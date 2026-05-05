@@ -44,6 +44,18 @@ let
         "grimac"
       ];
     };
+
+    "1.21.11-fabric" = {
+      loader = "fabric";
+      version = "1.21.11";
+      loaderVersion = "0.19.2";
+      installerVersion = "1.1.1";
+      hash = "sha256-xDK1HU7Xwbr0Z7pw7Dtdtob0zvlfq9pZ9J4O32u4jBc=";
+      mods = [
+        "fabric-api"
+        "terrain-diffusion"
+      ];
+    };
   };
 
   mkVariant =

@@ -4,6 +4,7 @@
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import sys
 import time
@@ -67,12 +68,21 @@ def hex_to_sri(hex_hash: str) -> str:
     return "sha512-" + base64.b64encode(binascii.unhexlify(hex_hash)).decode()
 
 
+def url_to_sri(url: str) -> str:
+    req = urllib.request.Request(url, headers=HEADERS)
+    h = hashlib.sha256()
+    with urllib.request.urlopen(req) as resp:
+        while chunk := resp.read(1024 * 1024):
+            h.update(chunk)
+    return "sha256-" + base64.b64encode(h.digest()).decode()
+
+
 def primary_file(version: dict) -> dict:
     return next((f for f in version["files"] if f["primary"]), version["files"][0])
 
 
 def resolve(
-    ids_or_slugs: list[str],
+    ids_or_slugs: list[str | dict],
     game_versions: list[str],
     loader: str,
     resolved: dict[str, dict] | None = None,
@@ -85,6 +95,16 @@ def resolve(
     queue = list(ids_or_slugs)
     while queue:
         ref = queue.pop(0)
+        if isinstance(ref, dict):
+            slug = ref["slug"]
+            url = ref["url"]
+            resolved[slug] = {
+                "url": url,
+                "hash": url_to_sri(url),
+            }
+            print(f"  {slug}: explicit artifact", file=sys.stderr)
+            continue
+
         proj = get_project(ref)
         pid = proj["id"]
         if pid in seen_pids:

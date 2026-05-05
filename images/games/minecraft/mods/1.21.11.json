@@ -1,0 +1,10 @@
+{
+  "fabric-api": {
+    "hash": "sha512-wgwBfiPW0ndGkNDdd0zshMFr+sVGHaLZNFoc2V7uSVsZVDM8Qh49HGYYYoTSSkM/awzO2AIfYuC/phfSOE0EcQ==",
+    "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/i5tSkVBH/fabric-api-0.141.3%2B1.21.11.jar"
+  },
+  "terrain-diffusion": {
+    "hash": "sha256-qenGaiUue9508lSkBWUy7gvovP68nCl7h3PoQ0e8ews=",
+    "url": "https://github.com/xandergos/terrain-diffusion-mc/releases/download/v2.1.0/terrain-diffusion-mc-2.1.0-cpu%2B1.21.11.jar"
+  }
+}
