@@ -165,10 +165,14 @@ let
       }
 
       def run-throttled [cpu_quota: string, memory_max: string, command: list<string>] {
-        ^systemd-run --scope --quiet --wait --collect \
-          -p $"CPUQuota=($cpu_quota)" \
-          -p $"MemoryMax=($memory_max)" \
-          ...$command
+        let limits = [
+          "-p"
+          $"CPUQuota=($cpu_quota)"
+          "-p"
+          $"MemoryMax=($memory_max)"
+        ]
+
+        ^systemd-run --scope --quiet --wait --collect ...$limits ...$command
       }
 
       def main [...targets: string] {
