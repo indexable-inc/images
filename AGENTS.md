@@ -6,6 +6,8 @@ Commit and push after making changes by default.
 
 Contributor setup and local checks are in @CONTRIBUTING.md.
 
+For PR-sized changes, work in a dedicated git worktree instead of the shared checkout. Keep the main checkout on `main` so other sessions and tools see a stable tree. Put active worktrees outside the repo, for example `/tmp/$USER/index-worktrees/<topic>`, and run repo commands from that worktree. If using natural-language code search, run `mgrep search -c {query}` from the main non-worktree checkout, because `mgrep` can be slow or stale inside worktrees.
+
 When a commit actually fixes a tracked GitHub issue, include an auto-closing keyword in the commit body, for example `Fixes #123`, `Closes #123`, or `Resolves #123`. Use `Refs #123` only for related work, policy docs, investigation, or partial cleanup that should not close the issue.
 
 ## Overview
