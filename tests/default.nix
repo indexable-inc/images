@@ -163,8 +163,8 @@ let
       message = "default minecraft image should include the 26.1.2 Fabric server mod set";
     }
     {
-      assertion = minecraftConfig.services.minecraft.javaPackage == pkgs.jetbrains.jdk-no-jcef;
-      message = "default Fabric minecraft should use JetBrains Runtime for enhanced class redefinition";
+      assertion = minecraftConfig.services.minecraft.javaPackage == pkgs.temurin-jre-bin-25;
+      message = "default Fabric minecraft should use Temurin";
     }
     {
       assertion = lib.hasInfix "/bin/java" minecraftExec;
@@ -185,10 +185,6 @@ let
     {
       assertion = lib.hasInfix "minecraft-hot-reload-agent.jar=socket=/run/minecraft-hot-reload/socket" minecraftExec;
       message = "Fabric minecraft should start the hot reload Java agent";
-    }
-    {
-      assertion = lib.hasInfix "-XX:+AllowEnhancedClassRedefinition" minecraftExec;
-      message = "Fabric minecraft should enable JBR enhanced class redefinition";
     }
     {
       assertion = minecraftService.RuntimeDirectory == "minecraft-hot-reload";
