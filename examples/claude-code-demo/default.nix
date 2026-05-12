@@ -147,6 +147,7 @@ let
     name = "compile";
     runtimeInputs = [
       pkgs.coreutils
+      pkgs.git
       pkgs.gnumake
       pkgs.systemd
     ];
@@ -172,16 +173,44 @@ let
           $"MemoryMax=($memory_max)"
         ]
 
-        ^systemd-run --scope --quiet --wait --collect ...$limits ...$command
+        if ("/run/systemd/private" | path exists) {
+          ^systemd-run --quiet --wait --collect ...$limits ...$command
+        } else {
+          ^$command.0 ...($command | skip 1)
+        }
+      }
+
+      def source-ready [source_dir: string] {
+        [
+          "Makefile"
+          "kernel"
+          "scripts"
+          "arch/x86/boot"
+        ] | all {|path| ($source_dir | path join $path) | path exists }
+      }
+
+      def ensure-source [source_dir: string] {
+        if (source-ready $source_dir) {
+          return
+        }
+
+        if ($source_dir | path exists) {
+          rm --recursive --force $source_dir
+        }
+
+        mkdir ($source_dir | path dirname)
+        ^${lib.getExe pkgs.git} clone --quiet --depth 1 --single-branch https://github.com/torvalds/linux.git $source_dir
+
+        if not (source-ready $source_dir) {
+          error make {
+            msg: $"Linux source tree bootstrap did not produce a complete checkout at ($source_dir)."
+          }
+        }
       }
 
       def main [...targets: string] {
         let source_dir = (env-or LINUX_SOURCE_DIR "/src/linux")
-        if not ($source_dir | path exists) {
-          error make {
-            msg: $"Linux source tree is missing at ($source_dir); wait for git-clone.service to finish."
-          }
-        }
+        ensure-source $source_dir
 
         cd $source_dir
 
