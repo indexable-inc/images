@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import ResourceUsage from './lib/ResourceUsage.svelte';
-  import ShellPrompt from './lib/ShellPrompt.svelte';
   import { FALLBACK_STATS, parseUsageStats, type Status } from './lib/stats';
 
   let stats = $state(FALLBACK_STATS);
@@ -35,5 +34,4 @@
   <div class="mark">ix</div>
 
   <ResourceUsage {stats} {status} />
-  <ShellPrompt />
 </main>
