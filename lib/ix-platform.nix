@@ -40,6 +40,13 @@
     };
 
     boot.isContainer = true;
+    # ix wires VM networking and ingress outside the guest. The stock NixOS
+    # DHCP/firewall units expect kernel packet-filtering and BPF/ARP support
+    # that ix images do not need and may not expose, which delays boot.
+    networking = {
+      useDHCP = false;
+      firewall.enable = false;
+    };
     system.stateVersion = "25.05";
   };
 }
