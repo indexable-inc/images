@@ -24,7 +24,7 @@ let
       [ ];
 
   deploymentDefaults = {
-    bootstrapImage = "registry.ix.dev/ix/test-cluster-bootstrap:a00f95b4a00a07fa";
+    bootstrapImage = "registry.ix.dev/ix/test-cluster-bootstrap:zstd-tools-2026-05-12";
     region = "hil-1";
     ipv4 = false;
     snapshot = true;

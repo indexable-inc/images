@@ -361,7 +361,7 @@ let
     }
     {
       assertion =
-        fleetPlan.web.bootstrapImage == "registry.ix.dev/ix/test-cluster-bootstrap:a00f95b4a00a07fa";
+        fleetPlan.web.bootstrapImage == "registry.ix.dev/ix/test-cluster-bootstrap:zstd-tools-2026-05-12";
       message = "fleet switches should create missing nodes from the shared NixOS bootstrap image";
     }
     {

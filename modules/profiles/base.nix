@@ -38,11 +38,16 @@
 
         # files
         inherit (pkgs)
-          ripgrep
+          bzip2
           fd
           file
+          gzip
+          gnutar
           tree
           unzip
+          xz
+          zstd
+          ripgrep
           less
           jq
           ;
