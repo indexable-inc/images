@@ -187,7 +187,7 @@ let
     name = "ix-fleet";
     runtimeInputs = [ python ];
     text = ''
-      def main [...args] {
+      def --wrapped main [...args] {
         exec python3 ${ixFleetScript} --plan ${plan} ...$args
       }
     '';
@@ -196,7 +196,7 @@ let
     name = "ix-fleet-plan";
     runtimeInputs = [ python ];
     text = ''
-      def main [...args] {
+      def --wrapped main [...args] {
         exec python3 ${ixFleetScript} --plan ${plan} plan ...$args
       }
     '';
@@ -205,7 +205,7 @@ let
     name = "ix-fleet-diff";
     runtimeInputs = [ python ];
     text = ''
-      def main [...args] {
+      def --wrapped main [...args] {
         exec python3 ${ixFleetScript} --plan ${plan} diff ...$args
       }
     '';
@@ -214,7 +214,7 @@ let
     name = "ix-fleet-switch";
     runtimeInputs = [ python ];
     text = ''
-      def main [...args] {
+      def --wrapped main [...args] {
         exec python3 ${ixFleetScript} --plan ${plan} switch ...$args
       }
     '';
@@ -223,8 +223,17 @@ let
     name = "ix-fleet-replace";
     runtimeInputs = [ python ];
     text = ''
-      def main [...args] {
+      def --wrapped main [...args] {
         exec python3 ${ixFleetScript} --plan ${plan} replace ...$args
+      }
+    '';
+  };
+  up = writeNushellApplication pkgs {
+    name = "ix-fleet-up";
+    runtimeInputs = [ python ];
+    text = ''
+      def --wrapped main [...args] {
+        exec python3 ${ixFleetScript} --plan ${plan} up ...$args
       }
     '';
   };
@@ -238,6 +247,7 @@ in
     planCommand
     replace
     switch
+    up
     ;
 
   inherit planValue;

@@ -247,6 +247,7 @@
               claude-code-demo-plan = claudeCodeDemo.planCommand;
               claude-code-demo-replace = claudeCodeDemo.replace;
               claude-code-demo-switch = claudeCodeDemo.switch;
+              claude-code-demo-up = claudeCodeDemo.up;
               minestom-hello-server-jar = repoPackages.minestom.helloServerJar;
             };
         }) devSystems
@@ -408,6 +409,12 @@
                 type = "app";
                 program = lib.getExe claudeCodeDemo.replace;
                 meta.description = "Build replacement images for the Claude Code demo fleet";
+              };
+
+              claude-code-demo-up = {
+                type = "app";
+                program = lib.getExe claudeCodeDemo.up;
+                meta.description = "Build and upload demo OCI images, then create or start VMs from them";
               };
 
               claude-code-demo-switch = {

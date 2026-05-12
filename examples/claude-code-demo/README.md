@@ -9,8 +9,12 @@ Two VMs:
 
 ```bash
 nix run .#claude-code-demo-plan
-nix run .#claude-code-demo-switch
+nix run .#claude-code-demo-up
 ```
+
+`up` builds the fleet's OCI image derivations, uploads the archives with the ix
+CLI, and creates or starts the VMs from those uploaded images. Use this while
+`ix switch` source switching is still unstable.
 
 ## Demo Flow
 

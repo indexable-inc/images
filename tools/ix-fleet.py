@@ -267,11 +267,13 @@ async def wait_node_ready(node: FleetNode, *, dry_run: bool) -> None:
 async def push_replacement_image(node: FleetNode, *, dry_run: bool) -> str:
     image = node.replacementImage
     source = image.source
-    if not dry_run and not Path(source).exists():
+    if not dry_run:
         out = run_cli(["nix-store", "--realise", image.sourceDrv], dry_run=False)
         realised = [line.strip() for line in out.splitlines() if line.strip()]
         if realised:
             source = realised[-1]
+        if not Path(source).exists():
+            raise RuntimeError(f"OCI image derivation did not realise to an existing path: {source}")
 
     out = run_cli(["ix", "push", source, image.destination], dry_run=dry_run)
     refs = [line.strip() for line in out.splitlines() if line.strip()]
@@ -436,6 +438,25 @@ async def replace_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
     run_cli(command, dry_run=dry_run)
 
 
+async def up_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
+    if dry_run:
+        step(f"ensure {node.name} exists from uploaded image {image}")
+        return
+
+    existing = find_node(await list_nodes(), node.name)
+    if existing is None:
+        await create_node(node, image, dry_run=dry_run)
+        return
+
+    if existing.get("status") == "failed":
+        run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+        await create_node(node, image, dry_run=dry_run)
+        return
+
+    if existing.get("status") != "running":
+        run_cli(["ix", "start", node.name], dry_run=dry_run)
+
+
 async def cmd_diff(plan: FleetPlan, args: argparse.Namespace) -> None:
     for node in selected_nodes(plan, args.on):
         if node.switch.buildOn == "remote":
@@ -470,6 +491,14 @@ async def cmd_replace(plan: FleetPlan, args: argparse.Namespace) -> None:
         await replace_node(node, image, dry_run=args.dry_run)
 
 
+async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
+    for node in selected_nodes(plan, args.on):
+        image = node.replacementImage.destination
+        if not args.skip_push:
+            image = await push_replacement_image(node, dry_run=args.dry_run)
+        await up_node(node, image, dry_run=args.dry_run)
+
+
 def parser() -> argparse.ArgumentParser:
     def add_common_options(target: argparse.ArgumentParser, *, defaults: bool) -> None:
         target.add_argument(
@@ -501,6 +530,9 @@ def parser() -> argparse.ArgumentParser:
     replace = sub.add_parser("replace")
     add_common_options(replace, defaults=False)
     replace.add_argument("--skip-push", action="store_true")
+    up = sub.add_parser("up")
+    add_common_options(up, defaults=False)
+    up.add_argument("--skip-push", action="store_true")
     return p
 
 
@@ -516,6 +548,8 @@ async def main() -> None:
         await cmd_switch(plan, args)
     elif args.command == "replace":
         await cmd_replace(plan, args)
+    elif args.command == "up":
+        await cmd_up(plan, args)
     else:
         raise AssertionError(args.command)
 
