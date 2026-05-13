@@ -14,7 +14,7 @@ let
     ];
   };
 in
-stdenv.mkDerivation (finalAttrs: {
+stdenv.mkDerivation {
   pname = "minecraft-hot-reload-agent";
   version = "0.1.0";
   inherit src;
@@ -45,4 +45,4 @@ stdenv.mkDerivation (finalAttrs: {
     description = "Minecraft development hot-reload Java agent";
     license = lib.licenses.mit;
   };
-})
+}
