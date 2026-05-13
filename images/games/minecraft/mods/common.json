@@ -1,11 +1,14 @@
 {
   "almanac": {
+    "hash": "sha256-RnaTFnM1GKbL0BONw0Yn23neTG9tCq3BhJ+pYP/FQJg=",
     "url": "https://cdn.modrinth.com/data/Gi02250Z/versions/7IRzJzBP/almanac-1.26.x-fabric-1.6.2.1.jar"
   },
   "ksyxis": {
+    "hash": "sha256-I8jFmTAE8FhOsnsZtDl7eqiDP0G48tHqIB7lSmD5ZLk=",
     "url": "https://cdn.modrinth.com/data/2ecVyZ49/versions/kL32PN9Q/Ksyxis-1.4.3.jar"
   },
   "lmd": {
+    "hash": "sha256-2t/dwf8jrqNr8yei3Raf0tRb8Xs4WpYij+cJ6iFJKII=",
     "url": "https://cdn.modrinth.com/data/vE2FN5qn/versions/eW5P1rHo/letmedespawn-1.26.x-fabric-1.6.2.1.jar"
   }
 }

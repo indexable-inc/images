@@ -9,7 +9,8 @@
       "fabric-api",
       {
         "slug": "terrain-diffusion",
-        "url": "https://github.com/xandergos/terrain-diffusion-mc/releases/download/v2.1.0/terrain-diffusion-mc-2.1.0-cpu%2B1.21.11.jar"
+        "url": "https://github.com/xandergos/terrain-diffusion-mc/releases/download/v2.1.0/terrain-diffusion-mc-2.1.0-cpu%2B1.21.11.jar",
+        "hash": "sha256-qenGaiUue9508lSkBWUy7gvovP68nCl7h3PoQ0e8ews="
       }
     ],
     "26.1.2": ["fabric-api", "lithium", "c2me-fabric", "krypton", "ferrite-core", "distanthorizons", "servercore", "vmp-fabric", "clumps", "chunky", "bluemap", "luckperms", "simple-voice-chat", "spark", "terralith", "tectonic", "grimac"],

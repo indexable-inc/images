@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Query Modrinth and generate per-version mod URL catalogs."""
+"""Query Modrinth and generate per-version mod URL+hash catalogs."""
 
 import argparse
+import base64
 import json
 import sys
 import time
@@ -65,6 +66,12 @@ def primary_file(version: dict) -> dict:
     return next((f for f in version["files"] if f["primary"]), version["files"][0])
 
 
+def sri_from_modrinth(f: dict) -> str:
+    """Convert Modrinth's hex SHA-512 into an SRI string usable by pkgs.fetchurl."""
+    sha512_bytes = bytes.fromhex(f["hashes"]["sha512"])
+    return "sha512-" + base64.b64encode(sha512_bytes).decode()
+
+
 def resolve(
     ids_or_slugs: list[str | dict],
     game_versions: list[str],
@@ -81,9 +88,14 @@ def resolve(
         ref = queue.pop(0)
         if isinstance(ref, dict):
             slug = ref["slug"]
-            url = ref["url"]
+            if "hash" not in ref:
+                raise ValueError(
+                    f"explicit artifact '{slug}' in manifest is missing 'hash'. "
+                    f"Compute one with: nix store prefetch-file --json --hash-type sha256 '{ref['url']}' | jq -r .hash"
+                )
             resolved[slug] = {
-                "url": url,
+                "url": ref["url"],
+                "hash": ref["hash"],
             }
             print(f"  {slug}: explicit artifact", file=sys.stderr)
             continue
@@ -103,6 +115,7 @@ def resolve(
         f = primary_file(version)
         resolved[proj["slug"]] = {
             "url": f["url"],
+            "hash": sri_from_modrinth(f),
         }
         print(f"  {proj['slug']}: {version['name']}", file=sys.stderr)
 
@@ -160,7 +173,7 @@ def generate(manifest_path: Path, output_dir: Path, only_version: str | None):
 
 
 def write_json(path: Path, catalog: dict[str, dict]):
-    """Write {slug: {url}} sorted by slug for deterministic diffs."""
+    """Write {slug: {url, hash}} sorted by slug for deterministic diffs."""
     sorted_catalog = dict(sorted(catalog.items()))
     path.write_text(json.dumps(sorted_catalog, indent=2, sort_keys=True) + "\n")
     print(f"  wrote {path} ({len(catalog)} mods)", file=sys.stderr)

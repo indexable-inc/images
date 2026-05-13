@@ -31,6 +31,10 @@ let
   modCatalogType = types.submodule {
     options = {
       url = mkOption { type = types.str; };
+      hash = mkOption {
+        type = types.str;
+        description = "SRI hash of the artifact at `url`. Used by `ix.artifacts.attachArtifactSources` to build the fetchurl derivation.";
+      };
       src = mkOption {
         type = types.path;
         description = "Locked mod artifact.";
