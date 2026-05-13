@@ -18,7 +18,7 @@ let
 
   version = "1.26.14.1";
 
-  bedrockServer = pkgs.stdenv.mkDerivation {
+  bedrockServer = pkgs.stdenv.mkDerivation (finalAttrs: {
     pname = "minecraft-bedrock-server";
     inherit version;
 
@@ -61,7 +61,7 @@ let
     '';
 
     meta.mainProgram = "bedrock_server";
-  };
+  });
 
   cfg = config.services.minecraft-bedrock;
   dataDir = "/var/lib/minecraft-bedrock";

@@ -3,7 +3,7 @@
   src,
 }:
 
-stdenvNoCC.mkDerivation {
+stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "tonbo-artifacts";
   version = "e16636b0e5ce";
 
@@ -27,4 +27,4 @@ stdenvNoCC.mkDerivation {
     mainProgram = "artifacts";
     platforms = [ "x86_64-linux" ];
   };
-}
+})

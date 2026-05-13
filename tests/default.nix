@@ -4,10 +4,8 @@
 }:
 let
   inherit (nixpkgs) lib;
-  inherit (ix) system;
   inherit (ix) pkgs;
 
-  moduleList = lib.collect builtins.isPath (import ../modules);
   versions = import ../images/games/minecraft/versions.nix {
     inherit lib;
     inherit (ix) artifacts;
@@ -15,27 +13,9 @@ let
   defaultMinecraftVersion = versions.default;
   defaultMinecraftModule = versions.${defaultMinecraftVersion};
 
-  evalConfig =
-    modules:
-    (lib.nixosSystem {
-      inherit system;
-      specialArgs.ix = {
-        inherit (ix)
-          artifacts
-          mkMinecraftLoader
-          mkMinecraftSyncManaged
-          writeNushellApplication
-          writePythonApplication
-          ;
-      };
-      modules = [
-        { nixpkgs.overlays = ix.overlays; }
-        ../lib/ix-platform.nix
-        ../lib/ix-oci-layer.nix
-      ]
-      ++ moduleList
-      ++ modules;
-    }).config;
+  # Thin wrapper to keep call sites as plain lists; delegates to ix.evalImageConfig
+  # so tests exercise the same evaluation path as production image builds.
+  evalConfig = modules: ix.evalImageConfig { inherit modules; };
 
   minecraftConfig = evalConfig [
     ../images/games/minecraft

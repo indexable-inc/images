@@ -22,7 +22,7 @@ let
     };
   };
 in
-pkgs.stdenvNoCC.mkDerivation {
+pkgs.stdenvNoCC.mkDerivation (_: {
   inherit
     pname
     version
@@ -51,4 +51,4 @@ pkgs.stdenvNoCC.mkDerivation {
     cp -R "${distDir}/." "$out/${installDir}/"
     runHook postInstall
   '';
-}
+})
