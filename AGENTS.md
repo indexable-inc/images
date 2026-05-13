@@ -43,11 +43,13 @@ The shared fleet bootstrap image is defined at `images/system/test-cluster-boots
 ## Layout
 
 ```
-flake.nix                                  # pure: ix.discoverImages ./images
+flake.nix                                  # manifest: inputs + delegated outputs
+.envrc, .githooks/pre-commit               # direnv sets core.hooksPath -> nix run .#lint
 lib/
-  default.nix                              # mkImage, discoverImages, helpers
+  default.nix                              # mkImage, discoverImages, ix.artifacts, helpers
+  per-system.nix                           # per-system packages / apps / checks / formatter
   ix-platform.nix                          # target platform: EPYC Gen 5 (znver5), container mode
-  ix-oci-layer.nix                               # OCI packaging, base profile
+  ix-oci-layer.nix                         # OCI packaging, base profile
   minecraft-loader.nix                     # helper used by loader modules
   docker-to-oci.py                         # docker-archive -> OCI archive transcoder
 modules/
