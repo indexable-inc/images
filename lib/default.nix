@@ -19,8 +19,6 @@
 {
   nixpkgs,
   llm-agents,
-  claude-code-nix,
-  codex-cli-nix,
   artifactInputs,
   paths,
 }:
@@ -112,14 +110,9 @@ let
       };
     };
 
-  # Overlays: llm-agents base + claude/codex from dedicated flakes, plus
-  # repo-local packages used by images.
-  overlay = final: prev: {
-    llm-agents = prev.llm-agents // {
-      inherit (claude-code-nix.packages.${final.stdenv.hostPlatform.system}) claude-code;
-      inherit (codex-cli-nix.packages.${final.stdenv.hostPlatform.system}) codex;
-    };
-
+  # Overlays: llm-agents provides claude-code and codex; plus repo-local
+  # packages used by images.
+  overlay = final: _prev: {
     minecraft-hot-reload-agent = final.callPackage paths.nixPackages.minecraftHotReloadAgent { };
     minecraft-rcon = final.callPackage paths.nixPackages.minecraftRcon {
       writePythonApplication = writePythonApplication final;

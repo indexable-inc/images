@@ -142,14 +142,6 @@
       url = "github:numtide/llm-agents.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    claude-code-nix = {
-      url = "github:sadjow/claude-code-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    codex-cli-nix = {
-      url = "github:sadjow/codex-cli-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     pre-commit-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -161,8 +153,6 @@
       self,
       nixpkgs,
       llm-agents,
-      claude-code-nix,
-      codex-cli-nix,
       pre-commit-hooks,
       ...
     }:
@@ -173,8 +163,6 @@
         inherit
           nixpkgs
           llm-agents
-          claude-code-nix
-          codex-cli-nix
           ;
         artifactInputs = inputs;
         paths = {
