@@ -142,14 +142,6 @@
       url = "github:numtide/llm-agents.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    claude-code-nix = {
-      url = "github:sadjow/claude-code-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    codex-cli-nix = {
-      url = "github:sadjow/codex-cli-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     pre-commit-hooks = {
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -161,8 +153,6 @@
       self,
       nixpkgs,
       llm-agents,
-      claude-code-nix,
-      codex-cli-nix,
       pre-commit-hooks,
       ...
     }:
@@ -173,8 +163,6 @@
         inherit
           nixpkgs
           llm-agents
-          claude-code-nix
-          codex-cli-nix
           ;
         artifactInputs = inputs;
         paths = {
@@ -228,7 +216,8 @@
       modules = import ./modules;
       overlays.default = ix.overlay;
 
-      packages = lib.genAttrs devSystems (system:
+      packages = lib.genAttrs devSystems (
+        system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           claudeCodeDemo = claudeCodeDemos.${system};
@@ -272,10 +261,14 @@
           claude-code-demo-linux-up = claudeCodeDemoLinuxUp;
           claude-code-demo-minecraft-up = claudeCodeDemoMinecraftUp;
           minestom-hello-server-jar = repoPackages.minestom.helloServerJar;
-        });
+        }
+      );
 
-      checks = lib.genAttrs devSystems (system:
-        { pre-commit = preCommitCheckFor system; }
+      checks = lib.genAttrs devSystems (
+        system:
+        {
+          pre-commit = preCommitCheckFor system;
+        }
         // lib.optionalAttrs (system == ix.system) (
           let
             lint = self.apps.${ix.system}.lint.program;
@@ -290,7 +283,8 @@
               mkdir -p "$out"
             '';
           }
-        ));
+        )
+      );
 
       formatter = lib.genAttrs devSystems (system: nixpkgs.legacyPackages.${system}.nixfmt);
 
@@ -300,7 +294,8 @@
       };
 
       # Developer tooling. Exposed for both Linux CI and macOS dev machines.
-      devShells = lib.genAttrs devSystems (system:
+      devShells = lib.genAttrs devSystems (
+        system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           preCommitCheck = self.checks.${system}.pre-commit;
@@ -320,9 +315,11 @@
             JAVA_HOME = pkgs.jdk25.home;
             inherit (preCommitCheck) shellHook;
           };
-        });
+        }
+      );
 
-      apps = lib.genAttrs devSystems (system:
+      apps = lib.genAttrs devSystems (
+        system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
           # Reuse derivations already built for packages to avoid evaluating them twice.
@@ -442,6 +439,7 @@
             program = lib.getExe claudeCodeDemo.switch;
             meta.description = "Switch the Claude Code demo fleet";
           };
-        });
+        }
+      );
     };
 }
