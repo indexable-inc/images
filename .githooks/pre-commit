@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Repo pre-commit hook. Activated via .envrc setting core.hooksPath.
+# Runs the same lint app contributors should run manually.
+set -euo pipefail
+exec nix run .#lint

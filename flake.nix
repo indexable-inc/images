@@ -7,18 +7,13 @@
       url = "github:numtide/llm-agents.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    pre-commit-hooks = {
-      url = "github:cachix/git-hooks.nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
     {
-      self,
       nixpkgs,
       llm-agents,
-      pre-commit-hooks,
+      ...
     }:
     let
       inherit (nixpkgs) lib;
@@ -44,11 +39,9 @@
         system:
         import ./lib/per-system.nix {
           inherit
-            self
             system
             ix
             nixpkgs
-            pre-commit-hooks
             ;
           repoRoot = ./.;
           examplePaths.claudeCodeDemo = ./examples/claude-code-demo;
@@ -58,7 +51,7 @@
     in
     {
       lib = ix;
-      modules = import ./modules;
+      nixosModules = import ./modules;
       overlays.default = ix.overlay;
       templates.default = {
         path = ./template;
@@ -67,7 +60,6 @@
       packages = collect "packages";
       apps = collect "apps";
       checks = collect "checks";
-      devShells = collect "devShells";
       formatter = collect "formatter";
     };
 }

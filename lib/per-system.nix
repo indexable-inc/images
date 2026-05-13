@@ -4,11 +4,9 @@
 # inputs and output categories. All composition logic for apps, demo
 # wrappers, lint plumbing, and the dev shell lives here.
 {
-  self,
   system,
   ix,
   nixpkgs,
-  pre-commit-hooks,
   repoRoot,
   examplePaths,
 }:
@@ -108,17 +106,6 @@ let
     root = repoRoot;
     fileset = fs.gitTracked repoRoot;
   };
-
-  preCommitCheck = pre-commit-hooks.lib.${system}.run {
-    src = repoRoot;
-    hooks.ix-lint = {
-      enable = true;
-      name = "ix lint";
-      entry = self.apps.${system}.lint.program;
-      pass_filenames = false;
-      always_run = true;
-    };
-  };
 in
 {
   packages =
@@ -151,10 +138,7 @@ in
     claude-code-demo-switch = mkApp claudeCodeDemo.switch "Switch the Claude Code demo fleet";
   };
 
-  checks = {
-    pre-commit = preCommitCheck;
-  }
-  // lib.optionalAttrs (system == ix.system) {
+  checks = lib.optionalAttrs (system == ix.system) {
     eval = import (repoRoot + "/tests") { inherit nixpkgs ix; };
     lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
       cp -R ${lintSource} source
@@ -166,18 +150,4 @@ in
   };
 
   formatter = pkgs.nixfmt;
-
-  devShells.default = pkgs.mkShell {
-    packages = [
-      pkgs.ast-grep
-      pkgs.deadnix
-      pkgs.gradle_9
-      pkgs.jdk25
-      pkgs.nixfmt
-      pkgs.statix
-    ]
-    ++ preCommitCheck.enabledPackages;
-    JAVA_HOME = pkgs.jdk25.home;
-    inherit (preCommitCheck) shellHook;
-  };
 }

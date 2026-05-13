@@ -1,15 +1,18 @@
 # Contributing
 
-Use the Nix development shell so local tooling matches CI:
-
-```sh
-nix develop
-```
-
-The dev shell installs the repo pre-commit hook. The hook runs the same lint entry point contributors should run manually before pushing:
+Run the repo lint before pushing:
 
 ```sh
 nix run .#lint
 ```
 
-This checks Nix formatting, Statix, Deadnix, and the repo ast-grep rules. Keep `nix run .#lint` as the source of truth when changing lint behavior.
+It checks Nix formatting (nixfmt), Statix, Deadnix, and the repo's ast-grep rules. CI runs the same derivation as a flake check.
+
+The repo ships a tracked git pre-commit hook at `.githooks/pre-commit` that calls the lint app. To activate it locally, `direnv allow` in the repo root: `.envrc` exports `core.hooksPath` so git uses the tracked hook. No additional shell or framework is needed.
+
+There is no `devShells.default` to enter for routine work. Reach for the per-package shell when you need build dependencies for a specific artifact, e.g.
+
+```sh
+nix develop .#minestom-hello-server-jar   # gives gradle + JDK 25
+nix develop nixpkgs#nixfmt                # nixfmt + its deps
+```
