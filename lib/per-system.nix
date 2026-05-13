@@ -1,14 +1,13 @@
-# Per-system flake outputs (packages / apps / checks / devShells / formatter).
+# Per-system flake outputs (packages / apps / checks / formatter).
 #
 # Kept out of flake.nix so the flake top-level can read as a manifest of
 # inputs and output categories. All composition logic for apps, demo
-# wrappers, lint plumbing, and the dev shell lives here.
+# wrappers, and lint plumbing lives here.
 {
   system,
   ix,
   nixpkgs,
-  repoRoot,
-  examplePaths,
+  paths,
 }:
 let
   inherit (nixpkgs) lib;
@@ -21,7 +20,23 @@ let
     meta = { inherit description; };
   };
 
-  python = pkgs.python3.withPackages (ps: [ ps.pydantic ]);
+  pythonWithPydantic = pkgs.python3.withPackages (ps: [ ps.pydantic ]);
+
+  mkPythonWrapper =
+    {
+      name,
+      script,
+      python ? pkgs.python3,
+    }:
+    ix.writeNushellApplication pkgs {
+      inherit name;
+      runtimeInputs = [ python ];
+      text = ''
+        def main [...args] {
+          exec python3 ${script} ...$args
+        }
+      '';
+    };
 
   lint = ix.writeNushellApplication pkgs {
     name = "lint";
@@ -51,29 +66,20 @@ let
     '';
   };
 
-  updateMods = ix.writeNushellApplication pkgs {
+  updateMods = mkPythonWrapper {
     name = "update-mods";
-    runtimeInputs = [ pkgs.python3 ];
-    text = ''
-      def main [...args] {
-        exec python3 ${repoRoot + "/tools/update-mods.py"} ...$args
-      }
-    '';
+    script = paths.tools.updateMods;
   };
 
-  ixFleet = ix.writeNushellApplication pkgs {
+  ixFleet = mkPythonWrapper {
     name = "ix-fleet";
-    runtimeInputs = [ python ];
-    text = ''
-      def main [...args] {
-        exec python3 ${repoRoot + "/tools/ix-fleet.py"} ...$args
-      }
-    '';
+    script = paths.tools.ixFleet;
+    python = pythonWithPydantic;
   };
 
-  benchFilesystem = import (repoRoot + "/bench/filesystem") { inherit ix pkgs; };
+  benchFilesystem = import paths.bench.filesystem { inherit ix pkgs; };
 
-  claudeCodeDemo = import examplePaths.claudeCodeDemo {
+  claudeCodeDemo = import paths.examples.claudeCodeDemo {
     ix = ix // {
       lib = ix;
     };
@@ -98,18 +104,14 @@ let
 
   repoPackages = ix.packageSetFor pkgs;
 
-  imagePackages = ix.discoverImages (repoRoot + "/images") // {
-    inherit (ix.pkgs) tonbo-artifacts;
-  };
-
   lintSource = fs.toSource {
-    root = repoRoot;
-    fileset = fs.gitTracked repoRoot;
+    inherit (paths) root;
+    fileset = fs.gitTracked paths.root;
   };
 in
 {
   packages =
-    imagePackages
+    (ix.discoverImages paths.images)
     // claudeCodeDemo.systemPackages
     // claudeCodeDemoImages
     // {
@@ -122,6 +124,7 @@ in
       claude-code-demo-linux-up = claudeCodeDemoLinuxUp;
       claude-code-demo-minecraft-up = claudeCodeDemoMinecraftUp;
       minestom-hello-server-jar = repoPackages.minestom.helloServerJar;
+      inherit (ix) tonbo-artifacts;
     };
 
   apps = {
@@ -139,7 +142,7 @@ in
   };
 
   checks = lib.optionalAttrs (system == ix.system) {
-    eval = import (repoRoot + "/tests") { inherit nixpkgs ix; };
+    eval = import paths.tests { inherit nixpkgs ix; };
     lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
       cp -R ${lintSource} source
       chmod -R u+w source

@@ -17,19 +17,31 @@
     }:
     let
       inherit (nixpkgs) lib;
-      ix = import ./lib {
-        inherit nixpkgs llm-agents;
-        paths = {
-          modules = ./modules;
-          nixPackages = {
-            minecraftHotReloadAgent = ./nix/packages/minecraft-hot-reload-agent.nix;
-            minecraftRcon = ./nix/packages/minecraft-rcon.nix;
-            tonboArtifacts = ./nix/packages/tonbo-artifacts.nix;
-          };
-          packages.minestom.servers.hello = ./packages/minestom/servers/hello;
-          tools.ixFleet = ./tools/ix-fleet.py;
-          tools.minecraftSyncManaged = ./nix/packages/minecraft-sync-managed.py;
+
+      # All path literals the flake exposes. Centralized so lib/ and
+      # lib/per-system.nix have a single source of truth.
+      paths = {
+        root = ./.;
+        images = ./images;
+        modules = ./modules;
+        tests = ./tests;
+        bench.filesystem = ./bench/filesystem;
+        examples.claudeCodeDemo = ./examples/claude-code-demo;
+        nixPackages = {
+          minecraftHotReloadAgent = ./nix/packages/minecraft-hot-reload-agent.nix;
+          minecraftRcon = ./nix/packages/minecraft-rcon.nix;
+          tonboArtifacts = ./nix/packages/tonbo-artifacts.nix;
         };
+        packages.minestom.servers.hello = ./packages/minestom/servers/hello;
+        tools = {
+          ixFleet = ./tools/ix-fleet.py;
+          minecraftSyncManaged = ./nix/packages/minecraft-sync-managed.py;
+          updateMods = ./tools/update-mods.py;
+        };
+      };
+
+      ix = import ./lib {
+        inherit nixpkgs llm-agents paths;
       };
       devSystems = [
         "x86_64-linux"
@@ -42,9 +54,8 @@
             system
             ix
             nixpkgs
+            paths
             ;
-          repoRoot = ./.;
-          examplePaths.claudeCodeDemo = ./examples/claude-code-demo;
         }
       );
       collect = key: lib.mapAttrs (_: out: out.${key}) perSystem;

@@ -110,13 +110,14 @@ let
     };
 
   # Overlays: llm-agents provides claude-code and codex; plus repo-local
-  # packages used by images.
+  # packages consumed by NixOS modules via `pkgs.<name>`. Packages that are
+  # only exposed as flake outputs (e.g. tonbo-artifacts) stay out of the
+  # overlay so they don't pollute the nixpkgs namespace inside images.
   overlay = final: _prev: {
     minecraft-hot-reload-agent = final.callPackage paths.nixPackages.minecraftHotReloadAgent { };
     minecraft-rcon = final.callPackage paths.nixPackages.minecraftRcon {
       writePythonApplication = writePythonApplication final;
     };
-    tonbo-artifacts = final.callPackage paths.nixPackages.tonboArtifacts { };
   };
   overlays = [
     llm-agents.overlays.default
@@ -195,6 +196,10 @@ let
       };
     };
   };
+
+  # x86_64-linux-only binary blob distributed by upstream Tonbo. Lives here
+  # rather than in `packageSetFor` because it has no useful cross-compile.
+  tonbo-artifacts = pkgs.callPackage paths.nixPackages.tonboArtifacts { };
 
   packageSetFor =
     pkgs:
@@ -321,6 +326,7 @@ in
     mkMinecraftLoader
     mkMinecraftSyncManaged
     packageSetFor
+    tonbo-artifacts
     writeNushellApplication
     writePythonApplication
     ;
