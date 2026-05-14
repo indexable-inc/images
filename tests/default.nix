@@ -85,6 +85,18 @@ let
   kernelDevGitCloneService = kernelDevConfig.systemd.services.git-clone;
   kernelDevGitCloneTimer = kernelDevConfig.systemd.timers.git-clone;
 
+  gatewayConfig = evalConfig [
+    ../images/services/gateway
+    {
+      services.gateway = {
+        routes."example.com" = "http://backend:8080";
+        tlsEmail = "ops@example.com";
+      };
+    }
+  ];
+  gatewayCaddy = gatewayConfig.services.caddy;
+  gatewayExampleHost = gatewayCaddy.virtualHosts."example.com";
+
   pythonAppClosureProbe = ix.writePythonApplication pkgs {
     name = "python-app-closure-probe";
     src = pkgs.writeText "python-app-closure-probe.py" ''
@@ -376,6 +388,31 @@ let
     {
       assertion = !(remoteDesktopConfig.systemd.services ? novnc);
       message = "remote-desktop should not use a separate noVNC websockify service";
+    }
+    {
+      assertion = gatewayCaddy.enable;
+      message = "gateway image should enable services.caddy via services.gateway";
+    }
+    {
+      assertion = gatewayCaddy.email == "ops@example.com";
+      message = "gateway tlsEmail should flow into the Caddy ACME contact";
+    }
+    {
+      assertion =
+        gatewayConfig.networking.firewall.allowedTCPPorts == [
+          80
+          443
+        ];
+      message = "gateway image should open only 80 and 443 in the in-guest firewall";
+    }
+    {
+      assertion =
+        builtins.match ".*reverse_proxy http://backend:8080.*" gatewayExampleHost.extraConfig != null;
+      message = "gateway routes should render a Caddy reverse_proxy directive for each entry";
+    }
+    {
+      assertion = builtins.match ".*max_size 32MB.*" gatewayExampleHost.extraConfig != null;
+      message = "gateway maxRequestBodyMiB should default to a 32MB request_body cap";
     }
     {
       assertion = fleet.nodes.db.networking.hostName == "db";
