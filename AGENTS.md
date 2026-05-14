@@ -34,9 +34,22 @@ Images are not stacked at runtime. ix runs one image. Layering is purely a build
 
 ix VMs implicitly have snapshots and effectively unbounded disk. Fleet and stateful-service designs should lean on those primitives: take snapshots before destructive or data-format-changing operations, prefer in-place NixOS/system switches for stateful nodes, and do not design around fixed-root-disk exhaustion as a primary constraint.
 
+## Trust model
+
+Assume the agent running inside a VM has root and a goal it is optimizing for. It can install packages, edit `/etc`, restart services, flip `networking.firewall.enable`, and overwrite anything reachable from inside the guest. What it does not have by default: host API credentials, the ix CLI's host-side authority, registry-write tokens, or any secret you do not mount in. Design follows from that asymmetry. Anything that must hold against a misbehaving in-VM process belongs outside the VM, where the agent cannot reach it.
+
+Concrete shapes this principle produces:
+
+- **Network policy.** In-VM `networking.firewall.*` is convenience for a cooperative guest. The guest can disable it, so it is not a containment boundary. When a port must stay closed against a rogue guest, the enforcement point is a separate router/gateway VM the agent has no shell on, or one of ix's group/internet primitives. Inline `networking.firewall.allowedTCPPorts` is still the right place to *declare* intent (co-located with the service that needs the port); the enforcing layer reads that intent from outside.
+- **Secrets.** Long-lived credentials (API keys, registry-write tokens, cloud creds) stay on the host or in a sibling VM that does not share a kernel with the agent. Mount only the short-lived, narrowly-scoped material the agent needs for the current task.
+- **Snapshot and rollback authority.** The operator owns snapshot/rollback. An agent that can `ix snapshot` its own VM can paper over destructive behavior, so that surface belongs on the host side.
+- **Image and switch-source authority.** The agent should not be able to switch its own VM to an unsigned or unreviewed image, or rewrite the source the VM was built from. That capability lives with the operator.
+
+The "VM networking" section below is one specialization of this principle. Apply the same lens whenever a new feature lands: "if a rogue agent in this VM tried to subvert this, where does the rule actually live?"
+
 ## VM networking
 
-Networking policy lives in the image, not in ix. ix exposes two primitives: VM group membership (east-west, which VMs can reach each other) and internet ingress/egress on or off (north-south, per direction). Per-port filtering, L7 rules, WAF, rate limiting, and mTLS termination belong in the image's NixOS config (`networking.firewall.*`, services in front of the workload) or in a user-built gateway VM. Do not push port allowlists or L7 features into ix; the matching rule on the ix side is recorded in `ix/AGENTS.md` under "Architecture that must not drift". If a service needs only some ports exposed, declare it in the image with `networking.firewall.allowedTCPPorts` or front it with a gateway VM.
+Networking policy lives in the image, not in ix. ix exposes two primitives: VM group membership (east-west, which VMs can reach each other) and internet ingress/egress on or off (north-south, per direction). Per-port filtering, L7 rules, WAF, rate limiting, and mTLS termination belong in the image's NixOS config (`networking.firewall.*`, services in front of the workload) or in a user-built gateway VM. Do not push port allowlists or L7 features into ix; the matching rule on the ix side is recorded in `ix/AGENTS.md` under "Architecture that must not drift". If a service needs only some ports exposed, declare it in the image with `networking.firewall.allowedTCPPorts` or front it with a gateway VM. Treat in-image firewall config as cooperative-guest intent per the trust model above: if the policy must hold against a rogue agent inside the same VM, the enforcement layer must live on a separate gateway/router VM the agent cannot reach.
 
 ## Registry access
 
