@@ -303,8 +303,8 @@ let
               virtualHosts."claude-code-demo" = {
                 default = true;
                 root = "${demoSite}/share/claude-code-demo-site";
-                locations."/stats.json".extraConfig = "root /run/claude-code-demo;";
-                locations."/".extraConfig = "try_files $uri $uri/ /index.html;";
+                locations."/stats.json".root = "/run/claude-code-demo";
+                locations."/".tryFiles = "$uri $uri/ /index.html";
               };
             };
 

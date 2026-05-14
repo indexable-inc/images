@@ -108,10 +108,15 @@ let
     inherit (paths) root;
     fileset = fs.gitTracked paths.root;
   };
+
+  tests = import paths.tests { inherit nixpkgs ix; };
 in
 {
   packages =
-    (ix.discoverImages paths.images)
+    (ix.discoverImages {
+      root = paths.images;
+      inherit (tests) imageTests;
+    })
     // claudeCodeDemo.systemPackages
     // claudeCodeDemoImages
     // {
@@ -144,7 +149,7 @@ in
   };
 
   checks = lib.optionalAttrs (system == ix.system) {
-    eval = import paths.tests { inherit nixpkgs ix; };
+    inherit (tests) eval;
     lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
       cp -R ${lintSource} source
       chmod -R u+w source

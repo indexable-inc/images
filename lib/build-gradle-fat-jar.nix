@@ -1,3 +1,22 @@
+/**
+  Build a Gradle fat-jar with a pinned dependency-verification metadata file.
+
+  Wraps `pkgs.stdenv.mkDerivation` with Gradle as the build tool. The
+  dependency hashes come from a Gradle dependency-verification XML
+  reproduced into the build sandbox, so the build is fixed-output and
+  network-isolated. The selected Gradle task runs in offline mode.
+
+  Arguments:
+  - `pname`, `version`, `src`: derivation identity and source.
+  - `verificationMetadata`: path to the Gradle verification XML.
+  - `javaPackage`, `gradle`: toolchain packages.
+  - `gradleBuildTask`, `gradleCheckTask`, `gradleFlags`: build invocation.
+  - `jarPath`: relative path of the produced jar inside the source tree.
+  - `installPhase`: override the default `cp ${jarPath} $out/...` phase.
+  - `doCheck`: run `gradleCheckTask` before the build task.
+  - Other standard `mkDerivation` args (`nativeBuildInputs`, `meta`,
+    `passthru`, `preConfigure`, etc.) are forwarded.
+*/
 { lib }:
 
 pkgs:

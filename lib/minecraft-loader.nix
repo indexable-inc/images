@@ -1,15 +1,19 @@
-# Helper for declaring a minecraft loader module (Fabric, Paper, Vanilla, ...).
-#
-# Each loader is structurally identical: declare `services.minecraft.<name>`
-# with an enable flag and a server-jar slot, and assign that jar to
-# `services.minecraft.serverJar`. The `src` slot defaults to
-# `ix.artifacts.minecraft.servers."${cfg.version}-${name}"`, so a caller that
-# sets `services.minecraft.version` rarely has to override anything per loader.
-#
-# Reached from modules via `specialArgs.ix.mkMinecraftLoader`. Loader files
-# call it and return the resulting module attrset directly. Loaders that need
-# to contribute more to `config` pass an `extraConfig cfg` hook; it merges into
-# the gated config so the loader file stays a single expression.
+/**
+  Declare a Minecraft loader module (Fabric, Paper, Vanilla, ...).
+
+  Each loader is structurally identical: it owns
+  `services.minecraft.<name>` with an enable flag and a server-jar slot,
+  and assigns that jar to `services.minecraft.serverJar`. The `src` slot
+  defaults to `ix.artifacts.minecraft.servers."${cfg.version}-${name}"`,
+  so callers that set `services.minecraft.version` rarely override
+  anything per loader.
+
+  Reached from modules via `specialArgs.ix.mkMinecraftLoader`. Loader
+  files call it and return the resulting module attrset directly.
+  Loaders that need to contribute more to `config` pass an
+  `extraConfig cfg` hook; it merges into the gated config so the loader
+  file stays a single expression.
+*/
 {
   ix,
   config,

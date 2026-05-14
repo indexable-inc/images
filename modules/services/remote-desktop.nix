@@ -8,6 +8,7 @@
 }:
 let
   inherit (lib)
+    mkDefault
     mkEnableOption
     mkIf
     mkOption
@@ -30,6 +31,15 @@ let
     '';
   };
 
+  flagValueType = types.oneOf [
+    types.bool
+    types.int
+    types.str
+    (types.listOf types.str)
+  ];
+
+  flags = lib.cli.toCommandLineGNU { } cfg.settings;
+
   launcher = ix.writeNushellApplication pkgs {
     name = "ix-remote-desktop";
     runtimeInputs = [
@@ -42,24 +52,8 @@ let
             [
               "start-desktop"
               cfg.display
-              "--start=${cfg.desktopCommand}"
-              "--bind-tcp=${cfg.bindAddress}:${toString cfg.port}"
-              "--auth=${cfg.auth}"
-              "--resize-display=${cfg.resolution}"
-              "--socket-dirs=/run/remote-desktop"
-              "--html=on"
-              "--ssl=off"
-              "--daemon=no"
-              "--mdns=no"
-              "--pulseaudio=no"
-              "--notifications=no"
-              "--webcam=no"
-              "--printing=no"
-              "--file-transfer=off"
-              "--open-files=off"
-              "--clipboard=on"
             ]
-            ++ cfg.extraOptions
+            ++ flags
           )
         }
         exec xpra ...$args
@@ -110,14 +104,40 @@ in
       description = "Xpra authentication module for incoming clients.";
     };
 
-    extraOptions = mkOption {
-      type = types.listOf types.str;
-      default = [ ];
-      description = "Additional command-line options passed to Xpra.";
+    settings = mkOption {
+      type = types.attrsOf flagValueType;
+      default = { };
+      description = ''
+        Flags passed to `xpra start-desktop` rendered via `lib.cli.toCommandLineGNU`.
+        Each entry becomes `--key=value`; `true` becomes a bare `--key`, `false`
+        omits the flag, and list values render as repeated `--key=elem` entries.
+        Convenience options (`port`, `bindAddress`, `display`, `resolution`,
+        `desktopCommand`, `auth`) seed this set via `mkDefault`, so a direct
+        assignment here wins.
+      '';
     };
   };
 
   config = mkIf cfg.enable {
+    services.remote-desktop.settings = {
+      start = mkDefault cfg.desktopCommand;
+      bind-tcp = mkDefault "${cfg.bindAddress}:${toString cfg.port}";
+      auth = mkDefault cfg.auth;
+      resize-display = mkDefault cfg.resolution;
+      socket-dirs = mkDefault "/run/remote-desktop";
+      html = mkDefault "on";
+      ssl = mkDefault "off";
+      daemon = mkDefault "no";
+      mdns = mkDefault "no";
+      pulseaudio = mkDefault "no";
+      notifications = mkDefault "no";
+      webcam = mkDefault "no";
+      printing = mkDefault "no";
+      file-transfer = mkDefault "off";
+      open-files = mkDefault "off";
+      clipboard = mkDefault "on";
+    };
+
     environment.systemPackages = [
       cfg.package
       pkgs.icewm

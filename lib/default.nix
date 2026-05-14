@@ -1,21 +1,5 @@
-# ix/images public lib.
-#
-# `mkImage` builds one self-contained OCI archive from a list of NixOS
-# modules. Each image is independent: ix does not stack images at runtime, it
-# runs one. `./ix-platform.nix` and `./ix-oci-layer.nix` form the implicit
-# base layer (container marker, target platform, OCI packaging, base profile
-# enabled by default). The module registry is pulled in so option declarations
-# are available to every image, but each module is gated on its own `enable`
-# flag and stays inert unless the image turns it on.
-#
-# `discoverImages` walks `images/<category>/<name>/` and turns each directory
-# into a flake package. If a directory has a `versions.nix` sibling, every
-# version produces `<name>_<ver>` and the `default` key picks the unsuffixed
-# `<name>` alias.
-#
-# `mkMinecraftLoader` is one of several cross-cutting helpers exposed to
-# modules via `specialArgs.ix`. Modules access them as `{ ix, ... }: ix.foo`
-# instead of relative-path imports.
+# ix/images public lib. Helpers documented per binding with RFC-0145
+# doc-comments below; the file's job is to wire them together.
 {
   nixpkgs,
   paths,
@@ -24,6 +8,25 @@ let
   inherit (nixpkgs) lib;
 
   system = "x86_64-linux";
+
+  /**
+    Package a Python entrypoint as a standalone executable.
+
+    Wraps `src` in a launcher script that prepends `runtimeInputs` to PATH
+    and runs the file under `python`. When `check` is true (default), the
+    derivation also runs `basedpyright` over `src` with `typeCheckingMode`
+    enforcement during the build, so type regressions fail the build instead
+    of surfacing at runtime.
+
+    Arguments:
+    - `name`: derivation name and `/bin/<name>` executable.
+    - `src`: a path or store path containing the Python entrypoint.
+    - `args`: literal argv prefix prepended to user args at runtime.
+    - `runtimeInputs`: extra packages prepended to PATH at runtime.
+    - `python`: Python interpreter package. Defaults to `pkgs.python314`.
+    - `check`, `typeCheckingMode`, `pythonPlatform`: basedpyright knobs.
+    - `meta`: standard derivation meta, with `mainProgram` defaulted.
+  */
   writePythonApplication =
     pkgs:
     {
@@ -73,6 +76,23 @@ let
       };
     };
 
+  /**
+    Package a Nushell command as a standalone executable.
+
+    Generates a Nu script that prepends `runtimeInputs` to PATH while
+    preserving the ambient PATH, then runs `text` as the body. With
+    `check` left on (default), nushell's `--ide-check` parses the
+    generated script during the build so syntax errors fail the build
+    rather than reaching the user.
+
+    Arguments:
+    - `name`: derivation name and `/bin/<name>` executable.
+    - `runtimeInputs`: packages prepended to PATH for the script body.
+    - `text`: the Nu script body. A leading `#!/usr/bin/env nu` line is
+      stripped before splicing.
+    - `check`: run `nu --ide-check` at build time.
+    - `meta`: standard derivation meta, with `mainProgram` defaulted.
+  */
   writeNushellApplication =
     pkgs:
     {
@@ -98,8 +118,6 @@ let
 
       ''
       + scriptBody;
-      # `--ide-check` parses the generated script and reports diagnostics
-      # without running `main`, so command wrappers are checked at build time.
       checkPhase = lib.optionalString check ''
         ${lib.getExe pkgs.nushell} --no-config-file --no-std-lib --ide-check 100 "$target"
       '';
@@ -108,9 +126,13 @@ let
       };
     };
 
-  # Repo-local packages that NixOS modules reach for as `pkgs.<name>`.
-  # Flake-output-only packages live in `packageSetFor` instead so they don't
-  # leak into the nixpkgs namespace inside images.
+  /**
+    Repo-local nixpkgs overlay.
+
+    Exposes the few repo-owned packages that NixOS modules expect to find
+    as `pkgs.<name>`. Flake-output-only packages live in `packageSetFor`
+    instead so they don't leak into the nixpkgs namespace inside images.
+  */
   overlay = final: _prev: {
     minecraft-hot-reload-agent = final.callPackage paths.packages.minecraftHotReloadAgent { };
     minecraft-rcon = final.callPackage paths.packages.minecraftRcon {
@@ -118,9 +140,16 @@ let
     };
   };
   overlays = [ overlay ];
+
+  /**
+    nixpkgs instance with the repo overlay applied, evaluated for
+    `x86_64-linux`. Use this when the image build needs `pkgs` directly.
+  */
   pkgs = import nixpkgs { inherit system overlays; };
 
-  # The module registry. collect picks all leaf paths from the nested attrset.
+  # Flat list of module paths from the canonical nested registry in
+  # `modules/default.nix`. Pulled in unconditionally so every option is in
+  # scope; each module stays inert until its `enable` flag is set.
   moduleList = lib.collect builtins.isPath (import paths.modules);
 
   buildNpmSite = import ./build-npm-site.nix;
@@ -139,11 +168,19 @@ let
       // args
     );
 
-  # Fetch a static artifact (mod jar, plugin, server) by URL + SRI hash.
-  # Hashes live next to URLs in the consuming catalog rather than in flake
-  # inputs, so a routine mod bump touches one JSON file and not flake.lock.
+  /**
+    Fetch a static artifact (mod jar, plugin, server) by URL + SRI hash.
+
+    Hashes live next to URLs in the consuming catalog rather than in flake
+    inputs, so a routine mod bump touches one JSON file and not
+    `flake.lock`. Accepts and ignores extra catalog keys.
+  */
   mkArtifact = { url, hash, ... }: pkgs.fetchurl { inherit url hash; };
 
+  /**
+    Enrich every entry of a `{ slug = { url, hash, ... }; ... }` catalog
+    with a `src` attribute pointing at the fetched store path.
+  */
   attachArtifactSources = lib.mapAttrs (_: entry: entry // { src = mkArtifact entry; });
 
   paperServers = {
@@ -156,14 +193,17 @@ let
     };
   };
 
-  # Per-version Fabric/NeoForge/Sponge mod catalogs generated by
-  # `tools/update-mods.py` from `<paths.minecraftMods>/manifest.json`. The
-  # bare-JSON catalog (slug -> { url, hash }) becomes `{ url, hash, src }` so
-  # callers can pass it straight to `services.minecraft.modCatalog`.
-  #
-  # Examples and images both consume `modCatalogs.<gameVersion>` by name. To
-  # add a mod, edit the manifest and run `nix run .#update-mods`; do not
-  # inline URLs anywhere downstream.
+  /**
+    Per-version Fabric/NeoForge/Sponge mod catalogs generated by
+    `tools/update-mods.py` from `<paths.minecraftMods>/manifest.json`.
+
+    The bare-JSON catalog (slug -> `{ url, hash }`) is enriched into
+    `{ url, hash, src }` so callers can pass it straight to
+    `services.minecraft.modCatalog`. Examples and images consume
+    `modCatalogs.<gameVersion>` by name; to add a mod, edit the manifest
+    and run `nix run .#update-mods` and do not inline URLs anywhere
+    downstream.
+  */
   modCatalogs =
     let
       gameVersions = lib.pipe paths.minecraftMods [
@@ -181,6 +221,12 @@ let
         );
     in
     lib.genAttrs gameVersions catalogFor;
+
+  /**
+    Pinned artifact catalogs surfaced to images and examples by name.
+    Examples must consume entries through this set (or one of the module
+    options it seeds) rather than inlining URLs and hashes.
+  */
   artifacts = {
     inherit attachArtifactSources;
     minecraft = {
@@ -221,6 +267,15 @@ let
     };
   };
 
+  /**
+    Flake-output-only repo packages, callPackage-style.
+
+    These are derivations that flake consumers can reach as
+    `packages.<system>.<name>`, but that we don't want to inject into the
+    nixpkgs namespace inside an image's evaluation. Each entry takes the
+    standard `pkgs` it should build against and the cross-cutting
+    `specialArgs.ix` bundle.
+  */
   packageSetFor =
     pkgs:
     let
@@ -235,8 +290,11 @@ let
       tonbo-artifacts = pkgs.callPackage paths.packages.tonboArtifacts { };
     };
 
-  # Helpers exposed to every module via specialArgs. Keep this surface small
-  # and stable: anything here is part of the cross-module contract.
+  /**
+    Cross-cutting helpers handed to every module through `specialArgs.ix`.
+    Keep this surface small and stable: anything here is part of the
+    cross-module contract.
+  */
   ixSpecialArgs = {
     inherit
       artifacts
@@ -251,6 +309,16 @@ let
     packages = packageSetFor pkgs;
   };
 
+  /**
+    Run the platform config, OCI packaging, base profile, the full module
+    registry, and the caller's `modules` through `lib.nixosSystem`, then
+    return the evaluated `config`. This is the evaluation path every
+    image build and every eval test goes through, so a test exercising it
+    catches the same regressions a real build would.
+
+    Arguments:
+    - `modules`: list of additional modules layered on top of the base.
+  */
   evalImageConfig =
     {
       modules ? [ ],
@@ -267,8 +335,20 @@ let
       ++ modules;
     }).config;
 
+  /**
+    Build one self-contained OCI archive from a list of NixOS modules.
+
+    Each image is independent: ix does not stack images at runtime, it
+    runs one. Returns the OCI-archive derivation; pass it to
+    `ix image push` or use it as a `packages.<system>.<name>` output.
+  */
   mkImage = args: (evalImageConfig args).ix.build.ociImage;
 
+  /**
+    Build a fleet plan helper for a given host system. Returns a function
+    that takes a fleet spec and produces the plan/commands tooling consumes.
+    `mkFleet` is the default-system shortcut.
+  */
   mkFleetFor =
     hostSystem:
     import ./fleet.nix {
@@ -322,13 +402,43 @@ let
     else
       { ${name} = mkImage { modules = [ path ]; }; };
 
+  /**
+    Walk `images/<category>/<name>/` under `root` and expose every
+    directory as a flake package. A directory with a `versions.nix`
+    sibling produces `<name>_<ver>` for each version key plus a
+    `<name>` alias for the `default` version.
+
+    `imageTests` is an optional attrset keyed by image name (matching
+    the discovered package names). When an image has an entry, it is
+    attached to the image derivation as `passthru.tests.eval` so
+    `nix build .#<image>.passthru.tests.eval` runs it (RFC 0119).
+  */
   discoverImages =
-    root:
-    lib.mergeAttrsList (
-      lib.concatMap (
-        cat: map (name: imagePackages name (root + "/${cat}/${name}")) (subdirs (root + "/${cat}"))
-      ) (subdirs root)
-    );
+    {
+      root,
+      imageTests ? { },
+    }:
+    let
+      raw = lib.mergeAttrsList (
+        lib.concatMap (
+          cat: map (name: imagePackages name (root + "/${cat}/${name}")) (subdirs (root + "/${cat}"))
+        ) (subdirs root)
+      );
+      attach =
+        name: pkg:
+        if imageTests ? ${name} then
+          pkg
+          // {
+            passthru = (pkg.passthru or { }) // {
+              tests = (pkg.passthru.tests or { }) // {
+                eval = imageTests.${name};
+              };
+            };
+          }
+        else
+          pkg;
+    in
+    lib.mapAttrs attach raw;
 in
 {
   inherit

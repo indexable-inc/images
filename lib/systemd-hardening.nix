@@ -1,7 +1,11 @@
-# Baseline systemd hardening for long-running network daemons. Restricts
-# capabilities, devices, kernel surfaces, and namespaces. Address families
-# stay open enough to accept inbound TCP/UDP and AF_UNIX. Merge into
-# `serviceConfig` and override fields per service as needed.
+/**
+  Baseline systemd hardening for long-running network daemons.
+
+  Restricts capabilities, devices, kernel surfaces, and namespaces.
+  Address families stay open enough to accept inbound TCP/UDP and
+  AF_UNIX. Merge into `serviceConfig` and override individual fields per
+  service as needed.
+*/
 {
   CapabilityBoundingSet = [ "" ];
   DeviceAllow = [ "" ];

@@ -8,6 +8,7 @@
 }:
 let
   inherit (lib)
+    mkDefault
     mkEnableOption
     mkIf
     mkOption
@@ -28,12 +29,6 @@ in
       type = types.str;
       default = "/var/lib/postgresql/18";
     };
-
-    extraSettings = mkOption {
-      type = types.attrsOf types.str;
-      default = { };
-      description = "Additional postgresql.conf key-value pairs merged on top of tuned defaults.";
-    };
   };
 
   config = mkIf cfg.enable {
@@ -44,12 +39,15 @@ in
       package = pkgs.postgresql_18;
       inherit (cfg) dataDir port;
       enableJIT = true;
-      settings = {
+      # Tuned defaults for a dedicated VM. Override any of these by setting
+      # `services.postgresql.settings.<key>` in the same module; the user
+      # assignment wins over `mkDefault`.
+      settings = lib.mapAttrs (_: mkDefault) {
         # connections
         listen_addresses = "*";
         max_connections = "200";
 
-        # memory: tuned for dedicated VM, adjust via extraSettings
+        # memory
         shared_buffers = "256MB";
         effective_cache_size = "768MB";
         work_mem = "4MB";
@@ -87,8 +85,7 @@ in
 
         # JIT
         jit = "on";
-      }
-      // cfg.extraSettings;
+      };
     };
   };
 }

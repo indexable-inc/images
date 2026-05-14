@@ -1,4 +1,12 @@
-# Colmena-style fleet evaluation for ix images.
+/**
+  Colmena-style fleet evaluation for ix images.
+
+  Curried: the outer function takes the build dependencies (`lib`,
+  `pkgs`, `evalImageConfig`, the `ix fleet` script, and the Nushell
+  application helper); the inner takes a fleet spec
+  (`defaults`, `deployment`, `secrets`, `nodes`) and returns the
+  rendered fleet plan, image attrset, and wrapped CLI app.
+*/
 {
   lib,
   pkgs,
