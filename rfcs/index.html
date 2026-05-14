@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFCs · ix images</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fdfdfc;
+    --fg: #1a1a1a;
+    --fg-dim: #5b5b5b;
+    --link: #0050b3;
+    --code-bg: #f3f3ef;
+    --rule: #e4e2dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614;
+      --fg: #e8e6df;
+      --fg-dim: #9b9890;
+      --link: #79b8ff;
+      --code-bg: #22221f;
+      --rule: #2e2d2a;
+    }
+  }
+  html { background: var(--bg); color: var(--fg); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    max-width: 720px;
+    margin: 3rem auto;
+    padding: 0 1.25rem 4rem;
+    font-size: 17px;
+    line-height: 1.55;
+  }
+  h1, h2, h3 { line-height: 1.25; font-weight: 600; }
+  h1 { font-size: 1.9rem; margin: 0 0 0.25rem; }
+  .subtitle { color: var(--fg-dim); font-size: 1rem; margin: 0 0 2rem; }
+  h2 { font-size: 1.35rem; margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+  h3 { font-size: 1.1rem; margin-top: 1.75rem; }
+  p { margin: 0.85rem 0; }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+  }
+  code { background: var(--code-bg); padding: 0.08em 0.3em; border-radius: 3px; }
+  pre {
+    background: var(--code-bg);
+    padding: 0.85rem 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    line-height: 1.45;
+  }
+  pre code { background: transparent; padding: 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.3rem 0; }
+  blockquote {
+    border-left: 3px solid var(--rule);
+    margin: 1rem 0;
+    padding: 0.1rem 0 0.1rem 1rem;
+    color: var(--fg-dim);
+  }
+  dl.frontmatter {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.25rem 1rem;
+    margin: 0 0 2rem;
+    font-size: 0.95rem;
+  }
+  dl.frontmatter dt { font-weight: 600; color: var(--fg-dim); }
+  dl.frontmatter dd { margin: 0; }
+  strong { font-weight: 600; }
+  .status { color: var(--fg-dim); font-size: 0.9em; }
+</style>
+</head>
+<body>
+
+<h1>RFCs</h1>
+<p class="subtitle">Design documents for non-trivial changes to this repo.</p>
+
+<p>RFCs capture <em>why</em> a decision was made and what alternatives were considered, which <code>git log</code> does not. The format is HTML so each file is self-contained: open it in any browser and it reads, no Markdown processor or build step required.</p>
+
+<h2>Index</h2>
+<ul>
+  <li><a href="0001-router-vm.html">RFC 0001 — User-built router VM for fleet networking policy</a> <span class="status">· Draft</span></li>
+</ul>
+
+<h2>When to write one</h2>
+<p>Open an RFC for changes that touch shared abstractions: the fleet API, module conventions, the trust model, networking primitives, lint rules, or anything that asks contributors to do something noticeably differently. Bug fixes, refactors that do not change a public surface, and one-off additions do not need an RFC; a normal PR is enough.</p>
+<p>If you are unsure, open an RFC. The cost is low.</p>
+
+<h2>Process</h2>
+<ol>
+  <li>Copy <code>0000-template.html</code> to <code>NNNN-short-slug.html</code>, using the next free number.</li>
+  <li>Fill in the frontmatter (status starts at <code>Draft</code>) and the body.</li>
+  <li>Open a PR titled <code>RFC NNNN: &lt;short title&gt;</code>.</li>
+  <li>PR review is the discussion. Line comments are the unit of feedback.</li>
+  <li>Merge when the proposal is coherent enough to read, even if it is not "finished". Subsequent edits land as follow-up PRs against the same file. The status field in the frontmatter tracks lifecycle; PR state is just how edits get in.</li>
+</ol>
+
+<h2>Status values</h2>
+<ul>
+  <li><code>Draft</code>: the proposal exists and is open to feedback. Default for a freshly merged RFC.</li>
+  <li><code>Accepted</code>: the design is the plan of record. Implementation may not be started.</li>
+  <li><code>Implemented</code>: the proposal landed and the relevant code, docs, or process exist. Link the tracking issue and the PRs.</li>
+  <li><code>Rejected</code>: a follow-up PR set this status. Keep the file so the reasoning is preserved.</li>
+  <li><code>Withdrawn</code>: the author no longer pursues it. Same retention rule.</li>
+  <li><code>Superseded</code>: pointed at a newer RFC via <code>superseded-by</code> in frontmatter.</li>
+</ul>
+
+<h2>Numbering</h2>
+<p>Numbers are zero-padded to four digits and never reused. If two PRs race for the same number, the later one renames before merge.</p>
+
+<h2>Implementation tracking</h2>
+<p>Once an RFC is <code>Accepted</code>, file a GitHub issue tagged <code>rfc-implementation</code> that links the RFC. The issue tracks the work; the RFC remains the design source of truth. When the work lands, a follow-up PR sets the RFC status to <code>Implemented</code> and links the issue and PRs from the frontmatter.</p>
+
+<h2>Why HTML</h2>
+<p>HTML over Markdown so each RFC has direct control over typography, embedded diagrams, and any future interactivity, without a build step or external CSS dependency. The downside is more verbose source; the upside is that you can open any file with <code>file://</code> in a browser and read it as intended. PR review still works because the prose dominates the diff and the surrounding HTML is stable boilerplate.</p>
+
+</body>
+</html>
