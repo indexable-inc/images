@@ -25,6 +25,7 @@ let
     - `runtimeInputs`: extra packages prepended to PATH at runtime.
     - `python`: Python interpreter package. Defaults to `pkgs.python314`.
     - `check`, `typeCheckingMode`, `pythonPlatform`: basedpyright knobs.
+    - `extraPaths`: extra import roots for basedpyright.
     - `meta`: standard derivation meta, with `mainProgram` defaulted.
   */
   writePythonApplication =
@@ -38,6 +39,7 @@ let
       check ? true,
       typeCheckingMode ? "all",
       pythonPlatform ? "Linux",
+      extraPaths ? [ "${python}/${python.sitePackages}" ],
       meta ? { },
     }:
     let
@@ -47,6 +49,7 @@ let
       pyrightConfig = pkgs.writeText "basedpyright-${name}.json" (
         builtins.toJSON {
           include = [ (builtins.toString src) ];
+          inherit extraPaths;
           inherit typeCheckingMode pythonPlatform;
           inherit (python) pythonVersion;
         }

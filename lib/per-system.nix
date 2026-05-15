@@ -22,22 +22,6 @@ let
 
   pythonWithPydantic = pkgs.python3.withPackages (ps: [ ps.pydantic ]);
 
-  mkPythonWrapper =
-    {
-      name,
-      script,
-      python ? pkgs.python3,
-    }:
-    ix.writeNushellApplication pkgs {
-      inherit name;
-      runtimeInputs = [ python ];
-      text = ''
-        def main [...args] {
-          exec python3 ${script} ...$args
-        }
-      '';
-    };
-
   lint = ix.writeNushellApplication pkgs {
     name = "lint";
     runtimeInputs = [
@@ -66,15 +50,17 @@ let
     '';
   };
 
-  updateMods = mkPythonWrapper {
+  updateMods = ix.writePythonApplication pkgs {
     name = "update-mods";
-    script = paths.tools.updateMods;
+    src = paths.tools.updateMods;
+    typeCheckingMode = "standard";
   };
 
-  ixFleet = mkPythonWrapper {
+  ixFleet = ix.writePythonApplication pkgs {
     name = "ix-fleet";
-    script = paths.tools.ixFleet;
+    src = paths.tools.ixFleet;
     python = pythonWithPydantic;
+    typeCheckingMode = "standard";
   };
 
   benchFilesystem = import paths.bench.filesystem { inherit ix pkgs; };

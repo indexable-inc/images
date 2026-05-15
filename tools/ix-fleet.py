@@ -183,7 +183,7 @@ def run_cli(
 
     assert process.stdout is not None
     assert process.stderr is not None
-    streams: dict[typing.BinaryIO, tuple[str, typing.TextIO]] = {
+    streams: dict[typing.IO[bytes], tuple[str, typing.TextIO]] = {
         process.stdout: ("stdout", sys.stdout),
         process.stderr: ("stderr", sys.stderr),
     }
@@ -198,6 +198,7 @@ def run_cli(
         if deadline is not None:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                assert timeout is not None
                 process.kill()
                 process.wait()
                 raise CliTimeoutError(
