@@ -8,6 +8,7 @@
 # `profiles/base.nix`, which `lib/ix-oci-layer.nix` enables by default.
 {
   base = ./profiles/base.nix;
+  extended-attributes = ./profiles/extended-attributes.nix;
   git-clone = ./services/git-clone.nix;
   minestom = ./services/minestom.nix;
   minecraft-bedrock = ./services/minecraft-bedrock.nix;

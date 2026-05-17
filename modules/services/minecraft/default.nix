@@ -159,6 +159,7 @@ let
     "ops.json"
     "whitelist.json"
   ] (lib.attrNames cfg.serverFiles);
+
   bukkit = {
     worlds = lib.filterAttrs (_: world: world != { }) (
       lib.mapAttrs (
@@ -322,6 +323,59 @@ let
   normalizeFor = path: value: if fileExt path == "properties" then flattenProperties value else value;
 
   serverFiles = cfg.serverFiles // pluginConfigFiles;
+
+  defaultWorldName = toString (cfg.properties."level-name" or "world");
+  annotatedWorldNames = lib.unique ([ defaultWorldName ] ++ lib.attrNames cfg.worlds);
+  mkXattrDefaults = kind: attributes: {
+    attributes = lib.mapAttrs (_: lib.mkDefault) (
+      {
+        "user.ix.managed-by" = "nix";
+        "user.ix.service" = "minecraft";
+        "user.ix.kind" = kind;
+      }
+      // attributes
+    );
+  };
+  mkCreatedXattrDefaults =
+    kind: attributes:
+    mkXattrDefaults kind attributes
+    // {
+      create = lib.mkDefault true;
+    };
+  regionDirectoriesFor = world: [
+    {
+      path = "${dataDir}/${world}/region";
+      dimension = "overworld";
+    }
+    {
+      path = "${dataDir}/${world}/DIM-1/region";
+      dimension = "nether";
+    }
+    {
+      path = "${dataDir}/${world}/DIM1/region";
+      dimension = "end";
+    }
+  ];
+  worldXattrs = lib.listToAttrs (
+    lib.concatMap (
+      world:
+      [
+        {
+          name = "${dataDir}/${world}";
+          value = mkCreatedXattrDefaults "minecraft.world" {
+            "user.ix.minecraft.world" = world;
+          };
+        }
+      ]
+      ++ map (region: {
+        name = region.path;
+        value = mkCreatedXattrDefaults "minecraft.region-directory" {
+          "user.ix.minecraft.world" = world;
+          "user.ix.minecraft.dimension" = region.dimension;
+        };
+      }) (regionDirectoriesFor world)
+    ) annotatedWorldNames
+  );
 
   mkManaged =
     label: source:
@@ -745,7 +799,19 @@ in
           "bukkit.yml" = cfg.bukkit;
         })
       ];
+
     };
+
+    ix.extendedAttributes = lib.mkMerge [
+      {
+        ${dataDir} = mkCreatedXattrDefaults "minecraft.server-root" { };
+        "${dataDir}/${cfg.dropinDir}" = mkCreatedXattrDefaults "minecraft.dropins" {
+          "user.ix.minecraft.dropin-dir" = cfg.dropinDir;
+        };
+        "${dataDir}/config" = mkCreatedXattrDefaults "minecraft.config" { };
+      }
+      worldXattrs
+    ];
 
     networking.firewall.allowedTCPPorts = [
       cfg.port

@@ -477,9 +477,49 @@ let
 
   fleetPlan = fleet.planValue.nodes;
 
+  extendedAttributes =
+    let
+      config = evalConfig [
+        {
+          ix.extendedAttributes."/build/ix-xattr-test" = {
+            create = true;
+            attributes = {
+              "user.ix.kind" = "test.path";
+              "user.ix.owner" = "ix";
+            };
+          };
+        }
+      ];
+    in
+    {
+      inherit config;
+      activationScript = config.system.activationScripts.ix-extended-attributes.text;
+    };
+
   # --- Per-image assertion groups -------------------------------------------
 
   groups = {
+    extended-attributes = [
+      {
+        assertion = builtins.hasAttr "/build/ix-xattr-test" extendedAttributes.config.ix.extendedAttributes;
+        message = "generic ix.extendedAttributes should expose absolute runtime paths";
+      }
+      {
+        assertion = builtins.elem pkgs.attr extendedAttributes.config.environment.systemPackages;
+        message = "generic ix.extendedAttributes should add attr tools for runtime inspection";
+      }
+      {
+        assertion =
+          lib.hasInfix "/bin/setfattr" extendedAttributes.activationScript
+          && lib.hasInfix "user.ix.kind" extendedAttributes.activationScript;
+        message = "generic ix.extendedAttributes should render setfattr activation commands";
+      }
+      {
+        assertion = lib.hasInfix "refusing to set extended attributes on symlink" extendedAttributes.activationScript;
+        message = "generic ix.extendedAttributes should avoid following symlinks";
+      }
+    ];
+
     kernel-dev = [
       {
         assertion = kernelDev.config.ix.image.name == "linux-kernel-dev";
@@ -597,6 +637,30 @@ let
       {
         assertion = !(lib.hasInfix "fabric-api" minecraft.service.unit.preStart);
         message = "minecraft preStart should not embed managed mod store paths in the unit";
+      }
+      {
+        assertion =
+          minecraft.config.ix.extendedAttributes."/var/lib/minecraft".attributes."user.ix.kind"
+          == "minecraft.server-root";
+        message = "minecraft should label its runtime data directory through the generic xattr module";
+      }
+      {
+        assertion =
+          minecraft.config.ix.extendedAttributes."/var/lib/minecraft/world/region".attributes."user.ix.kind"
+          == "minecraft.region-directory"
+          &&
+            minecraft.config.ix.extendedAttributes."/var/lib/minecraft/world/region".attributes."user.ix.minecraft.dimension"
+            == "overworld";
+        message = "minecraft should label overworld region directories through the generic xattr module";
+      }
+      {
+        assertion =
+          minecraft.config.ix.extendedAttributes."/var/lib/minecraft/world/DIM-1/region".attributes."user.ix.minecraft.dimension"
+          == "nether"
+          &&
+            minecraft.config.ix.extendedAttributes."/var/lib/minecraft/world/DIM1/region".attributes."user.ix.minecraft.dimension"
+            == "end";
+        message = "minecraft should label Nether and End region directories through the generic xattr module";
       }
       # rcon coverage stays on the minecraft default image because the option
       # surface lives in `services.minecraft`, not in a paper-specific module.
@@ -959,6 +1023,19 @@ let
   # --- Per-image build-time checks ------------------------------------------
 
   buildScripts = {
+    extended-attributes = ''
+      rm -rf /build/ix-xattr-test
+      mkdir -p /build/ix-xattr-probe
+      if ${pkgs.attr}/bin/setfattr --name user.ix.probe --value yes -- /build/ix-xattr-probe; then
+        ${extendedAttributes.activationScript}
+        test -d /build/ix-xattr-test
+        test "$(${pkgs.attr}/bin/getfattr --absolute-names --only-values -n user.ix.kind /build/ix-xattr-test)" = "test.path"
+        test "$(${pkgs.attr}/bin/getfattr --absolute-names --only-values -n user.ix.owner /build/ix-xattr-test)" = "ix"
+      else
+        echo "xattrs are not supported by the Nix build sandbox filesystem; checked activation rendering by eval"
+      fi
+    '';
+
     minecraft = ''
       ! grep -R 'rcon.password' ${minecraft.rcon.managed.serverFiles}
       grep -q '^query.port=25565$' ${minecraft.nestedProperties.managed.serverFiles}/server.properties
