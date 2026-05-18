@@ -3,3 +3,6 @@ result
 .gradle
 build
 target
+__pycache__/
+*.py[cod]
+*$py.class
