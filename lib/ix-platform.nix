@@ -5,6 +5,76 @@
 # No binary cache hits: everything builds from source.
 { config, lib, ... }:
 let
+  healthCheckType = lib.types.submodule (
+    { name, ... }:
+    {
+      options = {
+        description = lib.mkOption {
+          type = lib.types.str;
+          default = name;
+          description = "Human-readable check name shown by fleet health commands.";
+        };
+
+        from = lib.mkOption {
+          type = lib.types.enum [
+            "guest"
+            "host"
+          ];
+          default = "guest";
+          description = ''
+            Where the command runs.
+
+            `guest` execs through `ix shell <node> -- <command>` inside the VM.
+            `host` execs `<command>` directly on the operator's machine and
+            exports `IX_NODE` plus any fields returned by `ix ls` as
+            `IX_NODE_<KEY>` env vars, so the command can probe the node from
+            outside the VM (firewall, public IPv4, gateway path).
+          '';
+        };
+
+        command = lib.mkOption {
+          type = lib.types.nonEmptyListOf lib.types.str;
+          description = ''
+            Command argv. For `from = "guest"` it runs in the VM through
+            `ix shell`. For `from = "host"` it runs directly with the
+            `IX_NODE*` env vars described above; tools must be on the
+            operator's PATH.
+          '';
+        };
+
+        timeoutSec = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 30;
+          description = "Per-attempt timeout in seconds.";
+        };
+
+        attempts = lib.mkOption {
+          type = lib.types.ints.positive;
+          default = 30;
+          description = "Maximum number of attempts before the check fails.";
+        };
+
+        intervalSec = lib.mkOption {
+          type = lib.types.ints.unsigned;
+          default = 2;
+          description = "Seconds to wait between failed attempts.";
+        };
+
+        requiresIpv4 = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Whether this check needs `IX_NODE_IPV4` from `ix ls`.
+
+            Use this for host-side public reachability probes that connect to
+            the node's assigned IPv4 address. Fleet evaluation rejects nodes
+            with this requirement unless `deployment.ipv4 = true`.
+          '';
+        };
+      };
+    }
+  );
+
   portClaimType = lib.types.submodule (
     { name, ... }:
     {
@@ -68,30 +138,52 @@ let
   renderPortClaim = claim: "${claim.name} (${claim.address}, ${claim.description})";
   renderPortClaimConflict =
     key: claims: "${key}: ${lib.concatMapStringsSep ", " renderPortClaim claims}";
+  ipv4GuestHealthChecks = lib.filterAttrs (
+    _name: check: check.requiresIpv4 && check.from != "host"
+  ) config.ix.healthChecks;
 in
 {
-  options.ix.networking.portClaims = lib.mkOption {
-    type = lib.types.attrsOf portClaimType;
-    default = { };
-    description = ''
-      Sockets claimed by repo-owned service modules inside this image.
+  options.ix = {
+    healthChecks = lib.mkOption {
+      type = lib.types.attrsOf healthCheckType;
+      default = { };
+      description = ''
+        Commands that prove this image's important services are ready.
 
-      The registry catches same-namespace listener collisions at eval time.
-      Use separate fleet nodes or an explicit alternate port when two services
-      need the same public protocol port.
-    '';
-  };
+        Each check declares whether it runs from inside the VM (`from = "guest"`)
+        or from the operator host (`from = "host"`); host checks are how you
+        prove public reachability, firewall correctness, and external routing,
+        not just that systemd thinks the unit is active. Fleet plans expose
+        these so `ix-fleet health` and the post-deploy waits in `up`,
+        `replace`, and `switch` can use them.
+      '';
+    };
 
-  # Networking policy (per-port filtering, L7, WAF, rate limiting, gateway
-  # behavior) belongs to the image, not to ix. ix exposes two primitives:
-  # east-west group membership (which VMs can reach each other) and
-  # north-south on/off (whether the VM has internet ingress / egress).
-  # Anything finer lives in `networking.firewall.*` inside the image, in a
-  # sidecar, or behind a user-built gateway VM. `eastWest.hostName` stays
-  # here because it is a name, not a policy.
-  options.ix.networking.eastWest.hostName = lib.mkOption {
-    type = lib.types.str;
-    default = config.networking.hostName;
+    networking = {
+      portClaims = lib.mkOption {
+        type = lib.types.attrsOf portClaimType;
+        default = { };
+        description = ''
+          Sockets claimed by repo-owned service modules inside this image.
+
+          The registry catches same-namespace listener collisions at eval time.
+          Use separate fleet nodes or an explicit alternate port when two services
+          need the same public protocol port.
+        '';
+      };
+
+      # Networking policy (per-port filtering, L7, WAF, rate limiting, gateway
+      # behavior) belongs to the image, not to ix. ix exposes two primitives:
+      # east-west group membership (which VMs can reach each other) and
+      # north-south on/off (whether the VM has internet ingress / egress).
+      # Anything finer lives in `networking.firewall.*` inside the image, in a
+      # sidecar, or behind a user-built gateway VM. `eastWest.hostName` stays
+      # here because it is a name, not a policy.
+      eastWest.hostName = lib.mkOption {
+        type = lib.types.str;
+        default = config.networking.hostName;
+      };
+    };
   };
 
   config = {
@@ -105,6 +197,13 @@ in
             )}
 
           Put services that need the same public protocol port in separate fleet nodes/VMs, or choose an explicit alternate port when same-image co-location is intentional.
+        '';
+      }
+      {
+        assertion = ipv4GuestHealthChecks == { };
+        message = ''
+          ix.healthChecks can only set requiresIpv4 on host checks:
+            ${lib.concatStringsSep ", " (lib.attrNames ipv4GuestHealthChecks)}
         '';
       }
     ];

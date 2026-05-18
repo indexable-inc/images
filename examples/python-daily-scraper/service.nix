@@ -17,6 +17,7 @@ let
   package = import ./package.nix { inherit ix lib pkgs; };
   dataDir = "/var/lib/daily-scraper";
   outputDir = "${dataDir}/parquet";
+  systemctl = lib.getExe' config.systemd.package "systemctl";
 
   scraperArgs = [
     (lib.getExe cfg.package)
@@ -123,6 +124,17 @@ in
 
   config = mkIf cfg.enable {
     environment.systemPackages = [ cfg.package ];
+
+    ix.healthChecks.daily-scraper = {
+      from = "guest";
+      description = "Daily scraper timer is active";
+      command = [
+        systemctl
+        "is-active"
+        "--quiet"
+        "daily-scraper.timer"
+      ];
+    };
 
     systemd.services.daily-scraper = {
       description = "Daily Python data scraper";

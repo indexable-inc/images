@@ -35,6 +35,7 @@
           minecraftRcon = ./packages/minecraft-rcon;
           minecraftSyncManaged = ./packages/minecraft-sync-managed;
           llmClippy = ./packages/llm-clippy;
+          mcProbe = ./packages/mc-probe;
           minestom.servers.hello = ./packages/minestom/servers/hello;
           nixCargoUnit = ./packages/nix-cargo-unit;
           ociImageBuilder = ./packages/oci-image-builder;

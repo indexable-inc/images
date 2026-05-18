@@ -27,6 +27,7 @@ let
 
   dataDir = "/var/lib/minecraft";
   managedRoot = "/etc/minecraft";
+  systemctl = lib.getExe' config.systemd.package "systemctl";
   fileExt = path: lib.last (lib.splitString "." path);
 
   flattenProperties =
@@ -967,6 +968,24 @@ in
       default = true;
       description = "Whether to open the Minecraft Java port in the firewall.";
     };
+
+    health.motdContains = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "Factions" ];
+      description = ''
+        Substrings the rendered MOTD must contain for the `minecraft-status`
+        health check to pass. Color codes (`§X` and `&X`) are stripped from
+        both sides before comparing, so plain text is the right thing to put
+        here. When unset and `services.minecraft.properties.motd` is a string,
+        the health check asserts that MOTD automatically. Set an empty list to
+        probe SLP without asserting MOTD.
+
+        Catches the failure mode where the server starts and accepts
+        connections but is serving the wrong world or branding, e.g. when a
+        replacement image is rolled out against the wrong node.
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
@@ -991,6 +1010,10 @@ in
 
     services.minecraft = {
       rcon.enable = lib.mkIf cfg.worldBorder.enable (lib.mkDefault true);
+
+      health.motdContains = lib.mkIf (builtins.isString (cfg.properties.motd or null)) (
+        lib.mkDefault [ cfg.properties.motd ]
+      );
 
       properties = lib.mkMerge [
         {
@@ -1029,32 +1052,87 @@ in
 
     };
 
-    ix.extendedAttributes = lib.mkMerge [
-      {
-        ${dataDir} = mkCreatedXattrDefaults "minecraft.server-root" { };
-        "${dataDir}/${cfg.dropinDir}" = mkCreatedXattrDefaults "minecraft.dropins" {
-          "user.ix.minecraft.dropin-dir" = cfg.dropinDir;
-        };
-        "${dataDir}/config" = mkCreatedXattrDefaults "minecraft.config" { };
-      }
-      worldXattrs
-      datapackXattrs
-    ];
+    ix = {
+      extendedAttributes = lib.mkMerge [
+        {
+          ${dataDir} = mkCreatedXattrDefaults "minecraft.server-root" { };
+          "${dataDir}/${cfg.dropinDir}" = mkCreatedXattrDefaults "minecraft.dropins" {
+            "user.ix.minecraft.dropin-dir" = cfg.dropinDir;
+          };
+          "${dataDir}/config" = mkCreatedXattrDefaults "minecraft.config" { };
+        }
+        worldXattrs
+        datapackXattrs
+      ];
 
-    ix.networking.portClaims = {
-      minecraft = {
-        protocol = "tcp";
-        inherit (cfg) port;
-        description = "Minecraft Java server";
+      networking.portClaims = {
+        minecraft = {
+          protocol = "tcp";
+          inherit (cfg) port;
+          description = "Minecraft Java server";
+        };
+      }
+      // lib.optionalAttrs rconEnabled {
+        minecraft-rcon = {
+          protocol = "tcp";
+          port = rconPort;
+          description = "Minecraft RCON";
+        };
       };
-    }
-    // lib.optionalAttrs rconEnabled {
-      minecraft-rcon = {
-        protocol = "tcp";
-        port = rconPort;
-        description = "Minecraft RCON";
+
+      healthChecks = {
+        minecraft = {
+          from = "guest";
+          description = "Minecraft systemd unit is active";
+          command = [
+            systemctl
+            "is-active"
+            "--quiet"
+            "minecraft.service"
+          ];
+        };
+
+        minecraft-status = {
+          from = "guest";
+          description =
+            "Minecraft answers SLP"
+            + lib.optionalString (
+              cfg.health.motdContains != [ ]
+            ) " and the MOTD contains the configured substrings";
+          # Probes loopback inside the guest so we exercise the in-process
+          # listener even when the public firewall is closed (Paper backends
+          # behind Velocity, for example). `mc-probe` lives in the closure,
+          # so its store path is resolvable from inside the VM.
+          command = [
+            (lib.getExe ix.packages.mc-probe)
+            "127.0.0.1:${toString cfg.port}"
+          ]
+          ++ lib.concatMap (needle: [
+            "--motd-contains"
+            needle
+          ]) cfg.health.motdContains;
+        };
+      }
+      // lib.optionalAttrs cfg.openFirewall {
+        minecraft-reachable = {
+          from = "host";
+          requiresIpv4 = true;
+          description = "Minecraft Java port accepts TCP from operator host";
+          # Runs on the operator host (not inside the Nix store), so the tool
+          # is named, not store-pathed. macOS and normal Linux hosts provide nc.
+          command = [
+            "nc"
+            "-z"
+            "-w"
+            "5"
+            "$IX_NODE_IPV4"
+            (toString cfg.port)
+          ];
+        };
       };
     };
+
+    environment.systemPackages = [ ix.packages.mc-probe ];
 
     networking.firewall.allowedTCPPorts =
       lib.optionals cfg.openFirewall [ cfg.port ] ++ lib.optionals cfg.rcon.openFirewall [ rconPort ];

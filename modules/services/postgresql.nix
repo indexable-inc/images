@@ -1,7 +1,6 @@
 # PostgreSQL 18 with performance-tuned defaults for AMD EPYC Gen 5 (Zen 5).
 {
   config,
-  ix,
   lib,
   pkgs,
   ...
@@ -15,6 +14,7 @@ let
     types
     ;
   cfg = config.services.ix-postgresql;
+  pgIsReady = lib.getExe' config.services.postgresql.package "pg_isready";
 in
 {
   options.services.ix-postgresql = {
@@ -57,6 +57,23 @@ in
     };
 
     networking.firewall.allowedTCPPorts = lib.optionals cfg.openFirewall [ cfg.port ];
+
+    ix.healthChecks.ix-postgresql = {
+      from = "guest";
+      # `pg_isready` is a real readiness probe: returns 0 only when postmaster
+      # accepts connections, not merely when systemd marked the unit active.
+      # Catches "starting up", "rejecting connections", and crashed-but-not-yet-
+      # failed states that `systemctl is-active` misses.
+      description = "PostgreSQL accepts connections";
+      command = [
+        pgIsReady
+        "--quiet"
+        "--host"
+        "/run/postgresql"
+        "--port"
+        (toString cfg.port)
+      ];
+    };
 
     # `services.postgresql.settings.huge_pages = "on"` (below) makes
     # postmaster refuse to start without a sufficient pool of 2 MiB

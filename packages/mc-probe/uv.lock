@@ -1,0 +1,45 @@
+version = 1
+revision = 3
+requires-python = ">=3.13"
+
+[[package]]
+name = "asyncio-dgram"
+version = "3.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/92/531067e931af346b13cab79ab9be2619b043e54d611f413809e71119e093/asyncio_dgram-3.0.0.tar.gz", hash = "sha256:bd0937807a44451d799573b32400702187fd0bba6136f7cf306e9327c0c20f3e", size = 26500, upload-time = "2026-01-21T19:40:18.547Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/af/a1/ad5d53a50d07b4da934c5ff7db8fc3cfd091660b0f78174499644c72523f/asyncio_dgram-3.0.0-py3-none-any.whl", hash = "sha256:a4113061e6a7fbeee928d49c56cb61b68ca4a2fbee37f7e97280bbc72323ba8e", size = 7092, upload-time = "2026-01-21T19:40:17.309Z" },
+]
+
+[[package]]
+name = "dnspython"
+version = "2.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8c/8b/57666417c0f90f08bcafa776861060426765fdb422eb10212086fb811d26/dnspython-2.8.0.tar.gz", hash = "sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f", size = 368251, upload-time = "2025-09-07T18:58:00.022Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/5a/18ad964b0086c6e62e2e7500f7edc89e3faa45033c71c1893d34eed2b2de/dnspython-2.8.0-py3-none-any.whl", hash = "sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af", size = 331094, upload-time = "2025-09-07T18:57:58.071Z" },
+]
+
+[[package]]
+name = "mc-probe"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "mcstatus" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "mcstatus", specifier = ">=13.1.0,<14.0.0" }]
+
+[[package]]
+name = "mcstatus"
+version = "13.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asyncio-dgram" },
+    { name = "dnspython" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3b/11/75ade1d6e86e45b8233ef17fc09188dbf29a427856664c33c9097958166e/mcstatus-13.1.0.tar.gz", hash = "sha256:491f27afd384c8b3dee21fe88d6c0119d2f12f7c8c6b58f44e41afb65b0a8369", size = 162572, upload-time = "2026-04-20T16:59:35.921Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/90/285ae8ab8e4deed57e4c81e021d8d6a9d76fd9cbc8bff04803e77e06a28b/mcstatus-13.1.0-py3-none-any.whl", hash = "sha256:76dfaedcdfbadb105c2483a6bba1dd7e5fa9ea3dee8698fe89e4a7651b6d9a21", size = 61064, upload-time = "2026-04-20T16:59:34.085Z" },
+]

@@ -127,6 +127,19 @@ let
   ) nodeSpecs;
 
   nodeRefs = lib.mapAttrs (_name: config: { inherit config; }) nodeConfigs;
+  planHealthChecks =
+    config:
+    lib.mapAttrs (_name: check: {
+      inherit (check)
+        attempts
+        description
+        from
+        intervalSec
+        requiresIpv4
+        timeoutSec
+        ;
+      command = map builtins.unsafeDiscardStringContext check.command;
+    }) config.ix.healthChecks;
 
   nodePlan = lib.mapAttrs (
     name: spec:
@@ -137,6 +150,7 @@ let
       deploy = spec.deployment;
       replacementDestination = deploy.destination or "${imageName}:${imageTag}";
       switchBuildOn = deploy.switch.buildOn or "remote";
+      ipv4HealthChecks = lib.filterAttrs (_: check: check.requiresIpv4) config.ix.healthChecks;
       # ix switch expects a system out-path for local copy and a .drv for remote
       # build. Picking the wrong shape uploads the build-time closure and tries
       # to run `<drv>/bin/switch-to-configuration`, which deadlocks.
@@ -147,6 +161,8 @@ let
           config.system.build.toplevel.drvPath
       );
     in
+    assert lib.assertMsg (deploy.ipv4 || ipv4HealthChecks == { })
+      "fleet node '${name}' has health checks that require deployment.ipv4 = true: ${lib.concatStringsSep ", " (lib.attrNames ipv4HealthChecks)}";
     {
       inherit
         name
@@ -178,6 +194,7 @@ let
       inherit (deploy) env;
       inherit (deploy) l7ProxyPorts;
       dependsOn = lib.concatMap expandDependency spec.dependsOn;
+      healthChecks = planHealthChecks config;
     }
   ) nodeSpecs;
 
@@ -211,6 +228,7 @@ let
 
   subcommands = lib.genAttrs [
     "diff"
+    "health"
     "replace"
     "switch"
     "up"
@@ -221,6 +239,7 @@ in
   inherit (subcommands)
     diff
     replace
+    health
     switch
     up
     ;

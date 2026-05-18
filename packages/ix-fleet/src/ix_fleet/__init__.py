@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -5,6 +6,8 @@ import asyncio
 import json
 import os
 import select
+import shlex
+import string
 import subprocess
 import sys
 import time
@@ -46,6 +49,20 @@ class SwitchSpec(BaseModel):
     overrideInputs: dict[str, str] = Field(default_factory=empty_str_dict)
 
 
+class HealthCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    description: str = Field(min_length=1)
+    command: list[str] = Field(min_length=1)
+    timeoutSec: int = Field(ge=1)
+    attempts: int = Field(ge=1)
+    intervalSec: int = Field(ge=0)
+    requiresIpv4: bool = False
+    # `from` is a Python keyword, so accept it under an alias and store as
+    # `from_` on the model.
+    from_: typing.Literal["guest", "host"] = Field(alias="from")
+
+
 class FleetNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -63,6 +80,7 @@ class FleetNode(BaseModel):
     env: dict[str, str] = Field(default_factory=empty_str_dict)
     l7ProxyPorts: list[int] = Field(default_factory=empty_int_list)
     dependsOn: list[str] = Field(default_factory=empty_str_list)
+    healthChecks: dict[str, HealthCheck] = Field(default_factory=dict)
 
 
 class FleetPlan(BaseModel):
@@ -358,6 +376,94 @@ async def switch_node(node: FleetNode, *, dry_run: bool) -> None:
     )
 
 
+def _stringify_env_value(value: typing.Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float)):
+        return str(value)
+    return json.dumps(value)
+
+
+def node_env_vars(node: FleetNode, row: dict[str, typing.Any] | None) -> dict[str, str]:
+    env = {"IX_NODE": node.name}
+    if row is not None:
+        for key, value in row.items():
+            env[f"IX_NODE_{key.upper()}"] = _stringify_env_value(value)
+    return env
+
+
+def expand_host_command(command: list[str], env: dict[str, str]) -> list[str]:
+    return [string.Template(arg).safe_substitute(env) for arg in command]
+
+
+async def run_health_check(
+    node: FleetNode,
+    check_name: str,
+    check: HealthCheck,
+    *,
+    dry_run: bool,
+) -> None:
+    command = ["ix", "shell", node.name, "--", *check.command] if check.from_ == "guest" else check.command
+
+    if dry_run:
+        step(f"+ health {node.name}/{check_name} ({check.from_}): {shlex.join(command)}")
+        return
+
+    step(f"checking {node.name}/{check_name} ({check.from_}): {check.description}")
+    last_error = ""
+    for attempt in range(1, check.attempts + 1):
+        env: dict[str, str] | None = None
+        if check.from_ == "host":
+            row = find_node(await list_nodes(), node.name)
+            host_env = node_env_vars(node, row)
+            if check.requiresIpv4 and not host_env.get("IX_NODE_IPV4"):
+                last_error = "ix ls did not report IX_NODE_IPV4 yet"
+                if attempt < check.attempts:
+                    await asyncio.sleep(check.intervalSec)
+                continue
+            env = {**os.environ, **host_env}
+            command = expand_host_command(check.command, host_env)
+
+        try:
+            result = subprocess.run(
+                command,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=check.timeoutSec,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as error:
+            stdout = error.stdout or ""
+            stderr = error.stderr or ""
+            last_error = f"timed out after {check.timeoutSec}s\n{stdout}{stderr}".strip()
+        else:
+            if result.returncode == 0:
+                step(f"healthy {node.name}/{check_name}")
+                return
+            last_error = (result.stdout + result.stderr).strip()
+
+        if attempt < check.attempts:
+            await asyncio.sleep(check.intervalSec)
+
+    detail = f": {last_error}" if last_error else ""
+    raise RuntimeError(
+        f"{node.name}/{check_name} health check failed after {check.attempts} attempts{detail}"
+    )
+
+
+async def run_node_health_checks(node: FleetNode, *, dry_run: bool) -> None:
+    for check_name in sorted(node.healthChecks):
+        await run_health_check(
+            node,
+            check_name,
+            node.healthChecks[check_name],
+            dry_run=dry_run,
+        )
+
+
 def default_source_root(cwd: Path) -> Path:
     try:
         out = subprocess.check_output(
@@ -481,6 +587,8 @@ async def cmd_switch(plan: FleetPlan, args: argparse.Namespace) -> None:
             )
         else:
             await switch_node(node, dry_run=args.dry_run)
+        if not args.skip_health:
+            await run_node_health_checks(node, dry_run=args.dry_run)
 
 
 async def cmd_replace(plan: FleetPlan, args: argparse.Namespace) -> None:
@@ -489,6 +597,8 @@ async def cmd_replace(plan: FleetPlan, args: argparse.Namespace) -> None:
         if not args.skip_push:
             image = await push_replacement_image(node, dry_run=args.dry_run)
         await replace_node(node, image, dry_run=args.dry_run)
+        if not args.skip_health:
+            await run_node_health_checks(node, dry_run=args.dry_run)
 
 
 async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
@@ -497,6 +607,13 @@ async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
         if not args.skip_push:
             image = await push_replacement_image(node, dry_run=args.dry_run)
         await up_node(node, image, dry_run=args.dry_run)
+        if not args.skip_health:
+            await run_node_health_checks(node, dry_run=args.dry_run)
+
+
+async def cmd_health(plan: FleetPlan, args: argparse.Namespace) -> None:
+    for node in selected_nodes(plan, args.on):
+        await run_node_health_checks(node, dry_run=args.dry_run)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -522,17 +639,22 @@ def parser() -> argparse.ArgumentParser:
     add_common_options(plan, defaults=False)
     diff = sub.add_parser("diff")
     add_common_options(diff, defaults=False)
+    health = sub.add_parser("health")
+    add_common_options(health, defaults=False)
     switch = sub.add_parser("switch")
     add_common_options(switch, defaults=False)
     switch.add_argument("--no-snapshot", action="store_true")
+    switch.add_argument("--skip-health", action="store_true")
     switch.add_argument("--source-root", type=Path)
     switch.add_argument("--source-workdir", type=Path)
     replace = sub.add_parser("replace")
     add_common_options(replace, defaults=False)
     replace.add_argument("--skip-push", action="store_true")
+    replace.add_argument("--skip-health", action="store_true")
     up = sub.add_parser("up")
     add_common_options(up, defaults=False)
     up.add_argument("--skip-push", action="store_true")
+    up.add_argument("--skip-health", action="store_true")
     return p
 
 
@@ -544,6 +666,8 @@ async def main() -> None:
         print(json.dumps({"nodes": nodes}, indent=2))
     elif args.command == "diff":
         await cmd_diff(plan, args)
+    elif args.command == "health":
+        await cmd_health(plan, args)
     elif args.command == "switch":
         await cmd_switch(plan, args)
     elif args.command == "replace":
@@ -567,3 +691,7 @@ def run() -> None:
     ) as error:
         print(f"ix-fleet: {error}", file=sys.stderr)
         raise SystemExit(1) from error
+
+
+if __name__ == "__main__":
+    run()

@@ -1,0 +1,12 @@
+dependencies = ["mcstatus>=13.1.0,<14.0.0"]
+description = "Assert Minecraft Server List Ping responses for health checks"
+name = "mc-probe"
+requires-python = ">=3.13"
+version = "0.1.0"
+
+[project.scripts]
+mc-probe = "mc_probe:main"
+
+[build-system]
+build-backend = "uv_build"
+requires = ["uv_build>=0.11.0,<0.12.0"]

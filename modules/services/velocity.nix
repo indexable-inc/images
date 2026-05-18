@@ -17,6 +17,7 @@ let
   cfg = config.services.velocity;
   dataDir = "/var/lib/velocity";
   java = lib.getExe' cfg.javaPackage "java";
+  systemctl = lib.getExe' config.systemd.package "systemctl";
   tomlFormat = pkgs.formats.toml { };
   yamlFormat = pkgs.formats.yaml { };
   jsonFormat = pkgs.formats.json { };
@@ -258,6 +259,21 @@ in
       type = types.str;
       default = "<#09add3>A Velocity Server";
       description = "MiniMessage MOTD shown in Java clients' server list.";
+    };
+
+    health.motdContains = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "Survival" ];
+      description = ''
+        Substrings the rendered MOTD must contain for the `velocity-status`
+        health check to pass. Velocity renders MiniMessage tags into plain
+        text before the SLP response, so pass the plain-text payload here
+        (e.g. `[ "Survival" ]` for `<green>Survival</green>`), not the
+        MiniMessage source.
+
+        Empty list (the default) probes SLP without asserting MOTD.
+      '';
     };
 
     showMaxPlayers = mkOption {
@@ -567,6 +583,59 @@ in
     networking.firewall.allowedUDPPorts = lib.optionals (cfg.query.enable && cfg.query.openFirewall) [
       cfg.query.port
     ];
+
+    ix.healthChecks = {
+      velocity = {
+        from = "guest";
+        description = "Velocity systemd unit is active";
+        command = [
+          systemctl
+          "is-active"
+          "--quiet"
+          "velocity.service"
+        ];
+      };
+
+      velocity-status = {
+        from = "guest";
+        description =
+          "Velocity answers SLP"
+          + lib.optionalString (
+            cfg.health.motdContains != [ ]
+          ) " and the MOTD contains the configured substrings";
+        # Probes loopback inside the guest. Velocity speaks the standard
+        # Java SLP handshake even though it routes traffic to backends, so
+        # an SLP success here proves Velocity itself is healthy independent
+        # of any individual Paper backend's state.
+        command = [
+          (lib.getExe ix.packages.mc-probe)
+          "127.0.0.1:${toString cfg.port}"
+        ]
+        ++ lib.concatMap (needle: [
+          "--motd-contains"
+          needle
+        ]) cfg.health.motdContains;
+      };
+    }
+    // lib.optionalAttrs cfg.openFirewall {
+      velocity-reachable = {
+        from = "host";
+        requiresIpv4 = true;
+        description = "Velocity client port accepts TCP from operator host";
+        # Runs on the operator host (not inside the Nix store), so the tool
+        # is named, not store-pathed. macOS and normal Linux hosts provide nc.
+        command = [
+          "nc"
+          "-z"
+          "-w"
+          "5"
+          "$IX_NODE_IPV4"
+          (toString cfg.port)
+        ];
+      };
+    };
+
+    environment.systemPackages = [ ix.packages.mc-probe ];
 
     environment.etc = {
       "velocity/managed-config".source = managed.config;

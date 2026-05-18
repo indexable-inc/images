@@ -827,6 +827,22 @@ let
 
   fleetPlan = fleet.planValue.nodes;
 
+  fleetIpv4HealthCheckEval = builtins.tryEval (
+    builtins.deepSeq
+      (ix.mkFleet {
+        nodes.private.modules = [
+          {
+            ix.healthChecks."public-reachability" = {
+              from = "host";
+              requiresIpv4 = true;
+              command = [ "true" ];
+            };
+          }
+        ];
+      }).planValue.nodes.private.healthChecks."public-reachability"
+      true
+  );
+
   factionsExample =
     let
       fleet = import ../examples/factions-server {
@@ -1057,6 +1073,51 @@ let
           && claims.simple-voice-chat.port == 24454;
         message = "factions-server example should register every service listener in ix.networking.portClaims";
       }
+      {
+        assertion =
+          let
+            checks = factionsExample.fleet.planValue.nodes.factions.healthChecks;
+            mcProbe = lib.getExe repoPackages.mc-probe;
+            systemctl = lib.getExe' factionsExample.config.systemd.package "systemctl";
+          in
+          checks.minecraft.from == "guest"
+          && checks.minecraft.attempts == 30
+          &&
+            checks.minecraft.command == [
+              systemctl
+              "is-active"
+              "--quiet"
+              "minecraft.service"
+            ]
+          # The SLP check is the interesting one: it proves the Minecraft
+          # protocol speaker is up (not just the unit), and asserts the MOTD
+          # so a misrouted image lands as a check failure instead of silently
+          # serving Survival players a Factions world.
+          && checks.minecraft-status.from == "guest"
+          &&
+            checks.minecraft-status.command == [
+              mcProbe
+              "127.0.0.1:25565"
+              "--motd-contains"
+              "ix Factions | territory, raids, shops"
+            ]
+          # factions exposes Java publicly, so the host-side reachability
+          # probe is what catches firewall or routing regressions.
+          && checks.minecraft-reachable.from == "host"
+          &&
+            checks.minecraft-reachable.command == [
+              "nc"
+              "-z"
+              "-w"
+              "5"
+              "$IX_NODE_IPV4"
+              "25565"
+            ]
+          && lib.any (
+            package: lib.getName package == "mc-probe"
+          ) factionsExample.config.environment.systemPackages;
+        message = "factions-server should layer systemctl + SLP-with-MOTD + host TCP probes";
+      }
     ];
 
     survival-server = [
@@ -1119,6 +1180,50 @@ let
           && claims.geyser.port == 19132;
         message = "survival-server example should register proxy, backend, RCON, and Bedrock listeners";
       }
+      {
+        assertion =
+          let
+            checks = survivalExample.fleet.planValue.nodes.survival.healthChecks;
+            mcProbe = lib.getExe repoPackages.mc-probe;
+          in
+          checks.velocity.from == "guest"
+          && checks.minecraft.from == "guest"
+          # Velocity faces the public network in this topology, so it gets a
+          # host TCP probe. The Paper backend stays openFirewall = false, so
+          # its only host-observable signal is via Velocity itself.
+          && checks.velocity-reachable.from == "host"
+          &&
+            checks.velocity-reachable.command == [
+              "nc"
+              "-z"
+              "-w"
+              "5"
+              "$IX_NODE_IPV4"
+              "25565"
+            ]
+          && !(checks ? minecraft-reachable)
+          && lib.any (
+            package: lib.getName package == "mc-probe"
+          ) survivalExample.config.environment.systemPackages
+          # SLP checks on both: Velocity proves the proxy answers; the
+          # backend SLP proves the actual game server isn't dead behind a
+          # healthy proxy.
+          &&
+            checks.velocity-status.command == [
+              mcProbe
+              "127.0.0.1:25565"
+              "--motd-contains"
+              "ix Survival"
+            ]
+          &&
+            checks.minecraft-status.command == [
+              mcProbe
+              "127.0.0.1:25566"
+              "--motd-contains"
+              "ix Survival"
+            ];
+        message = "survival-server should expose layered guest/host probes with MOTD-aware SLP on both proxy and backend";
+      }
     ];
 
     python-daily-scraper = [
@@ -1160,6 +1265,24 @@ let
           && dailyScraperExample.timer.timerConfig.RandomizedDelaySec == "20m"
           && dailyScraperExample.timer.timerConfig.Unit == "daily-scraper.service";
         message = "python-daily-scraper example should run from a persistent daily timer";
+      }
+      {
+        assertion =
+          let
+            check = dailyScraperExample.plan.healthChecks.daily-scraper;
+          in
+          check.from == "guest"
+          &&
+            check.command == [
+              (lib.getExe' dailyScraperExample.config.systemd.package "systemctl")
+              "is-active"
+              "--quiet"
+              "daily-scraper.timer"
+            ];
+        # No listener for the operator to probe, so the guest unit check is
+        # the whole story. The explicit `from = "guest"` rules out a future
+        # default-flip accidentally turning this into an unrunnable host check.
+        message = "python-daily-scraper fleet plan should include a guest-side timer health check";
       }
       {
         assertion =
@@ -1298,7 +1421,7 @@ let
         message = "default minecraft image should include the 26.1.2 Fabric server mod set";
       }
       {
-        assertion = minecraft.config.services.minecraft.javaPackage == pkgs.temurin-jre-bin-25;
+        assertion = lib.getName minecraft.config.services.minecraft.javaPackage == "temurin-jre-bin";
         message = "default Fabric minecraft should use Temurin";
       }
       {
@@ -1613,7 +1736,9 @@ let
         message = "hyperion image should enable services.hyperion";
       }
       {
-        assertion = hyperion.cfg.package == repoPackages.hyperion;
+        assertion =
+          lib.getName hyperion.cfg.package == lib.getName repoPackages.hyperion
+          && hyperion.cfg.package.version == repoPackages.hyperion.version;
         message = "hyperion service should default to the repo-packaged Hyperion build";
       }
       {
@@ -1657,7 +1782,7 @@ let
         message = "remote-desktop image should enable services.remote-desktop";
       }
       {
-        assertion = remoteDesktop.cfg.package == pkgs.xpra;
+        assertion = lib.getName remoteDesktop.cfg.package == lib.getName pkgs.xpra;
         message = "remote-desktop should default to the nixpkgs Xpra package";
       }
       {
@@ -1950,6 +2075,33 @@ let
         message = "fleet wrapped-node deployment overrides should flow into the generated plan";
       }
       {
+        assertion =
+          let
+            check = fleetPlan.db.healthChecks.ix-postgresql;
+            pgIsReady = lib.getExe' fleet.nodes.db.services.postgresql.package "pg_isready";
+          in
+          check.from == "guest"
+          &&
+            check.command == [
+              pgIsReady
+              "--quiet"
+              "--host"
+              "/run/postgresql"
+              "--port"
+              "5432"
+            ]
+          && check.timeoutSec == 30;
+        message = "fleet plans should carry pg_isready-backed Postgres readiness checks";
+      }
+      {
+        assertion = fleet.health.meta.mainProgram == "ix-fleet-health";
+        message = "fleet wrappers should expose an ix-fleet health command";
+      }
+      {
+        assertion = !fleetIpv4HealthCheckEval.success;
+        message = "fleet plans should reject host-side IPv4 checks on private nodes";
+      }
+      {
         assertion = fleet.planValue.secrets.sessionKey.generate;
         message = "fleet plans should carry declarative secret specs";
       }
@@ -2169,7 +2321,7 @@ let
     '';
 
   imageTests = lib.mapAttrs (name: assertions: mkTest name assertions (buildScripts.${name} or "")) (
-    builtins.removeAttrs groups [ "fleet" ]
+    removeAttrs groups [ "fleet" ]
   );
 
   fleetTest = mkTest "fleet" groups.fleet "";

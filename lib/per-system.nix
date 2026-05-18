@@ -125,6 +125,7 @@ in
       inherit (repoPackages)
         hyperion
         ix-fleet
+        mc-probe
         minecraft-nbt
         minecraft-sync-managed
         llm-clippy
