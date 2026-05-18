@@ -152,47 +152,17 @@ in
   };
 
   checks =
-    lib.optionalAttrs (system == ix.system) (
-      let
-        # Serialize assertion groups to a self-contained nix-unit test file.
-        # Each assertion boolean is already evaluated at flake eval time; we
-        # bake them in as literals so nix-unit can report individual failures
-        # by name without needing nixos eval inside the sandbox.
-        nixUnitFile =
-          let
-            serializeGroup =
-              groupName: assertions:
-              lib.concatMapStrings (
-                a:
-                let
-                  n = builtins.toJSON "${groupName}: ${a.message}";
-                in
-                "  ${n} = { expr = ${if a.assertion then "true" else "false"}; expected = true; };\n"
-              ) assertions;
-          in
-          pkgs.writeText "ix-unit-tests.nix" (
-            "{\n"
-            + lib.concatStrings (lib.mapAttrsToList serializeGroup tests.groups)
-            + serializeGroup "cargo-unit-real-workspaces" tests.cargoUnitRealWorkspaceAssertions
-            + "}\n"
-          );
-      in
-      {
-        inherit (tests) eval;
-        cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
-        nix-unit = pkgs.runCommand "ix-nix-unit" { nativeBuildInputs = [ pkgs.nix-unit ]; } ''
-          nix-unit ${nixUnitFile}
-          mkdir "$out"
-        '';
-        lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
-          cp -R ${lintSource} source
-          chmod -R u+w source
-          cd source
-          ${lib.getExe lint}
-          mkdir -p "$out"
-        '';
-      }
-    )
+    lib.optionalAttrs (system == ix.system) {
+      inherit (tests) eval;
+      cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
+      lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
+        cp -R ${lintSource} source
+        chmod -R u+w source
+        cd source
+        ${lib.getExe lint}
+        mkdir -p "$out"
+      '';
+    }
     // lib.optionalAttrs (system == ix.system) rustPackageTests;
 
   formatter = pkgs.nixfmt;
