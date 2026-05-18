@@ -89,6 +89,12 @@ in
           btop
           file
           gdb
+          # gnutar, gzip, and zstd ride along so any VM switched once stays
+          # switchable: `ix switch --source` streams a tarball through
+          # `tar -x -I zstd` inside the guest, and these binaries are not
+          # on NixOS' default system PATH.
+          gnutar
+          gzip
           jq
           lldb
           lsof
@@ -96,6 +102,7 @@ in
           pv
           strace
           tcpdump
+          zstd
           ;
       }
       ++ lib.optionals shellWorkspace.enable [
