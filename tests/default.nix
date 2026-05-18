@@ -60,6 +60,8 @@ let
   bedrockService = bedrockConfig.systemd.services.minecraft-bedrock;
   bedrockServiceConfig = bedrockService.serviceConfig;
 
+  developmentBaseConfig = evalConfig [ ../images/dev/development-base ];
+
   remoteDesktopConfig = evalConfig [ ../images/desktop/remote-desktop ];
   remoteDesktopCfg = remoteDesktopConfig.services.remote-desktop;
   remoteDesktopService = remoteDesktopConfig.systemd.services.remote-desktop;
@@ -115,6 +117,7 @@ let
   packageNames = builtins.attrNames (ix.discoverImages ../images);
 
   expectedPackages = [
+    "development-base"
     "kernel-dev"
     "minecraft"
     "minecraft-bedrock"
@@ -130,6 +133,28 @@ let
     {
       assertion = packageNames == expectedPackages;
       message = "image discovery package set changed: expected ${builtins.toJSON expectedPackages}, got ${builtins.toJSON packageNames}";
+    }
+    {
+      assertion = developmentBaseConfig.ix.image.name == "development-base";
+      message = "development-base image should set the expected OCI image name";
+    }
+    {
+      assertion = lib.all (pkg: builtins.elem pkg developmentBaseConfig.environment.systemPackages) [
+        pkgs.llm-agents.claude-code
+        pkgs.llm-agents.codex
+        pkgs.gdb
+        pkgs.strace
+        pkgs.tcpdump
+        pkgs.cmake
+        pkgs.gcc
+        pkgs.gnumake
+        pkgs.ninja
+        pkgs.nodejs
+        pkgs.pkg-config
+        pkgs.python3
+        pkgs.rustup
+      ];
+      message = "development-base image should include agent, build, and debugging tools";
     }
     {
       assertion = kernelDevConfig.ix.image.name == "linux-kernel-dev";
