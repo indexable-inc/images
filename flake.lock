@@ -1,41 +1,5 @@
 {
   "nodes": {
-    "ixCliAarch64Darwin": {
-      "flake": false,
-      "locked": {
-        "narHash": "sha256-S91DPDZujxDOUKrLNEMHMa+Mng+Eln/c6PW9FRB9t5M=",
-        "type": "file",
-        "url": "https://ix.dev/cli/darwin-arm64/ix"
-      },
-      "original": {
-        "type": "file",
-        "url": "https://ix.dev/cli/darwin-arm64/ix"
-      }
-    },
-    "ixCliX86_64Darwin": {
-      "flake": false,
-      "locked": {
-        "narHash": "sha256-wmWjgN1mMADA5NDWihmoOUgFjUxd0L1/4Wn4It0V81E=",
-        "type": "file",
-        "url": "https://ix.dev/cli/darwin-x86_64/ix"
-      },
-      "original": {
-        "type": "file",
-        "url": "https://ix.dev/cli/darwin-x86_64/ix"
-      }
-    },
-    "ixCliX86_64Linux": {
-      "flake": false,
-      "locked": {
-        "narHash": "sha256-mQtFhDHIA+vntl0RhRs0w6WFNasbm82I2TWY9hTBnjM=",
-        "type": "file",
-        "url": "https://ix.dev/cli/linux-x86_64/ix"
-      },
-      "original": {
-        "type": "file",
-        "url": "https://ix.dev/cli/linux-x86_64/ix"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1778869304,
@@ -70,9 +34,6 @@
     },
     "root": {
       "inputs": {
-        "ixCliAarch64Darwin": "ixCliAarch64Darwin",
-        "ixCliX86_64Darwin": "ixCliX86_64Darwin",
-        "ixCliX86_64Linux": "ixCliX86_64Linux",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       }

@@ -4,7 +4,6 @@
   nixpkgs,
   paths,
   rust-overlay,
-  cliArtifacts ? { },
 }:
 let
   inherit (nixpkgs) lib;
@@ -514,49 +513,43 @@ let
   packageSetFor =
     pkgs:
     let
-      packageSystem = pkgs.stdenv.hostPlatform.system;
       ixForPackages = ixSpecialArgs // {
         inherit pkgs;
       };
-      basePackages = {
-        hyperion = (pkgsWithRustOverlayFor pkgs).callPackage paths.packages.hyperion {
-          ix = ixForPackages;
-        };
-        ix-fleet = pkgs.callPackage paths.packages.ixFleet {
-          ix = ixForPackages;
-        };
-        minestom.helloServerJar = pkgs.callPackage paths.packages.minestom.servers.hello {
-          ix = ixForPackages;
-        };
-        minecraft-nbt = pkgs.callPackage paths.packages.minecraftNbt {
-          inherit pkgs;
-          ix = ixForPackages;
-        };
-        llm-clippy = llmClippyFor pkgs;
-        minecraft-sync-managed = pkgs.callPackage paths.packages.minecraftSyncManaged {
-          inherit pkgs;
-          ix = ixForPackages;
-        };
-        nix-cargo-unit = pkgs.callPackage paths.packages.nixCargoUnit {
-          inherit pkgs;
-          ix = ixForPackages;
-        };
-        oci-image-builder = pkgs.callPackage paths.packages.ociImageBuilder {
-          inherit pkgs;
-          ix = ixForPackages;
-        };
-        python-mcp-server = pkgs.callPackage paths.packages.pythonMcpServer {
-          ix = ixForPackages;
-        };
-        tonbo-artifacts = pkgs.callPackage paths.packages.tonboArtifacts { };
-      };
-      cliPackages = lib.optionalAttrs (builtins.hasAttr packageSystem cliArtifacts) {
-        ix = pkgs.callPackage paths.packages.ix {
-          src = cliArtifacts.${packageSystem};
-        };
-      };
     in
-    basePackages // cliPackages;
+    {
+      hyperion = (pkgsWithRustOverlayFor pkgs).callPackage paths.packages.hyperion {
+        ix = ixForPackages;
+      };
+      ix-fleet = pkgs.callPackage paths.packages.ixFleet {
+        ix = ixForPackages;
+      };
+      minestom.helloServerJar = pkgs.callPackage paths.packages.minestom.servers.hello {
+        ix = ixForPackages;
+      };
+      minecraft-nbt = pkgs.callPackage paths.packages.minecraftNbt {
+        inherit pkgs;
+        ix = ixForPackages;
+      };
+      llm-clippy = llmClippyFor pkgs;
+      minecraft-sync-managed = pkgs.callPackage paths.packages.minecraftSyncManaged {
+        inherit pkgs;
+        ix = ixForPackages;
+      };
+      nix-cargo-unit = pkgs.callPackage paths.packages.nixCargoUnit {
+        inherit pkgs;
+        ix = ixForPackages;
+      };
+      oci-image-builder = pkgs.callPackage paths.packages.ociImageBuilder {
+        inherit pkgs;
+        ix = ixForPackages;
+      };
+      python-mcp-server = pkgs.callPackage paths.packages.pythonMcpServer {
+        ix = ixForPackages;
+      };
+      tonbo-artifacts = pkgs.callPackage paths.packages.tonboArtifacts { };
+      ix = pkgs.callPackage paths.packages.ix { };
+    };
 
   /**
     Cross-cutting helpers handed to every module through `specialArgs.ix`.
