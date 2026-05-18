@@ -1895,7 +1895,13 @@ let
       }
       {
         assertion =
-          fleetPlan.web.bootstrapImage == "registry.ix.dev/ix/test-cluster-bootstrap:zstd-tools-2026-05-12";
+          let
+            bootstrap =
+              (ix.evalImageConfig {
+                modules = [ ../images/system/test-cluster-bootstrap ];
+              }).ix.image;
+          in
+          fleetPlan.web.bootstrapImage == "registry.ix.dev/${bootstrap.name}:${bootstrap.tag}";
         message = "fleet switches should create missing nodes from the shared NixOS bootstrap image";
       }
       {
@@ -2178,7 +2184,7 @@ let
       cargoUnitRealWorkspaceScript;
 in
 {
-  inherit imageTests;
+  inherit imageTests groups cargoUnitRealWorkspaceAssertions;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
 
   # Aggregate. Pulls every per-image test into one derivation so

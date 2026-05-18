@@ -13,6 +13,7 @@
   evalImageConfig,
   ixFleet,
   writeNushellApplication,
+  bootstrapImage,
 }:
 {
   defaults ? [ ],
@@ -33,7 +34,7 @@ let
       [ ];
 
   deploymentDefaults = {
-    bootstrapImage = "registry.ix.dev/ix/test-cluster-bootstrap:zstd-tools-2026-05-12";
+    bootstrapImage = "registry.ix.dev/${bootstrapImage.name}:${bootstrapImage.tag}";
     region = "hil-1";
     ipv4 = false;
     snapshot = true;

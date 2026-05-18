@@ -621,6 +621,14 @@ let
     that takes a fleet spec and produces the plan/commands tooling consumes.
     `mkFleet` is the default-system shortcut.
   */
+  # Shared NixOS bootstrap image used to materialize missing fleet nodes.
+  # Reads the canonical name/tag from the image module so the fleet default
+  # and the image being published can't drift.
+  bootstrapImage =
+    (evalImageConfig {
+      modules = [ (paths.images + "/system/test-cluster-bootstrap") ];
+    }).ix.image;
+
   mkFleetFor =
     hostSystem:
     let
@@ -631,6 +639,7 @@ let
         lib
         evalImageConfig
         writeNushellApplication
+        bootstrapImage
         ;
       pkgs = hostPkgs;
       ixFleet = (packageSetFor hostPkgs).ix-fleet;
