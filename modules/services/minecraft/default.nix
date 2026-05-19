@@ -400,7 +400,7 @@ let
     ++ lib.optionals plugmanReloadEnabled [
       {
         name = "PlugManX.jar";
-        path = ix.artifacts.minecraft.plugins.plugmanx;
+        path = ix.artifacts.minecraft.paperPluginCatalog.plugmanx.src;
         pluginName = "PlugManX";
       }
     ];

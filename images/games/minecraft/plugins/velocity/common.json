@@ -1,0 +1,12 @@
+{
+  "floodgate-velocity": {
+    "hash": "sha256-8liZUEOkhpy28e9gURCsHZBmpbHhsxZJWiWwavoMEGA=",
+    "pluginName": "floodgate-velocity",
+    "url": "https://download.geysermc.org/v2/projects/floodgate/versions/2.2.5/builds/132/downloads/velocity"
+  },
+  "geyser-velocity": {
+    "hash": "sha256-usLTnnEXiiFlXPdmj/tvwzY7QbBNeogK8ex4jNTs1e4=",
+    "pluginName": "Geyser-Velocity",
+    "url": "https://download.geysermc.org/v2/projects/geyser/versions/2.10.0/builds/1149/downloads/velocity"
+  }
+}

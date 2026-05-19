@@ -1,0 +1,20 @@
+{
+  "loader": "velocity",
+  "common": {
+    "game_versions": [],
+    "mods": [
+      {
+        "slug": "geyser-velocity",
+        "pluginName": "Geyser-Velocity",
+        "version": "2.10.0+1149",
+        "url": "https://download.geysermc.org/v2/projects/geyser/versions/2.10.0/builds/1149/downloads/velocity"
+      },
+      {
+        "slug": "floodgate-velocity",
+        "pluginName": "floodgate-velocity",
+        "version": "2.2.5+132",
+        "url": "https://download.geysermc.org/v2/projects/floodgate/versions/2.2.5/builds/132/downloads/velocity"
+      }
+    ]
+  }
+}

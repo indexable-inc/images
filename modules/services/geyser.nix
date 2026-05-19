@@ -85,8 +85,8 @@ in
 
     package = mkOption {
       type = types.package;
-      default = ix.artifacts.minecraft.geyser.velocity;
-      defaultText = lib.literalExpression "ix.artifacts.minecraft.geyser.velocity";
+      default = ix.artifacts.minecraft.velocityPluginCatalog.geyser-velocity.src;
+      defaultText = lib.literalExpression "ix.artifacts.minecraft.velocityPluginCatalog.geyser-velocity.src";
       description = "Geyser Velocity plugin jar.";
     };
 

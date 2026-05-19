@@ -44,6 +44,11 @@
     "pluginName": "PlaceholderAPI",
     "url": "https://cdn.modrinth.com/data/lKEzGugV/versions/UmbIiI5H/PlaceholderAPI-2.12.2.jar"
   },
+  "plugmanx": {
+    "hash": "sha256-LLb7Ddfm9YZ7ypv6PwN1HW2J1rlJ6LbTdAUHtVrmqcA=",
+    "pluginName": "PlugManX",
+    "url": "https://cdn.modrinth.com/data/yro4niHu/versions/hrMAp7Ww/PlugManX-3.0.4.jar"
+  },
   "pvpindex-factions": {
     "hash": "sha512-Vwb3p8ijsF9STJn6xWfic2muAYVUOjKSgv0/rxmp4FzkSXyMjZZhniX4I5RFaMFBA72Eqn0xKU1OUlUydJ6tMg==",
     "pluginName": "PvPIndexFactions",

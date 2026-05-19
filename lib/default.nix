@@ -452,6 +452,7 @@ let
 
   modCatalogs = generatedCatalogs paths.minecraftMods;
   paperPluginCatalogs = generatedCatalogs paths.minecraftPaperPlugins;
+  velocityPluginCatalogs = generatedCatalogs paths.minecraftVelocityPlugins;
 
   # Minecraft version of the default variant declared in
   # `images/games/minecraft/versions.nix`. Lets per-loader fallback catalogs
@@ -465,6 +466,28 @@ let
     in
     versionsModule.${versionsModule.default}.services.minecraft.version;
 
+  # Fabric meta serves every server jar from the same loader+installer pair;
+  # only the Minecraft version moves. Keep the pair in one place so a Fabric
+  # bump touches one field instead of every URL string.
+  fabricLoaderVersion = "0.19.2";
+  fabricInstallerVersion = "1.1.1";
+  fabricServerUrl =
+    mcVer:
+    "https://meta.fabricmc.net/v2/versions/loader/${mcVer}/${fabricLoaderVersion}/${fabricInstallerVersion}/server/jar";
+  fabricServerHashes = {
+    "26.2-snapshot-5" = "sha256-IZctWQu9VH4Z5lU/VcEzvPGLfW8boOAXtCaQlKXyA5k=";
+    "26.2-snapshot-6" = "sha256-J4zGg7YlrHmYBsagTr+x2ZcAgOvj5vr/8iVgwMVG/e0=";
+    "26.1.2" = "sha256-6RvRm5/w4ExXhD5iTS9U0KPjmgSMr8pejiDrmENEXb0=";
+    "1.21.11" = "sha256-xDK1HU7Xwbr0Z7pw7Dtdtob0zvlfq9pZ9J4O32u4jBc=";
+  };
+  fabricServers = lib.mapAttrs' (mcVer: hash: {
+    name = "${mcVer}-fabric";
+    value = mkArtifact {
+      url = fabricServerUrl mcVer;
+      inherit hash;
+    };
+  }) fabricServerHashes;
+
   /**
     Pinned artifact catalogs surfaced to images and presets by name.
     Presets must consume entries through this set (or one of the module
@@ -473,47 +496,25 @@ let
   artifacts = {
     inherit attachArtifactSources;
     minecraft = {
-      inherit paperServers modCatalogs paperPluginCatalogs;
-      inherit velocityServers;
+      inherit
+        modCatalogs
+        paperPluginCatalogs
+        paperServers
+        velocityPluginCatalogs
+        velocityServers
+        ;
       paperPluginCatalog =
         if builtins.hasAttr defaultMinecraftVersion paperPluginCatalogs then
           paperPluginCatalogs.${defaultMinecraftVersion}
         else
           throw "ix.lib.artifacts.minecraft.paperPluginCatalog: no Paper plugin catalog generated for Minecraft ${defaultMinecraftVersion} (the default in images/games/minecraft/versions.nix). Run `nix run .#update-mods -- --manifest images/games/minecraft/plugins/paper/manifest.json --version ${defaultMinecraftVersion}` and commit the result.";
-      servers =
-        lib.mapAttrs (_: mkArtifact) {
-          "26.2-snapshot-5-fabric" = {
-            url = "https://meta.fabricmc.net/v2/versions/loader/26.2-snapshot-5/0.19.2/1.1.1/server/jar";
-            hash = "sha256-IZctWQu9VH4Z5lU/VcEzvPGLfW8boOAXtCaQlKXyA5k=";
-          };
-          "26.2-snapshot-6-fabric" = {
-            url = "https://meta.fabricmc.net/v2/versions/loader/26.2-snapshot-6/0.19.2/1.1.1/server/jar";
-            hash = "sha256-J4zGg7YlrHmYBsagTr+x2ZcAgOvj5vr/8iVgwMVG/e0=";
-          };
-          "26.1.2-fabric" = {
-            url = "https://meta.fabricmc.net/v2/versions/loader/26.1.2/0.19.2/1.1.1/server/jar";
-            hash = "sha256-6RvRm5/w4ExXhD5iTS9U0KPjmgSMr8pejiDrmENEXb0=";
-          };
-          "1.21.11-fabric" = {
-            url = "https://meta.fabricmc.net/v2/versions/loader/1.21.11/0.19.2/1.1.1/server/jar";
-            hash = "sha256-xDK1HU7Xwbr0Z7pw7Dtdtob0zvlfq9pZ9J4O32u4jBc=";
-          };
-        }
-        // {
-          "1.21.11-paper" = paperServers."1.21.11".src;
-          "26.1.2-paper" = paperServers."26.1.2".src;
-        };
-      plugins.plugmanx = mkArtifact {
-        url = "https://cdn.modrinth.com/data/yro4niHu/versions/hrMAp7Ww/PlugManX-3.0.4.jar";
-        hash = "sha256-LLb7Ddfm9YZ7ypv6PwN1HW2J1rlJ6LbTdAUHtVrmqcA=";
-      };
-      geyser.velocity = mkArtifact {
-        url = "https://download.geysermc.org/v2/projects/geyser/versions/2.10.0/builds/1149/downloads/velocity";
-        hash = "sha256-usLTnnEXiiFlXPdmj/tvwzY7QbBNeogK8ex4jNTs1e4=";
-      };
-      floodgate.velocity = mkArtifact {
-        url = "https://download.geysermc.org/v2/projects/floodgate/versions/2.2.5/builds/132/downloads/velocity";
-        hash = "sha256-8liZUEOkhpy28e9gURCsHZBmpbHhsxZJWiWwavoMEGA=";
+      # Velocity plugins are cross-Minecraft-version: `velocityPluginCatalog`
+      # is the unversioned default surfaced to modules. Per-version overrides
+      # can still come from `velocityPluginCatalogs.<version>` if added.
+      velocityPluginCatalog = velocityPluginCatalogs.common or { };
+      servers = fabricServers // {
+        "1.21.11-paper" = paperServers."1.21.11".src;
+        "26.1.2-paper" = paperServers."26.1.2".src;
       };
     };
   };

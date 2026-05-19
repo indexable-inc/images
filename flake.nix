@@ -25,6 +25,7 @@
         bench.filesystem = ./bench/filesystem;
         minecraftMods = ./images/games/minecraft/mods;
         minecraftPaperPlugins = ./images/games/minecraft/plugins/paper;
+        minecraftVelocityPlugins = ./images/games/minecraft/plugins/velocity;
         packages = {
           ix = ./packages/ix;
           hyperion = ./packages/hyperion;

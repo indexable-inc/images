@@ -66,8 +66,8 @@ in
 
     package = mkOption {
       type = types.package;
-      default = ix.artifacts.minecraft.floodgate.velocity;
-      defaultText = lib.literalExpression "ix.artifacts.minecraft.floodgate.velocity";
+      default = ix.artifacts.minecraft.velocityPluginCatalog.floodgate-velocity.src;
+      defaultText = lib.literalExpression "ix.artifacts.minecraft.velocityPluginCatalog.floodgate-velocity.src";
       description = "Floodgate Velocity plugin jar.";
     };
 
