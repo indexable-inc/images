@@ -122,6 +122,12 @@ in
       description = "IPv6 UDP port for Bedrock clients.";
     };
 
+    openFirewall = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Whether to open the Bedrock IPv4 and IPv6 UDP ports in the firewall.";
+    };
+
     settings = mkOption {
       inherit (propertiesFormat) type;
       default = { };
@@ -164,7 +170,7 @@ in
       enable-lan-visibility = lib.mkDefault false;
     };
 
-    networking.firewall.allowedUDPPorts = [
+    networking.firewall.allowedUDPPorts = lib.optionals cfg.openFirewall [
       cfg.port
       cfg.portv6
     ];

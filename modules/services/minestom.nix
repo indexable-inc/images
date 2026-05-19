@@ -59,6 +59,12 @@ in
       type = types.port;
       default = 25565;
     };
+
+    openFirewall = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Whether to open the Minestom client port in the firewall.";
+    };
   };
 
   config = mkIf cfg.enable {
@@ -68,7 +74,7 @@ in
       description = "Minestom server";
     };
 
-    networking.firewall.allowedTCPPorts = [ cfg.port ];
+    networking.firewall.allowedTCPPorts = lib.optionals cfg.openFirewall [ cfg.port ];
 
     systemd.services.minestom = {
       description = "Minestom server";

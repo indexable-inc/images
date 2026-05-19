@@ -25,6 +25,12 @@ in
       default = 5432;
     };
 
+    openFirewall = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Whether to open the PostgreSQL port in the firewall.";
+    };
+
     dataDir = mkOption {
       type = types.str;
       default = "/var/lib/postgresql/18";
@@ -50,7 +56,7 @@ in
       description = "PostgreSQL";
     };
 
-    networking.firewall.allowedTCPPorts = [ cfg.port ];
+    networking.firewall.allowedTCPPorts = lib.optionals cfg.openFirewall [ cfg.port ];
 
     # `services.postgresql.settings.huge_pages = "on"` (below) makes
     # postmaster refuse to start without a sufficient pool of 2 MiB
