@@ -18,7 +18,7 @@ let
 
   siteSrc = fs.toSource {
     root = ./site;
-    fileset = fs.unions [
+    fileset = fs.intersection (fs.gitTracked ./.) (fs.unions [
       ./site/index.html
       ./site/package.json
       ./site/package-lock.json
@@ -26,7 +26,7 @@ let
       ./site/tsconfig.json
       ./site/src
       ./site/vite.config.js
-    ];
+    ]);
   };
 
   vmConfig = {
