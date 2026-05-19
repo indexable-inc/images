@@ -18,15 +18,17 @@ let
 
   siteSrc = fs.toSource {
     root = ./site;
-    fileset = fs.intersection (fs.gitTracked ./.) (fs.unions [
-      ./site/index.html
-      ./site/package.json
-      ./site/package-lock.json
-      ./site/eslint.config.js
-      ./site/tsconfig.json
-      ./site/src
-      ./site/vite.config.js
-    ]);
+    fileset = fs.intersection (fs.gitTracked ./.) (
+      fs.unions [
+        ./site/index.html
+        ./site/package.json
+        ./site/package-lock.json
+        ./site/eslint.config.js
+        ./site/tsconfig.json
+        ./site/src
+        ./site/vite.config.js
+      ]
+    );
   };
 
   vmConfig = {
