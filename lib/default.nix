@@ -228,6 +228,7 @@ let
       inherit lib pkgs;
       clippyPackage = llmClippyFor pkgs;
       rustToolchain = rustNightlyToolchainFor pkgs;
+      writePythonApplication = writePythonApplication pkgs;
     };
   cargoUnitFor =
     pkgs:
@@ -452,6 +453,18 @@ let
   modCatalogs = generatedCatalogs paths.minecraftMods;
   paperPluginCatalogs = generatedCatalogs paths.minecraftPaperPlugins;
 
+  # Minecraft version of the default variant declared in
+  # `images/games/minecraft/versions.nix`. Lets per-loader fallback catalogs
+  # follow the image default instead of pinning a literal version that silently
+  # rots once the default moves.
+  defaultMinecraftVersion =
+    let
+      versionsModule = import (paths.images + "/games/minecraft/versions.nix") {
+        inherit lib;
+      };
+    in
+    versionsModule.${versionsModule.default}.services.minecraft.version;
+
   /**
     Pinned artifact catalogs surfaced to images and presets by name.
     Presets must consume entries through this set (or one of the module
@@ -462,7 +475,11 @@ let
     minecraft = {
       inherit paperServers modCatalogs paperPluginCatalogs;
       inherit velocityServers;
-      paperPluginCatalog = paperPluginCatalogs."26.1.2";
+      paperPluginCatalog =
+        if builtins.hasAttr defaultMinecraftVersion paperPluginCatalogs then
+          paperPluginCatalogs.${defaultMinecraftVersion}
+        else
+          throw "ix.lib.artifacts.minecraft.paperPluginCatalog: no Paper plugin catalog generated for Minecraft ${defaultMinecraftVersion} (the default in images/games/minecraft/versions.nix). Run `nix run .#update-mods -- --manifest images/games/minecraft/plugins/paper/manifest.json --version ${defaultMinecraftVersion}` and commit the result.";
       servers =
         lib.mapAttrs (_: mkArtifact) {
           "26.2-snapshot-5-fabric" = {
