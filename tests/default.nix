@@ -900,6 +900,21 @@ let
       timer = config.systemd.timers.daily-scraper;
     };
 
+  nginxLifecycleExample =
+    let
+      fleet = import ../examples/nginx-lifecycle {
+        index = {
+          lib = ix;
+        };
+      };
+      config = fleet.nodes.nginx;
+    in
+    {
+      inherit fleet config;
+      cfg = config.services.nginx;
+      plan = fleet.planValue.nodes.nginx;
+    };
+
   dailyScraperS3 =
     let
       config = evalConfig [
@@ -1295,6 +1310,59 @@ let
             ]
           && dailyScraperS3.service.serviceConfig.EnvironmentFile == "%d/aws-env";
         message = "python-daily-scraper service should support S3 sync through systemd credentials";
+      }
+    ];
+
+    nginx-lifecycle = [
+      {
+        assertion = nginxLifecycleExample.config.ix.image.tag == "nginx-lifecycle";
+        message = "nginx-lifecycle example should set a stable replacement image tag";
+      }
+      {
+        assertion = nginxLifecycleExample.plan.recreateOnUp;
+        message = "nginx-lifecycle fleet plan should recreate the VM on every ix-fleet up run";
+      }
+      {
+        assertion =
+          nginxLifecycleExample.cfg.enable
+          &&
+            nginxLifecycleExample.cfg.virtualHosts.localhost.locations."/".return
+            == "200 'ix nginx lifecycle ok\n'";
+        message = "nginx-lifecycle example should serve a fixed HTTP success body";
+      }
+      {
+        assertion =
+          let
+            claims = nginxLifecycleExample.config.ix.networking.portClaims;
+          in
+          claims.nginx.protocol == "tcp"
+          && claims.nginx.port == 80
+          && builtins.elem 80 nginxLifecycleExample.config.networking.firewall.allowedTCPPorts;
+        message = "nginx-lifecycle example should declare and open its HTTP listener";
+      }
+      {
+        assertion =
+          let
+            checks = nginxLifecycleExample.plan.healthChecks;
+          in
+          checks.nginx.from == "guest"
+          &&
+            checks.nginx.command == [
+              (lib.getExe' nginxLifecycleExample.config.systemd.package "systemctl")
+              "is-active"
+              "--quiet"
+              "nginx.service"
+            ]
+          && checks.nginx-http.from == "guest"
+          && lib.hasSuffix "/bin/curl" (builtins.head checks.nginx-http.command)
+          &&
+            builtins.tail checks.nginx-http.command == [
+              "--fail"
+              "--silent"
+              "--show-error"
+              "http://127.0.0.1/"
+            ];
+        message = "nginx-lifecycle fleet plan should prove the service unit and HTTP loopback path";
       }
     ];
 

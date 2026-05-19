@@ -190,6 +190,7 @@ let
       inherit (deploy) region;
       inherit (deploy) ipv4;
       inherit (deploy) snapshot;
+      recreateOnUp = deploy.recreateOnUp or false;
       inherit (spec) tags;
       inherit (deploy) env;
       inherit (deploy) l7ProxyPorts;

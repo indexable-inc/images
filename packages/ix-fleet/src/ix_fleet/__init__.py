@@ -76,6 +76,7 @@ class FleetNode(BaseModel):
     region: str = Field(min_length=1)
     ipv4: bool
     snapshot: bool
+    recreateOnUp: bool = False
     tags: list[str] = Field(default_factory=empty_str_list)
     env: dict[str, str] = Field(default_factory=empty_str_dict)
     l7ProxyPorts: list[int] = Field(default_factory=empty_int_list)
@@ -546,10 +547,16 @@ async def replace_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
 
 async def up_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
     if dry_run:
-        step(f"ensure {node.name} exists from uploaded image {image}")
+        verb = "recreate" if node.recreateOnUp else "ensure"
+        step(f"{verb} {node.name} from uploaded image {image}")
         return
 
     existing = find_node(await list_nodes(), node.name)
+    if existing is not None and node.recreateOnUp:
+        run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+        await create_node(node, image, dry_run=dry_run)
+        return
+
     if existing is None:
         await create_node(node, image, dry_run=dry_run)
         return
