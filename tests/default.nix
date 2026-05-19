@@ -473,6 +473,17 @@ let
       };
     };
 
+  developmentBase =
+    let
+      config = evalConfig [ ../images/dev/development-base ];
+    in
+    {
+      inherit config;
+      # Outer pkgs has no allowUnfree, so forcing pkgs.claude-code here would
+      # throw at eval; use lib.getName over the rendered systemPackages list.
+      packageNames = map lib.getName config.environment.systemPackages;
+    };
+
   pythonAppClosureProbe = ix.writePythonApplication pkgs {
     name = "python-app-closure-probe";
     src = pkgs.writeText "python-app-closure-probe.py" ''
@@ -1366,6 +1377,34 @@ let
       {
         assertion = kernelDev.git.clone.timer.wantedBy == [ "timers.target" ];
         message = "timer-activated git clone should be started by timers.target";
+      }
+    ];
+
+    development-base = [
+      {
+        assertion = developmentBase.config.ix.image.name == "development-base";
+        message = "development-base image should set the expected OCI image name";
+      }
+      {
+        assertion =
+          builtins.elem "claude-code" developmentBase.packageNames
+          && builtins.elem "codex" developmentBase.packageNames;
+        message = "development-base should ship the Claude Code and Codex CLIs";
+      }
+      {
+        # Global allowUnfree would let every unfree package slip in. The
+        # image is supposed to grant exactly one exception, by name.
+        assertion = !(developmentBase.config.nixpkgs.config.allowUnfree or false);
+        message = "development-base should not enable allowUnfree globally; use the predicate";
+      }
+      {
+        assertion =
+          let
+            predicate = developmentBase.config.nixpkgs.config.allowUnfreePredicate or null;
+            mkPkg = name: { pname = name; };
+          in
+          predicate != null && predicate (mkPkg "claude-code") && !(predicate (mkPkg "cursor-cli"));
+        message = "development-base allowUnfreePredicate should permit claude-code and reject other unfree packages";
       }
     ];
 
