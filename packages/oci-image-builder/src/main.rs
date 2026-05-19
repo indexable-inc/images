@@ -6,10 +6,9 @@ use std::collections::{btree_map::Entry, BTreeMap};
 use std::env;
 use std::error::Error;
 use std::fs::{self, File};
-use std::io::{Read, Write};
-use std::os::unix::fs::symlink;
+use std::io::{self, Write};
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use tempfile::tempdir;
 
 const DEFAULT_MIN_EFFICIENCY: f64 = 0.95;
@@ -642,32 +641,25 @@ fn write_metadata(
         serde_json::to_vec_pretty(&index)?,
     )?;
 
-    let outer_files = image_dir.join("../outer-files");
-    let mut entries = vec!["oci-layout".to_owned(), "index.json".to_owned()];
-    let mut blobs = fs::read_dir(image_dir.join("blobs/sha256"))?
-        .map(|entry| {
-            entry.map(|entry| format!("blobs/sha256/{}", entry.file_name().to_string_lossy()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    blobs.sort();
-    entries.extend(blobs);
-    fs::write(&outer_files, entries.join("\n"))?;
+    let mtime_secs: u64 = mtime.parse()?;
+    let mut entries: Vec<String> = vec!["oci-layout".to_owned(), "index.json".to_owned()];
+    for entry in fs::read_dir(image_dir.join("blobs/sha256"))? {
+        let entry = entry?;
+        entries.push(format!(
+            "blobs/sha256/{}",
+            entry.file_name().to_string_lossy()
+        ));
+    }
+    entries.sort();
 
-    run(Command::new("tar")
-        .arg("--create")
-        .arg("--file")
-        .arg(out_path)
-        .arg("--no-recursion")
-        .arg("--hard-dereference")
-        .arg("--sort=name")
-        .arg(format!("--mtime=@{mtime}"))
-        .arg("--owner=0")
-        .arg("--group=0")
-        .arg("--numeric-owner")
-        .arg("--directory")
-        .arg(image_dir)
-        .arg("--files-from")
-        .arg(outer_files))?;
+    let out = File::create(out_path)?;
+    let mut builder = tar::Builder::new(out);
+    builder.follow_symlinks(false);
+    for name in &entries {
+        let source = image_dir.join(name);
+        append_normalized_entry(&mut builder, &source, name, mtime_secs, 0, 0)?;
+    }
+    builder.finish()?;
 
     Ok(())
 }
@@ -678,60 +670,140 @@ fn write_tar_layer(
     conf: &Config,
     mtime: &str,
 ) -> Result<(String, u64), Box<dyn Error>> {
-    let mut child = Command::new("tar")
-        .arg("--create")
-        .arg("--file")
-        .arg("-")
-        .arg("--absolute-names")
-        .arg("--sort=name")
-        .arg(format!("--mtime=@{mtime}"))
-        .arg(format!("--owner={}", conf.uid))
-        .arg(format!("--group={}", conf.gid))
-        .arg("--numeric-owner")
-        .arg("--no-recursion")
-        .arg("/nix")
-        .arg("/nix/store")
-        .arg("--recursion")
-        .arg("--hard-dereference")
-        .arg("--files-from")
-        .arg(paths_file)
-        .stdout(Stdio::piped())
-        .spawn()?;
+    let mtime_secs: u64 = mtime.parse()?;
+    let uid: u64 = conf.uid.parse()?;
+    let gid: u64 = conf.gid.parse()?;
 
-    let mut stdout = child.stdout.take().ok_or("failed to capture tar stdout")?;
-    let mut layer = File::create(layer_path)?;
-    let mut hasher = Sha256::new();
-    let mut size = 0;
-    let mut buf = vec![0; 1024 * 1024];
-
-    loop {
-        let read = stdout.read(&mut buf)?;
-        if read == 0 {
-            break;
+    let mut paths: Vec<PathBuf> = vec![PathBuf::from("/nix"), PathBuf::from("/nix/store")];
+    let paths_text = fs::read_to_string(paths_file)?;
+    for line in paths_text.lines() {
+        if line.is_empty() {
+            continue;
         }
-        size += read as u64;
-        hasher.update(&buf[..read]);
-        layer.write_all(&buf[..read])?;
+        collect_paths_recursive(Path::new(line), &mut paths)?;
+    }
+    // Matches GNU tar `--sort=name`: every entry, including the explicit
+    // /nix and /nix/store roots, ends up in lexical order in the archive.
+    paths.sort();
+    paths.dedup();
+
+    let layer = File::create(layer_path)?;
+    let writer = HashingWriter::new(layer);
+    let mut builder = tar::Builder::new(writer);
+    builder.follow_symlinks(false);
+
+    for path in &paths {
+        let archive_name = path.to_string_lossy().into_owned();
+        append_normalized_entry(&mut builder, path, &archive_name, mtime_secs, uid, gid)?;
     }
 
-    let status = child.wait()?;
-    if !status.success() {
-        return Err(format!("command failed with {status}: tar layer stream").into());
+    let writer = builder.into_inner()?;
+    let (size, hash) = writer.finalize();
+    Ok((hash, size))
+}
+
+fn collect_paths_recursive(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), Box<dyn Error>> {
+    out.push(root.to_path_buf());
+    let metadata = fs::symlink_metadata(root)?;
+    let file_type = metadata.file_type();
+    if !file_type.is_dir() || file_type.is_symlink() {
+        return Ok(());
+    }
+    let mut children: Vec<PathBuf> = fs::read_dir(root)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    children.sort();
+    for child in children {
+        collect_paths_recursive(&child, out)?;
+    }
+    Ok(())
+}
+
+fn append_normalized_entry<W: Write>(
+    builder: &mut tar::Builder<W>,
+    source: &Path,
+    archive_name: &str,
+    mtime: u64,
+    uid: u64,
+    gid: u64,
+) -> Result<(), Box<dyn Error>> {
+    let metadata = fs::symlink_metadata(source)?;
+    let file_type = metadata.file_type();
+    let mode = metadata.permissions().mode() & 0o7777;
+
+    let mut header = tar::Header::new_gnu();
+    header.set_mtime(mtime);
+    header.set_uid(uid);
+    header.set_gid(gid);
+    header.set_username("")?;
+    header.set_groupname("")?;
+    header.set_mode(mode);
+
+    if file_type.is_symlink() {
+        let link_target = fs::read_link(source)?;
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_link_name(&link_target)?;
+        builder.append_data(&mut header, archive_name, io::empty())?;
+    } else if file_type.is_dir() {
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        builder.append_data(&mut header, archive_name, io::empty())?;
+    } else if file_type.is_file() {
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_size(metadata.len());
+        // `--hard-dereference` is automatic here: every visit re-reads the
+        // file content rather than emitting a hardlink reference, matching
+        // the GNU tar flag the old shell-out used.
+        let file = File::open(source)?;
+        builder.append_data(&mut header, archive_name, file)?;
+    } else {
+        return Err(format!(
+            "oci-image-builder: unsupported file type at {}",
+            source.display()
+        )
+        .into());
     }
 
-    Ok((format!("{:x}", hasher.finalize()), size))
+    Ok(())
+}
+
+struct HashingWriter<W: Write> {
+    inner: W,
+    hasher: Sha256,
+    size: u64,
+}
+
+impl<W: Write> HashingWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            hasher: Sha256::new(),
+            size: 0,
+        }
+    }
+
+    fn finalize(self) -> (u64, String) {
+        let hash = format!("{:x}", self.hasher.finalize());
+        (self.size, hash)
+    }
+}
+
+impl<W: Write> Write for HashingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.hasher.update(&buf[..n]);
+        self.size += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 fn sha256_bytes(data: &[u8]) -> String {
     format!("{:x}", Sha256::digest(data))
-}
-
-fn run(command: &mut Command) -> Result<(), Box<dyn Error>> {
-    let status = command.status()?;
-    if !status.success() {
-        return Err(format!("command failed with {status}: {command:?}").into());
-    }
-    Ok(())
 }
 
 #[cfg(test)]
