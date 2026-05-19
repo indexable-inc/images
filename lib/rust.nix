@@ -370,7 +370,7 @@ let
               chmod -R u+w "$out"
 
               if grep -q workspace "$out/Cargo.toml"; then
-                ${replaceWorkspaceValues} "$out/Cargo.toml" "$(cargo metadata --format-version 1 --no-deps --manifest-path "$crateCargoTOML" | jq -r .workspace_root)/Cargo.toml"
+                ${lib.getExe replaceWorkspaceValues} "$out/Cargo.toml" "$(cargo metadata --format-version 1 --no-deps --manifest-path "$crateCargoTOML" | jq -r .workspace_root)/Cargo.toml"
               fi
 
               printf '{"files":{},"package":null}' > "$out/.cargo-checksum.json"
