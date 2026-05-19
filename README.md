@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" width="80" alt="ix" />
+</p>
+
 # Index
 
 `index` builds ready-to-run [ix](https://ix.dev/) VM images from NixOS modules.
