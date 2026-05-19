@@ -1,13 +1,11 @@
-_:
-let
-  forwardingSecret = "ix-survival-example-forwarding-secret-change-me";
-in
-{
+_: {
   services = {
     velocity = {
       enable = true;
       motd = "<green>ix Survival</green> <gray>| Java and Bedrock</gray>";
-      forwarding.secret = forwardingSecret;
+      # Paper picks this up automatically: services.minecraft.paper defaults
+      # paper-global.yml's proxies.velocity block from the same string.
+      forwarding.secret = "ix-survival-example-forwarding-secret-change-me";
       servers.survival = "127.0.0.1:25566";
       try = [ "survival" ];
     };
@@ -41,12 +39,6 @@ in
         view-distance = 16;
         simulation-distance = 10;
         pvp = true;
-      };
-
-      configFiles."paper-global.yml".proxies.velocity = {
-        enabled = true;
-        secret = forwardingSecret;
-        online-mode = true;
       };
 
       serverFiles."spigot.yml".settings = {
