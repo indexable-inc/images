@@ -1743,10 +1743,7 @@ fn scan_rust_includes_into_closure(
         let include_root = if resolved.is_dir() {
             resolved.clone()
         } else {
-            resolved
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or(resolved)
+            resolved.parent().map(Path::to_path_buf).unwrap_or(resolved)
         };
         if !path_is_covered_by_roots(&include_root, included_roots) {
             queue.push_back(include_root.clone());
@@ -1756,13 +1753,16 @@ fn scan_rust_includes_into_closure(
     Ok(())
 }
 
-/// Lift literal-string arguments out of `include!`, `include_bytes!`, and
+/// Lift path arguments out of `include!`, `include_bytes!`, and
 /// `include_str!` macro calls. The scan is intentionally textual: it does
 /// not parse Rust, so false positives inside comments and string literals
 /// are possible but harmless (an extra non-existent directory in the
-/// closure is filtered out at the Nix layer). Macro arguments that are
-/// not plain `"…"` or `r"…"` literals — `concat!`, `env!`, identifiers,
-/// or raw strings with `#` delimiters — are skipped.
+/// closure is filtered out at the Nix layer). Plain `"…"` and `r"…"`
+/// literals are resolved as files. `concat!` arguments with a leading
+/// literal directory are resolved to that directory; the computed filename
+/// stays dynamic, but the source closure still contains the data tree.
+/// Other computed arguments such as `env!`, identifiers, and raw strings
+/// with `#` delimiters are skipped.
 fn extract_include_macro_paths(source: &str) -> Vec<String> {
     const MARKERS: &[&str] = &["include!", "include_bytes!", "include_str!"];
     let mut paths = Vec::new();
@@ -1786,42 +1786,59 @@ fn extract_include_macro_paths(source: &str) -> Vec<String> {
                 continue;
             };
             let tail = tail.trim_start();
-            let (tail, is_raw) = match tail.strip_prefix('r') {
-                Some(after_r) if after_r.starts_with('"') => (after_r, true),
-                _ => (tail, false),
-            };
-            let Some(body) = tail.strip_prefix('"') else {
+            if let Some((literal, _)) = parse_rust_string_literal(tail) {
+                if !literal.is_empty() {
+                    paths.push(literal);
+                }
+                continue;
+            }
+
+            let Some(concat_tail) = tail.strip_prefix("concat!") else {
                 continue;
             };
-            let mut chars = body.chars();
-            let mut literal = String::new();
-            let mut closed = false;
-            while let Some(c) = chars.next() {
-                if c == '"' {
-                    closed = true;
-                    break;
-                }
-                if c == '\\' && !is_raw {
-                    match chars.next() {
-                        Some('n') => literal.push('\n'),
-                        Some('t') => literal.push('\t'),
-                        Some('r') => literal.push('\r'),
-                        Some('"') => literal.push('"'),
-                        Some('\'') => literal.push('\''),
-                        Some('\\') => literal.push('\\'),
-                        Some(other) => literal.push(other),
-                        None => break,
-                    }
-                } else {
-                    literal.push(c);
-                }
-            }
-            if closed && !literal.is_empty() {
-                paths.push(literal);
+            let Some(concat_body) = concat_tail.trim_start().strip_prefix('(') else {
+                continue;
+            };
+            if let Some((literal, _)) = parse_rust_string_literal(concat_body.trim_start())
+                && let Some(directory) = literal.strip_suffix('/')
+                && !directory.is_empty()
+            {
+                paths.push(directory.to_string());
             }
         }
     }
     paths
+}
+
+fn parse_rust_string_literal(source: &str) -> Option<(String, &str)> {
+    let (source, is_raw) = match source.strip_prefix('r') {
+        Some(after_r) if after_r.starts_with('"') => (after_r, true),
+        _ => (source, false),
+    };
+    let body = source.strip_prefix('"')?;
+    let mut chars = body.char_indices();
+    let mut literal = String::new();
+    while let Some((index, c)) = chars.next() {
+        if c == '"' {
+            return Some((literal, &body[index + c.len_utf8()..]));
+        }
+        if c == '\\' && !is_raw {
+            match chars.next().map(|(_, escaped)| escaped) {
+                Some('n') => literal.push('\n'),
+                Some('t') => literal.push('\t'),
+                Some('r') => literal.push('\r'),
+                Some('"') => literal.push('"'),
+                Some('\'') => literal.push('\''),
+                Some('\\') => literal.push('\\'),
+                Some(other) => literal.push(other),
+                None => break,
+            }
+        } else {
+            literal.push(c);
+        }
+    }
+
+    None
 }
 
 fn path_is_covered_by_roots(path: &Path, roots: &BTreeSet<PathBuf>) -> bool {
@@ -2281,7 +2298,12 @@ mod tests {
 
         assert!(rendered.contains("targetSets = ["));
         assert_eq!(rendered.matches("binaries = {").count(), 3);
-        assert_eq!(rendered.matches("\"hello\" = withPolicyChecks units.").count(), 4);
+        assert_eq!(
+            rendered
+                .matches("\"hello\" = withPolicyChecks units.")
+                .count(),
+            4
+        );
     }
 
     #[test]
@@ -2711,7 +2733,11 @@ const CRLF: &str = include_str!("../../testdata/crlf.toml");
 "#,
         )
         .unwrap();
-        fs::write(workspace.join("testdata/anchored.toml"), "name = 'anchored'\n").unwrap();
+        fs::write(
+            workspace.join("testdata/anchored.toml"),
+            "name = 'anchored'\n",
+        )
+        .unwrap();
         fs::write(workspace.join("testdata/crlf.toml"), "name = 'crlf'\n").unwrap();
         let src_path = workspace.join("regex-lite/tests/lib.rs");
         let pkg_id = format!(
@@ -2761,7 +2787,9 @@ const CRLF: &str = include_str!("../../testdata/crlf.toml");
         let source = r#"
             const A: &[u8] = include_bytes!("data/anchored.toml");
             const B: &str = include_str!("../../shared/template.txt");
-            // Computed paths are not resolvable and are skipped:
+            // The filename stays dynamic, but the directory is static:
+            include_bytes!(concat!("../../testdata/", CASE, ".toml"));
+            // OUT_DIR paths are not source paths and are skipped:
             include!(concat!(env!("OUT_DIR"), "/generated.rs"));
             // Raw strings without `#` are still literals:
             const C: &[u8] = include_bytes!(r"raw/data.bin");
@@ -2776,6 +2804,7 @@ const CRLF: &str = include_str!("../../testdata/crlf.toml");
             paths,
             vec![
                 "../../shared/template.txt".to_string(),
+                "../../testdata".to_string(),
                 "data/anchored.toml".to_string(),
                 "from_a_comment.txt".to_string(),
                 "raw/data.bin".to_string(),
