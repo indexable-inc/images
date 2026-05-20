@@ -348,10 +348,6 @@ in
           "ca-derivations"
           "dynamic-derivations"
           "git-hashing"
-          # Determinate-only: 3x+ eval speedups and 20x less source-copy
-          # disk in large repos. Safe to list against upstream Nix too,
-          # which just ignores unknown experimental features.
-          "lazy-trees"
         ];
         allow-import-from-derivation = lib.mkDefault true;
         warn-dirty = false;
