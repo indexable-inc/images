@@ -26,11 +26,6 @@ let
 
   rustcLibPathVar =
     if pkgs.stdenv.hostPlatform.isDarwin then "DYLD_LIBRARY_PATH" else "LD_LIBRARY_PATH";
-
-  zlibForLinking = pkgs.zlib.overrideAttrs (_: {
-    # GitHub's x86_64 runners cannot execute znver5-tuned zlib test binaries.
-    doCheck = false;
-  });
 in
 rustPlatform.buildRustPackage {
   pname = "llm-clippy";
@@ -45,7 +40,7 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [
-    zlibForLinking
+    pkgs.zlib
   ]
   ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
     pkgs.libiconv
