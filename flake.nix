@@ -1,6 +1,18 @@
 {
   description = "Pre-built OCI images for ix VMs";
 
+  # znver5 forces every package in the closure to build from source: the
+  # nixpkgs binary cache is generic x86_64 and never has a hit. The
+  # indexable-inc Cachix cache stores the znver5-tuned closures CI builds,
+  # so a fresh checkout downloads instead of recompiling. Priority 30 (set
+  # in the cache settings) puts it ahead of cache.nixos.org by default.
+  nixConfig = {
+    extra-substituters = [ "https://indexable-inc.cachix.org" ];
+    extra-trusted-public-keys = [
+      "indexable-inc.cachix.org-1:HQ5mjdOyhgNjLVhjv0qgVMJ5YiO1zEEVMAtF9mTcpiI="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
