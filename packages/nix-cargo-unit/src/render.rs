@@ -1705,7 +1705,7 @@ fn collect_source_closure_roots(
         } else if file_type.is_dir() {
             collect_source_closure_roots(&path, source_boundary, included_roots, queue)?;
         } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
-            scan_rust_includes_into_closure(&path, source_boundary, included_roots, queue)?;
+            scan_rust_includes_into_closure(&path, source_boundary, included_roots, queue);
         }
     }
 
@@ -1726,11 +1726,11 @@ fn scan_rust_includes_into_closure(
     source_boundary: &Path,
     included_roots: &mut BTreeSet<PathBuf>,
     queue: &mut VecDeque<PathBuf>,
-) -> Result<()> {
-    let source = match fs::read_to_string(file) {
-        Ok(text) => text,
-        Err(_) => return Ok(()),
+) {
+    let Ok(source) = fs::read_to_string(file) else {
+        return;
     };
+
     let file_dir = file.parent().unwrap_or(file);
     for include_arg in extract_include_macro_paths(&source) {
         let resolved = normalize_path(&file_dir.join(&include_arg));
@@ -1750,7 +1750,6 @@ fn scan_rust_includes_into_closure(
             included_roots.insert(include_root);
         }
     }
-    Ok(())
 }
 
 /// Lift path arguments out of `include!`, `include_bytes!`, and
