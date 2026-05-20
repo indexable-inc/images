@@ -40,6 +40,10 @@ You need generic x86_64 binaries, aarch64 images, or FreeBSD. This repo chooses
 `-march=znver5` for the whole closure, so generic [nixpkgs](https://github.com/NixOS/nixpkgs)
 cache hits are intentionally out of scope.
 
+## Feedback
+
+Bug reports and enhancement requests go to [GitHub Issues](https://github.com/indexable-inc/index/issues). Security reports follow [SECURITY.md](SECURITY.md). Code changes land through pull requests against the `development` branch; see [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, coding standards, and commit conventions.
+
 ## Contributor Notes
 
 See [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) when you're ready to dig in.
