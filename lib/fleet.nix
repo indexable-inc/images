@@ -40,7 +40,7 @@ let
 
   deploymentDefaults = {
     bootstrapImage = "registry.ix.dev/${bootstrapImage.name}:${bootstrapImage.tag}";
-    region = "hil-1";
+    region = "us-west-1";
     ipv4 = false;
     snapshot = true;
     switch.buildOn = "remote";

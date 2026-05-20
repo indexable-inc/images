@@ -765,7 +765,7 @@ let
   pythonMcpServerPackage = (ix.packageSetFor pkgs).python-mcp-server;
 
   fleet = ix.mkFleet {
-    deployment.region = "hil-1";
+    deployment.region = "us-west-1";
     secrets.sessionKey.generate = true;
 
     nodes = {
@@ -2082,7 +2082,7 @@ let
         message = "fleet plans should expose replacement image derivations without forcing local image builds";
       }
       {
-        assertion = fleetPlan.web.region == "hil-1";
+        assertion = fleetPlan.web.region == "us-west-1";
         message = "fleet nodes should inherit the top-level deployment region";
       }
       {
