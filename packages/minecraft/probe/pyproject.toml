@@ -1,3 +1,4 @@
+[project]
 dependencies = ["mcstatus>=13.1.0,<14.0.0"]
 description = "Assert Minecraft Server List Ping responses for health checks"
 name = "mc-probe"
