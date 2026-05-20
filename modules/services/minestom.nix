@@ -52,7 +52,17 @@ in
 
     jvmFlags = mkOption {
       type = types.listOf types.str;
-      default = [ ];
+      default = [
+        # ZGC for sub-millisecond, heap-size-independent pauses: a single
+        # G1 pause near MaxGCPauseMillis (~200 ms in Aikar's flags used by
+        # the vanilla Minecraft module) drops multiple 20 TPS server ticks.
+        # `+UseZGC` selects generational ZGC by default since JDK 23 and
+        # is the only ZGC mode left on the temurin-jre-bin-25 default JRE.
+        #   JEP 474 (default mode):   https://openjdk.org/jeps/474
+        #   JEP 490 (mode removed):   https://openjdk.org/jeps/490
+        #   Oracle GC tuning (JDK 25): https://docs.oracle.com/en/java/javase/25/gctuning/z-garbage-collector.html
+        "-XX:+UseZGC"
+      ];
     };
 
     port = mkOption {
