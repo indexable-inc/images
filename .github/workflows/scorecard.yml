@@ -31,6 +31,10 @@ jobs:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
+          # Reads classic branch protection rules. Default GITHUB_TOKEN
+          # cannot, so Branch-Protection falls back to -1 ("internal
+          # error") without a PAT. See #89 for the secret setup.
+          repo_token: ${{ secrets.SCORECARD_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
