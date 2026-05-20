@@ -12,17 +12,11 @@
 }:
 let
   inherit (nixpkgs) lib;
-  ciPlatformOverlay = final: prev: {
-    zlib = prev.zlib.overrideAttrs (_: {
-      # GitHub's x86_64 runners cannot execute znver5-tuned zlib test binaries.
-      doCheck = false;
-    });
-  };
   pkgs = import nixpkgs {
     inherit system;
     overlays = [
       rust-overlay.overlays.default
-      ciPlatformOverlay
+      ix.overlay
     ];
   };
   fs = lib.fileset;

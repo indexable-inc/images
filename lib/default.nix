@@ -164,6 +164,12 @@ let
     {
       drgn = final.callPackage paths.packages.drgn { };
 
+      # GitHub's x86_64 runners cannot execute znver5-tuned zlib test
+      # binaries, but CI has to build the same znver5 closures images use.
+      zlib = prev.zlib.overrideAttrs (_: {
+        doCheck = false;
+      });
+
       # libtpms 0.10.2 + GCC 15.2 (the znver5-tuned compiler the platform
       # produces) fails the build with `-Werror=stringop-overflow` on a
       # CryptCmac.c buffer access GCC can't statically prove safe. Upstream
