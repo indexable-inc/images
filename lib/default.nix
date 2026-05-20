@@ -151,7 +151,7 @@ let
     instead so they don't leak into the nixpkgs namespace inside images.
   */
   overlay =
-    final: _prev:
+    final: prev:
     let
       ixForOverlay = {
         buildRustPackage = pkgs: (rustFor pkgs).buildPackage;
@@ -163,6 +163,26 @@ let
     in
     {
       drgn = final.callPackage paths.packages.drgn { };
+
+      # libtpms 0.10.2 + GCC 15.2 (the znver5-tuned compiler the platform
+      # produces) fails the build with `-Werror=stringop-overflow` on a
+      # CryptCmac.c buffer access GCC can't statically prove safe. Upstream
+      # PR stefanberger/libtpms#478 silenced an earlier related warning by
+      # adding asserts, but GCC 15 finds a new false-positive site that the
+      # current 0.10.2 release does not cover. No public bug exists for the
+      # exact GCC 15.2 + libtpms 0.10.2 failure (checked upstream issues and
+      # nixpkgs issues). Demote the warning back to a warning so the build
+      # completes; remove this override when libtpms bumps past 0.10.2 with
+      # the upstream fix or when nixpkgs' libtpms drops `-Werror`.
+      libtpms = prev.libtpms.overrideAttrs (oldAttrs: {
+        env = (oldAttrs.env or { }) // {
+          NIX_CFLAGS_COMPILE = toString [
+            ((oldAttrs.env or { }).NIX_CFLAGS_COMPILE or "")
+            "-Wno-error=stringop-overflow"
+          ];
+        };
+      });
+
       minecraft-hot-reload-agent = final.callPackage paths.packages.minecraft.hotReloadAgent { };
       minecraft-rcon = final.callPackage paths.packages.minecraft.rcon {
         writePythonApplication = writePythonApplication final;
