@@ -693,7 +693,11 @@ fn write_tar_layer(
     builder.follow_symlinks(false);
 
     for path in &paths {
-        let archive_name = path.to_string_lossy().into_owned();
+        let archive_name = path
+            .strip_prefix("/")
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
         append_normalized_entry(&mut builder, path, &archive_name, mtime_secs, uid, gid)?;
     }
 
