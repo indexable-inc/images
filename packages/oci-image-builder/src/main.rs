@@ -747,8 +747,7 @@ fn append_normalized_entry<W: Write>(
         let link_target = fs::read_link(source)?;
         header.set_entry_type(tar::EntryType::Symlink);
         header.set_size(0);
-        header.set_link_name(&link_target)?;
-        builder.append_data(&mut header, archive_name, io::empty())?;
+        builder.append_link(&mut header, archive_name, link_target)?;
     } else if file_type.is_dir() {
         header.set_entry_type(tar::EntryType::Directory);
         header.set_size(0);
