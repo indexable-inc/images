@@ -28,6 +28,12 @@ let
       config = evalConfig modules;
     in
     builtins.filter (assertion: !assertion.assertion) config.assertions;
+  samePorts =
+    left: right:
+    lib.sort (a: b: a < b) left == lib.sort (a: b: a < b) right;
+  # ix guest sidecars are opened by the shared platform base config.
+  baseFirewallTcpPorts = [ 5001 ];
+  baseFirewallUdpPorts = [ 8443 ];
 
   minecraft =
     let
@@ -1040,6 +1046,28 @@ let
         ) base.config.systemd.tmpfiles.rules;
         message = "base profile should pre-create the workspace directory via systemd-tmpfiles";
       }
+      {
+        assertion =
+          let
+            firewall = base.config.networking.firewall;
+          in
+          builtins.elem 5001 firewall.allowedTCPPorts
+          && builtins.elem 8443 firewall.allowedUDPPorts;
+        message = "base profile should expose ix guest sidecar ports through the in-guest firewall";
+      }
+      {
+        assertion =
+          let
+            claims = base.config.ix.networking.portClaims;
+          in
+          claims.ix-console.protocol == "tcp"
+          && claims.ix-console.port == 5001
+          && claims.ix-console.address == "*"
+          && claims.ix-agent.protocol == "udp"
+          && claims.ix-agent.port == 8443
+          && claims.ix-agent.address == "*";
+        message = "base profile should reserve ix guest sidecar listener ports";
+      }
     ];
 
     factions-server = [
@@ -1565,15 +1593,20 @@ let
       }
       {
         assertion =
-          minecraft.rcon.config.networking.firewall.allowedTCPPorts == [ minecraft.rcon.cfg.port ];
+          samePorts minecraft.rcon.config.networking.firewall.allowedTCPPorts (
+            baseFirewallTcpPorts ++ [ minecraft.rcon.cfg.port ]
+          );
         message = "typed minecraft RCON should keep the RCON port private by default";
       }
       {
         assertion =
-          minecraft.rcon.openFirewall.config.networking.firewall.allowedTCPPorts == [
-            minecraft.rcon.openFirewall.cfg.port
-            minecraft.rcon.openFirewall.cfg.rcon.port
-          ];
+          samePorts minecraft.rcon.openFirewall.config.networking.firewall.allowedTCPPorts (
+            baseFirewallTcpPorts
+            ++ [
+              minecraft.rcon.openFirewall.cfg.port
+              minecraft.rcon.openFirewall.cfg.rcon.port
+            ]
+          );
         message = "typed minecraft RCON should open the firewall only when requested";
       }
       {
@@ -1593,9 +1626,9 @@ let
       }
       {
         assertion =
-          minecraft.worldBorder.config.networking.firewall.allowedTCPPorts == [
-            minecraft.worldBorder.cfg.port
-          ];
+          samePorts minecraft.worldBorder.config.networking.firewall.allowedTCPPorts (
+            baseFirewallTcpPorts ++ [ minecraft.worldBorder.cfg.port ]
+          );
         message = "typed minecraft world border should keep the RCON port private";
       }
       {
@@ -1674,7 +1707,9 @@ let
       }
       {
         assertion =
-          minecraft.paper.config.networking.firewall.allowedTCPPorts == [ minecraft.paper.cfg.port ];
+          samePorts minecraft.paper.config.networking.firewall.allowedTCPPorts (
+            baseFirewallTcpPorts ++ [ minecraft.paper.cfg.port ]
+          );
         message = "Paper minecraft should not expose the local RCON reload port through the firewall";
       }
     ];
@@ -1765,11 +1800,14 @@ let
       }
       {
         assertion =
-          bedrock.config.networking.firewall.allowedUDPPorts == [
-            bedrock.cfg.port
-            bedrock.cfg.portv6
-          ];
-        message = "minecraft-bedrock firewall should open only the configured UDP ports";
+          samePorts bedrock.config.networking.firewall.allowedUDPPorts (
+            baseFirewallUdpPorts
+            ++ [
+              bedrock.cfg.port
+              bedrock.cfg.portv6
+            ]
+          );
+        message = "minecraft-bedrock firewall should open only the configured UDP ports plus ix sidecar ports";
       }
       {
         assertion = bedrock.service.unit.description == "Minecraft Bedrock server";
@@ -1839,8 +1877,11 @@ let
         message = "remote-desktop user should be a system user";
       }
       {
-        assertion = remoteDesktop.config.networking.firewall.allowedTCPPorts == [ remoteDesktop.cfg.port ];
-        message = "remote-desktop firewall should open only the configured browser port";
+        assertion =
+          samePorts remoteDesktop.config.networking.firewall.allowedTCPPorts (
+            baseFirewallTcpPorts ++ [ remoteDesktop.cfg.port ]
+          );
+        message = "remote-desktop firewall should open only the configured browser port plus ix sidecar ports";
       }
       {
         assertion = !(remoteDesktop.config.systemd.services ? xvfb);

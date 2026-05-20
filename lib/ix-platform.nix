@@ -192,6 +192,22 @@ in
   };
 
   config = {
+    ix.networking.portClaims = {
+      ix-console = {
+        protocol = "tcp";
+        port = 5001;
+        address = "*";
+        description = "ix-console shell and terminal snapshot listener";
+      };
+
+      ix-agent = {
+        protocol = "udp";
+        port = 8443;
+        address = "*";
+        description = "ix-agent WebTransport direct-connect endpoint";
+      };
+    };
+
     assertions = [
       {
         assertion = conflictingPortClaimGroups == { };
@@ -274,7 +290,15 @@ in
       # drift". Tracking the ix-side north-south primitive in
       # https://github.com/indexable-inc/index/issues/41.
       nftables.enable = true;
-      firewall.enable = lib.mkDefault true;
+      firewall = {
+        enable = lib.mkDefault true;
+        allowedTCPPorts = [
+          5001 # ix-console shell and terminal snapshot listener.
+        ];
+        allowedUDPPorts = [
+          8443 # ix-agent WebTransport direct-connect endpoint.
+        ];
+      };
     };
 
     services = {
