@@ -58,13 +58,13 @@ fn explicit_byte_tag_round_trips_in_range(tc: TestCase) {
         Ok(document) => {
             let stored: i8 = document.compound.get("value").expect("byte tag present");
             assert!(
-                (i8::MIN as i64..=i8::MAX as i64).contains(&byte),
+                (i64::from(i8::MIN)..=i64::from(i8::MAX)).contains(&byte),
                 "decoder accepted out-of-range byte {byte}"
             );
             assert_eq!(i64::from(stored), byte);
         }
         Err(_) => assert!(
-            !(i8::MIN as i64..=i8::MAX as i64).contains(&byte),
+            !(i64::from(i8::MIN)..=i64::from(i8::MAX)).contains(&byte),
             "decoder rejected in-range byte {byte}"
         ),
     }

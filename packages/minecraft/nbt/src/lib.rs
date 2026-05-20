@@ -11,6 +11,13 @@ pub struct Document {
     pub compound: NbtCompound,
 }
 
+/// Decodes a JSON representation of an NBT document.
+///
+/// # Errors
+///
+/// Returns an error when the input uses an invalid explicit tag wrapper, contains
+/// a value that cannot be represented as the requested NBT tag, or decodes to a
+/// non-compound document root.
 pub fn decode_document(value: &Value, default_root_name: &str) -> Result<Document> {
     let (root_name, root_value) = match value {
         Value::Object(object) if tag_name(object) == Some("root") => {
