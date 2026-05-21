@@ -256,3 +256,37 @@ fn empty_command_is_rejected_before_running() {
         "empty command should be a validation error: {stderr}"
     );
 }
+
+#[test]
+fn only_runs_just_the_named_nodes_and_skips_spawning_the_rest() {
+    // The dropped node would exit 7 if it ran; success here proves --only
+    // filtered it out before spawn rather than just hiding it from the report.
+    let spec = r#"{"nodes":{
+        "a":{"command":["sh","-c","exit 7"]},
+        "b":{"command":["true"]},
+        "c":{"command":["true"]}
+    }}"#;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("spec.json");
+    std::fs::write(&path, spec).unwrap();
+    let bin = env!("CARGO_BIN_EXE_dag-runner");
+    let output = Command::new(bin)
+        .arg("--output").arg("json")
+        .arg("--only").arg("b,c")
+        .arg(&path)
+        .output()
+        .expect("spawn dag-runner");
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    let events = parse_events(&output.stdout);
+    let summary = events.iter().find(|e| e["event"] == "summary").unwrap();
+    assert_eq!(summary["total"], 2);
+    assert_eq!(summary["succeeded"], 2);
+    let mut ran: Vec<&str> = events
+        .iter()
+        .filter(|e| e["event"] == "node_finished")
+        .map(|e| e["node"].as_str().unwrap())
+        .collect();
+    ran.sort_unstable();
+    assert_eq!(ran, vec!["b", "c"]);
+}

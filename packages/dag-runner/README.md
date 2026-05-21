@@ -7,10 +7,12 @@ The runner is meant for short, hands-off batches: spawn a fan-out of independent
 ## Usage
 
 ```
-dag-runner <spec.json> [--output auto|tui|plain|json]
+dag-runner <spec.json> [--output auto|tui|plain|json] [--only NAMES]
 ```
 
 `--output auto` (default) picks `tui` when stdout is a TTY and `plain` otherwise. `json` emits NDJSON events to stdout and a final `summary` line; everything else still goes to stderr.
+
+`--only` restricts the run to the named nodes (comma-separated, repeatable: `--only a,b --only c`). Unknown names and edges left dangling by the cut (a kept node depending on a dropped one) are rejected before any node is spawned, so a filtered run keeps the same "every kept node has every dep it needs" invariant as an unfiltered run.
 
 ## Spec schema
 

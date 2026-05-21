@@ -48,6 +48,14 @@ struct Args {
     /// Output mode.
     #[arg(long, value_enum, default_value_t = OutputMode::Auto)]
     output: OutputMode,
+
+    /// Restrict the run to these node names. Comma-separated, repeatable
+    /// (`--only a,b --only c`). Every name must exist in the spec, and any
+    /// kept node may only depend on other kept nodes; otherwise the runner
+    /// errors out before spawning anything so the remaining graph still has
+    /// well-defined semantics (no silent skips, no exit-code surprises).
+    #[arg(long, value_delimiter = ',')]
+    only: Vec<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -136,7 +144,11 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let text = std::fs::read_to_string(&args.spec)
         .with_context(|| format!("reading spec: {}", args.spec.display()))?;
-    let spec: Spec = serde_json::from_str(&text).context("parsing spec JSON")?;
+    let mut spec: Spec = serde_json::from_str(&text).context("parsing spec JSON")?;
+
+    if !args.only.is_empty() {
+        filter_only(&mut spec, &args.only)?;
+    }
 
     validate(&spec)?;
 
@@ -205,6 +217,45 @@ fn validate(spec: &Spec) -> Result<()> {
         }
     }
     detect_cycle(&spec.nodes)?;
+    Ok(())
+}
+
+/// Trim `spec.nodes` to the names in `only`. Unknown names and edges left
+/// dangling by the cut are rejected here, so the remaining graph keeps the
+/// "every kept node has every dep it needs" invariant of an unfiltered run.
+fn filter_only(spec: &mut Spec, only: &[String]) -> Result<()> {
+    let keep: HashSet<&str> = only.iter().map(String::as_str).collect();
+
+    let mut missing: Vec<&str> = keep
+        .iter()
+        .copied()
+        .filter(|name| !spec.nodes.contains_key(*name))
+        .collect();
+    if !missing.is_empty() {
+        missing.sort_unstable();
+        bail!("--only names not found in spec: {}", missing.join(", "));
+    }
+
+    spec.nodes.retain(|name, _| keep.contains(name.as_str()));
+
+    let mut dangling: Vec<String> = spec
+        .nodes
+        .iter()
+        .flat_map(|(name, node)| {
+            node.depends_on
+                .iter()
+                .filter(|dep| !keep.contains(dep.as_str()))
+                .map(move |dep| format!("{name} -> {dep}"))
+        })
+        .collect();
+    if !dangling.is_empty() {
+        dangling.sort();
+        bail!(
+            "--only would drop dependencies of kept nodes: {}; add the missing names to --only",
+            dangling.join(", ")
+        );
+    }
+
     Ok(())
 }
 
@@ -840,6 +891,29 @@ mod tests {
         let mut records = BTreeMap::new();
         records.insert("a".into(), record(Outcome::Skipped));
         assert_eq!(exit_code(&records), 1);
+    }
+
+    #[test]
+    fn filter_only_keeps_named_nodes_and_drops_the_rest() {
+        let mut spec = spec_of(&[("a", &[]), ("b", &["a"]), ("c", &[])]);
+        filter_only(&mut spec, &["a".into(), "b".into()]).unwrap();
+        let mut kept: Vec<&str> = spec.nodes.keys().map(String::as_str).collect();
+        kept.sort_unstable();
+        assert_eq!(kept, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn filter_only_errors_on_missing_name() {
+        let mut spec = spec_of(&[("a", &[])]);
+        let err = filter_only(&mut spec, &["ghost".into()]).unwrap_err().to_string();
+        assert!(err.contains("ghost"), "error should name the missing entry, got: {err}");
+    }
+
+    #[test]
+    fn filter_only_errors_when_kept_node_loses_its_dep() {
+        let mut spec = spec_of(&[("a", &[]), ("b", &["a"])]);
+        let err = filter_only(&mut spec, &["b".into()]).unwrap_err().to_string();
+        assert!(err.contains("b -> a"), "error should show the dropped edge, got: {err}");
     }
 
     #[test]
