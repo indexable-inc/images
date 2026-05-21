@@ -1,8 +1,9 @@
 # Target platform applied to every image.
 #
-# All images run on EPYC Gen 5 (Turin, Zen 5). Setting hostPlatform.gcc.arch
-# propagates -march=znver5 -mtune=znver5 to every package in the closure.
-# No binary cache hits: everything builds from source.
+# All images run on EPYC Gen 5 (Turin, Zen 5). The build platform stays
+# generic x86_64-linux so CI can execute build-time tools, while
+# hostPlatform.gcc.arch propagates -march=znver5 -mtune=znver5 to the image
+# closure. No binary cache hits: the target closure builds from source.
 {
   config,
   lib,
@@ -229,11 +230,14 @@ in
       }
     ];
 
-    nixpkgs.hostPlatform = {
-      system = "x86_64-linux";
-      gcc = {
-        arch = "znver5";
-        tune = "znver5";
+    nixpkgs = {
+      buildPlatform = "x86_64-linux";
+      hostPlatform = {
+        system = "x86_64-linux";
+        gcc = {
+          arch = "znver5";
+          tune = "znver5";
+        };
       };
     };
 

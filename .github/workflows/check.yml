@@ -26,17 +26,9 @@ jobs:
       - name: Install Determinate Nix
         uses: DeterminateSystems/determinate-nix-action@bafaa638b9d5ec0e7e3ac1a7fc80453ef1fd265f # v3
         with:
-          # Every image in this repo pins `nixpkgs.hostPlatform.gcc.arch =
-          # "znver5"`, which marks each derivation as needing the
-          # `gccarch-znver5` system feature. GitHub runners don't advertise
-          # that feature by default, so flake-check fails with
-          # `missing system features ... Required features: {gccarch-znver5}`
-          # before evaluating any image.
-          #
           # `accept-flake-config` lets CI consume the flake's `nixConfig`
           # (the Cachix substituter) without an interactive prompt.
           extra-conf: |
-            extra-system-features = gccarch-znver5
             accept-flake-config = true
 
       # Configures the indexable-inc Cachix substituter for the daemon and
