@@ -1,12 +1,10 @@
 # Target platform applied to every image.
 #
-# All images run on EPYC Gen 5 (Turin, Zen 5). The build platform stays
-# generic x86_64-linux so CI can execute build-time tools, while
-# hostPlatform.gcc.arch propagates -march=znver5 -mtune=znver5 to the image
-# closure. The upstream nixpkgs cache (generic x86_64) never hits; the
-# repo's own indexable-inc.cachix.org substituter, wired in flake.nix,
-# serves the znver5 closures CI has already built, with from-source as the
-# fallback.
+# All images run on EPYC Gen 5 (Turin, Zen 5). Setting hostPlatform.gcc.arch
+# propagates -march=znver5 -mtune=znver5 to the image closure. The upstream
+# nixpkgs cache is generic x86_64 and never has a hit; the repo's own
+# indexable-inc.cachix.org substituter, wired in flake.nix, serves the znver5
+# closures CI has already built, with from-source as the fallback.
 {
   config,
   lib,
@@ -233,14 +231,11 @@ in
       }
     ];
 
-    nixpkgs = {
-      buildPlatform = "x86_64-linux";
-      hostPlatform = {
-        system = "x86_64-linux";
-        gcc = {
-          arch = "znver5";
-          tune = "znver5";
-        };
+    nixpkgs.hostPlatform = {
+      system = "x86_64-linux";
+      gcc = {
+        arch = "znver5";
+        tune = "znver5";
       };
     };
 
