@@ -172,5 +172,107 @@ class EastWestGroupTests(unittest.TestCase):
         )
 
 
+class BootstrapTests(unittest.TestCase):
+    def test_bootstrap_waits_for_dependencies_before_selected_node(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(
+            fleet_plan(["db", "web"], [fleet_node("web", depends_on=["db"]), fleet_node("db")])
+        )
+        calls: list[str] = []
+
+        async def fake_bootstrap_node(node: ix_fleet.FleetNode, *, dry_run: bool) -> None:
+            self.assertFalse(dry_run)
+            calls.append(node.name)
+
+        with patch.object(ix_fleet, "bootstrap_node", fake_bootstrap_node):
+            args = argparse_namespace(on=["web"], dry_run=False)
+            asyncio.run(ix_fleet.cmd_bootstrap(plan, args))
+
+        self.assertEqual(calls, ["db", "web"])
+
+    def test_bootstrap_uses_bootstrap_image_without_replacement_push(self) -> None:
+        calls: list[list[str]] = []
+        ready: list[str] = []
+        node = ix_fleet.FleetNode.model_validate(fleet_node("api"))
+
+        async def fake_list_nodes() -> list[dict[str, typing.Any]]:
+            return []
+
+        async def fake_wait_node_ready(node: ix_fleet.FleetNode, *, dry_run: bool) -> None:
+            self.assertFalse(dry_run)
+            ready.append(node.name)
+
+        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+            del timeout
+            self.assertFalse(dry_run)
+            calls.append(command)
+            return ""
+
+        with (
+            patch.object(ix_fleet, "list_nodes", fake_list_nodes),
+            patch.object(ix_fleet, "run_cli", fake_run_cli),
+            patch.object(ix_fleet, "wait_node_ready", fake_wait_node_ready),
+        ):
+            asyncio.run(ix_fleet.bootstrap_node(node, dry_run=False))
+
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "ix",
+                    "new",
+                    "registry.ix.dev/ix/base:latest",
+                    "--name",
+                    "api",
+                    "--region",
+                    "us-west-1",
+                    "--no-shell",
+                ],
+            ],
+        )
+        self.assertEqual(ready, ["api"])
+
+
+class DownTests(unittest.TestCase):
+    def test_down_continues_after_node_failure(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(
+            fleet_plan(["db", "web"], [fleet_node("db"), fleet_node("web")])
+        )
+        calls: list[list[str]] = []
+
+        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+            del dry_run, timeout
+            calls.append(command)
+            if command[-1] == "web":
+                raise ix_fleet.CliError(command, 1, "", "permission denied")
+            return ""
+
+        with patch.object(ix_fleet, "run_cli", fake_run_cli):
+            args = argparse_namespace(on=[], dry_run=False)
+            with self.assertRaisesRegex(RuntimeError, "web: command failed"):
+                asyncio.run(ix_fleet.cmd_down(plan, args))
+
+        self.assertEqual(
+            calls,
+            [
+                ["ix", "rm", "--force", "web"],
+                ["ix", "rm", "--force", "db"],
+            ],
+        )
+
+    def test_down_treats_missing_nodes_as_absent(self) -> None:
+        node = ix_fleet.FleetNode.model_validate(fleet_node("api"))
+
+        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+            del dry_run, timeout
+            raise ix_fleet.CliError(command, 1, "", "VM not found")
+
+        with patch.object(ix_fleet, "run_cli", fake_run_cli):
+            asyncio.run(ix_fleet.remove_node(node, dry_run=False))
+
+
+def argparse_namespace(**kwargs: typing.Any) -> typing.Any:
+    return type("Args", (), kwargs)()
+
+
 if __name__ == "__main__":
     unittest.main()

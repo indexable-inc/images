@@ -2701,6 +2701,14 @@ let
         message = "fleet wrappers should expose an ix-fleet health command";
       }
       {
+        assertion = fleet.bootstrap.meta.mainProgram == "ix-fleet-bootstrap";
+        message = "fleet wrappers should expose an ix-fleet bootstrap command";
+      }
+      {
+        assertion = fleet.down.meta.mainProgram == "ix-fleet-down";
+        message = "fleet wrappers should expose an ix-fleet down command";
+      }
+      {
         assertion = !fleetIpv4HealthCheckEval.success;
         message = "fleet plans should reject host-side IPv4 checks on private nodes";
       }

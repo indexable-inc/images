@@ -422,6 +422,48 @@ async def ensure_node_groups(node: FleetNode, *, dry_run: bool) -> None:
             raise
 
 
+async def bootstrap_node(node: FleetNode, *, dry_run: bool) -> None:
+    await ensure_node(node, dry_run=dry_run)
+    await ensure_node_groups(node, dry_run=dry_run)
+
+
+def dependency_batches(plan: FleetPlan, selectors: list[str]) -> list[list[FleetNode]]:
+    remaining = {node.name for node in selected_nodes(plan, selectors)}
+    completed: set[str] = set()
+    batches: list[list[FleetNode]] = []
+    while remaining:
+        batch = [
+            plan.nodes[name]
+            for name in plan.order
+            if name in remaining and all(dep not in remaining or dep in completed for dep in plan.nodes[name].dependsOn)
+        ]
+        if not batch:
+            names = ", ".join(sorted(remaining))
+            raise ValueError(f"dependency cycle among selected nodes: {names}")
+        batches.append(batch)
+        for node in batch:
+            remaining.remove(node.name)
+            completed.add(node.name)
+    return batches
+
+
+def is_missing_node_error(error: CliError) -> bool:
+    return "not found" in error.output.lower()
+
+
+async def remove_node(node: FleetNode, *, dry_run: bool) -> None:
+    if dry_run:
+        step(f"remove {node.name}")
+        return
+    try:
+        run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+    except CliError as error:
+        if is_missing_node_error(error):
+            step(f"{node.name} is already absent")
+            return
+        raise
+
+
 def _stringify_env_value(value: typing.Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -671,6 +713,22 @@ async def cmd_health(plan: FleetPlan, args: argparse.Namespace) -> None:
         await run_node_health_checks(node, dry_run=args.dry_run)
 
 
+async def cmd_bootstrap(plan: FleetPlan, args: argparse.Namespace) -> None:
+    for batch in dependency_batches(plan, args.on):
+        await asyncio.gather(*(bootstrap_node(node, dry_run=args.dry_run) for node in batch))
+
+
+async def cmd_down(plan: FleetPlan, args: argparse.Namespace) -> None:
+    failures: list[str] = []
+    for node in reversed(selected_nodes(plan, args.on)):
+        try:
+            await remove_node(node, dry_run=args.dry_run)
+        except (CliError, OSError) as error:
+            failures.append(f"{node.name}: {error}")
+    if failures:
+        raise RuntimeError("failed to remove fleet nodes: " + "; ".join(failures))
+
+
 def parser() -> argparse.ArgumentParser:
     def add_common_options(target: argparse.ArgumentParser, *, defaults: bool) -> None:
         target.add_argument(
@@ -690,6 +748,10 @@ def parser() -> argparse.ArgumentParser:
     add_common_options(p, defaults=True)
 
     sub = p.add_subparsers(dest="command", required=True)
+    bootstrap = sub.add_parser("bootstrap")
+    add_common_options(bootstrap, defaults=False)
+    down = sub.add_parser("down")
+    add_common_options(down, defaults=False)
     plan = sub.add_parser("plan")
     add_common_options(plan, defaults=False)
     diff = sub.add_parser("diff")
@@ -719,6 +781,10 @@ async def main() -> None:
     if args.command == "plan":
         nodes = [node.model_dump() for node in selected_nodes(plan, args.on)]
         print(json.dumps({"nodes": nodes}, indent=2))
+    elif args.command == "bootstrap":
+        await cmd_bootstrap(plan, args)
+    elif args.command == "down":
+        await cmd_down(plan, args)
     elif args.command == "diff":
         await cmd_diff(plan, args)
     elif args.command == "health":

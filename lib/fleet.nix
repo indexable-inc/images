@@ -328,7 +328,9 @@ let
     };
 
   subcommands = lib.genAttrs [
+    "bootstrap"
     "diff"
+    "down"
     "health"
     "replace"
     "switch"
@@ -338,7 +340,9 @@ let
 in
 {
   inherit (subcommands)
+    bootstrap
     diff
+    down
     replace
     health
     switch
