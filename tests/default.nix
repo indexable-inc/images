@@ -1314,7 +1314,9 @@ let
     {
       services.minecraft = {
         configFiles."client//bad.toml" = { };
+        configFiles."/absolute/bad.toml" = { };
         serverFiles."plugins/../bukkit.yml" = { };
+        serverFiles."$(bad).json" = { };
         datapacks.bad = {
           fileName = "../bad";
           files."data/../bad.json" = { };
@@ -2011,9 +2013,20 @@ let
         message = "ix.relativePath shell helpers should quote safe relative paths and reject unsafe paths";
       }
       {
-        assertion = lib.any (
-          failure: lib.hasInfix "services.minecraft managed paths must be relative paths" failure.message
-        ) minecraftUnsafeManagedPathFailures;
+        assertion =
+          let
+            failure = lib.findFirst (
+              f: lib.hasInfix "services.minecraft managed paths must be relative paths" f.message
+            ) null minecraftUnsafeManagedPathFailures;
+            msg = if failure != null then failure.message else "";
+          in
+          failure != null
+          && lib.hasInfix "services.minecraft.configFiles.client//bad.toml" msg
+          && lib.hasInfix "services.minecraft.configFiles./absolute/bad.toml" msg
+          && lib.hasInfix "services.minecraft.serverFiles.plugins/../bukkit.yml" msg
+          && lib.hasInfix "services.minecraft.serverFiles.$(bad).json" msg
+          && lib.hasInfix "services.minecraft.datapacks.bad.fileName=../bad" msg
+          && lib.hasInfix "services.minecraft.datapacks.bad.files.data/../bad.json" msg;
         message = "minecraft managed file options should reject unsafe relative paths at eval time";
       }
       {

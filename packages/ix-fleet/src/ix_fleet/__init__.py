@@ -797,6 +797,8 @@ def parser() -> argparse.ArgumentParser:
     add_common_options(up, defaults=False)
     up.add_argument("--skip-push", action="store_true")
     up.add_argument("--skip-health", action="store_true")
+    fs_diff = sub.add_parser("fs-diff")
+    add_common_options(fs_diff, defaults=False)
     return p
 
 
@@ -820,6 +822,8 @@ async def main() -> None:
         await cmd_replace(plan, args)
     elif args.command == "up":
         await cmd_up(plan, args)
+    elif args.command == "fs-diff":
+        await cmd_fs_diff(plan, args)
     else:
         raise AssertionError(args.command)
 

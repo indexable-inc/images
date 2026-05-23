@@ -5,7 +5,7 @@ use std::io;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use clap::Parser;
 use serde_json::Value;
 
@@ -60,6 +60,21 @@ fn managed_files(source_dir: &Path) -> Result<Vec<String>> {
     collect_managed_files(source_dir, source_dir, &mut files)?;
     files.sort();
     Ok(files)
+}
+
+fn validate_rel_path(rel: &str) -> Result<()> {
+    ensure!(!rel.is_empty(), "path is empty");
+    let path = Path::new(rel);
+    ensure!(!path.is_absolute(), "path is absolute: {}", rel);
+
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir)) {
+        bail!("unsafe path (contains '..' or root): {}", rel);
+    }
+
+    if rel.chars().any(|c| matches!(c, ';' | '&' | '|' | '$' | '`' | '<' | '>' | '"' | '\'' | '*' | '?' | '[' | ']' | '{' | '}' | '(' | ')' | '~' | ' ' | '\\')) {
+        bail!("path contains shell-sensitive or unsafe characters: {}", rel);
+    }
+    Ok(())
 }
 
 fn collect_managed_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> Result<()> {
@@ -121,11 +136,13 @@ fn sync_tree(
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
 
-    for line in read_manifest_lines(manifest)? {
+    for (i, line) in read_manifest_lines(manifest)?.into_iter().enumerate() {
         let rel = manifest_rel(&line);
-        if !rel.is_empty() && !preserve_removed.contains(rel) {
-            remove_if_present(&target_dir.join(rel))?;
+        if rel.is_empty() || preserve_removed.contains(rel) {
+            continue;
         }
+        validate_rel_path(rel).with_context(|| format!("checking manifest path safety in {} at line {}", manifest.display(), i + 1))?;
+        remove_if_present(&target_dir.join(rel))?;
     }
 
     let tmp = manifest.with_file_name(format!(
@@ -141,6 +158,7 @@ fn sync_tree(
 
     let mut manifest_lines = String::new();
     for rel in managed_files(source_dir)? {
+        validate_rel_path(&rel).with_context(|| format!("checking managed file path safety in {}", source_dir.display()))?;
         let source_path = source_dir.join(&rel);
         let target_path = target_dir.join(&rel);
         if let Some(parent) = target_path.parent() {
@@ -624,6 +642,7 @@ fn main() -> Result<()> {
         &BTreeSet::from(["ops.json".to_owned(), "whitelist.json".to_owned()]),
     )?;
     for world in &config.datapack_worlds {
+        validate_rel_path(world).context("checking datapack world name safety")?;
         sync_tree(
             &config.managed_root.join("managed-datapacks"),
             &config.data_dir.join(world).join("datapacks"),
@@ -650,6 +669,23 @@ mod tests {
             ("uuid".to_owned(), Value::String(uuid.to_owned())),
             ("name".to_owned(), Value::String(name.to_owned())),
         ]))
+    }
+
+    #[test]
+    fn validate_rel_path_rejects_unsafe_paths() {
+        assert!(validate_rel_path("safe/path.json").is_ok());
+        assert!(validate_rel_path("config.toml").is_ok());
+        
+        assert!(validate_rel_path("../escape.json").is_err());
+        assert!(validate_rel_path("path/../escape.json").is_err());
+        assert!(validate_rel_path("/absolute/path").is_err());
+        assert!(validate_rel_path("path with space.json").is_err());
+        assert!(validate_rel_path("path;with;shell").is_err());
+        assert!(validate_rel_path("path/with$(cmd)").is_err());
+        assert!(validate_rel_path("path/with`cmd`").is_err());
+        assert!(validate_rel_path("path/with|pipe").is_err());
+        assert!(validate_rel_path("path/with\\backslash").is_err());
+        assert!(validate_rel_path("").is_err());
     }
 
     #[test]
