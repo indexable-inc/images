@@ -798,7 +798,6 @@ async def main() -> None:
     elif args.command == "up":
         await cmd_up(plan, args)
     elif args.command == "fs-diff":
-        await cmd_fs_diff(plan, args)
     else:
         raise AssertionError(args.command)
 
