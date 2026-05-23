@@ -86,7 +86,21 @@
       },
       {
         "slug": "plugmanx",
-        "pluginName": "PlugManX"
+        "pluginName": "PlugManX",
+        "version": "3.0.4",
+        "url": "https://cdn.modrinth.com/data/yro4niHu/versions/hrMAp7Ww/PlugManX-3.0.4.jar"
+      },
+      {
+        "slug": "viaversion",
+        "pluginName": "ViaVersion"
+      },
+      {
+        "slug": "viabackwards",
+        "pluginName": "ViaBackwards"
+      },
+      {
+        "slug": "viarewind",
+        "pluginName": "ViaRewind"
       }
     ]
   },

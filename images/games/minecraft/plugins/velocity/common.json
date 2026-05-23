@@ -8,5 +8,20 @@
     "hash": "sha256-usLTnnEXiiFlXPdmj/tvwzY7QbBNeogK8ex4jNTs1e4=",
     "pluginName": "Geyser-Velocity",
     "url": "https://download.geysermc.org/v2/projects/geyser/versions/2.10.0/builds/1149/downloads/velocity"
+  },
+  "viabackwards": {
+    "hash": "sha512-PdqWj0OKGlqmDChW8Pp2fbZQGiexqOvR3HK6CYBEVu5gjL2CumahxymKCMnw450a464nzBa9+ssuMz6Tr/fsdQ==",
+    "pluginName": "ViaBackwards",
+    "url": "https://cdn.modrinth.com/data/NpvuJQoq/versions/W890fNPl/ViaBackwards-5.9.1.jar"
+  },
+  "viarewind": {
+    "hash": "sha512-HB9Nt3XZ374oh3a9vS4LL0kQZDuQNGB9gT7lCdol/EXoTPsBg838MFYLJjLyTHXcxRpKm7Dej/KayeJL2J78lA==",
+    "pluginName": "ViaRewind",
+    "url": "https://cdn.modrinth.com/data/TbHIxhx5/versions/cOg14EE7/ViaRewind-4.1.1.jar"
+  },
+  "viaversion": {
+    "hash": "sha512-e4nyd5xIc0L4p32ydYOpiGi7IBF6T6aKLgfaC7Ytpa70Rru8AXIKCpg6HqLpGmvSb8lHvv7hQP8eTiUev2As+A==",
+    "pluginName": "ViaVersion",
+    "url": "https://cdn.modrinth.com/data/P1OZGk5p/versions/OGj9YIQN/ViaVersion-5.9.1.jar"
   }
 }

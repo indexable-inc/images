@@ -1,10 +1,10 @@
 {
   "c2me-fabric": {
-    "hash": "sha256-aASz7sslXqYn2p1BI3ZCOUNaPXj8YDCmoUPuyj63kws=",
+    "hash": "sha512-u4cjWzGnatTPVMwwO0uUg0HjARIXO6ITec16BefRKLM2zrDQwRDSS1ML8lWf/0SBxHUpWaQQyxrssTEaL2IUrA==",
     "url": "https://cdn.modrinth.com/data/VSNURh3q/versions/h0G6V9wK/c2me-fabric-mc26.2-snapshot-5-0.3.7%2Balpha.0.68.jar"
   },
   "fabric-api": {
-    "hash": "sha256-3g3blJ5SQZl+cb+GvrVFmNeItdlxOvbSCh6UDaIqmNs=",
+    "hash": "sha512-VADNXhvlByydqtwtDjgXpgq7E8AKwQPRaeZTofhBZdRwuQUuagA6vdGK/FfRpJ9l+M+F1bNkLUvcaEMpTD7lHQ==",
     "url": "https://cdn.modrinth.com/data/P7dR8mSH/versions/kw0Rlte8/fabric-api-0.147.1%2B26.2.jar"
   }
 }

@@ -76,13 +76,16 @@ def get_projects(ids_or_slugs: list[str]) -> list[JsonObject]:
 def get_versions(project_id: str, game_versions: list[str], loaders: list[str]) -> list[JsonObject]:
     key = (project_id, tuple(game_versions), tuple(loaders))
     if key not in _version_cache:
-        _version_cache[key] = api_get(
-            f"/project/{project_id}/version",
-            {
-                "game_versions": json.dumps(game_versions),
-                "loaders": json.dumps(loaders),
-            },
-        )
+        # Modrinth's /version endpoint treats an empty filter array as "match
+        # nothing" rather than "no filter", so empty filters must be omitted
+        # from the query string entirely. The velocity manifest's common shape
+        # has no per-version pin and so passes game_versions=[].
+        params: JsonObject = {}
+        if game_versions:
+            params["game_versions"] = json.dumps(game_versions)
+        if loaders:
+            params["loaders"] = json.dumps(loaders)
+        _version_cache[key] = api_get(f"/project/{project_id}/version", params)
     return _version_cache[key]
 
 
@@ -393,9 +396,13 @@ def generate(
         common_resolved = resolve(common_slugs, common_game_versions, [loader], projects)
 
         # Evict mods whose picked version doesn't span ALL common game versions.
-        # These get resolved per-version instead.
+        # These get resolved per-version instead. Explicit-artifact entries
+        # (those resolved from a manifest `url` rather than a Modrinth slug)
+        # have no Modrinth project to query, so the eviction check is skipped.
         evicted = []
         for slug in list(common_resolved.keys()):
+            if projects.get(slug, {}).get("source") == "explicit":
+                continue
             project = get_project(slug)
             versions = get_versions(project["id"], common_game_versions, [loader])
             version = pick_version(versions)

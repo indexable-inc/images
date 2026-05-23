@@ -18,8 +18,8 @@
           "url": "https://ko-fi.com/sekwah"
         }
       ],
-      "downloads": 92131,
-      "followers": 183,
+      "downloads": 93101,
+      "followers": 184,
       "gallery": [
         {
           "created": "2023-01-20T02:31:34.379030Z",
@@ -149,7 +149,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-13T01:43:33.340236Z",
-          "downloads": 559,
+          "downloads": 1085,
           "file": {
             "filename": "Advanced-Portals-Spigot-2.7.1.jar",
             "hashes": {
@@ -252,8 +252,8 @@
           "url": "https://paypal.me/ajgeiss0702"
         }
       ],
-      "downloads": 85592,
-      "followers": 180,
+      "downloads": 87144,
+      "followers": 181,
       "gallery": [
         {
           "created": "2023-01-10T03:52:49.777495Z",
@@ -379,7 +379,7 @@
               "version_id": null
             }
           ],
-          "downloads": 3982,
+          "downloads": 4750,
           "file": {
             "filename": "ajLeaderboards-2.11.0.jar",
             "hashes": {
@@ -493,18 +493,18 @@
       "discord_url": "https://discord.gg/Bh2EZfB",
       "donation_urls": [
         {
-          "id": "github",
-          "platform": "Github",
-          "url": "https://github.com/sponsors/Archy-X"
-        },
-        {
           "id": "paypal",
           "platform": "Paypal",
           "url": "https://paypal.me/archydev"
+        },
+        {
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/Archy-X"
         }
       ],
-      "downloads": 170495,
-      "followers": 345,
+      "downloads": 171928,
+      "followers": 346,
       "game_versions": [
         "1.14.4",
         "1.15",
@@ -567,7 +567,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-06T21:15:12.492402Z",
-          "downloads": 10145,
+          "downloads": 11454,
           "file": {
             "filename": "AuraSkills-2.3.12.jar",
             "hashes": {
@@ -636,7 +636,7 @@
       "date_created": "2023-12-22T13:36:04.796703Z",
       "date_modified": "2024-08-22T10:51:21.965135Z",
       "description": "A reliable, stable fork of AuthMe with various bug fixes, new exciting features and Folia support",
-      "downloads": 198145,
+      "downloads": 201190,
       "followers": 149,
       "gallery": [
         {
@@ -742,7 +742,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2024-08-22T10:51:21.965135Z",
-          "downloads": 180719,
+          "downloads": 183713,
           "file": {
             "filename": "AuthMe-5.7.0-FORK-Universal.jar",
             "hashes": {
@@ -874,8 +874,8 @@
           "url": "https://ko-fi.com/maoyue"
         }
       ],
-      "downloads": 83617,
-      "followers": 120,
+      "downloads": 85123,
+      "followers": 122,
       "game_versions": [
         "1.17",
         "1.17.1",
@@ -937,7 +937,7 @@
               "version_id": null
             }
           ],
-          "downloads": 9208,
+          "downloads": 10673,
           "file": {
             "filename": "AutoTreeChop-1.7.4.jar",
             "hashes": {
@@ -1013,8 +1013,8 @@
       "date_modified": "2026-04-05T19:57:02.425774Z",
       "description": "A lightweight grave (death chest) plugin focused on performance & compatibility.",
       "discord_url": "https://dc.artillex-studios.com/",
-      "downloads": 144559,
-      "followers": 310,
+      "downloads": 146522,
+      "followers": 312,
       "gallery": [
         {
           "created": "2023-11-21T17:43:51.187108Z",
@@ -1076,7 +1076,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-05T19:57:02.425774Z",
-          "downloads": 12503,
+          "downloads": 14382,
           "file": {
             "filename": "AxGraves-1.28.0.jar",
             "hashes": {
@@ -1154,8 +1154,8 @@
           "url": "https://www.paypal.com/paypalme/moulberry"
         }
       ],
-      "downloads": 185900,
-      "followers": 277,
+      "downloads": 187768,
+      "followers": 280,
       "gallery": [
         {
           "created": "2023-09-08T14:55:21.825755Z",
@@ -1206,7 +1206,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-09T05:43:04.707426Z",
-          "downloads": 2096,
+          "downloads": 2477,
           "file": {
             "filename": "AxiomPaperPlugin-5.0.4-for-MC26.1.jar",
             "hashes": {
@@ -1252,6 +1252,11 @@
       "discord_url": "https://discord.com/invite/rePyFESDbk",
       "donation_urls": [
         {
+          "id": "bmac",
+          "platform": "Bmac",
+          "url": "https://buymeacoffee.com/toxicity188"
+        },
+        {
           "id": "paypal",
           "platform": "Paypal",
           "url": "https://www.paypal.com/paypalme/toxicity188?country.x=KR&locale.x=en_US"
@@ -1260,15 +1265,10 @@
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/toxicity188"
-        },
-        {
-          "id": "bmac",
-          "platform": "Bmac",
-          "url": "https://buymeacoffee.com/toxicity188"
         }
       ],
-      "downloads": 57222,
-      "followers": 327,
+      "downloads": 57899,
+      "followers": 329,
       "gallery": [
         {
           "created": "2024-08-08T21:49:00.269486Z",
@@ -1456,7 +1456,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-16T11:22:33.154852Z",
-          "downloads": 112,
+          "downloads": 371,
           "file": {
             "filename": "BetterHud-bukkit-2.0.0.jar",
             "hashes": {
@@ -1505,6 +1505,224 @@
       "title": "BetterHud",
       "wiki_url": "https://github.com/toxicity188/BetterHud/wiki"
     },
+    "betterstructures": {
+      "additional_categories": [
+        "decoration",
+        "game-mechanics",
+        "mobs"
+      ],
+      "categories": [
+        "adventure",
+        "utility",
+        "worldgen"
+      ],
+      "client_side": "unsupported",
+      "color": 13027236,
+      "date_created": "2025-09-07T07:14:06.372641Z",
+      "date_modified": "2026-05-18T15:45:12.056136Z",
+      "description": "Add structures for any world generation!",
+      "discord_url": "https://discord.gg/GKyzTgT",
+      "donation_urls": [
+        {
+          "id": "patreon",
+          "platform": "Patreon",
+          "url": "https://www.patreon.com/magmaguy"
+        }
+      ],
+      "downloads": 63042,
+      "followers": 100,
+      "gallery": [
+        {
+          "created": "2025-09-07T07:18:45.988903Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/1732105383290b6203ed006e852760332ce53868_350.webp"
+        },
+        {
+          "created": "2025-10-10T11:43:55.695018Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/1889e6bbc950c77a8c2e4a531f032a73b69de4f1_350.webp"
+        },
+        {
+          "created": "2025-09-07T07:19:00.548129Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/2a46e04846173106c456e394c1a6f6833261e5ac_350.webp"
+        },
+        {
+          "created": "2025-10-10T11:43:23.386630Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/3d3e05b895cdfc860be93b1eb8311cfa3e51f031_350.webp"
+        },
+        {
+          "created": "2025-10-10T11:43:32.205311Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/49d949369cdad2978a44d4f728d168f1a695d244_350.webp"
+        },
+        {
+          "created": "2025-09-07T07:18:30.675568Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/6bb6384d8b1cc2177066d1d626b71348e1615a0f_350.webp"
+        },
+        {
+          "created": "2025-10-10T11:43:45.602620Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/6f2decc55fc1a347925b9be15d1043eb8764a096_350.webp"
+        },
+        {
+          "created": "2025-10-10T11:43:38.041235Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/7bfbf04258767df6f6910425f2dba21ffab10c20_350.webp"
+        },
+        {
+          "created": "2025-09-07T07:18:40.688616Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/a89e3c473929705af83f61cd00419d099a079ede_350.webp"
+        },
+        {
+          "created": "2025-09-07T07:18:35.482348Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/be0ea0700d9e63c39afab1968c8ae6cdcc1fcc14_350.webp"
+        },
+        {
+          "created": "2025-10-10T11:44:02.289669Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/ecea92a869f6f682981f2f246e2c8fda4a1dd4a8_350.webp"
+        },
+        {
+          "created": "2025-09-07T07:18:51.307396Z",
+          "featured": true,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/KYXglN2M/images/f47097349fd486788d4943b6e2c8951bac48fb10_350.webp"
+        }
+      ],
+      "game_versions": [
+        "1.14",
+        "1.14.1",
+        "1.14.2",
+        "1.14.3",
+        "1.14.4",
+        "1.18",
+        "1.18.1",
+        "1.18.2",
+        "1.19",
+        "1.19.1",
+        "1.19.2",
+        "1.19.3",
+        "1.19.4",
+        "1.20",
+        "1.20.1",
+        "1.20.2",
+        "1.20.3",
+        "1.20.4",
+        "1.20.5",
+        "1.20.6",
+        "1.21",
+        "1.21.1",
+        "1.21.2",
+        "1.21.3",
+        "1.21.4",
+        "1.21.5",
+        "1.21.6",
+        "1.21.7",
+        "1.21.8",
+        "1.21.9",
+        "1.21.10",
+        "1.21.11",
+        "26.1",
+        "26.1.1",
+        "26.1.2"
+      ],
+      "icon_url": "https://cdn.modrinth.com/data/KYXglN2M/b10b99e514f34ced9e3033b8b7996c8e6838267d_96.webp",
+      "issues_url": "https://github.com/MagmaGuy/BetterStructures/issues",
+      "license": {
+        "id": "LGPL-3.0-only",
+        "name": "GNU Lesser General Public License v3.0 only",
+        "url": null
+      },
+      "loaders": [
+        "paper",
+        "purpur",
+        "spigot"
+      ],
+      "page_url": "https://modrinth.com/mod/betterstructures",
+      "project_id": "KYXglN2M",
+      "project_type": "mod",
+      "selected_versions": {
+        "26.1.2+paper": {
+          "date_published": "2026-05-18T15:45:12.056136Z",
+          "dependencies": [
+            {
+              "dependency_type": "optional",
+              "file_name": null,
+              "project_id": "ypMp4OVC",
+              "version_id": null
+            },
+            {
+              "dependency_type": "optional",
+              "file_name": null,
+              "project_id": "jmQaa0X3",
+              "version_id": null
+            },
+            {
+              "dependency_type": "optional",
+              "file_name": null,
+              "project_id": "dXA9IZkK",
+              "version_id": null
+            }
+          ],
+          "downloads": 1230,
+          "file": {
+            "filename": "BetterStructures.jar",
+            "hashes": {
+              "sha1": "ecc5d7f5343f33d111d8afc5b48fb25eb24f818e",
+              "sha512": "f4718cdecaedf03439e040e4e65922298f9c845ad1dbe1a21d6a82a6113032874b82384607e69016d3204e6ffc0fbb86e3e1bcea4acd96a5843d06f1a47a7bc7"
+            },
+            "primary": true,
+            "size": 5571467,
+            "url": "https://cdn.modrinth.com/data/KYXglN2M/versions/icL1Igde/BetterStructures.jar"
+          },
+          "game_versions": [
+            "1.21.4",
+            "1.21.5",
+            "1.21.6",
+            "1.21.7",
+            "1.21.8",
+            "1.21.9",
+            "1.21.10",
+            "1.21.11",
+            "26.1",
+            "26.1.1",
+            "26.1.2"
+          ],
+          "id": "icL1Igde",
+          "loaders": [
+            "paper",
+            "purpur",
+            "spigot"
+          ],
+          "name": "BetterStructures 2.3.1",
+          "project_id": "KYXglN2M",
+          "version_number": "2.3.1",
+          "version_type": "release"
+        }
+      },
+      "server_side": "required",
+      "slug": "betterstructures",
+      "source": "modrinth",
+      "source_url": "https://github.com/MagmaGuy/BetterStructures",
+      "title": "BetterStructures",
+      "wiki_url": "https://magmaguy.com/wiki.html"
+    },
     "bluemap": {
       "additional_categories": [
         "adventure",
@@ -1521,18 +1739,18 @@
       "discord_url": "https://discord.gg/zmkyJa3",
       "donation_urls": [
         {
-          "id": "patreon",
-          "platform": "Patreon",
-          "url": "https://www.patreon.com/bluecolored"
-        },
-        {
           "id": "ko-fi",
           "platform": "Ko-fi",
           "url": "https://ko-fi.com/bluecolored"
+        },
+        {
+          "id": "patreon",
+          "platform": "Patreon",
+          "url": "https://www.patreon.com/bluecolored"
         }
       ],
-      "downloads": 350071,
-      "followers": 1323,
+      "downloads": 355309,
+      "followers": 1330,
       "gallery": [
         {
           "created": "2023-02-07T10:59:42.915364Z",
@@ -1633,7 +1851,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-12T17:15:51.421995Z",
-          "downloads": 4538,
+          "downloads": 5363,
           "file": {
             "filename": "bluemap-5.20-paper.jar",
             "hashes": {
@@ -1686,7 +1904,7 @@
           "url": "https://github.com/sponsors/Jsinco"
         }
       ],
-      "downloads": 50025,
+      "downloads": 50796,
       "followers": 118,
       "gallery": [
         {
@@ -1776,7 +1994,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-08T07:00:50.617700Z",
-          "downloads": 1469,
+          "downloads": 2171,
           "file": {
             "filename": "BreweryX-3.7.0.jar",
             "hashes": {
@@ -1828,7 +2046,7 @@
       "source": "modrinth",
       "source_url": "https://github.com/BreweryTeam/BreweryX",
       "title": "BreweryX",
-      "wiki_url": "https://brewery.lumamc.net"
+      "wiki_url": "https://docs.breweryteam.dev/docs/breweryx"
     },
     "brutal-nightmare": {
       "additional_categories": [
@@ -1847,7 +2065,7 @@
       "date_created": "2025-02-05T11:35:51.667146Z",
       "date_modified": "2026-05-02T14:15:42.195037Z",
       "description": "Minecraft too easy? Try this mods with nearly 40 modifiers - settings new mini bosses, which made minecraft become hard & insane.  Enhanced hostile mobs' AI & Angry passive mob. Zombie place/break blocks. Skeleton,Spider,Creeper,Enderman.",
-      "downloads": 61111,
+      "downloads": 62086,
       "followers": 194,
       "gallery": [
         {
@@ -1922,7 +2140,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-02T14:15:42.195037Z",
-          "downloads": 563,
+          "downloads": 765,
           "file": {
             "filename": "Brutal_Nightmare-5.8.jar",
             "hashes": {
@@ -1991,6 +2209,199 @@
       "source": "modrinth",
       "title": "Brutal Nightmare : Insane Difficult"
     },
+    "calcmod": {
+      "categories": [
+        "utility"
+      ],
+      "client_side": "optional",
+      "color": 5238351,
+      "date_created": "2022-08-04T21:21:58.593977Z",
+      "date_modified": "2026-05-17T20:46:58.537084Z",
+      "description": "A calculator in your chat with shortcuts designed for Minecraft",
+      "donation_urls": [
+        {
+          "id": "bmac",
+          "platform": "Bmac",
+          "url": "https://www.buymeacoffee.com/js802025"
+        },
+        {
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/js802025"
+        }
+      ],
+      "downloads": 2451946,
+      "followers": 700,
+      "gallery": [
+        {
+          "created": "2024-01-25T03:18:47.356317Z",
+          "description": "Straightforward syntax for speedy calculations",
+          "featured": false,
+          "ordering": 1,
+          "title": "Simple Syntax",
+          "url": "https://cdn.modrinth.com/data/XoHTb2Ap/images/1f723094c825bb8adf9310e9bf7798636bd2de40_350.webp"
+        },
+        {
+          "created": "2024-01-25T03:19:55.668898Z",
+          "description": "Always gather the right amount of items with CalcMod's Craft command",
+          "featured": false,
+          "ordering": 2,
+          "title": "Craft Easier",
+          "url": "https://cdn.modrinth.com/data/XoHTb2Ap/images/d8505ef32fa53bd6484f260f103ec6909905cb1b_350.webp"
+        },
+        {
+          "created": "2024-01-25T03:25:42.340871Z",
+          "description": "CalcMod helps with redstone and building farms",
+          "featured": false,
+          "ordering": 3,
+          "title": "Calculate Hopper Clocks",
+          "url": "https://cdn.modrinth.com/data/XoHTb2Ap/images/399425fbe83920982fcd365edbbd0281b147bf8d_350.webp"
+        },
+        {
+          "created": "2024-01-25T03:22:21.545961Z",
+          "description": "Calculate between any Overworld and Nether coordinate seamlessly",
+          "featured": false,
+          "ordering": 4,
+          "title": "Link Portals Faster",
+          "url": "https://cdn.modrinth.com/data/XoHTb2Ap/images/194e84e7289132a03c0ae0cd2d4adba10acaa028_350.webp"
+        },
+        {
+          "created": "2024-01-25T03:27:47.918270Z",
+          "description": "Tailor CalcMod to your use case",
+          "featured": false,
+          "ordering": 5,
+          "title": "Make Custom Functions",
+          "url": "https://cdn.modrinth.com/data/XoHTb2Ap/images/f376674582540a59ef989bc071b8c136088f5a68_350.webp"
+        },
+        {
+          "created": "2024-01-25T03:29:02.317396Z",
+          "description": "Use the right amount of gold every time",
+          "featured": false,
+          "ordering": 6,
+          "title": "Barter Better",
+          "url": "https://cdn.modrinth.com/data/XoHTb2Ap/images/4bb1bfc612cab6f10b474ae252b7d97c8eccac3b_350.webp"
+        },
+        {
+          "created": "2025-04-27T18:30:35.433416Z",
+          "description": "Find the shortest distance to your destination",
+          "featured": false,
+          "ordering": 10,
+          "title": "Travel Efficiently",
+          "url": "https://cdn.modrinth.com/data/XoHTb2Ap/images/887a893f1d9b558e1594a4dac8ad16e79aa04496_350.webp"
+        },
+        {
+          "created": "2023-11-11T02:25:35.382469Z",
+          "description": "(look at feature list to see everything else you can do!)",
+          "featured": false,
+          "ordering": 100,
+          "title": "And Much More!",
+          "url": "https://cdn.modrinth.com/data/XoHTb2Ap/images/f53777df82fd1bcffb0f68ad4b5b2afb1d585bd1_350.webp"
+        }
+      ],
+      "game_versions": [
+        "1.12.2",
+        "1.13",
+        "1.13.1",
+        "1.13.2",
+        "1.14",
+        "1.14.1",
+        "1.14.2",
+        "1.14.3",
+        "1.14.4",
+        "1.15",
+        "1.15.1",
+        "1.15.2",
+        "1.16",
+        "1.16.1",
+        "1.16.2",
+        "1.16.3",
+        "1.16.4",
+        "1.16.5",
+        "1.17",
+        "1.17.1",
+        "1.18",
+        "1.18.1",
+        "1.18.2",
+        "1.19",
+        "1.19.1",
+        "1.19.2",
+        "1.19.3",
+        "1.19.4",
+        "1.20",
+        "1.20.1",
+        "1.20.2",
+        "1.20.3",
+        "1.20.4",
+        "1.20.5",
+        "1.20.6",
+        "1.21",
+        "1.21.1",
+        "1.21.2",
+        "1.21.3",
+        "1.21.4",
+        "1.21.5",
+        "1.21.6",
+        "1.21.7",
+        "1.21.8",
+        "1.21.9",
+        "1.21.10",
+        "1.21.11",
+        "26.1",
+        "26.1.1",
+        "26.1.2"
+      ],
+      "icon_url": "https://cdn.modrinth.com/data/XoHTb2Ap/fe87f9fb4d48afbe539314b17e1be68ba242e58a.gif",
+      "issues_url": "https://github.com/js802025/calcmod/issues",
+      "license": {
+        "id": "MIT",
+        "name": "MIT License",
+        "url": null
+      },
+      "loaders": [
+        "fabric",
+        "forge",
+        "neoforge",
+        "paper",
+        "quilt"
+      ],
+      "page_url": "https://modrinth.com/mod/calcmod",
+      "project_id": "XoHTb2Ap",
+      "project_type": "mod",
+      "selected_versions": {
+        "26.1.2+paper": {
+          "date_published": "2026-05-17T20:46:58.537084Z",
+          "downloads": 327,
+          "file": {
+            "filename": "calcmod-1.5.1+paper.26.1.2.jar",
+            "hashes": {
+              "sha1": "085d4ab2010e233fcdc73d1a750ad820270c6bb0",
+              "sha512": "5a01048ba6810bbfe37b774e3354eb0c018efb596429d4c7e952b7e681a4d796468771125aa13757a5697dc17e760024e990bcfa095c9944ebd500d93f49eaf9"
+            },
+            "primary": true,
+            "size": 422800,
+            "url": "https://cdn.modrinth.com/data/XoHTb2Ap/versions/oOXqn6vP/calcmod-1.5.1%2Bpaper.26.1.2.jar"
+          },
+          "game_versions": [
+            "26.1",
+            "26.1.1",
+            "26.1.2"
+          ],
+          "id": "oOXqn6vP",
+          "loaders": [
+            "paper"
+          ],
+          "name": "CalcMod 1.5.1 For Paper 26.1",
+          "project_id": "XoHTb2Ap",
+          "version_number": "1.5.1+paper.26.1",
+          "version_type": "release"
+        }
+      },
+      "server_side": "optional",
+      "slug": "calcmod",
+      "source": "modrinth",
+      "source_url": "https://github.com/js802025/calcmod",
+      "title": "CalcMod"
+    },
     "chunky": {
       "categories": [
         "optimization",
@@ -2005,18 +2416,18 @@
       "discord_url": "https://discord.gg/ZwVJukcNQG",
       "donation_urls": [
         {
-          "id": "paypal",
-          "platform": "Paypal",
-          "url": "https://www.paypal.com/paypalme/pop4959"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/pop4959"
+        },
+        {
+          "id": "paypal",
+          "platform": "Paypal",
+          "url": "https://www.paypal.com/paypalme/pop4959"
         }
       ],
-      "downloads": 12576495,
-      "followers": 5479,
+      "downloads": 12740815,
+      "followers": 5509,
       "game_versions": [
         "1.13.2",
         "1.14",
@@ -2089,7 +2500,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-04T05:46:08.712785Z",
-          "downloads": 12087,
+          "downloads": 17030,
           "file": {
             "filename": "Chunky-Bukkit-1.5.3.jar",
             "hashes": {
@@ -2148,8 +2559,8 @@
           "url": "https://mc-host24.de/donate/FS_HEFT"
         }
       ],
-      "downloads": 105222,
-      "followers": 61,
+      "downloads": 108152,
+      "followers": 63,
       "gallery": [
         {
           "created": "2025-07-30T13:44:26.068945Z",
@@ -2232,7 +2643,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-14T14:12:27.058803Z",
-          "downloads": 2021,
+          "downloads": 4847,
           "file": {
             "filename": "ClearLag 1.7.7.1 VER 1.18-1.21.jar",
             "hashes": {
@@ -2309,8 +2720,8 @@
       "date_modified": "2026-04-20T08:27:33.350405Z",
       "description": "Click to pick up any mob into your inventory and carry\nthem around!",
       "discord_url": "https://discord.gg/zUetzp3Gzk",
-      "downloads": 131053,
-      "followers": 216,
+      "downloads": 133905,
+      "followers": 221,
       "gallery": [
         {
           "created": "2025-01-14T16:39:05.543653Z",
@@ -2386,7 +2797,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-03-26T18:54:56.423368Z",
-          "downloads": 8453,
+          "downloads": 9296,
           "file": {
             "filename": "ClickMobs-paper-1.3.1.jar",
             "hashes": {
@@ -2451,8 +2862,8 @@
       "date_modified": "2026-04-19T12:47:32.050850Z",
       "description": "Click to pick up villagers, reset their trades, change their biomes, claim them and much more!",
       "discord_url": "https://discord.gg/zUetzp3Gzk",
-      "downloads": 342623,
-      "followers": 445,
+      "downloads": 350422,
+      "followers": 450,
       "gallery": [
         {
           "created": "2025-03-11T21:31:06.283972Z",
@@ -2543,7 +2954,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-02-15T11:31:24.327723Z",
-          "downloads": 54314,
+          "downloads": 57770,
           "file": {
             "filename": "ClickVillagers-paper-1.6.2.jar",
             "hashes": {
@@ -2600,7 +3011,7 @@
       "date_modified": "2026-04-30T20:06:59.607871Z",
       "description": "A lightweight combat logging plugin for Minecraft Paper servers that prevents players from escaping fights unfairly.",
       "discord_url": "https://discord.gg/EFQRkm6jXz",
-      "downloads": 85,
+      "downloads": 149,
       "followers": 1,
       "game_versions": [
         "1.21",
@@ -2635,7 +3046,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-30T20:06:59.607871Z",
-          "downloads": 26,
+          "downloads": 81,
           "file": {
             "filename": "CombatLogPlugin-1.2.1-26.1+.jar",
             "hashes": {
@@ -2681,18 +3092,18 @@
       "discord_url": "https://discord.gg/j8KK5dGBps",
       "donation_urls": [
         {
-          "id": "github",
-          "platform": "Github",
-          "url": "https://github.com/sponsors/YouHaveTrouble"
-        },
-        {
           "id": "ko-fi",
           "platform": "Ko-fi",
           "url": "https://ko-fi.com/youhavetrouble"
+        },
+        {
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/YouHaveTrouble"
         }
       ],
-      "downloads": 70768,
-      "followers": 218,
+      "downloads": 71480,
+      "followers": 219,
       "game_versions": [
         "1.13",
         "1.13.1",
@@ -2775,7 +3186,7 @@
               "version_id": null
             }
           ],
-          "downloads": 22925,
+          "downloads": 23468,
           "file": {
             "filename": "CommandWhitelist-Bukkit-2.12.0.jar",
             "hashes": {
@@ -2837,8 +3248,8 @@
       "date_modified": "2026-05-13T21:44:02.407278Z",
       "description": "Forge and Fabric Unified Networking Solution",
       "discord_url": "https://discord.com/invite/eP8gE69",
-      "downloads": 2365363,
-      "followers": 174,
+      "downloads": 2401844,
+      "followers": 177,
       "game_versions": [
         "1.19.3",
         "1.19.4",
@@ -2886,7 +3297,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-13T21:44:02.407278Z",
-          "downloads": 181,
+          "downloads": 393,
           "file": {
             "filename": "common-networking-paper-1.0.23-26.1.2.jar",
             "hashes": {
@@ -2927,7 +3338,7 @@
       "client_side": "unsupported",
       "color": 14671839,
       "date_created": "2023-01-06T20:27:57.332496Z",
-      "date_modified": "2026-05-01T16:41:17.096136Z",
+      "date_modified": "2026-05-19T18:29:50.175327Z",
       "description": "Plugin that constantly checks for conditions on certain events and executes custom actions!",
       "discord_url": "https://discord.com/invite/vTaqTuTBRp",
       "donation_urls": [
@@ -2937,7 +3348,7 @@
           "url": "https://ko-fi.com/ajneb97"
         }
       ],
-      "downloads": 53132,
+      "downloads": 53617,
       "followers": 108,
       "game_versions": [
         "1.8",
@@ -3030,17 +3441,17 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-01T16:41:17.096136Z",
-          "downloads": 1164,
+          "date_published": "2026-05-19T18:29:50.175327Z",
+          "downloads": 260,
           "file": {
-            "filename": "ConditionalEvents-4.76.2.jar",
+            "filename": "ConditionalEvents-4.77.1.jar",
             "hashes": {
-              "sha1": "91488d114ad33d69c8472393e77eed58a8459f9b",
-              "sha512": "3eecfbc7b0db78bebb3ce0357479818714df092d7e336df62f9779e1f5948662dcec63f4c089b9f9c8b40d0bfd6983716f5cc066c3c4b1dbf2808593f01fef72"
+              "sha1": "c80e1f3f4803c3d9efbed7e18df8bb0f633013aa",
+              "sha512": "87bc4b6caff74444c959a1d61f179568911c8f82b385e2bb3989cccd51322a6b187517f7da039baa0f9192fc8aa8df8e0b46bfe4f6ff9d90416db330af8c911a"
             },
             "primary": true,
-            "size": 327852,
-            "url": "https://cdn.modrinth.com/data/4EEcEnDG/versions/C3VwpT6p/ConditionalEvents-4.76.2.jar"
+            "size": 330436,
+            "url": "https://cdn.modrinth.com/data/4EEcEnDG/versions/hMMjrGr6/ConditionalEvents-4.77.1.jar"
           },
           "game_versions": [
             "1.8.9",
@@ -3108,15 +3519,15 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "C3VwpT6p",
+          "id": "hMMjrGr6",
           "loaders": [
             "paper",
             "purpur",
             "spigot"
           ],
-          "name": "ConditionalEvents 4.76.2",
+          "name": "ConditionalEvents 4.77.1",
           "project_id": "4EEcEnDG",
-          "version_number": "4.76.2",
+          "version_number": "4.77.1",
           "version_type": "release"
         }
       },
@@ -3167,7 +3578,7 @@
           "url": "https://ko-fi.com/ryderbelserion"
         }
       ],
-      "downloads": 112970,
+      "downloads": 113901,
       "followers": 103,
       "game_versions": [
         "1.8.8",
@@ -3212,7 +3623,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2025-01-07T17:15:29.427809Z",
-          "downloads": 47630,
+          "downloads": 48359,
           "file": {
             "filename": "CrazyAuctions-1.7.0.jar",
             "hashes": {
@@ -3278,7 +3689,7 @@
           "url": "https://ko-fi.com/ryderbelserion"
         }
       ],
-      "downloads": 276602,
+      "downloads": 278074,
       "followers": 246,
       "gallery": [
         {
@@ -3384,13 +3795,13 @@
             {
               "dependency_type": "optional",
               "file_name": null,
-              "project_id": "lKEzGugV",
+              "project_id": "w02MKsTg",
               "version_id": null
             },
             {
               "dependency_type": "optional",
               "file_name": null,
-              "project_id": "w02MKsTg",
+              "project_id": "lKEzGugV",
               "version_id": null
             },
             {
@@ -3400,7 +3811,7 @@
               "version_id": null
             }
           ],
-          "downloads": 16332,
+          "downloads": 17187,
           "file": {
             "filename": "CrazyCrates-5.0.0.jar",
             "hashes": {
@@ -3436,101 +3847,182 @@
       "title": "CrazyCrates",
       "wiki_url": "https://docs.crazycrew.us/mods/crazycrates"
     },
-    "customnpcs": {
+    "custom-player-models": {
       "categories": [
         "decoration",
-        "library",
-        "utility"
+        "social"
       ],
-      "client_side": "unsupported",
-      "color": 263172,
-      "date_created": "2023-06-30T21:38:34.654162Z",
-      "date_modified": "2026-05-17T18:53:12.473596Z",
-      "description": "A simple, lightweight, intuitive NPC plugin.",
-      "discord_url": "https://discord.gg/ChpDcaQCev",
+      "client_side": "optional",
+      "color": 4668228,
+      "date_created": "2022-03-19T16:17:46.891784Z",
+      "date_modified": "2026-05-22T16:43:33.453494Z",
+      "description": "Customize your minecraft avatar!",
+      "discord_url": "https://discord.gg/mKyXdEsMZD",
       "donation_urls": [
         {
-          "id": "paypal",
-          "platform": "Paypal",
-          "url": "https://www.paypal.com/paypalme/foxikledev"
-        },
-        {
-          "id": "patreon",
-          "platform": "Patreon",
-          "url": "https://www.patreon.com/Foxikle"
+          "id": "ko-fi",
+          "platform": "Ko-fi",
+          "url": "https://ko-fi.com/tom5454"
         },
         {
           "id": "github",
           "platform": "Github",
-          "url": "https://github.com/sponsors/Foxikle"
-        }
-      ],
-      "downloads": 49860,
-      "followers": 130,
-      "gallery": [
+          "url": "https://github.com/sponsors/tom5454"
+        },
         {
-          "created": "2023-08-20T21:59:02.125036Z",
-          "description": "A simple banner for the plugin!",
-          "featured": true,
-          "ordering": 1,
-          "title": "Banner",
-          "url": "https://cdn.modrinth.com/data/ptXUpAzg/images/1c6f1c40d64aba78bd82430a6012fbdc48e8b73a_350.webp"
+          "id": "patreon",
+          "platform": "Patreon",
+          "url": "https://www.patreon.com/tom5454"
         }
       ],
+      "downloads": 2301447,
+      "followers": 1532,
       "game_versions": [
+        "b1.7.3",
+        "1.2.5",
+        "1.4.7",
+        "1.5.2",
+        "1.6.4",
+        "1.7.10",
+        "1.8",
+        "1.8.8",
+        "1.8.9",
+        "1.9",
+        "1.10",
+        "1.10.2",
+        "1.11",
+        "1.12",
+        "1.12.2",
+        "1.13",
+        "1.14",
+        "1.14.4",
+        "1.15",
+        "1.15.1",
+        "1.15.2",
+        "1.16",
+        "1.16.1",
+        "1.16.2",
+        "1.16.3",
+        "1.16.4",
+        "1.16.5",
+        "1.17",
+        "1.17.1",
+        "1.18",
+        "1.18.1",
+        "1.18.2",
+        "1.19-pre5",
+        "1.19-rc1",
+        "1.19-rc2",
+        "1.19",
+        "1.19.1",
+        "1.19.2",
+        "1.19.3",
+        "23w04a",
+        "23w05a",
+        "1.19.4",
+        "23w13a_or_b",
+        "1.20-pre1",
+        "1.20-pre2",
+        "1.20-pre3",
+        "1.20-pre4",
+        "1.20-pre5",
         "1.20",
         "1.20.1",
+        "23w32a",
+        "1.20.2-pre2",
         "1.20.2",
         "1.20.3",
         "1.20.4",
+        "23w51b",
+        "24w03b",
+        "24w04a",
+        "24w06a",
+        "24w10a",
+        "24w13a",
+        "24w14potato",
+        "1.20.5-pre1",
+        "1.20.5-pre2",
+        "1.20.5-pre3",
+        "1.20.5-pre4",
         "1.20.5",
         "1.20.6",
+        "24w21b",
+        "1.21-pre2",
         "1.21",
         "1.21.1",
+        "24w35a",
+        "24w36a",
+        "24w40a",
+        "1.21.2-pre1",
         "1.21.2",
         "1.21.3",
+        "24w45a",
+        "1.21.4-pre1",
         "1.21.4",
+        "25w03a",
+        "25w05a",
+        "25w06a",
+        "25w07a",
+        "25w09b",
+        "25w10a",
+        "1.21.5-pre1",
         "1.21.5",
+        "25w14craftmine",
+        "25w16a",
+        "25w18a",
+        "1.21.6-pre1",
         "1.21.6",
         "1.21.7",
         "1.21.8",
         "1.21.9",
         "1.21.10",
+        "1.21.11-pre1",
         "1.21.11",
         "26.1",
         "26.1.1",
-        "26.1.2"
+        "26.2-snapshot-1",
+        "26.1.2",
+        "26.2-snapshot-8"
       ],
-      "icon_url": "https://cdn.modrinth.com/data/ptXUpAzg/0fbbd80d10038987a09705e1cb90e71386eef13f.png",
-      "issues_url": "https://github.com/foxikle/customnpcs/issues",
+      "icon_url": "https://cdn.modrinth.com/data/h1E7sQNL/e9535e89447a025e014f9a319d752861982f97fa_96.webp",
+      "issues_url": "https://github.com/tom5454/CustomPlayerModels/issues",
       "license": {
         "id": "MIT",
         "name": "MIT License",
         "url": null
       },
       "loaders": [
-        "paper"
+        "babric",
+        "bta-babric",
+        "bukkit",
+        "fabric",
+        "folia",
+        "forge",
+        "java-agent",
+        "neoforge",
+        "paper",
+        "purpur",
+        "quilt",
+        "spigot"
       ],
-      "page_url": "https://modrinth.com/mod/customnpcs",
-      "project_id": "ptXUpAzg",
+      "page_url": "https://modrinth.com/mod/custom-player-models",
+      "project_id": "h1E7sQNL",
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-17T18:53:12.473596Z",
-          "downloads": 7,
+          "date_published": "2026-05-22T16:43:33.453494Z",
+          "downloads": 83,
           "file": {
-            "filename": "customnpcs-1.7.10-pre1.jar",
+            "filename": "CustomPlayerModels-Paper-0.6.26a.jar",
             "hashes": {
-              "sha1": "da0fa102bf9b016cc837933189ff4bda7cc03b72",
-              "sha512": "5d77d2a156cf0d0bf85df626801dbfb132751638a224ba4d560545afd3afd02e70b9faaa08de7053ea5cc868baea7f684ed4bf5ab88ef821a2c3b5e5421a4218"
+              "sha1": "6dd41d057fd7832f59ac791df5fa71f58d0d43e6",
+              "sha512": "f943099dc2f5518bb069f2a27d9d0eb46c58427e84722ad0cf2166f8642bc91ae25439aa2228c730c913ce782b9b72b4555f51fc0c61449b0e7682476516678b"
             },
             "primary": true,
-            "size": 573999,
-            "url": "https://cdn.modrinth.com/data/ptXUpAzg/versions/GLVKrg3X/customnpcs-1.7.10-pre1.jar"
+            "size": 2873714,
+            "url": "https://cdn.modrinth.com/data/h1E7sQNL/versions/JMxm1FzZ/CustomPlayerModels-Paper-0.6.26a.jar"
           },
           "game_versions": [
-            "1.20.5",
-            "1.20.6",
             "1.21",
             "1.21.1",
             "1.21.2",
@@ -3547,22 +4039,24 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "GLVKrg3X",
+          "id": "JMxm1FzZ",
           "loaders": [
-            "paper"
+            "folia",
+            "paper",
+            "purpur"
           ],
-          "name": "CustomNPCs 1.7.10-pre1",
-          "project_id": "ptXUpAzg",
-          "version_number": "1.7.10-pre1",
-          "version_type": "beta"
+          "name": "CustomPlayerModels-Paper v0.6.26a",
+          "project_id": "h1E7sQNL",
+          "version_number": "Paperv0.6.26a-paper",
+          "version_type": "release"
         }
       },
-      "server_side": "required",
-      "slug": "customnpcs",
+      "server_side": "optional",
+      "slug": "custom-player-models",
       "source": "modrinth",
-      "source_url": "https://github.com/foxikle/customnpcs",
-      "title": "CustomNPCs",
-      "wiki_url": "https://docs.foxikle.dev/"
+      "source_url": "https://github.com/tom5454/CustomPlayerModels",
+      "title": "Customizable Player Models",
+      "wiki_url": "https://github.com/tom5454/CustomPlayerModels/wiki"
     },
     "decentholograms": {
       "categories": [
@@ -3582,8 +4076,8 @@
           "url": "https://ko-fi.com/d0by1"
         }
       ],
-      "downloads": 160701,
-      "followers": 208,
+      "downloads": 164242,
+      "followers": 212,
       "gallery": [
         {
           "created": "2024-05-18T20:58:44.694106Z",
@@ -3720,7 +4214,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-01T13:45:08.629864Z",
-          "downloads": 8738,
+          "downloads": 10538,
           "file": {
             "filename": "DecentHolograms-2.9.10.jar",
             "hashes": {
@@ -3824,6 +4318,135 @@
       "title": "DecentHolograms",
       "wiki_url": "https://wiki.decentholograms.eu/"
     },
+    "deluxehub": {
+      "categories": [
+        "management",
+        "utility"
+      ],
+      "client_side": "unsupported",
+      "color": 11291833,
+      "date_created": "2025-05-07T22:21:45.963916Z",
+      "date_modified": "2026-05-17T15:46:25.735857Z",
+      "description": "The all-in-one hub management solution",
+      "donation_urls": [
+        {
+          "id": "ko-fi",
+          "platform": "Ko-fi",
+          "url": "https://ko-fi.com/itzsave"
+        }
+      ],
+      "downloads": 94033,
+      "followers": 43,
+      "game_versions": [
+        "1.2.1",
+        "1.2.2",
+        "1.2.3",
+        "1.2.4",
+        "1.2.5",
+        "1.19",
+        "1.19.1",
+        "1.19.2",
+        "1.19.3",
+        "1.19.4",
+        "1.20",
+        "1.20.1",
+        "1.20.2",
+        "1.20.3",
+        "1.20.4",
+        "1.20.5",
+        "1.20.6",
+        "1.21",
+        "1.21.1",
+        "1.21.2",
+        "1.21.3",
+        "1.21.4",
+        "1.21.5",
+        "1.21.6",
+        "1.21.7",
+        "1.21.8",
+        "1.21.9",
+        "1.21.10",
+        "1.21.11",
+        "26.1",
+        "26.1.1",
+        "26.1.2"
+      ],
+      "icon_url": "https://cdn.modrinth.com/data/FiktZRzq/fd37f924771ebc20a6fbd5e823caf46f81055151.jpeg",
+      "license": {
+        "id": "LicenseRef-All-Rights-Reserved",
+        "name": "",
+        "url": null
+      },
+      "loaders": [
+        "bukkit",
+        "folia",
+        "paper",
+        "spigot"
+      ],
+      "page_url": "https://modrinth.com/mod/deluxehub",
+      "project_id": "FiktZRzq",
+      "project_type": "mod",
+      "selected_versions": {
+        "26.1.2+paper": {
+          "date_published": "2026-05-17T15:46:25.735857Z",
+          "downloads": 833,
+          "file": {
+            "filename": "DeluxeHub-3.7.5.jar",
+            "hashes": {
+              "sha1": "32b5464a216541955e1d4d547687be2f5a50cba7",
+              "sha512": "6e7c52ea72cfe463be4e9611d80b3420bca9579bccdc5c4251b7f1e262764019c1613f4f4b366af93942836df96e84ac2994103d6572f8c3b744e1b3ddb17b34"
+            },
+            "primary": true,
+            "size": 5409475,
+            "url": "https://cdn.modrinth.com/data/FiktZRzq/versions/rmzbBoYy/DeluxeHub-3.7.5.jar"
+          },
+          "game_versions": [
+            "1.19",
+            "1.19.1",
+            "1.19.2",
+            "1.19.3",
+            "1.19.4",
+            "1.20",
+            "1.20.1",
+            "1.20.2",
+            "1.20.3",
+            "1.20.4",
+            "1.20.5",
+            "1.20.6",
+            "1.21",
+            "1.21.1",
+            "1.21.2",
+            "1.21.3",
+            "1.21.4",
+            "1.21.5",
+            "1.21.6",
+            "1.21.7",
+            "1.21.8",
+            "1.21.9",
+            "1.21.10",
+            "1.21.11",
+            "26.1",
+            "26.1.1",
+            "26.1.2"
+          ],
+          "id": "rmzbBoYy",
+          "loaders": [
+            "folia",
+            "paper",
+            "spigot"
+          ],
+          "name": "DeluxeHub 3.7.5",
+          "project_id": "FiktZRzq",
+          "version_number": "3.7.5",
+          "version_type": "release"
+        }
+      },
+      "server_side": "required",
+      "slug": "deluxehub",
+      "source": "modrinth",
+      "source_url": "https://github.com/ItzSave/DeluxeHub/",
+      "title": "DeluxeHub"
+    },
     "discordsrv": {
       "additional_categories": [
         "library"
@@ -3841,18 +4464,18 @@
       "discord_url": "https://discordsrv.com/discord",
       "donation_urls": [
         {
-          "id": "paypal",
-          "platform": "Paypal",
-          "url": "https://scarsz.me/donate"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/Scarsz"
+        },
+        {
+          "id": "paypal",
+          "platform": "Paypal",
+          "url": "https://scarsz.me/donate"
         }
       ],
-      "downloads": 426640,
-      "followers": 796,
+      "downloads": 430004,
+      "followers": 799,
       "game_versions": [
         "1.7.10",
         "1.8",
@@ -3949,7 +4572,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-24T12:01:20.640408Z",
-          "downloads": 14648,
+          "downloads": 17904,
           "file": {
             "filename": "DiscordSRV-Build-1.30.5.jar",
             "hashes": {
@@ -4074,8 +4697,8 @@
           "url": "https://ko-fi.com/distanthorizons"
         }
       ],
-      "downloads": 32642,
-      "followers": 103,
+      "downloads": 33248,
+      "followers": 104,
       "game_versions": [
         "1.16",
         "1.16.1",
@@ -4135,7 +4758,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-10T12:05:12.944518Z",
-          "downloads": 938,
+          "downloads": 1538,
           "file": {
             "filename": "DistantHorizonsSupport-0.13.1.jar",
             "hashes": {
@@ -4221,23 +4844,23 @@
       "client_side": "unsupported",
       "color": 660533,
       "date_created": "2024-05-23T03:29:15.917545Z",
-      "date_modified": "2026-04-21T16:24:19.720186Z",
+      "date_modified": "2026-05-21T14:56:22.021733Z",
       "description": "Duels Optimized | Fork of Duels plugin but optimized and added feature",
       "discord_url": "https://discord.meteordevelopments.com",
       "donation_urls": [
         {
-          "id": "paypal",
-          "platform": "Paypal",
-          "url": "https://www.paypal.com/paypalme/gsdevs"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/dumbo-the-developer"
+        },
+        {
+          "id": "paypal",
+          "platform": "Paypal",
+          "url": "https://www.paypal.com/paypalme/gsdevs"
         }
       ],
-      "downloads": 63147,
-      "followers": 97,
+      "downloads": 64539,
+      "followers": 100,
       "game_versions": [
         "1.14",
         "1.14.1",
@@ -4302,27 +4925,19 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-04-21T16:24:19.720186Z",
-          "downloads": 3577,
+          "date_published": "2026-05-21T14:56:22.021733Z",
+          "downloads": 932,
           "file": {
-            "filename": "Duels-Optimised-7.1.jar",
+            "filename": "Duels-Optimised-7.2.jar",
             "hashes": {
-              "sha1": "aeaf7d0302dbd20a52bc276988fc9bd72f05a798",
-              "sha512": "c6c003f5f44b00169a28c6ecac57fdb68fab449b69f173f1276374603c4b8906f50c223f3ee08782b84608bfbc217bf1c7ae875ce471c1ee0704eb0a7358e36e"
+              "sha1": "ed1984c2a649d8fd834a46146f0f71b3acde521d",
+              "sha512": "f24b8794e9320f960a950aaceadace745dc64ea67f2bf3c0cc4c05e5ed62595b58fea824d8b4b620d0c4690a0c24fd19a286de6d738d03f52d0cb0cd24fd242f"
             },
             "primary": true,
-            "size": 4124773,
-            "url": "https://cdn.modrinth.com/data/pQyMZOan/versions/vBLnA8YN/Duels-Optimised-7.1.jar"
+            "size": 4128660,
+            "url": "https://cdn.modrinth.com/data/pQyMZOan/versions/IZRyJawG/Duels-Optimised-7.2.jar"
           },
           "game_versions": [
-            "1.18",
-            "1.18.1",
-            "1.18.2",
-            "1.19",
-            "1.19.1",
-            "1.19.2",
-            "1.19.3",
-            "1.19.4",
             "1.20",
             "1.20.1",
             "1.20.2",
@@ -4346,7 +4961,7 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "vBLnA8YN",
+          "id": "IZRyJawG",
           "loaders": [
             "bukkit",
             "folia",
@@ -4354,9 +4969,9 @@
             "purpur",
             "spigot"
           ],
-          "name": "Hotfix",
+          "name": "7.2",
           "project_id": "pQyMZOan",
-          "version_number": "7.1",
+          "version_number": "7.2",
           "version_type": "release"
         }
       },
@@ -4384,18 +4999,18 @@
       "discord_url": "https://discord.com/invite/6NfdRuE",
       "donation_urls": [
         {
-          "id": "ko-fi",
-          "platform": "Ko-fi",
-          "url": "https://ko-fi.com/dima_dencep"
-        },
-        {
           "id": "other",
           "platform": "Other",
           "url": "https://boosty.to/dima_dencep"
+        },
+        {
+          "id": "ko-fi",
+          "platform": "Ko-fi",
+          "url": "https://ko-fi.com/dima_dencep"
         }
       ],
-      "downloads": 5742801,
-      "followers": 2158,
+      "downloads": 5792694,
+      "followers": 2164,
       "game_versions": [
         "1.16.5",
         "1.17-rc2",
@@ -4450,7 +5065,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-26T02:44:59.373913Z",
-          "downloads": 2544,
+          "downloads": 3242,
           "file": {
             "filename": "emotecraft-paper-for-MC26.1.2-3.3.0-a.build.150.jar",
             "hashes": {
@@ -4537,7 +5152,7 @@
           "url": "https://ko-fi.com/eternalcodeteam"
         }
       ],
-      "downloads": 24,
+      "downloads": 89,
       "followers": 1,
       "game_versions": [
         "1.19",
@@ -4594,7 +5209,7 @@
               "version_id": null
             }
           ],
-          "downloads": 9,
+          "downloads": 63,
           "file": {
             "filename": "EternalEconomy v1.0.0.jar",
             "hashes": {
@@ -4660,7 +5275,7 @@
       "client_side": "unsupported",
       "color": 15642410,
       "date_created": "2023-03-18T16:37:11.562416Z",
-      "date_modified": "2026-05-12T20:09:59.909663Z",
+      "date_modified": "2026-05-21T19:08:27.711240Z",
       "description": "Create fancy looking text, item or block holograms with the new 1.19.4 text display entities",
       "discord_url": "https://discord.gg/ZUgYCEJUEx",
       "donation_urls": [
@@ -4670,7 +5285,7 @@
           "url": "https://www.buymeacoffee.com/realoliver"
         }
       ],
-      "downloads": 204627,
+      "downloads": 208355,
       "followers": 344,
       "gallery": [
         {
@@ -4763,7 +5378,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-18T19:52:06.973920Z",
-          "downloads": 10274,
+          "downloads": 11981,
           "file": {
             "filename": "FancyHolograms-2.10.0.jar",
             "hashes": {
@@ -4815,7 +5430,7 @@
       "client_side": "unsupported",
       "color": 6560780,
       "date_created": "2023-02-12T14:13:27.163850Z",
-      "date_modified": "2026-05-12T20:10:22.661069Z",
+      "date_modified": "2026-05-21T19:08:20.211492Z",
       "description": "Simple, lightweight and fast NPC plugin using packets",
       "discord_url": "https://discord.gg/ZUgYCEJUEx",
       "donation_urls": [
@@ -4825,8 +5440,8 @@
           "url": "https://www.buymeacoffee.com/realoliver"
         }
       ],
-      "downloads": 289381,
-      "followers": 467,
+      "downloads": 294540,
+      "followers": 469,
       "gallery": [
         {
           "created": "2024-05-29T18:58:53.905336Z",
@@ -4940,7 +5555,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-18T19:45:38.001778Z",
-          "downloads": 13808,
+          "downloads": 16118,
           "file": {
             "filename": "FancyNpcs-2.10.0.jar",
             "hashes": {
@@ -4986,8 +5601,8 @@
       "date_created": "2025-02-05T11:44:16.858182Z",
       "date_modified": "2026-05-02T14:11:32.715948Z",
       "description": "> Fokus / Focus API - Library for CoffeeG's datapack/mod/plugin.",
-      "downloads": 110685,
-      "followers": 44,
+      "downloads": 112072,
+      "followers": 45,
       "game_versions": [
         "1.13",
         "1.13.1",
@@ -5063,7 +5678,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-02T14:11:32.715948Z",
-          "downloads": 670,
+          "downloads": 869,
           "file": {
             "filename": "FokusAPI-4.2.jar",
             "hashes": {
@@ -5164,8 +5779,8 @@
           "url": "https://ko-fi.com/imzowi"
         }
       ],
-      "downloads": 60624,
-      "followers": 90,
+      "downloads": 61192,
+      "followers": 92,
       "game_versions": [
         "1.7.2",
         "1.7.3",
@@ -5270,7 +5885,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2024-07-30T22:22:42.028122Z",
-          "downloads": 26984,
+          "downloads": 27384,
           "file": {
             "filename": "FoxAddition.jar",
             "hashes": {
@@ -5397,7 +6012,7 @@
       "date_created": "2022-08-15T22:17:51.457470Z",
       "date_modified": "2026-05-04T03:02:37.443799Z",
       "description": "Liberate your server from the chat-reporting bourgeoisie! The best paper chat report disabler this side of the Mississippi",
-      "downloads": 104394,
+      "downloads": 105011,
       "followers": 357,
       "game_versions": [
         "1.19.1",
@@ -5443,7 +6058,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-04T03:02:37.443799Z",
-          "downloads": 727,
+          "downloads": 977,
           "file": {
             "filename": "FreedomChat-Paper-1.7.8.jar",
             "hashes": {
@@ -5483,7 +6098,7 @@
       "client_side": "unsupported",
       "color": 9213012,
       "date_created": "2023-03-20T15:01:56.168603Z",
-      "date_modified": "2026-05-13T13:25:39.698144Z",
+      "date_modified": "2026-05-21T15:13:23.912182Z",
       "description": "A bridge/proxy allowing you to connect to Minecraft: Java Edition servers with Minecraft: Bedrock Edition.",
       "discord_url": "https://discord.gg/geysermc",
       "donation_urls": [
@@ -5493,8 +6108,8 @@
           "url": "https://opencollective.com/GeyserMC"
         }
       ],
-      "downloads": 859528,
-      "followers": 1157,
+      "downloads": 874359,
+      "followers": 1161,
       "game_versions": [
         "1.16.5",
         "1.17",
@@ -5550,17 +6165,17 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-13T13:25:39.698144Z",
-          "downloads": 6738,
+          "date_published": "2026-05-21T15:13:16.892042Z",
+          "downloads": 2174,
           "file": {
             "filename": "Geyser-Spigot.jar",
             "hashes": {
-              "sha1": "5d5516b79dfceccd2241a6650f97c29cd53b7f76",
-              "sha512": "4ac5244b0e87986c6d1bb4ddcd783b28f3098d03ba7c99e4985ef8e1f4f80ab33be17963064a2f5df4045f5c230a102b117a7f0cd9651f612b788f8e10601df2"
+              "sha1": "91fde75df341c31b5d59ef45f7f1bd0bd848a726",
+              "sha512": "5a1238704def5bbec769a359ce07150b1c6729b58358a21697592e672e78929972db0ae7864978642f1793a198ce22ee709406faa277b65ff7e20414709e2a23"
             },
             "primary": true,
-            "size": 18852520,
-            "url": "https://cdn.modrinth.com/data/wKkoqHrH/versions/ShRYLIa0/Geyser-Spigot.jar"
+            "size": 18858171,
+            "url": "https://cdn.modrinth.com/data/wKkoqHrH/versions/dTPIQvjK/Geyser-Spigot.jar"
           },
           "game_versions": [
             "1.16.5",
@@ -5593,18 +6208,16 @@
             "1.21.9",
             "1.21.10",
             "1.21.11",
-            "26.1",
-            "26.1.1",
             "26.1.2"
           ],
-          "id": "ShRYLIa0",
+          "id": "dTPIQvjK",
           "loaders": [
             "paper",
             "spigot"
           ],
-          "name": "Geyser-Spigot-2.10.0-b1148",
+          "name": "Geyser-Spigot-2.10.0-b1153",
           "project_id": "wKkoqHrH",
-          "version_number": "2.10.0-b1148",
+          "version_number": "2.10.0-b1153",
           "version_type": "beta"
         }
       },
@@ -5634,7 +6247,7 @@
           "url": "https://ko-fi.com/grampr"
         }
       ],
-      "downloads": 58031,
+      "downloads": 60441,
       "followers": 36,
       "game_versions": [
         "1.16",
@@ -5717,7 +6330,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-13T02:57:36.180193Z",
-          "downloads": 9038,
+          "downloads": 10311,
           "file": {
             "filename": "geyserupdater-spigot.jar",
             "hashes": {
@@ -5784,11 +6397,11 @@
       "client_side": "unknown",
       "color": 2631718,
       "date_created": "2024-03-22T20:37:05.089511Z",
-      "date_modified": "2026-05-16T22:26:27.687939Z",
+      "date_modified": "2026-05-22T22:51:13.042183Z",
       "description": "Fully async, multithreaded, predictive, open source, 3.01 reach, 1.005 timer, 0.01% speed, 99.99% antikb, \"bypassable\" 1.8-1.21 anticheat",
       "discord_url": "https://discord.grim.ac",
-      "downloads": 389675,
-      "followers": 381,
+      "downloads": 399258,
+      "followers": 384,
       "game_versions": [
         "1.7.2",
         "1.7.3",
@@ -5893,17 +6506,17 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-16T22:26:27.687939Z",
-          "downloads": 1108,
+          "date_published": "2026-05-22T22:51:13.042183Z",
+          "downloads": 297,
           "file": {
-            "filename": "grimac-bukkit-2.3.74-f3ed3b2.jar",
+            "filename": "grimac-bukkit-2.3.74-635708a.jar",
             "hashes": {
-              "sha1": "adf6ba9dffab907262666f33645fa12987c836f3",
-              "sha512": "ea78909cf29c4af64963baa02e62f3f8e2ef64a6d9887d15b4efc14c031874ba294463a1744f606867be86ebef557cbcdbee65acc0bbbfa96ee619ac0bfcc2aa"
+              "sha1": "3c9b06312deb38e16f50beea00d7ae6aba16d5cd",
+              "sha512": "c857437bd08a942f176f9f09d5eb18ae04db59e629a9a27034b208f42fdabcf7bf4fff45cff4314d7d5e16e25ed7d799ebd71d442f699768bdc4b828ac7f9d6f"
             },
             "primary": true,
-            "size": 11331624,
-            "url": "https://cdn.modrinth.com/data/LJNGWSvH/versions/FzbvPQpz/grimac-bukkit-2.3.74-f3ed3b2.jar"
+            "size": 11333057,
+            "url": "https://cdn.modrinth.com/data/LJNGWSvH/versions/ZcyNXqjo/grimac-bukkit-2.3.74-635708a.jar"
           },
           "game_versions": [
             "1.7.2",
@@ -5989,7 +6602,7 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "FzbvPQpz",
+          "id": "ZcyNXqjo",
           "loaders": [
             "bukkit",
             "folia",
@@ -5997,9 +6610,9 @@
             "purpur",
             "spigot"
           ],
-          "name": "Grim Anticheat (Bukkit) 2.3.74-f3ed3b2",
+          "name": "Grim Anticheat (Bukkit) 2.3.74-635708a",
           "project_id": "LJNGWSvH",
-          "version_number": "2.3.74-f3ed3b2",
+          "version_number": "2.3.74-635708a",
           "version_type": "alpha"
         }
       },
@@ -6024,18 +6637,18 @@
       "discord_url": "https://loohpjames.com/dev-discord",
       "donation_urls": [
         {
-          "id": "paypal",
-          "platform": "Paypal",
-          "url": "https://paypal.me/loohpjames/5USD"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/LOOHP"
+        },
+        {
+          "id": "paypal",
+          "platform": "Paypal",
+          "url": "https://paypal.me/loohpjames/5USD"
         }
       ],
-      "downloads": 188630,
-      "followers": 566,
+      "downloads": 190765,
+      "followers": 570,
       "game_versions": [
         "1.13",
         "1.13.1",
@@ -6105,7 +6718,7 @@
               "version_id": null
             }
           ],
-          "downloads": 5073,
+          "downloads": 7069,
           "file": {
             "filename": "ImageFrame-2026.1.2.0.jar",
             "hashes": {
@@ -6195,8 +6808,8 @@
           "url": "https://github.com/sponsors/spartacus04"
         }
       ],
-      "downloads": 229717,
-      "followers": 206,
+      "downloads": 233606,
+      "followers": 209,
       "gallery": [
         {
           "created": "2023-07-04T12:20:23.784043Z",
@@ -6280,7 +6893,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-21T21:29:49.852009Z",
-          "downloads": 17701,
+          "downloads": 21509,
           "file": {
             "filename": "instantrestock_2.6.2.jar",
             "hashes": {
@@ -6378,8 +6991,8 @@
           "url": "https://www.paypal.com/paypalme/catadmirer"
         }
       ],
-      "downloads": 115699,
-      "followers": 167,
+      "downloads": 116781,
+      "followers": 168,
       "gallery": [
         {
           "created": "2025-07-27T19:49:51.697656Z",
@@ -6440,7 +7053,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-03-08T02:13:39.126878Z",
-          "downloads": 14713,
+          "downloads": 15684,
           "file": {
             "filename": "InfuseSMP-2.4.3.jar",
             "hashes": {
@@ -6495,18 +7108,18 @@
       "discord_url": "https://loohpjames.com/dev-discord",
       "donation_urls": [
         {
-          "id": "paypal",
-          "platform": "Paypal",
-          "url": "https://paypal.me/loohpjames/5USD"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/LOOHP"
+        },
+        {
+          "id": "paypal",
+          "platform": "Paypal",
+          "url": "https://paypal.me/loohpjames/5USD"
         }
       ],
-      "downloads": 66266,
-      "followers": 190,
+      "downloads": 67234,
+      "followers": 191,
       "game_versions": [
         "1.8",
         "1.8.1",
@@ -6629,7 +7242,7 @@
               "version_id": null
             }
           ],
-          "downloads": 5818,
+          "downloads": 6667,
           "file": {
             "filename": "InteractiveChat-2026.1.0.0.jar",
             "hashes": {
@@ -6756,8 +7369,8 @@
           "url": "https://www.paypal.com/donate/?hosted_button_id=MDMJLRCACKKYS"
         }
       ],
-      "downloads": 94668,
-      "followers": 142,
+      "downloads": 96367,
+      "followers": 144,
       "gallery": [
         {
           "created": "2024-12-13T10:43:39.569778Z",
@@ -6895,7 +7508,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-19T20:19:40.078409Z",
-          "downloads": 7631,
+          "downloads": 9217,
           "file": {
             "filename": "InventoryRollbackPlus-1.8.3.jar",
             "hashes": {
@@ -7009,8 +7622,8 @@
           "url": "https://paypal.me/JanBoerman"
         }
       ],
-      "downloads": 234618,
-      "followers": 396,
+      "downloads": 238758,
+      "followers": 400,
       "game_versions": [
         "1.8.8",
         "1.12.2",
@@ -7057,7 +7670,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-10T21:26:14.724358Z",
-          "downloads": 5401,
+          "downloads": 7213,
           "file": {
             "filename": "InvSee++.jar",
             "hashes": {
@@ -7142,8 +7755,8 @@
           "url": "https://www.paypal.me/FlavioLiponi/"
         }
       ],
-      "downloads": 130110,
-      "followers": 132,
+      "downloads": 132608,
+      "followers": 134,
       "game_versions": [
         "1.8",
         "1.8.1",
@@ -7239,7 +7852,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2025-12-10T03:37:57.526475Z",
-          "downloads": 66695,
+          "downloads": 69158,
           "file": {
             "filename": "ItemEdit-3.7.8.jar",
             "hashes": {
@@ -7345,11 +7958,11 @@
       "client_side": "optional",
       "color": 10930848,
       "date_created": "2022-05-29T14:44:24.607795Z",
-      "date_modified": "2026-05-16T20:57:53.497387Z",
+      "date_modified": "2026-05-21T21:54:02.080938Z",
       "description": "Real-time map used for mapping in-game or your browser as you explore.",
       "discord_url": "https://discord.gg/eP8gE69",
-      "downloads": 10842097,
-      "followers": 4368,
+      "downloads": 10964146,
+      "followers": 4386,
       "game_versions": [
         "1.7.10",
         "1.12.2",
@@ -7402,28 +8015,28 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-16T20:48:47.083441Z",
-          "downloads": 284,
+          "date_published": "2026-05-21T21:42:50.586163Z",
+          "downloads": 347,
           "file": {
-            "filename": "journeymap-paper-26.1.2-6.0.0-beta.78-thin.jar",
+            "filename": "journeymap-paper-26.1.2-6.0.0-beta.81.jar",
             "hashes": {
-              "sha1": "da9058302e60c6fa0843cf7b439fc4ace05051a8",
-              "sha512": "e6959214d4b4497faa34fd0133da9c901cc9cc74de61f3a9684da32b4976b7506f1d40c14674acf32e540f4eebab7b4492a6cb13c7bb0059b6649dfff8921d6d"
+              "sha1": "036c329b83df76e56e3e9f2187e1d7989149de3c",
+              "sha512": "e2b11f1895e496c8bf4cca3597092b8d599d87f248593dd8609e92db48138c9f08e5ba457bbd0607b0daf9077e00f5d84f7b5a7416cd9427b2f160cf28030871"
             },
             "primary": true,
-            "size": 2359120,
-            "url": "https://cdn.modrinth.com/data/lfHFW1mp/versions/uDt5yWp0/journeymap-paper-26.1.2-6.0.0-beta.78-thin.jar"
+            "size": 2539611,
+            "url": "https://cdn.modrinth.com/data/lfHFW1mp/versions/StiJhu0E/journeymap-paper-26.1.2-6.0.0-beta.81.jar"
           },
           "game_versions": [
             "26.1.2"
           ],
-          "id": "uDt5yWp0",
+          "id": "StiJhu0E",
           "loaders": [
             "paper"
           ],
-          "name": "journeymap-26.1.2-6.0.0-beta.78+paper",
+          "name": "journeymap-26.1.2-6.0.0-beta.81+paper",
           "project_id": "lfHFW1mp",
-          "version_number": "26.1.2-6.0.0-beta.78+paper",
+          "version_number": "26.1.2-6.0.0-beta.81+paper",
           "version_type": "beta"
         }
       },
@@ -7446,7 +8059,7 @@
       "client_side": "optional",
       "color": 11653545,
       "date_created": "2023-10-17T17:50:28.746704Z",
-      "date_modified": "2026-05-15T22:24:03.817877Z",
+      "date_modified": "2026-05-20T04:04:16.697027Z",
       "description": "An addon for JourneyMap which provides integration with Supported Teams mods and Vanilla Teams.",
       "discord_url": "https://discord.gg/eP8gE69",
       "donation_urls": [
@@ -7456,7 +8069,7 @@
           "url": "https://github.com/sponsors/mysticdrew"
         }
       ],
-      "downloads": 148459,
+      "downloads": 149988,
       "followers": 43,
       "game_versions": [
         "1.19.2",
@@ -7492,7 +8105,7 @@
               "version_id": null
             }
           ],
-          "downloads": 53,
+          "downloads": 124,
           "file": {
             "filename": "JourneyMap-Teams-paper-26.1.2-1.3.0.jar",
             "hashes": {
@@ -7536,8 +8149,8 @@
       "date_modified": "2026-05-02T19:59:01.790817Z",
       "description": "Say goodbye to lag-induced knockback woes, delivering fair and consistent PvP battles for all players, no matter their ping!",
       "discord_url": "https://discord.gg/eVeWV8m4dh",
-      "downloads": 50971,
-      "followers": 136,
+      "downloads": 51709,
+      "followers": 137,
       "game_versions": [
         "1.12.2",
         "1.13",
@@ -7610,7 +8223,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-02T19:58:57.567349Z",
-          "downloads": 1223,
+          "downloads": 1635,
           "file": {
             "filename": "knockbacksync-bukkit-1.3.6-dev-b136.jar",
             "hashes": {
@@ -7719,7 +8332,7 @@
           "url": "https://ko-fi.com/lajczik"
         }
       ],
-      "downloads": 238454,
+      "downloads": 241296,
       "followers": 387,
       "gallery": [
         {
@@ -7808,7 +8421,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-01T01:57:55.756810Z",
-          "downloads": 8945,
+          "downloads": 11695,
           "file": {
             "filename": "LagFixer.jar",
             "hashes": {
@@ -7912,7 +8525,7 @@
           "url": "https://ko-fi.com/thefliff"
         }
       ],
-      "downloads": 52465,
+      "downloads": 53369,
       "followers": 30,
       "gallery": [
         {
@@ -7960,7 +8573,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-16T17:50:59.920935Z",
-          "downloads": 195,
+          "downloads": 1038,
           "file": {
             "filename": "LifeSteal-3.9.3.jar",
             "hashes": {
@@ -8018,8 +8631,8 @@
       "date_modified": "2026-05-14T09:39:53.442327Z",
       "description": "LifeStealZ - The Ultimate LifeSteal SMP Plugin!",
       "discord_url": "https://strassburger.org/discord",
-      "downloads": 331363,
-      "followers": 322,
+      "downloads": 334544,
+      "followers": 323,
       "gallery": [
         {
           "created": "2024-09-08T21:07:38.723197Z",
@@ -8097,7 +8710,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-14T09:39:53.442327Z",
-          "downloads": 2251,
+          "downloads": 5116,
           "file": {
             "filename": "lifestealz-2.21.1.jar",
             "hashes": {
@@ -8139,220 +8752,6 @@
       "title": "LifeStealZ",
       "wiki_url": "https://wiki.lifestealz.com"
     },
-    "login-to": {
-      "additional_categories": [
-        "storage"
-      ],
-      "categories": [
-        "management",
-        "technology",
-        "utility"
-      ],
-      "client_side": "unsupported",
-      "color": 3946550,
-      "date_created": "2025-03-19T14:04:43.672454Z",
-      "date_modified": "2026-05-16T21:00:50.617926Z",
-      "description": "A complete authentication solution for Minecraft servers, providing secure login and database storage with secure BCrypt hashing and premium Autologin",
-      "discord_url": "https://discord.gg/wZfZ8Q54mX",
-      "downloads": 49131,
-      "followers": 29,
-      "gallery": [
-        {
-          "created": "2025-12-02T18:35:29.805159Z",
-          "description": "This is the login prompt, when you join after the registration you will need to login",
-          "featured": true,
-          "ordering": 0,
-          "title": "Login",
-          "url": "https://cdn.modrinth.com/data/A5foNgax/images/2c7d60e5928a1b0d66ae08ac182135976ff143f7.png"
-        },
-        {
-          "created": "2025-12-02T18:38:23.359455Z",
-          "description": "This is a message that will popup, it's fully customizable, from the text to the color, and the best part is that if you change something the plugin will not need a reload to show this message, just save the file and you have done",
-          "featured": false,
-          "ordering": 0,
-          "title": "Example message",
-          "url": "https://cdn.modrinth.com/data/A5foNgax/images/33ff6f43640a172fca1d49ee2052cba2db08523f.png"
-        },
-        {
-          "created": "2025-12-02T18:36:58.271308Z",
-          "description": "You will be blind if you do not register or login, also you won't be able to move around if you dont authenticate yourself",
-          "featured": false,
-          "ordering": 0,
-          "title": "Bilnd",
-          "url": "https://cdn.modrinth.com/data/A5foNgax/images/4c8d6244acb8fedbd35ecbb3f1e88e4f5782bbe9_350.webp"
-        },
-        {
-          "created": "2025-12-02T18:34:39.735403Z",
-          "description": "What you will see if you join in the server for the first time or after an admin have deleted your account",
-          "featured": false,
-          "ordering": 0,
-          "title": "Registration",
-          "url": "https://cdn.modrinth.com/data/A5foNgax/images/cb2364a5cc1e7c8faa68e1591e4b9fad0211b9a5.png"
-        }
-      ],
-      "game_versions": [
-        "1.8",
-        "1.8.1",
-        "1.8.2",
-        "1.8.3",
-        "1.8.4",
-        "1.8.5",
-        "1.8.6",
-        "1.8.7",
-        "1.8.8",
-        "1.8.9",
-        "1.9",
-        "1.9.1",
-        "1.9.2",
-        "1.9.3",
-        "1.9.4",
-        "1.10",
-        "1.10.1",
-        "1.10.2",
-        "1.11",
-        "1.11.1",
-        "1.11.2",
-        "1.12",
-        "1.12.1",
-        "1.12.2",
-        "1.13",
-        "1.13.1",
-        "1.13.2",
-        "1.14",
-        "1.14.1",
-        "1.14.2",
-        "1.14.3",
-        "1.14.4",
-        "1.15",
-        "1.15.1",
-        "1.15.2",
-        "1.16",
-        "1.16.1",
-        "1.16.2",
-        "1.16.3",
-        "1.16.4",
-        "1.16.5",
-        "1.17",
-        "1.17.1",
-        "1.18",
-        "1.18.1",
-        "1.18.2",
-        "1.19",
-        "1.19.1",
-        "1.19.2",
-        "1.19.3",
-        "1.19.4",
-        "1.20",
-        "1.20.1",
-        "1.20.2",
-        "1.20.3",
-        "1.20.4",
-        "1.20.5",
-        "1.20.6",
-        "1.21",
-        "1.21.1",
-        "1.21.2",
-        "1.21.3",
-        "1.21.4",
-        "1.21.5",
-        "1.21.6",
-        "1.21.7",
-        "1.21.8",
-        "1.21.9",
-        "1.21.10",
-        "1.21.11",
-        "26.1",
-        "26.1.1",
-        "26.1.2"
-      ],
-      "icon_url": "https://cdn.modrinth.com/data/A5foNgax/ab0c65801afd89f27b3fc723e56a94e82c746ae1_96.webp",
-      "issues_url": "https://github.com/Yager400/LoginTo/issues",
-      "license": {
-        "id": "GPL-3.0-only",
-        "name": "GNU General Public License v3.0 only",
-        "url": null
-      },
-      "loaders": [
-        "bukkit",
-        "bungeecord",
-        "paper",
-        "purpur",
-        "spigot",
-        "velocity"
-      ],
-      "page_url": "https://modrinth.com/mod/login-to",
-      "project_id": "A5foNgax",
-      "project_type": "mod",
-      "selected_versions": {
-        "26.1.2+paper": {
-          "date_published": "2026-05-16T21:00:50.617926Z",
-          "downloads": 115,
-          "file": {
-            "filename": "LoginTo-3.5.0.jar",
-            "hashes": {
-              "sha1": "c12e040809aeb441ffc9d1629ee9049bcc6c5890",
-              "sha512": "4f7db1dbfbd32a953c831f871cd6cdce55c7bc9fbd815b686d439bf5d38223582dcbc163a72822b3db1b281a94adac800ddc3c18b2c8495603d9093068d51166"
-            },
-            "primary": true,
-            "size": 319704,
-            "url": "https://cdn.modrinth.com/data/A5foNgax/versions/YAQR2SEr/LoginTo-3.5.0.jar"
-          },
-          "game_versions": [
-            "1.16.5",
-            "1.17",
-            "1.17.1",
-            "1.18",
-            "1.18.1",
-            "1.18.2",
-            "1.19",
-            "1.19.1",
-            "1.19.2",
-            "1.19.3",
-            "1.19.4",
-            "1.20",
-            "1.20.1",
-            "1.20.2",
-            "1.20.3",
-            "1.20.4",
-            "1.20.5",
-            "1.20.6",
-            "1.21",
-            "1.21.1",
-            "1.21.2",
-            "1.21.3",
-            "1.21.4",
-            "1.21.5",
-            "1.21.6",
-            "1.21.7",
-            "1.21.8",
-            "1.21.9",
-            "1.21.10",
-            "1.21.11",
-            "26.1",
-            "26.1.1",
-            "26.1.2"
-          ],
-          "id": "YAQR2SEr",
-          "loaders": [
-            "bukkit",
-            "bungeecord",
-            "paper",
-            "purpur",
-            "spigot",
-            "velocity"
-          ],
-          "name": "LoginTo 3.5.0",
-          "project_id": "A5foNgax",
-          "version_number": "3.5.0",
-          "version_type": "release"
-        }
-      },
-      "server_side": "required",
-      "slug": "login-to",
-      "source": "modrinth",
-      "source_url": "https://github.com/Yager400/LoginTo",
-      "title": "LoginTo"
-    },
     "luckperms": {
       "categories": [
         "management",
@@ -8371,8 +8770,8 @@
           "url": "https://github.com/sponsors/lucko"
         }
       ],
-      "downloads": 1909242,
-      "followers": 1464,
+      "downloads": 1934467,
+      "followers": 1472,
       "game_versions": [
         "1.8.8",
         "1.8.9",
@@ -8464,7 +8863,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2025-10-11T12:26:55.608887Z",
-          "downloads": 244737,
+          "downloads": 253906,
           "file": {
             "filename": "LuckPerms-Bukkit-5.5.17.jar",
             "hashes": {
@@ -8578,8 +8977,8 @@
           "url": "https://github.com/sponsors/kennytv"
         }
       ],
-      "downloads": 81016,
-      "followers": 194,
+      "downloads": 82717,
+      "followers": 197,
       "game_versions": [
         "1.2.1",
         "1.2.2",
@@ -8673,7 +9072,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-17T11:13:26.667952Z",
-          "downloads": 5251,
+          "downloads": 5444,
           "file": {
             "filename": "Maintenance-Paper-5.0.0.jar",
             "hashes": {
@@ -8738,7 +9137,7 @@
       "client_side": "unsupported",
       "color": 3555906,
       "date_created": "2024-11-09T10:30:40.276572Z",
-      "date_modified": "2026-05-16T09:16:16.716815Z",
+      "date_modified": "2026-05-22T11:09:03.930918Z",
       "description": "The Powerful Anti-Xray, help you auto catch X-rayers and punish them according to your configuration.",
       "discord_url": "https://discord.gg/MzTea2W9cb",
       "donation_urls": [
@@ -8748,8 +9147,8 @@
           "url": "https://www.patreon.com/Author87668/join"
         }
       ],
-      "downloads": 64186,
-      "followers": 111,
+      "downloads": 65641,
+      "followers": 113,
       "gallery": [
         {
           "created": "2026-02-21T08:29:02.513714Z",
@@ -8831,17 +9230,17 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-16T09:16:16.716815Z",
-          "downloads": 481,
+          "date_published": "2026-05-22T11:09:03.930918Z",
+          "downloads": 250,
           "file": {
-            "filename": "MinerTrack-1.10.1.0.jar",
+            "filename": "MinerTrack-1.10.1.1.jar",
             "hashes": {
-              "sha1": "0d2214059d02161a49918320b33c936eba19d8a7",
-              "sha512": "e84b0df7fb5b25ae60bd2f697c0d40e41ae63833e284bd3cf2aa19c122322d02d050913ed88cc3c8178d44490619c6eacf1f674e1730725019ac0ad6b69764a4"
+              "sha1": "5efb9099c37fb1dff987b8d2995e03b1937c2e16",
+              "sha512": "01f04151423d1eea80277ff4dce93f7ad65a8a0e59b075ee463185d16c2161404daf920540e6f71b2c4a76ea33d0f4a26a35d4328830a88cfac6deb69169ae8e"
             },
             "primary": true,
-            "size": 2138707,
-            "url": "https://cdn.modrinth.com/data/O3VQnhG2/versions/h8P6KBel/MinerTrack-1.10.1.0.jar"
+            "size": 2138447,
+            "url": "https://cdn.modrinth.com/data/O3VQnhG2/versions/1Ts9yg1O/MinerTrack-1.10.1.1.jar"
           },
           "game_versions": [
             "1.18",
@@ -8875,15 +9274,15 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "h8P6KBel",
+          "id": "1Ts9yg1O",
           "loaders": [
             "folia",
             "paper",
             "purpur"
           ],
-          "name": "1.10.1.0 - Detection Improve",
+          "name": "1.10.1.1 - Path Handling Fix",
           "project_id": "O3VQnhG2",
-          "version_number": "1.10.1.0",
+          "version_number": "1.10.1.1",
           "version_type": "release"
         }
       },
@@ -8912,8 +9311,8 @@
           "url": "https://github.com/sponsors/jpenilla"
         }
       ],
-      "downloads": 182136,
-      "followers": 480,
+      "downloads": 184576,
+      "followers": 481,
       "gallery": [
         {
           "created": "2023-02-26T16:57:37.090237Z",
@@ -9004,7 +9403,7 @@
               "version_id": null
             }
           ],
-          "downloads": 5551,
+          "downloads": 6520,
           "file": {
             "filename": "minimotd-paper-2.2.3.jar",
             "hashes": {
@@ -9059,8 +9458,8 @@
           "url": "https://ko-fi.com/offsetmonkey538"
         }
       ],
-      "downloads": 69747,
-      "followers": 5,
+      "downloads": 70666,
+      "followers": 6,
       "game_versions": [
         "1.19.2",
         "22w42a",
@@ -9201,7 +9600,7 @@
               "version_id": null
             }
           ],
-          "downloads": 17,
+          "downloads": 22,
           "file": {
             "filename": "monkeylib538-paper-26.1-4.0.1+paper+26.1-all.jar",
             "hashes": {
@@ -9246,7 +9645,7 @@
       "client_side": "unsupported",
       "color": 11289668,
       "date_created": "2023-02-20T19:30:41.320503Z",
-      "date_modified": "2026-05-08T12:55:44.864696Z",
+      "date_modified": "2026-05-20T06:45:39.716949Z",
       "description": "The Bukkit World Management Plugin.",
       "discord_url": "https://discord.gg/NZtfKky",
       "donation_urls": [
@@ -9261,8 +9660,8 @@
           "url": "https://opencollective.com/multiverse-plugins"
         }
       ],
-      "downloads": 574073,
-      "followers": 661,
+      "downloads": 581661,
+      "followers": 666,
       "gallery": [
         {
           "created": "2026-05-05T14:14:46.389456Z",
@@ -9363,7 +9762,7 @@
             {
               "dependency_type": "optional",
               "file_name": null,
-              "project_id": "WuErDeI1",
+              "project_id": "qvdtDX3s",
               "version_id": null
             },
             {
@@ -9381,11 +9780,11 @@
             {
               "dependency_type": "optional",
               "file_name": null,
-              "project_id": "qvdtDX3s",
+              "project_id": "WuErDeI1",
               "version_id": null
             }
           ],
-          "downloads": 13707,
+          "downloads": 19170,
           "file": {
             "filename": "multiverse-core-5.6.2.jar",
             "hashes": {
@@ -9474,8 +9873,8 @@
           "url": "https://opencollective.com/multiverse-plugins"
         }
       ],
-      "downloads": 203146,
-      "followers": 278,
+      "downloads": 205288,
+      "followers": 279,
       "game_versions": [
         "1.13",
         "1.13.1",
@@ -9554,7 +9953,7 @@
               "version_id": null
             }
           ],
-          "downloads": 3695,
+          "downloads": 5543,
           "file": {
             "filename": "multiverse-inventories-5.3.3.jar",
             "hashes": {
@@ -9632,17 +10031,17 @@
       "discord_url": "https://discord.gg/NZtfKky",
       "donation_urls": [
         {
-          "id": "github",
-          "platform": "Github",
-          "url": "https://github.com/sponsors/Multiverse"
-        },
-        {
           "id": "other",
           "platform": "Other",
           "url": "https://opencollective.com/multiverse-plugins"
+        },
+        {
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/Multiverse"
         }
       ],
-      "downloads": 65163,
+      "downloads": 65826,
       "followers": 157,
       "game_versions": [
         "1.13",
@@ -9716,19 +10115,19 @@
           "date_published": "2026-01-11T02:39:26.380189Z",
           "dependencies": [
             {
-              "dependency_type": "required",
-              "file_name": null,
-              "project_id": "3wmN97b8",
-              "version_id": null
-            },
-            {
               "dependency_type": "optional",
               "file_name": null,
               "project_id": "8VMk6P0I",
               "version_id": null
+            },
+            {
+              "dependency_type": "required",
+              "file_name": null,
+              "project_id": "3wmN97b8",
+              "version_id": null
             }
           ],
-          "downloads": 16568,
+          "downloads": 17210,
           "file": {
             "filename": "multiverse-netherportals-5.0.4.jar",
             "hashes": {
@@ -9817,8 +10216,8 @@
           "url": "https://opencollective.com/multiverse-plugins"
         }
       ],
-      "downloads": 103896,
-      "followers": 230,
+      "downloads": 105276,
+      "followers": 231,
       "gallery": [
         {
           "created": "2026-05-05T14:17:20.963768Z",
@@ -9906,7 +10305,7 @@
               "version_id": null
             }
           ],
-          "downloads": 2429,
+          "downloads": 3639,
           "file": {
             "filename": "multiverse-portals-5.2.2.jar",
             "hashes": {
@@ -9983,8 +10382,8 @@
       "date_modified": "2026-05-02T18:43:41.524807Z",
       "description": "Create custom mobs and bosses with advanced skills, attributes, equipment, and more!",
       "discord_url": "https://www.mythiccraft.io/discord",
-      "downloads": 67838,
-      "followers": 157,
+      "downloads": 69154,
+      "followers": 160,
       "game_versions": [
         "1.13",
         "1.13.1",
@@ -10034,7 +10433,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-02T18:43:41.524807Z",
-          "downloads": 2855,
+          "downloads": 3841,
           "file": {
             "filename": "MythicMobs-5.12.0.jar",
             "hashes": {
@@ -10087,7 +10486,7 @@
       "date_modified": "2026-04-06T14:15:16.385892Z",
       "description": "Add custom NBT tags to Items/Tiles/Entities without NMS",
       "discord_url": "https://discord.com/invite/yk4caxM",
-      "downloads": 284145,
+      "downloads": 285821,
       "followers": 268,
       "game_versions": [
         "1.7.9",
@@ -10178,7 +10577,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-06T14:15:16.385892Z",
-          "downloads": 11827,
+          "downloads": 13414,
           "file": {
             "filename": "item-nbt-api-plugin-2.15.7.jar",
             "hashes": {
@@ -10295,7 +10694,7 @@
           "url": "https://ko-fi.com/synkdev"
         }
       ],
-      "downloads": 120085,
+      "downloads": 121641,
       "followers": 9,
       "gallery": [
         {
@@ -10404,7 +10803,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-11T20:53:15.324724Z",
-          "downloads": 2907,
+          "downloads": 4382,
           "file": {
             "filename": "NexusCore-1.12.2.jar",
             "hashes": {
@@ -10506,8 +10905,8 @@
           "url": "https://ko-fi.com/nightexpress"
         }
       ],
-      "downloads": 169668,
-      "followers": 103,
+      "downloads": 172357,
+      "followers": 104,
       "game_versions": [
         "1.19.4",
         "1.20.1",
@@ -10551,7 +10950,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-24T22:11:01.326344Z",
-          "downloads": 8288,
+          "downloads": 10362,
           "file": {
             "filename": "nightcore-2.15.2.jar",
             "hashes": {
@@ -10599,7 +10998,7 @@
       "client_side": "unsupported",
       "color": 2827813,
       "date_created": "2023-06-09T17:28:03.808096Z",
-      "date_modified": "2026-05-14T22:16:33.913152Z",
+      "date_modified": "2026-05-18T23:12:31.776540Z",
       "description": "OneBlock Minecraft Bukkit plugin",
       "discord_url": "https://discord.gg/zUKrmp3P9y",
       "donation_urls": [
@@ -10609,8 +11008,8 @@
           "url": "https://boosty.to/marl/donate"
         }
       ],
-      "downloads": 201648,
-      "followers": 157,
+      "downloads": 203281,
+      "followers": 156,
       "gallery": [
         {
           "created": "2024-03-13T16:58:43.702148Z",
@@ -10730,17 +11129,17 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-14T22:16:33.913152Z",
-          "downloads": 1050,
+          "date_published": "2026-05-18T23:12:31.776540Z",
+          "downloads": 1225,
           "file": {
-            "filename": "Oneblock-1.6.1a.jar",
+            "filename": "Oneblock-1.6.2.jar",
             "hashes": {
-              "sha1": "ae25962802402cb3277656d26ee5a55a6cb94182",
-              "sha512": "59aef3a54de12f088abb72b6d7b26baa33effd6cd0097fdfdf78f9b330b5f13979125ae8acfb0635b1a76f8bfd53e684fb96661e26f314130a99bf277996315f"
+              "sha1": "1090bedfc1c91b855dac36774574aa63d0a64f7e",
+              "sha512": "03ced988cb14b1b283cbec7e326f2a3b23127f27e7ff15cf325ba13369cf6b39dfa989aae0853fbc4da01c8d54a409880d0db4006b3b0aad3d327372c8e14645"
             },
             "primary": true,
-            "size": 7647087,
-            "url": "https://cdn.modrinth.com/data/gMMDcC2d/versions/1KWdBX8w/Oneblock-1.6.1a.jar"
+            "size": 7647378,
+            "url": "https://cdn.modrinth.com/data/gMMDcC2d/versions/QeUlYXt7/Oneblock-1.6.2.jar"
           },
           "game_versions": [
             "1.8",
@@ -10817,16 +11216,16 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "1KWdBX8w",
+          "id": "QeUlYXt7",
           "loaders": [
             "bukkit",
             "paper",
             "purpur",
             "spigot"
           ],
-          "name": "OneBlock 1.6.1a",
+          "name": "OneBlock 1.6.2",
           "project_id": "gMMDcC2d",
-          "version_number": "1.6.1a",
+          "version_number": "1.6.2",
           "version_type": "release"
         }
       },
@@ -10847,7 +11246,7 @@
       "date_created": "2025-02-14T16:14:59.000667Z",
       "date_modified": "2026-05-06T18:43:56.249944Z",
       "description": "Limits the number of Maces!",
-      "downloads": 57838,
+      "downloads": 59003,
       "followers": 55,
       "game_versions": [
         "1.21",
@@ -10885,7 +11284,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-06T18:43:56.249944Z",
-          "downloads": 2605,
+          "downloads": 3746,
           "file": {
             "filename": "OneMace-1.07.jar",
             "hashes": {
@@ -10951,18 +11350,18 @@
           "url": "https://paypal.me/packetevents"
         },
         {
-          "id": "github",
-          "platform": "Github",
-          "url": "https://github.com/sponsors/retrooper/"
-        },
-        {
           "id": "patreon",
           "platform": "Patreon",
           "url": "https://patreon.com/retrooper"
+        },
+        {
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/retrooper/"
         }
       ],
-      "downloads": 553597,
-      "followers": 320,
+      "downloads": 562503,
+      "followers": 325,
       "gallery": [
         {
           "created": "2023-08-22T16:56:41.690794Z",
@@ -11074,7 +11473,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-19T00:53:42.220896Z",
-          "downloads": 33630,
+          "downloads": 40097,
           "file": {
             "filename": "packetevents-spigot-2.12.1.jar",
             "hashes": {
@@ -11182,7 +11581,7 @@
       "client_side": "optional",
       "color": 6393173,
       "date_created": "2023-10-24T03:32:29.827414Z",
-      "date_modified": "2026-05-04T20:33:28.204059Z",
+      "date_modified": "2026-05-21T02:28:41.209395Z",
       "description": "Pl3xMap is a minimalistic and lightweight world map viewer for Minecraft servers using the vanilla Minecraft rendering style",
       "discord_url": "https://granny.dev/discord",
       "donation_urls": [
@@ -11192,8 +11591,8 @@
           "url": "https://github.com/sponsors/granny"
         }
       ],
-      "downloads": 79149,
-      "followers": 282,
+      "downloads": 79907,
+      "followers": 283,
       "gallery": [
         {
           "created": "2023-10-24T04:23:47.710438Z",
@@ -11244,7 +11643,7 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-04T20:33:28.204059Z",
+          "date_published": "2026-05-21T02:28:41.209395Z",
           "dependencies": [
             {
               "dependency_type": "required",
@@ -11253,21 +11652,21 @@
               "version_id": null
             }
           ],
-          "downloads": 810,
+          "downloads": 148,
           "file": {
-            "filename": "Pl3xMap-26.1.2-546.jar",
+            "filename": "Pl3xMap-26.1.2-547.jar",
             "hashes": {
-              "sha1": "ef6228401bc8d3129f9780c11fbc21b0a5de6858",
-              "sha512": "69e9fc73d4a296cc828d950c7fc837de372b438f21ffc806abeb61f28e0269e9ac7036ff8047ea8d65305111fb2c16cc6a6e898419dcffbcc67fecc721510383"
+              "sha1": "95becb118a10daea9e22d93c5196406a5ca57d7e",
+              "sha512": "f4301d8f3da1a913d80f6a2f67f9b2629a74dff2b0eb41750e3a164ad8566a8aac6e347937637befee8ed956956265071db06b1e576fa67ac7b29f9a45ede91d"
             },
             "primary": true,
-            "size": 11699990,
-            "url": "https://cdn.modrinth.com/data/34T8oVNY/versions/lIfBwoTp/Pl3xMap-26.1.2-546.jar"
+            "size": 11702549,
+            "url": "https://cdn.modrinth.com/data/34T8oVNY/versions/21UsCFPc/Pl3xMap-26.1.2-547.jar"
           },
           "game_versions": [
             "26.1.2"
           ],
-          "id": "lIfBwoTp",
+          "id": "21UsCFPc",
           "loaders": [
             "bukkit",
             "fabric",
@@ -11277,9 +11676,9 @@
             "quilt",
             "spigot"
           ],
-          "name": "26.1.2-546",
+          "name": "26.1.2-547",
           "project_id": "34T8oVNY",
-          "version_number": "26.1.2-546",
+          "version_number": "26.1.2-547",
           "version_type": "beta"
         }
       },
@@ -11307,8 +11706,8 @@
           "url": "https://github.com/sponsors/PlaceholderAPI"
         }
       ],
-      "downloads": 141973,
-      "followers": 187,
+      "downloads": 147399,
+      "followers": 191,
       "game_versions": [
         "1.8",
         "1.8.1",
@@ -11403,7 +11802,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-02-08T12:14:01.199969Z",
-          "downloads": 77054,
+          "downloads": 82311,
           "file": {
             "filename": "PlaceholderAPI-2.12.2.jar",
             "hashes": {
@@ -11528,8 +11927,8 @@
           "url": "https://patreon.com/plasmomc"
         }
       ],
-      "downloads": 3216281,
-      "followers": 2054,
+      "downloads": 3239013,
+      "followers": 2060,
       "game_versions": [
         "1.16.4",
         "1.16.5",
@@ -11605,7 +12004,7 @@
               "version_id": null
             }
           ],
-          "downloads": 7636,
+          "downloads": 9059,
           "file": {
             "filename": "PlasmoVoice-Paper-2.1.9.jar",
             "hashes": {
@@ -11680,7 +12079,7 @@
           "url": "https://ko-fi.com/ajneb97"
         }
       ],
-      "downloads": 224551,
+      "downloads": 227743,
       "followers": 139,
       "game_versions": [
         "1.8.9",
@@ -11765,7 +12164,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-08T13:13:42.976092Z",
-          "downloads": 5969,
+          "downloads": 8931,
           "file": {
             "filename": "PlayerKits2-1.22.2.jar",
             "hashes": {
@@ -11880,7 +12279,7 @@
           "url": "https://ko-fi.com/scalamobile"
         }
       ],
-      "downloads": 1268,
+      "downloads": 1317,
       "followers": 5,
       "gallery": [
         {
@@ -11941,7 +12340,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-15T14:26:13.686382Z",
-          "downloads": 8,
+          "downloads": 16,
           "file": {
             "filename": "Plot-1.2.8_beta-obfuscated.jar",
             "hashes": {
@@ -11995,6 +12394,23 @@
       "source": "modrinth",
       "title": "ScalaPlot"
     },
+    "plugmanx": {
+      "page_url": "https://cdn.modrinth.com/data/yro4niHu/versions/hrMAp7Ww/PlugManX-3.0.4.jar",
+      "selected_versions": {
+        "explicit": {
+          "file": {
+            "hashes": {
+              "sha256-sri": "sha256-LLb7Ddfm9YZ7ypv6PwN1HW2J1rlJ6LbTdAUHtVrmqcA="
+            },
+            "url": "https://cdn.modrinth.com/data/yro4niHu/versions/hrMAp7Ww/PlugManX-3.0.4.jar"
+          },
+          "version_number": "3.0.4"
+        }
+      },
+      "slug": "plugmanx",
+      "source": "explicit",
+      "title": "plugmanx"
+    },
     "powergems": {
       "additional_categories": [
         "transportation"
@@ -12017,7 +12433,7 @@
           "url": "https://ko-fi.com/iseal"
         }
       ],
-      "downloads": 102302,
+      "downloads": 102916,
       "followers": 94,
       "gallery": [
         {
@@ -12078,7 +12494,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-07T19:20:45.233788Z",
-          "downloads": 1220,
+          "downloads": 1786,
           "file": {
             "filename": "PowerGems-3.6.3.0.jar",
             "hashes": {
@@ -12148,7 +12564,7 @@
           "url": "https://www.patreon.com/plasmomc"
         }
       ],
-      "downloads": 76815,
+      "downloads": 77478,
       "followers": 67,
       "game_versions": [
         "1.16.5",
@@ -12202,7 +12618,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2025-09-03T13:10:26.433014Z",
-          "downloads": 28199,
+          "downloads": 28771,
           "file": {
             "filename": "pv-addon-groups-1.1.1.jar",
             "hashes": {
@@ -12282,7 +12698,7 @@
           "url": "https://www.patreon.com/plasmomc"
         }
       ],
-      "downloads": 58685,
+      "downloads": 59035,
       "followers": 33,
       "game_versions": [
         "1.16.5",
@@ -12346,7 +12762,7 @@
               "version_id": null
             }
           ],
-          "downloads": 292,
+          "downloads": 569,
           "file": {
             "filename": "pv-addon-lavaplayer-lib-1.2.1.jar",
             "hashes": {
@@ -12429,7 +12845,7 @@
           "url": "https://www.patreon.com/plasmomc"
         }
       ],
-      "downloads": 69776,
+      "downloads": 70169,
       "followers": 57,
       "game_versions": [
         "1.19.2",
@@ -12477,7 +12893,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2024-09-28T08:05:13.155265Z",
-          "downloads": 50049,
+          "downloads": 50420,
           "file": {
             "filename": "pv-addon-sculk-1.1.0.jar",
             "hashes": {
@@ -12538,11 +12954,11 @@
       "client_side": "unsupported",
       "color": 598546,
       "date_created": "2026-05-10T08:11:30.614946Z",
-      "date_modified": "2026-05-17T09:06:47.764157Z",
+      "date_modified": "2026-05-22T01:01:19.183609Z",
       "description": "Modern Factions refactor, old-school factions but with modern QOL features",
       "discord_url": "https://discord.gg/AGBUWhb6JQ",
-      "downloads": 44,
-      "followers": 1,
+      "downloads": 124,
+      "followers": 2,
       "game_versions": [
         "1.21",
         "1.21.1",
@@ -12569,6 +12985,7 @@
       },
       "loaders": [
         "bukkit",
+        "folia",
         "paper",
         "spigot"
       ],
@@ -12577,18 +12994,18 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-17T09:06:47.764157Z",
+          "date_published": "2026-05-22T01:01:19.183609Z",
           "dependencies": [
             {
               "dependency_type": "optional",
               "file_name": null,
-              "project_id": "fRQREgAc",
+              "project_id": "UmLGoGij",
               "version_id": null
             },
             {
               "dependency_type": "optional",
               "file_name": null,
-              "project_id": "rQtkf57Y",
+              "project_id": "DKY9btbd",
               "version_id": null
             },
             {
@@ -12600,7 +13017,31 @@
             {
               "dependency_type": "optional",
               "file_name": null,
+              "project_id": "rCku0I4l",
+              "version_id": null
+            },
+            {
+              "dependency_type": "optional",
+              "file_name": null,
               "project_id": "lKEzGugV",
+              "version_id": null
+            },
+            {
+              "dependency_type": "optional",
+              "file_name": null,
+              "project_id": "fRQREgAc",
+              "version_id": null
+            },
+            {
+              "dependency_type": "optional",
+              "file_name": null,
+              "project_id": "rAVMDz0v",
+              "version_id": null
+            },
+            {
+              "dependency_type": "optional",
+              "file_name": null,
+              "project_id": "rQtkf57Y",
               "version_id": null
             },
             {
@@ -12612,20 +13053,38 @@
             {
               "dependency_type": "optional",
               "file_name": null,
-              "project_id": "DKY9btbd",
+              "project_id": "zaW55ehx",
+              "version_id": null
+            },
+            {
+              "dependency_type": "optional",
+              "file_name": null,
+              "project_id": "Nfe9727w",
+              "version_id": null
+            },
+            {
+              "dependency_type": "optional",
+              "file_name": null,
+              "project_id": "hXiIvTyT",
+              "version_id": null
+            },
+            {
+              "dependency_type": "optional",
+              "file_name": null,
+              "project_id": "VaEk7CuZ",
               "version_id": null
             }
           ],
-          "downloads": 8,
+          "downloads": 3,
           "file": {
-            "filename": "pvpindex-factions-1.0.5.jar",
+            "filename": "pvpindex-factions-1.1.1.jar",
             "hashes": {
-              "sha1": "adebfa32888ce6812875dafd0f9ae44c9963ddba",
-              "sha512": "5706f7a7c8a3b05f524c99fac567e27369ae0185543a329282fd3faf19a9e05ce4497c8c8d96619e25f823944568c14103bd84aa7d31294d4e525532749ead32"
+              "sha1": "4be1564d1ade8444830085887b9a1129654793e8",
+              "sha512": "0341bc5ada87d4df5ebaa6f496df63690c23221be4782ba6f2363eb59abf307a8611120fe20c7b8b419496e76fd9cef8675f30ce21fd02a0f576c1068dfd4143"
             },
             "primary": true,
-            "size": 9113454,
-            "url": "https://cdn.modrinth.com/data/trDfzeaq/versions/2aurmzJG/pvpindex-factions-1.0.5.jar"
+            "size": 9391995,
+            "url": "https://cdn.modrinth.com/data/trDfzeaq/versions/bFsPe5KJ/pvpindex-factions-1.1.1.jar"
           },
           "game_versions": [
             "1.21",
@@ -12644,15 +13103,16 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "2aurmzJG",
+          "id": "bFsPe5KJ",
           "loaders": [
             "bukkit",
+            "folia",
             "paper",
             "spigot"
           ],
-          "name": "PvPIndex Factions 1.0.5",
+          "name": "PvPIndex Factions 1.1.1",
           "project_id": "trDfzeaq",
-          "version_number": "1.0.5",
+          "version_number": "1.1.1",
           "version_type": "release"
         }
       },
@@ -12662,236 +13122,6 @@
       "source_url": "https://github.com/PVP-Index/pvpindex-factions",
       "title": "PvPIndex Factions",
       "wiki_url": "https://pvp-index.github.io/pvpindex-factions/"
-    },
-    "qualityarmory": {
-      "categories": [
-        "equipment",
-        "game-mechanics"
-      ],
-      "client_side": "unsupported",
-      "color": 2695455,
-      "date_created": "2024-02-20T15:37:35.243398Z",
-      "date_modified": "2026-05-14T16:49:11.621460Z",
-      "description": "A quality gun plugin similar to CrackShot.",
-      "discord_url": "https://discord.gg/HT47UQXBqG",
-      "donation_urls": [
-        {
-          "id": "ko-fi",
-          "platform": "Ko-fi",
-          "url": "https://ko-fi.com/lorenzo0111"
-        }
-      ],
-      "downloads": 47982,
-      "followers": 73,
-      "gallery": [
-        {
-          "created": "2024-02-20T15:46:43.365690Z",
-          "description": "A showcase of two guns of the plugin",
-          "featured": false,
-          "ordering": 0,
-          "title": "Banner",
-          "url": "https://cdn.modrinth.com/data/flkUwsSr/images/1db22e420f8a8e08d34cf4f0fd38560eb0cb50ba_350.webp"
-        }
-      ],
-      "game_versions": [
-        "1.8",
-        "1.8.1",
-        "1.8.2",
-        "1.8.3",
-        "1.8.4",
-        "1.8.5",
-        "1.8.6",
-        "1.8.7",
-        "1.8.8",
-        "1.8.9",
-        "1.9",
-        "1.9.1",
-        "1.9.2",
-        "1.9.3",
-        "1.9.4",
-        "1.10",
-        "1.10.1",
-        "1.10.2",
-        "1.11",
-        "1.11.1",
-        "1.11.2",
-        "1.12",
-        "1.12.1",
-        "1.12.2",
-        "1.13",
-        "1.13.1",
-        "1.13.2",
-        "1.14",
-        "1.14.1",
-        "1.14.2",
-        "1.14.3",
-        "1.14.4",
-        "1.15",
-        "1.15.1",
-        "1.15.2",
-        "1.16",
-        "1.16.1",
-        "1.16.2",
-        "1.16.3",
-        "1.16.4",
-        "1.16.5",
-        "1.17",
-        "1.17.1",
-        "1.18",
-        "1.18.1",
-        "1.18.2",
-        "1.19",
-        "1.19.1",
-        "1.19.2",
-        "1.19.3",
-        "1.19.4",
-        "1.20",
-        "1.20.1",
-        "1.20.2",
-        "1.20.3",
-        "1.20.4",
-        "1.20.5",
-        "1.20.6",
-        "1.21",
-        "1.21.1",
-        "1.21.2",
-        "1.21.3",
-        "1.21.4",
-        "1.21.5",
-        "1.21.6",
-        "1.21.7",
-        "1.21.8",
-        "1.21.9",
-        "1.21.10",
-        "1.21.11",
-        "26.1",
-        "26.1.1",
-        "26.1.2"
-      ],
-      "icon_url": "https://cdn.modrinth.com/data/flkUwsSr/3343f814196ac00f1d9770cb88ab9a93820fa807_96.webp",
-      "issues_url": "https://github.com/Lorenzo0111/QualityArmory/issues",
-      "license": {
-        "id": "GPL-3.0-only",
-        "name": "GNU General Public License v3.0 only",
-        "url": "https://github.com/Lorenzo0111/QualityArmory/blob/master/LICENSE"
-      },
-      "loaders": [
-        "bukkit",
-        "paper",
-        "purpur",
-        "spigot"
-      ],
-      "page_url": "https://modrinth.com/mod/qualityarmory",
-      "project_id": "flkUwsSr",
-      "project_type": "mod",
-      "selected_versions": {
-        "26.1.2+paper": {
-          "date_published": "2026-05-14T16:49:11.621460Z",
-          "downloads": 373,
-          "file": {
-            "filename": "QualityArmory.jar",
-            "hashes": {
-              "sha1": "6776ae2d7c3885ac0391efeb6f08af8ec2c2fb1f",
-              "sha512": "c0d1ccaba58dbe8d0f385defe1f4d636c1376e1361430de9968f11a7167f16c374a8db3a9704256546aa3b8d599a90814ec44b983e504fa58c04b376e36c7ad5"
-            },
-            "primary": true,
-            "size": 2879855,
-            "url": "https://cdn.modrinth.com/data/flkUwsSr/versions/fdVKuHYp/QualityArmory.jar"
-          },
-          "game_versions": [
-            "1.8",
-            "1.8.1",
-            "1.8.2",
-            "1.8.3",
-            "1.8.4",
-            "1.8.5",
-            "1.8.6",
-            "1.8.7",
-            "1.8.8",
-            "1.8.9",
-            "1.9",
-            "1.9.1",
-            "1.9.2",
-            "1.9.3",
-            "1.9.4",
-            "1.10",
-            "1.10.1",
-            "1.10.2",
-            "1.11",
-            "1.11.1",
-            "1.11.2",
-            "1.12",
-            "1.12.1",
-            "1.12.2",
-            "1.13",
-            "1.13.1",
-            "1.13.2",
-            "1.14",
-            "1.14.1",
-            "1.14.2",
-            "1.14.3",
-            "1.14.4",
-            "1.15",
-            "1.15.1",
-            "1.15.2",
-            "1.16",
-            "1.16.1",
-            "1.16.2",
-            "1.16.3",
-            "1.16.4",
-            "1.16.5",
-            "1.17",
-            "1.17.1",
-            "1.18",
-            "1.18.1",
-            "1.18.2",
-            "1.19",
-            "1.19.1",
-            "1.19.2",
-            "1.19.3",
-            "1.19.4",
-            "1.20",
-            "1.20.1",
-            "1.20.2",
-            "1.20.3",
-            "1.20.4",
-            "1.20.5",
-            "1.20.6",
-            "1.21",
-            "1.21.1",
-            "1.21.2",
-            "1.21.3",
-            "1.21.4",
-            "1.21.5",
-            "1.21.6",
-            "1.21.7",
-            "1.21.8",
-            "1.21.9",
-            "1.21.10",
-            "1.21.11",
-            "26.1",
-            "26.1.1",
-            "26.1.2"
-          ],
-          "id": "fdVKuHYp",
-          "loaders": [
-            "bukkit",
-            "paper",
-            "purpur",
-            "spigot"
-          ],
-          "name": "QualityArmory 2.1.3",
-          "project_id": "flkUwsSr",
-          "version_number": "2.1.3",
-          "version_type": "release"
-        }
-      },
-      "server_side": "required",
-      "slug": "qualityarmory",
-      "source": "modrinth",
-      "source_url": "https://github.com/Lorenzo0111/QualityArmory/",
-      "title": "QualityArmory",
-      "wiki_url": "https://wiki.lorenzo0111.me/qualityarmory"
     },
     "quickpearl": {
       "additional_categories": [
@@ -12910,7 +13140,7 @@
       "date_modified": "2026-04-11T01:50:38.972024Z",
       "description": "\ud83d\ude80 The ultimate EnderPearl system: real physics, anti-glitch, smart teleport and zero lag. Perfect for HCF & Factions, Survival.",
       "discord_url": "https://discord.com/invite/ZRe3RnubdW",
-      "downloads": 33,
+      "downloads": 43,
       "followers": 1,
       "game_versions": [
         "1.7.10",
@@ -13006,7 +13236,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-11T01:50:38.972024Z",
-          "downloads": 20,
+          "downloads": 26,
           "file": {
             "filename": "QuickPearl.jar",
             "hashes": {
@@ -13121,8 +13351,8 @@
       "date_modified": "2026-02-14T01:23:59.624937Z",
       "description": "A shop plugin that allows players to easily sell/buy any items from a chest without any commands.",
       "discord_url": "https://discord.gg/Bu3dVtmsD3",
-      "downloads": 189755,
-      "followers": 432,
+      "downloads": 192284,
+      "followers": 434,
       "gallery": [
         {
           "created": "2022-12-23T13:52:10.190488Z",
@@ -13419,7 +13649,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-02-14T01:23:59.624937Z",
-          "downloads": 20969,
+          "downloads": 22340,
           "file": {
             "filename": "QuickShop-Hikari-6.2.0.11.jar",
             "hashes": {
@@ -13477,11 +13707,11 @@
       "client_side": "unsupported",
       "color": 3875441,
       "date_created": "2023-08-11T07:17:35.401922Z",
-      "date_modified": "2026-03-27T15:58:45.070317Z",
+      "date_modified": "2026-05-18T19:17:56.658855Z",
       "description": "SetHome is a plugin that allows you to easily create homes",
       "discord_url": "https://discord.gg/y6gGNsBTux",
-      "downloads": 209264,
-      "followers": 132,
+      "downloads": 213526,
+      "followers": 135,
       "gallery": [
         {
           "created": "2023-08-23T11:59:08.584028Z",
@@ -13543,17 +13773,17 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-03-27T15:58:45.070317Z",
-          "downloads": 38801,
+          "date_published": "2026-05-18T19:17:56.658855Z",
+          "downloads": 3401,
           "file": {
-            "filename": "SetHome-6.1.jar",
+            "filename": "SetHome-6.2.jar",
             "hashes": {
-              "sha1": "7be79746705233c240a9a08658b310ee9c81cc05",
-              "sha512": "47e76f2a44046c3d071f3c06053a575be9c22e3d70698f33ed921644ab3ac34b106f29921c1a2aa56b38781d4fce9386e8f358f5dcf0854fd848424fccb7939a"
+              "sha1": "31699530fab9f59b6e0a2495112a3f69919b3b50",
+              "sha512": "9a9b6f064ca7e7454e38eb6367ed222549ef9853ccf13c3bdcd26480d9e57234ec6e4205c74020ef5d316c5c27818fb56d3f1bf9ed370058a033f847f73d52dd"
             },
             "primary": true,
-            "size": 970064,
-            "url": "https://cdn.modrinth.com/data/1apsbntF/versions/12w6NDCz/SetHome-6.1.jar"
+            "size": 972022,
+            "url": "https://cdn.modrinth.com/data/1apsbntF/versions/j33t7krR/SetHome-6.2.jar"
           },
           "game_versions": [
             "1.19",
@@ -13584,16 +13814,16 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "12w6NDCz",
+          "id": "j33t7krR",
           "loaders": [
             "bukkit",
             "paper",
             "purpur",
             "spigot"
           ],
-          "name": "SetHome 6.1",
+          "name": "SetHome 6.2",
           "project_id": "1apsbntF",
-          "version_number": "6.1",
+          "version_number": "6.2",
           "version_type": "release"
         }
       },
@@ -13601,134 +13831,6 @@
       "slug": "sethome",
       "source": "modrinth",
       "title": "SetHome"
-    },
-    "simple-combatlog": {
-      "additional_categories": [
-        "adventure",
-        "equipment",
-        "magic"
-      ],
-      "categories": [
-        "game-mechanics",
-        "optimization",
-        "utility"
-      ],
-      "client_side": "unsupported",
-      "color": 2500906,
-      "date_created": "2024-12-08T20:26:29.159787Z",
-      "date_modified": "2026-05-03T12:12:50.905488Z",
-      "description": "The Simple-Combat-Log plugin prevents players from logging out during combat by setting a combat timer, disabling actions like Elytra use, and broadcasting a message if they leave the server mid-combat.",
-      "discord_url": "https://discordapp.com/users/824287756229672991",
-      "donation_urls": [
-        {
-          "id": "patreon",
-          "platform": "Patreon",
-          "url": "https://www.patreon.com/c/NikeyV1"
-        }
-      ],
-      "downloads": 44979,
-      "followers": 30,
-      "gallery": [
-        {
-          "created": "2024-12-08T20:43:43.627044Z",
-          "featured": false,
-          "ordering": 0,
-          "title": "Combat Log Message",
-          "url": "https://cdn.modrinth.com/data/LI8sodAD/images/af4472215e6ecdb975f02b20fe2d5ba7d178bf9e.png"
-        }
-      ],
-      "game_versions": [
-        "1.19",
-        "1.19.1",
-        "1.19.2",
-        "1.19.3",
-        "1.19.4",
-        "1.20",
-        "1.20.1",
-        "1.20.2",
-        "1.20.3",
-        "1.20.4",
-        "1.20.5",
-        "1.20.6",
-        "1.21",
-        "1.21.1",
-        "1.21.2",
-        "1.21.3",
-        "1.21.4",
-        "1.21.5",
-        "1.21.6",
-        "1.21.7",
-        "1.21.8",
-        "1.21.9",
-        "1.21.10",
-        "1.21.11",
-        "26.1",
-        "26.1.1",
-        "26.1.2"
-      ],
-      "icon_url": "https://cdn.modrinth.com/data/LI8sodAD/45dd30540041a3680cda5cd15c15df18fa7cd63e_96.webp",
-      "issues_url": "https://github.com/NikeyV1/CombatLog/issues",
-      "license": {
-        "id": "GPL-3.0-or-later",
-        "name": "GNU General Public License v3.0 or later",
-        "url": null
-      },
-      "loaders": [
-        "bukkit",
-        "paper",
-        "purpur",
-        "spigot"
-      ],
-      "page_url": "https://modrinth.com/mod/simple-combatlog",
-      "project_id": "LI8sodAD",
-      "project_type": "mod",
-      "selected_versions": {
-        "26.1.2+paper": {
-          "date_published": "2026-05-03T12:12:50.905488Z",
-          "downloads": 3286,
-          "file": {
-            "filename": "CombatLog.jar",
-            "hashes": {
-              "sha1": "75e04c06f87556df0530a0407df1da8842b51268",
-              "sha512": "4e3034141f35532c4dadfc38318c61e4d96de2f649f35a3014bb944de5c6f988dc0266e024484dce1af02e4ff5ab9375c27f192e163b2ed14573d502b44bb14b"
-            },
-            "primary": true,
-            "size": 78748,
-            "url": "https://cdn.modrinth.com/data/LI8sodAD/versions/d4hUZIrf/CombatLog.jar"
-          },
-          "game_versions": [
-            "1.21",
-            "1.21.1",
-            "1.21.2",
-            "1.21.3",
-            "1.21.4",
-            "1.21.5",
-            "1.21.6",
-            "1.21.7",
-            "1.21.8",
-            "1.21.9",
-            "1.21.10",
-            "1.21.11",
-            "26.1",
-            "26.1.1",
-            "26.1.2"
-          ],
-          "id": "d4hUZIrf",
-          "loaders": [
-            "paper",
-            "purpur"
-          ],
-          "name": "Admin Commands, WorldGuard Barriers & Config Overhaul",
-          "project_id": "LI8sodAD",
-          "version_number": "1.17",
-          "version_type": "release"
-        }
-      },
-      "server_side": "required",
-      "slug": "simple-combatlog",
-      "source": "modrinth",
-      "source_url": "https://github.com/NikeyV1/CombatLog.git",
-      "title": "Simple Combat Log"
     },
     "simple-login": {
       "categories": [
@@ -13747,8 +13849,8 @@
           "url": "https://ko-fi.com/spicymike"
         }
       ],
-      "downloads": 69219,
-      "followers": 40,
+      "downloads": 71899,
+      "followers": 41,
       "game_versions": [
         "1.17",
         "1.17.1",
@@ -13804,7 +13906,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-09T11:38:04.611151Z",
-          "downloads": 2304,
+          "downloads": 2778,
           "file": {
             "filename": "SimpleLogin-1.16.5.jar",
             "hashes": {
@@ -13847,11 +13949,11 @@
       "client_side": "optional",
       "color": 2368556,
       "date_created": "2021-11-15T12:29:48.239701Z",
-      "date_modified": "2026-05-12T17:57:44.710145Z",
+      "date_modified": "2026-05-19T16:01:47.625773Z",
       "description": "A working voice chat in Minecraft!",
       "discord_url": "https://discord.gg/4dH2zwTmyX",
-      "downloads": 47412435,
-      "followers": 11863,
+      "downloads": 48020926,
+      "followers": 11929,
       "gallery": [
         {
           "created": "2023-01-12T13:24:04.701172Z",
@@ -14134,7 +14236,8 @@
         "26.2-snapshot-4",
         "26.2-snapshot-5",
         "26.2-snapshot-6",
-        "26.2-snapshot-7"
+        "26.2-snapshot-7",
+        "26.2-snapshot-8"
       ],
       "icon_url": "https://cdn.modrinth.com/data/9eGKb6K1/icon.png",
       "issues_url": "https://github.com/henkelmax/simple-voice-chat/issues",
@@ -14163,7 +14266,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-04T13:16:22.885614Z",
-          "downloads": 49653,
+          "downloads": 68423,
           "file": {
             "filename": "voicechat-bukkit-2.6.17.jar",
             "hashes": {
@@ -14254,8 +14357,8 @@
       "date_created": "2025-01-19T20:25:22.952895Z",
       "date_modified": "2026-05-17T10:49:20.519702Z",
       "description": "A simple TPA Plugin. With customizable Messages and Sounds.",
-      "downloads": 55730,
-      "followers": 20,
+      "downloads": 57705,
+      "followers": 21,
       "gallery": [
         {
           "created": "2025-02-20T13:37:43.056828Z",
@@ -14300,17 +14403,17 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-15T12:18:13.566385Z",
-          "downloads": 841,
+          "date_published": "2026-05-17T10:49:20.519702Z",
+          "downloads": 1519,
           "file": {
-            "filename": "SimpleTPA-1.4.jar",
+            "filename": "SimpleTPA-1.4hf.jar",
             "hashes": {
-              "sha1": "40674dfa7cdcda1053f09a9af76e132b52f612f8",
-              "sha512": "21a51c2321975dfdf29cc7d0f618c5bae11df1b8c3871d8673b174a2645259a5a370bcb0a325f5ccae951b8d11524b013842534e30b8311d9756b45d073a7790"
+              "sha1": "2819ac7a36aa0ddf56947e2b0492d2143d341bb5",
+              "sha512": "480cbe0f9cacef5a5b313aec06c3945f2638135b9288a149b05dff0b3b9aa9dea7f0b54747bb4d053ea412eae14e59ce2ec2c033b5d1238316c13119d6daa883"
             },
             "primary": true,
-            "size": 329370,
-            "url": "https://cdn.modrinth.com/data/6t5Ziqmz/versions/E7bgrsOA/SimpleTPA-1.4.jar"
+            "size": 332571,
+            "url": "https://cdn.modrinth.com/data/6t5Ziqmz/versions/bvhNpRp8/SimpleTPA-1.4hf.jar"
           },
           "game_versions": [
             "1.21",
@@ -14329,16 +14432,16 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "E7bgrsOA",
+          "id": "bvhNpRp8",
           "loaders": [
             "bukkit",
             "paper",
             "purpur",
             "spigot"
           ],
-          "name": "SimpleTPA 1.4",
+          "name": "SimpleTPA 1.4hf",
           "project_id": "6t5Ziqmz",
-          "version_number": "1.4",
+          "version_number": "1.4hf",
           "version_type": "release"
         }
       },
@@ -14363,8 +14466,8 @@
           "url": "https://ko-fi.com/shanebee"
         }
       ],
-      "downloads": 178180,
-      "followers": 79,
+      "downloads": 180749,
+      "followers": 80,
       "gallery": [
         {
           "created": "2025-01-30T06:11:55.528035Z",
@@ -14419,7 +14522,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-10T12:55:56.639362Z",
-          "downloads": 3181,
+          "downloads": 5004,
           "file": {
             "filename": "SkBee-3.23.0.jar",
             "hashes": {
@@ -14481,8 +14584,8 @@
           "url": "https://skinsrestorer.net/donate"
         }
       ],
-      "downloads": 1041774,
-      "followers": 509,
+      "downloads": 1061294,
+      "followers": 513,
       "gallery": [
         {
           "created": "2025-06-25T18:06:12.946451Z",
@@ -14625,7 +14728,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-11T19:28:33.761062Z",
-          "downloads": 102209,
+          "downloads": 118163,
           "file": {
             "filename": "SkinsRestorer.jar",
             "hashes": {
@@ -14761,8 +14864,8 @@
           "url": "https://github.com/sponsors/SkriptLang"
         }
       ],
-      "downloads": 94580,
-      "followers": 83,
+      "downloads": 98713,
+      "followers": 85,
       "gallery": [
         {
           "created": "2025-11-07T19:22:32.600883Z",
@@ -14808,7 +14911,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-01T20:38:33.891031Z",
-          "downloads": 11144,
+          "downloads": 14647,
           "file": {
             "filename": "Skript-2.15.2.jar",
             "hashes": {
@@ -14852,181 +14955,6 @@
       "title": "Skript",
       "wiki_url": "https://docs.skriptlang.org/"
     },
-    "sleeper": {
-      "categories": [
-        "game-mechanics",
-        "social",
-        "utility"
-      ],
-      "client_side": "unsupported",
-      "color": 2494736,
-      "date_created": "2023-06-08T19:41:46.095599Z",
-      "date_modified": "2026-05-14T13:29:52.082661Z",
-      "description": "Customize your night skips with a set sleep threshold, animation, and voting. All customizable in the config.",
-      "downloads": 50277,
-      "followers": 153,
-      "gallery": [
-        {
-          "created": "2023-06-08T19:56:46.891310Z",
-          "featured": true,
-          "ordering": 1,
-          "title": "Plugin icon",
-          "url": "https://cdn.modrinth.com/data/Kt3eUOUy/images/22f522500f86c6087b9031c02785fc5dbe882cc6_350.webp"
-        }
-      ],
-      "game_versions": [
-        "1.13",
-        "1.13.1",
-        "1.13.2",
-        "1.14",
-        "1.14.1",
-        "1.14.2",
-        "1.14.3",
-        "1.14.4",
-        "1.15",
-        "1.15.1",
-        "1.15.2",
-        "1.16",
-        "1.16.1",
-        "1.16.2",
-        "1.16.3",
-        "1.16.4",
-        "1.16.5",
-        "1.17",
-        "1.17.1",
-        "1.18",
-        "1.18.1",
-        "1.18.2",
-        "1.19",
-        "1.19.1",
-        "1.19.2",
-        "1.19.3",
-        "1.19.4",
-        "1.20",
-        "1.20.1",
-        "1.20.2",
-        "1.20.3",
-        "1.20.4",
-        "1.20.5",
-        "1.20.6",
-        "1.21",
-        "1.21.1",
-        "1.21.2",
-        "1.21.3",
-        "1.21.4",
-        "1.21.5",
-        "1.21.6",
-        "1.21.7",
-        "1.21.8",
-        "1.21.9",
-        "1.21.10",
-        "1.21.11",
-        "26.1",
-        "26.1.1",
-        "26.1.2"
-      ],
-      "icon_url": "https://cdn.modrinth.com/data/Kt3eUOUy/7aba453244492fba7455292a11f76cf61f45fe49_96.webp",
-      "issues_url": "https://github.com/hraponssi/Sleeper/issues",
-      "license": {
-        "id": "GPL-3.0-only",
-        "name": "GNU General Public License v3.0 only",
-        "url": null
-      },
-      "loaders": [
-        "bukkit",
-        "folia",
-        "paper",
-        "purpur",
-        "spigot"
-      ],
-      "page_url": "https://modrinth.com/mod/sleeper",
-      "project_id": "Kt3eUOUy",
-      "project_type": "mod",
-      "selected_versions": {
-        "26.1.2+paper": {
-          "date_published": "2026-05-14T13:29:52.082661Z",
-          "downloads": 214,
-          "file": {
-            "filename": "Sleeper-1.10.6.jar",
-            "hashes": {
-              "sha1": "cda30d2f94a84bf97657e8db39276a0e61fa990d",
-              "sha512": "b1750b957cc4e43dea3251a9edaf00dbfd4765a9756a7a680344ba1d39b41eb27be5c42fcdd34cebbbdb69781d73cfa2c628f3d4dc8c830435610a2e7f0b93da"
-            },
-            "primary": true,
-            "size": 1594331,
-            "url": "https://cdn.modrinth.com/data/Kt3eUOUy/versions/vcEWwYuK/Sleeper-1.10.6.jar"
-          },
-          "game_versions": [
-            "1.13",
-            "1.13.1",
-            "1.13.2",
-            "1.14",
-            "1.14.1",
-            "1.14.2",
-            "1.14.3",
-            "1.14.4",
-            "1.15",
-            "1.15.1",
-            "1.15.2",
-            "1.16",
-            "1.16.1",
-            "1.16.2",
-            "1.16.3",
-            "1.16.4",
-            "1.16.5",
-            "1.17",
-            "1.17.1",
-            "1.18",
-            "1.18.1",
-            "1.18.2",
-            "1.19",
-            "1.19.1",
-            "1.19.2",
-            "1.19.3",
-            "1.19.4",
-            "1.20",
-            "1.20.1",
-            "1.20.2",
-            "1.20.3",
-            "1.20.4",
-            "1.20.5",
-            "1.20.6",
-            "1.21",
-            "1.21.1",
-            "1.21.2",
-            "1.21.3",
-            "1.21.4",
-            "1.21.5",
-            "1.21.6",
-            "1.21.7",
-            "1.21.8",
-            "1.21.9",
-            "1.21.10",
-            "1.21.11",
-            "26.1",
-            "26.1.1",
-            "26.1.2"
-          ],
-          "id": "vcEWwYuK",
-          "loaders": [
-            "bukkit",
-            "folia",
-            "paper",
-            "purpur",
-            "spigot"
-          ],
-          "name": "Sleeper 1.10.6",
-          "project_id": "Kt3eUOUy",
-          "version_number": "1.10.6",
-          "version_type": "release"
-        }
-      },
-      "server_side": "required",
-      "slug": "sleeper",
-      "source": "modrinth",
-      "source_url": "https://github.com/hraponssi/Sleeper",
-      "title": "Sleeper"
-    },
     "smartspawner": {
       "additional_categories": [
         "economy",
@@ -15045,18 +14973,18 @@
       "discord_url": "https://dsc.gg/nighterdevelopment",
       "donation_urls": [
         {
-          "id": "ko-fi",
-          "platform": "Ko-fi",
-          "url": "https://ko-fi.com/nighterdevelopment"
-        },
-        {
           "id": "paypal",
           "platform": "Paypal",
           "url": "https://www.paypal.com/paypalme/Nighter02"
+        },
+        {
+          "id": "ko-fi",
+          "platform": "Ko-fi",
+          "url": "https://ko-fi.com/nighterdevelopment"
         }
       ],
-      "downloads": 135158,
-      "followers": 122,
+      "downloads": 137655,
+      "followers": 123,
       "gallery": [
         {
           "created": "2026-04-10T17:42:21.326347Z",
@@ -15150,7 +15078,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-03T07:13:06.192549Z",
-          "downloads": 5499,
+          "downloads": 7261,
           "file": {
             "filename": "SmartSpawner-1.6.6.jar",
             "hashes": {
@@ -15208,8 +15136,8 @@
       "date_created": "2022-11-01T03:23:49.178089Z",
       "date_modified": "2025-08-15T16:06:07.347435Z",
       "description": "Highly configurable spawn plugin. Teleport to a custom spawnpoint by command or on specific events.",
-      "downloads": 75100,
-      "followers": 69,
+      "downloads": 76104,
+      "followers": 70,
       "game_versions": [
         "1.8",
         "1.8.1",
@@ -15304,7 +15232,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2025-08-15T16:06:07.347435Z",
-          "downloads": 38885,
+          "downloads": 39869,
           "file": {
             "filename": "Spawn-2.4.2.jar",
             "hashes": {
@@ -15432,8 +15360,8 @@
           "url": "https://github.com/sponsors/jpenilla"
         }
       ],
-      "downloads": 97015,
-      "followers": 450,
+      "downloads": 98078,
+      "followers": 452,
       "gallery": [
         {
           "created": "2023-02-26T05:00:20.470196Z",
@@ -15499,7 +15427,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-15T02:08:16.459594Z",
-          "downloads": 1350,
+          "downloads": 1629,
           "file": {
             "filename": "squaremap-paper-mc26.1.2-1.3.13.jar",
             "hashes": {
@@ -15540,8 +15468,8 @@
       "date_created": "2022-08-15T23:23:17.532599Z",
       "date_modified": "2026-04-25T16:54:51.685339Z",
       "description": "An all-in-one solution that works",
-      "downloads": 820935,
-      "followers": 1289,
+      "downloads": 834095,
+      "followers": 1299,
       "gallery": [
         {
           "created": "2025-01-18T18:20:10.699371Z",
@@ -15727,7 +15655,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-25T16:54:51.685339Z",
-          "downloads": 42723,
+          "downloads": 53462,
           "file": {
             "filename": "TAB v6.0.2 - Vanilla.jar",
             "hashes": {
@@ -15836,8 +15764,8 @@
           "url": "https://github.com/sponsors/jpenilla"
         }
       ],
-      "downloads": 280241,
-      "followers": 629,
+      "downloads": 282121,
+      "followers": 630,
       "gallery": [
         {
           "created": "2023-02-26T16:58:42.741903Z",
@@ -15903,7 +15831,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-15T02:44:36.586848Z",
-          "downloads": 3698,
+          "downloads": 4294,
           "file": {
             "filename": "tabtps-paper-1.3.31.jar",
             "hashes": {
@@ -15960,10 +15888,10 @@
       "client_side": "unsupported",
       "color": 4486220,
       "date_created": "2026-04-20T00:12:17.291773Z",
-      "date_modified": "2026-05-17T20:18:11.873776Z",
+      "date_modified": "2026-05-20T09:42:15.740824Z",
       "description": "TeamsAPI is a passive, server-side bridge plugin for Paper servers, inspired by Vault",
       "discord_url": "https://discord.gg/yWP95XfmBS",
-      "downloads": 68,
+      "downloads": 161,
       "followers": 1,
       "game_versions": [
         "1.16",
@@ -16027,17 +15955,17 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-17T20:18:08.820407Z",
-          "downloads": 1,
+          "date_published": "2026-05-20T09:42:13.115818Z",
+          "downloads": 14,
           "file": {
-            "filename": "teams-api-plugin-1.6.0.jar",
+            "filename": "teams-api-plugin-2.0.0.jar",
             "hashes": {
-              "sha1": "d1cd0de8336e0720da6db97a99153c0828bd1aac",
-              "sha512": "a4372cc3717ccef35deeae86aed05496018d20d6fe91118e94f83ccfbe84ae1d9685b4c76df4da8e79292504d69e2be3201484594bfc0129c5ee4ea490e1ed85"
+              "sha1": "47af900b16632d0a124d673950d5b0df1cd14e00",
+              "sha512": "16ff16295becb4aa764f88a97dba65ba53f667e543c11b5e3fcd983dbe295a7a3105620c193e4ad6a0e48601131da775e5c4c34957745f088ce47675f8873ea9"
             },
             "primary": true,
-            "size": 99234,
-            "url": "https://cdn.modrinth.com/data/2NJKwgXC/versions/QHbY0VSi/teams-api-plugin-1.6.0.jar"
+            "size": 114121,
+            "url": "https://cdn.modrinth.com/data/2NJKwgXC/versions/UrPpLreN/teams-api-plugin-2.0.0.jar"
           },
           "game_versions": [
             "1.16",
@@ -16079,7 +16007,7 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "QHbY0VSi",
+          "id": "UrPpLreN",
           "loaders": [
             "bukkit",
             "folia",
@@ -16087,9 +16015,9 @@
             "purpur",
             "spigot"
           ],
-          "name": "TeamsAPI 1.6.0",
+          "name": "TeamsAPI 2.0.0",
           "project_id": "2NJKwgXC",
-          "version_number": "1.6.0",
+          "version_number": "2.0.0",
           "version_type": "release"
         }
       },
@@ -16117,7 +16045,7 @@
           "url": "https://paypal.me/leonardrfong"
         }
       ],
-      "downloads": 40304,
+      "downloads": 41356,
       "followers": 68,
       "gallery": [
         {
@@ -16173,7 +16101,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-04T15:37:30.466807Z",
-          "downloads": 5561,
+          "downloads": 6405,
           "file": {
             "filename": "TerraformGenerator-26.1.0.jar",
             "hashes": {
@@ -16221,7 +16149,7 @@
       "date_created": "2024-02-15T17:39:47.384379Z",
       "date_modified": "2026-05-12T14:55:23.017815Z",
       "description": "A simple teleportation plugin that supports Folia, compatible with Bukkit/Spigot/Paper/Folia.",
-      "downloads": 98610,
+      "downloads": 100507,
       "followers": 62,
       "gallery": [
         {
@@ -16345,7 +16273,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-12T14:55:23.017815Z",
-          "downloads": 2050,
+          "downloads": 3901,
           "file": {
             "filename": "TPA-3.2.8.jar",
             "hashes": {
@@ -16460,10 +16388,10 @@
       "client_side": "unsupported",
       "color": 11320021,
       "date_created": "2025-12-18T03:50:32.566018Z",
-      "date_modified": "2026-05-06T22:33:49.918470Z",
+      "date_modified": "2026-05-22T12:41:48.503418Z",
       "description": "TradePost is an SMP-friendly auction house for Paper 26+ / 1.21+ with an item-based economy no Vault needed. Features shulker inspection, LuckPerms prefix support, offline payouts, and a global admin-controlled currency.",
       "discord_url": "https://discord.gg/stK88apKUu",
-      "downloads": 446,
+      "downloads": 515,
       "followers": 4,
       "gallery": [
         {
@@ -16621,7 +16549,7 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-06T22:33:49.918470Z",
+          "date_published": "2026-05-22T12:41:48.503418Z",
           "dependencies": [
             {
               "dependency_type": "required",
@@ -16636,21 +16564,21 @@
               "version_id": null
             }
           ],
-          "downloads": 17,
+          "downloads": 4,
           "file": {
-            "filename": "tradepost-2.8.jar",
+            "filename": "tradepost-2.9.jar",
             "hashes": {
-              "sha1": "32d5933c29121d6539d44c7bade653cd45a98132",
-              "sha512": "53fca2dd49cc5b3ab9eee8ddb28eed19938ad94216476018293c22984db33861286e744b5e5d55cfb0b71d60687a79a811304f7a75a203ea23b0fceef04709dc"
+              "sha1": "ea1e9e54a9fa5664278526cfbf26631c22ee2a56",
+              "sha512": "a5e23786a42c7f0e7b0acdbb090fe796799e62252e624eb22f6c718bafc8b4146928d97e047e3f51548cb5a7ee2ed1e4457f35bf374e20849ad502169c0c18be"
             },
             "primary": true,
-            "size": 108258,
-            "url": "https://cdn.modrinth.com/data/3gTYwJXk/versions/3DnVhMDh/tradepost-2.8.jar"
+            "size": 4601746,
+            "url": "https://cdn.modrinth.com/data/3gTYwJXk/versions/MLV8MCW1/tradepost-2.9.jar"
           },
           "game_versions": [
             "26.1.2"
           ],
-          "id": "3DnVhMDh",
+          "id": "MLV8MCW1",
           "loaders": [
             "bukkit",
             "folia",
@@ -16658,9 +16586,9 @@
             "purpur",
             "spigot"
           ],
-          "name": "TradePost 2.8",
+          "name": "TradePost 2.9",
           "project_id": "3gTYwJXk",
-          "version_number": "2.8",
+          "version_number": "2.9",
           "version_type": "release"
         }
       },
@@ -16689,8 +16617,8 @@
           "url": "https://www.patreon.com/c/PluginDEV/membership"
         }
       ],
-      "downloads": 75202,
-      "followers": 53,
+      "downloads": 76673,
+      "followers": 55,
       "gallery": [
         {
           "created": "2024-08-06T23:21:52.854984Z",
@@ -16768,7 +16696,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-03-21T19:12:57.780087Z",
-          "downloads": 15593,
+          "downloads": 17035,
           "file": {
             "filename": "timber-1.8.2.jar",
             "hashes": {
@@ -16837,14 +16765,172 @@
       "title": "TreeTimber",
       "wiki_url": "https://modncore.com/resource/Timber"
     },
+    "uberenchant": {
+      "additional_categories": [
+        "economy",
+        "game-mechanics"
+      ],
+      "categories": [
+        "equipment",
+        "library",
+        "utility"
+      ],
+      "client_side": "unsupported",
+      "color": 9122094,
+      "date_created": "2023-06-11T15:23:45.315834Z",
+      "date_modified": "2026-05-22T13:28:03.937104Z",
+      "description": "UberEnchant adds the ability for servers to enchant any item with any enchantment up to level 255 (since 1.17), add names and lore to items (color support), add potion effects to items, extract enchantments to books, and economy support.",
+      "discord_url": "https://discord.gg/MrFWQsmdK5",
+      "downloads": 84802,
+      "followers": 72,
+      "gallery": [
+        {
+          "created": "2023-06-12T19:54:35.116907Z",
+          "featured": true,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/PoPWpJ4U/images/46e3dde42625b995d106338efb7dfe344dd794f7.png"
+        },
+        {
+          "created": "2023-06-12T19:53:32.227611Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/PoPWpJ4U/images/fc7265656946c7eaafa064f8ae224bcd7796521b.jpeg"
+        },
+        {
+          "created": "2023-06-14T13:49:59.425518Z",
+          "featured": false,
+          "ordering": 0,
+          "url": "https://cdn.modrinth.com/data/PoPWpJ4U/images/fdceeb07bccf5a4ff6fec717f21814073b846de2_350.webp"
+        }
+      ],
+      "game_versions": [
+        "1.2.1",
+        "1.2.2",
+        "1.2.3",
+        "1.2.4",
+        "1.2.5",
+        "1.17",
+        "1.17.1",
+        "1.18",
+        "1.18.1",
+        "1.18.2",
+        "1.19",
+        "1.19.1",
+        "1.19.2",
+        "1.19.3",
+        "1.19.4",
+        "1.20",
+        "1.20.1",
+        "1.20.2",
+        "1.20.3",
+        "1.20.4",
+        "1.20.5",
+        "1.20.6",
+        "1.21",
+        "1.21.1",
+        "1.21.2",
+        "1.21.3",
+        "1.21.4",
+        "1.21.5",
+        "1.21.6",
+        "1.21.7",
+        "1.21.8",
+        "1.21.9",
+        "1.21.10",
+        "1.21.11",
+        "26.1",
+        "26.1.1",
+        "26.1.2"
+      ],
+      "icon_url": "https://cdn.modrinth.com/data/PoPWpJ4U/46e3dde42625b995d106338efb7dfe344dd794f7.png",
+      "issues_url": "https://dev.bukkit.org/projects/uberenchant/issues",
+      "license": {
+        "id": "MIT",
+        "name": "MIT License",
+        "url": null
+      },
+      "loaders": [
+        "bukkit",
+        "paper",
+        "purpur",
+        "spigot"
+      ],
+      "page_url": "https://modrinth.com/mod/uberenchant",
+      "project_id": "PoPWpJ4U",
+      "project_type": "mod",
+      "selected_versions": {
+        "26.1.2+paper": {
+          "date_published": "2026-05-22T13:28:03.937104Z",
+          "downloads": 82,
+          "file": {
+            "filename": "UberEnchant.jar",
+            "hashes": {
+              "sha1": "dacd93e6521e5d97e14f5608f32330fe5e0dc31e",
+              "sha512": "e6360c24af7eeaad0779e2934700a904277c99c92b9a96fdfff943c920f3e20f2284e2f0742b159c1da259f08a980b96e0135b8fe91f4d58cafa92eb738438dc"
+            },
+            "primary": true,
+            "size": 329403,
+            "url": "https://cdn.modrinth.com/data/PoPWpJ4U/versions/5sms5wg7/UberEnchant.jar"
+          },
+          "game_versions": [
+            "1.18",
+            "1.18.1",
+            "1.18.2",
+            "1.19",
+            "1.19.1",
+            "1.19.2",
+            "1.19.3",
+            "1.19.4",
+            "1.20",
+            "1.20.1",
+            "1.20.2",
+            "1.20.3",
+            "1.20.4",
+            "1.20.5",
+            "1.20.6",
+            "1.21",
+            "1.21.1",
+            "1.21.2",
+            "1.21.3",
+            "1.21.4",
+            "1.21.5",
+            "1.21.6",
+            "1.21.7",
+            "1.21.8",
+            "1.21.9",
+            "1.21.10",
+            "1.21.11",
+            "26.1",
+            "26.1.1",
+            "26.1.2"
+          ],
+          "id": "5sms5wg7",
+          "loaders": [
+            "bukkit",
+            "paper",
+            "purpur",
+            "spigot"
+          ],
+          "name": "UberEnchant 8.12.6",
+          "project_id": "PoPWpJ4U",
+          "version_number": "8.12.6",
+          "version_type": "release"
+        }
+      },
+      "server_side": "required",
+      "slug": "uberenchant",
+      "source": "modrinth",
+      "source_url": "https://github.com/Sciguymjm/UberEnchant",
+      "title": "UberEnchant"
+    },
     "vaultunlocked": {
       "client_side": "unsupported",
       "date_created": "2024-06-13T00:54:20.685153Z",
       "date_modified": "2026-04-27T00:02:05.183135Z",
       "description": "A modern drop-in Vault fork, with Folia support, and enhanced APIs.",
       "discord_url": "https://discord.gg/WNdwzpy",
-      "downloads": 81321,
-      "followers": 137,
+      "downloads": 83367,
+      "followers": 138,
       "game_versions": [
         "1.9",
         "1.9.1",
@@ -16929,7 +17015,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-04-27T00:02:05.183135Z",
-          "downloads": 7047,
+          "downloads": 8942,
           "file": {
             "filename": "VaultUnlocked-2.19.1.jar",
             "hashes": {
@@ -17023,7 +17109,7 @@
       "client_side": "optional",
       "color": 4014652,
       "date_created": "2023-05-24T19:31:57.085345Z",
-      "date_modified": "2026-05-15T14:40:40.901765Z",
+      "date_modified": "2026-05-21T21:52:48.071125Z",
       "description": "Mine the whole vein on mining a single ore. Known feature by modpacks and pvp games like UHC (quick mine)",
       "discord_url": "https://dc.mutils.net",
       "donation_urls": [
@@ -17033,8 +17119,8 @@
           "url": "https://ko-fi.com/miraculixx"
         }
       ],
-      "downloads": 48199959,
-      "followers": 4742,
+      "downloads": 49083654,
+      "followers": 4782,
       "gallery": [
         {
           "created": "2024-07-05T10:35:35.132611Z",
@@ -17118,32 +17204,32 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-15T14:40:28.070111Z",
-          "downloads": 15310,
+          "date_published": "2026-05-21T21:52:48.071125Z",
+          "downloads": 10404,
           "file": {
-            "filename": "veinminer-paper-2.8.2.jar",
+            "filename": "veinminer-paper-2.9.2.jar",
             "hashes": {
-              "sha1": "48bbadd95f67f3757e09b316d95759f0ddb3642b",
-              "sha512": "6de107d70f5edaa14a9a4f3c6c5b4a8f8581f5a6b090e833d3ed37bfc033f0a68ae266bf7cae088ff5a3782fb18eb66fbe0d4d140e488dd008423ee1e876d8c6"
+              "sha1": "041fa1f87f4722798747f18fa0199b14464ae527",
+              "sha512": "b67ddc8fe3ca6f98bae2c89abe8d1cb7fc9a1a8b18645cd41967b2304a33f6f7d27be514263d568295818c65577115f52268100d14b715fa842bc7f05a3e0e29"
             },
             "primary": true,
-            "size": 623038,
-            "url": "https://cdn.modrinth.com/data/OhduvhIc/versions/kHkZIIRl/veinminer-paper-2.8.2.jar"
+            "size": 625483,
+            "url": "https://cdn.modrinth.com/data/OhduvhIc/versions/PbWdSrpE/veinminer-paper-2.9.2.jar"
           },
           "game_versions": [
             "26.1",
             "26.1.1",
             "26.1.2"
           ],
-          "id": "kHkZIIRl",
+          "id": "PbWdSrpE",
           "loaders": [
             "folia",
             "paper",
             "purpur"
           ],
-          "name": "Veinminer Paper - 2.8.2",
+          "name": "Veinminer Paper - 2.9.2",
           "project_id": "OhduvhIc",
-          "version_number": "2.8.2",
+          "version_number": "2.9.2",
           "version_type": "release"
         }
       },
@@ -17162,7 +17248,7 @@
       "client_side": "optional",
       "color": 4211517,
       "date_created": "2024-09-14T13:26:24.954859Z",
-      "date_modified": "2026-05-15T14:42:10.105280Z",
+      "date_modified": "2026-05-20T17:13:17.866721Z",
       "description": "Veinminer Addon - Adds vineminer enchantment to enchanting tables. Only tools with the enchantment can veinmine",
       "discord_url": "https://dc.mutils.net",
       "donation_urls": [
@@ -17172,8 +17258,8 @@
           "url": "https://ko-fi.com/miraculixx"
         }
       ],
-      "downloads": 13877487,
-      "followers": 1065,
+      "downloads": 13984031,
+      "followers": 1075,
       "gallery": [
         {
           "created": "2024-09-15T13:21:29.011295Z",
@@ -17234,7 +17320,7 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-15T14:42:10.105280Z",
+          "date_published": "2026-05-20T17:13:17.866721Z",
           "dependencies": [
             {
               "dependency_type": "required",
@@ -17243,23 +17329,23 @@
               "version_id": null
             }
           ],
-          "downloads": 17194,
+          "downloads": 18153,
           "file": {
-            "filename": "veinminer-enchant-2.8.2.jar",
+            "filename": "veinminer-enchant-2.9.0.jar",
             "hashes": {
-              "sha1": "8170aeb4805817f76a20aeb179f40909315b2bf2",
-              "sha512": "9d9d69deb46b352ed9523f3db14ebd304415dea34f6decedcffb2b0c462aae55b0f95ce28b9b16c129e51da1ad4068b638fd1a2d1a132d575d3ff7c465bb7db5"
+              "sha1": "e79f4d3f9e8ddc3d0c164b38df25c0f45fa6267b",
+              "sha512": "b728dc37e1d12eeef0b5ee4e16d1bca8cd9527ac206b8b439f6e0dbb05cf5f71e55fc0025fbb01fd8dfcd680a71bf6af38e44826d482e5ca71aec6f678459f96"
             },
             "primary": true,
-            "size": 27449,
-            "url": "https://cdn.modrinth.com/data/4sP0LXxp/versions/qW6fPvHy/veinminer-enchant-2.8.2.jar"
+            "size": 27448,
+            "url": "https://cdn.modrinth.com/data/4sP0LXxp/versions/iFj1amMP/veinminer-enchant-2.9.0.jar"
           },
           "game_versions": [
             "26.1",
             "26.1.1",
             "26.1.2"
           ],
-          "id": "qW6fPvHy",
+          "id": "iFj1amMP",
           "loaders": [
             "fabric",
             "folia",
@@ -17268,9 +17354,9 @@
             "purpur",
             "quilt"
           ],
-          "name": "Veinminer Enchantment - 2.8.2",
+          "name": "Veinminer Enchantment - 2.9.0",
           "project_id": "4sP0LXxp",
-          "version_number": "2.8.2",
+          "version_number": "2.9.0",
           "version_type": "release"
         }
       },
@@ -17287,7 +17373,7 @@
       "client_side": "optional",
       "color": 14476775,
       "date_created": "2023-08-10T08:24:07.988560Z",
-      "date_modified": "2026-05-08T17:09:35.743845Z",
+      "date_modified": "2026-05-19T08:23:43.339610Z",
       "description": "Allow older Java Edition clients to connect to newer servers.",
       "discord_url": "https://discord.gg/viaversion",
       "donation_urls": [
@@ -17297,8 +17383,8 @@
           "url": "https://github.com/sponsors/kennytv"
         }
       ],
-      "downloads": 1410372,
-      "followers": 715,
+      "downloads": 1429756,
+      "followers": 723,
       "game_versions": [
         "1.10",
         "1.10.1",
@@ -17400,7 +17486,7 @@
               "version_id": null
             }
           ],
-          "downloads": 28149,
+          "downloads": 35958,
           "file": {
             "filename": "ViaBackwards-5.9.1.jar",
             "hashes": {
@@ -17501,18 +17587,18 @@
       "description": "ViaVersion addon to allow 1.8.x and 1.7.x clients on newer server versions.",
       "donation_urls": [
         {
-          "id": "github",
-          "platform": "Github",
-          "url": "https://github.com/sponsors/florianreuth"
-        },
-        {
           "id": "ko-fi",
           "platform": "Ko-fi",
           "url": "https://ko-fi.com/florianreuth"
+        },
+        {
+          "id": "github",
+          "platform": "Github",
+          "url": "https://github.com/sponsors/florianreuth"
         }
       ],
-      "downloads": 445934,
-      "followers": 177,
+      "downloads": 451650,
+      "followers": 179,
       "game_versions": [
         "1.7.10",
         "1.8",
@@ -17629,7 +17715,7 @@
               "version_id": null
             }
           ],
-          "downloads": 12432,
+          "downloads": 17696,
           "file": {
             "filename": "ViaRewind-4.1.1.jar",
             "hashes": {
@@ -17733,7 +17819,7 @@
       "client_side": "optional",
       "color": 14212575,
       "date_created": "2023-08-10T08:23:44.094983Z",
-      "date_modified": "2026-05-15T16:55:46.083228Z",
+      "date_modified": "2026-05-21T18:04:48.977402Z",
       "description": "Allow newer Java Edition clients to connect to older servers.",
       "discord_url": "https://discord.gg/viaversion",
       "donation_urls": [
@@ -17743,8 +17829,8 @@
           "url": "https://github.com/sponsors/kennytv"
         }
       ],
-      "downloads": 2064850,
-      "followers": 1080,
+      "downloads": 2092800,
+      "followers": 1088,
       "game_versions": [
         "1.8.9",
         "1.9",
@@ -17852,7 +17938,7 @@
               "version_id": null
             }
           ],
-          "downloads": 43378,
+          "downloads": 54811,
           "file": {
             "filename": "ViaVersion-5.9.1.jar",
             "hashes": {
@@ -17972,8 +18058,8 @@
           "url": "https://ko-fi.com/justdoom"
         }
       ],
-      "downloads": 327225,
-      "followers": 354,
+      "downloads": 330570,
+      "followers": 356,
       "gallery": [
         {
           "created": "2024-03-01T07:37:57.828643Z",
@@ -18086,7 +18172,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-02-04T04:16:19.848030Z",
-          "downloads": 21929,
+          "downloads": 23062,
           "file": {
             "filename": "VillagerInABukkit-paper-1.5.0.jar",
             "hashes": {
@@ -18133,18 +18219,18 @@
       "description": "Voice messages in minecraft chat",
       "donation_urls": [
         {
-          "id": "other",
-          "platform": "Other",
-          "url": "https://boosty.to/dimaskama/donate"
-        },
-        {
           "id": "paypal",
           "platform": "Paypal",
           "url": "https://www.paypal.com/donate/?hosted_button_id=FZ9PA86A62QLJ"
+        },
+        {
+          "id": "other",
+          "platform": "Other",
+          "url": "https://boosty.to/dimaskama/donate"
         }
       ],
-      "downloads": 153910,
-      "followers": 194,
+      "downloads": 159929,
+      "followers": 199,
       "game_versions": [
         "1.21.1",
         "1.21.3",
@@ -18191,7 +18277,7 @@
               "version_id": null
             }
           ],
-          "downloads": 9598,
+          "downloads": 9971,
           "file": {
             "filename": "voicemessages-paper-1.0.12.jar",
             "hashes": {
@@ -18247,11 +18333,11 @@
       "client_side": "unsupported",
       "color": 5486946,
       "date_created": "2023-01-30T15:44:56.223104Z",
-      "date_modified": "2026-05-15T14:50:50.276785Z",
+      "date_modified": "2026-05-19T10:08:52.932220Z",
       "description": "WildRTP - Another RTP Plugin build on Performance & Features",
       "discord_url": "https://discord.gg/Mbq2P92XqC",
-      "downloads": 65694,
-      "followers": 56,
+      "downloads": 66824,
+      "followers": 57,
       "game_versions": [
         "1.13",
         "1.13.1",
@@ -18321,17 +18407,17 @@
       "project_type": "mod",
       "selected_versions": {
         "26.1.2+paper": {
-          "date_published": "2026-05-02T18:01:25.105259Z",
-          "downloads": 2901,
+          "date_published": "2026-05-19T10:08:52.932220Z",
+          "downloads": 809,
           "file": {
-            "filename": "WildRTP-3.4.jar",
+            "filename": "WildRTP-3.4.1.jar",
             "hashes": {
-              "sha1": "a0c38ff8774725e50f2cc7643b4b46bf3d1175dc",
-              "sha512": "4ac9406eb3dc7e181b5720688adadc0bfbec940997bb74881e5b68db8c7cb9bc3fb5e033457a00bb8d9516d695344cd4061c56a03b49edc02ee58b63a2fd2368"
+              "sha1": "f6a6abd5046b5cc1f76e301e5dc78c2d8b016d01",
+              "sha512": "a535f0d79e2994aa62804071a2b392aa36cd1665c5f02f92409ea3ccbebe56154ba66d9851c45ab9e5ee11a9bf607ebc6bc3cb3c2623a8bdf428931c27874811"
             },
             "primary": true,
-            "size": 520659,
-            "url": "https://cdn.modrinth.com/data/5AKhI9Ob/versions/hKIuzrCC/WildRTP-3.4.jar"
+            "size": 526827,
+            "url": "https://cdn.modrinth.com/data/5AKhI9Ob/versions/TpnqNgY2/WildRTP-3.4.1.jar"
           },
           "game_versions": [
             "1.19",
@@ -18362,16 +18448,16 @@
             "26.1.1",
             "26.1.2"
           ],
-          "id": "hKIuzrCC",
+          "id": "TpnqNgY2",
           "loaders": [
             "bukkit",
             "paper",
             "purpur",
             "spigot"
           ],
-          "name": "3.4",
+          "name": "3.4.1",
           "project_id": "5AKhI9Ob",
-          "version_number": "3.4",
+          "version_number": "3.4.1",
           "version_type": "release"
         }
       },
@@ -18395,18 +18481,18 @@
       "discord_url": "https://discord.gg/enginehub",
       "donation_urls": [
         {
-          "id": "other",
-          "platform": "Other",
-          "url": "https://opencollective.com/enginehub"
-        },
-        {
           "id": "github",
           "platform": "Github",
           "url": "https://github.com/sponsors/EngineHub"
+        },
+        {
+          "id": "other",
+          "platform": "Other",
+          "url": "https://opencollective.com/enginehub"
         }
       ],
-      "downloads": 7415159,
-      "followers": 4234,
+      "downloads": 7523498,
+      "followers": 4252,
       "game_versions": [
         "1.17.1",
         "1.18.2",
@@ -18456,7 +18542,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-05-04T11:32:44.505155Z",
-          "downloads": 42885,
+          "downloads": 58142,
           "file": {
             "filename": "worldedit-bukkit-7.4.3.jar",
             "hashes": {
@@ -18519,8 +18605,8 @@
           "url": "https://github.com/sponsors/EngineHub"
         }
       ],
-      "downloads": 510313,
-      "followers": 548,
+      "downloads": 520717,
+      "followers": 549,
       "game_versions": [
         "1.21",
         "1.21.1",
@@ -18555,7 +18641,7 @@
       "selected_versions": {
         "26.1.2+paper": {
           "date_published": "2026-03-24T09:04:34.181505Z",
-          "downloads": 68241,
+          "downloads": 75795,
           "file": {
             "filename": "worldguard-bukkit-7.0.16.jar",
             "hashes": {
@@ -18591,6 +18677,75 @@
       "source_url": "https://github.com/EngineHub/WorldGuard",
       "title": "WorldGuard",
       "wiki_url": "https://worldguard.enginehub.org/"
+    },
+    "zephyrusfactions": {
+      "client_side": "unsupported",
+      "color": 1327437,
+      "date_created": "2026-05-18T11:15:35.033993Z",
+      "date_modified": "2026-05-18T11:45:11.339283Z",
+      "description": "A custom Factions plugin for ZephyrusNet with territory protection, grace period, upgrades, GUI menu, power system, player head drops, Vault economy, PlaceholderAPI, and LuckPerms chat integration.",
+      "downloads": 5,
+      "followers": 0,
+      "gallery": [
+        {
+          "created": "2026-05-18T12:56:19.888383Z",
+          "description": "[BETA] A comprehensive Faction Menu GUI currently in development. This interface is designed to streamline faction management, allowing players to manage members and claims through a visual layout. Please note that features are still being tested and may ",
+          "featured": true,
+          "ordering": 0,
+          "title": "Faction Menu (/f menu)",
+          "url": "https://cdn.modrinth.com/data/KndayYs0/images/0c10487ffa610467337469cf3cbe84dcf5133f03.png"
+        }
+      ],
+      "game_versions": [
+        "26.1",
+        "26.1.1",
+        "26.1.2"
+      ],
+      "icon_url": "https://cdn.modrinth.com/data/KndayYs0/f2d413d01bb8fd69c15e959064a6462c2ab2d0c0_96.webp",
+      "license": {
+        "id": "LicenseRef-All-Rights-Reserved",
+        "name": "",
+        "url": null
+      },
+      "loaders": [
+        "paper"
+      ],
+      "page_url": "https://modrinth.com/mod/zephyrusfactions",
+      "project_id": "KndayYs0",
+      "project_type": "mod",
+      "selected_versions": {
+        "26.1.2+paper": {
+          "date_published": "2026-05-18T11:45:11.339283Z",
+          "downloads": 5,
+          "file": {
+            "filename": "ZephyrusFactions-1.0.0.jar",
+            "hashes": {
+              "sha1": "b5e65cdbb6c6cd4c27ec4c686de126163cda1913",
+              "sha512": "7a65b3ce8175583a634de133296013f83dee620751ab980611673ea398866fa9ff414b3e1ae1b2a77d5a052a99299457889d0b186c2d5aec6ba54f96c4ef4473"
+            },
+            "primary": true,
+            "size": 51888,
+            "url": "https://cdn.modrinth.com/data/KndayYs0/versions/3g5abYkz/ZephyrusFactions-1.0.0.jar"
+          },
+          "game_versions": [
+            "26.1",
+            "26.1.1",
+            "26.1.2"
+          ],
+          "id": "3g5abYkz",
+          "loaders": [
+            "paper"
+          ],
+          "name": "ZephyrusFactions 1.0.0",
+          "project_id": "KndayYs0",
+          "version_number": "1.0.0",
+          "version_type": "beta"
+        }
+      },
+      "server_side": "required",
+      "slug": "zephyrusfactions",
+      "source": "modrinth",
+      "title": "ZephyrusFactions"
     }
   },
   "schema": 1,
@@ -18621,9 +18776,10 @@
       },
       "slugs": [
         "pvpindex-factions",
-        "quickpearl"
+        "quickpearl",
+        "zephyrusfactions"
       ],
-      "total_hits": 2
+      "total_hits": 3
     },
     "paper-26.1.2-server-popular": {
       "config": {
@@ -18657,7 +18813,9 @@
         "worldedit",
         "emotecraft",
         "plasmo-voice",
+        "calcmod",
         "common-network",
+        "custom-player-models",
         "viaversion",
         "luckperms",
         "viabackwards",
@@ -18692,13 +18850,13 @@
         "axiom-paper-plugin",
         "minimotd",
         "skbee",
-        "auraskills",
         "nightcore",
+        "auraskills",
         "decentholograms",
         "voicemessages",
         "journeymap-teams",
-        "axgraves",
         "placeholderapi",
+        "axgraves",
         "smartspawner",
         "clickmobs",
         "itemedit",
@@ -18707,50 +18865,48 @@
         "crazyauctions",
         "fokusapi",
         "clearlag++",
-        "freedomchat",
         "multiverse-portals",
+        "freedomchat",
         "powergems",
         "tpa.66666",
+        "skript",
         "squaremap",
         "inventoryrollbackplus",
-        "skript",
+        "deluxehub",
         "advanced-portals",
         "ajleaderboards",
         "autotreechop",
+        "uberenchant",
         "vaultunlocked",
         "maintenance",
         "pl3xmap",
         "pv-addon-groups",
         "treetimber",
         "spawn",
-        "commandwhitelist",
-        "pv-addon-sculk",
-        "monkeylib538",
         "simple-login",
+        "commandwhitelist",
+        "monkeylib538",
+        "pv-addon-sculk",
         "mythicmobs",
         "interactivechat",
         "wildrtp",
         "multiverse-netherportals",
         "minertrack",
         "duels-optimised",
+        "betterstructures",
         "brutal-nightmare",
         "foxaddition",
-        "pv-addon-lavaplayer-lib",
         "geyser-and-floodgate-auto-uploader",
+        "pv-addon-lavaplayer-lib",
         "onemace",
         "betterhud2",
         "simpletpaplugin",
         "conditionalevents",
         "lifesteal-system",
         "knockbacksync",
-        "sleeper",
-        "breweryx",
-        "customnpcs",
-        "login-to",
-        "qualityarmory",
-        "simple-combatlog"
+        "breweryx"
       ],
-      "total_hits": 1733
+      "total_hits": 1908
     },
     "paper-26.1.2-worldgen": {
       "config": {
@@ -18777,10 +18933,11 @@
         "query": "world generation"
       },
       "slugs": [
+        "betterstructures",
         "terraformgenerator",
         "plot"
       ],
-      "total_hits": 2
+      "total_hits": 3
     }
   }
 }

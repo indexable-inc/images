@@ -37,8 +37,9 @@ let
         };
 
         src = mkOption {
-          type = types.path;
-          description = "Plugin jar.";
+          type = types.nullOr types.path;
+          default = null;
+          description = "Plugin jar. Leave unset to resolve the plugin from pluginCatalog by slug.";
         };
 
         fileName = mkOption {
@@ -124,10 +125,20 @@ let
     "velocity.toml" = renderedSettings;
   };
   enabledPlugins = lib.filterAttrs (_: plugin: plugin.enable) cfg.plugins;
-  pluginJars = lib.mapAttrsToList (_: plugin: {
-    inherit (plugin) fileName;
-    path = plugin.src;
-  }) enabledPlugins;
+  pluginJars = lib.mapAttrsToList (
+    slug: plugin:
+    let
+      src =
+        if plugin.src != null then
+          plugin.src
+        else
+          (cfg.pluginCatalog.${slug} or (throw "velocity plugin '${slug}' not in pluginCatalog")).src;
+    in
+    {
+      inherit (plugin) fileName;
+      path = src;
+    }
+  ) enabledPlugins;
   pluginFileNames = map (plugin: plugin.fileName) pluginJars;
   invalidPluginFileNames = ix.relativePath.unsafeNames pluginFileNames;
   duplicatePluginFileNames = lib.filter (
@@ -545,7 +556,22 @@ in
     plugins = mkOption {
       type = types.attrsOf pluginType;
       default = { };
-      description = "Velocity plugins installed as jars under the plugins directory.";
+      description = "Velocity plugins installed as jars under the plugins directory. Empty {} resolves a pinned catalog plugin by slug; attrsets with src install a local or private plugin jar.";
+    };
+
+    pluginCatalog = mkOption {
+      type = types.attrsOf (
+        types.submodule {
+          freeformType = formatValueType;
+          options.src = mkOption {
+            type = types.path;
+            description = "Plugin jar realized from the generated artifact catalog.";
+          };
+        }
+      );
+      default = ix.artifacts.minecraft.velocityPluginCatalog;
+      defaultText = lib.literalExpression "ix.artifacts.minecraft.velocityPluginCatalog";
+      description = "Slug to locked Velocity plugin artifact mapping. Defaults to the generated catalog from `images/games/minecraft/plugins/velocity/`.";
     };
 
     configFiles = mkOption {

@@ -14,6 +14,18 @@
         "pluginName": "floodgate-velocity",
         "version": "2.2.5+132",
         "url": "https://download.geysermc.org/v2/projects/floodgate/versions/2.2.5/builds/132/downloads/velocity"
+      },
+      {
+        "slug": "viaversion",
+        "pluginName": "ViaVersion"
+      },
+      {
+        "slug": "viabackwards",
+        "pluginName": "ViaBackwards"
+      },
+      {
+        "slug": "viarewind",
+        "pluginName": "ViaRewind"
       }
     ]
   }
