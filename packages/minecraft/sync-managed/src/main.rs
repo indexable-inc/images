@@ -64,6 +64,15 @@ fn managed_files(source_dir: &Path) -> Result<Vec<String>> {
 
 fn validate_rel_path(rel: &str) -> Result<()> {
     ensure!(!rel.is_empty(), "path is empty");
+
+    ensure!(!rel.contains("//"), "path contains empty segment: {}", rel);
+    ensure!(!rel.ends_with('/'), "path has trailing slash: {}", rel);
+    ensure!(
+        !rel.split('/').any(|s| s == "." || s == ".." || s.is_empty()),
+        "path contains unsafe segment: {}",
+        rel
+    );
+
     let path = Path::new(rel);
     ensure!(!path.is_absolute(), "path is absolute: {}", rel);
 
