@@ -67,8 +67,8 @@ fn validate_rel_path(rel: &str) -> Result<()> {
     let path = Path::new(rel);
     ensure!(!path.is_absolute(), "path is absolute: {}", rel);
 
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir)) {
-        bail!("unsafe path (contains '..' or root): {}", rel);
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::CurDir)) {
+        bail!("unsafe path (contains '..' or root or '.'): {}", rel);
     }
 
     if rel.chars().any(|c| matches!(c, ';' | '&' | '|' | '$' | '`' | '<' | '>' | '"' | '\'' | '*' | '?' | '[' | ']' | '{' | '}' | '(' | ')' | '~' | ' ' | '\\')) {
