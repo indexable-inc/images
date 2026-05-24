@@ -60,11 +60,13 @@ let
       # Rejects paths that are absolute, contain '..' segments, '.' segments,
       # empty segments '//', or shell metacharacters. Matches Rust sync-managed
       # validation.
-      isSafe = builtins.match "^[a-zA-Z0-9._/-]+$" path != null;
+      isSafe = builtins.match "^[a-zA-Z0-9._/+-]+$" path != null;
       isAbsolute = lib.hasPrefix "/" path;
-      hasParent = lib.hasInfix ".." path;
-      hasCurrent = lib.hasInfix "/./" path || lib.hasPrefix "./" path || lib.hasSuffix "/." path || path == ".";
-      hasEmpty = lib.hasInfix "//" path;
+      segments = lib.splitString "/" path;
+      hasParent = builtins.elem ".." segments;
+      hasCurrent = builtins.elem "." segments;
+      # Detects internal empty segments (//), leading empty (absolute), or trailing empty (config/).
+      hasEmpty = builtins.elem "" segments;
     in
     isSafe && !isAbsolute && !hasParent && !hasCurrent && !hasEmpty;
 
