@@ -643,9 +643,34 @@ let
       '';
     };
 
-  buildPackage =
+  # Shortcut: pass `srcRoot = ./.` for a repo-owned crate whose tracked tree
+  # is the build closure. Expands to the standard `gitTracked` filter, defaults
+  # `meta.mainProgram` to `pname`, and keeps `commonArgs`'s `cargoLock` default
+  # (`src + "/Cargo.lock"`) intact.
+  expandSrcRoot =
     rawArgs:
+    if rawArgs ? srcRoot then
+      let
+        inherit (rawArgs) srcRoot;
+        pname = rawArgs.pname or rawArgs.name or "rust-package";
+      in
+      (builtins.removeAttrs rawArgs [ "srcRoot" ])
+      // {
+        src = lib.fileset.toSource {
+          root = srcRoot;
+          fileset = lib.fileset.gitTracked srcRoot;
+        };
+        meta = (rawArgs.meta or { }) // {
+          mainProgram = rawArgs.meta.mainProgram or pname;
+        };
+      }
+    else
+      rawArgs;
+
+  buildPackage =
+    expandedArgs:
     let
+      rawArgs = expandSrcRoot expandedArgs;
       args = commonArgs rawArgs;
       testEnabled = args.policy.tests.enable && (rawArgs.doCheck or true);
       rustcArgs = rustcArgsForPolicy args.policy;
