@@ -33,7 +33,10 @@ let
   recordsSession =
     pkgs.runCommand "run-records-session"
       {
-        nativeBuildInputs = [ package ];
+        nativeBuildInputs = [
+          package
+          pkgs.coreutils
+        ];
         strictDeps = true;
       }
       ''
@@ -69,6 +72,27 @@ let
           exit 1
         fi
         grep -q 'Full live output\|live stream' stderr
+
+        printf 'redirected stdin\n' >stdin-input
+        timeout 10s run ${lib.getExe' pkgs.coreutils "cat"} <stdin-input >stdin-stdout 2>stdin-stderr
+        grep -q 'redirected stdin' stdin-stdout
+        session=$(readlink "$IX_RUN_DIR/latest")
+        grep -q 'redirected stdin' "$session/output.log"
+
+        export IX_RUN_DIR=$TMPDIR/runs-closed-stdin
+        (
+          exec 0<&-
+          timeout 10s run ${lib.getExe pkgs.bash} -c 'printf "closed-stdin\n"'
+        ) >closed-stdin-stdout 2>closed-stdin-stderr
+        grep -q 'closed-stdin' closed-stdin-stdout
+
+        export IX_RUN_DIR=$TMPDIR/runs-closed-stdout
+        (
+          exec 1>&-
+          timeout 10s run ${lib.getExe pkgs.bash} -c 'printf "closed-stdout\n"'
+        ) 2>closed-stdout-stderr
+        session=$(readlink "$IX_RUN_DIR/latest")
+        grep -q 'closed-stdout' "$session/output.log"
 
         mkdir -p "$out"
       '';
