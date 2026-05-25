@@ -65,6 +65,11 @@ with the GitHub review-thread API, then request a fresh Codex review if the head
 changed. If the head did not change and GitHub does not rerun the failed gate,
 rerun it with `gh run rerun <run-id> --failed`.
 
+When manually triggering Codex, include the full current head SHA in the request,
+for example `@codex review head <sha>`. This gives no-findings responses a
+specific revision to answer. Avoid sending a later generic `@codex review` for
+the same head because it weakens that audit trail.
+
 Remove the worktree and delete the local branch after the PR has merged.
 
 Commit one logical change at a time. Use the pathspec form so unrelated staged

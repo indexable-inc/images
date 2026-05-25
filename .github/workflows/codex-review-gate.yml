@@ -252,12 +252,52 @@ jobs:
             exit 0
           fi
 
+          matching_requested_comment="$(
+            jq --arg head "$head_sha" -c '
+              def is_codex:
+                .user.login == "chatgpt-codex-connector[bot]"
+                or .user.login == "chatgpt-codex-connector";
+              def is_review_request:
+                .body | test("@codex[[:space:]]+review"; "i");
+              def is_no_findings:
+                is_codex
+                and (.body | test("Codex Review"; "i"))
+                and (.body | test("didn.?t find any major issues"; "i"));
+
+              [ .[][] ] as $comments
+              | [
+                  range(0; $comments | length) as $i
+                  | $comments[$i]
+                  | select(is_no_findings)
+                  | . as $response
+                  | (
+                      [
+                        range(0; $i) as $j
+                        | $comments[$j]
+                        | select((is_codex | not) and is_review_request)
+                      ]
+                      | last
+                    ) as $request
+                  | select($request != null and ($request.body | contains($head)))
+                  | {request: $request, response: $response}
+                ][-1] // empty
+            ' <<<"$comments_json"
+          )"
+
+          if [[ -n "$matching_requested_comment" ]]; then
+            commenter="$(jq -r '.response.user.login' <<<"$matching_requested_comment")"
+            created_at="$(jq -r '.response.created_at' <<<"$matching_requested_comment")"
+            request_created_at="$(jq -r '.request.created_at' <<<"$matching_requested_comment")"
+            echo "Found no-findings Codex response from ${commenter} for ${head_sha} at ${created_at}, after a SHA-specific request at ${request_created_at}."
+            exit 0
+          fi
+
           {
             echo "## Codex review required"
             echo
             echo "No review from \`chatgpt-codex-connector[bot]\` was found for PR #${PR_NUMBER} at \`${head_sha}\`."
             echo
-            echo "Wait for automatic Codex review or comment \`@codex review\`, then rerun this check if GitHub does not rerun it automatically. A no-findings Codex comment only satisfies this gate when it names the exact head SHA."
+            echo "Wait for automatic Codex review or comment \`@codex review head ${head_sha}\`, then rerun this check if GitHub does not rerun it automatically. A no-findings Codex comment only satisfies this gate when the latest review request before it names the exact head SHA."
           } >>"$GITHUB_STEP_SUMMARY"
 
           exit 1
