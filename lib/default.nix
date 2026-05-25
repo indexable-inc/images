@@ -694,6 +694,9 @@ let
           inherit pkgs;
           ix = ixForPackages;
         };
+        run = pkgs.callPackage paths.packages.run {
+          ix = ixForPackages;
+        };
         mcp = pkgs.callPackage paths.packages.mcp {
           ix = ixForPackages;
         };
