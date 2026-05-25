@@ -59,6 +59,11 @@ comment is intentionally declined, and resolve review threads before enabling
 auto-merge. Enable auto-merge only after required checks pass and required
 review state is clear.
 
+Unresolved Codex review threads are immediate blockers. Do not wait on more
+checks when Codex has left an open thread: fix the code or resolve the thread
+with the GitHub review-thread API, then request a fresh Codex review if the head
+changed.
+
 Remove the worktree and delete the local branch after the PR has merged.
 
 Commit one logical change at a time. Use the pathspec form so unrelated staged
