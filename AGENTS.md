@@ -26,20 +26,24 @@ operators will look first.
 
 ## Workflow
 
-Pull before starting. Work directly on `main` in the shared checkout unless the
-user asks for a branch or separate worktree. Commit and push after making
-changes by default.
+Pull `main` before starting. Always make changes on a short-lived branch in a
+separate worktree by default, including small docs edits. Keep the shared `main`
+checkout as the clean landing zone for pulls, branch bases, and final syncs.
 
-If the shared checkout already has unrelated edits, name the paths and the one
-line summary of what they appear to be doing, then move the new work into a
-temporary worktree:
+Create the branch and worktree from the updated `main` checkout. Use the
+`codex/` branch prefix unless the user asks for a different name:
 
 ```sh
-git worktree add ../<short-name>-<branch> -b <branch> main
+git worktree add ../<short-name>-<branch> -b codex/<branch> main
 ```
 
-Land that work with `git push origin <branch>:main`, then remove the worktree
-and delete the branch. Avoid stashing operator work out of the way.
+If the shared checkout already has unrelated edits, name the paths and the one
+line summary of what they appear to be doing before creating the new worktree.
+Avoid stashing operator work out of the way.
+
+After local checks pass, push the branch and open a PR targeting `main`. Enable
+auto-merge when branch protection and review state allow it. Remove the worktree
+and delete the local branch after the PR has merged.
 
 Commit one logical change at a time. Use the pathspec form so unrelated staged
 or unstaged files cannot ride along:
