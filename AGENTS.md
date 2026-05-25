@@ -41,9 +41,19 @@ If the shared checkout already has unrelated edits, name the paths and the one
 line summary of what they appear to be doing before creating the new worktree.
 Avoid stashing operator work out of the way.
 
-After local checks pass, push the branch and open a PR targeting `main`. Enable
-auto-merge when branch protection and review state allow it. Remove the worktree
-and delete the local branch after the PR has merged.
+After local checks pass, push the branch and open a PR targeting `main`. Watch
+required checks with `gh pr checks --watch --fail-fast`; if a check fails,
+inspect the run logs, fix the branch, push again, and keep watching until the PR
+is green.
+
+Treat PR comments and reviews as part of the work. Read them with
+`gh pr view --comments` and the review fields from `gh pr view --json reviews`.
+Address Codex comments in code when they identify a real issue, reply when a
+comment is intentionally declined, and resolve review threads before enabling
+auto-merge. Enable auto-merge only after required checks pass and required
+review state is clear.
+
+Remove the worktree and delete the local branch after the PR has merged.
 
 Commit one logical change at a time. Use the pathspec form so unrelated staged
 or unstaged files cannot ride along:
