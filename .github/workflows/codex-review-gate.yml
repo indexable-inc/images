@@ -257,8 +257,25 @@ jobs:
             exit 0
           fi
 
+          review_subject_committed_at="$(
+            gh api --paginate --slurp "repos/${REPO}/pulls/${PR_NUMBER}/commits" \
+              | jq -r '[.[][] | .sha] | reverse[]' \
+              | while IFS= read -r commit_sha; do
+                  commit_json="$(gh api "repos/${REPO}/commits/${commit_sha}")"
+                  if jq -e '[.files[]?.filename] | any(. != ".github/workflows/codex-review-gate.yml")' <<<"$commit_json" >/dev/null; then
+                    jq -r '.commit.committer.date' <<<"$commit_json"
+                    break
+                  fi
+                done
+          )"
+
+          if [[ -z "$review_subject_committed_at" ]]; then
+            head_commit_json="$(gh api "repos/${REPO}/commits/${head_sha}")"
+            review_subject_committed_at="$(jq -r '.commit.committer.date' <<<"$head_commit_json")"
+          fi
+
           matching_requested_comment="$(
-            jq --arg head "$head_sha" -c '
+            jq --arg reviewSubjectCommittedAt "$review_subject_committed_at" -c '
               def is_codex:
                 .user.login == "chatgpt-codex-connector[bot]"
                 or .user.login == "chatgpt-codex-connector";
@@ -275,6 +292,7 @@ jobs:
                   | $comments[$i]
                   | select(is_no_findings)
                   | . as $response
+                  | select($response.created_at >= $reviewSubjectCommittedAt)
                   | (
                       [
                         range(0; $i) as $j
@@ -283,7 +301,7 @@ jobs:
                       ]
                       | last
                     ) as $request
-                  | select($request != null and ($request.body | contains($head)))
+                  | select($request == null or ($request.created_at <= $response.created_at))
                   | {request: $request, response: $response}
                 ][-1] // empty
             ' <<<"$comments_json"
@@ -292,8 +310,7 @@ jobs:
           if [[ -n "$matching_requested_comment" ]]; then
             commenter="$(jq -r '.response.user.login' <<<"$matching_requested_comment")"
             created_at="$(jq -r '.response.created_at' <<<"$matching_requested_comment")"
-            request_created_at="$(jq -r '.request.created_at' <<<"$matching_requested_comment")"
-            echo "Found no-findings Codex response from ${commenter} for ${head_sha} at ${created_at}, after a SHA-specific request at ${request_created_at}."
+            echo "Found no-findings Codex response from ${commenter} for ${head_sha} at ${created_at}, after the latest non-gate commit at ${review_subject_committed_at}."
             exit 0
           fi
 
@@ -302,7 +319,7 @@ jobs:
             echo
             echo "No review from \`chatgpt-codex-connector[bot]\` was found for PR #${PR_NUMBER} at \`${head_sha}\`."
             echo
-            echo "Wait for automatic Codex review or comment \`@codex review head ${head_sha}\`, then rerun this check if GitHub does not rerun it automatically. A no-findings Codex comment only satisfies this gate when the latest review request before it names the exact head SHA."
+            echo "Wait for automatic Codex review or comment \`@codex review head ${head_sha}\`, then rerun this check if GitHub does not rerun it automatically. A no-findings Codex comment satisfies this gate when it was posted after the latest non-gate commit."
           } >>"$GITHUB_STEP_SUMMARY"
 
           exit 1
