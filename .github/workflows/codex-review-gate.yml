@@ -57,7 +57,7 @@ jobs:
                 | select(
                     (.user.login == "chatgpt-codex-connector[bot]" or .user.login == "chatgpt-codex-connector")
                     and .commit_id == $head
-                    and .state != "PENDING"
+                    and (.state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED")
                   )
               ][0] // empty
             ' <<<"$reviews_json"
