@@ -46,6 +46,12 @@ required checks with `gh pr checks --watch --fail-fast`; if a check fails,
 inspect the run logs, fix the branch, push again, and keep watching until the PR
 is green.
 
+`gh pr checks` may show stale failed runs next to newer passing reruns for the
+same check name. When the output is mixed, inspect
+`gh pr view --json mergeStateStatus,statusCheckRollup,latestReviews` and trust
+the latest run for the current head SHA rather than the oldest failure in the
+list.
+
 Treat PR comments and reviews as part of the work. Read them with
 `gh pr view --comments` and the review fields from `gh pr view --json reviews`.
 Address Codex comments in code when they identify a real issue, reply when a
