@@ -62,7 +62,8 @@ review state is clear.
 Unresolved Codex review threads are immediate blockers. Do not wait on more
 checks when Codex has left an open thread: fix the code or resolve the thread
 with the GitHub review-thread API, then request a fresh Codex review if the head
-changed.
+changed. If the head did not change and GitHub does not rerun the failed gate,
+rerun it with `gh run rerun <run-id> --failed`.
 
 Remove the worktree and delete the local branch after the PR has merged.
 
