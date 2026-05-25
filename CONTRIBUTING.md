@@ -84,4 +84,4 @@ One logical change per commit; see the [Workflow](AGENTS.md#workflow) section fo
 
 ## Pull requests
 
-PRs target `main` and need one approving review plus passing status checks (`flake-check` and the `Analyze (*)` CodeQL jobs). The PR description should answer the same "why" question the commit body answers, plus anything reviewer-only (rollout plan, known follow-ups).
+PRs target `main` and need passing required status checks, currently `flake-check` and `chatgpt-codex-connector reviewed head`. The PR description should answer the same "why" question the commit body answers, plus anything reviewer-only (rollout plan, known follow-ups).

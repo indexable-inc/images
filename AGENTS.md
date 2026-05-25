@@ -41,10 +41,11 @@ If the shared checkout already has unrelated edits, name the paths and the one
 line summary of what they appear to be doing before creating the new worktree.
 Avoid stashing operator work out of the way.
 
-After local checks pass, push the branch and open a PR targeting `main`. Watch
-required checks with `gh pr checks --watch --fail-fast`; if a check fails,
-inspect the run logs, fix the branch, push again, and keep watching until the PR
-is green.
+After local checks pass, push the branch and open a PR targeting `main`. Enable
+auto-merge as soon as required checks and review state allow it. Watch required
+checks with `gh pr checks --watch --fail-fast`; if a check fails, inspect the
+run logs, fix the branch, push again, and restart the watcher. Keep that loop
+going until GitHub reports the PR merged or a human explicitly asks you to stop.
 
 `gh pr checks` may show stale failed runs next to newer passing reruns for the
 same check name. When the output is mixed, inspect
@@ -55,9 +56,20 @@ list.
 Treat PR comments and reviews as part of the work. Read them with
 `gh pr view --comments` and the review fields from `gh pr view --json reviews`.
 Address Codex comments in code when they identify a real issue, reply when a
-comment is intentionally declined, and resolve review threads before enabling
-auto-merge. Enable auto-merge only after required checks pass and required
-review state is clear.
+comment is intentionally declined, and resolve review threads before relying on
+auto-merge. Codex is the default code review signal for agent-authored PRs; do
+not add or preserve a separate GitHub code-quality lane unless the user asks for
+it.
+
+Codex inline feedback lives in GitHub review threads, which `gh pr view
+--comments` does not show. Inspect unresolved threads directly before deciding a
+PR is clear:
+
+```sh
+gh api graphql \
+  -f owner=<owner> -f repo=<repo> -F number=<pr> \
+  -f query='query($owner:String!,$repo:String!,$number:Int!){ repository(owner:$owner,name:$repo){ pullRequest(number:$number){ reviewThreads(first:100){ nodes{ id isResolved path line comments(first:50){ nodes{ author{login} body url } } } } } } }'
+```
 
 Unresolved Codex review threads are immediate blockers. Do not wait on more
 checks when Codex has left an open thread: fix the code or resolve the thread
