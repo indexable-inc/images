@@ -44,6 +44,70 @@ jobs:
 
           pr_json="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"
           head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          owner="${REPO%%/*}"
+          repo_name="${REPO#*/}"
+          threads_query="$(
+            cat <<'GRAPHQL'
+          query($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+              pullRequest(number: $number) {
+                reviewThreads(first: 100) {
+                  nodes {
+                    id
+                    isResolved
+                    isOutdated
+                    comments(first: 20) {
+                      nodes {
+                        author { login }
+                        body
+                        url
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          GRAPHQL
+          )"
+
+          threads_json="$(
+            gh api graphql \
+              -f owner="$owner" \
+              -f repo="$repo_name" \
+              -F number="$PR_NUMBER" \
+              -f query="$threads_query"
+          )"
+
+          unresolved_codex_threads="$(
+            jq -c '
+              [
+                .data.repository.pullRequest.reviewThreads.nodes[]
+                | select(.isResolved == false)
+                | select(
+                    [
+                      .comments.nodes[].author.login
+                    ]
+                    | any(. == "chatgpt-codex-connector[bot]" or . == "chatgpt-codex-connector")
+                  )
+              ]
+            ' <<<"$threads_json"
+          )"
+
+          if jq -e 'length > 0' <<<"$unresolved_codex_threads" >/dev/null; then
+            {
+              echo "## Resolve Codex review threads"
+              echo
+              echo "Codex has unresolved review feedback on this PR. Fix or intentionally resolve every thread before this gate can pass."
+              echo
+              jq -r '
+                .[]
+                | "- " + (.comments.nodes[-1].url // .id)
+              ' <<<"$unresolved_codex_threads"
+            } >>"$GITHUB_STEP_SUMMARY"
+
+            exit 1
+          fi
 
           reviews_json="$(
             gh api --paginate --slurp \
