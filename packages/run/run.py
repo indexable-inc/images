@@ -15,19 +15,20 @@ import signal
 import struct
 import sys
 import termios
+import threading
 import time
 import tty
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from collections.abc import Callable
-from typing import BinaryIO, TextIO
 
 
 DEFAULT_HEAD_LINES = 80
 DEFAULT_TAIL_LINES = 80
 READ_SIZE = 65536
+EXPECTED_PTY_ERRORS = {errno.EBADF, errno.EIO, errno.EPIPE}
 SignalHandler = signal.Handlers | int | Callable[[int, FrameType | None], None] | None
 
 
@@ -127,7 +128,7 @@ class DisplayLimiter:
         try:
             os.write(self._stdout_fd, data)
         except OSError as exc:
-            if exc.errno != errno.EPIPE:
+            if exc.errno not in EXPECTED_PTY_ERRORS:
                 raise
             self._stdout_open = False
 
@@ -357,8 +358,8 @@ def session_paths(argv: list[str], started: dt.datetime) -> ArtifactPaths:
         if latest.is_symlink() or latest.is_file():
             latest.unlink()
         latest.symlink_to(session, target_is_directory=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        write_stderr(f"ix run: warning: could not update latest symlink {latest}: {exc}\n")
 
     return ArtifactPaths(
         session=session,
@@ -437,14 +438,23 @@ def write_helper_scripts(paths: ArtifactPaths) -> None:
 
 
 def terminal_size() -> tuple[int, int]:
-    size = os.get_terminal_size(sys.stdout.fileno()) if sys.stdout.isatty() else os.get_terminal_size()
+    stdout = getattr(sys, "stdout", None)
+    if stdout is not None:
+        try:
+            if stdout.isatty():
+                size = os.get_terminal_size(stdout.fileno())
+                return size.columns, size.lines
+        except (AttributeError, OSError, ValueError):
+            size = os.get_terminal_size()
+            return size.columns, size.lines
+    size = os.get_terminal_size()
     return size.columns, size.lines
 
 
 def safe_terminal_size() -> tuple[int, int]:
     try:
         return terminal_size()
-    except OSError:
+    except (AttributeError, OSError, ValueError):
         fallback = os.environ.get("COLUMNS"), os.environ.get("LINES")
         try:
             columns = int(fallback[0] or "80")
@@ -490,6 +500,60 @@ def set_nonblocking(fd: int) -> int:
     return flags
 
 
+def optional_stdin() -> tuple[int | None, bool]:
+    stdin = getattr(sys, "stdin", None)
+    if stdin is None:
+        return None, False
+    try:
+        return stdin.fileno(), stdin.isatty()
+    except (AttributeError, OSError, ValueError):
+        return None, False
+
+
+def stdio_fd(name: str, fallback: int) -> int:
+    stream = getattr(sys, name, None)
+    if stream is None:
+        return fallback
+    try:
+        return stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return fallback
+
+
+def write_master(master_fd: int, data: bytes) -> bool:
+    try:
+        os.write(master_fd, data)
+        return True
+    except OSError as exc:
+        if exc.errno in EXPECTED_PTY_ERRORS:
+            return False
+        raise
+
+
+def send_eot(master_fd: int) -> None:
+    # EOT is best-effort: the child may already have closed the PTY.
+    write_master(master_fd, b"\x04")
+
+
+def forward_stdin(stdin_fd: int, master_fd: int) -> None:
+    while True:
+        try:
+            data = os.read(stdin_fd, READ_SIZE)
+        except OSError as exc:
+            if exc.errno in {errno.EBADF, errno.EIO, errno.EINVAL}:
+                send_eot(master_fd)
+                return
+            write_stderr(f"ix run: warning: stopped forwarding stdin: {exc}\n")
+            send_eot(master_fd)
+            return
+
+        if not data:
+            send_eot(master_fd)
+            return
+        if not write_master(master_fd, data):
+            return
+
+
 def status_code(status: int) -> tuple[str, int, int | None]:
     if os.WIFEXITED(status):
         code = os.WEXITSTATUS(status)
@@ -533,7 +597,7 @@ def usage() -> str:
 
 def write_stderr(message: str) -> None:
     try:
-        os.write(sys.stderr.fileno(), message.encode())
+        os.write(stdio_fd("stderr", 2), message.encode())
     except OSError:
         return
 
@@ -636,8 +700,8 @@ def run(argv: list[str]) -> int:
         tail_lines=tail_lines,
         print_mode=mode,
         output_path=paths.output,
-        stderr_fd=sys.stderr.fileno(),
-        stdout_fd=sys.stdout.fileno(),
+        stderr_fd=stdio_fd("stderr", 2),
+        stdout_fd=stdio_fd("stdout", 1),
     )
     terminal = {
         "columns": columns,
@@ -657,20 +721,24 @@ def run(argv: list[str]) -> int:
     selector.register(master_fd, selectors.EVENT_READ, "pty")
     set_nonblocking(master_fd)
 
-    stdin_fd = sys.stdin.fileno()
-    stdin_registered = False
-    stdin_flags: int | None = None
+    stdin_fd, stdin_is_tty = optional_stdin()
     stdin_attrs: list[int | list[bytes | int]] | None = None
-    if stdin_fd >= 0:
+    if stdin_fd is not None and stdin_is_tty:
         try:
-            stdin_flags = set_nonblocking(stdin_fd)
-            selector.register(stdin_fd, selectors.EVENT_READ, "stdin")
-            stdin_registered = True
-            if sys.stdin.isatty():
-                stdin_attrs = termios.tcgetattr(stdin_fd)
-                tty.setraw(stdin_fd)
-        except OSError:
-            stdin_registered = False
+            stdin_attrs = termios.tcgetattr(stdin_fd)
+            tty.setraw(stdin_fd)
+        except OSError as exc:
+            write_stderr(f"ix run: warning: could not put stdin in raw mode: {exc}\n")
+
+    if stdin_fd is None:
+        send_eot(master_fd)
+    else:
+        threading.Thread(
+            target=forward_stdin,
+            args=(stdin_fd, master_fd),
+            daemon=True,
+            name="ix-run-stdin",
+        ).start()
 
     child_status: int | None = None
     pty_open = True
@@ -714,24 +782,6 @@ def run(argv: list[str]) -> int:
                             pty_open = False
                             break
                         recorder.record(data, sample(start_monotonic_ns))
-                elif key.data == "stdin" and stdin_registered:
-                    try:
-                        data = os.read(stdin_fd, READ_SIZE)
-                    except BlockingIOError:
-                        continue
-                    if data:
-                        try:
-                            os.write(master_fd, data)
-                        except OSError:
-                            pass
-                    else:
-                        selector.unregister(stdin_fd)
-                        stdin_registered = False
-                        try:
-                            os.write(master_fd, b"\x04")
-                        except OSError:
-                            pass
-
             if child_status is None:
                 try:
                     waited_pid, status = os.waitpid(pid, os.WNOHANG)
@@ -750,15 +800,14 @@ def run(argv: list[str]) -> int:
         signal.signal(signal.SIGWINCH, previous_winch)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
-        if stdin_attrs is not None:
+        if stdin_attrs is not None and stdin_fd is not None:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, stdin_attrs)
-        if stdin_flags is not None:
-            fcntl.fcntl(stdin_fd, fcntl.F_SETFL, stdin_flags)
         selector.close()
         try:
             os.close(master_fd)
-        except OSError:
-            pass
+        except OSError as exc:
+            if exc.errno not in EXPECTED_PTY_ERRORS:
+                raise
 
     finished_sample = sample(start_monotonic_ns)
     recorder.finish(finished_sample)
