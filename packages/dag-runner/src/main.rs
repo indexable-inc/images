@@ -384,8 +384,7 @@ async fn run(
 
             report_started(&name_owned, started, mode, pb.as_ref());
             let node_started = Instant::now();
-            let (outcome, stdout, stderr) =
-                run_command(&node, pb.as_ref(), cancel_for_task).await;
+            let (outcome, stdout, stderr) = run_command(&node, pb.as_ref(), cancel_for_task).await;
             let duration = node_started.elapsed();
             report_finished(&name_owned, &outcome, duration, started, mode, pb.as_ref());
 
@@ -443,7 +442,11 @@ async fn run_command(
     // If cancellation already fired (a later-spawning node sees the bit
     // before it ever reaches its select!), skip the work entirely.
     if *cancel_rx.borrow() {
-        return (Outcome::Failed(130), String::new(), "dag-runner: cancelled\n".into());
+        return (
+            Outcome::Failed(130),
+            String::new(),
+            "dag-runner: cancelled\n".into(),
+        );
     }
 
     let mut cmd = Command::new(&node.command[0]);
@@ -457,7 +460,13 @@ async fn run_command(
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return (Outcome::Failed(127), String::new(), format!("failed to spawn: {e}\n")),
+        Err(e) => {
+            return (
+                Outcome::Failed(127),
+                String::new(),
+                format!("failed to spawn: {e}\n"),
+            );
+        }
     };
 
     let stdout_pipe = child.stdout.take().expect("stdout piped");
@@ -494,7 +503,9 @@ async fn run_command(
             use std::fmt::Write;
             // Safe to unwrap: only the timeout arm produces TimedOut, and
             // maybe_timeout only resolves when timeout_secs is Some.
-            let secs = node.timeout_secs.expect("timeout arm requires timeout_secs");
+            let secs = node
+                .timeout_secs
+                .expect("timeout arm requires timeout_secs");
             terminate_child(&mut child).await;
             let _ = writeln!(extra_stderr, "dag-runner: node timed out after {secs}s");
             Outcome::Failed(124)
@@ -617,7 +628,11 @@ fn report_started(name: &str, started: Instant, mode: OutputMode, pb: Option<&Pr
             }
         }
         OutputMode::Plain => {
-            println!("[{:>6.1}s] {} started", started.elapsed().as_secs_f64(), name);
+            println!(
+                "[{:>6.1}s] {} started",
+                started.elapsed().as_secs_f64(),
+                name
+            );
         }
         OutputMode::Json => {
             emit(&Event::NodeStarted {
@@ -768,7 +783,10 @@ mod tests {
 
     fn spec_of(nodes: &[(&str, &[&str])]) -> Spec {
         Spec {
-            nodes: nodes.iter().map(|(n, d)| ((*n).to_string(), node(d))).collect(),
+            nodes: nodes
+                .iter()
+                .map(|(n, d)| ((*n).to_string(), node(d)))
+                .collect(),
         }
     }
 
@@ -799,20 +817,28 @@ mod tests {
     fn validate_rejects_missing_dependency() {
         let spec = spec_of(&[("a", &["ghost"])]);
         let err = validate(&spec).unwrap_err().to_string();
-        assert!(err.contains("ghost"), "error should name the missing dep, got: {err}");
-        assert!(err.contains('a'), "error should name the offending node, got: {err}");
+        assert!(
+            err.contains("ghost"),
+            "error should name the missing dep, got: {err}"
+        );
+        assert!(
+            err.contains('a'),
+            "error should name the offending node, got: {err}"
+        );
     }
 
     #[test]
     fn validate_rejects_empty_command() {
-        let spec: Spec =
-            serde_json::from_str(r#"{"nodes":{"a":{"command":[]}}}"#).unwrap();
+        let spec: Spec = serde_json::from_str(r#"{"nodes":{"a":{"command":[]}}}"#).unwrap();
         let err = validate(&spec).unwrap_err().to_string();
         assert!(
             err.contains("empty command"),
             "error should name the empty command, got: {err}"
         );
-        assert!(err.contains('a'), "error should name the offending node, got: {err}");
+        assert!(
+            err.contains('a'),
+            "error should name the offending node, got: {err}"
+        );
     }
 
     #[test]
@@ -905,15 +931,25 @@ mod tests {
     #[test]
     fn filter_only_errors_on_missing_name() {
         let mut spec = spec_of(&[("a", &[])]);
-        let err = filter_only(&mut spec, &["ghost".into()]).unwrap_err().to_string();
-        assert!(err.contains("ghost"), "error should name the missing entry, got: {err}");
+        let err = filter_only(&mut spec, &["ghost".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("ghost"),
+            "error should name the missing entry, got: {err}"
+        );
     }
 
     #[test]
     fn filter_only_errors_when_kept_node_loses_its_dep() {
         let mut spec = spec_of(&[("a", &[]), ("b", &["a"])]);
-        let err = filter_only(&mut spec, &["b".into()]).unwrap_err().to_string();
-        assert!(err.contains("b -> a"), "error should show the dropped edge, got: {err}");
+        let err = filter_only(&mut spec, &["b".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("b -> a"),
+            "error should show the dropped edge, got: {err}"
+        );
     }
 
     #[test]

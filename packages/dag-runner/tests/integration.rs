@@ -32,16 +32,26 @@ fn all_succeed_produces_zero_exit_and_finished_events() {
         "b":{"command":["true"],"depends_on":["a"]}
     }}"#;
     let (output, _dir) = run_binary(spec);
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let events = parse_events(&output.stdout);
 
-    let summary = events.iter().find(|e| e["event"] == "summary").expect("summary event");
+    let summary = events
+        .iter()
+        .find(|e| e["event"] == "summary")
+        .expect("summary event");
     assert_eq!(summary["total"], 2);
     assert_eq!(summary["succeeded"], 2);
     assert_eq!(summary["failed"], 0);
     assert_eq!(summary["skipped"], 0);
 
-    let finished: Vec<_> = events.iter().filter(|e| e["event"] == "node_finished").collect();
+    let finished: Vec<_> = events
+        .iter()
+        .filter(|e| e["event"] == "node_finished")
+        .collect();
     assert_eq!(finished.len(), 2);
     for ev in finished {
         assert_eq!(ev["outcome"], "succeeded");
@@ -102,7 +112,11 @@ fn env_overlay_is_visible_to_child() {
         "a":{"command":["sh","-c","test \"$DAG_RUNNER_TEST\" = wired"],"env":{"DAG_RUNNER_TEST":"wired"}}
     }}"#;
     let (output, _dir) = run_binary(spec);
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -121,7 +135,11 @@ fn env_overlay_shadows_parent() {
         .env("DAG_RUNNER_TEST", "parent")
         .output()
         .unwrap();
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -140,7 +158,11 @@ fn parent_env_inherited_when_no_overlay() {
         .env("DAG_RUNNER_TEST", "parent")
         .output()
         .unwrap();
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -149,7 +171,11 @@ fn env_value_with_equals_is_preserved() {
         "a":{"command":["sh","-c","test \"$DAG_RUNNER_TEST\" = 'a=b=c'"],"env":{"DAG_RUNNER_TEST":"a=b=c"}}
     }}"#;
     let (output, _dir) = run_binary(spec);
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -184,7 +210,11 @@ fn node_completes_before_timeout_succeeds() {
         "a":{"command":["true"],"timeout_secs":30}
     }}"#;
     let (output, _dir) = run_binary(spec);
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -196,7 +226,10 @@ fn cycle_is_rejected_before_running() {
     let (output, _dir) = run_binary(spec);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("cycle"), "expected cycle error, got: {stderr}");
+    assert!(
+        stderr.contains("cycle"),
+        "expected cycle error, got: {stderr}"
+    );
 }
 
 #[test]
@@ -223,7 +256,12 @@ fn sigint_cancels_running_nodes_with_exit_130() {
     // SIGINT is a valid signal. libc here avoids any /bin/kill path
     // assumption inside the Nix sandbox.
     let rc = unsafe { libc::kill(pid.cast_signed(), libc::SIGINT) };
-    assert_eq!(rc, 0, "kill(SIGINT) failed: errno {}", std::io::Error::last_os_error());
+    assert_eq!(
+        rc,
+        0,
+        "kill(SIGINT) failed: errno {}",
+        std::io::Error::last_os_error()
+    );
     let exit = child.wait().expect("wait for runner");
     assert_eq!(exit.code(), Some(130), "expected exit 130 after SIGINT");
 }
@@ -236,7 +274,10 @@ fn missing_dependency_is_rejected_before_running() {
     let (output, _dir) = run_binary(spec);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("ghost"), "expected missing-dep error to name 'ghost', got: {stderr}");
+    assert!(
+        stderr.contains("ghost"),
+        "expected missing-dep error to name 'ghost', got: {stderr}"
+    );
 }
 
 #[test]
@@ -271,12 +312,18 @@ fn only_runs_just_the_named_nodes_and_skips_spawning_the_rest() {
     std::fs::write(&path, spec).unwrap();
     let bin = env!("CARGO_BIN_EXE_dag-runner");
     let output = Command::new(bin)
-        .arg("--output").arg("json")
-        .arg("--only").arg("b,c")
+        .arg("--output")
+        .arg("json")
+        .arg("--only")
+        .arg("b,c")
         .arg(&path)
         .output()
         .expect("spawn dag-runner");
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let events = parse_events(&output.stdout);
     let summary = events.iter().find(|e| e["event"] == "summary").unwrap();

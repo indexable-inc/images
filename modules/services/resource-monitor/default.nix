@@ -94,8 +94,13 @@ let
   statsWriter = ix.buildRustPackage pkgs {
     pname = "resource-monitor-stats-writer";
     version = "0.1.0";
-    src = ./stats-writer;
-    cargoLock.lockFile = ./stats-writer/Cargo.lock;
+    src = ix.rustWorkspace.src;
+    cargoLock.lockFile = ix.rustWorkspace.cargoLock;
+    buildAndTestSubdir = "modules/services/resource-monitor/stats-writer";
+    cargoArgs = [
+      "-p"
+      "resource-monitor-stats-writer"
+    ];
     meta.mainProgram = "resource-monitor-stats-writer";
   };
 

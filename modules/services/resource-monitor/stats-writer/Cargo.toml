@@ -1,7 +1,7 @@
 [package]
 name = "resource-monitor-stats-writer"
-version = "0.1.0"
-edition = "2024"
-publish = false
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
 
 [dependencies]

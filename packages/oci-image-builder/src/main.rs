@@ -2,12 +2,12 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{btree_map::Entry, BTreeMap};
+use std::collections::{BTreeMap, btree_map::Entry};
 use std::env;
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
@@ -461,12 +461,7 @@ fn remove_children(paths: &mut BTreeMap<String, PathStats>, parent: &str, layer_
     }
 }
 
-fn record_path(
-    paths: &mut BTreeMap<String, PathStats>,
-    path: &str,
-    size: u64,
-    layer_index: usize,
-) {
+fn record_path(paths: &mut BTreeMap<String, PathStats>, path: &str, size: u64, layer_index: usize) {
     match paths.entry(path.to_owned()) {
         Entry::Vacant(entry) => {
             entry.insert(PathStats {

@@ -22,9 +22,7 @@ fn json_value() -> impl Generator<Value> {
         gs::text().map(Value::String),
     );
 
-    let array = gs::vecs(value.generator())
-        .max_size(8)
-        .map(Value::Array);
+    let array = gs::vecs(value.generator()).max_size(8).map(Value::Array);
 
     let object = gs::vecs(hegel::tuples!(gs::text(), value.generator()))
         .max_size(8)

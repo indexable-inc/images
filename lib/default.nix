@@ -261,7 +261,10 @@ let
     let
       checked = hostPkgs.callPackage path {
         pkgs = hostPkgs;
-        ix.buildRustPackage = pkgs: (rustFor pkgs).buildPackage;
+        ix = {
+          buildRustPackage = pkgs: (rustFor pkgs).buildPackage;
+          inherit rustWorkspace;
+        };
       };
     in
     checked.passthru.unchecked or checked;
@@ -685,6 +688,39 @@ let
     basePackages // cliPackages;
 
   /**
+    Shared Rust workspace source for repo-owned crates.
+
+    The root Cargo.toml and Cargo.lock are the source of truth for IDEs,
+    dependency versions, and package builds. The filtered source keeps the Nix
+    closure to Rust workspace inputs instead of the full repository.
+  */
+  rustWorkspace =
+    let
+      inherit (paths) root;
+    in
+    {
+      inherit root;
+      cargoLock = root + "/Cargo.lock";
+      src = lib.fileset.toSource {
+        inherit root;
+        fileset = lib.fileset.intersection (lib.fileset.gitTracked root) (
+          lib.fileset.unions [
+            (root + "/Cargo.toml")
+            (root + "/Cargo.lock")
+            (paths.modules + "/services/resource-monitor/stats-writer")
+            paths.packages.dagRunner
+            paths.packages.loop
+            paths.packages.mcp
+            paths.packages.minecraft.nbt
+            paths.packages.minecraft.syncManaged
+            paths.packages.nixCargoUnit
+            paths.packages.ociImageBuilder
+          ]
+        );
+      };
+    };
+
+  /**
     Cross-cutting helpers handed to every module through `specialArgs.ix`.
     Keep this surface small and stable: anything here is part of the
     cross-module contract.
@@ -704,6 +740,7 @@ let
       mkMinecraftNbtFormat
       mkMinecraftSyncManaged
       relativePath
+      rustWorkspace
       secrets
       systemdHardening
       writeNushellApplication
@@ -966,6 +1003,7 @@ let
       mkMinecraftSyncManaged
       packageSetFor
       relativePath
+      rustWorkspace
       secrets
       systemdHardening
       writeNushellApplication

@@ -1,0 +1,43 @@
+[workspace]
+members = [
+  "modules/services/resource-monitor/stats-writer",
+  "packages/dag-runner",
+  "packages/loop",
+  "packages/mcp",
+  "packages/minecraft/nbt",
+  "packages/minecraft/sync-managed",
+  "packages/nix-cargo-unit",
+  "packages/oci-image-builder",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+askama = { version = "0.16.0", default-features = false }
+axum = "0.8"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false }
+clap = "4"
+color-eyre = "0.6"
+futures = "0.3"
+hegeltest = { version = "0.14", default-features = false }
+indicatif = "0.18"
+libc = "0.2"
+loro = "1.12"
+quartz_nbt = "0.2.9"
+rmcp = "1.7"
+schemars = "1"
+serde = "1"
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+tempfile = "3"
+tokio = "1"
+toml = { version = "1.1.2", default-features = false }
+tower-http = "0.6"
+url = { version = "2.5.8", default-features = false }

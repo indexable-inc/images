@@ -6,21 +6,15 @@
 }:
 
 let
-  loop.src = lib.fileset.toSource {
-    root = ./.;
-    fileset = lib.fileset.intersection (lib.fileset.gitTracked ./.) (
-      lib.fileset.unions [
-        ./Cargo.toml
-        ./Cargo.lock
-        ./src
-      ]
-    );
-  };
-
   loop.binary = ix.cargoUnit.buildBinary {
     pname = "loop";
-    inherit (loop) src;
-    workspaceRoot = ./.;
+    src = ix.rustWorkspace.src;
+    workspaceRoot = ix.rustWorkspace.root;
+    cargoLock = ix.rustWorkspace.cargoLock;
+    cargoArgs = [
+      "-p"
+      "loop"
+    ];
     binary = "loop";
     policy = {
       denyUnusedCrateDependencies = false;

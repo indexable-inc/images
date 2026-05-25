@@ -1,20 +1,20 @@
 [package]
 name = "minecraft-nbt"
-version = "0.1.0"
-edition = "2024"
-publish = false
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
 
 [dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-quartz_nbt = { version = "0.2.9", features = ["preserve_order"] }
-serde_json = "1"
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+quartz_nbt = { workspace = true, features = ["preserve_order"] }
+serde_json.workspace = true
 
 [dev-dependencies]
 # Property-based testing via Hegel. Pinned to the `native` feature so cargo
 # test runs without the Python hegel-core server (the default backend). The
 # native backend is functionally complete; only performance differs.
-hegeltest = { version = "0.14", default-features = false, features = ["native"] }
+hegeltest = { workspace = true, default-features = false, features = ["native"] }
 
 # cargo-machete can't see hegeltest because it's only reached through the
 # `#[hegel::test]` proc-macro under `tests/`. Listing it here keeps the

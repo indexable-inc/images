@@ -8,12 +8,13 @@ ix.buildRustPackage pkgs {
   pname = "mcp";
   version = "0.1.0";
 
-  src = lib.fileset.toSource {
-    root = ./.;
-    fileset = lib.fileset.gitTracked ./.;
-  };
-
-  cargoLock.lockFile = ./Cargo.lock;
+  src = ix.rustWorkspace.src;
+  cargoLock.lockFile = ix.rustWorkspace.cargoLock;
+  buildAndTestSubdir = "packages/mcp";
+  cargoArgs = [
+    "-p"
+    "ix-mcp"
+  ];
 
   nativeBuildInputs = [ pkgs.makeWrapper ];
 
