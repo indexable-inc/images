@@ -9,6 +9,7 @@ import json
 import os
 import pty
 import re
+import select
 import selectors
 import shlex
 import signal
@@ -29,6 +30,7 @@ DEFAULT_HEAD_LINES = 80
 DEFAULT_TAIL_LINES = 80
 READ_SIZE = 65536
 EXPECTED_PTY_ERRORS = {errno.EBADF, errno.EIO, errno.EPIPE}
+RETRYABLE_WRITE_ERRORS = {errno.EAGAIN, errno.EWOULDBLOCK}
 SignalHandler = signal.Handlers | int | Callable[[int, FrameType | None], None] | None
 
 
@@ -520,14 +522,45 @@ def stdio_fd(name: str, fallback: int) -> int:
         return fallback
 
 
-def write_master(master_fd: int, data: bytes) -> bool:
+def wait_master_writable(master_fd: int) -> bool:
     try:
-        os.write(master_fd, data)
+        select.select([], [master_fd], [])
         return True
     except OSError as exc:
         if exc.errno in EXPECTED_PTY_ERRORS:
             return False
         raise
+    except ValueError:
+        return False
+
+
+def write_master(master_fd: int, data: bytes) -> bool:
+    remaining = memoryview(data)
+    while remaining:
+        try:
+            written = os.write(master_fd, remaining)
+        except BlockingIOError:
+            if not wait_master_writable(master_fd):
+                return False
+            continue
+        except InterruptedError:
+            continue
+        except OSError as exc:
+            if exc.errno in EXPECTED_PTY_ERRORS:
+                return False
+            if exc.errno in RETRYABLE_WRITE_ERRORS:
+                if not wait_master_writable(master_fd):
+                    return False
+                continue
+            raise
+
+        if written == 0:
+            if not wait_master_writable(master_fd):
+                return False
+            continue
+        remaining = remaining[written:]
+
+    return True
 
 
 def send_eot(master_fd: int) -> None:

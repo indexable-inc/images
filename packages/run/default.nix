@@ -79,6 +79,17 @@ let
         session=$(readlink "$IX_RUN_DIR/latest")
         grep -q 'redirected stdin' "$session/output.log"
 
+        i=0
+        while [ "$i" -lt 40000 ]; do
+          printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n'
+          i=$((i + 1))
+        done >large-stdin-input
+        large_size=$(wc -c <large-stdin-input | tr -d ' ')
+        export IX_RUN_DIR=$TMPDIR/runs-large-stdin
+        timeout 20s run ${lib.getExe pkgs.bash} -c 'stty -echo; sleep 1; cat >large-stdin-copy; wc -c <large-stdin-copy' \
+          <large-stdin-input >large-stdin-stdout 2>large-stdin-stderr
+        grep -q "^$large_size" large-stdin-stdout
+
         export IX_RUN_DIR=$TMPDIR/runs-closed-stdin
         (
           exec 0<&-
