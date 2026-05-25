@@ -38,7 +38,21 @@ pkgs:
 {
   pname,
   version ? "0.0.0",
-  src,
+  # Pass `srcRoot = ./.` for a standard uv project (pyproject.toml + src/ +
+  # uv.lock at the root); pass `src` directly to provide a custom fileset.
+  srcRoot ? null,
+  src ?
+    if srcRoot != null then
+      pkgs.lib.fileset.toSource {
+        root = srcRoot;
+        fileset = pkgs.lib.fileset.unions [
+          (srcRoot + "/pyproject.toml")
+          (srcRoot + "/src")
+          (srcRoot + "/uv.lock")
+        ];
+      }
+    else
+      throw "buildUvApplication: pass `srcRoot` for a standard uv project layout or `src` for a custom one",
   python ? pkgs.python3,
   mainProgram ? pname,
   groups ? [ ],
