@@ -694,7 +694,7 @@ let
           inherit pkgs;
           ix = ixForPackages;
         };
-        python-mcp-server = pkgs.callPackage paths.packages.pythonMcpServer {
+        mcp = pkgs.callPackage paths.packages.mcp {
           ix = ixForPackages;
         };
         tonbo-artifacts = pkgs.callPackage paths.packages.tonboArtifacts { };

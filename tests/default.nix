@@ -850,7 +850,7 @@ let
     distribution: distribution.fileName
   ) uvApplication.uvWheelhouse.distributions;
 
-  pythonMcpServerPackage = (ix.packageSetFor pkgs).python-mcp-server;
+  mcpPackage = (ix.packageSetFor pkgs).mcp;
 
   fleet = ix.mkFleet {
     deployment.region = "us-west-1";
@@ -2743,8 +2743,8 @@ let
         message = "uv wheelhouses should prefer compatible wheels over sdists";
       }
       {
-        assertion = pythonMcpServerPackage.meta.mainProgram == "ix-python-mcp";
-        message = "python MCP server package should expose ix-python-mcp as its main program";
+        assertion = mcpPackage.meta.mainProgram == "ix-mcp";
+        message = "MCP package should expose ix-mcp as its main program";
       }
     ];
 
@@ -3180,9 +3180,9 @@ let
     grep -q 'hello from uv app fixture' uv-app-fixture.out
     test -e ${uvApplication.uvWheelhouse}/click-8.1.7-py3-none-any.whl
 
-    ${lib.getExe pythonMcpServerPackage} eval '1 + 2' > python-mcp-eval.out
-    grep -q 'result:' python-mcp-eval.out
-    grep -q '^3$' python-mcp-eval.out
+    ${lib.getExe mcpPackage} eval '1 + 2' > mcp-eval.out
+    grep -q 'result:' mcp-eval.out
+    grep -q '^3$' mcp-eval.out
   '';
 
   cargoUnitRealWorkspaceAssertions = [

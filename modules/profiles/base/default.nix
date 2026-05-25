@@ -390,12 +390,12 @@ in
           ;
       })
       ++ [
-        # Persistent Python session exposed over MCP. Lets an agent inside
+        # Persistent Python sessions exposed over MCP. Lets an agent inside
         # the VM (or one shelling in via `ix shell`) hand structured Python
         # off to a client without round-tripping shell quoting, and keeps
         # the interpreter warm across calls so iterative debugging on a
         # live process or memfd doesn't re-import every step.
-        ix.packages.python-mcp-server
+        ix.packages.mcp
       ];
 
     # Pre-create the workspace at boot so login.nu can cd into it

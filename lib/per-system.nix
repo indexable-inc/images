@@ -299,7 +299,7 @@ in
         llm-clippy
         nix-cargo-unit
         oci-image-builder
-        python-mcp-server
+        mcp
         ;
       minestom-hello-server-jar = repoPackages.minestom.helloServerJar;
     }
