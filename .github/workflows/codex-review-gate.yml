@@ -44,6 +44,8 @@ jobs:
 
           pr_json="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"
           head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          head_json="$(gh api "repos/${REPO}/commits/${head_sha}")"
+          head_committed_at="$(jq -r '.commit.committer.date' <<<"$head_json")"
 
           reviews_json="$(
             gh api --paginate --slurp \
@@ -77,13 +79,18 @@ jobs:
           )"
 
           matching_comment="$(
-            jq --arg head "$head_sha" -c '
+            jq --arg head "$head_sha" --arg head_committed_at "$head_committed_at" -c '
               [
                 .[][]
                 | select(
                     (.user.login == "chatgpt-codex-connector[bot]" or .user.login == "chatgpt-codex-connector")
-                    and (.body | test("Codex Review|Reviewed commit"; "i"))
-                    and (.body | contains($head))
+                    and (
+                      ((.body | test("Codex Review|Reviewed commit"; "i")) and (.body | contains($head)))
+                      or (
+                        (.body | startswith("Codex Review: Didn'\''t find any major issues."))
+                        and .created_at >= $head_committed_at
+                      )
+                    )
                   )
               ][0] // empty
             ' <<<"$comments_json"
