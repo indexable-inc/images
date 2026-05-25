@@ -292,6 +292,7 @@ in
         llm-clippy
         nix-cargo-unit
         oci-image-builder
+        run
         mcp
         ;
       minestom-hello-server-jar = repoPackages.minestom.helloServerJar;
@@ -309,6 +310,7 @@ in
     lib.optionalAttrs (system == ix.system) {
       inherit (tests) eval;
       cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
+      run-records-session = repoPackages.run.passthru.tests.recordsSession;
       lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
         cp -R ${lintSource} source
         chmod -R u+w source

@@ -14,6 +14,28 @@ export type SiteUpdate = {
 
 export const siteUpdates: SiteUpdate[] = [
   {
+    id: 'recorded-runner',
+    date: '2026-05-25',
+    title: 'Recorded command runs become a package',
+    summary:
+      'The new `run` package keeps long command output compact while saving replayable and queryable artifacts.',
+    paragraphs: [
+      '`nix run .#run -- <command> ...` executes the command in a PTY, prints a bounded head and tail summary, and writes the complete live stream under `./.ix/run/latest`.',
+      'Each session includes `scriptreplay` timing files, an asciinema cast, chunk-level JSONL, line-level JSONL for pandas, and a summary file with duration and exit status.',
+      'The live `output.log` and helper scripts let another shell follow a slow build before the command has finished.'
+    ],
+    links: [
+      {
+        label: 'run package',
+        href: 'https://github.com/indexable-inc/index/tree/main/packages/run'
+      },
+      {
+        label: 'flake package wiring',
+        href: 'https://github.com/indexable-inc/index/blob/main/lib/per-system.nix'
+      }
+    ]
+  },
+  {
     id: 'fleet-secret-refs',
     date: '2026-05-24',
     title: 'Fleet secret refs become typed plan data',
