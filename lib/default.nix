@@ -189,7 +189,6 @@ let
     import ./bun-lock.nix {
       inherit lib pkgs;
     };
-  bunLock = bunLockFor pkgs;
   buildBunSite = import ./build-bun-site.nix {
     inherit bunLockFor;
   };
@@ -199,7 +198,6 @@ let
     import ./uv-lock.nix {
       inherit lib pkgs;
     };
-  uvLock = uvLockFor pkgs;
   basedpyrightTypeCheckingModes = [
     "off"
     "basic"
@@ -297,7 +295,7 @@ let
   /**
     Helpers that throw with a fixable error message instead of a deep-eval
     crash. See [`lib/errors.nix`](lib/errors.nix) for the full surface:
-    `assertEnum`, `atMostOne`, `exactlyOne`, `requireAttr`, `requireInput`.
+    `assertEnum`, `requireArg`, `requireAttr`.
   */
   errors = import ./errors.nix { inherit lib; };
 
@@ -720,11 +718,7 @@ let
       buildRustPackage
       buildNpmSite
       buildUvApplication
-      bunLock
-      bunLockFor
       cargoUnit
-      cargoUnitFor
-      errors
       languages
       minecraft
       mkMinecraftLoader
@@ -733,8 +727,6 @@ let
       relativePath
       secrets
       systemdHardening
-      uvLock
-      uvLockFor
       writeNushellApplication
       writePythonApplication
       ;
@@ -968,24 +960,7 @@ let
       map (e: lib.nameValuePair e.name (import e.path { index = indexShim; })) (flatPairs ++ nestedPairs)
     );
 
-  /**
-    Default-system shortcut over `exampleFleetsFor`. Used by aggregators
-    like `examplesHealthChecks` that only need plan data (which is
-    system-independent), not the wrapper derivations.
-  */
-  exampleFleets = exampleFleetsFor { hostSystem = system; };
-
-  /**
-    `ix.healthChecks` declared by every example, keyed by example name and
-    fleet node. Plain-data attrset suitable for `nix eval --json` and `jq`
-    pipelines; the `health-checks` Nu wrapper pretty-prints the same data
-    as a table.
-  */
-  examplesHealthChecks = lib.mapAttrs (
-    _name: fleet: lib.mapAttrs (_node: nodePlan: nodePlan.healthChecks) fleet.planValue.nodes
-  ) exampleFleets;
-
-  # Self-reference (let-bindings are mutually recursive): `exampleFleets`
+  # Self-reference (let-bindings are mutually recursive): `exampleFleetsFor`
   # passes `ixReturn` back into examples as `index.lib`. Forced only when
   # an example actually reads from it.
   ixReturn = {
@@ -997,21 +972,14 @@ let
       evalImageConfig
       mkImage
       mkFleet
-      mkFleetFor
       discoverImages
-      exampleFleets
       exampleFleetsFor
-      examplesHealthChecks
       artifacts
       buildBunSite
       buildGradleFatJar
       buildNpmSite
       buildUvApplication
-      bunLock
-      bunLockFor
       cargoUnit
-      cargoUnitFor
-      errors
       languages
       minecraft
       mkMinecraftLoader
@@ -1021,8 +989,6 @@ let
       relativePath
       secrets
       systemdHardening
-      uvLock
-      uvLockFor
       writeNushellApplication
       writePythonApplication
       ;

@@ -700,23 +700,14 @@ in
   inherit
     buildPackage
     cargoAuditCheck
-    cargoClippyCheck
-    cargoMacheteCheck
     cargoLockFile
-    defaultClippyAllowedLints
-    defaultClippyDeniedLints
-    defaultPolicy
     defaultRustToolchain
-    defaultRustsecAdvisoryDb
     nativeBuildInputsForPolicy
     policyChecksFor
     resolvePolicy
     resolveVendorSources
     resolveVendorDir
-    rustcArgsForPolicy
     rustcArgsForPolicyForPlatform
-    rustFlagsStringForPolicy
     vendorConfigScript
-    withPolicyChecks
     ;
 }
