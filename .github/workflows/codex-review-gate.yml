@@ -1,0 +1,107 @@
+name: Codex review gate
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  pull_request_review:
+    types:
+      - submitted
+      - edited
+      - dismissed
+  issue_comment:
+    types:
+      - created
+      - edited
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: codex-review-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex-review:
+    name: chatgpt-codex-connector reviewed head
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Codex reviewed the current head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"
+          head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+
+          reviews_json="$(
+            gh api --paginate --slurp \
+              "repos/${REPO}/pulls/${PR_NUMBER}/reviews"
+          )"
+
+          matching_review="$(
+            jq --arg head "$head_sha" -c '
+              [
+                .[][]
+                | select(
+                    (.user.login == "chatgpt-codex-connector[bot]" or .user.login == "chatgpt-codex-connector")
+                    and .commit_id == $head
+                    and .state != "PENDING"
+                  )
+              ][0] // empty
+            ' <<<"$reviews_json"
+          )"
+
+          if [[ -n "$matching_review" ]]; then
+            reviewer="$(jq -r '.user.login' <<<"$matching_review")"
+            state="$(jq -r '.state' <<<"$matching_review")"
+            submitted_at="$(jq -r '.submitted_at' <<<"$matching_review")"
+            echo "Found ${state} review from ${reviewer} for ${head_sha} at ${submitted_at}."
+            exit 0
+          fi
+
+          comments_json="$(
+            gh api --paginate --slurp \
+              "repos/${REPO}/issues/${PR_NUMBER}/comments"
+          )"
+
+          matching_comment="$(
+            jq --arg head "$head_sha" -c '
+              [
+                .[][]
+                | select(
+                    (.user.login == "chatgpt-codex-connector[bot]" or .user.login == "chatgpt-codex-connector")
+                    and (.body | test("Codex Review|Reviewed commit"; "i"))
+                    and (.body | contains($head))
+                  )
+              ][0] // empty
+            ' <<<"$comments_json"
+          )"
+
+          if [[ -n "$matching_comment" ]]; then
+            commenter="$(jq -r '.user.login' <<<"$matching_comment")"
+            created_at="$(jq -r '.created_at' <<<"$matching_comment")"
+            echo "Found Codex review comment from ${commenter} for ${head_sha} at ${created_at}."
+            exit 0
+          fi
+
+          {
+            echo "## Codex review required"
+            echo
+            echo "No review from \`chatgpt-codex-connector[bot]\` was found for PR #${PR_NUMBER} at \`${head_sha}\`."
+            echo
+            echo "Wait for automatic Codex review or comment \`@codex review\`, then rerun this check if GitHub does not rerun it automatically."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          exit 1
