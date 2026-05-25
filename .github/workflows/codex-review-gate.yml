@@ -20,6 +20,7 @@ on:
       - edited
 
 permissions:
+  checks: read
   contents: read
   issues: read
   pull-requests: read
@@ -44,8 +45,17 @@ jobs:
 
           pr_json="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"
           head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
-          head_json="$(gh api "repos/${REPO}/commits/${head_sha}")"
-          head_committed_at="$(jq -r '.commit.committer.date' <<<"$head_json")"
+          check_runs_json="$(gh api "repos/${REPO}/commits/${head_sha}/check-runs")"
+          head_checked_at="$(
+            jq -r '
+              [
+                .check_runs[]
+                | (.started_at // .created_at)
+                | select(. != null)
+              ]
+              | min // empty
+            ' <<<"$check_runs_json"
+          )"
 
           reviews_json="$(
             gh api --paginate --slurp \
@@ -79,7 +89,7 @@ jobs:
           )"
 
           matching_comment="$(
-            jq --arg head "$head_sha" --arg head_committed_at "$head_committed_at" -c '
+            jq --arg head "$head_sha" --arg head_checked_at "$head_checked_at" -c '
               [
                 .[][]
                 | select(
@@ -88,7 +98,8 @@ jobs:
                       ((.body | test("Codex Review|Reviewed commit"; "i")) and (.body | contains($head)))
                       or (
                         (.body | startswith("Codex Review: Didn'\''t find any major issues."))
-                        and .created_at >= $head_committed_at
+                        and $head_checked_at != ""
+                        and .created_at >= $head_checked_at
                       )
                     )
                   )
