@@ -18,6 +18,7 @@ on:
     types:
       - created
       - edited
+      - deleted
 
 permissions:
   contents: read
@@ -46,20 +47,26 @@ jobs:
           head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
           owner="${REPO%%/*}"
           repo_name="${REPO#*/}"
+          codex_logins='["chatgpt-codex-connector[bot]","chatgpt-codex-connector"]'
           threads_query="$(
             cat <<'GRAPHQL'
-          query($owner: String!, $repo: String!, $number: Int!) {
+          query($owner: String!, $repo: String!, $number: Int!, $after: String) {
             repository(owner: $owner, name: $repo) {
               pullRequest(number: $number) {
-                reviewThreads(first: 100) {
+                reviewThreads(first: 100, after: $after) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
                   nodes {
                     id
                     isResolved
-                    isOutdated
-                    comments(first: 20) {
+                    comments(first: 100) {
+                      pageInfo {
+                        hasNextPage
+                      }
                       nodes {
                         author { login }
-                        body
                         url
                       }
                     }
@@ -70,40 +77,125 @@ jobs:
           }
           GRAPHQL
           )"
-
-          threads_json="$(
-            gh api graphql \
-              -f owner="$owner" \
-              -f repo="$repo_name" \
-              -F number="$PR_NUMBER" \
-              -f query="$threads_query"
+          comments_query="$(
+            cat <<'GRAPHQL'
+          query($threadId: ID!, $after: String) {
+            node(id: $threadId) {
+              ... on PullRequestReviewThread {
+                comments(first: 100, after: $after) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                  nodes {
+                    author { login }
+                    url
+                  }
+                }
+              }
+            }
+          }
+          GRAPHQL
           )"
 
-          unresolved_codex_threads="$(
-            jq -c '
-              [
+          find_codex_comment_url() {
+            local thread_id="$1"
+            local after=""
+            local comments_json
+            local url
+
+            while true; do
+              local args=(-f threadId="$thread_id" -f query="$comments_query")
+              if [[ -n "$after" ]]; then
+                args+=(-f after="$after")
+              fi
+
+              comments_json="$(gh api graphql "${args[@]}")"
+              url="$(
+                jq -r --argjson codexLogins "$codex_logins" '
+                  [
+                    .data.node.comments.nodes[]?
+                    | select(.author.login as $login | $codexLogins | index($login))
+                    | .url
+                  ][0] // empty
+                ' <<<"$comments_json"
+              )"
+
+              if [[ -n "$url" ]]; then
+                printf '%s\n' "$url"
+                return 0
+              fi
+
+              if [[ "$(jq -r '.data.node.comments.pageInfo.hasNextPage' <<<"$comments_json")" != "true" ]]; then
+                return 1
+              fi
+
+              after="$(jq -r '.data.node.comments.pageInfo.endCursor' <<<"$comments_json")"
+            done
+          }
+
+          unresolved_codex_threads=()
+          after=""
+          while true; do
+            args=(
+              -f owner="$owner"
+              -f repo="$repo_name"
+              -F number="$PR_NUMBER"
+              -f query="$threads_query"
+            )
+            if [[ -n "$after" ]]; then
+              args+=(-f after="$after")
+            fi
+
+            threads_json="$(gh api graphql "${args[@]}")"
+
+            while IFS= read -r thread_json; do
+              thread_id="$(jq -r '.id' <<<"$thread_json")"
+              first_codex_url="$(jq -r '.firstCodexUrl // empty' <<<"$thread_json")"
+              has_more_comments="$(jq -r '.hasMoreComments' <<<"$thread_json")"
+
+              if [[ -n "$first_codex_url" ]]; then
+                unresolved_codex_threads+=("$first_codex_url")
+                continue
+              fi
+
+              if [[ "$has_more_comments" == "true" ]]; then
+                if url="$(find_codex_comment_url "$thread_id")"; then
+                  unresolved_codex_threads+=("$url")
+                fi
+              fi
+            done < <(
+              jq -c --argjson codexLogins "$codex_logins" '
                 .data.repository.pullRequest.reviewThreads.nodes[]
                 | select(.isResolved == false)
-                | select(
-                    [
-                      .comments.nodes[].author.login
-                    ]
-                    | any(. == "chatgpt-codex-connector[bot]" or . == "chatgpt-codex-connector")
-                  )
-              ]
-            ' <<<"$threads_json"
-          )"
+                | {
+                    id,
+                    firstCodexUrl: (
+                      [
+                        .comments.nodes[]?
+                        | select(.author.login as $login | $codexLogins | index($login))
+                        | .url
+                      ][0] // ""
+                    ),
+                    hasMoreComments: .comments.pageInfo.hasNextPage
+                  }
+              ' <<<"$threads_json"
+            )
 
-          if jq -e 'length > 0' <<<"$unresolved_codex_threads" >/dev/null; then
+            if [[ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$threads_json")" != "true" ]]; then
+              break
+            fi
+
+            after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"$threads_json")"
+          done
+
+          if ((${#unresolved_codex_threads[@]} > 0)); then
             {
               echo "## Resolve Codex review threads"
               echo
               echo "Codex has unresolved review feedback on this PR. Fix or intentionally resolve every thread before this gate can pass."
               echo
-              jq -r '
-                .[]
-                | "- " + (.comments.nodes[-1].url // .id)
-              ' <<<"$unresolved_codex_threads"
+              printf -- '- %s\n' "${unresolved_codex_threads[@]}"
             } >>"$GITHUB_STEP_SUMMARY"
 
             exit 1
