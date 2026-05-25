@@ -625,6 +625,10 @@ let
         ix-fleet = pkgs.callPackage paths.packages.ixFleet {
           ix = ixForPackages;
         };
+        ix-dev-diagnose = pkgs.callPackage paths.packages.ixDevDiagnose {
+          inherit pkgs;
+          ix = ixForPackages;
+        };
         minestom.helloServerJar = pkgs.callPackage paths.packages.minestom.servers.hello {
           ix = ixForPackages;
         };
@@ -712,6 +716,7 @@ let
             (root + "/Cargo.lock")
             (paths.modules + "/services/resource-monitor/stats-writer")
             paths.packages.dagRunner
+            paths.packages.ixDevDiagnose
             paths.packages.loop
             paths.packages.mcp
             paths.packages.minecraft.nbt

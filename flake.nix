@@ -71,6 +71,7 @@
         packages = {
           ix = ./packages/ix;
           ixFleet = ./packages/ix-fleet;
+          ixDevDiagnose = ./packages/ix-dev-diagnose;
           minecraft = {
             hotReloadAgent = ./packages/minecraft/hot-reload-agent;
             nbt = ./packages/minecraft/nbt;

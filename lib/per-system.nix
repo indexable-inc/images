@@ -285,6 +285,7 @@ in
       inherit (repoPackages)
         dag-runner
         drgn
+        ix-dev-diagnose
         ix-fleet
         mc-probe
         minecraft-nbt

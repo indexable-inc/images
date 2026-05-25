@@ -2,6 +2,7 @@
 members = [
   "modules/services/resource-monitor/stats-writer",
   "packages/dag-runner",
+  "packages/ix-dev-diagnose",
   "packages/loop",
   "packages/mcp",
   "packages/minecraft/nbt",
@@ -31,6 +32,8 @@ libc = "0.2"
 loro = "1.12"
 quartz_nbt = "0.2.9"
 rmcp = "1.7"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
 schemars = "1"
 serde = "1"
 serde_json = "1"
@@ -41,3 +44,5 @@ tokio = "1"
 toml = { version = "1.1.2", default-features = false }
 tower-http = "0.6"
 url = { version = "2.5.8", default-features = false }
+webpki-roots = "1"
+x509-parser = "0.18"

@@ -14,6 +14,28 @@ export type SiteUpdate = {
 
 export const siteUpdates: SiteUpdate[] = [
   {
+    id: 'ix-dev-diagnose',
+    date: '2026-05-25',
+    title: 'ix.dev reachability gets a JSON probe',
+    summary:
+      '`ix-dev-diagnose` captures DNS, TLS, certificate, and response-byte clues when ix.dev behaves differently by network.',
+    paragraphs: [
+      '`nix run .#ix-dev-diagnose -- --pretty` probes `https://ix.dev/` from the caller\'s path and emits one JSON report for sharing with support.',
+      'The report records system resolver answers, per-address TCP and TLS results, parsed certificate issuers and fingerprints, native and Mozilla-root verification outcomes, headers, and a bounded response-body sample.',
+      'This is meant for cases such as `SEC_ERROR_UNKNOWN_ISSUER`, captive portals, ISP interception, stale DNS, or CDN edge differences where the failing client sees different bytes than a working client.'
+    ],
+    links: [
+      {
+        label: 'diagnostic package',
+        href: 'https://github.com/indexable-inc/index/tree/main/packages/ix-dev-diagnose'
+      },
+      {
+        label: 'flake package wiring',
+        href: 'https://github.com/indexable-inc/index/blob/main/lib/per-system.nix'
+      }
+    ]
+  },
+  {
     id: 'recorded-runner',
     date: '2026-05-25',
     title: 'Recorded command runs become a package',
