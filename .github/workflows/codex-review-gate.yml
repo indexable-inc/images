@@ -20,7 +20,6 @@ on:
       - edited
 
 permissions:
-  checks: read
   contents: read
   issues: read
   pull-requests: read
@@ -45,17 +44,6 @@ jobs:
 
           pr_json="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"
           head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
-          check_runs_json="$(gh api "repos/${REPO}/commits/${head_sha}/check-runs")"
-          head_checked_at="$(
-            jq -r '
-              [
-                .check_runs[]
-                | (.started_at // .created_at)
-                | select(. != null)
-              ]
-              | min // empty
-            ' <<<"$check_runs_json"
-          )"
 
           reviews_json="$(
             gh api --paginate --slurp \
@@ -89,19 +77,13 @@ jobs:
           )"
 
           matching_comment="$(
-            jq --arg head "$head_sha" --arg head_checked_at "$head_checked_at" -c '
+            jq --arg head "$head_sha" -c '
               [
                 .[][]
                 | select(
                     (.user.login == "chatgpt-codex-connector[bot]" or .user.login == "chatgpt-codex-connector")
-                    and (
-                      ((.body | test("Codex Review|Reviewed commit"; "i")) and (.body | contains($head)))
-                      or (
-                        (.body | startswith("Codex Review: Didn'\''t find any major issues."))
-                        and $head_checked_at != ""
-                        and .created_at >= $head_checked_at
-                      )
-                    )
+                    and (.body | test("Codex Review|Reviewed commit"; "i"))
+                    and (.body | contains($head))
                   )
               ][0] // empty
             ' <<<"$comments_json"
@@ -119,7 +101,7 @@ jobs:
             echo
             echo "No review from \`chatgpt-codex-connector[bot]\` was found for PR #${PR_NUMBER} at \`${head_sha}\`."
             echo
-            echo "Wait for automatic Codex review or comment \`@codex review\`, then rerun this check if GitHub does not rerun it automatically."
+            echo "Wait for automatic Codex review or comment \`@codex review\`, then rerun this check if GitHub does not rerun it automatically. A no-findings Codex comment only satisfies this gate when it names the exact head SHA."
           } >>"$GITHUB_STEP_SUMMARY"
 
           exit 1
