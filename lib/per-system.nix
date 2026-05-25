@@ -24,17 +24,6 @@ let
   };
   fs = lib.fileset;
 
-  # Add `meta.description` to a derivation without rewriting the original
-  # call site. Used for repoPackages entries and generated fleet wrappers
-  # whose derivations are constructed elsewhere.
-  withDescription =
-    description: drv:
-    drv.overrideAttrs (old: {
-      meta = (old.meta or { }) // {
-        inherit description;
-      };
-    });
-
   # Each lint stage is one subcommand on a single binary so the spec keys
   # off `lib.getExe lintStage` without registering four sibling packages.
   # The Nu wrapper checks syntax at build time, so a typo in a stage shows
@@ -233,7 +222,11 @@ let
       lib.listToAttrs (
         map (sub: {
           name = "${name}-${sub}";
-          value = withDescription "Run `ix fleet ${sub}` against the ${name} example fleet" fleet.${sub};
+          value = fleet.${sub}.overrideAttrs (old: {
+            meta = (old.meta or { }) // {
+              description = "Run `ix fleet ${sub}` against the ${name} example fleet";
+            };
+          });
         }) fleetSubs
       )
     ) exampleFleets;

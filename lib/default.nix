@@ -151,26 +151,15 @@ let
     as `pkgs.<name>`. Flake-output-only packages live in `packageSetFor`
     instead so they don't leak into the nixpkgs namespace inside images.
   */
-  overlay =
-    final: _prev:
-    let
-      ixForOverlay = {
-        buildRustPackage = pkgs: (rustFor pkgs).buildPackage;
-      };
-      checkedOciImageBuilder = final.callPackage paths.packages.ociImageBuilder {
-        pkgs = final;
-        ix = ixForOverlay;
-      };
-    in
-    {
-      drgn = final.callPackage paths.packages.drgn { };
+  overlay = final: _prev: {
+    drgn = final.callPackage paths.packages.drgn { };
 
-      minecraft-hot-reload-agent = final.callPackage paths.packages.minecraft.hotReloadAgent { };
-      minecraft-rcon = final.callPackage paths.packages.minecraft.rcon {
-        writePythonApplication = writePythonApplication final;
-      };
-      oci-image-builder = checkedOciImageBuilder.passthru.unchecked or checkedOciImageBuilder;
+    minecraft-hot-reload-agent = final.callPackage paths.packages.minecraft.hotReloadAgent { };
+    minecraft-rcon = final.callPackage paths.packages.minecraft.rcon {
+      writePythonApplication = writePythonApplication final;
     };
+    oci-image-builder = buildIxRustTool final paths.packages.ociImageBuilder;
+  };
   overlays = [ overlay ];
 
   /**
@@ -264,20 +253,24 @@ let
       rustToolchain = rustNightlyToolchainFor pkgs;
       writePythonApplication = writePythonApplication pkgs;
     };
-  cargoUnitFor =
-    pkgs:
+  # Build a repo-owned Rust tool whose default.nix calls `ix.buildRustPackage`.
+  # Returns the policy-unchecked variant when present, so generators that
+  # only need the binary do not drag the policy-check graph into their closure.
+  buildIxRustTool =
+    hostPkgs: path:
     let
-      rust = rustFor pkgs;
-      checkedNixCargoUnit = pkgs.callPackage paths.packages.nixCargoUnit {
-        inherit pkgs;
-        ix = {
-          buildRustPackage = pkgs: (rustFor pkgs).buildPackage;
-        };
+      checked = hostPkgs.callPackage path {
+        pkgs = hostPkgs;
+        ix.buildRustPackage = pkgs: (rustFor pkgs).buildPackage;
       };
     in
+    checked.passthru.unchecked or checked;
+  cargoUnitFor =
+    pkgs:
     import ./cargo-unit.nix {
-      inherit lib pkgs rust;
-      nixCargoUnit = checkedNixCargoUnit.passthru.unchecked or checkedNixCargoUnit;
+      inherit lib pkgs;
+      rust = rustFor pkgs;
+      nixCargoUnit = buildIxRustTool pkgs paths.packages.nixCargoUnit;
     };
   cargoUnit = cargoUnitFor pkgs;
 
@@ -424,13 +417,7 @@ let
         "zlib"
       ];
       jsonFormat = pkgs.formats.json { };
-      checkedMinecraftNbt = pkgs.callPackage paths.packages.minecraft.nbt {
-        inherit pkgs;
-        ix = {
-          buildRustPackage = pkgs: (rustFor pkgs).buildPackage;
-        };
-      };
-      minecraftNbt = checkedMinecraftNbt.passthru.unchecked or checkedMinecraftNbt;
+      minecraftNbt = buildIxRustTool pkgs paths.packages.minecraft.nbt;
     in
     assert lib.assertMsg (builtins.elem format validFormats)
       "mkMinecraftNbtFormat: format must be one of ${lib.concatStringsSep ", " validFormats}";
@@ -463,17 +450,9 @@ let
   */
   mkMinecraftSyncManaged =
     args:
-    let
-      checkedPackage = pkgs.callPackage paths.packages.minecraft.syncManaged {
-        inherit pkgs;
-        ix = {
-          buildRustPackage = pkgs: (rustFor pkgs).buildPackage;
-        };
-      };
-    in
     import ./minecraft-sync-managed.nix (
       {
-        package = checkedPackage.passthru.unchecked or checkedPackage;
+        package = buildIxRustTool pkgs paths.packages.minecraft.syncManaged;
         inherit writeNushellApplication;
       }
       // args
