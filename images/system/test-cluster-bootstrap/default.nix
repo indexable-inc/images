@@ -1,4 +1,4 @@
-{ ... }:
+_:
 {
   ix.image = {
     name = "ix/test-cluster-bootstrap";
