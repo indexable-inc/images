@@ -82,13 +82,13 @@ export const siteUpdates: SiteUpdate[] = [
   {
     id: 'site-audio-briefs',
     date: '2026-05-23',
-    title: 'Audio briefs land on the site',
+    title: 'A compact update feed lands on the site',
     summary:
-      'The ix images site now has bite-size update entries and a browser-read audio brief.',
+      'The ix images site now has bite-size update entries with a plain RSS feed.',
     paragraphs: [
       'Public project notes now live as compact updates with exact repo links close to the text they explain.',
-      'The audio controls use browser speech synthesis, so GitHub Pages can keep serving static files while each reader picks an available voice from their device.',
-      'The full brief button queues the update feed as one listenable pass for anyone checking the project between tasks.'
+      'GitHub Pages serves static HTML and RSS, so the site stays inspectable without browser-only media controls or runtime services.',
+      'The feed is meant for quick release notes: one short summary, the operational detail, and links to the owning source.'
     ],
     links: [
       {
@@ -110,15 +110,4 @@ export const siteIntro =
 
 export function updateScript(update: SiteUpdate): string {
   return [update.title, update.summary, ...update.paragraphs].join(' ');
-}
-
-export function feedScript(updates: SiteUpdate[]): string {
-  const entries = updates.map((update, index) =>
-    [
-      `Update ${String(index + 1)}. ${update.date}.`,
-      updateScript(update)
-    ].join(' ')
-  );
-
-  return ['ix images update brief.', siteIntro, ...entries].join(' ');
 }
