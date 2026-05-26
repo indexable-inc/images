@@ -65,13 +65,13 @@ fn managed_files(source_dir: &Path) -> Result<Vec<String>> {
 fn validate_rel_path_shape(rel: &str) -> Result<()> {
     ensure!(!rel.is_empty(), "path is empty");
 
-    ensure!(!Path::new(rel).is_absolute(), "path is absolute: {}", rel);
+    ensure!(!Path::new(rel).is_absolute(), "path is absolute: {rel}");
 
     if rel
         .split('/')
         .any(|segment| segment.is_empty() || segment == "." || segment == "..")
     {
-        bail!("path contains unsafe segment: {}", rel);
+        bail!("path contains unsafe segment: {rel}");
     }
 
     Ok(())
@@ -84,10 +84,7 @@ fn validate_rel_path(rel: &str) -> Result<()> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '+' | '-'))
     {
-        bail!(
-            "path contains shell-sensitive or unsafe characters: {}",
-            rel
-        );
+        bail!("path contains shell-sensitive or unsafe characters: {rel}");
     }
 
     Ok(())
@@ -672,7 +669,7 @@ fn main() -> Result<()> {
         &BTreeSet::from(["ops.json".to_owned(), "whitelist.json".to_owned()]),
     )?;
     for world in &config.datapack_worlds {
-        validate_rel_path(world).context("checking datapack world name safety")?;
+        validate_rel_path_shape(world).context("checking datapack world name safety")?;
         sync_tree(
             &config.managed_root.join("managed-datapacks"),
             &config.data_dir.join(world).join("datapacks"),
@@ -707,6 +704,7 @@ mod tests {
         assert!(validate_rel_path("config.toml").is_ok());
         assert!(validate_rel_path("mods/pack+v1..2.toml").is_ok());
 
+        assert!(validate_rel_path("My World").is_err());
         assert!(validate_rel_path("../escape.json").is_err());
         assert!(validate_rel_path("path/../escape.json").is_err());
         assert!(validate_rel_path("./escape.json").is_err());
@@ -727,6 +725,7 @@ mod tests {
     fn validate_rel_path_shape_allows_legacy_manifest_cleanup_paths() {
         assert!(validate_rel_path_shape("plugins/Foo;Bar.yml").is_ok());
         assert!(validate_rel_path_shape("plugins/with space.yml").is_ok());
+        assert!(validate_rel_path_shape("My World").is_ok());
 
         assert!(validate_rel_path_shape("../escape.json").is_err());
         assert!(validate_rel_path_shape("path/../escape.json").is_err());

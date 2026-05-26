@@ -55,13 +55,9 @@ let
     ) "duplicate .properties keys after flattening: ${lib.concatStringsSep ", " duplicateNames}";
     lib.listToAttrs pairs;
 
-  isSafeRelativePath =
+  isSafeRelativePathShape =
     path:
     let
-      # Rejects paths that are absolute, contain '..' segments, '.' segments,
-      # empty segments '//', or shell metacharacters. Matches Rust sync-managed
-      # validation.
-      isSafe = builtins.match "^[a-zA-Z0-9._/+-]+$" path != null;
       isAbsolute = lib.hasPrefix "/" path;
       segments = lib.splitString "/" path;
       hasParent = builtins.elem ".." segments;
@@ -69,7 +65,16 @@ let
       # Detects internal empty segments (//), leading empty (absolute), or trailing empty (config/).
       hasEmpty = builtins.elem "" segments;
     in
-    isSafe && !isAbsolute && !hasParent && !hasCurrent && !hasEmpty;
+    path != "" && !isAbsolute && !hasParent && !hasCurrent && !hasEmpty;
+
+  isSafeRelativePath =
+    path:
+    let
+      # Managed files are rendered through shell builders and later synced at
+      # runtime, so keep the module and sync-managed character policy aligned.
+      isSafe = builtins.match "^[a-zA-Z0-9._/+-]+$" path != null;
+    in
+    isSafeRelativePathShape path && isSafe;
 
   isSafeRelativeName =
     name:
@@ -81,6 +86,7 @@ let
     isSafe && !isParent && !isCurrent;
 
   unsafePaths = paths: lib.filter (path: !isSafeRelativePath path) paths;
+  unsafePathShapes = paths: lib.filter (path: !isSafeRelativePathShape path) paths;
   unsafeNames = names: lib.filter (name: !isSafeRelativeName name) names;
 
   modCatalogType = types.submodule {
@@ -654,7 +660,7 @@ let
         unsafePaths (datapackGeneratedPaths cfg.datapacks.${name})
       )
     ) (lib.attrNames cfg.datapacks)
-    ++ map (path: "services.minecraft world directory ${path}") (unsafePaths annotatedWorldNames);
+    ++ map (path: "services.minecraft world directory ${path}") (unsafePathShapes annotatedWorldNames);
 
   managed =
     let
@@ -1118,7 +1124,7 @@ in
       }
       {
         assertion = invalidManagedPaths == [ ];
-        message = "services.minecraft managed paths must be relative paths without empty, '.', '..' segments, or shell-sensitive characters: ${lib.concatStringsSep ", " invalidManagedPaths}";
+        message = "services.minecraft managed paths must be relative paths without empty, '.', or '..' segments; managed file paths must also avoid shell-sensitive characters: ${lib.concatStringsSep ", " invalidManagedPaths}";
       }
       {
         assertion = rawAccessFileNames == [ ];

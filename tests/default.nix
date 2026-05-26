@@ -376,7 +376,7 @@ let
             defaultMinecraftModule
             {
               services.minecraft = {
-                properties.level-name = "custom";
+                properties.level-name = "My World";
                 datapacks."max-height".dimensionTypes.overworld = {
                   min_y = -2032;
                   height = 4064;
@@ -1315,6 +1315,7 @@ let
       services.minecraft = {
         configFiles."client//bad.toml" = { };
         configFiles."/absolute/bad.toml" = { };
+        properties.level-name = "../bad-world";
         serverFiles."plugins/../bukkit.yml" = { };
         serverFiles."$(bad).json" = { };
         datapacks.bad = {
@@ -2026,7 +2027,8 @@ let
           && lib.hasInfix "services.minecraft.serverFiles.plugins/../bukkit.yml" msg
           && lib.hasInfix "services.minecraft.serverFiles.$(bad).json" msg
           && lib.hasInfix "services.minecraft.datapacks.bad.fileName=../bad" msg
-          && lib.hasInfix "services.minecraft.datapacks.bad.files.data/../bad.json" msg;
+          && lib.hasInfix "services.minecraft.datapacks.bad.files.data/../bad.json" msg
+          && lib.hasInfix "services.minecraft world directory ../bad-world" msg;
         message = "minecraft managed file options should reject unsafe relative paths at eval time";
       }
       {
@@ -2328,11 +2330,11 @@ let
         message = "minecraft configFiles should accept readable SNBT files";
       }
       {
-        assertion = minecraft.datapacks.cfg.datapacks."max-height".worlds == [ "custom" ];
+        assertion = minecraft.datapacks.cfg.datapacks."max-height".worlds == [ "My World" ];
         message = "minecraft datapacks should default to the configured level-name world";
       }
       {
-        assertion = builtins.hasAttr "/var/lib/minecraft/custom/datapacks" minecraft.datapacks.config.ix.extendedAttributes;
+        assertion = builtins.hasAttr "/var/lib/minecraft/My World/datapacks" minecraft.datapacks.config.ix.extendedAttributes;
         message = "minecraft datapacks should annotate target world datapack directories";
       }
       {
@@ -3359,8 +3361,8 @@ let
       ln -s ${minecraft.datapacks.managed.datapacks} /build/minecraft-datapack-managed-root/managed-datapacks
 
       ${lib.getExe minecraft.datapacks.syncManaged}
-      test -L /build/minecraft-datapack-data/custom/datapacks/max-height
-      grep -q '"logical_height": 4064' /build/minecraft-datapack-data/custom/datapacks/max-height/data/minecraft/dimension_type/overworld.json
+      test -L "/build/minecraft-datapack-data/My World/datapacks/max-height"
+      grep -q '"logical_height": 4064' "/build/minecraft-datapack-data/My World/datapacks/max-height/data/minecraft/dimension_type/overworld.json"
     '';
 
     "minecraft_1.21.11-paper" = ''
