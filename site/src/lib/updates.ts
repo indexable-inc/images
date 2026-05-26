@@ -20,7 +20,7 @@ export const siteUpdates: SiteUpdate[] = [
     summary:
       '`ix-dev-diagnose` captures DNS, TLS, certificate, and response-byte clues when ix.dev behaves differently by network.',
     paragraphs: [
-      '`nix run .#ix-dev-diagnose -- --pretty` probes `https://ix.dev/` from the caller\'s path and emits one JSON report for sharing with support.',
+      '`nix run .#ix-dev-diagnose` probes `https://ix.dev/` from the caller\'s path, prints `success` or `failure`, and writes one JSON report for sharing with support.',
       'The report records system resolver answers, per-address TCP and TLS results, parsed certificate issuers and fingerprints, native and Mozilla-root verification outcomes, headers, and a bounded response-body sample.',
       'This is meant for cases such as `SEC_ERROR_UNKNOWN_ISSUER`, captive portals, ISP interception, stale DNS, or CDN edge differences where the failing client sees different bytes than a working client.'
     ],

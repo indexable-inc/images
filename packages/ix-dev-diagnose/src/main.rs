@@ -1,7 +1,9 @@
 use std::{
     collections::BTreeSet,
+    fs,
     io::{ErrorKind, Read, Write},
     net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -32,7 +34,7 @@ const RESPONSE_PREFIX_BYTES: usize = 96;
 
 #[derive(Parser)]
 #[command(
-    about = "Probe ix.dev HTTPS reachability and print JSON diagnostics.",
+    about = "Probe ix.dev HTTPS reachability and write JSON diagnostics.",
     version
 )]
 struct Args {
@@ -59,6 +61,14 @@ struct Args {
     /// Pretty-print the JSON report.
     #[arg(long)]
     pretty: bool,
+
+    /// Write the JSON report to this path.
+    #[arg(long, value_name = "PATH")]
+    output: Option<PathBuf>,
+
+    /// Print the JSON report to stdout instead of the short status summary.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -260,14 +270,84 @@ struct TlsOutcome {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let pretty = args.pretty;
     let report = run(&args)?;
-    if pretty {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+    let json = render_report_json(&report, args.pretty)?;
+
+    let report_path = if let Some(output) = &args.output {
+        Some(write_report_file(output, &json)?)
     } else {
-        println!("{}", serde_json::to_string(&report)?);
+        None
+    };
+
+    if args.json {
+        println!("{json}");
+    } else {
+        let report_path = match report_path {
+            Some(path) => path,
+            None => write_report_file(&default_output_path(&report), &json)?,
+        };
+        print_status_summary(&report, &report_path);
     }
+
     Ok(())
+}
+
+fn render_report_json(report: &Report, pretty: bool) -> Result<String> {
+    if pretty {
+        serde_json::to_string_pretty(report).context("failed to encode pretty JSON report")
+    } else {
+        serde_json::to_string(report).context("failed to encode JSON report")
+    }
+}
+
+fn write_report_file(path: &Path, json: &str) -> Result<PathBuf> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create report directory {}", parent.display()))?;
+    }
+    fs::write(path, json).with_context(|| format!("failed to write report {}", path.display()))?;
+    path.canonicalize()
+        .with_context(|| format!("failed to resolve report path {}", path.display()))
+}
+
+fn default_output_path(report: &Report) -> PathBuf {
+    let target = filename_component(&report.target.host);
+    PathBuf::from(format!(
+        "ix-dev-diagnose-{target}-{}.json",
+        report.command.started_unix_ms
+    ))
+}
+
+fn filename_component(value: &str) -> String {
+    let mut component = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-') {
+            component.push(ch);
+        } else if !component.ends_with('_') {
+            component.push('_');
+        }
+    }
+    let component = component.trim_matches('_').to_owned();
+    if component.is_empty() {
+        "target".to_owned()
+    } else {
+        component
+    }
+}
+
+fn print_status_summary(report: &Report, report_path: &Path) {
+    if report.summary.ok {
+        println!("success");
+    } else {
+        println!("failure");
+        if !report.summary.diagnoses.is_empty() {
+            println!("diagnoses: {}", report.summary.diagnoses.join(", "));
+        }
+    }
+    println!("report: {}", report_path.display());
 }
 
 fn run(args: &Args) -> Result<Report> {
@@ -1355,5 +1435,12 @@ mod tests {
     fn keeps_query_in_request_target() {
         let url = Url::parse("https://ix.dev/cli/linux-x86_64/ix?download=1").unwrap();
         assert_eq!(path_and_query(&url), "/cli/linux-x86_64/ix?download=1");
+    }
+
+    #[test]
+    fn sanitizes_target_for_default_report_filename() {
+        assert_eq!(filename_component("ix.dev"), "ix.dev");
+        assert_eq!(filename_component("[2001:db8::1]"), "2001_db8_1");
+        assert_eq!(filename_component("___"), "target");
     }
 }
