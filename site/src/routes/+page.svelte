@@ -1,9 +1,23 @@
 <script lang="ts">
   import { resolve } from '$app/paths';
-  import { marked } from 'marked';
+  import { Marked } from 'marked';
   import { siteFeedUrl, siteIntro, siteUpdates } from '$lib/updates';
 
-  marked.setOptions({ breaks: false, gfm: true });
+  const safeHrefPattern = /^(https?:|mailto:|#|\/)/i;
+
+  const marked = new Marked({
+    gfm: true,
+    breaks: false,
+    renderer: {
+      html: () => '',
+      link({ href, title, tokens }) {
+        const text = this.parser.parseInline(tokens);
+        if (!safeHrefPattern.test(href)) return text;
+        const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : '';
+        return `<a href="${href}"${titleAttr}>${text}</a>`;
+      }
+    }
+  });
 
   const feedHref = resolve('/feed.xml');
 
