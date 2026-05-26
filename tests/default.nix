@@ -707,7 +707,8 @@ let
   goUnitDerivedWorkspaceWithVendorHashFile = ix.goUnit.buildWorkspace {
     pname = "go-unit-hello-derived";
     src = goUnitDerivedSource;
-    inherit (goUnitWorkspace) vendorHashKey;
+    goMod = ./fixtures/go-unit-hello/go.mod;
+    goSum = ./fixtures/go-unit-hello/go.sum;
     vendorHashFile = ./fixtures/go-unit-hello/go-modules.nix;
     packages = [ "." ];
   };

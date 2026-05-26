@@ -35,22 +35,27 @@ let
       canReadModuleFiles = !(lib.isDerivation src);
       modRoot = args.modRoot or ".";
       moduleRoot = if modRoot == "." then src else src + "/${modRoot}";
+      explicitGoMod = args ? goMod;
       goMod = args.goMod or (moduleRoot + "/go.mod");
-      goModExists = !canReadModuleFiles || builtins.pathExists goMod;
+      canReadGoMod = (canReadModuleFiles || explicitGoMod) && builtins.pathExists goMod;
+      goModExists = canReadGoMod || (!canReadModuleFiles && !explicitGoMod);
       missingGoModMessage = "goUnit.buildWorkspace requires ${builtins.toString goMod}";
       checkedGoMod = if goModExists then goMod else throw missingGoModMessage;
+      explicitGoSum = args ? goSum;
       goSum = args.goSum or (moduleRoot + "/go.sum");
       goSumForBuild =
         args.goSum or (if canReadModuleFiles && builtins.pathExists goSum then goSum else null);
+      canReadGoSum =
+        goSumForBuild != null && (canReadModuleFiles || explicitGoSum) && builtins.pathExists goSumForBuild;
       explicitVendorHashFile = args ? vendorHashFile;
       vendorHashFile = args.vendorHashFile or (moduleRoot + "/go-modules.nix");
       vendorHashKey =
         args.vendorHashKey or (
-          if canReadModuleFiles then
+          if canReadGoMod then
             builtins.hashString "sha256" (
               (builtins.readFile checkedGoMod)
               + "\n"
-              + (if goSumForBuild == null then "" else builtins.readFile goSumForBuild)
+              + (if canReadGoSum then builtins.readFile goSumForBuild else "")
             )
           else
             null
