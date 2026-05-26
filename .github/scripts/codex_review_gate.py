@@ -279,6 +279,7 @@ def matching_thumbsup_request(
     head_sha: str,
     head_committed_at: datetime,
 ) -> dict[str, Any] | None:
+    latest_request: dict[str, Any] | None = None
     for comment in reversed(comments):
         body = str(comment.get("body") or "")
         if not is_review_request(comment) or head_sha not in body:
@@ -286,10 +287,16 @@ def matching_thumbsup_request(
         if parse_github_time(str(comment["created_at"])) < head_committed_at:
             continue
 
-        for reaction in github.reactions(int(comment["id"])):
-            user_login = reaction.get("user", {}).get("login")
-            if reaction.get("content") == "+1" and is_codex_login(user_login):
-                return comment
+        latest_request = comment
+        break
+
+    if latest_request is None:
+        return None
+
+    for reaction in github.reactions(int(latest_request["id"])):
+        user_login = reaction.get("user", {}).get("login")
+        if reaction.get("content") == "+1" and is_codex_login(user_login):
+            return latest_request
     return None
 
 
