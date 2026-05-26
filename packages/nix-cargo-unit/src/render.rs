@@ -2265,6 +2265,7 @@ fn render_doctest_command(
     script.push_str(&cargo_package_exports(unit)?);
     script.push_str("build_script_rustdoc_args=()\n");
     script.push_str("doctest_build_args=()\n");
+    script.push_str("doctest_runtime_library_paths=()\n");
     script.push_str("rustdoc_args=( --test )\n");
     match mode {
         DoctestCommandMode::List => {
@@ -2377,6 +2378,19 @@ fn append_doctest_builder_args(
     script.push_str("for doctest_build_arg in \"''${doctest_build_args[@]}\"; do\n");
     script.push_str("  rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )\n");
     script.push_str("done\n");
+    script.push_str("if [ \"''${#doctest_runtime_library_paths[@]}\" -gt 0 ]; then\n");
+    script.push_str(
+        "  doctest_runtime_library_path=$(IFS=:; printf '%s' \"''${doctest_runtime_library_paths[*]}\")\n",
+    );
+    script
+        .push_str("  if [ \"''${LD_LIBRARY_PATH+x}\" = x ] && [ -n \"$LD_LIBRARY_PATH\" ]; then\n");
+    script.push_str(
+        "    export LD_LIBRARY_PATH=\"$doctest_runtime_library_path:$LD_LIBRARY_PATH\"\n",
+    );
+    script.push_str("  else\n");
+    script.push_str("    export LD_LIBRARY_PATH=\"$doctest_runtime_library_path\"\n");
+    script.push_str("  fi\n");
+    script.push_str("fi\n");
 }
 
 fn push_doctest_build_arg(script: &mut String, value: &str) {
@@ -2385,19 +2399,15 @@ fn push_doctest_build_arg(script: &mut String, value: &str) {
 
 fn append_doctest_build_script_flag_reader(script: &mut String, run_ref: &str) {
     let quoted_run_ref = format!("\"{run_ref}\"");
-    let rustdoc_snippets = [("rustc-cfg", "--cfg"), ("rustc-link-search", "-L")];
 
     script.push('\n');
-    for (file, flag) in rustdoc_snippets {
-        let flag_arg = shell::quote(flag);
-        let _ = writeln!(
-            script,
-            "if [ -f {quoted_run_ref}/{file} ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && build_script_rustdoc_args+=( {flag_arg} \"$line\" )\n  done < {quoted_run_ref}/{file}\nfi",
-        );
-    }
     let _ = writeln!(
         script,
-        "if [ -f {quoted_run_ref}/rustc-cdylib-link-arg ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && doctest_build_args+=( -C \"link-arg=$line\" )\n  done < {quoted_run_ref}/rustc-cdylib-link-arg\nfi",
+        "if [ -f {quoted_run_ref}/rustc-cfg ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && build_script_rustdoc_args+=( '--cfg' \"$line\" )\n  done < {quoted_run_ref}/rustc-cfg\nfi",
+    );
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/rustc-link-search ]; then\n  while IFS= read -r line; do\n    if [ -n \"$line\" ]; then\n      build_script_rustdoc_args+=( '-L' \"$line\" )\n      link_search_path=\"$line\"\n      case \"$link_search_path\" in\n        *=*) link_search_path=\"''${{link_search_path#*=}}\" ;;\n      esac\n      [ -n \"$link_search_path\" ] && doctest_runtime_library_paths+=( \"$link_search_path\" )\n    fi\n  done < {quoted_run_ref}/rustc-link-search\nfi",
     );
     append_doctest_link_arg_reader(script, &quoted_run_ref, "rustc-link-arg");
     let _ = writeln!(
@@ -3239,13 +3249,23 @@ version = "0.1.0"
         )
         .unwrap();
 
+        assert_doctest_rendered_contract(&rendered);
+    }
+
+    fn assert_doctest_rendered_contract(rendered: &str) {
         assert_eq!(rendered.matches("-Z unstable-options").count(), 3);
         assert!(rendered.contains("build_script_rustdoc_args=()"));
         assert!(rendered.contains("doctest_build_args=()"));
+        assert!(rendered.contains("doctest_runtime_library_paths=()"));
         assert!(rendered.contains("rustdoc_args+=( \"''${build_script_rustdoc_args[@]}\" )"));
         assert!(rendered.contains("doctest_build_args+=( '-C' )"));
         assert!(rendered.contains("rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )"));
+        assert!(rendered.contains("doctest_runtime_library_paths+=( \"$link_search_path\" )"));
+        assert!(rendered.contains("export LD_LIBRARY_PATH=\"$doctest_runtime_library_path"));
         assert!(!rendered.contains("done < \"${units.native-run}/rustc-link-lib"));
+        assert!(!rendered.contains(
+            "doctest_build_args+=( -C \"link-arg=$line\" )\n  done < \"${units.native-run}/rustc-cdylib-link-arg"
+        ));
         assert!(!rendered.contains("rustdoc_args+=( \"''${build_script_flags[@]}\" )"));
         assert!(rendered.contains("done < \"${units."));
         assert!(rendered.contains("/rustc-env"));
