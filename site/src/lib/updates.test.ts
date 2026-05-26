@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
+import type { Component } from 'svelte';
 import { inlineTitleHtml, plainText, siteUpdates, updateScript } from './updates';
+
+const noopComponent = (() => null) as unknown as Component;
 
 describe('inlineTitleHtml', () => {
   test('wraps backtick spans in <code>', () => {
@@ -39,8 +42,7 @@ describe('updateScript', () => {
       id: 'demo',
       postedAt: '2026-05-26T01:22:16-07:00',
       title: 'a `cmd` arrived',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      component: (() => null) as any,
+      component: noopComponent,
       rawBody: 'It does `things` well.',
       links: []
     });
