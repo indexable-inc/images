@@ -121,8 +121,9 @@ fn collect_managed_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> Re
     Ok(())
 }
 
-fn manifest_rel(line: &str) -> &str {
-    line.split_once(' ').map_or(line, |(rel, _)| rel)
+fn manifest_entry(line: &str) -> (&str, Option<&str>) {
+    line.rsplit_once(' ')
+        .map_or((line, None), |(rel, target)| (rel, Some(target)))
 }
 
 fn read_manifest_lines(manifest: &Path) -> Result<Vec<String>> {
@@ -153,7 +154,7 @@ fn sync_tree(
     }
 
     for (i, line) in read_manifest_lines(manifest)?.into_iter().enumerate() {
-        let rel = manifest_rel(&line);
+        let (rel, _) = manifest_entry(&line);
         if rel.is_empty() || preserve_removed.contains(rel) {
             continue;
         }
@@ -214,9 +215,11 @@ fn sync_tree(
 }
 
 fn managed_target_for(manifest: &Path, rel: &str) -> Result<Option<String>> {
-    let prefix = format!("{rel} ");
     for line in read_manifest_lines(manifest)? {
-        if let Some(target) = line.strip_prefix(&prefix) {
+        let (entry_rel, target) = manifest_entry(&line);
+        if entry_rel == rel
+            && let Some(target) = target
+        {
             return Ok(Some(target.to_owned()));
         }
     }
@@ -305,7 +308,7 @@ fn plan_dropin_reloads(config: &Config, plan: &mut BTreeSet<(String, String)>) -
     }
 
     for line in read_manifest_lines(&dropin_manifest)? {
-        let rel = manifest_rel(&line);
+        let (rel, _) = manifest_entry(&line);
         if !is_jar_path(rel) || rel == "PlugManX.jar" {
             continue;
         }
@@ -350,7 +353,7 @@ fn plan_server_file_reloads(config: &Config, plan: &mut BTreeSet<(String, String
     }
 
     for line in read_manifest_lines(&server_manifest)? {
-        let rel = manifest_rel(&line);
+        let (rel, _) = manifest_entry(&line);
         let Some(plugin) = plugin_name_from_config_path(rel) else {
             continue;
         };
@@ -729,6 +732,18 @@ mod tests {
         assert!(validate_rel_path_shape("path/../escape.json").is_err());
         assert!(validate_rel_path_shape("path//escape.json").is_err());
         assert!(validate_rel_path_shape("/absolute/path").is_err());
+    }
+
+    #[test]
+    fn manifest_entry_keeps_legacy_paths_with_spaces() {
+        assert_eq!(
+            manifest_entry("plugins/Foo Bar.yml /nix/store/source"),
+            ("plugins/Foo Bar.yml", Some("/nix/store/source"))
+        );
+        assert_eq!(
+            manifest_entry("plugins/Foo;Bar.yml"),
+            ("plugins/Foo;Bar.yml", None)
+        );
     }
 
     #[test]

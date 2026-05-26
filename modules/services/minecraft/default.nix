@@ -74,7 +74,7 @@ let
   isSafeRelativeName =
     name:
     let
-      isSafe = builtins.match "^[a-zA-Z0-9._-]+$" name != null;
+      isSafe = builtins.match "^[a-zA-Z0-9._+-]+$" name != null;
       isParent = name == "..";
       isCurrent = name == ".";
     in
