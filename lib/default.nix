@@ -998,6 +998,7 @@ let
       evalImageConfig
       mkImage
       mkFleet
+      mkFleetFor
       discoverImages
       exampleFleetsFor
       artifacts
@@ -1006,7 +1007,10 @@ let
       buildGradleFatJar
       buildNpmSite
       buildUvApplication
+      bunLockFor
       cargoUnit
+      cargoUnitFor
+      errors
       languages
       minecraft
       mkMinecraftLoader
@@ -1017,6 +1021,7 @@ let
       rustWorkspace
       secrets
       systemdHardening
+      uvLockFor
       writeNushellApplication
       writePythonApplication
       ;
