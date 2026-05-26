@@ -60,11 +60,12 @@ let
       missingGoSumMessage = "goUnit.buildWorkspace requires ${builtins.toString goSum}; pass vendorHash = null only for stdlib-only modules without go.sum";
       canReadGoSum =
         goSumForBuild != null && (canReadModuleFiles || explicitGoSum) && builtins.pathExists goSumForBuild;
+      canDeriveVendorHashKey = canReadGoMod && (canReadGoSum || noSumModule);
       explicitVendorHashFile = args ? vendorHashFile;
       vendorHashFile = args.vendorHashFile or (moduleRoot + "/go-modules.nix");
       vendorHashKey =
         args.vendorHashKey or (
-          if canReadGoMod then
+          if canDeriveVendorHashKey then
             builtins.hashString "sha256" (
               (builtins.readFile checkedGoMod)
               + "\n"

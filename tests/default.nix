@@ -720,6 +720,17 @@ let
     vendorHashFile = ./fixtures/go-unit-hello/go-modules.nix;
     packages = [ "." ];
   };
+  goUnitDerivedMissingGoSumKeyEval =
+    let
+      workspace = ix.goUnit.buildWorkspace {
+        pname = "go-unit-hello-derived-missing-go-sum";
+        src = goUnitDerivedSource;
+        goMod = ./fixtures/go-unit-hello/go.mod;
+        vendorHashFile = ./fixtures/go-unit-hello/go-modules.nix;
+        packages = [ "." ];
+      };
+    in
+    builtins.tryEval workspace.default.drvPath;
   goUnitMissingGoModFixture = fs.toSource {
     root = ./fixtures/go-unit-hello;
     fileset = ./fixtures/go-unit-hello/main.go;
@@ -2798,6 +2809,10 @@ let
           goUnitDerivedWorkspaceWithVendorHashFile.packages.root.goUnit.vendorHashKey
           == goUnitWorkspace.vendorHashKey;
         message = "go-unit derivation sources should use explicit vendor hash files by key";
+      }
+      {
+        assertion = !goUnitDerivedMissingGoSumKeyEval.success;
+        message = "go-unit derivation sources should not derive vendor keys from go.mod alone";
       }
       {
         assertion = !goUnitMissingGoModEval.success;
