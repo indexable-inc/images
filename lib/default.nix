@@ -622,6 +622,32 @@ let
           inherit pkgs;
           ix = ixForPackages;
         };
+        room =
+          let
+            roomSiteSrc = lib.fileset.toSource {
+              root = paths.packages.room + "/site";
+              fileset = lib.fileset.intersection (lib.fileset.gitTracked (paths.packages.room + "/site")) (
+                lib.fileset.unions [
+                  (paths.packages.room + "/site/package.json")
+                  (paths.packages.room + "/site/package-lock.json")
+                  (paths.packages.room + "/site/index.html")
+                  (paths.packages.room + "/site/svelte.config.js")
+                  (paths.packages.room + "/site/tsconfig.json")
+                  (paths.packages.room + "/site/vite.config.ts")
+                  (paths.packages.room + "/site/src")
+                ]
+              );
+            };
+            site = buildNpmSite pkgs {
+              pname = "room-site";
+              version = "0.1.0";
+              src = roomSiteSrc;
+            };
+          in
+          pkgs.callPackage paths.packages.room {
+            inherit pkgs site;
+            ix = ixForPackages;
+          };
         drgn = pkgs.callPackage paths.packages.drgn { };
         ix-fleet = pkgs.callPackage paths.packages.ixFleet {
           ix = ixForPackages;
@@ -716,6 +742,7 @@ let
             (root + "/Cargo.toml")
             (root + "/Cargo.lock")
             (paths.modules + "/services/resource-monitor/stats-writer")
+            paths.packages.room
             paths.packages.dagRunner
             paths.packages.ixDevDiagnose
             paths.packages.loop

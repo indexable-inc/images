@@ -329,6 +329,7 @@ in
         mcp
         ;
       minestom-hello-server-jar = repoPackages.minestom.helloServerJar;
+      inherit (repoPackages) room;
     }
     // examplePackages
     // healthChecks.lifecyclePackages
