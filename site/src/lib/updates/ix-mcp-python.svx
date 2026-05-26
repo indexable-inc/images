@@ -1,0 +1,58 @@
+---
+id: ix-mcp-python
+postedAt: 2026-05-26T02:50:00-07:00
+title: "`ix-mcp` serves a persistent Python session over MCP"
+tags: [interesting, mcp, agents, python, polars]
+links:
+  - label: mcp package
+    href: https://github.com/indexable-inc/index/tree/main/packages/mcp
+---
+
+`nix run .#mcp` speaks MCP over stdio and exposes a Python interpreter as a small set of tools. Sessions live across calls, so an agent can load a dataset once with `python_exec` and ask `python_eval` questions against the cached globals on later turns. No notebook server, no kernel manager, just stdin / stdout.
+
+```text
+python_session_create  python_session_list  python_session_close
+python_eval            python_exec          python_reset
+```
+
+By default each session boots its own venv under a temp dir using the host's `python3`. Pass `command` to `python_session_create` for a project-aware interpreter, e.g. `["uv", "run", "python"]` so the worker inherits the project's `pyproject.toml` and `uv.lock`:
+
+```json
+{
+  "name": "python_session_create",
+  "arguments": {
+    "session_id": "build-analysis",
+    "command": ["uv", "run", "python"],
+    "cwd": "/Users/me/Projects/indexable-inc/index"
+  }
+}
+```
+
+This pairs naturally with `nix run .#run`. After recording a slow build, the agent can ask the MCP session to load `.ix/run/latest/lines.jsonl` into polars and rank the longest gaps, without paging tens of MB of log through its own context window:
+
+```python
+python_exec(source="""
+import polars as pl
+events = (
+    pl.read_ndjson(".ix/run/latest/lines.jsonl")
+      .filter(pl.col("text").str.starts_with("@nix "))
+      .select(
+          "ended_elapsed_ns",
+          pl.col("text").str.slice(5).str.json_decode().alias("event"),
+      )
+      .unnest("event")
+)
+starts = events.filter(pl.col('action') == 'start').select('id', 'text', pl.col('ended_elapsed_ns').alias('t0'))
+stops  = events.filter(pl.col('action') == 'stop' ).select('id',         pl.col('ended_elapsed_ns').alias('t1'))
+slow = (starts.join(stops, on='id')
+              .with_columns(((pl.col('t1') - pl.col('t0')) / 1e9).alias('seconds'))
+              .sort('seconds', descending=True))
+""")
+
+python_eval(expression="slow.head(20)")
+python_eval(expression="slow.filter(pl.col('text').str.contains('rust')).head(20)")
+```
+
+The follow-up `python_eval` calls reuse `slow`, so the agent can ask several questions of the same dataframe instead of re-parsing the log each turn. `python_reset` clears the globals, `python_session_close` ends the worker.
+
+The same binary is also a normal CLI: `nix run .#mcp -- repl` opens an interactive Python session, `nix run .#mcp -- exec '<source>'` and `nix run .#mcp -- eval '<expression>'` run a one-shot through the same worker. The MCP tools and the CLI subcommands share one implementation, so what works at the shell works the same when an agent drives it.
