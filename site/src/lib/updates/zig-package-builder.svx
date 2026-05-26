@@ -1,0 +1,26 @@
+---
+id: zig-package-builder
+postedAt: 2026-05-26T02:27:07-07:00
+title: "`ix.buildZigPackage` builds `build.zig.zon` projects with a cached package store"
+links:
+  - label: build-zig-package
+    href: https://github.com/indexable-inc/index/blob/main/lib/build-zig-package.nix
+  - label: zig fixtures
+    href: https://github.com/indexable-inc/index/tree/main/tests/fixtures
+---
+
+`ix.buildZigPackage` wraps a `build.zig` / `build.zig.zon` project as a normal Nix derivation. Remote `build.zig.zon` dependencies are materialized once through `nixpkgs.zigPackages.<minor>.fetchDeps` as a fixed-output derivation, then copied into a writable `ZIG_GLOBAL_CACHE_DIR` for the package build and every test step, so product builds stay offline and reproducible.
+
+```nix
+ix.buildZigPackage pkgs {
+  pname = "zig-deps-example";
+  version = "0.1.0";
+  src = ./.;
+  zigDepsHash = "sha256-...";   # required when build.zig.zon lists deps
+  testSteps.default = "test";
+}
+```
+
+Named Zig test steps are exposed as separate `passthru.tests.<name>` derivations rather than a single rolled-up step, so the flake check scheduler runs them in parallel and a failing case names the step that actually broke.
+
+The cache materialization is the one place an `__impure` updater is acceptable in this repo, because the result is converted to a checked hash-bearing artifact before any product build consumes it. The boundary lives next to the helper and is documented in `AGENTS.md`.
