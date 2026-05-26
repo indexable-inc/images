@@ -195,6 +195,7 @@ let
           inherit processes;
         }
       );
+      processComposeArgsText = lib.escapeShellArgs processComposeArgs;
       package = writeNushellApplication pkgs {
         inherit name;
         runtimeInputs = [ pkgs.process-compose ] ++ runtimeInputs;
@@ -217,7 +218,7 @@ let
             strictDeps = true;
           }
           ''
-            process-compose --config ${config} --dry-run --no-server --disable-dotenv
+            process-compose --config ${config} ${processComposeArgsText} --dry-run
             mkdir -p "$out"
           '';
     in

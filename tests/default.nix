@@ -513,6 +513,11 @@ let
     check = false;
   };
 
+  processComposeApplication = ix.writeProcessComposeApplication pkgs {
+    name = "process-compose-fixture";
+    processes.hello.command = "true";
+  };
+
   zigAppFixture = fs.toSource {
     root = ./fixtures/zig-app;
     fileset = fs.unions [
@@ -2656,6 +2661,10 @@ let
         message = "cargo-unit workspaces should expose an unused dependency policy check by default";
       }
       {
+        assertion = lib.hasInfix "--ordered-shutdown" processComposeApplication.passthru.tests.dryRun.buildCommand;
+        message = "process-compose dry-run checks should include runtime wrapper arguments";
+      }
+      {
         assertion = goUnitWorkspace.sourceAudit.module.lockFile == "go.sum";
         message = "go-unit workspaces should require and report the Go module lockfile";
       }
@@ -3412,6 +3421,7 @@ let
 
     ${lib.getExe pythonAppClosureProbe} > python-app-closure-probe.out
     grep -q 'python app source is in the runtime closure' python-app-closure-probe.out
+    test -e ${processComposeApplication.passthru.tests.dryRun}
 
     ${lib.getExe zigApplication} > zig-app-fixture.out
     grep -q 'hello from zig app fixture' zig-app-fixture.out
