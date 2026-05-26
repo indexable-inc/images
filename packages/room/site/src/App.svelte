@@ -47,6 +47,7 @@
   let socket: WebSocket | null = null;
   let reconnectTimer: number | null = null;
   let suppressMirror = false;
+  let destroyed = false;
 
   const unsubscribeDoc = doc.subscribe(() => {
     refreshFromDoc();
@@ -59,8 +60,11 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
+    removeSelf();
     unsubscribeDoc();
     unsubscribeLocal();
+    window.removeEventListener('pagehide', removeSelf);
     if (reconnectTimer !== null) {
       window.clearTimeout(reconnectTimer);
     }
@@ -68,6 +72,7 @@
   });
 
   connect();
+  window.addEventListener('pagehide', removeSelf);
 
   $effect(() => {
     if (suppressMirror) {
@@ -91,11 +96,21 @@
     next.binaryType = 'arraybuffer';
     next.addEventListener('open', () => {
       connected = true;
-      publishSelf();
+      next.send(`room-id:${selfId}`);
+      publishSelf(true);
     });
     next.addEventListener('close', () => {
       connected = false;
-      reconnectTimer = window.setTimeout(connect, 1000);
+      if (socket === next) {
+        socket = null;
+      }
+      if (destroyed || reconnectTimer !== null) {
+        return;
+      }
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, 1000);
     });
     next.addEventListener('message', (event) => {
       if (!(event.data instanceof ArrayBuffer)) {
@@ -110,7 +125,7 @@
     socket = next;
   }
 
-  function publishSelf() {
+  function publishSelf(force = false) {
     const previous = participants.get(selfId) as ParticipantRecord | undefined;
     const record: ParticipantRecord = {
       name,
@@ -121,7 +136,7 @@
       codexStatus: status,
       lastSeenMs: Date.now()
     };
-    if (previous && shallowEqualExceptLastSeen(previous, record)) {
+    if (!force && previous && shallowEqualExceptLastSeen(previous, record)) {
       return;
     }
     participants.set(selfId, record);
@@ -130,17 +145,18 @@
   }
 
   function refreshFromDoc() {
-    const snapshot = participants.toJSON() as Record<string, ParticipantRecord>;
+    const snapshot = participants.toJSON() as Record<string, unknown>;
     const next: ParticipantView[] = [];
-    for (const [id, record] of Object.entries(snapshot)) {
-      if (record && typeof record === 'object') {
+    for (const [id, value] of Object.entries(snapshot)) {
+      const record = parseParticipantRecord(value);
+      if (record) {
         next.push({ id, record });
       }
     }
     next.sort((a, b) => a.record.name.localeCompare(b.record.name));
     participantViews = next;
 
-    const mine = snapshot[selfId];
+    const mine = parseParticipantRecord(snapshot[selfId]);
     if (mine) {
       suppressMirror = true;
       try {
@@ -177,6 +193,42 @@
       left.codexTask === right.codexTask &&
       left.codexStatus === right.codexStatus
     );
+  }
+
+  function removeSelf() {
+    participants.delete(selfId);
+    doc.commit();
+  }
+
+  function parseParticipantRecord(value: unknown): ParticipantRecord | null {
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+    const record = value as Record<string, unknown>;
+    if (
+      typeof record.name !== 'string' ||
+      typeof record.color !== 'string' ||
+      typeof record.focus !== 'string' ||
+      typeof record.draft !== 'string' ||
+      typeof record.codexTask !== 'string' ||
+      !isAgentStatus(record.codexStatus) ||
+      typeof record.lastSeenMs !== 'number'
+    ) {
+      return null;
+    }
+    return {
+      name: record.name,
+      color: record.color,
+      focus: record.focus,
+      draft: record.draft,
+      codexTask: record.codexTask,
+      codexStatus: record.codexStatus,
+      lastSeenMs: record.lastSeenMs
+    };
+  }
+
+  function isAgentStatus(value: unknown): value is AgentStatus {
+    return typeof value === 'string' && statuses.includes(value as AgentStatus);
   }
 
   function hash(value: string) {
