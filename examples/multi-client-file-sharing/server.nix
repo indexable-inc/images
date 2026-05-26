@@ -81,7 +81,7 @@ in
       (lib.getExe' config.systemd.package "systemctl")
       "is-active"
       "--quiet"
-      "smbd.service"
+      "samba-smbd.service"
     ];
   };
 }
