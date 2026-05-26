@@ -14,6 +14,9 @@ export type SiteUpdateMeta = {
   // Markdown source: backticks for inline code, asterisks for emphasis.
   title: string;
   links: SiteUpdateLink[];
+  // Lowercased tag slugs. `interesting` is the default front-page filter; the
+  // rest are free-form axes consumed by the boolean filter expression.
+  tags: string[];
 };
 
 export type SiteUpdate = SiteUpdateMeta & {
@@ -23,7 +26,9 @@ export type SiteUpdate = SiteUpdateMeta & {
 
 type SvxModule = {
   default: Component;
-  metadata: SiteUpdateMeta;
+  // The raw frontmatter shape. `tags` is optional here because mdsvex does
+  // not validate; the loader below normalizes to a required `string[]`.
+  metadata: Omit<SiteUpdateMeta, 'tags'> & { tags?: string[] };
 };
 
 const modules = import.meta.glob<SvxModule>('./updates/*.svx', { eager: true });
@@ -36,6 +41,7 @@ const rawModules = import.meta.glob<string>('./updates/*.svx', {
 export const siteUpdates: SiteUpdate[] = Object.entries(modules)
   .map(([path, mod]) => ({
     ...mod.metadata,
+    tags: (mod.metadata.tags ?? []).map((tag) => tag.toLowerCase()),
     component: mod.default,
     rawBody: stripFrontmatter(rawModules[path] ?? '')
   }))

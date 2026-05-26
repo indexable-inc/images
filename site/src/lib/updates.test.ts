@@ -44,7 +44,8 @@ describe('updateScript', () => {
       title: 'a `cmd` arrived',
       component: noopComponent,
       rawBody: 'It does `things` well.',
-      links: []
+      links: [],
+      tags: []
     });
     expect(script).toBe('a cmd arrived. It does things well.');
   });
@@ -58,6 +59,15 @@ describe('siteUpdates', () => {
       expect(update.title.length).toBeGreaterThan(0);
       expect(typeof update.component).toBe('function');
       expect(Array.isArray(update.links)).toBe(true);
+      expect(Array.isArray(update.tags)).toBe(true);
+    }
+  });
+
+  test('tags are lowercased slugs', () => {
+    for (const update of siteUpdates) {
+      for (const tag of update.tags) {
+        expect(tag).toMatch(/^[a-z][a-z0-9-]*$/);
+      }
     }
   });
 

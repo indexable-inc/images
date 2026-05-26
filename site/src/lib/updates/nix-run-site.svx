@@ -2,6 +2,7 @@
 id: nix-run-site
 postedAt: 2026-05-26T01:22:16-07:00
 title: "`nix run .#site` previews the page locally"
+tags: [nix, site, cli]
 links:
   - label: per-system wiring
     href: https://github.com/indexable-inc/index/blob/main/lib/per-system.nix

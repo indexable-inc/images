@@ -2,6 +2,7 @@
 id: run-recorder
 postedAt: 2026-05-25T15:28:13-07:00
 title: "`nix run .#run` records command sessions"
+tags: [interesting, nix, cli]
 links:
   - label: run package
     href: https://github.com/indexable-inc/index/tree/main/packages/run

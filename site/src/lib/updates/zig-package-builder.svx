@@ -2,6 +2,7 @@
 id: zig-package-builder
 postedAt: 2026-05-26T02:27:07-07:00
 title: "`ix.buildZigPackage` builds `build.zig.zon` projects with a cached package store"
+tags: [nix, zig, builder]
 links:
   - label: build-zig-package
     href: https://github.com/indexable-inc/index/blob/main/lib/build-zig-package.nix

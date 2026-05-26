@@ -55,4 +55,11 @@
       {/each}
     </div>
   {/if}
+  {#if update.tags.length > 0}
+    <ul class="tags" aria-label="Tags">
+      {#each update.tags as tag (tag)}
+        <li>{tag}</li>
+      {/each}
+    </ul>
+  {/if}
 </article>

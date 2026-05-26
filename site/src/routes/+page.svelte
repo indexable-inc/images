@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import FilterBar from '$lib/FilterBar.svelte';
   import UpdateEntry from '$lib/UpdateEntry.svelte';
+  import { parseFilter } from '$lib/filter-expression';
   import { siteIntro, siteUpdates } from '$lib/updates';
 
   // The prerendered HTML uses UTC so every visitor's pre-hydration view
@@ -10,6 +12,16 @@
   onMount(() => {
     timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   });
+
+  // Default filter narrows to author-flagged headline items. Visitors can
+  // clear the input to see the full log or write any boolean expression.
+  let filter = $state('interesting');
+
+  const parsed = $derived(parseFilter(filter));
+  const filtered = $derived(
+    parsed.ok ? siteUpdates.filter((u) => parsed.matches(u.tags)) : siteUpdates
+  );
+  const error = $derived(parsed.ok ? undefined : parsed.error);
 </script>
 
 <svelte:head>
@@ -22,8 +34,18 @@
   <p>{siteIntro}</p>
 </section>
 
+<FilterBar
+  value={filter}
+  onChange={(next: string) => {
+    filter = next;
+  }}
+  matchCount={filtered.length}
+  totalCount={siteUpdates.length}
+  {error}
+/>
+
 <ol class="log">
-  {#each siteUpdates as update (update.id)}
+  {#each filtered as update (update.id)}
     <li>
       <UpdateEntry {update} {timeZone} />
     </li>

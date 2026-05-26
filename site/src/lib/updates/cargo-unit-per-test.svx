@@ -2,6 +2,7 @@
 id: cargo-unit-per-test
 postedAt: 2026-05-26T00:19:45-07:00
 title: "cargo-unit caches Rust tests per `#[test]`"
+tags: [nix, rust, testing, builder]
 links:
   - label: nix-cargo-unit
     href: https://github.com/indexable-inc/index/tree/main/packages/nix-cargo-unit

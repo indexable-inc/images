@@ -2,6 +2,7 @@
 id: observability-stack
 postedAt: 2026-05-23T00:25:53-07:00
 title: Self-hosted OpenTelemetry stack module
+tags: [nix, module, observability]
 links:
   - label: observability module
     href: https://github.com/indexable-inc/index/tree/main/modules/services/observability

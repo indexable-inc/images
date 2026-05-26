@@ -2,6 +2,7 @@
 id: ix-dev-diagnose
 postedAt: 2026-05-25T16:42:25-07:00
 title: "`ix-dev-diagnose` probes ix.dev reachability"
+tags: [nix, cli, diagnostics]
 links:
   - label: diagnostic package
     href: https://github.com/indexable-inc/index/tree/main/packages/ix-dev-diagnose
