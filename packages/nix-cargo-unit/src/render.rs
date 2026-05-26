@@ -2382,13 +2382,26 @@ fn append_doctest_builder_args(
     script.push_str(
         "  doctest_runtime_library_path=$(IFS=:; printf '%s' \"''${doctest_runtime_library_paths[*]}\")\n",
     );
-    script
-        .push_str("  if [ \"''${LD_LIBRARY_PATH+x}\" = x ] && [ -n \"$LD_LIBRARY_PATH\" ]; then\n");
     script.push_str(
-        "    export LD_LIBRARY_PATH=\"$doctest_runtime_library_path:$LD_LIBRARY_PATH\"\n",
+        "  doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')\n",
+    );
+    script.push_str("  case \"$doctest_runtime_library_path_host\" in\n");
+    script.push_str(
+        "    *apple-darwin*) doctest_runtime_library_path_var=DYLD_FALLBACK_LIBRARY_PATH ;;\n",
+    );
+    script.push_str("    *) doctest_runtime_library_path_var=LD_LIBRARY_PATH ;;\n");
+    script.push_str("  esac\n");
+    script.push_str(
+        "  doctest_runtime_library_path_current=\"''${!doctest_runtime_library_path_var-}\"\n",
+    );
+    script.push_str("  if [ -n \"$doctest_runtime_library_path_current\" ]; then\n");
+    script.push_str(
+        "    export \"$doctest_runtime_library_path_var=$doctest_runtime_library_path:$doctest_runtime_library_path_current\"\n",
     );
     script.push_str("  else\n");
-    script.push_str("    export LD_LIBRARY_PATH=\"$doctest_runtime_library_path\"\n");
+    script.push_str(
+        "    export \"$doctest_runtime_library_path_var=$doctest_runtime_library_path\"\n",
+    );
     script.push_str("  fi\n");
     script.push_str("fi\n");
 }
@@ -3261,7 +3274,19 @@ version = "0.1.0"
         assert!(rendered.contains("doctest_build_args+=( '-C' )"));
         assert!(rendered.contains("rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )"));
         assert!(rendered.contains("doctest_runtime_library_paths+=( \"$link_search_path\" )"));
-        assert!(rendered.contains("export LD_LIBRARY_PATH=\"$doctest_runtime_library_path"));
+        assert!(rendered.contains(
+            "doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')"
+        ));
+        assert!(rendered.contains(
+            "*apple-darwin*) doctest_runtime_library_path_var=DYLD_FALLBACK_LIBRARY_PATH ;;"
+        ));
+        assert!(rendered.contains("*) doctest_runtime_library_path_var=LD_LIBRARY_PATH ;;"));
+        assert!(rendered.contains(
+            "doctest_runtime_library_path_current=\"''${!doctest_runtime_library_path_var-}\""
+        ));
+        assert!(rendered.contains(
+            "export \"$doctest_runtime_library_path_var=$doctest_runtime_library_path"
+        ));
         assert!(!rendered.contains("done < \"${units.native-run}/rustc-link-lib"));
         assert!(!rendered.contains(
             "doctest_build_args+=( -C \"link-arg=$line\" )\n  done < \"${units.native-run}/rustc-cdylib-link-arg"
