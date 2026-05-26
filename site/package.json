@@ -27,5 +27,8 @@
   },
   "overrides": {
     "cookie": "^0.7.0"
+  },
+  "dependencies": {
+    "marked": "^16.4.2"
   }
 }
