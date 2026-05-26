@@ -1,8 +1,16 @@
 ## Module conventions
 
 Modules declare options and config. Keep each module inert until its enable flag
-or equivalent activation condition is set. Prefer independent modules registered
-through the central registry over modules importing each other.
+or equivalent activation condition is set. Prefer independent modules picked up
+through the auto-discovered registry over modules importing each other.
+
+A new module is a directory at `modules/<category>/<name>/` with its own
+`default.nix`. The walker in [`lib/default.nix`](lib/default.nix) (see
+`discoverModules`) finds it on the next eval; no registry edit is needed. Nested
+sub-modules follow the same shape (`modules/services/minecraft/fabric/default.nix`
+becomes `nixosModules.minecraft.fabric`). Helper data that lives next to a
+module but is not itself a NixOS module belongs in a sibling directory whose
+name starts with `_`, which the walker skips.
 
 Public options should describe the user's domain. Hide storage mechanics behind
 typed options, generated files, and small adapters. Use broad escape hatches only
@@ -29,4 +37,3 @@ namespace boundary or an explicit alternate port.
 Modules that manage artifacts should consume catalogs, lockfiles, or caller
 supplied sources. Presets and examples should read like intent, with local or
 private artifacts shown only when that is the point of the example.
-
