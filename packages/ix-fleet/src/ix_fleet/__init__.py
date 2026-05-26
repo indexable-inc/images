@@ -621,7 +621,7 @@ async def switch_node_from_source(
     if node.switch.buildVm is not None:
         command.extend(["--build-vm", node.switch.buildVm])
     for name, path in sorted(node.switch.overrideInputs.items()):
-        command.extend(["--override-input", f"{name}={path}"])
+        command.extend(["--override-input", name, path])
 
     for attempt in range(1, MAX_SWITCH_RETRIES + 1):
         try:

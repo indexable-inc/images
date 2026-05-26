@@ -294,6 +294,60 @@ class DownTests(unittest.TestCase):
             asyncio.run(ix_fleet.remove_node(node, dry_run=False))
 
 
+class SwitchSourceTests(unittest.TestCase):
+    def test_override_inputs_are_separate_nix_flag_arguments(self) -> None:
+        calls: list[list[str]] = []
+        node_data = fleet_node("api")
+        node_data["switch"]["buildVm"] = "builder"
+        node_data["switch"]["overrideInputs"] = {
+            "ix": "github:indexable-inc/ix",
+            "ix-images": "path:/workspace/index",
+        }
+        node = ix_fleet.FleetNode.model_validate(node_data)
+
+        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+            del timeout
+            self.assertFalse(dry_run)
+            calls.append(command)
+            return ""
+
+        with patch.object(ix_fleet, "run_cli", fake_run_cli):
+            asyncio.run(
+                ix_fleet.switch_node_from_source(
+                    node,
+                    Path("/source"),
+                    Path("/source/subdir"),
+                    dry_run=False,
+                )
+            )
+
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "ix",
+                    "switch",
+                    "api",
+                    ".#api",
+                    "--build-on",
+                    "remote",
+                    "--source",
+                    "/source",
+                    "--source-workdir",
+                    "/source/subdir",
+                    "--build-vm",
+                    "builder",
+                    "--override-input",
+                    "ix",
+                    "github:indexable-inc/ix",
+                    "--override-input",
+                    "ix-images",
+                    "path:/workspace/index",
+                ],
+            ],
+        )
+
+
 def argparse_namespace(**kwargs: typing.Any) -> typing.Any:
     return type("Args", (), kwargs)()
 
