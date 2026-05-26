@@ -180,6 +180,7 @@ let
       fs.unions [
         (paths.site + "/package.json")
         (paths.site + "/package-lock.json")
+        (paths.site + "/mdsvex.config.js")
         (paths.site + "/svelte.config.js")
         (paths.site + "/vite.config.ts")
         (paths.site + "/vitest.config.ts")

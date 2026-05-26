@@ -1,9 +1,9 @@
 import { fileURLToPath } from 'node:url';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { playwright } from '@vitest/browser-playwright';
-import { mdsvex, escapeSvelte } from 'mdsvex';
-import { codeToHtml } from 'shiki';
+import { mdsvex } from 'mdsvex';
 import { defineConfig } from 'vitest/config';
+import { siteMdsvexOptions } from './mdsvex.config.js';
 
 // vitest uses @sveltejs/vite-plugin-svelte directly (not the full sveltekit
 // plugin) so the browser server doesn't try to spin up a SvelteKit dev
@@ -22,19 +22,7 @@ export default defineConfig({
     svelte({
       extensions: ['.svelte', '.svx'],
       preprocess: [
-        mdsvex({
-          extensions: ['.svx'],
-          highlight: {
-            highlighter: async (code, lang = 'text') => {
-              const html = await codeToHtml(code, {
-                lang,
-                themes: { light: 'github-light', dark: 'github-dark' },
-                defaultColor: false
-              });
-              return `{@html \`${escapeSvelte(html)}\`}`;
-            }
-          }
-        })
+        mdsvex(siteMdsvexOptions)
       ]
     })
   ],
