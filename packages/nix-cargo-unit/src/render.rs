@@ -2287,22 +2287,7 @@ fn render_doctest_command(
         push_rustdoc_arg(&mut script, "--target");
         push_rustdoc_arg(&mut script, platform);
     }
-    for rustflag in &unit.profile.rustflags {
-        push_doctest_build_arg(&mut script, rustflag);
-    }
-    if let Some(run_index) = unit_build_script_run(graph, index) {
-        let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
-        append_doctest_build_script_flag_reader(&mut script, &run_ref);
-    }
-    script.push_str("rustdoc_args+=( \"''${build_script_rustdoc_args[@]}\" )\n");
-    if !matches!(mode, DoctestCommandMode::List) {
-        script.push_str("if [ \"''${#doctest_build_args[@]}\" -gt 0 ]; then\n");
-        script.push_str("  rustdoc_args+=( -Z unstable-options )\n");
-        script.push_str("fi\n");
-    }
-    script.push_str("for doctest_build_arg in \"''${doctest_build_args[@]}\"; do\n");
-    script.push_str("  rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )\n");
-    script.push_str("done\n");
+    append_doctest_builder_args(&mut script, graph, prepared, index, mode);
     for dep_index in &prepared.transitive_unit_deps[index] {
         let dep = &graph.units[*dep_index];
         if dep.is_bin() {
@@ -2365,6 +2350,33 @@ enum DoctestCommandMode {
 
 fn push_rustdoc_arg(script: &mut String, value: &str) {
     let _ = writeln!(script, "rustdoc_args+=( {} )", shell::quote(value));
+}
+
+fn append_doctest_builder_args(
+    script: &mut String,
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+    mode: DoctestCommandMode,
+) {
+    let unit = &graph.units[index];
+    for rustflag in &unit.profile.rustflags {
+        push_doctest_build_arg(script, rustflag);
+    }
+    if let Some(run_index) = unit_build_script_run(graph, index) {
+        let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
+        append_doctest_build_script_flag_reader(script, &run_ref);
+    }
+
+    script.push_str("rustdoc_args+=( \"''${build_script_rustdoc_args[@]}\" )\n");
+    if !matches!(mode, DoctestCommandMode::List) {
+        script.push_str("if [ \"''${#doctest_build_args[@]}\" -gt 0 ]; then\n");
+        script.push_str("  rustdoc_args+=( -Z unstable-options )\n");
+        script.push_str("fi\n");
+    }
+    script.push_str("for doctest_build_arg in \"''${doctest_build_args[@]}\"; do\n");
+    script.push_str("  rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )\n");
+    script.push_str("done\n");
 }
 
 fn push_doctest_build_arg(script: &mut String, value: &str) {
