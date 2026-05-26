@@ -37,7 +37,11 @@ def is_review_request(comment: dict[str, Any]) -> bool:
 def is_no_findings_comment(comment: dict[str, Any]) -> bool:
     body = str(comment.get("body") or "")
     login = comment.get("user", {}).get("login")
-    return is_codex_login(login) and "Codex Review" in body and bool(NO_FINDINGS_RE.search(body))
+    return (
+        is_codex_login(login)
+        and bool(re.search(r"Codex\s+Review", body, re.IGNORECASE))
+        and bool(NO_FINDINGS_RE.search(body))
+    )
 
 
 def is_review_comment_for_head(comment: dict[str, Any], head_sha: str) -> bool:
