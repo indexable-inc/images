@@ -3511,6 +3511,11 @@ const CRLF: &str = include_str!("../../testdata/crlf.toml");
         .unwrap();
 
         assert!(rendered.contains("[ \"regex-lite\" \"testdata\" ]"));
+        assert!(rendered.contains("sourcePackageRelative ="));
+        assert!(rendered.contains("test_source_root="));
+        assert!(rendered.contains("test_package_relative="));
+        assert!(rendered.contains("test_cwd=\"$test_root/$test_package_relative\""));
+        assert!(rendered.contains("cp -R \"$test_source_root\"/. \"$test_root\"/"));
         fs::remove_dir_all(workspace).unwrap();
     }
 

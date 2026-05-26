@@ -102,6 +102,13 @@ let
     in
     if audit.scope == "closure" && audit.relative != "" then "${source}/${audit.relative}" else source;
 
+  sourcePackageRelative =
+    sourceName:
+    let
+      audit = sourceAudit.${sourceName};
+    in
+    if audit.scope == "closure" then audit.relative else "";
+
   mkUnit = attrs: pkgs.stdenv.mkDerivation (attrs // {
     dontUnpack = true;
     dontConfigure = true;
@@ -371,23 +378,31 @@ let
           target:
           let
             packageCwd = sourcePackageRoot target.sourceStoreName;
+            packageRelative = sourcePackageRelative target.sourceStoreName;
+            sourceRoot = sources.${target.sourceStoreName};
           in
           ''
           test_binary=${pkgs.lib.escapeShellArg target.binary}
+          test_source_root=${pkgs.lib.escapeShellArg sourceRoot}
           test_source_cwd=${pkgs.lib.escapeShellArg packageCwd}
+          test_package_relative=${pkgs.lib.escapeShellArg packageRelative}
           test_cwd="$test_source_cwd"
           if [ ! -x "$test_binary" ]; then
             echo >&2 "error: cargo-unit coverage test binary is missing or not executable: $test_binary"
             exit 1
           fi
           ${pkgs.lib.optionalString writableTestCwd ''
-          test_cwd="$writable_cwd_root"/${pkgs.lib.escapeShellArg target.sourceStoreName}
-          if [ ! -e "$test_cwd/.cargo-unit-writable-cwd-ready" ]; then
-            rm -rf "$test_cwd"
-            mkdir -p "$test_cwd"
-            cp -R "$test_source_cwd"/. "$test_cwd"/
-            chmod -R u+w "$test_cwd"
-            touch "$test_cwd/.cargo-unit-writable-cwd-ready"
+          test_root="$writable_cwd_root"/${pkgs.lib.escapeShellArg target.sourceStoreName}
+          test_cwd="$test_root"
+          if [ -n "$test_package_relative" ]; then
+            test_cwd="$test_root/$test_package_relative"
+          fi
+          if [ ! -e "$test_root/.cargo-unit-writable-cwd-ready" ]; then
+            rm -rf "$test_root"
+            mkdir -p "$test_root"
+            cp -R "$test_source_root"/. "$test_root"/
+            chmod -R u+w "$test_root"
+            touch "$test_root/.cargo-unit-writable-cwd-ready"
           fi
           ''}
           echo "running coverage target $test_binary"
