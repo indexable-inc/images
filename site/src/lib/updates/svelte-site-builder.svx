@@ -12,26 +12,25 @@ links:
     href: https://docs.orbstack.dev/docker/file-sharing
 ---
 
-`ix.buildSvelteSite` is now the shared builder for the repo's Svelte/Vite surfaces: the docs site, loop viewer, and resource monitor site. It owns the locked production build, a static preview command, and a checkout dev-server command from one Nix call.
+`ix.buildSvelteSite` is now the shared builder for the repo's Svelte/Vite surfaces: the docs site and resource monitor site. It owns the locked production build, a static preview command, and a checkout dev-server command from one Nix call.
 
 ```nix
 ix.buildSvelteSite pkgs {
-  pname = "loop-viewer";
-  src = loopViewerSrc;
-  serve.port = 8081;
+  pname = "site";
+  src = siteSrc;
+  serve.port = 8080;
   devServer = {
-    name = "loop-viewer-dev";
-    checkoutSubdir = "packages/loop/site";
-    port = 5175;
+    name = "site-dev";
+    checkoutSubdir = "site";
+    port = 5173;
   };
 }
 ```
 
-The build still runs from a filtered, tracked source closure. The preview command serves the immutable output with `miniserve`, so `nix run .#loop-viewer` exercises the same files the package embeds. The dev command runs from the mutable checkout instead:
+The build still runs from a filtered, tracked source closure. The preview command serves the immutable output with `miniserve`, so `nix run .#site` exercises the same files the package embeds. The dev command runs from the mutable checkout instead:
 
 ```bash
 nix run .#site-dev
-nix run .#loop-viewer-dev -- --root packages/loop/site --install
 ```
 
 That split is deliberate. Vite's dev server writes dependency installs, caches, and HMR state, while Nix builds should stay pure and reproducible. The `-dev` wrappers install `node_modules` when missing, pass Vite's `--host` and `--port` flags, and leave ignored files in the checkout where editors and file watchers expect them.

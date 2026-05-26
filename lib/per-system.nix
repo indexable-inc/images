@@ -109,31 +109,6 @@ let
 
   agentsMd = repoPackages.agents-md;
 
-  # Bake the repo's lint program into the loop runner so
-  # `nix run .#loop` matches the historical Python wrapper's UX. The
-  # underlying binary still accepts `--lint-program` as an override.
-  loop =
-    pkgs.runCommand "loop"
-      {
-        nativeBuildInputs = [ pkgs.makeWrapper ];
-        meta = {
-          mainProgram = "loop";
-          description = "Run an agent CLI in a checked commit-and-push loop with a live web UI";
-        };
-      }
-      ''
-        mkdir -p $out/bin
-        makeWrapper ${lib.getExe repoPackages.loop} $out/bin/loop \
-          --add-flags --lint-program \
-          --add-flags ${lib.escapeShellArg (lib.getExe lint)} \
-          --prefix PATH : ${
-            lib.makeBinPath [
-              pkgs.git
-              pkgs.mgrep
-            ]
-          }
-      '';
-
   mcSource = ix.writeNushellApplication pkgs {
     name = "mc-source";
     text = builtins.readFile paths.tools.mcSource;
@@ -203,7 +178,6 @@ let
         "agents-md"
         "dag-runner"
         "ix-dev-diagnose"
-        "loop"
         "mcp"
         "minecraft-nbt"
         "minecraft-sync-managed"
@@ -280,7 +254,6 @@ let
       {
         inherit lib pkgs;
         inherit (ix) writeNushellApplication;
-        inherit (repoPackages) loop;
         dagRunner = repoPackages.dag-runner;
       }
       {
@@ -318,9 +291,8 @@ in
         };
 
       health-checks = healthChecks.dag;
-      health-checks-loro = healthChecks.loro;
       health-checks-zellij = healthChecks.zellij;
-      inherit lint loop site;
+      inherit lint site;
       site-dev = site.passthru.devServer;
       agents-md = agentsMd;
       bench-filesystem = benchFilesystem;
@@ -333,7 +305,6 @@ in
         drgn
         ix-dev-diagnose
         ix-fleet
-        loop-viewer
         mc-probe
         minecraft-nbt
         minecraft-sync-managed
@@ -343,7 +314,6 @@ in
         run
         mcp
         ;
-      loop-viewer-dev = repoPackages.loop-viewer.passthru.devServer;
       minestom-hello-server-jar = repoPackages.minestom.helloServerJar;
     }
     // examplePackages

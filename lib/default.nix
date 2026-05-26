@@ -733,40 +733,12 @@ let
       ixForPackages = ixSpecialArgs // {
         inherit pkgs;
         # Rebind the language unit builders to the caller's pkgs so repo
-        # packages built through packageSetFor (loop, ...) compile for
-        # the host system instead of the x86_64-linux pkgs the top-level
-        # ixSpecialArgs bundle is bound to.
+        # packages built through packageSetFor compile for the host system
+        # instead of the x86_64-linux pkgs the top-level ixSpecialArgs bundle
+        # is bound to.
         cargoUnit = cargoUnitFor pkgs;
         goUnit = goUnitFor pkgs;
         rustWorkspace = rustWorkspaceFor pkgs;
-      };
-      loopViewerSrc = lib.fileset.toSource {
-        root = paths.packages.loop + "/site";
-        fileset = lib.fileset.intersection (lib.fileset.gitTracked (paths.packages.loop + "/site")) (
-          lib.fileset.unions [
-            (paths.packages.loop + "/site/package.json")
-            (paths.packages.loop + "/site/package-lock.json")
-            (paths.packages.loop + "/site/index.html")
-            (paths.packages.loop + "/site/svelte.config.js")
-            (paths.packages.loop + "/site/tsconfig.json")
-            (paths.packages.loop + "/site/vite.config.ts")
-            (paths.packages.loop + "/site/src")
-          ]
-        );
-      };
-      loopViewer = buildSvelteSite pkgs {
-        pname = "loop-viewer";
-        version = "0.1.0";
-        src = loopViewerSrc;
-        serve = {
-          name = "loop-viewer";
-          port = 8082;
-        };
-        devServer = {
-          name = "loop-viewer-dev";
-          checkoutSubdir = "packages/loop/site";
-          port = 5175;
-        };
       };
       ixCliArgs = lib.optionalAttrs (builtins.hasAttr packageSystem cliArtifacts) {
         binarySrc = cliArtifacts.${packageSystem};
@@ -793,12 +765,6 @@ let
           ix = ixForPackages;
         };
         llm-clippy = llmClippyFor pkgs;
-        loop-viewer = loopViewer;
-        loop = pkgs.callPackage paths.packages.loop {
-          inherit pkgs;
-          viewer = loopViewer.passthru.staticSite;
-          ix = ixForPackages;
-        };
         mc-probe = pkgs.callPackage paths.packages.minecraft.probe {
           ix = ixForPackages;
         };
@@ -858,7 +824,6 @@ let
             (rustPackageFiles paths.packages.agentsMd)
             (rustPackageFiles paths.packages.dagRunner)
             (rustPackageFiles paths.packages.ixDevDiagnose)
-            (rustPackageFiles paths.packages.loop)
             (rustPackageFiles paths.packages.mcp)
             (rustPackageFiles paths.packages.minecraft.nbt)
             (rustPackageFiles paths.packages.minecraft.syncManaged)

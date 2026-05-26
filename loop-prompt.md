@@ -1,9 +1,0 @@
-Find one part of this repository where the code, module surface, or developer API can become meaningfully better. Look for friction a future caller or maintainer would actually feel: duplicated config, repeated boilerplate, awkward option names, brittle parsing, weak validation, unclear data flow, over-wide source inputs, untyped module boundaries, non-idiomatic code, helper APIs that force call sites to repeat themselves, or implementation choices that make the next feature harder.
-
-Make a focused improvement that raises the quality bar. Prefer changes that improve correctness, maintainability, developer ergonomics, eval/build behavior, or the shape of a public option/helper. Prose-only edits are acceptable when the prose is part of the developer experience, but do not settle for wording polish when a code or API improvement is available.
-
-Use `mgrep search -c {natural language}` to search the repository; do not reach for `rg`, `grep`, or `find` for code search. Read the surrounding code before editing. Preserve the repo's established patterns when they are sound, and improve the underlying helper/module when the pattern itself is the problem. Remove jank at the source: collapse duplicated shapes into one clear data path, replace ad hoc glue with the repo's idioms, and make the next call site harder to misuse. Keep the diff reviewable: one coherent quality improvement, plus tests or eval checks when the behavior could regress.
-
-If you discover that AGENTS.md itself is wrong, stale, or biasing you toward a bad change, fix that durable instruction instead of working around it. Remove or narrow rules that encode an incorrect model of the repo; add a short invariant only when the same mistake would plausibly recur.
-
-Work directly in the checkout. Do not commit or push; leave the working tree changes for the outer loop to check, commit, and push.

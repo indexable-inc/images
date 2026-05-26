@@ -3212,12 +3212,6 @@ let
         message = "repo Rust package outputs should not wrap unrelated workspace policy checks";
       }
       {
-        assertion =
-          builtins.pathExists (ix.rustWorkspace.src + "/packages/loop/src/main.rs")
-          && !(builtins.pathExists (ix.rustWorkspace.src + "/packages/loop/site/package.json"));
-        message = "repo Rust workspace source should exclude loop viewer site files";
-      }
-      {
         assertion = builtins.hasAttr "integration-all" repoPackages.dag-runner.passthru.tests;
         message = "repo Rust package tests should include package-owned integration test targets";
       }

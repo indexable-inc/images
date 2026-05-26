@@ -84,7 +84,6 @@
           dagRunner = ./packages/dag-runner;
           drgn = ./packages/drgn;
           llmClippy = ./packages/llm-clippy;
-          loop = ./packages/loop;
           minestom.servers.hello = ./packages/minestom/servers/hello;
           nixCargoUnit = ./packages/nix-cargo-unit;
           ociImageBuilder = ./packages/oci-image-builder;
