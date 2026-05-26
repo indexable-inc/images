@@ -2480,6 +2480,10 @@ mod tests {
         assert!(rendered.contains("packageRoot = \".\";"));
         assert!(rendered.contains("sourceStoreName = \"cargo-unit-source-hello-0.1.0-"));
         assert!(rendered.contains("testPlan = mkTestPlan \"cargo-unit-test-plan\";"));
+        assert!(rendered.contains("coverageReport = mkCoverageReport {};"));
+        assert!(rendered.contains("makeCoverageReport = mkCoverageReport;"));
+        assert!(rendered.contains("llvm-profdata"));
+        assert!(rendered.contains("llvm-cov"));
         assert!(rendered.contains("source-roots.tsv"));
         assert!(rendered.contains("testManifestDrv ="));
         assert!(rendered.contains("cargo-unit-test-manifest"));

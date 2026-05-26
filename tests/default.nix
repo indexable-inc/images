@@ -545,6 +545,23 @@ let
     ];
   };
 
+  cargoUnitCoverageWorkspace = ix.cargoUnit.buildWorkspace {
+    pname = "cargo-unit-hello-coverage";
+    src = cargoUnitFixture;
+    workspaceRoot = ./fixtures/cargo-unit-hello;
+    cargoArgs = [
+      "--workspace"
+      "--tests"
+    ];
+    profile = "coverage";
+    policy = {
+      denyUnusedCrateDependencies = false;
+      cargoAudit.enable = false;
+      cargoMachete.enable = false;
+      clippy.enable = false;
+    };
+  };
+
   cargoUnitHello = cargoUnitWorkspace.binaries.cargo-unit-hello;
   cargoUnitTangoComparison = cargoUnitWorkspace.compareTangoBenchmarks {
     baseline = cargoUnitWorkspace;
@@ -2627,6 +2644,14 @@ let
         message = "cargo-unit workspaces should expose a reusable test plan";
       }
       {
+        assertion = cargoUnitWorkspace ? coverageReport;
+        message = "cargo-unit workspaces should expose a reusable coverage report";
+      }
+      {
+        assertion = cargoUnitWorkspace ? makeCoverageReport;
+        message = "cargo-unit workspaces should expose a customizable coverage report builder";
+      }
+      {
         assertion = cargoUnitWorkspace ? benchmarkPlan;
         message = "cargo-unit workspaces should expose a reusable benchmark plan";
       }
@@ -3165,6 +3190,10 @@ let
     grep -q '/bin/cargo_unit_hello$' ${cargoUnitWorkspace.testPlan}/packages/cargo-unit-hello/test-binaries
     grep -qx '.' ${cargoUnitWorkspace.testPlan}/packages/cargo-unit-hello/package-root
     grep -q '^cargo-unit-source-cargo-unit-hello-0.1.0-.*	[.]$' ${cargoUnitWorkspace.testPlan}/source-roots.tsv
+    test -s ${cargoUnitCoverageWorkspace.coverageReport}/lcov.info
+    test -s ${cargoUnitCoverageWorkspace.coverageReport}/merged.profdata
+    grep -q '^SF:src/lib.rs$' ${cargoUnitCoverageWorkspace.coverageReport}/lcov.info
+    grep -q '^DA:' ${cargoUnitCoverageWorkspace.coverageReport}/lcov.info
     test -x ${cargoUnitWorkspace.benchmarkPlan}/packages/cargo-unit-hello/benchmarks/greeting
     grep -q '^cargo-unit-hello	greeting	.*/bin/greeting$' ${cargoUnitWorkspace.benchmarkPlan}/benchmarks.tsv
     test -e ${cargoUnitTangoComparison}/done

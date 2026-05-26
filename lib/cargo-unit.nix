@@ -236,11 +236,14 @@ let
     `benchmarks` and `benchmarkPlan`. Tango benches can compare previous and
     next artifacts with `next.compareTangoBenchmarks { baseline = previous; }`,
     where `previous` is another generated workspace or a `benchmarkPlan` path.
+    Test graphs also expose `coverageReport` and `makeCoverageReport`; build the
+    workspace with a profile that passes `-Cinstrument-coverage` and consume the
+    generated `$out/lcov.info`.
 
     Returns the generated attrset with `sourceAudit`, `units`, `roots`, `checkedRoots`,
-    `packages`, `binaries`, `libraries`, `benchmarks`, `default`, `policyChecks`, plus the
-    intermediate `unitGraphJson`, `unitsNix`, and `vendorDir` derivations for
-    inspection.
+    `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
+    `policyChecks`, plus the intermediate `unitGraphJson`, `unitsNix`, and `vendorDir`
+    derivations for inspection.
   */
   buildWorkspace =
     rawArgs:
