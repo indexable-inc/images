@@ -675,6 +675,33 @@ let
     packages = [ "." ];
   };
 
+  goUnitStdlibFixture = fs.toSource {
+    root = ./fixtures/go-unit-stdlib;
+    fileset = fs.unions [
+      ./fixtures/go-unit-stdlib/go.mod
+      ./fixtures/go-unit-stdlib/main.go
+      ./fixtures/go-unit-stdlib/main_test.go
+    ];
+  };
+
+  goUnitStdlibWorkspace = ix.goUnit.buildWorkspace {
+    pname = "go-unit-stdlib";
+    src = goUnitStdlibFixture;
+    vendorHash = null;
+    packages = [ "." ];
+  };
+
+  goUnitDerivedStdlibSource = pkgs.runCommand "go-unit-stdlib-source" { } ''
+    cp -R ${goUnitStdlibFixture}/. "$out"
+  '';
+
+  goUnitDerivedStdlibWorkspace = ix.goUnit.buildWorkspace {
+    pname = "go-unit-stdlib-derived";
+    src = goUnitDerivedStdlibSource;
+    vendorHash = null;
+    packages = [ "." ];
+  };
+
   goUnitPackageCollisionEval =
     builtins.tryEval
       (ix.goUnit.buildWorkspace {
@@ -2696,6 +2723,18 @@ let
         message = "go-unit workspaces should resolve default go.mod and go.sum below modRoot";
       }
       {
+        assertion = goUnitStdlibWorkspace.sourceAudit.module.lockFile == null;
+        message = "go-unit workspaces should allow stdlib-only modules without go.sum";
+      }
+      {
+        assertion = goUnitStdlibWorkspace.packages.root.goUnit.goSum == null;
+        message = "go-unit package derivations should pass null goSum for modules without go.sum";
+      }
+      {
+        assertion = goUnitDerivedStdlibWorkspace.vendorHashKey == null;
+        message = "go-unit workspaces should not read derivation source module files during eval";
+      }
+      {
         assertion = !goUnitPackageCollisionEval.success;
         message = "go-unit workspaces should reject package patterns with colliding output names";
       }
@@ -3437,6 +3476,12 @@ let
     ${goUnitNestedWorkspace.default}/bin/go-unit-nested > go-unit-nested.out
     grep -q 'hello from nested go-unit: Hello, world.' go-unit-nested.out
     test -e ${goUnitNestedWorkspace.tests.root}/done
+    ${goUnitStdlibWorkspace.default}/bin/go-unit-stdlib > go-unit-stdlib.out
+    grep -q 'HELLO FROM GO-UNIT STDLIB' go-unit-stdlib.out
+    test -e ${goUnitStdlibWorkspace.tests.root}/done
+    ${goUnitDerivedStdlibWorkspace.default}/bin/go-unit-stdlib > go-unit-stdlib-derived.out
+    grep -q 'HELLO FROM GO-UNIT STDLIB' go-unit-stdlib-derived.out
+    test -e ${goUnitDerivedStdlibWorkspace.tests.root}/done
 
     grep -q 'class="ix bun"' ${bunSite}/share/bun-site-fixture/index.html
     test -d ${bunSite.bunNodeModules}/node_modules/clsx
