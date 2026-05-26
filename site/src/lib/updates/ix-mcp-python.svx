@@ -8,7 +8,13 @@ links:
     href: https://github.com/indexable-inc/index/tree/main/packages/mcp
 ---
 
+<script>
+  import IxMcpDiagram from '$lib/diagrams/IxMcpDiagram.svelte';
+</script>
+
 `nix run .#mcp` speaks MCP over stdio and exposes a Python interpreter as a small set of tools. Sessions live across calls, so an agent can load a dataset once with `python_exec` and ask `python_eval` questions against the cached globals on later turns. No notebook server, no kernel manager, just stdin / stdout.
+
+<IxMcpDiagram />
 
 ```text
 python_session_create  python_session_list  python_session_close

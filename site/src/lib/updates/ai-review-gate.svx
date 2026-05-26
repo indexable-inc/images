@@ -10,7 +10,13 @@ links:
     href: https://github.com/indexable-inc/index/blob/main/.github/workflows/ai-review-gate.md
 ---
 
+<script>
+  import AiReviewGateDiagram from '$lib/diagrams/AiReviewGateDiagram.svelte';
+</script>
+
 `indexable-inc/index/.github/workflows/ai-review-gate.yml@main` is a `workflow_call` reviewer that any repo can mount as the default AI review on `main`. The current implementation runs `openai/codex-action` against a JSON schema, posts each finding as a GitHub review suggestion with a `suggested_replacement`, and reports an `overall_correctness` verdict that becomes the final gate.
+
+<AiReviewGateDiagram />
 
 ```yaml
 jobs:

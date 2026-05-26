@@ -10,7 +10,13 @@ links:
     href: https://github.com/indexable-inc/index/tree/main/modules/services/room
 ---
 
+<script>
+  import RoomServerDiagram from '$lib/diagrams/RoomServerDiagram.svelte';
+</script>
+
 `nix run .#room` boots a single binary that serves a Svelte page and a `/ws` WebSocket on `:8080`. Every connected teammate publishes presence (name, color, focus, draft), and a per-participant `codex` status keyed on one of `idle`, `thinking`, `editing`, `reviewing`, `blocked`, so the rest of the room sees what each agent is doing without anyone having to ask.
+
+<RoomServerDiagram />
 
 ```bash
 nix run github:indexable-inc/index#room
