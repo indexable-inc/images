@@ -258,7 +258,10 @@ impl PythonSession {
             .current_dir(cwd.as_deref().unwrap_or_else(|| Path::new(".")))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            // Worker stderr is not part of the JSON protocol. Normal Python
+            // stderr is captured in-process; raw fd 2 writes must not back up
+            // and block stdout responses.
+            .stderr(Stdio::null())
             .spawn()
             .with_context(|| {
                 format!(
@@ -460,5 +463,45 @@ fn command_arg(command: Vec<String>) -> Option<Vec<String>> {
         None
     } else {
         Some(command)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    use super::*;
+
+    #[test]
+    fn worker_stderr_burst_cannot_block_protocol() -> Result<()> {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = sender.send(run_worker_stderr_burst_session());
+        });
+
+        let output = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .context("worker stderr burst blocked the session protocol")??;
+        assert_eq!(output, "result:\nok");
+        Ok(())
+    }
+
+    fn run_worker_stderr_burst_session() -> Result<String> {
+        let script = r#"
+i=0
+head -c 2097152 /dev/zero >&2
+while IFS= read -r _line; do
+  printf '{"id":%s,"ok":true,"stdout":"","stderr":"","result":"ok"}\n' "$i"
+  i=$((i + 1))
+done
+"#;
+        let command = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            script.to_string(),
+            "ix-mcp-fake-worker".to_string(),
+        ];
+        let mut session = PythonSession::start("stderr-burst".to_string(), Some(command), None)?;
+        session.request("eval", json!({ "expression": "unused" }))
     }
 }
