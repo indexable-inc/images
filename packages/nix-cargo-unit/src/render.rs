@@ -2263,15 +2263,15 @@ fn render_doctest_command(
     )?;
     script.push_str("cd \"$CARGO_MANIFEST_DIR\"\n");
     script.push_str(&cargo_package_exports(unit)?);
-    script.push_str("rustdoc_args=( --test -Z unstable-options )\n");
+    script.push_str("build_script_flags=()\n");
+    script.push_str("rustdoc_args=( --test )\n");
     match mode {
         DoctestCommandMode::List => {
-            script.push_str("rustdoc_args+=( --output-format doctest )\n");
+            script.push_str("rustdoc_args+=( -Z unstable-options --output-format doctest )\n");
         }
         DoctestCommandMode::RunAll => {}
         DoctestCommandMode::RunCase => {
-            script
-                .push_str("rustdoc_args+=( --test-args \"$TEST_NAME\" --test-args --nocapture )\n");
+            script.push_str("rustdoc_args+=( --test-args \"$TEST_NAME\" --test-args --exact --test-args --include-ignored --test-args --nocapture )\n");
         }
     }
     push_rustdoc_arg(&mut script, "--crate-name");
@@ -2290,6 +2290,11 @@ fn render_doctest_command(
         push_rustdoc_arg(&mut script, "--doctest-build-arg");
         push_rustdoc_arg(&mut script, rustflag);
     }
+    if let Some(run_index) = unit_build_script_run(graph, index) {
+        let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
+        append_build_script_flag_reader(&mut script, &run_ref, unit);
+    }
+    script.push_str("rustdoc_args+=( \"''${build_script_flags[@]}\" )\n");
     for dep_index in &prepared.transitive_unit_deps[index] {
         let dep = &graph.units[*dep_index];
         if dep.is_bin() {
@@ -3088,6 +3093,103 @@ version = "0.1.0"
 
         assert_eq!(rendered.matches("\"alpha\" = mkDoctestEntry").count(), 2);
         assert_eq!(rendered.matches("\"beta\" = mkDoctestEntry").count(), 2);
+    }
+
+    #[test]
+    fn doctest_commands_match_cargo_rustdoc_contract() {
+        let workspace = tempfile::tempdir().unwrap();
+        fs::create_dir_all(workspace.path().join("src")).unwrap();
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            r#"[package]
+name = "native"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+        let build_rs = workspace.path().join("build.rs");
+        let lib_rs = workspace.path().join("src/lib.rs");
+        fs::write(&build_rs, "fn main() {}\n").unwrap();
+        fs::write(&lib_rs, "pub fn native() {}\n").unwrap();
+        let build_rs = build_rs.to_string_lossy();
+        let lib_rs = lib_rs.to_string_lossy();
+        let pkg_id = format!("path+file://{}#native@0.1.0", workspace.path().display());
+
+        let graph: UnitGraph = serde_json::from_value(serde_json::json!({
+          "version": 1,
+          "units": [
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["custom-build"],
+                "crate_types": ["bin"],
+                "name": "build-script-build",
+                "src_path": build_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "features": [],
+              "mode": "build",
+              "dependencies": []
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["custom-build"],
+                "crate_types": ["bin"],
+                "name": "build-script-build",
+                "src_path": build_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "features": [],
+              "mode": "run-custom-build",
+              "dependencies": [
+                { "index": 0, "extern_crate_name": "build_script_build" }
+              ]
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "name": "native",
+                "src_path": lib_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "features": [],
+              "mode": "build",
+              "dependencies": [
+                { "index": 1, "extern_crate_name": "build_script_build" }
+              ]
+            }
+          ],
+          "roots": [2]
+        }))
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: workspace.path().to_path_buf(),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(rendered.matches("-Z unstable-options").count(), 1);
+        assert!(rendered.contains("build_script_flags=()"));
+        assert!(rendered.contains("rustdoc_args+=( \"''${build_script_flags[@]}\" )"));
+        assert!(rendered.contains("done < \"${units."));
+        assert!(rendered.contains("/rustc-env"));
+        assert!(rendered.contains("export OUT_DIR=\"${units."));
+        assert!(rendered.contains("--test-args --exact"));
+        assert!(rendered.contains("--test-args --include-ignored"));
     }
 
     #[test]
