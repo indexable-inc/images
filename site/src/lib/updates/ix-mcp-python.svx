@@ -39,12 +39,19 @@ This pairs naturally with `nix run .#run`. After recording a slow build, the age
 ```python
 python_exec(source="""
 import polars as pl
+
+nix_event_dtype = pl.Struct([
+    pl.Field("action", pl.String),
+    pl.Field("id", pl.Int64),
+    pl.Field("text", pl.String),
+    pl.Field("type", pl.Int64),
+])
 events = (
     pl.read_ndjson(".ix/run/latest/lines.jsonl")
       .filter(pl.col("text").str.starts_with("@nix "))
       .select(
           "ended_elapsed_ns",
-          pl.col("text").str.slice(5).str.json_decode().alias("event"),
+          pl.col("text").str.slice(5).str.json_decode(nix_event_dtype).alias("event"),
       )
       .unnest("event")
 )

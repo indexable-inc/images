@@ -48,12 +48,20 @@ The same shape works for any structured event stream you choose to record. `nix 
 Record that through `run`, drop the `@nix ` prefix, decode the rest, and join starts to stops to surface the slowest phases:
 
 ```python
+import polars as pl
+
+nix_event_dtype = pl.Struct([
+    pl.Field("action", pl.String),
+    pl.Field("id", pl.Int64),
+    pl.Field("text", pl.String),
+    pl.Field("type", pl.Int64),
+])
 events = (
     pl.read_ndjson(".ix/run/latest/lines.jsonl")
       .filter(pl.col("text").str.starts_with("@nix "))
       .select(
           "ended_elapsed_ns",
-          pl.col("text").str.slice(5).str.json_decode().alias("event"),
+          pl.col("text").str.slice(5).str.json_decode(nix_event_dtype).alias("event"),
       )
       .unnest("event")
 )

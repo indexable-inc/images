@@ -55,4 +55,4 @@ The structured output keeps each finding mechanically actionable: `title`, `body
 }
 ```
 
-Branch protection requires the `ai review approved` check, which only passes when the reviewer returns a well-formed JSON document and votes `patch is correct`. Missing or malformed output fails closed.
+Direct users can require the `ai review approved` check. Reusable-workflow callers should require GitHub's called-job check name, such as `ai-review-gate / ai review approved` for the example above. The gate only passes when the reviewer returns a well-formed JSON document and votes `patch is correct`; missing or malformed output fails closed.

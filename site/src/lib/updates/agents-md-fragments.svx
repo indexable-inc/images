@@ -22,6 +22,6 @@ lib.agentsMd.render {
 Sibling repos can pull in shared guidance instead of copy-pasting it. The ix repo already publishes its agnostic sections through the same API and this repo imports them at the top of the render pipeline.
 
 ```bash
-nix run   github:indexable-inc/index#agents-md   # writes AGENTS.md
-nix flake check github:indexable-inc/index#agents-md-up-to-date
+nix run .#agents-md   # writes AGENTS.md
+nix flake check .#agents-md-up-to-date
 ```
