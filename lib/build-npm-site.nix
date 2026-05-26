@@ -56,9 +56,9 @@ let
   ++ lib.optional (buildFlags != [ ]) "--"
   ++ buildFlags;
 
-  routePrefixFlag =
-    lib.optionalString (serveRoutePrefix != "/" && serveRoutePrefix != "")
-      " --route-prefix ${lib.escapeShellArg serveRoutePrefix}";
+  routePrefixFlag = lib.optionalString (
+    serveRoutePrefix != "/" && serveRoutePrefix != ""
+  ) " --route-prefix ${lib.escapeShellArg serveRoutePrefix}";
 in
 pkgs.stdenvNoCC.mkDerivation (_: {
   inherit
