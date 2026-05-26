@@ -490,11 +490,14 @@ mod tests {
         let script = r#"
 i=0
 head -c 2097152 /dev/zero >&2
-while IFS= read -r _line; do
-  printf '{"id":%s,"ok":true,"stdout":"","stderr":"","result":"ok"}\n' "$i"
-  i=$((i + 1))
-done
-"#;
+	while IFS= read -r _line; do
+	  printf '{"id":%s,"ok":true,"stdout":"","stderr":"","result":"ok"}\n' "$i"
+	  case "$_line" in
+	    *'"op":"close"'*) break ;;
+	  esac
+	  i=$((i + 1))
+	done
+	"#;
         let command = vec![
             "sh".to_string(),
             "-c".to_string(),
