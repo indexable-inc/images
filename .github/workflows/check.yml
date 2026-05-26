@@ -52,5 +52,27 @@ jobs:
           name: indexable-inc
           authToken: ${{ github.event_name == 'push' && secrets.CACHIX_AUTH_TOKEN || '' }}
 
-      - name: nix flake check
-        run: nix flake check -L
+      # `nix flake check` runs serially: it evaluates every flake output, then
+      # builds the `checks` derivations in a single batch that only releases
+      # paths to Cachix when the whole batch finishes. A failure on one closure
+      # discards the prior work, so the rerun re-evaluates from scratch.
+      #
+      # nix-fast-build pipelines eval and build (via nix-eval-jobs) and pushes
+      # each completed closure to the daemon's post-build-hook as soon as it
+      # finishes, so partial progress survives a later failure. The fast
+      # `nix flake check --no-build` step stays in front to catch eval-only
+      # breakage in `packages` / `nixosConfigurations` attrs that the
+      # `checks.eval` aggregate does not reach.
+      - name: Evaluate flake outputs
+        run: nix flake check --no-build -L
+
+      - name: Build checks with nix-fast-build
+        # `--inputs-from .` resolves `nixpkgs#nix-fast-build` against the
+        # flake's locked nixpkgs, so the CI tool version moves with
+        # `nix flake update` instead of drifting on the runner's registry.
+        run: |
+          nix run --inputs-from . nixpkgs#nix-fast-build -- \
+            --skip-cached \
+            --no-nom \
+            --no-link \
+            --flake .#checks.x86_64-linux
