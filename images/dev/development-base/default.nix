@@ -1,9 +1,8 @@
 # Default ix dev base image: agent CLIs plus a normal build toolchain.
-# The auto-enabled base profile (modules/profiles/base.nix) supplies the
-# nushell workspace wrapper, gdb/lldb, strace, tcpdump, jq, btop, bpftrace,
-# lsof, ncdu, pv, file, and the gnutar/gzip/zstd trio needed to stay
-# `ix switch`-able. Editors and version control are not in base, so they
-# live here.
+# The auto-enabled base profile (modules/profiles/base.nix) supplies version
+# control, editors, the nushell workspace wrapper, gdb/lldb, strace, tcpdump,
+# jq, btop, bpftrace, lsof, ncdu, pv, file, and the gnutar/gzip/zstd trio
+# needed to stay `ix switch`-able.
 { lib, pkgs, ... }:
 {
   ix.image.name = "development-base";
