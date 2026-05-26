@@ -2485,6 +2485,8 @@ mod tests {
         assert!(rendered.contains("testPlan = mkTestPlan \"cargo-unit-test-plan\";"));
         assert!(rendered.contains("coverageReport = mkCoverageReport {};"));
         assert!(rendered.contains("makeCoverageReport = mkCoverageReport;"));
+        assert!(rendered.contains("writableTestCwd ? true"));
+        assert!(rendered.contains(".cargo-unit-writable-cwd-ready"));
         assert!(rendered.contains("llvm-profdata"));
         assert!(rendered.contains("llvm-cov"));
         assert!(!rendered.contains("fallbackLlvmCov"));

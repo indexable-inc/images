@@ -64,6 +64,8 @@ threshold with Tango's `--fail-threshold` flag.
 contains tests. Build the workspace with `extraRustcArgs` passing
 `-Cinstrument-coverage`; the report derivation runs each test binary, merges the
 LLVM profiles, and writes normalized LCOV to `$out/lcov.info`.
+Coverage tests run from writable package-source copies by default, matching
+Cargo's expectation that tests can create package-local runtime files.
 The selected Rust toolchain must include matching LLVM tools, or
 `makeCoverageReport` must receive explicit `llvmCov` and `llvmProfdata` paths.
 

@@ -288,6 +288,7 @@ let
       name ? "cargo-unit-coverage",
       testArgs ? [],
       testArgsByPackage ? {},
+      writableTestCwd ? true,
       llvmCov ? null,
       llvmProfdata ? null,
     }:
@@ -308,11 +309,12 @@ let
           coverage_root="$TMPDIR/cargo-unit-coverage"
           profile_dir="$coverage_root/profiles"
           source_roots="$coverage_root/source-roots.tsv"
+          writable_cwd_root="$coverage_root/writable-cwds"
           executed_test_binaries="$coverage_root/executed-test-binaries"
           merged_profile="$out/merged.profdata"
           raw_lcov="$out/raw.lcov"
 
-          mkdir -p "$out" "$profile_dir"
+          mkdir -p "$out" "$profile_dir" "$writable_cwd_root"
           : > "$source_roots"
           : > "$executed_test_binaries"
           export LLVM_PROFILE_FILE="$profile_dir/%p-%m.profraw"
@@ -361,11 +363,22 @@ let
           in
           ''
           test_binary=${pkgs.lib.escapeShellArg target.binary}
-          test_cwd=${pkgs.lib.escapeShellArg packageCwd}
+          test_source_cwd=${pkgs.lib.escapeShellArg packageCwd}
+          test_cwd="$test_source_cwd"
           if [ ! -x "$test_binary" ]; then
             echo >&2 "error: cargo-unit coverage test binary is missing or not executable: $test_binary"
             exit 1
           fi
+          ${pkgs.lib.optionalString writableTestCwd ''
+          test_cwd="$writable_cwd_root"/${pkgs.lib.escapeShellArg target.sourceStoreName}
+          if [ ! -e "$test_cwd/.cargo-unit-writable-cwd-ready" ]; then
+            rm -rf "$test_cwd"
+            mkdir -p "$test_cwd"
+            cp -R "$test_source_cwd"/. "$test_cwd"/
+            chmod -R u+w "$test_cwd"
+            touch "$test_cwd/.cargo-unit-writable-cwd-ready"
+          fi
+          ''}
           echo "running coverage target $test_binary"
           printf '%s\n' "$test_binary" >> "$executed_test_binaries"
           (
