@@ -25,6 +25,12 @@ let
   propertiesFormat = pkgs.formats.keyValue { };
   formatValueType = jsonFormat.type;
   fileExt = path: lib.last (lib.splitString "." path);
+  hostPort =
+    address: port:
+    let
+      host = if lib.hasInfix ":" address && !lib.hasPrefix "[" address then "[${address}]" else address;
+    in
+    "${host}:${toString port}";
 
   pluginType = types.submodule (
     { name, ... }:
@@ -176,6 +182,14 @@ let
       '') pluginJars
     );
   };
+  wildcardClientAddresses = [
+    "0.0.0.0"
+    "::"
+    "[::]"
+  ];
+  velocityProbeAddress =
+    if builtins.elem cfg.address wildcardClientAddresses then "127.0.0.1" else cfg.address;
+  velocityProbeTarget = hostPort velocityProbeAddress cfg.port;
 
   installManagedConfigFiles = lib.concatMapStringsSep "\n" (
     path:
@@ -655,13 +669,14 @@ in
           + lib.optionalString (
             cfg.health.motdContains != [ ]
           ) " and the MOTD contains the configured substrings";
-        # Probes loopback inside the guest. Velocity speaks the standard
-        # Java SLP handshake even though it routes traffic to backends, so
-        # an SLP success here proves Velocity itself is healthy independent
-        # of any individual Paper backend's state.
+        # Probe the actual bind address for concrete listeners, and loopback
+        # for wildcard binds. Velocity speaks the standard Java SLP handshake
+        # even though it routes traffic to backends, so an SLP success here
+        # proves Velocity itself is healthy independent of any individual Paper
+        # backend's state.
         command = [
           (lib.getExe ix.packages.mc-probe)
-          "127.0.0.1:${toString cfg.port}"
+          velocityProbeTarget
         ]
         ++ lib.concatMap (needle: [
           "--motd-contains"
