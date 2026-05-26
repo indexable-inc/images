@@ -1,10 +1,35 @@
 import { describe, expect, test } from 'vitest';
-import { plainText, siteUpdates, updateScript } from './updates';
+import { inlineTitleHtml, plainText, siteUpdates, updateScript } from './updates';
+
+describe('inlineTitleHtml', () => {
+  test('wraps backtick spans in <code>', () => {
+    expect(inlineTitleHtml('`nix run .#site` previews locally')).toBe(
+      '<code>nix run .#site</code> previews locally'
+    );
+  });
+
+  test('escapes raw HTML before any backtick substitution', () => {
+    const out = inlineTitleHtml('<script>alert(1)</script>');
+    expect(out).not.toMatch(/<script/i);
+    expect(out).toContain('&lt;script&gt;');
+  });
+
+  test('handles titles with no backticks', () => {
+    expect(inlineTitleHtml('Self-hosted OpenTelemetry stack module')).toBe(
+      'Self-hosted OpenTelemetry stack module'
+    );
+  });
+});
 
 describe('plainText', () => {
   test('strips inline code, bold, italic, and link syntax', () => {
-    const out = plainText('use `cmd`, **strong**, *em*, and [text](https://x)');
-    expect(out).toBe('use cmd, strong, em, and text');
+    expect(plainText('use `cmd`, **strong**, *em*, and [text](https://x)')).toBe(
+      'use cmd, strong, em, and text'
+    );
+  });
+
+  test('drops fenced code blocks', () => {
+    expect(plainText('before\n```\ncode\nblock\n```\nafter')).toBe('before after');
   });
 });
 
@@ -14,10 +39,12 @@ describe('updateScript', () => {
       id: 'demo',
       postedAt: '2026-05-26T01:22:16-07:00',
       title: 'a `cmd` arrived',
-      body: 'It does `things` well.',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      component: (() => null) as any,
+      rawBody: 'It does `things` well.',
       links: []
     });
-    expect(script).toBe('a `cmd` arrived. It does things well.');
+    expect(script).toBe('a cmd arrived. It does things well.');
   });
 });
 
@@ -25,15 +52,15 @@ describe('siteUpdates', () => {
   test('every entry has the required fields', () => {
     for (const update of siteUpdates) {
       expect(update.id).toMatch(/^[a-z][a-z0-9-]+$/);
-      expect(Number.isFinite(new Date(update.postedAt).getTime())).toBe(true);
+      expect(Number.isFinite(Date.parse(update.postedAt))).toBe(true);
       expect(update.title.length).toBeGreaterThan(0);
-      expect(update.body.length).toBeGreaterThan(0);
+      expect(typeof update.component).toBe('function');
       expect(Array.isArray(update.links)).toBe(true);
     }
   });
 
   test('entries are ordered newest first', () => {
-    const times = siteUpdates.map((u) => new Date(u.postedAt).getTime());
+    const times = siteUpdates.map((u) => Date.parse(u.postedAt));
     const sorted = [...times].sort((a, b) => b - a);
     expect(times).toEqual(sorted);
   });

@@ -199,6 +199,42 @@ time {
   font-size: 0.86em;
 }
 
+.body pre {
+  margin: 1.25rem 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--code);
+  overflow-x: auto;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.body pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  border-radius: 0;
+}
+
+/* shiki dual-theme: ship both colors per span as CSS vars, pick one here */
+.body pre.shiki,
+.body pre.shiki code {
+  background: var(--code) !important;
+}
+
+.body pre.shiki span {
+  color: var(--shiki-light);
+  background-color: transparent !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .body pre.shiki span {
+    color: var(--shiki-dark);
+  }
+}
+
 .body a {
   color: var(--fg);
   border-bottom-color: var(--fg-faint);

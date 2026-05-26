@@ -1,9 +1,29 @@
 import adapter from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+import { mdsvex, escapeSvelte } from 'mdsvex';
+import { codeToHtml } from 'shiki';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
-  preprocess: [vitePreprocess()],
+  extensions: ['.svelte', '.svx'],
+  preprocess: [
+    vitePreprocess(),
+    mdsvex({
+      extensions: ['.svx'],
+      highlight: {
+        // Shiki dual-theme: each span carries both light and dark colors as
+        // CSS variables; app.css picks one based on prefers-color-scheme.
+        highlighter: async (code, lang = 'text') => {
+          const html = await codeToHtml(code, {
+            lang,
+            themes: { light: 'github-light', dark: 'github-dark' },
+            defaultColor: false
+          });
+          return `{@html \`${escapeSvelte(html)}\`}`;
+        }
+      }
+    })
+  ],
   kit: {
     adapter: adapter({
       pages: 'build',

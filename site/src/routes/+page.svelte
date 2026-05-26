@@ -1,15 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { resolve } from '$app/paths';
-  import { renderBlock, renderInline } from '$lib/markdown';
-  import { siteFeedUrl, siteIntro, siteUpdates } from '$lib/updates';
+  import {
+    inlineTitleHtml,
+    siteFeedUrl,
+    siteIntro,
+    siteUpdates
+  } from '$lib/updates';
 
   const feedHref = resolve('/feed.xml');
 
   // The prerendered HTML renders in UTC so it reads the same in every
   // visitor's zone before JS runs. After hydration the page reformats each
   // <time> in the visitor's local zone so the label matches their wall clock.
-  // The <time datetime> attribute always carries the full offset.
+  // The <time datetime> attribute always carries the full ISO offset.
   let timeZone = $state<string | undefined>(undefined);
 
   onMount(() => {
@@ -40,18 +44,10 @@
     return `${date} · ${time} ${tzNamePart?.value ?? tz}`;
   }
 
-  const renderedEntries = siteUpdates.map((update) => ({
+  const entries = siteUpdates.map((update) => ({
     ...update,
-    html: renderBlock(update.body),
-    titleHtml: renderInline(update.title)
+    titleHtml: inlineTitleHtml(update.title)
   }));
-
-  const entries = $derived(
-    renderedEntries.map((entry) => ({
-      ...entry,
-      label: formatPostedAt(entry.postedAt, timeZone)
-    }))
-  );
 </script>
 
 <svelte:head>
@@ -77,14 +73,18 @@
 
   <ol class="log">
     {#each entries as entry (entry.id)}
+      {@const Entry = entry.component}
       <li id={entry.id}>
-        <time datetime={entry.postedAt}>{entry.label}</time>
+        <time datetime={entry.postedAt}>
+          {formatPostedAt(entry.postedAt, timeZone)}
+        </time>
         <h2>
           <!-- eslint-disable-next-line svelte/no-at-html-tags -->
           <a href="#{entry.id}">{@html entry.titleHtml}</a>
         </h2>
-        <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-        <div class="body">{@html entry.html}</div>
+        <div class="body">
+          <Entry />
+        </div>
         <div class="refs">
           {#each entry.links as link, i (link.href)}
             {#if i > 0}<span aria-hidden="true">·</span>{/if}

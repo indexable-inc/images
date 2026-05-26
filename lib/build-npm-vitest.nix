@@ -31,7 +31,9 @@ let
   npmDeps = pkgs.importNpmLock.buildNodeModules {
     npmRoot = src;
     inherit (pkgs) nodejs;
-    derivationArgs = { strictDeps = true; };
+    derivationArgs = {
+      strictDeps = true;
+    };
   };
 
   baseAttrs = {
@@ -91,22 +93,20 @@ let
 
   manifestEntries = builtins.fromJSON (builtins.readFile "${manifest}/tests.json");
 
+  # Turn a "describe > test" string into a single nix-attr-safe slug:
+  # lowercase, separators flattened to single dashes, anything not in
+  # [a-z0-9-] dropped entirely.
   caseId =
     name:
     let
-      slug = lib.replaceStrings [ " > " " " "/" "." "#" "[" "]" "(" ")" ] [
-        "--"
-        "-"
-        "-"
-        "-"
-        ""
-        ""
-        ""
-        ""
-        ""
-      ] (lib.toLower name);
+      lowered = lib.toLower name;
+      withSeps = lib.replaceStrings [ " > " ] [ "--" ] lowered;
+      safe = lib.stringAsChars (c: if (builtins.match "[a-z0-9-]" c != null) then c else "-") withSeps;
     in
-    lib.replaceStrings [ "`" "'" "\"" "," ] [ "" "" "" "" ] slug;
+    lib.pipe safe [
+      # Collapse runs of dashes to one.
+      (s: lib.concatStringsSep "-" (builtins.filter (p: p != "") (lib.splitString "-" s)))
+    ];
 
   cases = lib.listToAttrs (
     map (
