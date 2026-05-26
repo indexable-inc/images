@@ -2,7 +2,6 @@
 members = [
   "modules/services/resource-monitor/stats-writer",
   "packages/dag-runner",
-  "packages/room",
   "packages/ix-dev-diagnose",
   "packages/loop",
   "packages/mcp",

@@ -12,7 +12,7 @@ links:
     href: https://github.com/indexable-inc/index/blob/main/lib/rust.nix
 ---
 
-The Rust flake checks look busier than the builder really is: most package-level `cargoClippy` entries are labels for one shared workspace derivation. `rust-dag-runner-cargoClippy`, `rust-room-cargoClippy`, `rust-mcp-cargoClippy`, and the other repo-owned package checks resolve to the same `ix-rust-workspace-cargo-clippy.drv`.
+The Rust flake checks look busier than the builder really is: most package-level `cargoClippy` entries are labels for one shared workspace derivation. `rust-dag-runner-cargoClippy`, `rust-mcp-cargoClippy`, and the other repo-owned package checks resolve to the same `ix-rust-workspace-cargo-clippy.drv`.
 
 The derivation runs one Cargo command with one target directory:
 

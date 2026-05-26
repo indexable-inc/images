@@ -728,94 +728,12 @@ let
       ixForPackages = ixSpecialArgs // {
         inherit pkgs;
         # Rebind the language unit builders to the caller's pkgs so repo
-        # packages built through packageSetFor (room, loop, ...) compile for
+        # packages built through packageSetFor (loop, mcp, ...) compile for
         # the host system instead of the x86_64-linux pkgs the top-level
         # ixSpecialArgs bundle is bound to.
         cargoUnit = cargoUnitFor pkgs;
         goUnit = goUnitFor pkgs;
         rustWorkspace = rustWorkspaceFor pkgs;
-      };
-      roomSiteSrc = lib.fileset.toSource {
-        root = paths.packages.room + "/site";
-        fileset = lib.fileset.intersection (lib.fileset.gitTracked (paths.packages.room + "/site")) (
-          lib.fileset.unions [
-            (paths.packages.room + "/site/package.json")
-            (paths.packages.room + "/site/package-lock.json")
-            (paths.packages.room + "/site/index.html")
-            (paths.packages.room + "/site/svelte.config.js")
-            (paths.packages.room + "/site/tsconfig.json")
-            (paths.packages.room + "/site/vite.config.ts")
-            (paths.packages.room + "/site/src")
-          ]
-        );
-      };
-      roomSite = buildSvelteSite pkgs {
-        pname = "room-site";
-        version = "0.1.0";
-        src = roomSiteSrc;
-        serve = {
-          name = "room-site";
-          port = 8081;
-        };
-        devServer = {
-          name = "room-site-dev";
-          checkoutSubdir = "packages/room/site";
-          port = 5174;
-        };
-      };
-      roomDevBackend = writeNushellApplication pkgs {
-        name = "room-dev-backend";
-        runtimeInputs = [
-          (rustNightlyToolchainFor pkgs)
-          pkgs.stdenv.cc
-        ];
-        meta.description = "Run the room Rust backend from a mutable checkout";
-        text = ''
-          const checkout_site_dir = "packages/room/site"
-
-          def main [] {
-            let root = (pwd)
-            let site_dir = ($root | path join $checkout_site_dir)
-            let index = ($site_dir | path join "index.html")
-
-            if not ($index | path exists) {
-              error make { msg: $"room-dev must run from the repository root; missing ($index)" }
-            }
-
-            exec cargo run --package room --bin room -- --host 127.0.0.1 --port 8080 --site-dir $site_dir
-          }
-        '';
-      };
-      roomDev = writeProcessComposeApplication pkgs {
-        name = "room-dev";
-        processes = {
-          backend = {
-            command = lib.escapeShellArgs [ (lib.getExe roomDevBackend) ];
-            availability.restart = "exit_on_failure";
-            readiness_probe = {
-              http_get = {
-                host = "127.0.0.1";
-                scheme = "http";
-                path = "/";
-                port = 8080;
-              };
-              initial_delay_seconds = 1;
-              period_seconds = 2;
-              timeout_seconds = 1;
-              failure_threshold = 60;
-            };
-          };
-          frontend = {
-            command = lib.escapeShellArgs [
-              (lib.getExe roomSite.passthru.devServer)
-              "--root"
-              "packages/room/site"
-            ];
-            environment = [ "ROOM_BACKEND_URL=http://127.0.0.1:8080" ];
-            availability.restart = "exit_on_failure";
-          };
-        };
-        meta.description = "Run the room Rust backend and Vite frontend together from a checkout";
       };
       loopViewerSrc = lib.fileset.toSource {
         root = paths.packages.loop + "/site";
@@ -847,13 +765,6 @@ let
       };
       basePackages = {
         dag-runner = pkgs.callPackage paths.packages.dagRunner {
-          ix = ixForPackages;
-        };
-        room-site = roomSite;
-        room-dev = roomDev;
-        room = pkgs.callPackage paths.packages.room {
-          inherit pkgs;
-          site = roomSite;
           ix = ixForPackages;
         };
         drgn = pkgs.callPackage paths.packages.drgn { };
@@ -927,7 +838,6 @@ let
             (root + "/Cargo.toml")
             (root + "/Cargo.lock")
             (paths.modules + "/services/resource-monitor/stats-writer")
-            paths.packages.room
             paths.packages.dagRunner
             paths.packages.ixDevDiagnose
             paths.packages.loop

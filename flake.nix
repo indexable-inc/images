@@ -81,7 +81,6 @@
             syncManaged = ./packages/minecraft/sync-managed;
           };
           dagRunner = ./packages/dag-runner;
-          room = ./packages/room;
           drgn = ./packages/drgn;
           llmClippy = ./packages/llm-clippy;
           loop = ./packages/loop;

@@ -253,7 +253,6 @@ let
         "minecraft-sync-managed"
         "nix-cargo-unit"
         "oci-image-builder"
-        "room"
       ] repoPackages;
       moduleRustPackages = {
         resource-monitor-stats-writer =
@@ -386,14 +385,10 @@ in
         nix-cargo-unit
         oci-image-builder
         run
-        room-dev
-        room-site
         mcp
         ;
       loop-viewer-dev = repoPackages.loop-viewer.passthru.devServer;
-      room-site-dev = repoPackages.room-site.passthru.devServer;
       minestom-hello-server-jar = repoPackages.minestom.helloServerJar;
-      inherit (repoPackages) room;
     }
     // examplePackages
     // healthChecks.lifecyclePackages
@@ -413,7 +408,6 @@ in
       '';
       cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
       run-records-session = repoPackages.run.passthru.tests.recordsSession;
-      room-dev-process-compose = repoPackages.room-dev.passthru.tests.dryRun;
       lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
         cp -R ${lintSource} source
         chmod -R u+w source
