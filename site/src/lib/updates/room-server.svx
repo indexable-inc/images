@@ -1,0 +1,41 @@
+---
+id: room-server
+postedAt: 2026-05-26T02:56:00-07:00
+title: "`nix run .#room` runs a shared team presence room"
+tags: [interesting, rust, websocket, agents]
+links:
+  - label: room package
+    href: https://github.com/indexable-inc/index/tree/main/packages/room
+  - label: services.room module
+    href: https://github.com/indexable-inc/index/tree/main/modules/services/room
+---
+
+`nix run .#room` boots a single binary that serves a Svelte page and a `/ws` WebSocket on `:8080`. Every connected teammate publishes presence (name, color, focus, draft), and a per-participant `codex` status keyed on one of `idle`, `thinking`, `editing`, `reviewing`, `blocked`, so the rest of the room sees what each agent is doing without anyone having to ask.
+
+```bash
+nix run github:indexable-inc/index#room
+open http://localhost:8080
+```
+
+State is a `loro::LoroDoc` behind a `tokio::Mutex`, fanned out over a `broadcast::Sender<ServerEvent>` so every socket receives a full `snapshot` on connect and after each apply. Clients send `presence`, `focus`, `draft`, `codex`, or `leave` events; the server merges them into the participants map, stamps `lastSeenMs`, and re-broadcasts:
+
+```rust
+enum ClientEvent {
+    Presence { id, name, color },
+    Focus    { id, focus },
+    Draft    { id, draft },
+    Codex    { id, task, status },
+    Leave    { id },
+}
+```
+
+The Svelte page persists the teammate id in `localStorage`, reconnects on socket drop with a one-second backoff, and tabs cleanly over `wss://` when the room sits behind TLS termination. The build is a normal `npm` site; the Nix wrapper bakes the built assets into `ROOM_SITE_DIR` so the server is one closure with no separate static-asset deploy step.
+
+```nix
+services.room = {
+  enable = true;
+  port   = 8080;
+};
+```
+
+The NixOS module registers a port claim under `ix.networking.portClaims.room`, runs the binary as a `DynamicUser` systemd service with the shared `ix.systemdHardening` profile, and opens the firewall port unless `openFirewall = false`. Drop it into any image and the room comes up alongside the rest of the fleet.
