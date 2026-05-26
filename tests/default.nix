@@ -718,6 +718,7 @@ let
   goUnitDerivedStdlibWorkspace = ix.goUnit.buildWorkspace {
     pname = "go-unit-stdlib-derived";
     src = goUnitDerivedStdlibSource;
+    goMod = ./fixtures/go-unit-stdlib/go.mod;
     vendorHash = null;
     packages = [ "." ];
   };
@@ -732,6 +733,15 @@ let
     vendorHashFile = ./fixtures/go-unit-hello/go-modules.nix;
     packages = [ "." ];
   };
+  goUnitDerivedUnreadableNoSumEval = builtins.tryEval (
+    builtins.attrNames
+      (ix.goUnit.buildWorkspace {
+        pname = "go-unit-hello-derived-no-sum";
+        src = goUnitDerivedSource;
+        vendorHash = null;
+        packages = [ "." ];
+      }).packages
+  );
   goUnitDerivedMissingGoSumKeyEval =
     let
       workspace = ix.goUnit.buildWorkspace {
@@ -2901,14 +2911,18 @@ let
         message = "go-unit package derivations should pass null goSum for modules without go.sum";
       }
       {
-        assertion = goUnitDerivedStdlibWorkspace.vendorHashKey == null;
-        message = "go-unit workspaces should not read derivation source module files during eval";
+        assertion = goUnitDerivedStdlibWorkspace.packages.root.goUnit.goSum == null;
+        message = "go-unit derivation sources should allow no-sum modules when go.mod is readable";
       }
       {
         assertion =
           goUnitDerivedWorkspaceWithVendorHashFile.packages.root.goUnit.vendorHashKey
           == goUnitWorkspace.vendorHashKey;
         message = "go-unit derivation sources should use explicit vendor hash files by key";
+      }
+      {
+        assertion = !goUnitDerivedUnreadableNoSumEval.success;
+        message = "go-unit derivation sources should reject no-sum mode when go.mod is unreadable";
       }
       {
         assertion = !goUnitDerivedMissingGoSumKeyEval.success;
