@@ -116,6 +116,9 @@ let
   testTargets = [
 {{ test_target_entries }}  ];
 
+  doctestTargets = [
+{{ doctest_target_entries }}  ];
+
   benchmarkTargets = [
 {{ benchmark_target_entries }}  ];
 
@@ -568,6 +571,55 @@ let
         );
     };
 
+  parseDoctestList = path:
+    map (test: test.name) (
+      builtins.filter
+        (test:
+          test.doctest_attributes.rust or true
+          && ((test.doctest_attributes.ignore or "None") == "None" || includeIgnored)
+        )
+        (builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.readFile path))).doctests
+    );
+
+  doctestManifestDrv =
+    if doctestTargets == [] then null
+    else pkgs.runCommand "cargo-unit-doctest-manifest" { nativeBuildInputs = [ rustToolchain ]; } (
+      ''
+        mkdir -p "$out"
+      ''
+      + pkgs.lib.concatMapStrings (target: ''
+        (
+        ${target.listCommand}
+        ) > "$out"/${pkgs.lib.escapeShellArg target.name}.json
+      '') doctestTargets
+    );
+
+  mkDoctestCases =
+    { name, runCommand }:
+    pkgs.lib.listToAttrs (
+      map (testName: {
+        name = testName;
+        value =
+          pkgs.runCommand
+            "cargo-unit-doctest-${name}-${sanitizeTestName testName}"
+            { TEST_NAME = testName; nativeBuildInputs = [ rustToolchain ]; }
+            ''
+              ${runCommand}
+              mkdir -p "$out"
+            '';
+      }) (parseDoctestList "${doctestManifestDrv}/${name}.json")
+    );
+
+  mkDoctestEntry =
+    { name, allCommand, runCommand, ... }:
+    {
+      all = pkgs.runCommand "cargo-unit-doctest-${name}" { nativeBuildInputs = [ rustToolchain ]; } ''
+        ${allCommand}
+        mkdir -p "$out"
+      '';
+      cases = mkDoctestCases { inherit name runCommand; };
+    };
+
   policyChecks = {
 {{ policy_check_entries }}  } // extraPolicyChecks;
   withPolicyChecks = package:
@@ -599,6 +651,8 @@ in
 {{ benchmark_entries }}  };
   tests = {
 {{ test_entries }}  };
+  doctests = {
+{{ doctest_entries }}  };
   compareTangoBenchmarks = mkTangoBenchmarkComparison;
   targetSets = [
 {{ target_set_entries }}

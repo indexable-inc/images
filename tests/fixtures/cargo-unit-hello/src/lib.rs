@@ -1,3 +1,8 @@
+/// Return the fixture greeting.
+///
+/// ```
+/// assert_eq!(cargo_unit_hello::greeting(), "hello from cargo-unit");
+/// ```
 #[must_use]
 pub const fn greeting() -> &'static str {
     "hello from cargo-unit"

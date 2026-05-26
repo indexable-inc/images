@@ -569,6 +569,13 @@ impl Unit {
         self.target.has_library_kind()
     }
 
+    pub fn has_doctests(&self) -> bool {
+        self.target.doctest
+            && self.is_library()
+            && !self.is_external()
+            && self.mode != UnitMode::Test
+    }
+
     pub fn is_custom_build_compile(&self) -> bool {
         self.target.has_kind("custom-build") && !self.is_run_custom_build()
     }

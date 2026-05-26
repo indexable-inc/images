@@ -2645,6 +2645,14 @@ let
         message = "cargo-unit workspaces should expose test targets as separate checks";
       }
       {
+        assertion = cargoUnitWorkspace.doctests != { };
+        message = "cargo-unit workspaces should expose doctest targets as separate checks";
+      }
+      {
+        assertion = cargoUnitWorkspace.targetSets.build.doctests != { };
+        message = "cargo-unit target sets should expose doctest targets next to build roots";
+      }
+      {
         assertion = builtins.hasAttr "greeting" cargoUnitWorkspace.targetSets.bench.benchmarks;
         message = "cargo-unit workspaces should expose benchmark targets separately from tests";
       }
@@ -3199,6 +3207,8 @@ let
     grep -q 'goodbye from cargo-unit' cargo-unit-goodbye.out
     test -d ${cargoUnitWorkspace.targetSets.test.tests.cargo_unit_hello.all}
     test -d ${cargoUnitWorkspace.targetSets.test.tests.cargo_unit_hello.cases."tests::returns_greeting"}
+    test -d ${(builtins.head (builtins.attrValues cargoUnitWorkspace.doctests)).all}
+    test -d ${(builtins.head (builtins.attrValues (builtins.head (builtins.attrValues cargoUnitWorkspace.doctests)).cases))}
     test -s ${cargoUnitWorkspace.testPlan}/packages/cargo-unit-hello/test-binaries
     grep -q '/bin/cargo_unit_hello$' ${cargoUnitWorkspace.testPlan}/packages/cargo-unit-hello/test-binaries
     grep -qx '.' ${cargoUnitWorkspace.testPlan}/packages/cargo-unit-hello/package-root

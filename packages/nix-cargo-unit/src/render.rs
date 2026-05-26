@@ -263,7 +263,9 @@ struct UnitsNixTemplate {
     library_entries: String,
     benchmark_entries: String,
     test_entries: String,
+    doctest_entries: String,
     test_target_entries: String,
+    doctest_target_entries: String,
     benchmark_target_entries: String,
     target_set_entries: String,
     default_entry: String,
@@ -284,7 +286,9 @@ pub fn render_units_nix(graph: &UnitGraph, options: &RenderOptions) -> Result<St
         library_entries: render_root_entries(graph, &prepared, Unit::is_library),
         benchmark_entries: render_benchmark_entries(graph, &prepared),
         test_entries: render_test_entries(graph, &prepared),
+        doctest_entries: render_doctest_entries(graph, &prepared),
         test_target_entries: render_test_target_entries(graph, &prepared),
+        doctest_target_entries: render_doctest_target_entries(graph, &prepared)?,
         benchmark_target_entries: render_benchmark_target_entries(graph, &prepared),
         target_set_entries: render_target_sets(graph, &prepared),
         default_entry: render_default_entry(graph, &prepared),
@@ -1313,6 +1317,10 @@ fn nix_indented_string_fragment(value: &str) -> String {
     value.replace("''", "'''").replace("${", "''${")
 }
 
+fn nix_indented_string(value: &str) -> String {
+    format!("''\n{value}''")
+}
+
 #[derive(Default)]
 struct CargoManifestPackageMetadata {
     authors: String,
@@ -2083,17 +2091,20 @@ fn render_target_sets(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
     };
     let test_keys = compute_test_keys(graph, prepared);
     let benchmark_keys = compute_benchmark_keys(graph, prepared);
+    let doctest_keys = compute_doctest_keys(graph, prepared);
+    let doctest_indexes = doctest_keys.keys().copied().collect::<Vec<_>>();
 
     root_sets
         .iter()
         .map(|roots| {
             format!(
-                "    {{\n      roots = [ {} ];\n      binaries = {{\n{}      }};\n      libraries = {{\n{}      }};\n      benchmarks = {{\n{}      }};\n      tests = {{\n{}      }};\n    }}",
+                "    {{\n      roots = [ {} ];\n      binaries = {{\n{}      }};\n      libraries = {{\n{}      }};\n      benchmarks = {{\n{}      }};\n      tests = {{\n{}      }};\n      doctests = {{\n{}      }};\n    }}",
                 render_unit_refs(roots, prepared),
                 render_root_entries_for(roots, &graph.units, prepared, Unit::is_bin),
                 render_root_entries_for(roots, &graph.units, prepared, Unit::is_library),
                 render_benchmark_entries_for(roots, &graph.units, prepared, &benchmark_keys),
                 render_test_entries_for(roots, &graph.units, prepared, &test_keys),
+                render_doctest_entries_for(&doctest_indexes, &graph.units, &doctest_keys),
             )
         })
         .collect::<Vec<_>>()
@@ -2147,6 +2158,117 @@ fn compute_benchmark_keys(graph: &UnitGraph, prepared: &PreparedGraph) -> BTreeM
 fn test_binary_expr(unit: &Unit, prepared: &PreparedGraph, index: usize) -> String {
     let unit_ref = format!("${{units.{}}}", nix_attr(&prepared.names[index]));
     format!("{unit_ref}/bin/{}", unit.target.name)
+}
+
+fn render_doctest_command(
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+    mode: DoctestCommandMode,
+) -> Result<String> {
+    let unit = &graph.units[index];
+    let source = prepared.source_entry(index)?;
+    let package_root = source_path_expr(source, &crate_root_for_unit(unit))?;
+    let source_path = source_path_expr(source, Path::new(&unit.target.src_path))?;
+    let unit_ref = format!("${{units.{}}}", nix_attr(&prepared.names[index]));
+    let mut script = String::new();
+
+    script.push_str("set -euo pipefail\n");
+    writeln!(script, "export src=\"${{{}}}\"", prepared.source_ref(index))?;
+    writeln!(
+        script,
+        "export CARGO_MANIFEST_DIR={}",
+        shell::double_quote(&package_root)
+    )?;
+    script.push_str("cd \"$CARGO_MANIFEST_DIR\"\n");
+    script.push_str(&cargo_package_exports(unit)?);
+    script.push_str("rustdoc_args=( --test -Z unstable-options )\n");
+    match mode {
+        DoctestCommandMode::List => {
+            script.push_str("rustdoc_args+=( --output-format doctest )\n");
+        }
+        DoctestCommandMode::RunAll => {}
+        DoctestCommandMode::RunCase => {
+            script
+                .push_str("rustdoc_args+=( --test-args \"$TEST_NAME\" --test-args --nocapture )\n");
+        }
+    }
+    push_rustdoc_arg(&mut script, "--crate-name");
+    push_rustdoc_arg(&mut script, &unit.target.name.replace('-', "_"));
+    push_rustdoc_arg(&mut script, "--edition");
+    push_rustdoc_arg(&mut script, &unit.target.edition);
+    for feature in &unit.features {
+        push_rustdoc_arg(&mut script, "--cfg");
+        push_rustdoc_arg(&mut script, &format!("feature=\"{feature}\""));
+    }
+    if let Some(platform) = &unit.platform {
+        push_rustdoc_arg(&mut script, "--target");
+        push_rustdoc_arg(&mut script, platform);
+    }
+    for rustflag in &unit.profile.rustflags {
+        push_rustdoc_arg(&mut script, "--doctest-build-arg");
+        push_rustdoc_arg(&mut script, rustflag);
+    }
+    for dep_index in &prepared.transitive_unit_deps[index] {
+        let dep = &graph.units[*dep_index];
+        if dep.is_bin() {
+            continue;
+        }
+        writeln!(
+            script,
+            "rustdoc_args+=( -L \"dependency=${{units.{}}}/lib\" )",
+            nix_attr(&prepared.names[*dep_index])
+        )?;
+    }
+    writeln!(script, "rustdoc_args+=( -L \"dependency={unit_ref}/lib\" )")?;
+    writeln!(
+        script,
+        "rustdoc_args+=( --extern \"{}=$(cat {unit_ref}/nix-support/extern-path)\" )",
+        unit.target.name.replace('-', "_")
+    )?;
+    for dependency in &unit.dependencies {
+        let dep_unit = &graph.units[dependency.index];
+        if dep_unit.is_run_custom_build() || dep_unit.is_bin() {
+            continue;
+        }
+        writeln!(
+            script,
+            "rustdoc_args+=( --extern \"{}=$(cat ${{units.{}}}/nix-support/extern-path)\" )",
+            dependency.extern_crate_name,
+            nix_attr(&prepared.names[dependency.index])
+        )?;
+    }
+    writeln!(
+        script,
+        "rustdoc_args+=( {} )",
+        shell::double_quote(&source_path)
+    )?;
+    script.push_str("set -x\n");
+    match mode {
+        DoctestCommandMode::RunCase => {
+            script.push_str("doctest_log=$(mktemp)\n");
+            script.push_str("rustdoc \"''${rustdoc_args[@]}\" 2>&1 | tee \"$doctest_log\"\n");
+            script.push_str("if grep -q 'running 0 tests' \"$doctest_log\"; then\n");
+            script.push_str("  echo \"rustdoc filter did not run a doctest: $TEST_NAME\" >&2\n");
+            script.push_str("  exit 1\n");
+            script.push_str("fi\n");
+        }
+        DoctestCommandMode::List | DoctestCommandMode::RunAll => {
+            script.push_str("rustdoc \"''${rustdoc_args[@]}\"\n");
+        }
+    }
+    Ok(script)
+}
+
+#[derive(Clone, Copy)]
+enum DoctestCommandMode {
+    List,
+    RunAll,
+    RunCase,
+}
+
+fn push_rustdoc_arg(script: &mut String, value: &str) {
+    let _ = writeln!(script, "rustdoc_args+=( {} )", shell::quote(value));
 }
 
 fn render_benchmark_entries_for(
@@ -2222,6 +2344,73 @@ fn render_test_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
     render_test_entries_for(&graph.roots, &graph.units, prepared, &keys)
 }
 
+fn compute_doctest_keys(graph: &UnitGraph, prepared: &PreparedGraph) -> BTreeMap<usize, String> {
+    let indexes: Vec<usize> = graph
+        .units
+        .iter()
+        .enumerate()
+        .filter_map(|(index, unit)| unit.has_doctests().then_some(index))
+        .collect();
+
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for index in &indexes {
+        *counts
+            .entry(graph.units[*index].target.name.as_str())
+            .or_insert(0) += 1;
+    }
+
+    let mut keys = BTreeMap::new();
+    for index in indexes {
+        let unit = &graph.units[index];
+        let key = if counts[unit.target.name.as_str()] == 1 {
+            unit.target.name.clone()
+        } else {
+            prepared.names[index].clone()
+        };
+        keys.insert(index, key);
+    }
+    keys
+}
+
+fn render_doctest_entries_for(
+    roots: &[usize],
+    units: &[Unit],
+    keys: &BTreeMap<usize, String>,
+) -> String {
+    let mut entries = String::new();
+    let mut seen = BTreeSet::new();
+    for index in roots {
+        let unit = &units[*index];
+        if !unit.has_doctests() {
+            continue;
+        }
+        let key = keys
+            .get(index)
+            .expect("compute_doctest_keys covers every root doctest unit")
+            .clone();
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let _ = writeln!(
+            entries,
+            "    {} = mkDoctestEntry (builtins.head (builtins.filter (target: target.name == {}) doctestTargets));",
+            nix_attr(&key),
+            nix_attr(&key),
+        );
+    }
+
+    entries
+}
+
+fn render_doctest_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
+    let keys = compute_doctest_keys(graph, prepared);
+    render_doctest_entries_for(
+        &keys.keys().copied().collect::<Vec<_>>(),
+        &graph.units,
+        &keys,
+    )
+}
+
 /// One `{ name; binary; }` per unique test target across every root set.
 /// The template feeds this into a single manifest derivation so test
 /// enumeration is one IFD instead of one per binary.
@@ -2259,6 +2448,46 @@ fn render_test_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> St
         let _ = writeln!(entries, "    {target}");
     }
     entries
+}
+
+fn render_doctest_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> Result<String> {
+    let keys = compute_doctest_keys(graph, prepared);
+    let mut by_key: BTreeMap<String, String> = BTreeMap::new();
+    for (&index, key) in &keys {
+        if by_key.contains_key(key) {
+            continue;
+        }
+        by_key.insert(
+            key.clone(),
+            format!(
+                "{{ name = {}; listCommand = {}; allCommand = {}; runCommand = {}; }}",
+                nix_attr(key),
+                nix_indented_string(&render_doctest_command(
+                    graph,
+                    prepared,
+                    index,
+                    DoctestCommandMode::List,
+                )?),
+                nix_indented_string(&render_doctest_command(
+                    graph,
+                    prepared,
+                    index,
+                    DoctestCommandMode::RunAll,
+                )?),
+                nix_indented_string(&render_doctest_command(
+                    graph,
+                    prepared,
+                    index,
+                    DoctestCommandMode::RunCase,
+                )?),
+            ),
+        );
+    }
+    let mut entries = String::new();
+    for (_key, target) in by_key {
+        let _ = writeln!(entries, "    {target}");
+    }
+    Ok(entries)
 }
 
 /// One `{ name; binary; }` per unique benchmark target across every root set.
