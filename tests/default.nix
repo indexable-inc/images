@@ -608,6 +608,7 @@ let
     root = ./fixtures/go-unit-hello;
     fileset = fs.unions [
       ./fixtures/go-unit-hello/go.mod
+      ./fixtures/go-unit-hello/go-modules.nix
       ./fixtures/go-unit-hello/go.sum
       ./fixtures/go-unit-hello/main.go
       ./fixtures/go-unit-hello/main_test.go
@@ -617,7 +618,6 @@ let
   goUnitWorkspace = ix.goUnit.buildWorkspace {
     pname = "go-unit-hello";
     src = goUnitFixture;
-    vendorHash = "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8=";
     env.GOFLAGS = "-mod=readonly";
     packages = [ "." ];
   };
@@ -631,7 +631,6 @@ let
     pname = "go-unit-nested";
     src = goUnitNestedFixture;
     modRoot = "module";
-    vendorHash = "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8=";
     packages = [ "." ];
   };
 
@@ -640,7 +639,6 @@ let
       (ix.goUnit.buildWorkspace {
         pname = "go-unit-collision";
         src = goUnitFixture;
-        vendorHash = "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8=";
         packages = [
           "a.b"
           "a/b"
@@ -2592,6 +2590,16 @@ let
       {
         assertion = goUnitWorkspace.packages.root.goUnit.goSum == goUnitFixture + "/go.sum";
         message = "go-unit package derivations should pass go.sum through to buildGoModule";
+      }
+      {
+        assertion =
+          goUnitWorkspace.vendorHashKey == "946e64650b103a2fe8d7518f522acad2ba766bd2c3700066125f33206d400b66";
+        message = "go-unit workspaces should derive the vendor hash key from go.mod and go.sum";
+      }
+      {
+        assertion =
+          goUnitWorkspace.packages.root.goUnit.vendorHashFile == goUnitFixture + "/go-modules.nix";
+        message = "go-unit package derivations should use the module-owned vendor hash file by default";
       }
       {
         assertion =

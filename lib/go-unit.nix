@@ -36,6 +36,20 @@ let
       moduleRoot = if modRoot == "." then src else src + "/${modRoot}";
       goMod = args.goMod or (moduleRoot + "/go.mod");
       goSum = args.goSum or (moduleRoot + "/go.sum");
+      vendorHashFile = args.vendorHashFile or (moduleRoot + "/go-modules.nix");
+      vendorHashKey = builtins.hashString "sha256" (
+        (builtins.readFile goMod) + "\n" + (builtins.readFile goSum)
+      );
+      vendorHashes =
+        args.vendorHashes or (if builtins.pathExists vendorHashFile then import vendorHashFile else { });
+      vendorHash =
+        args.vendorHash or vendorHashes.${vendorHashKey} or (throw ''
+          goUnit.buildWorkspace requires a vendor hash for go.mod/go.sum key ${vendorHashKey}.
+          Add ${builtins.toString vendorHashFile} with:
+          {
+            "${vendorHashKey}" = "sha256-...";
+          }
+        '');
     in
     assert lib.assertMsg (builtins.pathExists goMod)
       "goUnit.buildWorkspace requires a checked-in go.mod at ${builtins.toString goMod}";
@@ -50,9 +64,10 @@ let
         goSum
         modRoot
         moduleRoot
+        vendorHash
+        vendorHashFile
+        vendorHashKey
         ;
-      vendorHash =
-        args.vendorHash or (throw "goUnit.buildWorkspace requires vendorHash from pkgs.buildGoModule");
       packages =
         let
           packages = args.packages or [ "." ];
@@ -89,7 +104,13 @@ let
       doCheck = false;
       strictDeps = true;
       passthru.goUnit = {
-        inherit (args) goSum goToolchain env;
+        inherit (args)
+          goSum
+          goToolchain
+          env
+          vendorHashKey
+          vendorHashFile
+          ;
         inherit package;
       };
     };
@@ -121,7 +142,13 @@ let
         touch "$out/done"
       '';
       passthru.goUnit = {
-        inherit (args) goSum goToolchain env;
+        inherit (args)
+          goSum
+          goToolchain
+          env
+          vendorHashKey
+          vendorHashFile
+          ;
         inherit package;
       };
     };
@@ -131,12 +158,17 @@ let
 
     Go does not expose Cargo's rustc unit graph, so callers choose the package
     patterns that deserve independent cache and test boundaries. The helper
-    requires `go.mod`, `go.sum`, and `vendorHash`.
+    requires `go.mod`, `go.sum`, and a matching Nix vendor hash.
+    By default, the vendor hash comes from `go-modules.nix` next to the module,
+    keyed by the combined `go.mod` and `go.sum` contents. This keeps the Nix
+    fixed-output hash in a narrow generated artifact instead of repeating it at
+    every build call site. Callers may pass `vendorHash`, `vendorHashes`, or
+    `vendorHashFile` when the owner lives somewhere else.
 
     Arguments:
     - `src`: filtered module source.
     - `packages`: Go package patterns to expose, default `[ "." ]`.
-    - `vendorHash`: hash accepted by `pkgs.buildGoModule`.
+    - `vendorHashFile`: attrset file keyed by `vendorHashKey`, default `go-modules.nix`.
     - `goToolchain`: optional Go package, default `ix.languages.go.toolchain pkgs { version = "latest"; }`.
 
     Returns `packages`, `tests`, `default`, `checks`, and `sourceAudit`.
@@ -170,9 +202,11 @@ let
           base = "workspace";
           scope = "module";
           relative = args.modRoot;
-          lockFile = if builtins.pathExists args.goSum then "go.sum" else null;
+          lockFile = "go.sum";
+          inherit (args) vendorHashKey;
         };
       };
+      inherit (args) vendorHashKey;
     };
 in
 {
