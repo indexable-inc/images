@@ -2093,6 +2093,10 @@ let
         assertion = lib.hasInfix "refusing to set extended attributes on symlink" extendedAttributes.activationScript;
         message = "generic ix.extendedAttributes should avoid following symlinks";
       }
+      {
+        assertion = lib.hasInfix "filesystem does not support extended attributes" extendedAttributes.activationScript;
+        message = "generic ix.extendedAttributes should warn instead of failing on unsupported filesystems";
+      }
     ];
 
     kernel-dev = [

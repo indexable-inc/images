@@ -50,6 +50,26 @@ let
   setfattr = "${pkgs.attr}/bin/setfattr";
   mkdir = "${pkgs.coreutils}/bin/mkdir";
 
+  applyAttributeFunction = ''
+    ix_set_xattr() {
+      ix_xattr_path=$1
+      ix_xattr_name=$2
+      ix_xattr_value=$3
+
+      ix_xattr_error=$(${setfattr} --name "$ix_xattr_name" --value "$ix_xattr_value" -- "$ix_xattr_path" 2>&1) && return 0
+
+      case "$ix_xattr_error" in
+        *"Operation not supported"* | *"Not supported"* | *"Function not implemented"*)
+          printf '%s\n' "warning: filesystem does not support extended attributes on $ix_xattr_path; skipped $ix_xattr_name" >&2
+          return 0
+          ;;
+      esac
+
+      printf '%s\n' "$ix_xattr_error" >&2
+      return 1
+    }
+  '';
+
   applyPath =
     path: entry:
     let
@@ -63,8 +83,7 @@ let
         else
           lib.concatStringsSep "\n" (
             lib.mapAttrsToList (
-              name: value:
-              "${setfattr} --name ${lib.escapeShellArg name} --value ${lib.escapeShellArg value} -- ${escapedPath}"
+              name: value: "ix_set_xattr ${escapedPath} ${lib.escapeShellArg name} ${lib.escapeShellArg value}"
             ) entry.attributes
           );
     in
@@ -80,7 +99,9 @@ let
       fi
     '';
 
-  applyScript = lib.concatStringsSep "\n" (lib.mapAttrsToList applyPath cfg);
+  applyScript = lib.concatStringsSep "\n" (
+    [ applyAttributeFunction ] ++ lib.mapAttrsToList applyPath cfg
+  );
 in
 {
   options.ix.extendedAttributes = mkOption {
