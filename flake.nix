@@ -59,6 +59,7 @@
       # lib/per-system.nix have a single source of truth.
       paths = {
         root = ./.;
+        agentsMd = ./agents-md;
         images = ./images;
         modules = ./modules;
         examples = ./examples;

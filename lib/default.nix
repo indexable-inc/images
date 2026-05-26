@@ -203,6 +203,7 @@ let
   secrets = import ./secrets.nix {
     inherit lib pkgs writeNushellApplication;
   };
+  agentsMd = import ./agents-md.nix { inherit lib paths; };
   languages = {
     cpp = import ./languages/cpp.nix { inherit errors; };
     elixir = import ./languages/elixir.nix { inherit errors; };
@@ -736,6 +737,7 @@ let
   ixSpecialArgs = {
     inherit
       artifacts
+      agentsMd
       buildBunSite
       buildGradleFatJar
       buildRustPackage
@@ -999,6 +1001,7 @@ let
       discoverImages
       exampleFleetsFor
       artifacts
+      agentsMd
       buildBunSite
       buildGradleFatJar
       buildNpmSite
