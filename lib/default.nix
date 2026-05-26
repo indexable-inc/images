@@ -277,6 +277,13 @@ let
       nixCargoUnit = buildIxRustTool pkgs paths.packages.nixCargoUnit;
     };
   cargoUnit = cargoUnitFor pkgs;
+  goUnitFor =
+    pkgs:
+    import ./go-unit.nix {
+      inherit lib pkgs;
+      inherit (languages) go;
+    };
+  goUnit = goUnitFor pkgs;
 
   /**
     Build a repo-owned Rust package with the shared Rust policy.
@@ -771,6 +778,7 @@ let
       buildNpmSite
       buildUvApplication
       cargoUnit
+      goUnit
       languages
       minecraft
       mkMinecraftLoader
@@ -1038,6 +1046,8 @@ let
       cargoUnit
       cargoUnitFor
       errors
+      goUnit
+      goUnitFor
       languages
       minecraft
       mkMinecraftLoader

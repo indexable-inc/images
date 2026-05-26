@@ -604,6 +604,49 @@ let
     };
   };
 
+  goUnitFixture = fs.toSource {
+    root = ./fixtures/go-unit-hello;
+    fileset = fs.unions [
+      ./fixtures/go-unit-hello/go.mod
+      ./fixtures/go-unit-hello/go.sum
+      ./fixtures/go-unit-hello/main.go
+      ./fixtures/go-unit-hello/main_test.go
+    ];
+  };
+
+  goUnitWorkspace = ix.goUnit.buildWorkspace {
+    pname = "go-unit-hello";
+    src = goUnitFixture;
+    vendorHash = "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8=";
+    env.GOFLAGS = "-mod=readonly";
+    packages = [ "." ];
+  };
+
+  goUnitNestedFixture = fs.toSource {
+    root = ./fixtures/go-unit-nested;
+    fileset = ./fixtures/go-unit-nested/module;
+  };
+
+  goUnitNestedWorkspace = ix.goUnit.buildWorkspace {
+    pname = "go-unit-nested";
+    src = goUnitNestedFixture;
+    modRoot = "module";
+    vendorHash = "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8=";
+    packages = [ "." ];
+  };
+
+  goUnitPackageCollisionEval =
+    builtins.tryEval
+      (ix.goUnit.buildWorkspace {
+        pname = "go-unit-collision";
+        src = goUnitFixture;
+        vendorHash = "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8=";
+        packages = [
+          "a.b"
+          "a/b"
+        ];
+      }).packages;
+
   cargoUnitScopePolicy = {
     denyUnusedCrateDependencies = false;
     cargoAudit.enable = false;
@@ -2539,6 +2582,40 @@ let
         message = "cargo-unit workspaces should expose an unused dependency policy check by default";
       }
       {
+        assertion = goUnitWorkspace.sourceAudit.module.lockFile == "go.sum";
+        message = "go-unit workspaces should require and report the Go module lockfile";
+      }
+      {
+        assertion = goUnitWorkspace.packages ? root;
+        message = "go-unit workspaces should expose package-shaped build derivations";
+      }
+      {
+        assertion = goUnitWorkspace.packages.root.goUnit.goSum == goUnitFixture + "/go.sum";
+        message = "go-unit package derivations should pass go.sum through to buildGoModule";
+      }
+      {
+        assertion =
+          goUnitWorkspace.packages.root.goUnit.goToolchain
+          == ix.languages.go.toolchain pkgs { version = "latest"; };
+        message = "go-unit package derivations should use the selected Go toolchain";
+      }
+      {
+        assertion = goUnitWorkspace.packages.root.goUnit.env.GOFLAGS == "-mod=readonly";
+        message = "go-unit package derivations should preserve buildGoModule env values";
+      }
+      {
+        assertion = goUnitWorkspace.tests ? root;
+        message = "go-unit workspaces should expose package-shaped test derivations";
+      }
+      {
+        assertion = goUnitNestedWorkspace.sourceAudit.module.relative == "module";
+        message = "go-unit workspaces should resolve default go.mod and go.sum below modRoot";
+      }
+      {
+        assertion = !goUnitPackageCollisionEval.success;
+        message = "go-unit workspaces should reject package patterns with colliding output names";
+      }
+      {
         assertion =
           let
             inherit (nomadSecretRefsExample) secretSet;
@@ -3222,6 +3299,12 @@ let
     test -e ${cargoUnitTangoComparison}/done
     grep -q '^cargo-unit-hello	greeting	' ${cargoUnitTangoComparison}/benchmarks.tsv
     grep -q '^greeting ' ${cargoUnitTangoComparison}/logs/cargo-unit-hello-greeting.log
+    ${goUnitWorkspace.default}/bin/go-unit-hello > go-unit-hello.out
+    grep -q 'hello from go-unit: Hello, world.' go-unit-hello.out
+    test -e ${goUnitWorkspace.tests.root}/done
+    ${goUnitNestedWorkspace.default}/bin/go-unit-nested > go-unit-nested.out
+    grep -q 'hello from nested go-unit: Hello, world.' go-unit-nested.out
+    test -e ${goUnitNestedWorkspace.tests.root}/done
 
     grep -q 'class="ix bun"' ${bunSite}/share/bun-site-fixture/index.html
     test -d ${bunSite.bunNodeModules}/node_modules/clsx
