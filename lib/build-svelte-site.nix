@@ -203,6 +203,9 @@ let
     ]
     ++ serveConfig.extraFlags
     ++ [ "${staticSite}/${installDir}" ];
+  serveWrapperFlags = lib.concatMapStringsSep " " (
+    arg: "--add-flags ${lib.escapeShellArg arg}"
+  ) serveArgs;
   servePackage =
     pkgs.runCommand "${pname}-serve"
       {
@@ -216,7 +219,7 @@ let
       ''
         mkdir -p "$out/bin"
         makeWrapper ${lib.getExe pkgs.miniserve} "$out/bin"/${lib.escapeShellArg serveConfig.name} \
-          --add-flags ${lib.escapeShellArg (lib.escapeShellArgs serveArgs)}
+          ${serveWrapperFlags}
       '';
 
   devDefaults = {

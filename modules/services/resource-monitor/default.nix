@@ -90,13 +90,10 @@ let
     src = siteSrc;
     preBuild = "cp ${pkgs.writeText "resource-monitor-vm-config.json" (builtins.toJSON metricConfig)} src/lib/vm-config.json";
     serve = {
-      name = "resource-monitor-site";
-      port = 8083;
+      enable = false;
     };
     devServer = {
-      name = "resource-monitor-site-dev";
-      checkoutSubdir = "modules/services/resource-monitor/site";
-      port = 5176;
+      enable = false;
     };
   };
 

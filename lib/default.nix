@@ -785,7 +785,7 @@ let
         loop-viewer = loopViewer;
         loop = pkgs.callPackage paths.packages.loop {
           inherit pkgs;
-          viewer = loopViewer;
+          viewer = loopViewer.passthru.staticSite;
           ix = ixForPackages;
         };
         mc-probe = pkgs.callPackage paths.packages.minecraft.probe {
