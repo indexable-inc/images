@@ -10,12 +10,14 @@ let
     (section "intro" "00-intro.md")
     (section "scope" "01-scope-of-agents-md.md")
     (section "workflow" "02-workflow.md")
+    (section "indexGitPush" "02a-index-git-push.md")
     (section "siteUpdates" "03-site-updates.md")
     (section "writingStyle" "04-writing-style.md")
     (section "inlineComments" "05-inline-comments.md")
     (section "rustStyle" "06-rust-style.md")
     (section "pythonStyle" "07-python-style.md")
     (section "saneDefaults" "08-sane-defaults.md")
+    (section "userFacingCommands" "08a-user-facing-commands.md")
     (section "nixPhilosophy" "09-nix-philosophy.md")
     (section "moduleConventions" "10-module-conventions.md")
     (section "imageConventions" "11-image-conventions.md")
@@ -46,6 +48,7 @@ let
       "rustStyle"
       "pythonStyle"
       "saneDefaults"
+      "userFacingCommands"
       "dependencyIntake"
       "issues"
       "tests"
@@ -61,6 +64,7 @@ let
 
     index = [
       "intro"
+      "indexGitPush"
       "siteUpdates"
       "moduleConventions"
       "imageConventions"
@@ -70,6 +74,9 @@ let
   };
 
   allSections = map (fragment: fragment.name) sectionList;
+
+  stripTrailingNewlines =
+    text: if lib.hasSuffix "\n" text then stripTrailingNewlines (lib.removeSuffix "\n" text) else text;
 
   render =
     {
@@ -81,7 +88,10 @@ let
     in
     assert lib.assertMsg (unknownSections == [ ])
       "agentsMd.render enabledSections contains unknown sections: ${lib.concatStringsSep ", " unknownSections}";
-    lib.concatStrings ((map (name: sections.${name}) enabledSections) ++ extraSections);
+    lib.concatStringsSep "\n\n" (
+      map stripTrailingNewlines ((map (name: sections.${name}) enabledSections) ++ extraSections)
+    )
+    + "\n";
 in
 {
   /**

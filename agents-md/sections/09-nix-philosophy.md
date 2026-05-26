@@ -40,3 +40,10 @@ Nix builders for language workspaces should pass the smallest source closure the
 compiler can consume. The caller names both the filtered `src` and the real
 `workspaceRoot`; do not infer one from the other.
 
+Nix source filtering and flakes only see tracked or staged source files. Stage
+new source files before running Nix validation so failures describe the
+expression under test instead of a missing path.
+
+Start validation narrow, then broaden as confidence grows. Package invariants
+belong in the owning derivation through `checkPhase`, `installCheckPhase`, or
+`passthru.tests`; keep flake `checks` as aggregation and policy gates.

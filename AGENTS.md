@@ -24,6 +24,14 @@ comment next to the load-bearing line. When a narrow note keeps growing across
 features, promote the broad invariant here and leave the local details where
 operators will look first.
 
+Before adding durable guidance, search the tree and existing docs first. Facts
+that are easy to rediscover with source search, generated reference, PR history,
+or a narrow README should stay out of this file.
+
+Each addition should be one or two direct sentences. Name the invariant, owner,
+or decision rule, and include a path, command, URL, or external reference only
+when it is the durable handle for that rule.
+
 ## Workflow
 
 Pull `main` before starting. Always make changes on a short-lived branch in a
@@ -84,18 +92,6 @@ the same head because it weakens that audit trail.
 
 Remove the worktree and delete the local branch after the PR has merged.
 
-Use the GitHub CLI credential helper for HTTPS pushes when the default helper
-would reuse a read-only bot credential:
-
-```sh
-gh auth setup-git
-git push -u <canonical-remote> <branch>
-```
-
-Choose the remote name that points at `indexable-inc/index`, such as `origin` in
-the shared checkout or `upstream` in a fork-based clone. Keep the branch tracking
-the same remote that received the push.
-
 Commit one logical change at a time. Use the pathspec form so unrelated staged
 or unstaged files cannot ride along:
 
@@ -118,6 +114,18 @@ Run the repo lint before committing:
 ```sh
 nix run .#lint
 ```
+
+Use the GitHub CLI credential helper for HTTPS pushes when the default helper
+would reuse a read-only bot credential:
+
+```sh
+gh auth setup-git
+git push -u <canonical-remote> <branch>
+```
+
+Choose the remote name that points at `indexable-inc/index`, such as `origin` in
+the shared checkout or `upstream` in a fork-based clone. Keep the branch tracking
+the same remote that received the push.
 
 ## Site updates
 
@@ -244,6 +252,44 @@ is real, track the work so the new surface keeps earning its weight.
 For a small choice, lead with the direct answer and the shortest working path.
 Save comparison tables for long-lived boundaries or vendor commitments.
 
+Before finishing a change, reread the diff with suspicion. Ask whether the owner
+is clear, whether a helper or type would remove real duplication, whether a
+boundary is string-shaped when it should be typed, and whether a smaller API
+would make the next change easier.
+
+Fix root causes at the owner. When the same adapter, default, conversion, or
+fallback appears in multiple places, move the capability transition or invariant
+to the boundary that owns it.
+
+Turn assumptions into checked behavior through types, schemas, module options,
+derivation checks, or focused tests. If the user asked for a fix, land code and
+the nearest durable test or validation hook; diagnosis alone is unfinished work.
+
+Delete vestigial code in the same change that makes it obsolete. Dead fields,
+options, structs, functions, configs, generated files, and compatibility shims
+make the safe path harder to see.
+
+When adding a non-obvious workaround, policy exception, or operational guard,
+put the reason near the choice and cite a durable source when one exists.
+
+## User-facing commands
+
+Keep protocol emitters separate from product workflow code. Workflows should
+produce facts; terminal, API, and document surfaces should render those facts
+for their audience.
+
+Human-readable output is the default for interactive commands. Agents, scripts,
+and tests should prefer machine-readable output when the command supports it.
+
+Long-running commands should expose the phases users naturally ask about.
+Terminal progress should keep moving while work is in flight, with recent rate
+and cumulative totals reported as separate facts when both matter.
+
+Default errors should lead with the operator-facing failure and actionable
+context. Source locations, backtraces, trace paths, and internal module paths
+belong behind debug output or structured output unless they are the user's next
+step.
+
 ## Nix philosophy
 
 `flake.nix` is the manifest. It should expose inputs and delegate outputs to
@@ -285,6 +331,14 @@ frontend inside the generated command.
 Nix builders for language workspaces should pass the smallest source closure the
 compiler can consume. The caller names both the filtered `src` and the real
 `workspaceRoot`; do not infer one from the other.
+
+Nix source filtering and flakes only see tracked or staged source files. Stage
+new source files before running Nix validation so failures describe the
+expression under test instead of a missing path.
+
+Start validation narrow, then broaden as confidence grows. Package invariants
+belong in the owning derivation through `checkPhase`, `installCheckPhase`, or
+`passthru.tests`; keep flake `checks` as aggregation and policy gates.
 
 ## Module conventions
 
@@ -443,6 +497,9 @@ task, file a narrow issue.
 - Fix the improper layer when stricter validation exposes a helper problem.
 - Use checked Nushell helpers for non-trivial generated commands.
 - Keep new scripts in a language that matches the data shape they handle.
+- Avoid generated `nix run` wrappers that call `nix run`, `nix build`, or
+  `nix flake check` internally. Model dependencies as derivation inputs or keep
+  orchestration outside Nix.
 - Default to no `devShells.default`; add per-package shells or build inputs where
   the need belongs.
 - Keep the tracked pre-commit hook as a small entry point to the lint app.
@@ -522,6 +579,13 @@ source files that own the behavior.
 
 Avoid broad agent delegation for simple search. The codebase is usually small
 enough that direct search plus a focused read gives better signal.
+
+Search before claiming external facts, API behavior, flags, versions, or current
+ownership. Live state beats docs when the task is about a running system; if
+observers disagree, debug the observer path too.
+
+Debug from first principles: actor, operation, boundary, invariant, observer.
+Prove the broken boundary with the smallest live check, then fix the owner.
 
 ## Debugging VMs
 

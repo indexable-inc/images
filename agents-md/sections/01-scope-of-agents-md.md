@@ -15,3 +15,10 @@ comment next to the load-bearing line. When a narrow note keeps growing across
 features, promote the broad invariant here and leave the local details where
 operators will look first.
 
+Before adding durable guidance, search the tree and existing docs first. Facts
+that are easy to rediscover with source search, generated reference, PR history,
+or a narrow README should stay out of this file.
+
+Each addition should be one or two direct sentences. Name the invariant, owner,
+or decision rule, and include a path, command, URL, or external reference only
+when it is the durable handle for that rule.

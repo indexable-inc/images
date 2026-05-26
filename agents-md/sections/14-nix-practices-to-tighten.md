@@ -12,7 +12,9 @@ task, file a narrow issue.
 - Fix the improper layer when stricter validation exposes a helper problem.
 - Use checked Nushell helpers for non-trivial generated commands.
 - Keep new scripts in a language that matches the data shape they handle.
+- Avoid generated `nix run` wrappers that call `nix run`, `nix build`, or
+  `nix flake check` internally. Model dependencies as derivation inputs or keep
+  orchestration outside Nix.
 - Default to no `devShells.default`; add per-package shells or build inputs where
   the need belongs.
 - Keep the tracked pre-commit hook as a small entry point to the lint app.
-
