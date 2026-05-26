@@ -34,6 +34,7 @@
     "cookie": "^0.7.0"
   },
   "dependencies": {
+    "@xyflow/svelte": "^1.5.2",
     "mdsvex": "^0.12.7",
     "shiki": "^4.1.0"
   }
