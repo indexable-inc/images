@@ -145,6 +145,92 @@ let
     };
 
   /**
+    Package a process-compose specification as a `nix run` application.
+
+    Generates a checked YAML config from Nix values and wraps
+    `process-compose` in a foreground command. By default the wrapper disables
+    the TUI in config and disables dotenv injection plus the process-compose
+    HTTP control server through CLI flags, so application ports remain
+    available and logs stay in the caller's terminal.
+
+    Arguments:
+    - `name`: derivation name and `/bin/<name>` executable.
+    - `processes`: attrset assigned to `processes` in the generated config.
+    - `settings`: extra top-level process-compose config fields.
+    - `runtimeInputs`: packages prepended to PATH before process-compose runs.
+    - `processComposeArgs`: argv inserted before user-provided args.
+    - `meta`: standard derivation meta, with `mainProgram` defaulted.
+  */
+  writeProcessComposeApplication =
+    pkgs:
+    {
+      name,
+      processes,
+      settings ? { },
+      runtimeInputs ? [ ],
+      processComposeArgs ? [
+        "--no-server"
+        "--ordered-shutdown"
+        "--disable-dotenv"
+      ],
+      meta ? { },
+    }:
+    let
+      format = pkgs.formats.yaml { };
+      xdgConfigHome =
+        pkgs.runCommand "${name}-process-compose-xdg-config"
+          {
+            strictDeps = true;
+          }
+          ''
+            mkdir -p "$out/process-compose"
+          '';
+      config = format.generate "${name}.process-compose.yaml" (
+        {
+          version = "0.5";
+          is_tui_disabled = true;
+        }
+        // settings
+        // {
+          inherit processes;
+        }
+      );
+      package = writeNushellApplication pkgs {
+        inherit name;
+        runtimeInputs = [ pkgs.process-compose ] ++ runtimeInputs;
+        meta = meta // {
+          mainProgram = meta.mainProgram or name;
+        };
+        text = ''
+          const process_compose_args = ${builtins.toJSON processComposeArgs}
+
+          def main [...args: string] {
+            $env.XDG_CONFIG_HOME = "${xdgConfigHome}"
+            exec process-compose --config ${config} ...$process_compose_args ...$args
+          }
+        '';
+      };
+      dryRun =
+        pkgs.runCommand "${name}-process-compose-dry-run"
+          {
+            nativeBuildInputs = [ pkgs.process-compose ];
+            strictDeps = true;
+          }
+          ''
+            process-compose --config ${config} --dry-run --no-server --disable-dotenv
+            mkdir -p "$out"
+          '';
+    in
+    package.overrideAttrs (old: {
+      passthru = (old.passthru or { }) // {
+        inherit config;
+        tests = (old.passthru.tests or { }) // {
+          inherit dryRun;
+        };
+      };
+    });
+
+  /**
     Repo-local nixpkgs overlay.
 
     Exposes the few repo-owned packages that NixOS modules expect to find
@@ -677,6 +763,60 @@ let
           port = 5174;
         };
       };
+      roomDevBackend = writeNushellApplication pkgs {
+        name = "room-dev-backend";
+        runtimeInputs = [
+          (rustNightlyToolchainFor pkgs)
+          pkgs.stdenv.cc
+        ];
+        meta.description = "Run the room Rust backend from a mutable checkout";
+        text = ''
+          const checkout_site_dir = "packages/room/site"
+
+          def main [] {
+            let root = (pwd)
+            let site_dir = ($root | path join $checkout_site_dir)
+            let index = ($site_dir | path join "index.html")
+
+            if not ($index | path exists) {
+              error make { msg: $"room-dev must run from the repository root; missing ($index)" }
+            }
+
+            exec cargo run --package room --bin room -- --host 127.0.0.1 --port 8080 --site-dir $site_dir
+          }
+        '';
+      };
+      roomDev = writeProcessComposeApplication pkgs {
+        name = "room-dev";
+        processes = {
+          backend = {
+            command = lib.escapeShellArgs [ (lib.getExe roomDevBackend) ];
+            availability.restart = "exit_on_failure";
+            readiness_probe = {
+              http_get = {
+                host = "127.0.0.1";
+                scheme = "http";
+                path = "/";
+                port = 8080;
+              };
+              initial_delay_seconds = 1;
+              period_seconds = 2;
+              timeout_seconds = 1;
+              failure_threshold = 60;
+            };
+          };
+          frontend = {
+            command = lib.escapeShellArgs [
+              (lib.getExe roomSite.passthru.devServer)
+              "--root"
+              "packages/room/site"
+            ];
+            environment = [ "ROOM_BACKEND_URL=http://127.0.0.1:8080" ];
+            availability.restart = "exit_on_failure";
+          };
+        };
+        meta.description = "Run the room Rust backend and Vite frontend together from a checkout";
+      };
       loopViewerSrc = lib.fileset.toSource {
         root = paths.packages.loop + "/site";
         fileset = lib.fileset.intersection (lib.fileset.gitTracked (paths.packages.loop + "/site")) (
@@ -710,6 +850,7 @@ let
           ix = ixForPackages;
         };
         room-site = roomSite;
+        room-dev = roomDev;
         room = pkgs.callPackage paths.packages.room {
           inherit pkgs;
           site = roomSite;
@@ -873,6 +1014,7 @@ let
       secrets
       systemdHardening
       writeNushellApplication
+      writeProcessComposeApplication
       writePythonApplication
       ;
     packages = packageSetFor pkgs;
@@ -1148,6 +1290,7 @@ let
       systemdHardening
       uvLockFor
       writeNushellApplication
+      writeProcessComposeApplication
       writePythonApplication
       ;
 
