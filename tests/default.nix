@@ -750,6 +750,16 @@ let
         packages = [ "." ];
       }).packages
   );
+  goUnitMissingExplicitGoSumEval = builtins.tryEval (
+    builtins.attrNames
+      (ix.goUnit.buildWorkspace {
+        pname = "go-unit-missing-explicit-go-sum";
+        src = goUnitMissingGoSumFixture;
+        goSum = goUnitMissingGoSumFixture + "/go.sum";
+        vendorHash = "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8=";
+        packages = [ "." ];
+      }).packages
+  );
 
   goUnitPackageCollisionEval =
     builtins.tryEval
@@ -2800,6 +2810,10 @@ let
       {
         assertion = !goUnitMissingGoSumEval.success;
         message = "go-unit local sources should reject missing go.sum even with a direct vendor hash";
+      }
+      {
+        assertion = !goUnitMissingExplicitGoSumEval.success;
+        message = "go-unit explicit go.sum paths should reject filtered-out files during eval";
       }
       {
         assertion = !goUnitPackageCollisionEval.success;

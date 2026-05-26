@@ -51,7 +51,12 @@ let
           goSum
         else
           null;
-      goSumExists = goSumForBuild != null || noSumModule || (!canReadModuleFiles && !explicitGoSum);
+      goSumExists =
+        if explicitGoSum then
+          (goSumForBuild == null && noSumModule)
+          || (goSumForBuild != null && builtins.pathExists goSumForBuild)
+        else
+          goSumForBuild != null || noSumModule || !canReadModuleFiles;
       missingGoSumMessage = "goUnit.buildWorkspace requires ${builtins.toString goSum}; pass vendorHash = null only for stdlib-only modules without go.sum";
       canReadGoSum =
         goSumForBuild != null && (canReadModuleFiles || explicitGoSum) && builtins.pathExists goSumForBuild;
