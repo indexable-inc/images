@@ -411,14 +411,17 @@ async fn main() -> Result<()> {
             service.waiting().await?;
         }
         CliCommand::Repl => {
-            let command = if cli.python.is_empty() {
+            let (command, _temp_dir) = if cli.python.is_empty() {
                 let temp_dir = tempfile::Builder::new()
                     .prefix("ix-mcp-python-repl-")
                     .tempdir()
                     .context("failed to create Python REPL directory")?;
-                create_default_environment(temp_dir.path())?
+                let command = create_default_environment(temp_dir.path())?;
+                // The default command points inside the venv, so keep the temp
+                // directory alive until the interactive process exits.
+                (command, Some(temp_dir))
             } else {
-                cli.python
+                (cli.python, None)
             };
             let status = Command::new(&command[0])
                 .args(&command[1..])
