@@ -65,24 +65,25 @@ fn managed_files(source_dir: &Path) -> Result<Vec<String>> {
 fn validate_rel_path(rel: &str) -> Result<()> {
     ensure!(!rel.is_empty(), "path is empty");
 
-    ensure!(!rel.contains("//"), "path contains empty segment: {}", rel);
-    ensure!(!rel.ends_with('/'), "path has trailing slash: {}", rel);
-    ensure!(
-        !rel.split('/').any(|s| s == "." || s == ".." || s.is_empty()),
-        "path contains unsafe segment: {}",
-        rel
-    );
+    ensure!(!Path::new(rel).is_absolute(), "path is absolute: {}", rel);
 
-    let path = Path::new(rel);
-    ensure!(!path.is_absolute(), "path is absolute: {}", rel);
-
-    if path.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::CurDir)) {
-        bail!("unsafe path (contains '..' or root or '.'): {}", rel);
+    if rel
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        bail!("path contains unsafe segment: {}", rel);
     }
 
-    if rel.chars().any(|c| matches!(c, ';' | '&' | '|' | '$' | '`' | '<' | '>' | '"' | '\'' | '*' | '?' | '[' | ']' | '{' | '}' | '(' | ')' | '~' | ' ' | '\\')) {
-        bail!("path contains shell-sensitive or unsafe characters: {}", rel);
+    if !rel
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '+' | '-'))
+    {
+        bail!(
+            "path contains shell-sensitive or unsafe characters: {}",
+            rel
+        );
     }
+
     Ok(())
 }
 
@@ -150,7 +151,13 @@ fn sync_tree(
         if rel.is_empty() || preserve_removed.contains(rel) {
             continue;
         }
-        validate_rel_path(rel).with_context(|| format!("checking manifest path safety in {} at line {}", manifest.display(), i + 1))?;
+        validate_rel_path(rel).with_context(|| {
+            format!(
+                "checking manifest path safety in {} at line {}",
+                manifest.display(),
+                i + 1
+            )
+        })?;
         remove_if_present(&target_dir.join(rel))?;
     }
 
@@ -167,7 +174,12 @@ fn sync_tree(
 
     let mut manifest_lines = String::new();
     for rel in managed_files(source_dir)? {
-        validate_rel_path(&rel).with_context(|| format!("checking managed file path safety in {}", source_dir.display()))?;
+        validate_rel_path(&rel).with_context(|| {
+            format!(
+                "checking managed file path safety in {}",
+                source_dir.display()
+            )
+        })?;
         let source_path = source_dir.join(&rel);
         let target_path = target_dir.join(&rel);
         if let Some(parent) = target_path.parent() {
@@ -684,9 +696,14 @@ mod tests {
     fn validate_rel_path_rejects_unsafe_paths() {
         assert!(validate_rel_path("safe/path.json").is_ok());
         assert!(validate_rel_path("config.toml").is_ok());
-        
+        assert!(validate_rel_path("mods/pack+v1..2.toml").is_ok());
+
         assert!(validate_rel_path("../escape.json").is_err());
         assert!(validate_rel_path("path/../escape.json").is_err());
+        assert!(validate_rel_path("./escape.json").is_err());
+        assert!(validate_rel_path("path/./escape.json").is_err());
+        assert!(validate_rel_path("path//escape.json").is_err());
+        assert!(validate_rel_path("path/escape.json/").is_err());
         assert!(validate_rel_path("/absolute/path").is_err());
         assert!(validate_rel_path("path with space.json").is_err());
         assert!(validate_rel_path("path;with;shell").is_err());

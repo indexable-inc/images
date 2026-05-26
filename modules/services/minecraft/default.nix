@@ -55,7 +55,8 @@ let
     ) "duplicate .properties keys after flattening: ${lib.concatStringsSep ", " duplicateNames}";
     lib.listToAttrs pairs;
 
-  isSafeRelativePath = path:
+  isSafeRelativePath =
+    path:
     let
       # Rejects paths that are absolute, contain '..' segments, '.' segments,
       # empty segments '//', or shell metacharacters. Matches Rust sync-managed
@@ -70,7 +71,8 @@ let
     in
     isSafe && !isAbsolute && !hasParent && !hasCurrent && !hasEmpty;
 
-  isSafeRelativeName = name:
+  isSafeRelativeName =
+    name:
     let
       isSafe = builtins.match "^[a-zA-Z0-9._-]+$" name != null;
       isParent = name == "..";
@@ -628,21 +630,15 @@ let
         datapack.src;
   }) enabledDatapacks;
   invalidManagedPaths =
-    lib.optional (
-      !isSafeRelativeName cfg.dropinDir
-    ) "services.minecraft.dropinDir=${cfg.dropinDir}"
+    lib.optional (!isSafeRelativeName cfg.dropinDir) "services.minecraft.dropinDir=${cfg.dropinDir}"
     ++ map (path: "services.minecraft.configFiles.${path}") (
       unsafePaths (lib.attrNames cfg.configFiles)
     )
     ++ map (path: "services.minecraft.serverFiles.${path}") (
       unsafePaths (lib.attrNames cfg.serverFiles)
     )
-    ++ map (path: "services.minecraft.mods.${path}") (
-      unsafeNames (lib.attrNames cfg.mods)
-    )
-    ++ map (path: "services.minecraft.plugins.${path}") (
-      unsafeNames (lib.attrNames cfg.plugins)
-    )
+    ++ map (path: "services.minecraft.mods.${path}") (unsafeNames (lib.attrNames cfg.mods))
+    ++ map (path: "services.minecraft.plugins.${path}") (unsafeNames (lib.attrNames cfg.plugins))
     ++ lib.concatMap (
       name:
       let
@@ -658,9 +654,7 @@ let
         unsafePaths (datapackGeneratedPaths cfg.datapacks.${name})
       )
     ) (lib.attrNames cfg.datapacks)
-    ++ map (path: "services.minecraft world directory ${path}") (
-      unsafePaths annotatedWorldNames
-    );
+    ++ map (path: "services.minecraft world directory ${path}") (unsafePaths annotatedWorldNames);
 
   managed =
     let
