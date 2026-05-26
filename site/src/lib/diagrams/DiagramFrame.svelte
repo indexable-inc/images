@@ -124,12 +124,14 @@
     }
   }
 
-  function modalFocusableElements(): HTMLElement[] {
-    if (!overlay) return [];
-    return Array.from(overlay.querySelectorAll<HTMLElement>(focusableSelector)).filter(
-      (element) => element.offsetParent !== null || element === document.activeElement
-    );
-  }
+	  function modalFocusableElements(): HTMLElement[] {
+	    if (!overlay) return [];
+	    return Array.from(overlay.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+	      (element) =>
+	        !element.classList.contains('backdrop') &&
+	        (element.offsetParent !== null || element === document.activeElement)
+	    );
+	  }
 
   $effect(() => {
     if (!expanded) return;
@@ -200,12 +202,13 @@
     tabindex="-1"
     bind:this={overlay}
   >
-    <button
-      type="button"
-      class="backdrop"
-      aria-label="Close expanded diagram"
-      onclick={closeExpanded}
-    ></button>
+	    <button
+	      type="button"
+	      class="backdrop"
+	      tabindex="-1"
+	      aria-label="Close expanded diagram"
+	      onclick={closeExpanded}
+	    ></button>
     <div class="modal" role="presentation">
       <header class="modal-header">
         <span class="modal-caption">{caption ?? ''}</span>
