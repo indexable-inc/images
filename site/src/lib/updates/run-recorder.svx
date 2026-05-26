@@ -1,24 +1,68 @@
 ---
 id: run-recorder
-postedAt: 2026-05-25T15:28:13-07:00
+postedAt: 2026-05-26T02:49:00-07:00
 title: "`nix run .#run` records command sessions"
-tags: [interesting, nix, cli]
+tags: [interesting, nix, cli, polars]
 links:
   - label: run package
     href: https://github.com/indexable-inc/index/tree/main/packages/run
 ---
 
-`nix run .#run -- <command> ...` executes the command in a PTY, prints a bounded head/tail summary to the terminal, and writes the full live stream under `./.ix/run/latest/`.
+`nix run .#run -- <command> ...` executes the command in a PTY, prints a bounded head/tail summary to the terminal, and writes the full live stream plus per-line timing under `./.ix/run/latest/`.
 
 ```bash
 nix run github:indexable-inc/index#run -- cargo test -p my-crate
 ls .ix/run/latest/
-# manifest.json  output.log  output.cast  output.timing
-# stdout.jsonl   lines.jsonl
+# events.jsonl  lines.jsonl  live          output.log  replay
+# session.cast  summary.json  timing.log   typescript
 ```
 
-Each session captures `scriptreplay` timing files, an asciinema cast, chunk-level JSONL, line-level JSONL ready for pandas, and a summary manifest with duration and exit status. A second shell can `tail -f output.log` while the original command is still running, which is useful for slow Nix builds and long test suites.
+A second shell can `tail -f .ix/run/latest/output.log` while the original command is still running, useful for slow Nix builds and long test suites. `./.ix/run/latest/replay [divisor]` reads `timing.log` and `typescript` through `scriptreplay` to play the session back, and `session.cast` is a valid asciinema v2 file.
 
-```bash
-tail -f .ix/run/latest/output.log   # live stream, even while the build runs
+`lines.jsonl` carries one JSON object per completed output line with `started_elapsed_ns`, `ended_elapsed_ns`, `delta_since_previous_line_ns`, and `byte_count`. Polars reads it with no schema work and keeps the elapsed-time columns as integer nanoseconds, so ranking the lines that gapped longest before printing is one expression:
+
+```python
+import polars as pl
+
+df = pl.read_ndjson(".ix/run/latest/lines.jsonl")
+(
+    df.sort("delta_since_previous_line_ns", descending=True)
+      .select("line_no", "delta_since_previous_line_ns", "text")
+      .head(20)
+)
 ```
+
+The same shape works for any structured event stream you choose to record. `nix build .#someBadAttr --log-format internal-json` emits one `@nix {...}` line per phase, with `start` / `stop` pairs keyed on `id`:
+
+```
+@nix {"action":"start","id":12,"text":"querying info about missing paths","type":105,...}
+@nix {"action":"stop","id":12}
+```
+
+Record that through `run`, drop the `@nix ` prefix, decode the rest, and join starts to stops to surface the slowest phases:
+
+```python
+events = (
+    pl.read_ndjson(".ix/run/latest/lines.jsonl")
+      .filter(pl.col("text").str.starts_with("@nix "))
+      .select(
+          "ended_elapsed_ns",
+          pl.col("text").str.slice(5).str.json_decode().alias("event"),
+      )
+      .unnest("event")
+)
+starts = events.filter(pl.col("action") == "start").select(
+    "id", "text", pl.col("ended_elapsed_ns").alias("t0"),
+)
+stops = events.filter(pl.col("action") == "stop").select(
+    "id", pl.col("ended_elapsed_ns").alias("t1"),
+)
+(
+    starts.join(stops, on="id")
+          .with_columns(((pl.col("t1") - pl.col("t0")) / 1e9).alias("seconds"))
+          .sort("seconds", descending=True)
+          .head(20)
+)
+```
+
+`pl.read_ndjson` replaces the older `pandas.read_json(path, lines=True)` recipe in the README. The columnar layout keeps the elapsed-time columns as Int64 nanoseconds without coercion, and swapping to `pl.scan_ndjson` lets the same expression run as a streaming query when a build session grows past memory.
