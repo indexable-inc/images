@@ -409,7 +409,7 @@ jobs:
           def try_request_api_json(method: str, path: str, data: dict[str, Any] | None = None) -> Any:
               try:
                   return request_api_json(method, path, data)
-              except RuntimeError as error:
+              except (RuntimeError, urllib.error.URLError) as error:
                   print(f"warning: could not resolve publisher identity from {path}: {error}", file=sys.stderr)
                   return None
 
