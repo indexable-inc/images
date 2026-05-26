@@ -122,6 +122,22 @@ let
       lib.removePrefix buildSourcePrefix entry.file
     else
       entry.file;
+  projectArgs =
+    entry:
+    lib.optionals (entry ? projectName && entry.projectName != null) [
+      "--project"
+      entry.projectName
+    ];
+  caseArgs =
+    entry:
+    [
+      (relativeTestFile entry)
+    ]
+    ++ projectArgs entry
+    ++ [
+      "--testNamePattern"
+      (exactNamePattern entry.name)
+    ];
 
   # Turn a string into a single nix-attr-safe slug: lowercase, separators
   # flattened to single dashes, anything not in [a-z0-9-] dropped entirely.
@@ -163,12 +179,16 @@ let
           // {
             pname = "${pname}-vitest-${caseId entry}";
             inherit version;
-            passthru.testName = entry.name;
-            passthru.testFile = relativeTestFile entry;
+            passthru = {
+              testName = entry.name;
+              testFile = relativeTestFile entry;
+              testProject = entry.projectName or null;
+              vitestArgs = caseArgs entry;
+            };
             buildPhase = ''
               runHook preBuild
               ${preTest}
-              ${vitestCli} run ${lib.escapeShellArg (relativeTestFile entry)} --testNamePattern ${lib.escapeShellArg (exactNamePattern entry.name)}
+              ${vitestCli} run ${lib.escapeShellArgs (caseArgs entry)}
               runHook postBuild
             '';
             installPhase = ''

@@ -1,0 +1,12 @@
+{
+  "name": "vitest-workspace-fixture",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:list": "vitest list --json --static-parse"
+  },
+  "devDependencies": {
+    "vitest": "4.1.7"
+  }
+}
