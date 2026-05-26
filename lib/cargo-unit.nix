@@ -384,6 +384,7 @@ let
             lib.nameValuePair "${prefix}${targetName}-${lib.replaceStrings [ "::" ] [ "-" ] case}" drv
           ) (target.cases or { })
         ) (lib.getAttrs (builtins.filter (name: targets ? ${name}) targetNames) targets);
+      policyChecks = workspace.policyChecks or { };
       testCases =
         flattenCaseTargets "" selectedTestTargets (workspace.tests or { })
         // flattenCaseTargets "doctest-" selectedDoctestTargets (workspace.doctests or { });
@@ -401,11 +402,8 @@ let
         (binaryDrv.passthru or { })
         // passthru
         // {
-          tests =
-            (binaryDrv.passthru.tests or { })
-            // (binaryDrv.passthru.policyChecks or { })
-            // (passthru.tests or { })
-            // tests;
+          tests = (binaryDrv.passthru.tests or { }) // policyChecks // (passthru.tests or { }) // tests;
+          inherit policyChecks;
           inherit (workspace) policy;
         };
     };

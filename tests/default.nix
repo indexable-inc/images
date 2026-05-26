@@ -2803,8 +2803,8 @@ let
         message = "cargo-unit workspaces should expose a cargo-machete policy check by default";
       }
       {
-        assertion = cargoUnitWorkspace.binaries.cargo-unit-hello ? unchecked;
-        message = "cargo-unit package outputs should be wrapped by policy checks by default";
+        assertion = !(cargoUnitWorkspace.binaries.cargo-unit-hello ? unchecked);
+        message = "cargo-unit package outputs should stay independent from aggregate policy checks";
       }
       {
         assertion = builtins.hasAttr "cargo_unit_hello-all" cargoUnitSelectedHello.passthru.tests;
@@ -2944,6 +2944,16 @@ let
       {
         assertion = repoPackages.minecraft-nbt.passthru.tests ? cargoMachete;
         message = "repo Rust policy checks should be exposed as flake-checkable tests";
+      }
+      {
+        assertion = !(repoPackages.dag-runner.passthru ? unchecked);
+        message = "repo Rust package outputs should not wrap unrelated workspace policy checks";
+      }
+      {
+        assertion =
+          builtins.pathExists (ix.rustWorkspace.src + "/packages/loop/src/main.rs")
+          && !(builtins.pathExists (ix.rustWorkspace.src + "/packages/loop/site/package.json"));
+        message = "repo Rust workspace source should exclude loop viewer site files";
       }
       {
         assertion = builtins.hasAttr "integration-all" repoPackages.dag-runner.passthru.tests;

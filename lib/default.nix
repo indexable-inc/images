@@ -831,21 +831,31 @@ let
     workspacePkgs:
     let
       inherit (paths) root;
+      rustPackageFiles =
+        packagePath:
+        lib.fileset.intersection (lib.fileset.gitTracked packagePath) (
+          lib.fileset.unions [
+            (packagePath + "/Cargo.toml")
+            (packagePath + "/src")
+            (lib.fileset.maybeMissing (packagePath + "/tests"))
+            (lib.fileset.maybeMissing (packagePath + "/templates"))
+          ]
+        );
       src = lib.fileset.toSource {
         inherit root;
         fileset = lib.fileset.intersection (lib.fileset.gitTracked root) (
           lib.fileset.unions [
             (root + "/Cargo.toml")
             (root + "/Cargo.lock")
-            (paths.modules + "/services/resource-monitor/stats-writer")
-            paths.packages.dagRunner
-            paths.packages.ixDevDiagnose
-            paths.packages.loop
-            paths.packages.mcp
-            paths.packages.minecraft.nbt
-            paths.packages.minecraft.syncManaged
-            paths.packages.nixCargoUnit
-            paths.packages.ociImageBuilder
+            (rustPackageFiles (paths.modules + "/services/resource-monitor/stats-writer"))
+            (rustPackageFiles paths.packages.dagRunner)
+            (rustPackageFiles paths.packages.ixDevDiagnose)
+            (rustPackageFiles paths.packages.loop)
+            (rustPackageFiles paths.packages.mcp)
+            (rustPackageFiles paths.packages.minecraft.nbt)
+            (rustPackageFiles paths.packages.minecraft.syncManaged)
+            (rustPackageFiles paths.packages.nixCargoUnit)
+            (rustPackageFiles paths.packages.ociImageBuilder)
           ]
         );
       };
@@ -872,10 +882,9 @@ let
           "build"
           "test"
         ];
-        # Every policy check runs once across the whole workspace: a
-        # regression in any single crate fails the workspace selection.
-        # `cargoUnit.buildWorkspace`'s defaults already enable each check;
-        # this block makes the contract explicit at the workspace root.
+        # Every policy check runs once across the whole workspace. Selected
+        # package outputs expose these as explicit tests instead of making
+        # downstream binary builds depend on unrelated workspace policy.
         policy = {
           denyUnusedCrateDependencies = true;
           cargoAudit.enable = true;

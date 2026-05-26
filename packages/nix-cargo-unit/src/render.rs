@@ -2138,7 +2138,7 @@ fn render_root_entries_for(
         }
         let _ = writeln!(
             entries,
-            "    {} = withPolicyChecks units.{};",
+            "    {} = units.{};",
             nix_attr(&unit.target.name),
             nix_attr(&prepared.names[*index])
         );
@@ -3030,12 +3030,7 @@ version = "0.1.0"
 
         assert!(rendered.contains("targetSets = ["));
         assert_eq!(rendered.matches("binaries = {").count(), 3);
-        assert_eq!(
-            rendered
-                .matches("\"hello\" = withPolicyChecks units.")
-                .count(),
-            4
-        );
+        assert_eq!(rendered.matches("\"hello\" = units.").count(), 4);
     }
 
     #[test]
