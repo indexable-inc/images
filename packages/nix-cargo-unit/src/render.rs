@@ -642,15 +642,12 @@ fn same_package_bins(graph: &UnitGraph, index: usize) -> Vec<(String, usize)> {
     if !needs_bin_exe_env(unit) {
         return Vec::new();
     }
-    graph
-        .units
+    unit.dependencies
         .iter()
-        .enumerate()
-        .filter_map(|(i, other)| {
-            if i == index || !is_bin_exe_candidate(unit, other) {
-                return None;
-            }
-            Some((other.target.name.clone(), i))
+        .filter_map(|dependency| {
+            let candidate = graph.units.get(dependency.index)?;
+            is_bin_exe_candidate(unit, candidate)
+                .then(|| (candidate.target.name.clone(), dependency.index))
         })
         .collect()
 }
@@ -2823,19 +2820,20 @@ version = "0.1.0"
             "path+file://{}#dag-runner@0.1.0",
             workspace.path().display()
         );
+        let bin_target = serde_json::json!({
+          "kind": ["bin"],
+          "crate_types": ["bin"],
+          "name": "dag-runner",
+          "src_path": main_rs,
+          "edition": "2024"
+        });
 
         let graph: UnitGraph = serde_json::from_value(serde_json::json!({
           "version": 1,
           "units": [
             {
               "pkg_id": pkg_id,
-              "target": {
-                "kind": ["bin"],
-                "crate_types": ["bin"],
-                "name": "dag-runner",
-                "src_path": main_rs,
-                "edition": "2024"
-              },
+              "target": bin_target,
               "profile": { "name": "release", "opt_level": "3" },
               "features": [],
               "mode": "build",
@@ -2843,13 +2841,7 @@ version = "0.1.0"
             },
             {
               "pkg_id": pkg_id,
-              "target": {
-                "kind": ["bin"],
-                "crate_types": ["bin"],
-                "name": "dag-runner",
-                "src_path": main_rs,
-                "edition": "2024"
-              },
+              "target": bin_target,
               "profile": { "name": "test", "opt_level": "0" },
               "features": [],
               "mode": "test",
@@ -2870,6 +2862,14 @@ version = "0.1.0"
               "dependencies": [
                 { "index": 0, "extern_crate_name": "dag_runner" }
               ]
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": bin_target,
+              "profile": { "name": "dev", "opt_level": "0" },
+              "features": ["extra"],
+              "mode": "build",
+              "dependencies": []
             }
           ],
           "roots": [0, 1, 2]
