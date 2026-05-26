@@ -382,8 +382,8 @@ jobs:
           SUMMARY_MARKER = f"<!-- ai-review-summary:{HEAD_SHA} -->"
 
 
-          def request_json(method: str, path: str, data: dict[str, Any] | None = None) -> Any:
-              url = f"https://api.github.com/repos/{REPOSITORY}{path}"
+          def request_api_json(method: str, path: str, data: dict[str, Any] | None = None) -> Any:
+              url = f"https://api.github.com{path}"
               body = None if data is None else json.dumps(data).encode()
               request = urllib.request.Request(url, data=body, method=method)
               request.add_header("Accept", "application/vnd.github+json")
@@ -400,6 +400,18 @@ jobs:
                   raise RuntimeError(f"GitHub API {method} {path} failed: {error.code} {detail}") from error
 
               return None if not payload else json.loads(payload)
+
+
+          def request_json(method: str, path: str, data: dict[str, Any] | None = None) -> Any:
+              return request_api_json(method, f"/repos/{REPOSITORY}{path}", data)
+
+
+          def try_request_api_json(method: str, path: str, data: dict[str, Any] | None = None) -> Any:
+              try:
+                  return request_api_json(method, path, data)
+              except (RuntimeError, urllib.error.URLError) as error:
+                  print(f"warning: could not resolve publisher identity from {path}: {error}", file=sys.stderr)
+                  return None
 
 
           def request_pages(path: str) -> list[dict[str, Any]]:
@@ -435,19 +447,44 @@ jobs:
               return str(user.get("login") or "")
 
 
-          def marker_bodies(path: str) -> list[str]:
+          def publisher_authors() -> set[str]:
+              # Installation tokens may not expose `/user` or `/app`; keep the
+              # default Actions authors when identity discovery is unavailable.
+              authors = set(BOT_AUTHORS)
+
+              viewer_payload = try_request_api_json("POST", "/graphql", {"query": "query { viewer { login } }"})
+              if isinstance(viewer_payload, dict):
+                  viewer_data = viewer_payload.get("data")
+                  if isinstance(viewer_data, dict):
+                      graphql_viewer = viewer_data.get("viewer")
+                      if isinstance(graphql_viewer, dict):
+                          graphql_login = str(graphql_viewer.get("login") or "")
+                          if graphql_login:
+                              authors.add(graphql_login)
+
+              viewer = try_request_api_json("GET", "/user")
+              if isinstance(viewer, dict):
+                  login = str(viewer.get("login") or "")
+                  if login:
+                      authors.add(login)
+
+              return authors
+
+
+          def marker_bodies(path: str, authors: set[str]) -> list[str]:
               bodies: list[str] = []
               for item in request_pages(path):
-                  if author_login(item) in BOT_AUTHORS:
+                  if author_login(item) in authors:
                       bodies.append(str(item.get("body") or ""))
               return bodies
 
 
           def existing_markers() -> set[str]:
+              authors = publisher_authors()
               bodies: list[str] = []
-              bodies.extend(marker_bodies(f"/pulls/{PR_NUMBER}/comments"))
-              bodies.extend(marker_bodies(f"/pulls/{PR_NUMBER}/reviews"))
-              bodies.extend(marker_bodies(f"/issues/{PR_NUMBER}/comments"))
+              bodies.extend(marker_bodies(f"/pulls/{PR_NUMBER}/comments", authors))
+              bodies.extend(marker_bodies(f"/pulls/{PR_NUMBER}/reviews", authors))
+              bodies.extend(marker_bodies(f"/issues/{PR_NUMBER}/comments", authors))
               markers: set[str] = set()
               for body in bodies:
                   for line in body.splitlines():

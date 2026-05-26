@@ -69,6 +69,10 @@ on auto-merge. The AI review gate is the default code review signal for
 agent-authored PRs; do not add or preserve a separate GitHub code-quality lane
 unless the user asks for it.
 
+Check the PR author before pushing to, closing, merging, enabling auto-merge for,
+or otherwise modifying a PR. Do not change PRs authored by another GitHub user
+unless that user or the operator explicitly authorizes it.
+
 AI review inline feedback lives in GitHub review threads, which `gh pr view
 --comments` does not show. Inspect unresolved threads directly before deciding a
 PR is clear:
