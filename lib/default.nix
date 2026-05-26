@@ -182,6 +182,9 @@ let
     inherit bunLockFor;
   };
   buildNpmSite = import ./build-npm-site.nix;
+  buildSvelteSite = import ./build-svelte-site.nix {
+    inherit bunLockFor writeNushellApplication;
+  };
   buildNpmVitest = import ./build-npm-vitest.nix;
   buildZigPackage = import ./build-zig-package.nix { };
   uvLockFor =
@@ -646,36 +649,72 @@ let
         goUnit = goUnitFor pkgs;
         rustWorkspace = rustWorkspaceFor pkgs;
       };
+      roomSiteSrc = lib.fileset.toSource {
+        root = paths.packages.room + "/site";
+        fileset = lib.fileset.intersection (lib.fileset.gitTracked (paths.packages.room + "/site")) (
+          lib.fileset.unions [
+            (paths.packages.room + "/site/package.json")
+            (paths.packages.room + "/site/package-lock.json")
+            (paths.packages.room + "/site/index.html")
+            (paths.packages.room + "/site/svelte.config.js")
+            (paths.packages.room + "/site/tsconfig.json")
+            (paths.packages.room + "/site/vite.config.ts")
+            (paths.packages.room + "/site/src")
+          ]
+        );
+      };
+      roomSite = buildSvelteSite pkgs {
+        pname = "room-site";
+        version = "0.1.0";
+        src = roomSiteSrc;
+        serve = {
+          name = "room-site";
+          port = 8081;
+        };
+        devServer = {
+          name = "room-site-dev";
+          checkoutSubdir = "packages/room/site";
+          port = 5174;
+        };
+      };
+      loopViewerSrc = lib.fileset.toSource {
+        root = paths.packages.loop + "/site";
+        fileset = lib.fileset.intersection (lib.fileset.gitTracked (paths.packages.loop + "/site")) (
+          lib.fileset.unions [
+            (paths.packages.loop + "/site/package.json")
+            (paths.packages.loop + "/site/package-lock.json")
+            (paths.packages.loop + "/site/index.html")
+            (paths.packages.loop + "/site/svelte.config.js")
+            (paths.packages.loop + "/site/tsconfig.json")
+            (paths.packages.loop + "/site/vite.config.ts")
+            (paths.packages.loop + "/site/src")
+          ]
+        );
+      };
+      loopViewer = buildSvelteSite pkgs {
+        pname = "loop-viewer";
+        version = "0.1.0";
+        src = loopViewerSrc;
+        serve = {
+          name = "loop-viewer";
+          port = 8082;
+        };
+        devServer = {
+          name = "loop-viewer-dev";
+          checkoutSubdir = "packages/loop/site";
+          port = 5175;
+        };
+      };
       basePackages = {
         dag-runner = pkgs.callPackage paths.packages.dagRunner {
           ix = ixForPackages;
         };
-        room =
-          let
-            roomSiteSrc = lib.fileset.toSource {
-              root = paths.packages.room + "/site";
-              fileset = lib.fileset.intersection (lib.fileset.gitTracked (paths.packages.room + "/site")) (
-                lib.fileset.unions [
-                  (paths.packages.room + "/site/package.json")
-                  (paths.packages.room + "/site/package-lock.json")
-                  (paths.packages.room + "/site/index.html")
-                  (paths.packages.room + "/site/svelte.config.js")
-                  (paths.packages.room + "/site/tsconfig.json")
-                  (paths.packages.room + "/site/vite.config.ts")
-                  (paths.packages.room + "/site/src")
-                ]
-              );
-            };
-            site = buildNpmSite pkgs {
-              pname = "room-site";
-              version = "0.1.0";
-              src = roomSiteSrc;
-            };
-          in
-          pkgs.callPackage paths.packages.room {
-            inherit pkgs site;
-            ix = ixForPackages;
-          };
+        room-site = roomSite;
+        room = pkgs.callPackage paths.packages.room {
+          inherit pkgs;
+          site = roomSite;
+          ix = ixForPackages;
+        };
         drgn = pkgs.callPackage paths.packages.drgn { };
         ix-fleet = pkgs.callPackage paths.packages.ixFleet {
           ix = ixForPackages;
@@ -690,32 +729,12 @@ let
           ix = ixForPackages;
         };
         llm-clippy = llmClippyFor pkgs;
-        loop =
-          let
-            loopSiteSrc = lib.fileset.toSource {
-              root = paths.packages.loop + "/site";
-              fileset = lib.fileset.intersection (lib.fileset.gitTracked (paths.packages.loop + "/site")) (
-                lib.fileset.unions [
-                  (paths.packages.loop + "/site/package.json")
-                  (paths.packages.loop + "/site/package-lock.json")
-                  (paths.packages.loop + "/site/index.html")
-                  (paths.packages.loop + "/site/svelte.config.js")
-                  (paths.packages.loop + "/site/tsconfig.json")
-                  (paths.packages.loop + "/site/vite.config.ts")
-                  (paths.packages.loop + "/site/src")
-                ]
-              );
-            };
-            viewer = buildNpmSite pkgs {
-              pname = "loop-viewer";
-              version = "0.1.0";
-              src = loopSiteSrc;
-            };
-          in
-          pkgs.callPackage paths.packages.loop {
-            inherit pkgs viewer;
-            ix = ixForPackages;
-          };
+        loop-viewer = loopViewer;
+        loop = pkgs.callPackage paths.packages.loop {
+          inherit pkgs;
+          viewer = loopViewer;
+          ix = ixForPackages;
+        };
         mc-probe = pkgs.callPackage paths.packages.minecraft.probe {
           ix = ixForPackages;
         };
@@ -838,6 +857,7 @@ let
       buildRustPackage
       buildNpmSite
       buildNpmVitest
+      buildSvelteSite
       buildUvApplication
       buildZigPackage
       cargoUnit
@@ -1106,6 +1126,7 @@ let
       buildGradleFatJar
       buildNpmSite
       buildNpmVitest
+      buildSvelteSite
       buildUvApplication
       buildZigPackage
       bunLockFor

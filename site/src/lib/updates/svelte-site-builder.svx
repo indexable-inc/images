@@ -1,0 +1,39 @@
+---
+id: svelte-site-builder
+postedAt: 2026-05-26T03:50:00-07:00
+title: "`ix.buildSvelteSite` packages Svelte builds, previews, and dev servers"
+tags: [interesting, nix, svelte, vite]
+links:
+  - label: Svelte builder
+    href: https://github.com/indexable-inc/index/tree/main/lib/build-svelte-site.nix
+  - label: Vite CLI
+    href: https://vite.dev/guide/cli
+  - label: OrbStack mounts
+    href: https://docs.orbstack.dev/docker/file-sharing
+---
+
+`ix.buildSvelteSite` is now the shared builder for the repo's Svelte/Vite surfaces: the docs site, room UI, loop viewer, and resource monitor site. It owns the locked production build, a static preview command, and a checkout dev-server command from one Nix call.
+
+```nix
+ix.buildSvelteSite pkgs {
+  pname = "room-site";
+  src = roomSiteSrc;
+  serve.port = 8081;
+  devServer = {
+    name = "room-site-dev";
+    checkoutSubdir = "packages/room/site";
+    port = 5174;
+  };
+}
+```
+
+The build still runs from a filtered, tracked source closure. The preview command serves the immutable output with `miniserve`, so `nix run .#room-site` or `nix run .#loop-viewer` exercises the same files the package embeds. The dev command runs from the mutable checkout instead:
+
+```bash
+nix run .#site-dev
+nix run .#room-site-dev -- --root packages/room/site --install
+```
+
+That split is deliberate. Vite's dev server writes dependency installs, caches, and HMR state, while Nix builds should stay pure and reproducible. The `-dev` wrappers install `node_modules` when missing, pass Vite's `--host` and `--port` flags, and leave ignored files in the checkout where editors and file watchers expect them.
+
+For OrbStack and VM workflows, the builder stops at the command boundary. OrbStack already provides macOS-to-Linux bind mounts, port forwarding, and faster Linux-side volumes for heavier dependency trees. When an ix shell workspace needs ignored files copied after a tracked source sync, `nix run .#ix-shell-sync-ignored -- <vm> <path>` streams only the git-ignored paths into `/work/ix`.
