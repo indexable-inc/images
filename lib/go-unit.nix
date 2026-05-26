@@ -54,7 +54,8 @@ let
           lib.hasPrefix "require(" compactLine
           || (lib.hasPrefix "require" compactLine && compactLine != "require")
         ) (lib.splitString "\n" (builtins.readFile checkedGoMod));
-      noSumModule = requestedNoSumModule && !readableGoModHasRequire;
+      unreadableNoSumModule = requestedNoSumModule && !canReadGoMod;
+      noSumModule = requestedNoSumModule && canReadGoMod && !readableGoModHasRequire;
       goSumForBuild =
         if explicitGoSum then
           args.goSum
@@ -67,8 +68,10 @@ let
           (goSumForBuild == null && noSumModule)
           || (goSumForBuild != null && builtins.pathExists goSumForBuild)
         else
-          goSumForBuild != null || noSumModule || !canReadModuleFiles;
+          goSumForBuild != null || noSumModule || (!canReadModuleFiles && !requestedNoSumModule);
       missingGoSumMessage = "goUnit.buildWorkspace requires ${builtins.toString goSum}; pass vendorHash = null only for stdlib-only modules without go.sum";
+      unreadableNoSumMessage = "goUnit.buildWorkspace cannot verify vendorHash = null against ${builtins.toString goMod}; pass a readable goMod or a real vendorHash";
+      requireNoSumMessage = "goUnit.buildWorkspace vendorHash = null is only for stdlib-only modules without require directives";
       canReadGoSum =
         goSumForBuild != null && (canReadModuleFiles || explicitGoSum) && builtins.pathExists goSumForBuild;
       canDeriveVendorHashKey = canReadGoMod && (canReadGoSum || noSumModule);
@@ -112,6 +115,8 @@ let
         );
     in
     assert lib.assertMsg goModExists missingGoModMessage;
+    assert lib.assertMsg (!unreadableNoSumModule) unreadableNoSumMessage;
+    assert lib.assertMsg (!requestedNoSumModule || !readableGoModHasRequire) requireNoSumMessage;
     assert lib.assertMsg goSumExists missingGoSumMessage;
     {
       pname = args.pname or "go-unit";

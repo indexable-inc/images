@@ -718,6 +718,7 @@ let
   goUnitDerivedStdlibWorkspace = ix.goUnit.buildWorkspace {
     pname = "go-unit-stdlib-derived";
     src = goUnitDerivedStdlibSource;
+    goMod = ./fixtures/go-unit-stdlib/go.mod;
     vendorHash = null;
     packages = [ "." ];
   };
@@ -732,6 +733,15 @@ let
     vendorHashFile = ./fixtures/go-unit-hello/go-modules.nix;
     packages = [ "." ];
   };
+  goUnitDerivedUnreadableNoSumEval = builtins.tryEval (
+    builtins.attrNames
+      (ix.goUnit.buildWorkspace {
+        pname = "go-unit-hello-derived-no-sum";
+        src = goUnitDerivedSource;
+        vendorHash = null;
+        packages = [ "." ];
+      }).packages
+  );
   goUnitDerivedMissingGoSumKeyEval =
     let
       workspace = ix.goUnit.buildWorkspace {
@@ -1097,6 +1107,7 @@ let
     serve = {
       name = "svelte-site-fixture";
       port = 8180;
+      routePrefix = "/fixture";
       extraFlags = [
         "--title"
         "Svelte Site Fixture"
@@ -2901,14 +2912,18 @@ let
         message = "go-unit package derivations should pass null goSum for modules without go.sum";
       }
       {
-        assertion = goUnitDerivedStdlibWorkspace.vendorHashKey == null;
-        message = "go-unit workspaces should not read derivation source module files during eval";
+        assertion = goUnitDerivedStdlibWorkspace.packages.root.goUnit.goSum == null;
+        message = "go-unit derivation sources should allow no-sum modules when go.mod is readable";
       }
       {
         assertion =
           goUnitDerivedWorkspaceWithVendorHashFile.packages.root.goUnit.vendorHashKey
           == goUnitWorkspace.vendorHashKey;
         message = "go-unit derivation sources should use explicit vendor hash files by key";
+      }
+      {
+        assertion = !goUnitDerivedUnreadableNoSumEval.success;
+        message = "go-unit derivation sources should reject no-sum mode when go.mod is unreadable";
       }
       {
         assertion = !goUnitDerivedMissingGoSumKeyEval.success;
@@ -3709,6 +3724,10 @@ let
     test -x ${bunSite.bunNodeModules.nodeCompat}/bin/node
     grep -q 'class="ix npm"' ${npmSite}/share/npm-site-fixture/index.html
     grep -q 'class="ix svelte"' ${svelteSite}/share/svelte-site-fixture/index.html
+    test ! -L ${svelteSite}/share/svelte-site-fixture
+    test ! -L ${svelteSite}/share/svelte-site-fixture/index.html
+    grep -q -- '--route-prefix' ${svelteSite.passthru.serve}/bin/svelte-site-fixture
+    grep -q -- '/fixture' ${svelteSite.passthru.serve}/bin/svelte-site-fixture
     test -x ${svelteSite}/bin/svelte-site-fixture
     grep -q -- "Svelte Site Fixture" ${svelteSite}/bin/svelte-site-fixture
     test -x ${svelteSite.passthru.devServer}/bin/svelte-site-fixture-dev

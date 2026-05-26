@@ -2263,15 +2263,17 @@ fn render_doctest_command(
     )?;
     script.push_str("cd \"$CARGO_MANIFEST_DIR\"\n");
     script.push_str(&cargo_package_exports(unit)?);
-    script.push_str("rustdoc_args=( --test -Z unstable-options )\n");
+    script.push_str("build_script_rustdoc_args=()\n");
+    script.push_str("doctest_build_args=()\n");
+    script.push_str("doctest_runtime_library_paths=()\n");
+    script.push_str("rustdoc_args=( --test )\n");
     match mode {
         DoctestCommandMode::List => {
-            script.push_str("rustdoc_args+=( --output-format doctest )\n");
+            script.push_str("rustdoc_args+=( -Z unstable-options --output-format doctest )\n");
         }
         DoctestCommandMode::RunAll => {}
         DoctestCommandMode::RunCase => {
-            script
-                .push_str("rustdoc_args+=( --test-args \"$TEST_NAME\" --test-args --nocapture )\n");
+            script.push_str("rustdoc_args+=( --test-args \"$TEST_NAME\" --test-args --include-ignored --test-args --nocapture )\n");
         }
     }
     push_rustdoc_arg(&mut script, "--crate-name");
@@ -2286,10 +2288,7 @@ fn render_doctest_command(
         push_rustdoc_arg(&mut script, "--target");
         push_rustdoc_arg(&mut script, platform);
     }
-    for rustflag in &unit.profile.rustflags {
-        push_rustdoc_arg(&mut script, "--doctest-build-arg");
-        push_rustdoc_arg(&mut script, rustflag);
-    }
+    append_doctest_builder_args(&mut script, graph, prepared, index, mode);
     for dep_index in &prepared.transitive_unit_deps[index] {
         let dep = &graph.units[*dep_index];
         if dep.is_bin() {
@@ -2329,8 +2328,10 @@ fn render_doctest_command(
         DoctestCommandMode::RunCase => {
             script.push_str("doctest_log=$(mktemp)\n");
             script.push_str("rustdoc \"''${rustdoc_args[@]}\" 2>&1 | tee \"$doctest_log\"\n");
-            script.push_str("if grep -q 'running 0 tests' \"$doctest_log\"; then\n");
-            script.push_str("  echo \"rustdoc filter did not run a doctest: $TEST_NAME\" >&2\n");
+            script.push_str("if ! grep -q '^running 1 test$' \"$doctest_log\"; then\n");
+            script.push_str(
+                "  echo \"rustdoc filter did not run exactly one doctest: $TEST_NAME\" >&2\n",
+            );
             script.push_str("  exit 1\n");
             script.push_str("fi\n");
         }
@@ -2350,6 +2351,90 @@ enum DoctestCommandMode {
 
 fn push_rustdoc_arg(script: &mut String, value: &str) {
     let _ = writeln!(script, "rustdoc_args+=( {} )", shell::quote(value));
+}
+
+fn append_doctest_builder_args(
+    script: &mut String,
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+    mode: DoctestCommandMode,
+) {
+    let unit = &graph.units[index];
+    for rustflag in &unit.profile.rustflags {
+        push_doctest_build_arg(script, rustflag);
+    }
+    if let Some(run_index) = unit_build_script_run(graph, index) {
+        let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
+        append_doctest_build_script_flag_reader(script, &run_ref);
+    }
+
+    script.push_str("rustdoc_args+=( \"''${build_script_rustdoc_args[@]}\" )\n");
+    if !matches!(mode, DoctestCommandMode::List) {
+        script.push_str("if [ \"''${#doctest_build_args[@]}\" -gt 0 ]; then\n");
+        script.push_str("  rustdoc_args+=( -Z unstable-options )\n");
+        script.push_str("fi\n");
+    }
+    script.push_str("for doctest_build_arg in \"''${doctest_build_args[@]}\"; do\n");
+    script.push_str("  rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )\n");
+    script.push_str("done\n");
+    script.push_str("if [ \"''${#doctest_runtime_library_paths[@]}\" -gt 0 ]; then\n");
+    script.push_str(
+        "  doctest_runtime_library_path=$(IFS=:; printf '%s' \"''${doctest_runtime_library_paths[*]}\")\n",
+    );
+    script.push_str(
+        "  doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')\n",
+    );
+    script.push_str("  case \"$doctest_runtime_library_path_host\" in\n");
+    script.push_str(
+        "    *apple-darwin*) doctest_runtime_library_path_var=DYLD_FALLBACK_LIBRARY_PATH ;;\n",
+    );
+    script.push_str("    *) doctest_runtime_library_path_var=LD_LIBRARY_PATH ;;\n");
+    script.push_str("  esac\n");
+    script.push_str(
+        "  doctest_runtime_library_path_current=\"''${!doctest_runtime_library_path_var-}\"\n",
+    );
+    script.push_str("  if [ -n \"$doctest_runtime_library_path_current\" ]; then\n");
+    script.push_str(
+        "    export \"$doctest_runtime_library_path_var=$doctest_runtime_library_path:$doctest_runtime_library_path_current\"\n",
+    );
+    script.push_str("  else\n");
+    script.push_str(
+        "    export \"$doctest_runtime_library_path_var=$doctest_runtime_library_path\"\n",
+    );
+    script.push_str("  fi\n");
+    script.push_str("fi\n");
+}
+
+fn push_doctest_build_arg(script: &mut String, value: &str) {
+    let _ = writeln!(script, "doctest_build_args+=( {} )", shell::quote(value));
+}
+
+fn append_doctest_build_script_flag_reader(script: &mut String, run_ref: &str) {
+    let quoted_run_ref = format!("\"{run_ref}\"");
+
+    script.push('\n');
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/rustc-cfg ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && build_script_rustdoc_args+=( '--cfg' \"$line\" )\n  done < {quoted_run_ref}/rustc-cfg\nfi",
+    );
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/rustc-link-search ]; then\n  while IFS= read -r line; do\n    if [ -n \"$line\" ]; then\n      build_script_rustdoc_args+=( '-L' \"$line\" )\n      link_search_path=\"$line\"\n      case \"$link_search_path\" in\n        *=*) link_search_path=\"''${{link_search_path#*=}}\" ;;\n      esac\n      [ -n \"$link_search_path\" ] && doctest_runtime_library_paths+=( \"$link_search_path\" )\n    fi\n  done < {quoted_run_ref}/rustc-link-search\nfi",
+    );
+    append_doctest_link_arg_reader(script, &quoted_run_ref, "rustc-link-arg");
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/rustc-env ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && export \"$line\"\n  done < {quoted_run_ref}/rustc-env\nfi",
+    );
+    let _ = writeln!(script, "export OUT_DIR={quoted_run_ref}/out-dir\n");
+}
+
+fn append_doctest_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str) {
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/{file} ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && doctest_build_args+=( -C \"link-arg=$line\" )\n  done < {quoted_run_ref}/{file}\nfi",
+    );
 }
 
 fn render_benchmark_entries_for(
@@ -2833,7 +2918,7 @@ version = "0.1.0"
             {
               "pkg_id": pkg_id,
               "target": bin_target,
-              "profile": { "name": "release", "opt_level": "3" },
+              "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-feature=+sse2"] },
               "features": [],
               "mode": "build",
               "dependencies": []
@@ -3088,6 +3173,131 @@ version = "0.1.0"
 
         assert_eq!(rendered.matches("\"alpha\" = mkDoctestEntry").count(), 2);
         assert_eq!(rendered.matches("\"beta\" = mkDoctestEntry").count(), 2);
+    }
+
+    #[test]
+    fn doctest_commands_match_cargo_rustdoc_contract() {
+        let workspace = tempfile::tempdir().unwrap();
+        fs::create_dir_all(workspace.path().join("src")).unwrap();
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            r#"[package]
+name = "native"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+        let build_rs = workspace.path().join("build.rs");
+        let lib_rs = workspace.path().join("src/lib.rs");
+        fs::write(&build_rs, "fn main() {}\n").unwrap();
+        fs::write(&lib_rs, "pub fn native() {}\n").unwrap();
+        let build_rs = build_rs.to_string_lossy();
+        let lib_rs = lib_rs.to_string_lossy();
+        let pkg_id = format!("path+file://{}#native@0.1.0", workspace.path().display());
+
+        let graph: UnitGraph = serde_json::from_value(serde_json::json!({
+          "version": 1,
+          "units": [
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["custom-build"],
+                "crate_types": ["bin"],
+                "name": "build-script-build",
+                "src_path": build_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "features": [],
+              "mode": "build",
+              "dependencies": []
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["custom-build"],
+                "crate_types": ["bin"],
+                "name": "build-script-build",
+                "src_path": build_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "features": [],
+              "mode": "run-custom-build",
+              "dependencies": [
+                { "index": 0, "extern_crate_name": "build_script_build" }
+              ]
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["lib"],
+                "crate_types": ["lib"],
+                "name": "native",
+                "src_path": lib_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-feature=+sse2"] },
+              "features": [],
+              "mode": "build",
+              "dependencies": [
+                { "index": 1, "extern_crate_name": "build_script_build" }
+              ]
+            }
+          ],
+          "roots": [2]
+        }))
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: workspace.path().to_path_buf(),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+            },
+        )
+        .unwrap();
+
+        assert_doctest_rendered_contract(&rendered);
+    }
+
+    fn assert_doctest_rendered_contract(rendered: &str) {
+        assert_eq!(rendered.matches("-Z unstable-options").count(), 3);
+        assert!(rendered.contains("build_script_rustdoc_args=()"));
+        assert!(rendered.contains("doctest_build_args=()"));
+        assert!(rendered.contains("doctest_runtime_library_paths=()"));
+        assert!(rendered.contains("rustdoc_args+=( \"''${build_script_rustdoc_args[@]}\" )"));
+        assert!(rendered.contains("doctest_build_args+=( '-C' )"));
+        assert!(rendered.contains("rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )"));
+        assert!(rendered.contains("doctest_runtime_library_paths+=( \"$link_search_path\" )"));
+        assert!(rendered.contains(
+            "doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')"
+        ));
+        assert!(rendered.contains(
+            "*apple-darwin*) doctest_runtime_library_path_var=DYLD_FALLBACK_LIBRARY_PATH ;;"
+        ));
+        assert!(rendered.contains("*) doctest_runtime_library_path_var=LD_LIBRARY_PATH ;;"));
+        assert!(rendered.contains(
+            "doctest_runtime_library_path_current=\"''${!doctest_runtime_library_path_var-}\""
+        ));
+        assert!(rendered.contains(
+            "export \"$doctest_runtime_library_path_var=$doctest_runtime_library_path"
+        ));
+        assert!(!rendered.contains("done < \"${units.native-run}/rustc-link-lib"));
+        assert!(!rendered.contains(
+            "doctest_build_args+=( -C \"link-arg=$line\" )\n  done < \"${units.native-run}/rustc-cdylib-link-arg"
+        ));
+        assert!(!rendered.contains("rustdoc_args+=( \"''${build_script_flags[@]}\" )"));
+        assert!(rendered.contains("done < \"${units."));
+        assert!(rendered.contains("/rustc-env"));
+        assert!(rendered.contains("export OUT_DIR=\"${units."));
+        assert!(!rendered.contains("--test-args --exact"));
+        assert!(rendered.contains("--test-args --include-ignored"));
+        assert!(rendered.contains("^running 1 test$"));
     }
 
     #[test]

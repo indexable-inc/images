@@ -22,7 +22,8 @@
   - `installDir`: path under `$out` where built assets are installed.
   - `installFlags`: extra Bun install flags when `packageManager = "bun"`.
   - `extraNativeBuildInputs`: extra packages on PATH for the build.
-  - `serve`: static preview settings, including `name`, `host`, and `port`.
+  - `serve`: static preview settings, including `name`, `host`, `port`, and
+    `routePrefix`.
   - `devServer`: checkout dev-server settings, including `name`,
     `checkoutSubdir`, `host`, `port`, and `autoInstall`.
   - `meta`: standard derivation meta.
@@ -186,6 +187,7 @@ let
     name = pname;
     host = "127.0.0.1";
     port = 8080;
+    routePrefix = null;
     spa = true;
     extraFlags = [ ];
   };
@@ -194,12 +196,17 @@ let
     lib.optionals serveConfig.spa [
       "--index"
       "index.html"
+      "--spa"
     ]
     ++ [
       "--interfaces"
       serveConfig.host
       "--port"
       (toString serveConfig.port)
+    ]
+    ++ lib.optionals (serveConfig.routePrefix != null && serveConfig.routePrefix != "") [
+      "--route-prefix"
+      serveConfig.routePrefix
     ]
     ++ serveConfig.extraFlags
     ++ [ "${staticSite}/${installDir}" ];
@@ -310,17 +317,27 @@ let
       devServer = devServerPackage;
     };
 in
-pkgs.symlinkJoin {
-  name = "${pname}-${version}";
-  paths = [
-    staticSite
-  ]
-  ++ lib.optional serveConfig.enable servePackage
-  ++ lib.optional devConfig.enable devServerPackage;
-  inherit passthru;
-  meta =
-    meta
-    // lib.optionalAttrs serveConfig.enable {
-      mainProgram = meta.mainProgram or serveConfig.name;
-    };
-}
+pkgs.runCommand "${pname}-${version}"
+  {
+    strictDeps = true;
+    inherit passthru;
+    meta =
+      meta
+      // lib.optionalAttrs serveConfig.enable {
+        mainProgram = meta.mainProgram or serveConfig.name;
+      };
+  }
+  ''
+    mkdir -p "$out"
+    cp -R -L --no-preserve=mode,ownership ${staticSite}/. "$out"/
+
+    ${lib.optionalString serveConfig.enable ''
+      mkdir -p "$out/bin"
+      ln -s ${lib.escapeShellArg "${servePackage}/bin/${serveConfig.name}"} "$out/bin"/${lib.escapeShellArg serveConfig.name}
+    ''}
+
+    ${lib.optionalString devConfig.enable ''
+      mkdir -p "$out/bin"
+      ln -s ${lib.escapeShellArg "${devServerPackage}/bin/${devConfig.name}"} "$out/bin"/${lib.escapeShellArg devConfig.name}
+    ''}
+  ''
