@@ -2177,7 +2177,6 @@ fn render_target_sets(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
     let test_keys = compute_test_keys(graph, prepared);
     let benchmark_keys = compute_benchmark_keys(graph, prepared);
     let doctest_keys = compute_doctest_keys(graph, prepared);
-    let doctest_indexes = doctest_keys.keys().copied().collect::<Vec<_>>();
 
     root_sets
         .iter()
@@ -2189,7 +2188,7 @@ fn render_target_sets(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
                 render_root_entries_for(roots, &graph.units, prepared, Unit::is_library),
                 render_benchmark_entries_for(roots, &graph.units, prepared, &benchmark_keys),
                 render_test_entries_for(roots, &graph.units, prepared, &test_keys),
-                render_doctest_entries_for(&doctest_indexes, &graph.units, &doctest_keys),
+                render_doctest_entries_for(roots, &graph.units, &doctest_keys),
             )
         })
         .collect::<Vec<_>>()
@@ -3036,6 +3035,64 @@ version = "0.1.0"
                 .count(),
             4
         );
+    }
+
+    #[test]
+    fn scopes_doctests_to_each_root_set() {
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace/alpha#alpha@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "alpha",
+                    "src_path": "/workspace/alpha/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/beta#beta@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "beta",
+                    "src_path": "/workspace/beta/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0, 1],
+              "root_sets": [[0], [1]]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(rendered.matches("\"alpha\" = mkDoctestEntry").count(), 2);
+        assert_eq!(rendered.matches("\"beta\" = mkDoctestEntry").count(), 2);
     }
 
     #[test]
