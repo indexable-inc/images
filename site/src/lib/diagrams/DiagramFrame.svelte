@@ -63,6 +63,16 @@
   let expanded = $state(false);
   let expandButton: HTMLButtonElement | undefined = $state();
   let closeButton: HTMLButtonElement | undefined = $state();
+  let overlay: HTMLDivElement | undefined = $state();
+
+  const focusableSelector = [
+    'a[href]',
+    'button:not([disabled])',
+    'input:not([disabled])',
+    'select:not([disabled])',
+    'textarea:not([disabled])',
+    '[tabindex]:not([tabindex="-1"])'
+  ].join(',');
 
   function openExpanded(): void {
     expanded = true;
@@ -78,7 +88,47 @@
     if (event.key === 'Escape') {
       event.preventDefault();
       closeExpanded();
+      return;
     }
+
+    if (event.key !== 'Tab') {
+      return;
+    }
+
+    const focusable = modalFocusableElements();
+    if (focusable.length === 0) {
+      event.preventDefault();
+      overlay?.focus();
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+
+    if (!(active instanceof HTMLElement) || !overlay?.contains(active)) {
+      event.preventDefault();
+      first.focus();
+      return;
+    }
+
+    if (event.shiftKey && active === first) {
+      event.preventDefault();
+      last.focus();
+      return;
+    }
+
+    if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function modalFocusableElements(): HTMLElement[] {
+    if (!overlay) return [];
+    return Array.from(overlay.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+      (element) => element.offsetParent !== null || element === document.activeElement
+    );
   }
 
   $effect(() => {
@@ -102,7 +152,7 @@
         {nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.18 }}
-        minZoom={0.5}
+        minZoom={0.1}
         maxZoom={1.5}
         nodesDraggable={false}
         nodesConnectable={false}
@@ -148,6 +198,7 @@
     aria-label={caption ?? 'Expanded diagram'}
     onkeydown={onModalKeydown}
     tabindex="-1"
+    bind:this={overlay}
   >
     <button
       type="button"
