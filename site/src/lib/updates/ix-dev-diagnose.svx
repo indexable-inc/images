@@ -10,7 +10,7 @@ links:
 `nix run .#ix-dev-diagnose` reaches `https://ix.dev/` from the caller's network path, prints `success` or `failure`, and writes one JSON report capturing system resolver answers, per-address TCP and TLS results, parsed certificate issuers and fingerprints, native and Mozilla-root verification outcomes, response headers, and a bounded body sample.
 
 ```bash
-nix run .#ix-dev-diagnose -- --max-body-bytes 128 --out report.json
+nix run github:indexable-inc/index#ix-dev-diagnose -- --max-body-bytes 128 --out report.json
 ```
 
 ```json

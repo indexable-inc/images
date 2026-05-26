@@ -10,7 +10,7 @@ links:
 `nix run .#run -- <command> ...` executes the command in a PTY, prints a bounded head/tail summary to the terminal, and writes the full live stream under `./.ix/run/latest/`.
 
 ```bash
-nix run .#run -- cargo test -p my-crate
+nix run github:indexable-inc/index#run -- cargo test -p my-crate
 ls .ix/run/latest/
 # manifest.json  output.log  output.cast  output.timing
 # stdout.jsonl   lines.jsonl
