@@ -191,42 +191,43 @@ let
     );
   };
 
-  siteBuild = ix.buildNpmSite pkgs {
+  siteBuild = ix.buildSvelteSite pkgs {
     pname = "ix-site";
     version = "0.1.0";
     src = siteSrc;
     distDir = "build";
+    serve.enable = false;
+    devServer = {
+      name = "ix-site-dev";
+      checkoutSubdir = "site";
+    };
   };
 
   # Local preview build: same source, but with the SvelteKit base path
   # cleared so miniserve can serve it from the URL root. The deployed
   # artifact (`siteBuild`) keeps the `/index` prefix for GitHub Pages.
-  sitePreviewBuild = ix.buildNpmSite pkgs {
+  sitePreviewBuild = ix.buildSvelteSite pkgs {
     pname = "ix-site-preview";
     version = "0.1.0";
     src = siteSrc;
     distDir = "build";
     preBuild = "export BASE_PATH=";
     installDir = "share/ix-site-preview";
+    serve.name = "ix-site";
+    devServer.enable = false;
   };
-
-  sitePreviewServe =
-    pkgs.runCommand "ix-site-serve"
-      {
-        nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
-      }
-      ''
-        mkdir -p $out/bin
-        makeWrapper ${lib.getExe pkgs.miniserve} $out/bin/ix-site \
-          --add-flags "--index index.html --interfaces 127.0.0.1 --port 8080 ${sitePreviewBuild}/share/ix-site-preview"
-      '';
 
   site = pkgs.symlinkJoin {
     name = "ix-site-0.1.0";
     paths = [
       siteBuild
-      sitePreviewServe
+      sitePreviewBuild
     ];
+    passthru = {
+      devServer = siteBuild.passthru.devServer;
+      preview = sitePreviewBuild;
+      static = siteBuild.passthru.staticSite;
+    };
     meta.mainProgram = "ix-site";
   };
 
@@ -365,6 +366,7 @@ in
       health-checks-loro = healthChecks.loro;
       health-checks-zellij = healthChecks.zellij;
       inherit lint loop site;
+      site-dev = site.passthru.devServer;
       agents-md = agentsMd;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
@@ -376,6 +378,7 @@ in
         drgn
         ix-dev-diagnose
         ix-fleet
+        loop-viewer
         mc-probe
         minecraft-nbt
         minecraft-sync-managed
@@ -383,8 +386,11 @@ in
         nix-cargo-unit
         oci-image-builder
         run
+        room-site
         mcp
         ;
+      loop-viewer-dev = repoPackages.loop-viewer.passthru.devServer;
+      room-site-dev = repoPackages.room-site.passthru.devServer;
       minestom-hello-server-jar = repoPackages.minestom.helloServerJar;
       inherit (repoPackages) room;
     }

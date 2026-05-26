@@ -6,7 +6,7 @@
   "scripts": {
     "build": "npm run check && npm run lint && vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "dev": "vite dev --host 127.0.0.1",
+    "dev": "vite dev",
     "lint": "eslint ."
   },
   "dependencies": {

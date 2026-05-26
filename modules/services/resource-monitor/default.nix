@@ -84,11 +84,20 @@ let
     );
   };
 
-  site = ix.buildNpmSite pkgs {
+  site = ix.buildSvelteSite pkgs {
     pname = "resource-monitor-site";
     version = "0.1.0";
     src = siteSrc;
     preBuild = "cp ${pkgs.writeText "resource-monitor-vm-config.json" (builtins.toJSON metricConfig)} src/lib/vm-config.json";
+    serve = {
+      name = "resource-monitor-site";
+      port = 8083;
+    };
+    devServer = {
+      name = "resource-monitor-site-dev";
+      checkoutSubdir = "modules/services/resource-monitor/site";
+      port = 5176;
+    };
   };
 
   statsWriter = ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
