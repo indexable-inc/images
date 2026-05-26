@@ -61,9 +61,11 @@ threshold with Tango's `--fail-threshold` flag.
 ## Cargo Unit Coverage
 
 `ix.cargoUnit.buildWorkspace` exposes `coverageReport` when the target set
-contains tests. Build the workspace with a Cargo profile that passes
+contains tests. Build the workspace with `extraRustcArgs` passing
 `-Cinstrument-coverage`; the report derivation runs each test binary, merges the
 LLVM profiles, and writes normalized LCOV to `$out/lcov.info`.
+The selected Rust toolchain must include matching LLVM tools, or
+`makeCoverageReport` must receive explicit `llvmCov` and `llvmProfdata` paths.
 
 ```nix
 ix.cargoUnit.buildWorkspace {
@@ -73,7 +75,8 @@ ix.cargoUnit.buildWorkspace {
     "--workspace"
     "--tests"
   ];
-  profile = "coverage";
+  profile = "dev";
+  extraRustcArgs = [ "-Cinstrument-coverage" ];
 }
 ```
 

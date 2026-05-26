@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+
+CODEX_LOGINS = {"chatgpt-codex-connector[bot]", "chatgpt-codex-connector"}
+REVIEW_STATES = {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
+REVIEW_REQUEST_RE = re.compile(r"@codex\s+review", re.IGNORECASE)
+NO_FINDINGS_RE = re.compile(r"didn.?t find any major issues", re.IGNORECASE)
+
+
+def parse_github_time(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def is_codex_login(login: str | None) -> bool:
+    return login in CODEX_LOGINS
+
+
+def is_review_request(comment: dict[str, Any]) -> bool:
+    body = str(comment.get("body") or "")
+    return not is_codex_login(comment.get("user", {}).get("login")) and bool(
+        REVIEW_REQUEST_RE.search(body)
+    )
+
+
+def is_no_findings_comment(comment: dict[str, Any]) -> bool:
+    body = str(comment.get("body") or "")
+    login = comment.get("user", {}).get("login")
+    return is_codex_login(login) and "Codex Review" in body and bool(NO_FINDINGS_RE.search(body))
+
+
+def is_review_comment_for_head(comment: dict[str, Any], head_sha: str) -> bool:
+    body = str(comment.get("body") or "")
+    login = comment.get("user", {}).get("login")
+    return (
+        is_codex_login(login)
+        and bool(re.search(r"Codex Review|Reviewed commit", body, re.IGNORECASE))
+        and head_sha in body
+    )
+
+
+@dataclass(frozen=True)
+class GitHub:
+    repo: str
+    token: str
+
+    def request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, Any] | None = None,
+        query: dict[str, str | int] | None = None,
+    ) -> tuple[Any, dict[str, str]]:
+        url = f"https://api.github.com{path}"
+        if query:
+            url = f"{url}?{urllib.parse.urlencode(query)}"
+
+        body = None if data is None else json.dumps(data).encode()
+        request = urllib.request.Request(url, data=body, method=method)
+        request.add_header("Accept", "application/vnd.github+json")
+        request.add_header("Authorization", f"Bearer {self.token}")
+        request.add_header("X-GitHub-Api-Version", "2022-11-28")
+        if data is not None:
+            request.add_header("Content-Type", "application/json")
+
+        try:
+            with urllib.request.urlopen(request) as response:
+                payload = response.read().decode()
+                headers = dict(response.headers.items())
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")
+            raise RuntimeError(f"GitHub API {method} {path} failed: {error.code} {detail}") from error
+
+        if not payload:
+            return None, headers
+        return json.loads(payload), headers
+
+    def rest(self, path: str, *, query: dict[str, str | int] | None = None) -> Any:
+        return self.request_json("GET", path, query=query)[0]
+
+    def rest_pages(self, path: str) -> list[dict[str, Any]]:
+        page = 1
+        items: list[dict[str, Any]] = []
+        while True:
+            payload = self.rest(path, query={"per_page": 100, "page": page})
+            if not payload:
+                return items
+            if not isinstance(payload, list):
+                raise RuntimeError(f"GitHub API {path} returned a non-list payload")
+            items.extend(payload)
+            if len(payload) < 100:
+                return items
+            page += 1
+
+    def graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        payload = self.request_json(
+            "POST",
+            "/graphql",
+            data={"query": query, "variables": variables},
+        )[0]
+        errors = payload.get("errors")
+        if errors:
+            raise RuntimeError(f"GitHub GraphQL failed: {json.dumps(errors)}")
+        return payload["data"]
+
+    def pull_request(self, number: int) -> dict[str, Any]:
+        return self.rest(f"/repos/{self.repo}/pulls/{number}")
+
+    def commit(self, sha: str) -> dict[str, Any]:
+        return self.rest(f"/repos/{self.repo}/commits/{sha}")
+
+    def reviews(self, number: int) -> list[dict[str, Any]]:
+        return self.rest_pages(f"/repos/{self.repo}/pulls/{number}/reviews")
+
+    def issue_comments(self, number: int) -> list[dict[str, Any]]:
+        return self.rest_pages(f"/repos/{self.repo}/issues/{number}/comments")
+
+    def reactions(self, comment_id: int) -> list[dict[str, Any]]:
+        return self.rest_pages(f"/repos/{self.repo}/issues/comments/{comment_id}/reactions")
+
+
+THREADS_QUERY = """
+query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          isResolved
+          comments(first: 100) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              author { login }
+              url
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+THREAD_COMMENTS_QUERY = """
+query($threadId: ID!, $after: String) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          author { login }
+          url
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def find_codex_thread_comment_url(github: GitHub, thread_id: str) -> str | None:
+    after = None
+    while True:
+        data = github.graphql(THREAD_COMMENTS_QUERY, {"threadId": thread_id, "after": after})
+        comments = data["node"]["comments"]
+        for comment in comments["nodes"]:
+            if is_codex_login(comment.get("author", {}).get("login")):
+                return str(comment["url"])
+        if not comments["pageInfo"]["hasNextPage"]:
+            return None
+        after = comments["pageInfo"]["endCursor"]
+
+
+def unresolved_codex_thread_urls(github: GitHub, owner: str, repo_name: str, number: int) -> list[str]:
+    urls: list[str] = []
+    after = None
+    while True:
+        data = github.graphql(
+            THREADS_QUERY,
+            {"owner": owner, "repo": repo_name, "number": number, "after": after},
+        )
+        threads = data["repository"]["pullRequest"]["reviewThreads"]
+        for thread in threads["nodes"]:
+            if thread["isResolved"]:
+                continue
+
+            thread_comments = thread["comments"]
+            url = next(
+                (
+                    str(comment["url"])
+                    for comment in thread_comments["nodes"]
+                    if is_codex_login(comment.get("author", {}).get("login"))
+                ),
+                None,
+            )
+            if url is None and thread_comments["pageInfo"]["hasNextPage"]:
+                url = find_codex_thread_comment_url(github, str(thread["id"]))
+            if url is not None:
+                urls.append(url)
+
+        if not threads["pageInfo"]["hasNextPage"]:
+            return urls
+        after = threads["pageInfo"]["endCursor"]
+
+
+def matching_review(reviews: list[dict[str, Any]], head_sha: str) -> dict[str, Any] | None:
+    for review in reviews:
+        login = review.get("user", {}).get("login")
+        if (
+            is_codex_login(login)
+            and review.get("commit_id") == head_sha
+            and review.get("state") in REVIEW_STATES
+        ):
+            return review
+    return None
+
+
+def matching_review_comment(
+    comments: list[dict[str, Any]], head_sha: str
+) -> dict[str, Any] | None:
+    for comment in comments:
+        if is_review_comment_for_head(comment, head_sha):
+            return comment
+    return None
+
+
+def matching_no_findings_comment(
+    comments: list[dict[str, Any]], head_committed_at: datetime
+) -> dict[str, Any] | None:
+    latest: dict[str, Any] | None = None
+    for index, comment in enumerate(comments):
+        if not is_no_findings_comment(comment):
+            continue
+        if parse_github_time(str(comment["created_at"])) < head_committed_at:
+            continue
+
+        prior_requests = [
+            request
+            for request in comments[:index]
+            if is_review_request(request)
+            and parse_github_time(str(request["created_at"]))
+            <= parse_github_time(str(comment["created_at"]))
+        ]
+        if not prior_requests or prior_requests[-1]["created_at"] <= comment["created_at"]:
+            latest = comment
+    return latest
+
+
+def matching_thumbsup_request(
+    github: GitHub,
+    comments: list[dict[str, Any]],
+    head_sha: str,
+    head_committed_at: datetime,
+) -> dict[str, Any] | None:
+    for comment in reversed(comments):
+        body = str(comment.get("body") or "")
+        if not is_review_request(comment) or head_sha not in body:
+            continue
+        if parse_github_time(str(comment["created_at"])) < head_committed_at:
+            continue
+
+        for reaction in github.reactions(int(comment["id"])):
+            user_login = reaction.get("user", {}).get("login")
+            if reaction.get("content") == "+1" and is_codex_login(user_login):
+                return comment
+    return None
+
+
+def append_summary(lines: list[str]) -> None:
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as summary:
+            summary.write("\n".join(lines))
+            summary.write("\n")
+    else:
+        print("\n".join(lines))
+
+
+def require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"missing required environment variable {name}")
+    return value
+
+
+def main() -> int:
+    repo = require_env("REPO")
+    number = int(require_env("PR_NUMBER"))
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise RuntimeError("missing required environment variable GH_TOKEN or GITHUB_TOKEN")
+
+    owner, repo_name = repo.split("/", 1)
+    github = GitHub(repo=repo, token=token)
+    pull_request = github.pull_request(number)
+    head_sha = str(pull_request["head"]["sha"])
+
+    unresolved_threads = unresolved_codex_thread_urls(github, owner, repo_name, number)
+    if unresolved_threads:
+        append_summary(
+            [
+                "## Resolve Codex review threads",
+                "",
+                "Codex has unresolved review feedback on this PR. Fix or intentionally resolve every thread before this gate can pass.",
+                "",
+                *[f"- {url}" for url in unresolved_threads],
+            ]
+        )
+        return 1
+
+    review = matching_review(github.reviews(number), head_sha)
+    if review is not None:
+        print(
+            f"Found {review['state']} review from {review['user']['login']} "
+            f"for {head_sha} at {review['submitted_at']}."
+        )
+        return 0
+
+    comments = github.issue_comments(number)
+    comment = matching_review_comment(comments, head_sha)
+    if comment is not None:
+        print(
+            f"Found Codex review comment from {comment['user']['login']} "
+            f"for {head_sha} at {comment['created_at']}."
+        )
+        return 0
+
+    head_commit = github.commit(head_sha)
+    head_committed_at = parse_github_time(str(head_commit["commit"]["committer"]["date"]))
+
+    no_findings = matching_no_findings_comment(comments, head_committed_at)
+    if no_findings is not None:
+        print(
+            f"Found no-findings Codex response from {no_findings['user']['login']} "
+            f"for {head_sha} at {no_findings['created_at']}, after the current head "
+            f"commit at {head_committed_at.isoformat()}."
+        )
+        return 0
+
+    thumbsup_request = matching_thumbsup_request(github, comments, head_sha, head_committed_at)
+    if thumbsup_request is not None:
+        print(
+            f"Found Codex thumbs-up reaction on review request {thumbsup_request['html_url']} "
+            f"for {head_sha}, after the current head commit at {head_committed_at.isoformat()}."
+        )
+        return 0
+
+    append_summary(
+        [
+            "## Codex review required",
+            "",
+            f"No review from `chatgpt-codex-connector[bot]` was found for PR #{number} at `{head_sha}`.",
+            "",
+            f"Wait for automatic Codex review or comment `@codex review head {head_sha}`, then rerun this check if GitHub does not rerun it automatically. A no-findings Codex comment or Codex thumbs-up reaction on that exact review request satisfies this gate.",
+        ]
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except RuntimeError as error:
+        print(f"error: {error}", file=sys.stderr)
+        raise SystemExit(1)

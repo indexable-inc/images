@@ -545,15 +545,28 @@ let
     ];
   };
 
+  cargoUnitCoverageRustToolchain = ix.languages.rust.toolchain pkgs {
+    channel = "nightly";
+    version = ix.languages.rust.defaultNightlyDate;
+    components = [
+      "cargo"
+      "llvm-tools"
+      "rust-std"
+      "rustc"
+    ];
+  };
+
   cargoUnitCoverageWorkspace = ix.cargoUnit.buildWorkspace {
     pname = "cargo-unit-hello-coverage";
     src = cargoUnitFixture;
     workspaceRoot = ./fixtures/cargo-unit-hello;
+    rustToolchain = cargoUnitCoverageRustToolchain;
     cargoArgs = [
       "--workspace"
       "--tests"
     ];
-    profile = "coverage";
+    profile = "dev";
+    extraRustcArgs = [ "-Cinstrument-coverage" ];
     policy = {
       denyUnusedCrateDependencies = false;
       cargoAudit.enable = false;

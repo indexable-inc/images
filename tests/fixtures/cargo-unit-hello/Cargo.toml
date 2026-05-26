@@ -1,5 +1,3 @@
-cargo-features = ["profile-rustflags"]
-
 [package]
 name = "cargo-unit-hello"
 version = "0.1.0"
@@ -24,7 +22,3 @@ path = "src/goodbye.rs"
 [[bench]]
 name = "greeting"
 harness = false
-
-[profile.coverage]
-inherits = "dev"
-rustflags = ["-Cinstrument-coverage"]

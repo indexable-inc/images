@@ -34,6 +34,7 @@ let
     rustToolchain = args.rustToolchain or rust.defaultRustToolchain;
     nativeBuildInputs = args.nativeBuildInputs or [ ];
     env = args.env or { };
+    extraRustcArgs = args.extraRustcArgs or [ ];
     cargoExtraConfig = args.cargoExtraConfig or "";
     vendorDir = args.vendorDir or null;
     vendorSources = args.vendorSources or null;
@@ -237,8 +238,10 @@ let
     next artifacts with `next.compareTangoBenchmarks { baseline = previous; }`,
     where `previous` is another generated workspace or a `benchmarkPlan` path.
     Test graphs also expose `coverageReport` and `makeCoverageReport`; build the
-    workspace with a profile that passes `-Cinstrument-coverage` and consume the
-    generated `$out/lcov.info`.
+    workspace with `extraRustcArgs = [ "-Cinstrument-coverage" ]` and consume the
+    generated `$out/lcov.info`. The selected Rust toolchain must provide matching
+    `llvm-cov` and `llvm-profdata`, or callers must pass explicit tool paths to
+    `makeCoverageReport`.
 
     Returns the generated attrset with `sourceAudit`, `units`, `roots`, `checkedRoots`,
     `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
@@ -277,6 +280,7 @@ let
         inherit pkgs vendorDir vendorSources;
         inherit (args)
           src
+          extraRustcArgs
           rustToolchain
           ;
         inherit workspaceRoot;
