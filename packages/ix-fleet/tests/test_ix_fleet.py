@@ -200,6 +200,30 @@ class UpNodeTests(unittest.TestCase):
         self.assertEqual(calls[0][:3], ["ix", "new", "registry.ix.dev/example/web:new"])
         self.assertNotIn(["ix", "start", "web"], calls)
 
+    def test_dry_run_shows_existing_node_replacement(self) -> None:
+        calls: list[list[str]] = []
+        steps: list[str] = []
+        node = ix_fleet.FleetNode.model_validate(fleet_node("web"))
+
+        async def fake_list_nodes() -> list[dict[str, typing.Any]]:
+            return [{"name": "web", "status": "running"}]
+
+        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+            del timeout
+            self.assertTrue(dry_run)
+            calls.append(command)
+            return ""
+
+        with (
+            patch.object(ix_fleet, "list_nodes", fake_list_nodes),
+            patch.object(ix_fleet, "run_cli", fake_run_cli),
+            patch.object(ix_fleet, "step", steps.append),
+        ):
+            asyncio.run(ix_fleet.up_node(node, "registry.ix.dev/example/web:new", dry_run=True))
+
+        self.assertEqual(steps, ["replace existing web from uploaded image registry.ix.dev/example/web:new"])
+        self.assertEqual(calls[0][:3], ["ix", "new", "registry.ix.dev/example/web:new"])
+
 
 class EastWestGroupTests(unittest.TestCase):
     def test_ensures_group_before_adding_node(self) -> None:

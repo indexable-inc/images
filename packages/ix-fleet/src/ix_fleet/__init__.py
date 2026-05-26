@@ -658,26 +658,29 @@ async def replace_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
 
 
 async def up_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
-    if dry_run:
-        verb = "recreate" if node.recreateOnUp else "ensure"
-        step(f"{verb} {node.name} from uploaded image {image}")
-        return
-
     existing = find_node(await list_nodes(), node.name)
     if existing is not None and node.recreateOnUp:
+        if dry_run:
+            step(f"recreate existing {node.name} from uploaded image {image}")
         run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
         await create_node(node, image, dry_run=dry_run)
         return
 
     if existing is None:
+        if dry_run:
+            step(f"create missing {node.name} from uploaded image {image}")
         await create_node(node, image, dry_run=dry_run)
         return
 
     if existing.get("status") == "failed":
+        if dry_run:
+            step(f"replace failed {node.name} from uploaded image {image}")
         run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
         await create_node(node, image, dry_run=dry_run)
         return
 
+    if dry_run:
+        step(f"replace existing {node.name} from uploaded image {image}")
     await replace_node(node, image, dry_run=dry_run)
 
 
