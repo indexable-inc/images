@@ -27,7 +27,7 @@ Each session writes:
 - `events.jsonl`: one JSON object per PTY output chunk, including elapsed time,
   byte count, decoded text, and base64 bytes.
 - `lines.jsonl`: one JSON object per completed output line, shaped for
-  `pandas.read_json(path, lines=True)`.
+  `polars.read_ndjson(path)` (or `pandas.read_json(path, lines=True)`).
 - `summary.json`: command, cwd, terminal metadata, artifact paths, duration, and
   exit status. This starts as `running` and is replaced with the final result.
 
