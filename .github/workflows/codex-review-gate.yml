@@ -9,354 +9,628 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
   pull_request_review:
     types:
       - submitted
       - edited
       - dismissed
-  pull_request_review_comment:
-    types:
-      - created
-      - edited
-      - deleted
-  issue_comment:
-    types:
-      - created
-      - edited
-      - deleted
 
 permissions:
   contents: read
-  issues: read
-  pull-requests: read
 
 concurrency:
-  group: codex-review-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: codex-structured-review-${{ github.event_name }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  codex-review:
-    name: chatgpt-codex-connector reviewed head
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
+  codex-structured-review:
+    name: codex structured review
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      CODEX_MODEL: ${{ vars.CODEX_MODEL || 'gpt-5.5' }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPOSITORY: ${{ github.repository }}
     steps:
-      - name: Verify Codex reviewed the current head
+      - name: Check Codex review availability
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-          REPO: ${{ github.repository }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::Missing OPENAI_API_KEY secret; Codex structured review cannot run."
+            exit 1
+          fi
+
+      - name: Checkout base commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Fetch pull request refs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          auth_header="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 | tr -d '\n')"
+          git \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            fetch --no-tags origin \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/codex-pr/${PR_NUMBER}/head"
+          fetched_head="$(git rev-parse "refs/remotes/codex-pr/${PR_NUMBER}/head")"
+          if [ "${fetched_head}" != "${HEAD_SHA}" ]; then
+            echo "::error::Fetched pull request head ${fetched_head}, expected ${HEAD_SHA}."
+            exit 1
+          fi
+
+      - name: Generate structured output schema
+        run: |
+          cat > codex-output-schema.json <<'JSON'
+          {
+            "type": "object",
+            "properties": {
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "body": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "confidence_score": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "priority": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3
+                    },
+                    "code_location": {
+                      "type": "object",
+                      "properties": {
+                        "relative_file_path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "line_range": {
+                          "type": "object",
+                          "properties": {
+                            "start": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "end": {
+                              "type": "integer",
+                              "minimum": 1
+                            }
+                          },
+                          "required": [
+                            "start",
+                            "end"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "relative_file_path",
+                        "line_range"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "suggested_replacement": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "body",
+                    "confidence_score",
+                    "priority",
+                    "code_location",
+                    "suggested_replacement"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "overall_correctness": {
+                "type": "string",
+                "enum": [
+                  "patch is correct",
+                  "patch is incorrect"
+                ]
+              },
+              "overall_explanation": {
+                "type": "string",
+                "minLength": 1
+              },
+              "overall_confidence_score": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "required": [
+              "findings",
+              "overall_correctness",
+              "overall_explanation",
+              "overall_confidence_score"
+            ],
+            "additionalProperties": false
+          }
+          JSON
+
+      - name: Build Codex review prompt
+        run: |
+          set -euo pipefail
+          {
+            cat <<'PROMPT'
+          You are acting as a reviewer for a proposed code change made by another engineer.
+          Focus on issues that impact correctness, performance, security, maintainability, or developer experience.
+          Flag only actionable issues introduced by the pull request.
+          When you flag an issue, cite a file path and line range from the changed side of the pull request diff.
+          Prioritize severe issues and avoid nit-level comments unless they block understanding of the diff.
+          After listing findings, produce an overall correctness verdict ("patch is correct" or "patch is incorrect") with a concise justification and a confidence score between 0 and 1.
+
+          If a finding can be fixed by replacing the exact cited line range, set suggested_replacement to the complete replacement text for that range. Only provide a suggested_replacement when it is safe for GitHub's suggestion UI to apply directly. Use an empty string when the fix needs wider edits, depends on context outside the cited range, or is not obvious.
+
+          Return only JSON that matches the supplied schema.
+          PROMPT
+            echo
+            echo "Repository: ${REPOSITORY}"
+            echo "Pull Request #: ${PR_NUMBER}"
+            echo "Base SHA: ${BASE_SHA}"
+            echo "Head SHA: ${HEAD_SHA}"
+            echo
+            echo "Changed files:"
+            git --no-pager diff --name-status "${BASE_SHA}...${HEAD_SHA}"
+            echo
+            echo "Diff stat:"
+            git --no-pager diff --stat=200 "${BASE_SHA}...${HEAD_SHA}"
+            echo
+            echo "Unified diff:"
+            git --no-pager diff --unified=5 "${BASE_SHA}...${HEAD_SHA}"
+          } > codex-prompt.md
+
+      - name: Run Codex structured review
+        id: run-codex
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1 # v1.8
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: codex-prompt.md
+          output-schema-file: codex-output-schema.json
+          output-file: codex-output.json
+          sandbox: read-only
+          safety-strategy: drop-sudo
+          model: ${{ env.CODEX_MODEL }}
+
+      - name: Inspect structured review output
+        if: always()
+        run: |
+          if [ -s codex-output.json ]; then
+            jq '.' codex-output.json
+          else
+            echo "Codex output file missing."
+          fi
+
+      - name: Stage Codex review artifact
+        if: always()
+        run: |
+          mkdir -p codex-review-output
+          if [ -f codex-output.json ]; then
+            cp codex-output.json codex-review-output/codex-output.json
+          else
+            : > codex-review-output/codex-output.json
+          fi
+
+      - name: Upload Codex review output
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-structured-review-${{ github.run_id }}
+          path: codex-review-output/codex-output.json
+          retention-days: 1
+
+  publish-structured-review:
+    name: publish codex structured review
+    if: >-
+      always() &&
+      github.event.pull_request.draft == false &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    needs:
+      - codex-structured-review
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      issues: write
+      pull-requests: write
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Download Codex review output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-structured-review-${{ github.run_id }}
+          path: .
+
+      - name: Publish GitHub review suggestions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 - <<'PY'
-          #!/usr/bin/env python3
           from __future__ import annotations
 
+          import hashlib
           import json
           import os
-          import re
           import sys
           import urllib.error
           import urllib.parse
           import urllib.request
-          from dataclasses import dataclass
-          from datetime import datetime, timezone
           from typing import Any
 
 
-          CODEX_LOGINS = {"chatgpt-codex-connector[bot]", "chatgpt-codex-connector"}
-          REVIEW_STATES = {"COMMENTED", "APPROVED", "CHANGES_REQUESTED"}
-          REVIEW_REQUEST_RE = re.compile(r"@codex\s+review", re.IGNORECASE)
-          NO_FINDINGS_RE = re.compile(r"didn.?t find any major issues", re.IGNORECASE)
+          def require_env(name: str) -> str:
+              value = os.environ.get(name)
+              if not value:
+                  raise RuntimeError(f"missing required environment variable {name}")
+              return value
 
 
-          def parse_github_time(value: str) -> datetime:
-              return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+          REPOSITORY = require_env("REPOSITORY")
+          PR_NUMBER = int(require_env("PR_NUMBER"))
+          HEAD_SHA = require_env("HEAD_SHA")
+          GITHUB_TOKEN = require_env("GITHUB_TOKEN")
+          OUTPUT_PATH = "codex-output.json"
+          BOT_AUTHORS = {"github-actions", "github-actions[bot]"}
+          MARKER_PREFIX = f"<!-- codex-structured-review:{HEAD_SHA}:"
+          SUMMARY_MARKER = f"<!-- codex-structured-review-summary:{HEAD_SHA} -->"
 
 
-          def is_codex_login(login: str | None) -> bool:
-              return login in CODEX_LOGINS
+          def request_json(method: str, path: str, data: dict[str, Any] | None = None) -> Any:
+              url = f"https://api.github.com/repos/{REPOSITORY}{path}"
+              body = None if data is None else json.dumps(data).encode()
+              request = urllib.request.Request(url, data=body, method=method)
+              request.add_header("Accept", "application/vnd.github+json")
+              request.add_header("Authorization", f"Bearer {GITHUB_TOKEN}")
+              request.add_header("X-GitHub-Api-Version", "2022-11-28")
+              if data is not None:
+                  request.add_header("Content-Type", "application/json")
+
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      payload = response.read().decode()
+              except urllib.error.HTTPError as error:
+                  detail = error.read().decode(errors="replace")
+                  raise RuntimeError(f"GitHub API {method} {path} failed: {error.code} {detail}") from error
+
+              return None if not payload else json.loads(payload)
 
 
-          def is_review_request(comment: dict[str, Any]) -> bool:
-              body = str(comment.get("body") or "")
-              return not is_codex_login(comment.get("user", {}).get("login")) and bool(
-                  REVIEW_REQUEST_RE.search(body)
-              )
-
-
-          def is_no_findings_comment(comment: dict[str, Any]) -> bool:
-              body = str(comment.get("body") or "")
-              login = comment.get("user", {}).get("login")
-              return (
-                  is_codex_login(login)
-                  and bool(re.search(r"Codex\s+Review", body, re.IGNORECASE))
-                  and bool(NO_FINDINGS_RE.search(body))
-              )
-
-
-          def is_review_comment_for_head(comment: dict[str, Any], head_sha: str) -> bool:
-              body = str(comment.get("body") or "")
-              login = comment.get("user", {}).get("login")
-              return (
-                  is_codex_login(login)
-                  and bool(re.search(r"Codex Review|Reviewed commit", body, re.IGNORECASE))
-                  and head_sha in body
-              )
-
-
-          @dataclass(frozen=True)
-          class GitHub:
-              repo: str
-              token: str
-
-              def request_json(
-                  self,
-                  method: str,
-                  path: str,
-                  *,
-                  data: dict[str, Any] | None = None,
-                  query: dict[str, str | int] | None = None,
-              ) -> tuple[Any, dict[str, str]]:
-                  url = f"https://api.github.com{path}"
-                  if query:
-                      url = f"{url}?{urllib.parse.urlencode(query)}"
-
-                  body = None if data is None else json.dumps(data).encode()
-                  request = urllib.request.Request(url, data=body, method=method)
-                  request.add_header("Accept", "application/vnd.github+json")
-                  request.add_header("Authorization", f"Bearer {self.token}")
-                  request.add_header("X-GitHub-Api-Version", "2022-11-28")
-                  if data is not None:
-                      request.add_header("Content-Type", "application/json")
-
-                  try:
-                      with urllib.request.urlopen(request) as response:
-                          payload = response.read().decode()
-                          headers = dict(response.headers.items())
-                  except urllib.error.HTTPError as error:
-                      detail = error.read().decode(errors="replace")
-                      raise RuntimeError(f"GitHub API {method} {path} failed: {error.code} {detail}") from error
-
+          def request_pages(path: str) -> list[dict[str, Any]]:
+              page = 1
+              items: list[dict[str, Any]] = []
+              while True:
+                  separator = "&" if "?" in path else "?"
+                  payload = request_json("GET", f"{path}{separator}{urllib.parse.urlencode({'per_page': 100, 'page': page})}")
                   if not payload:
-                      return None, headers
-                  return json.loads(payload), headers
-
-              def rest(self, path: str, *, query: dict[str, str | int] | None = None) -> Any:
-                  return self.request_json("GET", path, query=query)[0]
-
-              def rest_pages(self, path: str) -> list[dict[str, Any]]:
-                  page = 1
-                  items: list[dict[str, Any]] = []
-                  while True:
-                      payload = self.rest(path, query={"per_page": 100, "page": page})
-                      if not payload:
-                          return items
-                      if not isinstance(payload, list):
-                          raise RuntimeError(f"GitHub API {path} returned a non-list payload")
-                      items.extend(payload)
-                      if len(payload) < 100:
-                          return items
-                      page += 1
-
-              def graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
-                  payload = self.request_json(
-                      "POST",
-                      "/graphql",
-                      data={"query": query, "variables": variables},
-                  )[0]
-                  errors = payload.get("errors")
-                  if errors:
-                      raise RuntimeError(f"GitHub GraphQL failed: {json.dumps(errors)}")
-                  return payload["data"]
-
-              def pull_request(self, number: int) -> dict[str, Any]:
-                  return self.rest(f"/repos/{self.repo}/pulls/{number}")
-
-              def commit(self, sha: str) -> dict[str, Any]:
-                  return self.rest(f"/repos/{self.repo}/commits/{sha}")
-
-              def reviews(self, number: int) -> list[dict[str, Any]]:
-                  return self.rest_pages(f"/repos/{self.repo}/pulls/{number}/reviews")
-
-              def issue_comments(self, number: int) -> list[dict[str, Any]]:
-                  return self.rest_pages(f"/repos/{self.repo}/issues/{number}/comments")
-
-              def reactions(self, comment_id: int) -> list[dict[str, Any]]:
-                  return self.rest_pages(f"/repos/{self.repo}/issues/comments/{comment_id}/reactions")
+                      return items
+                  if not isinstance(payload, list):
+                      raise RuntimeError(f"GitHub API {path} returned a non-list payload")
+                  items.extend(payload)
+                  if len(payload) < 100:
+                      return items
+                  page += 1
 
 
-          THREADS_QUERY = """
-          query($owner: String!, $repo: String!, $number: Int!, $after: String) {
-            repository(owner: $owner, name: $repo) {
-              pullRequest(number: $number) {
-                reviewThreads(first: 100, after: $after) {
-                  pageInfo {
-                    hasNextPage
-                    endCursor
-                  }
-                  nodes {
-                    id
-                    isResolved
-                    comments(first: 100) {
-                      pageInfo {
-                        hasNextPage
-                        endCursor
-                      }
-                      nodes {
-                        author { login }
-                        url
-                      }
-                    }
-                  }
-                }
+          def load_review_output() -> dict[str, Any]:
+              if not os.path.exists(OUTPUT_PATH) or os.path.getsize(OUTPUT_PATH) == 0:
+                  raise RuntimeError("Codex output file missing; failing review gate.")
+              with open(OUTPUT_PATH, encoding="utf-8") as output:
+                  payload = json.load(output)
+              if not isinstance(payload, dict):
+                  raise RuntimeError("Codex output must be a JSON object")
+              return payload
+
+
+          def author_login(item: dict[str, Any]) -> str:
+              user = item.get("user")
+              if not isinstance(user, dict):
+                  return ""
+              return str(user.get("login") or "")
+
+
+          def marker_bodies(path: str) -> list[str]:
+              bodies: list[str] = []
+              for item in request_pages(path):
+                  if author_login(item) in BOT_AUTHORS:
+                      bodies.append(str(item.get("body") or ""))
+              return bodies
+
+
+          def existing_markers() -> set[str]:
+              bodies: list[str] = []
+              bodies.extend(marker_bodies(f"/pulls/{PR_NUMBER}/comments"))
+              bodies.extend(marker_bodies(f"/pulls/{PR_NUMBER}/reviews"))
+              bodies.extend(marker_bodies(f"/issues/{PR_NUMBER}/comments"))
+              markers: set[str] = set()
+              for body in bodies:
+                  for line in body.splitlines():
+                      if line.startswith(MARKER_PREFIX) or line == SUMMARY_MARKER:
+                          markers.add(line)
+              return markers
+
+
+          def priority_badge(priority: int) -> str:
+              colors = {
+                  0: "red",
+                  1: "orange",
+                  2: "yellow",
+                  3: "blue",
               }
-            }
-          }
-          """
+              color = colors.get(priority)
+              if color is None:
+                  raise RuntimeError(f"finding priority must be between 0 and 3: {priority}")
+              return f"![P{priority} Badge](https://img.shields.io/badge/P{priority}-{color}?style=flat)"
 
 
-          THREAD_COMMENTS_QUERY = """
-          query($threadId: ID!, $after: String) {
-            node(id: $threadId) {
-              ... on PullRequestReviewThread {
-                comments(first: 100, after: $after) {
-                  pageInfo {
-                    hasNextPage
-                    endCursor
-                  }
-                  nodes {
-                    author { login }
-                    url
-                  }
-                }
+          def finding_marker(path: str, start: int, end: int, priority: int, title: str, body: str, suggestion: str | None) -> str:
+              marker_payload = {
+                  "body": body,
+                  "end": end,
+                  "path": path,
+                  "priority": priority,
+                  "start": start,
+                  "suggestion": suggestion or "",
+                  "title": title,
               }
-            }
-          }
-          """
+              marker_json = json.dumps(marker_payload, sort_keys=True, separators=(",", ":"))
+              marker_hash = hashlib.sha256(marker_json.encode()).hexdigest()[:24]
+              return f"{MARKER_PREFIX}{marker_hash} -->"
 
 
-          def find_codex_thread_comment_url(github: GitHub, thread_id: str) -> str | None:
-              after = None
-              while True:
-                  data = github.graphql(THREAD_COMMENTS_QUERY, {"threadId": thread_id, "after": after})
-                  comments = data["node"]["comments"]
-                  for comment in comments["nodes"]:
-                      if is_codex_login(comment.get("author", {}).get("login")):
-                          return str(comment["url"])
-                  if not comments["pageInfo"]["hasNextPage"]:
-                      return None
-                  after = comments["pageInfo"]["endCursor"]
+          def normalize_finding(finding: dict[str, Any], index: int) -> dict[str, Any]:
+              location = finding.get("code_location")
+              if not isinstance(location, dict):
+                  raise RuntimeError(f"finding {index} is missing code_location")
+              line_range = location.get("line_range")
+              if not isinstance(line_range, dict):
+                  raise RuntimeError(f"finding {index} is missing code_location.line_range")
 
+              path = str(location.get("relative_file_path") or "").strip()
+              if not path or path.startswith("/") or ".." in path.split("/"):
+                  raise RuntimeError(f"finding {index} has invalid relative_file_path: {path!r}")
 
-          def unresolved_codex_thread_urls(github: GitHub, owner: str, repo_name: str, number: int) -> list[str]:
-              urls: list[str] = []
-              after = None
-              while True:
-                  data = github.graphql(
-                      THREADS_QUERY,
-                      {"owner": owner, "repo": repo_name, "number": number, "after": after},
-                  )
-                  threads = data["repository"]["pullRequest"]["reviewThreads"]
-                  for thread in threads["nodes"]:
-                      if thread["isResolved"]:
-                          continue
+              start = int(line_range.get("start"))
+              end = int(line_range.get("end"))
+              if start <= 0 or end < start:
+                  raise RuntimeError(f"finding {index} has invalid line range: {start}-{end}")
 
-                      thread_comments = thread["comments"]
-                      url = next(
-                          (
-                              str(comment["url"])
-                              for comment in thread_comments["nodes"]
-                              if is_codex_login(comment.get("author", {}).get("login"))
-                          ),
-                          None,
-                      )
-                      if url is None and thread_comments["pageInfo"]["hasNextPage"]:
-                          url = find_codex_thread_comment_url(github, str(thread["id"]))
-                      if url is not None:
-                          urls.append(url)
+              priority = int(finding.get("priority"))
+              confidence = float(finding.get("confidence_score"))
+              if confidence < 0 or confidence > 1:
+                  raise RuntimeError(f"finding {index} confidence must be between 0 and 1: {confidence}")
+              title = str(finding.get("title") or "").strip()
+              body = str(finding.get("body") or "").strip()
+              if not title or not body:
+                  raise RuntimeError(f"finding {index} is missing title or body")
 
-                  if not threads["pageInfo"]["hasNextPage"]:
-                      return urls
-                  after = threads["pageInfo"]["endCursor"]
+              suggestion = finding.get("suggested_replacement")
+              if suggestion is not None:
+                  suggestion = str(suggestion).rstrip("\n")
+                  if "```" in suggestion or suggestion == "":
+                      suggestion = None
 
-
-          def matching_review(reviews: list[dict[str, Any]], head_sha: str) -> dict[str, Any] | None:
-              for review in reviews:
-                  login = review.get("user", {}).get("login")
-                  if (
-                      is_codex_login(login)
-                      and review.get("commit_id") == head_sha
-                      and review.get("state") in REVIEW_STATES
-                  ):
-                      return review
-              return None
-
-
-          def matching_review_comment(
-              comments: list[dict[str, Any]], head_sha: str
-          ) -> dict[str, Any] | None:
-              for comment in comments:
-                  if is_review_comment_for_head(comment, head_sha):
-                      return comment
-              return None
-
-
-          def matching_no_findings_comment(
-              comments: list[dict[str, Any]], head_committed_at: datetime
-          ) -> dict[str, Any] | None:
-              latest: dict[str, Any] | None = None
-              for index, comment in enumerate(comments):
-                  if not is_no_findings_comment(comment):
-                      continue
-                  if parse_github_time(str(comment["created_at"])) < head_committed_at:
-                      continue
-
-                  prior_requests = [
-                      request
-                      for request in comments[:index]
-                      if is_review_request(request)
-                      and parse_github_time(str(request["created_at"]))
-                      <= parse_github_time(str(comment["created_at"]))
+              marker = finding_marker(path, start, end, priority, title, body, suggestion)
+              comment_body = "\n".join(
+                  [
+                      marker,
+                      f"{priority_badge(priority)} **{title}**",
+                      "",
+                      body,
                   ]
-                  if not prior_requests or prior_requests[-1]["created_at"] <= comment["created_at"]:
-                      latest = comment
-              return latest
+              )
+              if suggestion is not None:
+                  comment_body = "\n".join(
+                      [
+                          comment_body,
+                          "",
+                          "```suggestion",
+                          suggestion,
+                          "```",
+                      ]
+                  )
+
+              comment = {
+                  "body": comment_body,
+                  "path": path,
+                  "side": "RIGHT",
+                  "line": end,
+              }
+              if start != end:
+                  comment["start_line"] = start
+                  comment["start_side"] = "RIGHT"
+
+              return {
+                  "marker": marker,
+                  "comment": comment,
+                  "summary": f"- P{priority} `{path}:{start}` {title}",
+              }
 
 
-          def matching_thumbsup_request(
-              github: GitHub,
-              comments: list[dict[str, Any]],
-              head_sha: str,
-              head_committed_at: datetime,
-          ) -> dict[str, Any] | None:
-              latest_request: dict[str, Any] | None = None
-              for comment in reversed(comments):
-                  body = str(comment.get("body") or "")
-                  if not is_review_request(comment) or head_sha not in body:
+          def create_issue_comment(body: str) -> None:
+              request_json("POST", f"/issues/{PR_NUMBER}/comments", {"body": body})
+
+
+          def publish_review(findings: list[dict[str, Any]], review_output: dict[str, Any]) -> None:
+              markers = existing_markers()
+              normalized = [
+                  normalize_finding(finding, index)
+                  for index, finding in enumerate(findings, start=1)
+              ]
+              new_comments = [
+                  item["comment"]
+                  for item in normalized
+                  if item["marker"] not in markers
+              ]
+
+              summary_lines = [
+                  SUMMARY_MARKER,
+                  "Codex structured review found issues in this pull request.",
+                  "",
+                  f"Verdict: {review_output.get('overall_correctness')}",
+                  f"Confidence: {float(review_output.get('overall_confidence_score', 0)):.2f}",
+                  "",
+                  str(review_output.get("overall_explanation") or "").strip(),
+                  "",
+                  *[item["summary"] for item in normalized],
+              ]
+
+              if not new_comments:
+                  print("All Codex review findings were already published for this head.")
+                  if SUMMARY_MARKER not in markers:
+                      create_issue_comment("\n".join(summary_lines))
+                  return
+
+              review_body = "\n".join(summary_lines)
+              try:
+                  request_json(
+                      "POST",
+                      f"/pulls/{PR_NUMBER}/reviews",
+                      {
+                          "commit_id": HEAD_SHA,
+                          "event": "COMMENT",
+                          "body": review_body,
+                          "comments": new_comments,
+                      },
+                  )
+                  print(f"Published {len(new_comments)} Codex review comment(s).")
+                  return
+              except RuntimeError as error:
+                  print(f"Bulk review publication failed; falling back to individual comments: {error}")
+
+              failed: list[str] = []
+              for item in normalized:
+                  if item["marker"] in markers:
                       continue
-                  if parse_github_time(str(comment["created_at"])) < head_committed_at:
-                      continue
+                  try:
+                      payload = {"commit_id": HEAD_SHA, **item["comment"]}
+                      request_json("POST", f"/pulls/{PR_NUMBER}/comments", payload)
+                  except RuntimeError as error:
+                      failed.append(f"{item['summary']} ({error})")
 
-                  latest_request = comment
-                  break
-
-              if latest_request is None:
-                  return None
-
-              for reaction in github.reactions(int(latest_request["id"])):
-                  user_login = reaction.get("user", {}).get("login")
-                  if reaction.get("content") == "+1" and is_codex_login(user_login):
-                      return latest_request
-              return None
-
-
-          def append_summary(lines: list[str]) -> None:
-              summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-              if summary_path:
-                  with open(summary_path, "a", encoding="utf-8") as summary:
-                      summary.write("\n".join(lines))
-                      summary.write("\n")
+              if failed:
+                  create_issue_comment(
+                      "\n".join(
+                          [
+                              *summary_lines,
+                              "",
+                              "Some inline comments could not be placed on the diff:",
+                              *failed,
+                          ]
+                      )
+                  )
+                  print(f"{len(failed)} Codex finding(s) could not be placed inline.")
               else:
-                  print("\n".join(lines))
+                  print("Published Codex review comments individually.")
+
+
+          def main() -> int:
+              review_output = load_review_output()
+
+              findings = review_output.get("findings")
+              if not isinstance(findings, list):
+                  raise RuntimeError("Codex output field findings must be a list")
+
+              verdict = str(review_output.get("overall_correctness") or "")
+              if findings:
+                  publish_review(findings, review_output)
+              elif verdict == "patch is incorrect":
+                  markers = existing_markers()
+                  if SUMMARY_MARKER not in markers:
+                      create_issue_comment(
+                          "\n".join(
+                              [
+                                  SUMMARY_MARKER,
+                                  "Codex structured review marked this pull request incorrect but did not return inline findings.",
+                                  "",
+                                  str(review_output.get("overall_explanation") or "").strip(),
+                              ]
+                          )
+                      )
+
+              if findings or verdict != "patch is correct":
+                  print("Codex structured review found issues.")
+                  return 1
+
+              print("Codex structured review found no issues.")
+              return 0
+
+
+          if __name__ == "__main__":
+              try:
+                  raise SystemExit(main())
+              except RuntimeError as error:
+                  print(f"error: {error}", file=sys.stderr)
+                  raise SystemExit(1)
+          PY
+
+  fork-review-gate:
+    name: fork review fallback
+    if: >-
+      github.event.pull_request.draft == false &&
+      (
+        github.event_name == 'pull_request_target' ||
+        github.event_name == 'pull_request_review'
+      ) &&
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Require maintainer approval on fork head
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+          from typing import Any
 
 
           def require_env(name: str) -> str:
@@ -367,77 +641,78 @@ jobs:
 
 
           def main() -> int:
-              repo = require_env("REPO")
+              repository = require_env("REPOSITORY")
+              owner, repo = repository.split("/", 1)
               number = int(require_env("PR_NUMBER"))
-              token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-              if not token:
-                  raise RuntimeError("missing required environment variable GH_TOKEN or GITHUB_TOKEN")
+              head_sha = require_env("HEAD_SHA")
+              token = require_env("GITHUB_TOKEN")
 
-              owner, repo_name = repo.split("/", 1)
-              github = GitHub(repo=repo, token=token)
-              pull_request = github.pull_request(number)
-              head_sha = str(pull_request["head"]["sha"])
+              query = """
+              query($owner:String!,$repo:String!,$number:Int!) {
+                repository(owner:$owner, name:$repo) {
+                  pullRequest(number:$number) {
+                    latestReviews(first:100) {
+                      nodes {
+                        state
+                        authorAssociation
+                        author { login }
+                        commit { oid }
+                      }
+                    }
+                  }
+                }
+              }
+              """
+              payload = json.dumps(
+                  {
+                      "query": query,
+                      "variables": {
+                          "owner": owner,
+                          "repo": repo,
+                          "number": number,
+                      },
+                  }
+              ).encode()
+              request = urllib.request.Request("https://api.github.com/graphql", data=payload, method="POST")
+              request.add_header("Authorization", f"Bearer {token}")
+              request.add_header("Content-Type", "application/json")
+              request.add_header("X-GitHub-Api-Version", "2022-11-28")
 
-              unresolved_threads = unresolved_codex_thread_urls(github, owner, repo_name, number)
-              if unresolved_threads:
-                  append_summary(
-                      [
-                          "## Resolve Codex review threads",
-                          "",
-                          "Codex has unresolved review feedback on this PR. Fix or intentionally resolve every thread before this gate can pass.",
-                          "",
-                          *[f"- {url}" for url in unresolved_threads],
-                      ]
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      response_payload = json.loads(response.read().decode())
+              except urllib.error.HTTPError as error:
+                  detail = error.read().decode(errors="replace")
+                  raise RuntimeError(f"GitHub GraphQL request failed: {error.code} {detail}") from error
+
+              if response_payload.get("errors"):
+                  raise RuntimeError(f"GitHub GraphQL returned errors: {response_payload['errors']}")
+
+              reviews = (
+                  response_payload
+                  .get("data", {})
+                  .get("repository", {})
+                  .get("pullRequest", {})
+                  .get("latestReviews", {})
+                  .get("nodes", [])
+              )
+              trusted_associations = {"COLLABORATOR", "MEMBER", "OWNER"}
+              approvers = [
+                  str(review.get("author", {}).get("login") or "")
+                  for review in reviews
+                  if review.get("state") == "APPROVED"
+                  and review.get("authorAssociation") in trusted_associations
+                  and review.get("commit", {}).get("oid") == head_sha
+              ]
+              if not approvers:
+                  print(
+                      "::error::Fork pull requests do not run the secret-backed Codex reviewer. "
+                      "A repository maintainer must approve the current head commit before this gate can pass."
                   )
                   return 1
 
-              review = matching_review(github.reviews(number), head_sha)
-              if review is not None:
-                  print(
-                      f"Found {review['state']} review from {review['user']['login']} "
-                      f"for {head_sha} at {review['submitted_at']}."
-                  )
-                  return 0
-
-              comments = github.issue_comments(number)
-              comment = matching_review_comment(comments, head_sha)
-              if comment is not None:
-                  print(
-                      f"Found Codex review comment from {comment['user']['login']} "
-                      f"for {head_sha} at {comment['created_at']}."
-                  )
-                  return 0
-
-              head_commit = github.commit(head_sha)
-              head_committed_at = parse_github_time(str(head_commit["commit"]["committer"]["date"]))
-
-              no_findings = matching_no_findings_comment(comments, head_committed_at)
-              if no_findings is not None:
-                  print(
-                      f"Found no-findings Codex response from {no_findings['user']['login']} "
-                      f"for {head_sha} at {no_findings['created_at']}, after the current head "
-                      f"commit at {head_committed_at.isoformat()}."
-                  )
-                  return 0
-
-              thumbsup_request = matching_thumbsup_request(github, comments, head_sha, head_committed_at)
-              if thumbsup_request is not None:
-                  print(
-                      f"Found Codex thumbs-up reaction on review request {thumbsup_request['html_url']} "
-                      f"for {head_sha}, after the current head commit at {head_committed_at.isoformat()}."
-                  )
-                  return 0
-
-              append_summary(
-                  [
-                      "## Codex review required",
-                      "",
-                      f"No review from `chatgpt-codex-connector[bot]` was found for PR #{number} at `{head_sha}`.",
-                      "",
-                      f"Wait for automatic Codex review or comment `@codex review head {head_sha}`, then rerun this check if GitHub does not rerun it automatically. A no-findings Codex comment or Codex thumbs-up reaction on that exact review request satisfies this gate.",
-                  ]
-              )
-              return 1
+              print(f"Fork fallback accepted maintainer approval from: {', '.join(approvers)}")
+              return 0
 
 
           if __name__ == "__main__":
@@ -447,3 +722,33 @@ jobs:
                   print(f"error: {error}", file=sys.stderr)
                   raise SystemExit(1)
           PY
+
+  required-review-gate:
+    name: chatgpt-codex-connector reviewed head
+    if: >-
+      always() &&
+      github.event.pull_request.draft == false &&
+      (
+        (github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository) ||
+        ((github.event_name == 'pull_request_target' ||
+          github.event_name == 'pull_request_review') &&
+          github.event.pull_request.head.repo.full_name != github.repository)
+      )
+    needs:
+      - fork-review-gate
+      - publish-structured-review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mirror structured review result for existing branch protection
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            result="${{ needs.publish-structured-review.result }}"
+          else
+            result="${{ needs.fork-review-gate.result }}"
+          fi
+          if [ "${result}" != "success" ]; then
+            echo "::error::Codex structured review did not pass."
+            exit 1
+          fi
+          echo "Codex structured review passed."
