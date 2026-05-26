@@ -13,82 +13,104 @@ export type SiteUpdate = {
 
 export const siteUpdates: SiteUpdate[] = [
   {
-    id: 'ix-dev-diagnose',
-    date: '2026-05-25',
-    title: 'ix.dev reachability gets a JSON probe',
-    body: `\`ix-dev-diagnose\` captures DNS, TLS, certificate, and response-byte clues when ix.dev behaves differently by network.
+    id: 'nix-run-site',
+    date: '2026-05-26',
+    title: '`nix run .#site` previews the page locally',
+    body: `The \`site\` package is now a \`symlinkJoin\` of the deploy artifact and a tiny \`miniserve\` wrapper, so \`nix build .#site\` still emits the GitHub Pages tree and \`nix run .#site\` boots a preview at \`http://127.0.0.1:8080/\`.
 
-\`nix run .#ix-dev-diagnose\` probes \`https://ix.dev/\` from the caller's path, prints \`success\` or \`failure\`, and writes one JSON report for sharing with support.
-
-The report records system resolver answers, per-address TCP and TLS results, parsed certificate issuers and fingerprints, native and Mozilla-root verification outcomes, headers, and a bounded response-body sample.
-
-Meant for \`SEC_ERROR_UNKNOWN_ISSUER\`, captive portals, ISP interception, stale DNS, or CDN edge differences where the failing client sees different bytes than a working client.`,
+The wrapper points at a second \`buildNpmSite\` invocation whose \`preBuild\` exports \`BASE_PATH=\`, leaning on SvelteKit's own base-path plumbing instead of rewriting URLs in the server layer. \`buildNpmSite\` stays focused on building.`,
     links: [
       {
-        label: 'diagnostic package',
-        href: 'https://github.com/indexable-inc/index/tree/main/packages/ix-dev-diagnose'
+        label: 'per-system wiring',
+        href: 'https://github.com/indexable-inc/index/blob/main/lib/per-system.nix'
       },
       {
-        label: 'flake wiring',
-        href: 'https://github.com/indexable-inc/index/blob/main/lib/per-system.nix'
+        label: 'build-npm-site',
+        href: 'https://github.com/indexable-inc/index/blob/main/lib/build-npm-site.nix'
       }
     ]
   },
   {
-    id: 'recorded-runner',
+    id: 'cargo-unit-per-test',
+    date: '2026-05-26',
+    title: 'cargo-unit caches Rust tests per `#[test]`',
+    body: `\`nix-cargo-unit\` used to build one derivation per test binary; a single flaky case re-ran every test in the file and lost Nix scheduler parallelism. The generated \`tests.<binary>\` attrset now exposes \`all\` (legacy whole-binary behavior) plus \`cases."mod::test_x"\`, one \`runCommand\` per individual test, invoked with \`--exact\`.
+
+Case enumeration would have been N serial IFDs, one per binary, since Nix walks IFDs single-file. They are collapsed into one \`testManifestDrv\` that depends on every test binary and writes per-target \`.list\` and \`.ignored.list\` files. Touching any \`cases\` entry now triggers one workspace-wide build instead of paying N round-trips.
+
+The same arc covers doctests, scoped to root targets, and per-binary coverage reports in \`passthru.coverage\`.`,
+    links: [
+      {
+        label: 'nix-cargo-unit',
+        href: 'https://github.com/indexable-inc/index/tree/main/packages/nix-cargo-unit'
+      },
+      {
+        label: 'units template',
+        href: 'https://github.com/indexable-inc/index/blob/main/packages/nix-cargo-unit/templates/units.nix.askama'
+      }
+    ]
+  },
+  {
+    id: 'agents-md-fragments',
     date: '2026-05-25',
-    title: 'Recorded command runs become a package',
-    body: `The new \`run\` package keeps long command output compact while saving replayable and queryable artifacts.
+    title: '`AGENTS.md` is generated from reusable fragments',
+    body: `The contributor guide is no longer a single hand-edited file. It is built from \`agents-md/sections/\` fragments, exposed through \`lib.agentsMd.{sections, profiles, render}\`, and rendered by \`nix run .#agents-md\`. A flake check enforces that the committed \`AGENTS.md\` matches the generated output.
 
-\`nix run .#run -- <command> ...\` executes the command in a PTY, prints a bounded head and tail summary, and writes the complete live stream under \`./.ix/run/latest\`.
+Sibling repos can pull in shared guidance instead of copy-pasting it. The ix repo already publishes its agnostic sections through the same API and this repo imports them at the top of the render pipeline.`,
+    links: [
+      {
+        label: 'agents-md helper',
+        href: 'https://github.com/indexable-inc/index/blob/main/lib/agents-md.nix'
+      },
+      {
+        label: 'fragments',
+        href: 'https://github.com/indexable-inc/index/tree/main/agents-md/sections'
+      }
+    ]
+  },
+  {
+    id: 'run-recorder',
+    date: '2026-05-25',
+    title: '`nix run .#run` records command sessions',
+    body: `\`nix run .#run -- <command> ...\` executes the command in a PTY, prints a bounded head/tail summary to the terminal, and writes the full live stream under \`./.ix/run/latest/\`.
 
-Each session includes \`scriptreplay\` timing files, an asciinema cast, chunk-level JSONL, line-level JSONL for pandas, and a summary file with duration and exit status. The live \`output.log\` lets another shell follow a slow build before the command finishes.`,
+Each session captures \`scriptreplay\` timing files, an asciinema cast, chunk-level JSONL, line-level JSONL ready for pandas, and a summary manifest with duration and exit status. A second shell can \`tail -f output.log\` while the original command is still running, which is useful for slow Nix builds and long test suites.`,
     links: [
       {
         label: 'run package',
         href: 'https://github.com/indexable-inc/index/tree/main/packages/run'
-      },
-      {
-        label: 'flake wiring',
-        href: 'https://github.com/indexable-inc/index/blob/main/lib/per-system.nix'
       }
     ]
   },
   {
-    id: 'fleet-secret-refs',
-    date: '2026-05-24',
-    title: 'Fleet secret refs become typed plan data',
-    body: `ix fleets can now declare secret references once and hand VM modules stable runtime paths.
+    id: 'ix-dev-diagnose',
+    date: '2026-05-25',
+    title: '`ix-dev-diagnose` probes ix.dev reachability',
+    body: `\`nix run .#ix-dev-diagnose\` reaches \`https://ix.dev/\` from the caller's network path, prints \`success\` or \`failure\`, and writes one JSON report capturing system resolver answers, per-address TCP and TLS results, parsed certificate issuers and fingerprints, native and Mozilla-root verification outcomes, response headers, and a bounded body sample.
 
-Fleet specs carry a provider block plus per-secret keys, while modules read \`secretRefs\` instead of spelling \`/run/secrets\` paths by hand. The first documented shape uses a Vaultwarden-style backend for S3 scraper credentials.
-
-The generated plan stays pure JSON, so a future reconciler can materialize files before services start. Secret bytes never enter the Nix store; services consume runtime files through systemd credentials where the module already supports that pattern.`,
+Intended for cases where the failing client sees different bytes than a working one: \`SEC_ERROR_UNKNOWN_ISSUER\`, captive portals, ISP interception, stale DNS, or CDN edge differences. Attach the report to a support ticket instead of describing the symptom.`,
     links: [
       {
-        label: 'fleet helper',
-        href: 'https://github.com/indexable-inc/index/blob/main/lib/fleet.nix'
-      },
-      {
-        label: 'scraper example',
-        href: 'https://github.com/indexable-inc/index/blob/main/examples/python-daily-scraper/README.md#s3-output'
+        label: 'diagnostic package',
+        href: 'https://github.com/indexable-inc/index/tree/main/packages/ix-dev-diagnose'
       }
     ]
   },
   {
-    id: 'site-audio-briefs',
+    id: 'observability-stack',
     date: '2026-05-23',
-    title: 'A compact update feed lands on the site',
-    body: `Public project notes now live as compact updates with exact repo links close to the text they explain.
+    title: 'Self-hosted OpenTelemetry stack module',
+    body: `\`modules/services/observability\` now wires a complete self-hosted stack: an OpenTelemetry collector, Tempo for traces, Loki for logs, Mimir or Prometheus for metrics, and Grafana with a generated overview dashboard. The dashboard is defined in Nix through \`dashboards/lib.nix\`, so panels can be composed and reused instead of pasted as JSON blobs.
 
-GitHub Pages serves static HTML and RSS, so the site stays inspectable without browser-only media controls or runtime services. The feed is meant for quick release notes: one short summary, the operational detail, and links to the owning source.`,
+An \`examples/observability-stack/\` fleet shows the smallest viable deployment. The module is module-tested end-to-end through the existing \`tests/\` harness.`,
     links: [
       {
-        label: 'site source',
-        href: 'https://github.com/indexable-inc/index/tree/main/site'
+        label: 'observability module',
+        href: 'https://github.com/indexable-inc/index/tree/main/modules/services/observability'
       },
       {
-        label: 'contributor note',
-        href: 'https://github.com/indexable-inc/index/blob/main/AGENTS.md#site-updates'
+        label: 'example fleet',
+        href: 'https://github.com/indexable-inc/index/tree/main/examples/observability-stack'
       }
     ]
   }
