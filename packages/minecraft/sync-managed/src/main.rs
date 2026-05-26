@@ -62,7 +62,7 @@ fn managed_files(source_dir: &Path) -> Result<Vec<String>> {
     Ok(files)
 }
 
-fn validate_rel_path(rel: &str) -> Result<()> {
+fn validate_rel_path_shape(rel: &str) -> Result<()> {
     ensure!(!rel.is_empty(), "path is empty");
 
     ensure!(!Path::new(rel).is_absolute(), "path is absolute: {}", rel);
@@ -73,6 +73,12 @@ fn validate_rel_path(rel: &str) -> Result<()> {
     {
         bail!("path contains unsafe segment: {}", rel);
     }
+
+    Ok(())
+}
+
+fn validate_rel_path(rel: &str) -> Result<()> {
+    validate_rel_path_shape(rel)?;
 
     if !rel
         .chars()
@@ -151,7 +157,7 @@ fn sync_tree(
         if rel.is_empty() || preserve_removed.contains(rel) {
             continue;
         }
-        validate_rel_path(rel).with_context(|| {
+        validate_rel_path_shape(rel).with_context(|| {
             format!(
                 "checking manifest path safety in {} at line {}",
                 manifest.display(),
@@ -712,6 +718,17 @@ mod tests {
         assert!(validate_rel_path("path/with|pipe").is_err());
         assert!(validate_rel_path("path/with\\backslash").is_err());
         assert!(validate_rel_path("").is_err());
+    }
+
+    #[test]
+    fn validate_rel_path_shape_allows_legacy_manifest_cleanup_paths() {
+        assert!(validate_rel_path_shape("plugins/Foo;Bar.yml").is_ok());
+        assert!(validate_rel_path_shape("plugins/with space.yml").is_ok());
+
+        assert!(validate_rel_path_shape("../escape.json").is_err());
+        assert!(validate_rel_path_shape("path/../escape.json").is_err());
+        assert!(validate_rel_path_shape("path//escape.json").is_err());
+        assert!(validate_rel_path_shape("/absolute/path").is_err());
     }
 
     #[test]
