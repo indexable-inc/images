@@ -74,9 +74,18 @@ AI review inline feedback lives in GitHub review threads, which `gh pr view
 PR is clear:
 
 ```sh
-gh api graphql \
+gh api graphql --paginate \
   -f owner=<owner> -f repo=<repo> -F number=<pr> \
-  -f query='query($owner:String!,$repo:String!,$number:Int!){ repository(owner:$owner,name:$repo){ pullRequest(number:$number){ reviewThreads(first:100){ nodes{ id isResolved path line comments(first:50){ nodes{ author{login} body url } } } } } } }'
+  -f query='query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){ repository(owner:$owner,name:$repo){ pullRequest(number:$number){ reviewThreads(first:100,after:$endCursor){ pageInfo{ hasNextPage endCursor } nodes{ id isResolved path line comments(first:100){ pageInfo{ hasNextPage endCursor } nodes{ author{login} body url } } } } } } }'
+```
+
+If a thread reports `comments.pageInfo.hasNextPage`, page that thread's comments
+before declaring it resolved:
+
+```sh
+gh api graphql --paginate \
+  -f thread=<thread-id> \
+  -f query='query($thread:ID!,$endCursor:String){ node(id:$thread){ ... on PullRequestReviewThread{ comments(first:100,after:$endCursor){ pageInfo{ hasNextPage endCursor } nodes{ author{login} body url } } } } }'
 ```
 
 Unresolved AI review threads are immediate blockers. Do not wait on more checks
