@@ -1,131 +1,58 @@
+import type { Component } from 'svelte';
+
 export type SiteUpdateLink = {
   label: string;
   href: string;
 };
 
-export type SiteUpdate = {
+export type SiteUpdateMeta = {
   id: string;
   // ISO 8601 with timezone offset. Authors keep the source readable in their
   // local zone; render layers normalize to UTC so visitors in any zone see
   // one canonical date and time.
   postedAt: string;
+  // Markdown source: backticks for inline code, asterisks for emphasis.
   title: string;
-  body: string;
   links: SiteUpdateLink[];
 };
 
-export const siteUpdates: SiteUpdate[] = [
-  {
-    id: 'nix-run-site',
-    postedAt: '2026-05-26T01:22:16-07:00',
-    title: '`nix run .#site` previews the page locally',
-    body: `The \`site\` package is now a \`symlinkJoin\` of the deploy artifact and a tiny \`miniserve\` wrapper, so \`nix build .#site\` still emits the GitHub Pages tree and \`nix run .#site\` boots a preview at \`http://127.0.0.1:8080/\`.
+export type SiteUpdate = SiteUpdateMeta & {
+  component: Component;
+  rawBody: string;
+};
 
-The wrapper points at a second \`buildNpmSite\` invocation whose \`preBuild\` exports \`BASE_PATH=\`, leaning on SvelteKit's own base-path plumbing instead of rewriting URLs in the server layer. \`buildNpmSite\` stays focused on building.`,
-    links: [
-      {
-        label: 'per-system wiring',
-        href: 'https://github.com/indexable-inc/index/blob/main/lib/per-system.nix'
-      },
-      {
-        label: 'build-npm-site',
-        href: 'https://github.com/indexable-inc/index/blob/main/lib/build-npm-site.nix'
-      }
-    ]
-  },
-  {
-    id: 'cargo-unit-per-test',
-    postedAt: '2026-05-26T00:19:45-07:00',
-    title: 'cargo-unit caches Rust tests per `#[test]`',
-    body: `\`nix-cargo-unit\` used to build one derivation per test binary; a single flaky case re-ran every test in the file and lost Nix scheduler parallelism. The generated \`tests.<binary>\` attrset now exposes \`all\` (legacy whole-binary behavior) plus \`cases."mod::test_x"\`, one \`runCommand\` per individual test, invoked with \`--exact\`.
+type SvxModule = {
+  default: Component;
+  metadata: SiteUpdateMeta;
+};
 
-Case enumeration would have been N serial IFDs, one per binary, since Nix walks IFDs single-file. They are collapsed into one \`testManifestDrv\` that depends on every test binary and writes per-target \`.list\` and \`.ignored.list\` files. Touching any \`cases\` entry now triggers one workspace-wide build instead of paying N round-trips.
+const modules = import.meta.glob<SvxModule>('./updates/*.svx', { eager: true });
+const rawModules = import.meta.glob<string>('./updates/*.svx', {
+  eager: true,
+  query: '?raw',
+  import: 'default'
+});
 
-The same arc covers doctests, scoped to root targets, and per-binary coverage reports in \`passthru.coverage\`.`,
-    links: [
-      {
-        label: 'nix-cargo-unit',
-        href: 'https://github.com/indexable-inc/index/tree/main/packages/nix-cargo-unit'
-      },
-      {
-        label: 'units template',
-        href: 'https://github.com/indexable-inc/index/blob/main/packages/nix-cargo-unit/templates/units.nix.askama'
-      }
-    ]
-  },
-  {
-    id: 'agents-md-fragments',
-    postedAt: '2026-05-25T23:51:39-07:00',
-    title: '`AGENTS.md` is generated from reusable fragments',
-    body: `The contributor guide is no longer a single hand-edited file. It is built from \`agents-md/sections/\` fragments, exposed through \`lib.agentsMd.{sections, profiles, render}\`, and rendered by \`nix run .#agents-md\`. A flake check enforces that the committed \`AGENTS.md\` matches the generated output.
-
-Sibling repos can pull in shared guidance instead of copy-pasting it. The ix repo already publishes its agnostic sections through the same API and this repo imports them at the top of the render pipeline.`,
-    links: [
-      {
-        label: 'agents-md helper',
-        href: 'https://github.com/indexable-inc/index/blob/main/lib/agents-md.nix'
-      },
-      {
-        label: 'fragments',
-        href: 'https://github.com/indexable-inc/index/tree/main/agents-md/sections'
-      }
-    ]
-  },
-  {
-    id: 'ix-dev-diagnose',
-    postedAt: '2026-05-25T16:42:25-07:00',
-    title: '`ix-dev-diagnose` probes ix.dev reachability',
-    body: `\`nix run .#ix-dev-diagnose\` reaches \`https://ix.dev/\` from the caller's network path, prints \`success\` or \`failure\`, and writes one JSON report capturing system resolver answers, per-address TCP and TLS results, parsed certificate issuers and fingerprints, native and Mozilla-root verification outcomes, response headers, and a bounded body sample.
-
-Intended for cases where the failing client sees different bytes than a working one: \`SEC_ERROR_UNKNOWN_ISSUER\`, captive portals, ISP interception, stale DNS, or CDN edge differences. Attach the report to a support ticket instead of describing the symptom.`,
-    links: [
-      {
-        label: 'diagnostic package',
-        href: 'https://github.com/indexable-inc/index/tree/main/packages/ix-dev-diagnose'
-      }
-    ]
-  },
-  {
-    id: 'run-recorder',
-    postedAt: '2026-05-25T15:28:13-07:00',
-    title: '`nix run .#run` records command sessions',
-    body: `\`nix run .#run -- <command> ...\` executes the command in a PTY, prints a bounded head/tail summary to the terminal, and writes the full live stream under \`./.ix/run/latest/\`.
-
-Each session captures \`scriptreplay\` timing files, an asciinema cast, chunk-level JSONL, line-level JSONL ready for pandas, and a summary manifest with duration and exit status. A second shell can \`tail -f output.log\` while the original command is still running, which is useful for slow Nix builds and long test suites.`,
-    links: [
-      {
-        label: 'run package',
-        href: 'https://github.com/indexable-inc/index/tree/main/packages/run'
-      }
-    ]
-  },
-  {
-    id: 'observability-stack',
-    postedAt: '2026-05-23T00:25:53-07:00',
-    title: 'Self-hosted OpenTelemetry stack module',
-    body: `\`modules/services/observability\` now wires a complete self-hosted stack: an OpenTelemetry collector, Tempo for traces, Loki for logs, Mimir or Prometheus for metrics, and Grafana with a generated overview dashboard. The dashboard is defined in Nix through \`dashboards/lib.nix\`, so panels can be composed and reused instead of pasted as JSON blobs.
-
-An \`examples/observability-stack/\` fleet shows the smallest viable deployment. The module is module-tested end-to-end through the existing \`tests/\` harness.`,
-    links: [
-      {
-        label: 'observability module',
-        href: 'https://github.com/indexable-inc/index/tree/main/modules/services/observability'
-      },
-      {
-        label: 'example fleet',
-        href: 'https://github.com/indexable-inc/index/tree/main/examples/observability-stack'
-      }
-    ]
-  }
-];
+export const siteUpdates: SiteUpdate[] = Object.entries(modules)
+  .map(([path, mod]) => ({
+    ...mod.metadata,
+    component: mod.default,
+    rawBody: stripFrontmatter(rawModules[path] ?? '')
+  }))
+  .sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt));
 
 export const siteUrl = 'https://indexable-inc.github.io/index/';
 export const siteFeedUrl = `${siteUrl}feed.xml`;
 export const siteIntro =
   'Images, NixOS modules, helpers, and notes published by ix.';
 
+function stripFrontmatter(source: string): string {
+  return source.replace(/^---\n[\s\S]*?\n---\n?/, '').trim();
+}
+
 export function plainText(markdown: string): string {
   return markdown
+    .replace(/```[\s\S]*?```/g, '')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
@@ -134,6 +61,23 @@ export function plainText(markdown: string): string {
     .trim();
 }
 
+export function inlineTitleHtml(markdown: string): string {
+  // Titles use markdown-style backticks for inline code. Escape HTML first,
+  // then unescape the backtick run we matched so the <code> wrapper survives.
+  return escapeHtml(markdown).replace(
+    /`([^`]+)`/g,
+    (_, code: string) => `<code>${code}</code>`
+  );
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export function updateScript(update: SiteUpdate): string {
-  return `${update.title}. ${plainText(update.body)}`;
+  return `${plainText(update.title)}. ${plainText(update.rawBody)}`;
 }

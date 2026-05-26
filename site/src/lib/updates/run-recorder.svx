@@ -1,0 +1,23 @@
+---
+id: run-recorder
+postedAt: 2026-05-25T15:28:13-07:00
+title: "`nix run .#run` records command sessions"
+links:
+  - label: run package
+    href: https://github.com/indexable-inc/index/tree/main/packages/run
+---
+
+`nix run .#run -- <command> ...` executes the command in a PTY, prints a bounded head/tail summary to the terminal, and writes the full live stream under `./.ix/run/latest/`.
+
+```bash
+nix run .#run -- cargo test -p my-crate
+ls .ix/run/latest/
+# manifest.json  output.log  output.cast  output.timing
+# stdout.jsonl   lines.jsonl
+```
+
+Each session captures `scriptreplay` timing files, an asciinema cast, chunk-level JSONL, line-level JSONL ready for pandas, and a summary manifest with duration and exit status. A second shell can `tail -f output.log` while the original command is still running, which is useful for slow Nix builds and long test suites.
+
+```bash
+tail -f .ix/run/latest/output.log   # live stream, even while the build runs
+```

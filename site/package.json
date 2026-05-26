@@ -29,6 +29,7 @@
     "cookie": "^0.7.0"
   },
   "dependencies": {
-    "marked": "^16.4.2"
+    "mdsvex": "^0.12.7",
+    "shiki": "^4.1.0"
   }
 }

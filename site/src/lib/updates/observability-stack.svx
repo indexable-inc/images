@@ -1,0 +1,24 @@
+---
+id: observability-stack
+postedAt: 2026-05-23T00:25:53-07:00
+title: Self-hosted OpenTelemetry stack module
+links:
+  - label: observability module
+    href: https://github.com/indexable-inc/index/tree/main/modules/services/observability
+  - label: example fleet
+    href: https://github.com/indexable-inc/index/tree/main/examples/observability-stack
+---
+
+`modules/services/observability` now wires a complete self-hosted stack: an OpenTelemetry collector, Tempo for traces, Loki for logs, Mimir or Prometheus for metrics, and Grafana with a generated overview dashboard. The dashboard is defined in Nix through `dashboards/lib.nix`, so panels can be composed and reused instead of pasted as JSON blobs.
+
+```nix
+services.observability = {
+  enable = true;
+  traces.backend  = "tempo";
+  logs.backend    = "loki";
+  metrics.backend = "mimir";
+  grafana.dashboards = [ ./dashboards/overview.nix ];
+};
+```
+
+An `examples/observability-stack/` fleet shows the smallest viable deployment. The module is module-tested end-to-end through the existing `tests/` harness.

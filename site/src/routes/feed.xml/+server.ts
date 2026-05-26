@@ -1,4 +1,5 @@
 import {
+  plainText,
   siteFeedUrl,
   siteIntro,
   siteUpdates,
@@ -41,7 +42,7 @@ function itemXml(update: (typeof siteUpdates)[number]): string {
 
   return `
     <item>
-      <title>${escapeXml(update.title)}</title>
+      <title>${escapeXml(plainText(update.title))}</title>
       <link>${escapeXml(link)}</link>
       <guid isPermaLink="true">${escapeXml(link)}</guid>
       <pubDate>${escapeXml(rssDate(update.postedAt))}</pubDate>

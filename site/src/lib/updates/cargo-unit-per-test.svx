@@ -1,0 +1,22 @@
+---
+id: cargo-unit-per-test
+postedAt: 2026-05-26T00:19:45-07:00
+title: "cargo-unit caches Rust tests per `#[test]`"
+links:
+  - label: nix-cargo-unit
+    href: https://github.com/indexable-inc/index/tree/main/packages/nix-cargo-unit
+  - label: units template
+    href: https://github.com/indexable-inc/index/blob/main/packages/nix-cargo-unit/templates/units.nix.askama
+---
+
+`nix-cargo-unit` used to build one derivation per test binary; a single flaky case re-ran every test in the file and lost Nix scheduler parallelism. The generated `tests.<binary>` attrset now exposes `all` (legacy whole-binary behavior) plus `cases."mod::test_x"`, one `runCommand` per individual test, invoked with `--exact`.
+
+```nix
+units.tests.my-crate.all                          # legacy whole-binary
+units.tests.my-crate.cases."parser::handles_eof"  # one drv per #[test]
+units.tests.my-crate.passthru.coverage            # lcov per binary
+```
+
+Case enumeration would have been N serial IFDs, one per binary, since Nix walks IFDs single-file. They are collapsed into one `testManifestDrv` that depends on every test binary and writes per-target `.list` and `.ignored.list` files. Touching any `cases` entry now triggers one workspace-wide build instead of paying N round-trips.
+
+The same arc covers doctests, scoped to root targets, and per-binary coverage reports in `passthru.coverage`.

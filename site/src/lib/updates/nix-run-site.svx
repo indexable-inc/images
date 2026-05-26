@@ -1,0 +1,28 @@
+---
+id: nix-run-site
+postedAt: 2026-05-26T01:22:16-07:00
+title: "`nix run .#site` previews the page locally"
+links:
+  - label: per-system wiring
+    href: https://github.com/indexable-inc/index/blob/main/lib/per-system.nix
+  - label: build-npm-site
+    href: https://github.com/indexable-inc/index/blob/main/lib/build-npm-site.nix
+---
+
+The `site` package is now a `symlinkJoin` of the deploy artifact and a tiny `miniserve` wrapper, so `nix build .#site` still emits the GitHub Pages tree and `nix run .#site` boots a preview at `http://127.0.0.1:8080/`.
+
+```bash
+nix build .#site   # GitHub Pages tree under result/share/ix-site
+nix run   .#site   # preview at http://127.0.0.1:8080/
+```
+
+The wrapper points at a second `buildNpmSite` invocation whose `preBuild` exports `BASE_PATH=`, leaning on SvelteKit's own base-path plumbing instead of rewriting URLs in the server layer. `buildNpmSite` stays focused on building.
+
+```nix
+sitePreviewBuild = ix.buildNpmSite pkgs {
+  pname = "ix-site-preview";
+  src = siteSrc;
+  distDir = "build";
+  preBuild = "export BASE_PATH=";
+};
+```
