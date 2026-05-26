@@ -1,10 +1,8 @@
-import type { Component } from 'svelte';
 import { describe, expect, test } from 'vitest';
+import type { Component } from 'svelte';
 import { inlineTitleHtml, plainText, siteUpdates, updateScript } from './updates';
 
-// updateScript only reads `title` and `rawBody`, so a no-op component is
-// enough to satisfy the SiteUpdate shape in the assertion below.
-const noopComponent = (() => ({})) as unknown as Component;
+const noopComponent = (() => null) as unknown as Component;
 
 describe('inlineTitleHtml', () => {
   test('wraps backtick spans in <code>', () => {

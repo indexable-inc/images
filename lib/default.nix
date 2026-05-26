@@ -624,6 +624,12 @@ let
       packageSystem = pkgs.stdenv.hostPlatform.system;
       ixForPackages = ixSpecialArgs // {
         inherit pkgs;
+        # Rebind the language unit builders to the caller's pkgs so repo
+        # packages built through packageSetFor (room, loop, ...) compile for
+        # the host system instead of the x86_64-linux pkgs the top-level
+        # ixSpecialArgs bundle is bound to.
+        cargoUnit = cargoUnitFor pkgs;
+        goUnit = goUnitFor pkgs;
       };
       basePackages = {
         dag-runner = pkgs.callPackage paths.packages.dagRunner {
