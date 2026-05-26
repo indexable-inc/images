@@ -204,7 +204,7 @@ let
     ++ serveConfig.extraFlags
     ++ [ "${staticSite}/${installDir}" ];
   serveWrapperFlags = lib.concatMapStringsSep " " (
-    arg: "--add-flags ${lib.escapeShellArg (lib.escapeShellArg arg)}"
+    arg: "--add-flag ${lib.escapeShellArg arg}"
   ) serveArgs;
   servePackage =
     pkgs.runCommand "${pname}-serve"
