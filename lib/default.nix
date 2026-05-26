@@ -733,40 +733,12 @@ let
       ixForPackages = ixSpecialArgs // {
         inherit pkgs;
         # Rebind the language unit builders to the caller's pkgs so repo
-        # packages built through packageSetFor (room, loop, ...) compile for
+        # packages built through packageSetFor (loop, ...) compile for
         # the host system instead of the x86_64-linux pkgs the top-level
         # ixSpecialArgs bundle is bound to.
         cargoUnit = cargoUnitFor pkgs;
         goUnit = goUnitFor pkgs;
         rustWorkspace = rustWorkspaceFor pkgs;
-      };
-      roomSiteSrc = lib.fileset.toSource {
-        root = paths.packages.room + "/site";
-        fileset = lib.fileset.intersection (lib.fileset.gitTracked (paths.packages.room + "/site")) (
-          lib.fileset.unions [
-            (paths.packages.room + "/site/package.json")
-            (paths.packages.room + "/site/package-lock.json")
-            (paths.packages.room + "/site/index.html")
-            (paths.packages.room + "/site/svelte.config.js")
-            (paths.packages.room + "/site/tsconfig.json")
-            (paths.packages.room + "/site/vite.config.ts")
-            (paths.packages.room + "/site/src")
-          ]
-        );
-      };
-      roomSite = buildSvelteSite pkgs {
-        pname = "room-site";
-        version = "0.1.0";
-        src = roomSiteSrc;
-        serve = {
-          name = "room-site";
-          port = 8081;
-        };
-        devServer = {
-          name = "room-site-dev";
-          checkoutSubdir = "packages/room/site";
-          port = 5174;
-        };
       };
       loopViewerSrc = lib.fileset.toSource {
         root = paths.packages.loop + "/site";
@@ -821,12 +793,6 @@ let
           ix = ixForPackages;
         };
         llm-clippy = llmClippyFor pkgs;
-        room-site = roomSite;
-        room = pkgs.callPackage paths.packages.room {
-          inherit pkgs;
-          site = roomSite.passthru.staticSite;
-          ix = ixForPackages;
-        };
         loop-viewer = loopViewer;
         loop = pkgs.callPackage paths.packages.loop {
           inherit pkgs;
@@ -898,7 +864,6 @@ let
             (rustPackageFiles paths.packages.minecraft.syncManaged)
             (rustPackageFiles paths.packages.nixCargoUnit)
             (rustPackageFiles paths.packages.ociImageBuilder)
-            (rustPackageFiles paths.packages.room)
           ]
         );
       };

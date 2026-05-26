@@ -10,7 +10,6 @@ members = [
   "packages/minecraft/sync-managed",
   "packages/nix-cargo-unit",
   "packages/oci-image-builder",
-  "packages/room",
 ]
 resolver = "3"
 
