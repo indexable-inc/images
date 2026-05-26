@@ -182,6 +182,7 @@ let
         (paths.site + "/package-lock.json")
         (paths.site + "/svelte.config.js")
         (paths.site + "/vite.config.ts")
+        (paths.site + "/vitest.config.ts")
         (paths.site + "/tsconfig.json")
         (paths.site + "/eslint.config.js")
         (paths.site + "/src")
@@ -227,6 +228,15 @@ let
       sitePreviewServe
     ];
     meta.mainProgram = "ix-site";
+  };
+
+  siteTests = ix.buildNpmVitest pkgs {
+    pname = "ix-site";
+    version = "0.1.0";
+    src = siteSrc;
+    preTest = ''
+      node node_modules/@sveltejs/kit/src/cli.js sync
+    '';
   };
 
   repoPackages = ix.packageSetFor pkgs;
@@ -388,7 +398,11 @@ in
         ${lib.getExe lint}
         mkdir -p "$out"
       '';
+      site-test = siteTests.all;
     }
+    // lib.optionalAttrs (system == ix.system) (
+      lib.mapAttrs' (caseId: drv: lib.nameValuePair "site-test-${caseId}" drv) siteTests.cases
+    )
     // lib.optionalAttrs (system == ix.system) rustPackageTests;
 
   formatter = pkgs.nixfmt;

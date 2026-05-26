@@ -1,23 +1,7 @@
 <script lang="ts">
   import { resolve } from '$app/paths';
-  import { Marked } from 'marked';
+  import { renderBlock, renderInline } from '$lib/markdown';
   import { siteFeedUrl, siteIntro, siteUpdates } from '$lib/updates';
-
-  const safeHrefPattern = /^(https?:|mailto:|#|\/)/i;
-
-  const marked = new Marked({
-    gfm: true,
-    breaks: false,
-    renderer: {
-      html: () => '',
-      link({ href, title, tokens }) {
-        const text = this.parser.parseInline(tokens);
-        if (!safeHrefPattern.test(href)) return text;
-        const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : '';
-        return `<a href="${href}"${titleAttr}>${text}</a>`;
-      }
-    }
-  });
 
   const feedHref = resolve('/feed.xml');
 
@@ -34,8 +18,8 @@
 
   const entries = siteUpdates.map((update) => ({
     ...update,
-    html: marked.parse(update.body) as string,
-    titleHtml: marked.parseInline(update.title) as string,
+    html: renderBlock(update.body),
+    titleHtml: renderInline(update.title),
     label: formatDate(update.date)
   }));
 </script>

@@ -182,6 +182,7 @@ let
     inherit bunLockFor;
   };
   buildNpmSite = import ./build-npm-site.nix;
+  buildNpmVitest = import ./build-npm-vitest.nix;
   uvLockFor =
     pkgs:
     import ./uv-lock.nix {
@@ -776,6 +777,7 @@ let
       buildGradleFatJar
       buildRustPackage
       buildNpmSite
+      buildNpmVitest
       buildUvApplication
       cargoUnit
       goUnit
@@ -1041,6 +1043,7 @@ let
       buildBunSite
       buildGradleFatJar
       buildNpmSite
+      buildNpmVitest
       buildUvApplication
       bunLockFor
       cargoUnit
