@@ -1,6 +1,25 @@
 <script lang="ts">
   import { resolve } from '$app/paths';
+  import { Marked } from 'marked';
   import { siteFeedUrl, siteIntro, siteUpdates } from '$lib/updates';
+
+  const safeHrefPattern = /^(https?:|mailto:|#|\/)/i;
+
+  const marked = new Marked({
+    gfm: true,
+    breaks: false,
+    renderer: {
+      html: () => '',
+      link({ href, title, tokens }) {
+        const text = this.parser.parseInline(tokens);
+        if (!safeHrefPattern.test(href)) return text;
+        const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : '';
+        return `<a href="${href}"${titleAttr}>${text}</a>`;
+      }
+    }
+  });
+
+  const feedHref = resolve('/feed.xml');
 
   const dateFormatter = new Intl.DateTimeFormat('en', {
     month: 'short',
@@ -9,100 +28,52 @@
     timeZone: 'UTC'
   });
 
-  const feedHref = resolve('/feed.xml');
-  const latestUpdate = siteUpdates[0];
-
-  let selectedId = $state(latestUpdate.id);
-
-  const selectedUpdate = $derived(
-    siteUpdates.find((update) => update.id === selectedId) ?? latestUpdate
-  );
-
   function formatDate(date: string): string {
     return dateFormatter.format(new Date(`${date}T00:00:00Z`));
   }
+
+  const entries = siteUpdates.map((update) => ({
+    ...update,
+    html: marked.parse(update.body) as string,
+    label: formatDate(update.date)
+  }));
 </script>
 
 <svelte:head>
   <title>ix images</title>
-  <meta
-    name="description"
-    content="Pre-built OCI images and composable NixOS modules for ix VMs, with a compact RSS update feed."
-  />
-  <link rel="alternate" type="application/rss+xml" title="ix images updates" href={siteFeedUrl} />
+  <meta name="description" content={siteIntro} />
+  <link rel="alternate" type="application/rss+xml" title="ix images" href={siteFeedUrl} />
 </svelte:head>
 
-<main>
-  <header class="masthead" aria-labelledby="page-title">
-    <div>
-      <p class="eyebrow">ix images</p>
-      <h1 id="page-title">Pre-built systems for ix VMs.</h1>
-    </div>
-    <nav class="top-links" aria-label="Primary links">
-      <a href="https://github.com/indexable-inc/index">GitHub</a>
-      <a href="https://ix.dev">ix.dev</a>
-      <a href={feedHref}>RSS</a>
-    </nav>
-  </header>
+<header>
+  <a class="wordmark" href={resolve('/')}>ix images</a>
+  <nav>
+    <a href="https://github.com/indexable-inc/index">github</a>
+    <a href="https://ix.dev">ix.dev</a>
+    <a href={feedHref}>rss</a>
+  </nav>
+</header>
 
-  <section class="intro" aria-label="Project summary">
+<main>
+  <section class="hero">
+    <h1>Pre-built systems for ix VMs.</h1>
     <p>{siteIntro}</p>
-    <p>
-      This page is the public changelog: short entries, exact source links, and a feed
-      that works in any RSS reader.
-    </p>
   </section>
 
-  <section class="updates" aria-labelledby="updates-title">
-    <div class="section-heading">
-      <p class="eyebrow">Updates</p>
-      <h2 id="updates-title">Latest changes</h2>
-    </div>
-
-    <div class="update-layout">
-      <ol class="update-list" aria-label="Update list">
-        {#each siteUpdates as update (update.id)}
-          <li>
-            <button
-              type="button"
-              class:selected={update.id === selectedId}
-              aria-pressed={update.id === selectedId}
-              onclick={() => {
-                selectedId = update.id;
-              }}
-            >
-              <span class="update-meta">
-                <time datetime={update.date}>{formatDate(update.date)}</time>
-              </span>
-              <span class="update-title">{update.title}</span>
-              <span class="update-summary">{update.summary}</span>
-            </button>
-          </li>
-        {/each}
-      </ol>
-
-      <article id={selectedUpdate.id} class="update-detail" aria-labelledby="selected-update-title">
-        <time datetime={selectedUpdate.date}>{formatDate(selectedUpdate.date)}</time>
-        <h3 id="selected-update-title">{selectedUpdate.title}</h3>
-        <p class="summary">{selectedUpdate.summary}</p>
-        {#each selectedUpdate.paragraphs as paragraph (paragraph)}
-          <p>{paragraph}</p>
-        {/each}
-        <div class="link-row" aria-label="Update links">
-          {#each selectedUpdate.links as link (link.href)}
+  <ol class="log">
+    {#each entries as entry (entry.id)}
+      <li id={entry.id}>
+        <time datetime={entry.date}>{entry.label}</time>
+        <h2><a href="#{entry.id}">{entry.title}</a></h2>
+        <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+        <div class="body">{@html entry.html}</div>
+        <div class="refs">
+          {#each entry.links as link, i (link.href)}
+            {#if i > 0}<span aria-hidden="true">·</span>{/if}
             <a href={link.href} rel="external">{link.label}</a>
           {/each}
         </div>
-      </article>
-    </div>
-  </section>
-
-  <section class="repository" aria-labelledby="repository-title">
-    <h2 id="repository-title">Source</h2>
-    <p>
-      Images are discovered from <code>images/</code>. NixOS modules live under
-      <code>modules/</code>. The repository is
-      <a href="https://github.com/indexable-inc/index">indexable-inc/index</a>.
-    </p>
-  </section>
+      </li>
+    {/each}
+  </ol>
 </main>

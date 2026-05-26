@@ -190,13 +190,43 @@ let
     );
   };
 
-  site = ix.buildNpmSite pkgs {
+  siteBuild = ix.buildNpmSite pkgs {
     pname = "ix-site";
     version = "0.1.0";
     src = siteSrc;
     distDir = "build";
-    serve = true;
-    serveRoutePrefix = "/index";
+  };
+
+  # Local preview build: same source, but with the SvelteKit base path
+  # cleared so miniserve can serve it from the URL root. The deployed
+  # artifact (`siteBuild`) keeps the `/index` prefix for GitHub Pages.
+  sitePreviewBuild = ix.buildNpmSite pkgs {
+    pname = "ix-site-preview";
+    version = "0.1.0";
+    src = siteSrc;
+    distDir = "build";
+    preBuild = "export BASE_PATH=";
+    installDir = "share/ix-site-preview";
+  };
+
+  sitePreviewServe =
+    pkgs.runCommand "ix-site-serve"
+      {
+        nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
+      }
+      ''
+        mkdir -p $out/bin
+        makeWrapper ${lib.getExe pkgs.miniserve} $out/bin/ix-site \
+          --add-flags "--index index.html --interfaces 127.0.0.1 --port 8080 ${sitePreviewBuild}/share/ix-site-preview"
+      '';
+
+  site = pkgs.symlinkJoin {
+    name = "ix-site-0.1.0";
+    paths = [
+      siteBuild
+      sitePreviewServe
+    ];
+    meta.mainProgram = "ix-site";
   };
 
   repoPackages = ix.packageSetFor pkgs;
