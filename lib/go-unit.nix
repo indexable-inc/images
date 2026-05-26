@@ -43,7 +43,13 @@ let
       checkedGoMod = if goModExists then goMod else throw missingGoModMessage;
       explicitGoSum = args ? goSum;
       goSum = args.goSum or (moduleRoot + "/go.sum");
-      noSumModule = (args ? vendorHash) && args.vendorHash == null;
+      requestedNoSumModule = (args ? vendorHash) && args.vendorHash == null;
+      readableGoModHasRequire =
+        canReadGoMod
+        && lib.any (line: line == "require (" || lib.hasPrefix "require " line) (
+          lib.splitString "\n" (builtins.readFile checkedGoMod)
+        );
+      noSumModule = requestedNoSumModule && !readableGoModHasRequire;
       goSumForBuild =
         if explicitGoSum then
           args.goSum

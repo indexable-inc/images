@@ -761,6 +761,15 @@ let
         packages = [ "." ];
       }).packages
   );
+  goUnitMissingGoSumNoSumEval = builtins.tryEval (
+    builtins.attrNames
+      (ix.goUnit.buildWorkspace {
+        pname = "go-unit-missing-go-sum-no-sum";
+        src = goUnitMissingGoSumFixture;
+        vendorHash = null;
+        packages = [ "." ];
+      }).packages
+  );
   goUnitMissingExplicitGoSumEval = builtins.tryEval (
     builtins.attrNames
       (ix.goUnit.buildWorkspace {
@@ -2825,6 +2834,10 @@ let
       {
         assertion = !goUnitMissingGoSumEval.success;
         message = "go-unit local sources should reject missing go.sum even with a direct vendor hash";
+      }
+      {
+        assertion = !goUnitMissingGoSumNoSumEval.success;
+        message = "go-unit local sources with external requirements should not use the no-sum path";
       }
       {
         assertion = !goUnitMissingExplicitGoSumEval.success;
