@@ -1,0 +1,52 @@
+---
+id: ai-review-gate
+postedAt: 2026-05-26T02:55:00-07:00
+title: "Reusable Codex AI review gate for any repo"
+tags: [interesting, ci, agents, github]
+links:
+  - label: workflow source
+    href: https://github.com/indexable-inc/index/blob/main/.github/workflows/ai-review-gate.yml
+  - label: caller documentation
+    href: https://github.com/indexable-inc/index/blob/main/.github/workflows/ai-review-gate.md
+---
+
+`indexable-inc/index/.github/workflows/ai-review-gate.yml@main` is a `workflow_call` reviewer that any repo can mount as the default AI review on `main`. The current implementation runs `openai/codex-action` against a JSON schema, posts each finding as a GitHub review suggestion with a `suggested_replacement`, and reports an `overall_correctness` verdict that becomes the final gate.
+
+```yaml
+jobs:
+  ai-review-gate:
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: indexable-inc/index/.github/workflows/ai-review-gate.yml@main
+    with:
+      caller_event_name: ${{ github.event_name }}
+      required_check_name: ai review approved
+    secrets:
+      openai_api_key:   ${{ secrets.OPENAI_API_KEY }}
+      repository_token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Same-repo PRs from regular users run the secret-backed reviewer. Fork and Dependabot PRs stay on a no-secret path until a trusted maintainer approves the current head SHA, so a forked PR cannot edit the prompt and reach the OpenAI key. The reviewer instruction files (`AGENTS.md`) are restored from the trusted base commit before Codex runs, so a PR that rewrites `AGENTS.md` cannot bend the reviewer's rules.
+
+The structured output keeps each finding mechanically actionable: `title`, `body`, `confidence_score`, `priority`, `code_location.{relative_file_path, line_range}`, and a `suggested_replacement` GitHub renders as a one-click apply. `AI_REVIEW_MODEL` and `AI_REVIEW_EFFORT` are repo variables, with `xhigh` reasoning effort as the default.
+
+```jsonc
+{
+  "findings": [
+    {
+      "title": "fork PRs can leak OPENAI_API_KEY",
+      "priority": 0,
+      "code_location": { "relative_file_path": ".github/workflows/foo.yml", "line_range": {"start": 12, "end": 18} },
+      "suggested_replacement": "...",
+      "confidence_score": 0.92
+    }
+  ],
+  "overall_correctness": "patch is incorrect"
+}
+```
+
+Branch protection requires the `ai review approved` check, which only passes when the reviewer returns a well-formed JSON document and votes `patch is correct`. Missing or malformed output fails closed.
