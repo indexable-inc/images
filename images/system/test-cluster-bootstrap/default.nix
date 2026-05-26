@@ -1,5 +1,4 @@
-_:
-{
+_: {
   ix.image = {
     name = "ix/test-cluster-bootstrap";
     tag = "zstd-tools-2026-05-12";
