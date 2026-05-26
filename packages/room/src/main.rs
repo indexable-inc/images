@@ -1,9 +1,10 @@
 use std::{
-    collections::BTreeMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use anyhow::Context;
@@ -18,14 +19,12 @@ use axum::{
 };
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
-use loro::LoroDoc;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use loro::{ExportMode, LoroDoc};
 use tokio::sync::{Mutex, broadcast};
 use tower_http::services::{ServeDir, ServeFile};
 
 #[derive(Parser, Debug)]
-#[command(about = "Serve a multiplayer team room")]
+#[command(about = "Serve a multiplayer team room backed by a Loro CRDT document")]
 struct Args {
     #[arg(long, env = "ROOM_HOST", default_value_t = IpAddr::V4(Ipv4Addr::UNSPECIFIED))]
     host: IpAddr,
@@ -39,90 +38,33 @@ struct Args {
 
 #[derive(Clone)]
 struct AppState {
-    room: Arc<Mutex<RoomState>>,
     doc: Arc<Mutex<LoroDoc>>,
-    events: broadcast::Sender<ServerEvent>,
+    updates: broadcast::Sender<Broadcast>,
 }
 
-#[derive(Default, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct RoomState {
-    participants: BTreeMap<String, Participant>,
+#[derive(Clone)]
+struct Broadcast {
+    // Connection that produced the update. Receivers skip frames they sent
+    // themselves so a client's own edit is not echoed back across the wire.
+    origin: u64,
+    bytes: Arc<[u8]>,
 }
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct Participant {
-    id: String,
-    name: String,
-    color: String,
-    focus: String,
-    draft: String,
-    codex: CodexStatus,
-    last_seen_ms: u128,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct CodexStatus {
-    task: String,
-    status: AgentStatus,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "kebab-case")]
-enum AgentStatus {
-    Idle,
-    Thinking,
-    Editing,
-    Reviewing,
-    Blocked,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-enum ClientEvent {
-    Presence {
-        id: String,
-        name: String,
-        color: String,
-    },
-    Focus {
-        id: String,
-        focus: String,
-    },
-    Draft {
-        id: String,
-        draft: String,
-    },
-    Codex {
-        id: String,
-        task: String,
-        status: AgentStatus,
-    },
-    Leave {
-        id: String,
-    },
-}
-
-#[derive(Serialize, Clone)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-enum ServerEvent {
-    Snapshot { state: RoomState },
-}
+static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let site_dir = args.site_dir.or_else(|| std::env::var_os("ROOM_SITE_DIR").map(PathBuf::from));
     let site_dir = site_dir.context("set --site-dir or ROOM_SITE_DIR to the built Svelte site")?;
-    let (events, _) = broadcast::channel(128);
     let doc = LoroDoc::new();
+    // Server peer id is fixed; clients pick their own random peer id so concurrent
+    // ops from different sessions do not collide.
     doc.set_peer_id(1).context("failed to set room document peer id")?;
+    let (updates, _) = broadcast::channel(256);
     let state = AppState {
-        room: Arc::new(Mutex::new(RoomState::default())),
         doc: Arc::new(Mutex::new(doc)),
-        events,
+        updates,
     };
     let index = site_dir.join("index.html");
     let app = Router::new()
@@ -145,117 +87,50 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
 }
 
 async fn handle_socket(socket: WebSocket, state: AppState) {
+    let client_id = NEXT_CLIENT_ID.fetch_add(1, Ordering::Relaxed);
     let (mut sender, mut receiver) = socket.split();
-    let mut events = state.events.subscribe();
-    send_snapshot(&state).await;
 
+    let snapshot = {
+        let doc = state.doc.lock().await;
+        doc.export(ExportMode::Snapshot)
+    };
+    let Ok(snapshot) = snapshot else {
+        return;
+    };
+    if sender.send(Message::Binary(snapshot.into())).await.is_err() {
+        return;
+    }
+
+    let mut updates = state.updates.subscribe();
     let send_task = tokio::spawn(async move {
-        while let Ok(event) = events.recv().await {
-            let Ok(text) = serde_json::to_string(&event) else {
+        while let Ok(broadcast) = updates.recv().await {
+            if broadcast.origin == client_id {
                 continue;
-            };
-            if sender.send(Message::Text(text.into())).await.is_err() {
+            }
+            let payload = broadcast.bytes.as_ref().to_vec();
+            if sender.send(Message::Binary(payload.into())).await.is_err() {
                 break;
             }
         }
     });
 
     while let Some(Ok(message)) = receiver.next().await {
-        if let Message::Text(text) = message {
-            let Ok(event) = serde_json::from_str::<ClientEvent>(&text) else {
+        let Message::Binary(bytes) = message else {
+            continue;
+        };
+        {
+            let doc = state.doc.lock().await;
+            if doc.import(&bytes).is_err() {
                 continue;
-            };
-            apply_event(&state, event).await;
+            }
         }
+        let _ = state.updates.send(Broadcast {
+            origin: client_id,
+            bytes: Arc::from(bytes.as_ref()),
+        });
     }
 
     send_task.abort();
-}
-
-async fn apply_event(state: &AppState, event: ClientEvent) {
-    record_event(state, &event).await;
-
-    let mut room = state.room.lock().await;
-    match event {
-        ClientEvent::Presence { id, name, color } => {
-            room.participants
-                .entry(id.clone())
-                .and_modify(|participant| {
-                    participant.name.clone_from(&name);
-                    participant.color.clone_from(&color);
-                    participant.last_seen_ms = now_ms();
-                })
-                .or_insert_with(|| Participant {
-                    id,
-                    name,
-                    color,
-                    focus: "overview".to_owned(),
-                    draft: String::new(),
-                    codex: CodexStatus {
-                        task: "waiting for a task".to_owned(),
-                        status: AgentStatus::Idle,
-                    },
-                    last_seen_ms: now_ms(),
-                });
-        }
-        ClientEvent::Focus { id, focus } => {
-            if let Some(participant) = room.participants.get_mut(&id) {
-                participant.focus = focus;
-                participant.last_seen_ms = now_ms();
-            }
-        }
-        ClientEvent::Draft { id, draft } => {
-            if let Some(participant) = room.participants.get_mut(&id) {
-                participant.draft = draft;
-                participant.last_seen_ms = now_ms();
-            }
-        }
-        ClientEvent::Codex { id, task, status } => {
-            if let Some(participant) = room.participants.get_mut(&id) {
-                participant.codex = CodexStatus { task, status };
-                participant.last_seen_ms = now_ms();
-            }
-        }
-        ClientEvent::Leave { id } => {
-            room.participants.remove(&id);
-        }
-    }
-
-    let _ = state.events.send(ServerEvent::Snapshot {
-        state: room.clone(),
-    });
-}
-
-async fn record_event(state: &AppState, event: &ClientEvent) {
-    let Ok(value) = serde_json::to_value(event) else {
-        return;
-    };
-    let doc = state.doc.lock().await;
-    let events = doc.get_list("events");
-    if events
-        .insert(
-            events.len(),
-            json!({
-                "atMs": now_ms(),
-                "event": value,
-            }),
-        )
-        .is_ok()
-    {
-        doc.commit();
-    }
-}
-
-async fn send_snapshot(state: &AppState) {
-    let room = state.room.lock().await.clone();
-    let _ = state.events.send(ServerEvent::Snapshot { state: room });
-}
-
-fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_millis()
 }
 
 async fn shutdown_signal() {

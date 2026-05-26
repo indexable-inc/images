@@ -10,7 +10,5 @@ axum = { workspace = true, features = ["ws"] }
 clap = { workspace = true, features = ["derive", "env"] }
 futures.workspace = true
 loro.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tower-http = { workspace = true, features = ["fs", "trace"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
+tower-http = { workspace = true, features = ["fs"] }

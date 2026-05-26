@@ -1,93 +1,182 @@
 <script lang="ts">
+  import { LoroDoc } from 'loro-crdt';
+  import { onDestroy } from 'svelte';
+
   type AgentStatus = 'idle' | 'thinking' | 'editing' | 'reviewing' | 'blocked';
 
-  type Participant = {
-    id: string;
+  type ParticipantRecord = {
     name: string;
     color: string;
     focus: string;
     draft: string;
-    codex: {
-      task: string;
-      status: AgentStatus;
-    };
+    codexTask: string;
+    codexStatus: AgentStatus;
     lastSeenMs: number;
   };
 
-  type SnapshotEvent = {
-    type: 'snapshot';
-    state: {
-      participants: Record<string, Participant>;
-    };
+  type ParticipantView = {
+    id: string;
+    record: ParticipantRecord;
   };
 
   const colors = ['#2f80ed', '#15a46e', '#c05621', '#8b5cf6', '#d12b6a'];
   const statuses: AgentStatus[] = ['idle', 'thinking', 'editing', 'reviewing', 'blocked'];
-  const savedId = localStorage.getItem('room-id');
-  const selfId = savedId ?? crypto.randomUUID();
-  localStorage.setItem('room-id', selfId);
+
+  const selfId = (() => {
+    const saved = localStorage.getItem('room-id');
+    if (saved) {
+      return saved;
+    }
+    const fresh = crypto.randomUUID();
+    localStorage.setItem('room-id', fresh);
+    return fresh;
+  })();
+
+  const doc = new LoroDoc();
+  const participants = doc.getMap('participants');
+
+  let connected = $state(false);
+  let participantViews = $state<ParticipantView[]>([]);
+  let name = $state(localStorage.getItem('room-name') ?? 'Teammate');
+  let color = $state(colors[Math.abs(hash(selfId)) % colors.length]);
+  let focus = $state('overview');
+  let draft = $state('');
+  let task = $state('reviewing the current branch');
+  let status = $state<AgentStatus>('thinking');
 
   let socket: WebSocket | null = null;
-  let connected = false;
-  let name = localStorage.getItem('room-name') ?? 'Teammate';
-  let color = colors[Math.abs(hash(selfId)) % colors.length];
-  let focus = 'overview';
-  let draft = '';
-  let task = 'reviewing the current branch';
-  let status: AgentStatus = 'thinking';
-  let participants: Participant[] = [];
+  let reconnectTimer: number | null = null;
+  let suppressMirror = false;
 
-  $: self = participants.find((participant) => participant.id === selfId);
-  $: others = participants.filter((participant) => participant.id !== selfId);
+  const unsubscribeDoc = doc.subscribe(() => {
+    refreshFromDoc();
+  });
+
+  const unsubscribeLocal = doc.subscribeLocalUpdates((bytes) => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(bytes);
+    }
+  });
+
+  onDestroy(() => {
+    unsubscribeDoc();
+    unsubscribeLocal();
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+    }
+    socket?.close();
+  });
 
   connect();
 
+  $effect(() => {
+    if (suppressMirror) {
+      return;
+    }
+    void name;
+    void color;
+    void focus;
+    void draft;
+    void task;
+    void status;
+    publishSelf();
+  });
+
+  const selfRecord = $derived(participantViews.find((view) => view.id === selfId)?.record);
+  const otherViews = $derived(participantViews.filter((view) => view.id !== selfId));
+
   function connect() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
-    socket.addEventListener('open', () => {
+    const next = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    next.binaryType = 'arraybuffer';
+    next.addEventListener('open', () => {
       connected = true;
-      sendPresence();
-      sendCodex();
-      sendFocus();
-      sendDraft();
+      publishSelf();
     });
-    socket.addEventListener('close', () => {
+    next.addEventListener('close', () => {
       connected = false;
-      window.setTimeout(connect, 1000);
+      reconnectTimer = window.setTimeout(connect, 1000);
     });
-    socket.addEventListener('message', (message) => {
-      const event = JSON.parse(message.data) as SnapshotEvent;
-      if (event.type === 'snapshot') {
-        participants = Object.values(event.state.participants).sort((left, right) =>
-          left.name.localeCompare(right.name)
-        );
+    next.addEventListener('message', (event) => {
+      if (!(event.data instanceof ArrayBuffer)) {
+        return;
+      }
+      try {
+        doc.import(new Uint8Array(event.data));
+      } catch {
+        // Skip frames the server sent before our state caught up.
       }
     });
-    window.addEventListener('beforeunload', () => send({ type: 'leave', id: selfId }));
+    socket = next;
   }
 
-  function send(event: object) {
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(event));
+  function publishSelf() {
+    const previous = participants.get(selfId) as ParticipantRecord | undefined;
+    const record: ParticipantRecord = {
+      name,
+      color,
+      focus,
+      draft,
+      codexTask: task,
+      codexStatus: status,
+      lastSeenMs: Date.now()
+    };
+    if (previous && shallowEqualExceptLastSeen(previous, record)) {
+      return;
+    }
+    participants.set(selfId, record);
+    doc.commit();
+    localStorage.setItem('room-name', name);
+  }
+
+  function refreshFromDoc() {
+    const snapshot = participants.toJSON() as Record<string, ParticipantRecord>;
+    const next: ParticipantView[] = [];
+    for (const [id, record] of Object.entries(snapshot)) {
+      if (record && typeof record === 'object') {
+        next.push({ id, record });
+      }
+    }
+    next.sort((a, b) => a.record.name.localeCompare(b.record.name));
+    participantViews = next;
+
+    const mine = snapshot[selfId];
+    if (mine) {
+      suppressMirror = true;
+      try {
+        if (mine.name !== name) {
+          name = mine.name;
+        }
+        if (mine.color !== color) {
+          color = mine.color;
+        }
+        if (mine.focus !== focus) {
+          focus = mine.focus;
+        }
+        if (mine.draft !== draft) {
+          draft = mine.draft;
+        }
+        if (mine.codexTask !== task) {
+          task = mine.codexTask;
+        }
+        if (mine.codexStatus !== status) {
+          status = mine.codexStatus;
+        }
+      } finally {
+        suppressMirror = false;
+      }
     }
   }
 
-  function sendPresence() {
-    localStorage.setItem('room-name', name);
-    send({ type: 'presence', id: selfId, name, color });
-  }
-
-  function sendFocus() {
-    send({ type: 'focus', id: selfId, focus });
-  }
-
-  function sendDraft() {
-    send({ type: 'draft', id: selfId, draft });
-  }
-
-  function sendCodex() {
-    send({ type: 'codex', id: selfId, task, status });
+  function shallowEqualExceptLastSeen(left: ParticipantRecord, right: ParticipantRecord) {
+    return (
+      left.name === right.name &&
+      left.color === right.color &&
+      left.focus === right.focus &&
+      left.draft === right.draft &&
+      left.codexTask === right.codexTask &&
+      left.codexStatus === right.codexStatus
+    );
   }
 
   function hash(value: string) {
@@ -99,25 +188,27 @@
   <section class="toolbar">
     <div>
       <h1>Room</h1>
-      <p>{connected ? 'live multiplayer session' : 'reconnecting'}</p>
+      <p>{connected ? 'live Loro session' : 'reconnecting'}</p>
     </div>
     <label>
       <span>Name</span>
-      <input bind:value={name} on:input={sendPresence} />
+      <input bind:value={name} />
     </label>
   </section>
 
   <section class="workspace">
     <aside>
       <div class="panel-title">Team</div>
-      {#each participants as participant}
-        <article class:self={participant.id === selfId}>
-          <div class="avatar" style={`background:${participant.color}`}>{participant.name.slice(0, 1)}</div>
-          <div>
-            <strong>{participant.name}</strong>
-            <span>{participant.focus}</span>
+      {#each participantViews as view (view.id)}
+        <article class:self={view.id === selfId}>
+          <div class="avatar" style={`background:${view.record.color}`}>
+            {view.record.name.slice(0, 1)}
           </div>
-          <small>{participant.codex.status}</small>
+          <div>
+            <strong>{view.record.name}</strong>
+            <span>{view.record.focus}</span>
+          </div>
+          <small>{view.record.codexStatus}</small>
         </article>
       {/each}
     </aside>
@@ -126,16 +217,16 @@
       <div class="field-grid">
         <label>
           <span>Viewing</span>
-          <input bind:value={focus} on:input={sendFocus} placeholder="packages/room/src/main.rs" />
+          <input bind:value={focus} placeholder="packages/room/src/main.rs" />
         </label>
         <label>
           <span>Codex task</span>
-          <input bind:value={task} on:input={sendCodex} />
+          <input bind:value={task} />
         </label>
         <label>
           <span>Status</span>
-          <select bind:value={status} on:change={sendCodex}>
-            {#each statuses as item}
+          <select bind:value={status}>
+            {#each statuses as item (item)}
               <option value={item}>{item}</option>
             {/each}
           </select>
@@ -144,23 +235,23 @@
 
       <label class="draft">
         <span>Typing</span>
-        <textarea bind:value={draft} on:input={sendDraft} placeholder="Share the prompt or note you are composing."></textarea>
+        <textarea bind:value={draft} placeholder="Share the prompt or note you are composing."></textarea>
       </label>
 
       <div class="board">
-        {#if self}
+        {#if selfRecord}
           <div class="lane active">
             <span class="eyebrow">You</span>
-            <h2>{self.codex.task}</h2>
-            <p>{self.draft || 'No draft text yet.'}</p>
+            <h2>{selfRecord.codexTask}</h2>
+            <p>{selfRecord.draft || 'No draft text yet.'}</p>
           </div>
         {/if}
-        {#each others as participant}
+        {#each otherViews as view (view.id)}
           <div class="lane">
-            <span class="eyebrow" style={`color:${participant.color}`}>{participant.name}</span>
-            <h2>{participant.codex.task}</h2>
-            <p>{participant.draft || `${participant.name} is not typing right now.`}</p>
-            <footer>{participant.focus}</footer>
+            <span class="eyebrow" style={`color:${view.record.color}`}>{view.record.name}</span>
+            <h2>{view.record.codexTask}</h2>
+            <p>{view.record.draft || `${view.record.name} is not typing right now.`}</p>
+            <footer>{view.record.focus}</footer>
           </div>
         {/each}
       </div>

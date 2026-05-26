@@ -2446,8 +2446,6 @@ dependencies = [
  "clap",
  "futures",
  "loro",
- "serde",
- "serde_json",
  "tokio",
  "tower-http",
 ]
@@ -3130,7 +3128,6 @@ dependencies = [
  "tokio-util",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
