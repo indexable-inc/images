@@ -1,0 +1,27 @@
+---
+id: cargo-unit-clippy-sharing
+postedAt: 2026-05-26T04:22:46-07:00
+title: "`cargo-unit` shares clippy work across repo Rust packages"
+tags: [interesting, nix, rust, builder]
+links:
+  - label: Rust workspace wiring
+    href: https://github.com/indexable-inc/index/blob/main/lib/default.nix
+  - label: Cargo unit builder
+    href: https://github.com/indexable-inc/index/blob/main/lib/cargo-unit.nix
+  - label: Rust policy checks
+    href: https://github.com/indexable-inc/index/blob/main/lib/rust.nix
+---
+
+The Rust flake checks look busier than the builder really is: most package-level `cargoClippy` entries are labels for one shared workspace derivation. `rust-dag-runner-cargoClippy`, `rust-room-cargoClippy`, `rust-mcp-cargoClippy`, and the other repo-owned package checks resolve to the same `ix-rust-workspace-cargo-clippy.drv`.
+
+The derivation runs one Cargo command with one target directory:
+
+```bash
+cargo clippy --frozen --offline --workspace --all-targets -- \
+  -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery -D clippy::cargo \
+  -A clippy::multiple_crate_versions
+```
+
+That means a shared dependency such as `e` in an `a`, `b`, `c`, `d` workspace rides Cargo's normal unit sharing inside the single clippy run. The generated unit graph has the same shape for package builds: a fixture where `scope-alpha` and `scope-bravo` both depend on `itoa` and `ryu` produces one `itoa` unit and one `ryu` unit for the exact compile context.
+
+Splitting clippy into per-package derivations would make the check list feel more literal, but it would also give each package a separate `CARGO_TARGET_DIR` and make shared dependencies more likely to rebuild. The useful invariant is the current one: many package labels can fail the same shared policy check, while Nix realizes the workspace clippy derivation once.
