@@ -119,8 +119,10 @@ fn collect_managed_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> Re
 }
 
 fn manifest_entry(line: &str) -> (&str, Option<&str>) {
-    line.rsplit_once(' ')
-        .map_or((line, None), |(rel, target)| (rel, Some(target)))
+    match line.rsplit_once(' ') {
+        Some((rel, target)) if Path::new(target).is_absolute() => (rel, Some(target)),
+        _ => (line, None),
+    }
 }
 
 fn read_manifest_lines(manifest: &Path) -> Result<Vec<String>> {
@@ -742,6 +744,10 @@ mod tests {
         assert_eq!(
             manifest_entry("plugins/Foo;Bar.yml"),
             ("plugins/Foo;Bar.yml", None)
+        );
+        assert_eq!(
+            manifest_entry("plugins/Foo Bar.yml"),
+            ("plugins/Foo Bar.yml", None)
         );
     }
 
