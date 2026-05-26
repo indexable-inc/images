@@ -702,8 +702,8 @@ let
     packages = [ "." ];
   };
   goUnitDerivedSource = pkgs.runCommand "go-unit-hello-source" { } ''
-    	    cp -R ${goUnitFixture}/. "$out"
-    	  '';
+    cp -R ${goUnitFixture}/. "$out"
+  '';
   goUnitDerivedWorkspaceWithVendorHashFile = ix.goUnit.buildWorkspace {
     pname = "go-unit-hello-derived";
     src = goUnitDerivedSource;
