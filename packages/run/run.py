@@ -30,6 +30,7 @@ DEFAULT_HEAD_LINES = 80
 DEFAULT_TAIL_LINES = 80
 READ_SIZE = 65536
 EXPECTED_PTY_ERRORS = {errno.EBADF, errno.EIO, errno.EPIPE}
+EXPECTED_STDOUT_CLOSE_ERRORS = {errno.EBADF, errno.EPIPE}
 RETRYABLE_WRITE_ERRORS = {errno.EAGAIN, errno.EWOULDBLOCK}
 SignalHandler = signal.Handlers | int | Callable[[int, FrameType | None], None] | None
 
@@ -130,7 +131,7 @@ class DisplayLimiter:
         try:
             os.write(self._stdout_fd, data)
         except OSError as exc:
-            if exc.errno not in EXPECTED_PTY_ERRORS:
+            if exc.errno not in EXPECTED_STDOUT_CLOSE_ERRORS:
                 raise
             self._stdout_open = False
 

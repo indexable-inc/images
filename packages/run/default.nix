@@ -36,6 +36,7 @@ let
         nativeBuildInputs = [
           package
           pkgs.coreutils
+          pkgs.python3
         ];
         strictDeps = true;
       }
@@ -104,6 +105,46 @@ let
         ) 2>closed-stdout-stderr
         session=$(readlink "$IX_RUN_DIR/latest")
         grep -q 'closed-stdout' "$session/output.log"
+
+        RUN_PY=${./run.py} python3 - <<'PY'
+        import errno
+        import importlib.util
+        import os
+        import sys
+        from pathlib import Path
+
+        spec = importlib.util.spec_from_file_location("run_module", os.environ["RUN_PY"])
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        display = module.DisplayLimiter(
+            head_lines=80,
+            tail_lines=80,
+            print_mode="full",
+            output_path=Path("output.log"),
+            stderr_fd=2,
+            stdout_fd=1,
+        )
+
+        original_write = module.os.write
+
+        def raise_eio(fd, data):
+            raise OSError(errno.EIO, "simulated stdout device error")
+
+        module.os.write = raise_eio
+        try:
+            try:
+                display.emit_line(1, b"visible output\n")
+            except OSError as exc:
+                if exc.errno != errno.EIO:
+                    raise
+            else:
+                raise AssertionError("stdout EIO was suppressed")
+        finally:
+            module.os.write = original_write
+        PY
 
         mkdir -p "$out"
       '';
