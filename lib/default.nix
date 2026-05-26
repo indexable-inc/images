@@ -183,6 +183,7 @@ let
   };
   buildNpmSite = import ./build-npm-site.nix;
   buildNpmVitest = import ./build-npm-vitest.nix;
+  buildZigPackage = import ./build-zig-package.nix { };
   uvLockFor =
     pkgs:
     import ./uv-lock.nix {
@@ -779,6 +780,7 @@ let
       buildNpmSite
       buildNpmVitest
       buildUvApplication
+      buildZigPackage
       cargoUnit
       goUnit
       languages
@@ -1045,6 +1047,7 @@ let
       buildNpmSite
       buildNpmVitest
       buildUvApplication
+      buildZigPackage
       bunLockFor
       cargoUnit
       cargoUnitFor

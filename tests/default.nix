@@ -513,6 +513,43 @@ let
     check = false;
   };
 
+  zigAppFixture = fs.toSource {
+    root = ./fixtures/zig-app;
+    fileset = fs.unions [
+      ./fixtures/zig-app/build.zig
+      ./fixtures/zig-app/build.zig.zon
+      ./fixtures/zig-app/src
+    ];
+  };
+
+  zigApplication = ix.buildZigPackage pkgs {
+    pname = "zig-app-fixture";
+    version = "0.1.0";
+    src = zigAppFixture;
+    zig = ix.languages.zig.toolchain pkgs { version = "0.14"; };
+    testSteps = {
+      lib = "test-lib";
+      exe = "test-exe";
+    };
+  };
+
+  zigDepsFixture = fs.toSource {
+    root = ./fixtures/zig-deps;
+    fileset = fs.unions [
+      ./fixtures/zig-deps/build.zig
+      ./fixtures/zig-deps/build.zig.zon
+      ./fixtures/zig-deps/src
+    ];
+  };
+
+  zigDepsApplication = ix.buildZigPackage pkgs {
+    pname = "zig-deps-fixture";
+    version = "0.1.0";
+    src = zigDepsFixture;
+    zig = ix.languages.zig.toolchain pkgs { version = "0.14"; };
+    zigDepsHash = "sha256-2eURmY4iF5iG5CdYiI7cKbrT3ymqb9UFUxO22LmsZ9s=";
+  };
+
   cargoUnitFixture = fs.toSource {
     root = ./fixtures/cargo-unit-hello;
     fileset = fs.unions [
@@ -2624,6 +2661,18 @@ let
         message = "go-unit workspaces should reject package patterns with colliding output names";
       }
       {
+        assertion = zigApplication.passthru.tests ? lib && zigApplication.passthru.tests ? exe;
+        message = "Zig packages should expose named test steps as separate derivations";
+      }
+      {
+        assertion = zigApplication.passthru.testSteps.lib == "test-lib";
+        message = "Zig packages should retain the build step names behind test derivations";
+      }
+      {
+        assertion = zigDepsApplication.passthru.zigDeps != null;
+        message = "Zig packages should materialize remote build.zig.zon dependencies through a cache derivation";
+      }
+      {
         assertion =
           let
             inherit (nomadSecretRefsExample) secretSet;
@@ -3285,6 +3334,13 @@ let
 
     ${lib.getExe pythonAppClosureProbe} > python-app-closure-probe.out
     grep -q 'python app source is in the runtime closure' python-app-closure-probe.out
+
+    ${lib.getExe zigApplication} > zig-app-fixture.out
+    grep -q 'hello from zig app fixture' zig-app-fixture.out
+    test -e ${zigApplication.passthru.tests.lib}/done
+    test -e ${zigApplication.passthru.tests.exe}/done
+    test -e ${zigDepsApplication}/bin/zig-deps-fixture
+    test -e ${zigDepsApplication.passthru.tests.default}/done
 
     ${cargoUnitHello}/bin/cargo-unit-hello > cargo-unit-hello.out
     grep -q 'hello from cargo-unit' cargo-unit-hello.out

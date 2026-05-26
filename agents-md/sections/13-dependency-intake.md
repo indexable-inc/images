@@ -18,6 +18,11 @@ Tracked Nix files should never contain fake hash helpers or placeholder hashes.
 Materialize real SRI hashes with the owning updater, lock command,
 `nix flake update`, or a checked prefetch command before committing.
 
+Use `__impure` only for explicit dependency-discovery or prefetch derivations
+that are turned into a checked hash-bearing artifact before product builds
+consume them. Keep the impure boundary named next to the updater or generated
+lock output that makes later builds pure.
+
 Generated catalogs are build inputs, not hand-edited source. If a generated file
 is wrong, change the manifest or generator that owns it.
 
@@ -27,4 +32,3 @@ hashes, and metadata catalogs for search or browsing surfaces.
 
 Repository examples should consume those shared surfaces. Repeating URLs and
 hashes in examples creates second owners with no update story.
-
