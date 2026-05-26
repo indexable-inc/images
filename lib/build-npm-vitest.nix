@@ -93,10 +93,39 @@ let
 
   manifestEntries = builtins.fromJSON (builtins.readFile "${manifest}/tests.json");
 
-  # Turn a "describe > test" string into a single nix-attr-safe slug:
-  # lowercase, separators flattened to single dashes, anything not in
-  # [a-z0-9-] dropped entirely.
-  caseId =
+  regexSpecialChars = [
+    "\\"
+    "^"
+    "$"
+    "."
+    "*"
+    "+"
+    "?"
+    "("
+    ")"
+    "["
+    "]"
+    "{"
+    "}"
+    "|"
+  ];
+
+  escapeRegex =
+    name: lib.stringAsChars (c: if builtins.elem c regexSpecialChars then "\\${c}" else c) name;
+  exactNamePattern = name: "^${escapeRegex name}$";
+  relativeTestFile =
+    entry:
+    let
+      buildSourcePrefix = "/build/source/";
+    in
+    if lib.hasPrefix buildSourcePrefix entry.file then
+      lib.removePrefix buildSourcePrefix entry.file
+    else
+      entry.file;
+
+  # Turn a string into a single nix-attr-safe slug: lowercase, separators
+  # flattened to single dashes, anything not in [a-z0-9-] dropped entirely.
+  slugify =
     name:
     let
       lowered = lib.toLower name;
@@ -108,21 +137,38 @@ let
       (s: lib.concatStringsSep "-" (builtins.filter (p: p != "") (lib.splitString "-" s)))
     ];
 
+  caseId =
+    entry:
+    let
+      slug = slugify entry.name;
+      readable = if slug == "" then "case" else slug;
+      digest = builtins.substring 0 12 (
+        builtins.hashString "sha256" (
+          builtins.toJSON {
+            file = relativeTestFile entry;
+            inherit (entry) name;
+            projectName = entry.projectName or null;
+          }
+        )
+      );
+    in
+    "${readable}-${digest}";
+
   cases = lib.listToAttrs (
     map (
       entry:
-      lib.nameValuePair (caseId entry.name) (
+      lib.nameValuePair (caseId entry) (
         pkgs.stdenvNoCC.mkDerivation (
           baseAttrs
           // {
-            pname = "${pname}-vitest-${caseId entry.name}";
+            pname = "${pname}-vitest-${caseId entry}";
             inherit version;
             passthru.testName = entry.name;
-            passthru.testFile = entry.file;
+            passthru.testFile = relativeTestFile entry;
             buildPhase = ''
               runHook preBuild
               ${preTest}
-              ${vitestCli} run --testNamePattern ${lib.escapeShellArg entry.name}
+              ${vitestCli} run ${lib.escapeShellArg (relativeTestFile entry)} --testNamePattern ${lib.escapeShellArg (exactNamePattern entry.name)}
               runHook postBuild
             '';
             installPhase = ''
