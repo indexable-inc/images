@@ -142,6 +142,65 @@ class PushReplacementImageTests(unittest.TestCase):
             self.assertEqual(image, "registry.ix.dev/example/health-check-nginx:nginx-lifecycle")
 
 
+class UpNodeTests(unittest.TestCase):
+    def test_replaces_existing_running_node_with_uploaded_image(self) -> None:
+        calls: list[list[str]] = []
+        node = ix_fleet.FleetNode.model_validate(fleet_node("web"))
+
+        async def fake_list_nodes() -> list[dict[str, typing.Any]]:
+            return [{"name": "web", "status": "running"}]
+
+        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+            del timeout
+            self.assertFalse(dry_run)
+            calls.append(command)
+            return ""
+
+        with (
+            patch.object(ix_fleet, "list_nodes", fake_list_nodes),
+            patch.object(ix_fleet, "run_cli", fake_run_cli),
+        ):
+            asyncio.run(ix_fleet.up_node(node, "registry.ix.dev/example/web:new", dry_run=False))
+
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "ix",
+                    "new",
+                    "registry.ix.dev/example/web:new",
+                    "--name",
+                    "web",
+                    "--region",
+                    "us-west-1",
+                    "--no-shell",
+                ]
+            ],
+        )
+
+    def test_replaces_existing_stopped_node_instead_of_starting_old_image(self) -> None:
+        calls: list[list[str]] = []
+        node = ix_fleet.FleetNode.model_validate(fleet_node("web"))
+
+        async def fake_list_nodes() -> list[dict[str, typing.Any]]:
+            return [{"name": "web", "status": "stopped"}]
+
+        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+            del timeout
+            self.assertFalse(dry_run)
+            calls.append(command)
+            return ""
+
+        with (
+            patch.object(ix_fleet, "list_nodes", fake_list_nodes),
+            patch.object(ix_fleet, "run_cli", fake_run_cli),
+        ):
+            asyncio.run(ix_fleet.up_node(node, "registry.ix.dev/example/web:new", dry_run=False))
+
+        self.assertEqual(calls[0][:3], ["ix", "new", "registry.ix.dev/example/web:new"])
+        self.assertNotIn(["ix", "start", "web"], calls)
+
+
 class EastWestGroupTests(unittest.TestCase):
     def test_ensures_group_before_adding_node(self) -> None:
         calls: list[list[str]] = []
