@@ -46,9 +46,14 @@ let
       requestedNoSumModule = (args ? vendorHash) && args.vendorHash == null;
       readableGoModHasRequire =
         canReadGoMod
-        && lib.any (line: line == "require (" || lib.hasPrefix "require " line) (
-          lib.splitString "\n" (builtins.readFile checkedGoMod)
-        );
+        && lib.any (
+          line:
+          let
+            compactLine = lib.replaceStrings [ " " "\t" ] [ "" "" ] line;
+          in
+          lib.hasPrefix "require(" compactLine
+          || (lib.hasPrefix "require" compactLine && compactLine != "require")
+        ) (lib.splitString "\n" (builtins.readFile checkedGoMod));
       noSumModule = requestedNoSumModule && !readableGoModHasRequire;
       goSumForBuild =
         if explicitGoSum then

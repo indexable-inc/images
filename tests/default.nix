@@ -691,6 +691,13 @@ let
       ./fixtures/go-unit-hello/main_test.go
     ];
   };
+  goUnitRequireNoSpaceFixture = fs.toSource {
+    root = ./fixtures/go-unit-require-nospace;
+    fileset = fs.unions [
+      ./fixtures/go-unit-require-nospace/go.mod
+      ./fixtures/go-unit-require-nospace/main.go
+    ];
+  };
 
   goUnitStdlibWorkspace = ix.goUnit.buildWorkspace {
     pname = "go-unit-stdlib";
@@ -766,6 +773,15 @@ let
       (ix.goUnit.buildWorkspace {
         pname = "go-unit-missing-go-sum-no-sum";
         src = goUnitMissingGoSumFixture;
+        vendorHash = null;
+        packages = [ "." ];
+      }).packages
+  );
+  goUnitRequireNoSpaceNoSumEval = builtins.tryEval (
+    builtins.attrNames
+      (ix.goUnit.buildWorkspace {
+        pname = "go-unit-require-nospace-no-sum";
+        src = goUnitRequireNoSpaceFixture;
         vendorHash = null;
         packages = [ "." ];
       }).packages
@@ -2838,6 +2854,10 @@ let
       {
         assertion = !goUnitMissingGoSumNoSumEval.success;
         message = "go-unit local sources with external requirements should not use the no-sum path";
+      }
+      {
+        assertion = !goUnitRequireNoSpaceNoSumEval.success;
+        message = "go-unit no-sum detection should reject compact require blocks";
       }
       {
         assertion = !goUnitMissingExplicitGoSumEval.success;
