@@ -701,6 +701,28 @@ let
     vendorHash = null;
     packages = [ "." ];
   };
+  goUnitDerivedSource = pkgs.runCommand "go-unit-hello-source" { } ''
+    	    cp -R ${goUnitFixture}/. "$out"
+    	  '';
+  goUnitDerivedWorkspaceWithVendorHashFile = ix.goUnit.buildWorkspace {
+    pname = "go-unit-hello-derived";
+    src = goUnitDerivedSource;
+    inherit (goUnitWorkspace) vendorHashKey;
+    vendorHashFile = ./fixtures/go-unit-hello/go-modules.nix;
+    packages = [ "." ];
+  };
+  goUnitMissingGoModFixture = fs.toSource {
+    root = ./fixtures/go-unit-hello;
+    fileset = ./fixtures/go-unit-hello/main.go;
+  };
+  goUnitMissingGoModEval =
+    builtins.tryEval
+      (ix.goUnit.buildWorkspace {
+        pname = "go-unit-missing-go-mod";
+        src = goUnitMissingGoModFixture;
+        vendorHash = null;
+        packages = [ "." ];
+      }).vendorHashKey;
 
   goUnitPackageCollisionEval =
     builtins.tryEval
@@ -2733,6 +2755,16 @@ let
       {
         assertion = goUnitDerivedStdlibWorkspace.vendorHashKey == null;
         message = "go-unit workspaces should not read derivation source module files during eval";
+      }
+      {
+        assertion =
+          goUnitDerivedWorkspaceWithVendorHashFile.packages.root.goUnit.vendorHashKey
+          == goUnitWorkspace.vendorHashKey;
+        message = "go-unit derivation sources should use explicit vendor hash files by key";
+      }
+      {
+        assertion = !goUnitMissingGoModEval.success;
+        message = "go-unit local sources should reject missing go.mod during eval";
       }
       {
         assertion = !goUnitPackageCollisionEval.success;

@@ -36,15 +36,21 @@ let
       modRoot = args.modRoot or ".";
       moduleRoot = if modRoot == "." then src else src + "/${modRoot}";
       goMod = args.goMod or (moduleRoot + "/go.mod");
+      checkedGoMod =
+        if canReadModuleFiles && !(builtins.pathExists goMod) then
+          throw "goUnit.buildWorkspace requires ${builtins.toString goMod}"
+        else
+          goMod;
       goSum = args.goSum or (moduleRoot + "/go.sum");
       goSumForBuild =
         args.goSum or (if canReadModuleFiles && builtins.pathExists goSum then goSum else null);
+      explicitVendorHashFile = args ? vendorHashFile;
       vendorHashFile = args.vendorHashFile or (moduleRoot + "/go-modules.nix");
       vendorHashKey =
         args.vendorHashKey or (
-          if canReadModuleFiles && builtins.pathExists goMod then
+          if canReadModuleFiles then
             builtins.hashString "sha256" (
-              (builtins.readFile goMod)
+              (builtins.readFile checkedGoMod)
               + "\n"
               + (if goSumForBuild == null then "" else builtins.readFile goSumForBuild)
             )
@@ -53,7 +59,10 @@ let
         );
       vendorHashes =
         args.vendorHashes or (
-          if canReadModuleFiles && builtins.pathExists vendorHashFile then import vendorHashFile else { }
+          if (canReadModuleFiles || explicitVendorHashFile) && builtins.pathExists vendorHashFile then
+            import vendorHashFile
+          else
+            { }
         );
       vendorHash =
         args.vendorHash or (
@@ -79,13 +88,13 @@ let
       version = args.version or "0.0.0";
       inherit
         src
-        goMod
         modRoot
         moduleRoot
         vendorHash
         vendorHashFile
         vendorHashKey
         ;
+      goMod = checkedGoMod;
       goSum = goSumForBuild;
       packages =
         let
