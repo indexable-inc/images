@@ -958,6 +958,10 @@ let
     serve = {
       name = "svelte-site-fixture";
       port = 8180;
+      extraFlags = [
+        "--title"
+        "Svelte Site Fixture"
+      ];
     };
     devServer = {
       name = "svelte-site-fixture-dev";
@@ -3464,6 +3468,7 @@ let
     grep -q 'class="ix npm"' ${npmSite}/share/npm-site-fixture/index.html
     grep -q 'class="ix svelte"' ${svelteSite}/share/svelte-site-fixture/index.html
     test -x ${svelteSite}/bin/svelte-site-fixture
+    grep -q -- "'Svelte Site Fixture'" ${svelteSite}/bin/svelte-site-fixture
     test -x ${svelteSite.passthru.devServer}/bin/svelte-site-fixture-dev
 
     ${uvApplication}/bin/uv-app-fixture > uv-app-fixture.out
