@@ -831,6 +831,7 @@ jobs:
     name: >-
       ${{
         github.event.pull_request.draft == false &&
+        github.event.pull_request.base.ref == 'main' &&
         (
           (inputs.caller_event_name || github.event_name) == 'pull_request' ||
           (inputs.caller_event_name || github.event_name) == 'pull_request_target' ||
@@ -849,6 +850,7 @@ jobs:
     if: >-
       always() &&
       github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref == 'main' &&
       (
         (inputs.caller_event_name || github.event_name) == 'pull_request' ||
         (inputs.caller_event_name || github.event_name) == 'pull_request_target' ||
