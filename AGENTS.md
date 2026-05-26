@@ -546,6 +546,10 @@ through a real multiline input path such as `--body-file -`, a temporary file, o
 an editor. Escaped `\n` sequences in quoted `--body` strings render literally on
 GitHub.
 
+Prefer GitHub's suggestion block syntax for proposed inline changes in PR review
+comments on changed lines. Use fenced `suggestion` blocks only when GitHub can
+apply the snippet directly.
+
 When work exposes a real bug, broken assumption, or unidiomatic pattern that
 will outlive the current task, file a GitHub issue right then. One concrete
 observation per issue.
