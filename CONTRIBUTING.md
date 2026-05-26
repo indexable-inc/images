@@ -111,4 +111,4 @@ One logical change per commit; see the [Workflow](AGENTS.md#workflow) section fo
 
 ## Pull requests
 
-PRs target `main` and need passing required status checks, currently `flake-check` and `chatgpt-codex-connector reviewed head`. The PR description should answer the same "why" question the commit body answers, plus anything reviewer-only (rollout plan, known follow-ups).
+PRs target `main` and need passing required status checks, currently `flake-check` and `ai review approved`. Repositories migrating an older review gate can set `AI_REVIEW_REQUIRED_CHECK_NAME` until branch protection uses the model-neutral check name. The PR description should answer the same "why" question the commit body answers, plus anything reviewer-only: rollout plan, known follow-ups, and reviewer-specific context.

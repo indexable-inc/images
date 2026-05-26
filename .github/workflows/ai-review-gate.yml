@@ -1,6 +1,34 @@
-name: Codex review gate
+name: AI review gate
 
 on:
+  workflow_call:
+    inputs:
+      caller_event_name:
+        description: Original event name from the caller.
+        required: true
+        type: string
+      model:
+        description: Model passed to the current OpenAI-backed reviewer.
+        required: false
+        type: string
+        default: ""
+      effort:
+        description: Reasoning effort passed to the current OpenAI-backed reviewer.
+        required: false
+        type: string
+        default: ""
+      required_check_name:
+        description: Final gate job name that branch protection should require.
+        required: false
+        type: string
+        default: ai review approved
+    secrets:
+      openai_api_key:
+        description: OpenAI API key used by the current reviewer implementation.
+        required: false
+      repository_token:
+        description: GitHub token from the caller with pull request write access.
+        required: true
   pull_request:
     branches:
       - main
@@ -27,32 +55,34 @@ permissions:
   contents: read
 
 concurrency:
-  group: codex-structured-review-${{ github.event_name }}-${{ github.event.pull_request.number }}
+  group: ai-review-${{ inputs.caller_event_name || github.event_name }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  codex-structured-review:
-    name: codex structured review
+  ai-structured-review:
+    name: ai structured review
     if: >-
       github.event.pull_request.draft == false &&
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      (inputs.caller_event_name || github.event_name) == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
+      AI_REVIEW_EFFORT: ${{ inputs.effort || vars.AI_REVIEW_EFFORT || 'xhigh' }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      CODEX_MODEL: ${{ vars.CODEX_MODEL || 'gpt-5.5' }}
+      AI_REVIEW_MODEL: ${{ inputs.model || vars.AI_REVIEW_MODEL || 'gpt-5.5' }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       REPOSITORY: ${{ github.repository }}
     steps:
-      - name: Check Codex review availability
+      - name: Check AI review availability
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.openai_api_key || secrets.OPENAI_API_KEY }}
         run: |
           if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::error::Missing OPENAI_API_KEY secret; Codex structured review cannot run."
+            echo "::error::Missing OpenAI API key secret; AI review cannot run."
             exit 1
           fi
 
@@ -65,23 +95,43 @@ jobs:
 
       - name: Fetch pull request refs
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.repository_token || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           auth_header="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 | tr -d '\n')"
           git \
             -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
             fetch --no-tags origin \
-            "+refs/pull/${PR_NUMBER}/head:refs/remotes/codex-pr/${PR_NUMBER}/head"
-          fetched_head="$(git rev-parse "refs/remotes/codex-pr/${PR_NUMBER}/head")"
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/ai-review-pr/${PR_NUMBER}/head"
+          fetched_head="$(git rev-parse "refs/remotes/ai-review-pr/${PR_NUMBER}/head")"
           if [ "${fetched_head}" != "${HEAD_SHA}" ]; then
             echo "::error::Fetched pull request head ${fetched_head}, expected ${HEAD_SHA}."
             exit 1
           fi
 
+      - name: Checkout pull request head for review exploration
+        run: git checkout --detach "${HEAD_SHA}"
+
+      - name: Restore trusted reviewer instructions
+        run: |
+          set -euo pipefail
+          mapfile -d '' instruction_paths < <(
+            {
+              git ls-files -z | grep -z -E '(^|/)AGENTS\.md$' || true
+              git ls-tree -r -z --name-only "${BASE_SHA}" | grep -z -E '(^|/)AGENTS\.md$' || true
+            } | sort -zu
+          )
+          for path in "${instruction_paths[@]}"; do
+            rm -f -- "${path}"
+            if git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
+              mkdir -p -- "$(dirname -- "${path}")"
+              git show "${BASE_SHA}:${path}" > "${path}"
+            fi
+          done
+
       - name: Generate structured output schema
         run: |
-          cat > codex-output-schema.json <<'JSON'
+          cat > ai-review-output-schema.json <<'JSON'
           {
             "type": "object",
             "properties": {
@@ -183,7 +233,7 @@ jobs:
           }
           JSON
 
-      - name: Build Codex review prompt
+      - name: Build AI review prompt
         run: |
           set -euo pipefail
           {
@@ -193,6 +243,10 @@ jobs:
           Flag only actionable issues introduced by the pull request.
           When you flag an issue, cite a file path and line range from the changed side of the pull request diff.
           Prioritize severe issues and avoid nit-level comments unless they block understanding of the diff.
+          The workspace is checked out at the pull request head, with reviewer instruction files restored from the trusted base commit before this action runs. Before returning JSON, inspect the changed files and any nearby code needed to validate assumptions; do not rely only on the pasted diff when broader context matters.
+
+          For GitHub Actions and CI changes, explicitly check event coverage, fork and Dependabot token/secrets behavior, workflow_call caller context, branch-protection check names, stale/skipped check rows, job permissions, pagination of GitHub API queries, and whether fallback paths can actually retrigger and pass.
+          For automation that uses secrets or models, check that untrusted PR text cannot reach a secret-backed agent with write permissions, and that the final gate fails closed when the reviewer output is absent, malformed, or incomplete.
           After listing findings, produce an overall correctness verdict ("patch is correct" or "patch is incorrect") with a concise justification and a confidence score between 0 and 1.
 
           If a finding can be fixed by replacing the exact cited line range, set suggested_replacement to the complete replacement text for that range. Only provide a suggested_replacement when it is safe for GitHub's suggestion UI to apply directly. Use an empty string when the fix needs wider edits, depends on context outside the cited range, or is not obvious.
@@ -213,56 +267,62 @@ jobs:
             echo
             echo "Unified diff:"
             git --no-pager diff --unified=5 "${BASE_SHA}...${HEAD_SHA}"
-          } > codex-prompt.md
+          } > ai-review-prompt.md
 
-      - name: Run Codex structured review
-        id: run-codex
+      - name: Remove stale AI review output
+        run: rm -f ai-review-output.json
+
+      - name: Run AI structured review
+        id: run-ai-review
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1 # v1.8
         with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: codex-prompt.md
-          output-schema-file: codex-output-schema.json
-          output-file: codex-output.json
+          openai-api-key: ${{ secrets.openai_api_key || secrets.OPENAI_API_KEY }}
+          prompt-file: ai-review-prompt.md
+          output-schema-file: ai-review-output-schema.json
+          output-file: ai-review-output.json
           sandbox: read-only
           safety-strategy: drop-sudo
-          model: ${{ env.CODEX_MODEL }}
+          model: ${{ env.AI_REVIEW_MODEL }}
+          effort: ${{ env.AI_REVIEW_EFFORT }}
 
       - name: Inspect structured review output
         if: always()
         run: |
-          if [ -s codex-output.json ]; then
-            jq '.' codex-output.json
+          if [ -s ai-review-output.json ]; then
+            jq '.' ai-review-output.json
           else
-            echo "Codex output file missing."
+            echo "AI review output file missing."
           fi
 
-      - name: Stage Codex review artifact
-        if: always()
+      - name: Stage AI review artifact
+        if: ${{ success() }}
         run: |
-          mkdir -p codex-review-output
-          if [ -f codex-output.json ]; then
-            cp codex-output.json codex-review-output/codex-output.json
-          else
-            : > codex-review-output/codex-output.json
+          set -euo pipefail
+          if [ ! -s ai-review-output.json ]; then
+            echo "::error::AI review output file missing or empty after a successful reviewer run."
+            exit 1
           fi
+          mkdir -p ai-review-artifact
+          cp ai-review-output.json ai-review-artifact/ai-review-output.json
 
-      - name: Upload Codex review output
-        if: always()
+      - name: Upload AI review output
+        if: ${{ success() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: codex-structured-review-${{ github.run_id }}
-          path: codex-review-output/codex-output.json
+          name: ai-review-${{ github.run_id }}
+          path: ai-review-artifact/ai-review-output.json
           retention-days: 1
 
-  publish-structured-review:
-    name: publish codex structured review
+  publish-ai-review:
+    name: publish ai structured review
     if: >-
       always() &&
       github.event.pull_request.draft == false &&
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      (inputs.caller_event_name || github.event_name) == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     needs:
-      - codex-structured-review
+      - ai-structured-review
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -273,15 +333,24 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       REPOSITORY: ${{ github.repository }}
     steps:
-      - name: Download Codex review output
+      - name: Require successful AI review job
+        env:
+          AI_STRUCTURED_REVIEW_RESULT: ${{ needs.ai-structured-review.result }}
+        run: |
+          if [ "${AI_STRUCTURED_REVIEW_RESULT}" != "success" ]; then
+            echo "::error::AI structured review did not complete successfully (${AI_STRUCTURED_REVIEW_RESULT})."
+            exit 1
+          fi
+
+      - name: Download AI review output
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: codex-structured-review-${{ github.run_id }}
+          name: ai-review-${{ github.run_id }}
           path: .
 
       - name: Publish GitHub review suggestions
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.repository_token || secrets.GITHUB_TOKEN }}
         run: |
           python3 - <<'PY'
           from __future__ import annotations
@@ -307,10 +376,10 @@ jobs:
           PR_NUMBER = int(require_env("PR_NUMBER"))
           HEAD_SHA = require_env("HEAD_SHA")
           GITHUB_TOKEN = require_env("GITHUB_TOKEN")
-          OUTPUT_PATH = "codex-output.json"
+          OUTPUT_PATH = "ai-review-output.json"
           BOT_AUTHORS = {"github-actions", "github-actions[bot]"}
-          MARKER_PREFIX = f"<!-- codex-structured-review:{HEAD_SHA}:"
-          SUMMARY_MARKER = f"<!-- codex-structured-review-summary:{HEAD_SHA} -->"
+          MARKER_PREFIX = f"<!-- ai-review:{HEAD_SHA}:"
+          SUMMARY_MARKER = f"<!-- ai-review-summary:{HEAD_SHA} -->"
 
 
           def request_json(method: str, path: str, data: dict[str, Any] | None = None) -> Any:
@@ -351,11 +420,11 @@ jobs:
 
           def load_review_output() -> dict[str, Any]:
               if not os.path.exists(OUTPUT_PATH) or os.path.getsize(OUTPUT_PATH) == 0:
-                  raise RuntimeError("Codex output file missing; failing review gate.")
+                  raise RuntimeError("AI review output file missing; failing review gate.")
               with open(OUTPUT_PATH, encoding="utf-8") as output:
                   payload = json.load(output)
               if not isinstance(payload, dict):
-                  raise RuntimeError("Codex output must be a JSON object")
+                  raise RuntimeError("AI review output must be a JSON object")
               return payload
 
 
@@ -502,7 +571,7 @@ jobs:
 
               summary_lines = [
                   SUMMARY_MARKER,
-                  "Codex structured review found issues in this pull request.",
+                  "AI review found issues in this pull request.",
                   "",
                   f"Verdict: {review_output.get('overall_correctness')}",
                   f"Confidence: {float(review_output.get('overall_confidence_score', 0)):.2f}",
@@ -513,7 +582,7 @@ jobs:
               ]
 
               if not new_comments:
-                  print("All Codex review findings were already published for this head.")
+                  print("All AI review findings were already published for this head.")
                   if SUMMARY_MARKER not in markers:
                       create_issue_comment("\n".join(summary_lines))
                   return
@@ -530,7 +599,7 @@ jobs:
                           "comments": new_comments,
                       },
                   )
-                  print(f"Published {len(new_comments)} Codex review comment(s).")
+                  print(f"Published {len(new_comments)} AI review comment(s).")
                   return
               except RuntimeError as error:
                   print(f"Bulk review publication failed; falling back to individual comments: {error}")
@@ -556,9 +625,9 @@ jobs:
                           ]
                       )
                   )
-                  print(f"{len(failed)} Codex finding(s) could not be placed inline.")
+                  print(f"{len(failed)} AI review finding(s) could not be placed inline.")
               else:
-                  print("Published Codex review comments individually.")
+                  print("Published AI review comments individually.")
 
 
           def main() -> int:
@@ -566,7 +635,7 @@ jobs:
 
               findings = review_output.get("findings")
               if not isinstance(findings, list):
-                  raise RuntimeError("Codex output field findings must be a list")
+                  raise RuntimeError("AI review output field findings must be a list")
 
               verdict = str(review_output.get("overall_correctness") or "")
               if findings:
@@ -578,7 +647,7 @@ jobs:
                           "\n".join(
                               [
                                   SUMMARY_MARKER,
-                                  "Codex structured review marked this pull request incorrect but did not return inline findings.",
+                                  "AI review marked this pull request incorrect but did not return inline findings.",
                                   "",
                                   str(review_output.get("overall_explanation") or "").strip(),
                               ]
@@ -586,10 +655,10 @@ jobs:
                       )
 
               if findings or verdict != "patch is correct":
-                  print("Codex structured review found issues.")
+                  print("AI review found issues.")
                   return 1
 
-              print("Codex structured review found no issues.")
+              print("AI review found no issues.")
               return 0
 
 
@@ -601,15 +670,18 @@ jobs:
                   raise SystemExit(1)
           PY
 
-  fork-review-gate:
-    name: fork review fallback
+  no-secret-review-fallback:
+    name: no-secret review fallback
     if: >-
       github.event.pull_request.draft == false &&
       (
-        github.event_name == 'pull_request_target' ||
-        github.event_name == 'pull_request_review'
+        (inputs.caller_event_name || github.event_name) == 'pull_request_target' ||
+        (inputs.caller_event_name || github.event_name) == 'pull_request_review'
       ) &&
-      github.event.pull_request.head.repo.full_name != github.repository
+      (
+        github.event.pull_request.head.repo.full_name != github.repository ||
+        github.event.pull_request.user.login == 'dependabot[bot]'
+      )
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
@@ -618,9 +690,9 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       REPOSITORY: ${{ github.repository }}
     steps:
-      - name: Require maintainer approval on fork head
+      - name: Require maintainer approval on no-secret head
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.repository_token || secrets.GITHUB_TOKEN }}
         run: |
           python3 - <<'PY'
           from __future__ import annotations
@@ -640,37 +712,11 @@ jobs:
               return value
 
 
-          def main() -> int:
-              repository = require_env("REPOSITORY")
-              owner, repo = repository.split("/", 1)
-              number = int(require_env("PR_NUMBER"))
-              head_sha = require_env("HEAD_SHA")
-              token = require_env("GITHUB_TOKEN")
-
-              query = """
-              query($owner:String!,$repo:String!,$number:Int!) {
-                repository(owner:$owner, name:$repo) {
-                  pullRequest(number:$number) {
-                    latestReviews(first:100) {
-                      nodes {
-                        state
-                        authorAssociation
-                        author { login }
-                        commit { oid }
-                      }
-                    }
-                  }
-                }
-              }
-              """
+          def request_graphql(token: str, query: str, variables: dict[str, Any]) -> dict[str, Any]:
               payload = json.dumps(
                   {
                       "query": query,
-                      "variables": {
-                          "owner": owner,
-                          "repo": repo,
-                          "number": number,
-                      },
+                      "variables": variables,
                   }
               ).encode()
               request = urllib.request.Request("https://api.github.com/graphql", data=payload, method="POST")
@@ -687,15 +733,73 @@ jobs:
 
               if response_payload.get("errors"):
                   raise RuntimeError(f"GitHub GraphQL returned errors: {response_payload['errors']}")
+              if not isinstance(response_payload, dict):
+                  raise RuntimeError("GitHub GraphQL returned a non-object response")
+              return response_payload
 
-              reviews = (
-                  response_payload
-                  .get("data", {})
-                  .get("repository", {})
-                  .get("pullRequest", {})
-                  .get("latestReviews", {})
-                  .get("nodes", [])
-              )
+
+          def main() -> int:
+              repository = require_env("REPOSITORY")
+              owner, repo = repository.split("/", 1)
+              number = int(require_env("PR_NUMBER"))
+              head_sha = require_env("HEAD_SHA")
+              token = require_env("GITHUB_TOKEN")
+
+              query = """
+              query($owner:String!,$repo:String!,$number:Int!,$cursor:String) {
+                repository(owner:$owner, name:$repo) {
+                  pullRequest(number:$number) {
+                    latestReviews(first:100, after:$cursor) {
+                      nodes {
+                        state
+                        authorAssociation
+                        author { login }
+                        commit { oid }
+                      }
+                      pageInfo {
+                        hasNextPage
+                        endCursor
+                      }
+                    }
+                  }
+                }
+              }
+              """
+              reviews: list[dict[str, Any]] = []
+              cursor: str | None = None
+              while True:
+                  response_payload = request_graphql(
+                      token,
+                      query,
+                      {
+                          "owner": owner,
+                          "repo": repo,
+                          "number": number,
+                          "cursor": cursor,
+                      },
+                  )
+                  latest_reviews = (
+                      response_payload
+                      .get("data", {})
+                      .get("repository", {})
+                      .get("pullRequest", {})
+                      .get("latestReviews", {})
+                  )
+                  if not isinstance(latest_reviews, dict):
+                      raise RuntimeError("GitHub GraphQL response is missing latestReviews")
+
+                  nodes = latest_reviews.get("nodes", [])
+                  if not isinstance(nodes, list):
+                      raise RuntimeError("GitHub GraphQL latestReviews.nodes must be a list")
+                  reviews.extend(review for review in nodes if isinstance(review, dict))
+
+                  page_info = latest_reviews.get("pageInfo", {})
+                  if not isinstance(page_info, dict) or not page_info.get("hasNextPage"):
+                      break
+                  cursor = str(page_info.get("endCursor") or "")
+                  if not cursor:
+                      raise RuntimeError("GitHub GraphQL latestReviews pagination returned no endCursor")
+
               trusted_associations = {"COLLABORATOR", "MEMBER", "OWNER"}
               approvers = [
                   str(review.get("author", {}).get("login") or "")
@@ -706,12 +810,12 @@ jobs:
               ]
               if not approvers:
                   print(
-                      "::error::Fork pull requests do not run the secret-backed Codex reviewer. "
+                      "::error::This pull request does not run the secret-backed AI reviewer. "
                       "A repository maintainer must approve the current head commit before this gate can pass."
                   )
                   return 1
 
-              print(f"Fork fallback accepted maintainer approval from: {', '.join(approvers)}")
+              print(f"No-secret fallback accepted maintainer approval from: {', '.join(approvers)}")
               return 0
 
 
@@ -724,31 +828,261 @@ jobs:
           PY
 
   required-review-gate:
-    name: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || ((github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review') && github.event.pull_request.head.repo.full_name != github.repository)) && 'chatgpt-codex-connector reviewed head' || 'codex review gate skipped' }}
+    name: >-
+      ${{
+        github.event.pull_request.draft == false &&
+        (
+          (inputs.caller_event_name || github.event_name) == 'pull_request' ||
+          (inputs.caller_event_name || github.event_name) == 'pull_request_target' ||
+          (inputs.caller_event_name || github.event_name) == 'pull_request_review'
+        ) &&
+        (
+          (
+            github.event.pull_request.head.repo.full_name == github.repository &&
+            github.event.pull_request.user.login != 'dependabot[bot]'
+          ) ||
+          (inputs.caller_event_name || github.event_name) != 'pull_request'
+        ) &&
+        (inputs.required_check_name || vars.AI_REVIEW_REQUIRED_CHECK_NAME || 'ai review approved') ||
+        'ai review gate skipped'
+      }}
     if: >-
       always() &&
       github.event.pull_request.draft == false &&
       (
-        (github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository) ||
-        ((github.event_name == 'pull_request_target' ||
-          github.event_name == 'pull_request_review') &&
-          github.event.pull_request.head.repo.full_name != github.repository)
+        (inputs.caller_event_name || github.event_name) == 'pull_request' ||
+        (inputs.caller_event_name || github.event_name) == 'pull_request_target' ||
+        (inputs.caller_event_name || github.event_name) == 'pull_request_review'
+      ) &&
+      (
+        (
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
+        ) ||
+        (
+          (inputs.caller_event_name || github.event_name) != 'pull_request' &&
+          (
+            github.event.pull_request.head.repo.full_name != github.repository ||
+            github.event.pull_request.user.login == 'dependabot[bot]'
+          )
+        )
       )
     needs:
-      - fork-review-gate
-      - publish-structured-review
+      - no-secret-review-fallback
+      - publish-ai-review
     runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      contents: read
+      pull-requests: read
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPOSITORY: ${{ github.repository }}
+      RESULT_SOURCE: >-
+        ${{
+          ((inputs.caller_event_name || github.event_name) == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository &&
+            github.event.pull_request.user.login != 'dependabot[bot]') &&
+          'publish-current' ||
+          ((github.event.pull_request.head.repo.full_name == github.repository &&
+            github.event.pull_request.user.login != 'dependabot[bot]') &&
+            'publish-existing' ||
+            'fallback-current')
+        }}
     steps:
-      - name: Mirror structured review result for existing branch protection
+      - name: Mirror AI review result for branch protection
+        env:
+          GITHUB_TOKEN: ${{ secrets.repository_token || secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            result="${{ needs.publish-structured-review.result }}"
+          if [ "${RESULT_SOURCE}" = "publish-current" ]; then
+            result="${{ needs.publish-ai-review.result }}"
+          elif [ "${RESULT_SOURCE}" = "fallback-current" ]; then
+            result="${{ needs.no-secret-review-fallback.result }}"
           else
-            result="${{ needs.fork-review-gate.result }}"
+            if python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from typing import Any
+
+
+          def require_env(name: str) -> str:
+              value = os.environ.get(name)
+              if not value:
+                  raise RuntimeError(f"missing required environment variable {name}")
+              return value
+
+
+          def request_json(path: str) -> dict[str, Any]:
+              repository = require_env("REPOSITORY")
+              token = require_env("GITHUB_TOKEN")
+              request = urllib.request.Request(f"https://api.github.com/repos/{repository}{path}")
+              request.add_header("Accept", "application/vnd.github+json")
+              request.add_header("Authorization", f"Bearer {token}")
+              request.add_header("X-GitHub-Api-Version", "2022-11-28")
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      payload = json.loads(response.read().decode())
+              except urllib.error.HTTPError as error:
+                  detail = error.read().decode(errors="replace")
+                  raise RuntimeError(f"GitHub API GET {path} failed: {error.code} {detail}") from error
+              if not isinstance(payload, dict):
+                  raise RuntimeError("GitHub API returned a non-object response")
+              return payload
+
+
+          def main() -> int:
+              head_sha = require_env("HEAD_SHA")
+              pr_number = int(require_env("PR_NUMBER"))
+              publish_job = "publish ai structured review"
+              structured_job = "ai structured review"
+              ignored_conclusions = {"neutral", "skipped"}
+              terminal_failures = {"action_required", "cancelled", "failure", "stale", "startup_failure", "timed_out"}
+
+              def candidate_shas() -> list[str]:
+                  shas = [head_sha]
+                  pull = request_json(f"/pulls/{pr_number}")
+                  pull_head = pull.get("head", {})
+                  pull_head_sha = ""
+                  if isinstance(pull_head, dict):
+                      pull_head_sha = str(pull_head.get("sha") or "")
+
+                  merge_sha = str(pull.get("merge_commit_sha") or "")
+                  if pull_head_sha == head_sha and merge_sha and merge_sha not in shas:
+                      shas.append(merge_sha)
+                  return shas
+
+              def belongs_to_pull_request(run: dict[str, Any]) -> bool:
+                  pull_requests = run.get("pull_requests")
+                  if not isinstance(pull_requests, list) or not pull_requests:
+                      return True
+                  return any(
+                      isinstance(pull_request, dict)
+                      and pull_request.get("number") == pr_number
+                      for pull_request in pull_requests
+                  )
+
+              def is_job_run(run: dict[str, Any], job_name: str) -> bool:
+                  name = str(run.get("name") or "")
+                  return name == job_name or name.endswith(f" / {job_name}")
+
+              def run_time(run: dict[str, Any]) -> str:
+                  for key in ("completed_at", "started_at", "created_at"):
+                      value = run.get(key)
+                      if isinstance(value, str) and value:
+                          return value
+                  return ""
+
+              def latest_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+                  if not runs:
+                      return None
+                  return max(runs, key=run_time)
+
+              for attempt in range(1, 181):
+                  check_runs: list[dict[str, Any]] = []
+                  for sha in candidate_shas():
+                      page = 1
+                      while True:
+                          query = urllib.parse.urlencode(
+                              {
+                                  "filter": "all",
+                                  "page": page,
+                                  "per_page": 100,
+                              }
+                          )
+                          payload = request_json(f"/commits/{sha}/check-runs?{query}")
+                          page_runs = payload.get("check_runs", [])
+                          if not isinstance(page_runs, list):
+                              raise RuntimeError("GitHub API check_runs field must be a list")
+                          check_runs.extend(
+                              run
+                              for run in page_runs
+                              if isinstance(run, dict) and belongs_to_pull_request(run)
+                          )
+                          if len(page_runs) < 100:
+                              break
+                          page += 1
+
+                  watched_runs = [
+                      run
+                      for run in check_runs
+                      if (
+                          is_job_run(run, publish_job)
+                          or is_job_run(run, structured_job)
+                      )
+                      and run.get("conclusion") not in ignored_conclusions
+                  ]
+                  publisher_runs = [
+                      run for run in watched_runs if is_job_run(run, publish_job)
+                  ]
+                  structured_runs = [
+                      run for run in watched_runs if is_job_run(run, structured_job)
+                  ]
+                  publisher = latest_run(publisher_runs)
+                  structured = latest_run(structured_runs)
+
+                  selected = publisher
+                  if structured is not None and (
+                      publisher is None or run_time(structured) > run_time(publisher)
+                  ):
+                      selected = structured
+
+                  if selected is not None:
+                      name = str(selected.get("name") or "AI review")
+                      status = str(selected.get("status") or "")
+                      conclusion = str(selected.get("conclusion") or "")
+                      if status != "completed":
+                          print(f"Waiting for current-head AI review check: {name}.")
+                      elif conclusion in terminal_failures:
+                          print(f"::error::{name} failed for the current head.")
+                          return 1
+                      elif is_job_run(selected, publish_job) and conclusion == "success":
+                          print("Found latest successful AI review publisher check for current head.")
+                          return 0
+                      else:
+                          print("Waiting for the current-head AI review publisher check to finish.")
+                  else:
+                      print("Waiting for a current-head AI review check to appear.")
+
+                  active_runs = [
+                      str(run.get("name"))
+                      for run in watched_runs
+                      if run.get("status") != "completed"
+                  ]
+                  if active_runs and selected is None:
+                      print(f"Active AI review checks: {', '.join(sorted(set(active_runs)))}.")
+
+                  if attempt == 180:
+                      print(
+                          "::error::Timed out waiting for a successful AI review publisher check "
+                          "on the current pull request head or merge SHA."
+                      )
+                      return 1
+                  time.sleep(10)
+
+
+          if __name__ == "__main__":
+              try:
+                  raise SystemExit(main())
+              except RuntimeError as error:
+                  print(f"error: {error}", file=sys.stderr)
+                  raise SystemExit(1)
+          PY
+            then
+              result="success"
+            else
+              result="failure"
+            fi
           fi
           if [ "${result}" != "success" ]; then
-            echo "::error::Codex structured review did not pass."
+            echo "::error::AI review did not pass."
             exit 1
           fi
-          echo "Codex structured review passed."
+          echo "AI review passed."

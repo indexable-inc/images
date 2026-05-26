@@ -63,13 +63,13 @@ list.
 
 Treat PR comments and reviews as part of the work. Read them with
 `gh pr view --comments` and the review fields from `gh pr view --json reviews`.
-Address Codex comments in code when they identify a real issue, reply when a
-comment is intentionally declined, and resolve review threads before relying on
-auto-merge. Codex is the default code review signal for agent-authored PRs; do
-not add or preserve a separate GitHub code-quality lane unless the user asks for
-it.
+Address AI review comments in code when they identify a real issue, reply when
+a comment is intentionally declined, and resolve review threads before relying
+on auto-merge. The AI review gate is the default code review signal for
+agent-authored PRs; do not add or preserve a separate GitHub code-quality lane
+unless the user asks for it.
 
-Codex inline feedback lives in GitHub review threads, which `gh pr view
+AI review inline feedback lives in GitHub review threads, which `gh pr view
 --comments` does not show. Inspect unresolved threads directly before deciding a
 PR is clear:
 
@@ -79,16 +79,10 @@ gh api graphql \
   -f query='query($owner:String!,$repo:String!,$number:Int!){ repository(owner:$owner,name:$repo){ pullRequest(number:$number){ reviewThreads(first:100){ nodes{ id isResolved path line comments(first:50){ nodes{ author{login} body url } } } } } } }'
 ```
 
-Unresolved Codex review threads are immediate blockers. Do not wait on more
-checks when Codex has left an open thread: fix the code or resolve the thread
-with the GitHub review-thread API, then request a fresh Codex review if the head
-changed. If the head did not change and GitHub does not rerun the failed gate,
-rerun it with `gh run rerun <run-id> --failed`.
-
-When manually triggering Codex, include the full current head SHA in the request,
-for example `@codex review head <sha>`. This gives no-findings responses a
-specific revision to answer. Avoid sending a later generic `@codex review` for
-the same head because it weakens that audit trail.
+Unresolved AI review threads are immediate blockers. Do not wait on more checks
+when the reviewer has left an open thread: fix the code or resolve the thread
+with the GitHub review-thread API. If GitHub does not rerun the failed gate for
+the current head, rerun it with `gh run rerun <run-id> --failed`.
 
 Remove the worktree and delete the local branch after the PR has merged.
 
