@@ -2263,7 +2263,8 @@ fn render_doctest_command(
     )?;
     script.push_str("cd \"$CARGO_MANIFEST_DIR\"\n");
     script.push_str(&cargo_package_exports(unit)?);
-    script.push_str("build_script_flags=()\n");
+    script.push_str("build_script_rustdoc_args=()\n");
+    script.push_str("doctest_build_args=()\n");
     script.push_str("rustdoc_args=( --test )\n");
     match mode {
         DoctestCommandMode::List => {
@@ -2271,7 +2272,7 @@ fn render_doctest_command(
         }
         DoctestCommandMode::RunAll => {}
         DoctestCommandMode::RunCase => {
-            script.push_str("rustdoc_args+=( --test-args \"$TEST_NAME\" --test-args --exact --test-args --include-ignored --test-args --nocapture )\n");
+            script.push_str("rustdoc_args+=( --test-args \"$TEST_NAME\" --test-args --include-ignored --test-args --nocapture )\n");
         }
     }
     push_rustdoc_arg(&mut script, "--crate-name");
@@ -2287,14 +2288,21 @@ fn render_doctest_command(
         push_rustdoc_arg(&mut script, platform);
     }
     for rustflag in &unit.profile.rustflags {
-        push_rustdoc_arg(&mut script, "--doctest-build-arg");
-        push_rustdoc_arg(&mut script, rustflag);
+        push_doctest_build_arg(&mut script, rustflag);
     }
     if let Some(run_index) = unit_build_script_run(graph, index) {
         let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
-        append_build_script_flag_reader(&mut script, &run_ref, unit);
+        append_doctest_build_script_flag_reader(&mut script, &run_ref);
     }
-    script.push_str("rustdoc_args+=( \"''${build_script_flags[@]}\" )\n");
+    script.push_str("rustdoc_args+=( \"''${build_script_rustdoc_args[@]}\" )\n");
+    if !matches!(mode, DoctestCommandMode::List) {
+        script.push_str("if [ \"''${#doctest_build_args[@]}\" -gt 0 ]; then\n");
+        script.push_str("  rustdoc_args+=( -Z unstable-options )\n");
+        script.push_str("fi\n");
+    }
+    script.push_str("for doctest_build_arg in \"''${doctest_build_args[@]}\"; do\n");
+    script.push_str("  rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )\n");
+    script.push_str("done\n");
     for dep_index in &prepared.transitive_unit_deps[index] {
         let dep = &graph.units[*dep_index];
         if dep.is_bin() {
@@ -2334,8 +2342,10 @@ fn render_doctest_command(
         DoctestCommandMode::RunCase => {
             script.push_str("doctest_log=$(mktemp)\n");
             script.push_str("rustdoc \"''${rustdoc_args[@]}\" 2>&1 | tee \"$doctest_log\"\n");
-            script.push_str("if grep -q 'running 0 tests' \"$doctest_log\"; then\n");
-            script.push_str("  echo \"rustdoc filter did not run a doctest: $TEST_NAME\" >&2\n");
+            script.push_str("if ! grep -q '^running 1 test$' \"$doctest_log\"; then\n");
+            script.push_str(
+                "  echo \"rustdoc filter did not run exactly one doctest: $TEST_NAME\" >&2\n",
+            );
             script.push_str("  exit 1\n");
             script.push_str("fi\n");
         }
@@ -2355,6 +2365,45 @@ enum DoctestCommandMode {
 
 fn push_rustdoc_arg(script: &mut String, value: &str) {
     let _ = writeln!(script, "rustdoc_args+=( {} )", shell::quote(value));
+}
+
+fn push_doctest_build_arg(script: &mut String, value: &str) {
+    let _ = writeln!(script, "doctest_build_args+=( {} )", shell::quote(value));
+}
+
+fn append_doctest_build_script_flag_reader(script: &mut String, run_ref: &str) {
+    let quoted_run_ref = format!("\"{run_ref}\"");
+    let rustdoc_snippets = [("rustc-cfg", "--cfg"), ("rustc-link-search", "-L")];
+
+    script.push('\n');
+    for (file, flag) in rustdoc_snippets {
+        let flag_arg = shell::quote(flag);
+        let _ = writeln!(
+            script,
+            "if [ -f {quoted_run_ref}/{file} ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && build_script_rustdoc_args+=( {flag_arg} \"$line\" )\n  done < {quoted_run_ref}/{file}\nfi",
+        );
+    }
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/rustc-link-lib ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && doctest_build_args+=( -l \"$line\" )\n  done < {quoted_run_ref}/rustc-link-lib\nfi",
+    );
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/rustc-cdylib-link-arg ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && doctest_build_args+=( -C \"link-arg=$line\" )\n  done < {quoted_run_ref}/rustc-cdylib-link-arg\nfi",
+    );
+    append_doctest_link_arg_reader(script, &quoted_run_ref, "rustc-link-arg");
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/rustc-env ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && export \"$line\"\n  done < {quoted_run_ref}/rustc-env\nfi",
+    );
+    let _ = writeln!(script, "export OUT_DIR={quoted_run_ref}/out-dir\n");
+}
+
+fn append_doctest_link_arg_reader(script: &mut String, quoted_run_ref: &str, file: &str) {
+    let _ = writeln!(
+        script,
+        "if [ -f {quoted_run_ref}/{file} ]; then\n  while IFS= read -r line; do\n    [ -n \"$line\" ] && doctest_build_args+=( -C \"link-arg=$line\" )\n  done < {quoted_run_ref}/{file}\nfi",
+    );
 }
 
 fn render_benchmark_entries_for(
@@ -2838,7 +2887,7 @@ version = "0.1.0"
             {
               "pkg_id": pkg_id,
               "target": bin_target,
-              "profile": { "name": "release", "opt_level": "3" },
+              "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-feature=+sse2"] },
               "features": [],
               "mode": "build",
               "dependencies": []
@@ -3157,7 +3206,7 @@ version = "0.1.0"
                 "src_path": lib_rs,
                 "edition": "2024"
               },
-              "profile": { "name": "release", "opt_level": "3" },
+              "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-feature=+sse2"] },
               "features": [],
               "mode": "build",
               "dependencies": [
@@ -3182,14 +3231,20 @@ version = "0.1.0"
         )
         .unwrap();
 
-        assert_eq!(rendered.matches("-Z unstable-options").count(), 1);
-        assert!(rendered.contains("build_script_flags=()"));
-        assert!(rendered.contains("rustdoc_args+=( \"''${build_script_flags[@]}\" )"));
+        assert_eq!(rendered.matches("-Z unstable-options").count(), 3);
+        assert!(rendered.contains("build_script_rustdoc_args=()"));
+        assert!(rendered.contains("doctest_build_args=()"));
+        assert!(rendered.contains("rustdoc_args+=( \"''${build_script_rustdoc_args[@]}\" )"));
+        assert!(rendered.contains("doctest_build_args+=( '-C' )"));
+        assert!(rendered.contains("doctest_build_args+=( -l \"$line\" )"));
+        assert!(rendered.contains("rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )"));
+        assert!(!rendered.contains("rustdoc_args+=( \"''${build_script_flags[@]}\" )"));
         assert!(rendered.contains("done < \"${units."));
         assert!(rendered.contains("/rustc-env"));
         assert!(rendered.contains("export OUT_DIR=\"${units."));
-        assert!(rendered.contains("--test-args --exact"));
+        assert!(!rendered.contains("--test-args --exact"));
         assert!(rendered.contains("--test-args --include-ignored"));
+        assert!(rendered.contains("^running 1 test$"));
     }
 
     #[test]
