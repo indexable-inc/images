@@ -23,6 +23,10 @@ let
     ];
   };
   fs = lib.fileset;
+  packageRegistry = import (paths.packagesRoot + "/registry.nix") {
+    inherit lib;
+    root = paths.packagesRoot;
+  };
 
   # Each lint stage is one subcommand on a single binary so the spec keys
   # off `lib.getExe lintStage` without registering four sibling packages.
@@ -113,7 +117,7 @@ let
     name = "mc-source";
     text = builtins.readFile paths.tools.mcSource;
     runtimeInputs = [
-      (pkgs.callPackage paths.packages.vineflower { })
+      (pkgs.callPackage packageRegistry.byId.vineflower.path { })
     ];
     meta.description = "Decompile a Minecraft server jar with Mojang mappings via Vineflower";
   };
@@ -171,19 +175,33 @@ let
   };
 
   repoPackages = ix.packageSetFor pkgs;
+  repoFlakePackages = lib.listToAttrs (
+    map (
+      entry:
+      lib.nameValuePair entry.flake.attrName (
+        lib.attrByPath entry.packageSet.attrPath
+          (throw "packages/${entry.relativePath}/package.nix: flake output `${entry.flake.attrName}` needs packageSet.attrPath")
+          repoPackages
+      )
+    ) (packageRegistry.flakeEntriesFor system)
+  );
 
   rustPackageTests =
     let
-      rustPackages = lib.getAttrs [
-        "agents-md"
-        "dag-runner"
-        "ix-dev-diagnose"
-        "mcp"
-        "minecraft-nbt"
-        "minecraft-sync-managed"
-        "nix-cargo-unit"
-        "oci-image-builder"
-      ] repoPackages;
+      repoRustPackageTests = lib.mergeAttrsList (
+        map (
+          entry:
+          let
+            package =
+              lib.attrByPath entry.packageSet.attrPath
+                (throw "packages/${entry.relativePath}/package.nix: passthruTests needs packageSet.attrPath")
+                repoPackages;
+          in
+          lib.mapAttrs' (testName: test: lib.nameValuePair "${entry.passthruTests.prefix}-${testName}" test) (
+            package.passthru.tests or { }
+          )
+        ) (packageRegistry.passthruTestEntriesFor system)
+      );
       moduleRustPackages = {
         resource-monitor-stats-writer =
           let
@@ -194,13 +212,14 @@ let
             binary = "resource-monitor-stats-writer";
           };
       };
+      moduleRustPackageTests = lib.concatMapAttrs (
+        packageName: package:
+        lib.mapAttrs' (testName: test: lib.nameValuePair "rust-${packageName}-${testName}" test) (
+          package.passthru.tests or { }
+        )
+      ) moduleRustPackages;
     in
-    lib.concatMapAttrs (
-      packageName: package:
-      lib.mapAttrs' (testName: test: lib.nameValuePair "rust-${packageName}-${testName}" test) (
-        package.passthru.tests or { }
-      )
-    ) (rustPackages // moduleRustPackages);
+    repoRustPackageTests // moduleRustPackageTests;
 
   lintSource = fs.toSource {
     inherit (paths) root;
@@ -294,36 +313,15 @@ in
       health-checks-zellij = healthChecks.zellij;
       inherit lint site;
       site-dev = site.passthru.devServer;
-      agents-md = agentsMd;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
       update-ix-cli = updateIxCli;
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
-      inherit (repoPackages)
-        dag-runner
-        drgn
-        ix-dev-diagnose
-        ix-fleet
-        mc-probe
-        minecraft-nbt
-        minecraft-sync-managed
-        llm-clippy
-        nix-cargo-unit
-        oci-image-builder
-        run
-        mcp
-        ;
-      minestom-hello-server-jar = repoPackages.minestom.helloServerJar;
     }
+    // repoFlakePackages
     // examplePackages
-    // healthChecks.lifecyclePackages
-    // lib.optionalAttrs (repoPackages ? ix) {
-      inherit (repoPackages) ix;
-    }
-    // lib.optionalAttrs (system == ix.system) {
-      inherit (repoPackages) tonbo-artifacts;
-    };
+    // healthChecks.lifecyclePackages;
 
   checks =
     lib.optionalAttrs (system == ix.system) {

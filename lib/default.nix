@@ -14,6 +14,17 @@ let
 
   system = "x86_64-linux";
 
+  packageRegistry = import (paths.packagesRoot + "/registry.nix") {
+    inherit lib;
+    root = paths.packagesRoot;
+  };
+  packagePath =
+    id:
+    let
+      entry = packageRegistry.byId.${id} or (throw "ix.lib: package registry has no `${id}` entry");
+    in
+    entry.path;
+
   /**
     Package a Python entrypoint as a standalone executable.
 
@@ -238,15 +249,36 @@ let
     as `pkgs.<name>`. Flake-output-only packages live in `packageSetFor`
     instead so they don't leak into the nixpkgs namespace inside images.
   */
-  overlay = final: _prev: {
-    drgn = final.callPackage paths.packages.drgn { };
-
-    minecraft-hot-reload-agent = final.callPackage paths.packages.minecraft.hotReloadAgent { };
-    minecraft-rcon = final.callPackage paths.packages.minecraft.rcon {
-      writePythonApplication = writePythonApplication final;
-    };
-    oci-image-builder = buildIxRustTool final paths.packages.ociImageBuilder;
-  };
+  overlay =
+    final: _prev:
+    let
+      packageSystem = final.stdenv.hostPlatform.system;
+      overlayContext = entry: {
+        inherit
+          entry
+          final
+          buildIxRustTool
+          rustNightlyClippyToolchainFor
+          ;
+        pkgs = final;
+        inherit (entry) path;
+        writePythonApplication = writePythonApplication final;
+      };
+      buildOverlayPackage =
+        entry:
+        let
+          context = overlayContext entry;
+        in
+        if entry.overlay ? build then
+          entry.overlay.build context
+        else
+          final.callPackage entry.path (entry.overlay.callPackageArgs context);
+    in
+    lib.listToAttrs (
+      map (entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)) (
+        packageRegistry.overlayEntriesFor packageSystem
+      )
+    );
   overlays = [ overlay ];
 
   /**
@@ -339,7 +371,7 @@ let
     };
   llmClippyFor =
     pkgs:
-    pkgs.callPackage paths.packages.llmClippy {
+    pkgs.callPackage (packagePath "llm-clippy") {
       rustToolchain = rustNightlyClippyToolchainFor pkgs;
     };
   rustFor =
@@ -357,7 +389,7 @@ let
   buildIxRustTool =
     hostPkgs: path:
     let
-      usesCargoUnit = builtins.toString path != builtins.toString paths.packages.nixCargoUnit;
+      usesCargoUnit = builtins.toString path != builtins.toString (packagePath "nix-cargo-unit");
       hostRustWorkspace = rustWorkspaceFor hostPkgs;
       checked = hostPkgs.callPackage path {
         pkgs = hostPkgs;
@@ -383,7 +415,7 @@ let
     import ./cargo-unit.nix {
       inherit lib pkgs;
       rust = rustFor pkgs;
-      nixCargoUnit = buildIxRustTool pkgs paths.packages.nixCargoUnit;
+      nixCargoUnit = buildIxRustTool pkgs (packagePath "nix-cargo-unit");
     };
   cargoUnit = cargoUnitFor pkgs;
   goUnitFor =
@@ -537,7 +569,7 @@ let
         "zlib"
       ];
       jsonFormat = pkgs.formats.json { };
-      minecraftNbt = buildIxRustTool pkgs paths.packages.minecraft.nbt;
+      minecraftNbt = buildIxRustTool pkgs (packagePath "minecraft-nbt");
     in
     assert lib.assertMsg (builtins.elem format validFormats)
       "mkMinecraftNbtFormat: format must be one of ${lib.concatStringsSep ", " validFormats}";
@@ -572,7 +604,7 @@ let
     args:
     import ./minecraft-sync-managed.nix (
       {
-        package = buildIxRustTool pkgs paths.packages.minecraft.syncManaged;
+        package = buildIxRustTool pkgs (packagePath "minecraft-sync-managed");
         inherit writeNushellApplication;
       }
       // args
@@ -740,54 +772,46 @@ let
         goUnit = goUnitFor pkgs;
         rustWorkspace = rustWorkspaceFor pkgs;
       };
-      ixCliArgs = lib.optionalAttrs (builtins.hasAttr packageSystem cliArtifacts) {
-        binarySrc = cliArtifacts.${packageSystem};
+      context = {
+        inherit
+          pkgs
+          packageSystem
+          cliArtifacts
+          rustNightlyClippyToolchainFor
+          ixForPackages
+          ;
+        ix = ixForPackages;
       };
-      basePackages = {
-        agents-md = pkgs.callPackage paths.packages.agentsMd {
-          ix = ixForPackages;
-        };
-        dag-runner = pkgs.callPackage paths.packages.dagRunner {
-          ix = ixForPackages;
-        };
-        ix = pkgs.callPackage paths.packages.ix ixCliArgs;
-        drgn = pkgs.callPackage paths.packages.drgn { };
-        ix-fleet = pkgs.callPackage paths.packages.ixFleet {
-          ix = ixForPackages;
-        };
-        ix-dev-diagnose = pkgs.callPackage paths.packages.ixDevDiagnose {
-          ix = ixForPackages;
-        };
-        minestom.helloServerJar = pkgs.callPackage paths.packages.minestom.servers.hello {
-          ix = ixForPackages;
-        };
-        minecraft-nbt = pkgs.callPackage paths.packages.minecraft.nbt {
-          ix = ixForPackages;
-        };
-        llm-clippy = llmClippyFor pkgs;
-        mc-probe = pkgs.callPackage paths.packages.minecraft.probe {
-          ix = ixForPackages;
-        };
-        minecraft-sync-managed = pkgs.callPackage paths.packages.minecraft.syncManaged {
-          ix = ixForPackages;
-        };
-        nix-cargo-unit = pkgs.callPackage paths.packages.nixCargoUnit {
-          inherit pkgs;
-          ix = ixForPackages;
-        };
-        oci-image-builder = pkgs.callPackage paths.packages.ociImageBuilder {
-          ix = ixForPackages;
-        };
-        run = pkgs.callPackage paths.packages.run {
-          ix = ixForPackages;
-        };
-        mcp = pkgs.callPackage paths.packages.mcp {
-          ix = ixForPackages;
-        };
-        tonbo-artifacts = pkgs.callPackage paths.packages.tonboArtifacts { };
-      };
+      mergePackageTrees =
+        left: right:
+        lib.foldl' (
+          acc: name:
+          let
+            rightValue = right.${name};
+          in
+          if builtins.hasAttr name acc then
+            let
+              leftValue = acc.${name};
+            in
+            if
+              builtins.isAttrs leftValue
+              && builtins.isAttrs rightValue
+              && !(lib.isDerivation leftValue)
+              && !(lib.isDerivation rightValue)
+            then
+              acc // { ${name} = mergePackageTrees leftValue rightValue; }
+            else
+              throw "packageSetFor: duplicate package attr path segment `${name}`"
+          else
+            acc // { ${name} = rightValue; }
+        ) left (builtins.attrNames right);
+      buildEntry =
+        entry: pkgs.callPackage entry.path (entry.callPackageArgs (context // { inherit entry; }));
+      packageTreeFor = entry: lib.setAttrByPath entry.packageSet.attrPath (buildEntry entry);
     in
-    basePackages;
+    lib.foldl' mergePackageTrees { } (
+      map packageTreeFor (packageRegistry.packageSetEntriesFor packageSystem)
+    );
 
   /**
     Shared Rust workspace source and unit graph for repo-owned crates.
@@ -817,19 +841,14 @@ let
       src = lib.fileset.toSource {
         inherit root;
         fileset = lib.fileset.intersection (lib.fileset.gitTracked root) (
-          lib.fileset.unions [
-            (root + "/Cargo.toml")
-            (root + "/Cargo.lock")
-            (rustPackageFiles (paths.modules + "/services/resource-monitor/stats-writer"))
-            (rustPackageFiles paths.packages.agentsMd)
-            (rustPackageFiles paths.packages.dagRunner)
-            (rustPackageFiles paths.packages.ixDevDiagnose)
-            (rustPackageFiles paths.packages.mcp)
-            (rustPackageFiles paths.packages.minecraft.nbt)
-            (rustPackageFiles paths.packages.minecraft.syncManaged)
-            (rustPackageFiles paths.packages.nixCargoUnit)
-            (rustPackageFiles paths.packages.ociImageBuilder)
-          ]
+          lib.fileset.unions (
+            [
+              (root + "/Cargo.toml")
+              (root + "/Cargo.lock")
+              (rustPackageFiles (paths.modules + "/services/resource-monitor/stats-writer"))
+            ]
+            ++ map (entry: rustPackageFiles entry.path) packageRegistry.rustWorkspaceEntries
+          )
         );
       };
       cargoLock = root + "/Cargo.lock";

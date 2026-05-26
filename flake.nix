@@ -66,32 +66,10 @@
         tests = ./tests;
         bench.filesystem = ./bench/filesystem;
         site = ./site;
+        packagesRoot = ./packages;
         minecraftMods = ./images/games/minecraft/mods;
         minecraftPaperPlugins = ./images/games/minecraft/plugins/paper;
         minecraftVelocityPlugins = ./images/games/minecraft/plugins/velocity;
-        packages = {
-          agentsMd = ./packages/agents-md;
-          ix = ./packages/ix;
-          ixFleet = ./packages/ix-fleet;
-          ixDevDiagnose = ./packages/ix-dev-diagnose;
-          minecraft = {
-            hotReloadAgent = ./packages/minecraft/hot-reload-agent;
-            nbt = ./packages/minecraft/nbt;
-            probe = ./packages/minecraft/probe;
-            rcon = ./packages/minecraft/rcon;
-            syncManaged = ./packages/minecraft/sync-managed;
-          };
-          dagRunner = ./packages/dag-runner;
-          drgn = ./packages/drgn;
-          llmClippy = ./packages/llm-clippy;
-          minestom.servers.hello = ./packages/minestom/servers/hello;
-          nixCargoUnit = ./packages/nix-cargo-unit;
-          ociImageBuilder = ./packages/oci-image-builder;
-          run = ./packages/run;
-          mcp = ./packages/mcp;
-          tonboArtifacts = ./packages/tonbo-artifacts;
-          vineflower = ./packages/vineflower;
-        };
         tools = {
           ixShellSyncIgnored = ./tools/ix-shell-sync-ignored.py;
           mcSource = ./tools/mc-source.nu;

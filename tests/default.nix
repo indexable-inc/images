@@ -11,6 +11,13 @@ let
   inherit (ix) pkgs;
   fs = lib.fileset;
   repoPackages = ix.packageSetFor pkgs;
+  packageRegistry = import ../packages/registry.nix {
+    inherit lib;
+    root = ../packages;
+  };
+  missingPackageMetadata = map (
+    dir: lib.removePrefix "${builtins.toString ../packages}/" (builtins.toString dir)
+  ) packageRegistry.packageDirsWithoutMetadata;
 
   versions = import ../images/games/minecraft/versions.nix {
     inherit lib;
@@ -2855,6 +2862,12 @@ let
     ];
 
     helpers = [
+      {
+        assertion = missingPackageMetadata == [ ];
+        message =
+          "packages with default.nix should declare package.nix metadata entries: "
+          + lib.concatStringsSep ", " missingPackageMetadata;
+      }
       {
         assertion = cargoUnitWorkspace.policyChecks ? unusedCrateDependencies;
         message = "cargo-unit workspaces should expose an unused dependency policy check by default";
