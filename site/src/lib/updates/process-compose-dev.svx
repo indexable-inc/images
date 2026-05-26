@@ -1,0 +1,32 @@
+---
+id: process-compose-dev
+postedAt: 2026-05-26T04:32:00-07:00
+title: "`nix run .#room-dev` starts the room backend and Vite together"
+tags: [interesting, nix, svelte, rust]
+links:
+  - label: room README
+    href: https://github.com/indexable-inc/index/tree/main/packages/room
+  - label: Process Compose
+    href: https://f1bonacc1.github.io/process-compose/
+  - label: devenv processes
+    href: https://devenv.sh/processes/
+---
+
+`room-dev` is the repo's first checkout-local multi-process runner. It uses a
+small Nix helper to generate a `process-compose` config, then runs the Rust room
+backend and Vite dev server in one foreground command:
+
+```bash
+nix run .#room-dev
+```
+
+The wrapper disables the process-compose TUI and control server, so the command
+keeps ordinary terminal logs and leaves `:8080` free for the room backend. The
+frontend still runs on Vite's `:5174`; its `/ws` route proxies to the Rust
+server, which keeps hot reloads and live WebSocket state in the same browser
+origin during development.
+
+Devenv was a close fit for the process model, especially readiness probes and
+service presets. For this repo, the smaller boundary won: a flake package keeps
+the existing `nix run .#...` workflow, avoids a new dev-shell layer, and leaves
+future multi-process commands with one reusable helper.

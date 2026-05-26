@@ -386,6 +386,7 @@ in
         nix-cargo-unit
         oci-image-builder
         run
+        room-dev
         room-site
         mcp
         ;
@@ -412,6 +413,7 @@ in
       '';
       cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
       run-records-session = repoPackages.run.passthru.tests.recordsSession;
+      room-dev-process-compose = repoPackages.room-dev.passthru.tests.dryRun;
       lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
         cp -R ${lintSource} source
         chmod -R u+w source
