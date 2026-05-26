@@ -18,7 +18,7 @@ let
   dashboards = pkgs.linkFarm "ix-observability-dashboards" [
     {
       name = "overview.json";
-      path = import ./dashboards/overview.nix { inherit pkgs; };
+      path = import ./_dashboards/overview.nix { inherit pkgs; };
     }
   ];
 

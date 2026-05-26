@@ -255,10 +255,14 @@ let
   */
   pkgs = import nixpkgs { inherit system overlays; };
 
-  # Flat list of module paths from the canonical nested registry in
-  # `modules/default.nix`. Pulled in unconditionally so every option is in
-  # scope; each module stays inert until its `enable` flag is set.
-  moduleList = lib.collect builtins.isPath (import paths.modules);
+  # Auto-discovered NixOS module registry. The walk lives next to
+  # `discoverImages` for symmetry; see its doc-comment for the discovery rules.
+  nixosModules = discoverModules { root = paths.modules; };
+
+  # Flat list of module paths from the auto-discovered registry under
+  # `modules/`. Pulled in unconditionally so every option is in scope; each
+  # module stays inert until its `enable` flag is set.
+  moduleList = lib.collect builtins.isPath nixosModules;
 
   bunLockFor =
     pkgs:
@@ -1105,6 +1109,65 @@ let
     lib.mapAttrs attach raw;
 
   /**
+    Walk `modules/<category>/<name>/` under `root` and expose every
+    discovered NixOS module as an attrset of paths. Each module is a
+    directory containing `default.nix`; sibling directories with their
+    own `default.nix` become nested keys (so `services/minecraft/` ships
+    `{ default = ./minecraft; fabric = ./minecraft/fabric; ...; mods = { bluemap = ...; }; }`).
+
+    A directory or `.nix` file whose name starts with `_` is skipped, so
+    a module can keep non-module helper data (templates, dashboards, lua)
+    alongside its `default.nix` without polluting the registry.
+
+    The walk only enumerates directories and only treats a directory as
+    a module when it has its own `default.nix`. Sibling `.nix` files,
+    Lua, Nu, and other resources are ignored; if a module needs them,
+    `default.nix` imports them directly.
+  */
+  discoverModules =
+    { root }:
+    let
+      isModuleSegment = name: !(lib.hasPrefix "_" name);
+      keepValue = v: builtins.isPath v || (builtins.isAttrs v && v != { });
+      walk =
+        dir:
+        let
+          entries = builtins.readDir dir;
+          childDirNames = lib.filter (n: entries.${n} == "directory" && isModuleSegment n) (
+            builtins.attrNames entries
+          );
+          hasDefault = (entries."default.nix" or null) == "regular";
+          rawChildren = lib.listToAttrs (map (n: lib.nameValuePair n (walk (dir + "/${n}"))) childDirNames);
+          children = lib.filterAttrs (_: keepValue) rawChildren;
+        in
+        if hasDefault && children == { } then
+          dir
+        else if hasDefault then
+          children // { default = dir; }
+        else
+          children;
+      rootEntries = builtins.readDir root;
+      categoryNames = lib.filter (n: (rootEntries.${n} or "") == "directory" && isModuleSegment n) (
+        builtins.attrNames rootEntries
+      );
+      perCategory = map (
+        cat:
+        let
+          walked = walk (root + "/${cat}");
+        in
+        # A category dir without its own `default.nix` returns an attrset of
+        # its children; flatten those into the top-level module registry.
+        # A category dir with a `default.nix` would shadow the category name,
+        # which we don't currently use, so reject it loudly.
+        if builtins.isAttrs walked then
+          walked
+        else
+          throw "discoverModules: category '${cat}' has its own default.nix; categories must only contain module subdirectories"
+      ) categoryNames;
+    in
+    lib.mergeAttrsList perCategory;
+
+  /**
     Discovered example fleets, built for a given host system. Discovery
     walks two layouts side by side: flat `examples/<name>/default.nix`
     and nested `examples/<category>/<name>/default.nix`. A directory is
@@ -1180,6 +1243,8 @@ let
       mkFleet
       mkFleetFor
       discoverImages
+      discoverModules
+      nixosModules
       exampleFleetsFor
       artifacts
       agentsMd

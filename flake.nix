@@ -131,7 +131,7 @@
     in
     {
       lib = ix;
-      nixosModules = import ./modules;
+      inherit (ix) nixosModules;
       overlays.default = ix.overlay;
       packages = collect "packages";
       checks = collect "checks";

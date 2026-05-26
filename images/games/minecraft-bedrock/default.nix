@@ -4,7 +4,7 @@
   ix.image = {
     name = "minecraft-bedrock";
     # Tag tracks the pinned Bedrock package version, so bumping the server
-    # version in modules/services/minecraft-bedrock.nix moves the image tag.
+    # version in modules/services/minecraft-bedrock moves the image tag.
     tag = config.services.minecraft-bedrock.package.version;
   };
 
