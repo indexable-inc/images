@@ -723,6 +723,15 @@ let
         vendorHash = null;
         packages = [ "." ];
       }).vendorHashKey;
+  goUnitMissingGoModPackagesEval = builtins.tryEval (
+    builtins.attrNames
+      (ix.goUnit.buildWorkspace {
+        pname = "go-unit-missing-go-mod";
+        src = goUnitMissingGoModFixture;
+        vendorHash = null;
+        packages = [ "." ];
+      }).packages
+  );
 
   goUnitPackageCollisionEval =
     builtins.tryEval
@@ -2765,6 +2774,10 @@ let
       {
         assertion = !goUnitMissingGoModEval.success;
         message = "go-unit local sources should reject missing go.mod during eval";
+      }
+      {
+        assertion = !goUnitMissingGoModPackagesEval.success;
+        message = "go-unit local package surfaces should reject missing go.mod during eval";
       }
       {
         assertion = !goUnitPackageCollisionEval.success;

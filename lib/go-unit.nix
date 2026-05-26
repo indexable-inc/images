@@ -36,11 +36,9 @@ let
       modRoot = args.modRoot or ".";
       moduleRoot = if modRoot == "." then src else src + "/${modRoot}";
       goMod = args.goMod or (moduleRoot + "/go.mod");
-      checkedGoMod =
-        if canReadModuleFiles && !(builtins.pathExists goMod) then
-          throw "goUnit.buildWorkspace requires ${builtins.toString goMod}"
-        else
-          goMod;
+      goModExists = !canReadModuleFiles || builtins.pathExists goMod;
+      missingGoModMessage = "goUnit.buildWorkspace requires ${builtins.toString goMod}";
+      checkedGoMod = if goModExists then goMod else throw missingGoModMessage;
       goSum = args.goSum or (moduleRoot + "/go.sum");
       goSumForBuild =
         args.goSum or (if canReadModuleFiles && builtins.pathExists goSum then goSum else null);
@@ -83,6 +81,7 @@ let
             ''
         );
     in
+    assert lib.assertMsg goModExists missingGoModMessage;
     {
       pname = args.pname or "go-unit";
       version = args.version or "0.0.0";
