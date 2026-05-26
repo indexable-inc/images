@@ -1,13 +1,14 @@
 {
   stdenvNoCC,
   fetchurl,
+  binarySrc ? null,
 }:
 
 let
   sources = {
     x86_64-linux = fetchurl {
       url = "https://ix.dev/cli/linux-x86_64/ix";
-      hash = "sha256-U5vAZ1AKsk5XIwXoNwM4Bz7FJ1firsZddY9fwfChsNY=";
+      hash = "sha256-aqPw2lpMcr91M6MleCtmNLDG1hy0B6B3XL0NaWdaeSM=";
     };
     aarch64-darwin = fetchurl {
       url = "https://ix.dev/cli/darwin-arm64/ix";
@@ -20,12 +21,17 @@ let
   };
 
   inherit (stdenvNoCC.hostPlatform) system;
+  selectedSrc =
+    if binarySrc == null then
+      sources.${system} or (throw "ix CLI: no precompiled binary for ${system}")
+    else
+      binarySrc;
 in
 stdenvNoCC.mkDerivation {
   pname = "ix";
   version = "precompiled";
 
-  src = sources.${system} or (throw "ix CLI: no precompiled binary for ${system}");
+  src = selectedSrc;
 
   dontUnpack = true;
   dontBuild = true;

@@ -764,10 +764,14 @@ let
           port = 5175;
         };
       };
+      ixCliArgs = lib.optionalAttrs (builtins.hasAttr packageSystem cliArtifacts) {
+        binarySrc = cliArtifacts.${packageSystem};
+      };
       basePackages = {
         dag-runner = pkgs.callPackage paths.packages.dagRunner {
           ix = ixForPackages;
         };
+        ix = pkgs.callPackage paths.packages.ix ixCliArgs;
         drgn = pkgs.callPackage paths.packages.drgn { };
         ix-fleet = pkgs.callPackage paths.packages.ixFleet {
           ix = ixForPackages;
@@ -809,13 +813,8 @@ let
         };
         tonbo-artifacts = pkgs.callPackage paths.packages.tonboArtifacts { };
       };
-      cliPackages = lib.optionalAttrs (builtins.hasAttr packageSystem cliArtifacts) {
-        ix = pkgs.callPackage paths.packages.ix {
-          src = cliArtifacts.${packageSystem};
-        };
-      };
     in
-    basePackages // cliPackages;
+    basePackages;
 
   /**
     Shared Rust workspace source and unit graph for repo-owned crates.
