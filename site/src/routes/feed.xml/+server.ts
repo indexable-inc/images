@@ -56,7 +56,7 @@ export function GET(): Response {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>ix images updates</title>
+    <title>index</title>
     <link>${escapeXml(siteUrl)}</link>
     <atom:link href="${escapeXml(siteFeedUrl)}" rel="self" type="application/rss+xml" />
     <description>${escapeXml(siteIntro)}</description>

@@ -35,18 +35,19 @@
   const entries = siteUpdates.map((update) => ({
     ...update,
     html: marked.parse(update.body) as string,
+    titleHtml: marked.parseInline(update.title) as string,
     label: formatDate(update.date)
   }));
 </script>
 
 <svelte:head>
-  <title>ix images</title>
+  <title>index</title>
   <meta name="description" content={siteIntro} />
-  <link rel="alternate" type="application/rss+xml" title="ix images" href={siteFeedUrl} />
+  <link rel="alternate" type="application/rss+xml" title="index" href={siteFeedUrl} />
 </svelte:head>
 
 <header>
-  <a class="wordmark" href={resolve('/')}>ix images</a>
+  <a class="wordmark" href={resolve('/')}>index</a>
   <nav>
     <a href="https://github.com/indexable-inc/index">github</a>
     <a href="https://ix.dev">ix.dev</a>
@@ -56,7 +57,7 @@
 
 <main>
   <section class="hero">
-    <h1>Pre-built systems for ix VMs.</h1>
+    <h1>Open source from ix.</h1>
     <p>{siteIntro}</p>
   </section>
 
@@ -64,7 +65,10 @@
     {#each entries as entry (entry.id)}
       <li id={entry.id}>
         <time datetime={entry.date}>{entry.label}</time>
-        <h2><a href="#{entry.id}">{entry.title}</a></h2>
+        <h2>
+          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+          <a href="#{entry.id}">{@html entry.titleHtml}</a>
+        </h2>
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
         <div class="body">{@html entry.html}</div>
         <div class="refs">

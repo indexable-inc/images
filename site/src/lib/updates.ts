@@ -119,7 +119,7 @@ An \`examples/observability-stack/\` fleet shows the smallest viable deployment.
 export const siteUrl = 'https://indexable-inc.github.io/index/';
 export const siteFeedUrl = `${siteUrl}feed.xml`;
 export const siteIntro =
-  'Pre-built OCI images and composable NixOS modules for ix VMs.';
+  'Images, NixOS modules, helpers, and notes published by ix.';
 
 export function plainText(markdown: string): string {
   return markdown
