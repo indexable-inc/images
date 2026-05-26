@@ -447,10 +447,10 @@ jobs:
               return str(user.get("login") or "")
 
 
-	          def publisher_authors() -> set[str]:
-	              # Installation tokens may not expose `/user` or `/app`; keep the
-	              # default Actions authors when identity discovery is unavailable.
-	              authors = set(BOT_AUTHORS)
+          def publisher_authors() -> set[str]:
+              # Installation tokens may not expose `/user` or `/app`; keep the
+              # default Actions authors when identity discovery is unavailable.
+              authors = set(BOT_AUTHORS)
 
               viewer = try_request_api_json("GET", "/user")
               if isinstance(viewer, dict):
