@@ -534,6 +534,18 @@ def wait_master_writable(master_fd: int) -> bool:
         return False
 
 
+def wait_fd_readable(fd: int) -> bool:
+    try:
+        select.select([fd], [], [])
+        return True
+    except OSError as exc:
+        if exc.errno in EXPECTED_PTY_ERRORS:
+            return False
+        raise
+    except ValueError:
+        return False
+
+
 def write_master(master_fd: int, data: bytes) -> bool:
     remaining = memoryview(data)
     while remaining:
@@ -572,8 +584,20 @@ def forward_stdin(stdin_fd: int, master_fd: int) -> None:
     while True:
         try:
             data = os.read(stdin_fd, READ_SIZE)
+        except BlockingIOError:
+            if wait_fd_readable(stdin_fd):
+                continue
+            send_eot(master_fd)
+            return
+        except InterruptedError:
+            continue
         except OSError as exc:
             if exc.errno in {errno.EBADF, errno.EIO, errno.EINVAL}:
+                send_eot(master_fd)
+                return
+            if exc.errno in RETRYABLE_WRITE_ERRORS:
+                if wait_fd_readable(stdin_fd):
+                    continue
                 send_eot(master_fd)
                 return
             write_stderr(f"ix run: warning: stopped forwarding stdin: {exc}\n")

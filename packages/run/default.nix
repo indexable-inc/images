@@ -36,6 +36,7 @@ let
         nativeBuildInputs = [
           package
           pkgs.coreutils
+          pkgs.python3
         ];
         strictDeps = true;
       }
@@ -89,6 +90,40 @@ let
         timeout 20s run ${lib.getExe pkgs.bash} -c 'stty -echo; sleep 1; cat >large-stdin-copy; wc -c <large-stdin-copy' \
           <large-stdin-input >large-stdin-stdout 2>large-stdin-stderr
         grep -q "^$large_size" large-stdin-stdout
+
+        export IX_RUN_DIR=$TMPDIR/runs-nonblocking-stdin
+        python3 - <<'PY'
+        import fcntl
+        import os
+        import subprocess
+        import time
+
+        read_fd, write_fd = os.pipe()
+        flags = fcntl.fcntl(read_fd, fcntl.F_GETFL)
+        fcntl.fcntl(read_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+        env = os.environ.copy()
+        payload = b"delayed nonblocking stdin\n"
+        proc = subprocess.Popen(
+            ["run", "${lib.getExe pkgs.bash}", "-c", "cat"],
+            stdin=read_fd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        os.close(read_fd)
+        time.sleep(0.2)
+        os.write(write_fd, payload)
+        os.close(write_fd)
+
+        stdout, stderr = proc.communicate(timeout=10)
+        if proc.returncode != 0:
+            raise SystemExit(
+                f"run exited {proc.returncode}; stdout={stdout!r}; stderr={stderr!r}"
+            )
+        if payload.strip() not in stdout:
+            raise SystemExit(f"delayed stdin was not forwarded: stdout={stdout!r}")
+        PY
 
         export IX_RUN_DIR=$TMPDIR/runs-closed-stdin
         (
