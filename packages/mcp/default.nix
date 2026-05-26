@@ -29,14 +29,18 @@ let
         strictDeps = true;
       }
       ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
+                export HOME=$TMPDIR/home
+                mkdir -p "$HOME"
 
-        printf 'print("ix-mcp-repl-ok")\nraise SystemExit(0)\n' | ix-mcp repl >stdout 2>stderr
-        grep -q '^ix-mcp-repl-ok$' stdout
+        	        printf 'print("ix-mcp-repl-ok")\nraise SystemExit(0)\n' | ix-mcp repl >stdout 2>stderr
+        	        grep -q '^ix-mcp-repl-ok$' stdout
+        	        if find "$TMPDIR" -maxdepth 1 -type d -name 'ix-mcp-python-repl-*' | grep -q .; then
+        	          echo "default REPL temp directory leaked" >&2
+        	          exit 1
+        	        fi
 
-        mkdir -p "$out"
-      '';
+        	        mkdir -p "$out"
+        	      '';
 in
 package.overrideAttrs (old: {
   passthru =

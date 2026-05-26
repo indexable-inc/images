@@ -3,7 +3,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio},
     sync::{Arc, Mutex},
 };
 
@@ -403,7 +403,7 @@ fn uuid_like(sessions: &HashMap<String, PythonSession>) -> String {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(CliCommand::Serve) {
         CliCommand::Serve => {
@@ -431,7 +431,11 @@ async fn main() -> Result<()> {
                 .with_context(|| {
                     format!("failed to start Python REPL command {}", command.join(" "))
                 })?;
-            std::process::exit(status.code().unwrap_or(1));
+            let code = status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or(1);
+            return Ok(ExitCode::from(code));
         }
         CliCommand::Eval { expression } => {
             let mut manager = SessionManager::default();
@@ -455,7 +459,7 @@ async fn main() -> Result<()> {
             println!("{}", session.request("exec", json!({ "source": source }))?);
         }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 fn command_arg(command: Vec<String>) -> Option<Vec<String>> {
