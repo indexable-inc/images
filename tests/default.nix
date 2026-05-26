@@ -683,6 +683,14 @@ let
       ./fixtures/go-unit-stdlib/main_test.go
     ];
   };
+  goUnitMissingGoSumFixture = fs.toSource {
+    root = ./fixtures/go-unit-hello;
+    fileset = fs.unions [
+      ./fixtures/go-unit-hello/go.mod
+      ./fixtures/go-unit-hello/main.go
+      ./fixtures/go-unit-hello/main_test.go
+    ];
+  };
 
   goUnitStdlibWorkspace = ix.goUnit.buildWorkspace {
     pname = "go-unit-stdlib";
@@ -730,6 +738,15 @@ let
         pname = "go-unit-missing-go-mod";
         src = goUnitMissingGoModFixture;
         vendorHash = null;
+        packages = [ "." ];
+      }).packages
+  );
+  goUnitMissingGoSumEval = builtins.tryEval (
+    builtins.attrNames
+      (ix.goUnit.buildWorkspace {
+        pname = "go-unit-missing-go-sum";
+        src = goUnitMissingGoSumFixture;
+        vendorHash = "sha256-36P4vOdzJotmVZon5Zud/d/jxzv4ad04aQT2G/EE3U8=";
         packages = [ "." ];
       }).packages
   );
@@ -2779,6 +2796,10 @@ let
       {
         assertion = !goUnitMissingGoModPackagesEval.success;
         message = "go-unit local package surfaces should reject missing go.mod during eval";
+      }
+      {
+        assertion = !goUnitMissingGoSumEval.success;
+        message = "go-unit local sources should reject missing go.sum even with a direct vendor hash";
       }
       {
         assertion = !goUnitPackageCollisionEval.success;

@@ -43,8 +43,16 @@ let
       checkedGoMod = if goModExists then goMod else throw missingGoModMessage;
       explicitGoSum = args ? goSum;
       goSum = args.goSum or (moduleRoot + "/go.sum");
+      noSumModule = (args ? vendorHash) && args.vendorHash == null;
       goSumForBuild =
-        args.goSum or (if canReadModuleFiles && builtins.pathExists goSum then goSum else null);
+        if explicitGoSum then
+          args.goSum
+        else if canReadModuleFiles && builtins.pathExists goSum then
+          goSum
+        else
+          null;
+      goSumExists = goSumForBuild != null || noSumModule || (!canReadModuleFiles && !explicitGoSum);
+      missingGoSumMessage = "goUnit.buildWorkspace requires ${builtins.toString goSum}; pass vendorHash = null only for stdlib-only modules without go.sum";
       canReadGoSum =
         goSumForBuild != null && (canReadModuleFiles || explicitGoSum) && builtins.pathExists goSumForBuild;
       explicitVendorHashFile = args ? vendorHashFile;
@@ -87,6 +95,7 @@ let
         );
     in
     assert lib.assertMsg goModExists missingGoModMessage;
+    assert lib.assertMsg goSumExists missingGoSumMessage;
     {
       pname = args.pname or "go-unit";
       version = args.version or "0.0.0";
