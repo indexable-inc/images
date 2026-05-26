@@ -58,6 +58,9 @@ function stripFrontmatter(source: string): string {
 
 export function plainText(markdown: string): string {
   return markdown
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<[A-Z][A-Za-z0-9]*\b[^>]*\/?>/g, '')
+    .replace(/<\/[A-Z][A-Za-z0-9]*>/g, '')
     .replace(/```[\s\S]*?```/g, '')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')

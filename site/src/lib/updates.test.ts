@@ -34,6 +34,17 @@ describe('plainText', () => {
   test('drops fenced code blocks', () => {
     expect(plainText('before\n```\ncode\nblock\n```\nafter')).toBe('before after');
   });
+
+  test('drops svelte script blocks and component tags', () => {
+    const source = [
+      '<script>',
+      "  import Diagram from '$lib/diagrams/X.svelte';",
+      '</script>',
+      '',
+      'before <Diagram /> after'
+    ].join('\n');
+    expect(plainText(source)).toBe('before after');
+  });
 });
 
 describe('updateScript', () => {
