@@ -15,6 +15,12 @@
   - `distDir`: relative path of the build output inside `src`.
   - `installDir`: path under `$out` where the built assets are installed.
   - `extraNativeBuildInputs`: extra packages on PATH for the build.
+  - `serve`: install a `$out/bin/<pname>` wrapper that runs `miniserve`
+    against the built assets, so `nix run .#<name>` previews the site
+    on `http://127.0.0.1:8080/` by default.
+  - `serveRoutePrefix`: URL prefix the wrapper should mount the assets
+    under, matching the SvelteKit `paths.base` the build was compiled
+    with. Defaults to `/`.
   - `meta`: standard derivation meta.
 */
 pkgs:
@@ -28,6 +34,8 @@ pkgs:
   distDir ? "dist",
   installDir ? "share/${pname}",
   extraNativeBuildInputs ? [ ],
+  serve ? false,
+  serveRoutePrefix ? "/",
   meta ? { },
 }:
 let
@@ -47,6 +55,10 @@ let
   ]
   ++ lib.optional (buildFlags != [ ]) "--"
   ++ buildFlags;
+
+  routePrefixFlag =
+    lib.optionalString (serveRoutePrefix != "/" && serveRoutePrefix != "")
+      " --route-prefix ${lib.escapeShellArg serveRoutePrefix}";
 in
 pkgs.stdenvNoCC.mkDerivation (_: {
   inherit
@@ -54,8 +66,9 @@ pkgs.stdenvNoCC.mkDerivation (_: {
     version
     src
     npmDeps
-    meta
     ;
+
+  meta = meta // lib.optionalAttrs serve { mainProgram = pname; };
 
   strictDeps = true;
 
@@ -63,6 +76,7 @@ pkgs.stdenvNoCC.mkDerivation (_: {
     pkgs.nodejs
     pkgs.importNpmLock.linkNodeModulesHook
   ]
+  ++ lib.optional serve pkgs.makeBinaryWrapper
   ++ extraNativeBuildInputs;
 
   buildPhase = ''
@@ -76,6 +90,11 @@ pkgs.stdenvNoCC.mkDerivation (_: {
     runHook preInstall
     mkdir -p "$out"/${lib.escapeShellArg installDir}
     cp -R ${lib.escapeShellArg (distDir + "/.")} "$out"/${lib.escapeShellArg installDir}/
+    ${lib.optionalString serve ''
+      mkdir -p "$out/bin"
+      makeWrapper ${lib.getExe pkgs.miniserve} "$out/bin/${pname}" \
+        --add-flags "--index index.html --interfaces 127.0.0.1 --port 8080${routePrefixFlag} $out/${installDir}"
+    ''}
     runHook postInstall
   '';
 })

@@ -195,6 +195,8 @@ let
     version = "0.1.0";
     src = siteSrc;
     distDir = "build";
+    serve = true;
+    serveRoutePrefix = "/index";
   };
 
   repoPackages = ix.packageSetFor pkgs;
