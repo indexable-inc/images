@@ -772,6 +772,9 @@ let
         binarySrc = cliArtifacts.${packageSystem};
       };
       basePackages = {
+        agents-md = pkgs.callPackage paths.packages.agentsMd {
+          ix = ixForPackages;
+        };
         dag-runner = pkgs.callPackage paths.packages.dagRunner {
           ix = ixForPackages;
         };
@@ -852,6 +855,7 @@ let
             (root + "/Cargo.toml")
             (root + "/Cargo.lock")
             (rustPackageFiles (paths.modules + "/services/resource-monitor/stats-writer"))
+            (rustPackageFiles paths.packages.agentsMd)
             (rustPackageFiles paths.packages.dagRunner)
             (rustPackageFiles paths.packages.ixDevDiagnose)
             (rustPackageFiles paths.packages.loop)

@@ -117,15 +117,15 @@ jobs:
           set -euo pipefail
           mapfile -d '' instruction_paths < <(
             {
-              git ls-files -z | grep -z -E '(^|/)AGENTS\.md$' || true
-              git ls-tree -r -z --name-only "${BASE_SHA}" | grep -z -E '(^|/)AGENTS\.md$' || true
+              git ls-files -z | grep -z -E '(^|/)(AGENTS|CLAUDE)\.md$' || true
+              git ls-tree -r -z --name-only "${BASE_SHA}" | grep -z -E '(^|/)(AGENTS|CLAUDE)\.md$' || true
             } | sort -zu
           )
           for path in "${instruction_paths[@]}"; do
-            rm -f -- "${path}"
             if git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
-              mkdir -p -- "$(dirname -- "${path}")"
-              git show "${BASE_SHA}:${path}" > "${path}"
+              git restore --source "${BASE_SHA}" --worktree -- "${path}"
+            else
+              rm -f -- "${path}"
             fi
           done
 

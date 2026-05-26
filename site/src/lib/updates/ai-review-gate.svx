@@ -36,7 +36,7 @@ jobs:
       repository_token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-Same-repo PRs from regular users run the secret-backed reviewer. Fork and Dependabot PRs stay on a no-secret path until a trusted maintainer approves the current head SHA, so a forked PR cannot edit the prompt and reach the OpenAI key. The reviewer instruction files (`AGENTS.md`) are restored from the trusted base commit before Codex runs, so a PR that rewrites `AGENTS.md` cannot bend the reviewer's rules.
+Same-repo PRs from regular users run the secret-backed reviewer. Fork and Dependabot PRs stay on a no-secret path until a trusted maintainer approves the current head SHA, so a forked PR cannot edit the prompt and reach the OpenAI key. The reviewer instruction files (`AGENTS.md` and `CLAUDE.md`) are restored from the trusted base commit before Codex runs, so a PR that rewrites them cannot bend the reviewer's rules.
 
 The structured output keeps each finding mechanically actionable: `title`, `body`, `confidence_score`, `priority`, `code_location.{relative_file_path, line_range}`, and a `suggested_replacement` GitHub renders as a one-click apply. `AI_REVIEW_MODEL` and `AI_REVIEW_EFFORT` are repo variables, with `xhigh` reasoning effort as the default.
 

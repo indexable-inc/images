@@ -70,6 +70,7 @@
         minecraftPaperPlugins = ./images/games/minecraft/plugins/paper;
         minecraftVelocityPlugins = ./images/games/minecraft/plugins/velocity;
         packages = {
+          agentsMd = ./packages/agents-md;
           ix = ./packages/ix;
           ixFleet = ./packages/ix-fleet;
           ixDevDiagnose = ./packages/ix-dev-diagnose;

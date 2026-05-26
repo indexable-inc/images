@@ -107,36 +107,7 @@ let
     meta.description = "Copy git-ignored files into an ix shell workspace";
   };
 
-  agentsMdFile = pkgs.writeText "AGENTS.md" (ix.agentsMd.render { });
-
-  agentsMd = ix.writeNushellApplication pkgs {
-    name = "agents-md";
-    meta.description = "Generate this repository's AGENTS.md from reusable fragments";
-    text = ''
-      def main [
-        --write: path
-        --check: path
-      ] {
-        let generated = (open --raw ${agentsMdFile})
-
-        if $check != null {
-          let current = (open --raw $check)
-          if $current != $generated {
-            print --stderr $"($check) differs from generated AGENTS.md"
-            exit 1
-          }
-          return
-        }
-
-        if $write != null {
-          $generated | save --force $write
-          return
-        }
-
-        print --no-newline $generated
-      }
-    '';
-  };
+  agentsMd = repoPackages.agents-md;
 
   # Bake the repo's lint program into the loop runner so
   # `nix run .#loop` matches the historical Python wrapper's UX. The
@@ -229,6 +200,7 @@ let
   rustPackageTests =
     let
       rustPackages = lib.getAttrs [
+        "agents-md"
         "dag-runner"
         "ix-dev-diagnose"
         "loop"
@@ -387,7 +359,7 @@ in
     lib.optionalAttrs (system == ix.system) {
       inherit (tests) eval;
       agents-md = pkgs.runCommand "agents-md-check" { nativeBuildInputs = [ agentsMd ]; } ''
-        agents-md --check ${paths.root}/AGENTS.md
+        agents-md --check ${paths.root}
         mkdir -p "$out"
       '';
       cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
