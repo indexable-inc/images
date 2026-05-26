@@ -81,3 +81,9 @@ function escapeHtml(value: string): string {
 export function updateScript(update: SiteUpdate): string {
   return `${plainText(update.title)}. ${plainText(update.rawBody)}`;
 }
+
+// Absolute URL for one entry. The base path lives in `siteUrl`, which
+// already carries the trailing slash, so the slug just appends.
+export function updateUrl(id: string): string {
+  return `${siteUrl}${id}`;
+}

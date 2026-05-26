@@ -4,7 +4,8 @@ import {
   siteIntro,
   siteUpdates,
   siteUrl,
-  updateScript
+  updateScript,
+  updateUrl
 } from '$lib/updates';
 
 export const prerender = true;
@@ -30,10 +31,6 @@ function escapeXml(value: string): string {
 
 function rssDate(postedAt: string): string {
   return new Date(postedAt).toUTCString();
-}
-
-function updateUrl(updateId: string): string {
-  return `${siteUrl}#${encodeURIComponent(updateId)}`;
 }
 
 function itemXml(update: (typeof siteUpdates)[number]): string {
