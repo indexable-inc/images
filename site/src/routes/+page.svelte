@@ -21,22 +21,32 @@
 
   const feedHref = resolve('/feed.xml');
 
+  // Render in UTC so the prerendered HTML reads the same in every visitor's
+  // zone. The <time datetime> attribute carries the full offset for clients
+  // that want to reformat locally.
   const dateFormatter = new Intl.DateTimeFormat('en', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
     timeZone: 'UTC'
   });
+  const timeFormatter = new Intl.DateTimeFormat('en', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'UTC'
+  });
 
-  function formatDate(date: string): string {
-    return dateFormatter.format(new Date(`${date}T00:00:00Z`));
+  function formatPostedAt(postedAt: string): string {
+    const parsed = new Date(postedAt);
+    return `${dateFormatter.format(parsed)} · ${timeFormatter.format(parsed)} UTC`;
   }
 
   const entries = siteUpdates.map((update) => ({
     ...update,
     html: marked.parse(update.body) as string,
     titleHtml: marked.parseInline(update.title) as string,
-    label: formatDate(update.date)
+    label: formatPostedAt(update.postedAt)
   }));
 </script>
 
@@ -64,7 +74,7 @@
   <ol class="log">
     {#each entries as entry (entry.id)}
       <li id={entry.id}>
-        <time datetime={entry.date}>{entry.label}</time>
+        <time datetime={entry.postedAt}>{entry.label}</time>
         <h2>
           <!-- eslint-disable-next-line svelte/no-at-html-tags -->
           <a href="#{entry.id}">{@html entry.titleHtml}</a>

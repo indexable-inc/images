@@ -5,7 +5,10 @@ export type SiteUpdateLink = {
 
 export type SiteUpdate = {
   id: string;
-  date: string;
+  // ISO 8601 with timezone offset. Authors keep the source readable in their
+  // local zone; render layers normalize to UTC so visitors in any zone see
+  // one canonical date and time.
+  postedAt: string;
   title: string;
   body: string;
   links: SiteUpdateLink[];
@@ -14,7 +17,7 @@ export type SiteUpdate = {
 export const siteUpdates: SiteUpdate[] = [
   {
     id: 'nix-run-site',
-    date: '2026-05-26',
+    postedAt: '2026-05-26T01:22:16-07:00',
     title: '`nix run .#site` previews the page locally',
     body: `The \`site\` package is now a \`symlinkJoin\` of the deploy artifact and a tiny \`miniserve\` wrapper, so \`nix build .#site\` still emits the GitHub Pages tree and \`nix run .#site\` boots a preview at \`http://127.0.0.1:8080/\`.
 
@@ -32,7 +35,7 @@ The wrapper points at a second \`buildNpmSite\` invocation whose \`preBuild\` ex
   },
   {
     id: 'cargo-unit-per-test',
-    date: '2026-05-26',
+    postedAt: '2026-05-26T00:19:45-07:00',
     title: 'cargo-unit caches Rust tests per `#[test]`',
     body: `\`nix-cargo-unit\` used to build one derivation per test binary; a single flaky case re-ran every test in the file and lost Nix scheduler parallelism. The generated \`tests.<binary>\` attrset now exposes \`all\` (legacy whole-binary behavior) plus \`cases."mod::test_x"\`, one \`runCommand\` per individual test, invoked with \`--exact\`.
 
@@ -52,7 +55,7 @@ The same arc covers doctests, scoped to root targets, and per-binary coverage re
   },
   {
     id: 'agents-md-fragments',
-    date: '2026-05-25',
+    postedAt: '2026-05-25T23:51:39-07:00',
     title: '`AGENTS.md` is generated from reusable fragments',
     body: `The contributor guide is no longer a single hand-edited file. It is built from \`agents-md/sections/\` fragments, exposed through \`lib.agentsMd.{sections, profiles, render}\`, and rendered by \`nix run .#agents-md\`. A flake check enforces that the committed \`AGENTS.md\` matches the generated output.
 
@@ -69,22 +72,8 @@ Sibling repos can pull in shared guidance instead of copy-pasting it. The ix rep
     ]
   },
   {
-    id: 'run-recorder',
-    date: '2026-05-25',
-    title: '`nix run .#run` records command sessions',
-    body: `\`nix run .#run -- <command> ...\` executes the command in a PTY, prints a bounded head/tail summary to the terminal, and writes the full live stream under \`./.ix/run/latest/\`.
-
-Each session captures \`scriptreplay\` timing files, an asciinema cast, chunk-level JSONL, line-level JSONL ready for pandas, and a summary manifest with duration and exit status. A second shell can \`tail -f output.log\` while the original command is still running, which is useful for slow Nix builds and long test suites.`,
-    links: [
-      {
-        label: 'run package',
-        href: 'https://github.com/indexable-inc/index/tree/main/packages/run'
-      }
-    ]
-  },
-  {
     id: 'ix-dev-diagnose',
-    date: '2026-05-25',
+    postedAt: '2026-05-25T16:42:25-07:00',
     title: '`ix-dev-diagnose` probes ix.dev reachability',
     body: `\`nix run .#ix-dev-diagnose\` reaches \`https://ix.dev/\` from the caller's network path, prints \`success\` or \`failure\`, and writes one JSON report capturing system resolver answers, per-address TCP and TLS results, parsed certificate issuers and fingerprints, native and Mozilla-root verification outcomes, response headers, and a bounded body sample.
 
@@ -97,8 +86,22 @@ Intended for cases where the failing client sees different bytes than a working 
     ]
   },
   {
+    id: 'run-recorder',
+    postedAt: '2026-05-25T15:28:13-07:00',
+    title: '`nix run .#run` records command sessions',
+    body: `\`nix run .#run -- <command> ...\` executes the command in a PTY, prints a bounded head/tail summary to the terminal, and writes the full live stream under \`./.ix/run/latest/\`.
+
+Each session captures \`scriptreplay\` timing files, an asciinema cast, chunk-level JSONL, line-level JSONL ready for pandas, and a summary manifest with duration and exit status. A second shell can \`tail -f output.log\` while the original command is still running, which is useful for slow Nix builds and long test suites.`,
+    links: [
+      {
+        label: 'run package',
+        href: 'https://github.com/indexable-inc/index/tree/main/packages/run'
+      }
+    ]
+  },
+  {
     id: 'observability-stack',
-    date: '2026-05-23',
+    postedAt: '2026-05-23T00:25:53-07:00',
     title: 'Self-hosted OpenTelemetry stack module',
     body: `\`modules/services/observability\` now wires a complete self-hosted stack: an OpenTelemetry collector, Tempo for traces, Loki for logs, Mimir or Prometheus for metrics, and Grafana with a generated overview dashboard. The dashboard is defined in Nix through \`dashboards/lib.nix\`, so panels can be composed and reused instead of pasted as JSON blobs.
 
