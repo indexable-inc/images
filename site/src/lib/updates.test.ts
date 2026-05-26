@@ -12,7 +12,7 @@ describe('updateScript', () => {
   test('joins title and flattened body for RSS descriptions', () => {
     const script = updateScript({
       id: 'demo',
-      date: '2026-05-26',
+      postedAt: '2026-05-26T01:22:16-07:00',
       title: 'a `cmd` arrived',
       body: 'It does `things` well.',
       links: []
@@ -25,7 +25,7 @@ describe('siteUpdates', () => {
   test('every entry has the required fields', () => {
     for (const update of siteUpdates) {
       expect(update.id).toMatch(/^[a-z][a-z0-9-]+$/);
-      expect(update.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(Number.isFinite(new Date(update.postedAt).getTime())).toBe(true);
       expect(update.title.length).toBeGreaterThan(0);
       expect(update.body.length).toBeGreaterThan(0);
       expect(Array.isArray(update.links)).toBe(true);
@@ -33,9 +33,9 @@ describe('siteUpdates', () => {
   });
 
   test('entries are ordered newest first', () => {
-    const dates = siteUpdates.map((u) => u.date);
-    const sorted = [...dates].sort().reverse();
-    expect(dates).toEqual(sorted);
+    const times = siteUpdates.map((u) => new Date(u.postedAt).getTime());
+    const sorted = [...times].sort((a, b) => b - a);
+    expect(times).toEqual(sorted);
   });
 
   test('link hrefs are absolute https URLs', () => {

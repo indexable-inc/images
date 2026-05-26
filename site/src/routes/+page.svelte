@@ -1,27 +1,57 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { resolve } from '$app/paths';
   import { renderBlock, renderInline } from '$lib/markdown';
   import { siteFeedUrl, siteIntro, siteUpdates } from '$lib/updates';
 
   const feedHref = resolve('/feed.xml');
 
-  const dateFormatter = new Intl.DateTimeFormat('en', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: 'UTC'
+  // The prerendered HTML renders in UTC so it reads the same in every
+  // visitor's zone before JS runs. After hydration the page reformats each
+  // <time> in the visitor's local zone so the label matches their wall clock.
+  // The <time datetime> attribute always carries the full offset.
+  let timeZone = $state<string | undefined>(undefined);
+
+  onMount(() => {
+    timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   });
 
-  function formatDate(date: string): string {
-    return dateFormatter.format(new Date(`${date}T00:00:00Z`));
+  function formatPostedAt(postedAt: string, zone: string | undefined): string {
+    const parsed = new Date(postedAt);
+    const tz = zone ?? 'UTC';
+    const date = new Intl.DateTimeFormat('en', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: tz
+    }).format(parsed);
+    const time = new Intl.DateTimeFormat('en', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: tz
+    }).format(parsed);
+    const tzNamePart = new Intl.DateTimeFormat('en', {
+      timeZoneName: 'short',
+      timeZone: tz
+    })
+      .formatToParts(parsed)
+      .find((part) => part.type === 'timeZoneName');
+    return `${date} · ${time} ${tzNamePart?.value ?? tz}`;
   }
 
-  const entries = siteUpdates.map((update) => ({
+  const renderedEntries = siteUpdates.map((update) => ({
     ...update,
     html: renderBlock(update.body),
-    titleHtml: renderInline(update.title),
-    label: formatDate(update.date)
+    titleHtml: renderInline(update.title)
   }));
+
+  const entries = $derived(
+    renderedEntries.map((entry) => ({
+      ...entry,
+      label: formatPostedAt(entry.postedAt, timeZone)
+    }))
+  );
 </script>
 
 <svelte:head>
@@ -48,7 +78,7 @@
   <ol class="log">
     {#each entries as entry (entry.id)}
       <li id={entry.id}>
-        <time datetime={entry.date}>{entry.label}</time>
+        <time datetime={entry.postedAt}>{entry.label}</time>
         <h2>
           <!-- eslint-disable-next-line svelte/no-at-html-tags -->
           <a href="#{entry.id}">{@html entry.titleHtml}</a>
