@@ -2345,31 +2345,7 @@ fn render_test_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
 }
 
 fn compute_doctest_keys(graph: &UnitGraph, prepared: &PreparedGraph) -> BTreeMap<usize, String> {
-    let indexes: Vec<usize> = graph
-        .units
-        .iter()
-        .enumerate()
-        .filter_map(|(index, unit)| unit.has_doctests().then_some(index))
-        .collect();
-
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for index in &indexes {
-        *counts
-            .entry(graph.units[*index].target.name.as_str())
-            .or_insert(0) += 1;
-    }
-
-    let mut keys = BTreeMap::new();
-    for index in indexes {
-        let unit = &graph.units[index];
-        let key = if counts[unit.target.name.as_str()] == 1 {
-            unit.target.name.clone()
-        } else {
-            prepared.names[index].clone()
-        };
-        keys.insert(index, key);
-    }
-    keys
+    compute_root_keys(graph, prepared, Unit::has_doctests)
 }
 
 fn render_doctest_entries_for(
@@ -2410,7 +2386,6 @@ fn render_doctest_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> String
         &keys,
     )
 }
-
 /// One `{ name; binary; }` per unique test target across every root set.
 /// The template feeds this into a single manifest derivation so test
 /// enumeration is one IFD instead of one per binary.
