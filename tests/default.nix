@@ -1097,6 +1097,7 @@ let
     serve = {
       name = "svelte-site-fixture";
       port = 8180;
+      routePrefix = "/fixture";
       extraFlags = [
         "--title"
         "Svelte Site Fixture"
@@ -3709,6 +3710,10 @@ let
     test -x ${bunSite.bunNodeModules.nodeCompat}/bin/node
     grep -q 'class="ix npm"' ${npmSite}/share/npm-site-fixture/index.html
     grep -q 'class="ix svelte"' ${svelteSite}/share/svelte-site-fixture/index.html
+    test ! -L ${svelteSite}/share/svelte-site-fixture
+    test ! -L ${svelteSite}/share/svelte-site-fixture/index.html
+    grep -q -- '--route-prefix' ${svelteSite.passthru.serve}/bin/svelte-site-fixture
+    grep -q -- '/fixture' ${svelteSite.passthru.serve}/bin/svelte-site-fixture
     test -x ${svelteSite}/bin/svelte-site-fixture
     grep -q -- "Svelte Site Fixture" ${svelteSite}/bin/svelte-site-fixture
     test -x ${svelteSite.passthru.devServer}/bin/svelte-site-fixture-dev

@@ -6,24 +6,27 @@ tags: [nix, site, cli]
 links:
   - label: per-system wiring
     href: https://github.com/indexable-inc/index/blob/main/lib/per-system.nix
-  - label: build-npm-site
-    href: https://github.com/indexable-inc/index/blob/main/lib/build-npm-site.nix
+  - label: build-svelte-site
+    href: https://github.com/indexable-inc/index/blob/main/lib/build-svelte-site.nix
 ---
 
-The `site` package is now a `symlinkJoin` of the deploy artifact and a tiny `miniserve` wrapper, so `nix build .#site` still emits the GitHub Pages tree and `nix run .#site` boots a preview at `http://127.0.0.1:8080/`.
+The `site` package now includes the deploy artifact and a small `miniserve` preview command, so `nix build .#site` emits the GitHub Pages tree and `nix run .#site` boots a preview at `http://127.0.0.1:8080/index/`.
 
 ```bash
 nix build github:indexable-inc/index#site   # GitHub Pages tree under result/share/ix-site
-nix run   github:indexable-inc/index#site   # preview at http://127.0.0.1:8080/
+nix run   github:indexable-inc/index#site   # preview at http://127.0.0.1:8080/index/
 ```
 
-The wrapper points at a second `buildNpmSite` invocation whose `preBuild` exports `BASE_PATH=`, leaning on SvelteKit's own base-path plumbing instead of rewriting URLs in the server layer. `buildNpmSite` stays focused on building.
+The wrapper serves the same SvelteKit build that Pages deploys. `ix.buildSvelteSite` passes miniserve a route prefix instead of rebuilding with a different `BASE_PATH`, so local preview exercises the production `/index` URL layout.
 
 ```nix
-sitePreviewBuild = ix.buildNpmSite pkgs {
-  pname = "ix-site-preview";
+siteBuild = ix.buildSvelteSite pkgs {
+  pname = "ix-site";
   src = siteSrc;
   distDir = "build";
-  preBuild = "export BASE_PATH=";
+  serve = {
+    name = "ix-site";
+    routePrefix = "/index";
+  };
 };
 ```
