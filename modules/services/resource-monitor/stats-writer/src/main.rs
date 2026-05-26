@@ -1,3 +1,14 @@
+// Numeric arithmetic here is metric/billing math (bytes, seconds, USD) where
+// f64 precision and i64↔u32 date conversions are intentional and bounded by
+// domain. Allow the pedantic cast lints at the crate level rather than
+// peppering call sites.
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -31,7 +42,8 @@ struct CpuSample {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let config = parse_args(env::args().skip(1).collect())?;
+    let args: Vec<String> = env::args().skip(1).collect();
+    let config = parse_args(&args)?;
     fs::create_dir_all(&config.output_dir)?;
 
     loop {
@@ -40,7 +52,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn parse_args(args: Vec<String>) -> Result<Config, Box<dyn Error>> {
+fn parse_args(args: &[String]) -> Result<Config, Box<dyn Error>> {
     let mut config = Config {
         output_dir: PathBuf::from("/run/resource-monitor"),
         df: PathBuf::from("df"),
@@ -70,13 +82,13 @@ fn parse_args(args: Vec<String>) -> Result<Config, Box<dyn Error>> {
             "--total-memory-gib" => config.total_memory_gib = parse_positive(value, flag)?,
             "--total-storage-tib" => config.total_storage_tib = parse_positive(value, flag)?,
             "--cpu-usd-per-vcpu-month" => {
-                config.cpu_usd_per_vcpu_month = parse_positive(value, flag)?
+                config.cpu_usd_per_vcpu_month = parse_positive(value, flag)?;
             }
             "--memory-usd-per-gib-hour" => {
-                config.memory_usd_per_gib_hour = parse_positive(value, flag)?
+                config.memory_usd_per_gib_hour = parse_positive(value, flag)?;
             }
             "--storage-usd-per-tib-hour" => {
-                config.storage_usd_per_tib_hour = parse_positive(value, flag)?
+                config.storage_usd_per_tib_hour = parse_positive(value, flag)?;
             }
             "--margin-multiplier" => config.margin_multiplier = parse_positive(value, flag)?,
             _ => return Err(format!("unknown argument: {flag}").into()),
@@ -242,7 +254,7 @@ fn iso_timestamp(time: SystemTime) -> Result<String, Box<dyn Error>> {
     ))
 }
 
-fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+const fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
     let z = days_since_epoch + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let day_of_era = z - era * 146_097;
@@ -253,7 +265,7 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
     let month_prime = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    let year = year + if month <= 2 { 1 } else { 0 };
+    let year = year + (month <= 2) as i64;
 
     (year, month as u32, day as u32)
 }

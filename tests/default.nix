@@ -613,6 +613,10 @@ let
   };
 
   cargoUnitHello = cargoUnitWorkspace.binaries.cargo-unit-hello;
+  cargoUnitSelectedHello = ix.cargoUnit.selectBinaryWithTests cargoUnitWorkspace {
+    binary = "cargo-unit-hello";
+    packageName = "cargo-unit-hello";
+  };
   cargoUnitTangoComparison = cargoUnitWorkspace.compareTangoBenchmarks {
     baseline = cargoUnitWorkspace;
     args = [
@@ -2768,6 +2772,15 @@ let
         message = "cargo-unit package outputs should be wrapped by policy checks by default";
       }
       {
+        assertion = builtins.hasAttr "cargo_unit_hello-all" cargoUnitSelectedHello.passthru.tests;
+        message = "selectBinaryWithTests should schedule package-owned test binaries";
+      }
+      {
+        assertion =
+          !(builtins.hasAttr "cargo_unit_hello-tests-returns_greeting" cargoUnitSelectedHello.passthru.tests);
+        message = "selectBinaryWithTests should not force per-case test manifests into flake checks by default";
+      }
+      {
         assertion = builtins.all (binary: builtins.hasAttr binary cargoUnitBinaries) [
           "cargo-unit-goodbye"
           "cargo-unit-hello"
@@ -2892,6 +2905,26 @@ let
       {
         assertion = repoPackages.minecraft-nbt.passthru.tests ? package;
         message = "repo Rust package builds should be exposed as flake-checkable tests";
+      }
+      {
+        assertion = repoPackages.minecraft-nbt.passthru.tests ? cargoMachete;
+        message = "repo Rust policy checks should be exposed as flake-checkable tests";
+      }
+      {
+        assertion = builtins.hasAttr "integration-all" repoPackages.dag-runner.passthru.tests;
+        message = "repo Rust package tests should include package-owned integration test targets";
+      }
+      {
+        assertion = builtins.hasAttr "minecraft_nbt-all" repoPackages.minecraft-nbt.passthru.tests;
+        message = "repo Rust package tests should include package-owned library test targets";
+      }
+      {
+        assertion = builtins.hasAttr "property-all" repoPackages.minecraft-nbt.passthru.tests;
+        message = "repo Rust package tests should include package-owned property test targets";
+      }
+      {
+        assertion = builtins.hasAttr "doctest-minecraft_nbt-all" repoPackages.minecraft-nbt.passthru.tests;
+        message = "repo Rust package tests should include package-owned doctest targets";
       }
       {
         assertion =

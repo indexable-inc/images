@@ -6,28 +6,16 @@
 }:
 
 let
-  loop.binary = ix.cargoUnit.buildBinary {
-    pname = "loop";
-    src = ix.rustWorkspace.src;
-    workspaceRoot = ix.rustWorkspace.root;
-    cargoLock = ix.rustWorkspace.cargoLock;
-    cargoArgs = [
-      "-p"
-      "loop"
-    ];
+  unwrapped = ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
     binary = "loop";
-    policy = {
-      denyUnusedCrateDependencies = false;
-      cargoAudit.enable = false;
-      cargoMachete.enable = false;
-      clippy.enable = false;
-    };
   };
 in
 pkgs.runCommand "loop"
   {
     nativeBuildInputs = [ pkgs.makeWrapper ];
-    passthru.unwrapped = loop.binary;
+    passthru = unwrapped.passthru // {
+      inherit unwrapped;
+    };
     meta = {
       description = "Run agent loops and health checks with a Loro-backed web UI";
       mainProgram = "loop";
@@ -36,6 +24,6 @@ pkgs.runCommand "loop"
   }
   ''
     mkdir -p "$out/bin"
-    makeWrapper "${loop.binary}/bin/loop" "$out/bin/loop" \
+    makeWrapper "${unwrapped}/bin/loop" "$out/bin/loop" \
       --set LOOP_VIEWER_DIR "${viewer}/share/loop-viewer"
   ''

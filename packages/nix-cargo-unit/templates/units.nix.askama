@@ -115,9 +115,17 @@ let
   # The shared manifest derivation depends on every binary listed here.
   testTargets = [
 {{ test_target_entries }}  ];
+  testTargetNamesByPackage =
+    pkgs.lib.mapAttrs (_: targets: map (target: target.name) targets) (
+      pkgs.lib.groupBy (target: target.packageName) testTargets
+    );
 
   doctestTargets = [
 {{ doctest_target_entries }}  ];
+  doctestTargetNamesByPackage =
+    pkgs.lib.mapAttrs (_: targets: map (target: target.name) targets) (
+      pkgs.lib.groupBy (target: target.packageName) doctestTargets
+    );
 
   benchmarkTargets = [
 {{ benchmark_target_entries }}  ];
@@ -634,7 +642,13 @@ let
     };
 in
 {
-  inherit policyChecks sourceAudit units;
+  inherit
+    doctestTargetNamesByPackage
+    policyChecks
+    sourceAudit
+    testTargetNamesByPackage
+    units
+    ;
   testPlan = mkTestPlan "cargo-unit-test-plan";
   benchmarkPlan = mkBenchmarkPlan "cargo-unit-benchmark-plan";
   coverageReport = mkCoverageReport {};

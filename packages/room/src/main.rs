@@ -181,8 +181,8 @@ async fn apply_event(state: &AppState, event: ClientEvent) {
             room.participants
                 .entry(id.clone())
                 .and_modify(|participant| {
-                    participant.name = name.clone();
-                    participant.color = color.clone();
+                    participant.name.clone_from(&name);
+                    participant.color.clone_from(&color);
                     participant.last_seen_ms = now_ms();
                 })
                 .or_insert_with(|| Participant {
@@ -230,7 +230,7 @@ async fn record_event(state: &AppState, event: &ClientEvent) {
     let Ok(value) = serde_json::to_value(event) else {
         return;
     };
-    let mut doc = state.doc.lock().await;
+    let doc = state.doc.lock().await;
     let events = doc.get_list("events");
     if events
         .insert(
@@ -274,7 +274,7 @@ async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
+        () = ctrl_c => {},
+        () = terminate => {},
     }
 }

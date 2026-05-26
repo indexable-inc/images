@@ -633,6 +633,44 @@ fn render_build_inputs(
     }
 }
 
+// Cargo sets `CARGO_BIN_EXE_<name>` for integration tests and benchmarks.
+// The unit graph exposes same-package build-mode bin targets as dependencies;
+// test-harness bin units and integration-test binaries are runnable outputs too,
+// but they are not the executable Cargo points this variable at.
+fn same_package_bins(graph: &UnitGraph, index: usize) -> Vec<(String, usize)> {
+    let unit = &graph.units[index];
+    if !needs_bin_exe_env(unit) {
+        return Vec::new();
+    }
+    graph
+        .units
+        .iter()
+        .enumerate()
+        .filter_map(|(i, other)| {
+            if i == index || !is_bin_exe_candidate(unit, other) {
+                return None;
+            }
+            Some((other.target.name.clone(), i))
+        })
+        .collect()
+}
+
+fn needs_bin_exe_env(unit: &Unit) -> bool {
+    matches!(unit.mode, UnitMode::Test)
+        && unit
+            .target
+            .kind
+            .iter()
+            .any(|kind| matches!(kind.as_str(), "test" | "bench"))
+}
+
+fn is_bin_exe_candidate(unit: &Unit, candidate: &Unit) -> bool {
+    candidate.pkg_id == unit.pkg_id
+        && candidate.mode == UnitMode::Build
+        && candidate.target.has_kind("bin")
+        && candidate.platform == unit.platform
+}
+
 fn render_rustc_build_phase(
     graph: &UnitGraph,
     options: &RenderOptions,
@@ -645,6 +683,7 @@ fn render_rustc_build_phase(
 
     script.push_str("mkdir -p build\n");
     script.push_str("build_script_flags=()\n");
+    script.push_str("rustc_env=()\n");
     script.push_str("rustc_args=()\n\n");
     script.push_str(&cargo_package_exports(unit)?);
     writeln!(
@@ -652,6 +691,7 @@ fn render_rustc_build_phase(
         "export CARGO_MANIFEST_DIR={}",
         shell::double_quote(&source_path_expr(source, &crate_root_for_unit(unit))?)
     )?;
+    append_bin_exe_env(&mut script, graph, prepared, index)?;
 
     if let Some(run_index) = unit_build_script_run(graph, index) {
         let run_ref = format!("${{units.{}}}", nix_attr(&prepared.names[run_index]));
@@ -719,11 +759,43 @@ fn render_rustc_build_phase(
     }
 
     script.push_str("rustc_args+=( \"''${build_script_flags[@]}\" )\n");
-    if collects_unused_crate_dependencies(unit, options) {
+    append_rustc_invocation(
+        &mut script,
+        collects_unused_crate_dependencies(unit, options),
+    );
+
+    Ok(script)
+}
+
+fn append_bin_exe_env(
+    script: &mut String,
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+) -> Result<()> {
+    for (bin_name, bin_index) in same_package_bins(graph, index) {
+        let env_name = format!("CARGO_BIN_EXE_{bin_name}");
+        writeln!(
+            script,
+            "rustc_env+=( {} )",
+            shell::quote(&format!(
+                "{env_name}=${{units.{}}}/bin/{bin_name}",
+                nix_attr(&prepared.names[bin_index])
+            ))
+        )?;
+    }
+
+    Ok(())
+}
+
+fn append_rustc_invocation(script: &mut String, collect_unused_deps: bool) {
+    if collect_unused_deps {
         script.push_str("rustc_diagnostics=build/rustc-diagnostics.jsonl\n");
         script.push_str("set +e\n");
         script.push_str("set -x\n");
-        script.push_str("rustc \"''${rustc_args[@]}\" 2> \"$rustc_diagnostics\"\n");
+        script.push_str(
+            "env \"''${rustc_env[@]}\" rustc \"''${rustc_args[@]}\" 2> \"$rustc_diagnostics\"\n",
+        );
         script.push_str("rustc_status=$?\n");
         script.push_str("set +x\n");
         script.push_str("set -e\n");
@@ -737,10 +809,8 @@ fn render_rustc_build_phase(
         );
     } else {
         script.push_str("set -x\n");
-        script.push_str("rustc \"''${rustc_args[@]}\"\n");
+        script.push_str("env \"''${rustc_env[@]}\" rustc \"''${rustc_args[@]}\"\n");
     }
-
-    Ok(script)
 }
 
 fn collects_unused_crate_dependencies(unit: &Unit, options: &RenderOptions) -> bool {
@@ -1263,7 +1333,14 @@ fn cargo_package_exports(unit: &Unit) -> Result<String> {
         .map(cargo_manifest_package_metadata)
         .unwrap_or_default();
 
+    // CARGO_CRATE_NAME is the rust identifier rustc receives via `--crate-name`.
+    // Cargo normalizes the target's name (`-` → `_`); crates like rmcp read this
+    // via `env!()` at compile time.
+    let crate_name = unit.target.name.replace('-', "_");
+    let is_bin = unit.target.kind.iter().any(|kind| kind == "bin");
+
     for (name, value) in [
+        ("CARGO_CRATE_NAME", crate_name.as_str()),
         ("CARGO_PKG_NAME", package_name.as_ref()),
         ("CARGO_PKG_VERSION", version),
         ("CARGO_PKG_VERSION_MAJOR", major),
@@ -1279,6 +1356,14 @@ fn cargo_package_exports(unit: &Unit) -> Result<String> {
         ("CARGO_PKG_RUST_VERSION", metadata.rust_version.as_str()),
     ] {
         let _ = writeln!(script, "export {name}={}", shell_env_value(value));
+    }
+
+    if is_bin {
+        let _ = writeln!(
+            script,
+            "export CARGO_BIN_NAME={}",
+            shell_env_value(&unit.target.name)
+        );
     }
 
     Ok(script)
@@ -2432,11 +2517,24 @@ fn render_doctest_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) ->
         if by_key.contains_key(key) {
             continue;
         }
+        let unit = &graph.units[index];
+        let source = prepared
+            .source_entry(index)
+            .expect("prepared graph has source entries for every doctest target");
+        let package_root = if source.relative.is_empty() {
+            "."
+        } else {
+            source.relative.as_str()
+        };
         by_key.insert(
             key.clone(),
             format!(
-                "{{ name = {}; listCommand = {}; allCommand = {}; runCommand = {}; }}",
+                "{{ name = {}; packageName = {}; packageVersion = {}; packageRoot = {}; sourceStoreName = {}; listCommand = {}; allCommand = {}; runCommand = {}; }}",
                 nix_attr(key),
+                nix_attr(&unit.package_name()),
+                nix_attr(unit.package_version()),
+                nix_attr(package_root),
+                nix_attr(&source.name),
                 nix_indented_string(&render_doctest_command(
                     graph,
                     prepared,
@@ -2678,6 +2776,9 @@ mod tests {
         assert!(rendered.contains("RUST_TEST_THREADS"));
         assert!(rendered.contains("mkTestCases ="));
         assert!(rendered.contains("testTargets = ["));
+        assert!(rendered.contains("testTargetNamesByPackage ="));
+        assert!(rendered.contains("pkgs.lib.groupBy (target: target.packageName) testTargets"));
+        assert!(rendered.contains("doctestTargetNamesByPackage ="));
         assert!(rendered.contains("{ name = \"hello\"; binary ="));
         assert!(!rendered.contains("units.\\\""));
         assert!(rendered.contains("packageName = \"hello\";"));
@@ -2697,6 +2798,107 @@ mod tests {
         assert!(rendered.contains("source-roots.tsv"));
         assert!(rendered.contains("testManifestDrv ="));
         assert!(rendered.contains("cargo-unit-test-manifest"));
+    }
+
+    #[test]
+    fn bin_exe_env_uses_build_bins_for_integration_tests() {
+        let workspace = tempfile::tempdir().unwrap();
+        fs::create_dir_all(workspace.path().join("src")).unwrap();
+        fs::create_dir_all(workspace.path().join("tests")).unwrap();
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            r#"[package]
+name = "dag-runner"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+        let main_rs = workspace.path().join("src/main.rs");
+        let integration_rs = workspace.path().join("tests/integration.rs");
+        fs::write(&main_rs, "fn main() {}\n").unwrap();
+        fs::write(&integration_rs, "#[test]\nfn runs() {}\n").unwrap();
+        let main_rs = main_rs.display().to_string();
+        let integration_rs = integration_rs.display().to_string();
+        let pkg_id = format!(
+            "path+file://{}#dag-runner@0.1.0",
+            workspace.path().display()
+        );
+
+        let graph: UnitGraph = serde_json::from_value(serde_json::json!({
+          "version": 1,
+          "units": [
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["bin"],
+                "crate_types": ["bin"],
+                "name": "dag-runner",
+                "src_path": main_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "release", "opt_level": "3" },
+              "features": [],
+              "mode": "build",
+              "dependencies": []
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["bin"],
+                "crate_types": ["bin"],
+                "name": "dag-runner",
+                "src_path": main_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "test", "opt_level": "0" },
+              "features": [],
+              "mode": "test",
+              "dependencies": []
+            },
+            {
+              "pkg_id": pkg_id,
+              "target": {
+                "kind": ["test"],
+                "crate_types": ["bin"],
+                "name": "integration",
+                "src_path": integration_rs,
+                "edition": "2024"
+              },
+              "profile": { "name": "test", "opt_level": "0" },
+              "features": [],
+              "mode": "test",
+              "dependencies": [
+                { "index": 0, "extern_crate_name": "dag_runner" }
+              ]
+            }
+          ],
+          "roots": [0, 1, 2]
+        }))
+        .unwrap();
+
+        assert!(same_package_bins(&graph, 1).is_empty());
+        assert_eq!(
+            same_package_bins(&graph, 2),
+            vec![("dag-runner".to_string(), 0)]
+        );
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: workspace.path().to_path_buf(),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(rendered.matches("CARGO_BIN_EXE_dag-runner=").count(), 1);
+        assert!(rendered.contains("rustc_env+=( 'CARGO_BIN_EXE_dag-runner=${units."));
+        assert!(!rendered.contains("export CARGO_BIN_EXE_dag-runner"));
+        assert!(rendered.contains("env \"''${rustc_env[@]}\" rustc \"''${rustc_args[@]}\""));
     }
 
     #[test]

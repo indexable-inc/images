@@ -256,21 +256,34 @@ let
       rustToolchain = rustNightlyToolchainFor pkgs;
       writePythonApplication = writePythonApplication pkgs;
     };
-  # Build a repo-owned Rust tool whose default.nix calls `ix.buildRustPackage`.
+  # Build a repo-owned Rust tool while keeping nix-cargo-unit itself on the
+  # pre-cargo-unit bootstrap path.
   # Returns the policy-unchecked variant when present, so generators that
   # only need the binary do not drag the policy-check graph into their closure.
   buildIxRustTool =
     hostPkgs: path:
     let
+      usesCargoUnit = builtins.toString path != builtins.toString paths.packages.nixCargoUnit;
+      hostRustWorkspace = rustWorkspaceFor hostPkgs;
       checked = hostPkgs.callPackage path {
         pkgs = hostPkgs;
         ix = {
           buildRustPackage = pkgs: (rustFor pkgs).buildPackage;
-          inherit rustWorkspace;
+          rustWorkspace = hostRustWorkspace;
+        }
+        // lib.optionalAttrs usesCargoUnit {
+          cargoUnit = cargoUnitFor hostPkgs;
         };
       };
+      unchecked = checked.passthru.unchecked or null;
     in
-    checked.passthru.unchecked or checked;
+    if unchecked == null then
+      checked
+    else
+      unchecked
+      // {
+        meta = (unchecked.meta or { }) // (checked.meta or { });
+      };
   cargoUnitFor =
     pkgs:
     import ./cargo-unit.nix {
@@ -631,10 +644,10 @@ let
         # ixSpecialArgs bundle is bound to.
         cargoUnit = cargoUnitFor pkgs;
         goUnit = goUnitFor pkgs;
+        rustWorkspace = rustWorkspaceFor pkgs;
       };
       basePackages = {
         dag-runner = pkgs.callPackage paths.packages.dagRunner {
-          inherit pkgs;
           ix = ixForPackages;
         };
         room =
@@ -668,14 +681,12 @@ let
           ix = ixForPackages;
         };
         ix-dev-diagnose = pkgs.callPackage paths.packages.ixDevDiagnose {
-          inherit pkgs;
           ix = ixForPackages;
         };
         minestom.helloServerJar = pkgs.callPackage paths.packages.minestom.servers.hello {
           ix = ixForPackages;
         };
         minecraft-nbt = pkgs.callPackage paths.packages.minecraft.nbt {
-          inherit pkgs;
           ix = ixForPackages;
         };
         llm-clippy = llmClippyFor pkgs;
@@ -709,7 +720,6 @@ let
           ix = ixForPackages;
         };
         minecraft-sync-managed = pkgs.callPackage paths.packages.minecraft.syncManaged {
-          inherit pkgs;
           ix = ixForPackages;
         };
         nix-cargo-unit = pkgs.callPackage paths.packages.nixCargoUnit {
@@ -717,7 +727,6 @@ let
           ix = ixForPackages;
         };
         oci-image-builder = pkgs.callPackage paths.packages.ociImageBuilder {
-          inherit pkgs;
           ix = ixForPackages;
         };
         run = pkgs.callPackage paths.packages.run {
@@ -737,19 +746,20 @@ let
     basePackages // cliPackages;
 
   /**
-    Shared Rust workspace source for repo-owned crates.
+    Shared Rust workspace source and unit graph for repo-owned crates.
 
     The root Cargo.toml and Cargo.lock are the source of truth for IDEs,
     dependency versions, and package builds. The filtered source keeps the Nix
     closure to Rust workspace inputs instead of the full repository.
+
+    `rustWorkspaceFor pkgs` returns `{ root; src; cargoLock; units; }` for the
+    caller's package set. The default `rustWorkspace` uses the repo's
+    `x86_64-linux` package set for image and module evaluation.
   */
-  rustWorkspace =
+  rustWorkspaceFor =
+    workspacePkgs:
     let
       inherit (paths) root;
-    in
-    {
-      inherit root;
-      cargoLock = root + "/Cargo.lock";
       src = lib.fileset.toSource {
         inherit root;
         fileset = lib.fileset.intersection (lib.fileset.gitTracked root) (
@@ -769,7 +779,50 @@ let
           ]
         );
       };
+      cargoLock = root + "/Cargo.lock";
+      # One workspace-wide unit graph for every repo-owned Rust crate. Each
+      # crate's `default.nix` picks its binary and test targets out of this
+      # via `ix.cargoUnit.selectBinaryWithTests`, so the unit graph + vendor
+      # closure get generated once instead of per crate. `nix-cargo-unit`
+      # itself stays on the bootstrap path (it's what builds this graph).
+      units = (cargoUnitFor workspacePkgs).buildWorkspace {
+        pname = "ix-rust-workspace";
+        inherit src;
+        cargoLock.lockFile = cargoLock;
+        workspaceRoot = root;
+        cargoArgs = [ "--workspace" ];
+        cargoTargets = [
+          [ "--workspace" ]
+          [
+            "--workspace"
+            "--tests"
+          ]
+        ];
+        cargoTargetNames = [
+          "build"
+          "test"
+        ];
+        # Every policy check runs once across the whole workspace: a
+        # regression in any single crate fails the workspace selection.
+        # `cargoUnit.buildWorkspace`'s defaults already enable each check;
+        # this block makes the contract explicit at the workspace root.
+        policy = {
+          denyUnusedCrateDependencies = true;
+          cargoAudit.enable = true;
+          cargoMachete.enable = true;
+          clippy.enable = true;
+        };
+      };
+    in
+    {
+      inherit
+        root
+        src
+        cargoLock
+        units
+        ;
     };
+  rustWorkspace = rustWorkspaceFor pkgs;
 
   /**
     Cross-cutting helpers handed to every module through `specialArgs.ix`.
@@ -796,6 +849,7 @@ let
       mkMinecraftSyncManaged
       relativePath
       rustWorkspace
+      rustWorkspaceFor
       secrets
       systemdHardening
       writeNushellApplication
@@ -1068,6 +1122,7 @@ let
       packageSetFor
       relativePath
       rustWorkspace
+      rustWorkspaceFor
       secrets
       systemdHardening
       uvLockFor

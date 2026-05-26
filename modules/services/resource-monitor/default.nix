@@ -91,16 +91,8 @@ let
     preBuild = "cp ${pkgs.writeText "resource-monitor-vm-config.json" (builtins.toJSON metricConfig)} src/lib/vm-config.json";
   };
 
-  statsWriter = ix.buildRustPackage pkgs {
-    pname = "resource-monitor-stats-writer";
-    version = "0.1.0";
-    src = ix.rustWorkspace.src;
-    cargoLock.lockFile = ix.rustWorkspace.cargoLock;
-    buildAndTestSubdir = "modules/services/resource-monitor/stats-writer";
-    cargoArgs = [
-      "-p"
-      "resource-monitor-stats-writer"
-    ];
+  statsWriter = ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
+    binary = "resource-monitor-stats-writer";
     meta.mainProgram = "resource-monitor-stats-writer";
   };
 

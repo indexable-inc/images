@@ -1,19 +1,6 @@
-{
-  ix,
-  pkgs,
-}:
+{ ix, ... }:
 
-ix.buildRustPackage pkgs {
-  pname = "ix-dev-diagnose";
-  version = "0.1.0";
-
-  src = ix.rustWorkspace.src;
-  cargoLock.lockFile = ix.rustWorkspace.cargoLock;
-  buildAndTestSubdir = "packages/ix-dev-diagnose";
-  cargoArgs = [
-    "-p"
-    "ix-dev-diagnose"
-  ];
-
+ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
+  binary = "ix-dev-diagnose";
   meta.mainProgram = "ix-dev-diagnose";
 }

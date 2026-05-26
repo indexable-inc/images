@@ -244,18 +244,33 @@ let
   rustPackageTests =
     let
       rustPackages = lib.getAttrs [
+        "dag-runner"
+        "ix-dev-diagnose"
+        "loop"
+        "mcp"
         "minecraft-nbt"
         "minecraft-sync-managed"
         "nix-cargo-unit"
         "oci-image-builder"
+        "room"
       ] repoPackages;
+      moduleRustPackages = {
+        resource-monitor-stats-writer =
+          let
+            cargoUnit = ix.cargoUnitFor pkgs;
+            rustWorkspace = ix.rustWorkspaceFor pkgs;
+          in
+          cargoUnit.selectBinaryWithTests rustWorkspace.units {
+            binary = "resource-monitor-stats-writer";
+          };
+      };
     in
     lib.concatMapAttrs (
       packageName: package:
       lib.mapAttrs' (testName: test: lib.nameValuePair "rust-${packageName}-${testName}" test) (
         package.passthru.tests or { }
       )
-    ) rustPackages;
+    ) (rustPackages // moduleRustPackages);
 
   lintSource = fs.toSource {
     inherit (paths) root;

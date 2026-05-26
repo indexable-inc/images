@@ -331,6 +331,86 @@ let
     workspace.binaries.${binary} or workspace.default;
 
   /**
+    Pick a binary out of a pre-built `buildWorkspace` plus its test
+    derivations, ready for `passthru.tests` consumption.
+
+    `testTargets` and `doctestTargets` default to every generated target owned
+    by `packageName`. Each target becomes one `<target>-all` test; doctests use
+    `doctest-<target>-all` names. Set `includeTestCases` only for callers that
+    deliberately want one flake-checkable derivation per discovered test case.
+
+    Use this when the caller has one shared workspace (`ix.rustWorkspace.units`)
+    so all repo-owned crates ride the same unit graph. Use `buildBinary` when
+    a crate needs its own workspace (different policy, fetched source, etc).
+  */
+  selectBinaryWithTests =
+    workspace:
+    {
+      binary,
+      packageName ? binary,
+      testTargets ? null,
+      doctestTargets ? null,
+      includeTestCases ? false,
+      meta ? { },
+      passthru ? { },
+    }:
+    let
+      binaryDrv = workspace.binaries.${binary} or workspace.default;
+      uncheckedBinary = binaryDrv.passthru.unchecked or binaryDrv;
+      namesForPackage =
+        attrName: fallback:
+        if builtins.hasAttr attrName workspace && builtins.hasAttr packageName workspace.${attrName} then
+          workspace.${attrName}.${packageName}
+        else
+          fallback;
+      selectedTestTargets =
+        if testTargets == null then namesForPackage "testTargetNamesByPackage" [ binary ] else testTargets;
+      selectedDoctestTargets =
+        if doctestTargets == null then
+          namesForPackage "doctestTargetNamesByPackage" [ ]
+        else
+          doctestTargets;
+      flattenAllTargets =
+        prefix: targetNames: targets:
+        lib.mapAttrs' (targetName: target: lib.nameValuePair "${prefix}${targetName}-all" target.all) (
+          lib.getAttrs (builtins.filter (name: targets ? ${name}) targetNames) targets
+        );
+      flattenCaseTargets =
+        prefix: targetNames: targets:
+        lib.concatMapAttrs (
+          targetName: target:
+          lib.mapAttrs' (
+            case: drv:
+            lib.nameValuePair "${prefix}${targetName}-${lib.replaceStrings [ "::" ] [ "-" ] case}" drv
+          ) (target.cases or { })
+        ) (lib.getAttrs (builtins.filter (name: targets ? ${name}) targetNames) targets);
+      testCases =
+        flattenCaseTargets "" selectedTestTargets (workspace.tests or { })
+        // flattenCaseTargets "doctest-" selectedDoctestTargets (workspace.doctests or { });
+      tests = {
+        package = uncheckedBinary;
+      }
+      // flattenAllTargets "" selectedTestTargets (workspace.tests or { })
+      // flattenAllTargets "doctest-" selectedDoctestTargets (workspace.doctests or { })
+      // lib.optionalAttrs includeTestCases testCases;
+    in
+    binaryDrv
+    // {
+      meta = (binaryDrv.meta or { }) // meta;
+      passthru =
+        (binaryDrv.passthru or { })
+        // passthru
+        // {
+          tests =
+            (binaryDrv.passthru.tests or { })
+            // (binaryDrv.passthru.policyChecks or { })
+            // (passthru.tests or { })
+            // tests;
+          inherit (workspace) policy;
+        };
+    };
+
+  /**
     Select several binary targets from one workspace unit graph.
 
     Use `cargoTargets` on `buildWorkspace` when the same import should expose
@@ -352,6 +432,7 @@ in
     buildBinary
     buildBinaries
     buildWorkspace
+    selectBinaryWithTests
     auditCargoLock
     generateUnitGraph
     generateUnitsNix

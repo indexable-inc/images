@@ -496,10 +496,11 @@ let
     let
       args = commonArgs rawArgs;
       inherit (args.policy) cargoAudit;
+      lockFile = cargoLockFile args.cargoLock;
       auditFlags = [
         "audit"
         "--file"
-        (builtins.toString (cargoLockFile args.cargoLock))
+        "Cargo.lock"
         "--db"
         (builtins.toString cargoAudit.db)
         "--no-fetch"
@@ -517,10 +518,16 @@ let
     pkgs.runCommand "${args.pname}-cargo-audit"
       {
         nativeBuildInputs = [ pkgs.cargo-audit ];
+        # Stage the lockfile through a derivation input so its store path
+        # is realized in every builder's sandbox, not just the one that
+        # evaluated the expression.
+        inherit lockFile;
       }
       ''
         export CARGO_HOME="$TMPDIR/cargo-home"
         mkdir -p "$CARGO_HOME"
+        cp "$lockFile" "$TMPDIR/Cargo.lock"
+        cd "$TMPDIR"
         cargo-audit ${lib.escapeShellArgs auditFlags}
         ${mkdirOut}
       '';
