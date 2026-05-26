@@ -95,7 +95,7 @@ jobs:
 
       - name: Fetch pull request refs
         env:
-          GITHUB_TOKEN: ${{ secrets.repository_token || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.repository_token || github.token }}
         run: |
           set -euo pipefail
           auth_header="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 | tr -d '\n')"
@@ -350,7 +350,7 @@ jobs:
 
       - name: Publish GitHub review suggestions
         env:
-          GITHUB_TOKEN: ${{ secrets.repository_token || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.repository_token || github.token }}
         run: |
           python3 - <<'PY'
           from __future__ import annotations
@@ -692,7 +692,7 @@ jobs:
     steps:
       - name: Require maintainer approval on no-secret head
         env:
-          GITHUB_TOKEN: ${{ secrets.repository_token || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.repository_token || github.token }}
         run: |
           python3 - <<'PY'
           from __future__ import annotations
@@ -893,7 +893,7 @@ jobs:
     steps:
       - name: Mirror AI review result for branch protection
         env:
-          GITHUB_TOKEN: ${{ secrets.repository_token || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.repository_token || github.token }}
         run: |
           if [ "${RESULT_SOURCE}" = "publish-current" ]; then
             result="${{ needs.publish-ai-review.result }}"
