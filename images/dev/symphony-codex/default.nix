@@ -8,8 +8,6 @@
   networking.hostName = "symphony-codex";
 
   environment.systemPackages = [
-    ix.packages.symphony-room-server
-
     pkgs.ast-grep
     pkgs.bashInteractive
     pkgs.cacert

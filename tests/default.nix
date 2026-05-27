@@ -2372,8 +2372,8 @@ let
         message = "symphony-codex image should publish the latest tag by default";
       }
       {
-        assertion = builtins.elem "symphony-room-server" symphonyCodex.packageNames;
-        message = "symphony-codex image should include room-server";
+        assertion = !(builtins.elem "symphony-room-server" symphonyCodex.packageNames);
+        message = "symphony-codex image should let Symphony choose the live room-server source";
       }
       {
         assertion = builtins.elem pkgs.codex symphonyCodex.packages;
