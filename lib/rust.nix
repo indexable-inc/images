@@ -688,27 +688,44 @@ let
       cargoTestFlags =
         (rawArgs.cargoTestFlags or [ ])
         ++ lib.optionals (testEnabled && args.policy.tests.useNextest) [ "--no-tests=pass" ];
+      # Vendor through our own fetcher (`resolveVendorDir` -> `static.crates.io`)
+      # instead of letting nixpkgs's `importCargoLock` re-fetch each crate via
+      # the legacy `crates.io/api/v1/crates/.../download` URL. The legacy
+      # endpoint is now gated on User-Agent (no `curl/...`) and is a redirect
+      # to the same CDN anyway, so going direct is both unblocked and faster.
+      # Surface the vendor dir as `cargoDeps` (absolute store path); the
+      # cargo-setup hook expects `cargoVendorDir` to be in-source, not a
+      # `/nix/store` path. User-supplied `cargoHash`, `cargoDeps`, or
+      # `cargoVendorDir` still wins.
+      bareVendorDir = resolveVendorDir {
+        inherit (args) cargoLock outputHashes vendorDir;
+        sourceOverrides = rawArgs.sourceOverrides or { };
+      };
+      # nixpkgs's `cargoSetupPostPatchHook` diffs `$cargoDeps/Cargo.lock`
+      # against the lockfile in the source tree. `resolveVendorDir` only
+      # emits the per-crate symlinks, so re-attach the lockfile here.
+      defaultCargoDeps = pkgs.runCommand "cargo-deps" { } ''
+        mkdir -p "$out"
+        cp -RL ${bareVendorDir}/. "$out/"
+        cp ${cargoLockFile args.cargoLock} "$out/Cargo.lock"
+      '';
       buildArgs =
         builtins.removeAttrs rawArgs [
           "cargoArgs"
           "cargoExtraConfig"
+          "cargoLock"
           "cargoTestFlags"
           "outputHashes"
           "policy"
           "rustPlatform"
           "rustToolchain"
+          "sourceOverrides"
           "vendorDir"
         ]
         //
-          lib.optionalAttrs
-            (
-              !(rawArgs ? cargoLock)
-              && !(rawArgs ? cargoHash)
-              && !(rawArgs ? cargoDeps)
-              && !(rawArgs ? cargoVendorDir)
-            )
+          lib.optionalAttrs (!(rawArgs ? cargoHash) && !(rawArgs ? cargoDeps) && !(rawArgs ? cargoVendorDir))
             {
-              cargoLock.lockFile = cargoLockFile args.cargoLock;
+              cargoDeps = defaultCargoDeps;
             }
         // {
           nativeBuildInputs = (rawArgs.nativeBuildInputs or [ ]) ++ nativeBuildInputsForPolicy args.policy;

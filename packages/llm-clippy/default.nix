@@ -1,4 +1,5 @@
 {
+  ix,
   lib,
   makeWrapper,
   pkgs,
@@ -13,23 +14,20 @@ let
     else
       pkgs.rust-bin.fromRustupToolchainFile (src + "/rust-toolchain.toml");
 
-  rustPlatform = pkgs.makeRustPlatform {
-    cargo = toolchain;
-    rustc = toolchain;
-  };
-
   rustcLibPathVar =
     if pkgs.stdenv.hostPlatform.isDarwin then "DYLD_LIBRARY_PATH" else "LD_LIBRARY_PATH";
 in
-rustPlatform.buildRustPackage {
+ix.buildRustPackage pkgs {
   pname = "llm-clippy";
   version = "0.1.97";
 
   inherit src;
+  rustToolchain = toolchain;
+  # Vendor through ix.buildRustPackage's `resolveVendorDir`, which fetches from
+  # `static.crates.io`. Upstream indexable-inc/clippy ships no Cargo.lock, so
+  # the patch plants one into $sourceRoot for cargo at build time; the same
+  # file is what `cargoLock.lockFile` points at for vendoring.
   cargoLock.lockFile = ./Cargo.lock;
-  # Upstream indexable-inc/clippy ships no Cargo.lock. cargoLock.lockFile only
-  # vendors and validates ("ERROR: Missing Cargo.lock from src" if it isn't
-  # present), so cargoPatches is how we plant the file into $sourceRoot.
   cargoPatches = [ ./cargo-lock.patch ];
 
   nativeBuildInputs = [ makeWrapper ];
@@ -40,9 +38,13 @@ rustPlatform.buildRustPackage {
     pkgs.libiconv
   ];
   doCheck = false;
+  # llm-clippy IS the clippy that lints every other repo Rust package, so its
+  # own clippy check cannot reach for `llmClippyFor` again - it would recurse
+  # forever back into this build. Machete and other policy gates stay on.
+  policy.clippy.enable = false;
 
   # This Clippy fork links against rustc_private crates from its Rust toolchain.
-  RUSTC_BOOTSTRAP = "1";
+  env.RUSTC_BOOTSTRAP = "1";
 
   postInstall = ''
     for bin in "$out/bin/cargo-clippy" "$out/bin/clippy-driver"; do

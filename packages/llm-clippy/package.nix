@@ -5,11 +5,13 @@
   callPackageArgs =
     {
       pkgs,
+      ixForPackages,
       rustNightlyClippyToolchainFor,
       clippy-fork,
       ...
     }:
     {
+      ix = ixForPackages;
       rustToolchain = rustNightlyClippyToolchainFor pkgs;
       src = clippy-fork;
     };

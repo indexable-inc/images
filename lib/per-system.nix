@@ -15,35 +15,10 @@
 }:
 let
   inherit (nixpkgs) lib;
-  # crates.io rejects any User-Agent containing "curl" with HTTP 403, which
-  # catches nixpkgs's default `curl/X.Y Nixpkgs/Z` UA on every fetchurl. Inject
-  # an extra `--user-agent` flag at the derivation level so it overrides the
-  # default and unblocks every fetchurl-backed crate fetch (including the
-  # `rustPlatform.importCargoLock` path that this repo does not own). FOD
-  # hashing ignores builder args, so adding curlOptsList does not invalidate
-  # any cached tarball.
-  #
-  # The cargo-unit path in `lib/rust.nix` sidesteps the gate by fetching from
-  # `static.crates.io` (cargo's sparse CDN, no UA check). That trick does not
-  # work for `importCargoLock` because nixpkgs hardcodes the legacy URL shape
-  # `${registry}/${name}/${version}/download`, which static.crates.io does not
-  # serve - the CDN expects `crates/${name}/${name}-${version}.crate`. We do
-  # not own `importCargoLock`, so we fix it at the curl layer instead.
-  fetchurlNonCurlUa = _final: prev: {
-    fetchurl =
-      args:
-      (prev.fetchurl args).overrideAttrs (old: {
-        curlOptsList = (old.curlOptsList or [ ]) ++ [
-          "--user-agent"
-          "ix-flake-fetchurl/1.0"
-        ];
-      });
-  };
   pkgs = import nixpkgs {
     inherit system;
     overlays = [
       rust-overlay.overlays.default
-      fetchurlNonCurlUa
       ix.overlay
     ];
   };
