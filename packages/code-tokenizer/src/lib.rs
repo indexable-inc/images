@@ -131,11 +131,15 @@ impl TokenStream for CodeTokenStream {
                 || case_break_acronym_end
                 || !ch.is_alphanumeric()
             {
+                // `offset_to` is the byte position right after the last char
+                // *in* the token — it must not include the trailing
+                // separator. Bump `byte_offset` past the separator so the
+                // next token starts fresh.
+                self.token.offset_to = current_offset;
                 if separator {
                     current_offset += ch.len_utf8();
                     chars.next();
                 }
-                self.token.offset_to = current_offset;
                 self.byte_offset = current_offset;
                 self.position += 1;
                 return true;
