@@ -1,0 +1,20 @@
+---
+id: file-search
+postedAt: 2026-05-27T01:30:00-07:00
+title: "`file-search` ships a Tantivy-backed BM25 indexer with a CLI, library, and bench"
+tags: [rust, search, tantivy, cli]
+links:
+  - label: file-search
+    href: https://github.com/indexable-inc/index/tree/main/packages/file-search
+  - label: code-tokenizer
+    href: https://github.com/indexable-inc/index/tree/main/packages/code-tokenizer
+---
+
+`file-search` indexes a directory tree into a Tantivy index and serves BM25 ranked search over it. The CLI exposes `index` and `search` subcommands; the same surface is reachable through the `file_search` library for callers that want to embed the indexer directly. An in-memory `EphemeralSearch` variant uses Tantivy's `RamDirectory` to rerank a batch of texts without touching disk.
+
+```sh
+nix run .#file-search -- index ./src
+nix run .#file-search -- search "make_widget" --limit 5
+```
+
+The tokenizer lives in its own `code-tokenizer` crate so other consumers can reuse the same camelCase / snake_case / kebab-case split plus optional English stemming, with ANSI escape sequences stripped before tokenization. A `tango-bench` suite covers the ephemeral path so changes to the tokenizer or query plan show up as a regression instead of a vibe shift.

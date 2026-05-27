@@ -1,0 +1,29 @@
+[package]
+name = "file-search"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "BM25 file indexer and searcher built on Tantivy"
+
+[lib]
+name = "file_search"
+path = "src/lib.rs"
+
+[[bin]]
+name = "file-search"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+code-tokenizer.workspace = true
+repo-walker.workspace = true
+snafu.workspace = true
+tantivy.workspace = true
+
+[dev-dependencies]
+tango-bench.workspace = true
+tempfile.workspace = true
+
+[[bench]]
+name = "search_bench"
+harness = false

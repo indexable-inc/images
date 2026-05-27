@@ -1,0 +1,86 @@
+use super::helpers::tokenize;
+
+#[test]
+fn camel_case() {
+    assert_eq!(tokenize("HelloWorld"), vec!["hello", "world"]);
+}
+
+#[test]
+fn snake_case() {
+    assert_eq!(tokenize("hello_world"), vec!["hello", "world"]);
+}
+
+#[test]
+fn mixed() {
+    assert_eq!(tokenize("helloWorld"), vec!["hello", "world"]);
+}
+
+#[test]
+fn uppercase() {
+    assert_eq!(tokenize("HELLO_WORLD"), vec!["hello", "world"]);
+}
+
+#[test]
+fn camel_case_this_is_a_test() {
+    assert_eq!(tokenize("thisIsATest"), vec!["this", "is", "atest"]);
+}
+
+#[test]
+fn camel_case_complex() {
+    assert_eq!(tokenize("getUserById"), vec!["get", "user", "by", "id"]);
+}
+
+#[test]
+fn snake_case_complex() {
+    assert_eq!(tokenize("get_user_by_id"), vec!["get", "user", "by", "id"]);
+}
+
+#[test]
+fn kebab_case() {
+    assert_eq!(tokenize("get-user-by-id"), vec!["get", "user", "by", "id"]);
+}
+
+#[test]
+fn mixed_snake_camel() {
+    assert_eq!(tokenize("get_userById"), vec!["get", "user", "by", "id"]);
+}
+
+#[test]
+fn acronyms() {
+    assert_eq!(tokenize("HTTPServer"), vec!["httpserver"]);
+}
+
+#[test]
+fn numbers() {
+    assert_eq!(tokenize("user123Id"), vec!["user123", "id"]);
+}
+
+#[test]
+fn special_chars_ignored() {
+    assert_eq!(tokenize("hello@world!test"), vec!["hello", "world", "test"]);
+}
+
+#[test]
+fn leading_trailing_special() {
+    assert_eq!(tokenize("!!!hello___world!!!"), vec!["hello", "world"]);
+}
+
+#[test]
+fn empty_string() {
+    assert_eq!(tokenize(""), Vec::<String>::new());
+}
+
+#[test]
+fn only_special_chars() {
+    assert_eq!(tokenize("@#$%^&*()"), Vec::<String>::new());
+}
+
+#[test]
+fn single_word() {
+    assert_eq!(tokenize("hello"), vec!["hello"]);
+}
+
+#[test]
+fn single_uppercase() {
+    assert_eq!(tokenize("HELLO"), vec!["hello"]);
+}
