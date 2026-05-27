@@ -90,17 +90,15 @@ pub fn index_directory(
     let mut stats = IndexStats::default();
 
     for entry in scanner {
-        match entry {
-            Ok(file_path) => match index_file(writer, schema, &file_path) {
-                Ok(()) => stats.files_indexed += 1,
-                Err(e) => {
-                    stats.files_skipped += 1;
-                    stats.errors.push((file_path, e.to_string()));
-                }
-            },
-            Err(err) => {
+        // Walker errors (missing root, permission-denied subtree) abort the
+        // run before commit so the wipe above is rolled back. Per-file
+        // read/parse errors stay non-fatal and are recorded in stats.
+        let file_path = entry.context(error::WalkSnafu { directory })?;
+        match index_file(writer, schema, &file_path) {
+            Ok(()) => stats.files_indexed += 1,
+            Err(e) => {
                 stats.files_skipped += 1;
-                stats.errors.push((directory.to_path_buf(), format!("walker: {err}")));
+                stats.errors.push((file_path, e.to_string()));
             }
         }
     }

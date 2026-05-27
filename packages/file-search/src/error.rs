@@ -62,6 +62,15 @@ pub enum Error {
     #[snafu(display("Indexed file {path} has no parent directory", path = path.display()))]
     IndexedPathHasNoParent { path: PathBuf },
 
+    #[snafu(display(
+        "Walker failed under {directory}: {source}",
+        directory = directory.display(),
+    ))]
+    Walk {
+        directory: PathBuf,
+        source: repo_walker::WalkError,
+    },
+
     #[snafu(display("Failed to search index: {source}"))]
     Search { source: tantivy::TantivyError },
 
