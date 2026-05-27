@@ -80,6 +80,29 @@ pub fn index_directory(
         .delete_query(Box::new(cleanup))
         .context(error::CommitIndexSnafu)?;
 
+    match walk_and_add(writer, schema, directory, respect_gitignore) {
+        Ok(stats) => {
+            writer.commit().context(error::CommitIndexSnafu)?;
+            Ok(stats)
+        }
+        Err(err) => {
+            // The queued wipe + any added docs are still uncommitted in the
+            // writer. Roll back so a transient walker failure doesn't blow
+            // away the previous index on the next commit. `rollback` only
+            // surfaces a fault when the writer state itself is broken, so
+            // we report the original walk error either way.
+            let _ = writer.rollback();
+            Err(err)
+        }
+    }
+}
+
+fn walk_and_add(
+    writer: &IndexWriter,
+    schema: &IndexSchema,
+    directory: &Path,
+    respect_gitignore: bool,
+) -> Result<IndexStats> {
     let scanner = FileScanner::new(
         directory,
         WalkOptions {
@@ -102,8 +125,6 @@ pub fn index_directory(
             }
         }
     }
-
-    writer.commit().context(error::CommitIndexSnafu)?;
     Ok(stats)
 }
 
