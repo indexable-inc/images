@@ -126,10 +126,7 @@ let
         rustWorkspaceFor
         ;
     })
-    rustNightlyToolchainFor
     rustNightlyClippyToolchainFor
-    llmClippyFor
-    rustFor
     buildIxRustTool
     cargoUnitFor
     buildRustPackage
