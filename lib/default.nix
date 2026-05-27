@@ -243,44 +243,7 @@ let
     `shellParent` return shell snippets for joining a root expression such as
     `$out` with a validated relative path.
   */
-  relativePath =
-    let
-      reservedSegments = [
-        ""
-        "."
-        ".."
-      ];
-      segments = path: lib.splitString "/" path;
-      hasReservedSegment =
-        path: lib.any (segment: builtins.elem segment reservedSegments) (segments path);
-      isSafe =
-        path:
-        builtins.isString path && path != "" && !(lib.hasPrefix "/" path) && !(hasReservedSegment path);
-      isSafeName = path: isSafe path && builtins.length (segments path) == 1;
-      renderPath = path: if builtins.isString path then path else "<${builtins.typeOf path}>";
-      assertSafe =
-        path:
-        assert lib.assertMsg (isSafe path)
-          "ix.relativePath.shellPath expected a safe relative path, got ${renderPath path}";
-        path;
-      shellPath = root: path: ''"${root}"/${lib.escapeShellArg (assertSafe path)}'';
-      shellParent =
-        root: path:
-        let
-          parent = dirOf (assertSafe path);
-        in
-        if parent == "." then ''"${root}"'' else shellPath root parent;
-    in
-    {
-      inherit
-        isSafe
-        isSafeName
-        shellParent
-        shellPath
-        ;
-      unsafe = paths: lib.filter (path: !(isSafe path)) paths;
-      unsafeNames = paths: lib.filter (path: !(isSafeName path)) paths;
-    };
+  relativePath = import ./relative-path.nix { inherit lib; };
 
   mkMinecraftLoader = import ./minecraft-loader.nix;
 
