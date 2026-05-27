@@ -9,10 +9,12 @@ let
   sectionList = [
     (section "intro" "00-intro.md")
     (section "scope" "01-scope-of-agents-md.md")
+    (section "craft" "01b-craft-standard.md")
     (section "workflow" "02-workflow.md")
     (section "indexGitPush" "02a-index-git-push.md")
     (section "siteUpdates" "03-site-updates.md")
     (section "writingStyle" "04-writing-style.md")
+    (section "replyShape" "04b-reply-shape.md")
     (section "inlineComments" "05-inline-comments.md")
     (section "rustStyle" "06-rust-style.md")
     (section "pythonStyle" "07-python-style.md")
@@ -42,8 +44,10 @@ let
   profiles = {
     common = [
       "scope"
+      "craft"
       "workflow"
       "writingStyle"
+      "replyShape"
       "inlineComments"
       "rustStyle"
       "pythonStyle"
