@@ -10,6 +10,7 @@ result-*
 .gradle/
 build/
 target/
+target-*/
 buck-out/
 dist/
 
