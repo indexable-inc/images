@@ -40,10 +40,17 @@ pub struct FileScanner {
 impl FileScanner {
     #[must_use]
     pub fn new(directory: &Path, options: WalkOptions) -> Self {
+        // `WalkBuilder` keeps multiple ignore sources on by default: gitignore
+        // (incl. global + exclude), generic `.ignore` files, and the hidden
+        // filter. `respect_gitignore = false` should silence *all* of those so
+        // callers that opt out actually see everything — otherwise stripping
+        // git rules but leaving `.ignore` rules behind is confusing.
         let walker = WalkBuilder::new(directory)
             .git_ignore(options.respect_gitignore)
             .git_global(options.respect_gitignore)
             .git_exclude(options.respect_gitignore)
+            .ignore(options.respect_gitignore)
+            .parents(options.respect_gitignore)
             .hidden(options.respect_gitignore)
             .follow_links(options.follow_links)
             .build();
