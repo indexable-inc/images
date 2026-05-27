@@ -1956,6 +1956,7 @@ name = "repo-walker"
 version = "0.1.0"
 dependencies = [
  "ignore",
+ "tempfile",
 ]
 
 [[package]]
