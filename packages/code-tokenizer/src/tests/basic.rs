@@ -22,7 +22,7 @@ fn uppercase() {
 
 #[test]
 fn camel_case_this_is_a_test() {
-    assert_eq!(tokenize("thisIsATest"), vec!["this", "is", "atest"]);
+    assert_eq!(tokenize("thisIsATest"), vec!["this", "is", "a", "test"]);
 }
 
 #[test]
@@ -47,7 +47,17 @@ fn mixed_snake_camel() {
 
 #[test]
 fn acronyms() {
-    assert_eq!(tokenize("HTTPServer"), vec!["httpserver"]);
+    // Acronym followed by camelCase splits before the last uppercase so
+    // queries for either `http` or `server` match the symbol.
+    assert_eq!(tokenize("HTTPServer"), vec!["http", "server"]);
+}
+
+#[test]
+fn single_letter_word_in_middle() {
+    // `getXValue` and friends were folded as `get` + `xvalue` before;
+    // they now split cleanly so queries for the suffix match.
+    assert_eq!(tokenize("getXValue"), vec!["get", "x", "value"]);
+    assert_eq!(tokenize("isAWidget"), vec!["is", "a", "widget"]);
 }
 
 #[test]
@@ -102,5 +112,5 @@ fn single_letter_prefix_etag() {
 
 #[test]
 fn digit_prefix_splits_on_letter() {
-    assert_eq!(tokenize("3DModel"), vec!["3", "dmodel"]);
+    assert_eq!(tokenize("3DModel"), vec!["3", "d", "model"]);
 }

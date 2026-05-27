@@ -101,16 +101,36 @@ impl TokenStream for CodeTokenStream {
         self.token.offset_from = start_offset;
 
         loop {
-            let Some(ch) = chars.clone().next() else {
+            // Peek the current and following char without consuming, so we
+            // can detect the "acronym followed by a single-letter word"
+            // case (`getXValue` → `get`, `x`, `value`; `HTTPServer` →
+            // `http`, `server`) which needs to break *before* the trailing
+            // uppercase that starts the next camel word.
+            let mut lookahead = chars.clone();
+            let Some(ch) = lookahead.next() else {
                 self.token.offset_to = current_offset;
                 self.byte_offset = current_offset;
                 self.position += 1;
                 return true;
             };
+            let next_after = lookahead.next();
 
             let separator = is_separator(ch);
-            let case_break = ch.is_uppercase() && last_was_lower_or_digit;
-            if separator || case_break || !ch.is_alphanumeric() {
+            let case_break_lower_to_upper = ch.is_uppercase() && last_was_lower_or_digit;
+            // Inside an uppercase run (`!last_was_lower_or_digit` and the
+            // current token already has ≥1 char), break before the last
+            // uppercase when the following char is lowercase. This catches
+            // both single-letter prefixes (`XValue`) and the trailing
+            // upper at the end of an acronym (`HTTPServer`).
+            let case_break_acronym_end = ch.is_uppercase()
+                && !last_was_lower_or_digit
+                && !self.token.text.is_empty()
+                && next_after.is_some_and(char::is_lowercase);
+            if separator
+                || case_break_lower_to_upper
+                || case_break_acronym_end
+                || !ch.is_alphanumeric()
+            {
                 if separator {
                     current_offset += ch.len_utf8();
                     chars.next();
