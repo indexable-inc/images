@@ -65,9 +65,15 @@ pub struct GitignoreFilter {
 impl GitignoreFilter {
     pub fn new(directory: &Path, respect_gitignore: bool) -> Self {
         let matcher = if respect_gitignore {
-            ignore::gitignore::GitignoreBuilder::new(directory)
-                .build()
-                .ok()
+            // `GitignoreBuilder::new` only seeds the root, not the file itself.
+            // Without an explicit `.add(...)` for the `.gitignore` in the
+            // directory, the resulting matcher has zero globs and lets every
+            // path through. `add` returns a non-fatal warning when the file
+            // is missing; treat that as "no globs to apply" rather than an
+            // error.
+            let mut builder = ignore::gitignore::GitignoreBuilder::new(directory);
+            let _ = builder.add(directory.join(".gitignore"));
+            builder.build().ok()
         } else {
             None
         };
@@ -165,5 +171,20 @@ mod tests {
     #[test]
     fn nonexistent_paths_are_not_indexable() {
         assert!(!is_indexable_file(&PathBuf::from("/nonexistent/foo.rs")));
+    }
+
+    #[test]
+    fn gitignore_filter_loads_dot_gitignore_from_directory() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        std::fs::write(dir.path().join(".gitignore"), "ignored.txt\n").expect("write");
+        let keep = dir.path().join("keep.txt");
+        let ignored = dir.path().join("ignored.txt");
+        std::fs::write(&keep, "k").expect("write keep");
+        std::fs::write(&ignored, "i").expect("write ignored");
+
+        let filter = GitignoreFilter::new(dir.path(), true);
+        let kept = filter.filter_paths(vec![keep.clone(), ignored.clone()]);
+
+        assert_eq!(kept, vec![keep], "ignored.txt should be filtered out");
     }
 }

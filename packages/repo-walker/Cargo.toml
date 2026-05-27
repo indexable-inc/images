@@ -7,3 +7,6 @@ description = "Iterator over text files in a directory tree, honoring .gitignore
 
 [dependencies]
 ignore.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
