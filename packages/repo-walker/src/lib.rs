@@ -1,19 +1,25 @@
 //! Walk a directory tree the way a source-code consumer wants to: respect
 //! `.gitignore`, skip hidden files, skip known binary extensions, and yield
-//! the remaining paths through a plain [`Iterator`].
+//! the remaining files through a fallible [`Iterator`].
 //!
 //! Built on top of [`ignore::WalkBuilder`]; this crate adds a binary-extension
-//! filter so callers don't have to maintain their own list.
+//! filter so callers don't have to maintain their own list, surfaces walk
+//! errors as [`Result`] items rather than silently dropping them, and honors
+//! the `follow_links` option even for the final "is this a regular file?"
+//! check.
 
 use ignore::WalkBuilder;
 use std::path::{Path, PathBuf};
+
+pub use ignore::Error as WalkError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct WalkOptions {
     /// Honor `.gitignore`, `.git/info/exclude`, the global gitignore file,
     /// and skip hidden entries.
     pub respect_gitignore: bool,
-    /// Follow symbolic links during traversal.
+    /// Follow symbolic links during traversal. When false, symlinks are
+    /// reported by the walker but skipped by the regular-file filter.
     pub follow_links: bool,
 }
 
@@ -28,6 +34,7 @@ impl Default for WalkOptions {
 
 pub struct FileScanner {
     walker: ignore::Walk,
+    follow_links: bool,
 }
 
 impl FileScanner {
@@ -41,18 +48,42 @@ impl FileScanner {
             .follow_links(options.follow_links)
             .build();
 
-        Self { walker }
+        Self {
+            walker,
+            follow_links: options.follow_links,
+        }
     }
 }
 
 impl Iterator for FileScanner {
-    type Item = PathBuf;
+    type Item = Result<PathBuf, WalkError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        (&mut self.walker)
-            .flatten()
-            .find(|entry| is_indexable_file(entry.path()))
-            .map(|entry| entry.path().to_path_buf())
+        loop {
+            let entry = match self.walker.next()? {
+                Ok(entry) => entry,
+                Err(err) => return Some(Err(err)),
+            };
+            // `DirEntry::file_type` is the type as observed *without*
+            // following symlinks. When `follow_links` is off, treat
+            // symlinks as not-a-file even if their target is one.
+            let Some(file_type) = entry.file_type() else {
+                continue;
+            };
+            let is_regular_file = file_type.is_file()
+                || (self.follow_links && file_type.is_symlink() && entry.path().is_file());
+            if !is_regular_file {
+                continue;
+            }
+            let ext_ok = entry
+                .path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_none_or(|ext_str| !is_binary_extension(ext_str));
+            if ext_ok {
+                return Some(Ok(entry.path().to_path_buf()));
+            }
+        }
     }
 }
 
@@ -98,11 +129,18 @@ impl GitignoreFilter {
     }
 }
 
-/// True for regular files whose extension is not on the known-binary list.
-/// Files without an extension are treated as text.
+/// True for regular files (resolved without following symlinks) whose
+/// extension is not on the known-binary list. Files without an extension are
+/// treated as text.
 #[must_use]
 pub fn is_indexable_file(path: &Path) -> bool {
-    if !path.is_file() {
+    // `Path::is_file` follows symlinks, so a symlink to a regular file would
+    // pass. Use `symlink_metadata` so symlinks are excluded; callers that
+    // want symlink traversal should pre-resolve and use `Path::is_file`.
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
         return false;
     }
 
@@ -191,5 +229,27 @@ mod tests {
         let kept = filter.filter_paths(vec![keep.clone(), ignored]);
 
         assert_eq!(kept, vec![keep], "ignored.txt should be filtered out");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_to_regular_file_is_not_indexable() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let target = dir.path().join("target.txt");
+        let link = dir.path().join("link.txt");
+        std::fs::write(&target, "t").expect("write target");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        assert!(is_indexable_file(&target));
+        assert!(!is_indexable_file(&link), "symlinks should be skipped");
+    }
+
+    #[test]
+    fn walker_surfaces_missing_root_error() {
+        let mut scanner = FileScanner::new(
+            &PathBuf::from("/nonexistent/path/that/should/not/exist"),
+            WalkOptions::default(),
+        );
+        let first = scanner.next().expect("walker yields at least one item");
+        assert!(first.is_err(), "missing root should surface as an Err");
     }
 }
