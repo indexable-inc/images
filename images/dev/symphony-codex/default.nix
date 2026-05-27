@@ -2,7 +2,7 @@
 {
   ix.image = {
     name = "ix/symphony-codex";
-    tag = "latest";
+    tag = "2026-05-27";
   };
 
   networking.hostName = "symphony-codex";

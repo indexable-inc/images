@@ -2368,8 +2368,8 @@ let
         message = "symphony-codex image should set the expected public OCI image name";
       }
       {
-        assertion = symphonyCodex.config.ix.image.tag == "latest";
-        message = "symphony-codex image should publish the latest tag by default";
+        assertion = symphonyCodex.config.ix.image.tag == "2026-05-27";
+        message = "symphony-codex image should publish an immutable production tag";
       }
       {
         assertion = !(builtins.elem "symphony-room-server" symphonyCodex.packageNames);
