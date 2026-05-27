@@ -88,10 +88,15 @@ impl Iterator for FileScanner {
 }
 
 /// Apply a standalone gitignore matcher to an already-collected path list.
+///
 /// Useful when paths come from somewhere other than the walker (a file
-/// watcher, a diff, a manifest).
+/// watcher, a diff, a manifest). Only loads the root `.gitignore`; nested
+/// `.gitignore` files inside subdirectories are not consulted. For
+/// full-tree honor of nested ignores, walk via [`FileScanner`] instead.
 pub struct GitignoreFilter {
+    root: PathBuf,
     matcher: Option<ignore::gitignore::Gitignore>,
+    respect_gitignore: bool,
 }
 
 impl GitignoreFilter {
@@ -111,29 +116,53 @@ impl GitignoreFilter {
             None
         };
 
-        Self { matcher }
+        Self {
+            root: directory.to_path_buf(),
+            matcher,
+            respect_gitignore,
+        }
     }
 
     #[must_use]
     pub fn filter_paths(&self, paths: Vec<PathBuf>) -> Vec<PathBuf> {
-        let Some(matcher) = self.matcher.as_ref() else {
-            return paths.into_iter().filter(|p| is_indexable_file(p)).collect();
-        };
-
+        let drop_hidden = self.respect_gitignore;
+        let matcher = self.matcher.as_ref();
         paths
             .into_iter()
             .filter(|path| {
+                if !is_indexable_file(path) {
+                    return false;
+                }
+                if drop_hidden && is_hidden_below(&self.root, path) {
+                    return false;
+                }
                 // `matched_path_or_any_parents` walks up the path so a
                 // directory-only rule like `target/` excludes
                 // `target/debug/foo.rs`. Plain `matched` only checks the
                 // path itself, missing descendants.
-                is_indexable_file(path)
-                    && !matcher
-                        .matched_path_or_any_parents(path, path.is_dir())
-                        .is_ignore()
+                matcher.is_none_or(|m| !m.matched_path_or_any_parents(path, path.is_dir()).is_ignore())
             })
             .collect()
     }
+}
+
+/// True if any path component beneath `root` starts with `.` (matching the
+/// walker's hidden-file rule). Components at or above `root` are ignored so
+/// the user's tempdir path or home directory don't accidentally count.
+fn is_hidden_below(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        // Path isn't under the configured root: fall back to checking the
+        // basename only.
+        return path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|s| s.starts_with('.'));
+    };
+    relative.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .is_some_and(|s| s.starts_with('.') && s != "." && s != "..")
+    })
 }
 
 /// True for regular files (resolved without following symlinks) whose
@@ -236,6 +265,19 @@ mod tests {
         let kept = filter.filter_paths(vec![keep.clone(), ignored]);
 
         assert_eq!(kept, vec![keep], "ignored.txt should be filtered out");
+    }
+
+    #[test]
+    fn gitignore_filter_drops_hidden_paths_when_respected() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let kept = dir.path().join("kept.rs");
+        let hidden = dir.path().join(".secret.rs");
+        std::fs::write(&kept, "k").expect("write kept");
+        std::fs::write(&hidden, "h").expect("write hidden");
+
+        let filter = GitignoreFilter::new(dir.path(), true);
+        let result = filter.filter_paths(vec![kept.clone(), hidden]);
+        assert_eq!(result, vec![kept]);
     }
 
     #[test]
