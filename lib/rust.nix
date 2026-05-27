@@ -258,11 +258,15 @@ let
       '';
       pkgs.linkFarm "cargo-vendor-dir" vendorEntries;
 
+  # Both registry shapes resolve to the same CDN artifact. `static.crates.io` is
+  # the direct CloudFront URL cargo's sparse protocol uses; the older
+  # `api.crates.io/api/v1/crates/.../download` endpoint just 302s here and, as
+  # of 2026-05, rejects curl's default User-Agent with HTTP 403.
+  cratesIoDownloadUrl =
+    pkg: "https://static.crates.io/crates/${pkg.name}/${pkg.name}-${pkg.version}.crate";
   registryDownloadUrls = {
-    "registry+https://github.com/rust-lang/crates.io-index" =
-      pkg: "https://crates.io/api/v1/crates/${pkg.name}/${pkg.version}/download";
-    "sparse+https://index.crates.io/" =
-      pkg: "https://static.crates.io/crates/${pkg.name}/${pkg.name}-${pkg.version}.crate";
+    "registry+https://github.com/rust-lang/crates.io-index" = cratesIoDownloadUrl;
+    "sparse+https://index.crates.io/" = cratesIoDownloadUrl;
   };
 
   parseGitSource =
