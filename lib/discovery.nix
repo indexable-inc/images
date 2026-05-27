@@ -7,26 +7,105 @@
   ixReturn,
 }:
 let
-  # Subdirectories of `dir`. Used to walk images/<cat>/<name>/.
-  subdirs =
-    dir:
+  listHasPrefix =
+    prefix: list:
+    builtins.length prefix <= builtins.length list && lib.take (builtins.length prefix) list == prefix;
+
+  mergeNestedAttrs =
+    attrs:
+    lib.zipAttrsWith (
+      name: values:
+      if builtins.all builtins.isAttrs values then
+        mergeNestedAttrs values
+      else if builtins.length values == 1 then
+        builtins.head values
+      else
+        throw "discoverModules: duplicate module output '${name}'"
+    ) attrs;
+
+  /**
+    Walk a directory tree and return `{ <name> = { path; metadata; }; }`.
+    Entries are directories containing every required file. Directories whose
+    names start with `_` are skipped with their subtree. `validate` may return
+    extra metadata and `outputNames` for additional duplicate claims.
+  */
+  discoverTree =
+    {
+      root,
+      requiredFiles ? [ "default.nix" ],
+      metadataFile ? null,
+      metadataArgs ? { },
+      validate ? _: { },
+    }:
     let
-      entries = builtins.readDir dir;
+      walk =
+        path: segments:
+        let
+          entries = builtins.readDir path;
+          dirs = lib.filter (name: entries.${name} == "directory" && !(lib.hasPrefix "_" name)) (
+            builtins.attrNames entries
+          );
+          hasRequiredFiles = lib.all (file: (entries.${file} or null) == "regular") requiredFiles;
+          baseMetadata = {
+            name = lib.last segments;
+            inherit segments;
+            relativePath = lib.concatStringsSep "/" segments;
+          }
+          // lib.optionalAttrs (metadataFile != null) {
+            sidecar =
+              if (entries.${metadataFile} or null) == "regular" then
+                import (path + "/${metadataFile}") ({ inherit lib; } // metadataArgs)
+              else
+                null;
+          };
+          metadata =
+            baseMetadata
+            // validate {
+              inherit path;
+              metadata = baseMetadata;
+            };
+          entry = {
+            inherit path metadata;
+            claims = map (name: {
+              inherit name path;
+              inherit (metadata) relativePath;
+            }) (lib.unique ([ metadata.name ] ++ (metadata.outputNames or [ ])));
+          };
+        in
+        lib.optionals (segments != [ ] && hasRequiredFiles) [ entry ]
+        ++ lib.concatMap (name: walk (path + "/${name}") (segments ++ [ name ])) dirs;
+
+      discovered = walk root [ ];
+      claimsByName = lib.groupBy (claim: claim.name) (lib.concatMap (entry: entry.claims) discovered);
+      duplicateClaims = lib.filterAttrs (_: claims: builtins.length claims > 1) claimsByName;
+      duplicateMessages = lib.mapAttrsToList (
+        name: claims:
+        "discoverTree: duplicate output name '${name}' claimed by "
+        + lib.concatStringsSep " and " (
+          map (claim: "${claim.relativePath} at ${builtins.toString claim.path}") claims
+        )
+      ) duplicateClaims;
     in
-    lib.filter (n: entries.${n} == "directory") (builtins.attrNames entries);
+    if duplicateMessages != [ ] then
+      throw (lib.concatStringsSep "\n" duplicateMessages)
+    else
+      lib.listToAttrs (
+        map (entry: lib.nameValuePair entry.metadata.name { inherit (entry) path metadata; }) discovered
+      );
 
   # One image directory -> { <name> = pkg; <name>_<ver> = pkg; ... }.
   # Without versions.nix, the dir is a single module.
   # With versions.nix, each version is layered on top of the base module and
   # the `default` key picks which version gets the unsuffixed alias.
   imagePackages =
-    name: path:
+    entry:
     let
-      versionsPath = path + "/versions.nix";
+      inherit (entry) path;
+      inherit (entry.metadata) name;
+      versions = entry.metadata.sidecar;
     in
-    if builtins.pathExists versionsPath then
+    if versions != null then
       let
-        versions = import versionsPath { inherit lib artifacts; };
         defaultVer = versions.default;
         verMods = builtins.removeAttrs versions [ "default" ];
         verPkgs = lib.mapAttrs' (
@@ -63,12 +142,30 @@ let
       imageTests ? { },
     }:
     let
-      imageCategories = lib.filter (cat: cat != "presets") (subdirs root);
-      raw = lib.mergeAttrsList (
-        lib.concatMap (
-          cat: map (name: imagePackages name (root + "/${cat}/${name}")) (subdirs (root + "/${cat}"))
-        ) imageCategories
-      );
+      discovered = discoverTree {
+        inherit root;
+        metadataFile = "versions.nix";
+        metadataArgs = { inherit artifacts; };
+        validate =
+          { metadata, ... }:
+          let
+            inherit (metadata) name segments sidecar;
+            versionNames =
+              if sidecar == null then
+                [ ]
+              else
+                map (version: "${name}_${version}") (
+                  builtins.attrNames (builtins.removeAttrs sidecar [ "default" ])
+                );
+          in
+          assert lib.assertMsg (
+            builtins.length segments == 2
+          ) "discoverImages: expected images/<category>/<name>/default.nix, got ${metadata.relativePath}";
+          {
+            outputNames = versionNames;
+          };
+      };
+      raw = lib.concatMapAttrs (_: imagePackages) discovered;
       attach =
         name: pkg:
         if imageTests ? ${name} then
@@ -104,45 +201,39 @@ let
   discoverModules =
     { root }:
     let
-      isModuleSegment = name: !(lib.hasPrefix "_" name);
-      keepValue = v: builtins.isPath v || (builtins.isAttrs v && v != { });
-      walk =
-        dir:
+      discovered = discoverTree {
+        inherit root;
+        validate =
+          { metadata, ... }:
+          let
+            inherit (metadata) segments;
+            category = builtins.head segments;
+            moduleSegments = builtins.tail segments;
+          in
+          assert lib.assertMsg (builtins.length segments > 1)
+            "discoverModules: category '${category}' has its own default.nix; categories must only contain module subdirectories";
+          {
+            inherit moduleSegments;
+            name = lib.concatStringsSep "." moduleSegments;
+          };
+      };
+      entries = builtins.attrValues discovered;
+      modulePaths = map (entry: entry.metadata.moduleSegments) entries;
+      hasDescendant =
+        modulePath:
+        lib.any (
+          otherPath:
+          builtins.length otherPath > builtins.length modulePath && listHasPrefix modulePath otherPath
+        ) modulePaths;
+      entryAsTree =
+        entry:
         let
-          entries = builtins.readDir dir;
-          childDirNames = lib.filter (n: entries.${n} == "directory" && isModuleSegment n) (
-            builtins.attrNames entries
-          );
-          hasDefault = (entries."default.nix" or null) == "regular";
-          rawChildren = lib.listToAttrs (map (n: lib.nameValuePair n (walk (dir + "/${n}"))) childDirNames);
-          children = lib.filterAttrs (_: keepValue) rawChildren;
+          modulePath = entry.metadata.moduleSegments;
+          outputPath = if hasDescendant modulePath then modulePath ++ [ "default" ] else modulePath;
         in
-        if hasDefault && children == { } then
-          dir
-        else if hasDefault then
-          children // { default = dir; }
-        else
-          children;
-      rootEntries = builtins.readDir root;
-      categoryNames = lib.filter (n: (rootEntries.${n} or "") == "directory" && isModuleSegment n) (
-        builtins.attrNames rootEntries
-      );
-      perCategory = map (
-        cat:
-        let
-          walked = walk (root + "/${cat}");
-        in
-        # A category dir without its own `default.nix` returns an attrset of
-        # its children; flatten those into the top-level module registry.
-        # A category dir with a `default.nix` would shadow the category name,
-        # which we don't currently use, so reject it loudly.
-        if builtins.isAttrs walked then
-          walked
-        else
-          throw "discoverModules: category '${cat}' has its own default.nix; categories must only contain module subdirectories"
-      ) categoryNames;
+        lib.setAttrByPath outputPath entry.path;
     in
-    lib.mergeAttrsList perCategory;
+    mergeNestedAttrs (map entryAsTree entries);
 
   /**
     Discovered example fleets, built for a given host system. Discovery
@@ -180,34 +271,20 @@ let
         };
       };
 
-      isExampleDir = path: builtins.pathExists (path + "/default.nix");
-
-      topEntries = subdirs paths.examples;
-
-      flatPairs = map (name: {
-        inherit name;
-        path = paths.examples + "/${name}";
-      }) (lib.filter (name: isExampleDir (paths.examples + "/${name}")) topEntries);
-
-      categoryDirs = lib.filter (name: !(isExampleDir (paths.examples + "/${name}"))) topEntries;
-
-      nestedPairs = lib.concatMap (
-        cat:
-        let
-          catPath = paths.examples + "/${cat}";
-        in
-        map (name: {
-          inherit name;
-          path = catPath + "/${name}";
-        }) (lib.filter (name: isExampleDir (catPath + "/${name}")) (subdirs catPath))
-      ) categoryDirs;
+      discovered = discoverTree {
+        root = paths.examples;
+        validate =
+          { metadata, ... }:
+          assert lib.assertMsg (builtins.length metadata.segments <= 2)
+            "exampleFleetsFor: expected examples/<name>/default.nix or examples/<category>/<name>/default.nix, got examples/${metadata.relativePath}";
+          { };
+      };
     in
-    lib.listToAttrs (
-      map (e: lib.nameValuePair e.name (import e.path { index = indexShim; })) (flatPairs ++ nestedPairs)
-    );
+    lib.mapAttrs (_: entry: import entry.path { index = indexShim; }) discovered;
 in
 {
   inherit
+    discoverTree
     discoverImages
     discoverModules
     exampleFleetsFor

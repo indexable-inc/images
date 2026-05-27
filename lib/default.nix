@@ -341,6 +341,7 @@ let
         ixReturn
         ;
     })
+    discoverTree
     discoverImages
     discoverModules
     exampleFleetsFor
@@ -359,6 +360,7 @@ let
       mkImage
       mkFleet
       mkFleetFor
+      discoverTree
       discoverImages
       discoverModules
       nixosModules
