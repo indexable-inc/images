@@ -512,6 +512,16 @@ let
       packageNames = map lib.getName config.environment.systemPackages;
     };
 
+  symphonyCodex =
+    let
+      config = evalConfig [ ../images/dev/symphony-codex ];
+    in
+    {
+      inherit config;
+      packages = config.environment.systemPackages;
+      packageNames = map lib.getName config.environment.systemPackages;
+    };
+
   pythonAppClosureProbe = ix.writePythonApplication pkgs {
     name = "python-app-closure-probe";
     src = pkgs.writeText "python-app-closure-probe.py" ''
@@ -2349,6 +2359,59 @@ let
             ]
         ) vitestWorkspaceCases;
         message = "vitest per-case checks should filter project-specific manifest entries by project";
+      }
+    ];
+
+    symphony-codex = [
+      {
+        assertion = symphonyCodex.config.ix.image.name == "ix/symphony-codex";
+        message = "symphony-codex image should set the expected public OCI image name";
+      }
+      {
+        assertion = symphonyCodex.config.ix.image.tag == "latest";
+        message = "symphony-codex image should publish the latest tag by default";
+      }
+      {
+        assertion = builtins.elem "symphony-room-server" symphonyCodex.packageNames;
+        message = "symphony-codex image should include room-server";
+      }
+      {
+        assertion = builtins.elem pkgs.codex symphonyCodex.packages;
+        message = "symphony-codex image should include codex for diagnostic shell sessions";
+      }
+      {
+        assertion =
+          builtins.elem pkgs.gh symphonyCodex.packages && builtins.elem pkgs.git symphonyCodex.packages;
+        message = "symphony-codex image should include GitHub and git tooling";
+      }
+      {
+        assertion =
+          builtins.elem pkgs.direnv symphonyCodex.packages
+          && builtins.elem pkgs.ripgrep symphonyCodex.packages;
+        message = "symphony-codex image should include common agent workspace tools";
+      }
+      {
+        assertion = samePorts symphonyCodex.config.networking.firewall.allowedTCPPorts (
+          baseFirewallTcpPorts ++ [ 8080 ]
+        );
+        message = "symphony-codex image should open room-server HTTP";
+      }
+      {
+        assertion = samePorts symphonyCodex.config.networking.firewall.allowedUDPPorts (
+          baseFirewallUdpPorts ++ [ 4433 ]
+        );
+        message = "symphony-codex image should open room-server WebTransport";
+      }
+      {
+        assertion =
+          let
+            claims = symphonyCodex.config.ix.networking.portClaims;
+          in
+          claims.symphony-room-http.protocol == "tcp"
+          && claims.symphony-room-http.port == 8080
+          && claims.symphony-room-webtransport.protocol == "udp"
+          && claims.symphony-room-webtransport.port == 4433;
+        message = "symphony-codex image should register Room listener port claims";
       }
     ];
 
