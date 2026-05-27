@@ -59,6 +59,9 @@ pub enum Error {
         max_size: u64,
     },
 
+    #[snafu(display("Indexed file {path} has no parent directory", path = path.display()))]
+    IndexedPathHasNoParent { path: PathBuf },
+
     #[snafu(display("Failed to search index: {source}"))]
     Search { source: tantivy::TantivyError },
 

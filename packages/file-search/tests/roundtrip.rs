@@ -1,4 +1,4 @@
-use file_search::{EphemeralSearch, SearchIndex};
+use file_search::{EphemeralSearch, SearchIndex, SearchIndexReader};
 use std::fs;
 use tempfile::TempDir;
 
@@ -29,6 +29,78 @@ fn index_then_search_finds_path_by_filename() {
         hits.iter().any(|h| h.path.ends_with("widgets.rs")),
         "filename should rank highest: {hits:?}",
     );
+}
+
+#[test]
+fn reindexing_removes_old_chunks() {
+    let workdir = TempDir::new().expect("workdir");
+    let index_dir = TempDir::new().expect("index dir");
+
+    let file = workdir.path().join("subject.md");
+    fs::write(&file, "alpha bravo charlie").expect("write v1");
+
+    {
+        let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
+        index.index_directory(workdir.path(), false).expect("index v1");
+        let hits = index.search("alpha", 5, None).expect("search v1");
+        assert!(!hits.is_empty(), "v1 should match `alpha`");
+    }
+
+    fs::write(&file, "delta echo foxtrot").expect("write v2");
+    {
+        let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
+        index.index_directory(workdir.path(), false).expect("index v2");
+        let alpha_hits = index.search("alpha", 5, None).expect("search alpha");
+        assert!(
+            alpha_hits.is_empty(),
+            "stale chunk should be gone after re-index: {alpha_hits:?}",
+        );
+        let delta_hits = index.search("delta", 5, None).expect("search delta");
+        assert!(!delta_hits.is_empty(), "v2 should match `delta`");
+    }
+}
+
+#[test]
+fn directory_filter_matches_subdirectory() {
+    let workdir = TempDir::new().expect("workdir");
+    let index_dir = TempDir::new().expect("index dir");
+
+    let inside = workdir.path().join("inside");
+    let outside = workdir.path().join("outside");
+    fs::create_dir(&inside).expect("mkdir inside");
+    fs::create_dir(&outside).expect("mkdir outside");
+
+    fs::write(inside.join("hit.rs"), "fn target() {}").expect("write inside");
+    fs::write(outside.join("miss.rs"), "fn target() {}").expect("write outside");
+
+    let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
+    index.index_directory(workdir.path(), false).expect("index");
+
+    let hits = index.search("target", 10, Some(inside.as_path())).expect("search filtered");
+    assert!(!hits.is_empty(), "subdirectory filter should match indexed files");
+    for hit in &hits {
+        assert!(
+            hit.path.contains("/inside/"),
+            "filtered hit escaped subdir: {hit:?}",
+        );
+    }
+}
+
+#[test]
+fn search_index_reader_opens_without_writer_lock() {
+    let workdir = TempDir::new().expect("workdir");
+    let index_dir = TempDir::new().expect("index dir");
+
+    fs::write(workdir.path().join("note.md"), "indexable content here").expect("write");
+
+    // Keep the writer alive in the indexer; a second SearchIndex would
+    // block on the writer lock, but SearchIndexReader should not.
+    let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open writer");
+    index.index_directory(workdir.path(), false).expect("index");
+
+    let reader = SearchIndexReader::open(index_dir.path()).expect("open reader concurrently");
+    let hits = reader.search("indexable", 5, None).expect("reader search");
+    assert!(!hits.is_empty(), "reader should see committed docs");
 }
 
 #[test]

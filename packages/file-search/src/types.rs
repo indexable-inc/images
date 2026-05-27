@@ -5,6 +5,7 @@ use tantivy::schema::{Field, Schema};
 
 pub(crate) struct IndexSchema {
     pub path: Field,
+    pub path_exact: Field,
     pub content: Field,
     pub filename: Field,
     pub chunk_offset: Field,
@@ -22,6 +23,7 @@ impl IndexSchema {
 
         Ok(Self {
             path: field("path")?,
+            path_exact: field("path_exact")?,
             content: field("content")?,
             filename: field("filename")?,
             chunk_offset: field("chunk_offset")?,

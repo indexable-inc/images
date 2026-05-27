@@ -66,10 +66,6 @@ pub(crate) fn index_directory(
     directory: &Path,
     respect_gitignore: bool,
 ) -> Result<IndexStats> {
-    let canonical_base = std::fs::canonicalize(directory).context(error::CanonicalizeSnafu {
-        path: directory,
-    })?;
-
     let scanner = FileScanner::new(
         directory,
         WalkOptions {
@@ -80,7 +76,7 @@ pub(crate) fn index_directory(
     let mut stats = IndexStats::default();
 
     for file_path in scanner {
-        match index_file(writer, schema, &file_path, &canonical_base) {
+        match index_file(writer, schema, &file_path) {
             Ok(()) => stats.files_indexed += 1,
             Err(e) => {
                 stats.files_skipped += 1;
@@ -93,12 +89,7 @@ pub(crate) fn index_directory(
     Ok(stats)
 }
 
-fn index_file(
-    writer: &IndexWriter,
-    schema: &IndexSchema,
-    file_path: &Path,
-    canonical_base_directory: &Path,
-) -> Result<()> {
+fn index_file(writer: &IndexWriter, schema: &IndexSchema, file_path: &Path) -> Result<()> {
     let metadata =
         std::fs::metadata(file_path).context(error::GetMetadataSnafu { path: file_path })?;
 
@@ -115,22 +106,36 @@ fn index_file(
 
     let filename = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let path_str = file_path.to_string_lossy();
-    let directory_facet = path_to_facet(canonical_base_directory);
+
+    // Facet the file by its actual parent directory rather than the indexed
+    // root, so `--filter <subdir>` matches every document beneath that
+    // subdir. The search side canonicalizes the filter path; canonicalize
+    // here too so the facet strings agree on symlinks and `.` components.
+    let parent_dir = file_path
+        .parent()
+        .ok_or_else(|| Error::IndexedPathHasNoParent {
+            path: file_path.to_path_buf(),
+        })?;
+    let canonical_parent = std::fs::canonicalize(parent_dir)
+        .context(error::CanonicalizeSnafu { path: parent_dir })?;
+    let directory_facet = path_to_facet(&canonical_parent);
+
     let extension = file_path
         .extension()
         .and_then(|ext| ext.to_str())
         .unwrap_or("");
     let extension_facet = extension_to_facet(extension);
 
-    // Re-index by deleting any chunks recorded under this path first; tantivy's
-    // term delete is scoped to the field so other files with the same prefix
-    // aren't touched.
-    writer.delete_term(Term::from_field_text(schema.path, &path_str));
+    // `path_exact` is the untokenized keyword copy; this delete actually
+    // matches the previous chunks recorded for `file_path`. Deleting via
+    // `schema.path` would silently no-op because that field is stemmed.
+    writer.delete_term(Term::from_field_text(schema.path_exact, &path_str));
 
     for (offset, chunk) in chunk_content(&content) {
         writer
             .add_document(doc!(
                 schema.path => path_str.as_ref(),
+                schema.path_exact => path_str.as_ref(),
                 schema.content => chunk,
                 schema.filename => filename,
                 schema.chunk_offset => offset as u64,

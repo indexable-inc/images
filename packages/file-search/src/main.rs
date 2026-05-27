@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use file_search::{Result, SearchIndex};
+use file_search::{Result, SearchIndex, SearchIndexReader};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -55,13 +55,13 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     let index_dir = cli.index_dir.unwrap_or_else(default_index_dir);
-    let mut index = SearchIndex::open_or_create(&index_dir)?;
 
     match cli.command {
         Command::Index {
             directory,
             no_gitignore,
         } => {
+            let mut index = SearchIndex::open_or_create(&index_dir)?;
             let stats = index.index_directory(&directory, !no_gitignore)?;
             println!(
                 "indexed {} file(s), skipped {} ({} error{}) into {}",
@@ -80,7 +80,11 @@ fn run(cli: Cli) -> Result<()> {
             limit,
             filter,
         } => {
-            let results = index.search(&query, limit, filter.as_deref())?;
+            // Search avoids opening the writer so it can run against a
+            // shared or read-only index, and so it doesn't conflict with a
+            // concurrent `index` invocation.
+            let reader = SearchIndexReader::open(&index_dir)?;
+            let results = reader.search(&query, limit, filter.as_deref())?;
             if results.is_empty() {
                 println!("no results");
             }
