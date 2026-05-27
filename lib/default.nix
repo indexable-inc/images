@@ -337,6 +337,7 @@ let
     dhall = import ./languages/dhall.nix { };
     elixir = import ./languages/elixir.nix { inherit errors; };
     erlang = import ./languages/erlang.nix { inherit errors; };
+    futhark = import ./languages/futhark.nix { };
     gleam = import ./languages/gleam.nix { };
     go = import ./languages/go.nix { inherit errors; };
     haskell = import ./languages/haskell.nix { inherit errors; };
