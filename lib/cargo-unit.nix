@@ -424,6 +424,51 @@ let
       workspace = buildWorkspace (builtins.removeAttrs args [ "binaries" ]);
     in
     lib.genAttrs binaries (binary: workspace.binaries.${binary} or workspace.default);
+
+  /**
+    Materialize a Cargo vendor directory from a `Cargo.lock` without building
+    the workspace unit graph. Callers that aren't going through
+    `buildWorkspace` (e.g. an `overrideAttrs` of a foreign Rust derivation, or
+    a non-workspace tool fetched as a single crate) can reuse the same
+    static.crates.io fetcher and git-source plumbing that `buildWorkspace`
+    uses internally.
+
+    Arguments:
+    - `cargoLock`: path to the `Cargo.lock` to vendor.
+    - `outputHashes`: attrset keyed by the exact `Cargo.lock` git source
+      string (e.g. `"git+https://github.com/owner/repo#rev"`); value is the
+      sha256 of the resolved git tree.
+    - `sourceOverrides`: optional attrset mapping `Cargo.lock` source strings
+      to pre-fetched source trees, used when a private git dependency cannot
+      be fetched from inside the build sandbox.
+    - `vendorDir`: optional pre-built vendor directory that short-circuits
+      resolution. Mirrors `buildWorkspace`'s `vendorDir` arg.
+
+    Returns a `pkgs.linkFarm` of `<name>-<version>` -> source tree, the same
+    shape `buildWorkspace` materializes.
+  */
+  vendorDir =
+    args:
+    rust.resolveVendorDir {
+      inherit (args) cargoLock;
+      outputHashes = args.outputHashes or { };
+      sourceOverrides = args.sourceOverrides or { };
+      vendorDir = args.vendorDir or null;
+    };
+
+  /**
+    Materialize the per-package source attrset used by `vendorDir`. Useful for
+    callers that need to address individual vendored crates rather than the
+    aggregate link farm. See `vendorDir` for the shared argument shape.
+  */
+  vendorSources =
+    args:
+    rust.resolveVendorSources {
+      inherit (args) cargoLock;
+      outputHashes = args.outputHashes or { };
+      sourceOverrides = args.sourceOverrides or { };
+      vendorSources = args.vendorSources or null;
+    };
 in
 {
   inherit
@@ -434,5 +479,7 @@ in
     auditCargoLock
     generateUnitGraph
     generateUnitsNix
+    vendorDir
+    vendorSources
     ;
 }
