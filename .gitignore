@@ -1,11 +1,52 @@
+# Nix
 result
-.direnv
+result-*
+.direnv/
+
+# ix CLI local state
 .ix/
-.gradle
-build
-target
+
+# Build outputs
+.gradle/
+build/
+target/
+buck-out/
+dist/
+
+# Node / pnpm
+node_modules/
+.pnpm-store/
+
+# SvelteKit / Vite
+.svelte-kit/
+.vite/
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-packages/loop/site/dist/
-packages/loop/site/node_modules/
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.basedpyright/
+
+# Terraform / OpenTofu local state
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Local caches and scratch
+.tmp/
+.hegel/
+.worktrees/
+
+# Editors
+.idea/
+
+# Claude Code per-machine overrides
+.claude/settings.local.json
+
+# macOS
+.DS_Store
