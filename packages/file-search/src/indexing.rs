@@ -4,8 +4,9 @@ use crate::{
 };
 use repo_walker::{FileScanner, WalkOptions};
 use snafu::ResultExt;
+use std::ops::Bound;
 use std::path::Path;
-use tantivy::{IndexWriter, Term, doc};
+use tantivy::{IndexWriter, Term, doc, query::RangeQuery};
 
 const MAX_FILE_SIZE: u64 = 1_048_576;
 const CHUNK_SIZE: usize = 500;
@@ -60,6 +61,25 @@ pub fn index_directory(
     directory: &Path,
     respect_gitignore: bool,
 ) -> Result<IndexStats> {
+    // Wipe every doc whose `directory` lives under the indexed root so
+    // files that were deleted, renamed, or newly gitignored between runs
+    // disappear from search results. The trailing-slash encoding plus the
+    // `[<root>/, <root>0)` range is the same trick `search::search` uses,
+    // and only matches files actually under this root — sibling roots like
+    // `<root>-old` stay untouched.
+    let canonical_root = std::fs::canonicalize(directory)
+        .context(error::CanonicalizeSnafu { path: directory })?;
+    let root_lower = directory_term(&canonical_root);
+    let mut root_upper = root_lower.clone();
+    root_upper.pop();
+    root_upper.push('0');
+    let lower_term = Term::from_field_text(schema.directory, &root_lower);
+    let upper_term = Term::from_field_text(schema.directory, &root_upper);
+    let cleanup = RangeQuery::new(Bound::Included(lower_term), Bound::Excluded(upper_term));
+    writer
+        .delete_query(Box::new(cleanup))
+        .context(error::CommitIndexSnafu)?;
+
     let scanner = FileScanner::new(
         directory,
         WalkOptions {

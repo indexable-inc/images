@@ -87,6 +87,37 @@ fn directory_filter_matches_subdirectory() {
 }
 
 #[test]
+fn reindex_removes_deleted_file_chunks() {
+    let workdir = TempDir::new().expect("workdir");
+    let index_dir = TempDir::new().expect("index dir");
+
+    let kept = workdir.path().join("kept.md");
+    let removed = workdir.path().join("gone.md");
+    fs::write(&kept, "alpha bravo").expect("write kept");
+    fs::write(&removed, "alpha charlie").expect("write removed");
+
+    {
+        let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
+        index.index_directory(workdir.path(), false).expect("index v1");
+        let hits = index.search("charlie", 5, None).expect("search v1");
+        assert!(!hits.is_empty(), "removed file should be searchable in v1");
+    }
+
+    fs::remove_file(&removed).expect("rm removed");
+    {
+        let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
+        index.index_directory(workdir.path(), false).expect("index v2");
+        let hits = index.search("charlie", 5, None).expect("search v2");
+        assert!(
+            hits.is_empty(),
+            "chunks for deleted file should be gone: {hits:?}",
+        );
+        let alpha_hits = index.search("alpha", 5, None).expect("search alpha");
+        assert!(!alpha_hits.is_empty(), "surviving file should still match");
+    }
+}
+
+#[test]
 fn directory_filter_excludes_same_prefix_siblings() {
     let workdir = TempDir::new().expect("workdir");
     let index_dir = TempDir::new().expect("index dir");
