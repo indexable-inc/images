@@ -31,6 +31,7 @@ pub struct FileScanner {
 }
 
 impl FileScanner {
+    #[must_use]
     pub fn new(directory: &Path, options: WalkOptions) -> Self {
         let walker = WalkBuilder::new(directory)
             .git_ignore(options.respect_gitignore)
@@ -63,6 +64,7 @@ pub struct GitignoreFilter {
 }
 
 impl GitignoreFilter {
+    #[must_use]
     pub fn new(directory: &Path, respect_gitignore: bool) -> Self {
         let matcher = if respect_gitignore {
             // `GitignoreBuilder::new` only seeds the root, not the file itself.
@@ -81,6 +83,7 @@ impl GitignoreFilter {
         Self { matcher }
     }
 
+    #[must_use]
     pub fn filter_paths(&self, paths: Vec<PathBuf>) -> Vec<PathBuf> {
         let Some(matcher) = self.matcher.as_ref() else {
             return paths.into_iter().filter(|p| is_indexable_file(p)).collect();
@@ -97,6 +100,7 @@ impl GitignoreFilter {
 
 /// True for regular files whose extension is not on the known-binary list.
 /// Files without an extension are treated as text.
+#[must_use]
 pub fn is_indexable_file(path: &Path) -> bool {
     if !path.is_file() {
         return false;
@@ -107,6 +111,7 @@ pub fn is_indexable_file(path: &Path) -> bool {
         .is_none_or(|ext_str| !is_binary_extension(ext_str))
 }
 
+#[must_use]
 pub fn is_binary_extension(ext: &str) -> bool {
     matches!(
         ext.to_ascii_lowercase().as_str(),
@@ -183,7 +188,7 @@ mod tests {
         std::fs::write(&ignored, "i").expect("write ignored");
 
         let filter = GitignoreFilter::new(dir.path(), true);
-        let kept = filter.filter_paths(vec![keep.clone(), ignored.clone()]);
+        let kept = filter.filter_paths(vec![keep.clone(), ignored]);
 
         assert_eq!(kept, vec![keep], "ignored.txt should be filtered out");
     }

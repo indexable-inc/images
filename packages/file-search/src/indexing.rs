@@ -29,7 +29,7 @@ fn extension_to_facet(extension: &str) -> Facet {
     }
 }
 
-pub(crate) fn chunk_content(content: &str) -> Vec<(usize, String)> {
+pub fn chunk_content(content: &str) -> Vec<(usize, String)> {
     if content.len() <= CHUNK_SIZE {
         return vec![(0, content.to_string())];
     }
@@ -60,7 +60,7 @@ pub(crate) fn chunk_content(content: &str) -> Vec<(usize, String)> {
     chunks
 }
 
-pub(crate) fn index_directory(
+pub fn index_directory(
     writer: &mut IndexWriter,
     schema: &IndexSchema,
     directory: &Path,

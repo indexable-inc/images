@@ -3,7 +3,7 @@ use snafu::ResultExt;
 use std::path::PathBuf;
 use tantivy::schema::{Field, Schema};
 
-pub(crate) struct IndexSchema {
+pub struct IndexSchema {
     pub path: Field,
     pub path_exact: Field,
     pub content: Field,
@@ -14,7 +14,7 @@ pub(crate) struct IndexSchema {
 }
 
 impl IndexSchema {
-    pub(crate) fn from_schema(schema: &Schema) -> Result<Self> {
+    pub fn from_schema(schema: &Schema) -> Result<Self> {
         let field = |name: &'static str| {
             schema
                 .get_field(name)

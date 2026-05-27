@@ -1,8 +1,8 @@
 //! Tantivy tokenizer that splits identifiers the way code reviewers read them.
 //!
-//! Tokens split on camelCase, snake_case, kebab-case, and any non-alphanumeric
-//! run. ANSI escape sequences are stripped up front so terminal captures
-//! tokenize the same way as their decoded contents.
+//! Tokens split on `camelCase`, `snake_case`, `kebab-case`, and any
+//! non-alphanumeric run. ANSI escape sequences are stripped up front so
+//! terminal captures tokenize the same way as their decoded contents.
 //!
 //! Two analyzers are registered on the index:
 //!
@@ -60,20 +60,10 @@ impl CodeTokenStream {
             byte_offset: 0,
         }
     }
+}
 
-    fn is_separator(ch: char) -> bool {
-        ch == '_' || ch == '-'
-    }
-
-    fn should_break_on_case_change(ch: char, last_was_lower_or_digit: bool) -> bool {
-        ch.is_uppercase() && last_was_lower_or_digit
-    }
-
-    fn should_stop_consuming(ch: char, last_was_lower_or_digit: bool) -> bool {
-        Self::is_separator(ch)
-            || Self::should_break_on_case_change(ch, last_was_lower_or_digit)
-            || !ch.is_alphanumeric()
-    }
+const fn is_separator(ch: char) -> bool {
+    matches!(ch, '_' | '-')
 }
 
 impl TokenStream for CodeTokenStream {
@@ -118,8 +108,10 @@ impl TokenStream for CodeTokenStream {
                 return true;
             };
 
-            if Self::should_stop_consuming(ch, last_was_lower_or_digit) {
-                if Self::is_separator(ch) {
+            let separator = is_separator(ch);
+            let case_break = ch.is_uppercase() && last_was_lower_or_digit;
+            if separator || case_break || !ch.is_alphanumeric() {
+                if separator {
                     current_offset += ch.len_utf8();
                     chars.next();
                 }

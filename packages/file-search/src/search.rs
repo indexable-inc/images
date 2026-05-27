@@ -28,7 +28,7 @@ fn path_to_facet(path: &Path) -> Facet {
     Facet::from(&normalized)
 }
 
-pub(crate) fn search(
+pub fn search(
     index: &Index,
     reader: &IndexReader,
     schema: &IndexSchema,

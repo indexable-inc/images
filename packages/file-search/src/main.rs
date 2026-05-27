@@ -111,12 +111,13 @@ fn chunk_label(offset: u64) -> String {
 }
 
 fn default_index_dir() -> PathBuf {
-    std::env::var_os("FILE_SEARCH_INDEX_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
+    std::env::var_os("FILE_SEARCH_INDEX_DIR").map_or_else(
+        || {
             let base = dirs_cache_dir().unwrap_or_else(std::env::temp_dir);
             base.join("file-search").join("index")
-        })
+        },
+        PathBuf::from,
+    )
 }
 
 fn dirs_cache_dir() -> Option<PathBuf> {

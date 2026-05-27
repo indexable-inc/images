@@ -1,7 +1,7 @@
 use file_search::EphemeralSearch;
 use tango_bench::{IntoBenchmarks, benchmark_fn, tango_benchmarks, tango_main};
 
-const SAMPLE_RUST_CODE: &str = r#"
+const SAMPLE_RUST_CODE: &str = r"
 pub fn fibonacci(n: u64) -> u64 {
     match n {
         0 => 0,
@@ -20,7 +20,7 @@ impl SearchIndex {
         Self::open_or_create()
     }
 }
-"#;
+";
 
 const SAMPLE_QUERIES: &[&str] = &[
     "fibonacci",

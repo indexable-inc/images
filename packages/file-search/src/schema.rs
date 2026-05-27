@@ -3,7 +3,7 @@ use tantivy::schema::{
     FacetOptions, IndexRecordOption, STRING, STORED, Schema, TextFieldIndexing, TextOptions,
 };
 
-pub(crate) fn build_schema() -> Schema {
+pub fn build_schema() -> Schema {
     let text_indexing = TextFieldIndexing::default()
         .set_tokenizer(CODE_STEMMED_TOKENIZER)
         .set_index_option(IndexRecordOption::WithFreqsAndPositions);

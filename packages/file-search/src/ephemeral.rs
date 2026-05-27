@@ -28,6 +28,13 @@ pub struct EphemeralSearch {
 }
 
 impl EphemeralSearch {
+    /// Build an in-memory index over `texts` and return a handle that can
+    /// rerank them by BM25 score.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the index, writer, or reader cannot be created,
+    /// or if a document cannot be added or committed.
     pub fn from_texts(texts: impl IntoIterator<Item = String>) -> Result<Self> {
         let (schema, id_field, content_field) = build_schema();
 
@@ -68,6 +75,13 @@ impl EphemeralSearch {
         })
     }
 
+    /// Return up to `limit` hits ranked by BM25, with each [`RankResult::id`]
+    /// referencing the position of the text in the iterator passed to
+    /// [`Self::from_texts`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be parsed or the search fails.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<RankResult>> {
         let parser = QueryParser::for_index(&self.index, vec![self.content_field]);
         let parsed = parser.parse_query(query).context(QueryParseSnafu)?;
@@ -80,10 +94,15 @@ impl EphemeralSearch {
         let mut results = Vec::with_capacity(top_docs.len());
         for (score, doc_address) in top_docs {
             let doc: TantivyDocument = searcher.doc(doc_address).context(error::SearchSnafu)?;
-            let id = doc
+            let raw_id = doc
                 .get_first(self.id_field)
                 .and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
+                .unwrap_or(0);
+            // The id was assigned by `enumerate()`, which yields `usize`,
+            // so the round-trip back to `usize` only loses information on
+            // 32-bit targets when an index has more than 2^32 - 1 docs;
+            // that's not reachable here.
+            let id = usize::try_from(raw_id).unwrap_or(usize::MAX);
 
             results.push(RankResult { id, score });
         }

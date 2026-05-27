@@ -39,9 +39,14 @@ pub struct SearchIndexReader {
 }
 
 impl SearchIndexReader {
-    /// Open an existing index at `index_dir` for searching. Errors if no
-    /// index exists at that path — use [`SearchIndex::open_or_create`] to
-    /// create one.
+    /// Open an existing index at `index_dir` for searching.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `index_dir` does not contain a valid Tantivy
+    /// index, if the schema is missing a field the reader expects, or if
+    /// the reader cannot be initialized. Use [`SearchIndex::open_or_create`]
+    /// when no index exists yet.
     pub fn open(index_dir: impl AsRef<Path>) -> Result<Self> {
         let index_dir = index_dir.as_ref();
         let index = Index::open_in_dir(index_dir).context(error::OpenIndexSnafu {
@@ -62,6 +67,12 @@ impl SearchIndexReader {
     /// Search the index for the top `limit` hits matching `query`. When
     /// `filter_directory` is set, only documents whose canonicalized parent
     /// directory equals it or sits beneath it are returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query cannot be parsed, the search fails, or
+    /// (when `filter_directory` is set) the filter path cannot be
+    /// canonicalized.
     pub fn search(
         &self,
         query: &str,
@@ -92,6 +103,12 @@ pub struct SearchIndex {
 impl SearchIndex {
     /// Open an existing index in `index_dir`, or create a new one if it does
     /// not exist yet. The directory is created on demand.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `index_dir` cannot be created, if an existing
+    /// index cannot be opened or has a mismatched schema, or if Tantivy
+    /// cannot acquire the writer lock or initialize the reader.
     pub fn open_or_create(index_dir: impl Into<PathBuf>) -> Result<Self> {
         let index_dir = index_dir.into();
         let schema = schema::build_schema();
@@ -123,6 +140,14 @@ impl SearchIndex {
 
     /// Walk `directory`, indexing every file the scanner considers
     /// text-shaped. Honors `.gitignore` when `respect_gitignore` is true.
+    /// Per-file errors are recorded in [`IndexStats::errors`] instead of
+    /// aborting the walk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the final commit fails. Individual files that
+    /// fail to read, parse, or index are recorded in the returned
+    /// [`IndexStats`] but do not abort the run.
     pub fn index_directory(
         &mut self,
         directory: &Path,
@@ -133,6 +158,10 @@ impl SearchIndex {
 
     /// Search the index for the top `limit` hits matching `query`. Same
     /// behavior as [`SearchIndexReader::search`].
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`SearchIndexReader::search`].
     pub fn search(
         &self,
         query: &str,
