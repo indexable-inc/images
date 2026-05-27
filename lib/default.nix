@@ -341,6 +341,7 @@ let
     gleam = import ./languages/gleam.nix { };
     go = import ./languages/go.nix { inherit errors; };
     haskell = import ./languages/haskell.nix { inherit errors; };
+    idris = import ./languages/idris.nix { };
     java = import ./languages/java { inherit errors lib; };
     javascript = import ./languages/javascript.nix { inherit errors; };
     kotlin = import ./languages/kotlin.nix { inherit errors; };
