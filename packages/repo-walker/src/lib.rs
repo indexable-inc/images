@@ -102,6 +102,12 @@ pub struct GitignoreFilter {
 impl GitignoreFilter {
     #[must_use]
     pub fn new(directory: &Path, respect_gitignore: bool) -> Self {
+        // Canonicalize the root so the hidden-path strip-prefix check
+        // succeeds even when callers pass a relative root but absolute file
+        // paths (or vice versa). Fall back to the raw path if the root
+        // doesn't exist yet — the matcher will still load (with zero
+        // globs) and filter_paths will fall back to a basename check.
+        let root = std::fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
         let matcher = if respect_gitignore {
             // `GitignoreBuilder::new` only seeds the root, not the file itself.
             // Without an explicit `.add(...)` for the `.gitignore` in the
@@ -109,15 +115,15 @@ impl GitignoreFilter {
             // path through. `add` returns a non-fatal warning when the file
             // is missing; treat that as "no globs to apply" rather than an
             // error.
-            let mut builder = ignore::gitignore::GitignoreBuilder::new(directory);
-            let _ = builder.add(directory.join(".gitignore"));
+            let mut builder = ignore::gitignore::GitignoreBuilder::new(&root);
+            let _ = builder.add(root.join(".gitignore"));
             builder.build().ok()
         } else {
             None
         };
 
         Self {
-            root: directory.to_path_buf(),
+            root,
             matcher,
             respect_gitignore,
         }
@@ -133,14 +139,22 @@ impl GitignoreFilter {
                 if !is_indexable_file(path) {
                     return false;
                 }
-                if drop_hidden && is_hidden_below(&self.root, path) {
+                // Canonicalize the caller's path so a relative root and an
+                // absolute path (or vice versa) line up for both the
+                // hidden-prefix check and the gitignore matcher (which is
+                // built against the canonicalized root).
+                let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+                if drop_hidden && is_hidden_below(&self.root, &canonical) {
                     return false;
                 }
                 // `matched_path_or_any_parents` walks up the path so a
                 // directory-only rule like `target/` excludes
                 // `target/debug/foo.rs`. Plain `matched` only checks the
                 // path itself, missing descendants.
-                matcher.is_none_or(|m| !m.matched_path_or_any_parents(path, path.is_dir()).is_ignore())
+                matcher.is_none_or(|m| {
+                    !m.matched_path_or_any_parents(&canonical, canonical.is_dir())
+                        .is_ignore()
+                })
             })
             .collect()
     }
