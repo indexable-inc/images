@@ -123,7 +123,14 @@ impl GitignoreFilter {
         paths
             .into_iter()
             .filter(|path| {
-                is_indexable_file(path) && !matcher.matched(path, path.is_dir()).is_ignore()
+                // `matched_path_or_any_parents` walks up the path so a
+                // directory-only rule like `target/` excludes
+                // `target/debug/foo.rs`. Plain `matched` only checks the
+                // path itself, missing descendants.
+                is_indexable_file(path)
+                    && !matcher
+                        .matched_path_or_any_parents(path, path.is_dir())
+                        .is_ignore()
             })
             .collect()
     }
@@ -229,6 +236,27 @@ mod tests {
         let kept = filter.filter_paths(vec![keep.clone(), ignored]);
 
         assert_eq!(kept, vec![keep], "ignored.txt should be filtered out");
+    }
+
+    #[test]
+    fn gitignore_filter_excludes_ignored_directory_descendants() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        std::fs::write(dir.path().join(".gitignore"), "target/\n").expect("write");
+        let target_dir = dir.path().join("target");
+        std::fs::create_dir(&target_dir).expect("mkdir target");
+        let kept = dir.path().join("keep.rs");
+        let ignored = target_dir.join("dropped.rs");
+        std::fs::write(&kept, "k").expect("write keep");
+        std::fs::write(&ignored, "i").expect("write ignored");
+
+        let filter = GitignoreFilter::new(dir.path(), true);
+        let result = filter.filter_paths(vec![kept.clone(), ignored]);
+
+        assert_eq!(
+            result,
+            vec![kept],
+            "files under a directory-rule match should be filtered",
+        );
     }
 
     #[cfg(unix)]
