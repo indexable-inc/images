@@ -29,27 +29,36 @@ pub fn chunk_content(content: &str) -> Vec<(usize, String)> {
         return vec![(0, content.to_string())];
     }
 
+    // Materialize char boundaries once so each chunk's end + next-start lookup
+    // is O(log n) via binary search instead of restarting `char_indices` from
+    // byte 0 every iteration (which made the loop quadratic on large files).
+    let boundaries: Vec<usize> = content
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(content.len()))
+        .collect();
+    let aligned = |raw: usize| -> usize {
+        if raw >= content.len() {
+            return content.len();
+        }
+        let idx = boundaries
+            .binary_search(&raw)
+            .unwrap_or_else(|insert| insert);
+        boundaries.get(idx).copied().unwrap_or(content.len())
+    };
+
     let mut chunks = Vec::new();
     let mut offset = 0;
 
     while offset < content.len() {
-        let end = (offset + CHUNK_SIZE).min(content.len());
-        let end = content
-            .char_indices()
-            .find(|(i, _)| *i >= end)
-            .map_or(content.len(), |(i, _)| i);
+        let end = aligned(offset + CHUNK_SIZE);
         let chunk = content.get(offset..end).unwrap_or("");
         chunks.push((offset, chunk.to_string()));
 
         if end >= content.len() {
             break;
         }
-
-        let next_offset = offset + CHUNK_SIZE - CHUNK_OVERLAP;
-        offset = content
-            .char_indices()
-            .find(|(i, _)| *i >= next_offset)
-            .map_or(content.len(), |(i, _)| i);
+        offset = aligned(offset + CHUNK_SIZE - CHUNK_OVERLAP);
     }
 
     chunks
