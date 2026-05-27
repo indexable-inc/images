@@ -6,7 +6,7 @@
   goUnitFor,
   rustWorkspaceFor,
   cliArtifacts,
-  rustNightlyClippyToolchainFor,
+  clippy-fork,
 }:
 pkgs:
 let
@@ -26,7 +26,7 @@ let
       pkgs
       packageSystem
       cliArtifacts
-      rustNightlyClippyToolchainFor
+      clippy-fork
       ixForPackages
       ;
     ix = ixForPackages;

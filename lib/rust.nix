@@ -258,11 +258,15 @@ let
       '';
       pkgs.linkFarm "cargo-vendor-dir" vendorEntries;
 
+  # Both registry shapes resolve to the same CDN artifact. `static.crates.io` is
+  # the direct CloudFront URL cargo's sparse protocol uses; the older
+  # `api.crates.io/api/v1/crates/.../download` endpoint just 302s here and, as
+  # of 2026-05, rejects curl's default User-Agent with HTTP 403.
+  cratesIoDownloadUrl =
+    pkg: "https://static.crates.io/crates/${pkg.name}/${pkg.name}-${pkg.version}.crate";
   registryDownloadUrls = {
-    "registry+https://github.com/rust-lang/crates.io-index" =
-      pkg: "https://crates.io/api/v1/crates/${pkg.name}/${pkg.version}/download";
-    "sparse+https://index.crates.io/" =
-      pkg: "https://static.crates.io/crates/${pkg.name}/${pkg.name}-${pkg.version}.crate";
+    "registry+https://github.com/rust-lang/crates.io-index" = cratesIoDownloadUrl;
+    "sparse+https://index.crates.io/" = cratesIoDownloadUrl;
   };
 
   parseGitSource =
@@ -684,27 +688,44 @@ let
       cargoTestFlags =
         (rawArgs.cargoTestFlags or [ ])
         ++ lib.optionals (testEnabled && args.policy.tests.useNextest) [ "--no-tests=pass" ];
+      # Vendor through our own fetcher (`resolveVendorDir` -> `static.crates.io`)
+      # instead of letting nixpkgs's `importCargoLock` re-fetch each crate via
+      # the legacy `crates.io/api/v1/crates/.../download` URL. The legacy
+      # endpoint is now gated on User-Agent (no `curl/...`) and is a redirect
+      # to the same CDN anyway, so going direct is both unblocked and faster.
+      # Surface the vendor dir as `cargoDeps` (absolute store path); the
+      # cargo-setup hook expects `cargoVendorDir` to be in-source, not a
+      # `/nix/store` path. User-supplied `cargoHash`, `cargoDeps`, or
+      # `cargoVendorDir` still wins.
+      bareVendorDir = resolveVendorDir {
+        inherit (args) cargoLock outputHashes vendorDir;
+        sourceOverrides = rawArgs.sourceOverrides or { };
+      };
+      # nixpkgs's `cargoSetupPostPatchHook` diffs `$cargoDeps/Cargo.lock`
+      # against the lockfile in the source tree. `resolveVendorDir` only
+      # emits the per-crate symlinks, so re-attach the lockfile here.
+      defaultCargoDeps = pkgs.runCommand "cargo-deps" { } ''
+        mkdir -p "$out"
+        cp -RL ${bareVendorDir}/. "$out/"
+        cp ${cargoLockFile args.cargoLock} "$out/Cargo.lock"
+      '';
       buildArgs =
         builtins.removeAttrs rawArgs [
           "cargoArgs"
           "cargoExtraConfig"
+          "cargoLock"
           "cargoTestFlags"
           "outputHashes"
           "policy"
           "rustPlatform"
           "rustToolchain"
+          "sourceOverrides"
           "vendorDir"
         ]
         //
-          lib.optionalAttrs
-            (
-              !(rawArgs ? cargoLock)
-              && !(rawArgs ? cargoHash)
-              && !(rawArgs ? cargoDeps)
-              && !(rawArgs ? cargoVendorDir)
-            )
+          lib.optionalAttrs (!(rawArgs ? cargoHash) && !(rawArgs ? cargoDeps) && !(rawArgs ? cargoVendorDir))
             {
-              cargoLock.lockFile = cargoLockFile args.cargoLock;
+              cargoDeps = defaultCargoDeps;
             }
         // {
           nativeBuildInputs = (rawArgs.nativeBuildInputs or [ ]) ++ nativeBuildInputsForPolicy args.policy;

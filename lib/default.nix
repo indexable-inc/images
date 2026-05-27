@@ -7,6 +7,7 @@
   determinate,
   home-manager,
   hermes-agent,
+  clippy-fork,
   cliArtifacts ? { },
 }:
 let
@@ -43,7 +44,7 @@ let
       lib
       packageRegistry
       buildIxRustTool
-      rustNightlyClippyToolchainFor
+      clippy-fork
       writePythonApplication
       ;
   };
@@ -102,11 +103,14 @@ let
   agentsMd = import ./agents-md.nix { inherit lib paths; };
   languages = {
     cpp = import ./languages/cpp.nix { inherit errors; };
+    dhall = import ./languages/dhall.nix { };
     elixir = import ./languages/elixir.nix { inherit errors; };
     erlang = import ./languages/erlang.nix { inherit errors; };
+    futhark = import ./languages/futhark.nix { };
     gleam = import ./languages/gleam.nix { };
     go = import ./languages/go.nix { inherit errors; };
     haskell = import ./languages/haskell.nix { inherit errors; };
+    idris = import ./languages/idris.nix { };
     java = import ./languages/java { inherit errors lib; };
     javascript = import ./languages/javascript.nix { inherit errors; };
     kotlin = import ./languages/kotlin.nix { inherit errors; };
@@ -124,9 +128,9 @@ let
         languages
         writePythonApplication
         rustWorkspaceFor
+        clippy-fork
         ;
     })
-    rustNightlyClippyToolchainFor
     buildIxRustTool
     cargoUnitFor
     buildRustPackage
@@ -242,7 +246,7 @@ let
       goUnitFor
       rustWorkspaceFor
       cliArtifacts
-      rustNightlyClippyToolchainFor
+      clippy-fork
       ;
   };
 

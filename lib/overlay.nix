@@ -2,7 +2,7 @@
   lib,
   packageRegistry,
   buildIxRustTool,
-  rustNightlyClippyToolchainFor,
+  clippy-fork,
   writePythonApplication,
 }:
 final: _prev:
@@ -13,7 +13,7 @@ let
       entry
       final
       buildIxRustTool
-      rustNightlyClippyToolchainFor
+      clippy-fork
       ;
     pkgs = final;
     inherit (entry) path;

@@ -23,7 +23,7 @@ let
     consumer that calls `toolchain pkgs { channel = "nightly"; version
     = languages.rust.defaultNightlyDate; }`.
   */
-  defaultNightlyDate = "2026-05-17";
+  defaultNightlyDate = "2026-05-27";
 
   /**
     Toolchain components everyone gets by default. The shape mirrors
