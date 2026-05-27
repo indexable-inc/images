@@ -1,0 +1,11 @@
+{
+  "loader": "fabric",
+  "loaderVersion": "0.19.2",
+  "installerVersion": "1.1.1",
+  "versions": [
+    "1.21.11",
+    "26.1.2",
+    "26.2-snapshot-5",
+    "26.2-snapshot-6"
+  ]
+}

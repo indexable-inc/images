@@ -94,6 +94,12 @@ let
     meta.description = "Regenerate Minecraft mod catalogs";
   };
 
+  updateLoaders = ix.writePythonApplication pkgs {
+    name = "update-loaders";
+    src = paths.tools.updateLoaders;
+    meta.description = "Refresh Minecraft loader (Paper / Velocity / Fabric) catalogs from upstream";
+  };
+
   updateIxCli = ix.writePythonApplication pkgs {
     name = "update-ix-cli";
     src = paths.tools.updateIxCli;
@@ -315,6 +321,7 @@ in
       site-dev = site.passthru.devServer;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
+      update-loaders = updateLoaders;
       update-ix-cli = updateIxCli;
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
@@ -331,6 +338,19 @@ in
         mkdir -p "$out"
       '';
       cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
+      # Offline schema gate for the loader manifests. `deepSeq` forces
+      # every Paper / Velocity / Fabric per-version lock through
+      # `readLoaderManifest` in `lib/artifacts.nix`, so malformed JSON or a
+      # missing key fires here before any image starts evaluating. The
+      # forced surface is the parsed-and-validated manifest data, not the
+      # wrapped `fetchurl` derivations, to keep this check pure eval.
+      loader-manifests =
+        let
+          forced = builtins.deepSeq ix.artifacts.minecraft.loaderManifests "ok";
+        in
+        pkgs.runCommand "loader-manifests-check" { } ''
+          printf '%s\n' '${forced}' > "$out"
+        '';
       run-records-session = repoPackages.run.passthru.tests.recordsSession;
       lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
         cp -R ${lintSource} source
