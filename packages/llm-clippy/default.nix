@@ -4,15 +4,14 @@
   makeWrapper,
   pkgs,
   src,
-  rustToolchain ? null,
 }:
 
 let
-  toolchain =
-    if rustToolchain != null then
-      rustToolchain
-    else
-      pkgs.rust-bin.fromRustupToolchainFile (src + "/rust-toolchain.toml");
+  # Drive the toolchain from the fork's `rust-toolchain.toml` so a
+  # `nix flake update clippy-fork` advances the rustc/rustc_private ABI in
+  # lockstep with the source. If a future fork commit needs different
+  # components, edit that file in the fork, not this one.
+  toolchain = pkgs.rust-bin.fromRustupToolchainFile (src + "/rust-toolchain.toml");
 
   rustcLibPathVar =
     if pkgs.stdenv.hostPlatform.isDarwin then "DYLD_LIBRARY_PATH" else "LD_LIBRARY_PATH";
@@ -23,12 +22,10 @@ ix.buildRustPackage pkgs {
 
   inherit src;
   rustToolchain = toolchain;
-  # Vendor through ix.buildRustPackage's `resolveVendorDir`, which fetches from
-  # `static.crates.io`. Upstream indexable-inc/clippy ships no Cargo.lock, so
-  # the patch plants one into $sourceRoot for cargo at build time; the same
-  # file is what `cargoLock.lockFile` points at for vendoring.
-  cargoLock.lockFile = ./Cargo.lock;
-  cargoPatches = [ ./cargo-lock.patch ];
+  # Read both the lockfile and the cargo-vendor inputs straight from the fork
+  # so `nix flake update clippy-fork` brings dependency changes along with the
+  # source commit. No checked-in lockfile to drift.
+  cargoLock.lockFile = src + "/Cargo.lock";
 
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [

@@ -259,7 +259,6 @@ let
           entry
           final
           buildIxRustTool
-          rustNightlyClippyToolchainFor
           clippy-fork
           ;
         pkgs = final;
@@ -356,21 +355,6 @@ let
       channel = "nightly";
       version = languages.rust.defaultNightlyDate;
     };
-  rustNightlyClippyToolchainFor =
-    pkgs:
-    languages.rust.toolchain pkgs {
-      channel = "nightly";
-      version = languages.rust.defaultNightlyDate;
-      components = [
-        "cargo"
-        "llvm-tools"
-        "rust-src"
-        "rust-std"
-        "rustc"
-        "rustc-dev"
-        "rustfmt"
-      ];
-    };
   # ix.buildRustPackage closure handed to `callPackage`'d Rust packages.
   # Kept minimal so it stays usable from the bootstrap path (no `cargoUnit`,
   # no `rustWorkspace`); `buildIxRustTool` adds those for packages that need
@@ -382,7 +366,6 @@ let
     pkgs:
     pkgs.callPackage (packagePath "llm-clippy") {
       ix = ixBuildSurfaceFor pkgs;
-      rustToolchain = rustNightlyClippyToolchainFor pkgs;
       src = clippy-fork;
     };
   rustFor =
@@ -788,7 +771,6 @@ let
           pkgs
           packageSystem
           cliArtifacts
-          rustNightlyClippyToolchainFor
           clippy-fork
           ixForPackages
           ;

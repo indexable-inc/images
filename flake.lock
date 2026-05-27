@@ -3,11 +3,11 @@
     "clippy-fork": {
       "flake": false,
       "locked": {
-        "lastModified": 1779900656,
-        "narHash": "sha256-x9uIZqcwKep3E5S2ZAHI0Id9t1lmW71eYKsfcaz3TBE=",
+        "lastModified": 1779910316,
+        "narHash": "sha256-RFFqSzRgJiNSHwZEtw25Oi42MMb0xFuEoQhWEyi5phg=",
         "owner": "indexable-inc",
         "repo": "clippy",
-        "rev": "f43c7a0518ac638976143b66dfd63bf6fe471bd9",
+        "rev": "ebb30cfa60e4aa04ae826ded32662e8ab6d926cb",
         "type": "github"
       },
       "original": {
