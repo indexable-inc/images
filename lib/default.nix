@@ -834,6 +834,7 @@ let
           lib.fileset.unions [
             (packagePath + "/Cargo.toml")
             (packagePath + "/src")
+            (lib.fileset.maybeMissing (packagePath + "/benches"))
             (lib.fileset.maybeMissing (packagePath + "/tests"))
             (lib.fileset.maybeMissing (packagePath + "/templates"))
           ]
