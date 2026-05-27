@@ -870,10 +870,15 @@ let
             "--workspace"
             "--tests"
           ]
+          [
+            "--workspace"
+            "--benches"
+          ]
         ];
         cargoTargetNames = [
           "build"
           "test"
+          "bench"
         ];
         # Every policy check runs once across the whole workspace. Selected
         # package outputs expose these as explicit tests instead of making
