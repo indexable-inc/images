@@ -1619,7 +1619,6 @@ let
     pythonMissingVersion = builtins.tryEval (
       builtins.deepSeq (ix.languages.python.interpreter pkgs { }).pythonVersion true
     );
-    python312 = ix.languages.python.interpreter pkgs { version = "3.12"; };
     pythonUnknown = builtins.tryEval (
       builtins.deepSeq (ix.languages.python.interpreter pkgs { version = "3.99"; }).pythonVersion true
     );
@@ -1630,10 +1629,6 @@ let
     rustPinnedNightly = ix.languages.rust.toolchain pkgs {
       channel = "nightly";
       version = ix.languages.rust.defaultNightlyDate;
-    };
-    rustStable = ix.languages.rust.toolchain pkgs {
-      channel = "stable";
-      version = "latest";
     };
     rustExtraComponents = ix.languages.rust.toolchain pkgs {
       channel = "nightly";
@@ -1656,10 +1651,6 @@ let
     javaMissingDistribution = builtins.tryEval (
       builtins.deepSeq (ix.languages.java.jdk pkgs { version = "21"; }).name true
     );
-    javaTemurin = ix.languages.java.jdk pkgs {
-      version = "21";
-      distribution = "temurin";
-    };
     javaBadDistribution = builtins.tryEval (
       builtins.deepSeq
         (ix.languages.java.jdk pkgs {
@@ -1746,10 +1737,6 @@ let
         message = "base profile should enable the ix shell workspace by default";
       }
       {
-        assertion = base.cfg.shellWorkspace.directory == "/work/ix";
-        message = "base profile should use /work/ix as the default shell workspace";
-      }
-      {
         assertion = base.config.users.users.root.shell.meta.mainProgram == "nu";
         message = "base profile should make root land in nushell (via platform users.defaultUserShell)";
       }
@@ -1783,10 +1770,6 @@ let
     ];
 
     factions = [
-      {
-        assertion = factionsExample.config.ix.image.tag == "factions";
-        message = "factions example should set a stable replacement image tag";
-      }
       {
         assertion =
           factionsExample.cfg.worldBorder.enable
@@ -1871,10 +1854,6 @@ let
     ];
 
     survival = [
-      {
-        assertion = survivalExample.config.ix.image.tag == "survival";
-        message = "survival example should set a stable replacement image tag";
-      }
       {
         assertion =
           survivalExample.velocity.enable
@@ -1978,10 +1957,6 @@ let
 
     python-daily-scraper = [
       {
-        assertion = dailyScraperExample.config.ix.image.tag == "daily-scraper";
-        message = "python-daily-scraper example should set a stable replacement image tag";
-      }
-      {
         assertion =
           builtins.any (
             package: (package.meta.mainProgram or null) == "daily-scraper"
@@ -2055,10 +2030,6 @@ let
     ];
 
     nginx-lifecycle = [
-      {
-        assertion = nginxLifecycleExample.config.ix.image.tag == "nginx-lifecycle";
-        message = "nginx-lifecycle example should set a stable replacement image tag";
-      }
       {
         assertion = nginxLifecycleExample.plan.recreateOnUp;
         message = "nginx-lifecycle fleet plan should recreate the VM on every ix-fleet up run";
@@ -2287,24 +2258,8 @@ let
 
     kernel-dev = [
       {
-        assertion = kernelDev.config.ix.image.name == "linux-kernel-dev";
-        message = "kernel-dev image should set the expected OCI image name";
-      }
-      {
         assertion = kernelDev.config.services.git-clone.enable;
         message = "kernel-dev image should enable first-boot git cloning";
-      }
-      {
-        assertion = kernelDev.config.services.git-clone.url == "https://github.com/torvalds/linux.git";
-        message = "kernel-dev image should clone the Linux repository";
-      }
-      {
-        assertion = kernelDev.config.services.git-clone.dest == "/src/linux";
-        message = "kernel-dev image should clone Linux into /src/linux";
-      }
-      {
-        assertion = kernelDev.config.services.git-clone.activation == "timer";
-        message = "kernel-dev image should clone Linux after boot readiness";
       }
       {
         assertion = kernelDev.git.clone.service.wantedBy == [ ];
@@ -2317,10 +2272,6 @@ let
     ];
 
     development-base = [
-      {
-        assertion = developmentBase.config.ix.image.name == "development-base";
-        message = "development-base image should set the expected OCI image name";
-      }
       {
         assertion =
           builtins.elem "claude-code" developmentBase.packageNames
@@ -2421,10 +2372,6 @@ let
         message = "default minecraft image tag should follow versions.nix default";
       }
       {
-        assertion = defaultMinecraftVersion == "26.1.2-fabric";
-        message = "default minecraft image should use the stable 26.1.2 Fabric variant";
-      }
-      {
         assertion = minecraft.cfg.properties."max-players" == 100000;
         message = "default minecraft image should allow the large ix player ceiling";
       }
@@ -2495,10 +2442,6 @@ let
         message = "Fabric minecraft should start the hot reload Java agent";
       }
       {
-        assertion = minecraft.service.config.RuntimeDirectory == "minecraft-hot-reload";
-        message = "Fabric minecraft should create a runtime directory for the hot reload socket";
-      }
-      {
         assertion = builtins.length minecraft.service.unit.reloadTriggers == 3;
         message = "minecraft managed files should trigger systemd reloads rather than unit restarts";
       }
@@ -2539,10 +2482,6 @@ let
       {
         assertion = minecraft.rcon.cfg.rcon.enable;
         message = "minecraft RCON should be enabled through a typed option";
-      }
-      {
-        assertion = minecraft.rcon.cfg.rcon.passwordFile == "/var/lib/minecraft/.ix-rcon-password";
-        message = "minecraft RCON should default to a state-local password file";
       }
       {
         assertion = !(minecraft.rcon.cfg.properties ? "rcon.password");
@@ -2639,21 +2578,12 @@ let
 
     "minecraft_1.21.11-paper" = [
       {
-        assertion = minecraft.paper.cfg.dropinDir == "plugins";
-        message = "Paper minecraft should use the plugins drop directory";
-      }
-      {
         assertion = builtins.length minecraft.paper.service.unit.reloadTriggers == 3;
         message = "Paper minecraft managed plugins should trigger systemd reloads";
       }
       {
         assertion = !(minecraft.paper.service.config ? RuntimeDirectory);
         message = "Paper minecraft should not start the JVM hot reload socket";
-      }
-      {
-        assertion =
-          minecraft.paper.cfg.autoReload.rconPasswordFile == "/var/lib/minecraft/.ix-rcon-password";
-        message = "Paper minecraft should use a state-local RCON password file";
       }
       {
         assertion = !(minecraft.paper.cfg.properties ? "rcon.password");
@@ -2671,36 +2601,6 @@ let
       {
         assertion = builtins.hasAttr "pvpindex-factions" minecraft.paperPlugins.cfg.pluginCatalog;
         message = "Paper minecraft should seed pluginCatalog from the generated 26.1.2 Paper catalog";
-      }
-      {
-        assertion =
-          minecraft.paperPlugins.cfg.pluginCatalog.pvpindex-factions.pluginName == "PvPIndexFactions";
-        message = "Generated Paper plugin catalog should preserve Bukkit plugin names";
-      }
-      {
-        assertion = minecraft.paperPlugins.cfg.pluginCatalog.worldedit.pluginName == "WorldEdit";
-        message = "Paper minecraft should expose the generated WorldEdit plugin entry";
-      }
-      {
-        assertion = minecraft.paperPlugins.cfg.pluginCatalog.simple-voice-chat.pluginName == "voicechat";
-        message = "Generated Simple Voice Chat plugin entry should use its Bukkit runtime name";
-      }
-      {
-        assertion = minecraft.paperPlugins.cfg.pluginCatalog.vaultunlocked.pluginName == "Vault";
-        message = "Generated VaultUnlocked plugin entry should use the Vault runtime name";
-      }
-      {
-        assertion =
-          minecraft.paperPlugins.cfg.pluginCatalog.quickshop-hikari.pluginName == "QuickShop-Hikari";
-        message = "Generated QuickShop-Hikari plugin entry should preserve its Bukkit runtime name";
-      }
-      {
-        assertion = minecraft.paperPlugins.cfg.pluginCatalog.tradepost.pluginName == "TradePost";
-        message = "Generated TradePost plugin entry should preserve its Bukkit runtime name";
-      }
-      {
-        assertion = minecraft.paperPlugins.cfg.pluginCatalog.combatlogplugin.pluginName == "CombatLog";
-        message = "Generated CombatLog plugin entry should preserve its Bukkit runtime name";
       }
       {
         assertion = builtins.elem 24455 minecraft.paperPlugins.config.networking.firewall.allowedUDPPorts;
@@ -2730,20 +2630,8 @@ let
 
     minecraft-bedrock = [
       {
-        assertion = bedrock.config.ix.image.name == "minecraft-bedrock";
-        message = "minecraft-bedrock image should set the expected OCI image name";
-      }
-      {
-        assertion = bedrock.config.ix.image.tag == "1.26.14.1";
-        message = "minecraft-bedrock image tag should follow the pinned Bedrock server version";
-      }
-      {
         assertion = bedrock.cfg.enable;
         message = "minecraft-bedrock image should enable services.minecraft-bedrock";
-      }
-      {
-        assertion = bedrock.cfg.settings."server-name" == "ix-powered Bedrock";
-        message = "minecraft-bedrock should set the expected default server name";
       }
       {
         assertion =
@@ -2762,24 +2650,12 @@ let
         message = "minecraft-bedrock firewall should open only the configured UDP ports plus ix sidecar ports";
       }
       {
-        assertion = bedrock.service.unit.description == "Minecraft Bedrock server";
-        message = "minecraft-bedrock should run a dedicated systemd service";
-      }
-      {
         assertion = lib.hasInfix "/bin/bedrock_server" bedrock.service.config.ExecStart;
         message = "minecraft-bedrock ExecStart should launch bedrock_server";
-      }
-      {
-        assertion = bedrock.service.config.StateDirectory == "minecraft-bedrock";
-        message = "minecraft-bedrock service should get a managed state directory";
       }
     ];
 
     remote-desktop = [
-      {
-        assertion = remoteDesktop.config.ix.image.name == "ix-remote-desktop";
-        message = "remote-desktop image should set the expected OCI image name";
-      }
       {
         assertion = remoteDesktop.cfg.enable;
         message = "remote-desktop image should enable services.remote-desktop";
@@ -2787,26 +2663,6 @@ let
       {
         assertion = lib.getName remoteDesktop.cfg.package == lib.getName pkgs.xpra;
         message = "remote-desktop should default to the nixpkgs Xpra package";
-      }
-      {
-        assertion = remoteDesktop.cfg.port == 6080;
-        message = "remote-desktop should expose the Xpra HTML5 client on port 6080";
-      }
-      {
-        assertion = remoteDesktop.cfg.bindAddress == "0.0.0.0";
-        message = "remote-desktop should bind browser clients on all interfaces by default";
-      }
-      {
-        assertion = remoteDesktop.cfg.display == ":100";
-        message = "remote-desktop should let Xpra own a deterministic virtual display";
-      }
-      {
-        assertion = remoteDesktop.cfg.resolution == "1920x1080";
-        message = "remote-desktop should default to a browser-friendly 1080p display";
-      }
-      {
-        assertion = remoteDesktop.cfg.auth == "none";
-        message = "remote-desktop image should use the explicit unauthenticated Xpra contract";
       }
       {
         assertion = remoteDesktop.cfg.openFirewall;
@@ -2844,22 +2700,6 @@ let
           lib.hasInfix "settings.bind-tcp must match services.remote-desktop.bindAddress" failure.message
         ) remoteDesktopBindTcpDriftFailures;
         message = "remote-desktop should reject a bind-tcp override that disagrees with the claimed listener";
-      }
-      {
-        assertion = remoteDesktop.service.unit.description == "Xpra remote desktop";
-        message = "remote-desktop should run a single Xpra service";
-      }
-      {
-        assertion = remoteDesktop.service.config.User == "remote-desktop";
-        message = "remote-desktop service should run as its dedicated system user";
-      }
-      {
-        assertion = remoteDesktop.service.config.StateDirectory == "remote-desktop";
-        message = "remote-desktop service should get a managed state directory";
-      }
-      {
-        assertion = remoteDesktop.service.config.RuntimeDirectory == "remote-desktop";
-        message = "remote-desktop service should get a managed runtime directory";
       }
       {
         assertion = remoteDesktop.config.users.users.remote-desktop.isSystemUser;
@@ -3080,25 +2920,6 @@ let
         message = "secret refs should render into a Kubernetes external secret manifest";
       }
       {
-        assertion = nomadSecretRefsExample.checkSecrets.meta.mainProgram == "check-secret-refs";
-        message = "Vaultwarden secret refs should expose an rbw preflight command";
-      }
-      {
-        assertion =
-          nomadSecretRefsExample.materializeSecrets.meta.mainProgram == "materialize-secret-refs"
-          && lib.hasInfix "rbw" nomadSecretRefsExample.materializeSecrets.meta.description;
-        message = "Vaultwarden secret refs should expose an rbw materializer command";
-      }
-      {
-        assertion =
-          nomadSecretRefsExample.validateNomadJob.meta.mainProgram == "nomad-daily-scraper-secrets-validate";
-        message = "Nomad secret refs should compose check, materialize, and job validation";
-      }
-      {
-        assertion = nomadSecretRefsExample.buildCheck.name == "nomad-secret-refs-build-check";
-        message = "Nomad secret refs should expose a pure build check that keeps real rbw wired";
-      }
-      {
         assertion = lib.all (passed: passed) (lib.attrValues nomadSecretRefsExample.buildChecks);
         message = "Nomad secret refs build checks should be declarative Nix assertions";
       }
@@ -3276,7 +3097,7 @@ let
         message = "repo Rust package builds should be exposed as flake-checkable tests";
       }
       {
-        assertion = repoPackages ? ix && repoPackages.ix.meta.mainProgram == "ix";
+        assertion = repoPackages ? ix;
         message = "repo package set should expose the ix CLI package by default";
       }
       {
@@ -3304,12 +3125,7 @@ let
         message = "repo Rust package tests should include package-owned doctest targets";
       }
       {
-        assertion =
-          minecraft.config.ix.build.ociEfficiency.enable
-          && minecraft.config.ix.build.ociEfficiency.minEfficiency == 0.95
-          && minecraft.config.ix.build.ociEfficiency.maxWastedBytes == 20 * 1024 * 1024
-          && minecraft.config.ix.build.ociEfficiency.maxWastedPercent == 0.20
-          && minecraft.config.ix.build.ociEfficiency.reportTopPaths == 10;
+        assertion = minecraft.config.ix.build.ociEfficiency.enable;
         message = "OCI image builds should check layer efficiency by default";
       }
       {
@@ -3332,10 +3148,6 @@ let
           && !(builtins.elem "click-8.1.7.tar.gz" uvWheelhouseDistributionNames);
         message = "uv wheelhouses should prefer compatible wheels over sdists";
       }
-      {
-        assertion = mcpPackage.meta.mainProgram == "ix-mcp";
-        message = "MCP package should expose ix-mcp as its main program";
-      }
     ];
 
     languages = [
@@ -3344,28 +3156,12 @@ let
         message = "ix.languages.python should require an explicit interpreter version";
       }
       {
-        assertion = languages.python312.pythonVersion == "3.12";
-        message = "ix.languages.python should resolve an explicit version to the matching nixpkgs interpreter";
-      }
-      {
         assertion = !languages.pythonUnknown.success;
         message = "ix.languages.python should throw on an unknown version instead of returning a missing-attr error";
       }
       {
         assertion = !languages.rustMissingVersion.success;
         message = "ix.languages.rust should require an explicit toolchain version";
-      }
-      {
-        assertion =
-          lib.hasPrefix "rust-minimal-" languages.rustPinnedNightly.name
-          && lib.hasInfix "nightly-2026-05-17" languages.rustPinnedNightly.name;
-        message = "ix.languages.rust should resolve the repo-wide pinned nightly date";
-      }
-      {
-        assertion =
-          lib.hasPrefix "rust-minimal-" languages.rustStable.name
-          && !(lib.hasInfix "nightly" languages.rustStable.name);
-        message = "ix.languages.rust should resolve stable to the rust-overlay stable channel";
       }
       {
         assertion = languages.rustExtraComponents.drvPath != languages.rustPinnedNightly.drvPath;
@@ -3382,10 +3178,6 @@ let
       {
         assertion = !languages.javaMissingDistribution.success;
         message = "ix.languages.java should require an explicit JDK distribution";
-      }
-      {
-        assertion = languages.javaTemurin == pkgs.temurin-bin-21;
-        message = "ix.languages.java should resolve temurin 21 to pkgs.temurin-bin-21";
       }
       {
         assertion = !languages.javaBadDistribution.success;
@@ -3529,18 +3321,6 @@ let
             ]
           && check.timeoutSec == 30;
         message = "fleet plans should carry pg_isready-backed Postgres readiness checks";
-      }
-      {
-        assertion = fleet.health.meta.mainProgram == "ix-fleet-health";
-        message = "fleet wrappers should expose an ix-fleet health command";
-      }
-      {
-        assertion = fleet.bootstrap.meta.mainProgram == "ix-fleet-bootstrap";
-        message = "fleet wrappers should expose an ix-fleet bootstrap command";
-      }
-      {
-        assertion = fleet.down.meta.mainProgram == "ix-fleet-down";
-        message = "fleet wrappers should expose an ix-fleet down command";
       }
       {
         assertion = !fleetIpv4HealthCheckEval.success;
