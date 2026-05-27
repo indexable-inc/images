@@ -2936,7 +2936,7 @@ let
         message = "cargo-unit workspaces should expose a clippy policy check by default";
       }
       {
-        assertion = cargoUnitWorkspace.policy.clippy.package.pname == "llm-clippy";
+        assertion = cargoUnitWorkspace.policy.clippy.package.unchecked.pname == "llm-clippy";
         message = "cargo-unit clippy checks should use llm-clippy by default";
       }
       {
@@ -3075,7 +3075,7 @@ let
         message = "repo Rust packages should expose clippy policy checks by default";
       }
       {
-        assertion = repoPackages.minecraft-nbt.passthru.policy.clippy.package.pname == "llm-clippy";
+        assertion = repoPackages.minecraft-nbt.passthru.policy.clippy.package.unchecked.pname == "llm-clippy";
         message = "repo Rust clippy checks should use llm-clippy by default";
       }
       {
