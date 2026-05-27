@@ -334,6 +334,7 @@ let
   agentsMd = import ./agents-md.nix { inherit lib paths; };
   languages = {
     cpp = import ./languages/cpp.nix { inherit errors; };
+    dhall = import ./languages/dhall.nix { };
     elixir = import ./languages/elixir.nix { inherit errors; };
     erlang = import ./languages/erlang.nix { inherit errors; };
     gleam = import ./languages/gleam.nix { };
