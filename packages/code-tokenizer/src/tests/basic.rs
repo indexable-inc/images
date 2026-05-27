@@ -84,3 +84,23 @@ fn single_word() {
 fn single_uppercase() {
     assert_eq!(tokenize("HELLO"), vec!["hello"]);
 }
+
+#[test]
+fn single_letter_lowercase_prefix() {
+    assert_eq!(tokenize("aTest"), vec!["a", "test"]);
+}
+
+#[test]
+fn single_letter_prefix_long_word() {
+    assert_eq!(tokenize("xCoordinate"), vec!["x", "coordinate"]);
+}
+
+#[test]
+fn single_letter_prefix_etag() {
+    assert_eq!(tokenize("eTag"), vec!["e", "tag"]);
+}
+
+#[test]
+fn digit_prefix_splits_on_letter() {
+    assert_eq!(tokenize("3DModel"), vec!["3", "dmodel"]);
+}

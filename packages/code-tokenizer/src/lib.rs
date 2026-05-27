@@ -91,7 +91,10 @@ impl TokenStream for CodeTokenStream {
         let mut current_offset = self.byte_offset;
         let mut chars = remaining.chars();
 
-        let start_offset = loop {
+        // Seed `last_was_lower_or_digit` from the first character so that
+        // single-letter prefixes (`aTest`, `xCoordinate`, `eTag`) still split
+        // at the next uppercase boundary.
+        let (start_offset, mut last_was_lower_or_digit) = loop {
             let Some(ch) = chars.next() else {
                 return false;
             };
@@ -101,13 +104,11 @@ impl TokenStream for CodeTokenStream {
 
             if ch.is_alphanumeric() {
                 self.token.text.push(ch.to_ascii_lowercase());
-                break char_start;
+                break (char_start, ch.is_lowercase() || ch.is_numeric());
             }
         };
 
         self.token.offset_from = start_offset;
-
-        let mut last_was_lower_or_digit = false;
 
         loop {
             let Some(ch) = chars.clone().next() else {
