@@ -79,10 +79,16 @@
         minecraftMods = ./images/games/minecraft/mods;
         minecraftPaperPlugins = ./images/games/minecraft/plugins/paper;
         minecraftVelocityPlugins = ./images/games/minecraft/plugins/velocity;
+        minecraftLoaders = {
+          paper = ./images/games/minecraft/loaders/paper;
+          velocity = ./images/games/minecraft/loaders/velocity;
+          fabric = ./images/games/minecraft/loaders/fabric;
+        };
         tools = {
           ixShellSyncIgnored = ./tools/ix-shell-sync-ignored.py;
           mcSource = ./tools/mc-source.nu;
           updateIxCli = ./tools/update-ix-cli.py;
+          updateLoaders = ./tools/update-loaders.py;
           updateMods = ./tools/update-mods.py;
         };
       };

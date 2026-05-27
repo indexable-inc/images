@@ -1,0 +1,38 @@
+name: Update loader manifests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 11 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  check-loaders:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Determinate Nix
+        uses: DeterminateSystems/determinate-nix-action@bafaa638b9d5ec0e7e3ac1a7fc80453ef1fd265f # v3
+        with:
+          extra-conf: |
+            extra-system-features = gccarch-znver5
+            accept-flake-config = true
+
+      - name: Set up Cachix
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: indexable-inc
+
+      # Re-fetch upstream Paper / Velocity / Fabric metadata and compare to
+      # the on-disk lock files. Fails the job (with a JSON diff to the log)
+      # whenever upstream has published a new build for any pinned version,
+      # so a follow-up PR can roll the manifest forward.
+      - name: Verify loader manifests are current
+        run: nix run .#update-loaders -- --check
