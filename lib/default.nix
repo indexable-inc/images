@@ -835,6 +835,7 @@ let
             (packagePath + "/Cargo.toml")
             (packagePath + "/src")
             (lib.fileset.maybeMissing (packagePath + "/benches"))
+            (lib.fileset.maybeMissing (packagePath + "/build.rs"))
             (lib.fileset.maybeMissing (packagePath + "/tests"))
             (lib.fileset.maybeMissing (packagePath + "/templates"))
           ]
