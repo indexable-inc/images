@@ -366,39 +366,40 @@ let
     packages = packageSetFor pkgs;
   };
 
-  inherit (import ./images.nix {
-    inherit
-      lib
-      nixpkgs
-      paths
-      system
-      determinate
-      home-manager
-      overlays
-      ixSpecialArgs
-      moduleList
-      writeNushellApplication
-      secrets
-      packageSetFor
-      ;
-  })
+  inherit
+    (import ./images.nix {
+      inherit
+        lib
+        nixpkgs
+        paths
+        system
+        determinate
+        home-manager
+        overlays
+        ixSpecialArgs
+        moduleList
+        writeNushellApplication
+        secrets
+        packageSetFor
+        ;
+    })
     evalImageConfig
     mkImage
-    bootstrapImage
     mkFleetFor
     mkFleet
     ;
 
-  inherit (import ./discovery.nix {
-    inherit
-      lib
-      paths
-      artifacts
-      mkImage
-      mkFleetFor
-      ixReturn
-      ;
-  })
+  inherit
+    (import ./discovery.nix {
+      inherit
+        lib
+        paths
+        artifacts
+        mkImage
+        mkFleetFor
+        ixReturn
+        ;
+    })
     discoverImages
     discoverModules
     exampleFleetsFor
