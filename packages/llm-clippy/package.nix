@@ -3,8 +3,14 @@
   packageSet = true;
   flake = true;
   callPackageArgs =
-    { pkgs, rustNightlyClippyToolchainFor, ... }:
+    {
+      pkgs,
+      rustNightlyClippyToolchainFor,
+      clippy-fork,
+      ...
+    }:
     {
       rustToolchain = rustNightlyClippyToolchainFor pkgs;
+      src = clippy-fork;
     };
 }

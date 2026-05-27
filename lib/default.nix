@@ -7,6 +7,7 @@
   determinate,
   home-manager,
   hermes-agent,
+  clippy-fork,
   cliArtifacts ? { },
 }:
 let
@@ -259,6 +260,7 @@ let
           final
           buildIxRustTool
           rustNightlyClippyToolchainFor
+          clippy-fork
           ;
         pkgs = final;
         inherit (entry) path;
@@ -373,6 +375,7 @@ let
     pkgs:
     pkgs.callPackage (packagePath "llm-clippy") {
       rustToolchain = rustNightlyClippyToolchainFor pkgs;
+      src = clippy-fork;
     };
   rustFor =
     pkgs:
@@ -778,6 +781,7 @@ let
           packageSystem
           cliArtifacts
           rustNightlyClippyToolchainFor
+          clippy-fork
           ixForPackages
           ;
         ix = ixForPackages;

@@ -2,17 +2,11 @@
   lib,
   makeWrapper,
   pkgs,
+  src,
   rustToolchain ? null,
 }:
 
 let
-  src = pkgs.fetchFromGitHub {
-    owner = "indexable-inc";
-    repo = "clippy";
-    rev = "c5f8f62dacfc666fa29615b13f777bb7404a1e60";
-    hash = "sha256-pFGUPLgM0lSDz8Iv3FLapQAJJV507B1DmJp4pKxp6JA=";
-  };
-
   toolchain =
     if rustToolchain != null then
       rustToolchain

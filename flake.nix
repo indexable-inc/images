@@ -31,6 +31,14 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Fork of rust-lang/rust-clippy with extra restriction lints tuned for
+    # LLM-assisted codebases. Pinned in flake.lock so `nix flake update`
+    # bumps it; consumed as the source tree for `packages/llm-clippy`.
+    clippy-fork = {
+      url = "github:indexable-inc/clippy";
+      flake = false;
+    };
+
     # Nous Research's Hermes agent ships its own NixOS module
     # (`nixosModules.default`) and uv2nix-built Python closure. Pinned to
     # a release tag so routine bumps are review events; `nix flake update
@@ -50,6 +58,7 @@
       determinate,
       home-manager,
       hermes-agent,
+      clippy-fork,
       ...
     }:
     let
@@ -86,6 +95,7 @@
           determinate
           home-manager
           hermes-agent
+          clippy-fork
           ;
       };
       devSystems = [
