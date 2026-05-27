@@ -1,7 +1,5 @@
 use code_tokenizer::CODE_STEMMED_TOKENIZER;
-use tantivy::schema::{
-    FacetOptions, IndexRecordOption, STRING, STORED, Schema, TextFieldIndexing, TextOptions,
-};
+use tantivy::schema::{IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions};
 
 pub fn build_schema() -> Schema {
     let text_indexing = TextFieldIndexing::default()
@@ -21,7 +19,11 @@ pub fn build_schema() -> Schema {
     schema_builder.add_text_field("content", text_options.clone());
     schema_builder.add_text_field("filename", text_options);
     schema_builder.add_u64_field("chunk_offset", STORED);
-    schema_builder.add_facet_field("directory", FacetOptions::default());
-    schema_builder.add_facet_field("extension", FacetOptions::default());
+    // Directory and extension are stored as untokenized keyword strings
+    // (rather than tantivy `Facet`s) so byte-range filters can match an
+    // exact dir plus its descendants without auto-matching same-prefix
+    // siblings (e.g. `/repo/src` vs `/repo/src-old`).
+    schema_builder.add_text_field("directory", STRING);
+    schema_builder.add_text_field("extension", STRING);
     schema_builder.build()
 }

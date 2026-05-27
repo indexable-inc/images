@@ -87,6 +87,31 @@ fn directory_filter_matches_subdirectory() {
 }
 
 #[test]
+fn directory_filter_excludes_same_prefix_siblings() {
+    let workdir = TempDir::new().expect("workdir");
+    let index_dir = TempDir::new().expect("index dir");
+
+    let src = workdir.path().join("src");
+    let src_old = workdir.path().join("src-old");
+    fs::create_dir(&src).expect("mkdir src");
+    fs::create_dir(&src_old).expect("mkdir src-old");
+    fs::write(src.join("kept.rs"), "fn target() {}").expect("write src");
+    fs::write(src_old.join("dropped.rs"), "fn target() {}").expect("write src-old");
+
+    let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
+    index.index_directory(workdir.path(), false).expect("index");
+
+    let hits = index.search("target", 10, Some(src.as_path())).expect("filter src");
+    assert!(!hits.is_empty(), "filter for /src should match kept.rs");
+    for hit in &hits {
+        assert!(
+            !hit.path.contains("src-old"),
+            "filter for /src must not pull in /src-old: {hit:?}",
+        );
+    }
+}
+
+#[test]
 fn search_index_reader_opens_without_writer_lock() {
     let workdir = TempDir::new().expect("workdir");
     let index_dir = TempDir::new().expect("index dir");

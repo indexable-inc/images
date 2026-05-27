@@ -111,8 +111,6 @@ impl SearchIndex {
     /// cannot acquire the writer lock or initialize the reader.
     pub fn open_or_create(index_dir: impl Into<PathBuf>) -> Result<Self> {
         let index_dir = index_dir.into();
-        let schema = schema::build_schema();
-        let index_schema = IndexSchema::from_schema(&schema)?;
 
         let index = if index_dir.join("meta.json").exists() {
             Index::open_in_dir(&index_dir).context(error::OpenIndexSnafu { path: &index_dir })?
@@ -120,9 +118,16 @@ impl SearchIndex {
             std::fs::create_dir_all(&index_dir).context(error::CreateIndexDirSnafu {
                 path: index_dir.clone(),
             })?;
-            Index::create_in_dir(&index_dir, schema).context(error::CreateIndexSnafu)?
+            Index::create_in_dir(&index_dir, schema::build_schema())
+                .context(error::CreateIndexSnafu)?
         };
 
+        // Derive `IndexSchema` from the opened index rather than the freshly
+        // built schema. The on-disk index could have been created by an older
+        // build whose field order differs from `build_schema`; using the
+        // wrong field ids would corrupt reads. `from_schema` returns a
+        // typed error if the index doesn't carry the fields we expect.
+        let index_schema = IndexSchema::from_schema(&index.schema())?;
         code_tokenizer::register_tokenizers(&index);
 
         let writer = index

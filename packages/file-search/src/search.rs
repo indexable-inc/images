@@ -1,5 +1,6 @@
 use crate::{
     error::{self, Result},
+    indexing::directory_term,
     types::{IndexSchema, SearchResult},
 };
 use snafu::ResultExt;
@@ -9,7 +10,7 @@ use tantivy::{
     Index, IndexReader, Term,
     collector::TopDocs,
     query::{BooleanQuery, Occur, Query, QueryParser, RangeQuery},
-    schema::{Facet, Value},
+    schema::Value,
 };
 
 // Filename matches rank above raw path matches, which rank above content
@@ -17,16 +18,6 @@ use tantivy::{
 // file that happens to mention `foo`.
 const FILENAME_BOOST: f32 = 3.0;
 const PATH_BOOST: f32 = 2.0;
-
-fn path_to_facet(path: &Path) -> Facet {
-    let path_str = path.to_string_lossy();
-    let normalized = if path_str.starts_with('/') {
-        path_str.into_owned()
-    } else {
-        format!("/{path_str}")
-    };
-    Facet::from(&normalized)
-}
 
 pub fn search(
     index: &Index,
@@ -39,7 +30,8 @@ pub fn search(
     reader.reload().context(error::SearchSnafu)?;
     let searcher = reader.searcher();
 
-    let mut parser = QueryParser::for_index(index, vec![schema.content, schema.filename, schema.path]);
+    let mut parser =
+        QueryParser::for_index(index, vec![schema.content, schema.filename, schema.path]);
     parser.set_field_boost(schema.filename, FILENAME_BOOST);
     parser.set_field_boost(schema.path, PATH_BOOST);
 
@@ -49,25 +41,26 @@ pub fn search(
         Some(dir_path) => {
             let canonical_dir = std::fs::canonicalize(dir_path)
                 .context(error::CanonicalizeSnafu { path: dir_path })?;
-            let dir_facet = path_to_facet(&canonical_dir);
 
-            let lower_bound = Term::from_facet(schema.directory, &dir_facet);
+            // Files store their parent directory as `<canonical>/` (see
+            // `indexing::directory_term`). The matching byte range is then
+            // `[<dir>/, <dir>0)`: anything bytewise >= `<dir>/` and < the
+            // next character after `/` (0x2F → 0x30 = '0'). This catches
+            // the exact directory plus every descendant, without crossing
+            // into same-prefix siblings (because '/' < '0' and '/' > '-',
+            // so e.g. `<dir>-old/` falls below the lower bound).
+            let lower_str = directory_term(&canonical_dir);
+            let mut upper_str = lower_str.clone();
+            upper_str.pop(); // strip the trailing '/'
+            upper_str.push('0'); // next byte after '/' in ASCII
 
-            // Tantivy ranges over facets work on the encoded prefix; appending
-            // U+FFFF gives us "everything that starts with this facet" without
-            // matching unrelated facets that happen to share a prefix.
-            let mut upper_encoded = dir_facet.encoded_str().to_string();
-            upper_encoded.push('\u{FFFF}');
-            let upper_bound = Term::from_field_bytes(schema.directory, upper_encoded.as_bytes());
-
-            let facet_range = RangeQuery::new(
-                Bound::Included(lower_bound),
-                Bound::Excluded(upper_bound),
-            );
+            let lower = Term::from_field_text(schema.directory, &lower_str);
+            let upper = Term::from_field_text(schema.directory, &upper_str);
+            let dir_range = RangeQuery::new(Bound::Included(lower), Bound::Excluded(upper));
 
             Box::new(BooleanQuery::new(vec![
                 (Occur::Must, content_query),
-                (Occur::Must, Box::new(facet_range)),
+                (Occur::Must, Box::new(dir_range)),
             ]))
         }
         None => content_query,
