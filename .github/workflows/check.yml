@@ -40,17 +40,15 @@ jobs:
             extra-system-features = gccarch-znver5
             accept-flake-config = true
 
-      # Configures the indexable-inc Cachix substituter for the daemon and
-      # uploads every store path realised during this job. PRs from forks
-      # cannot read `secrets.CACHIX_AUTH_TOKEN` so the action degrades to
-      # read-only automatically. Push-event jobs from main and release tags
-      # supply the token and become writers; this gates publish credentials on
-      # reviewed refs per the supply-chain rule in AGENTS.md.
+      # Push-event jobs from main and release tags publish store paths to
+      # Cachix. Pull requests already consume the public substituter through
+      # the flake's accepted nixConfig, so they skip this writer setup.
       - name: Set up Cachix
+        if: github.event_name == 'push'
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
         with:
           name: indexable-inc
-          authToken: ${{ github.event_name == 'push' && secrets.CACHIX_AUTH_TOKEN || '' }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
       - name: nix flake check
         run: nix flake check -L

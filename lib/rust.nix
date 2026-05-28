@@ -12,18 +12,6 @@
   writePythonApplication,
 }:
 let
-  defaultClippyDeniedLints = [
-    "warnings"
-    "clippy::all"
-    "clippy::pedantic"
-    "clippy::nursery"
-    "clippy::cargo"
-  ];
-
-  defaultClippyAllowedLints = [
-    "clippy::multiple_crate_versions"
-  ];
-
   defaultRustToolchain = rustToolchain;
 
   defaultRustsecAdvisoryDb = pkgs.fetchFromGitHub {
@@ -49,8 +37,8 @@ let
       enable = true;
       package = clippyPackage;
       cargoArgs = [ "--all-targets" ];
-      deniedLints = defaultClippyDeniedLints;
-      allowedLints = defaultClippyAllowedLints;
+      deniedLints = [ ];
+      allowedLints = [ ];
     };
     tests = {
       enable = true;
@@ -636,23 +624,29 @@ let
       extraTests ? { },
       extraPassthru ? { },
     }:
-    pkgs.symlinkJoin {
-      name = "${package.name}-policy-checked";
-      paths = [ package ];
-      inherit (package) meta;
-      passthru =
-        (package.passthru or { })
-        // extraPassthru
-        // {
-          unchecked = package;
-          inherit policyChecks;
-          tests = (package.passthru.tests or { }) // policyChecks // extraTests;
-        };
-      postBuild = lib.optionalString (policyChecks != { }) ''
-        mkdir -p "$out/rust-policy"
-        ${linkPolicyChecks policyChecks}
-      '';
-    };
+    pkgs.symlinkJoin (
+      {
+        name = "${package.name}-policy-checked";
+        paths = [ package ];
+        inherit (package) meta;
+        passthru =
+          (package.passthru or { })
+          // extraPassthru
+          // {
+            unchecked = package;
+            inherit policyChecks;
+            tests = (package.passthru.tests or { }) // policyChecks // extraTests;
+          };
+        postBuild = lib.optionalString (policyChecks != { }) ''
+          mkdir -p "$out/rust-policy"
+          ${linkPolicyChecks policyChecks}
+        '';
+      }
+      # The policy wrapper is still the same Rust package for eval-time callers
+      # that inspect package identity.
+      // lib.optionalAttrs (package ? pname) { inherit (package) pname; }
+      // lib.optionalAttrs (package ? version) { inherit (package) version; }
+    );
 
   # Shortcut: pass `srcRoot = ./.` for a repo-owned crate whose tracked tree
   # is the build closure. Expands to the standard `gitTracked` filter, defaults

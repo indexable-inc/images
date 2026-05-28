@@ -5,13 +5,20 @@
   writePythonApplication,
   rustWorkspaceFor,
   clippy-fork,
+  repoRoot,
 }:
 let
+  repoRustToolchainFile = builtins.fromTOML (builtins.readFile (repoRoot + "/rust-toolchain.toml"));
+  repoRustChannel = repoRustToolchainFile.toolchain.channel;
+  repoRustNightlyDate =
+    assert lib.assertMsg (lib.hasPrefix "nightly-" repoRustChannel)
+      "rust-toolchain.toml must pin a nightly channel for repo-owned Rust packages";
+    lib.removePrefix "nightly-" repoRustChannel;
   rustNightlyToolchainFor =
     pkgs:
     languages.rust.toolchain pkgs {
       channel = "nightly";
-      version = languages.rust.defaultNightlyDate;
+      version = repoRustNightlyDate;
     };
   rustFor =
     pkgs:
