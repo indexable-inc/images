@@ -617,7 +617,11 @@ let
               ${pkgs.lib.optionalString (miriRustFlags != "") ''
               export RUSTFLAGS="''${RUSTFLAGS:+$RUSTFLAGS }${miriRustFlags}"
               ''}
-              cd ${src}
+              miri_src="$TMPDIR/cargo-unit-miri-src"
+              mkdir -p "$miri_src"
+              cp -R ${src}/. "$miri_src"/
+              chmod -R u+w "$miri_src"
+              cd "$miri_src"
               ${testRunPrelude}
               cargo ${pkgs.lib.escapeShellArgs cargoMiriArgs}
               mkdir -p "$out"
