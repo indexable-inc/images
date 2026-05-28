@@ -1,1 +1,3 @@
 ruleDirs: ["./nix-rules"]
+testConfigs:
+  - testDir: ./nix-rules-tests

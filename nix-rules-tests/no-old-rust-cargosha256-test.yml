@@ -1,0 +1,5 @@
+id: no-old-rust-cargosha256
+valid:
+  - '{ cargoHash = "sha256-AAAA"; }'
+invalid:
+  - '{ cargoSha256 = "sha256-AAAA"; }'

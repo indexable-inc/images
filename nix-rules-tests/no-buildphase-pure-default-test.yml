@@ -1,0 +1,6 @@
+id: no-buildphase-pure-default
+valid:
+  - '{ preBuild = "make"; postInstall = "make install"; }'
+invalid:
+  - '{ buildPhase = "make"; }'
+  - '{ installPhase = "make install"; }'

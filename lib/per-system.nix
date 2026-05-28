@@ -34,7 +34,7 @@ let
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (nixfmt | statix | deadnix | ast-grep); driven by `lint`";
+    meta.description = "One lint stage (nixfmt | statix | deadnix | ast-grep | ast-grep-test); driven by `lint`";
     runtimeInputs = [
       pkgs.ast-grep
       pkgs.deadnix
@@ -50,8 +50,14 @@ let
       def "main statix" [] { statix check . }
       def "main deadnix" [] { deadnix --fail --no-lambda-pattern-names . }
       def "main ast-grep" [] { ast-grep scan --error . }
+      # Rule self-test: every fixture under nix-rules-tests must flag its
+      # invalid cases and ignore its valid ones. Catches rules whose pattern
+      # silently stops matching (e.g. a bare `attr = val` that parses as an
+      # expression, not a binding). --skip-snapshot-tests keeps it to match
+      # presence/absence without baseline snapshot files.
+      def "main ast-grep-test" [] { ast-grep test --skip-snapshot-tests }
       def main [] {
-        error make { msg: "specify a stage: nixfmt | statix | deadnix | ast-grep" }
+        error make { msg: "specify a stage: nixfmt | statix | deadnix | ast-grep | ast-grep-test" }
       }
     '';
   };
@@ -73,6 +79,10 @@ let
       "ast-grep".command = [
         (lib.getExe lintStage)
         "ast-grep"
+      ];
+      "ast-grep-test".command = [
+        (lib.getExe lintStage)
+        "ast-grep-test"
       ];
     };
   };

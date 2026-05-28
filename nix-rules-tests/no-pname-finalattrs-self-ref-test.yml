@@ -1,0 +1,6 @@
+id: no-pname-finalattrs-self-ref
+valid:
+  - '{ owner = "someorg"; repo = "my-tool"; }'
+invalid:
+  - '{ repo = finalAttrs.pname; }'
+  - '{ owner = finalAttrs.pname; }'

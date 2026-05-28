@@ -1,0 +1,5 @@
+id: no-old-go-vendorsha256
+valid:
+  - '{ vendorHash = "sha256-AAAA"; }'
+invalid:
+  - '{ vendorSha256 = "sha256-AAAA"; }'
