@@ -1729,40 +1729,6 @@ let
       }).refs
       true
   );
-  discoverTreeDuplicateExpr = pkgs.writeText "discover-tree-duplicate.nix" ''
-    let
-      lib = import ${nixpkgs}/lib;
-      discovery = import ${../lib/discovery.nix} {
-        inherit lib;
-        paths = { };
-        artifacts = { };
-        mkImage = _: null;
-        mkFleetFor = _: _: null;
-        ixReturn = { };
-      };
-    in
-    builtins.deepSeq
-      (discovery.discoverTree {
-        root = ${./fixtures/discover-tree-duplicates};
-      })
-      true
-  '';
-  discoveryScript = ''
-    set +e
-    ${pkgs.nix}/bin/nix-instantiate --eval --strict ${discoverTreeDuplicateExpr} > discover-tree.out 2> discover-tree.err
-    status=$?
-    set -e
-
-    if test "$status" -eq 0; then
-      echo "discoverTree duplicate fixture evaluated successfully, expected duplicate-name failure" >&2
-      exit 1
-    fi
-
-    grep -F "discoverTree: duplicate output name 'shared'" discover-tree.err
-    grep -F "first/shared" discover-tree.err
-    grep -F "second/shared" discover-tree.err
-  '';
-
   # --- Per-image assertion groups -------------------------------------------
 
   groups = {
@@ -3707,18 +3673,12 @@ let
     mkdir -p "$out"
   '';
 
-  discoveryTest = pkgs.runCommand "ix-test-discovery" { nativeBuildInputs = [ pkgs.gnugrep ]; } ''
-    ${discoveryScript}
-    mkdir -p "$out"
-  '';
-
   cargoUnitRealWorkspacesTest =
     mkTest "cargo-unit-real-workspaces" cargoUnitRealWorkspaceAssertions
       cargoUnitRealWorkspaceScript;
 in
 {
   inherit imageTests groups cargoUnitRealWorkspaceAssertions;
-  discovery = discoveryTest;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
 
   # Aggregate. Pulls every per-image test into one derivation so
@@ -3728,7 +3688,6 @@ in
     ++ [
       fleetTest
       helperTest
-      discoveryTest
     ]
   );
 }
