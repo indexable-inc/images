@@ -140,9 +140,8 @@ let
     ];
   };
 
-  attachSrc = lock: lock // { src = mkArtifact lock; };
-  paperServers = lib.mapAttrs (_: attachSrc) paperLoader.locks;
-  velocityServers = lib.mapAttrs (_: attachSrc) velocityLoader.locks;
+  paperServers = attachArtifactSources paperLoader.locks;
+  velocityServers = attachArtifactSources velocityLoader.locks;
   fabricServers = lib.mapAttrs' (mcVer: lock: {
     name = "${mcVer}-fabric";
     value = mkArtifact lock;
@@ -191,7 +190,7 @@ in
     # Velocity plugins are cross-Minecraft-version: `velocityPluginCatalog`
     # is the unversioned default surfaced to modules. Per-version overrides
     # can still come from `velocityPluginCatalogs.<version>` if added.
-    velocityPluginCatalog = velocityPluginCatalogs.common or { };
+    velocityPluginCatalog = velocityPluginCatalogs.common;
     servers = fabricServers // paperServerSrcs;
   };
 }
