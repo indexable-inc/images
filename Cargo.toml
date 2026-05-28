@@ -10,6 +10,8 @@ members = [
   "packages/minecraft/nbt",
   "packages/minecraft/sync-managed",
   "packages/nix-cargo-unit",
+  "packages/nix-web-monitor/parser",
+  "packages/nix-web-monitor/server",
   "packages/oci-image-builder",
   "packages/repo-walker",
 ]
@@ -36,6 +38,7 @@ multiple_crate_versions = "allow"
 [workspace.dependencies]
 anyhow = "1"
 askama = { version = "0.16.0", default-features = false }
+axum = "0.8"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
@@ -46,6 +49,7 @@ hegeltest = { version = "0.14", default-features = false }
 ignore = "0.4"
 indicatif = "0.18"
 libc = "0.2"
+nix-web-monitor-parser = { path = "packages/nix-web-monitor/parser" }
 quartz_nbt = "0.2.9"
 repo-walker = { path = "packages/repo-walker" }
 rmcp = "1.7"
@@ -63,7 +67,9 @@ tantivy = "0.26"
 tar = "0.4"
 tempfile = "3"
 tokio = "1"
+tokio-stream = "0.1"
 toml = { version = "1.1.2", default-features = false }
+tower-http = "0.6"
 url = { version = "2.5.8", default-features = false }
 webpki-roots = "1"
 x509-parser = "0.18"
