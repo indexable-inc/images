@@ -11,6 +11,8 @@
   extraEnv ? {},
   testRunPrelude ? "",
   testArgsByPackage ? {},
+  packageTestInputs ? {},
+  packageTestEnv ? {},
   extraPolicyChecks ? {},
   extraRustcArgs ? [],
   extraRustcArgsForPlatform ? _platform: [],
@@ -165,6 +167,18 @@ let
   hostRustTarget = pkgs.stdenv.hostPlatform.rust.rustcTarget or pkgs.stdenv.hostPlatform.config;
   defaultLlvmCov = "${rustToolchain}/lib/rustlib/${hostRustTarget}/bin/llvm-cov";
   defaultLlvmProfdata = "${rustToolchain}/lib/rustlib/${hostRustTarget}/bin/llvm-profdata";
+  packageTestAttrs = packageName: {
+    nativeBuildInputs = packageTestInputs.${packageName} or [];
+    env = packageTestEnv.${packageName} or {};
+  };
+  packageTestEnvArgs =
+    packageName:
+    pkgs.lib.mapAttrsToList (name: value: "${name}=${builtins.toString value}") (
+      packageTestEnv.${packageName} or {}
+    );
+  packageTestInputsForTargets =
+    targets:
+    pkgs.lib.concatMap (target: packageTestInputs.${target.packageName} or []) targets;
 
   mkTestPlan = name:
     pkgs.runCommand name
@@ -343,7 +357,7 @@ let
       {
         __structuredAttrs = true;
         strictDeps = true;
-        nativeBuildInputs = [ pkgs.coreutils ];
+        nativeBuildInputs = [ pkgs.coreutils ] ++ packageTestInputsForTargets testTargets;
       }
       (
         ''
@@ -434,7 +448,7 @@ let
           printf '%s\n' "$test_binary" >> "$executed_test_binaries"
           (
             cd "$test_cwd"
-            "$test_binary" ${pkgs.lib.escapeShellArgs (testArgs ++ (testArgsByPackage.${target.packageName} or []))}
+            env ${pkgs.lib.escapeShellArgs (packageTestEnvArgs target.packageName)} "$test_binary" ${pkgs.lib.escapeShellArgs (testArgs ++ (testArgsByPackage.${target.packageName} or []))}
           )
         '') testTargets
         + ''
@@ -621,7 +635,7 @@ let
         value =
           pkgs.runCommand
             "cargo-unit-test-${name}-${sanitizeTestName testName}"
-            { }
+            (packageTestAttrs packageName)
             ''
               ${testRunPrelude}
               ${binary} --exact --nocapture ${runFlag}${pkgs.lib.escapeShellArgs (testArgs ++ [ testName ])}
@@ -637,7 +651,7 @@ let
     in
     {
       # Runs the whole test binary in one derivation, mirroring `cargo test`.
-      all = pkgs.runCommand "cargo-unit-test-${name}" { } ''
+      all = pkgs.runCommand "cargo-unit-test-${name}" (packageTestAttrs packageName) ''
         export RUST_TEST_THREADS="$NIX_BUILD_CORES"
         ${testRunPrelude}
         ${binary} ${pkgs.lib.escapeShellArgs testArgs}

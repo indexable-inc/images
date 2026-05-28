@@ -3,15 +3,17 @@
   lib,
   makeWrapper,
   pkgs,
-  src,
+  clippy-fork ? null,
+  src ? clippy-fork,
 }:
 
 let
+  source = if src == null then throw "llm-clippy: src is required" else src;
   # Drive the toolchain from the fork's `rust-toolchain.toml` so a
   # `nix flake update clippy-fork` advances the rustc/rustc_private ABI in
   # lockstep with the source. If a future fork commit needs different
   # components, edit that file in the fork, not this one.
-  toolchain = pkgs.rust-bin.fromRustupToolchainFile (src + "/rust-toolchain.toml");
+  toolchain = pkgs.rust-bin.fromRustupToolchainFile (source + "/rust-toolchain.toml");
 
   rustcLibPathVar =
     if pkgs.stdenv.hostPlatform.isDarwin then "DYLD_LIBRARY_PATH" else "LD_LIBRARY_PATH";
@@ -20,12 +22,12 @@ ix.buildRustPackage pkgs {
   pname = "llm-clippy";
   version = "0.1.97";
 
-  inherit src;
+  src = source;
   rustToolchain = toolchain;
   # Read both the lockfile and the cargo-vendor inputs straight from the fork
   # so `nix flake update clippy-fork` brings dependency changes along with the
   # source commit. No checked-in lockfile to drift.
-  cargoLock.lockFile = src + "/Cargo.lock";
+  cargoLock.lockFile = source + "/Cargo.lock";
 
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [

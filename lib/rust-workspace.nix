@@ -60,6 +60,7 @@ let
       "test"
       "bench"
     ];
+    packageTestInputs.tui = [ workspacePkgs.vim ];
     # Every policy check runs once across the whole workspace. Selected
     # package outputs expose these as explicit tests instead of making
     # downstream binary builds depend on unrelated workspace policy.

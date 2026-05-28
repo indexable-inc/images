@@ -21,4 +21,18 @@ mod tests {
     fn current_dir_is_writable() {
         std::fs::write(".cargo-unit-writable-cwd-check", "ok").unwrap();
     }
+
+    #[test]
+    fn package_test_env_and_path_are_available() {
+        assert_eq!(
+            std::env::var("CARGO_UNIT_FIXTURE_ENV").as_deref(),
+            Ok("ok")
+        );
+
+        let output = std::process::Command::new("hello")
+            .output()
+            .expect("hello should be on PATH");
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Hello"));
+    }
 }

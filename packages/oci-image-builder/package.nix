@@ -4,11 +4,6 @@
   flake = true;
   inRustWorkspace = true;
   passthruTests = true;
-  callPackageArgs =
-    { ix, ... }:
-    {
-      inherit ix;
-    };
   overlay = {
     attrName = "oci-image-builder";
     build =

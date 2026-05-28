@@ -3057,6 +3057,8 @@ mod tests {
         assert!(rendered.contains("/bin/hello\";"));
         assert!(rendered.contains("testRunPrelude ? \"\""));
         assert!(rendered.contains("testArgsByPackage ? {}"));
+        assert!(rendered.contains("packageTestInputs ? {}"));
+        assert!(rendered.contains("packageTestEnv ? {}"));
         assert!(rendered.contains("mkTestEntry ="));
         assert!(rendered.contains("RUST_TEST_THREADS"));
         assert!(rendered.contains("mkTestCases ="));

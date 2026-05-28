@@ -36,6 +36,8 @@ let
     env = args.env or { };
     testRunPrelude = args.testRunPrelude or "";
     testArgsByPackage = args.testArgsByPackage or { };
+    packageTestInputs = args.packageTestInputs or { };
+    packageTestEnv = args.packageTestEnv or { };
     extraRustcArgs = args.extraRustcArgs or [ ];
     cargoExtraConfig = args.cargoExtraConfig or "";
     vendorDir = args.vendorDir or null;
@@ -377,7 +379,12 @@ let
         # `clippy-driver` links against.
         extraClippyNativeBuildInputs = lib.optional perUnitClippyEnabled args.policy.clippy.package;
         extraEnv = args.env;
-        inherit (args) testRunPrelude testArgsByPackage;
+        inherit (args)
+          testRunPrelude
+          testArgsByPackage
+          packageTestInputs
+          packageTestEnv
+          ;
         extraRustcArgsForPlatform = rust.rustcArgsForPolicyForPlatform args.policy;
         # Manifest-derived flags come first so per-call `policy.clippy`
         # entries land later in argv and can override them. Cargo's

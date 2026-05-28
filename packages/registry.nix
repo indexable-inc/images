@@ -25,10 +25,28 @@ let
     dir: !(builtins.pathExists (dir + "/package.nix"))
   ) defaultPackageDirs;
 
-  normalizeArgs = value: if builtins.isFunction value then value else (_: value);
+  allowedMetadataKeys = [
+    "flake"
+    "id"
+    "inRustWorkspace"
+    "overlay"
+    "packageSet"
+    "passthruTests"
+    "path"
+  ];
+
+  assertKnownKeys =
+    label: allowedKeys: value:
+    let
+      unknownKeys = lib.subtractLists allowedKeys (builtins.attrNames value);
+    in
+    assert lib.assertMsg (
+      unknownKeys == [ ]
+    ) "${label}: unsupported keys: ${lib.concatStringsSep ", " unknownKeys}";
+    value;
 
   normalizePackageSet =
-    id: value:
+    label: id: value:
     if value == null || value == false then
       null
     else if value == true then
@@ -37,14 +55,14 @@ let
         systems = null;
       }
     else
-      value
+      assertKnownKeys "${label}: packageSet" [ "attrPath" "systems" ] value
       // {
         attrPath = value.attrPath or [ id ];
         systems = value.systems or null;
       };
 
   normalizeFlake =
-    id: value:
+    label: id: value:
     if value == null || value == false then
       null
     else if value == true then
@@ -53,32 +71,30 @@ let
         systems = null;
       }
     else
-      value
+      assertKnownKeys "${label}: flake" [ "attrName" "systems" ] value
       // {
         attrName = value.attrName or id;
         systems = value.systems or null;
       };
 
   normalizeOverlay =
-    id: value:
+    label: id: value:
     if value == null || value == false then
       null
     else if value == true then
       {
         attrName = id;
         systems = null;
-        callPackageArgs = _: { };
       }
     else
-      value
+      assertKnownKeys "${label}: overlay" [ "attrName" "build" "systems" ] value
       // {
         attrName = value.attrName or id;
         systems = value.systems or null;
-        callPackageArgs = normalizeArgs (value.callPackageArgs or { });
       };
 
   normalizePassthruTests =
-    id: value:
+    label: id: value:
     if value == null || value == false then
       null
     else if value == true then
@@ -86,7 +102,7 @@ let
         prefix = "rust-${id}";
       }
     else
-      value
+      assertKnownKeys "${label}: passthruTests" [ "prefix" ] value
       // {
         prefix = value.prefix or "rust-${id}";
       };
@@ -97,20 +113,20 @@ let
       metadataFile = dir + "/package.nix";
       imported = import metadataFile;
       raw = if builtins.isFunction imported then imported { inherit lib; } else imported;
+      label = "packages/${relativePath dir}/package.nix";
       id = raw.id or (throw "packages/${relativePath dir}/package.nix: missing required `id`");
     in
-    raw
+    assertKnownKeys label allowedMetadataKeys raw
     // {
       inherit id;
       path = raw.path or dir;
       metadataPath = metadataFile;
       relativePath = relativePath dir;
-      callPackageArgs = normalizeArgs (raw.callPackageArgs or { });
-      packageSet = normalizePackageSet id (raw.packageSet or null);
-      flake = normalizeFlake id (raw.flake or null);
-      overlay = normalizeOverlay id (raw.overlay or null);
+      packageSet = normalizePackageSet label id (raw.packageSet or null);
+      flake = normalizeFlake label id (raw.flake or null);
+      overlay = normalizeOverlay label id (raw.overlay or null);
       inRustWorkspace = raw.inRustWorkspace or false;
-      passthruTests = normalizePassthruTests id (raw.passthruTests or null);
+      passthruTests = normalizePassthruTests label id (raw.passthruTests or null);
     };
 
   entries = map importMetadata packageDirs;

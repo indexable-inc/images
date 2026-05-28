@@ -34,11 +34,7 @@ fn write_and_read() {
     assert_eq!(first, "hello");
 }
 
-// Requires `vim` on PATH. Run with `cargo test -- --ignored` in an environment
-// that provides it. Tracked by indexable-inc/index#261 — once nix-cargo-unit
-// supports per-package test inputs, drop both #[ignore]s and declare vim there.
 #[test]
-#[ignore = "requires vim; see #261"]
 fn vim_spawns_and_produces_output() {
     let manager = TuiManager::new();
     let instance = manager
@@ -64,7 +60,6 @@ fn vim_spawns_and_produces_output() {
 }
 
 #[test]
-#[ignore = "requires vim; see #261"]
 fn vim_help_command_changes_screen() {
     let manager = TuiManager::new();
     let instance = manager
