@@ -180,6 +180,8 @@
         builds={snapshot.builds}
         dependencies={snapshot.dependencies}
         expected={snapshot.expected}
+        finished={snapshot.finished}
+        exitCode={snapshot.exitCode}
         {selectedActivityId}
         onselect={(id: number | null) => {
           selectedActivityId = id;

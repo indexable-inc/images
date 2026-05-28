@@ -16,11 +16,19 @@
     builds: BuildNode[];
     dependencies: DerivationEdge[];
     expected: Record<string, number>;
+    /// Whether the Nix run has exited. Flips the empty placeholder from a
+    /// "waiting" message to a terminal one so a finished run with no builds
+    /// does not look like it is still pending.
+    finished: boolean;
+    /// Process exit code once finished; distinguishes "nothing to build" (0)
+    /// from "stopped before any build" (non-zero, e.g. an eval failure).
+    exitCode: number | null;
     selectedActivityId: number | null;
     onselect: (activityId: number | null) => void;
   };
 
-  const { builds, dependencies, expected, selectedActivityId, onselect }: Props = $props();
+  const { builds, dependencies, expected, finished, exitCode, selectedActivityId, onselect }: Props =
+    $props();
 
   const now = useNow();
 
@@ -47,6 +55,17 @@
   const collapsed = new SvelteSet<string>();
 
   const expectedBuilds = $derived(expected[ACTIVITY_NAME_BUILD] ?? 0);
+
+  /// Placeholder shown when no build rows exist. A finished run gets a terminal
+  /// message (everything substituted, or stopped before building) instead of a
+  /// "waiting" one that wrongly implies work is still pending.
+  const emptyLabel = $derived.by((): string => {
+    if (finished) return exitCode === 0 ? 'nothing to build' : 'stopped before building';
+    if (expectedBuilds > 0) {
+      return `waiting for ${String(expectedBuilds)} build${expectedBuilds === 1 ? '' : 's'}`;
+    }
+    return 'waiting for build phase';
+  });
 
   function elapsedMs(build: BuildNode): number {
     const end = build.stoppedAtMs ?? now.value;
@@ -108,7 +127,7 @@
           ancestors={new Set()}
         />
       {:else}
-        <div class="empty wide">waiting for build phase</div>
+        <div class="empty wide">{emptyLabel}</div>
       {/each}
     {:else}
       {#each ordered as build (build.derivation)}
@@ -142,13 +161,7 @@
           <div class="right">{String(build.logCount)}</div>
         </div>
       {:else}
-        <div class="empty wide">
-          {#if expectedBuilds > 0}
-            waiting for {String(expectedBuilds)} build{expectedBuilds === 1 ? '' : 's'}
-          {:else}
-            waiting for build phase
-          {/if}
-        </div>
+        <div class="empty wide">{emptyLabel}</div>
       {/each}
     {/if}
   </div>
