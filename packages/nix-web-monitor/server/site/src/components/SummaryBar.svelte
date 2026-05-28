@@ -67,13 +67,21 @@
     return Math.max(0, end - startedAtMs);
   });
 
-  /// Substituter transfers still in flight. Counted straight from the activity
-  /// list so the figure is exact even when no byte progress is reported.
-  const downloading = $derived(
-    snapshot.activities.filter(
-      (activity) => activity.activityType.name === 'file_transfer' && activity.status === 'running'
-    ).length
-  );
+  /// Running activities by kind. This is the breakdown that explains a run whose
+  /// build rows look busy while the host CPU sits idle: the wall-clock is going
+  /// into substituter transfers, store copies, and path-info queries, not
+  /// compute. Nix's stream does not link an input download to the specific build
+  /// that needs it, so this is the honest fleet-wide view rather than a per-build
+  /// attribution.
+  function runningOfType(name: string): number {
+    return snapshot.activities.filter(
+      (activity) => activity.activityType.name === name && activity.status === 'running'
+    ).length;
+  }
+
+  const downloading = $derived(runningOfType('file_transfer'));
+  const copying = $derived(runningOfType('copy_path') + runningOfType('copy_paths'));
+  const querying = $derived(runningOfType('query_path_info'));
 
   /// Monotonic total of bytes pulled from substituters: each file-transfer
   /// activity's `done` counter summed. Stopped transfers keep their final value,
@@ -142,6 +150,18 @@
         {#if downloadRate > 0}
           <span class="kpi-num kpi-faint">{formatRate(downloadRate)}</span>
         {/if}
+      </div>
+    {/if}
+    {#if copying > 0}
+      <div class="kpi kpi-info">
+        <span class="kpi-num">{copying}</span>
+        <span class="kpi-label">copying</span>
+      </div>
+    {/if}
+    {#if querying > 0}
+      <div class="kpi kpi-info">
+        <span class="kpi-num">{querying}</span>
+        <span class="kpi-label">querying</span>
       </div>
     {/if}
     {#if counts.succeeded > 0}
