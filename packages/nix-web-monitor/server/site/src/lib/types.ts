@@ -6,7 +6,16 @@
 import * as v from 'valibot';
 
 export const activityStatusSchema = v.picklist(['running', 'stopped']);
-export const buildStatusSchema = v.picklist(['running', 'stopped', 'succeeded', 'failed']);
+/// `planned` is a derivation Nix announced in its build plan but has not started
+/// yet. It seeds the tree up front so the target and its full subtree render
+/// before any leaf begins, rather than the tree growing bottom-up from starts.
+export const buildStatusSchema = v.picklist([
+  'planned',
+  'running',
+  'stopped',
+  'succeeded',
+  'failed'
+]);
 
 export const activityTypeSchema = v.object({
   code: v.number(),

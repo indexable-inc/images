@@ -711,6 +711,23 @@ main.dragging-v .splitter-v::after {
 .state[data-state='failed'] {
   background: var(--red);
 }
+/* Planned builds are announced but not started: a hollow ring reads as
+ * "pending" against the filled dots of work that has actually begun. */
+.state[data-state='planned'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--faint);
+}
+
+/* Planned rows are upcoming work: present so the whole tree shows from the
+ * start, but recessive so in-flight and finished builds stay the foreground. */
+.activity-row.planned,
+.build-row.planned {
+  opacity: 0.55;
+}
+.activity-row.planned .drv-name,
+.build-row.planned .drv-name {
+  color: var(--muted);
+}
 
 .drv {
   overflow: hidden;

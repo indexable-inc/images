@@ -39,7 +39,8 @@
     running: 0,
     failed: 1,
     stopped: 2,
-    succeeded: 3
+    succeeded: 3,
+    planned: 4
   };
 
   function compareBuilds(left: BuildNode, right: BuildNode): number {
@@ -48,7 +49,9 @@
   }
 
   /// Tree view nests builds by dependency; flat view is the plain sorted list.
-  let layout = $state<'flat' | 'tree'>('flat');
+  /// The tree is the default: with the plan seeding every node up front it shows
+  /// the target at the root and its whole subtree, lighting up as builds run.
+  let layout = $state<'flat' | 'tree'>('tree');
 
   const ordered = $derived(builds.toSorted(compareBuilds));
   const tree = $derived(buildDependencyTree(builds, dependencies, compareBuilds));
@@ -70,6 +73,12 @@
   function elapsedMs(build: BuildNode): number {
     const end = build.stoppedAtMs ?? now.value;
     return Math.max(0, end - build.startedAtMs);
+  }
+
+  /// Planned rows have not started, so their elapsed time is meaningless; the
+  /// duration column stays blank until the build is live or done.
+  function durationLabel(build: BuildNode): string {
+    return build.status === 'planned' ? '' : formatDuration(elapsedMs(build));
   }
 
   function whereLabel(host: string | null): string {
@@ -137,6 +146,7 @@
         <div
           class="build-row"
           class:selected
+          class:planned={build.status === 'planned'}
           class:clickable={build.activityId !== null}
           role={build.activityId !== null ? 'button' : undefined}
           tabindex={build.activityId !== null ? 0 : undefined}
@@ -157,7 +167,7 @@
             {whereLabel(build.host)}
           </div>
           <div class="phase">{build.phase ?? ''}</div>
-          <div class="duration">{formatDuration(elapsedMs(build))}</div>
+          <div class="duration">{durationLabel(build)}</div>
           <div class="right">{String(build.logCount)}</div>
         </div>
       {:else}

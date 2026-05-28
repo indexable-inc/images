@@ -1,0 +1,13 @@
+---
+id: nix-web-monitor-full-tree
+postedAt: 2026-05-28T15:45:00-07:00
+title: "`nix-web-monitor` shows the whole build tree from the start"
+tags: [nix, tooling, observability]
+links:
+  - label: nix-web-monitor
+    href: https://github.com/indexable-inc/index/tree/main/packages/nix-web-monitor
+---
+
+The builds panel now seeds the entire tree the moment Nix prints its plan, so `nix build .#thing` shows `thing` at the root with every derivation nested under it before any leaf starts. Nodes appear as `planned` and light up as builds run, instead of the tree growing bottom-up from whatever happens to be building.
+
+Two changes make this work. The parser reads Nix's "these N derivations will be built:" announcement and seeds one planned row per derivation up front. The edge resolver queries `nix-store --query --requisites` for each derivation's full transitive `.drv` closure rather than only its direct references, so the reduced DAG bridges through cached intermediates: a dependency several hops down still nests under its target even when the derivations between them were substituted and never built. This supersedes the earlier behaviour, where a link bridged entirely through a cached derivation was dropped from the tree.

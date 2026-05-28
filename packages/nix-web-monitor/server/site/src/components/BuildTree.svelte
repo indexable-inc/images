@@ -66,6 +66,7 @@
   <div
     class="activity-row dep-row"
     class:stopped={node.status === 'stopped'}
+    class:planned={node.status === 'planned'}
     class:clickable
     class:selected
     role={clickable ? 'button' : undefined}
@@ -105,16 +106,22 @@
     <span class="drv activity-drv" title={drv}>
       <span class="drv-hash">{parts.hash}</span><span class="drv-name">{parts.name}</span>
     </span>
-    <span class="where" class:remote={whereLabel(node.host) !== 'local'} title={whereLabel(node.host)}>
-      {whereLabel(node.host)}
-    </span>
+    {#if node.status !== 'planned'}
+      <span
+        class="where"
+        class:remote={whereLabel(node.host) !== 'local'}
+        title={whereLabel(node.host)}
+      >
+        {whereLabel(node.host)}
+      </span>
+    {/if}
     {#if node.phase !== null}
       <span class="phase">{node.phase}</span>
     {/if}
     {#if isCollapsed && children.length > 0}
       <span class="subtree-count">+{String(children.length)}</span>
     {/if}
-    <span class="activity-dur">{formatDuration(elapsedMs(node))}</span>
+    <span class="activity-dur">{node.status === 'planned' ? '' : formatDuration(elapsedMs(node))}</span>
   </div>
 
   {#if !isCollapsed}

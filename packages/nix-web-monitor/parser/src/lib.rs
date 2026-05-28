@@ -9,6 +9,11 @@ use snafu::Snafu;
 
 const NIX_JSON_PREFIX: &str = "@nix ";
 
+/// Suffix Nix uses for derivation files. Build-plan lines and closure queries
+/// both carry a mix of `.drv` inputs and source paths; only the `.drv` paths
+/// are nodes in the build DAG.
+const DRV_SUFFIX: &str = ".drv";
+
 /// Nix log level for `error`-class messages emitted via `msg` actions.
 const NIX_LEVEL_ERROR: i64 = 0;
 
@@ -38,6 +43,20 @@ mod result_code {
 
 mod activity_code {
     pub const BUILD: u64 = 105;
+}
+
+/// Where the message stream sits relative to a build-plan announcement. Nix
+/// prints "these N derivations will be built:" (or the singular form) followed
+/// by one indented `.drv` per line, and a separate "will be fetched" block for
+/// substituted paths. Only the indented lines under [`PlanSection::Build`] name
+/// derivations that will actually be built.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PlanSection {
+    /// Not currently reading a plan block.
+    #[default]
+    None,
+    /// Inside the "will be built" derivation list.
+    Build,
 }
 
 #[derive(Debug, Snafu)]
@@ -218,11 +237,24 @@ pub struct MonitorState {
     pub expected: BTreeMap<String, i64>,
     pub exit_code: Option<i32>,
     pub finished: bool,
-    /// Direct input `.drv` paths per derivation, learned out-of-band from
-    /// `nix-store --query --references` (the internal-json stream carries no
-    /// dependency edges). The snapshot turns this into the rendered DAG; the
-    /// raw adjacency stays server-side and never rides the wire.
-    direct_deps: BTreeMap<String, Vec<String>>,
+    /// Transitive input `.drv` closure per derivation, learned out-of-band from
+    /// `nix-store --query --requisites` (the internal-json stream carries no
+    /// dependency edges). Because the closure is transitive, the snapshot can
+    /// reduce it to a DAG whose edges connect built derivations even when the
+    /// path between them runs through cached intermediates that Nix never
+    /// reports. The raw closure stays server-side and never rides the wire.
+    closure_deps: BTreeMap<String, BTreeSet<String>>,
+    /// Last dependency edge set broadcast, so a query that does not change the
+    /// rendered DAG (common once the closure is mostly known) skips re-emitting
+    /// an identical `DependenciesSet`.
+    #[serde(skip)]
+    last_dependencies: Option<Vec<DerivationEdge>>,
+    /// Which section of a build-plan announcement the message stream is inside.
+    /// Nix prints the plan as a header line followed by indented store paths;
+    /// this tracks that the indented lines belong to the build list rather than
+    /// the "will be fetched" list or unrelated output.
+    #[serde(skip)]
+    plan_section: PlanSection,
     /// Monotonic counter for `LogEntry.index`. Kept independent of
     /// `logs.len()` so retention pruning never reuses an index.
     log_counter: u64,
@@ -246,7 +278,7 @@ impl MonitorState {
             errors: self.errors.clone(),
             progress: self.progress,
             expected: self.expected.clone(),
-            dependencies: dependency_edges(&self.direct_deps, &observed),
+            dependencies: dependency_edges(&self.closure_deps, &observed),
             exit_code: self.exit_code,
             finished: self.finished,
         }
@@ -281,15 +313,28 @@ impl MonitorState {
         }
     }
 
-    /// Record the direct input derivations of one built derivation, learned
-    /// from `nix-store --query --references`. Only the `.drv` inputs matter for
-    /// the dependency DAG; the caller filters source paths out before calling.
-    /// Stored unfiltered by observation status so a dependency that starts
-    /// building later still produces its edge on the next snapshot.
-    pub fn record_direct_dependencies(&mut self, derivation: String, input_drvs: Vec<String>) {
-        self.direct_deps.insert(derivation, input_drvs);
+    /// Record the transitive input `.drv` closure of one derivation, learned
+    /// from `nix-store --query --requisites`. The caller filters source paths
+    /// and the derivation itself out before calling. Stored unfiltered by build
+    /// status so the DAG can bridge through cached intermediates: an edge
+    /// between two built derivations survives even when the path between them
+    /// runs entirely through derivations Nix never reports building.
+    pub fn record_closure(&mut self, derivation: String, closure_drvs: BTreeSet<String>) {
+        self.closure_deps.insert(derivation, closure_drvs);
         let observed: BTreeSet<&str> = self.builds.keys().map(String::as_str).collect();
-        let edges = dependency_edges(&self.direct_deps, &observed);
+        let edges = dependency_edges(&self.closure_deps, &observed);
+        self.emit_dependencies(edges);
+    }
+
+    /// Broadcast a recomputed edge set only when it differs from the last one.
+    /// Closure queries arrive faster than the rendered DAG actually changes, so
+    /// this drops the redundant `DependenciesSet` frames a naive recompute would
+    /// put on the wire for every cached intermediate that touched no edge.
+    fn emit_dependencies(&mut self, edges: Vec<DerivationEdge>) {
+        if self.last_dependencies.as_ref() == Some(&edges) {
+            return;
+        }
+        self.last_dependencies = Some(edges.clone());
         self.emit(Delta::DependenciesSet { edges });
     }
 
@@ -318,9 +363,11 @@ impl MonitorState {
         self.emit(Delta::ErrorAppend { message });
     }
 
-    /// Settle the run and, on a clean exit, promote `Stopped` builds to
-    /// `Succeeded`. Nix has no positive success marker per activity, so we
-    /// wait for the process to confirm before claiming success.
+    /// Settle the run and, on a clean exit, promote `Stopped` and still-`Planned`
+    /// builds to `Succeeded`. Nix has no positive success marker per activity, so
+    /// we wait for the process to confirm before claiming success; a clean exit
+    /// also means any node the plan announced was realised, so leftover planned
+    /// rows resolve to success rather than lingering as pending work.
     pub fn finish(&mut self, exit_code: Option<i32>) {
         self.exit_code = exit_code;
         self.finished = true;
@@ -328,7 +375,9 @@ impl MonitorState {
             let promoted: Vec<String> = self
                 .builds
                 .iter_mut()
-                .filter(|(_, build)| build.status == BuildStatus::Stopped)
+                .filter(|(_, build)| {
+                    matches!(build.status, BuildStatus::Stopped | BuildStatus::Planned)
+                })
                 .map(|(derivation, build)| {
                     build.status = BuildStatus::Succeeded;
                     derivation.clone()
@@ -388,22 +437,80 @@ impl MonitorState {
         );
 
         if let Some(derivation) = build {
-            self.builds.insert(
-                derivation.clone(),
-                BuildNode {
-                    derivation: derivation.clone(),
-                    activity_id: Some(action.id),
-                    host,
-                    phase: None,
-                    status: BuildStatus::Running,
-                    log_count: 0,
-                    started_at_ms: now_ms,
-                    stopped_at_ms: None,
-                },
-            );
+            use std::collections::btree_map::Entry;
+            match self.builds.entry(derivation.clone()) {
+                // A planned node lights up: stamp the real start so its duration
+                // counts from now rather than from when the plan announced it,
+                // and keep any log count already attributed to it.
+                Entry::Occupied(mut entry) => {
+                    let node = entry.get_mut();
+                    node.activity_id = Some(action.id);
+                    node.host = host;
+                    node.status = BuildStatus::Running;
+                    node.started_at_ms = now_ms;
+                    node.stopped_at_ms = None;
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(BuildNode {
+                        derivation: derivation.clone(),
+                        activity_id: Some(action.id),
+                        host,
+                        phase: None,
+                        status: BuildStatus::Running,
+                        log_count: 0,
+                        started_at_ms: now_ms,
+                        stopped_at_ms: None,
+                    });
+                }
+            }
             self.emit_build(&derivation);
         }
         self.emit_activity(action.id);
+    }
+
+    /// Seed a planned build node from the "will be built" announcement. No-op if
+    /// the derivation already has a row, so a build that starts before (or
+    /// without) the plan line keeps its live status.
+    fn plan_build(&mut self, derivation: &str) {
+        use std::collections::btree_map::Entry;
+        let Entry::Vacant(entry) = self.builds.entry(derivation.to_owned()) else {
+            return;
+        };
+        entry.insert(BuildNode {
+            derivation: derivation.to_owned(),
+            activity_id: None,
+            host: None,
+            phase: None,
+            status: BuildStatus::Planned,
+            log_count: 0,
+            // Plan time, overwritten with the real start in `start_activity`;
+            // the UI shows no duration while a node is still planned.
+            started_at_ms: current_unix_ms(),
+            stopped_at_ms: None,
+        });
+        self.emit_build(derivation);
+    }
+
+    /// Fold a parsed `msg` line into the build-plan tracker. Nix announces every
+    /// derivation it will build up front, so seeding those as planned nodes
+    /// renders the whole tree (target at the root, dependencies nested beneath)
+    /// before any leaf starts, instead of growing it bottom-up as builds begin.
+    fn note_build_plan(&mut self, text: &str) {
+        if is_build_plan_header(text) {
+            self.plan_section = PlanSection::Build;
+            return;
+        }
+        if self.plan_section == PlanSection::Build
+            && let Some(derivation) = planned_derivation(text)
+        {
+            self.plan_build(derivation);
+            return;
+        }
+        // Any line that is not an indented plan entry ends the build list: the
+        // "will be fetched" header, a blank line, or unrelated output.
+        if !text.starts_with(char::is_whitespace) {
+            self.plan_section = PlanSection::None;
+        }
     }
 
     /// Mark the activity stopped. The build status moves to `Stopped` and
@@ -496,6 +603,9 @@ impl MonitorState {
         // eval failure shows up as an empty log with only an exit code.
         self.push_log(None, action.level, &cleaned);
 
+        // Seed planned build nodes from the up-front "will be built" plan.
+        self.note_build_plan(&cleaned);
+
         // Failure detection runs on the formatted msg (which preserves the
         // "error: ..." prefix that `parse_builder_failure` keys on); raw_msg
         // is the body of the message without the severity word so the
@@ -574,36 +684,43 @@ fn truncate_head<T>(items: &mut Vec<T>, max: usize) {
     }
 }
 
-/// Build the minimal dependency DAG over the derivations Nix actually built.
+/// Reduce the transitive `.drv` closures into the minimal dependency DAG over
+/// the derivations the UI renders (`rendered`: planned and built rows).
 ///
-/// `direct_deps` maps a derivation to the input `.drv` paths it directly
-/// requires. An edge survives only when both endpoints are `observed` (a real
-/// build, so it has a row to attach to); a link bridged entirely through a
-/// cached, never-built derivation is intentionally absent. The result is
-/// transitively reduced, so a chain `a -> b -> c` never also keeps the
-/// redundant `a -> c`, and sorted for a stable wire order.
+/// `closure_deps` maps a derivation to its full transitive input `.drv`
+/// closure. Restricting each closure to `rendered` yields every rendered
+/// derivation reachable from `from`, even when the only path between them runs
+/// through cached intermediates Nix never reports building. That is what keeps a
+/// deep dependency nested under the target instead of floating up as its own
+/// root. The relation is transitively reduced, so a chain `a -> b -> c` never
+/// also keeps the redundant `a -> c`, and sorted for a stable wire order.
 fn dependency_edges(
-    direct_deps: &BTreeMap<String, Vec<String>>,
-    observed: &BTreeSet<&str>,
+    closure_deps: &BTreeMap<String, BTreeSet<String>>,
+    rendered: &BTreeSet<&str>,
 ) -> Vec<DerivationEdge> {
-    let mut adjacency: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for (from, inputs) in direct_deps {
-        if !observed.contains(from.as_str()) {
+    let mut edges = Vec::new();
+    for (from, closure) in closure_deps {
+        if !rendered.contains(from.as_str()) {
             continue;
         }
-        for to in inputs {
-            if from != to && observed.contains(to.as_str()) {
-                adjacency.entry(from).or_default().insert(to);
-            }
-        }
-    }
-
-    let mut edges = Vec::new();
-    for (&from, targets) in &adjacency {
-        for &to in targets {
-            if !reachable_via_detour(&adjacency, from, to) {
+        // Rendered derivations reachable from `from`, the candidate edge targets.
+        let reachable: Vec<&str> = closure
+            .iter()
+            .map(String::as_str)
+            .filter(|to| *to != from.as_str() && rendered.contains(to))
+            .collect();
+        for &to in &reachable {
+            // Drop `from -> to` when another rendered node between them also
+            // reaches `to`: the longer path already implies this edge.
+            let implied = reachable.iter().any(|&mid| {
+                mid != to
+                    && closure_deps
+                        .get(mid)
+                        .is_some_and(|mid_closure| mid_closure.contains(to))
+            });
+            if !implied {
                 edges.push(DerivationEdge {
-                    from: from.to_owned(),
+                    from: from.clone(),
                     to: to.to_owned(),
                 });
             }
@@ -613,35 +730,23 @@ fn dependency_edges(
     edges
 }
 
-/// Whether `to` is reachable from `from` through a path of length two or more,
-/// i.e. via some neighbour other than `to` itself. Such a `from -> to` edge is
-/// implied by the longer path and is dropped in transitive reduction.
-fn reachable_via_detour(adjacency: &BTreeMap<&str, BTreeSet<&str>>, from: &str, to: &str) -> bool {
-    let Some(neighbours) = adjacency.get(from) else {
-        return false;
-    };
-    neighbours
-        .iter()
-        .any(|&next| next != to && reaches(adjacency, next, to))
+/// Whether `text` is the header that precedes Nix's "will be built" derivation
+/// list. Nix uses the plural "these N derivations will be built:" and the
+/// singular "this derivation will be built:"; matching the shared suffix covers
+/// both without pinning the count wording.
+fn is_build_plan_header(text: &str) -> bool {
+    text.trim_end().ends_with("will be built:")
 }
 
-/// Depth-first reachability from `start` to `target`. The `visited` guard keeps
-/// the walk finite even though derivation graphs are acyclic by construction.
-fn reaches(adjacency: &BTreeMap<&str, BTreeSet<&str>>, start: &str, target: &str) -> bool {
-    let mut stack = vec![start];
-    let mut visited: BTreeSet<&str> = BTreeSet::new();
-    while let Some(node) = stack.pop() {
-        if node == target {
-            return true;
-        }
-        if !visited.insert(node) {
-            continue;
-        }
-        if let Some(neighbours) = adjacency.get(node) {
-            stack.extend(neighbours.iter().copied());
-        }
+/// Parse one indented build-plan entry into its `.drv` path. Plan lines are a
+/// lone store path indented under the header; a non-indented or non-`.drv` line
+/// (such as the "will be fetched" output paths) yields `None`.
+fn planned_derivation(text: &str) -> Option<&str> {
+    if !text.starts_with(char::is_whitespace) {
+        return None;
     }
-    false
+    let path = text.trim();
+    (path.starts_with("/nix/store/") && path.ends_with(DRV_SUFFIX)).then_some(path)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -714,6 +819,11 @@ pub struct BuildNode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BuildStatus {
+    /// Announced in Nix's "these derivations will be built" plan but not yet
+    /// started. Seeds the full tree up front so the target and everything under
+    /// it is visible before its leaves begin, instead of the tree filling in
+    /// bottom-up as each build starts.
+    Planned,
     Running,
     /// Activity finished without an error reference; outcome unknown until
     /// the wrapping process exits.
@@ -1257,13 +1367,15 @@ mod tests {
         }
     }
 
-    fn deps(pairs: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
+    /// Build a `closure_deps` map from transitive `.drv` closures, the shape the
+    /// resolver records from `nix-store --query --requisites`.
+    fn closures(pairs: &[(&str, &[&str])]) -> BTreeMap<String, BTreeSet<String>> {
         pairs
             .iter()
-            .map(|(drv, inputs)| {
+            .map(|(drv, reqs)| {
                 (
                     (*drv).to_owned(),
-                    inputs.iter().map(|s| (*s).to_owned()).collect(),
+                    reqs.iter().map(|s| (*s).to_owned()).collect(),
                 )
             })
             .collect()
@@ -1273,10 +1385,10 @@ mod tests {
     fn dependency_edges_drop_redundant_transitive_links() {
         // a -> b -> c with a direct a -> c shortcut. Reduction keeps the chain
         // and drops the shortcut.
-        let direct = deps(&[("a", &["b", "c"]), ("b", &["c"])]);
-        let observed = BTreeSet::from(["a", "b", "c"]);
+        let closure = closures(&[("a", &["b", "c"]), ("b", &["c"])]);
+        let rendered = BTreeSet::from(["a", "b", "c"]);
         assert_eq!(
-            dependency_edges(&direct, &observed),
+            dependency_edges(&closure, &rendered),
             vec![edge("a", "b"), edge("b", "c")]
         );
     }
@@ -1285,10 +1397,10 @@ mod tests {
     fn dependency_edges_keep_both_arms_of_a_diamond() {
         // a depends on b and c, both of which depend on d. Neither arm is
         // implied by the other, so all four edges survive.
-        let direct = deps(&[("a", &["b", "c"]), ("b", &["d"]), ("c", &["d"])]);
-        let observed = BTreeSet::from(["a", "b", "c", "d"]);
+        let closure = closures(&[("a", &["b", "c", "d"]), ("b", &["d"]), ("c", &["d"])]);
+        let rendered = BTreeSet::from(["a", "b", "c", "d"]);
         assert_eq!(
-            dependency_edges(&direct, &observed),
+            dependency_edges(&closure, &rendered),
             vec![
                 edge("a", "b"),
                 edge("a", "c"),
@@ -1299,12 +1411,22 @@ mod tests {
     }
 
     #[test]
-    fn dependency_edges_ignore_unbuilt_endpoints() {
-        // `x` was never built (not observed), so the a -> x edge vanishes and a
-        // is left depending only on the observed b.
-        let direct = deps(&[("a", &["b", "x"])]);
-        let observed = BTreeSet::from(["a", "b"]);
-        assert_eq!(dependency_edges(&direct, &observed), vec![edge("a", "b")]);
+    fn dependency_edges_ignore_unrendered_endpoints() {
+        // `x` is in the closure but is not a rendered row, so the a -> x edge
+        // vanishes and a is left depending only on the rendered b.
+        let closure = closures(&[("a", &["b", "x"])]);
+        let rendered = BTreeSet::from(["a", "b"]);
+        assert_eq!(dependency_edges(&closure, &rendered), vec![edge("a", "b")]);
+    }
+
+    #[test]
+    fn dependency_edges_bridge_through_cached_intermediate() {
+        // a reaches b only through a cached intermediate `m` that Nix never
+        // builds, so `m` is neither queried nor rendered. The transitive closure
+        // still lists b, so b nests under a instead of floating up as a root.
+        let closure = closures(&[("a", &["m", "b"]), ("b", &[])]);
+        let rendered = BTreeSet::from(["a", "b"]);
+        assert_eq!(dependency_edges(&closure, &rendered), vec![edge("a", "b")]);
     }
 
     #[test]
@@ -1318,15 +1440,118 @@ mod tests {
                 r#"@nix {{"action":"start","fields":["{drv}","local",1,1],"id":{id},"level":3,"text":"building","type":105}}"#
             ));
         }
-        state.record_direct_dependencies(
+        state.record_closure(
             "/nix/store/aaa-app.drv".to_owned(),
-            vec!["/nix/store/bbb-lib.drv".to_owned()],
+            BTreeSet::from(["/nix/store/bbb-lib.drv".to_owned()]),
         );
 
         assert_eq!(
             state.snapshot().dependencies,
             vec![edge("/nix/store/aaa-app.drv", "/nix/store/bbb-lib.drv")]
         );
+    }
+
+    #[test]
+    fn build_plan_seeds_planned_nodes_before_any_start() {
+        let mut state = MonitorState::default();
+        state.apply_line(
+            r#"@nix {"action":"msg","level":3,"msg":"these 2 derivations will be built:"}"#,
+        );
+        state.apply_line(r#"@nix {"action":"msg","level":3,"msg":"  /nix/store/aaa-app.drv"}"#);
+        state.apply_line(r#"@nix {"action":"msg","level":3,"msg":"  /nix/store/bbb-lib.drv"}"#);
+
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.builds.len(), 2);
+        assert!(
+            snapshot
+                .builds
+                .iter()
+                .all(|build| build.status == BuildStatus::Planned),
+            "plan entries seed nodes the build has not started yet"
+        );
+    }
+
+    #[test]
+    fn fetched_paths_are_not_planned_build_nodes() {
+        let mut state = MonitorState::default();
+        state.apply_line(
+            r#"@nix {"action":"msg","level":3,"msg":"this derivation will be built:"}"#,
+        );
+        state.apply_line(r#"@nix {"action":"msg","level":3,"msg":"  /nix/store/aaa-app.drv"}"#);
+        state.apply_line(r#"@nix {"action":"msg","level":3,"msg":"these 2 paths will be fetched (1.50 MiB download, 5.00 MiB unpacked):"}"#);
+        state.apply_line(
+            r#"@nix {"action":"msg","level":3,"msg":"  /nix/store/ccc-cached-output"}"#,
+        );
+
+        let snapshot = state.snapshot();
+        assert_eq!(
+            snapshot.builds.len(),
+            1,
+            "only the will-be-built derivation is a node; fetched output paths are not"
+        );
+        assert_eq!(snapshot.builds[0].derivation, "/nix/store/aaa-app.drv");
+    }
+
+    #[test]
+    fn planned_node_lights_up_on_build_start() {
+        let mut state = MonitorState::default();
+        state.apply_line(
+            r#"@nix {"action":"msg","level":3,"msg":"this derivation will be built:"}"#,
+        );
+        state.apply_line(r#"@nix {"action":"msg","level":3,"msg":"  /nix/store/aaa-app.drv"}"#);
+        assert_eq!(state.snapshot().builds[0].status, BuildStatus::Planned);
+
+        state.apply_line(r#"@nix {"action":"start","fields":["/nix/store/aaa-app.drv","ssh://builder",1,1],"id":7,"level":3,"text":"building","type":105}"#);
+        let build = state.snapshot().builds.remove(0);
+        assert_eq!(build.status, BuildStatus::Running);
+        assert_eq!(build.activity_id, Some(7));
+        assert_eq!(build.host.as_deref(), Some("ssh://builder"));
+    }
+
+    #[test]
+    fn clean_finish_promotes_leftover_planned_nodes() {
+        let mut state = MonitorState::default();
+        state.apply_line(
+            r#"@nix {"action":"msg","level":3,"msg":"this derivation will be built:"}"#,
+        );
+        state.apply_line(r#"@nix {"action":"msg","level":3,"msg":"  /nix/store/aaa-app.drv"}"#);
+
+        state.finish(Some(0));
+        assert_eq!(
+            state.snapshot().builds[0].status,
+            BuildStatus::Succeeded,
+            "a clean run realised every planned node"
+        );
+    }
+
+    #[test]
+    fn unchanged_closure_does_not_rebroadcast_dependencies() {
+        let mut state = MonitorState::default();
+        for (id, drv) in [
+            (1u64, "/nix/store/aaa-app.drv"),
+            (2, "/nix/store/bbb-lib.drv"),
+        ] {
+            state.apply_line(&format!(
+                r#"@nix {{"action":"start","fields":["{drv}","local",1,1],"id":{id},"level":3,"text":"building","type":105}}"#
+            ));
+        }
+        state.drain_deltas();
+
+        let lib = BTreeSet::from(["/nix/store/bbb-lib.drv".to_owned()]);
+        state.record_closure("/nix/store/aaa-app.drv".to_owned(), lib.clone());
+        let first = count_dependency_deltas(&state.drain_deltas());
+        state.record_closure("/nix/store/aaa-app.drv".to_owned(), lib);
+        let second = count_dependency_deltas(&state.drain_deltas());
+
+        assert_eq!(first, 1, "the first closure changes the DAG and broadcasts");
+        assert_eq!(second, 0, "an identical closure broadcasts nothing");
+    }
+
+    fn count_dependency_deltas(deltas: &[Delta]) -> usize {
+        deltas
+            .iter()
+            .filter(|delta| matches!(delta, Delta::DependenciesSet { .. }))
+            .count()
     }
 
     #[test]

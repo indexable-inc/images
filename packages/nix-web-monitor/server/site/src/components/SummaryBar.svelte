@@ -22,7 +22,7 @@
   const counts = $derived(
     snapshot.builds.reduce<StatusCounts>(
       (acc, build) => ({ ...acc, [build.status]: acc[build.status] + 1 }),
-      { running: 0, stopped: 0, succeeded: 0, failed: 0 }
+      { planned: 0, running: 0, stopped: 0, succeeded: 0, failed: 0 }
     )
   );
 
@@ -137,6 +137,12 @@
       </div>
     {/if}
 
+    {#if counts.planned > 0}
+      <div class="kpi">
+        <span class="kpi-num">{counts.planned}</span>
+        <span class="kpi-label">queued</span>
+      </div>
+    {/if}
     {#if counts.running > 0}
       <div class="kpi kpi-warn">
         <span class="kpi-num">{counts.running}</span>
