@@ -104,7 +104,7 @@ in
     };
 
     networking.firewall.allowedTCPPorts =
-      lib.optionals cfg.openFirewall [ cfg.port ] ++ yourkit.firewallTcpPortsFor cfg.yourkit;
+      lib.optional cfg.openFirewall cfg.port ++ yourkit.firewallTcpPortsFor cfg.yourkit;
 
     systemd.services.minestom = {
       description = "Minestom server";

@@ -55,7 +55,7 @@ let
     scraper.outputDir
     scraper.s3.uri
   ]
-  ++ lib.optionals scraper.s3.deleteRemoved [ "--delete" ];
+  ++ lib.optional scraper.s3.deleteRemoved "--delete";
 in
 {
   environment.systemPackages = [ scraper.package ];

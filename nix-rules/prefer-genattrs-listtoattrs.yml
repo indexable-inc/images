@@ -1,0 +1,16 @@
+id: prefer-genattrs-listtoattrs
+language: nix
+severity: warning
+message: "`lib.listToAttrs (map (n: { name = n; value = f n; }) xs)` collapses to `lib.genAttrs xs f`."
+note: |
+  WHY: `lib.genAttrs` is the documented idiom for "give me an attrset keyed by
+  these names where each value comes from one function." The list-to-attrs +
+  map shape is a hand-rolled equivalent that hides the intent and is harder for
+  tooling to recognize.
+  NIXPKGS: `lib.genAttrs` is used widely in nixpkgs (forAllSystems and friends).
+  REPO: Use `lib.genAttrs keys f` directly.
+rule:
+  any:
+    - pattern: 'lib.listToAttrs (map ($N: { name = $N; value = $V; }) $XS)'
+    - pattern: 'listToAttrs (map ($N: { name = $N; value = $V; }) $XS)'
+    - pattern: 'builtins.listToAttrs (map ($N: { name = $N; value = $V; }) $XS)'

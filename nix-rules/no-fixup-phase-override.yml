@@ -1,0 +1,16 @@
+id: no-fixup-phase-override
+language: nix
+severity: error
+message: "`fixupPhase = ...` wipes the default fixup pass. Use `preFixup` / `postFixup` instead."
+note: |
+  WHY: The default `fixupPhase` runs RPATH patching, shebang fixing, library
+  stripping, reference scanning, and the `*Hook` chain. Overriding the whole
+  phase removes all of that; the package ships without runtime patching and
+  usually fails in subtle ways (missing libraries, wrong interpreter, dangling
+  references) at use time.
+  NIXPKGS: nixpkgs-hammering `fixup-phase` enforces.
+  REPO: Hook into `preFixup = ''…''` or `postFixup = ''…''`. Override
+  `fixupPhase` only when you really mean to bypass shebang and RPATH handling,
+  and document the reason inline.
+rule:
+  pattern: fixupPhase = $X

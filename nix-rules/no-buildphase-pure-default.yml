@@ -1,0 +1,18 @@
+id: no-buildphase-pure-default
+language: nix
+severity: warning
+message: "`buildPhase = \"make\";` and `installPhase = \"make install\";` restate the stdenv default. Drop the override or document the deviation."
+note: |
+  WHY: stdenv's default `buildPhase` is exactly `make`; the default `installPhase`
+  is exactly `make install`. Restating them blocks future stdenv improvements
+  (parallel install, install-target overrides) and hides which phase your package
+  actually customizes.
+  NIXPKGS: nixpkgs-hammering `explicit-phases`.
+  REPO: Drop the override. If you must override, use `preBuild`/`postBuild`/
+  `preInstall`/`postInstall` to add work around the default.
+rule:
+  any:
+    - pattern: buildPhase = "make"
+    - pattern: installPhase = "make install"
+    - pattern: buildPhase = "make "
+    - pattern: installPhase = "make install "

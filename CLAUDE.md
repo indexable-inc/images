@@ -584,7 +584,8 @@ task, file a narrow issue.
   format boundaries.
 - Filter local sources to the smallest useful tracked file set.
 - Use `lib.getExe` or `lib.getExe'` instead of spelling `${pkg}/bin/foo`
-  repeatedly.
+  repeatedly. `getExe` reads `meta.mainProgram`; reach for `getExe' pkg "name"`
+  when the package ships multiple binaries.
 - Keep validation in shared builders and reuse those builders everywhere.
 - Fix the improper layer when stricter validation exposes a helper problem.
 - Use checked Nushell helpers for non-trivial generated commands.
@@ -595,6 +596,32 @@ task, file a narrow issue.
 - Default to no `devShells.default`; add per-package shells or build inputs where
   the need belongs.
 - Keep the tracked pre-commit hook as a small entry point to the lint app.
+- Use `stdenv.mkDerivation (finalAttrs: { ... })` over `let version = ...; in
+  mkDerivation { inherit version; ... }`. `finalAttrs:` is the canonical
+  self-reference (we ban `rec`), and overrides propagate cleanly.
+- Use `lib.mkPackageOption pkgs "<name>" { }` instead of hand-rolled
+  `package = mkOption { type = types.package; default = pkgs.<name>; };`. It
+  produces consistent `defaultText`, `example`, and the `nullable`
+  no-install path for free.
+- Use `mkEnableOption "<noun>"` instead of `mkOption { type = types.bool;
+  default = false; description = "Whether to enable ..."; }`. Pass a bare noun
+  phrase; the helper renders `"Whether to enable <noun>."` itself.
+- When a `default` references `pkgs.*`, `cfg.*`, or any non-literal expression,
+  set `defaultText = lib.literalExpression "..."` so the generated option docs
+  show the expression instead of the resolved store path.
+- Use the standard meta block: `meta.description`, `meta.license` (typed),
+  `meta.mainProgram` when the derivation ships a binary, and a `passthru.tests`
+  entry for cheap smoke tests.
+- Use Markdown roles in option descriptions where they sharpen meaning:
+  `{file}`, `{option}`, `{command}`, `{env}`, `{manpage}`. The renderer
+  consumes them; even without rendering, they encode intent.
+- Keep transitive `inputs.<x>.inputs.nixpkgs.follows = "nixpkgs"` set on every
+  flake input that itself takes a nixpkgs. Each unfollowed nixpkgs duplicates
+  the evaluator's working set.
+- Cross-compilation hygiene: `cmake`, `meson`, `ninja`, `pkg-config`,
+  `autoreconfHook`, `makeWrapper`, `wrapGAppsHook` all belong in
+  `nativeBuildInputs`, never `buildInputs`. The splicing in `buildInputs`
+  swaps them to the target platform and silently breaks the build.
 
 ## Nix style (ast-grep enforced)
 
@@ -602,30 +629,118 @@ Run `nix run .#lint` before committing. It runs nixfmt, Statix, Deadnix, and the
 repo's ast-grep rules. The lint app is the mechanical source of truth. The
 common hard rules are:
 
-- No `with pkgs;` or `with lib;`. Use `inherit (pkgs) ...` or `lib.foo`
-  directly.
-- No `rec { }`. Use `let ... in` or `final` / `prev`.
-- No `mkForce`. Fix the module boundary or compose priorities deliberately.
+### Scope / access
+
+- No `with pkgs;` / `with lib;` / `with builtins;`. Use `inherit (pkgs) ...` or
+  `lib.foo` directly.
+- No `pkgs.lib.X`. Bind `lib` in the function signature (or `inherit (pkgs)
+  lib;` once at the top of a `let`) and use `lib.foo` everywhere.
+- No `rec { }` and no `let { ... }` legacy form. Use `let ... in` or
+  `finalAttrs:` for mkDerivation self-reference.
+- No `mkForce` and no `mkOverride <int>` back-door. Fix the module boundary or
+  compose `mkDefault` / `mkOptionDefault` / `mkBefore` / `mkAfter`.
 - No `lib.recursiveUpdate`. Build the attrset in one place or use `lib.mkMerge`.
+- No `{ } // X` / `X // { }` attrset updates with an empty operand.
+- No `mkMerge [ x ]` single-element wrappers; drop the wrapper.
 - No repeated parent keys in the same attrset. Group related assignments under
   one parent.
 - Prefer `inherit (source) name;` for direct same-name field copies.
+
+### Eval and source paths
+
 - No `builtins.currentSystem`, `builtins.getEnv`, `<nixpkgs>`, or `path:` flake
-  refs.
+  refs. No `builtins.getFlake (toString ./...)`.
 - No `(import ./foo.nix)` inside `imports = [ ... ]`; NixOS auto-imports paths.
 - No `..` paths inside `modules/`; shared helpers come through `specialArgs.ix`.
-- No `writeShellApplication` or `writeShellScriptBin` for user-facing commands.
-- No bare `assert cond;`. Use an assertion that names the failure.
-- No unused bindings. Use `_` for intentionally unused lambda arguments.
+- `builtins.path { path = ./.; }` must set `name = "<stable>"` so the store
+  path is reproducible across clones.
+- Prefer `lib.fileset.toSource` over `lib.cleanSource`/`lib.sources.cleanSourceWith`.
+- No `"${root}/..."` string interpolation of the workspace tree at the root
+  level; use `root + "/..."` or `builtins.path { name; path; }`.
+
+### Migration / deprecated APIs
+
+- No `lib.mdDoc` / `lib.options.mdDoc` / bare `mdDoc`. Pass plain Markdown.
+- No `substituteAll` / `substituteAllFiles` (removed from nixpkgs). Use
+  `pkgs.replaceVars` / `replaceVarsWith`.
+- No `cargoSha256` (use `cargoHash` or `cargoLock`), no `vendorSha256` (use
+  `vendorHash`), no `npmDepsSha256` / `pnpmDepsHash` (use `npmDepsHash`).
+- No bare `buildRustPackage`; use `pkgs.rustPlatform.buildRustPackage` or
+  `crane.buildPackage`.
+- No `flake-utils.lib.eachSystem`; we hand-roll per-system in
+  `lib/per-system.nix`.
+
+### Idioms (mechanical)
+
+- Use `lib.importJSON path` / `lib.importTOML path` instead of
+  `builtins.fromJSON (builtins.readFile path)`.
+- Use `(pkgs.formats.json { }).generate "name" value` instead of
+  `pkgs.writeText "name" (builtins.toJSON value)`.
+- Use `lib.optional cond x` (singular) when the conditional yields one element;
+  reserve `lib.optionals cond xs` (plural) for actual lists.
+- Use `lib.genAttrs keys f` instead of `lib.listToAttrs (map (n: { name = n;
+  value = f n; }) keys)`.
+- Use `builtins.attrValues X` instead of `lib.mapAttrsToList (_: v: v) X`.
+- Use `lib.genAttrs (lib.attrNames X) (_: v)` instead of
+  `lib.mapAttrs (_: _: v) X` when both arguments are discarded.
+- Use `xs == [ ]` / `xs != [ ]` instead of `builtins.length xs == 0` / `> 0`.
+- No `!true` / `!false` literals; write the inverse literal directly.
+- No `mkIf true x` / `lib.optional true x`; constant conditions on these
+  helpers are refactor leftovers.
+- No `name = "${pname}-${version}"` restatement; stdenv constructs `name` from
+  `pname` + `version`.
+- Wrap dynamic attrpath antiquotes: `legacyPackages."${system}"`, not
+  `legacyPackages.${system}`.
+
+### Derivations / mkDerivation
+
 - Set `strictDeps = true` on every `mkDerivation`.
+- No `fixupPhase = ...` override; use `preFixup` / `postFixup`. Same idea for
+  `buildPhase` / `installPhase` — do not restate the stdenv defaults.
+- `configureFlags` / `cmakeFlags` / `mesonFlags` / `makeFlags` / `ninjaFlags`
+  are lists of strings; never one string with spaces.
+- No `enableParallelBuilding = true;` (stdenv default since 2020). `= false`
+  is meaningful — keep it with a one-line reason.
+
+### Types and options
+
+- No `types.attrs` / `lib.types.attrs` / `types.unspecified` for public
+  options. Use a typed `submodule` with `freeformType = (pkgs.formats.<x> {}).type`,
+  or an explicit `oneOf` / `attrsOf <type>`.
+- `mkOption.default` should be a self-contained expression. Conditional
+  defaults that branch on sibling cfg belong in `config = ...` with `mkDefault`.
+
+### Hashes / licenses / fetchers
+
 - Keep raw fetched data artifact URLs out of `flake.nix`.
-- Use `pkgs.*` fetchers instead of `builtins.fetch*`.
+- Use `pkgs.*` fetchers instead of `builtins.fetch*`. Use SRI in the `hash`
+  slot (`hash = "sha256-...="`); never `hash = "sha256:..."` (legacy) or
+  `sha256 = ...` in fetchers.
 - Commit real hashes, never fake hash helpers or placeholders.
+- `meta.license` references `lib.licenses.<id>`, never a raw SPDX string. The
+  bare `gpl2` / `gpl3` / `lgpl2` / `lgpl3` / `agpl3` aliases are banned — pick
+  the explicit `*Only` / `*Plus` flavor.
+
+### Errors and warnings
+
+- No bare `assert cond;`. Use `assert lib.assertMsg cond "...";`.
+- No `abort`. Prefer `throw "ix.<area>: ..."` (catchable) or
+  `lib.assertMsg` for invariants. `throw ""` is the same shape as a bare
+  assert and is rejected.
+- No leftover `builtins.trace` / `lib.traceVal` / `lib.traceSeq` in tracked
+  code.
+
+### Build / configuration outputs
+
+- No `writeShellApplication` or `writeShellScriptBin` for user-facing commands.
+- No unused bindings. Use `_` for intentionally unused lambda arguments.
 - Use `nixosModules.<name>` for module exports. Avoid a flat top-level
   `modules` output.
 - Keep image targets at `x86_64-linux`.
 - Use structured config options for new modules instead of stringly config
   fragments.
+- No `environment.pathsToLink = [ <one> ];` singletons; compose via module
+  merge or `lib.mkAfter`.
 
 ## Issues
 

@@ -1,0 +1,14 @@
+id: no-stringly-license
+language: nix
+severity: error
+message: "`meta.license` should reference `lib.licenses.<id>`, not a raw SPDX string."
+note: |
+  WHY: `meta.license` accepts the typed records under `lib.licenses` (with `free`
+  / `redistributable` / `url` / `spdxId` fields). A raw string drops that metadata
+  and breaks tooling that filters on it (Hydra unfree gating, `nix-env --json`
+  consumers, license aggregators).
+  NIXPKGS: Convention; `meta.license` types check against the licenses module.
+  REPO: Use `lib.licenses.mit`, `lib.licenses.asl20`, etc. Multi-license packages
+  pass a list.
+rule:
+  pattern: license = "$LIC"

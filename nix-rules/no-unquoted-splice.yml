@@ -1,0 +1,15 @@
+id: no-unquoted-splice
+language: nix
+severity: warning
+message: "`legacyPackages.${system}` interpolates outside a string. Wrap the antiquote in quotes: `legacyPackages.\"${system}\"`."
+note: |
+  WHY: Dynamic attribute names at the parser level evaluate the antiquote and
+  use the result as the attribute name. They look just like string-interpolated
+  names but bypass the string parser — tools that walk the AST often disagree on
+  the semantics. The quoted form is what most parsers and formatters expect.
+  NIXPKGS: statix `unquoted_splice`.
+  REPO: Quote the antiquote. `set."${dynamic}"` is the canonical form.
+rule:
+  any:
+    - pattern: $X.legacyPackages.${$Y}
+    - pattern: $X.packages.${$Y}

@@ -174,14 +174,12 @@ let
           value = pkgs.writeText document.fileName document.text;
         }) customDocumentList
       );
-      documentsConfig = pkgs.writeText "agents-md-documents.json" (
-        builtins.toJSON (
-          map (document: {
-            inherit (document) target;
-            file_name = document.fileName;
-            generated_path = "${generatedDocuments.${document.target}}";
-          }) customDocumentList
-        )
+      documentsConfig = (pkgs.formats.json { }).generate "agents-md-documents.json" (
+        map (document: {
+          inherit (document) target;
+          file_name = document.fileName;
+          generated_path = "${generatedDocuments.${document.target}}";
+        }) customDocumentList
       );
     in
     pkgs.runCommand "agents-md"

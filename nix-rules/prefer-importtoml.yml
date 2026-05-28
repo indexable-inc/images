@@ -1,0 +1,10 @@
+id: prefer-importtoml
+language: nix
+severity: warning
+message: "Use `lib.importTOML path` instead of `builtins.fromTOML (builtins.readFile path)`."
+note: |
+  WHY: Same shape as `prefer-importjson`. `lib.importTOML` reads better at the
+  call site and makes the eval-time parse explicit.
+  NIXPKGS: `lib.importTOML` is part of `nixpkgs/lib/trivial.nix`.
+rule:
+  pattern: builtins.fromTOML (builtins.readFile $PATH)

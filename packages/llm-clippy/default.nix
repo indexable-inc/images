@@ -31,9 +31,7 @@ ix.buildRustPackage pkgs {
   buildInputs = [
     pkgs.zlib
   ]
-  ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
-    pkgs.libiconv
-  ];
+  ++ lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.libiconv;
   doCheck = false;
   # llm-clippy is the Clippy binary that cargo-unit policy checks use for the
   # rest of the repo. Its own build stays on the bootstrap path, where a Clippy

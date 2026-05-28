@@ -56,7 +56,7 @@ in
       description = "PostgreSQL";
     };
 
-    networking.firewall.allowedTCPPorts = lib.optionals cfg.openFirewall [ cfg.port ];
+    networking.firewall.allowedTCPPorts = lib.optional cfg.openFirewall cfg.port;
 
     ix.healthChecks.ix-postgresql = {
       from = "guest";

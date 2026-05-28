@@ -1,0 +1,24 @@
+id: no-ambiguous-gpl-license
+language: nix
+severity: error
+message: "Ambiguous GPL license identifier. Use `gpl2Only` / `gpl2Plus` / `gpl3Only` / `gpl3Plus` / `lgpl2Only` / `lgpl3Plus` instead."
+note: |
+  WHY: SPDX requires disambiguating between `-only` and `-or-later`. The bare
+  `gpl2`, `gpl3`, `lgpl2`, `lgpl3`, and `agpl3` identifiers in `lib.licenses` are
+  legacy aliases; nixpkgs migrated everything internal to the explicit form and
+  prints a warning when the alias is referenced.
+  NIXPKGS: nixpkgs-hammering `unclear-gpl`; SPDX guidance.
+  REPO: Pick the right SPDX flavor. When unsure, `gpl3Plus` is the most common
+  upstream choice.
+rule:
+  any:
+    - pattern: lib.licenses.gpl2
+    - pattern: lib.licenses.gpl3
+    - pattern: lib.licenses.lgpl2
+    - pattern: lib.licenses.lgpl3
+    - pattern: lib.licenses.agpl3
+    - pattern: licenses.gpl2
+    - pattern: licenses.gpl3
+    - pattern: licenses.lgpl2
+    - pattern: licenses.lgpl3
+    - pattern: licenses.agpl3

@@ -1,0 +1,16 @@
+id: no-builtin-length-list-zero
+language: nix
+severity: warning
+message: "`builtins.length xs == 0` is `xs == [ ]`; same for `> 0` → `xs != [ ]`. Drop the function call."
+note: |
+  WHY: `length` walks the list to count elements; comparing the count to a
+  literal small number scales linearly while `xs == [ ]` is O(1) and reads
+  better. The pattern also obscures intent (is the author checking emptiness or
+  some other bound?).
+  REPO: Use `xs == [ ]` and `xs != [ ]`.
+rule:
+  any:
+    - pattern: builtins.length $XS == 0
+    - pattern: builtins.length $XS > 0
+    - pattern: length $XS == 0
+    - pattern: length $XS > 0

@@ -18,6 +18,6 @@ in
   services.minecraft = {
     enable = true;
     properties.motd = "ix-powered Minecraft";
-    mods = lib.mapAttrs (_: _: { }) commonCatalog;
+    mods = lib.genAttrs (lib.attrNames commonCatalog) (_: { });
   };
 }

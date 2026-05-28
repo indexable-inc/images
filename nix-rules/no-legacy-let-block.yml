@@ -1,0 +1,14 @@
+id: no-let-with-rec-in-attrset
+language: nix
+severity: error
+message: "`let { ... }` is the undocumented legacy let form that defines an attrset bound to the local `body` attribute. Use `let ... in` or a normal attrset."
+note: |
+  WHY: `let { body = expr; x = 1; }` evaluates to `expr` with `x` in scope — an
+  obsolete relic from early Nix. The Nix manual no longer documents it and
+  reviewers treat it as a typo. Same family as the `rec { }` ban
+  (`no-rec-attrset`).
+  NIXPKGS: statix `legacy_let_syntax`. Not used anywhere in modern nixpkgs.
+  REPO: Rewrite as `let body = expr; x = 1; in body` (or just inline the
+  expression).
+rule:
+  pattern: let { $$$BODY }

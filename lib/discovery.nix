@@ -72,7 +72,7 @@ let
             }) (lib.unique ([ metadata.name ] ++ (metadata.outputNames or [ ])));
           };
         in
-        lib.optionals (segments != [ ] && hasRequiredFiles) [ entry ]
+        lib.optional (segments != [ ] && hasRequiredFiles) entry
         ++ lib.concatMap (name: walk (path + "/${name}") (segments ++ [ name ])) dirs;
 
       discovered = walk root [ ];

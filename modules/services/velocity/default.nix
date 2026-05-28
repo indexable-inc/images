@@ -645,10 +645,10 @@ in
     };
 
     networking.firewall.allowedTCPPorts =
-      lib.optionals cfg.openFirewall [ cfg.port ] ++ yourkit.firewallTcpPortsFor cfg.yourkit;
-    networking.firewall.allowedUDPPorts = lib.optionals (cfg.query.enable && cfg.query.openFirewall) [
-      cfg.query.port
-    ];
+      lib.optional cfg.openFirewall cfg.port ++ yourkit.firewallTcpPortsFor cfg.yourkit;
+    networking.firewall.allowedUDPPorts = lib.optional (
+      cfg.query.enable && cfg.query.openFirewall
+    ) cfg.query.port;
 
     ix.healthChecks = {
       velocity = {

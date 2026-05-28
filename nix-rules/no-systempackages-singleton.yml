@@ -1,0 +1,11 @@
+id: no-environment-pathsToLink-singleton
+language: nix
+severity: warning
+message: "`environment.pathsToLink = [ \"<single>\" ];` should compose with the existing list (`mkAfter` / module merge), not replace it."
+note: |
+  WHY: `environment.pathsToLink` is a list. Assigning a one-element list at a
+  module's top level discards any other module's contribution at the same
+  priority. The fix is module merging or `lib.mkAfter`.
+  REPO: Use module merge or `lib.mkAfter [ "<path>" ]`.
+rule:
+  pattern: environment.pathsToLink = [ $X ]

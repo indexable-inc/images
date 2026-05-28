@@ -1,0 +1,15 @@
+id: prefer-attrvalues-over-mapattrs-identity
+language: nix
+severity: warning
+message: "`lib.mapAttrsToList (_: v: v) X` is `builtins.attrValues X`. Drop the identity map."
+note: |
+  WHY: `mapAttrsToList` is for the case where the value depends on both name and
+  current value. The identity lambda makes it equivalent to `builtins.attrValues`
+  but evaluates one more closure per entry and reads as accidental.
+  REPO: Use `builtins.attrValues X` (or `lib.attrValues X`).
+rule:
+  any:
+    - pattern: 'lib.mapAttrsToList (_: $V: $V) $X'
+    - pattern: 'lib.mapAttrsToList ($_: $V: $V) $X'
+    - pattern: 'mapAttrsToList (_: $V: $V) $X'
+    - pattern: 'mapAttrsToList ($_: $V: $V) $X'

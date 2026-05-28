@@ -1,0 +1,12 @@
+id: no-old-rust-cargosha256
+language: nix
+severity: error
+message: "`cargoSha256` is removed from `rustPlatform.buildRustPackage`. Use `cargoHash` (SRI) or `cargoLock = { lockFile = ...; outputHashes = { ... }; }`."
+note: |
+  WHY: nixpkgs renamed `cargoSha256` to `cargoHash` and added the structured
+  `cargoLock` block. The old slot was removed entirely; setting it now is a
+  silent no-op that ships a derivation with an unset hash and no vendoring.
+  NIXPKGS: PR #259603 removed the legacy attribute.
+  REPO: Use `cargoHash` (with SRI) or the typed `cargoLock` form.
+rule:
+  pattern: cargoSha256 = $_

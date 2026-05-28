@@ -1,0 +1,15 @@
+id: no-pkgs-lib
+language: nix
+severity: warning
+message: "`pkgs.lib.X` reaches through `pkgs`. Use the bare `lib` binding (or `inherit (pkgs) lib;`)."
+note: |
+  WHY: `pkgs.lib` is the same value as the `lib` argument the module / callPackage
+  helper already receives. Reaching for it via `pkgs.lib.foo` is an extra hop, hides
+  the dependency on `lib`, and prevents tooling from seeing which helpers a file
+  actually uses.
+  NIXPKGS: Convention across nixpkgs, home-manager, nixvim is to receive `lib` as a
+  top-level arg and call helpers as `lib.foo` directly.
+  REPO: Bind `lib` in the function signature (`{ lib, pkgs, ... }:`) or
+  `inherit (pkgs) lib;` once at the top of a `let`, and use `lib.foo` everywhere.
+rule:
+  pattern: pkgs.lib.$X

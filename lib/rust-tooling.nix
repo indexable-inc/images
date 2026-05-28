@@ -8,7 +8,7 @@
   repoRoot,
 }:
 let
-  repoRustToolchainFile = builtins.fromTOML (builtins.readFile (repoRoot + "/rust-toolchain.toml"));
+  repoRustToolchainFile = lib.importTOML (repoRoot + "/rust-toolchain.toml");
   repoRustChannel = repoRustToolchainFile.toolchain.channel;
   repoRustNightlyDate =
     assert lib.assertMsg (lib.hasPrefix "nightly-" repoRustChannel)

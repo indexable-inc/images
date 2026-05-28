@@ -1,0 +1,14 @@
+id: no-hash-sha256-prefix
+language: nix
+severity: error
+message: "`hash = \"sha256:...\"` uses the legacy hex/base32 form. Use the SRI form `hash = \"sha256-<base64>=\"` instead."
+note: |
+  WHY: nixpkgs has a single `hash` slot that prefers SRI (base64 with the
+  algorithm name and `=` padding). The `sha256:` colon form is a compatibility
+  shim that confuses prefetchers, hash bumpers, and update scripts — `nix
+  hash to-sri` and `nix-prefetch-url --type sha256` both emit SRI directly.
+  NIXPKGS: Standard since the unification of `sha256 =` and `hash =` (PR #228215).
+  REPO: Always store SRI in the `hash =` slot. The `sha256 =` slot is banned
+  entirely by `no-sha256-in-fetcher.yml`.
+rule:
+  pattern: hash = "sha256:$_"

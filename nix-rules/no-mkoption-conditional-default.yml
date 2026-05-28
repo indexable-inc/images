@@ -1,0 +1,15 @@
+id: no-mkoption-conditional-default
+language: nix
+severity: warning
+message: "`mkOption.default = if cond then ... else ...` couples the declaration to a sibling option. Move the branch into `config = ...` with `mkDefault`, and keep `default` a self-contained expression."
+note: |
+  WHY: The `default` of a public option should document the resting value of
+  that option, not the result of a sibling branch. A conditional default makes
+  the rendered docs lie (it prints either branch depending on the resolution),
+  prevents `defaultText` from quoting the expression, and entangles the option
+  declaration with `config`. The owner-fix is to keep `default` literal and
+  express the branch in `config` with `mkDefault` (or `mkIf` for whole subtrees).
+  REPO: Keep `mkOption.default` literal or a single named expression. Use
+  `defaultText = lib.literalExpression "..."` when the literal cannot be inlined.
+rule:
+  pattern: mkOption { $$$PRE default = if $C then $A else $B; $$$POST }

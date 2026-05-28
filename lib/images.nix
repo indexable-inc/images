@@ -84,7 +84,7 @@ let
   mkFleetFor =
     hostSystem:
     let
-      hostPkgs = nixpkgs.legacyPackages.${hostSystem};
+      hostPkgs = nixpkgs.legacyPackages."${hostSystem}";
     in
     import ./fleet.nix {
       inherit

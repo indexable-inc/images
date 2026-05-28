@@ -25,7 +25,7 @@ let
   };
   defaultMinecraftVersion = versions.default;
   defaultMinecraftModule = versions.${defaultMinecraftVersion};
-  rustToolchainFile = builtins.fromTOML (builtins.readFile ../rust-toolchain.toml);
+  rustToolchainFile = lib.importTOML ../rust-toolchain.toml;
   rustPinnedNightlyDate = lib.removePrefix "nightly-" rustToolchainFile.toolchain.channel;
 
   # Thin wrapper to keep call sites as plain lists; delegates to ix.evalImageConfig
@@ -2912,7 +2912,7 @@ let
       {
         assertion =
           let
-            manifest = builtins.fromJSON (builtins.readFile nomadSecretRefsExample.kubernetesExternalSecret);
+            manifest = lib.importJSON nomadSecretRefsExample.kubernetesExternalSecret;
           in
           manifest.kind == "ExternalSecret"
           && manifest.metadata.namespace == "batch"

@@ -111,10 +111,9 @@ let
 
   rustFlagsStringForPolicy = policy: lib.concatStringsSep " " (rustcArgsForPolicy policy);
 
-  nativeBuildInputsForPolicy = policy: lib.optionals policy.linker.useMold [ pkgs.mold ];
+  nativeBuildInputsForPolicy = policy: lib.optional policy.linker.useMold pkgs.mold;
 
-  cargoLockPackages =
-    cargoLock: (builtins.fromTOML (builtins.readFile (cargoLockFile cargoLock))).package or [ ];
+  cargoLockPackages = cargoLock: (lib.importTOML (cargoLockFile cargoLock)).package or [ ];
 
   dependencyPackages = cargoLock: builtins.filter (pkg: pkg ? source) (cargoLockPackages cargoLock);
 
@@ -570,9 +569,9 @@ let
       ]
       ++ args.cargoArgs
       ++ clippyCargoArgs rawArgs args
-      ++ lib.optionals (args.policy.clippy.deniedLints != [ ] || args.policy.clippy.allowedLints != [ ]) [
-        "--"
-      ]
+      ++ lib.optional (
+        args.policy.clippy.deniedLints != [ ] || args.policy.clippy.allowedLints != [ ]
+      ) "--"
       ++ clippyLintArgs args.policy;
     in
     pkgs.runCommand "${args.pname}-cargo-clippy"
@@ -681,7 +680,7 @@ let
       rustcArgs = rustcArgsForPolicy args.policy;
       cargoTestFlags =
         (rawArgs.cargoTestFlags or [ ])
-        ++ lib.optionals (testEnabled && args.policy.tests.useNextest) [ "--no-tests=pass" ];
+        ++ lib.optional (testEnabled && args.policy.tests.useNextest) "--no-tests=pass";
       # Vendor through our own fetcher (`resolveVendorDir` -> `static.crates.io`)
       # instead of letting nixpkgs's `importCargoLock` re-fetch each crate via
       # the legacy `crates.io/api/v1/crates/.../download` URL. The legacy

@@ -1,0 +1,17 @@
+id: no-types-attrs
+language: nix
+severity: warning
+message: "`types.attrs` is the give-up type. Use a typed `submodule` with `freeformType` (or `attrsOf <real-type>`) so options merge, document, and validate."
+note: |
+  WHY: `types.attrs` accepts any attrset, loses merging semantics, suppresses
+  documentation, and prevents `pkgs.formats.*` from typing your settings. The
+  canonical replacement is `lib.types.submodule { freeformType = (pkgs.formats.toml { }).type; options = { ... }; }`
+  (or similar JSON / YAML / INI) — typed escape hatch with documented fields.
+  NIXPKGS: RFC 42 — settings shapes use `pkgs.formats.*.type`. Convention across
+  nixpkgs services modules.
+  REPO: Allow `types.attrs` only at true foreign-format boundaries; document the
+  reason in a comment next to the option.
+rule:
+  any:
+    - pattern: lib.types.attrs
+    - pattern: types.attrs

@@ -1,0 +1,16 @@
+id: no-mkif-true
+language: nix
+severity: warning
+message: "`mkIf true x` is `x`; `mkIf false x` is empty. Drop the wrapper."
+note: |
+  WHY: A constant condition on `mkIf` is either a refactor leftover or a
+  load-bearing override that should be expressed with `mkDefault` / explicit
+  priority instead. Either way, the literal form is harmful: it suggests
+  conditional behavior that does not exist.
+  REPO: Replace `mkIf true x` with `x`; remove `mkIf false x` entirely.
+rule:
+  any:
+    - pattern: lib.mkIf true $X
+    - pattern: lib.mkIf false $X
+    - pattern: mkIf true $X
+    - pattern: mkIf false $X

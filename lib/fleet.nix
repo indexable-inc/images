@@ -310,7 +310,7 @@ let
     secrets = secretSet.plan;
   };
 
-  plan = pkgs.writeText "ix-fleet-plan.json" (builtins.toJSON planValue);
+  plan = (pkgs.formats.json { }).generate "ix-fleet-plan.json" planValue;
   userLocalBinPath = ''
     let home = ($env.HOME? | default "")
     if $home != "" {

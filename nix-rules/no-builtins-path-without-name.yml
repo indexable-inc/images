@@ -1,0 +1,18 @@
+id: no-builtins-path-without-name
+language: nix
+severity: warning
+message: "`builtins.path { path = ...; }` without `name` derives the store-path name from the working directory. Set `name = \"<stable>\"` so the result is reproducible across clones."
+note: |
+  WHY: When `name` is omitted, the store path inherits the basename of the
+  directory `path` resolves to. A user who clones the repo as `index-fork`
+  instead of `index` gets a different store path and a different cache key.
+  Setting `name` explicitly removes that surprise.
+  NIXPKGS: nix.dev best-practice "Reproducible source paths".
+  REPO: Always pass `name`. `builtins.path { name = "source"; path = ./.; }` is
+  the conventional default.
+rule:
+  pattern: builtins.path { $$$ATTRS }
+  not:
+    has:
+      pattern: name = $_
+      stopBy: end

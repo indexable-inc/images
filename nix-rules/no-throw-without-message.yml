@@ -1,0 +1,15 @@
+id: no-throw-without-message
+language: nix
+severity: warning
+message: "`throw` without a message string is a placeholder. Always pass a message that names the failing invariant."
+note: |
+  WHY: Bare `throw "..."` is fine when the message is concrete. `throw` with a
+  variable that holds an opaque value (or nothing at all) produces an
+  uninformative trace that names a file and a column but not the actual problem.
+  Match the spirit of `no-bare-assert`: name the invariant.
+  REPO: Write `throw "ix.<area>: <what failed> (<value>)"` so the trace points at
+  the owner.
+rule:
+  any:
+    - pattern: throw ""
+    - pattern: builtins.throw ""

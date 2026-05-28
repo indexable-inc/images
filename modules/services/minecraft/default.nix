@@ -472,13 +472,11 @@ let
   managedJars =
     modJars
     ++ pluginJars
-    ++ lib.optionals plugmanReloadEnabled [
-      {
-        name = "PlugManX.jar";
-        path = ix.artifacts.minecraft.paperPluginCatalog.plugmanx.src;
-        pluginName = "PlugManX";
-      }
-    ];
+    ++ lib.optional plugmanReloadEnabled {
+      name = "PlugManX.jar";
+      path = ix.artifacts.minecraft.paperPluginCatalog.plugmanx.src;
+      pluginName = "PlugManX";
+    };
 
   nbtFormats = {
     nbt = ix.mkMinecraftNbtFormat pkgs { format = "nbt"; };
@@ -803,9 +801,7 @@ let
     '';
   };
 
-  autoReloadJvmFlags = lib.optionals jvmReloadEnabled [
-    "-javaagent:${pkgs.minecraft-hot-reload-agent}/share/minecraft-hot-reload-agent/minecraft-hot-reload-agent.jar=socket=${cfg.autoReload.socketPath}"
-  ];
+  autoReloadJvmFlags = lib.optional jvmReloadEnabled "-javaagent:${pkgs.minecraft-hot-reload-agent}/share/minecraft-hot-reload-agent/minecraft-hot-reload-agent.jar=socket=${cfg.autoReload.socketPath}";
 
   javaArgs = [
     java
@@ -1272,8 +1268,8 @@ in
     environment.systemPackages = [ ix.packages.mc-probe ];
 
     networking.firewall.allowedTCPPorts =
-      lib.optionals cfg.openFirewall [ cfg.port ]
-      ++ lib.optionals cfg.rcon.openFirewall [ rconPort ]
+      lib.optional cfg.openFirewall cfg.port
+      ++ lib.optional cfg.rcon.openFirewall rconPort
       ++ yourkit.firewallTcpPortsFor cfg.yourkit;
     environment.etc = {
       "minecraft/managed-dropins".source = managed.dropins;

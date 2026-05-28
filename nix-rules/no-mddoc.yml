@@ -1,0 +1,19 @@
+id: no-mddoc
+language: nix
+severity: error
+message: "`lib.mdDoc` / `mdDoc` is a no-op and was removed from nixpkgs. Pass the description string directly."
+note: |
+  WHY: Module option descriptions are Markdown by default since nixpkgs 23.05. The
+  `lib.mdDoc` wrapper was introduced as a transitional marker and turned into a
+  deprecated no-op (PR #303841); newer nixpkgs evaluation prints a warning when it
+  is called. The same applies to `lib.options.mdDoc`.
+  NIXPKGS: Yes — tracking issue #300735. The migration converted every call site
+  in nixpkgs and home-manager to bare strings.
+  REPO: Use the plain string. `mkOption { description = "Whatever."; }` already
+  accepts Markdown, including `{file}` / `{option}` / `{command}` roles.
+rule:
+  any:
+    - pattern: lib.mdDoc $X
+    - pattern: lib.options.mdDoc $X
+    - pattern: options.mdDoc $X
+    - pattern: mdDoc $X

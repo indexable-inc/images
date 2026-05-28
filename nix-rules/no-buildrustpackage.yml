@@ -1,0 +1,13 @@
+id: no-buildrustpackage
+language: nix
+severity: warning
+message: "`buildRustPackage` is the legacy entry point. Use `rustPlatform.buildRustPackage` (typed `cargoLock` shape) or `crane` for finer-grained caching."
+note: |
+  WHY: The bare `buildRustPackage` identifier without the `rustPlatform.`
+  prefix is an old alias from a time when `rustPackages.*` exposed it directly.
+  All modern call sites go through `rustPlatform.buildRustPackage` with a typed
+  `cargoLock = { lockFile = ...; outputHashes = { ... }; }` block. Repos that
+  need per-crate caching reach for crane.
+  REPO: Use `pkgs.rustPlatform.buildRustPackage` or `crane.buildPackage`.
+rule:
+  pattern: buildRustPackage { $$$ATTRS }

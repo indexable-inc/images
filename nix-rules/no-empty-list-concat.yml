@@ -1,0 +1,14 @@
+id: no-empty-list-concat
+language: nix
+severity: warning
+message: "`[] ++ X` and `X ++ []` are no-ops. Drop the empty operand."
+note: |
+  WHY: List concatenation with an empty list on either side is the identity.
+  Usually appears after a refactor that emptied one branch; the read is
+  noisier than the equivalent `X`.
+  NIXPKGS: statix `empty_list_concat`; nix-linter `ListLiteralConcat`.
+  REPO: Drop the `[ ] ++` or `++ [ ]` half.
+rule:
+  any:
+    - pattern: $X ++ [ ]
+    - pattern: '[ ] ++ $X'

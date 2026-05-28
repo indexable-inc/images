@@ -42,10 +42,13 @@ pkgs:
   # uv.lock at the root); pass `src` directly to provide a custom fileset.
   srcRoot ? null,
   src ?
+    let
+      inherit (pkgs) lib;
+    in
     if srcRoot != null then
-      pkgs.lib.fileset.toSource {
+      lib.fileset.toSource {
         root = srcRoot;
-        fileset = pkgs.lib.fileset.unions [
+        fileset = lib.fileset.unions [
           (srcRoot + "/pyproject.toml")
           (srcRoot + "/src")
           (srcRoot + "/uv.lock")
@@ -98,14 +101,12 @@ let
     "--extra"
     extra
   ]) extras;
-  pyrightConfig = pkgs.writeText "basedpyright-${pname}.json" (
-    builtins.toJSON {
-      include = typeCheckPaths;
-      inherit extraPaths pythonPlatform;
-      typeCheckingMode = checkedTypeCheckingMode;
-      inherit (python) pythonVersion;
-    }
-  );
+  pyrightConfig = (pkgs.formats.json { }).generate "basedpyright-${pname}.json" {
+    include = typeCheckPaths;
+    inherit extraPaths pythonPlatform;
+    typeCheckingMode = checkedTypeCheckingMode;
+    inherit (python) pythonVersion;
+  };
   exportArgs = [
     "--frozen"
     "--no-emit-project"

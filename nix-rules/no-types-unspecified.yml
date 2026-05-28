@@ -1,0 +1,15 @@
+id: no-types-unspecified
+language: nix
+severity: error
+message: "`types.unspecified` accepts anything, including bottom. Use a real type or `attrsOf <type>` / `oneOf [ ... ]`."
+note: |
+  WHY: `types.unspecified` is documented as "no validation" and is intended only
+  for the module system's own internals (e.g. inside `_module.args`). Using it
+  for public options destroys merging, validation, and docs all at once.
+  NIXPKGS: `unspecified` is hidden in the manual. Convention: never appears in
+  user-facing options.
+  REPO: Pick a real type. `attrsOf (oneOf [ str int bool ])` is usually closer.
+rule:
+  any:
+    - pattern: lib.types.unspecified
+    - pattern: types.unspecified

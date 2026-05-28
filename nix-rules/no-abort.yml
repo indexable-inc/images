@@ -1,0 +1,14 @@
+id: no-abort
+language: nix
+severity: warning
+message: "`abort` is a hard abort with no recovery. Use `throw` (catchable) or `lib.assertMsg` (typed assertion) instead."
+note: |
+  WHY: `builtins.abort` and bare `abort` halt the evaluator immediately with no
+  way for any caller to recover or report context. `throw` raises a catchable
+  Nix exception with the same message API, and `lib.assertMsg` integrates with
+  `assert` so the failure names the invariant.
+  REPO: Use `throw "ix.<area>: ..."` for user-facing failure and `assert lib.assertMsg cond "..."` for invariants.
+rule:
+  any:
+    - pattern: abort $_
+    - pattern: builtins.abort $_

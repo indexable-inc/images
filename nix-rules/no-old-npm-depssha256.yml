@@ -1,0 +1,14 @@
+id: no-old-npm-depssha256
+language: nix
+severity: error
+message: "`npmDepsHash`'s old `sha256` companion is removed. Use `npmDepsHash = \"sha256-...=\";` (SRI)."
+note: |
+  WHY: Legacy `buildNpmPackage` accepted bare `sha256`/`npmDepsSha256` in some
+  forks; nixpkgs only takes `npmDepsHash` now. Hand-typed `sha256 = ...;` next
+  to a `pname/version`/`src` block silently ships a derivation with the wrong
+  fetched closure.
+  REPO: Use `npmDepsHash` with SRI.
+rule:
+  any:
+    - pattern: npmDepsSha256 = $_
+    - pattern: pnpmDepsHash = $_

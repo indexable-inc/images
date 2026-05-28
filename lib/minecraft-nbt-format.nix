@@ -30,7 +30,7 @@ assert lib.assertMsg (builtins.elem flavor validFlavors)
   generate =
     name: value:
     let
-      input = pkgs.writeText "${name}.json" (builtins.toJSON value);
+      input = (pkgs.formats.json { }).generate "${name}.json" value;
     in
     pkgs.runCommand name { nativeBuildInputs = [ minecraftNbt ]; } ''
       minecraft-nbt \

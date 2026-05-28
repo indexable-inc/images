@@ -88,7 +88,9 @@ let
     pname = "resource-monitor-site";
     version = "0.1.0";
     src = siteSrc;
-    preBuild = "cp ${pkgs.writeText "resource-monitor-vm-config.json" (builtins.toJSON metricConfig)} src/lib/vm-config.json";
+    preBuild = "cp ${
+      (pkgs.formats.json { }).generate "resource-monitor-vm-config.json" metricConfig
+    } src/lib/vm-config.json";
     serve = {
       enable = false;
     };
@@ -195,6 +197,6 @@ in
       };
     };
 
-    networking.firewall.allowedTCPPorts = lib.optionals cfg.openFirewall [ cfg.port ];
+    networking.firewall.allowedTCPPorts = lib.optional cfg.openFirewall cfg.port;
   };
 }

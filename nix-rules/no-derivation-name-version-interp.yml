@@ -1,0 +1,14 @@
+id: no-derivation-name-version-interp
+language: nix
+severity: warning
+message: "`name = \"${pname}-${version}\"` restates stdenv. Set `pname` and `version`; stdenv constructs `name` automatically."
+note: |
+  WHY: When both `pname` and `version` are set on a derivation, stdenv builds
+  `name` for you. Setting it manually creates a third source of truth and
+  invites the value to drift from `pname`/`version` after a bump.
+  NIXPKGS: nixpkgs-hammering `name-and-version`.
+  REPO: Drop the manual `name = "${pname}-${version}";`.
+rule:
+  any:
+    - pattern: name = "${pname}-${version}"
+    - pattern: name = "${finalAttrs.pname}-${finalAttrs.version}"

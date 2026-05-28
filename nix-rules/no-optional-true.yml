@@ -1,0 +1,19 @@
+id: no-optional-true
+language: nix
+severity: warning
+message: "`lib.optional true x` is always `[ x ]`; `lib.optional false x` is always `[ ]`. Inline the literal."
+note: |
+  WHY: A constant condition on `optional` / `optionals` is a refactor leftover.
+  Future readers will either drop it (if literal `false`) or wrap the value in
+  `[ ... ]` (if literal `true`).
+  REPO: Inline the result.
+rule:
+  any:
+    - pattern: lib.optional true $X
+    - pattern: lib.optional false $X
+    - pattern: lib.optionals true $X
+    - pattern: lib.optionals false $X
+    - pattern: optional true $X
+    - pattern: optional false $X
+    - pattern: optionals true $X
+    - pattern: optionals false $X

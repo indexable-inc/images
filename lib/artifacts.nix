@@ -41,8 +41,7 @@ let
         builtins.attrNames
         (map (lib.removeSuffix ".json"))
       ];
-      catalogFor =
-        ver: attachArtifactSources (builtins.fromJSON (builtins.readFile (root + "/${ver}.json")));
+      catalogFor = ver: attachArtifactSources (lib.importJSON (root + "/${ver}.json"));
     in
     lib.genAttrs gameVersions catalogFor;
 
@@ -67,7 +66,7 @@ let
     let
       manifestPath = root + "/manifest.json";
       manifestPathStr = toString manifestPath;
-      manifest = builtins.fromJSON (builtins.readFile manifestPath);
+      manifest = lib.importJSON manifestPath;
 
       missingManifestKeys = lib.filter (key: !(manifest ? ${key})) requiredManifestKeys;
       checkedManifest =
@@ -89,7 +88,7 @@ let
           lockPath = root + "/${ver}.json";
           lockPathStr = toString lockPath;
           exists = builtins.pathExists lockPath;
-          lock = if exists then builtins.fromJSON (builtins.readFile lockPath) else { };
+          lock = if exists then lib.importJSON lockPath else { };
           missingLockKeys = lib.filter (key: !(lock ? ${key})) [
             "url"
             "hash"

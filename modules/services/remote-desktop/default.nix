@@ -187,7 +187,7 @@ in
       pkgs.xterm
     ];
 
-    networking.firewall.allowedTCPPorts = lib.optionals cfg.openFirewall [ cfg.port ];
+    networking.firewall.allowedTCPPorts = lib.optional cfg.openFirewall cfg.port;
 
     users.groups.remote-desktop = { };
     users.users.remote-desktop = {

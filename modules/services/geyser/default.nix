@@ -397,8 +397,6 @@ in
       description = "Geyser Bedrock listener";
     };
 
-    networking.firewall.allowedUDPPorts = lib.optionals cfg.bedrock.openFirewall [
-      cfg.bedrock.port
-    ];
+    networking.firewall.allowedUDPPorts = lib.optional cfg.bedrock.openFirewall cfg.bedrock.port;
   };
 }

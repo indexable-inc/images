@@ -295,23 +295,21 @@ let
       secretStoreRef,
       values,
     }:
-    pkgs.writeText "kubernetes-${name}-external-secret.json" (
-      builtins.toJSON {
-        apiVersion = "external-secrets.io/v1";
-        kind = "ExternalSecret";
-        metadata = {
-          inherit name namespace;
-        };
-        spec = {
-          inherit secretStoreRef;
-          target.name = name;
-          data = lib.mapAttrsToList (refName: value: {
-            secretKey = value.kubernetesKey or refName;
-            remoteRef.key = value.key;
-          }) values;
-        };
-      }
-    );
+    (pkgs.formats.json { }).generate "kubernetes-${name}-external-secret.json" {
+      apiVersion = "external-secrets.io/v1";
+      kind = "ExternalSecret";
+      metadata = {
+        inherit name namespace;
+      };
+      spec = {
+        inherit secretStoreRef;
+        target.name = name;
+        data = lib.mapAttrsToList (refName: value: {
+          secretKey = value.kubernetesKey or refName;
+          remoteRef.key = value.key;
+        }) values;
+      };
+    };
 in
 {
   inherit

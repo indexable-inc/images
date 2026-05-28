@@ -1,0 +1,18 @@
+id: no-flake-utils-eachsystem
+language: nix
+severity: warning
+message: "`flake-utils.lib.eachSystem` is discouraged. Use `flake-parts` (`mkFlake` + `perSystem`) or a plain `lib.genAttrs systems` helper."
+note: |
+  WHY: `flake-utils` was an early stop-gap before flake-parts existed. It pulls
+  in a separate input and a separate set of conventions for what most repos
+  encode with a one-liner `lib.genAttrs` or a flake-parts module. Repos that
+  ship NixOS configurations are better served by flake-parts because it gives
+  module-system errors and composability for free.
+  NIXPKGS: nixvim, flake-parts, mic92/dotfiles, and most modern templates have
+  moved off flake-utils. See https://ayats.org/blog/no-flake-utils.
+  REPO: We hand-roll per-system in `lib/per-system.nix`; this rule prevents
+  re-introducing flake-utils when the same shape already has an owner.
+rule:
+  any:
+    - pattern: flake-utils.lib.eachSystem $$$X
+    - pattern: flake-utils.lib.eachDefaultSystem $$$X

@@ -51,14 +51,12 @@ let
       # the file references a store path with no recorded dependency
       # and Nix prints a "without a proper context" eval warning on
       # every consumer evaluation.
-      pyrightConfig = pkgs.writeText "basedpyright-${name}.json" (
-        builtins.toJSON {
-          include = [ "${src}" ];
-          inherit extraPaths pythonPlatform;
-          typeCheckingMode = checkedTypeCheckingMode;
-          inherit (python) pythonVersion;
-        }
-      );
+      pyrightConfig = (pkgs.formats.json { }).generate "basedpyright-${name}.json" {
+        include = [ "${src}" ];
+        inherit extraPaths pythonPlatform;
+        typeCheckingMode = checkedTypeCheckingMode;
+        inherit (python) pythonVersion;
+      };
     in
     pkgs.writeTextFile {
       inherit name;

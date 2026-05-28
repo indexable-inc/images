@@ -25,7 +25,7 @@ let
     managedRoot
   ];
 
-  reloadArgs = lib.optionals plugmanReloadEnabled [ "--plugman-reload" ];
+  reloadArgs = lib.optional plugmanReloadEnabled "--plugman-reload";
 
   ignoredPluginArgs = lib.concatMap (plugin: [
     "--plugman-ignored-plugin"
@@ -45,7 +45,7 @@ let
     "--rcon-broadcast-to-ops"
     (if rconBroadcastToOps then "true" else "false")
   ]
-  ++ lib.optionals rconEnabled [ "--rcon-enable" ];
+  ++ lib.optional rconEnabled "--rcon-enable";
 
   args = rootArgs ++ reloadArgs ++ ignoredPluginArgs ++ datapackWorldArgs ++ rconArgs;
 in

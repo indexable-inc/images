@@ -1,0 +1,17 @@
+id: no-tostring-derivation
+language: nix
+severity: warning
+message: "`toString drv` discards string context and drops the runtime dependency. Use string interpolation `\"${drv}\"` (preserves context) or `drv.outPath` (explicit)."
+note: |
+  WHY: `toString` flattens its argument to a context-free string. For a regular
+  string it is a no-op; for a derivation it returns the store path but drops the
+  in-band marker that tells Nix this output is a build dependency. The build
+  succeeds, the runtime closure omits the referenced output, and the error
+  surfaces only when the script tries to actually use the path.
+  REPO: When the value is a derivation, use `"${drv}"` (the interpolation form
+  preserves context). When the value is a plain string, `toString` is fine but
+  usually unnecessary.
+rule:
+  any:
+    - pattern: toString pkgs.$_
+    - pattern: builtins.toString pkgs.$_

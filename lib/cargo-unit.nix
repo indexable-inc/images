@@ -96,7 +96,7 @@ let
   clippyLintFlagsFromManifest =
     manifestPath:
     let
-      manifest = builtins.fromTOML (builtins.readFile manifestPath);
+      manifest = lib.importTOML manifestPath;
       raw = manifest.workspace.lints.clippy or manifest.lints.clippy or { };
       filtered = builtins.removeAttrs raw cargoGroupClippyLints;
       entryFor =

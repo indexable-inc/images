@@ -7,7 +7,7 @@ let
   inherit (pkgs) lib;
   fs = lib.fileset;
   workspaceRoot = ix.rustWorkspace.root;
-  workspaceManifest = builtins.fromTOML (builtins.readFile (workspaceRoot + "/Cargo.toml"));
+  workspaceManifest = lib.importTOML (workspaceRoot + "/Cargo.toml");
   workspaceMembers = workspaceManifest.workspace.members;
   workspaceMemberManifests = map (member: workspaceRoot + "/${member}/Cargo.toml") workspaceMembers;
   explicitTargetPaths =
@@ -15,7 +15,7 @@ let
   memberTargetStubs =
     member:
     let
-      manifest = builtins.fromTOML (builtins.readFile (workspaceRoot + "/${member}/Cargo.toml"));
+      manifest = lib.importTOML (workspaceRoot + "/${member}/Cargo.toml");
       relative = path: "${member}/${path}";
     in
     map relative (

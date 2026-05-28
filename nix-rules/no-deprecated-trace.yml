@@ -1,0 +1,16 @@
+id: no-deprecated-trace
+language: nix
+severity: warning
+message: "`builtins.trace` left in tracked code prints during every eval. Remove it or guard behind a debug flag."
+note: |
+  WHY: `trace` is a debug instrument, not an observability tool. Once committed
+  it fires on every `nix flake check`, every `nix-instantiate`, every `nix
+  build` of a downstream consumer, with no way to filter. Tracking-down trace
+  output that survived a merge is a recurring cost.
+  REPO: Strip `trace` before committing. If you need persistent diagnostic
+  output, expose a typed option that wraps it.
+rule:
+  any:
+    - pattern: builtins.trace $$$X
+    - pattern: lib.traceVal $$$X
+    - pattern: lib.traceSeq $$$X

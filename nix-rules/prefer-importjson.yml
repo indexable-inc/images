@@ -1,0 +1,15 @@
+id: prefer-importjson
+language: nix
+severity: warning
+message: "Use `lib.importJSON path` instead of `builtins.fromJSON (builtins.readFile path)`."
+note: |
+  WHY: `lib.importJSON` is the documented one-liner with the same evaluation
+  semantics. It reads better at the call site and makes intent (parse a JSON file
+  at eval time) explicit. The compound form is a frequent typo target — readFile
+  on a non-string path silently coerces and parse errors blame `fromJSON` instead
+  of the file.
+  NIXPKGS: `lib.importJSON` is part of `nixpkgs/lib/trivial.nix`.
+  REPO: Replace inline `builtins.fromJSON (builtins.readFile X)` with
+  `lib.importJSON X`. Same for TOML via `lib.importTOML`.
+rule:
+  pattern: builtins.fromJSON (builtins.readFile $PATH)

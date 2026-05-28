@@ -91,7 +91,7 @@ let
     }
   );
 
-  manifestEntries = builtins.fromJSON (builtins.readFile "${manifest}/tests.json");
+  manifestEntries = lib.importJSON "${manifest}/tests.json";
 
   exactNamePattern = name: "^${lib.escapeRegex name}$";
   relativeTestFile =
