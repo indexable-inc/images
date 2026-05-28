@@ -343,6 +343,7 @@ let
         ;
     })
     discoverTree
+    inspectTree
     discoverImages
     discoverModules
     exampleFleetsFor
@@ -362,6 +363,7 @@ let
       mkFleet
       mkFleetFor
       discoverTree
+      inspectTree
       discoverImages
       discoverModules
       nixosModules
