@@ -11,6 +11,7 @@ let
     mkEnableOption
     mkIf
     mkOption
+    mkPackageOption
     types
     ;
 
@@ -246,10 +247,8 @@ in
       description = "Velocity proxy jar.";
     };
 
-    javaPackage = mkOption {
-      type = types.package;
-      default = pkgs.temurin-jre-bin-25;
-      description = "JVM used to run Velocity.";
+    javaPackage = mkPackageOption pkgs "temurin-jre-bin-25" {
+      extraDescription = "Used to run Velocity.";
     };
 
     maxRAMPercentage = mkOption {

@@ -14,6 +14,7 @@ let
     mkEnableOption
     mkIf
     mkOption
+    mkPackageOption
     types
     ;
   cfg = config.services.minestom;
@@ -47,10 +48,7 @@ in
       default = 85;
     };
 
-    javaPackage = mkOption {
-      type = types.package;
-      default = pkgs.temurin-jre-bin-25;
-    };
+    javaPackage = mkPackageOption pkgs "temurin-jre-bin-25" { };
 
     jvmFlags = mkOption {
       type = types.listOf types.str;
