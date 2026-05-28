@@ -2,11 +2,13 @@
   import type { LogEntry } from '../types';
 
   type Props = {
-    logs: LogEntry[];
+    logs: ReadonlyArray<LogEntry>;
   };
 
+  const RECENT_LOG_LIMIT = 300;
+
   const { logs }: Props = $props();
-  const recent = $derived(logs.slice(-300));
+  const recent = $derived(logs.slice(-RECENT_LOG_LIMIT));
 </script>
 
 <section class="panel logs-panel">

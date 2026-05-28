@@ -2,29 +2,35 @@
   import type { ActivityNode, BuildNode } from '../types';
 
   type Props = {
-    activities: ActivityNode[];
-    builds: BuildNode[];
+    activities: ReadonlyArray<ActivityNode>;
+    builds: ReadonlyArray<BuildNode>;
   };
 
   const { activities, builds }: Props = $props();
 
-  const buildIds = $derived(new Set(builds.map((build) => build.activityId)));
+  const MAX_DEPTH = 8;
+
+  const buildActivityIds = $derived(
+    new Set(builds.flatMap((build) => (build.activityId === null ? [] : [build.activityId])))
+  );
+
+  const byId = $derived(new Map(activities.map((activity) => [activity.id, activity])));
+
   const rows = $derived(
     activities
-      .slice()
-      .sort((left, right) => left.startedTick - right.startedTick)
+      .toSorted((left, right) => left.startedTick - right.startedTick)
       .map((activity) => ({
         activity,
-        depth: depthFor(activity, activities),
-        isBuild: buildIds.has(activity.id)
+        depth: depthFor(activity, byId),
+        isBuild: buildActivityIds.has(activity.id)
       }))
   );
 
-  function depthFor(activity: ActivityNode, all: ActivityNode[]): number {
+  function depthFor(activity: ActivityNode, lookup: ReadonlyMap<number, ActivityNode>): number {
     let depth = 0;
     let parent = activity.parent;
-    while (parent !== null && depth < 8) {
-      const next = all.find((candidate) => candidate.id === parent);
+    while (parent !== null && depth < MAX_DEPTH) {
+      const next = lookup.get(parent);
       if (next === undefined) break;
       depth += 1;
       parent = next.parent;

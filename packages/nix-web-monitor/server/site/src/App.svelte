@@ -4,7 +4,7 @@
   import BuildTable from './components/BuildTable.svelte';
   import LogPanel from './components/LogPanel.svelte';
   import SummaryBar from './components/SummaryBar.svelte';
-  import { fetchInitialSnapshot, openMonitorEvents } from './monitor-store';
+  import { openMonitorEvents } from './monitor-store';
   import { EMPTY_SNAPSHOT, type ConnectionStatus, type MonitorSnapshot } from './types';
 
   let snapshot = $state<MonitorSnapshot>(EMPTY_SNAPSHOT);
@@ -12,9 +12,6 @@
   let closeEvents: (() => void) | null = null;
 
   onMount(() => {
-    void fetchInitialSnapshot().then((initial) => {
-      snapshot = initial;
-    });
     closeEvents = openMonitorEvents(
       (nextSnapshot) => {
         snapshot = nextSnapshot;
@@ -26,7 +23,7 @@
   });
 
   onDestroy(() => {
-    if (closeEvents !== null) closeEvents();
+    closeEvents?.();
   });
 </script>
 

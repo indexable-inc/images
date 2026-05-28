@@ -7,18 +7,7 @@ let
   fs = lib.fileset;
   siteSrc = fs.toSource {
     root = ./site;
-    fileset = fs.intersection (fs.gitTracked ./.) (
-      fs.unions [
-        ./site/eslint.config.js
-        ./site/index.html
-        ./site/package-lock.json
-        ./site/package.json
-        ./site/src
-        ./site/svelte.config.ts
-        ./site/tsconfig.json
-        ./site/vite.config.js
-      ]
-    );
+    fileset = fs.intersection (fs.gitTracked ./.) ./site;
   };
 
   site = ix.buildSvelteSite pkgs {
@@ -38,17 +27,17 @@ let
   };
 
   wrapper =
-    pkgs.runCommand "nix-web-monitor-0.1.0"
+    pkgs.runCommand "${unwrapped.pname}-${unwrapped.version}"
       {
         strictDeps = true;
         nativeBuildInputs = [ pkgs.makeBinaryWrapper ];
         passthru = {
-          tests = (unwrapped.passthru.tests or { }) // {
+          tests = unwrapped.passthru.tests // {
             inherit site;
           };
           inherit site unwrapped;
         };
-        meta = (unwrapped.meta or { }) // {
+        meta = unwrapped.meta // {
           description = "Run Nix with a live web monitor for logs, builds, and activity DAGs";
           mainProgram = "nix-web-monitor";
         };

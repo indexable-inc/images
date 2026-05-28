@@ -1,19 +1,19 @@
 export type ActivityStatus = 'running' | 'stopped';
-export type BuildStatus = 'running' | 'succeeded' | 'failed';
+export type BuildStatus = 'running' | 'stopped' | 'succeeded' | 'failed';
 
-export type ActivityType = {
+export type ActivityType = Readonly<{
   code: number;
   name: string;
-};
+}>;
 
-export type ActivityProgress = {
+export type ActivityProgress = Readonly<{
   done: number;
   expected: number;
   running: number;
   failed: number;
-};
+}>;
 
-export type ActivityNode = {
+export type ActivityNode = Readonly<{
   id: number;
   parent: number | null;
   activityType: ActivityType;
@@ -24,45 +24,49 @@ export type ActivityNode = {
   startedTick: number;
   stoppedTick: number | null;
   build: string | null;
-};
+}>;
 
-export type BuildNode = {
+export type BuildNode = Readonly<{
   derivation: string;
-  activityId: number;
+  activityId: number | null;
   host: string | null;
   phase: string | null;
   status: BuildStatus;
   logCount: number;
-};
+}>;
 
-export type LogEntry = {
+export type LogEntry = Readonly<{
   index: number;
   activityId: number | null;
   text: string;
-};
+}>;
 
-export type MonitorSnapshot = {
-  activities: ActivityNode[];
-  builds: BuildNode[];
-  logs: LogEntry[];
-  messages: string[];
-  errors: string[];
+export type MonitorSnapshot = Readonly<{
+  activities: ReadonlyArray<ActivityNode>;
+  builds: ReadonlyArray<BuildNode>;
+  logs: ReadonlyArray<LogEntry>;
+  messages: ReadonlyArray<string>;
+  errors: ReadonlyArray<string>;
   progress: ActivityProgress | null;
-  expected: Record<string, number>;
+  expected: Readonly<Record<string, number>>;
   exitCode: number | null;
   finished: boolean;
-};
+}>;
 
 export type ConnectionStatus = 'connecting' | 'live' | 'closed' | 'error';
 
-export const EMPTY_SNAPSHOT: MonitorSnapshot = {
-  activities: [],
-  builds: [],
-  logs: [],
-  messages: [],
-  errors: [],
+/// Mirrors `activity_code::BUILD` in the parser; the protocol's name for an
+/// individual derivation build activity.
+export const ACTIVITY_NAME_BUILD = 'build';
+
+export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
+  activities: Object.freeze([]),
+  builds: Object.freeze([]),
+  logs: Object.freeze([]),
+  messages: Object.freeze([]),
+  errors: Object.freeze([]),
   progress: null,
-  expected: {},
+  expected: Object.freeze({}),
   exitCode: null,
   finished: false
-};
+});

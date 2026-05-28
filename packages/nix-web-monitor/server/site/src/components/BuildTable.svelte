@@ -1,24 +1,25 @@
 <script lang="ts">
-  import type { BuildNode } from '../types';
+  import type { BuildNode, BuildStatus } from '../types';
 
   type Props = {
-    builds: BuildNode[];
+    builds: ReadonlyArray<BuildNode>;
   };
 
   const { builds }: Props = $props();
 
-  const ordered = $derived(
-    builds
-      .slice()
-      .sort((left, right) => left.derivation.localeCompare(right.derivation))
-      .sort((left, right) => statusRank(left.status) - statusRank(right.status))
-  );
+  const STATUS_ORDER: Readonly<Record<BuildStatus, number>> = {
+    running: 0,
+    failed: 1,
+    stopped: 2,
+    succeeded: 3
+  };
 
-  function statusRank(status: BuildNode['status']): number {
-    if (status === 'running') return 0;
-    if (status === 'failed') return 1;
-    return 2;
-  }
+  const ordered = $derived(
+    builds.toSorted((left, right) => {
+      const byStatus = STATUS_ORDER[left.status] - STATUS_ORDER[right.status];
+      return byStatus !== 0 ? byStatus : left.derivation.localeCompare(right.derivation);
+    })
+  );
 
   function shortDrv(path: string): string {
     const slash = path.lastIndexOf('/');

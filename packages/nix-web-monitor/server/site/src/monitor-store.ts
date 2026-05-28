@@ -1,25 +1,63 @@
-import { LoroDoc } from 'loro-crdt';
-import {
-  EMPTY_SNAPSHOT,
-  type ActivityNode,
-  type ActivityProgress,
-  type BuildNode,
-  type ConnectionStatus,
-  type LogEntry,
-  type MonitorSnapshot
-} from './types';
+import * as v from 'valibot';
+import type { ConnectionStatus, MonitorSnapshot } from './types';
 
 type SnapshotHandler = (snapshot: MonitorSnapshot) => void;
 type StatusHandler = (status: ConnectionStatus) => void;
 
-const doc = new LoroDoc();
-const root = doc.getMap('monitor');
+const activityTypeSchema = v.object({
+  code: v.number(),
+  name: v.string()
+});
 
-export function rememberSnapshot(snapshot: MonitorSnapshot): MonitorSnapshot {
-  root.set('snapshot', snapshot);
-  doc.commit();
-  return snapshot;
-}
+const activityProgressSchema = v.object({
+  done: v.number(),
+  expected: v.number(),
+  running: v.number(),
+  failed: v.number()
+});
+
+const activityStatusSchema = v.picklist(['running', 'stopped']);
+const buildStatusSchema = v.picklist(['running', 'stopped', 'succeeded', 'failed']);
+
+const activityNodeSchema = v.object({
+  id: v.number(),
+  parent: v.nullable(v.number()),
+  activityType: activityTypeSchema,
+  text: v.string(),
+  phase: v.nullable(v.string()),
+  progress: v.nullable(activityProgressSchema),
+  status: activityStatusSchema,
+  startedTick: v.number(),
+  stoppedTick: v.nullable(v.number()),
+  build: v.nullable(v.string())
+});
+
+const buildNodeSchema = v.object({
+  derivation: v.string(),
+  activityId: v.nullable(v.number()),
+  host: v.nullable(v.string()),
+  phase: v.nullable(v.string()),
+  status: buildStatusSchema,
+  logCount: v.number()
+});
+
+const logEntrySchema = v.object({
+  index: v.number(),
+  activityId: v.nullable(v.number()),
+  text: v.string()
+});
+
+const snapshotSchema = v.object({
+  activities: v.array(activityNodeSchema),
+  builds: v.array(buildNodeSchema),
+  logs: v.array(logEntrySchema),
+  messages: v.array(v.string()),
+  errors: v.array(v.string()),
+  progress: v.nullable(activityProgressSchema),
+  expected: v.record(v.string(), v.number()),
+  exitCode: v.nullable(v.number()),
+  finished: v.boolean()
+}) satisfies v.GenericSchema<MonitorSnapshot>;
 
 export function openMonitorEvents(onSnapshot: SnapshotHandler, onStatus: StatusHandler): () => void {
   onStatus('connecting');
@@ -30,12 +68,12 @@ export function openMonitorEvents(onSnapshot: SnapshotHandler, onStatus: StatusH
   });
 
   events.addEventListener('snapshot', (event) => {
-    const snapshot = parseSnapshotPayload(event);
+    const snapshot = parseSnapshotEvent(event);
     if (snapshot === null) {
       onStatus('error');
       return;
     }
-    onSnapshot(rememberSnapshot(snapshot));
+    onSnapshot(snapshot);
     onStatus(snapshot.finished ? 'closed' : 'live');
   });
 
@@ -52,185 +90,13 @@ export function openMonitorEvents(onSnapshot: SnapshotHandler, onStatus: StatusH
   };
 }
 
-export async function fetchInitialSnapshot(): Promise<MonitorSnapshot> {
-  const response = await fetch('/api/snapshot', { cache: 'no-store' });
-  if (!response.ok) return EMPTY_SNAPSHOT;
-  const parsed = parseSnapshot(await response.json());
-  return parsed ?? EMPTY_SNAPSHOT;
-}
-
-function parseSnapshotPayload(event: Event): MonitorSnapshot | null {
+function parseSnapshotEvent(event: Event): MonitorSnapshot | null {
   if (!(event instanceof MessageEvent) || typeof event.data !== 'string') return null;
   try {
-    return parseSnapshot(JSON.parse(event.data));
+    const parsed: unknown = JSON.parse(event.data);
+    const result = v.safeParse(snapshotSchema, parsed);
+    return result.success ? result.output : null;
   } catch {
     return null;
   }
-}
-
-function parseSnapshot(value: unknown): MonitorSnapshot | null {
-  if (!isRecord(value)) return null;
-  const activities = parseArray(value.activities, parseActivity);
-  const builds = parseArray(value.builds, parseBuild);
-  const logs = parseArray(value.logs, parseLog);
-  const messages = parseStringArray(value.messages);
-  const errors = parseStringArray(value.errors);
-  const expected = parseNumberRecord(value.expected);
-  if (
-    activities === null ||
-    builds === null ||
-    logs === null ||
-    messages === null ||
-    errors === null ||
-    expected === null ||
-    !isNullableNumber(value.exitCode) ||
-    typeof value.finished !== 'boolean'
-  ) {
-    return null;
-  }
-
-  return {
-    activities,
-    builds,
-    logs,
-    messages,
-    errors,
-    progress: parseProgress(value.progress),
-    expected,
-    exitCode: value.exitCode,
-    finished: value.finished
-  };
-}
-
-function parseActivity(value: unknown): ActivityNode | null {
-  if (!isRecord(value)) return null;
-  const activityType = value.activityType;
-  if (
-    !isRecord(activityType) ||
-    !isNumber(activityType.code) ||
-    typeof activityType.name !== 'string' ||
-    !isNumber(value.id) ||
-    !isNullableNumber(value.parent) ||
-    typeof value.text !== 'string' ||
-    !isNullableString(value.phase) ||
-    !isActivityStatus(value.status) ||
-    !isNumber(value.startedTick) ||
-    !isNullableNumber(value.stoppedTick) ||
-    !isNullableString(value.build)
-  ) {
-    return null;
-  }
-
-  return {
-    id: value.id,
-    parent: value.parent,
-    activityType: { code: activityType.code, name: activityType.name },
-    text: value.text,
-    phase: value.phase,
-    progress: parseProgress(value.progress),
-    status: value.status,
-    startedTick: value.startedTick,
-    stoppedTick: value.stoppedTick,
-    build: value.build
-  };
-}
-
-function parseBuild(value: unknown): BuildNode | null {
-  if (!isRecord(value)) return null;
-  if (
-    typeof value.derivation !== 'string' ||
-    !isNumber(value.activityId) ||
-    !isNullableString(value.host) ||
-    !isNullableString(value.phase) ||
-    !isBuildStatus(value.status) ||
-    !isNumber(value.logCount)
-  ) {
-    return null;
-  }
-
-  return {
-    derivation: value.derivation,
-    activityId: value.activityId,
-    host: value.host,
-    phase: value.phase,
-    status: value.status,
-    logCount: value.logCount
-  };
-}
-
-function parseLog(value: unknown): LogEntry | null {
-  if (!isRecord(value)) return null;
-  if (!isNumber(value.index) || !isNullableNumber(value.activityId) || typeof value.text !== 'string') {
-    return null;
-  }
-  return { index: value.index, activityId: value.activityId, text: value.text };
-}
-
-function parseProgress(value: unknown): ActivityProgress | null {
-  if (value === null) return null;
-  if (!isRecord(value)) return null;
-  if (
-    !isNumber(value.done) ||
-    !isNumber(value.expected) ||
-    !isNumber(value.running) ||
-    !isNumber(value.failed)
-  ) {
-    return null;
-  }
-  return {
-    done: value.done,
-    expected: value.expected,
-    running: value.running,
-    failed: value.failed
-  };
-}
-
-function parseArray<T>(value: unknown, parse: (item: unknown) => T | null): T[] | null {
-  if (!Array.isArray(value)) return null;
-  const parsed: T[] = [];
-  for (const item of value) {
-    const next = parse(item);
-    if (next === null) return null;
-    parsed.push(next);
-  }
-  return parsed;
-}
-
-function parseStringArray(value: unknown): string[] | null {
-  if (!Array.isArray(value)) return null;
-  return value.every((item): item is string => typeof item === 'string') ? value : null;
-}
-
-function parseNumberRecord(value: unknown): Record<string, number> | null {
-  if (!isRecord(value)) return null;
-  const result: Record<string, number> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (!isNumber(item)) return null;
-    result[key] = item;
-  }
-  return result;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function isNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function isNullableNumber(value: unknown): value is number | null {
-  return value === null || isNumber(value);
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === 'string';
-}
-
-function isActivityStatus(value: unknown): value is ActivityNode['status'] {
-  return value === 'running' || value === 'stopped';
-}
-
-function isBuildStatus(value: unknown): value is BuildNode['status'] {
-  return value === 'running' || value === 'succeeded' || value === 'failed';
 }

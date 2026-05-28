@@ -11,4 +11,5 @@ workspace = true
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+snafu.workspace = true
 strip-ansi-escapes.workspace = true

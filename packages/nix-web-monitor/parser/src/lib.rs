@@ -4,15 +4,56 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use snafu::Snafu;
 
 const NIX_JSON_PREFIX: &str = "@nix ";
-const RESULT_BUILD_LOG_LINE: u64 = 101;
-const RESULT_SET_PHASE: u64 = 104;
-const RESULT_PROGRESS: u64 = 105;
-const RESULT_SET_EXPECTED: u64 = 106;
-const RESULT_POST_BUILD_LOG_LINE: u64 = 107;
-const RESULT_FETCH_STATUS: u64 = 108;
-const ACTIVITY_BUILD: u64 = 105;
+
+/// Nix log level for `error`-class messages emitted via `msg` actions.
+const NIX_LEVEL_ERROR: i64 = 0;
+
+mod result_code {
+    pub const FILE_LINKED: u64 = 100;
+    pub const BUILD_LOG_LINE: u64 = 101;
+    pub const SET_PHASE: u64 = 104;
+    pub const PROGRESS: u64 = 105;
+    pub const SET_EXPECTED: u64 = 106;
+    pub const POST_BUILD_LOG_LINE: u64 = 107;
+    pub const FETCH_STATUS: u64 = 108;
+}
+
+mod activity_code {
+    pub const BUILD: u64 = 105;
+}
+
+#[derive(Debug, Snafu)]
+pub enum ParseError {
+    #[snafu(display("missing action field"))]
+    MissingAction,
+
+    #[snafu(display("missing numeric field {key}"))]
+    MissingNumericField { key: String },
+
+    #[snafu(display("field {key} must be an unsigned integer"))]
+    NotUnsignedInteger { key: String },
+
+    #[snafu(display("field {key} must be an integer"))]
+    NotInteger { key: String },
+
+    #[snafu(display("field {key} must be a string"))]
+    NotString { key: String },
+
+    #[snafu(display("expected one text field"))]
+    OneTextField,
+
+    #[snafu(display("expected two numeric fields"))]
+    TwoNumericFields,
+
+    #[snafu(display("expected four numeric progress fields"))]
+    ProgressFields,
+
+    #[snafu(display("expected activity type must be non-negative"))]
+    NegativeActivityType,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
@@ -167,9 +208,19 @@ impl MonitorState {
         }
     }
 
+    /// Settle the run and, on a clean exit, promote `Stopped` builds to
+    /// `Succeeded`. Nix has no positive success marker per activity, so we
+    /// wait for the process to confirm before claiming success.
     pub fn finish(&mut self, exit_code: Option<i32>) {
         self.exit_code = exit_code;
         self.finished = true;
+        if exit_code == Some(0) {
+            for build in self.builds.values_mut() {
+                if build.status == BuildStatus::Stopped {
+                    build.status = BuildStatus::Succeeded;
+                }
+            }
+        }
     }
 
     fn apply_event(&mut self, event: &NixEvent) {
@@ -178,21 +229,16 @@ impl MonitorState {
             NixEvent::Stop(action) => self.stop_activity(action.id),
             NixEvent::Result(action) => self.apply_result(action),
             NixEvent::Message(action) => self.apply_message(action),
-            NixEvent::Unknown { raw } => self.messages.push(raw.to_string()),
+            NixEvent::Unknown { .. } => {}
         }
     }
 
     fn start_activity(&mut self, action: &StartAction) {
         let now = next_tick(self.activities.len());
-        let build = if action.activity_type.code == ACTIVITY_BUILD {
-            first_text_field(&action.fields)
+        let (build, host) = if action.activity_type.code == activity_code::BUILD {
+            (text_field(&action.fields, 0), text_field(&action.fields, 1))
         } else {
-            None
-        };
-        let host = if action.activity_type.code == ACTIVITY_BUILD {
-            text_field(&action.fields, 1)
-        } else {
-            None
+            (None, None)
         };
 
         self.activities.insert(
@@ -217,7 +263,7 @@ impl MonitorState {
                 derivation.clone(),
                 BuildNode {
                     derivation,
-                    activity_id: action.id,
+                    activity_id: Some(action.id),
                     host,
                     phase: None,
                     status: BuildStatus::Running,
@@ -227,6 +273,11 @@ impl MonitorState {
         }
     }
 
+    /// Mark the activity stopped. The build status moves to `Stopped` and
+    /// stays there until either a builder failure arrives (`Failed`) or the
+    /// process exits cleanly (`finish` promotes to `Succeeded`). Nix never
+    /// emits a per-activity success signal, so we cannot do better without
+    /// inventing one.
     fn stop_activity(&mut self, id: u64) {
         if let Some(activity) = self.activities.get_mut(&id) {
             activity.status = ActivityStatus::Stopped;
@@ -235,7 +286,7 @@ impl MonitorState {
                 && let Some(build_node) = self.builds.get_mut(build)
                 && build_node.status == BuildStatus::Running
             {
-                build_node.status = BuildStatus::Succeeded;
+                build_node.status = BuildStatus::Stopped;
             }
         }
     }
@@ -276,11 +327,11 @@ impl MonitorState {
 
     fn apply_message(&mut self, action: &MessageAction) {
         self.messages.push(action.message.clone());
-        let stripped = strip_ansi(&action.message);
-        if stripped.starts_with("error:") {
+        if action.level == Some(NIX_LEVEL_ERROR) {
             self.errors.push(action.message.clone());
         }
 
+        let stripped = strip_ansi(&action.message);
         if let Some(failure) = parse_builder_failure(&stripped) {
             self.mark_failed_build(failure);
         }
@@ -295,20 +346,21 @@ impl MonitorState {
     }
 
     fn mark_failed_build(&mut self, failure: BuilderFailure) {
-        if let Some(build) = self.builds.get_mut(&failure.derivation) {
-            build.status = BuildStatus::Failed;
-        } else {
-            self.builds.insert(
-                failure.derivation.clone(),
-                BuildNode {
+        use std::collections::btree_map::Entry;
+        match self.builds.entry(failure.derivation.clone()) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().status = BuildStatus::Failed;
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(BuildNode {
                     derivation: failure.derivation,
-                    activity_id: 0,
+                    activity_id: None,
                     host: None,
                     phase: None,
                     status: BuildStatus::Failed,
                     log_count: 0,
-                },
-            );
+                });
+            }
         }
     }
 
@@ -371,7 +423,7 @@ pub enum ActivityStatus {
 #[serde(rename_all = "camelCase")]
 pub struct BuildNode {
     pub derivation: String,
-    pub activity_id: u64,
+    pub activity_id: Option<u64>,
     pub host: Option<String>,
     pub phase: Option<String>,
     pub status: BuildStatus,
@@ -382,6 +434,9 @@ pub struct BuildNode {
 #[serde(rename_all = "snake_case")]
 pub enum BuildStatus {
     Running,
+    /// Activity finished without an error reference; outcome unknown until
+    /// the wrapping process exits.
+    Stopped,
     Succeeded,
     Failed,
 }
@@ -412,7 +467,7 @@ pub fn parse_line(line: &str) -> ParsedLine {
             Ok(event) => ParsedLine::Event(event),
             Err(error) => ParsedLine::ParseError {
                 text: line.to_owned(),
-                error,
+                error: error.to_string(),
             },
         },
         Err(error) => ParsedLine::ParseError {
@@ -422,11 +477,11 @@ pub fn parse_line(line: &str) -> ParsedLine {
     }
 }
 
-fn parse_event(raw: Value) -> Result<NixEvent, String> {
+fn parse_event(raw: Value) -> Result<NixEvent, ParseError> {
     let action = raw
         .get("action")
         .and_then(Value::as_str)
-        .ok_or_else(|| "missing action field".to_owned())?;
+        .ok_or(ParseError::MissingAction)?;
 
     match action {
         "start" => parse_start(&raw).map(NixEvent::Start),
@@ -437,8 +492,8 @@ fn parse_event(raw: Value) -> Result<NixEvent, String> {
     }
 }
 
-fn parse_start(raw: &Value) -> Result<StartAction, String> {
-    let activity_type = activity_type(required_u64(raw, "type")?);
+fn parse_start(raw: &Value) -> Result<StartAction, ParseError> {
+    let activity_type = activity_type_for(required_u64(raw, "type")?);
     Ok(StartAction {
         id: required_u64(raw, "id")?,
         parent: optional_u64(raw, "parent")?,
@@ -449,13 +504,13 @@ fn parse_start(raw: &Value) -> Result<StartAction, String> {
     })
 }
 
-fn parse_stop(raw: &Value) -> Result<StopAction, String> {
+fn parse_stop(raw: &Value) -> Result<StopAction, ParseError> {
     Ok(StopAction {
         id: required_u64(raw, "id")?,
     })
 }
 
-fn parse_message(raw: &Value) -> Result<MessageAction, String> {
+fn parse_message(raw: &Value) -> Result<MessageAction, ParseError> {
     Ok(MessageAction {
         level: optional_i64(raw, "level")?,
         message: optional_string(raw, "msg")?.unwrap_or_default(),
@@ -463,44 +518,36 @@ fn parse_message(raw: &Value) -> Result<MessageAction, String> {
     })
 }
 
-fn parse_result(raw: &Value) -> Result<ResultAction, String> {
+fn parse_result(raw: &Value) -> Result<ResultAction, ParseError> {
     let result_type = required_u64(raw, "type")?;
     let fields = fields(raw);
     let result = match result_type {
-        100 => {
+        result_code::FILE_LINKED => {
             let (linked, total) = two_numbers(&fields)?;
             ActivityResult::FileLinked { linked, total }
         }
-        RESULT_BUILD_LOG_LINE => ActivityResult::BuildLogLine {
+        result_code::BUILD_LOG_LINE => ActivityResult::BuildLogLine {
             line: one_text(&fields)?,
         },
-        RESULT_SET_PHASE => ActivityResult::SetPhase {
+        result_code::SET_PHASE => ActivityResult::SetPhase {
             phase: one_text(&fields)?,
         },
-        RESULT_PROGRESS => {
-            let progress_fields = four_numbers(&fields)?;
-            ActivityResult::Progress {
-                progress: ActivityProgress {
-                    done: progress_fields.done,
-                    expected: progress_fields.expected,
-                    running: progress_fields.running,
-                    failed: progress_fields.failed,
-                },
-            }
-        }
-        RESULT_SET_EXPECTED => {
+        result_code::PROGRESS => ActivityResult::Progress {
+            progress: parse_progress(&fields)?,
+        },
+        result_code::SET_EXPECTED => {
             let (activity_type_code, expected) = two_numbers(&fields)?;
             let activity_type_code = u64::try_from(activity_type_code)
-                .map_err(|_| "expected activity type must be non-negative".to_owned())?;
+                .map_err(|_| ParseError::NegativeActivityType)?;
             ActivityResult::SetExpected {
-                activity_type: activity_type(activity_type_code),
+                activity_type: activity_type_for(activity_type_code),
                 expected,
             }
         }
-        RESULT_POST_BUILD_LOG_LINE => ActivityResult::PostBuildLogLine {
+        result_code::POST_BUILD_LOG_LINE => ActivityResult::PostBuildLogLine {
             line: one_text(&fields)?,
         },
-        RESULT_FETCH_STATUS => ActivityResult::FetchStatus {
+        result_code::FETCH_STATUS => ActivityResult::FetchStatus {
             status: one_text(&fields)?,
         },
         _ => ActivityResult::Other {
@@ -513,14 +560,6 @@ fn parse_result(raw: &Value) -> Result<ResultAction, String> {
         id: required_u64(raw, "id")?,
         result,
     })
-}
-
-#[derive(Clone, Copy)]
-struct FourNumbers {
-    done: i64,
-    expected: i64,
-    running: i64,
-    failed: i64,
 }
 
 fn fields(raw: &Value) -> Vec<FieldValue> {
@@ -543,75 +582,83 @@ fn field_value(value: &Value) -> FieldValue {
     }
 }
 
-fn one_text(fields: &[FieldValue]) -> Result<String, String> {
+fn one_text(fields: &[FieldValue]) -> Result<String, ParseError> {
     match fields {
         [FieldValue::Text(text)] => Ok(text.clone()),
-        _ => Err("expected one text field".to_owned()),
+        _ => Err(ParseError::OneTextField),
     }
 }
 
-fn two_numbers(fields: &[FieldValue]) -> Result<(i64, i64), String> {
+fn two_numbers(fields: &[FieldValue]) -> Result<(i64, i64), ParseError> {
     match fields {
         [FieldValue::Number(first), FieldValue::Number(second)] => Ok((*first, *second)),
-        _ => Err("expected two numeric fields".to_owned()),
+        _ => Err(ParseError::TwoNumericFields),
     }
 }
 
-fn four_numbers(fields: &[FieldValue]) -> Result<FourNumbers, String> {
+fn parse_progress(fields: &[FieldValue]) -> Result<ActivityProgress, ParseError> {
     match fields {
         [
             FieldValue::Number(done),
             FieldValue::Number(expected),
             FieldValue::Number(running),
             FieldValue::Number(failed),
-        ] => Ok(FourNumbers {
+        ] => Ok(ActivityProgress {
             done: *done,
             expected: *expected,
             running: *running,
             failed: *failed,
         }),
-        _ => Err("expected four numeric fields".to_owned()),
+        _ => Err(ParseError::ProgressFields),
     }
 }
 
-fn required_u64(raw: &Value, key: &str) -> Result<u64, String> {
+fn required_u64(raw: &Value, key: &str) -> Result<u64, ParseError> {
     raw.get(key)
         .and_then(Value::as_u64)
-        .ok_or_else(|| format!("missing numeric field {key}"))
+        .ok_or_else(|| ParseError::MissingNumericField {
+            key: key.to_owned(),
+        })
 }
 
-fn optional_u64(raw: &Value, key: &str) -> Result<Option<u64>, String> {
+fn optional_u64(raw: &Value, key: &str) -> Result<Option<u64>, ParseError> {
     match raw.get(key) {
         Some(Value::Null) | None => Ok(None),
         Some(value) => value
             .as_u64()
             .map(Some)
-            .ok_or_else(|| format!("field {key} must be an unsigned integer")),
+            .ok_or_else(|| ParseError::NotUnsignedInteger {
+                key: key.to_owned(),
+            }),
     }
 }
 
-fn optional_i64(raw: &Value, key: &str) -> Result<Option<i64>, String> {
+fn optional_i64(raw: &Value, key: &str) -> Result<Option<i64>, ParseError> {
     match raw.get(key) {
         Some(Value::Null) | None => Ok(None),
         Some(value) => value
             .as_i64()
             .map(Some)
-            .ok_or_else(|| format!("field {key} must be an integer")),
+            .ok_or_else(|| ParseError::NotInteger {
+                key: key.to_owned(),
+            }),
     }
 }
 
-fn optional_string(raw: &Value, key: &str) -> Result<Option<String>, String> {
+fn optional_string(raw: &Value, key: &str) -> Result<Option<String>, ParseError> {
     match raw.get(key) {
         Some(Value::Null) | None => Ok(None),
         Some(value) => value
             .as_str()
             .map(ToOwned::to_owned)
             .map(Some)
-            .ok_or_else(|| format!("field {key} must be a string")),
+            .ok_or_else(|| ParseError::NotString {
+                key: key.to_owned(),
+            }),
     }
 }
 
-fn activity_type(code: u64) -> ActivityType {
+fn activity_type_for(code: u64) -> ActivityType {
     let name = match code {
         0 => "unknown",
         100 => "copy_path",
@@ -619,7 +666,7 @@ fn activity_type(code: u64) -> ActivityType {
         102 => "realise",
         103 => "copy_paths",
         104 => "builds",
-        ACTIVITY_BUILD => "build",
+        activity_code::BUILD => "build",
         106 => "optimise_store",
         107 => "verify_paths",
         108 => "substitute",
@@ -634,10 +681,6 @@ fn activity_type(code: u64) -> ActivityType {
         code,
         name: name.to_owned(),
     }
-}
-
-fn first_text_field(fields: &[FieldValue]) -> Option<String> {
-    text_field(fields, 0)
 }
 
 fn text_field(fields: &[FieldValue], index: usize) -> Option<String> {
@@ -705,5 +748,40 @@ mod tests {
             BuildStatus::Failed,
             "plain terminal messages should update failed build state"
         );
+    }
+
+    #[test]
+    fn stop_then_clean_finish_promotes_to_succeeded() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"start","fields":["/nix/store/abc-demo.drv","local",1,1],"id":7,"level":3,"text":"building '/nix/store/abc-demo.drv'","type":105}"#);
+        state.apply_line(r#"@nix {"action":"stop","id":7}"#);
+
+        assert_eq!(
+            state.snapshot().builds[0].status,
+            BuildStatus::Stopped,
+            "stop alone is not evidence of success"
+        );
+
+        state.finish(Some(0));
+        assert_eq!(state.snapshot().builds[0].status, BuildStatus::Succeeded);
+    }
+
+    #[test]
+    fn stop_then_late_error_resolves_to_failed_without_succeeded_flicker() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"start","fields":["/nix/store/abc-demo.drv","local",1,1],"id":7,"level":3,"text":"building '/nix/store/abc-demo.drv'","type":105}"#);
+        state.apply_line(r#"@nix {"action":"stop","id":7}"#);
+        state.apply_line("error: builder for '/nix/store/abc-demo.drv' failed with exit code 1");
+
+        assert_eq!(state.snapshot().builds[0].status, BuildStatus::Failed);
+    }
+
+    #[test]
+    fn error_level_message_is_recorded_as_error() {
+        let mut state = MonitorState::default();
+        state.apply_line(
+            r#"@nix {"action":"msg","level":0,"msg":"something went wrong","raw_msg":"x"}"#,
+        );
+        assert_eq!(state.snapshot().errors, vec!["something went wrong"]);
     }
 }

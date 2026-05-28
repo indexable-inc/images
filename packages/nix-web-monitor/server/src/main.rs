@@ -10,9 +10,9 @@ use axum::extract::State;
 use axum::response::sse::{Event, Sse};
 use axum::routing::get;
 use clap::{Parser, ValueEnum};
-use futures::Stream;
-use futures::StreamExt;
-use nix_web_monitor_parser::{MonitorSnapshot, MonitorState, NixEvent, ParsedLine};
+use futures::stream;
+use futures::{Stream, StreamExt};
+use nix_web_monitor_parser::{MonitorState, NixEvent, ParsedLine};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast};
@@ -79,7 +79,6 @@ async fn main() -> Result<()> {
 
     let monitor = Arc::new(RwLock::new(MonitorState::default()));
     let (snapshots, _) = broadcast::channel(256);
-    publish_snapshot(&monitor, &snapshots).await?;
 
     let state = AppState {
         monitor: Arc::clone(&monitor),
@@ -100,13 +99,13 @@ async fn main() -> Result<()> {
         snapshots,
     ));
 
+    let exit_code = build.await.context("joining Nix command task")??;
+
     if args.exit_when_done {
-        let exit_code = build.await.context("joining Nix command task")??;
         server.abort();
         std::process::exit(exit_code.unwrap_or(1));
     }
 
-    let exit_code = build.await.context("joining Nix command task")??;
     eprintln!(
         "nix-web-monitor: Nix command finished with {}; press Ctrl-C to stop the web UI",
         exit_code
@@ -131,7 +130,6 @@ async fn serve(
     let index = site_dir.join("index.html");
     let static_files = ServeDir::new(&site_dir).fallback(ServeFile::new(index));
     let app = Router::new()
-        .route("/api/snapshot", get(snapshot))
         .route("/api/events", get(events))
         .fallback_service(static_files)
         .with_state(state);
@@ -143,23 +141,27 @@ async fn serve(
     }))
 }
 
-async fn snapshot(State(state): State<AppState>) -> axum::Json<MonitorSnapshot> {
-    axum::Json(state.monitor.read().await.snapshot())
-}
-
 async fn events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream =
-        BroadcastStream::new(state.snapshots.subscribe()).filter_map(|message| async move {
-            match message {
-                Ok(data) => Some(Ok(Event::default().event("snapshot").data(data))),
-                Err(broadcast_error) => Some(Ok(Event::default()
-                    .event("monitor-error")
-                    .data(broadcast_error.to_string()))),
-            }
-        });
-    Sse::new(stream)
+    // Subscribe before sending the seed so any snapshot produced between
+    // serialising and forwarding still reaches this client.
+    let receiver = state.snapshots.subscribe();
+    let seed = serde_json::to_string(&state.monitor.read().await.snapshot())
+        .ok()
+        .map(|payload| Event::default().event("snapshot").data(payload));
+
+    let seed_stream = stream::iter(seed.map(Ok));
+    let live_stream = BroadcastStream::new(receiver).filter_map(|message| async move {
+        match message {
+            Ok(data) => Some(Ok(Event::default().event("snapshot").data(data))),
+            Err(broadcast_error) => Some(Ok(Event::default()
+                .event("monitor-error")
+                .data(broadcast_error.to_string()))),
+        }
+    });
+
+    Sse::new(seed_stream.chain(live_stream))
 }
 
 async fn run_nix_command(
@@ -184,40 +186,27 @@ async fn run_nix_command(
     let stdout = child.stdout.take().context("nix stdout was not captured")?;
     let stderr = child.stderr.take().context("nix stderr was not captured")?;
 
-    let stdout_monitor = Arc::clone(&monitor);
-    let stdout_snapshots = snapshots.clone();
-    let stdout_task = tokio::spawn(async move {
-        process_stream(
-            stdout,
-            stdout_monitor,
-            stdout_snapshots,
-            terminal_output,
-            StreamName::Stdout,
-        )
-        .await
-    });
-    let stderr_monitor = Arc::clone(&monitor);
-    let stderr_snapshots = snapshots.clone();
-    let stderr_task = tokio::spawn(async move {
-        process_stream(
-            stderr,
-            stderr_monitor,
-            stderr_snapshots,
-            terminal_output,
-            StreamName::Stderr,
-        )
-        .await
-    });
+    let stdout_task = spawn_stream(
+        stdout,
+        Arc::clone(&monitor),
+        snapshots.clone(),
+        terminal_output,
+        StreamName::Stdout,
+    );
+    let stderr_task = spawn_stream(
+        stderr,
+        Arc::clone(&monitor),
+        snapshots.clone(),
+        terminal_output,
+        StreamName::Stderr,
+    );
 
     let status = child.wait().await.context("waiting for nix")?;
     stdout_task.await.context("joining stdout reader")??;
     stderr_task.await.context("joining stderr reader")??;
 
     let exit_code = status.code();
-    {
-        let mut locked = monitor.write().await;
-        locked.finish(exit_code);
-    }
+    monitor.write().await.finish(exit_code);
     publish_snapshot(&monitor, &snapshots).await?;
 
     Ok(exit_code)
@@ -227,6 +216,25 @@ async fn run_nix_command(
 enum StreamName {
     Stdout,
     Stderr,
+}
+
+fn spawn_stream<R>(
+    stream: R,
+    monitor: Arc<RwLock<MonitorState>>,
+    snapshots: broadcast::Sender<String>,
+    terminal_output: TerminalOutput,
+    name: StreamName,
+) -> tokio::task::JoinHandle<Result<()>>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(process_stream(
+        stream,
+        monitor,
+        snapshots,
+        terminal_output,
+        name,
+    ))
 }
 
 async fn process_stream<R>(
@@ -241,10 +249,7 @@ where
 {
     let mut lines = BufReader::new(stream).lines();
     while let Some(line) = lines.next_line().await.context("reading nix output")? {
-        let parsed = {
-            let mut locked = monitor.write().await;
-            locked.apply_line(&line)
-        };
+        let parsed = monitor.write().await.apply_line(&line);
         print_terminal_line(terminal_output, name, &parsed);
         publish_snapshot(&monitor, &snapshots).await?;
     }
@@ -258,31 +263,35 @@ async fn publish_snapshot(
 ) -> Result<()> {
     let payload = serde_json::to_string(&monitor.read().await.snapshot())
         .context("serializing monitor snapshot")?;
-    drop(snapshots.send(payload));
+    // Subscribers may all have dropped; that's fine.
+    let _ = snapshots.send(payload);
     Ok(())
 }
 
 fn print_terminal_line(terminal_output: TerminalOutput, name: StreamName, parsed: &ParsedLine) {
-    let rendered = match terminal_output {
-        TerminalOutput::Quiet => None,
-        TerminalOutput::Summary => rendered_summary_terminal_line(parsed),
-        TerminalOutput::Logs => rendered_log_terminal_line(parsed),
+    let Some(rendered) = render_for(terminal_output, parsed) else {
+        return;
     };
-
-    match rendered {
-        Some(line) => match name {
-            StreamName::Stdout => println!("{line}"),
-            StreamName::Stderr => eprintln!("{line}"),
-        },
-        None => {}
+    match name {
+        StreamName::Stdout => println!("{rendered}"),
+        StreamName::Stderr => eprintln!("{rendered}"),
     }
 }
 
-fn rendered_summary_terminal_line(parsed: &ParsedLine) -> Option<String> {
+fn render_for(terminal_output: TerminalOutput, parsed: &ParsedLine) -> Option<String> {
+    if let Some(line) = default_render(parsed) {
+        return Some(line);
+    }
+    match terminal_output {
+        TerminalOutput::Quiet => None,
+        TerminalOutput::Summary => render_summary_event(parsed),
+        TerminalOutput::Logs => render_log_event(parsed),
+    }
+}
+
+/// Lines every non-quiet mode shows: plain output and parse failures.
+fn default_render(parsed: &ParsedLine) -> Option<String> {
     match parsed {
-        ParsedLine::Event(NixEvent::Message(message)) if is_operator_message(&message.message) => {
-            Some(message.message.clone())
-        }
         ParsedLine::Plain { text } => Some(text.clone()),
         ParsedLine::ParseError { text, error } => Some(format!(
             "nix-web-monitor: could not parse event ({error}): {text}"
@@ -291,13 +300,23 @@ fn rendered_summary_terminal_line(parsed: &ParsedLine) -> Option<String> {
     }
 }
 
-fn rendered_log_terminal_line(parsed: &ParsedLine) -> Option<String> {
+fn render_summary_event(parsed: &ParsedLine) -> Option<String> {
     match parsed {
-        ParsedLine::Event(NixEvent::Message(message)) => Some(message.message.clone()),
-        ParsedLine::Event(NixEvent::Start(start)) if !start.text.is_empty() => {
-            Some(start.text.clone())
+        ParsedLine::Event(NixEvent::Message(message)) if is_operator_message(&message.message) => {
+            Some(message.message.clone())
         }
-        ParsedLine::Event(NixEvent::Result(result)) => match &result.result {
+        _ => None,
+    }
+}
+
+fn render_log_event(parsed: &ParsedLine) -> Option<String> {
+    let ParsedLine::Event(event) = parsed else {
+        return None;
+    };
+    match event {
+        NixEvent::Message(message) => Some(message.message.clone()),
+        NixEvent::Start(start) if !start.text.is_empty() => Some(start.text.clone()),
+        NixEvent::Result(result) => match &result.result {
             nix_web_monitor_parser::ActivityResult::BuildLogLine { line }
             | nix_web_monitor_parser::ActivityResult::PostBuildLogLine { line } => {
                 Some(line.clone())
@@ -311,13 +330,7 @@ fn rendered_log_terminal_line(parsed: &ParsedLine) -> Option<String> {
             | nix_web_monitor_parser::ActivityResult::SetExpected { .. }
             | nix_web_monitor_parser::ActivityResult::Other { .. } => None,
         },
-        ParsedLine::Plain { text } => Some(text.clone()),
-        ParsedLine::ParseError { text, error } => Some(format!(
-            "nix-web-monitor: could not parse event ({error}): {text}"
-        )),
-        ParsedLine::Event(NixEvent::Start(_) | NixEvent::Stop(_) | NixEvent::Unknown { .. }) => {
-            None
-        }
+        NixEvent::Start(_) | NixEvent::Stop(_) | NixEvent::Unknown { .. } => None,
     }
 }
 

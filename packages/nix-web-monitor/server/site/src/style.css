@@ -230,6 +230,10 @@ pre {
   color: var(--amber);
 }
 
+.state[data-state='stopped'] {
+  color: var(--blue);
+}
+
 .state[data-state='succeeded'] {
   color: var(--green);
 }
