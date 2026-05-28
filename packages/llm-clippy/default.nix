@@ -35,9 +35,9 @@ ix.buildRustPackage pkgs {
     pkgs.libiconv
   ];
   doCheck = false;
-  # llm-clippy IS the clippy that lints every other repo Rust package, so its
-  # own clippy check cannot reach for `llmClippyFor` again - it would recurse
-  # forever back into this build. Machete and other policy gates stay on.
+  # llm-clippy is the Clippy binary that cargo-unit policy checks use for the
+  # rest of the repo. Its own build stays on the bootstrap path, where a Clippy
+  # policy check would recurse through `llmClippyFor`.
   policy.clippy.enable = false;
 
   # This Clippy fork links against rustc_private crates from its Rust toolchain.
