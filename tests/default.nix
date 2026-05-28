@@ -2946,14 +2946,8 @@ let
           let
             denied = cargoUnitWorkspace.policy.clippy.deniedLints;
           in
-          builtins.all (lint: builtins.elem lint denied) [
-            "warnings"
-            "clippy::all"
-            "clippy::pedantic"
-            "clippy::nursery"
-            "clippy::cargo"
-          ];
-        message = "cargo-unit clippy checks should deny the shared strict lint set by default";
+          denied == [ ];
+        message = "cargo-unit clippy policy should defer default lint levels to Cargo.toml";
       }
       {
         assertion = cargoUnitWorkspace.policyChecks ? cargoMachete;

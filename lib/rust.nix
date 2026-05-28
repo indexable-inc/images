@@ -12,18 +12,6 @@
   writePythonApplication,
 }:
 let
-  defaultClippyDeniedLints = [
-    "warnings"
-    "clippy::all"
-    "clippy::pedantic"
-    "clippy::nursery"
-    "clippy::cargo"
-  ];
-
-  defaultClippyAllowedLints = [
-    "clippy::multiple_crate_versions"
-  ];
-
   defaultRustToolchain = rustToolchain;
 
   defaultRustsecAdvisoryDb = pkgs.fetchFromGitHub {
@@ -49,8 +37,8 @@ let
       enable = true;
       package = clippyPackage;
       cargoArgs = [ "--all-targets" ];
-      deniedLints = defaultClippyDeniedLints;
-      allowedLints = defaultClippyAllowedLints;
+      deniedLints = [ ];
+      allowedLints = [ ];
     };
     tests = {
       enable = true;

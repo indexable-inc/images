@@ -695,7 +695,7 @@ fn render_rustc_build_phase(
         append_build_script_flag_reader(&mut script, &run_ref, unit);
     }
 
-    push_rustc_args(&mut script, unit, &prepared.hashes[index]);
+    push_rustc_args(&mut script, unit, &prepared.hashes[index])?;
     append_target_linker_arg(&mut script, unit);
     append_extra_rustc_args(&mut script, unit);
 
@@ -814,7 +814,7 @@ fn collects_unused_crate_dependencies(unit: &Unit, options: &RenderOptions) -> b
     options.deny_unused_crate_dependencies && !unit.is_external()
 }
 
-fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) {
+fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) -> Result<()> {
     push_arg(script, "--crate-name");
     push_arg(script, &unit.target.name.replace('-', "_"));
     push_arg(script, "--edition");
@@ -878,6 +878,12 @@ fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) {
     for rustflag in &unit.profile.rustflags {
         push_arg(script, rustflag);
     }
+    for rustflag in &unit.lint_rustflags {
+        push_arg(script, rustflag);
+    }
+    for arg in &unit.check_cfg_args {
+        push_arg(script, arg);
+    }
     for feature in &unit.features {
         push_arg(script, "--cfg");
         push_arg(script, &format!("feature=\"{feature}\""));
@@ -896,6 +902,8 @@ fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) {
         push_arg(script, "--cap-lints");
         push_arg(script, "warn");
     }
+
+    Ok(())
 }
 
 fn lto_for_unit(unit: &Unit) -> Option<&'static str> {
@@ -2280,6 +2288,12 @@ fn render_doctest_command(
     push_rustdoc_arg(&mut script, &unit.target.name.replace('-', "_"));
     push_rustdoc_arg(&mut script, "--edition");
     push_rustdoc_arg(&mut script, &unit.target.edition);
+    for rustflag in &unit.lint_rustflags {
+        push_rustdoc_arg(&mut script, rustflag);
+    }
+    for arg in &unit.check_cfg_args {
+        push_rustdoc_arg(&mut script, arg);
+    }
     for feature in &unit.features {
         push_rustdoc_arg(&mut script, "--cfg");
         push_rustdoc_arg(&mut script, &format!("feature=\"{feature}\""));
@@ -3246,6 +3260,8 @@ version = "0.1.0"
                 "edition": "2024"
               },
               "profile": { "name": "release", "opt_level": "3", "rustflags": ["-C", "target-feature=+sse2"] },
+              "lint_rustflags": ["--deny=warnings", "--warn=unexpected_cfgs"],
+              "check_cfg_args": ["--check-cfg", "cfg(docsrs,test)"],
               "features": [],
               "mode": "build",
               "dependencies": [
@@ -3280,6 +3296,10 @@ version = "0.1.0"
         assert!(rendered.contains("doctest_runtime_library_paths=()"));
         assert!(rendered.contains("rustdoc_args+=( \"''${build_script_rustdoc_args[@]}\" )"));
         assert!(rendered.contains("doctest_build_args+=( '-C' )"));
+        assert!(rendered.contains("rustdoc_args+=( '--deny=warnings' )"));
+        assert!(rendered.contains("rustdoc_args+=( '--warn=unexpected_cfgs' )"));
+        assert!(rendered.contains("rustdoc_args+=( '--check-cfg' )"));
+        assert!(rendered.contains("rustdoc_args+=( 'cfg(docsrs,test)' )"));
         assert!(rendered.contains("rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )"));
         assert!(rendered.contains("case \"$link_search_path\" in"));
         assert!(rendered.contains(
@@ -4489,6 +4509,77 @@ version = "0.1.0"
             )
         );
         assert!(rendered.contains("export \"$cargo_metadata_env=$cargo_metadata_value\""));
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn unit_graph_lint_flags_render_as_rustc_args() {
+        let workspace = std::env::temp_dir().join(format!(
+            "nix-cargo-unit-lint-flags-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        let _ = fs::remove_dir_all(&workspace);
+        fs::create_dir_all(workspace.join("src")).unwrap();
+        fs::write(workspace.join("src/lib.rs"), "pub fn marker() {}\n").unwrap();
+
+        let src_path = workspace.join("src/lib.rs");
+        let pkg_id = format!("path+file://{}#linted@0.1.0", workspace.display());
+        let graph: UnitGraph = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "units": [{
+                "pkg_id": pkg_id,
+                "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "linted",
+                    "src_path": src_path,
+                    "edition": "2024"
+                },
+                "profile": { "name": "dev", "opt_level": "0" },
+                "lint_rustflags": [
+                    "--deny=clippy::all",
+                    "--forbid=unsafe_code",
+                    "--warn=unexpected_cfgs",
+                    "--warn=clippy::pedantic",
+                    "--check-cfg",
+                    "cfg(ix_test)"
+                ],
+                "check_cfg_args": [
+                    "--check-cfg",
+                    "cfg(docsrs,test)",
+                    "--check-cfg",
+                    "cfg(feature, values(\"alpha\", \"beta\"))"
+                ],
+                "mode": "build",
+                "dependencies": []
+            }],
+            "roots": [0]
+        }))
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: workspace.clone(),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+            },
+        )
+        .unwrap();
+
+        assert!(rendered.contains("rustc_args+=( '--deny=clippy::all' )"));
+        assert!(rendered.contains("rustc_args+=( '--forbid=unsafe_code' )"));
+        assert!(rendered.contains("rustc_args+=( '--warn=clippy::pedantic' )"));
+        assert!(rendered.contains("rustc_args+=( '--warn=unexpected_cfgs' )"));
+        assert!(rendered.contains("rustc_args+=( '--check-cfg' )"));
+        assert!(rendered.contains("rustc_args+=( 'cfg(docsrs,test)' )"));
+        assert!(rendered.contains("rustc_args+=( 'cfg(feature, values(\"alpha\", \"beta\"))' )"));
+        assert!(rendered.contains("rustc_args+=( 'cfg(ix_test)' )"));
         fs::remove_dir_all(workspace).unwrap();
     }
 }
