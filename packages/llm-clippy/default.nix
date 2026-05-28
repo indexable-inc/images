@@ -39,6 +39,10 @@ ix.buildRustPackage pkgs {
   # rest of the repo. Its own build stays on the bootstrap path, where a Clippy
   # policy check would recurse through `llmClippyFor`.
   policy.clippy.enable = false;
+  # The Clippy fork carries Cargo UI fixtures that are not build workspaces.
+  # cargo-machete walks them anyway and cargo metadata tries to write lockfiles
+  # inside the read-only Nix store.
+  policy.cargoMachete.enable = false;
 
   # This Clippy fork links against rustc_private crates from its Rust toolchain.
   env.RUSTC_BOOTSTRAP = "1";
