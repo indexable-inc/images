@@ -254,10 +254,38 @@ fn plugin_name_from_config_path(rel: &str) -> Option<&str> {
     }
 }
 
-fn write_plan(plan_path: &Path, plan: &BTreeSet<(String, String)>) -> Result<()> {
+/// `PlugManX` lifecycle verb the reload plan asks the server to perform for one
+/// plugin. Variant order is the plan's sort order, kept identical to the legacy
+/// stringly plan (`load` < `reload` < `unload`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ReloadAction {
+    Load,
+    Reload,
+    Unload,
+}
+
+impl ReloadAction {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Load => "load",
+            Self::Reload => "reload",
+            Self::Unload => "unload",
+        }
+    }
+}
+
+/// One line of the reload plan: a lifecycle verb paired with the plugin it
+/// applies to. Ordering matches the rendered plan file.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ReloadEntry {
+    action: ReloadAction,
+    plugin: String,
+}
+
+fn write_plan(plan_path: &Path, plan: &BTreeSet<ReloadEntry>) -> Result<()> {
     let mut lines = String::new();
-    for (action, plugin) in plan {
-        writeln!(&mut lines, "{action} {plugin}").expect("writing to String cannot fail");
+    for ReloadEntry { action, plugin } in plan {
+        writeln!(&mut lines, "{} {plugin}", action.as_str()).expect("writing to String cannot fail");
     }
 
     fs::write(plan_path, lines).with_context(|| format!("writing {}", plan_path.display()))
@@ -269,7 +297,7 @@ fn is_jar_path(rel: &str) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("jar"))
 }
 
-fn plan_dropin_reloads(config: &Config, plan: &mut BTreeSet<(String, String)>) -> Result<()> {
+fn plan_dropin_reloads(config: &Config, plan: &mut BTreeSet<ReloadEntry>) -> Result<()> {
     let dropin_manifest = config
         .data_dir
         .join(format!(".ix-managed-{}", config.dropin_dir));
@@ -297,10 +325,16 @@ fn plan_dropin_reloads(config: &Config, plan: &mut BTreeSet<(String, String)>) -
 
         match old_target {
             None => {
-                plan.insert(("load".to_owned(), plugin));
+                plan.insert(ReloadEntry {
+                    action: ReloadAction::Load,
+                    plugin,
+                });
             }
             Some(old_target) if old_target != target => {
-                plan.insert(("reload".to_owned(), plugin));
+                plan.insert(ReloadEntry {
+                    action: ReloadAction::Reload,
+                    plugin,
+                });
             }
             Some(_) => {}
         }
@@ -317,14 +351,17 @@ fn plan_dropin_reloads(config: &Config, plan: &mut BTreeSet<(String, String)>) -
             continue;
         }
         if !managed_dropins.join(rel).exists() {
-            plan.insert(("unload".to_owned(), plugin));
+            plan.insert(ReloadEntry {
+                action: ReloadAction::Unload,
+                plugin,
+            });
         }
     }
 
     Ok(())
 }
 
-fn plan_server_file_reloads(config: &Config, plan: &mut BTreeSet<(String, String)>) -> Result<()> {
+fn plan_server_file_reloads(config: &Config, plan: &mut BTreeSet<ReloadEntry>) -> Result<()> {
     let server_manifest = config.data_dir.join(".ix-managed-server-files");
     let managed_server_files = config.managed_root.join("managed-server-files");
     if !(server_manifest.exists() && managed_server_files.exists()) {
@@ -347,7 +384,10 @@ fn plan_server_file_reloads(config: &Config, plan: &mut BTreeSet<(String, String
             .to_string();
         let old_target = managed_target_for(&server_manifest, &rel)?;
         if old_target.as_deref() != Some(target.as_str()) {
-            plan.insert(("reload".to_owned(), plugin.to_owned()));
+            plan.insert(ReloadEntry {
+                action: ReloadAction::Reload,
+                plugin: plugin.to_owned(),
+            });
         }
     }
 
@@ -360,7 +400,10 @@ fn plan_server_file_reloads(config: &Config, plan: &mut BTreeSet<(String, String
             continue;
         }
         if !managed_server_files.join(rel).exists() {
-            plan.insert(("reload".to_owned(), plugin.to_owned()));
+            plan.insert(ReloadEntry {
+                action: ReloadAction::Reload,
+                plugin: plugin.to_owned(),
+            });
         }
     }
 
@@ -538,16 +581,19 @@ fn entry_uuid(entry: &Value) -> Option<&str> {
         .filter(|uuid| !uuid.is_empty())
 }
 
-fn entries_by_uuid(path: &Path, entries: &[Value]) -> Result<BTreeMap<String, Value>> {
-    let mut indexed = BTreeMap::new();
+/// Reject access files whose entries lack UUIDs or repeat one. The reconcile
+/// step keys on UUID, so a missing or duplicate UUID would silently drop or
+/// merge players; fail loudly before that can happen.
+fn validate_unique_uuids(path: &Path, entries: &[Value]) -> Result<()> {
+    let mut seen = BTreeSet::new();
     for entry in entries {
         let uuid = entry_uuid(entry)
             .ok_or_else(|| anyhow!("{} contains an entry without a UUID", path.display()))?;
-        if indexed.insert(uuid.to_owned(), entry.clone()).is_some() {
+        if !seen.insert(uuid.to_owned()) {
             bail!("{} contains duplicate UUID {}", path.display(), uuid);
         }
     }
-    Ok(indexed)
+    Ok(())
 }
 
 fn reconcile_entries(current: &[Value], previous: &[Value], desired: &[Value]) -> Vec<Value> {
@@ -623,15 +669,15 @@ fn reconcile_access_file(config: &Config, name: &str) -> Result<()> {
     let state_path = config.data_dir.join(".ix-managed-access").join(name);
 
     let desired = read_json_entries(&desired_path)?;
-    let _desired_by_uuid = entries_by_uuid(&desired_path, &desired)?;
+    validate_unique_uuids(&desired_path, &desired)?;
     let current = read_json_entries(&live_path)?;
     let previous = if state_path.exists() {
         read_json_entries(&state_path)?
     } else {
         old_server_file_entries(config, name)?
     };
-    let _previous_by_uuid = entries_by_uuid(&state_path, &previous)?;
-    let _current_by_uuid = entries_by_uuid(&live_path, &current)?;
+    validate_unique_uuids(&state_path, &previous)?;
+    validate_unique_uuids(&live_path, &current)?;
     let next_entries = reconcile_entries(&current, &previous, &desired);
 
     write_json_entries(&live_path, &next_entries)?;
