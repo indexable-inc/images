@@ -13,6 +13,18 @@ note: |
 rule:
   pattern: builtins.path { $$$ATTRS }
   not:
+    # A bare `name = $_` does not parse as a Nix binding node, so the old
+    # `has: { pattern: name = $_ }` never matched and the rule flagged every
+    # call. Walk the literal argument attrset's own bindings instead and look
+    # for one whose attrpath is exactly `name`. Scoping to the argument's
+    # binding_set (rather than `stopBy: end`) avoids counting a `name` binding
+    # nested inside some value attrset.
     has:
-      pattern: name = $_
-      stopBy: end
+      field: argument
+      has:
+        kind: binding_set
+        has:
+          kind: binding
+          has:
+            field: attrpath
+            regex: '^name$'
