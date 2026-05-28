@@ -5,9 +5,4 @@
     "helloServerJar"
   ];
   flake = true;
-  callPackageArgs =
-    { ix, ... }:
-    {
-      inherit ix;
-    };
 }

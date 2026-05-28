@@ -55,7 +55,11 @@ let
         acc // { ${name} = rightValue; }
     ) left (builtins.attrNames right);
   buildEntry =
-    entry: pkgs.callPackage entry.path (entry.callPackageArgs (context // { inherit entry; }));
+    entry:
+    let
+      autoArgs = pkgs // context // { inherit entry; };
+    in
+    lib.callPackageWith autoArgs entry.path { };
   packageTreeFor = entry: lib.setAttrByPath entry.packageSet.attrPath (buildEntry entry);
 in
 lib.foldl' mergePackageTrees { } (
