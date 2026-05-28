@@ -618,6 +618,7 @@ let
               export RUSTFLAGS="''${RUSTFLAGS:+$RUSTFLAGS }${miriRustFlags}"
               ''}
               cd ${src}
+              ${testRunPrelude}
               cargo ${pkgs.lib.escapeShellArgs cargoMiriArgs}
               mkdir -p "$out"
             '';
