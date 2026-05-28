@@ -44,8 +44,10 @@ let
     inherit
       lib
       packageRegistry
+      rust-overlay
       symphony
       buildIxRustTool
+      buildRustPackage
       clippy-fork
       writePythonApplication
       ;
