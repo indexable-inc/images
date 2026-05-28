@@ -40,7 +40,7 @@ pub struct IndexStats {
     pub errors: Vec<(PathBuf, String)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SearchResult {
     pub path: String,
     pub score: f32,

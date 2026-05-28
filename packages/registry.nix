@@ -143,8 +143,6 @@ assert lib.assertMsg (
   inherit
     entries
     byId
-    defaultPackageDirs
-    packageDirs
     packageDirsWithoutMetadata
     packageSetEntriesFor
     flakeEntriesFor
