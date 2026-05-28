@@ -18,13 +18,29 @@
 
   const rows = $derived(
     activities
+      .filter((activity) => visibleRow(activity, buildActivityIds))
       .toSorted((left, right) => left.startedTick - right.startedTick)
       .map((activity) => ({
         activity,
         depth: depthFor(activity, byId),
-        isBuild: buildActivityIds.has(activity.id)
+        isBuild: buildActivityIds.has(activity.id),
+        display: rowText(activity)
       }))
   );
+
+  const hiddenCount = $derived(activities.length - rows.length);
+
+  function visibleRow(activity: ActivityNode, buildIds: ReadonlySet<number>): boolean {
+    // Build activities are always interesting, even if Nix gives them empty
+    // text. Everything else needs phase or text to be worth a row.
+    if (buildIds.has(activity.id)) return true;
+    return activity.text.length > 0 || activity.phase !== null;
+  }
+
+  function rowText(activity: ActivityNode): string {
+    if (activity.phase !== null) return activity.phase;
+    return activity.text;
+  }
 
   function depthFor(activity: ActivityNode, lookup: ReadonlyMap<number, ActivityNode>): number {
     let depth = 0;
@@ -37,21 +53,35 @@
     }
     return depth;
   }
+
+  /// Keep both the head and tail of long strings visible. Most rows are file
+  /// paths and the tail (filename) is more identifying than the prefix.
+  function middleTruncate(text: string, max: number): string {
+    if (text.length <= max) return text;
+    const head = Math.ceil((max - 1) / 2);
+    const tail = Math.floor((max - 1) / 2);
+    return `${text.slice(0, head)}…${text.slice(text.length - tail)}`;
+  }
 </script>
 
 <section class="panel graph-panel">
-  <div class="panel-title">activity dag</div>
+  <header class="panel-title">
+    <span>activities</span>
+    <span class="panel-meta">
+      {String(rows.length)} shown{#if hiddenCount > 0} &middot; {String(hiddenCount)} hidden{/if}
+    </span>
+  </header>
   <div class="graph">
     {#each rows as row (row.activity.id)}
       <div
         class="activity-row"
         class:build={row.isBuild}
         class:stopped={row.activity.status === 'stopped'}
-        style={`--depth: ${String(row.depth)}`}
+        style="--depth: {String(row.depth)}"
+        title={row.display}
       >
-        <span class="join" aria-hidden="true"></span>
         <span class="activity-kind">{row.activity.activityType.name}</span>
-        <span class="activity-text">{row.activity.phase ?? row.activity.text}</span>
+        <span class="activity-text">{middleTruncate(row.display, 80)}</span>
       </div>
     {:else}
       <div class="empty">waiting for events</div>

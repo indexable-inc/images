@@ -31,8 +31,12 @@
   <SummaryBar {snapshot} {status} />
 
   <section class="workspace">
-    <ActivityGraph activities={snapshot.activities} builds={snapshot.builds} />
-    <BuildTable builds={snapshot.builds} />
-    <LogPanel logs={snapshot.logs} />
+    <section class="main-pane">
+      <LogPanel logs={snapshot.logs} />
+    </section>
+    <aside class="side-pane">
+      <BuildTable builds={snapshot.builds} expected={snapshot.expected} />
+      <ActivityGraph activities={snapshot.activities} builds={snapshot.builds} />
+    </aside>
   </section>
 </main>

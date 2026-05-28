@@ -1,11 +1,12 @@
 <script lang="ts">
-  import type { BuildNode, BuildStatus } from '../types';
+  import { ACTIVITY_NAME_BUILD, type BuildNode, type BuildStatus } from '../types';
 
   type Props = {
     builds: ReadonlyArray<BuildNode>;
+    expected: Readonly<Record<string, number>>;
   };
 
-  const { builds }: Props = $props();
+  const { builds, expected }: Props = $props();
 
   const STATUS_ORDER: Readonly<Record<BuildStatus, number>> = {
     running: 0,
@@ -21,6 +22,8 @@
     })
   );
 
+  const expectedBuilds = $derived(expected[ACTIVITY_NAME_BUILD] ?? 0);
+
   function shortDrv(path: string): string {
     const slash = path.lastIndexOf('/');
     return slash === -1 ? path : path.slice(slash + 1);
@@ -28,19 +31,24 @@
 </script>
 
 <section class="panel builds-panel">
-  <div class="panel-title">builds</div>
+  <header class="panel-title">
+    <span>builds</span>
+    <span class="panel-meta">{String(builds.length)}{#if expectedBuilds > 0} / {String(expectedBuilds)}{/if}</span>
+  </header>
   <div class="build-table">
-    <div class="head">state</div>
-    <div class="head">derivation</div>
-    <div class="head">phase</div>
-    <div class="head right">logs</div>
     {#each ordered as build (build.derivation)}
-      <div class="state" data-state={build.status}>{build.status}</div>
+      <div class="state" data-state={build.status} title={build.status}></div>
       <div class="drv" title={build.derivation}>{shortDrv(build.derivation)}</div>
-      <div class="phase">{build.phase ?? '-'}</div>
+      <div class="phase">{build.phase ?? ''}</div>
       <div class="right">{String(build.logCount)}</div>
     {:else}
-      <div class="empty wide">waiting for builds</div>
+      <div class="empty wide">
+        {#if expectedBuilds > 0}
+          waiting for {String(expectedBuilds)} build{expectedBuilds === 1 ? '' : 's'}
+        {:else}
+          waiting for build phase
+        {/if}
+      </div>
     {/each}
   </div>
 </section>
