@@ -93,26 +93,7 @@ let
 
   manifestEntries = builtins.fromJSON (builtins.readFile "${manifest}/tests.json");
 
-  regexSpecialChars = [
-    "\\"
-    "^"
-    "$"
-    "."
-    "*"
-    "+"
-    "?"
-    "("
-    ")"
-    "["
-    "]"
-    "{"
-    "}"
-    "|"
-  ];
-
-  escapeRegex =
-    name: lib.stringAsChars (c: if builtins.elem c regexSpecialChars then "\\${c}" else c) name;
-  exactNamePattern = name: "^${escapeRegex name}$";
+  exactNamePattern = name: "^${lib.escapeRegex name}$";
   relativeTestFile =
     entry:
     let

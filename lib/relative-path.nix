@@ -12,11 +12,12 @@ let
     path:
     builtins.isString path && path != "" && !(lib.hasPrefix "/" path) && !(hasReservedSegment path);
   isSafeName = path: isSafe path && builtins.length (segments path) == 1;
-  renderPath = path: if builtins.isString path then path else "<${builtins.typeOf path}>";
   assertSafe =
     path:
-    assert lib.assertMsg (isSafe path)
-      "ix.relativePath.shellPath expected a safe relative path, got ${renderPath path}";
+    assert lib.assertMsg (isSafe path) (
+      "ix.relativePath.shellPath expected a safe relative path, got "
+      + (if builtins.isString path then path else "<${builtins.typeOf path}>")
+    );
     path;
   shellPath = root: path: ''"${root}"/${lib.escapeShellArg (assertSafe path)}'';
   shellParent =

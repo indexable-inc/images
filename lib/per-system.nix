@@ -330,8 +330,8 @@ in
     // examplePackages
     // healthChecks.lifecyclePackages;
 
-  checks =
-    lib.optionalAttrs (system == ix.system) {
+  checks = lib.optionalAttrs (system == ix.system) (
+    {
       inherit (tests) eval;
       agents-md = pkgs.runCommand "agents-md-check" { nativeBuildInputs = [ agentsMd ]; } ''
         agents-md --check ${paths.root}
@@ -361,10 +361,9 @@ in
       '';
       site-test = siteTests.all;
     }
-    // lib.optionalAttrs (system == ix.system) (
-      lib.mapAttrs' (caseId: drv: lib.nameValuePair "site-test-${caseId}" drv) siteTests.cases
-    )
-    // lib.optionalAttrs (system == ix.system) rustPackageTests;
+    // lib.mapAttrs' (caseId: drv: lib.nameValuePair "site-test-${caseId}" drv) siteTests.cases
+    // rustPackageTests
+  );
 
   formatter = pkgs.nixfmt;
 }

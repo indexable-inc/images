@@ -75,7 +75,7 @@ let
   };
   buildNpmSite = import ./build-npm-site.nix;
   buildSvelteSite = import ./build-svelte-site.nix {
-    inherit bunLockFor writeNushellApplication;
+    inherit bunLockFor errors writeNushellApplication;
   };
   buildNpmVitest = import ./build-npm-vitest.nix;
   buildZigPackage = import ./build-zig-package.nix { };

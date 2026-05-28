@@ -13,24 +13,17 @@ let
       channel = "nightly";
       version = languages.rust.defaultNightlyDate;
     };
-  # ix.buildRustPackage closure handed to `callPackage`'d Rust packages.
-  # Kept minimal so it stays usable from the bootstrap path (no `cargoUnit`,
-  # no `rustWorkspace`); `buildIxRustTool` adds those for packages that need
-  # them.
-  ixBuildSurfaceFor = _pkgs: {
-    buildRustPackage = innerPkgs: (rustFor innerPkgs).buildPackage;
-  };
-  llmClippyFor =
-    pkgs:
-    pkgs.callPackage (packagePath "llm-clippy") {
-      ix = ixBuildSurfaceFor pkgs;
-      src = clippy-fork;
-    };
   rustFor =
     pkgs:
     import ./rust.nix {
       inherit lib pkgs;
-      clippyPackage = llmClippyFor pkgs;
+      # llm-clippy bootstraps before cargoUnit / rustWorkspace exist, so the
+      # `ix` closure it receives carries only `buildRustPackage`.
+      # `buildIxRustTool` adds the richer surface for packages that need it.
+      clippyPackage = pkgs.callPackage (packagePath "llm-clippy") {
+        ix.buildRustPackage = innerPkgs: (rustFor innerPkgs).buildPackage;
+        src = clippy-fork;
+      };
       rustToolchain = rustNightlyToolchainFor pkgs;
       writePythonApplication = writePythonApplication pkgs;
     };

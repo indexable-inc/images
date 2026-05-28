@@ -1,5 +1,6 @@
 {
   bunLockFor,
+  errors,
   writeNushellApplication,
 }:
 
@@ -48,15 +49,14 @@ pkgs:
 let
   inherit (pkgs) lib;
 
-  validPackageManagers = [
-    "bun"
-    "npm"
-  ];
-  checkedPackageManager =
-    if builtins.elem packageManager validPackageManagers then
-      packageManager
-    else
-      throw "ix.buildSvelteSite.packageManager must be one of ${lib.concatStringsSep ", " validPackageManagers}; got ${packageManager}";
+  checkedPackageManager = errors.assertEnum {
+    name = "ix.buildSvelteSite.packageManager";
+    value = packageManager;
+    valid = [
+      "bun"
+      "npm"
+    ];
+  };
 
   packageManagers = {
     bun =
