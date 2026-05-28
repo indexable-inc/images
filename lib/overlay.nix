@@ -36,5 +36,5 @@ lib.listToAttrs (
   )
 )
 // {
-  symphony-room-server = symphony.packages.${packageSystem}.room-server;
+  symphony-room-server = symphony.packages."${packageSystem}".room-server;
 }
