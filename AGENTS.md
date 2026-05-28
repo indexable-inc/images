@@ -701,8 +701,6 @@ common hard rules are:
   `buildPhase` / `installPhase` — do not restate the stdenv defaults.
 - `configureFlags` / `cmakeFlags` / `mesonFlags` / `makeFlags` / `ninjaFlags`
   are lists of strings; never one string with spaces.
-- No `enableParallelBuilding = true;` (stdenv default since 2020). `= false`
-  is meaningful — keep it with a one-line reason.
 
 ### Types and options
 
@@ -718,10 +716,10 @@ common hard rules are:
 - Use `pkgs.*` fetchers instead of `builtins.fetch*`. Prefer SRI in the
   `hash` slot (`hash = "sha256-...="`); never `sha256 = ...` in fetchers.
 - Commit real hashes, never fake hash helpers or placeholders.
-- `meta.license` references `lib.licenses.<id>`, never a raw SPDX string. The
-  bare `gpl2` / `gpl3` / `lgpl2` / `lgpl3` / `agpl3` aliases are banned — pick
-  the explicit `*Only` / `*Plus` flavor (`agpl3Plus`, not `gpl3Plus`, when the
-  upstream is AGPL).
+- `meta.license` should reference `lib.licenses.<id>`, never a raw SPDX
+  string. The bare `gpl2` / `gpl3` / `lgpl2` / `lgpl3` / `agpl3` aliases are
+  banned by ast-grep — pick the explicit `*Only` / `*Plus` flavor
+  (`agpl3Plus`, not `gpl3Plus`, when the upstream is AGPL).
 
 ### Errors and warnings
 
