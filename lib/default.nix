@@ -130,6 +130,7 @@ let
         rustWorkspaceFor
         clippy-fork
         ;
+      repoRoot = paths.root;
     })
     buildIxRustTool
     cargoUnitFor

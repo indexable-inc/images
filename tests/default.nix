@@ -25,6 +25,8 @@ let
   };
   defaultMinecraftVersion = versions.default;
   defaultMinecraftModule = versions.${defaultMinecraftVersion};
+  rustToolchainFile = builtins.fromTOML (builtins.readFile ../rust-toolchain.toml);
+  rustPinnedNightlyDate = lib.removePrefix "nightly-" rustToolchainFile.toolchain.channel;
 
   # Thin wrapper to keep call sites as plain lists; delegates to ix.evalImageConfig
   # so tests exercise the same evaluation path as production image builds.
@@ -606,7 +608,7 @@ let
 
   cargoUnitCoverageRustToolchain = ix.languages.rust.toolchain pkgs {
     channel = "nightly";
-    version = ix.languages.rust.defaultNightlyDate;
+    version = rustPinnedNightlyDate;
     components = [
       "cargo"
       "llvm-tools"
@@ -1628,11 +1630,11 @@ let
     );
     rustPinnedNightly = ix.languages.rust.toolchain pkgs {
       channel = "nightly";
-      version = ix.languages.rust.defaultNightlyDate;
+      version = rustPinnedNightlyDate;
     };
     rustExtraComponents = ix.languages.rust.toolchain pkgs {
       channel = "nightly";
-      version = ix.languages.rust.defaultNightlyDate;
+      version = rustPinnedNightlyDate;
       components = [
         "cargo"
         "rust-std"
@@ -2969,7 +2971,7 @@ let
         message = "cargo-unit workspaces should expose a clippy policy check by default";
       }
       {
-        assertion = cargoUnitWorkspace.policy.clippy.package.pname == "llm-clippy";
+        assertion = cargoUnitWorkspace.policy.clippy.package.unchecked.pname == "llm-clippy";
         message = "cargo-unit clippy checks should use llm-clippy by default";
       }
       {
@@ -2977,14 +2979,8 @@ let
           let
             denied = cargoUnitWorkspace.policy.clippy.deniedLints;
           in
-          builtins.all (lint: builtins.elem lint denied) [
-            "warnings"
-            "clippy::all"
-            "clippy::pedantic"
-            "clippy::nursery"
-            "clippy::cargo"
-          ];
-        message = "cargo-unit clippy checks should deny the shared strict lint set by default";
+          denied == [ ];
+        message = "cargo-unit clippy policy should defer default lint levels to Cargo.toml";
       }
       {
         assertion = cargoUnitWorkspace.policyChecks ? cargoMachete;
@@ -3108,7 +3104,8 @@ let
         message = "repo Rust packages should expose clippy policy checks by default";
       }
       {
-        assertion = repoPackages.minecraft-nbt.passthru.policy.clippy.package.pname == "llm-clippy";
+        assertion =
+          repoPackages.minecraft-nbt.passthru.policy.clippy.package.unchecked.pname == "llm-clippy";
         message = "repo Rust clippy checks should use llm-clippy by default";
       }
       {

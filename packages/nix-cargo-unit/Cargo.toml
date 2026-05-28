@@ -6,6 +6,9 @@ description = "Render Cargo unit graphs as composable Nix derivations"
 license = "MIT"
 publish.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 askama = { workspace = true, default-features = false, features = ["derive", "std"] }
 clap = { workspace = true, features = ["derive"] }
