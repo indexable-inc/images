@@ -8,17 +8,9 @@
     timeZone: string | undefined;
     // `h1` for standalone permalink pages, `h2` (default) on the feed.
     titleTag?: 'h1' | 'h2';
-    // The feed wants each title to link back to its permalink; the
-    // permalink page itself does not need to link to itself.
-    titleLinksToPermalink?: boolean;
   };
 
-  const {
-    update,
-    timeZone,
-    titleTag = 'h2',
-    titleLinksToPermalink = true
-  }: Props = $props();
+  const { update, timeZone, titleTag = 'h2' }: Props = $props();
 
   const Body = $derived(update.component);
   const titleHtml = $derived(inlineTitleHtml(update.title));
@@ -33,15 +25,10 @@
       <!-- eslint-disable-next-line svelte/no-at-html-tags -->
       {@html titleHtml}
     </h1>
-  {:else if titleLinksToPermalink}
-    <h2>
-      <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-      <a href={permalink}>{@html titleHtml}</a>
-    </h2>
   {:else}
     <h2>
       <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-      {@html titleHtml}
+      <a href={permalink}>{@html titleHtml}</a>
     </h2>
   {/if}
   <div class="body">
