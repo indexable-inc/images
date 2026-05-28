@@ -23,6 +23,10 @@ pub struct Unit {
     pub profile: Profile,
     #[serde(default)]
     pub features: Vec<String>,
+    #[serde(default)]
+    pub lint_rustflags: Vec<String>,
+    #[serde(default)]
+    pub check_cfg_args: Vec<String>,
     pub mode: UnitMode,
     #[serde(default)]
     pub dependencies: Vec<Dependency>,
@@ -677,6 +681,14 @@ fn write_unit_identity(hasher: &mut sha2::Sha256, unit: &Unit) {
     hasher.update(b"\0");
     for flag in &unit.profile.rustflags {
         hasher.update(flag.as_bytes());
+        hasher.update(b"\0");
+    }
+    for flag in &unit.lint_rustflags {
+        hasher.update(flag.as_bytes());
+        hasher.update(b"\0");
+    }
+    for arg in &unit.check_cfg_args {
+        hasher.update(arg.as_bytes());
         hasher.update(b"\0");
     }
     hasher.update(unit.mode.as_str().as_bytes());

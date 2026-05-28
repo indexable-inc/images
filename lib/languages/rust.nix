@@ -16,16 +16,6 @@ let
   ];
 
   /**
-    Repo-wide pinned nightly date. Exposed below as
-    `ix.languages.rust.defaultNightlyDate` so the internal
-    `rustNightlyToolchainFor` in `lib/default.nix` can grep-stably
-    forward it through `toolchain`. Bumping this advances every
-    consumer that calls `toolchain pkgs { channel = "nightly"; version
-    = languages.rust.defaultNightlyDate; }`.
-  */
-  defaultNightlyDate = "2026-05-27";
-
-  /**
     Toolchain components everyone gets by default. The shape mirrors
     the `minimal` profile so the override surface is the same whether
     a caller selects `profile = "minimal"` or accepts the default
@@ -67,8 +57,6 @@ let
       "${channel}-${version}";
 in
 {
-  inherit defaultNightlyDate;
-
   /**
     Build a rust-overlay toolchain.
 
@@ -82,8 +70,6 @@ in
     - `channel`: required, one of `"stable" | "beta" | "nightly"`.
     - `version`: required, `"latest"`, a semver like `"1.83.0"`, or an
       ISO date like `"2025-12-01"` (date is only valid on nightly).
-      The repo's `rustNightlyToolchainFor` passes the pinned date
-      `${defaultNightlyDate}` so that pin stays grep-able.
     - `components`: rustup components to include. Defaults to the
       minimal `[ "cargo" "rust-std" "rustc" ]` set; pass an extended
       list (for example `[ ... "rust-src" "rust-analyzer" ]`) when the

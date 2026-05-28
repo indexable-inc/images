@@ -6,6 +6,9 @@ publish.workspace = true
 description = "Collect JSON diagnostics for ix.dev HTTPS reachability"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true

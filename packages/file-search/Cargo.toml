@@ -5,6 +5,9 @@ edition.workspace = true
 publish.workspace = true
 description = "BM25 file indexer and searcher built on Tantivy"
 
+[lints]
+workspace = true
+
 [lib]
 name = "file_search"
 path = "src/lib.rs"
