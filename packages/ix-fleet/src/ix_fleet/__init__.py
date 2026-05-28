@@ -5,12 +5,10 @@ import argparse
 import asyncio
 import json
 import os
-import select
 import shlex
 import string
 import subprocess
 import sys
-import time
 import typing
 from pathlib import Path
 
@@ -218,7 +216,7 @@ class CliTimeoutError(RuntimeError):
         super().__init__(f"command timed out after {timeout}s: {' '.join(command)}")
 
 
-def run_cli(
+async def run_cli(
     command: list[str],
     *,
     dry_run: bool,
@@ -228,57 +226,43 @@ def run_cli(
     if dry_run:
         return ""
 
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
-
     assert process.stdout is not None
     assert process.stderr is not None
-    streams: dict[typing.IO[bytes], tuple[str, typing.TextIO]] = {
-        process.stdout: ("stdout", sys.stdout),
-        process.stderr: ("stderr", sys.stderr),
-    }
-    chunks = {
-        "stdout": [],
-        "stderr": [],
-    }
-    deadline = None if timeout is None else time.monotonic() + timeout
 
-    while streams:
-        wait = 0.2
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                assert timeout is not None
-                process.kill()
-                process.wait()
-                raise CliTimeoutError(
-                    command,
-                    timeout,
-                    "".join(chunks["stdout"]),
-                    "".join(chunks["stderr"]),
-                )
-            wait = min(wait, remaining)
-
-        readable, _, _ = select.select(list(streams), [], [], wait)
-        if not readable and process.poll() is not None:
-            readable = list(streams)
-
-        for stream in readable:
-            data = os.read(stream.fileno(), 4096)
-            if data == b"":
-                streams.pop(stream, None)
-                continue
-            name, target = streams[stream]
+    async def tee(reader: asyncio.StreamReader, target: typing.TextIO) -> str:
+        chunks: list[str] = []
+        while True:
+            data = await reader.read(4096)
+            if not data:
+                return "".join(chunks)
             text = data.decode(errors="replace")
-            chunks[name].append(text)
+            chunks.append(text)
             print(text, end="", file=target, flush=True)
 
-    returncode = process.wait()
-    stdout = "".join(chunks["stdout"])
-    stderr = "".join(chunks["stderr"])
+    # Drain both pipes concurrently so the child never blocks on a full buffer
+    # while we await its exit.
+    stdout_task = asyncio.ensure_future(tee(process.stdout, sys.stdout))
+    stderr_task = asyncio.ensure_future(tee(process.stderr, sys.stderr))
+
+    timed_out = False
+    try:
+        await asyncio.wait_for(process.wait(), timeout)
+    except asyncio.TimeoutError:
+        timed_out = True
+        process.kill()
+
+    returncode = await process.wait()
+    stdout = await stdout_task
+    stderr = await stderr_task
+
+    if timed_out:
+        assert timeout is not None
+        raise CliTimeoutError(command, timeout, stdout, stderr)
     if returncode != 0:
         raise CliError(command, returncode, stdout, stderr)
     return stdout
@@ -309,10 +293,15 @@ async def wait_node_ready(node: FleetNode, *, dry_run: bool) -> None:
     deadline = asyncio.get_running_loop().time() + 180
     last_error = ""
     while asyncio.get_running_loop().time() < deadline:
-        result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if result.returncode == 0:
+        probe = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_b, stderr_b = await probe.communicate()
+        if probe.returncode == 0:
             return
-        last_error = (result.stderr or result.stdout).strip()
+        last_error = (stderr_b.decode(errors="replace") or stdout_b.decode(errors="replace")).strip()
         await asyncio.sleep(2)
 
     raise RuntimeError(f"{node.name} bootstrap did not become ready: {last_error}")
@@ -322,20 +311,20 @@ async def push_replacement_image(node: FleetNode, *, dry_run: bool) -> str:
     image = node.replacementImage
     source = image.source
     if not dry_run:
-        out = run_cli(["nix-store", "--realise", image.sourceDrv], dry_run=False)
+        out = await run_cli(["nix-store", "--realise", image.sourceDrv], dry_run=False)
         realised = [line.strip() for line in out.splitlines() if line.strip()]
         if realised:
             source = realised[-1]
         if not Path(source).exists():
             raise RuntimeError(f"OCI image derivation did not realise to an existing path: {source}")
 
-    out = run_cli(["ix", "image", "push", source, image.destination], dry_run=dry_run)
+    out = await run_cli(["ix", "image", "push", source, image.destination], dry_run=dry_run)
     refs = [line.strip() for line in out.splitlines() if line.strip()]
     return refs[-1] if refs else image.destination
 
 
 async def list_nodes() -> list[dict[str, typing.Any]]:
-    out = run_cli(["ix", "ls", "--output", "json"], dry_run=False)
+    out = await run_cli(["ix", "ls", "--output", "json"], dry_run=False)
     rows = json.loads(out)
     if not isinstance(rows, list):
         raise TypeError("ix ls --output json must return a list")
@@ -363,7 +352,7 @@ async def create_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
         command.extend(["--l7-proxy-port", str(port)])
     if node.ipv4:
         command.append("--ipv4")
-    run_cli(command, dry_run=dry_run)
+    await run_cli(command, dry_run=dry_run)
 
 
 async def ensure_node(node: FleetNode, *, dry_run: bool) -> bool:
@@ -378,7 +367,7 @@ async def ensure_node(node: FleetNode, *, dry_run: bool) -> bool:
         return True
 
     if existing.get("status") == "failed":
-        run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+        await run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
         await create_node(node, node.bootstrapImage, dry_run=dry_run)
         await wait_node_ready(node, dry_run=dry_run)
         return True
@@ -387,25 +376,25 @@ async def ensure_node(node: FleetNode, *, dry_run: bool) -> bool:
         await wait_node_ready(node, dry_run=dry_run)
         return False
 
-    run_cli(["ix", "start", node.name], dry_run=dry_run)
+    await run_cli(["ix", "start", node.name], dry_run=dry_run)
     await wait_node_ready(node, dry_run=dry_run)
     return False
 
 
 async def snapshot_node(node: FleetNode, *, dry_run: bool) -> None:
-    run_cli(["ix", "snapshot", "create", node.name], dry_run=dry_run)
+    await run_cli(["ix", "snapshot", "create", node.name], dry_run=dry_run)
 
 
 async def switch_node(node: FleetNode, *, dry_run: bool) -> None:
     if node.switch.buildOn == "local":
         # ix switch --build-on local expects the system out-path already in the
         # local store. Realize the flake installable first so the path is valid.
-        run_cli(
+        await run_cli(
             ["nix", "build", "--no-link", "--print-out-paths", node.switch.sourceInstallable],
             dry_run=dry_run,
         )
     step(f"switching {node.name} (build-on={node.switch.buildOn})")
-    run_cli(
+    await run_cli(
         ["ix", "switch", node.name, node.switch.target, "--build-on", node.switch.buildOn],
         dry_run=dry_run,
         timeout=1800,
@@ -427,7 +416,7 @@ async def ensure_group(group: str, *, dry_run: bool) -> None:
         return
 
     try:
-        run_cli(["ix", "group", "create", group], dry_run=dry_run)
+        await run_cli(["ix", "group", "create", group], dry_run=dry_run)
     except CliError as error:
         if is_existing_group_error(error):
             step(f"east-west group {group} already exists")
@@ -439,7 +428,7 @@ async def ensure_node_groups(node: FleetNode, *, dry_run: bool) -> None:
     for group in sorted(node.groups):
         await ensure_group(group, dry_run=dry_run)
         try:
-            run_cli(["ix", "group", "add", group, node.name], dry_run=dry_run)
+            await run_cli(["ix", "group", "add", group, node.name], dry_run=dry_run)
         except CliError as error:
             if is_existing_member_error(error):
                 step(f"{node.name} is already in east-west group {group}")
@@ -481,7 +470,7 @@ async def remove_node(node: FleetNode, *, dry_run: bool) -> None:
         step(f"remove {node.name}")
         return
     try:
-        run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+        await run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
     except CliError as error:
         if is_missing_node_error(error):
             step(f"{node.name} is already absent")
@@ -539,24 +528,23 @@ async def run_health_check(
             env = {**os.environ, **host_env}
             command = expand_host_command(check.command, host_env)
 
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
         try:
-            result = subprocess.run(
-                command,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=check.timeoutSec,
-                env=env,
-            )
-        except subprocess.TimeoutExpired as error:
-            stdout = error.stdout or ""
-            stderr = error.stderr or ""
-            last_error = f"timed out after {check.timeoutSec}s\n{stdout}{stderr}".strip()
+            stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), check.timeoutSec)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            last_error = f"timed out after {check.timeoutSec}s"
         else:
-            if result.returncode == 0:
+            if process.returncode == 0:
                 step(f"healthy {node.name}/{check_name}")
                 return
-            last_error = (result.stdout + result.stderr).strip()
+            last_error = (stdout_b.decode(errors="replace") + stderr_b.decode(errors="replace")).strip()
 
         if attempt < check.attempts:
             await asyncio.sleep(check.intervalSec)
@@ -626,7 +614,7 @@ async def switch_node_from_source(
     for attempt in range(1, MAX_SWITCH_RETRIES + 1):
         try:
             step(f"switching {node.name} from source (attempt {attempt}/{MAX_SWITCH_RETRIES})")
-            run_cli(command, dry_run=dry_run, timeout=3600)
+            await run_cli(command, dry_run=dry_run, timeout=3600)
             return
         except (CliError, CliTimeoutError) as e:
             error_msg = e.output or str(e)
@@ -654,14 +642,14 @@ async def replace_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
         command.extend(["--l7-proxy-port", str(port)])
     if node.ipv4:
         command.append("--ipv4")
-    run_cli(command, dry_run=dry_run)
+    await run_cli(command, dry_run=dry_run)
 
 
 async def up_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
     if dry_run:
         if node.recreateOnUp:
             step(f"recreate {node.name} from uploaded image {image}")
-            run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+            await run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
             await create_node(node, image, dry_run=dry_run)
         else:
             step(f"create or replace {node.name} from uploaded image {image}")
@@ -670,7 +658,7 @@ async def up_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
 
     existing = find_node(await list_nodes(), node.name)
     if existing is not None and node.recreateOnUp:
-        run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+        await run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
         await create_node(node, image, dry_run=dry_run)
         return
 
@@ -679,7 +667,7 @@ async def up_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
         return
 
     if existing.get("status") == "failed":
-        run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+        await run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
         await create_node(node, image, dry_run=dry_run)
         return
 

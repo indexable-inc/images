@@ -98,7 +98,7 @@ class PushReplacementImageTests(unittest.TestCase):
             source.write_text("")
             calls: list[list[str]] = []
 
-            def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+            async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
                 del timeout
                 calls.append(command)
                 if command[0] == "nix-store":
@@ -150,7 +150,7 @@ class UpNodeTests(unittest.TestCase):
         async def fake_list_nodes() -> list[dict[str, typing.Any]]:
             return [{"name": "web", "status": "running"}]
 
-        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
             del timeout
             self.assertFalse(dry_run)
             calls.append(command)
@@ -185,7 +185,7 @@ class UpNodeTests(unittest.TestCase):
         async def fake_list_nodes() -> list[dict[str, typing.Any]]:
             return [{"name": "web", "status": "stopped"}]
 
-        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
             del timeout
             self.assertFalse(dry_run)
             calls.append(command)
@@ -208,7 +208,7 @@ class UpNodeTests(unittest.TestCase):
         async def fail_list_nodes() -> list[dict[str, typing.Any]]:
             self.fail("dry-run up should not require live node state")
 
-        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
             del timeout
             self.assertTrue(dry_run)
             calls.append(command)
@@ -229,7 +229,7 @@ class EastWestGroupTests(unittest.TestCase):
     def test_ensures_group_before_adding_node(self) -> None:
         calls: list[list[str]] = []
 
-        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
             del timeout
             self.assertFalse(dry_run)
             calls.append(command)
@@ -253,7 +253,7 @@ class EastWestGroupTests(unittest.TestCase):
     def test_existing_group_membership_is_idempotent(self) -> None:
         calls: list[list[str]] = []
 
-        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
             del timeout
             self.assertFalse(dry_run)
             calls.append(command)
@@ -308,7 +308,7 @@ class BootstrapTests(unittest.TestCase):
             self.assertFalse(dry_run)
             ready.append(node.name)
 
-        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
             del timeout
             self.assertFalse(dry_run)
             calls.append(command)
@@ -346,7 +346,7 @@ class DownTests(unittest.TestCase):
         )
         calls: list[list[str]] = []
 
-        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
             del dry_run, timeout
             calls.append(command)
             if command[-1] == "web":
@@ -369,7 +369,7 @@ class DownTests(unittest.TestCase):
     def test_down_treats_missing_nodes_as_absent(self) -> None:
         node = ix_fleet.FleetNode.model_validate(fleet_node("api"))
 
-        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
             del dry_run, timeout
             raise ix_fleet.CliError(command, 1, "", "VM not found")
 
@@ -388,7 +388,7 @@ class SwitchSourceTests(unittest.TestCase):
         }
         node = ix_fleet.FleetNode.model_validate(node_data)
 
-        def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
             del timeout
             self.assertFalse(dry_run)
             calls.append(command)
