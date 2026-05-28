@@ -350,11 +350,14 @@ fn render_clippy_unit_entries(
     Ok(entries)
 }
 
-// Clippy only lints workspace-owned code. Build-script artifacts and vendored
-// crates (registry, sparse, git) compile under `--cap-lints warn` for a
-// reason — we don't want a churning upstream to break the workspace lint gate.
+// Clippy only lints workspace-owned code. Vendored crates (registry, sparse,
+// git) compile under `--cap-lints warn` for a reason: we don't want a churning
+// upstream to break the workspace lint gate. The run-custom-build unit
+// executes `build.rs` (no source to lint), but the custom-build compile unit
+// IS workspace Rust and the old `cargo clippy` workspace gate covered it, so
+// it must keep getting clippy here.
 fn is_clippy_unit_candidate(unit: &Unit) -> bool {
-    !unit.is_run_custom_build() && !unit.is_custom_build_compile() && !unit.is_external()
+    !unit.is_run_custom_build() && !unit.is_external()
 }
 
 fn render_policy_check_entries(
@@ -2947,7 +2950,8 @@ mod tests {
         assert!(rendered.contains("mkClippyUnit"));
         assert!(rendered.contains("env \"''${rustc_env[@]}\" clippy-driver"));
         assert!(rendered.contains("extraClippyLintArgs"));
-        assert!(rendered.contains("clippy = clippyUnits;"));
+        assert!(rendered.contains("clippy = clippyPolicyAggregate;"));
+        assert!(rendered.contains("clippyPolicyAggregate ="));
     }
 
     #[test]

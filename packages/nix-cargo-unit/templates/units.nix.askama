@@ -666,11 +666,22 @@ let
       cases = mkDoctestCases { inherit name runCommand; };
     };
 
+  # `policyChecks` is consumed by `withPolicyChecks`, `selectBinaryWithTests`,
+  # and the per-system flake check lift, all of which expect each value to be
+  # a single derivation (they string-interpolate it). The per-unit fan-out
+  # lives at `clippyUnits` for callers that want individual units; the policy
+  # surface wraps every clippy unit into one symlinkJoin so the gate is one
+  # store path that depends on every per-unit clippy build.
+  clippyPolicyAggregate =
+    pkgs.symlinkJoin {
+      name = "cargo-unit-clippy";
+      paths = pkgs.lib.attrValues clippyUnits;
+    };
   policyChecks =
     {
 {{ policy_check_entries }}    }
     // pkgs.lib.optionalAttrs (clippyEnabled && clippyUnits != {}) {
-      clippy = clippyUnits;
+      clippy = clippyPolicyAggregate;
     }
     // extraPolicyChecks;
   withPolicyChecks = package:

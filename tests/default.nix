@@ -2950,32 +2950,36 @@ let
       }
       {
         assertion = cargoUnitWorkspace.policyChecks ? clippy;
-        message = "cargo-unit workspaces should expose per-unit clippy checks under policyChecks.clippy";
+        message = "cargo-unit workspaces should expose a clippy policy check derivation";
       }
       {
         assertion = !(cargoUnitWorkspace.policyChecks ? cargoClippy);
         message = "cargo-unit buildWorkspace should suppress the legacy workspace-level cargoClippy when per-unit clippy is on";
       }
       {
-        assertion = builtins.isAttrs cargoUnitWorkspace.policyChecks.clippy;
-        message = "cargo-unit policyChecks.clippy should be a fan-out attrset, one entry per linted unit";
+        # `policyChecks.clippy` is one aggregate derivation so
+        # `withPolicyChecks` and `selectBinaryWithTests` can string-coerce it
+        # like every other policy check. The aggregate transitively depends on
+        # every per-unit clippy derivation.
+        assertion = lib.isDerivation cargoUnitWorkspace.policyChecks.clippy;
+        message = "cargo-unit policyChecks.clippy should be a single aggregate derivation";
       }
       {
-        assertion = builtins.length (builtins.attrNames cargoUnitWorkspace.policyChecks.clippy) >= 2;
-        message = "cargo-unit policyChecks.clippy should produce multiple per-unit derivations for a multi-target fixture";
+        # The per-unit fan-out lives at `clippyUnits` for callers that want
+        # individual unit derivations (e.g. exposing one flake check per
+        # crate).
+        assertion = builtins.isAttrs cargoUnitWorkspace.clippyUnits;
+        message = "cargo-unit clippyUnits should be a fan-out attrset, one entry per linted unit";
+      }
+      {
+        assertion = builtins.length (builtins.attrNames cargoUnitWorkspace.clippyUnits) >= 2;
+        message = "cargo-unit clippyUnits should produce multiple per-unit derivations for a multi-target fixture";
       }
       {
         assertion = builtins.all (unit: lib.isDerivation unit) (
-          builtins.attrValues cargoUnitWorkspace.policyChecks.clippy
+          builtins.attrValues cargoUnitWorkspace.clippyUnits
         );
-        message = "cargo-unit policyChecks.clippy entries should each be a derivation";
-      }
-      {
-        # clippyUnits sits at the top of the units attrset so callers that
-        # don't want the policyChecks aggregator can still pick individual
-        # units by their unit attribute name (matches `units.<name>`).
-        assertion = cargoUnitWorkspace.clippyUnits == cargoUnitWorkspace.policyChecks.clippy;
-        message = "cargo-unit should expose clippyUnits at the top level identical to policyChecks.clippy";
+        message = "cargo-unit clippyUnits entries should each be a derivation";
       }
       {
         assertion = cargoUnitWorkspace.policy.clippy.package.unchecked.pname == "llm-clippy";

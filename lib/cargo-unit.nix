@@ -66,6 +66,72 @@ let
       Fetched or patched sources pass workspaceRoot = src.
     '');
 
+  # Cargo only emits `[lints.clippy]` into the unit graph's `lint_rustflags`
+  # when invoked as `cargo clippy`, not `cargo build`. Our unit graph is built
+  # with `cargo build --unit-graph`, so per-unit clippy never sees the
+  # workspace lint policy unless we resolve it ourselves. Parse the workspace
+  # manifest and emit the equivalent `-D|-W|-A clippy::<lint>` flags.
+  #
+  # Per-package overrides (a package with its own `[lints.clippy]` and
+  # `workspace = false`) are not yet honored; most workspaces in practice use
+  # `[lints] workspace = true` per crate, which inherits the workspace table.
+  #
+  # `clippy::cargo` group lints and the individual members of that group
+  # invoke the `cargo` binary to read workspace metadata. Per-unit clippy
+  # runs in a sandboxed build directory without a discoverable Cargo.toml
+  # (the unit's source closure is package-shaped, not workspace-shaped), so
+  # those lints error out with "could not find Cargo.toml". They only make
+  # sense at workspace scope; skip them here and leave a workspace-level
+  # cargo-clippy check as the future home for that subset.
+  cargoGroupClippyLints = [
+    "cargo"
+    "cargo_common_metadata"
+    "multiple_crate_versions"
+    "negative_feature_names"
+    "redundant_feature_names"
+    "wildcard_dependencies"
+  ];
+  clippyLintFlagsFromManifest =
+    manifestPath:
+    let
+      manifest = builtins.fromTOML (builtins.readFile manifestPath);
+      raw = manifest.workspace.lints.clippy or manifest.lints.clippy or { };
+      filtered = builtins.removeAttrs raw cargoGroupClippyLints;
+      entryFor =
+        name: value:
+        if builtins.isString value then
+          {
+            inherit name;
+            level = value;
+            priority = 0;
+          }
+        else
+          {
+            inherit name;
+            level = value.level;
+            priority = value.priority or 0;
+          };
+      entries = lib.mapAttrsToList entryFor filtered;
+      # Cargo applies args in ascending-priority order so higher-priority lints
+      # appear later on the command line and win as overrides. Mirror that here
+      # so a per-lint allow can override a group-wide deny.
+      sorted = lib.sort (left: right: left.priority < right.priority) entries;
+      flagFor =
+        level:
+        if level == "deny" || level == "forbid" then
+          "-D"
+        else if level == "warn" then
+          "-W"
+        else if level == "allow" then
+          "-A"
+        else
+          throw "cargoUnit: unknown clippy lint level '${level}' in ${manifestPath}";
+    in
+    lib.concatMap (entry: [
+      (flagFor entry.level)
+      "clippy::${entry.name}"
+    ]) sorted;
+
   renderCargoArgs =
     args: cargoTarget:
     lib.escapeShellArgs (
@@ -310,7 +376,14 @@ let
         extraClippyNativeBuildInputs = lib.optional perUnitClippyEnabled args.policy.clippy.package;
         extraEnv = args.env;
         extraRustcArgsForPlatform = rust.rustcArgsForPolicyForPlatform args.policy;
-        extraClippyLintArgs = rust.clippyLintArgs args.policy;
+        # Manifest-derived flags come first so per-call `policy.clippy`
+        # entries land later in argv and can override them. Cargo's
+        # `[lints.clippy]` resolution is the load-bearing source for most
+        # workspaces; `policy.clippy.deniedLints` stays as an escape hatch
+        # for callers without a Cargo.toml policy.
+        extraClippyLintArgs =
+          clippyLintFlagsFromManifest (args.src + "/Cargo.toml")
+          ++ rust.clippyLintArgs args.policy;
         clippyEnabled = perUnitClippyEnabled;
         extraPolicyChecks = extraPolicyChecksFromRust;
       };
