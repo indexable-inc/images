@@ -51,6 +51,26 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 h1, h2, h3, h4, h5, h6,
@@ -239,30 +259,100 @@ main {
 
 .side-pane {
   display: grid;
-  grid-template-rows: minmax(8rem, 0.45fr) minmax(8rem, 0.55fr);
-  gap: 1px;
+  grid-template-rows: minmax(4rem, calc(var(--builds-fraction, 0.45) * 100% - 2.5px)) 5px minmax(4rem, 1fr);
   background: var(--line);
 }
 
+/* Visible 1px line + 5px hit area: the element is 5px wide but the visible
+ * track is a centered 1px stripe so the layout doesn't look chunky. The whole
+ * 5px is draggable and the grip dots appear on hover/focus for affordance. */
 .splitter {
-  background: var(--line);
-  cursor: col-resize;
-  transition: background 100ms ease-out;
+  position: relative;
+  background: transparent;
   touch-action: none;
 }
 
-.splitter:hover,
-.splitter:focus-visible {
+.splitter::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  background: var(--line);
+  transition: background 100ms ease-out;
+}
+
+.splitter::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--faint);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 120ms ease-out, background 100ms ease-out;
+}
+
+.splitter:hover::before,
+.splitter:focus-visible::before {
   background: var(--accent);
+}
+
+.splitter:hover::after,
+.splitter:focus-visible::after {
+  opacity: 0.75;
+}
+
+.splitter-h {
+  cursor: col-resize;
+}
+
+.splitter-h::before {
+  width: 1px;
+  height: 100%;
+}
+
+.splitter-h::after {
+  width: 2px;
+  height: 28px;
+}
+
+.splitter-v {
+  cursor: row-resize;
+}
+
+.splitter-v::before {
+  height: 1px;
+  width: 100%;
+}
+
+.splitter-v::after {
+  height: 2px;
+  width: 28px;
+}
+
+.splitter:focus-visible {
   outline: none;
 }
 
-main.dragging {
+main.dragging-h {
   cursor: col-resize;
   user-select: none;
 }
 
-main.dragging .splitter {
+main.dragging-v {
+  cursor: row-resize;
+  user-select: none;
+}
+
+main.dragging-h .splitter-h::before,
+main.dragging-v .splitter-v::before {
+  background: var(--accent);
+}
+
+main.dragging-h .splitter-h::after,
+main.dragging-v .splitter-v::after {
+  opacity: 0.9;
   background: var(--accent);
 }
 
@@ -495,14 +585,49 @@ main.dragging .splitter {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
+.line.expandable {
+  cursor: pointer;
+}
+
+.line.expandable .text::after {
+  content: '⤵';
+  color: var(--faint);
+  margin-left: 0.35rem;
+  opacity: 0;
+  transition: opacity 100ms ease-out;
+}
+
+.line.expandable:hover .text::after,
+.line.expandable:focus-visible .text::after {
+  opacity: 0.8;
+}
+
+.line.expandable.expanded .text::after {
+  content: '⤴';
+  opacity: 0.8;
+}
+
+.line.expandable:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .idx {
   color: var(--faint);
   user-select: none;
 }
 
 .text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.line.expanded .text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .log-error { color: var(--red); }
@@ -529,11 +654,11 @@ main.dragging .splitter {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr) 0 minmax(0, 0.8fr);
   }
-  .splitter {
-    display: none;
-  }
   .side-pane {
-    grid-template-rows: minmax(8rem, 1fr) minmax(8rem, 1fr);
+    grid-template-rows: minmax(8rem, 1fr) 5px minmax(8rem, 1fr);
+  }
+  .splitter-h {
+    display: none;
   }
   .progress {
     margin-left: 0;

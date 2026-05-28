@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { ActivityNode, BuildNode } from '../types';
+  import PanelHeader from '$lib/PanelHeader.svelte';
+  import type { ActivityNode, BuildNode } from '$lib/types';
 
   type Props = {
     activities: ReadonlyArray<ActivityNode>;
@@ -77,12 +78,11 @@
 </script>
 
 <section class="panel graph-panel">
-  <header class="panel-title">
-    <span>activities</span>
+  <PanelHeader title="activities">
     <span class="panel-meta">
       {String(rows.length)} shown{#if hiddenCount > 0} &middot; {String(hiddenCount)} hidden{/if}
     </span>
-  </header>
+  </PanelHeader>
   <div class="graph">
     {#each rows as row (row.activity.id)}
       <div

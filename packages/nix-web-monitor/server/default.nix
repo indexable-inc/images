@@ -45,9 +45,14 @@ let
       ''
         mkdir -p "$out/bin" "$out/share/nix-web-monitor"
         cp -R ${site}/share/nix-web-monitor-site/. "$out/share/nix-web-monitor/"
+        # Deliberately no PATH wrapping for `nix`: the wrapper invokes
+        # whatever Nix is already on the operator's PATH so that
+        # `nix-web-monitor build .#x` uses the same Nix as a bare
+        # `nix build .#x` would. Pinning a specific Nix here drags an
+        # extra copy into every closure and silently shadows custom
+        # builds.
         makeWrapper ${lib.getExe unwrapped} "$out/bin/nix-web-monitor" \
-          --set NIX_WEB_MONITOR_SITE_DIR "$out/share/nix-web-monitor" \
-          --prefix PATH : ${lib.makeBinPath [ pkgs.nix ]}
+          --set NIX_WEB_MONITOR_SITE_DIR "$out/share/nix-web-monitor"
       '';
 in
 wrapper

@@ -1,21 +1,31 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import ActivityGraph from './components/ActivityGraph.svelte';
-  import BuildTable from './components/BuildTable.svelte';
-  import LogPanel from './components/LogPanel.svelte';
-  import SummaryBar from './components/SummaryBar.svelte';
-  import { openMonitorEvents } from './monitor-store';
-  import { EMPTY_SNAPSHOT, type ConnectionStatus, type MonitorSnapshot } from './types';
+  import ActivityGraph from '$components/ActivityGraph.svelte';
+  import BuildTable from '$components/BuildTable.svelte';
+  import LogPanel from '$components/LogPanel.svelte';
+  import SummaryBar from '$components/SummaryBar.svelte';
+  import Splitter from '$lib/Splitter.svelte';
+  import { openMonitorEvents } from '$lib/monitor-store';
+  import { EMPTY_SNAPSHOT, type ConnectionStatus, type MonitorSnapshot } from '$lib/types';
 
   const SIDEBAR_KEY = 'nix-web-monitor.sidebar-width';
   const SIDEBAR_DEFAULT = 360;
   const SIDEBAR_MIN = 220;
   const SIDEBAR_MAX_FRACTION = 0.7;
 
+  const BUILDS_KEY = 'nix-web-monitor.builds-fraction';
+  const BUILDS_DEFAULT = 0.45;
+  const BUILDS_MIN_FRACTION = 0.15;
+  const BUILDS_MAX_FRACTION = 0.85;
+
   let snapshot = $state<MonitorSnapshot>(EMPTY_SNAPSHOT);
   let status = $state<ConnectionStatus>('connecting');
-  let sidebarWidth = $state(loadSidebarWidth());
-  let dragging = $state(false);
+  let sidebarWidth = $state(loadNumber(SIDEBAR_KEY, SIDEBAR_DEFAULT, SIDEBAR_MIN));
+  let buildsFraction = $state(
+    loadNumber(BUILDS_KEY, BUILDS_DEFAULT, BUILDS_MIN_FRACTION, BUILDS_MAX_FRACTION)
+  );
+  let draggingAxis = $state<'horizontal' | 'vertical' | null>(null);
+  let sidePane = $state<HTMLElement | null>(null);
   let closeEvents: (() => void) | null = null;
 
   onMount(() => {
@@ -33,12 +43,19 @@
     closeEvents?.();
   });
 
-  function loadSidebarWidth(): number {
-    if (typeof window === 'undefined') return SIDEBAR_DEFAULT;
-    const stored = window.localStorage.getItem(SIDEBAR_KEY);
-    if (stored === null) return SIDEBAR_DEFAULT;
+  function loadNumber(key: string, fallback: number, min: number, max?: number): number {
+    if (typeof window === 'undefined') return fallback;
+    const stored = window.localStorage.getItem(key);
+    if (stored === null) return fallback;
     const parsed = Number(stored);
-    return Number.isFinite(parsed) && parsed >= SIDEBAR_MIN ? parsed : SIDEBAR_DEFAULT;
+    if (!Number.isFinite(parsed)) return fallback;
+    if (parsed < min) return fallback;
+    if (max !== undefined && parsed > max) return fallback;
+    return parsed;
+  }
+
+  function persist(key: string, value: number): void {
+    window.localStorage.setItem(key, String(value));
   }
 
   function clampSidebarWidth(width: number): number {
@@ -46,60 +63,94 @@
     return Math.min(max, Math.max(SIDEBAR_MIN, width));
   }
 
-  function onSplitterPointerDown(event: PointerEvent): void {
-    dragging = true;
-    event.preventDefault();
+  function clampBuildsFraction(fraction: number): number {
+    return Math.min(BUILDS_MAX_FRACTION, Math.max(BUILDS_MIN_FRACTION, fraction));
   }
 
   function onPointerMove(event: PointerEvent): void {
-    if (!dragging) return;
-    sidebarWidth = clampSidebarWidth(window.innerWidth - event.clientX);
+    if (draggingAxis === 'horizontal') {
+      sidebarWidth = clampSidebarWidth(window.innerWidth - event.clientX);
+    } else if (draggingAxis === 'vertical' && sidePane !== null) {
+      const rect = sidePane.getBoundingClientRect();
+      buildsFraction = clampBuildsFraction((event.clientY - rect.top) / rect.height);
+    }
   }
 
   function onPointerUp(): void {
-    if (!dragging) return;
-    dragging = false;
-    window.localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth));
+    if (draggingAxis === 'horizontal') persist(SIDEBAR_KEY, sidebarWidth);
+    else if (draggingAxis === 'vertical') persist(BUILDS_KEY, buildsFraction);
+    draggingAxis = null;
   }
 
-  function onSplitterKeydown(event: KeyboardEvent): void {
+  function startHorizontal(event: PointerEvent): void {
+    draggingAxis = 'horizontal';
+    event.preventDefault();
+  }
+
+  function startVertical(event: PointerEvent): void {
+    draggingAxis = 'vertical';
+    event.preventDefault();
+  }
+
+  function sidebarKeydown(event: KeyboardEvent): void {
     const step = event.shiftKey ? 40 : 16;
     if (event.key === 'ArrowLeft') {
       sidebarWidth = clampSidebarWidth(sidebarWidth + step);
-      event.preventDefault();
     } else if (event.key === 'ArrowRight') {
       sidebarWidth = clampSidebarWidth(sidebarWidth - step);
-      event.preventDefault();
     } else {
       return;
     }
-    window.localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth));
+    event.preventDefault();
+    persist(SIDEBAR_KEY, sidebarWidth);
+  }
+
+  function buildsKeydown(event: KeyboardEvent): void {
+    const step = event.shiftKey ? 0.08 : 0.03;
+    if (event.key === 'ArrowUp') {
+      buildsFraction = clampBuildsFraction(buildsFraction - step);
+    } else if (event.key === 'ArrowDown') {
+      buildsFraction = clampBuildsFraction(buildsFraction + step);
+    } else {
+      return;
+    }
+    event.preventDefault();
+    persist(BUILDS_KEY, buildsFraction);
   }
 </script>
 
 <svelte:window onpointermove={onPointerMove} onpointerup={onPointerUp} />
 
-<main class:dragging>
+<main
+  class:dragging-h={draggingAxis === 'horizontal'}
+  class:dragging-v={draggingAxis === 'vertical'}
+>
   <SummaryBar {snapshot} {status} />
 
   <section class="workspace" style="--sidebar-width: {String(sidebarWidth)}px">
     <section class="main-pane">
       <LogPanel logs={snapshot.logs} />
     </section>
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div
-      class="splitter"
-      role="separator"
-      tabindex="0"
-      aria-orientation="vertical"
-      aria-label="Resize sidebar"
-      aria-valuenow={Math.round(sidebarWidth)}
-      onpointerdown={onSplitterPointerDown}
-      onkeydown={onSplitterKeydown}
-    ></div>
-    <aside class="side-pane">
+    <Splitter
+      orientation="vertical"
+      label="Resize sidebar"
+      valueNow={Math.round(sidebarWidth)}
+      onstart={startHorizontal}
+      onkeydown={sidebarKeydown}
+    />
+    <aside
+      class="side-pane"
+      bind:this={sidePane}
+      style="--builds-fraction: {String(buildsFraction)}"
+    >
       <BuildTable builds={snapshot.builds} expected={snapshot.expected} />
+      <Splitter
+        orientation="horizontal"
+        label="Resize builds panel"
+        valueNow={Math.round(buildsFraction * 100)}
+        onstart={startVertical}
+        onkeydown={buildsKeydown}
+      />
       <ActivityGraph activities={snapshot.activities} builds={snapshot.builds} />
     </aside>
   </section>

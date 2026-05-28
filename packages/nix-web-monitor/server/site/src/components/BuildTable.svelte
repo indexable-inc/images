@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ACTIVITY_NAME_BUILD, type BuildNode, type BuildStatus } from '../types';
+  import PanelHeader from '$lib/PanelHeader.svelte';
+  import { ACTIVITY_NAME_BUILD, type BuildNode, type BuildStatus } from '$lib/types';
 
   type Props = {
     builds: ReadonlyArray<BuildNode>;
@@ -31,10 +32,9 @@
 </script>
 
 <section class="panel builds-panel">
-  <header class="panel-title">
-    <span>builds</span>
+  <PanelHeader title="builds">
     <span class="panel-meta">{String(builds.length)}{#if expectedBuilds > 0} / {String(expectedBuilds)}{/if}</span>
-  </header>
+  </PanelHeader>
   <div class="build-table">
     {#each ordered as build (build.derivation)}
       <div class="state" data-state={build.status} title={build.status}></div>

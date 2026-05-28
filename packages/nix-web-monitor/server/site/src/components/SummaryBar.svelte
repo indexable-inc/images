@@ -4,7 +4,7 @@
     type BuildStatus,
     type ConnectionStatus,
     type MonitorSnapshot
-  } from '../types';
+  } from '$lib/types';
 
   type Props = {
     snapshot: MonitorSnapshot;
