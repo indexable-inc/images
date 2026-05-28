@@ -24,6 +24,7 @@
         activity,
         depth: depthFor(activity, byId),
         isBuild: buildActivityIds.has(activity.id),
+        kind: kindLabel(activity),
         display: rowText(activity)
       }))
   );
@@ -40,6 +41,17 @@
   function rowText(activity: ActivityNode): string {
     if (activity.phase !== null) return activity.phase;
     return activity.text;
+  }
+
+  /// Nix tags many real activities with type `unknown` (code 0). The text
+  /// usually leads with an action verb (\"evaluating\", \"copying\",
+  /// \"querying\", \"downloading\"). Synthesize the kind label from that
+  /// verb so the column actually classifies the row.
+  function kindLabel(activity: ActivityNode): string {
+    const declared = activity.activityType.name;
+    if (declared !== 'unknown') return declared;
+    const verb = /^([a-zA-Z]+)/.exec(activity.text)?.[1];
+    return verb === undefined ? 'note' : verb.toLowerCase();
   }
 
   function depthFor(activity: ActivityNode, lookup: ReadonlyMap<number, ActivityNode>): number {
@@ -80,7 +92,7 @@
         style="--depth: {String(row.depth)}"
         title={row.display}
       >
-        <span class="activity-kind">{row.activity.activityType.name}</span>
+        <span class="activity-kind">{row.kind}</span>
         <span class="activity-text">{middleTruncate(row.display, 80)}</span>
       </div>
     {:else}

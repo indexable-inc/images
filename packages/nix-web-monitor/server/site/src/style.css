@@ -224,9 +224,8 @@ main {
 .workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(20rem, 28rem);
-  gap: 1px;
-  background: var(--line);
+  grid-template-columns: minmax(0, 1fr) 5px var(--sidebar-width, 22rem);
+  background: var(--bg);
 }
 
 .main-pane,
@@ -242,6 +241,29 @@ main {
   display: grid;
   grid-template-rows: minmax(8rem, 0.45fr) minmax(8rem, 0.55fr);
   gap: 1px;
+  background: var(--line);
+}
+
+.splitter {
+  background: var(--line);
+  cursor: col-resize;
+  transition: background 100ms ease-out;
+  touch-action: none;
+}
+
+.splitter:hover,
+.splitter:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+main.dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+
+main.dragging .splitter {
+  background: var(--accent);
 }
 
 .panel {
@@ -289,10 +311,10 @@ main {
 
 .activity-row {
   display: grid;
-  grid-template-columns: calc(var(--depth) * 0.75rem + 0.6rem) 6.5rem minmax(0, 1fr);
+  grid-template-columns: max-content minmax(0, 1fr);
   align-items: center;
-  column-gap: 0.4rem;
-  padding: 0.15rem 0.5rem;
+  column-gap: 0.5rem;
+  padding: 0.15rem 0.5rem 0.15rem calc(var(--depth) * 0.75rem + 0.5rem);
   color: var(--muted);
   border-bottom: 1px solid var(--line-soft);
   line-height: 1.3;
@@ -306,11 +328,8 @@ main {
   opacity: 0.55;
 }
 
-.activity-row::before {
-  content: '';
-  display: block;
-  border-left: 1px solid var(--line);
-  height: 100%;
+.activity-row:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .activity-kind {
@@ -318,8 +337,7 @@ main {
   font-variant-numeric: tabular-nums;
   text-transform: lowercase;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 4.5rem;
 }
 
 .activity-text {
@@ -509,7 +527,10 @@ main {
 @media (max-width: 960px) {
   .workspace {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 0.8fr);
+    grid-template-rows: minmax(0, 1fr) 0 minmax(0, 0.8fr);
+  }
+  .splitter {
+    display: none;
   }
   .side-pane {
     grid-template-rows: minmax(8rem, 1fr) minmax(8rem, 1fr);
