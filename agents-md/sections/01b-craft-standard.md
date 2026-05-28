@@ -18,6 +18,10 @@ Treat lint failures as design feedback. Suppress only for a deliberate local
 invariant, a generated or external shape, or a documented tool limitation. Keep
 the suppression small and explain it next to the line.
 
+Treat repo rules as binding by default. Bypass one only when the local evidence
+proves the rule is impossible or harmful for the task, and record that reason
+near the exception.
+
 Reject fallback paths. If an owner, route, capability, config, schema, or
 transport is unavailable, return a typed error and make it observable rather
 than guessing a safe default. Sentinel values, silent retries, and hidden

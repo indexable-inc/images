@@ -13,6 +13,9 @@ mode that names the real problem.
 applies to a class of future changes across the repo, or when it captures an
 architecture invariant that would be expensive to rediscover.
 
+`AGENTS.md` and `CLAUDE.md` are generated files. Update their source fragments
+under `agents-md/sections/`, then run `nix run .#agents-md -- --write`.
+
 The test for a new rule is generality. It should survive the specific feature
 that prompted it, apply to the next helper or module with the same shape, and
 read more like a design philosophy than a task note. Specific examples are fine
@@ -51,6 +54,10 @@ callers.
 Treat lint failures as design feedback. Suppress only for a deliberate local
 invariant, a generated or external shape, or a documented tool limitation. Keep
 the suppression small and explain it next to the line.
+
+Treat repo rules as binding by default. Bypass one only when the local evidence
+proves the rule is impossible or harmful for the task, and record that reason
+near the exception.
 
 Reject fallback paths. If an owner, route, capability, config, schema, or
 transport is unavailable, return a typed error and make it observable rather
