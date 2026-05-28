@@ -12,7 +12,6 @@ let
     mkEnableOption
     mkOption
     mkIf
-    mkMerge
     types
     ;
   cfg = config.services.git-clone;
@@ -54,45 +53,40 @@ in
   config = mkIf cfg.enable {
     environment.systemPackages = [ pkgs.gitoxide ];
 
-    systemd = mkMerge [
-      {
-        services.git-clone = {
-          description = "Clone ${cfg.url}";
-          after = [ "network-online.target" ];
-          wants = [ "network-online.target" ];
-          wantedBy = lib.optional (cfg.activation == "multi-user") "multi-user.target";
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-          };
-          path = [
-            pkgs.coreutils
-            pkgs.gitoxide
-          ];
-          script =
-            let
-              depthFlag = lib.optionalString cfg.shallow "--depth 1";
-              refFlag = lib.optionalString (cfg.ref != null) "--ref ${lib.escapeShellArg cfg.ref}";
-              destParent = builtins.dirOf cfg.dest;
-            in
-            ''
-              if [ ! -d "${cfg.dest}/.git" ]; then
-                mkdir -p ${lib.escapeShellArg destParent}
-                gix clone ${depthFlag} ${refFlag} ${lib.escapeShellArg cfg.url} ${lib.escapeShellArg cfg.dest}
-              fi
-            '';
-        };
-      }
-      (mkIf (cfg.activation == "timer") {
-        timers.git-clone = {
-          description = "Start git clone after boot";
-          wantedBy = [ "timers.target" ];
-          timerConfig = {
-            OnBootSec = "15s";
-            Unit = "git-clone.service";
-          };
-        };
-      })
-    ];
+    systemd.services.git-clone = {
+      description = "Clone ${cfg.url}";
+      after = [ "network-online.target" ];
+      wants = [ "network-online.target" ];
+      wantedBy = lib.optional (cfg.activation == "multi-user") "multi-user.target";
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      path = [
+        pkgs.coreutils
+        pkgs.gitoxide
+      ];
+      script =
+        let
+          depthFlag = lib.optionalString cfg.shallow "--depth 1";
+          refFlag = lib.optionalString (cfg.ref != null) "--ref ${lib.escapeShellArg cfg.ref}";
+          destParent = builtins.dirOf cfg.dest;
+        in
+        ''
+          if [ ! -d "${cfg.dest}/.git" ]; then
+            mkdir -p ${lib.escapeShellArg destParent}
+            gix clone ${depthFlag} ${refFlag} ${lib.escapeShellArg cfg.url} ${lib.escapeShellArg cfg.dest}
+          fi
+        '';
+    };
+
+    systemd.timers.git-clone = mkIf (cfg.activation == "timer") {
+      description = "Start git clone after boot";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "15s";
+        Unit = "git-clone.service";
+      };
+    };
   };
 }

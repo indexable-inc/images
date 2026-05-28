@@ -86,7 +86,6 @@ let
     isSafe && !isParent && !isCurrent;
 
   unsafePaths = paths: lib.filter (path: !isSafeRelativePath path) paths;
-  unsafePathShapes = paths: lib.filter (path: !isSafeRelativePathShape path) paths;
   unsafeNames = names: lib.filter (name: !isSafeRelativeName name) names;
 
   modCatalogType = types.submodule {
@@ -660,7 +659,9 @@ let
         unsafePaths (datapackGeneratedPaths cfg.datapacks.${name})
       )
     ) (lib.attrNames cfg.datapacks)
-    ++ map (path: "services.minecraft world directory ${path}") (unsafePathShapes annotatedWorldNames);
+    ++ map (path: "services.minecraft world directory ${path}") (
+      lib.filter (path: !isSafeRelativePathShape path) annotatedWorldNames
+    );
 
   managed =
     let
