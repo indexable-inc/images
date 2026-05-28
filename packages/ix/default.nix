@@ -1,6 +1,8 @@
 {
   stdenvNoCC,
   fetchurl,
+  cliArtifacts ? { },
+  packageSystem ? stdenvNoCC.hostPlatform.system,
   binarySrc ? null,
 }:
 
@@ -21,11 +23,14 @@ let
   };
 
   inherit (stdenvNoCC.hostPlatform) system;
+  artifactSrc = cliArtifacts.${packageSystem} or null;
   selectedSrc =
-    if binarySrc == null then
-      sources.${system} or (throw "ix CLI: no precompiled binary for ${system}")
+    if binarySrc != null then
+      binarySrc
+    else if artifactSrc != null then
+      artifactSrc
     else
-      binarySrc;
+      sources.${system} or (throw "ix CLI: no precompiled binary for ${system}");
 in
 stdenvNoCC.mkDerivation {
   pname = "ix";

@@ -24,11 +24,12 @@ let
     entry:
     let
       context = overlayContext entry;
+      autoArgs = final // context;
     in
     if entry.overlay ? build then
       entry.overlay.build context
     else
-      final.callPackage entry.path (entry.overlay.callPackageArgs context);
+      lib.callPackageWith autoArgs entry.path { };
 in
 lib.listToAttrs (
   map (entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)) (
@@ -36,5 +37,5 @@ lib.listToAttrs (
   )
 )
 // {
-  symphony-room-server = symphony.packages.${packageSystem}.room-server;
+  symphony-room-server = symphony.packages."${packageSystem}".room-server;
 }
