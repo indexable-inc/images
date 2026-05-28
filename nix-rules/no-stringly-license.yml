@@ -11,4 +11,4 @@ note: |
   REPO: Use `lib.licenses.mit`, `lib.licenses.asl20`, etc. Multi-license packages
   pass a list.
 rule:
-  pattern: license = "$LIC"
+  pattern: meta.license = "$LIC"

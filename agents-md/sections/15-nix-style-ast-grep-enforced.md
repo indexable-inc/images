@@ -39,7 +39,8 @@ common hard rules are:
 - No `substituteAll` / `substituteAllFiles` (removed from nixpkgs). Use
   `pkgs.replaceVars` / `replaceVarsWith`.
 - No `cargoSha256` (use `cargoHash` or `cargoLock`), no `vendorSha256` (use
-  `vendorHash`), no `npmDepsSha256` / `pnpmDepsHash` (use `npmDepsHash`).
+  `vendorHash`), no `npmDepsSha256` (use `npmDepsHash`). `pnpmDepsHash` is the
+  current name on the pnpm side and is not flagged.
 - No bare `buildRustPackage`; use `pkgs.rustPlatform.buildRustPackage` or
   `crane.buildPackage`.
 - No `flake-utils.lib.eachSystem`; we hand-roll per-system in
@@ -63,7 +64,8 @@ common hard rules are:
 - No `mkIf true x` / `lib.optional true x`; constant conditions on these
   helpers are refactor leftovers.
 - No `name = "${pname}-${version}"` restatement; stdenv constructs `name` from
-  `pname` + `version`.
+  `pname` + `version`. (Use `pname` + `version` instead of a single dashed
+  `name` so updaters and `meta` rendering can parse the version.)
 - Wrap dynamic attrpath antiquotes: `legacyPackages."${system}"`, not
   `legacyPackages.${system}`.
 
@@ -88,13 +90,13 @@ common hard rules are:
 ### Hashes / licenses / fetchers
 
 - Keep raw fetched data artifact URLs out of `flake.nix`.
-- Use `pkgs.*` fetchers instead of `builtins.fetch*`. Use SRI in the `hash`
-  slot (`hash = "sha256-...="`); never `hash = "sha256:..."` (legacy) or
-  `sha256 = ...` in fetchers.
+- Use `pkgs.*` fetchers instead of `builtins.fetch*`. Prefer SRI in the
+  `hash` slot (`hash = "sha256-...="`); never `sha256 = ...` in fetchers.
 - Commit real hashes, never fake hash helpers or placeholders.
 - `meta.license` references `lib.licenses.<id>`, never a raw SPDX string. The
   bare `gpl2` / `gpl3` / `lgpl2` / `lgpl3` / `agpl3` aliases are banned — pick
-  the explicit `*Only` / `*Plus` flavor.
+  the explicit `*Only` / `*Plus` flavor (`agpl3Plus`, not `gpl3Plus`, when the
+  upstream is AGPL).
 
 ### Errors and warnings
 
@@ -114,6 +116,4 @@ common hard rules are:
 - Keep image targets at `x86_64-linux`.
 - Use structured config options for new modules instead of stringly config
   fragments.
-- No `environment.pathsToLink = [ <one> ];` singletons; compose via module
-  merge or `lib.mkAfter`.
 
