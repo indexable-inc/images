@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use bytes::Bytes;
 use nix_web_monitor_parser::MonitorState;
 use tokio::process::Command;
 use tokio::sync::{RwLock, Semaphore, broadcast, mpsc};
 use tokio::task::JoinSet;
 
-use crate::publish_snapshot;
+use crate::broadcast_deltas;
 
 /// Suffix Nix uses for derivation files. A built derivation also references
 /// source paths; only the `.drv` references are edges in the build DAG.
@@ -33,7 +34,7 @@ const MAX_CONCURRENT_QUERIES: usize = 16;
 pub async fn resolve_dependencies(
     mut derivations: mpsc::UnboundedReceiver<String>,
     monitor: Arc<RwLock<MonitorState>>,
-    snapshots: broadcast::Sender<String>,
+    deltas: broadcast::Sender<Bytes>,
 ) -> Result<()> {
     let limit = Arc::new(Semaphore::new(MAX_CONCURRENT_QUERIES));
     let mut queries: JoinSet<Result<()>> = JoinSet::new();
@@ -47,10 +48,10 @@ pub async fn resolve_dependencies(
             .await
             .expect("dependency query semaphore is never closed");
         let monitor = Arc::clone(&monitor);
-        let snapshots = snapshots.clone();
+        let deltas = deltas.clone();
         queries.spawn(async move {
             let _permit = permit;
-            resolve_one(derivation, &monitor, &snapshots).await
+            resolve_one(derivation, &monitor, &deltas).await
         });
 
         // Reap finished queries opportunistically so the set does not grow for
@@ -72,7 +73,7 @@ pub async fn resolve_dependencies(
 async fn resolve_one(
     derivation: String,
     monitor: &Arc<RwLock<MonitorState>>,
-    snapshots: &broadcast::Sender<String>,
+    deltas: &broadcast::Sender<Bytes>,
 ) -> Result<()> {
     let inputs = match direct_input_derivations(&derivation).await {
         Ok(inputs) => inputs,
@@ -86,7 +87,7 @@ async fn resolve_one(
         .write()
         .await
         .record_direct_dependencies(derivation, inputs);
-    publish_snapshot(monitor, snapshots).await
+    broadcast_deltas(monitor, deltas).await
 }
 
 /// Direct input derivations of `derivation`, via the decade-stable

@@ -73,6 +73,22 @@ export const snapshotSchema = v.object({
   finished: v.boolean()
 });
 
+/// One incremental change to the monitor state, mirroring Rust's `Delta` enum.
+/// The live WebTransport stream carries these (msgpack-framed) after an initial
+/// `reset` seed; the discriminant rides in `type`. Field names are camelCase to
+/// match the serde wire shape.
+export const deltaSchema = v.variant('type', [
+  v.object({ type: v.literal('reset'), snapshot: snapshotSchema }),
+  v.object({ type: v.literal('buildUpsert'), build: buildNodeSchema }),
+  v.object({ type: v.literal('activityUpsert'), activity: activityNodeSchema }),
+  v.object({ type: v.literal('logsAppend'), entries: v.array(logEntrySchema) }),
+  v.object({ type: v.literal('progressSet'), progress: activityProgressSchema }),
+  v.object({ type: v.literal('expectedSet'), name: v.string(), value: v.number() }),
+  v.object({ type: v.literal('errorAppend'), message: v.string() }),
+  v.object({ type: v.literal('dependenciesSet'), edges: v.array(derivationEdgeSchema) }),
+  v.object({ type: v.literal('finished'), exitCode: v.nullable(v.number()) })
+]);
+
 export type ActivityStatus = v.InferOutput<typeof activityStatusSchema>;
 export type BuildStatus = v.InferOutput<typeof buildStatusSchema>;
 export type ActivityType = v.InferOutput<typeof activityTypeSchema>;
@@ -82,6 +98,7 @@ export type BuildNode = v.InferOutput<typeof buildNodeSchema>;
 export type LogEntry = v.InferOutput<typeof logEntrySchema>;
 export type DerivationEdge = v.InferOutput<typeof derivationEdgeSchema>;
 export type MonitorSnapshot = v.InferOutput<typeof snapshotSchema>;
+export type Delta = v.InferOutput<typeof deltaSchema>;
 
 /// Purely client-side, never received over the wire.
 export type ConnectionStatus = 'connecting' | 'live' | 'closed' | 'error';

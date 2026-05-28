@@ -42,6 +42,7 @@ anyhow = "1"
 askama = { version = "0.16.0", default-features = false }
 axum = "0.8"
 base64 = "0.22"
+bytes = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
 code-tokenizer = { path = "packages/code-tokenizer" }
@@ -61,6 +62,7 @@ pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 quartz_nbt = "0.2.9"
 repo-walker = { path = "packages/repo-walker" }
 rmcp = "1.7"
+rmp-serde = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
 schemars = "1"
@@ -84,4 +86,5 @@ url = { version = "2.5.8", default-features = false }
 uuid = "1"
 vt100 = "0.16"
 webpki-roots = "1"
+wtransport = "0.7"
 x509-parser = "0.18"

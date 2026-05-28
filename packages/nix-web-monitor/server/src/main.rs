@@ -1,28 +1,36 @@
 use std::collections::HashSet;
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
-use axum::response::sse::{Event, Sse};
 use axum::routing::get;
+use bytes::{BufMut, Bytes, BytesMut};
 use clap::{Parser, ValueEnum};
-use futures::stream;
-use futures::{Stream, StreamExt};
-use nix_web_monitor_parser::{MonitorSnapshot, MonitorState, NixEvent, ParsedLine, strip_ansi};
+use nix_web_monitor_parser::{Delta, MonitorSnapshot, MonitorState, NixEvent, ParsedLine, strip_ansi};
+use serde::Serialize;
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast, mpsc};
-use tokio_stream::wrappers::BroadcastStream;
 use tower_http::services::{ServeDir, ServeFile};
+use wtransport::endpoint::IncomingSession;
+use wtransport::{Endpoint, Identity, ServerConfig};
 
 mod dependencies;
 use dependencies::resolve_dependencies;
+
+/// Bound on the delta broadcast ring. A client that falls this far behind gets
+/// resynced with a fresh `Reset` rather than the dropped frames.
+const DELTA_CHANNEL_CAPACITY: usize = 1024;
+
+/// WebTransport keep-alive. Localhost rarely idles, but a short interval keeps
+/// the QUIC connection from being reaped during a quiet stretch of a long build.
+const KEEP_ALIVE: Duration = Duration::from_secs(3);
 
 #[derive(Parser)]
 #[command(
@@ -35,9 +43,13 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
 
-    /// Port used by the web monitor.
+    /// TCP port for the static UI and JSON endpoints.
     #[arg(long, default_value_t = 7532)]
     port: u16,
+
+    /// UDP port for the WebTransport (HTTP/3) live delta stream.
+    #[arg(long, default_value_t = 7533)]
+    udp_port: u16,
 
     /// Static UI directory. The Nix package wrapper fills this in.
     #[arg(long, env = "NIX_WEB_MONITOR_SITE_DIR")]
@@ -72,10 +84,27 @@ enum TerminalOutput {
     Quiet,
 }
 
+/// Shared state for the HTTP handlers. The live delta feed rides WebTransport,
+/// so the broadcast sender lives with those tasks, not here; HTTP only serves
+/// the one-shot snapshot and the transport handshake.
 #[derive(Clone)]
 struct AppState {
     monitor: Arc<RwLock<MonitorState>>,
-    snapshots: broadcast::Sender<String>,
+    /// What the browser needs to dial the WebTransport endpoint.
+    transport: TransportInfo,
+}
+
+/// Connection details the page fetches over plain HTTP before opening the
+/// WebTransport session. The cert hash lets the browser pin our ephemeral
+/// self-signed certificate via `serverCertificateHashes` instead of the public
+/// PKI, which is what makes a localhost HTTP/3 server reachable without a CA.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TransportInfo {
+    /// UDP port of the WebTransport endpoint.
+    port: u16,
+    /// SHA-256 of the server's self-signed certificate (32 bytes).
+    cert_hash: Vec<u8>,
 }
 
 #[tokio::main]
@@ -83,26 +112,43 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     validate_site_dir(&args.site_dir)?;
 
+    // ECDSA P-256, 14-day validity: exactly what `serverCertificateHashes`
+    // requires, so the browser can pin this cert without a CA.
+    let identity = Identity::self_signed(["localhost", "127.0.0.1", "::1"])
+        .context("generating self-signed WebTransport identity")?;
+    let cert_hash = identity.certificate_chain().as_slice()[0]
+        .hash()
+        .as_ref()
+        .to_vec();
+
     let monitor = Arc::new(RwLock::new(MonitorState::default()));
-    let (snapshots, _) = broadcast::channel(256);
+    let (deltas, _) = broadcast::channel::<Bytes>(DELTA_CHANNEL_CAPACITY);
+
+    let http_addr: SocketAddr = format!("{}:{}", args.host, args.port)
+        .parse()
+        .with_context(|| format!("invalid HTTP address {}:{}", args.host, args.port))?;
+    let udp_addr: SocketAddr = format!("{}:{}", args.host, args.udp_port)
+        .parse()
+        .with_context(|| format!("invalid WebTransport address {}:{}", args.host, args.udp_port))?;
 
     let state = AppState {
         monitor: Arc::clone(&monitor),
-        snapshots: snapshots.clone(),
+        transport: TransportInfo {
+            port: args.udp_port,
+            cert_hash,
+        },
     };
-    let addr: SocketAddr = format!("{}:{}", args.host, args.port)
-        .parse()
-        .with_context(|| format!("invalid web monitor address {}:{}", args.host, args.port))?;
-    let server = serve(addr, args.site_dir, state).await?;
+    let http_server = serve(http_addr, args.site_dir, state).await?;
+    let wt_server = spawn_webtransport(udp_addr, identity, Arc::clone(&monitor), deltas.clone())?;
 
-    eprintln!("nix-web-monitor: http://{addr}");
+    eprintln!("nix-web-monitor: http://{http_addr} (WebTransport on udp/{})", args.udp_port);
 
     let build = tokio::spawn(run_nix_command(
         args.nix_args,
         args.terminal_output,
         args.nix_verbose,
         monitor,
-        snapshots,
+        deltas,
     ));
 
     let exit_code = build.await.context("joining Nix command task")??;
@@ -116,7 +162,8 @@ async fn main() -> Result<()> {
             .await
             .context("waiting for Ctrl-C")?;
     }
-    server.abort();
+    http_server.abort();
+    wt_server.abort();
     // Propagate Nix's exit status either way; otherwise the wrapper masks
     // build failures from shells and CI.
     std::process::exit(exit_code.unwrap_or(1));
@@ -139,46 +186,129 @@ async fn serve(
     }))
 }
 
-/// Build the HTTP router: the JSON/SSE API routes plus the static UI fallback.
-/// Split from [`serve`] so it can be exercised without binding a socket.
+/// Build the HTTP router: the JSON endpoints plus the static UI fallback. The
+/// live stream rides WebTransport, not HTTP, so the only API routes here are the
+/// one-shot snapshot and the transport handshake. Split from [`serve`] so it can
+/// be exercised without binding a socket.
 fn router(site_dir: &Path, state: AppState) -> Router {
     let index = site_dir.join("index.html");
     let static_files = ServeDir::new(site_dir).fallback(ServeFile::new(index));
     Router::new()
-        .route("/api/events", get(events))
         .route("/api/state", get(state_snapshot))
+        .route("/api/transport", get(transport_info))
         .fallback_service(static_files)
         .with_state(state)
 }
 
 /// One-shot snapshot of the current monitor state as JSON, for scripts and
-/// agents that want to `curl | jq` the build tree instead of consuming the SSE
-/// stream at `/api/events`. Same payload the stream seeds each client with.
+/// agents that want to `curl | jq` the build tree instead of opening a
+/// WebTransport session. Same payload the live stream seeds each client with.
 async fn state_snapshot(State(state): State<AppState>) -> Json<MonitorSnapshot> {
     Json(state.monitor.read().await.snapshot())
 }
 
-async fn events(
-    State(state): State<AppState>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    // Subscribe before sending the seed so any snapshot produced between
-    // serialising and forwarding still reaches this client.
-    let receiver = state.snapshots.subscribe();
-    let seed = serde_json::to_string(&state.monitor.read().await.snapshot())
-        .ok()
-        .map(|payload| Event::default().event("snapshot").data(payload));
+/// WebTransport handshake details the page needs before dialing the HTTP/3
+/// endpoint: the UDP port and the certificate hash to pin.
+async fn transport_info(State(state): State<AppState>) -> Json<TransportInfo> {
+    Json(state.transport)
+}
 
-    let seed_stream = stream::iter(seed.map(Ok));
-    let live_stream = BroadcastStream::new(receiver).filter_map(|message| async move {
-        match message {
-            Ok(data) => Some(Ok(Event::default().event("snapshot").data(data))),
-            Err(broadcast_error) => Some(Ok(Event::default()
-                .event("monitor-error")
-                .data(broadcast_error.to_string()))),
+/// Bind the WebTransport endpoint and serve one delta stream per session.
+fn spawn_webtransport(
+    addr: SocketAddr,
+    identity: Identity,
+    monitor: Arc<RwLock<MonitorState>>,
+    deltas: broadcast::Sender<Bytes>,
+) -> Result<tokio::task::JoinHandle<()>> {
+    let config = ServerConfig::builder()
+        .with_bind_address(addr)
+        .with_identity(identity)
+        .keep_alive_interval(Some(KEEP_ALIVE))
+        .build();
+    let endpoint =
+        Endpoint::server(config).with_context(|| format!("binding WebTransport endpoint on {addr}"))?;
+
+    Ok(tokio::spawn(async move {
+        loop {
+            let incoming = endpoint.accept().await;
+            let monitor = Arc::clone(&monitor);
+            let deltas = deltas.clone();
+            tokio::spawn(async move {
+                if let Err(error) = serve_session(incoming, &monitor, &deltas).await {
+                    eprintln!("nix-web-monitor: WebTransport session ended: {error:#}");
+                }
+            });
         }
-    });
+    }))
+}
 
-    Sse::new(seed_stream.chain(live_stream))
+/// Accept one WebTransport session and push deltas on a unidirectional stream:
+/// a `Reset` seed first, then the live feed.
+#[allow(clippy::significant_drop_tightening)] // read lock must outlive subscribe(); see below.
+async fn serve_session(
+    incoming: IncomingSession,
+    monitor: &Arc<RwLock<MonitorState>>,
+    deltas: &broadcast::Sender<Bytes>,
+) -> Result<()> {
+    let connection = incoming
+        .await
+        .context("awaiting WebTransport session request")?
+        .accept()
+        .await
+        .context("accepting WebTransport session")?;
+    let mut stream = connection
+        .open_uni()
+        .await
+        .context("opening unidirectional stream")?
+        .await
+        .context("establishing unidirectional stream")?;
+
+    // Seed and subscribe under the read lock. Broadcasters drain and send while
+    // holding the write lock, so nothing can be broadcast between this snapshot
+    // and the subscription: the seed reflects everything applied so far, and the
+    // receiver captures everything applied after, with no gap or duplicate. The
+    // guard must outlive `subscribe()`, so the function opts out of clippy's
+    // drop-tightening, which would otherwise reopen that gap.
+    let (seed, mut receiver) = {
+        let state = monitor.read().await;
+        let receiver = deltas.subscribe();
+        let seed = frame(&Delta::Reset {
+            snapshot: state.snapshot(),
+        })?;
+        (seed, receiver)
+    };
+    stream.write_all(&seed).await.context("writing seed frame")?;
+
+    loop {
+        match receiver.recv().await {
+            Ok(payload) => stream.write_all(&payload).await.context("writing delta frame")?,
+            // A slow client outran the ring; resync from a fresh snapshot
+            // rather than leaving it stuck on stale state.
+            Err(broadcast::error::RecvError::Lagged(_)) => {
+                let resync = frame(&Delta::Reset {
+                    snapshot: monitor.read().await.snapshot(),
+                })?;
+                stream
+                    .write_all(&resync)
+                    .await
+                    .context("writing resync frame")?;
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+    Ok(())
+}
+
+/// Encode one delta as a length-prefixed msgpack frame: a `u32` big-endian byte
+/// count followed by the payload, so the client can split the stream back into
+/// discrete deltas.
+fn frame(delta: &Delta) -> Result<Bytes> {
+    let payload = rmp_serde::to_vec_named(delta).context("serializing delta to msgpack")?;
+    let len = u32::try_from(payload.len()).context("delta frame exceeds u32 length")?;
+    let mut buf = BytesMut::with_capacity(4 + payload.len());
+    buf.put_u32(len);
+    buf.put_slice(&payload);
+    Ok(buf.freeze())
 }
 
 async fn run_nix_command(
@@ -186,7 +316,7 @@ async fn run_nix_command(
     terminal_output: TerminalOutput,
     nix_verbose: bool,
     monitor: Arc<RwLock<MonitorState>>,
-    snapshots: broadcast::Sender<String>,
+    deltas: broadcast::Sender<Bytes>,
 ) -> Result<Option<i32>> {
     let mut command = Command::new("nix");
     if nix_verbose {
@@ -210,14 +340,14 @@ async fn run_nix_command(
     let resolver_task = tokio::spawn(resolve_dependencies(
         deps_rx,
         Arc::clone(&monitor),
-        snapshots.clone(),
+        deltas.clone(),
     ));
 
     let stdout_task = tokio::spawn(forward_stdout(stdout, terminal_output));
     let stderr_task = tokio::spawn(parse_stderr(
         stderr,
         Arc::clone(&monitor),
-        snapshots.clone(),
+        deltas.clone(),
         terminal_output,
         deps_tx,
     ));
@@ -231,7 +361,7 @@ async fn run_nix_command(
 
     let exit_code = status.code();
     monitor.write().await.finish(exit_code);
-    publish_snapshot(&monitor, &snapshots).await?;
+    broadcast_deltas(&monitor, &deltas).await?;
 
     Ok(exit_code)
 }
@@ -264,7 +394,7 @@ where
 async fn parse_stderr<R>(
     stream: R,
     monitor: Arc<RwLock<MonitorState>>,
-    snapshots: broadcast::Sender<String>,
+    deltas: broadcast::Sender<Bytes>,
     terminal_output: TerminalOutput,
     deps_tx: mpsc::UnboundedSender<String>,
 ) -> Result<()>
@@ -315,19 +445,28 @@ where
         if let Some(rendered) = render_for(terminal_output, &parsed) {
             eprintln!("{rendered}");
         }
-        publish_snapshot(&monitor, &snapshots).await?;
+        broadcast_deltas(&monitor, &deltas).await?;
     }
     Ok(())
 }
 
-pub(crate) async fn publish_snapshot(
+/// Drain the deltas accumulated by the latest mutation and broadcast each as a
+/// framed message. Drains and sends under the write lock so concurrent callers
+/// cannot interleave frames out of the order the state machine produced them.
+// Hold the write lock across the sends on purpose: draining and broadcasting
+// under one lock is what keeps two concurrent callers from interleaving frames
+// out of the order the state machine produced them. Clippy's drop-tightening
+// would release the lock after `drain_deltas`, reopening that race.
+#[allow(clippy::significant_drop_tightening)]
+pub(crate) async fn broadcast_deltas(
     monitor: &Arc<RwLock<MonitorState>>,
-    snapshots: &broadcast::Sender<String>,
+    deltas: &broadcast::Sender<Bytes>,
 ) -> Result<()> {
-    let payload = serde_json::to_string(&monitor.read().await.snapshot())
-        .context("serializing monitor snapshot")?;
-    // Subscribers may all have dropped; that's fine.
-    let _ = snapshots.send(payload);
+    let mut state = monitor.write().await;
+    for delta in state.drain_deltas() {
+        // Subscribers may all have dropped; that's fine.
+        let _ = deltas.send(frame(&delta)?);
+    }
     Ok(())
 }
 
@@ -413,17 +552,22 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
+    fn test_state() -> AppState {
+        AppState {
+            monitor: Arc::new(RwLock::new(MonitorState::default())),
+            transport: TransportInfo {
+                port: 7533,
+                cert_hash: vec![0u8; 32],
+            },
+        }
+    }
+
     /// `/api/state` must be a wired route that serializes the live snapshot to
     /// JSON. Exercises route registration, the handler, and serde output in one
     /// shot without binding a socket or shipping a real site dir.
     #[tokio::test]
     async fn state_endpoint_serves_snapshot_json() {
-        let (snapshots, _) = broadcast::channel(8);
-        let state = AppState {
-            monitor: Arc::new(RwLock::new(MonitorState::default())),
-            snapshots,
-        };
-        let response = router(Path::new("/nonexistent-site"), state)
+        let response = router(Path::new("/nonexistent-site"), test_state())
             .oneshot(
                 Request::builder()
                     .uri("/api/state")
@@ -444,5 +588,51 @@ mod tests {
             json.get("activities").is_some(),
             "snapshot exposes activities"
         );
+    }
+
+    /// The handshake route must expose the UDP port and the 32-byte cert hash
+    /// the browser pins; without both the page cannot open a session.
+    #[tokio::test]
+    async fn transport_endpoint_exposes_port_and_cert_hash() {
+        let response = router(Path::new("/nonexistent-site"), test_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/transport")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("body collects");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("body is JSON");
+        assert_eq!(json.get("port").and_then(serde_json::Value::as_u64), Some(7533));
+        assert_eq!(
+            json.get("certHash").and_then(serde_json::Value::as_array).map(Vec::len),
+            Some(32),
+            "cert hash is the 32-byte SHA-256 the browser pins"
+        );
+    }
+
+    /// A framed delta must carry its msgpack length prefix and decode back to an
+    /// equal value: this is the exact wire contract the browser reframes and
+    /// decodes, so a serialization change that breaks it must fail here.
+    #[test]
+    fn delta_frames_round_trip_through_msgpack() {
+        let delta = Delta::ExpectedSet {
+            name: "build".to_owned(),
+            value: 12,
+        };
+        let framed = frame(&delta).expect("delta frames");
+
+        let len = u32::from_be_bytes(framed[..4].try_into().expect("length prefix")) as usize;
+        assert_eq!(len, framed.len() - 4, "prefix counts the payload bytes");
+
+        let decoded: Delta = rmp_serde::from_slice(&framed[4..]).expect("payload decodes");
+        assert_eq!(decoded, delta);
     }
 }

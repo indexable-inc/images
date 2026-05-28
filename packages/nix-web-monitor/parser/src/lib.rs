@@ -175,6 +175,38 @@ pub struct ActivityProgress {
     pub failed: i64,
 }
 
+/// One incremental change to the monitor state, mirroring the snapshot shape.
+///
+/// The state machine accumulates these as it applies each Nix log line, so the
+/// transport can ship only what changed instead of re-broadcasting the whole
+/// snapshot per line (the O(n²) cost called out on [`MonitorState::logs`]). A
+/// freshly-connected client receives one [`Delta::Reset`] seed, then the live
+/// stream of the variants below. The discriminant rides in a `type` field so
+/// the browser can decode it as a tagged union.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Delta {
+    /// Full state, used only to seed a new subscriber. Never broadcast.
+    Reset { snapshot: MonitorSnapshot },
+    /// A build was created or changed (status, phase, host, failure).
+    BuildUpsert { build: BuildNode },
+    /// An activity was created or changed (status, phase, progress).
+    ActivityUpsert { activity: ActivityNode },
+    /// New log entries appended since the last delta. The client mirrors the
+    /// per-build `logCount` from these so the hot path carries no `BuildUpsert`.
+    LogsAppend { entries: Vec<LogEntry> },
+    /// The aggregate progress line moved.
+    ProgressSet { progress: ActivityProgress },
+    /// The expected count for one activity type was (re)declared.
+    ExpectedSet { name: String, value: i64 },
+    /// One operator/error message was appended to the errors list.
+    ErrorAppend { message: String },
+    /// The dependency DAG was recomputed after learning new edges.
+    DependenciesSet { edges: Vec<DerivationEdge> },
+    /// The wrapped Nix process exited; `exit_code` is its status if any.
+    Finished { exit_code: Option<i32> },
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitorState {
@@ -194,6 +226,12 @@ pub struct MonitorState {
     /// Monotonic counter for `LogEntry.index`. Kept independent of
     /// `logs.len()` so retention pruning never reuses an index.
     log_counter: u64,
+    /// Deltas accumulated since the last [`MonitorState::drain_deltas`]. Each
+    /// mutating method pushes the changes it makes here; the transport drains
+    /// and broadcasts them. Never serialized: it is transient outbound state,
+    /// not part of the snapshot.
+    #[serde(skip)]
+    outbox: Vec<Delta>,
 }
 
 impl MonitorState {
@@ -214,6 +252,35 @@ impl MonitorState {
         }
     }
 
+    /// Take the deltas accumulated since the last drain. The transport calls
+    /// this after every applied line and broadcasts the result; a [`Reset`] seed
+    /// is built separately from [`snapshot`], so it never appears here.
+    ///
+    /// [`Reset`]: Delta::Reset
+    /// [`snapshot`]: MonitorState::snapshot
+    pub fn drain_deltas(&mut self) -> Vec<Delta> {
+        std::mem::take(&mut self.outbox)
+    }
+
+    fn emit(&mut self, delta: Delta) {
+        self.outbox.push(delta);
+    }
+
+    /// Emit the current build node for `derivation` if it exists. Used after a
+    /// mutation that changed a build so the wire carries the new row.
+    fn emit_build(&mut self, derivation: &str) {
+        if let Some(build) = self.builds.get(derivation).cloned() {
+            self.emit(Delta::BuildUpsert { build });
+        }
+    }
+
+    /// Emit the current activity node for `id` if it exists.
+    fn emit_activity(&mut self, id: u64) {
+        if let Some(activity) = self.activities.get(&id).cloned() {
+            self.emit(Delta::ActivityUpsert { activity });
+        }
+    }
+
     /// Record the direct input derivations of one built derivation, learned
     /// from `nix-store --query --references`. Only the `.drv` inputs matter for
     /// the dependency DAG; the caller filters source paths out before calling.
@@ -221,6 +288,9 @@ impl MonitorState {
     /// building later still produces its edge on the next snapshot.
     pub fn record_direct_dependencies(&mut self, derivation: String, input_drvs: Vec<String>) {
         self.direct_deps.insert(derivation, input_drvs);
+        let observed: BTreeSet<&str> = self.builds.keys().map(String::as_str).collect();
+        let edges = dependency_edges(&self.direct_deps, &observed);
+        self.emit(Delta::DependenciesSet { edges });
     }
 
     pub fn apply_line(&mut self, line: &str) -> ParsedLine {
@@ -234,11 +304,18 @@ impl MonitorState {
             ParsedLine::Event(event) => self.apply_event(event),
             ParsedLine::Plain { text } => self.apply_plain(text),
             ParsedLine::ParseError { text, error } => {
-                self.errors
-                    .push(format!("failed to parse Nix event: {error}"));
+                self.push_error(format!("failed to parse Nix event: {error}"));
                 self.push_log(None, None, text);
             }
         }
+    }
+
+    /// Append one operator/error message and emit it. Caps the retained list
+    /// from the head; the client mirrors the same cap, so no trim delta ships.
+    fn push_error(&mut self, message: String) {
+        self.errors.push(message.clone());
+        truncate_head(&mut self.errors, STATE_ERROR_RETAIN);
+        self.emit(Delta::ErrorAppend { message });
     }
 
     /// Settle the run and, on a clean exit, promote `Stopped` builds to
@@ -248,12 +325,20 @@ impl MonitorState {
         self.exit_code = exit_code;
         self.finished = true;
         if exit_code == Some(0) {
-            for build in self.builds.values_mut() {
-                if build.status == BuildStatus::Stopped {
+            let promoted: Vec<String> = self
+                .builds
+                .iter_mut()
+                .filter(|(_, build)| build.status == BuildStatus::Stopped)
+                .map(|(derivation, build)| {
                     build.status = BuildStatus::Succeeded;
-                }
+                    derivation.clone()
+                })
+                .collect();
+            for derivation in promoted {
+                self.emit_build(&derivation);
             }
         }
+        self.emit(Delta::Finished { exit_code });
     }
 
     fn apply_event(&mut self, event: &NixEvent) {
@@ -306,7 +391,7 @@ impl MonitorState {
             self.builds.insert(
                 derivation.clone(),
                 BuildNode {
-                    derivation,
+                    derivation: derivation.clone(),
                     activity_id: Some(action.id),
                     host,
                     phase: None,
@@ -316,7 +401,9 @@ impl MonitorState {
                     stopped_at_ms: None,
                 },
             );
+            self.emit_build(&derivation);
         }
+        self.emit_activity(action.id);
     }
 
     /// Mark the activity stopped. The build status moves to `Stopped` and
@@ -326,16 +413,24 @@ impl MonitorState {
     /// inventing one.
     fn stop_activity(&mut self, id: u64) {
         let now_ms = current_unix_ms();
-        if let Some(activity) = self.activities.get_mut(&id) {
-            activity.status = ActivityStatus::Stopped;
-            activity.stopped_at_ms = Some(now_ms);
-            if let Some(build) = &activity.build
-                && let Some(build_node) = self.builds.get_mut(build)
-                && build_node.status == BuildStatus::Running
-            {
-                build_node.status = BuildStatus::Stopped;
-                build_node.stopped_at_ms = Some(now_ms);
-            }
+        let Some(activity) = self.activities.get_mut(&id) else {
+            return;
+        };
+        activity.status = ActivityStatus::Stopped;
+        activity.stopped_at_ms = Some(now_ms);
+        let stopped_build = if let Some(build) = activity.build.clone()
+            && let Some(build_node) = self.builds.get_mut(&build)
+            && build_node.status == BuildStatus::Running
+        {
+            build_node.status = BuildStatus::Stopped;
+            build_node.stopped_at_ms = Some(now_ms);
+            Some(build)
+        } else {
+            None
+        };
+        self.emit_activity(id);
+        if let Some(build) = stopped_build {
+            self.emit_build(&build);
         }
     }
 
@@ -346,13 +441,19 @@ impl MonitorState {
                 self.push_log(Some(action.id), None, &cleaned);
             }
             ActivityResult::SetPhase { phase } => {
-                if let Some(activity) = self.activities.get_mut(&action.id) {
-                    activity.phase = Some(phase.clone());
-                    if let Some(build) = &activity.build
-                        && let Some(build_node) = self.builds.get_mut(build)
-                    {
-                        build_node.phase = Some(phase.clone());
-                    }
+                let Some(activity) = self.activities.get_mut(&action.id) else {
+                    return;
+                };
+                activity.phase = Some(phase.clone());
+                let changed_build = activity.build.clone();
+                if let Some(build) = &changed_build
+                    && let Some(build_node) = self.builds.get_mut(build)
+                {
+                    build_node.phase = Some(phase.clone());
+                }
+                self.emit_activity(action.id);
+                if let Some(build) = changed_build {
+                    self.emit_build(&build);
                 }
             }
             ActivityResult::Progress { progress } => {
@@ -360,12 +461,20 @@ impl MonitorState {
                 if let Some(activity) = self.activities.get_mut(&action.id) {
                     activity.progress = Some(*progress);
                 }
+                self.emit(Delta::ProgressSet {
+                    progress: *progress,
+                });
+                self.emit_activity(action.id);
             }
             ActivityResult::SetExpected {
                 activity_type,
                 expected,
             } => {
                 self.expected.insert(activity_type.name.clone(), *expected);
+                self.emit(Delta::ExpectedSet {
+                    name: activity_type.name.clone(),
+                    value: *expected,
+                });
             }
             ActivityResult::FetchStatus { status } => {
                 // Surface substituter fetch status in the log stream. It used
@@ -381,8 +490,7 @@ impl MonitorState {
     fn apply_message(&mut self, action: &MessageAction) {
         let cleaned = Self::cleaned_message(action);
         if action.level == Some(NIX_LEVEL_ERROR) {
-            self.errors.push(cleaned.clone());
-            truncate_head(&mut self.errors, STATE_ERROR_RETAIN);
+            self.push_error(cleaned.clone());
         }
         // Surface operator messages in the UI log panel too; otherwise an
         // eval failure shows up as an empty log with only an exit code.
@@ -394,19 +502,19 @@ impl MonitorState {
         // cleaned form would silently miss modern Nix failure patterns.
         let stripped = strip_ansi(&action.message);
         if let Some(failure) = parse_builder_failure(&stripped) {
-            self.mark_failed_build(failure);
+            self.mark_failed_build(&failure);
         }
     }
 
     fn apply_plain(&mut self, text: &str) {
         let stripped = strip_ansi(text);
         if let Some(failure) = parse_builder_failure(&stripped) {
-            self.mark_failed_build(failure);
+            self.mark_failed_build(&failure);
         }
         self.push_log(None, None, &stripped);
     }
 
-    fn mark_failed_build(&mut self, failure: BuilderFailure) {
+    fn mark_failed_build(&mut self, failure: &BuilderFailure) {
         use std::collections::btree_map::Entry;
         let now_ms = current_unix_ms();
         match self.builds.entry(failure.derivation.clone()) {
@@ -419,7 +527,7 @@ impl MonitorState {
             }
             Entry::Vacant(entry) => {
                 entry.insert(BuildNode {
-                    derivation: failure.derivation,
+                    derivation: failure.derivation.clone(),
                     activity_id: None,
                     host: None,
                     phase: None,
@@ -430,6 +538,7 @@ impl MonitorState {
                 });
             }
         }
+        self.emit_build(&failure.derivation);
     }
 
     fn push_log(&mut self, activity_id: Option<u64>, level: Option<i64>, text: &str) {
@@ -443,13 +552,17 @@ impl MonitorState {
             build_node.log_count += 1;
         }
 
-        self.logs.push(LogEntry {
+        let entry = LogEntry {
             index,
             activity_id,
             level,
             text: text.to_owned(),
-        });
+        };
+        self.logs.push(entry.clone());
         truncate_head(&mut self.logs, STATE_LOG_RETAIN);
+        self.emit(Delta::LogsAppend {
+            entries: vec![entry],
+        });
     }
 }
 
@@ -1213,6 +1326,85 @@ mod tests {
         assert_eq!(
             state.snapshot().dependencies,
             vec![edge("/nix/store/aaa-app.drv", "/nix/store/bbb-lib.drv")]
+        );
+    }
+
+    #[test]
+    fn build_start_emits_build_and_activity_upserts() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"start","fields":["/nix/store/abc-demo.drv","ssh://builder",1,1],"id":7,"level":3,"text":"building","type":105}"#);
+
+        let deltas = state.drain_deltas();
+        let build = deltas.iter().find_map(|delta| match delta {
+            Delta::BuildUpsert { build } => Some(build),
+            _ => None,
+        });
+        assert_eq!(
+            build.map(|build| (build.derivation.as_str(), build.host.as_deref())),
+            Some(("/nix/store/abc-demo.drv", Some("ssh://builder"))),
+            "build start carries the derivation and host on a BuildUpsert"
+        );
+        assert!(
+            deltas
+                .iter()
+                .any(|delta| matches!(delta, Delta::ActivityUpsert { activity } if activity.id == 7)),
+            "build start also upserts its activity row"
+        );
+    }
+
+    #[test]
+    fn log_line_emits_one_logs_append() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"start","fields":["/nix/store/abc-demo.drv","local",1,1],"id":7,"level":3,"text":"building","type":105}"#);
+        state.drain_deltas();
+        state.apply_line(r#"@nix {"action":"result","fields":["compiling"],"id":7,"type":101}"#);
+
+        let appends: Vec<Vec<LogEntry>> = state
+            .drain_deltas()
+            .into_iter()
+            .filter_map(|delta| match delta {
+                Delta::LogsAppend { entries } => Some(entries),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(appends.len(), 1, "one log line yields exactly one LogsAppend");
+        assert_eq!(appends[0].len(), 1);
+        assert_eq!(appends[0][0].text, "compiling");
+    }
+
+    #[test]
+    fn finish_promotes_stopped_build_then_signals_finished() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"start","fields":["/nix/store/abc-demo.drv","local",1,1],"id":7,"level":3,"text":"building","type":105}"#);
+        state.apply_line(r#"@nix {"action":"stop","id":7}"#);
+        state.drain_deltas();
+
+        state.finish(Some(0));
+        let deltas = state.drain_deltas();
+
+        let promoted = deltas.iter().find_map(|delta| match delta {
+            Delta::BuildUpsert { build } => Some(build.status),
+            _ => None,
+        });
+        assert_eq!(
+            promoted,
+            Some(BuildStatus::Succeeded),
+            "a clean finish promotes the stopped build via BuildUpsert"
+        );
+        assert!(
+            matches!(deltas.last(), Some(Delta::Finished { exit_code: Some(0) })),
+            "Finished is the terminal delta"
+        );
+    }
+
+    #[test]
+    fn drain_clears_the_outbox() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"start","fields":["/nix/store/abc-demo.drv","local",1,1],"id":7,"level":3,"text":"building","type":105}"#);
+        assert!(!state.drain_deltas().is_empty(), "first drain yields the start deltas");
+        assert!(
+            state.drain_deltas().is_empty(),
+            "a second drain with no intervening mutation is empty"
         );
     }
 }
