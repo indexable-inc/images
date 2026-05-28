@@ -14,7 +14,8 @@
 
   const { logs, selectedActivityId, onclearselection }: Props = $props();
 
-  type LevelFilter = 'all' | 'error' | 'warn' | 'info';
+  const LEVEL_FILTERS = ['all', 'error', 'warn', 'info'] as const;
+  type LevelFilter = (typeof LEVEL_FILTERS)[number];
   let levelFilter = $state<LevelFilter>('all');
   let search = $state('');
   let stream = $state<HTMLDivElement | null>(null);
@@ -101,7 +102,7 @@
   <PanelHeader title="logs">
     <div class="log-controls">
       <div class="filter-chips" role="tablist" aria-label="log level filter">
-        {#each ['all', 'error', 'warn', 'info'] as const as choice (choice)}
+        {#each LEVEL_FILTERS as choice (choice)}
           <button
             type="button"
             class="chip"

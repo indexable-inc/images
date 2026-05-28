@@ -238,8 +238,29 @@ async fn parse_stderr<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let mut lines = BufReader::new(stream).lines();
-    while let Some(line) = lines.next_line().await.context("reading nix stderr")? {
+    // Read raw bytes per line, then decode lossily. `BufReader::lines()`
+    // would error out on the first non-UTF-8 byte and stop draining stderr,
+    // which would block the child once the pipe filled. Lossy decode keeps
+    // the stream flowing for builders that emit invalid UTF-8 (binary
+    // spillover, mis-set locales, etc.).
+    let mut reader = BufReader::new(stream);
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        buf.clear();
+        let read = reader
+            .read_until(b'\n', &mut buf)
+            .await
+            .context("reading nix stderr")?;
+        if read == 0 {
+            break;
+        }
+        if buf.last() == Some(&b'\n') {
+            buf.pop();
+        }
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+        let line = String::from_utf8_lossy(&buf);
         let parsed = monitor.write().await.apply_line(&line);
         if let Some(rendered) = render_for(terminal_output, &parsed) {
             eprintln!("{rendered}");
@@ -261,13 +282,11 @@ async fn publish_snapshot(
 }
 
 fn render_for(terminal_output: TerminalOutput, parsed: &ParsedLine) -> Option<String> {
-    if let Some(line) = default_render(parsed) {
-        return Some(line);
-    }
+    // Quiet truly means quiet: skip the default plain/parse-error fallthrough.
     match terminal_output {
         TerminalOutput::Quiet => None,
-        TerminalOutput::Summary => render_summary_event(parsed),
-        TerminalOutput::Logs => render_log_event(parsed),
+        TerminalOutput::Summary => default_render(parsed).or_else(|| render_summary_event(parsed)),
+        TerminalOutput::Logs => default_render(parsed).or_else(|| render_log_event(parsed)),
     }
 }
 

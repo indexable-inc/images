@@ -14,9 +14,17 @@ const NIX_LEVEL_ERROR: i64 = 0;
 
 /// Maximum log entries shipped per snapshot. The UI only renders the tail and
 /// we re-broadcast on every line, so the full backlog would make total bytes
-/// scale O(n^2) with build verbosity. Older entries stay in `MonitorState`
-/// for the lifetime of the process but never leave the server.
+/// scale O(n^2) with build verbosity.
 const SNAPSHOT_LOG_LIMIT: usize = 500;
+
+/// Maximum log entries retained server-side. Older entries get dropped from
+/// the head once we exceed this; without the cap a long-lived monitor would
+/// hold every line the wrapped Nix process emitted in memory forever.
+const STATE_LOG_RETAIN: usize = 5_000;
+
+/// Same idea for `messages` and `errors`; these grow once per `msg` event,
+/// which is bounded but unfriendly for warning-heavy evals or long fetches.
+const STATE_MESSAGE_RETAIN: usize = 2_000;
 
 mod result_code {
     pub const FILE_LINKED: u64 = 100;
@@ -179,6 +187,9 @@ pub struct MonitorState {
     pub expected: BTreeMap<String, i64>,
     pub exit_code: Option<i32>,
     pub finished: bool,
+    /// Monotonic counter for `LogEntry.index`. Kept independent of
+    /// `logs.len()` so retention pruning never reuses an index.
+    log_counter: u64,
 }
 
 impl MonitorState {
@@ -354,14 +365,21 @@ impl MonitorState {
     fn apply_message(&mut self, action: &MessageAction) {
         let cleaned = Self::cleaned_message(action);
         self.messages.push(cleaned.clone());
+        truncate_head(&mut self.messages, STATE_MESSAGE_RETAIN);
         if action.level == Some(NIX_LEVEL_ERROR) {
             self.errors.push(cleaned.clone());
+            truncate_head(&mut self.errors, STATE_MESSAGE_RETAIN);
         }
         // Surface operator messages in the UI log panel too; otherwise an
         // eval failure shows up as an empty log with only an exit code.
         self.push_log(None, action.level, &cleaned);
 
-        if let Some(failure) = parse_builder_failure(&cleaned) {
+        // Failure detection runs on the formatted msg (which preserves the
+        // "error: ..." prefix that `parse_builder_failure` keys on); raw_msg
+        // is the body of the message without the severity word so the
+        // cleaned form would silently miss modern Nix failure patterns.
+        let stripped = strip_ansi(&action.message);
+        if let Some(failure) = parse_builder_failure(&stripped) {
             self.mark_failed_build(failure);
         }
     }
@@ -401,7 +419,8 @@ impl MonitorState {
     }
 
     fn push_log(&mut self, activity_id: Option<u64>, level: Option<i64>, text: &str) {
-        let index = self.logs.len();
+        let index = usize::try_from(self.log_counter).unwrap_or(usize::MAX);
+        self.log_counter = self.log_counter.saturating_add(1);
         if let Some(id) = activity_id
             && let Some(activity) = self.activities.get(&id)
             && let Some(build) = &activity.build
@@ -416,6 +435,15 @@ impl MonitorState {
             level,
             text: text.to_owned(),
         });
+        truncate_head(&mut self.logs, STATE_LOG_RETAIN);
+    }
+}
+
+/// Drop entries from the front so the collection never exceeds `max`.
+/// Cheap when `max - new.len()` is small (the common steady-state).
+fn truncate_head<T>(items: &mut Vec<T>, max: usize) {
+    if items.len() > max {
+        items.drain(..items.len() - max);
     }
 }
 
@@ -964,5 +992,44 @@ mod tests {
             "error: Cannot build '/nix/store/xyz-demo.drv'. Reason: builder failed with exit code 1.",
         );
         assert_eq!(state.snapshot().builds[0].status, BuildStatus::Failed);
+    }
+
+    #[test]
+    fn raw_msg_does_not_hide_msg_based_failure_detection() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"start","fields":["/nix/store/xyz-demo.drv","local",1,1],"id":11,"level":3,"text":"building '/nix/store/xyz-demo.drv'","type":105}"#);
+        state.apply_line(r#"@nix {"action":"stop","id":11}"#);
+        // Nix sometimes ships the formatted message in `msg` and a stripped
+        // body in `raw_msg`. The display string is the raw body, but failure
+        // detection still needs to key on the formatted `msg` prefix.
+        state.apply_line(
+            r#"@nix {"action":"msg","level":0,"msg":"error: Cannot build '/nix/store/xyz-demo.drv'. Reason: builder failed with exit code 1.","raw_msg":"Cannot build '/nix/store/xyz-demo.drv'. Reason: builder failed with exit code 1."}"#,
+        );
+        assert_eq!(state.snapshot().builds[0].status, BuildStatus::Failed);
+    }
+
+    #[test]
+    fn log_retention_drops_head_but_keeps_indices_monotonic() {
+        let mut state = MonitorState::default();
+        let total = STATE_LOG_RETAIN + 50;
+        for i in 0..total {
+            state.apply_line(&format!("line {i}"));
+        }
+        assert_eq!(state.logs.len(), STATE_LOG_RETAIN);
+        let first_index = state.logs.first().unwrap().index;
+        let last_index = state.logs.last().unwrap().index;
+        assert_eq!(first_index, 50, "head is dropped after retention overflow");
+        assert_eq!(last_index, total - 1, "indices never reused");
+    }
+
+    #[test]
+    fn message_retention_caps_messages_array() {
+        let mut state = MonitorState::default();
+        for i in 0..(STATE_MESSAGE_RETAIN + 25) {
+            state.apply_line(&format!(
+                "@nix {{\"action\":\"msg\",\"level\":3,\"msg\":\"warn {i}\"}}"
+            ));
+        }
+        assert_eq!(state.snapshot().messages.len(), STATE_MESSAGE_RETAIN);
     }
 }
