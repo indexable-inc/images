@@ -44,6 +44,7 @@ const buildNodeSchema = v.object({
 const logEntrySchema = v.object({
   index: v.number(),
   activityId: v.nullable(v.number()),
+  level: v.nullable(v.number()),
   text: v.string()
 });
 

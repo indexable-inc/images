@@ -38,6 +38,8 @@ export type BuildNode = Readonly<{
 export type LogEntry = Readonly<{
   index: number;
   activityId: number | null;
+  /// Nix log level when known. 0=error, 1=warn, 2=notice, 3=info, 4+=debug-ish.
+  level: number | null;
   text: string;
 }>;
 

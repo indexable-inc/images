@@ -274,35 +274,22 @@ pre {
   user-select: none;
 }
 
-.bold {
-  font-weight: 700;
+.log-error {
+  color: var(--red);
 }
 
-.fg-black { color: #4b5563; }
-.fg-red { color: var(--red); }
-.fg-green { color: var(--green); }
-.fg-yellow { color: var(--amber); }
-.fg-blue { color: var(--blue); }
-.fg-magenta { color: #c084fc; }
-.fg-cyan { color: #67e8f9; }
-.fg-white { color: var(--ink); }
-.fg-bright-black { color: var(--muted); }
-.fg-bright-red { color: #fca5a5; }
-.fg-bright-green { color: #86efac; }
-.fg-bright-yellow { color: #fde68a; }
-.fg-bright-blue { color: #93c5fd; }
-.fg-bright-magenta { color: #e9d5ff; }
-.fg-bright-cyan { color: #a5f3fc; }
-.fg-bright-white { color: #f9fafb; }
+.log-warn {
+  color: var(--amber);
+}
 
-.bg-black { background: #1f2937; }
-.bg-red { background: color-mix(in srgb, var(--red) 25%, transparent); }
-.bg-green { background: color-mix(in srgb, var(--green) 25%, transparent); }
-.bg-yellow { background: color-mix(in srgb, var(--amber) 25%, transparent); }
-.bg-blue { background: color-mix(in srgb, var(--blue) 25%, transparent); }
-.bg-magenta { background: color-mix(in srgb, #c084fc 25%, transparent); }
-.bg-cyan { background: color-mix(in srgb, #67e8f9 25%, transparent); }
-.bg-white { background: color-mix(in srgb, var(--ink) 15%, transparent); }
+.log-notice {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.log-debug {
+  color: var(--faint);
+}
 
 .empty {
   color: var(--faint);

@@ -210,7 +210,7 @@ impl MonitorState {
             ParsedLine::ParseError { text, error } => {
                 self.errors
                     .push(format!("failed to parse Nix event: {error}"));
-                self.push_log(None, text);
+                self.push_log(None, None, text);
             }
         }
     }
@@ -238,6 +238,15 @@ impl MonitorState {
             NixEvent::Message(action) => self.apply_message(action),
             NixEvent::Unknown { .. } => {}
         }
+    }
+
+    /// Prefer Nix's clean `raw_msg`; otherwise strip ANSI ourselves. The
+    /// log panel never gets literal escape bytes either way.
+    fn cleaned_message(action: &MessageAction) -> String {
+        action
+            .raw_message
+            .clone()
+            .unwrap_or_else(|| strip_ansi(&action.message))
     }
 
     fn start_activity(&mut self, action: &StartAction) {
@@ -301,7 +310,8 @@ impl MonitorState {
     fn apply_result(&mut self, action: &ResultAction) {
         match &action.result {
             ActivityResult::BuildLogLine { line } | ActivityResult::PostBuildLogLine { line } => {
-                self.push_log(Some(action.id), line);
+                let cleaned = strip_ansi(line);
+                self.push_log(Some(action.id), None, &cleaned);
             }
             ActivityResult::SetPhase { phase } => {
                 if let Some(activity) = self.activities.get_mut(&action.id) {
@@ -333,16 +343,16 @@ impl MonitorState {
     }
 
     fn apply_message(&mut self, action: &MessageAction) {
-        self.messages.push(action.message.clone());
+        let cleaned = Self::cleaned_message(action);
+        self.messages.push(cleaned.clone());
         if action.level == Some(NIX_LEVEL_ERROR) {
-            self.errors.push(action.message.clone());
+            self.errors.push(cleaned.clone());
         }
         // Surface operator messages in the UI log panel too; otherwise an
         // eval failure shows up as an empty log with only an exit code.
-        self.push_log(None, &action.message);
+        self.push_log(None, action.level, &cleaned);
 
-        let stripped = strip_ansi(&action.message);
-        if let Some(failure) = parse_builder_failure(&stripped) {
+        if let Some(failure) = parse_builder_failure(&cleaned) {
             self.mark_failed_build(failure);
         }
     }
@@ -352,7 +362,7 @@ impl MonitorState {
         if let Some(failure) = parse_builder_failure(&stripped) {
             self.mark_failed_build(failure);
         }
-        self.push_log(None, text);
+        self.push_log(None, None, &stripped);
     }
 
     fn mark_failed_build(&mut self, failure: BuilderFailure) {
@@ -374,7 +384,7 @@ impl MonitorState {
         }
     }
 
-    fn push_log(&mut self, activity_id: Option<u64>, text: &str) {
+    fn push_log(&mut self, activity_id: Option<u64>, level: Option<i64>, text: &str) {
         let index = self.logs.len();
         if let Some(id) = activity_id
             && let Some(activity) = self.activities.get(&id)
@@ -387,6 +397,7 @@ impl MonitorState {
         self.logs.push(LogEntry {
             index,
             activity_id,
+            level,
             text: text.to_owned(),
         });
     }
@@ -456,6 +467,9 @@ pub enum BuildStatus {
 pub struct LogEntry {
     pub index: usize,
     pub activity_id: Option<u64>,
+    /// Nix log level when known (0=error, 1=warn, 2=notice, 3=info, ...).
+    /// `None` for builder output and plain stdout lines.
+    pub level: Option<i64>,
     pub text: String,
 }
 
@@ -707,7 +721,53 @@ fn next_tick(value: usize) -> u64 {
 }
 
 fn strip_ansi(text: &str) -> String {
-    String::from_utf8(strip_ansi_escapes::strip(text)).unwrap_or_else(|_| text.to_owned())
+    let no_esc =
+        String::from_utf8(strip_ansi_escapes::strip(text)).unwrap_or_else(|_| text.to_owned());
+    strip_orphan_sgr(&no_esc)
+}
+
+/// Drop bare CSI SGR sequences like `[35;1m` / `[0m` that survive when the
+/// upstream encoder loses the `ESC` byte (some Nix paths emit msg fields
+/// where the leading 0x1B has been pre-stripped). The pattern is narrow on
+/// purpose: digits separated by `;` terminated by `m`, so legitimate text
+/// such as `[1]` or `[main]` stays intact.
+fn strip_orphan_sgr(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        if ch != '[' {
+            out.push(ch);
+            continue;
+        }
+
+        let mut end = idx + 1;
+        let mut saw_digit = false;
+        let mut matched = false;
+        while let Some(&(j, next)) = chars.peek() {
+            if next.is_ascii_digit() {
+                saw_digit = true;
+                end = j + 1;
+                chars.next();
+            } else if next == ';' && saw_digit {
+                end = j + 1;
+                chars.next();
+            } else if next == 'm' && saw_digit {
+                end = j + 1;
+                chars.next();
+                matched = true;
+                break;
+            } else {
+                break;
+            }
+        }
+
+        if matched {
+            continue;
+        }
+        out.push('[');
+        out.push_str(&text[idx + 1..end]);
+    }
+    out
 }
 
 fn parse_builder_failure(text: &str) -> Option<BuilderFailure> {
@@ -802,7 +862,7 @@ mod tests {
     fn error_level_message_is_recorded_as_error() {
         let mut state = MonitorState::default();
         state.apply_line(
-            r#"@nix {"action":"msg","level":0,"msg":"something went wrong","raw_msg":"x"}"#,
+            r#"@nix {"action":"msg","level":0,"msg":"something went wrong"}"#,
         );
         assert_eq!(state.snapshot().errors, vec!["something went wrong"]);
     }
@@ -811,13 +871,41 @@ mod tests {
     fn operator_messages_reach_the_log_stream() {
         let mut state = MonitorState::default();
         state.apply_line(
-            r#"@nix {"action":"msg","level":0,"msg":"eval failed: undefined variable","raw_msg":"x"}"#,
+            r#"@nix {"action":"msg","level":0,"msg":"eval failed: undefined variable"}"#,
         );
         let snapshot = state.snapshot();
         assert_eq!(
             snapshot.logs.last().map(|entry| entry.text.as_str()),
             Some("eval failed: undefined variable"),
             "messages should be visible in the log panel"
+        );
+        assert_eq!(snapshot.logs.last().and_then(|entry| entry.level), Some(0));
+    }
+
+    #[test]
+    fn ansi_codes_are_stripped_before_reaching_the_log_panel() {
+        let mut state = MonitorState::default();
+        // Nix emits SGR codes in `msg`; the UI never gets the raw bytes.
+        state.apply_line(
+            r#"@nix {"action":"msg","level":1,"msg":"[35;1mwarning:[0m unknown setting 'foo'"}"#,
+        );
+        let snapshot = state.snapshot();
+        assert_eq!(
+            snapshot.logs.last().map(|entry| entry.text.as_str()),
+            Some("warning: unknown setting 'foo'")
+        );
+    }
+
+    #[test]
+    fn raw_msg_is_preferred_when_present() {
+        let mut state = MonitorState::default();
+        state.apply_line(
+            r#"@nix {"action":"msg","level":0,"msg":"[31merror[0m: oops","raw_msg":"error: oops"}"#,
+        );
+        let snapshot = state.snapshot();
+        assert_eq!(
+            snapshot.logs.last().map(|entry| entry.text.as_str()),
+            Some("error: oops")
         );
     }
 
