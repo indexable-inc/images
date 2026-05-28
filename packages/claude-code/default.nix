@@ -12,10 +12,17 @@
 }:
 
 let
-  # 2.1.154 is the `next` prerelease channel (npm dist-tag `next`); the
-  # `latest` stable channel is still 2.1.153. It is the first build that
-  # defaults `/fast` to Opus 4.8, which is why it is pinned here ahead of
-  # the stable promotion. Bump by re-prefetching each platform binary:
+  # Pinned to a prerelease build on purpose. Anthropic publishes new Claude
+  # Code versions to the npm `next` (prerelease) tag days before promoting
+  # them to `latest` (stable), and every channel that normally surfaces an
+  # upgrade only watches `latest`: the built-in `claude` auto-updater and
+  # `claude doctor` both reported "up to date", and sadjow/claude-code-nix
+  # (the usual Nix source) tracks stable too. At the Opus 4.8 launch 2.1.154
+  # sat on `next` while everything else still showed 2.1.153, yet 2.1.154 is
+  # the first build that defaults `/fast` to Opus 4.8. Fetching the platform
+  # binary directly by version is the only way to pin ahead of the stable
+  # promotion. When `latest` catches up, this can fall back to a channel that
+  # tracks stable. Bump by re-prefetching each platform binary:
   #   nix store prefetch-file --json \
   #     https://downloads.claude.ai/claude-code-releases/<version>/<slug>/claude
   version = "2.1.154";
