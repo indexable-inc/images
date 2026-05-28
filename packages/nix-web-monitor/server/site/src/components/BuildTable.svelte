@@ -1,20 +1,32 @@
 <script lang="ts">
+  import { SvelteSet } from 'svelte/reactivity';
   import PanelHeader from '$lib/PanelHeader.svelte';
+  import BuildTree from '$components/BuildTree.svelte';
   import { splitDerivation, formatDuration } from '$lib/format';
+  import { buildDependencyTree } from '$lib/build-tree';
   import { useNow } from '$lib/now.svelte';
-  import { ACTIVITY_NAME_BUILD, type BuildNode, type BuildStatus } from '$lib/types';
+  import {
+    ACTIVITY_NAME_BUILD,
+    type BuildNode,
+    type BuildStatus,
+    type DerivationEdge
+  } from '$lib/types';
 
   type Props = {
     builds: BuildNode[];
+    dependencies: DerivationEdge[];
     expected: Record<string, number>;
     selectedActivityId: number | null;
     onselect: (activityId: number | null) => void;
   };
 
-  const { builds, expected, selectedActivityId, onselect }: Props = $props();
+  const { builds, dependencies, expected, selectedActivityId, onselect }: Props = $props();
 
   const now = useNow();
 
+  /// Running first, then failed, stopped, and finally succeeded; ties broken by
+  /// derivation path. Shared by the flat list and the dependency tree so both
+  /// views rank builds the same way.
   const STATUS_ORDER: Record<BuildStatus, number> = {
     running: 0,
     failed: 1,
@@ -22,12 +34,17 @@
     succeeded: 3
   };
 
-  const ordered = $derived(
-    builds.toSorted((left, right) => {
-      const byStatus = STATUS_ORDER[left.status] - STATUS_ORDER[right.status];
-      return byStatus !== 0 ? byStatus : left.derivation.localeCompare(right.derivation);
-    })
-  );
+  function compareBuilds(left: BuildNode, right: BuildNode): number {
+    const byStatus = STATUS_ORDER[left.status] - STATUS_ORDER[right.status];
+    return byStatus !== 0 ? byStatus : left.derivation.localeCompare(right.derivation);
+  }
+
+  /// Tree view nests builds by dependency; flat view is the plain sorted list.
+  let layout = $state<'flat' | 'tree'>('flat');
+
+  const ordered = $derived(builds.toSorted(compareBuilds));
+  const tree = $derived(buildDependencyTree(builds, dependencies, compareBuilds));
+  const collapsed = new SvelteSet<string>();
 
   const expectedBuilds = $derived(expected[ACTIVITY_NAME_BUILD] ?? 0);
 
@@ -53,49 +70,86 @@
 
 <section class="panel builds-panel">
   <PanelHeader title="builds">
+    <div class="filter-chips">
+      <button type="button" class="chip" class:active={layout === 'flat'} onclick={() => (layout = 'flat')}>
+        flat
+      </button>
+      <button
+        type="button"
+        class="chip"
+        class:active={layout === 'tree'}
+        title={tree.hasEdges ? 'nest builds by dependency' : 'no dependency edges resolved yet'}
+        onclick={() => (layout = 'tree')}
+      >
+        tree
+      </button>
+    </div>
     <span class="panel-meta">
       {String(builds.length)}{#if expectedBuilds > 0} / {String(expectedBuilds)}{/if}
     </span>
   </PanelHeader>
-  <div class="build-table">
-    {#each ordered as build (build.derivation)}
-      {@const parts = splitDerivation(build.derivation)}
-      {@const selected = build.activityId !== null && build.activityId === selectedActivityId}
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <div
-        class="build-row"
-        class:selected
-        class:clickable={build.activityId !== null}
-        role={build.activityId !== null ? 'button' : undefined}
-        tabindex={build.activityId !== null ? 0 : undefined}
-        aria-pressed={build.activityId !== null ? selected : undefined}
-        onclick={() => { toggleSelect(build); }}
-        onkeydown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            toggleSelect(build);
-          }
-        }}
-      >
-        <div class="state" data-state={build.status} title={build.status}></div>
-        <div class="drv" title={build.derivation}>
-          <span class="drv-hash">{parts.hash}</span><span class="drv-name">{parts.name}</span>
-        </div>
-        <div class="where" class:remote={whereIsRemote(build.host)} title={whereLabel(build.host)}>
-          {whereLabel(build.host)}
-        </div>
-        <div class="phase">{build.phase ?? ''}</div>
-        <div class="duration">{formatDuration(elapsedMs(build))}</div>
-        <div class="right">{String(build.logCount)}</div>
-      </div>
+  <div class="build-table" class:tree={layout === 'tree'}>
+    {#if layout === 'tree'}
+      {#each tree.roots as rootDrv, index (rootDrv)}
+        <BuildTree
+          drv={rootDrv}
+          {tree}
+          {collapsed}
+          ontoggle={(drv: string) => {
+            if (collapsed.has(drv)) collapsed.delete(drv);
+            else collapsed.add(drv);
+          }}
+          now={now.value}
+          {selectedActivityId}
+          {onselect}
+          guideLines={[]}
+          isLast={index === tree.roots.length - 1}
+          isRoot={true}
+          ancestors={new Set()}
+        />
+      {:else}
+        <div class="empty wide">waiting for build phase</div>
+      {/each}
     {:else}
-      <div class="empty wide">
-        {#if expectedBuilds > 0}
-          waiting for {String(expectedBuilds)} build{expectedBuilds === 1 ? '' : 's'}
-        {:else}
-          waiting for build phase
-        {/if}
-      </div>
-    {/each}
+      {#each ordered as build (build.derivation)}
+        {@const parts = splitDerivation(build.derivation)}
+        {@const selected = build.activityId !== null && build.activityId === selectedActivityId}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <div
+          class="build-row"
+          class:selected
+          class:clickable={build.activityId !== null}
+          role={build.activityId !== null ? 'button' : undefined}
+          tabindex={build.activityId !== null ? 0 : undefined}
+          aria-pressed={build.activityId !== null ? selected : undefined}
+          onclick={() => { toggleSelect(build); }}
+          onkeydown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              toggleSelect(build);
+            }
+          }}
+        >
+          <div class="state" data-state={build.status} title={build.status}></div>
+          <div class="drv" title={build.derivation}>
+            <span class="drv-hash">{parts.hash}</span><span class="drv-name">{parts.name}</span>
+          </div>
+          <div class="where" class:remote={whereIsRemote(build.host)} title={whereLabel(build.host)}>
+            {whereLabel(build.host)}
+          </div>
+          <div class="phase">{build.phase ?? ''}</div>
+          <div class="duration">{formatDuration(elapsedMs(build))}</div>
+          <div class="right">{String(build.logCount)}</div>
+        </div>
+      {:else}
+        <div class="empty wide">
+          {#if expectedBuilds > 0}
+            waiting for {String(expectedBuilds)} build{expectedBuilds === 1 ? '' : 's'}
+          {:else}
+            waiting for build phase
+          {/if}
+        </div>
+      {/each}
+    {/if}
   </div>
 </section>

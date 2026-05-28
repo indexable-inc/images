@@ -1,0 +1,15 @@
+---
+id: nix-web-monitor-dependency-tree
+postedAt: 2026-05-28T11:30:00-07:00
+title: "`nix-web-monitor` builds panel can nest derivations by dependency"
+tags: [nix, tooling, observability]
+links:
+  - label: nix-web-monitor
+    href: https://github.com/indexable-inc/index/tree/main/packages/nix-web-monitor
+---
+
+The builds panel now has a `flat` / `tree` toggle. Tree mode nests each built derivation under the derivation that depends on it, so you can read which build is waiting on which instead of scanning a flat list.
+
+Nix's `internal-json` log stream names every derivation it builds but carries no edges between them, so the monitor learns the structure out of band: for each built derivation it queries `nix-store --query --references` for the direct input `.drv` paths, keeps the edges between derivations that actually built this run, and transitively reduces them so a chain `a → b → c` never also draws the redundant `a → c`.
+
+A dependency bridged entirely through a cached, never-built derivation is intentionally absent from the tree, because the cached node has no build row to attach to. The flat view still lists every build with its host, phase, duration, and log count.

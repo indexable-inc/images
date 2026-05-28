@@ -53,6 +53,14 @@ export const logEntrySchema = v.object({
   text: v.string()
 });
 
+/// One directed dependency edge in the build DAG: `from` directly requires
+/// `to`. Both are `derivation` paths matching a `BuildNode`, so the tree view
+/// joins edges to build rows by string identity.
+export const derivationEdgeSchema = v.object({
+  from: v.string(),
+  to: v.string()
+});
+
 export const snapshotSchema = v.object({
   activities: v.array(activityNodeSchema),
   builds: v.array(buildNodeSchema),
@@ -60,6 +68,7 @@ export const snapshotSchema = v.object({
   errors: v.array(v.string()),
   progress: v.nullable(activityProgressSchema),
   expected: v.record(v.string(), v.number()),
+  dependencies: v.array(derivationEdgeSchema),
   exitCode: v.nullable(v.number()),
   finished: v.boolean()
 });
@@ -71,6 +80,7 @@ export type ActivityProgress = v.InferOutput<typeof activityProgressSchema>;
 export type ActivityNode = v.InferOutput<typeof activityNodeSchema>;
 export type BuildNode = v.InferOutput<typeof buildNodeSchema>;
 export type LogEntry = v.InferOutput<typeof logEntrySchema>;
+export type DerivationEdge = v.InferOutput<typeof derivationEdgeSchema>;
 export type MonitorSnapshot = v.InferOutput<typeof snapshotSchema>;
 
 /// Purely client-side, never received over the wire.
@@ -92,6 +102,7 @@ export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
   errors: [],
   progress: null,
   expected: {},
+  dependencies: [],
   exitCode: null,
   finished: false
 });

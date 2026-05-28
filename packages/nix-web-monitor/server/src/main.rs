@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -15,9 +16,12 @@ use futures::{Stream, StreamExt};
 use nix_web_monitor_parser::{MonitorState, NixEvent, ParsedLine, strip_ansi};
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::services::{ServeDir, ServeFile};
+
+mod dependencies;
+use dependencies::resolve_dependencies;
 
 #[derive(Parser)]
 #[command(
@@ -184,17 +188,31 @@ async fn run_nix_command(
     let stdout = child.stdout.take().context("nix stdout was not captured")?;
     let stderr = child.stderr.take().context("nix stderr was not captured")?;
 
+    // The dependency resolver runs alongside parsing: the stderr reader hands
+    // it each newly-seen build derivation, it queries the edges, and drops its
+    // sender when stderr ends so the resolver drains and exits.
+    let (deps_tx, deps_rx) = mpsc::unbounded_channel();
+    let resolver_task = tokio::spawn(resolve_dependencies(
+        deps_rx,
+        Arc::clone(&monitor),
+        snapshots.clone(),
+    ));
+
     let stdout_task = tokio::spawn(forward_stdout(stdout, terminal_output));
     let stderr_task = tokio::spawn(parse_stderr(
         stderr,
         Arc::clone(&monitor),
         snapshots.clone(),
         terminal_output,
+        deps_tx,
     ));
 
     let status = child.wait().await.context("waiting for nix")?;
     stdout_task.await.context("joining stdout reader")??;
     stderr_task.await.context("joining stderr reader")??;
+    resolver_task
+        .await
+        .context("joining dependency resolver")??;
 
     let exit_code = status.code();
     monitor.write().await.finish(exit_code);
@@ -233,10 +251,13 @@ async fn parse_stderr<R>(
     monitor: Arc<RwLock<MonitorState>>,
     snapshots: broadcast::Sender<String>,
     terminal_output: TerminalOutput,
+    deps_tx: mpsc::UnboundedSender<String>,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
 {
+    // Derivations already handed to the resolver, so each is queried once.
+    let mut requested: HashSet<String> = HashSet::new();
     // Read raw bytes per line, then decode lossily. `BufReader::lines()`
     // would error out on the first non-UTF-8 byte and stop draining stderr,
     // which would block the child once the pipe filled. Lossy decode keeps
@@ -260,7 +281,22 @@ where
             buf.pop();
         }
         let line = String::from_utf8_lossy(&buf);
-        let parsed = monitor.write().await.apply_line(&line);
+        let mut state = monitor.write().await;
+        let parsed = state.apply_line(&line);
+        // Collect derivations not yet queried while still holding the lock,
+        // then resolve their edges off the parse path.
+        let new_derivations: Vec<String> = state
+            .builds
+            .keys()
+            .filter(|derivation| requested.insert((*derivation).clone()))
+            .cloned()
+            .collect();
+        drop(state);
+        for derivation in new_derivations {
+            // Send failure means the resolver task is gone (shutdown); dropping
+            // the edge request is the right behaviour then.
+            let _ = deps_tx.send(derivation);
+        }
         if let Some(rendered) = render_for(terminal_output, &parsed) {
             eprintln!("{rendered}");
         }
@@ -269,7 +305,7 @@ where
     Ok(())
 }
 
-async fn publish_snapshot(
+pub(crate) async fn publish_snapshot(
     monitor: &Arc<RwLock<MonitorState>>,
     snapshots: &broadcast::Sender<String>,
 ) -> Result<()> {

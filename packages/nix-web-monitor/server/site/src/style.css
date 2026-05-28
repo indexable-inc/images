@@ -492,6 +492,30 @@ main.dragging-v .splitter-v::after {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
+/* Dependency-tree rows reuse the activity-row layout but are selectable like
+ * build rows, so they carry the same affordances as the flat build list. */
+.dep-row.clickable {
+  cursor: pointer;
+}
+
+.dep-row.clickable:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.dep-row.selected {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.dep-row .where {
+  flex: 0 0 auto;
+}
+
+.dep-row .phase {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
 /* Box-drawing guides. Fixed-width cells keep the vertical stems aligned
  * column-to-column so a child's connector meets its ancestor's line. */
 .guides {

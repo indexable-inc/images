@@ -1,6 +1,6 @@
 #![allow(clippy::module_name_repetitions)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -186,6 +186,11 @@ pub struct MonitorState {
     pub expected: BTreeMap<String, i64>,
     pub exit_code: Option<i32>,
     pub finished: bool,
+    /// Direct input `.drv` paths per derivation, learned out-of-band from
+    /// `nix-store --query --references` (the internal-json stream carries no
+    /// dependency edges). The snapshot turns this into the rendered DAG; the
+    /// raw adjacency stays server-side and never rides the wire.
+    direct_deps: BTreeMap<String, Vec<String>>,
     /// Monotonic counter for `LogEntry.index`. Kept independent of
     /// `logs.len()` so retention pruning never reuses an index.
     log_counter: u64,
@@ -195,6 +200,7 @@ impl MonitorState {
     #[must_use]
     pub fn snapshot(&self) -> MonitorSnapshot {
         let log_tail_start = self.logs.len().saturating_sub(SNAPSHOT_LOG_LIMIT);
+        let observed: BTreeSet<&str> = self.builds.keys().map(String::as_str).collect();
         MonitorSnapshot {
             activities: self.activities.values().cloned().collect(),
             builds: self.builds.values().cloned().collect(),
@@ -202,9 +208,19 @@ impl MonitorState {
             errors: self.errors.clone(),
             progress: self.progress,
             expected: self.expected.clone(),
+            dependencies: dependency_edges(&self.direct_deps, &observed),
             exit_code: self.exit_code,
             finished: self.finished,
         }
+    }
+
+    /// Record the direct input derivations of one built derivation, learned
+    /// from `nix-store --query --references`. Only the `.drv` inputs matter for
+    /// the dependency DAG; the caller filters source paths out before calling.
+    /// Stored unfiltered by observation status so a dependency that starts
+    /// building later still produces its edge on the next snapshot.
+    pub fn record_direct_dependencies(&mut self, derivation: String, input_drvs: Vec<String>) {
+        self.direct_deps.insert(derivation, input_drvs);
     }
 
     pub fn apply_line(&mut self, line: &str) -> ParsedLine {
@@ -445,6 +461,76 @@ fn truncate_head<T>(items: &mut Vec<T>, max: usize) {
     }
 }
 
+/// Build the minimal dependency DAG over the derivations Nix actually built.
+///
+/// `direct_deps` maps a derivation to the input `.drv` paths it directly
+/// requires. An edge survives only when both endpoints are `observed` (a real
+/// build, so it has a row to attach to); a link bridged entirely through a
+/// cached, never-built derivation is intentionally absent. The result is
+/// transitively reduced, so a chain `a -> b -> c` never also keeps the
+/// redundant `a -> c`, and sorted for a stable wire order.
+fn dependency_edges(
+    direct_deps: &BTreeMap<String, Vec<String>>,
+    observed: &BTreeSet<&str>,
+) -> Vec<DerivationEdge> {
+    let mut adjacency: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (from, inputs) in direct_deps {
+        if !observed.contains(from.as_str()) {
+            continue;
+        }
+        for to in inputs {
+            if from != to && observed.contains(to.as_str()) {
+                adjacency.entry(from).or_default().insert(to);
+            }
+        }
+    }
+
+    let mut edges = Vec::new();
+    for (&from, targets) in &adjacency {
+        for &to in targets {
+            if !reachable_via_detour(&adjacency, from, to) {
+                edges.push(DerivationEdge {
+                    from: from.to_owned(),
+                    to: to.to_owned(),
+                });
+            }
+        }
+    }
+    edges.sort();
+    edges
+}
+
+/// Whether `to` is reachable from `from` through a path of length two or more,
+/// i.e. via some neighbour other than `to` itself. Such a `from -> to` edge is
+/// implied by the longer path and is dropped in transitive reduction.
+fn reachable_via_detour(adjacency: &BTreeMap<&str, BTreeSet<&str>>, from: &str, to: &str) -> bool {
+    let Some(neighbours) = adjacency.get(from) else {
+        return false;
+    };
+    neighbours
+        .iter()
+        .any(|&next| next != to && reaches(adjacency, next, to))
+}
+
+/// Depth-first reachability from `start` to `target`. The `visited` guard keeps
+/// the walk finite even though derivation graphs are acyclic by construction.
+fn reaches(adjacency: &BTreeMap<&str, BTreeSet<&str>>, start: &str, target: &str) -> bool {
+    let mut stack = vec![start];
+    let mut visited: BTreeSet<&str> = BTreeSet::new();
+    while let Some(node) = stack.pop() {
+        if node == target {
+            return true;
+        }
+        if !visited.insert(node) {
+            continue;
+        }
+        if let Some(neighbours) = adjacency.get(node) {
+            stack.extend(neighbours.iter().copied());
+        }
+    }
+    false
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitorSnapshot {
@@ -454,8 +540,22 @@ pub struct MonitorSnapshot {
     pub errors: Vec<String>,
     pub progress: Option<ActivityProgress>,
     pub expected: BTreeMap<String, i64>,
+    /// Minimal dependency DAG over derivations Nix actually built: each edge's
+    /// `from` directly requires `to`. Derived from `direct_deps` at snapshot
+    /// time, restricted to built derivations and transitively reduced.
+    pub dependencies: Vec<DerivationEdge>,
     pub exit_code: Option<i32>,
     pub finished: bool,
+}
+
+/// One directed dependency edge: `from` directly requires `to`. Both endpoints
+/// are `derivation` paths matching a [`BuildNode`], so the UI can join edges to
+/// build rows by string identity.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivationEdge {
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -608,8 +708,8 @@ fn parse_result(raw: &Value) -> Result<ResultAction, ParseError> {
         },
         result_code::SET_EXPECTED => {
             let (activity_type_code, expected) = two_numbers(&fields)?;
-            let activity_type_code = u64::try_from(activity_type_code)
-                .map_err(|_| ParseError::NegativeActivityType)?;
+            let activity_type_code =
+                u64::try_from(activity_type_code).map_err(|_| ParseError::NegativeActivityType)?;
             ActivityResult::SetExpected {
                 activity_type: activity_type_for(activity_type_code),
                 expected,
@@ -926,9 +1026,7 @@ mod tests {
     #[test]
     fn error_level_message_is_recorded_as_error() {
         let mut state = MonitorState::default();
-        state.apply_line(
-            r#"@nix {"action":"msg","level":0,"msg":"something went wrong"}"#,
-        );
+        state.apply_line(r#"@nix {"action":"msg","level":0,"msg":"something went wrong"}"#);
         assert_eq!(state.snapshot().errors, vec!["something went wrong"]);
     }
 
@@ -1037,5 +1135,84 @@ mod tests {
             ));
         }
         assert_eq!(state.snapshot().errors.len(), STATE_ERROR_RETAIN);
+    }
+
+    fn edge(from: &str, to: &str) -> DerivationEdge {
+        DerivationEdge {
+            from: from.to_owned(),
+            to: to.to_owned(),
+        }
+    }
+
+    fn deps(pairs: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
+        pairs
+            .iter()
+            .map(|(drv, inputs)| {
+                (
+                    (*drv).to_owned(),
+                    inputs.iter().map(|s| (*s).to_owned()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dependency_edges_drop_redundant_transitive_links() {
+        // a -> b -> c with a direct a -> c shortcut. Reduction keeps the chain
+        // and drops the shortcut.
+        let direct = deps(&[("a", &["b", "c"]), ("b", &["c"])]);
+        let observed = BTreeSet::from(["a", "b", "c"]);
+        assert_eq!(
+            dependency_edges(&direct, &observed),
+            vec![edge("a", "b"), edge("b", "c")]
+        );
+    }
+
+    #[test]
+    fn dependency_edges_keep_both_arms_of_a_diamond() {
+        // a depends on b and c, both of which depend on d. Neither arm is
+        // implied by the other, so all four edges survive.
+        let direct = deps(&[("a", &["b", "c"]), ("b", &["d"]), ("c", &["d"])]);
+        let observed = BTreeSet::from(["a", "b", "c", "d"]);
+        assert_eq!(
+            dependency_edges(&direct, &observed),
+            vec![
+                edge("a", "b"),
+                edge("a", "c"),
+                edge("b", "d"),
+                edge("c", "d")
+            ]
+        );
+    }
+
+    #[test]
+    fn dependency_edges_ignore_unbuilt_endpoints() {
+        // `x` was never built (not observed), so the a -> x edge vanishes and a
+        // is left depending only on the observed b.
+        let direct = deps(&[("a", &["b", "x"])]);
+        let observed = BTreeSet::from(["a", "b"]);
+        assert_eq!(dependency_edges(&direct, &observed), vec![edge("a", "b")]);
+    }
+
+    #[test]
+    fn snapshot_exposes_recorded_dependency_dag() {
+        let mut state = MonitorState::default();
+        for (id, drv) in [
+            (1u64, "/nix/store/aaa-app.drv"),
+            (2, "/nix/store/bbb-lib.drv"),
+        ] {
+            state.apply_line(&format!(
+                r#"@nix {{"action":"start","fields":["{drv}","local",1,1],"id":{id},"level":3,"text":"building","type":105}}"#
+            ));
+        }
+        state.record_direct_dependencies(
+            "/nix/store/aaa-app.drv".to_owned(),
+            vec!["/nix/store/bbb-lib.drv".to_owned()],
+        );
+
+        assert_eq!(
+            state.snapshot().dependencies,
+            vec![edge("/nix/store/aaa-app.drv", "/nix/store/bbb-lib.drv")]
+        );
     }
 }

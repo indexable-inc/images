@@ -178,6 +178,7 @@
     >
       <BuildTable
         builds={snapshot.builds}
+        dependencies={snapshot.dependencies}
         expected={snapshot.expected}
         {selectedActivityId}
         onselect={(id: number | null) => {
