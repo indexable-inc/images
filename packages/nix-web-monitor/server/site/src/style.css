@@ -484,8 +484,16 @@ main.dragging-v .splitter-v::after {
   white-space: nowrap;
 }
 
+/* Push finished rows well into the background so the handful of in-flight
+ * rows read as the foreground in a long, mostly-stopped list. */
 .activity-row.stopped {
-  opacity: 0.6;
+  opacity: 0.4;
+}
+
+/* Lift in-flight rows out of the muted default so active work stands out. */
+.activity-row:not(.stopped) .activity-text,
+.activity-row:not(.stopped) .drv-name {
+  color: var(--ink);
 }
 
 .activity-row:hover {
@@ -591,9 +599,13 @@ main.dragging-v .splitter-v::after {
   opacity: 0.85;
 }
 
+/* Fixed-width trailing column. The flexible name column (`.activity-text` /
+ * `.activity-drv`, `flex: 1 1 auto`) grows to absorb the slack instead, so the
+ * `where` badge and duration land in the same place on every row. An
+ * `auto` left margin here would swallow that slack first and leave the badges
+ * ragged against variable-length names. */
 .activity-dur {
-  flex: 0 0 auto;
-  margin-left: auto;
+  flex: 0 0 3.2rem;
   padding-left: 0.5rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;

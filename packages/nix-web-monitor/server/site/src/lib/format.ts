@@ -58,3 +58,19 @@ export function formatDuration(ms: number): string {
   const remHours = hours % 24;
   return `${String(days)}d${String(remHours).padStart(2, '0')}h`;
 }
+
+/// Human byte-rate in decimal units (`kB`/`MB` are 1000-based, matching how
+/// substituters and browsers report download speed). One decimal below 100 so a
+/// `2.4 MB/s` reading stays legible; whole numbers above to avoid noise.
+export function formatRate(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 B/s';
+  const units = ['B/s', 'kB/s', 'MB/s', 'GB/s'];
+  let value = bytesPerSecond;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit += 1;
+  }
+  const text = unit === 0 || value >= 100 ? String(Math.round(value)) : value.toFixed(1);
+  return `${text} ${units[unit]}`;
+}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatDuration } from '$lib/format';
+  import { formatDuration, formatRate } from '$lib/format';
   import { useNow } from '$lib/now.svelte';
   import {
     ACTIVITY_NAME_BUILD,
@@ -66,6 +66,44 @@
     const end = snapshot.finished ? (lastStopMs ?? now.value) : now.value;
     return Math.max(0, end - startedAtMs);
   });
+
+  /// Substituter transfers still in flight. Counted straight from the activity
+  /// list so the figure is exact even when no byte progress is reported.
+  const downloading = $derived(
+    snapshot.activities.filter(
+      (activity) => activity.activityType.name === 'file_transfer' && activity.status === 'running'
+    ).length
+  );
+
+  /// Monotonic total of bytes pulled from substituters: each file-transfer
+  /// activity's `done` counter summed. Stopped transfers keep their final value,
+  /// so the sum only grows and a time delta yields a live rate.
+  const downloadedBytes = $derived(
+    snapshot.activities.reduce(
+      (sum, activity) =>
+        activity.activityType.name === 'file_transfer' ? sum + (activity.progress?.done ?? 0) : sum,
+      0
+    )
+  );
+
+  /// Per-second samples of `downloadedBytes`, held off the reactive graph so the
+  /// effect that writes `downloadRate` never depends on its own output. The tick
+  /// gate means snapshot bursts within one second do not each compute a rate.
+  const sample = { bytes: 0, at: 0, rate: 0, seeded: false };
+  let downloadRate = $state(0);
+  $effect(() => {
+    const at = now.value;
+    const bytes = downloadedBytes;
+    if (sample.seeded && at > sample.at) {
+      const perSecond = Math.max(0, ((bytes - sample.bytes) / (at - sample.at)) * 1000);
+      // Light EWMA so the reading does not jump between snapshot bursts.
+      sample.rate = sample.rate * 0.4 + perSecond * 0.6;
+      downloadRate = sample.rate;
+    }
+    sample.bytes = bytes;
+    sample.at = at;
+    sample.seeded = true;
+  });
 </script>
 
 <header class="summary">
@@ -95,6 +133,15 @@
       <div class="kpi kpi-warn">
         <span class="kpi-num">{counts.running}</span>
         <span class="kpi-label">running</span>
+      </div>
+    {/if}
+    {#if downloading > 0}
+      <div class="kpi kpi-info">
+        <span class="kpi-num">{downloading}</span>
+        <span class="kpi-label">downloading</span>
+        {#if downloadRate > 0}
+          <span class="kpi-num kpi-faint">{formatRate(downloadRate)}</span>
+        {/if}
       </div>
     {/if}
     {#if counts.succeeded > 0}
