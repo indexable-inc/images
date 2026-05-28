@@ -3034,9 +3034,8 @@ let
         message = "selectBinaryWithTests should expose only derivations in passthru.tests";
       }
       {
-        assertion =
-          !(builtins.hasAttr "cargo_unit_hello-tests-returns_greeting" cargoUnitSelectedHello.passthru.tests);
-        message = "selectBinaryWithTests should not force per-case test manifests into flake checks by default";
+        assertion = builtins.hasAttr "cargo_unit_hello-tests-returns_greeting" cargoUnitSelectedHello.passthru.tests;
+        message = "selectBinaryWithTests should expose per-case test derivations by default";
       }
       {
         assertion = builtins.all (binary: builtins.hasAttr binary cargoUnitBinaries) [
