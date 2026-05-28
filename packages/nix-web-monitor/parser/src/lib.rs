@@ -649,8 +649,7 @@ fn field_value(value: &Value) -> FieldValue {
         Value::String(text) => FieldValue::Text(text.clone()),
         Value::Number(number) => number
             .as_i64()
-            .map(FieldValue::Number)
-            .unwrap_or_else(|| FieldValue::Other(value.clone())),
+            .map_or_else(|| FieldValue::Other(value.clone()), FieldValue::Number),
         Value::Bool(value) => FieldValue::Bool(*value),
         Value::Null => FieldValue::Null,
         Value::Array(_) | Value::Object(_) => FieldValue::Other(value.clone()),
@@ -779,7 +778,9 @@ fn current_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Strip both ESC-prefixed CSI sequences and the bare `[<n>;<n>m` form that
+/// Strip CSI sequences from `text`.
+///
+/// Handles both ESC-prefixed CSI sequences and the bare `[<n>;<n>m` form that
 /// shows up when an upstream encoder drops the leading `0x1B`. Used by the
 /// state machine before display, by failure-message detection, and re-exported
 /// for the wrapper binary's terminal renderer.
@@ -834,6 +835,10 @@ fn strip_orphan_sgr(text: &str) -> String {
     out
 }
 
+// Nix always emits `/nix/store/.../*.drv` lowercase, so a plain byte suffix
+// match is the right comparison; the case-insensitive clippy lint is a false
+// positive for this format.
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
 fn parse_builder_failure(text: &str) -> Option<BuilderFailure> {
     // Legacy Nix: `error: builder for '/nix/store/...drv' failed with exit code 1`
     if let Some(after) = text.strip_prefix("error: builder for '")
