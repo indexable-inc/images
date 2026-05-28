@@ -38,9 +38,12 @@ struct CargoLockPackageEntry {
     source: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
 struct CargoManifest {
     package: Option<CargoManifestPackage>,
+    workspace: Option<CargoManifestWorkspace>,
+    lints: Option<CargoManifestLintsRoot>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,6 +63,29 @@ struct CargoManifestPackage {
     license_file: Option<toml::Value>,
     #[serde(default, rename = "rust-version")]
     rust_version: Option<toml::Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct CargoManifestWorkspace {
+    lints: Option<CargoManifestLintsTables>,
+}
+
+// Package-level `[lints]`. Cargo accepts either `workspace = true` (inherit
+// every `[workspace.lints.<tool>]`) OR explicit per-tool tables; mixing is
+// a hard error in cargo. The struct stays permissive and the resolution
+// helper picks `workspace = true` first when present.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct CargoManifestLintsRoot {
+    workspace: Option<bool>,
+    clippy: Option<BTreeMap<String, toml::Value>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct CargoManifestLintsTables {
+    clippy: Option<BTreeMap<String, toml::Value>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -161,7 +187,58 @@ struct PreparedGraph {
     source_entries: BTreeMap<String, SourceEntry>,
     transitive_unit_deps: Vec<BTreeSet<usize>>,
     build_script_runs: BTreeMap<usize, BuildScriptRun>,
+    // Effective clippy `-D|-W|-A clippy::<lint>` flag list per `pkg_id`.
+    // Resolved per cargo `[lints]` semantics: a package opts in by setting
+    // `[lints] workspace = true` (inherit `[workspace.lints.clippy]`) or by
+    // declaring its own `[lints.clippy]`. Packages without `[lints]` get an
+    // empty list. `clippy::cargo` group members are filtered because they
+    // need `cargo metadata` access that the per-unit sandbox doesn't have.
+    clippy_lint_args_by_pkg_id: BTreeMap<String, Vec<String>>,
 }
+
+#[derive(Clone, Debug)]
+struct ClippyLintEntry {
+    name: String,
+    level: ClippyLintLevel,
+    priority: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ClippyLintLevel {
+    Allow,
+    Warn,
+    Deny,
+    Forbid,
+}
+
+impl ClippyLintLevel {
+    const fn rustc_flag(self) -> &'static str {
+        match self {
+            Self::Allow => "-A",
+            Self::Warn => "-W",
+            // `forbid` is stricter than `deny` (cannot be overridden in
+            // source via `#[allow]`). rustc accepts both as separate flags;
+            // map `forbid` to `-F`.
+            Self::Deny => "-D",
+            Self::Forbid => "-F",
+        }
+    }
+}
+
+// `clippy::cargo` group members invoke the `cargo` binary to read workspace
+// metadata. Per-unit clippy runs in a sandboxed build directory without a
+// discoverable Cargo.toml (the source closure is package-shaped, not
+// workspace-shaped), so those lints error with `could not find Cargo.toml`.
+// They only make sense at workspace scope; a separate workspace-level
+// cargo-clippy derivation is the future home for that subset.
+const CARGO_GROUP_CLIPPY_LINTS: &[&str] = &[
+    "cargo",
+    "cargo_common_metadata",
+    "multiple_crate_versions",
+    "negative_feature_names",
+    "redundant_feature_names",
+    "wildcard_dependencies",
+];
 
 struct BuildScriptRun {
     compile_index: usize,
@@ -439,6 +516,138 @@ impl PreparedGraph {
     }
 }
 
+fn parse_clippy_lint_entries(
+    table: &BTreeMap<String, toml::Value>,
+    manifest_label: &str,
+) -> Result<Vec<ClippyLintEntry>> {
+    table
+        .iter()
+        .filter(|(name, _)| !CARGO_GROUP_CLIPPY_LINTS.contains(&name.as_str()))
+        .map(|(name, value)| parse_clippy_lint_entry(name, value, manifest_label))
+        .collect()
+}
+
+fn parse_clippy_lint_entry(
+    name: &str,
+    value: &toml::Value,
+    manifest_label: &str,
+) -> Result<ClippyLintEntry> {
+    let (level_str, priority) = match value {
+        toml::Value::String(level) => (level.as_str(), 0_i64),
+        toml::Value::Table(table) => {
+            let level = table
+                .get("level")
+                .and_then(toml::Value::as_str)
+                .ok_or_else(|| {
+                    eyre!(
+                        "clippy lint `{name}` in {manifest_label} has table form without a `level` field"
+                    )
+                })?;
+            let priority = table
+                .get("priority")
+                .and_then(toml::Value::as_integer)
+                .unwrap_or(0);
+            (level, priority)
+        }
+        other => {
+            return Err(eyre!(
+                "clippy lint `{name}` in {manifest_label} has unsupported TOML shape: {other:?}"
+            ));
+        }
+    };
+    let level = match level_str {
+        "allow" => ClippyLintLevel::Allow,
+        "warn" => ClippyLintLevel::Warn,
+        "deny" => ClippyLintLevel::Deny,
+        "forbid" => ClippyLintLevel::Forbid,
+        other => {
+            return Err(eyre!(
+                "clippy lint `{name}` in {manifest_label} has unknown level `{other}`"
+            ));
+        }
+    };
+    Ok(ClippyLintEntry {
+        name: name.to_string(),
+        level,
+        priority,
+    })
+}
+
+fn clippy_args_from_entries(mut entries: Vec<ClippyLintEntry>) -> Vec<String> {
+    // Cargo applies flags in ascending-priority order so higher-priority
+    // (per-lint) overrides land later on the command line and win against
+    // (group) defaults. Use a stable sort so two entries with identical
+    // priority retain manifest order.
+    entries.sort_by_key(|entry| entry.priority);
+    entries
+        .into_iter()
+        .flat_map(|entry| {
+            [
+                entry.level.rustc_flag().to_string(),
+                format!("clippy::{}", entry.name),
+            ]
+        })
+        .collect()
+}
+
+fn read_workspace_clippy_lints(workspace_root: &Path) -> Result<Vec<ClippyLintEntry>> {
+    let manifest_path = workspace_root.join("Cargo.toml");
+    let manifest_str = match fs::read_to_string(&manifest_path) {
+        Ok(value) => value,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(err).wrap_err_with(|| {
+                format!("reading workspace manifest {}", manifest_path.display())
+            });
+        }
+    };
+    let manifest: CargoManifest = toml::from_str(&manifest_str)
+        .wrap_err_with(|| format!("parsing workspace manifest {}", manifest_path.display()))?;
+    let Some(table) = manifest
+        .workspace
+        .and_then(|workspace| workspace.lints)
+        .and_then(|lints| lints.clippy)
+    else {
+        return Ok(Vec::new());
+    };
+    parse_clippy_lint_entries(&table, &manifest_path.display().to_string())
+}
+
+fn clippy_args_for_package(
+    unit: &Unit,
+    workspace_entries: &[ClippyLintEntry],
+) -> Result<Vec<String>> {
+    let manifest_path = crate_root_for_unit(unit).join("Cargo.toml");
+    let manifest_str = match fs::read_to_string(&manifest_path) {
+        Ok(value) => value,
+        // Vendored crates may not have a Cargo.toml at the path the pkg_id
+        // points at (the source closure is package-shaped). Treat as "no
+        // policy" — clippy still runs with its default lint set.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(err).wrap_err_with(|| {
+                format!("reading package manifest {}", manifest_path.display())
+            });
+        }
+    };
+    let manifest: CargoManifest = toml::from_str(&manifest_str)
+        .wrap_err_with(|| format!("parsing package manifest {}", manifest_path.display()))?;
+
+    let Some(lints) = manifest.lints else {
+        return Ok(Vec::new());
+    };
+
+    if lints.workspace == Some(true) {
+        return Ok(clippy_args_from_entries(workspace_entries.to_vec()));
+    }
+
+    let Some(table) = lints.clippy else {
+        return Ok(Vec::new());
+    };
+    let entries = parse_clippy_lint_entries(&table, &manifest_path.display().to_string())?;
+    Ok(clippy_args_from_entries(entries))
+}
+
 fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedGraph> {
     let mut hashes = vec![None; graph.units.len()];
     for index in 0..graph.units.len() {
@@ -526,6 +735,19 @@ fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedG
         );
     }
 
+    let workspace_clippy_entries = read_workspace_clippy_lints(&options.workspace_root)?;
+    let mut clippy_lint_args_by_pkg_id: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for unit in &graph.units {
+        if !is_clippy_unit_candidate(unit) {
+            continue;
+        }
+        if clippy_lint_args_by_pkg_id.contains_key(&unit.pkg_id) {
+            continue;
+        }
+        let args = clippy_args_for_package(unit, &workspace_clippy_entries)?;
+        clippy_lint_args_by_pkg_id.insert(unit.pkg_id.clone(), args);
+    }
+
     Ok(PreparedGraph {
         hashes,
         names,
@@ -533,6 +755,7 @@ fn prepare_graph(graph: &UnitGraph, options: &RenderOptions) -> Result<PreparedG
         source_entries,
         transitive_unit_deps,
         build_script_runs,
+        clippy_lint_args_by_pkg_id,
     })
 }
 
@@ -653,7 +876,17 @@ fn render_clippy_unit(
     let unit = &graph.units[index];
     let mut attrs = Attrs::new();
 
-    attrs.string("pname", &format!("{}-clippy", unit.target.name));
+    // Build-script compile units share `target.name == "build-script-build"`
+    // across every crate, so the bare `target.name`-prefixed pname makes
+    // every build-script clippy derivation look the same in error messages
+    // (`build-script-build-clippy-<version>`). Prefix the package name so a
+    // failing unit identifies its owning crate at a glance, while keeping
+    // the target suffix so library / bin / build-script units stay distinct
+    // for one package.
+    attrs.string(
+        "pname",
+        &format!("{}-{}-clippy", unit.package_name(), unit.target.name),
+    );
     attrs.string("version", unit.package_version());
     attrs.expr("src", &prepared.source_ref(index));
     // `clippy-driver` rides the rustToolchain (which carries the matching
@@ -862,8 +1095,19 @@ fn render_driver_build_phase(
 
     script.push_str("rustc_args+=( \"''${build_script_flags[@]}\" )\n");
     if driver == Driver::ClippyDriver {
-        // Inject the workspace's clippy lint policy (-D/-W/-A clippy::...)
-        // at the rustc-args end so they override any earlier defaults.
+        // Per-package clippy lint args resolved at prepare time from each
+        // package's Cargo.toml `[lints]` table. Injected at the end of
+        // rustc_args so per-lint overrides from the manifest win against
+        // any earlier defaults. `extraClippyLintArgs` (the nix-level
+        // policy escape hatch) lands after so callers can still override
+        // a manifest-derived flag.
+        let package_args = prepared
+            .clippy_lint_args_by_pkg_id
+            .get(&unit.pkg_id)
+            .map_or(&[][..], Vec::as_slice);
+        for arg in package_args {
+            push_arg(&mut script, arg);
+        }
         script.push_str("rustc_args+=( ${pkgs.lib.escapeShellArgs extraClippyLintArgs} )\n");
     }
     append_driver_invocation(&mut script, driver, collect_unused_deps);
@@ -917,6 +1161,37 @@ fn append_driver_invocation(script: &mut String, driver: Driver, collect_unused_
             r#"jq -r 'select(."$message_type" == "unused_extern") | .unused_extern_names[]' "$rustc_diagnostics" | sort -u > build/unused-crate-dependencies
 "#,
         );
+    } else if driver == Driver::ClippyDriver {
+        // `nix build` truncates a failed derivation's log to the last 25
+        // lines by default, and bash's `set -e` runs the stdenv cleanup
+        // hooks before exit, so by the time nix tails the log the actual
+        // clippy diagnostic has been pushed off-screen. Capture the
+        // driver output to a file and re-print it after the run so the
+        // failing lint shows up in the default tail.
+        // Users can still run `nix build -L` to stream the live log.
+        script.push_str("clippy_log=build/clippy-driver.log\n");
+        script.push_str("set +e\n");
+        script.push_str("set -x\n");
+        let _ = writeln!(
+            script,
+            "env \"''${{rustc_env[@]}}\" {binary} \"''${{rustc_args[@]}}\" > \"$clippy_log\" 2>&1"
+        );
+        script.push_str("clippy_status=$?\n");
+        script.push_str("set +x\n");
+        script.push_str("set -e\n");
+        // Print the captured output even on success so warnings stay
+        // visible in the build log.
+        script.push_str("cat \"$clippy_log\" >&2\n");
+        script.push_str("if [ \"$clippy_status\" -ne 0 ]; then\n");
+        // Re-tail the diagnostic at the end of the log so nix's default
+        // 25-line tail surfaces the actual clippy error.
+        script.push_str("  echo >&2\n");
+        script.push_str(
+            "  echo '=== clippy-driver failed; tail of diagnostic ===' >&2\n",
+        );
+        script.push_str("  tail -n 80 \"$clippy_log\" >&2\n");
+        script.push_str("  exit \"$clippy_status\"\n");
+        script.push_str("fi\n");
     } else {
         script.push_str("set -x\n");
         let _ = writeln!(
