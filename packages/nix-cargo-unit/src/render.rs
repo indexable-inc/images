@@ -2632,9 +2632,10 @@ fn render_test_entries_for(
         let binary = test_binary_expr(unit, prepared, *index);
         let _ = writeln!(
             entries,
-            "    {} = mkTestEntry {{ name = {}; binary = \"{binary}\"; }};",
+            "    {} = mkTestEntry {{ name = {}; binary = \"{binary}\"; packageName = {}; }};",
             nix_attr(&key),
             nix_attr(&key),
+            nix_attr(&unit.package_name()),
         );
     }
 
@@ -3052,7 +3053,10 @@ mod tests {
 
         assert!(rendered.contains("tests = {"));
         assert!(rendered.contains("\"hello\" = mkTestEntry { name = \"hello\";"));
+        assert!(rendered.contains("packageName = \"hello\";"));
         assert!(rendered.contains("/bin/hello\";"));
+        assert!(rendered.contains("testRunPrelude ? \"\""));
+        assert!(rendered.contains("testArgsByPackage ? {}"));
         assert!(rendered.contains("mkTestEntry ="));
         assert!(rendered.contains("RUST_TEST_THREADS"));
         assert!(rendered.contains("mkTestCases ="));

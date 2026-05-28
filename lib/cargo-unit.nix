@@ -34,6 +34,8 @@ let
     rustToolchain = args.rustToolchain or rust.defaultRustToolchain;
     nativeBuildInputs = args.nativeBuildInputs or [ ];
     env = args.env or { };
+    testRunPrelude = args.testRunPrelude or "";
+    testArgsByPackage = args.testArgsByPackage or { };
     extraRustcArgs = args.extraRustcArgs or [ ];
     cargoExtraConfig = args.cargoExtraConfig or "";
     vendorDir = args.vendorDir or null;
@@ -375,6 +377,7 @@ let
         # `clippy-driver` links against.
         extraClippyNativeBuildInputs = lib.optional perUnitClippyEnabled args.policy.clippy.package;
         extraEnv = args.env;
+        inherit (args) testRunPrelude testArgsByPackage;
         extraRustcArgsForPlatform = rust.rustcArgsForPolicyForPlatform args.policy;
         # Manifest-derived flags come first so per-call `policy.clippy`
         # entries land later in argv and can override them. Cargo's
@@ -426,9 +429,9 @@ let
     derivations, ready for `passthru.tests` consumption.
 
     `testTargets` and `doctestTargets` default to every generated target owned
-    by `packageName`. Each target becomes one `<target>-all` test; doctests use
-    `doctest-<target>-all` names. Set `includeTestCases` only for callers that
-    deliberately want one flake-checkable derivation per discovered test case.
+    by `packageName`. Each discovered test case becomes its own derivation by
+    default; `<target>-all` remains available for callers that need the full
+    harness as a single compatibility check.
 
     Use this when the caller has one shared workspace (`ix.rustWorkspace.units`)
     so all repo-owned crates ride the same unit graph. Use `buildBinary` when
@@ -441,7 +444,7 @@ let
       packageName ? binary,
       testTargets ? null,
       doctestTargets ? null,
-      includeTestCases ? false,
+      includeTestCases ? true,
       meta ? { },
       passthru ? { },
     }:

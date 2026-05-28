@@ -9,6 +9,8 @@
   extraNativeBuildInputs ? [],
   extraClippyNativeBuildInputs ? [],
   extraEnv ? {},
+  testRunPrelude ? "",
+  testArgsByPackage ? {},
   extraPolicyChecks ? {},
   extraRustcArgs ? [],
   extraRustcArgsForPlatform ? _platform: [],
@@ -558,31 +560,60 @@ let
   # Map both to ASCII-safe runs without losing the path shape.
   sanitizeTestName = pkgs.lib.replaceStrings [ "::" ":" " " ] [ "--" "_" "_" ];
 
-  # Single IFD that depends on every test binary. Writes one
-  # `<name>.list` (non-ignored tests) and one `<name>.ignored.list`
-  # per target. Mainline Nix evaluates IFDs serially, so collapsing
-  # per-binary list drvs into one cuts eval latency proportionally
-  # to the number of test targets. The tradeoff is that touching any
-  # `cases` forces every test binary to build; consumers that only
-  # want `tests.<name>.all` skip this derivation entirely.
+  # One IFD owns test discovery because IFDs block evaluation. The builder
+  # lists binaries concurrently, then the generated attrset fans out into
+  # ordinary per-#[test] derivations.
   testManifestDrv =
     if testTargets == [] then null
     else pkgs.runCommand "cargo-unit-test-manifest" { } (
       ''
+        set -euo pipefail
+
         mkdir -p "$out"
+
+        max_jobs="''${NIX_BUILD_CORES:-1}"
+        case "$max_jobs" in
+          ""|*[!0-9]*|0) max_jobs=1 ;;
+        esac
+
+        running=0
+        failures=0
+        wait_for_one() {
+          if ! wait -n; then
+            failures=$((failures + 1))
+          fi
+          running=$((running - 1))
+        }
       ''
       + pkgs.lib.concatMapStrings (target: ''
-        ${target.binary} --list --format terse > "$out"/${pkgs.lib.escapeShellArg target.name}.list
-        ${target.binary} --list --format terse --ignored > "$out"/${pkgs.lib.escapeShellArg target.name}.ignored.list
+        (
+          ${target.binary} --list --format terse > "$out"/${pkgs.lib.escapeShellArg target.name}.list
+          ${target.binary} --list --format terse --ignored > "$out"/${pkgs.lib.escapeShellArg target.name}.ignored.list
+        ) &
+        running=$((running + 1))
+        if [ "$running" -ge "$max_jobs" ]; then
+          wait_for_one
+        fi
       '') testTargets
+      + ''
+        while [ "$running" -gt 0 ]; do
+          wait_for_one
+        done
+
+        if [ "$failures" -ne 0 ]; then
+          echo >&2 "error: cargo-unit failed to list $failures test target(s)"
+          exit 1
+        fi
+      ''
     );
 
   mkTestCases =
-    { name, binary, ignored }:
+    { name, binary, packageName, ignored }:
     let
       suffix = if ignored then ".ignored.list" else ".list";
       listPath = "${testManifestDrv}/${name}${suffix}";
       runFlag = pkgs.lib.optionalString ignored "--include-ignored ";
+      testArgs = testArgsByPackage.${packageName} or [];
     in
     pkgs.lib.listToAttrs (
       map (testName: {
@@ -592,28 +623,33 @@ let
             "cargo-unit-test-${name}-${sanitizeTestName testName}"
             { }
             ''
-              ${binary} --exact --nocapture ${runFlag}${pkgs.lib.escapeShellArg testName}
+              ${testRunPrelude}
+              ${binary} --exact --nocapture ${runFlag}${pkgs.lib.escapeShellArgs (testArgs ++ [ testName ])}
               mkdir -p "$out"
             '';
       }) (parseTestList listPath)
     );
 
   mkTestEntry =
-    { name, binary }:
+    { name, binary, packageName }:
+    let
+      testArgs = testArgsByPackage.${packageName} or [];
+    in
     {
       # Runs the whole test binary in one derivation, mirroring `cargo test`.
       all = pkgs.runCommand "cargo-unit-test-${name}" { } ''
         export RUST_TEST_THREADS="$NIX_BUILD_CORES"
-        ${binary}
+        ${testRunPrelude}
+        ${binary} ${pkgs.lib.escapeShellArgs testArgs}
         mkdir -p "$out"
       '';
       # One derivation per #[test], populated from the shared manifest.
       # First access to any binary's `cases` triggers the single manifest
       # IFD (which builds every test binary in the workspace).
       cases =
-        mkTestCases { inherit name binary; ignored = false; }
+        mkTestCases { inherit name binary packageName; ignored = false; }
         // pkgs.lib.optionalAttrs includeIgnored (
-          mkTestCases { inherit name binary; ignored = true; }
+          mkTestCases { inherit name binary packageName; ignored = true; }
         );
     };
 
