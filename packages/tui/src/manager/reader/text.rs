@@ -71,30 +71,6 @@ pub fn read_full(
 
 const POLL_INTERVAL_MS: u64 = 50;
 
-fn try_read_with_retry(
-    runtime: &Arc<Runtime>,
-    id: Uuid,
-    command_tx: &mpsc::Sender<PtyCommand>,
-    start: std::time::Instant,
-    timeout: std::time::Duration,
-) -> Result<Vec<String>> {
-    let result = read_output(runtime, id, command_tx);
-
-    if result.is_ok() {
-        return result;
-    }
-
-    if let Err(Error::NoOutputAvailable { .. }) = result {
-        if start.elapsed() >= timeout {
-            return result;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
-        return try_read_with_retry(runtime, id, command_tx, start, timeout);
-    }
-
-    result
-}
-
 pub fn read_output_blocking(
     runtime: &Arc<Runtime>,
     id: Uuid,
@@ -105,10 +81,12 @@ pub fn read_output_blocking(
     let timeout = std::time::Duration::from_millis(timeout_ms);
 
     loop {
-        let result = try_read_with_retry(runtime, id, command_tx, start, timeout);
-
-        if result.is_ok() || !matches!(result, Err(Error::NoOutputAvailable { .. })) {
-            return result;
+        match read_output(runtime, id, command_tx) {
+            Ok(lines) => return Ok(lines),
+            Err(Error::NoOutputAvailable { .. }) if start.elapsed() < timeout => {
+                std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
+            }
+            Err(err) => return Err(err),
         }
     }
 }

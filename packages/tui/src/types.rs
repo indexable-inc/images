@@ -1,6 +1,4 @@
-use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::process::Child;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -15,7 +13,6 @@ pub struct TuiInstance {
     pub cols: u16,
     pub rows: u16,
     pub scrollback_limit: usize,
-    pub(crate) _process: Arc<tokio::sync::Mutex<Child>>,
     pub(crate) command_tx: mpsc::Sender<PtyCommand>,
 }
 

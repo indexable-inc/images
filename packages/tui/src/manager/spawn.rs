@@ -92,6 +92,14 @@ pub(super) fn spawn_tui(
         pty_actor(id, pty, command_rx, parser).await;
     });
 
+    // Own the child entirely in a reaper task. Calling wait() drives the
+    // SIGCHLD reap so short-lived commands (echo, seq, ...) do not leave
+    // zombies even though we never expose a kill path on TuiInstance.
+    runtime_clone.spawn(async move {
+        let mut child = child;
+        let _ = child.wait().await;
+    });
+
     let instance = TuiInstance {
         id,
         command,
@@ -100,7 +108,6 @@ pub(super) fn spawn_tui(
         cols: DEFAULT_COLS,
         rows: DEFAULT_ROWS,
         scrollback_limit: scrollback_lines,
-        _process: Arc::new(tokio::sync::Mutex::new(child)),
         command_tx,
     };
 
