@@ -64,6 +64,11 @@
     {:else}
       <span class="activity-text" title={meta.text}>{middleTruncate(meta.text, 80)}</span>
     {/if}
+    {#if meta.count > 1}
+      <span class="group-count" title="{String(meta.count)} identical activities folded into one row"
+        >×{String(meta.count)}</span
+      >
+    {/if}
     {#if isCollapsed && children.length > 0}
       <span class="subtree-count">+{String(children.length)}</span>
     {/if}

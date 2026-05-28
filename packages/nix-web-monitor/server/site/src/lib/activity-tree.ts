@@ -11,6 +11,13 @@
 /// dropped, and their visible descendants are re-parented onto the nearest
 /// interesting ancestor. That keeps the rendered tree connected without empty
 /// filler rows.
+///
+/// Sibling rows that share the same label are then folded into one row carrying
+/// a `×N` count. Nix copies a single flake input to the store once per consumer
+/// and emits an identical activity each time, so an ungrouped view is a wall of
+/// dozens of identical "copying …/source.tar.gz to the store" lines that buries
+/// the builds and downloads an operator actually cares about. The fold keeps one
+/// row per distinct label per parent and pushes the real work back into view.
 
 import { activityKind, splitDerivation, type DerivationParts } from '$lib/format';
 import type { ActivityNode, ActivityStatus, BuildNode, BuildStatus } from '$lib/types';
@@ -25,7 +32,12 @@ export type ActivityRowMeta = Readonly<{
   derivation: DerivationParts | null;
   /// Display text for non-build rows (phase preferred over raw text).
   text: string;
+  /// Number of identical sibling activities folded into this row. `1` means a
+  /// lone row; greater means the label repeated and the row shows `×N`.
+  count: number;
+  /// Earliest start across the folded group; the lone start when `count` is 1.
   startedAtMs: number;
+  /// Latest stop across the folded group, or `null` while any member still runs.
   stoppedAtMs: number | null;
 }>;
 
@@ -35,6 +47,17 @@ export type ActivityTree = Readonly<{
   roots: readonly number[];
   shown: number;
   hidden: number;
+}>;
+
+/// Stable per-row descriptor, computed once and reused for both the grouping
+/// key and the rendered `rowMeta`. The key is what makes two sibling rows fold:
+/// same kind, same identifying payload (derivation name for builds, display text
+/// otherwise).
+type RowDescriptor = Readonly<{
+  kind: string;
+  derivation: DerivationParts | null;
+  text: string;
+  key: string;
 }>;
 
 function isInteresting(activity: ActivityNode, buildIds: ReadonlySet<number>): boolean {
@@ -67,16 +90,16 @@ export function buildActivityTree(activities: ActivityNode[], builds: BuildNode[
     return null;
   }
 
-  const childrenById = new Map<number, number[]>();
-  const roots: number[] = [];
+  const rawChildren = new Map<number, number[]>();
+  const rawRoots: number[] = [];
   for (const activity of visible) {
     const parent = displayParent(activity);
     if (parent === null) {
-      roots.push(activity.id);
+      rawRoots.push(activity.id);
     } else {
-      const siblings = childrenById.get(parent) ?? [];
+      const siblings = rawChildren.get(parent) ?? [];
       siblings.push(activity.id);
-      childrenById.set(parent, siblings);
+      rawChildren.set(parent, siblings);
     }
   }
 
@@ -85,32 +108,105 @@ export function buildActivityTree(activities: ActivityNode[], builds: BuildNode[
     const b = byId.get(right);
     return (a?.startedTick ?? 0) - (b?.startedTick ?? 0);
   };
-  roots.sort(byStartTick);
-  for (const siblings of childrenById.values()) siblings.sort(byStartTick);
 
-  const rowMeta = new Map<number, ActivityRowMeta>(
+  const descriptor = new Map<number, RowDescriptor>(
     visible.map((activity) => {
       const isBuild = buildIds.has(activity.id);
-      return [
-        activity.id,
-        {
-          id: activity.id,
-          kind: activityKind(activity.activityType.name, activity.text),
-          state: buildStatusByActivity.get(activity.id) ?? activity.status,
-          derivation: isBuild && activity.build !== null ? splitDerivation(activity.build) : null,
-          text: activity.phase ?? activity.text,
-          startedAtMs: activity.startedAtMs,
-          stoppedAtMs: activity.stoppedAtMs
-        }
-      ];
+      const derivation = isBuild && activity.build !== null ? splitDerivation(activity.build) : null;
+      const kind = activityKind(activity.activityType.name, activity.text);
+      const text = activity.phase ?? activity.text;
+      return [activity.id, { kind, derivation, text, key: `${kind} ${derivation?.name ?? text}` }];
     })
   );
+
+  /// Members folded into each kept representative, in start order. Built top
+  /// down so a representative's children are the merged children of every member
+  /// it absorbed, themselves folded recursively.
+  const members = new Map<number, number[]>();
+  const childrenById = new Map<number, number[]>();
+
+  /// Fold one ordered sibling list: the first activity for a given key is kept,
+  /// later identical ones are absorbed into it. Returns the kept order.
+  function fold(ids: number[]): number[] {
+    const repByKey = new Map<string, number>();
+    const kept: number[] = [];
+    for (const id of ids) {
+      const key = descriptor.get(id)?.key ?? String(id);
+      const rep = repByKey.get(key);
+      if (rep === undefined) {
+        repByKey.set(key, id);
+        kept.push(id);
+        members.set(id, [id]);
+      } else {
+        members.get(rep)?.push(id);
+      }
+    }
+    return kept;
+  }
+
+  /// Fold a level, then recurse into each kept row over the merged children of
+  /// all its members. A representative inherits every absorbed member's subtree.
+  function descend(ids: number[]): number[] {
+    const kept = fold(ids.toSorted(byStartTick));
+    for (const rep of kept) {
+      const kids = (members.get(rep) ?? [])
+        .flatMap((member) => rawChildren.get(member) ?? [])
+        .toSorted(byStartTick);
+      const keptKids = descend(kids);
+      if (keptKids.length > 0) childrenById.set(rep, keptKids);
+    }
+    return kept;
+  }
+
+  const roots = descend(rawRoots);
+
+  const rowMeta = new Map<number, ActivityRowMeta>();
+  for (const [rep, group] of members) {
+    const desc = descriptor.get(rep);
+    const activity = byId.get(rep);
+    if (desc === undefined || activity === undefined) continue;
+
+    if (group.length === 1) {
+      rowMeta.set(rep, {
+        id: rep,
+        kind: desc.kind,
+        state: buildStatusByActivity.get(rep) ?? activity.status,
+        derivation: desc.derivation,
+        text: desc.text,
+        count: 1,
+        startedAtMs: activity.startedAtMs,
+        stoppedAtMs: activity.stoppedAtMs
+      });
+      continue;
+    }
+
+    // A folded group only ever holds non-build activities (builds have unique
+    // derivation keys), so its state is the simple running/stopped union and
+    // its span runs from the earliest start to the latest stop.
+    const running = group.some((member) => byId.get(member)?.status === 'running');
+    const startedAtMs = Math.min(
+      ...group.map((member) => byId.get(member)?.startedAtMs ?? activity.startedAtMs)
+    );
+    const stoppedAtMs = running
+      ? null
+      : Math.max(...group.map((member) => byId.get(member)?.stoppedAtMs ?? activity.startedAtMs));
+    rowMeta.set(rep, {
+      id: rep,
+      kind: desc.kind,
+      state: running ? 'running' : 'stopped',
+      derivation: desc.derivation,
+      text: desc.text,
+      count: group.length,
+      startedAtMs,
+      stoppedAtMs
+    });
+  }
 
   return {
     rowMeta,
     childrenById,
     roots,
-    shown: visible.length,
-    hidden: activities.length - visible.length
+    shown: rowMeta.size,
+    hidden: activities.length - rowMeta.size
   };
 }

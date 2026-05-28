@@ -584,6 +584,13 @@ main.dragging-v .splitter-v::after {
   font-variant-numeric: tabular-nums;
 }
 
+.group-count {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
 .activity-dur {
   flex: 0 0 auto;
   margin-left: auto;
