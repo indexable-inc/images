@@ -1,6 +1,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -251,6 +252,7 @@ impl MonitorState {
 
     fn start_activity(&mut self, action: &StartAction) {
         let now = next_tick(self.activities.len());
+        let now_ms = current_unix_ms();
         let (build, host) = if action.activity_type.code == activity_code::BUILD {
             (text_field(&action.fields, 0), text_field(&action.fields, 1))
         } else {
@@ -270,6 +272,8 @@ impl MonitorState {
                 status: ActivityStatus::Running,
                 started_tick: now,
                 stopped_tick: None,
+                started_at_ms: now_ms,
+                stopped_at_ms: None,
                 build: build.clone(),
             },
         );
@@ -284,6 +288,8 @@ impl MonitorState {
                     phase: None,
                     status: BuildStatus::Running,
                     log_count: 0,
+                    started_at_ms: now_ms,
+                    stopped_at_ms: None,
                 },
             );
         }
@@ -295,14 +301,17 @@ impl MonitorState {
     /// emits a per-activity success signal, so we cannot do better without
     /// inventing one.
     fn stop_activity(&mut self, id: u64) {
+        let now_ms = current_unix_ms();
         if let Some(activity) = self.activities.get_mut(&id) {
             activity.status = ActivityStatus::Stopped;
             activity.stopped_tick = Some(next_tick(self.logs.len()));
+            activity.stopped_at_ms = Some(now_ms);
             if let Some(build) = &activity.build
                 && let Some(build_node) = self.builds.get_mut(build)
                 && build_node.status == BuildStatus::Running
             {
                 build_node.status = BuildStatus::Stopped;
+                build_node.stopped_at_ms = Some(now_ms);
             }
         }
     }
@@ -367,9 +376,14 @@ impl MonitorState {
 
     fn mark_failed_build(&mut self, failure: BuilderFailure) {
         use std::collections::btree_map::Entry;
+        let now_ms = current_unix_ms();
         match self.builds.entry(failure.derivation.clone()) {
             Entry::Occupied(mut entry) => {
-                entry.get_mut().status = BuildStatus::Failed;
+                let build = entry.get_mut();
+                build.status = BuildStatus::Failed;
+                if build.stopped_at_ms.is_none() {
+                    build.stopped_at_ms = Some(now_ms);
+                }
             }
             Entry::Vacant(entry) => {
                 entry.insert(BuildNode {
@@ -379,6 +393,8 @@ impl MonitorState {
                     phase: None,
                     status: BuildStatus::Failed,
                     log_count: 0,
+                    started_at_ms: now_ms,
+                    stopped_at_ms: Some(now_ms),
                 });
             }
         }
@@ -430,6 +446,11 @@ pub struct ActivityNode {
     pub status: ActivityStatus,
     pub started_tick: u64,
     pub stopped_tick: Option<u64>,
+    /// Unix epoch milliseconds when the activity started, stamped by the
+    /// parser at apply time. Lets the UI render live durations without
+    /// needing the original event timestamps from Nix.
+    pub started_at_ms: u64,
+    pub stopped_at_ms: Option<u64>,
     pub build: Option<String>,
 }
 
@@ -449,6 +470,8 @@ pub struct BuildNode {
     pub phase: Option<String>,
     pub status: BuildStatus,
     pub log_count: usize,
+    pub started_at_ms: u64,
+    pub stopped_at_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -718,6 +741,14 @@ fn text_field(fields: &[FieldValue], index: usize) -> Option<String> {
 
 fn next_tick(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn current_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| u64::try_from(d.as_millis()).ok())
+        .unwrap_or(0)
 }
 
 fn strip_ansi(text: &str) -> String {

@@ -26,6 +26,10 @@
   );
   let draggingAxis = $state<'horizontal' | 'vertical' | null>(null);
   let sidePane = $state<HTMLElement | null>(null);
+  /// When set, the log panel filters to entries whose activityId matches this
+  /// build's activity. Clicking the same build again or hitting the clear
+  /// chip in the log panel resets it.
+  let selectedActivityId = $state<number | null>(null);
   let closeEvents: (() => void) | null = null;
 
   onMount(() => {
@@ -129,7 +133,11 @@
 
   <section class="workspace" style="--sidebar-width: {String(sidebarWidth)}px">
     <section class="main-pane">
-      <LogPanel logs={snapshot.logs} />
+      <LogPanel
+        logs={snapshot.logs}
+        {selectedActivityId}
+        onclearselection={() => (selectedActivityId = null)}
+      />
     </section>
     <Splitter
       orientation="vertical"
@@ -143,7 +151,14 @@
       bind:this={sidePane}
       style="--builds-fraction: {String(buildsFraction)}"
     >
-      <BuildTable builds={snapshot.builds} expected={snapshot.expected} />
+      <BuildTable
+        builds={snapshot.builds}
+        expected={snapshot.expected}
+        {selectedActivityId}
+        onselect={(id: number | null) => {
+          selectedActivityId = id;
+        }}
+      />
       <Splitter
         orientation="horizontal"
         label="Resize builds panel"

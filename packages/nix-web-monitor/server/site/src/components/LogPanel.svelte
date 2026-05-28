@@ -5,12 +5,14 @@
   import type { LogEntry } from '$lib/types';
 
   type Props = {
-    logs: ReadonlyArray<LogEntry>;
+    logs: LogEntry[];
+    selectedActivityId: number | null;
+    onclearselection: () => void;
   };
 
   const RECENT_LOG_LIMIT = 500;
 
-  const { logs }: Props = $props();
+  const { logs, selectedActivityId, onclearselection }: Props = $props();
 
   type LevelFilter = 'all' | 'error' | 'warn' | 'info';
   let levelFilter = $state<LevelFilter>('all');
@@ -24,7 +26,7 @@
   /// single-line truncation.
   const expanded = new SvelteSet<number>();
 
-  const filtered = $derived(filterLogs(logs, levelFilter, search));
+  const filtered = $derived(filterLogs(logs, levelFilter, search, selectedActivityId));
   const visible = $derived(filtered.slice(-RECENT_LOG_LIMIT));
   const hiddenCount = $derived(logs.length - visible.length);
 
@@ -38,12 +40,14 @@
   });
 
   function filterLogs(
-    items: ReadonlyArray<LogEntry>,
+    items: LogEntry[],
     level: LevelFilter,
-    query: string
-  ): ReadonlyArray<LogEntry> {
+    query: string,
+    activityId: number | null
+  ): LogEntry[] {
     const lower = query.trim().toLowerCase();
     return items.filter((entry) => {
+      if (activityId !== null && entry.activityId !== activityId) return false;
       if (!matchesLevel(entry.level, level)) return false;
       if (lower.length === 0) return true;
       return entry.text.toLowerCase().includes(lower);
@@ -114,6 +118,11 @@
         placeholder="filter"
         bind:value={search}
       />
+      {#if selectedActivityId !== null}
+        <button type="button" class="chip selection" onclick={onclearselection}>
+          build #{String(selectedActivityId)} &times;
+        </button>
+      {/if}
       {#if !follow}
         <button type="button" class="chip jump" onclick={jumpToEnd}>jump &darr;</button>
       {/if}

@@ -3,8 +3,8 @@
   import type { ActivityNode, BuildNode } from '$lib/types';
 
   type Props = {
-    activities: ReadonlyArray<ActivityNode>;
-    builds: ReadonlyArray<BuildNode>;
+    activities: ActivityNode[];
+    builds: BuildNode[];
   };
 
   const { activities, builds }: Props = $props();

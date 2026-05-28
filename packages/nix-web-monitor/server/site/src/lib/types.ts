@@ -1,60 +1,81 @@
-export type ActivityStatus = 'running' | 'stopped';
-export type BuildStatus = 'running' | 'stopped' | 'succeeded' | 'failed';
+/// One source of truth: valibot schemas define every wire shape, types are
+/// inferred from those schemas. Schemas double as runtime validators in
+/// `monitor-store.ts`; types double as compile-time contracts everywhere
+/// else. Add a field once (in the schema) and it shows up in the type.
 
-export type ActivityType = Readonly<{
-  code: number;
-  name: string;
-}>;
+import * as v from 'valibot';
 
-export type ActivityProgress = Readonly<{
-  done: number;
-  expected: number;
-  running: number;
-  failed: number;
-}>;
+export const activityStatusSchema = v.picklist(['running', 'stopped']);
+export const buildStatusSchema = v.picklist(['running', 'stopped', 'succeeded', 'failed']);
 
-export type ActivityNode = Readonly<{
-  id: number;
-  parent: number | null;
-  activityType: ActivityType;
-  text: string;
-  phase: string | null;
-  progress: ActivityProgress | null;
-  status: ActivityStatus;
-  startedTick: number;
-  stoppedTick: number | null;
-  build: string | null;
-}>;
+export const activityTypeSchema = v.object({
+  code: v.number(),
+  name: v.string()
+});
 
-export type BuildNode = Readonly<{
-  derivation: string;
-  activityId: number | null;
-  host: string | null;
-  phase: string | null;
-  status: BuildStatus;
-  logCount: number;
-}>;
+export const activityProgressSchema = v.object({
+  done: v.number(),
+  expected: v.number(),
+  running: v.number(),
+  failed: v.number()
+});
 
-export type LogEntry = Readonly<{
-  index: number;
-  activityId: number | null;
-  /// Nix log level when known. 0=error, 1=warn, 2=notice, 3=info, 4+=debug-ish.
-  level: number | null;
-  text: string;
-}>;
+export const activityNodeSchema = v.object({
+  id: v.number(),
+  parent: v.nullable(v.number()),
+  activityType: activityTypeSchema,
+  text: v.string(),
+  phase: v.nullable(v.string()),
+  progress: v.nullable(activityProgressSchema),
+  status: activityStatusSchema,
+  startedTick: v.number(),
+  stoppedTick: v.nullable(v.number()),
+  startedAtMs: v.number(),
+  stoppedAtMs: v.nullable(v.number()),
+  build: v.nullable(v.string())
+});
 
-export type MonitorSnapshot = Readonly<{
-  activities: ReadonlyArray<ActivityNode>;
-  builds: ReadonlyArray<BuildNode>;
-  logs: ReadonlyArray<LogEntry>;
-  messages: ReadonlyArray<string>;
-  errors: ReadonlyArray<string>;
-  progress: ActivityProgress | null;
-  expected: Readonly<Record<string, number>>;
-  exitCode: number | null;
-  finished: boolean;
-}>;
+export const buildNodeSchema = v.object({
+  derivation: v.string(),
+  activityId: v.nullable(v.number()),
+  host: v.nullable(v.string()),
+  phase: v.nullable(v.string()),
+  status: buildStatusSchema,
+  logCount: v.number(),
+  startedAtMs: v.number(),
+  stoppedAtMs: v.nullable(v.number())
+});
 
+export const logEntrySchema = v.object({
+  index: v.number(),
+  activityId: v.nullable(v.number()),
+  /// Nix log level when known. 0=error, 1=warn, 2=notice, 3=info, 4+=debug.
+  level: v.nullable(v.number()),
+  text: v.string()
+});
+
+export const snapshotSchema = v.object({
+  activities: v.array(activityNodeSchema),
+  builds: v.array(buildNodeSchema),
+  logs: v.array(logEntrySchema),
+  messages: v.array(v.string()),
+  errors: v.array(v.string()),
+  progress: v.nullable(activityProgressSchema),
+  expected: v.record(v.string(), v.number()),
+  exitCode: v.nullable(v.number()),
+  finished: v.boolean()
+});
+
+export type ActivityStatus = v.InferOutput<typeof activityStatusSchema>;
+export type BuildStatus = v.InferOutput<typeof buildStatusSchema>;
+export type ActivityType = v.InferOutput<typeof activityTypeSchema>;
+export type ActivityProgress = v.InferOutput<typeof activityProgressSchema>;
+export type ActivityNode = v.InferOutput<typeof activityNodeSchema>;
+export type BuildNode = v.InferOutput<typeof buildNodeSchema>;
+export type LogEntry = v.InferOutput<typeof logEntrySchema>;
+export type MonitorSnapshot = v.InferOutput<typeof snapshotSchema>;
+
+/// Purely client-side, never received over the wire.
 export type ConnectionStatus = 'connecting' | 'live' | 'closed' | 'error';
 
 /// Mirrors `activity_code::BUILD` in the parser; the protocol's name for an
@@ -62,13 +83,13 @@ export type ConnectionStatus = 'connecting' | 'live' | 'closed' | 'error';
 export const ACTIVITY_NAME_BUILD = 'build';
 
 export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
-  activities: Object.freeze([]),
-  builds: Object.freeze([]),
-  logs: Object.freeze([]),
-  messages: Object.freeze([]),
-  errors: Object.freeze([]),
+  activities: [],
+  builds: [],
+  logs: [],
+  messages: [],
+  errors: [],
   progress: null,
-  expected: Object.freeze({}),
+  expected: {},
   exitCode: null,
   finished: false
 });

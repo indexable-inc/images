@@ -439,56 +439,127 @@ main.dragging-v .splitter-v::after {
 /* ---------- builds ---------- */
 
 .build-table {
-  display: grid;
-  grid-template-columns: 1rem minmax(0, 1fr) auto auto;
-  align-content: start;
-  gap: 0.15rem 0.5rem;
-  padding: 0.4rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem 0;
 }
 
-.build-table > .state {
-  width: 0.6rem;
-  height: 0.6rem;
+.build-row {
+  display: grid;
+  grid-template-columns:
+    0.85rem
+    minmax(0, 1fr)
+    auto
+    minmax(0, auto)
+    3rem
+    1.6rem;
+  align-items: center;
+  column-gap: 0.5rem;
+  padding: 0.2rem 0.6rem;
+  border-left: 2px solid transparent;
+}
+
+.build-row.clickable {
+  cursor: pointer;
+}
+
+.build-row.clickable:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.build-row.clickable:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.build-row.selected {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-left-color: var(--accent);
+}
+
+.state {
+  width: 0.55rem;
+  height: 0.55rem;
   border-radius: 50%;
-  align-self: center;
   background: var(--muted);
 }
 
-.build-table > .state[data-state='running'] {
+.state[data-state='running'] {
   background: var(--amber);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 35%, transparent);
 }
-.build-table > .state[data-state='stopped'] {
+.state[data-state='stopped'] {
   background: var(--blue);
 }
-.build-table > .state[data-state='succeeded'] {
+.state[data-state='succeeded'] {
   background: var(--green);
 }
-.build-table > .state[data-state='failed'] {
+.state[data-state='failed'] {
   background: var(--red);
 }
 
-.build-table > .drv,
-.build-table > .phase {
+.drv {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.build-table > .drv {
+.drv-hash {
+  color: var(--faint);
+}
+
+.drv-name {
   color: var(--ink);
 }
 
-.build-table > .phase {
+.where {
+  font-size: inherit !important;
+  color: var(--muted);
+  text-transform: lowercase;
+  padding: 0 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-soft);
+  white-space: nowrap;
+}
+
+.where.remote {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-soft));
+}
+
+.phase {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-style: italic;
 }
 
-.build-table > .right {
+.duration {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.right {
   color: var(--faint);
   font-variant-numeric: tabular-nums;
   text-align: right;
   min-width: 1.5rem;
+}
+
+.chip.selection {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border-radius: 4px;
+}
+
+.chip.selection:hover {
+  background: var(--accent);
+  color: var(--panel);
 }
 
 /* ---------- logs ---------- */
