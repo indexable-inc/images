@@ -30,6 +30,14 @@
 
 <section class="panel logs-panel">
   <div class="panel-title">logs</div>
-  <pre>{#each recent as log (log.index)}<span class="line {lineClass(log.level)}"><span class="idx">{String(log.index).padStart(5, '0')}</span> {log.text}</span>
-{:else}<span class="empty">waiting for logs</span>{/each}</pre>
+  <div class="log-stream">
+    {#each recent as log (log.index)}
+      <div class="line {lineClass(log.level)}">
+        <span class="idx">{String(log.index).padStart(5, '0')}</span>
+        <span class="text">{log.text}</span>
+      </div>
+    {:else}
+      <div class="empty">waiting for logs</div>
+    {/each}
+  </div>
 </section>

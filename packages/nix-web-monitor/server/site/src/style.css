@@ -150,7 +150,7 @@ main {
 
 .graph,
 .build-table,
-pre {
+.log-stream {
   min-height: 0;
   overflow: auto;
 }
@@ -255,22 +255,28 @@ pre {
   font-variant-numeric: tabular-nums;
 }
 
-pre {
+.log-stream {
   flex: 1 1 auto;
-  margin: 0;
-  padding: 0.75rem;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  padding: 0.4rem 0.75rem;
   color: var(--ink);
 }
 
 .line {
-  display: block;
-  min-height: 1.45em;
+  display: grid;
+  grid-template-columns: 3.5rem 1fr;
+  column-gap: 0.5rem;
+  line-height: 1.25;
+  padding: 0.05rem 0;
+}
+
+.text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .idx {
   color: var(--faint);
+  font-variant-numeric: tabular-nums;
   user-select: none;
 }
 
