@@ -11,6 +11,12 @@ const NIX_JSON_PREFIX: &str = "@nix ";
 /// Nix log level for `error`-class messages emitted via `msg` actions.
 const NIX_LEVEL_ERROR: i64 = 0;
 
+/// Maximum log entries shipped per snapshot. The UI only renders the tail and
+/// we re-broadcast on every line, so the full backlog would make total bytes
+/// scale O(n^2) with build verbosity. Older entries stay in `MonitorState`
+/// for the lifetime of the process but never leave the server.
+const SNAPSHOT_LOG_LIMIT: usize = 500;
+
 mod result_code {
     pub const FILE_LINKED: u64 = 100;
     pub const BUILD_LOG_LINE: u64 = 101;
@@ -177,10 +183,11 @@ pub struct MonitorState {
 impl MonitorState {
     #[must_use]
     pub fn snapshot(&self) -> MonitorSnapshot {
+        let log_tail_start = self.logs.len().saturating_sub(SNAPSHOT_LOG_LIMIT);
         MonitorSnapshot {
             activities: self.activities.values().cloned().collect(),
             builds: self.builds.values().cloned().collect(),
-            logs: self.logs.clone(),
+            logs: self.logs[log_tail_start..].to_vec(),
             messages: self.messages.clone(),
             errors: self.errors.clone(),
             progress: self.progress,
@@ -330,6 +337,9 @@ impl MonitorState {
         if action.level == Some(NIX_LEVEL_ERROR) {
             self.errors.push(action.message.clone());
         }
+        // Surface operator messages in the UI log panel too; otherwise an
+        // eval failure shows up as an empty log with only an exit code.
+        self.push_log(None, &action.message);
 
         let stripped = strip_ansi(&action.message);
         if let Some(failure) = parse_builder_failure(&stripped) {
@@ -701,15 +711,27 @@ fn strip_ansi(text: &str) -> String {
 }
 
 fn parse_builder_failure(text: &str) -> Option<BuilderFailure> {
-    let after_prefix = text.strip_prefix("error: builder for '")?;
-    let (derivation, _) = after_prefix.split_once("' failed with exit code ")?;
-    if derivation.ends_with(".drv") {
-        Some(BuilderFailure {
+    // Legacy Nix: `error: builder for '/nix/store/...drv' failed with exit code 1`
+    if let Some(after) = text.strip_prefix("error: builder for '")
+        && let Some((derivation, _)) = after.split_once("' failed with exit code ")
+        && derivation.ends_with(".drv")
+    {
+        return Some(BuilderFailure {
             derivation: derivation.to_owned(),
-        })
-    } else {
-        None
+        });
     }
+
+    // Modern Nix (>= 2.21): `error: Cannot build '/nix/store/...drv'. Reason: builder failed ...`
+    if let Some(after) = text.strip_prefix("error: Cannot build '")
+        && let Some((derivation, _)) = after.split_once("'.")
+        && derivation.ends_with(".drv")
+    {
+        return Some(BuilderFailure {
+            derivation: derivation.to_owned(),
+        });
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -783,5 +805,45 @@ mod tests {
             r#"@nix {"action":"msg","level":0,"msg":"something went wrong","raw_msg":"x"}"#,
         );
         assert_eq!(state.snapshot().errors, vec!["something went wrong"]);
+    }
+
+    #[test]
+    fn operator_messages_reach_the_log_stream() {
+        let mut state = MonitorState::default();
+        state.apply_line(
+            r#"@nix {"action":"msg","level":0,"msg":"eval failed: undefined variable","raw_msg":"x"}"#,
+        );
+        let snapshot = state.snapshot();
+        assert_eq!(
+            snapshot.logs.last().map(|entry| entry.text.as_str()),
+            Some("eval failed: undefined variable"),
+            "messages should be visible in the log panel"
+        );
+    }
+
+    #[test]
+    fn snapshot_caps_logs_to_the_tail() {
+        let mut state = MonitorState::default();
+        for i in 0..(SNAPSHOT_LOG_LIMIT + 50) {
+            state.apply_line(&format!("line {i}"));
+        }
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.logs.len(), SNAPSHOT_LOG_LIMIT);
+        assert_eq!(snapshot.logs.first().unwrap().text, "line 50");
+        assert_eq!(
+            snapshot.logs.last().unwrap().text,
+            format!("line {}", SNAPSHOT_LOG_LIMIT + 49)
+        );
+    }
+
+    #[test]
+    fn modern_nix_failure_message_marks_build_failed() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"start","fields":["/nix/store/xyz-demo.drv","local",1,1],"id":9,"level":3,"text":"building '/nix/store/xyz-demo.drv'","type":105}"#);
+        state.apply_line(r#"@nix {"action":"stop","id":9}"#);
+        state.apply_line(
+            "error: Cannot build '/nix/store/xyz-demo.drv'. Reason: builder failed with exit code 1.",
+        );
+        assert_eq!(state.snapshot().builds[0].status, BuildStatus::Failed);
     }
 }

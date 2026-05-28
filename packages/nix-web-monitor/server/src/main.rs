@@ -13,7 +13,7 @@ use clap::{Parser, ValueEnum};
 use futures::stream;
 use futures::{Stream, StreamExt};
 use nix_web_monitor_parser::{MonitorState, NixEvent, ParsedLine};
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{self, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
@@ -101,22 +101,21 @@ async fn main() -> Result<()> {
 
     let exit_code = build.await.context("joining Nix command task")??;
 
-    if args.exit_when_done {
-        server.abort();
-        std::process::exit(exit_code.unwrap_or(1));
+    if !args.exit_when_done {
+        eprintln!(
+            "nix-web-monitor: Nix command finished with {}; press Ctrl-C to stop the web UI",
+            exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "no exit code".to_owned())
+        );
+        tokio::signal::ctrl_c()
+            .await
+            .context("waiting for Ctrl-C")?;
     }
-
-    eprintln!(
-        "nix-web-monitor: Nix command finished with {}; press Ctrl-C to stop the web UI",
-        exit_code
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "no exit code".to_owned())
-    );
-    tokio::signal::ctrl_c()
-        .await
-        .context("waiting for Ctrl-C")?;
     server.abort();
-    Ok(())
+    // Propagate Nix's exit status either way; otherwise the wrapper masks
+    // build failures from shells and CI.
+    std::process::exit(exit_code.unwrap_or(1));
 }
 
 async fn serve(
@@ -186,20 +185,13 @@ async fn run_nix_command(
     let stdout = child.stdout.take().context("nix stdout was not captured")?;
     let stderr = child.stderr.take().context("nix stderr was not captured")?;
 
-    let stdout_task = spawn_stream(
-        stdout,
-        Arc::clone(&monitor),
-        snapshots.clone(),
-        terminal_output,
-        StreamName::Stdout,
-    );
-    let stderr_task = spawn_stream(
+    let stdout_task = tokio::spawn(forward_stdout(stdout, terminal_output));
+    let stderr_task = tokio::spawn(parse_stderr(
         stderr,
         Arc::clone(&monitor),
         snapshots.clone(),
         terminal_output,
-        StreamName::Stderr,
-    );
+    ));
 
     let status = child.wait().await.context("waiting for nix")?;
     stdout_task.await.context("joining stdout reader")??;
@@ -212,48 +204,48 @@ async fn run_nix_command(
     Ok(exit_code)
 }
 
-#[derive(Clone, Copy)]
-enum StreamName {
-    Stdout,
-    Stderr,
-}
-
-fn spawn_stream<R>(
-    stream: R,
-    monitor: Arc<RwLock<MonitorState>>,
-    snapshots: broadcast::Sender<String>,
-    terminal_output: TerminalOutput,
-    name: StreamName,
-) -> tokio::task::JoinHandle<Result<()>>
+/// Forward Nix's stdout byte-for-byte so commands like `nix eval --raw`
+/// preserve exact output (no spurious trailing newline, no UTF-8 round-trip).
+/// With `--log-format internal-json`, log activity lands on stderr; stdout is
+/// reserved for the command's actual output, which never needs parsing.
+async fn forward_stdout<R>(stream: R, terminal_output: TerminalOutput) -> Result<()>
 where
-    R: AsyncRead + Unpin + Send + 'static,
+    R: AsyncRead + Unpin,
 {
-    tokio::spawn(process_stream(
-        stream,
-        monitor,
-        snapshots,
-        terminal_output,
-        name,
-    ))
+    let mut reader = stream;
+    match terminal_output {
+        // Still drain so the child does not block on a full pipe.
+        TerminalOutput::Quiet => {
+            io::copy(&mut reader, &mut io::sink())
+                .await
+                .context("draining nix stdout")?;
+        }
+        TerminalOutput::Summary | TerminalOutput::Logs => {
+            io::copy(&mut reader, &mut io::stdout())
+                .await
+                .context("forwarding nix stdout")?;
+        }
+    }
+    Ok(())
 }
 
-async fn process_stream<R>(
+async fn parse_stderr<R>(
     stream: R,
     monitor: Arc<RwLock<MonitorState>>,
     snapshots: broadcast::Sender<String>,
     terminal_output: TerminalOutput,
-    name: StreamName,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
 {
     let mut lines = BufReader::new(stream).lines();
-    while let Some(line) = lines.next_line().await.context("reading nix output")? {
+    while let Some(line) = lines.next_line().await.context("reading nix stderr")? {
         let parsed = monitor.write().await.apply_line(&line);
-        print_terminal_line(terminal_output, name, &parsed);
+        if let Some(rendered) = render_for(terminal_output, &parsed) {
+            eprintln!("{rendered}");
+        }
         publish_snapshot(&monitor, &snapshots).await?;
     }
-
     Ok(())
 }
 
@@ -266,16 +258,6 @@ async fn publish_snapshot(
     // Subscribers may all have dropped; that's fine.
     let _ = snapshots.send(payload);
     Ok(())
-}
-
-fn print_terminal_line(terminal_output: TerminalOutput, name: StreamName, parsed: &ParsedLine) {
-    let Some(rendered) = render_for(terminal_output, parsed) else {
-        return;
-    };
-    match name {
-        StreamName::Stdout => println!("{rendered}"),
-        StreamName::Stderr => eprintln!("{rendered}"),
-    }
 }
 
 fn render_for(terminal_output: TerminalOutput, parsed: &ParsedLine) -> Option<String> {
