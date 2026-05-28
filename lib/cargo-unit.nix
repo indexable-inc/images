@@ -288,7 +288,9 @@ let
           policy =
             args.policy
             // lib.optionalAttrs perUnitClippyEnabled {
-              clippy = args.policy.clippy // { enable = false; };
+              clippy = args.policy.clippy // {
+                enable = false;
+              };
             };
         }
       );
@@ -305,8 +307,7 @@ let
         # guarantees rustc + cargo. Adding the resolved clippy package keeps
         # version drift impossible because the toolchain pins the rustc that
         # `clippy-driver` links against.
-        extraClippyNativeBuildInputs =
-          lib.optional perUnitClippyEnabled args.policy.clippy.package;
+        extraClippyNativeBuildInputs = lib.optional perUnitClippyEnabled args.policy.clippy.package;
         extraEnv = args.env;
         extraRustcArgsForPlatform = rust.rustcArgsForPolicyForPlatform args.policy;
         extraClippyLintArgs = rust.clippyLintArgs args.policy;

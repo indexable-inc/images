@@ -2965,17 +2965,16 @@ let
         message = "cargo-unit policyChecks.clippy should produce multiple per-unit derivations for a multi-target fixture";
       }
       {
-        assertion = builtins.all (
-          unit: lib.isDerivation unit
-        ) (builtins.attrValues cargoUnitWorkspace.policyChecks.clippy);
+        assertion = builtins.all (unit: lib.isDerivation unit) (
+          builtins.attrValues cargoUnitWorkspace.policyChecks.clippy
+        );
         message = "cargo-unit policyChecks.clippy entries should each be a derivation";
       }
       {
         # clippyUnits sits at the top of the units attrset so callers that
         # don't want the policyChecks aggregator can still pick individual
         # units by their unit attribute name (matches `units.<name>`).
-        assertion =
-          cargoUnitWorkspace.clippyUnits == cargoUnitWorkspace.policyChecks.clippy;
+        assertion = cargoUnitWorkspace.clippyUnits == cargoUnitWorkspace.policyChecks.clippy;
         message = "cargo-unit should expose clippyUnits at the top level identical to policyChecks.clippy";
       }
       {
