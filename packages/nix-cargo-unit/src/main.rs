@@ -1,3 +1,4 @@
+mod hash;
 mod model;
 mod render;
 mod shell;

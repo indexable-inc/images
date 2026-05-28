@@ -631,8 +631,7 @@ impl Unit {
             hasher.update(b"\0");
         }
 
-        let digest = hasher.finalize();
-        hex16(&digest[..8])
+        crate::hash::short_digest(&hasher.finalize())
     }
 }
 
@@ -794,16 +793,6 @@ impl Lto {
             Self::Fat => Some("fat"),
         }
     }
-}
-
-fn hex16(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(16);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0xf) as usize] as char);
-    }
-    out
 }
 
 #[cfg(test)]

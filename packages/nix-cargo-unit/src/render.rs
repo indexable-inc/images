@@ -3,13 +3,12 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use crate::hash;
+use crate::model::{Unit, UnitGraph, UnitMode};
+use crate::shell;
 use askama::Template as _;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use serde::Deserialize;
-use sha2::Digest as _;
-
-use crate::model::{Unit, UnitGraph, UnitMode};
-use crate::shell;
 
 pub struct RenderOptions {
     pub workspace_root: PathBuf,
@@ -227,6 +226,17 @@ impl SourceScope {
 }
 
 impl SourceEntry {
+    /// Package directory relative to the scoped source root, as a Cargo manifest
+    /// dir. The workspace root collapses to `"."` so callers never emit an empty
+    /// path component.
+    const fn package_root(&self) -> &str {
+        if self.relative.is_empty() {
+            "."
+        } else {
+            self.relative.as_str()
+        }
+    }
+
     fn nix_expr(&self) -> String {
         match self.base {
             SourceBase::Workspace => format!(
@@ -604,6 +614,18 @@ impl Driver {
     }
 }
 
+// CA-derivation attributes Nix needs to content-address a unit's output.
+// Opt-in: callers pass `--content-addressed`, otherwise units stay input
+// addressed.
+fn append_content_addressing(attrs: &mut Attrs, content_addressed: bool) {
+    if !content_addressed {
+        return;
+    }
+    attrs.bool("__contentAddressed", true);
+    attrs.string("outputHashMode", "recursive");
+    attrs.string("outputHashAlgo", "sha256");
+}
+
 fn render_rustc_unit(
     graph: &UnitGraph,
     options: &RenderOptions,
@@ -627,11 +649,7 @@ fn render_rustc_unit(
         &render_build_inputs(graph, prepared, index, unit_build_script_run(graph, index)),
     );
     attrs.bool("dontStrip", true);
-    if options.content_addressed {
-        attrs.bool("__contentAddressed", true);
-        attrs.string("outputHashMode", "recursive");
-        attrs.string("outputHashAlgo", "sha256");
-    }
+    append_content_addressing(&mut attrs, options.content_addressed);
     attrs.multiline(
         "buildPhase",
         &render_driver_build_phase(graph, options, prepared, index, Driver::Rustc)?,
@@ -672,11 +690,7 @@ fn render_clippy_unit(
         &render_build_inputs(graph, prepared, index, unit_build_script_run(graph, index)),
     );
     attrs.bool("dontStrip", true);
-    if options.content_addressed {
-        attrs.bool("__contentAddressed", true);
-        attrs.string("outputHashMode", "recursive");
-        attrs.string("outputHashAlgo", "sha256");
-    }
+    append_content_addressing(&mut attrs, options.content_addressed);
     attrs.multiline(
         "buildPhase",
         &render_driver_build_phase(graph, options, prepared, index, Driver::ClippyDriver)?,
@@ -1049,16 +1063,22 @@ fn append_target_linker_arg(script: &mut String, unit: &Unit) {
 }
 
 fn cargo_target_linker_env_name(target: &str) -> String {
-    let mut env_name = String::from("CARGO_TARGET_");
-    for byte in target.bytes() {
+    format!("CARGO_TARGET_{}_LINKER", cargo_env_segment(target))
+}
+
+// Cargo's environment-variable normalization for a name segment: ASCII letters
+// uppercased, digits and `_` kept, every other byte mapped to `_`. Shared by
+// CARGO_FEATURE_* and the target portion of CARGO_TARGET_<triple>_LINKER.
+fn cargo_env_segment(value: &str) -> String {
+    let mut segment = String::with_capacity(value.len());
+    for byte in value.bytes() {
         match byte {
-            b'a'..=b'z' => env_name.push(char::from(byte.to_ascii_uppercase())),
-            b'A'..=b'Z' | b'0'..=b'9' | b'_' => env_name.push(char::from(byte)),
-            _ => env_name.push('_'),
+            b'a'..=b'z' => segment.push(char::from(byte.to_ascii_uppercase())),
+            b'A'..=b'Z' | b'0'..=b'9' | b'_' => segment.push(char::from(byte)),
+            _ => segment.push('_'),
         }
     }
-    env_name.push_str("_LINKER");
-    env_name
+    segment
 }
 
 fn append_extra_rustc_args(script: &mut String, unit: &Unit) {
@@ -1193,11 +1213,7 @@ fn render_build_script_run(
     );
     attrs.expr("buildInputs", &format!("[ {} ]", inputs.join(" ")));
     attrs.bool("dontStrip", true);
-    if options.content_addressed {
-        attrs.bool("__contentAddressed", true);
-        attrs.string("outputHashMode", "recursive");
-        attrs.string("outputHashAlgo", "sha256");
-    }
+    append_content_addressing(&mut attrs, options.content_addressed);
     attrs.multiline(
         "buildPhase",
         &render_build_script_run_phase(
@@ -1456,7 +1472,7 @@ fn cargo_package_exports(unit: &Unit) -> Result<String> {
     // Cargo normalizes the target's name (`-` → `_`); crates like rmcp read this
     // via `env!()` at compile time.
     let crate_name = unit.target.name.replace('-', "_");
-    let is_bin = unit.target.kind.iter().any(|kind| kind == "bin");
+    let is_bin = unit.target.has_kind("bin");
 
     for (name, value) in [
         ("CARGO_CRATE_NAME", crate_name.as_str()),
@@ -1609,15 +1625,7 @@ fn append_cargo_feature_exports(script: &mut String, unit: &Unit) {
 }
 
 fn cargo_feature_env_name(feature: &str) -> String {
-    let mut env_name = String::from("CARGO_FEATURE_");
-    for byte in feature.bytes() {
-        match byte {
-            b'a'..=b'z' => env_name.push(char::from(byte.to_ascii_uppercase())),
-            b'A'..=b'Z' | b'0'..=b'9' | b'_' => env_name.push(char::from(byte)),
-            _ => env_name.push('_'),
-        }
-    }
-    env_name
+    format!("CARGO_FEATURE_{}", cargo_env_segment(feature))
 }
 
 fn append_cargo_cfg_exports(script: &mut String) {
@@ -1856,7 +1864,7 @@ fn relative_path_string(path: &Path, root: &Path) -> Result<String> {
 
 fn source_name(base: SourceBase, unit: &Unit, source_key: &str, relative: &str) -> String {
     let package_name = unit.package_name();
-    let hash = stable_hash(&format!(
+    let hash = hash::short(&format!(
         "{}\0{}\0{}\0{}\0{}",
         base.label(),
         package_name,
@@ -1885,13 +1893,6 @@ fn store_name_component(value: &str) -> String {
     } else {
         component
     }
-}
-
-fn stable_hash(value: &str) -> String {
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(value.as_bytes());
-    let digest = hasher.finalize();
-    hex16(&digest[..8])
 }
 
 fn local_source_key(unit: &Unit) -> String {
@@ -1966,16 +1967,6 @@ const fn hex_value(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
-}
-
-fn hex16(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(16);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0xf) as usize] as char);
-    }
-    out
 }
 
 fn source_closure_relatives(root: &Path, source_boundary: &Path) -> Result<Vec<String>> {
@@ -2510,9 +2501,7 @@ fn append_doctest_builder_args(
     script.push_str(
         "  doctest_runtime_library_path=$(IFS=:; printf '%s' \"''${doctest_runtime_library_paths[*]}\")\n",
     );
-    script.push_str(
-        "  doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')\n",
-    );
+    script.push_str("  doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')\n");
     script.push_str("  case \"$doctest_runtime_library_path_host\" in\n");
     script.push_str(
         "    *apple-darwin*)\n      doctest_runtime_library_path_var=DYLD_FALLBACK_LIBRARY_PATH\n      doctest_runtime_library_path_default=\"$HOME/lib:/usr/local/lib:/usr/lib\"\n      ;;\n",
@@ -2689,25 +2678,36 @@ fn render_doctest_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> String
         &keys,
     )
 }
-/// One `{ name; binary; }` per unique test target across every root set.
-/// The template feeds this into a single manifest derivation so test
-/// enumeration is one IFD instead of one per binary.
-fn render_test_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
-    let keys = compute_test_keys(graph, prepared);
+/// Emit one indented record per unique target, ordered by key. Targets are
+/// deduplicated upstream into `by_key`, so this only joins them for the
+/// template.
+fn join_target_entries(by_key: BTreeMap<String, String>) -> String {
+    let mut entries = String::new();
+    for target in by_key.into_values() {
+        let _ = writeln!(entries, "    {target}");
+    }
+    entries
+}
+
+/// One `{ name; binary; ... }` per unique runnable binary target across every
+/// root set. Tests and benchmarks share the same record shape; the only
+/// difference is which root units `keys` selects. The template feeds these into
+/// a single manifest derivation so enumeration is one IFD instead of one per
+/// binary.
+fn render_runnable_target_entries(
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    keys: &BTreeMap<usize, String>,
+) -> String {
     let mut by_key: BTreeMap<String, String> = BTreeMap::new();
-    for (&index, key) in &keys {
-        let unit = &graph.units[index];
+    for (&index, key) in keys {
         if by_key.contains_key(key) {
             continue;
         }
+        let unit = &graph.units[index];
         let source = prepared
             .source_entry(index)
-            .expect("prepared graph has source entries for every test target");
-        let package_root = if source.relative.is_empty() {
-            "."
-        } else {
-            source.relative.as_str()
-        };
+            .expect("prepared graph has source entries for every runnable target");
         by_key.insert(
             key.clone(),
             format!(
@@ -2716,16 +2716,16 @@ fn render_test_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> St
                 test_binary_expr(unit, prepared, index),
                 nix_attr(&unit.package_name()),
                 nix_attr(unit.package_version()),
-                nix_attr(package_root),
+                nix_attr(source.package_root()),
                 nix_attr(&source.name),
             ),
         );
     }
-    let mut entries = String::new();
-    for (_key, target) in by_key {
-        let _ = writeln!(entries, "    {target}");
-    }
-    entries
+    join_target_entries(by_key)
+}
+
+fn render_test_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
+    render_runnable_target_entries(graph, prepared, &compute_test_keys(graph, prepared))
 }
 
 fn render_doctest_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> Result<String> {
@@ -2739,11 +2739,6 @@ fn render_doctest_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) ->
         let source = prepared
             .source_entry(index)
             .expect("prepared graph has source entries for every doctest target");
-        let package_root = if source.relative.is_empty() {
-            "."
-        } else {
-            source.relative.as_str()
-        };
         by_key.insert(
             key.clone(),
             format!(
@@ -2751,7 +2746,7 @@ fn render_doctest_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) ->
                 nix_attr(key),
                 nix_attr(&unit.package_name()),
                 nix_attr(unit.package_version()),
-                nix_attr(package_root),
+                nix_attr(source.package_root()),
                 nix_attr(&source.name),
                 nix_indented_string(&render_doctest_command(
                     graph,
@@ -2774,50 +2769,14 @@ fn render_doctest_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) ->
             ),
         );
     }
-    let mut entries = String::new();
-    for (_key, target) in by_key {
-        let _ = writeln!(entries, "    {target}");
-    }
-    Ok(entries)
+    Ok(join_target_entries(by_key))
 }
 
-/// One `{ name; binary; }` per unique benchmark target across every root set.
-/// The template feeds this into benchmark plans and previous-vs-next Tango
+/// One benchmark record per unique benchmark target across every root set. The
+/// template feeds these into benchmark plans and previous-vs-next Tango
 /// comparisons without another Cargo metadata pass.
 fn render_benchmark_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
-    let keys = compute_benchmark_keys(graph, prepared);
-    let mut by_key: BTreeMap<String, String> = BTreeMap::new();
-    for (&index, key) in &keys {
-        let unit = &graph.units[index];
-        if by_key.contains_key(key) {
-            continue;
-        }
-        let source = prepared
-            .source_entry(index)
-            .expect("prepared graph has source entries for every benchmark target");
-        let package_root = if source.relative.is_empty() {
-            "."
-        } else {
-            source.relative.as_str()
-        };
-        by_key.insert(
-            key.clone(),
-            format!(
-                "{{ name = {}; binary = \"{}\"; packageName = {}; packageVersion = {}; packageRoot = {}; sourceStoreName = {}; }}",
-                nix_attr(key),
-                test_binary_expr(unit, prepared, index),
-                nix_attr(&unit.package_name()),
-                nix_attr(unit.package_version()),
-                nix_attr(package_root),
-                nix_attr(&source.name),
-            ),
-        );
-    }
-    let mut entries = String::new();
-    for (_key, target) in by_key {
-        let _ = writeln!(entries, "    {target}");
-    }
-    entries
+    render_runnable_target_entries(graph, prepared, &compute_benchmark_keys(graph, prepared))
 }
 
 fn nix_attr(value: &str) -> String {
@@ -3193,7 +3152,9 @@ version = "0.1.0"
         assert!(rendered.contains("rustc_env+=( 'CARGO_BIN_EXE_dag-runner=${units."));
         assert!(!rendered.contains("export CARGO_BIN_EXE_dag-runner"));
         assert!(rendered.contains("env \"''${rustc_env[@]}\" rustc \"''${rustc_args[@]}\""));
-        assert!(rendered.contains("env \"''${rustc_env[@]}\" clippy-driver \"''${rustc_args[@]}\""));
+        assert!(
+            rendered.contains("env \"''${rustc_env[@]}\" clippy-driver \"''${rustc_args[@]}\"")
+        );
     }
 
     #[test]
@@ -3491,21 +3452,20 @@ version = "0.1.0"
         assert!(rendered.contains("rustdoc_args+=( 'cfg(docsrs,test)' )"));
         assert!(rendered.contains("rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )"));
         assert!(rendered.contains("case \"$link_search_path\" in"));
-        assert!(rendered.contains(
-            "/out-dir|\"${units."
-        ));
-        assert!(rendered.contains(
-            "/out-dir/*) doctest_runtime_library_paths+=( \"$link_search_path\" ) ;;"
-        ));
+        assert!(rendered.contains("/out-dir|\"${units."));
+        assert!(
+            rendered.contains(
+                "/out-dir/*) doctest_runtime_library_paths+=( \"$link_search_path\" ) ;;"
+            )
+        );
         assert!(!rendered.contains(
             "[ -n \"$link_search_path\" ] && doctest_runtime_library_paths+=( \"$link_search_path\" )"
         ));
-        assert!(rendered.contains(
-            "doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')"
-        ));
-        assert!(rendered.contains(
-            "doctest_runtime_library_path_var=DYLD_FALLBACK_LIBRARY_PATH"
-        ));
+        assert!(
+            rendered
+                .contains("doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')")
+        );
+        assert!(rendered.contains("doctest_runtime_library_path_var=DYLD_FALLBACK_LIBRARY_PATH"));
         assert!(rendered.contains(
             "doctest_runtime_library_path_default=\"$HOME/lib:/usr/local/lib:/usr/lib\""
         ));
@@ -3513,9 +3473,11 @@ version = "0.1.0"
         assert!(rendered.contains(
             "doctest_runtime_library_path_current=\"''${!doctest_runtime_library_path_var-}\""
         ));
-        assert!(rendered.contains(
-            "export \"$doctest_runtime_library_path_var=$doctest_runtime_library_path"
-        ));
+        assert!(
+            rendered.contains(
+                "export \"$doctest_runtime_library_path_var=$doctest_runtime_library_path"
+            )
+        );
         assert!(!rendered.contains("done < \"${units.native-run}/rustc-link-lib"));
         assert!(!rendered.contains(
             "doctest_build_args+=( -C \"link-arg=$line\" )\n  done < \"${units.native-run}/rustc-cdylib-link-arg"
