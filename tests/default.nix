@@ -2324,7 +2324,7 @@ let
         message = "symphony-codex image should publish an immutable production tag";
       }
       {
-        assertion = builtins.elem "symphony-room-server" symphonyCodex.packageNames;
+        assertion = builtins.elem pkgs.symphony-room-server symphonyCodex.packages;
         message = "symphony-codex image should include the room-server binary it starts";
       }
       {
