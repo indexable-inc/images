@@ -12,7 +12,7 @@ use axum::routing::get;
 use clap::{Parser, ValueEnum};
 use futures::stream;
 use futures::{Stream, StreamExt};
-use nix_web_monitor_parser::{MonitorState, NixEvent, ParsedLine};
+use nix_web_monitor_parser::{MonitorState, NixEvent, ParsedLine, strip_ansi};
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast};
@@ -302,12 +302,18 @@ fn default_render(parsed: &ParsedLine) -> Option<String> {
 }
 
 fn render_summary_event(parsed: &ParsedLine) -> Option<String> {
-    match parsed {
-        ParsedLine::Event(NixEvent::Message(message)) if is_operator_message(&message.message) => {
-            Some(message.message.clone())
-        }
-        _ => None,
+    let ParsedLine::Event(NixEvent::Message(message)) = parsed else {
+        return None;
+    };
+    // Strip ANSI before checking severity: some Nix paths emit messages
+    // where the "error:" / "warning:" prefix is split by ANSI sequences,
+    // and a naive substring check then misses what the operator most
+    // wants to see in summary mode.
+    let stripped = strip_ansi(&message.message);
+    if !is_operator_message(&stripped) {
+        return None;
     }
+    Some(stripped)
 }
 
 fn render_log_event(parsed: &ParsedLine) -> Option<String> {

@@ -779,7 +779,12 @@ fn current_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn strip_ansi(text: &str) -> String {
+/// Strip both ESC-prefixed CSI sequences and the bare `[<n>;<n>m` form that
+/// shows up when an upstream encoder drops the leading `0x1B`. Used by the
+/// state machine before display, by failure-message detection, and re-exported
+/// for the wrapper binary's terminal renderer.
+#[must_use]
+pub fn strip_ansi(text: &str) -> String {
     let no_esc =
         String::from_utf8(strip_ansi_escapes::strip(text)).unwrap_or_else(|_| text.to_owned());
     strip_orphan_sgr(&no_esc)
