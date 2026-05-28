@@ -4,6 +4,9 @@
 applies to a class of future changes across the repo, or when it captures an
 architecture invariant that would be expensive to rediscover.
 
+`AGENTS.md` and `CLAUDE.md` are generated files. Update their source fragments
+under `agents-md/sections/`, then run `nix run .#agents-md -- --write`.
+
 The test for a new rule is generality. It should survive the specific feature
 that prompted it, apply to the next helper or module with the same shape, and
 read more like a design philosophy than a task note. Specific examples are fine
