@@ -57,6 +57,7 @@ numpy = "0.28"
 parking_lot = "0.12"
 pty-process = { version = "0.4", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 quartz_nbt = "0.2.9"
 repo-walker = { path = "packages/repo-walker" }
 rmcp = "1.7"

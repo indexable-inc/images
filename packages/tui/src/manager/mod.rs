@@ -5,9 +5,10 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::{Error, error::Result, types::TuiInstance};
+use crate::{Error, actor::PtyCommand, error::Result, types::TuiInstance};
 
 pub struct TuiManager {
     instances: Arc<RwLock<HashMap<Uuid, TuiInstance>>>,
@@ -18,6 +19,26 @@ impl Default for TuiManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+async fn write_async_impl(
+    id: Uuid,
+    command_tx: &mpsc::Sender<PtyCommand>,
+    data: Vec<u8>,
+) -> Result<()> {
+    let (response_tx, response_rx) = oneshot::channel();
+
+    command_tx
+        .send(PtyCommand::Write {
+            data,
+            response: response_tx,
+        })
+        .await
+        .map_err(|_| Error::TuiNotFound { id })?;
+
+    response_rx.await.map_err(|_| Error::TuiNotFound { id })??;
+
+    Ok(())
 }
 
 impl TuiManager {
@@ -61,26 +82,11 @@ impl TuiManager {
     }
 
     pub fn write(&self, instance: &TuiInstance, data: &str) -> Result<()> {
-        let id = instance.id;
-        let command_tx = instance.command_tx.clone();
-        let data = data.as_bytes().to_vec();
-        let runtime = Arc::clone(&self.runtime);
-
-        runtime.block_on(async move {
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-
-            command_tx
-                .send(crate::actor::PtyCommand::Write {
-                    data,
-                    response: response_tx,
-                })
-                .await
-                .map_err(|_| Error::TuiNotFound { id })?;
-
-            response_rx.await.map_err(|_| Error::TuiNotFound { id })??;
-
-            Ok(())
-        })
+        self.runtime.block_on(write_async_impl(
+            instance.id,
+            &instance.command_tx,
+            data.as_bytes().to_vec(),
+        ))
     }
 
     pub fn read(&self, instance: &TuiInstance) -> Result<Vec<String>> {
@@ -112,5 +118,38 @@ impl TuiManager {
         instance: &TuiInstance,
     ) -> Result<ndarray::Array2<crate::types::StyledCell>> {
         reader::read_styled_cells(&self.runtime, instance.id, &instance.command_tx)
+    }
+
+    pub async fn write_async(instance: &TuiInstance, data: &str) -> Result<()> {
+        write_async_impl(instance.id, &instance.command_tx, data.as_bytes().to_vec()).await
+    }
+
+    pub async fn read_viewport_async(instance: &TuiInstance) -> Result<Vec<String>> {
+        reader::read_viewport_async(instance.id, &instance.command_tx).await
+    }
+
+    pub async fn read_scrollback_async(instance: &TuiInstance) -> Result<Vec<String>> {
+        reader::read_scrollback_async(instance.id, &instance.command_tx).await
+    }
+
+    pub async fn read_full_async(instance: &TuiInstance) -> Result<reader::FullOutput> {
+        reader::read_full_async(instance.id, &instance.command_tx).await
+    }
+
+    pub async fn read_blocking_async(
+        instance: &TuiInstance,
+        timeout_ms: u64,
+    ) -> Result<Vec<String>> {
+        reader::read_blocking_async(instance.id, &instance.command_tx, timeout_ms).await
+    }
+
+    pub async fn read_chars_async(instance: &TuiInstance) -> Result<Vec<Vec<char>>> {
+        reader::read_chars_async(instance.id, &instance.command_tx).await
+    }
+
+    pub async fn read_styled_cells_async(
+        instance: &TuiInstance,
+    ) -> Result<ndarray::Array2<crate::types::StyledCell>> {
+        reader::read_styled_cells_async(instance.id, &instance.command_tx).await
     }
 }

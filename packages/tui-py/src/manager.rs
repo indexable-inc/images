@@ -1,19 +1,75 @@
 use std::sync::Arc;
 
+use ndarray::Array2;
 use numpy::PyArray2;
 use pyo3::prelude::*;
+use pyo3_async_runtimes::tokio::future_into_py;
 
 use crate::types::{FullOutput, StyledCell};
 
-/// A handle to a single spawned TUI process.
-#[pyclass(frozen, from_py_object, module = "superglide_tui._superglide_tui")]
-#[derive(Clone)]
+/// Low-level binding around `tui::TuiManager`. Application code should prefer
+/// the `superglide_tui.TuiManager` Python wrapper.
+#[pyclass(module = "superglide_tui._superglide_tui")]
+pub struct TuiManager {
+    inner: Arc<tui::TuiManager>,
+}
+
+#[pymethods]
+impl TuiManager {
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(tui::TuiManager::new()),
+        }
+    }
+
+    /// Spawn a child process attached to a fresh PTY.
+    #[pyo3(signature = (command, args=None, scrollback_lines=10_000))]
+    fn spawn(
+        &self,
+        py: Python<'_>,
+        command: String,
+        args: Option<Vec<String>>,
+        scrollback_lines: usize,
+    ) -> PyResult<TuiInstance> {
+        let manager = Arc::clone(&self.inner);
+        let args = args.unwrap_or_default();
+        let instance = py.detach(move || manager.spawn(command, args, scrollback_lines))?;
+        Ok(TuiInstance {
+            inner: instance,
+            manager: Arc::clone(&self.inner),
+        })
+    }
+
+    /// All currently tracked instances.
+    fn list(&self) -> Vec<TuiInstance> {
+        self.inner
+            .list()
+            .into_iter()
+            .map(|inner| TuiInstance {
+                inner,
+                manager: Arc::clone(&self.inner),
+            })
+            .collect()
+    }
+}
+
+/// Low-level binding around `tui::TuiInstance`. Carries an `Arc` to the
+/// owning manager so the actor task and tokio runtime stay alive for as long
+/// as any Python reference does.
+#[pyclass(frozen, module = "superglide_tui._superglide_tui")]
 pub struct TuiInstance {
-    pub(crate) inner: tui::TuiInstance,
+    inner: tui::TuiInstance,
+    // Held to keep the tokio runtime (and the actor task spawned on it)
+    // alive while Python still has a handle to this instance.
+    #[allow(dead_code, reason = "lifetime anchor for the manager runtime")]
+    manager: Arc<tui::TuiManager>,
 }
 
 #[pymethods]
 impl TuiInstance {
+    // -- identity / shape -------------------------------------------------
+
     #[getter]
     fn id(&self) -> String {
         self.inner.id.to_string()
@@ -44,158 +100,156 @@ impl TuiInstance {
         self.inner.scrollback_limit
     }
 
+    // -- sync I/O ---------------------------------------------------------
+
+    fn write(&self, py: Python<'_>, data: &str) -> PyResult<()> {
+        let inner = self.inner.clone();
+        let manager = Arc::clone(&self.manager);
+        let owned = data.to_owned();
+        py.detach(move || manager.write(&inner, &owned))?;
+        Ok(())
+    }
+
+    fn read_viewport(&self, py: Python<'_>) -> PyResult<Vec<String>> {
+        let inner = self.inner.clone();
+        let manager = Arc::clone(&self.manager);
+        let lines = py.detach(move || manager.read_viewport(&inner))?;
+        Ok(lines)
+    }
+
+    fn read_scrollback(&self, py: Python<'_>) -> PyResult<Vec<String>> {
+        let inner = self.inner.clone();
+        let manager = Arc::clone(&self.manager);
+        let lines = py.detach(move || manager.read_scrollback(&inner))?;
+        Ok(lines)
+    }
+
+    fn read_full(&self, py: Python<'_>) -> PyResult<FullOutput> {
+        let inner = self.inner.clone();
+        let manager = Arc::clone(&self.manager);
+        let full = py.detach(move || manager.read_full(&inner))?;
+        Ok(full.into())
+    }
+
+    fn read_blocking(&self, py: Python<'_>, timeout_ms: u64) -> PyResult<Vec<String>> {
+        let inner = self.inner.clone();
+        let manager = Arc::clone(&self.manager);
+        let lines = py.detach(move || manager.read_blocking(&inner, timeout_ms))?;
+        Ok(lines)
+    }
+
+    fn read_chars_array<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyArray2<u32>>> {
+        let inner = self.inner.clone();
+        let manager = Arc::clone(&self.manager);
+        let rows = py.detach(move || manager.read_chars(&inner))?;
+        chars_to_array(py, rows)
+    }
+
+    fn read_styled_cells(&self, py: Python<'_>) -> PyResult<Vec<Vec<StyledCell>>> {
+        let inner = self.inner.clone();
+        let manager = Arc::clone(&self.manager);
+        let cells = py.detach(move || manager.read_styled_cells(&inner))?;
+        Ok(styled_to_nested(&cells))
+    }
+
+    // -- async I/O (returns asyncio-awaitable coroutines) -----------------
+
+    fn write_async<'py>(&self, py: Python<'py>, data: String) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            tui::TuiManager::write_async(&inner, &data).await?;
+            Ok(())
+        })
+    }
+
+    fn read_viewport_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let lines = tui::TuiManager::read_viewport_async(&inner).await?;
+            Ok(lines)
+        })
+    }
+
+    fn read_scrollback_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let lines = tui::TuiManager::read_scrollback_async(&inner).await?;
+            Ok(lines)
+        })
+    }
+
+    fn read_full_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let full = tui::TuiManager::read_full_async(&inner).await?;
+            let out: FullOutput = full.into();
+            Ok(out)
+        })
+    }
+
+    fn read_blocking_async<'py>(
+        &self,
+        py: Python<'py>,
+        timeout_ms: u64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let lines = tui::TuiManager::read_blocking_async(&inner, timeout_ms).await?;
+            Ok(lines)
+        })
+    }
+
+    fn read_chars_array_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let rows = tui::TuiManager::read_chars_async(&inner).await?;
+            Python::attach(|py| {
+                let arr = chars_to_array(py, rows)?;
+                Ok(arr.unbind())
+            })
+        })
+    }
+
+    fn read_styled_cells_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            let cells = tui::TuiManager::read_styled_cells_async(&inner).await?;
+            Ok(styled_to_nested(&cells))
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "TuiInstance(id={}, command={:?}, args={:?}, rows={}, cols={})",
+            "_TuiInstance(id={}, command={:?}, args={:?}, rows={}, cols={})",
             self.inner.id, self.inner.command, self.inner.args, self.inner.rows, self.inner.cols,
         )
     }
 }
 
-/// Manages many concurrent PTY-backed TUI processes.
-#[pyclass(module = "superglide_tui._superglide_tui")]
-pub struct TuiManager {
-    inner: Arc<tui::TuiManager>,
+fn chars_to_array(
+    py: Python<'_>,
+    rows: Vec<Vec<char>>,
+) -> PyResult<Bound<'_, PyArray2<u32>>> {
+    let codepoint_rows: Vec<Vec<u32>> = rows
+        .into_iter()
+        .map(|row| row.into_iter().map(|ch| ch as u32).collect())
+        .collect();
+
+    PyArray2::from_vec2(py, &codepoint_rows).map_err(|source| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "failed to build char array: {source}"
+        ))
+    })
 }
 
-#[pymethods]
-impl TuiManager {
-    #[new]
-    fn new() -> Self {
-        Self {
-            inner: Arc::new(tui::TuiManager::new()),
-        }
+fn styled_to_nested(cells: &Array2<tui::StyledCell>) -> Vec<Vec<StyledCell>> {
+    let (row_count, _) = cells.dim();
+    let mut out = Vec::with_capacity(row_count);
+    for row in cells.rows() {
+        out.push(row.iter().cloned().map(StyledCell::from).collect());
     }
-
-    /// Spawn a child process attached to a fresh PTY.
-    #[pyo3(signature = (command, args=None, scrollback_lines=10_000))]
-    fn spawn(
-        &self,
-        py: Python<'_>,
-        command: String,
-        args: Option<Vec<String>>,
-        scrollback_lines: usize,
-    ) -> PyResult<TuiInstance> {
-        let manager = Arc::clone(&self.inner);
-        let args = args.unwrap_or_default();
-        let instance = py.detach(move || manager.spawn(command, args, scrollback_lines))?;
-        Ok(TuiInstance { inner: instance })
-    }
-
-    /// All currently tracked instances.
-    fn list(&self) -> Vec<TuiInstance> {
-        self.inner
-            .list()
-            .into_iter()
-            .map(|inner| TuiInstance { inner })
-            .collect()
-    }
-
-    /// Send raw input bytes (UTF-8) to the PTY.
-    fn write(&self, py: Python<'_>, instance: &TuiInstance, data: &str) -> PyResult<()> {
-        let manager = Arc::clone(&self.inner);
-        let inner = instance.inner.clone();
-        py.detach(move || manager.write(&inner, data))?;
-        Ok(())
-    }
-
-    /// Read the current viewport (24x80 by default) as a list of lines.
-    fn read(&self, py: Python<'_>, instance: &TuiInstance) -> PyResult<Vec<String>> {
-        let manager = Arc::clone(&self.inner);
-        let inner = instance.inner.clone();
-        let lines = py.detach(move || manager.read(&inner))?;
-        Ok(lines)
-    }
-
-    fn read_viewport(&self, py: Python<'_>, instance: &TuiInstance) -> PyResult<Vec<String>> {
-        let manager = Arc::clone(&self.inner);
-        let inner = instance.inner.clone();
-        let lines = py.detach(move || manager.read_viewport(&inner))?;
-        Ok(lines)
-    }
-
-    fn read_scrollback(&self, py: Python<'_>, instance: &TuiInstance) -> PyResult<Vec<String>> {
-        let manager = Arc::clone(&self.inner);
-        let inner = instance.inner.clone();
-        let lines = py.detach(move || manager.read_scrollback(&inner))?;
-        Ok(lines)
-    }
-
-    /// Block until some output is available or until `timeout_ms` elapses.
-    fn read_blocking(
-        &self,
-        py: Python<'_>,
-        instance: &TuiInstance,
-        timeout_ms: u64,
-    ) -> PyResult<Vec<String>> {
-        let manager = Arc::clone(&self.inner);
-        let inner = instance.inner.clone();
-        let lines = py.detach(move || manager.read_blocking(&inner, timeout_ms))?;
-        Ok(lines)
-    }
-
-    /// Combined snapshot of scrollback + viewport.
-    fn read_full(&self, py: Python<'_>, instance: &TuiInstance) -> PyResult<FullOutput> {
-        let manager = Arc::clone(&self.inner);
-        let inner = instance.inner.clone();
-        let full = py.detach(move || manager.read_full(&inner))?;
-        Ok(full.into())
-    }
-
-    /// Per-cell characters of the current viewport as a nested list.
-    fn read_chars(
-        &self,
-        py: Python<'_>,
-        instance: &TuiInstance,
-    ) -> PyResult<Vec<Vec<String>>> {
-        let manager = Arc::clone(&self.inner);
-        let inner = instance.inner.clone();
-        let rows = py.detach(move || manager.read_chars(&inner))?;
-        Ok(rows
-            .into_iter()
-            .map(|row| row.into_iter().map(|ch| ch.to_string()).collect())
-            .collect())
-    }
-
-    /// Per-cell characters of the current viewport as a uint32 numpy array of
-    /// Unicode codepoints, shape `(rows, cols)`.
-    fn read_chars_array<'py>(
-        &self,
-        py: Python<'py>,
-        instance: &TuiInstance,
-    ) -> PyResult<Bound<'py, PyArray2<u32>>> {
-        let manager = Arc::clone(&self.inner);
-        let inner = instance.inner.clone();
-        let rows = py.detach(move || manager.read_chars(&inner))?;
-
-        let codepoint_rows: Vec<Vec<u32>> = rows
-            .into_iter()
-            .map(|row| row.into_iter().map(|ch| ch as u32).collect())
-            .collect();
-
-        PyArray2::from_vec2(py, &codepoint_rows).map_err(|source| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "failed to build char array: {source}"
-            ))
-        })
-    }
-
-    /// Per-cell styled view of the current viewport as a nested list of
-    /// `StyledCell` objects.
-    fn read_styled_cells(
-        &self,
-        py: Python<'_>,
-        instance: &TuiInstance,
-    ) -> PyResult<Vec<Vec<StyledCell>>> {
-        let manager = Arc::clone(&self.inner);
-        let inner = instance.inner.clone();
-        let cells = py.detach(move || manager.read_styled_cells(&inner))?;
-
-        let (row_count, _) = cells.dim();
-        let mut out = Vec::with_capacity(row_count);
-        for row in cells.rows() {
-            out.push(row.iter().cloned().map(StyledCell::from).collect());
-        }
-        Ok(out)
-    }
+    out
 }
