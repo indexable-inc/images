@@ -2510,9 +2510,7 @@ fn append_doctest_builder_args(
     script.push_str(
         "  doctest_runtime_library_path=$(IFS=:; printf '%s' \"''${doctest_runtime_library_paths[*]}\")\n",
     );
-    script.push_str(
-        "  doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')\n",
-    );
+    script.push_str("  doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')\n");
     script.push_str("  case \"$doctest_runtime_library_path_host\" in\n");
     script.push_str(
         "    *apple-darwin*)\n      doctest_runtime_library_path_var=DYLD_FALLBACK_LIBRARY_PATH\n      doctest_runtime_library_path_default=\"$HOME/lib:/usr/local/lib:/usr/lib\"\n      ;;\n",
@@ -2710,13 +2708,14 @@ fn render_test_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> St
         by_key.insert(
             key.clone(),
             format!(
-                "{{ name = {}; binary = \"{}\"; packageName = {}; packageVersion = {}; packageRoot = {}; sourceStoreName = {}; }}",
+                "{{ name = {}; binary = \"{}\"; packageName = {}; packageVersion = {}; packageRoot = {}; sourceStoreName = {}; cargoArgs = {}; }}",
                 nix_attr(key),
                 test_binary_expr(unit, prepared, index),
                 nix_attr(&unit.package_name()),
                 nix_attr(unit.package_version()),
                 nix_attr(package_root),
                 nix_attr(&source.name),
+                nix_string_list(&cargo_miri_target_args(graph, index, unit)),
             ),
         );
     }
@@ -2725,6 +2724,64 @@ fn render_test_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> St
         let _ = writeln!(entries, "    {target}");
     }
     entries
+}
+
+fn cargo_miri_target_args(graph: &UnitGraph, index: usize, unit: &Unit) -> Vec<String> {
+    let package_name = unit.package_name();
+    let mut args = cargo_miri_base_args(graph, index);
+    args.push("--package".to_string());
+    args.push(package_name.into_owned());
+
+    if unit.target.has_kind("test") {
+        args.push("--test".to_string());
+        args.push(unit.target.name.clone());
+    } else if unit.target.has_kind("example") {
+        args.push("--example".to_string());
+        args.push(unit.target.name.clone());
+    } else if unit.target.has_kind("bin") || unit.target.has_crate_type("bin") {
+        args.push("--bin".to_string());
+        args.push(unit.target.name.clone());
+    } else {
+        args.push("--lib".to_string());
+    }
+
+    args
+}
+
+fn cargo_miri_base_args(graph: &UnitGraph, index: usize) -> Vec<String> {
+    let root_set_index = graph
+        .root_sets
+        .iter()
+        .position(|roots| roots.contains(&index))
+        .unwrap_or(0);
+    let raw_args = graph
+        .root_set_cargo_args
+        .get(root_set_index)
+        .cloned()
+        .unwrap_or_default();
+    strip_cargo_target_selectors(raw_args)
+}
+
+fn strip_cargo_target_selectors(args: Vec<String>) -> Vec<String> {
+    let mut filtered = Vec::new();
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--workspace" | "--all" | "--all-targets" | "--lib" | "--bins" | "--examples"
+            | "--tests" | "--benches" => {}
+            "-p" | "--package" | "--exclude" | "--bin" | "--example" | "--test" | "--bench" => {
+                let _ = iter.next();
+            }
+            _ if arg.starts_with("--package=")
+                || arg.starts_with("--exclude=")
+                || arg.starts_with("--bin=")
+                || arg.starts_with("--example=")
+                || arg.starts_with("--test=")
+                || arg.starts_with("--bench=") => {}
+            _ => filtered.push(arg),
+        }
+    }
+    filtered
 }
 
 fn render_doctest_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> Result<String> {
@@ -2913,7 +2970,9 @@ mod tests {
                   "dependencies": []
                 }
               ],
-              "roots": [0]
+              "roots": [0],
+              "root_sets": [[0]],
+              "root_set_cargo_args": [["--workspace", "--tests", "--features", "miri-mode"]]
             }"#,
         )
         .unwrap();
@@ -2978,7 +3037,9 @@ mod tests {
                   "dependencies": []
                 }
               ],
-              "roots": [0]
+              "roots": [0],
+              "root_sets": [[0]],
+              "root_set_cargo_args": [["--workspace", "--tests", "--features", "miri-mode"]]
             }"#,
         )
         .unwrap();
@@ -3032,7 +3093,9 @@ mod tests {
                   "dependencies": []
                 }
               ],
-              "roots": [0]
+              "roots": [0],
+              "root_sets": [[0]],
+              "root_set_cargo_args": [["--workspace", "--tests", "--features", "miri-mode"]]
             }"#,
         )
         .unwrap();
@@ -3065,6 +3128,11 @@ mod tests {
         assert!(rendered.contains("packageName = \"hello\";"));
         assert!(rendered.contains("packageRoot = \".\";"));
         assert!(rendered.contains("sourceStoreName = \"cargo-unit-source-hello-0.1.0-"));
+        assert!(rendered.contains(
+            "cargoArgs = [ \"--features\" \"miri-mode\" \"--package\" \"hello\" \"--lib\" ];"
+        ));
+        assert!(rendered.contains("miriUnits = mkMiriUnits {};"));
+        assert!(rendered.contains("mkMiriUnits ="));
         assert!(rendered.contains("sourcePackageRoot ="));
         assert!(rendered.contains("test_cwd="));
         assert!(rendered.contains("cd \"$test_cwd\""));
@@ -3079,6 +3147,55 @@ mod tests {
         assert!(rendered.contains("source-roots.tsv"));
         assert!(rendered.contains("testManifestDrv ="));
         assert!(rendered.contains("cargo-unit-test-manifest"));
+    }
+
+    #[test]
+    fn miri_args_select_examples_and_strip_workspace_exclusions() {
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["example"],
+                    "crate_types": ["bin"],
+                    "name": "sample",
+                    "src_path": "/workspace/examples/sample.rs",
+                    "edition": "2024",
+                    "test": true
+                  },
+                  "profile": { "name": "test", "opt_level": "0" },
+                  "features": [],
+                  "mode": "test",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0],
+              "root_sets": [[0]],
+              "root_set_cargo_args": [["--workspace", "--exclude", "skip-me", "--examples", "--no-default-features"]]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+            },
+        )
+        .unwrap();
+
+        assert!(rendered.contains(
+            "cargoArgs = [ \"--no-default-features\" \"--package\" \"hello\" \"--example\" \"sample\" ];"
+        ));
+        assert!(!rendered.contains("--exclude"));
+        assert!(!rendered.contains("\"--bin\" \"sample\""));
     }
 
     #[test]
@@ -3187,7 +3304,9 @@ version = "0.1.0"
         assert!(rendered.contains("rustc_env+=( 'CARGO_BIN_EXE_dag-runner=${units."));
         assert!(!rendered.contains("export CARGO_BIN_EXE_dag-runner"));
         assert!(rendered.contains("env \"''${rustc_env[@]}\" rustc \"''${rustc_args[@]}\""));
-        assert!(rendered.contains("env \"''${rustc_env[@]}\" clippy-driver \"''${rustc_args[@]}\""));
+        assert!(
+            rendered.contains("env \"''${rustc_env[@]}\" clippy-driver \"''${rustc_args[@]}\"")
+        );
     }
 
     #[test]
@@ -3485,21 +3604,20 @@ version = "0.1.0"
         assert!(rendered.contains("rustdoc_args+=( 'cfg(docsrs,test)' )"));
         assert!(rendered.contains("rustdoc_args+=( --doctest-build-arg \"$doctest_build_arg\" )"));
         assert!(rendered.contains("case \"$link_search_path\" in"));
-        assert!(rendered.contains(
-            "/out-dir|\"${units."
-        ));
-        assert!(rendered.contains(
-            "/out-dir/*) doctest_runtime_library_paths+=( \"$link_search_path\" ) ;;"
-        ));
+        assert!(rendered.contains("/out-dir|\"${units."));
+        assert!(
+            rendered.contains(
+                "/out-dir/*) doctest_runtime_library_paths+=( \"$link_search_path\" ) ;;"
+            )
+        );
         assert!(!rendered.contains(
             "[ -n \"$link_search_path\" ] && doctest_runtime_library_paths+=( \"$link_search_path\" )"
         ));
-        assert!(rendered.contains(
-            "doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')"
-        ));
-        assert!(rendered.contains(
-            "doctest_runtime_library_path_var=DYLD_FALLBACK_LIBRARY_PATH"
-        ));
+        assert!(
+            rendered
+                .contains("doctest_runtime_library_path_host=$(rustc -vV | sed -n 's/^host: //p')")
+        );
+        assert!(rendered.contains("doctest_runtime_library_path_var=DYLD_FALLBACK_LIBRARY_PATH"));
         assert!(rendered.contains(
             "doctest_runtime_library_path_default=\"$HOME/lib:/usr/local/lib:/usr/lib\""
         ));
@@ -3507,9 +3625,11 @@ version = "0.1.0"
         assert!(rendered.contains(
             "doctest_runtime_library_path_current=\"''${!doctest_runtime_library_path_var-}\""
         ));
-        assert!(rendered.contains(
-            "export \"$doctest_runtime_library_path_var=$doctest_runtime_library_path"
-        ));
+        assert!(
+            rendered.contains(
+                "export \"$doctest_runtime_library_path_var=$doctest_runtime_library_path"
+            )
+        );
         assert!(!rendered.contains("done < \"${units.native-run}/rustc-link-lib"));
         assert!(!rendered.contains(
             "doctest_build_args+=( -C \"link-arg=$line\" )\n  done < \"${units.native-run}/rustc-cdylib-link-arg"

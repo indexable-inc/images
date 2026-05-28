@@ -38,6 +38,7 @@ let
     cargoExtraConfig = args.cargoExtraConfig or "";
     vendorDir = args.vendorDir or null;
     vendorSources = args.vendorSources or null;
+    miriTests = args.miriTests or { };
     # Maps exact Cargo.lock source strings to already-fetched source trees.
     # This keeps private Git dependencies reproducible without requiring
     # sandboxed fetchers to see a developer SSH agent or GitHub credentials.
@@ -160,6 +161,7 @@ let
     rawArgs:
     let
       args = commonArgs rawArgs;
+      rootSetCargoArgs = map (targetArgs: profileArgs args.profile ++ targetArgs) args.cargoTargets;
       vendorDir = rust.resolveVendorDir {
         inherit (args)
           cargoLock
@@ -175,6 +177,7 @@ let
           nativeBuildInputs = [
             args.rustToolchain
             pkgs.cacert
+            pkgs.jq
             nixCargoUnit
           ]
           ++ args.nativeBuildInputs;
@@ -217,7 +220,10 @@ let
           lib.concatMapStringsSep " " (
             targetIndex: "$TMPDIR/unit-graph-${builtins.toString targetIndex}.json"
           ) (lib.range 0 ((builtins.length args.cargoTargets) - 1))
-        } > "$out"
+        } > "$TMPDIR/merged-unit-graph.json"
+        jq --argjson root_set_cargo_args ${lib.escapeShellArg (builtins.toJSON rootSetCargoArgs)} \
+          '.root_set_cargo_args = $root_set_cargo_args' \
+          "$TMPDIR/merged-unit-graph.json" > "$out"
       '';
 
   /**
@@ -308,9 +314,12 @@ let
     generated `$out/lcov.info`. The selected Rust toolchain must provide matching
     `llvm-cov` and `llvm-profdata`, or callers must pass explicit tool paths to
     `makeCoverageReport`.
+    Miri runs are per test target under `miriUnits`; `makeMiriTest` only joins
+    selected target derivations so callers can publish one named check without
+    losing the per-target rebuild boundary.
 
     Returns the generated attrset with `sourceAudit`, `units`, `roots`, `checkedRoots`,
-    `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
+    `packages`, `binaries`, `libraries`, `benchmarks`, `miriUnits`, `coverageReport`, `default`,
     `policyChecks`, plus the intermediate `unitGraphJson`, `unitsNix`, and `vendorDir`
     derivations for inspection.
   */
@@ -385,6 +394,14 @@ let
           clippyLintFlagsFromManifest (args.src + "/Cargo.toml") ++ rust.clippyLintArgs args.policy;
         clippyEnabled = perUnitClippyEnabled;
         extraPolicyChecks = extraPolicyChecksFromRust;
+        miriCargoSetupScript = rust.vendorConfigScript {
+          inherit vendorDir;
+          cargoLock = rust.cargoLockFile args.cargoLock;
+          inherit (args) cargoExtraConfig;
+        };
+        miriPackage = (rawArgs.miri or { }).package or pkgs.miri;
+        miriRustToolchain = (rawArgs.miri or { }).rustToolchain or args.rustToolchain;
+        defaultMiriFlags = (rawArgs.miri or { }).flags or [ ];
       };
       targetSetNames =
         if args.cargoTargetNames == null then
@@ -399,10 +416,53 @@ let
           lib.nameValuePair targetName (builtins.elemAt units.targetSets (targetIndex - 1))
         ) targetSetNames
       );
+      makeMiriTest =
+        {
+          name ? "${rawArgs.pname or "cargo-unit"}-miri",
+          targets ? null,
+          ...
+        }@miriArgs:
+        let
+          miriUnits = units.mkMiriUnits (
+            builtins.removeAttrs miriArgs [
+              "name"
+              "targets"
+            ]
+          );
+          missingTargets =
+            if targets == null then
+              [ ]
+            else
+              builtins.filter (target: !(builtins.hasAttr target miriUnits)) targets;
+          selectedUnits =
+            if missingTargets != [ ] then
+              throw "cargoUnit.makeMiriTest unknown Miri targets: ${lib.concatStringsSep ", " missingTargets}"
+            else if targets == null then
+              miriUnits
+            else
+              lib.getAttrs targets miriUnits;
+        in
+        assert lib.assertMsg (selectedUnits != { }) ''
+          cargoUnit.makeMiriTest requires at least one Miri target.
+          Include `--tests`, `--all-targets`, or a specific test target in cargoTargets.
+        '';
+        pkgs.symlinkJoin {
+          inherit name;
+          paths = builtins.attrValues selectedUnits;
+        };
+      miriTests = lib.mapAttrs (
+        name: testArgs: makeMiriTest ({ inherit name; } // testArgs)
+      ) args.miriTests;
     in
     units
     // {
-      inherit unitGraphJson unitsNix vendorDir;
+      inherit
+        makeMiriTest
+        miriTests
+        unitGraphJson
+        unitsNix
+        vendorDir
+        ;
       targetSets = namedTargetSets;
       inherit (args) policy;
     };

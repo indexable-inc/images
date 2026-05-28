@@ -12,6 +12,10 @@
   extraPolicyChecks ? {},
   extraRustcArgs ? [],
   extraRustcArgsForPlatform ? _platform: [],
+  miriCargoSetupScript ? "",
+  miriPackage ? pkgs.miri,
+  miriRustToolchain ? rustToolchain,
+  defaultMiriFlags ? [],
   # `-D clippy::xxx` / `-A clippy::xxx` flags appended to every per-unit
   # clippy-driver invocation. Empty by default so the rendered units file
   # is policy-agnostic; cargo-unit.nix derives these from the workspace
@@ -558,6 +562,67 @@ let
   # Map both to ASCII-safe runs without losing the path shape.
   sanitizeTestName = pkgs.lib.replaceStrings [ "::" ":" " " ] [ "--" "_" "_" ];
 
+  mkMiriUnits =
+    {
+      cargoArgsByTarget ? {},
+      env ? {},
+      miriFlags ? defaultMiriFlags,
+      testArgs ? [],
+      testArgsByTarget ? {},
+    }:
+    pkgs.lib.listToAttrs (
+      map (
+        target:
+        let
+          cargoArgs = cargoArgsByTarget.${target.name} or target.cargoArgs;
+          targetTestArgs = testArgs ++ (testArgsByTarget.${target.name} or []);
+          miriRustFlags = pkgs.lib.concatStringsSep " " (extraRustcArgs ++ extraRustcArgsForPlatform null);
+          cargoMiriArgs = [
+            "miri"
+            "test"
+          ]
+          ++ cargoArgs
+          ++ [
+            "--frozen"
+            "--offline"
+          ]
+          ++ pkgs.lib.optionals (targetTestArgs != []) ([ "--" ] ++ targetTestArgs);
+        in
+        {
+          name = target.name;
+          value = pkgs.runCommand "cargo-unit-miri-${target.name}"
+            (
+              {
+                __structuredAttrs = true;
+                strictDeps = true;
+                nativeBuildInputs = [
+                  miriRustToolchain
+                  miriPackage
+                  pkgs.cacert
+                ] ++ extraNativeBuildInputs;
+                SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+                MIRIFLAGS = pkgs.lib.concatStringsSep " " miriFlags;
+              }
+              // extraEnv
+              // env
+            )
+            ''
+              set -euo pipefail
+
+              ${miriCargoSetupScript}
+
+              export CARGO_TARGET_DIR="$TMPDIR/cargo-target"
+              ${pkgs.lib.optionalString (miriRustFlags != "") ''
+              export RUSTFLAGS="''${RUSTFLAGS:+$RUSTFLAGS }${miriRustFlags}"
+              ''}
+              cd ${src}
+              cargo ${pkgs.lib.escapeShellArgs cargoMiriArgs}
+              mkdir -p "$out"
+            '';
+        }
+      ) testTargets
+    );
+
   # Single IFD that depends on every test binary. Writes one
   # `<name>.list` (non-ignored tests) and one `<name>.ignored.list`
   # per target. Mainline Nix evaluates IFDs serially, so collapsing
@@ -704,6 +769,8 @@ in
     testTargetNamesByPackage
     units
     ;
+  inherit mkMiriUnits;
+  miriUnits = mkMiriUnits {};
   testPlan = mkTestPlan "cargo-unit-test-plan";
   benchmarkPlan = mkBenchmarkPlan "cargo-unit-benchmark-plan";
   coverageReport = mkCoverageReport {};

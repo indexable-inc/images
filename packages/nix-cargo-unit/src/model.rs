@@ -14,6 +14,8 @@ pub struct UnitGraph {
     pub roots: Vec<usize>,
     #[serde(default)]
     pub root_sets: Vec<Vec<usize>>,
+    #[serde(default)]
+    pub root_set_cargo_args: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -302,6 +304,7 @@ impl UnitGraph {
             units: Vec::new(),
             roots: Vec::new(),
             root_sets: Vec::new(),
+            root_set_cargo_args: Vec::new(),
         };
         let mut merged_by_hash = BTreeMap::new();
 
@@ -335,6 +338,13 @@ impl UnitGraph {
                 }
             }
             merged.root_sets.push(root_set);
+            merged.root_set_cargo_args.push(
+                graph
+                    .root_set_cargo_args
+                    .first()
+                    .cloned()
+                    .unwrap_or_default(),
+            );
         }
 
         merged.validate()?;

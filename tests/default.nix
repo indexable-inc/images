@@ -636,6 +636,44 @@ let
     };
   };
 
+  cargoUnitFakeMiriToolchain = pkgs.runCommand "cargo-unit-fake-miri-toolchain" { } ''
+    mkdir -p "$out/bin"
+    cat > "$out/bin/cargo" <<'EOF'
+    #!${pkgs.runtimeShell}
+    set -eu
+    : "''${CARGO_UNIT_FAKE_CARGO_LOG:=$out/cargo-miri-argv}"
+    mkdir -p "$(dirname "$CARGO_UNIT_FAKE_CARGO_LOG")"
+    printf '%s\n' "$*" > "$CARGO_UNIT_FAKE_CARGO_LOG"
+    EOF
+    chmod +x "$out/bin/cargo"
+  '';
+
+  cargoUnitMiriWorkspace = ix.cargoUnit.buildWorkspace {
+    src = cargoUnitFixture;
+    workspaceRoot = ./fixtures/cargo-unit-hello;
+    cargoTargets = [
+      [
+        "--workspace"
+        "--tests"
+      ]
+    ];
+    miri = {
+      package = pkgs.runCommand "cargo-unit-empty-miri-package" { } "mkdir -p $out";
+      rustToolchain = cargoUnitFakeMiriToolchain;
+      flags = [ "-Zmiri-disable-isolation" ];
+    };
+    miriTests.tagged = {
+      targets = [ "cargo_unit_hello" ];
+      testArgs = [ ":miri:" ];
+    };
+    policy = {
+      denyUnusedCrateDependencies = false;
+      cargoAudit.enable = false;
+      cargoMachete.enable = false;
+      clippy.enable = false;
+    };
+  };
+
   cargoUnitHello = cargoUnitWorkspace.binaries.cargo-unit-hello;
   cargoUnitSelectedHello = ix.cargoUnit.selectBinaryWithTests cargoUnitWorkspace {
     binary = "cargo-unit-hello";
@@ -3040,6 +3078,22 @@ let
         message = "cargo-unit workspaces should expose a customizable coverage report builder";
       }
       {
+        assertion = cargoUnitWorkspace ? makeMiriTest;
+        message = "cargo-unit workspaces should expose a customizable Miri test aggregate builder";
+      }
+      {
+        assertion = builtins.isAttrs cargoUnitWorkspace.miriUnits;
+        message = "cargo-unit workspaces should expose per-target Miri derivations";
+      }
+      {
+        assertion = builtins.hasAttr "cargo_unit_hello" cargoUnitWorkspace.miriUnits;
+        message = "cargo-unit Miri derivations should be keyed by test target";
+      }
+      {
+        assertion = cargoUnitMiriWorkspace.miriTests ? tagged;
+        message = "cargo-unit workspaces should expose named Miri test presets";
+      }
+      {
         assertion = cargoUnitWorkspace ? benchmarkPlan;
         message = "cargo-unit workspaces should expose a reusable benchmark plan";
       }
@@ -3584,6 +3638,7 @@ let
     test -s ${cargoUnitCoverageWorkspace.coverageReport}/merged.profdata
     grep -q '^SF:src/lib.rs$' ${cargoUnitCoverageWorkspace.coverageReport}/lcov.info
     grep -q '^DA:' ${cargoUnitCoverageWorkspace.coverageReport}/lcov.info
+    grep -qx 'miri test --release --package cargo-unit-hello --lib --frozen --offline -- :miri:' ${cargoUnitMiriWorkspace.miriTests.tagged}/cargo-miri-argv
     test -x ${cargoUnitWorkspace.benchmarkPlan}/packages/cargo-unit-hello/benchmarks/greeting
     grep -q '^cargo-unit-hello	greeting	.*/bin/greeting$' ${cargoUnitWorkspace.benchmarkPlan}/benchmarks.tsv
     test -e ${cargoUnitTangoComparison}/done
