@@ -137,6 +137,11 @@ fn write_stats(config: &Config) -> Result<(), Box<dyn Error>> {
         + disk_used_tib
             * ((config.storage_usd_per_tib_hour / SECONDS_PER_HOUR) * config.margin_multiplier);
 
+    // Hand-rolled JSON instead of serde: this daemon ships with an empty
+    // `[dependencies]` (see Cargo.toml) and runs on every resource-monitor VM,
+    // so keeping the closure tiny is worth emitting the object by hand. The
+    // shape below is the wire contract checked by the `usageStatsSchema` valibot
+    // schema in the site's `src/lib/stats.ts`; keep the two in sync.
     let stats = format!(
         concat!(
             "{{",
