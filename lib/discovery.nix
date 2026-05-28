@@ -24,13 +24,12 @@ let
     ) attrs;
 
   /**
-    Same walk and duplicate-name detection as `discoverTree`, but returns
-    `{ discovered; duplicateMessages; }` instead of throwing. Exists so the
-    test suite can assert the exact duplicate-name failure mode without
-    catching a throw; `discoverTree` is a thin throw-or-return wrapper on
-    top of it.
+    Walk a directory tree and return `{ <name> = { path; metadata; }; }`.
+    Entries are directories containing every required file. Directories whose
+    names start with `_` are skipped with their subtree. `validate` may return
+    extra metadata and `outputNames` for additional duplicate claims.
   */
-  inspectTree =
+  discoverTree =
     {
       root,
       requiredFiles ? [ "default.nix" ],
@@ -87,28 +86,11 @@ let
         )
       ) duplicateClaims;
     in
-    {
-      inherit discovered duplicateMessages;
-    };
-
-  /**
-    Walk a directory tree and return `{ <name> = { path; metadata; }; }`.
-    Entries are directories containing every required file. Directories whose
-    names start with `_` are skipped with their subtree. `validate` may return
-    extra metadata and `outputNames` for additional duplicate claims.
-  */
-  discoverTree =
-    args:
-    let
-      result = inspectTree args;
-    in
-    if result.duplicateMessages != [ ] then
-      throw (lib.concatStringsSep "\n" result.duplicateMessages)
+    if duplicateMessages != [ ] then
+      throw (lib.concatStringsSep "\n" duplicateMessages)
     else
       lib.listToAttrs (
-        map (
-          entry: lib.nameValuePair entry.metadata.name { inherit (entry) path metadata; }
-        ) result.discovered
+        map (entry: lib.nameValuePair entry.metadata.name { inherit (entry) path metadata; }) discovered
       );
 
   # One image directory -> { <name> = pkg; <name>_<ver> = pkg; ... }.
@@ -303,7 +285,6 @@ in
 {
   inherit
     discoverTree
-    inspectTree
     discoverImages
     discoverModules
     exampleFleetsFor

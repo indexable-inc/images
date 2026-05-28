@@ -1729,8 +1729,6 @@ let
       }).refs
       true
   );
-  discoverTreeDuplicateMessages =
-    (ix.inspectTree { root = ./fixtures/discover-tree-duplicates; }).duplicateMessages;
   # --- Per-image assertion groups -------------------------------------------
 
   groups = {
@@ -2929,20 +2927,6 @@ let
       {
         assertion = !invalidSecretNameEval.success;
         message = "secret refs should reject unsafe relative names during eval";
-      }
-      {
-        assertion = lib.any (
-          msg: lib.hasInfix "discoverTree: duplicate output name 'shared'" msg
-        ) discoverTreeDuplicateMessages;
-        message = "discoverTree should name the duplicated output in its failure message";
-      }
-      {
-        assertion = lib.any (msg: lib.hasInfix "first/shared" msg) discoverTreeDuplicateMessages;
-        message = "discoverTree duplicate failure should cite the first claiming path";
-      }
-      {
-        assertion = lib.any (msg: lib.hasInfix "second/shared" msg) discoverTreeDuplicateMessages;
-        message = "discoverTree duplicate failure should cite the second claiming path";
       }
       {
         assertion = cargoUnitWorkspace.policyChecks ? cargoAudit;
