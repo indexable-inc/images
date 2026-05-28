@@ -1,0 +1,18 @@
+[package]
+name = "tui-py"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Python bindings for the tui PTY-backed terminal UI management library"
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+ndarray.workspace = true
+numpy.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
+tui = { workspace = true, features = ["pyo3"] }

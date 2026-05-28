@@ -1,0 +1,22 @@
+[package]
+name = "tui"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "PTY-backed terminal UI management library for spawning and controlling multiple TUI processes"
+
+[lints]
+workspace = true
+
+[features]
+pyo3 = ["dep:pyo3"]
+
+[dependencies]
+ndarray.workspace = true
+parking_lot.workspace = true
+pty-process.workspace = true
+pyo3 = { workspace = true, optional = true }
+snafu.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "process", "io-util", "time"] }
+uuid = { workspace = true, features = ["v4"] }
+vt100.workspace = true

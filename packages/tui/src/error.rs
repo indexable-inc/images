@@ -1,0 +1,67 @@
+use snafu::Snafu;
+use uuid::Uuid;
+
+#[derive(Debug, Snafu)]
+pub enum Error {
+    #[snafu(
+        display("Failed to spawn process '{command}': {source}"),
+        visibility(pub(crate))
+    )]
+    ProcessSpawn {
+        command: String,
+        source: std::io::Error,
+    },
+
+    #[snafu(display("TUI instance {id} not found"))]
+    TuiNotFound { id: Uuid },
+
+    #[snafu(
+        display("Failed to write to TUI {id}: {source}"),
+        visibility(pub(crate))
+    )]
+    WriteToTui { id: Uuid, source: std::io::Error },
+
+    #[snafu(display("Failed to read from TUI {id}: {source}"))]
+    ReadFromTui { id: Uuid, source: std::io::Error },
+
+    #[snafu(display("TUI {id} has no buffered output available"))]
+    NoOutputAvailable { id: Uuid },
+
+    #[snafu(display("Invalid row range: {message}"))]
+    InvalidRowRange { message: String },
+
+    #[snafu(display("Row index {index} out of bounds (total lines: {total_lines})"))]
+    RowIndexOutOfBounds { index: usize, total_lines: usize },
+
+    #[snafu(display("Invalid column range: {message}"))]
+    InvalidColRange { message: String },
+
+    #[snafu(display("Column index {index} out of bounds (line length: {line_len})"))]
+    ColIndexOutOfBounds { index: usize, line_len: usize },
+
+    #[snafu(display("{message}"))]
+    ArrayConversion { message: String },
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[cfg(feature = "pyo3")]
+impl From<Error> for pyo3::PyErr {
+    fn from(err: Error) -> Self {
+        use pyo3::exceptions::{PyIOError, PyKeyError, PyRuntimeError, PyValueError};
+        let msg = err.to_string();
+        match err {
+            Error::TuiNotFound { .. } | Error::NoOutputAvailable { .. } => {
+                PyKeyError::new_err(msg)
+            }
+            Error::InvalidRowRange { .. }
+            | Error::InvalidColRange { .. }
+            | Error::RowIndexOutOfBounds { .. }
+            | Error::ColIndexOutOfBounds { .. } => PyValueError::new_err(msg),
+            Error::ProcessSpawn { .. }
+            | Error::WriteToTui { .. }
+            | Error::ReadFromTui { .. } => PyIOError::new_err(msg),
+            Error::ArrayConversion { .. } => PyRuntimeError::new_err(msg),
+        }
+    }
+}

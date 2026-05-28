@@ -14,6 +14,8 @@ members = [
   "packages/nix-web-monitor/server",
   "packages/oci-image-builder",
   "packages/repo-walker",
+  "packages/tui",
+  "packages/tui-py",
 ]
 resolver = "3"
 
@@ -49,7 +51,12 @@ hegeltest = { version = "0.14", default-features = false }
 ignore = "0.4"
 indicatif = "0.18"
 libc = "0.2"
+ndarray = "0.16"
 nix-web-monitor-parser = { path = "packages/nix-web-monitor/parser" }
+numpy = "0.28"
+parking_lot = "0.12"
+pty-process = { version = "0.4", features = ["async"] }
+pyo3 = { version = "0.28", features = ["abi3-py311"] }
 quartz_nbt = "0.2.9"
 repo-walker = { path = "packages/repo-walker" }
 rmcp = "1.7"
@@ -70,6 +77,9 @@ tokio = "1"
 tokio-stream = "0.1"
 toml = { version = "1.1.2", default-features = false }
 tower-http = "0.6"
+tui = { path = "packages/tui" }
 url = { version = "2.5.8", default-features = false }
+uuid = "1"
+vt100 = "0.16"
 webpki-roots = "1"
 x509-parser = "0.18"
