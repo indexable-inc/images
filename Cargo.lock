@@ -3339,7 +3339,6 @@ dependencies = [
 name = "tui-py"
 version = "0.1.0"
 dependencies = [
- "ndarray 0.16.1",
  "numpy",
  "pyo3",
  "tui",
