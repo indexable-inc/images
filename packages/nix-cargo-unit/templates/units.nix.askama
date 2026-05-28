@@ -617,9 +617,9 @@ let
               ${pkgs.lib.optionalString (miriRustFlags != "") ''
               export RUSTFLAGS="''${RUSTFLAGS:+$RUSTFLAGS }${miriRustFlags}"
               ''}
-              miri_src="$TMPDIR/cargo-unit-miri-workspace"
+              miri_src="$TMPDIR/cargo-unit-miri-src"
               mkdir -p "$miri_src"
-              cp -R ${workspaceRoot}/. "$miri_src"/
+              cp -R ${src}/. "$miri_src"/
               chmod -R u+w "$miri_src"
               cd "$miri_src"
               ${testRunPrelude}
