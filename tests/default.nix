@@ -1729,6 +1729,9 @@ let
       }).refs
       true
   );
+  discoverTreeDuplicateEval = builtins.tryEval (
+    builtins.deepSeq (ix.discoverTree { root = ./fixtures/discover-tree-duplicates; }) true
+  );
   # --- Per-image assertion groups -------------------------------------------
 
   groups = {
@@ -2927,6 +2930,10 @@ let
       {
         assertion = !invalidSecretNameEval.success;
         message = "secret refs should reject unsafe relative names during eval";
+      }
+      {
+        assertion = !discoverTreeDuplicateEval.success;
+        message = "discoverTree should reject two subtrees claiming the same output name";
       }
       {
         assertion = cargoUnitWorkspace.policyChecks ? cargoAudit;
