@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { formatDuration } from '$lib/format';
+  import { useNow } from '$lib/now.svelte';
   import {
     ACTIVITY_NAME_BUILD,
     type BuildStatus,
@@ -12,6 +14,8 @@
   };
 
   const { snapshot, status }: Props = $props();
+
+  const now = useNow();
 
   type StatusCounts = Readonly<Record<BuildStatus, number>>;
 
@@ -35,6 +39,33 @@
   );
 
   const exit = $derived(snapshot.exitCode);
+
+  /// Overall run wall-clock: earliest activity start to last activity stop
+  /// while running, frozen at the final span once the run finishes. The
+  /// snapshot carries no finish timestamp, so the last observed stop is the
+  /// best end marker; it falls back to the live clock only if nothing stopped.
+  const startedAtMs = $derived(
+    snapshot.activities.reduce<number | null>(
+      (min, activity) => (min === null ? activity.startedAtMs : Math.min(min, activity.startedAtMs)),
+      null
+    )
+  );
+  const lastStopMs = $derived(
+    snapshot.activities.reduce<number | null>(
+      (max, activity) =>
+        activity.stoppedAtMs === null
+          ? max
+          : max === null
+            ? activity.stoppedAtMs
+            : Math.max(max, activity.stoppedAtMs),
+      null
+    )
+  );
+  const elapsedMs = $derived.by(() => {
+    if (startedAtMs === null) return null;
+    const end = snapshot.finished ? (lastStopMs ?? now.value) : now.value;
+    return Math.max(0, end - startedAtMs);
+  });
 </script>
 
 <header class="summary">
@@ -52,6 +83,13 @@
       <span class="kpi-num kpi-faint">{expectedBuilds}</span>
       <span class="kpi-label">builds</span>
     </div>
+
+    {#if elapsedMs !== null}
+      <div class="kpi" class:kpi-good={snapshot.finished && exit === 0}>
+        <span class="kpi-num">{formatDuration(elapsedMs)}</span>
+        <span class="kpi-label">{snapshot.finished ? 'total' : 'elapsed'}</span>
+      </div>
+    {/if}
 
     {#if counts.running > 0}
       <div class="kpi kpi-warn">

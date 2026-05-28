@@ -21,6 +21,25 @@ export function splitDerivation(path: string): DerivationParts {
   };
 }
 
+/// Keep both the head and tail of long strings visible. Most activity rows are
+/// file paths and the tail (filename) is more identifying than the prefix.
+export function middleTruncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = Math.floor((max - 1) / 2);
+  return `${text.slice(0, head)}…${text.slice(text.length - tail)}`;
+}
+
+/// Nix tags many real activities with type `unknown` (code 0). The text usually
+/// leads with an action verb ("evaluating", "copying", "querying",
+/// "downloading"). Synthesize the kind label from that verb so the column
+/// actually classifies the row instead of repeating "unknown".
+export function activityKind(typeName: string, text: string): string {
+  if (typeName !== 'unknown') return typeName;
+  const verb = /^([a-zA-Z]+)/.exec(text)?.[1];
+  return verb === undefined ? 'note' : verb.toLowerCase();
+}
+
 /// Compact duration formatter: `42s`, `3m04s`, `2h11m`, `1d04h`. Sub-second
 /// resolution would just flicker; the UI ticks once per second anyway.
 export function formatDuration(ms: number): string {

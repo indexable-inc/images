@@ -239,6 +239,80 @@ main {
   font-size: inherit !important;
 }
 
+/* ---------- error panel ---------- */
+
+.topbar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.error-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 11rem;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--red) 9%, var(--panel));
+}
+
+.error-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.75rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--red) 25%, var(--line));
+}
+
+.error-title {
+  color: var(--red);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.error-overflow {
+  color: var(--muted);
+}
+
+.error-dismiss {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.error-list {
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  min-height: 0;
+  overflow: auto;
+}
+
+.error-item {
+  display: block;
+  width: 100%;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--red);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0.1rem 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.error-item:hover {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+.tree-toggle {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
 /* ---------- workspace layout ---------- */
 
 .workspace {
@@ -400,29 +474,70 @@ main.dragging-v .splitter-v::after {
 }
 
 .activity-row {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  column-gap: 0.5rem;
-  padding: 0.15rem 0.5rem 0.15rem calc(var(--depth) * 0.75rem + 0.5rem);
+  gap: 0.4rem;
+  padding: 0.12rem 0.5rem;
   color: var(--muted);
   border-bottom: 1px solid var(--line-soft);
   line-height: 1.3;
-}
-
-.activity-row.build {
-  color: var(--ink);
+  white-space: nowrap;
 }
 
 .activity-row.stopped {
-  opacity: 0.55;
+  opacity: 0.6;
 }
 
 .activity-row:hover {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
+/* Box-drawing guides. Fixed-width cells keep the vertical stems aligned
+ * column-to-column so a child's connector meets its ancestor's line. */
+.guides {
+  flex: 0 0 auto;
+  color: var(--faint);
+  white-space: pre;
+  user-select: none;
+}
+
+.guide {
+  display: inline-block;
+  width: 1.1ch;
+}
+
+.guide.connector {
+  color: var(--line);
+}
+
+.twirl {
+  flex: 0 0 auto;
+  width: 1.1rem;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+  line-height: 1;
+}
+
+.twirl:hover {
+  color: var(--ink);
+}
+
+.twirl.hidden {
+  visibility: hidden;
+  cursor: default;
+}
+
+.state {
+  flex: 0 0 auto;
+}
+
 .activity-kind {
+  flex: 0 0 auto;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
   text-transform: lowercase;
@@ -430,10 +545,28 @@ main.dragging-v .splitter-v::after {
   min-width: 4.5rem;
 }
 
-.activity-text {
+.activity-text,
+.activity-drv {
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.subtree-count {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-dur {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 0.5rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 /* ---------- builds ---------- */
@@ -504,8 +637,19 @@ main.dragging-v .splitter-v::after {
   white-space: nowrap;
 }
 
+/* The store-path hash is opaque noise; keep it collapsed so the package name
+ * leads, and reveal it only when the operator hovers, focuses, or selects the
+ * row (the full path is always in the row's title for copy/inspect). */
 .drv-hash {
+  display: none;
   color: var(--faint);
+}
+
+.build-row:hover .drv-hash,
+.build-row:focus-visible .drv-hash,
+.build-row.selected .drv-hash,
+.activity-row:hover .drv-hash {
+  display: inline;
 }
 
 .drv-name {

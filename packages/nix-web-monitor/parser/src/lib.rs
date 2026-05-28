@@ -22,9 +22,9 @@ const SNAPSHOT_LOG_LIMIT: usize = 500;
 /// hold every line the wrapped Nix process emitted in memory forever.
 const STATE_LOG_RETAIN: usize = 5_000;
 
-/// Same idea for `messages` and `errors`; these grow once per `msg` event,
+/// Same idea for `errors`; these grow once per error-level `msg` event,
 /// which is bounded but unfriendly for warning-heavy evals or long fetches.
-const STATE_MESSAGE_RETAIN: usize = 2_000;
+const STATE_ERROR_RETAIN: usize = 2_000;
 
 mod result_code {
     pub const FILE_LINKED: u64 = 100;
@@ -181,7 +181,6 @@ pub struct MonitorState {
     pub activities: BTreeMap<u64, ActivityNode>,
     pub builds: BTreeMap<String, BuildNode>,
     pub logs: Vec<LogEntry>,
-    pub messages: Vec<String>,
     pub errors: Vec<String>,
     pub progress: Option<ActivityProgress>,
     pub expected: BTreeMap<String, i64>,
@@ -200,7 +199,6 @@ impl MonitorState {
             activities: self.activities.values().cloned().collect(),
             builds: self.builds.values().cloned().collect(),
             logs: self.logs[log_tail_start..].to_vec(),
-            messages: self.messages.clone(),
             errors: self.errors.clone(),
             progress: self.progress,
             expected: self.expected.clone(),
@@ -282,7 +280,6 @@ impl MonitorState {
                 progress: None,
                 status: ActivityStatus::Running,
                 started_tick: now,
-                stopped_tick: None,
                 started_at_ms: now_ms,
                 stopped_at_ms: None,
                 build: build.clone(),
@@ -315,7 +312,6 @@ impl MonitorState {
         let now_ms = current_unix_ms();
         if let Some(activity) = self.activities.get_mut(&id) {
             activity.status = ActivityStatus::Stopped;
-            activity.stopped_tick = Some(next_tick(self.logs.len()));
             activity.stopped_at_ms = Some(now_ms);
             if let Some(build) = &activity.build
                 && let Some(build_node) = self.builds.get_mut(build)
@@ -356,7 +352,11 @@ impl MonitorState {
                 self.expected.insert(activity_type.name.clone(), *expected);
             }
             ActivityResult::FetchStatus { status } => {
-                self.messages.push(status.clone());
+                // Surface substituter fetch status in the log stream. It used
+                // to land in a `messages` bin the UI never rendered, so the
+                // operator never saw "downloading ..." progress.
+                let cleaned = strip_ansi(status);
+                self.push_log(Some(action.id), None, &cleaned);
             }
             ActivityResult::FileLinked { .. } | ActivityResult::Other { .. } => {}
         }
@@ -364,11 +364,9 @@ impl MonitorState {
 
     fn apply_message(&mut self, action: &MessageAction) {
         let cleaned = Self::cleaned_message(action);
-        self.messages.push(cleaned.clone());
-        truncate_head(&mut self.messages, STATE_MESSAGE_RETAIN);
         if action.level == Some(NIX_LEVEL_ERROR) {
             self.errors.push(cleaned.clone());
-            truncate_head(&mut self.errors, STATE_MESSAGE_RETAIN);
+            truncate_head(&mut self.errors, STATE_ERROR_RETAIN);
         }
         // Surface operator messages in the UI log panel too; otherwise an
         // eval failure shows up as an empty log with only an exit code.
@@ -453,7 +451,6 @@ pub struct MonitorSnapshot {
     pub activities: Vec<ActivityNode>,
     pub builds: Vec<BuildNode>,
     pub logs: Vec<LogEntry>,
-    pub messages: Vec<String>,
     pub errors: Vec<String>,
     pub progress: Option<ActivityProgress>,
     pub expected: BTreeMap<String, i64>,
@@ -473,7 +470,6 @@ pub struct ActivityNode {
     pub progress: Option<ActivityProgress>,
     pub status: ActivityStatus,
     pub started_tick: u64,
-    pub stopped_tick: Option<u64>,
     /// Unix epoch milliseconds when the activity started, stamped by the
     /// parser at apply time. Lets the UI render live durations without
     /// needing the original event timestamps from Nix.
@@ -1033,13 +1029,13 @@ mod tests {
     }
 
     #[test]
-    fn message_retention_caps_messages_array() {
+    fn error_retention_caps_errors_array() {
         let mut state = MonitorState::default();
-        for i in 0..(STATE_MESSAGE_RETAIN + 25) {
+        for i in 0..(STATE_ERROR_RETAIN + 25) {
             state.apply_line(&format!(
-                "@nix {{\"action\":\"msg\",\"level\":3,\"msg\":\"warn {i}\"}}"
+                "@nix {{\"action\":\"msg\",\"level\":0,\"msg\":\"boom {i}\"}}"
             ));
         }
-        assert_eq!(state.snapshot().messages.len(), STATE_MESSAGE_RETAIN);
+        assert_eq!(state.snapshot().errors.len(), STATE_ERROR_RETAIN);
     }
 }

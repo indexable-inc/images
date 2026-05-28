@@ -29,7 +29,6 @@ export const activityNodeSchema = v.object({
   progress: v.nullable(activityProgressSchema),
   status: activityStatusSchema,
   startedTick: v.number(),
-  stoppedTick: v.nullable(v.number()),
   startedAtMs: v.number(),
   stoppedAtMs: v.nullable(v.number()),
   build: v.nullable(v.string())
@@ -58,7 +57,6 @@ export const snapshotSchema = v.object({
   activities: v.array(activityNodeSchema),
   builds: v.array(buildNodeSchema),
   logs: v.array(logEntrySchema),
-  messages: v.array(v.string()),
   errors: v.array(v.string()),
   progress: v.nullable(activityProgressSchema),
   expected: v.record(v.string(), v.number()),
@@ -78,6 +76,11 @@ export type MonitorSnapshot = v.InferOutput<typeof snapshotSchema>;
 /// Purely client-side, never received over the wire.
 export type ConnectionStatus = 'connecting' | 'live' | 'closed' | 'error';
 
+/// Log-level filter choices for the log panel. Shared with the app shell so
+/// the errors panel and keyboard shortcuts can drive the same filter state.
+export const LOG_LEVEL_FILTERS = ['all', 'error', 'warn', 'info'] as const;
+export type LogLevelFilter = (typeof LOG_LEVEL_FILTERS)[number];
+
 /// Mirrors `activity_code::BUILD` in the parser; the protocol's name for an
 /// individual derivation build activity.
 export const ACTIVITY_NAME_BUILD = 'build';
@@ -86,7 +89,6 @@ export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
   activities: [],
   builds: [],
   logs: [],
-  messages: [],
   errors: [],
   progress: null,
   expected: {},

@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import ActivityGraph from '$components/ActivityGraph.svelte';
   import BuildTable from '$components/BuildTable.svelte';
+  import ErrorPanel from '$components/ErrorPanel.svelte';
   import LogPanel from '$components/LogPanel.svelte';
   import SummaryBar from '$components/SummaryBar.svelte';
   import Splitter from '$lib/Splitter.svelte';
@@ -30,7 +31,21 @@
   /// build's activity. Clicking the same build again or hitting the clear
   /// chip in the log panel resets it.
   let selectedActivityId = $state<number | null>(null);
+  /// Log panel instance, used to drive its filter from the errors panel. Typed
+  /// to the imperative surface we call so the binding stays checked rather than
+  /// collapsing to `any`.
+  type LogPanelApi = { inspect: (text: string) => void };
+  let logPanel = $state<LogPanelApi | null>(null);
+  /// Number of errors the operator has dismissed; the panel reappears only when
+  /// a newer error pushes the count past this watermark.
+  let errorsDismissed = $state(0);
   let closeEvents: (() => void) | null = null;
+
+  const showErrors = $derived(snapshot.errors.length > errorsDismissed);
+
+  function dismissErrors(): void {
+    errorsDismissed = snapshot.errors.length;
+  }
 
   onMount(() => {
     closeEvents = openMonitorEvents(
@@ -129,11 +144,21 @@
   class:dragging-h={draggingAxis === 'horizontal'}
   class:dragging-v={draggingAxis === 'vertical'}
 >
-  <SummaryBar {snapshot} {status} />
+  <div class="topbar">
+    <SummaryBar {snapshot} {status} />
+    {#if showErrors}
+      <ErrorPanel
+        errors={snapshot.errors}
+        onclose={dismissErrors}
+        oninspect={(text: string) => logPanel?.inspect(text)}
+      />
+    {/if}
+  </div>
 
   <section class="workspace" style="--sidebar-width: {String(sidebarWidth)}px">
     <section class="main-pane">
       <LogPanel
+        bind:this={logPanel}
         logs={snapshot.logs}
         {selectedActivityId}
         onclearselection={() => (selectedActivityId = null)}

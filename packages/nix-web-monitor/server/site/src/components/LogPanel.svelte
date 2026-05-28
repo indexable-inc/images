@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import PanelHeader from '$lib/PanelHeader.svelte';
-  import type { LogEntry } from '$lib/types';
+  import { LOG_LEVEL_FILTERS, type LogEntry, type LogLevelFilter } from '$lib/types';
 
   type Props = {
     logs: LogEntry[];
@@ -14,11 +14,18 @@
 
   const { logs, selectedActivityId, onclearselection }: Props = $props();
 
-  const LEVEL_FILTERS = ['all', 'error', 'warn', 'info'] as const;
-  type LevelFilter = (typeof LEVEL_FILTERS)[number];
-  let levelFilter = $state<LevelFilter>('all');
+  let level = $state<LogLevelFilter>('all');
   let search = $state('');
   let stream = $state<HTMLDivElement | null>(null);
+  let searchInput = $state<HTMLInputElement | null>(null);
+
+  /// Imperative entry point for the errors panel: pin the log view to a single
+  /// error line. Exposed through `bind:this` so the panel can drive the filter
+  /// without the shell having to own log-view state.
+  export function inspect(text: string): void {
+    level = 'error';
+    search = text;
+  }
   /// When true, append-on-update keeps the view glued to the bottom. The
   /// scroll handler flips this off the moment the user scrolls up, and back
   /// on if they scroll back to the end.
@@ -27,7 +34,7 @@
   /// single-line truncation.
   const expanded = new SvelteSet<number>();
 
-  const filtered = $derived(filterLogs(logs, levelFilter, search, selectedActivityId));
+  const filtered = $derived(filterLogs(logs, level, search, selectedActivityId));
   const visible = $derived(filtered.slice(-RECENT_LOG_LIMIT));
   const hiddenCount = $derived(logs.length - visible.length);
 
@@ -42,24 +49,24 @@
 
   function filterLogs(
     items: LogEntry[],
-    level: LevelFilter,
+    filter: LogLevelFilter,
     query: string,
     activityId: number | null
   ): LogEntry[] {
     const lower = query.trim().toLowerCase();
     return items.filter((entry) => {
       if (activityId !== null && entry.activityId !== activityId) return false;
-      if (!matchesLevel(entry.level, level)) return false;
+      if (!matchesLevel(entry.level, filter)) return false;
       if (lower.length === 0) return true;
       return entry.text.toLowerCase().includes(lower);
     });
   }
 
-  function matchesLevel(level: number | null, filter: LevelFilter): boolean {
+  function matchesLevel(entryLevel: number | null, filter: LogLevelFilter): boolean {
     if (filter === 'all') return true;
-    if (filter === 'error') return level === 0;
-    if (filter === 'warn') return level === 0 || level === 1;
-    return level === null || level <= 3;
+    if (filter === 'error') return entryLevel === 0;
+    if (filter === 'warn') return entryLevel === 0 || entryLevel === 1;
+    return entryLevel === null || entryLevel <= 3;
   }
 
   function lineClass(level: number | null): string {
@@ -96,18 +103,51 @@
     follow = true;
     if (stream !== null) stream.scrollTop = stream.scrollHeight;
   }
+
+  /// Power-user shortcuts: `/` focuses the filter, `Esc` peels back the current
+  /// filter then the build selection, `g`/`G` jumps to the live tail. Typing in
+  /// a field is left alone except for `Esc`, which still clears the filter.
+  function onWindowKeydown(event: KeyboardEvent): void {
+    const target = event.target;
+    const typing =
+      target instanceof HTMLElement &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
+    if (event.key === '/' && !typing) {
+      event.preventDefault();
+      searchInput?.focus();
+      searchInput?.select();
+      return;
+    }
+    if (event.key === 'Escape') {
+      if (search.length > 0) {
+        search = '';
+      } else if (selectedActivityId !== null) {
+        onclearselection();
+      } else if (target === searchInput) {
+        searchInput?.blur();
+      }
+      return;
+    }
+    if ((event.key === 'g' || event.key === 'G') && !typing) {
+      event.preventDefault();
+      jumpToEnd();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <section class="panel logs-panel">
   <PanelHeader title="logs">
     <div class="log-controls">
       <div class="filter-chips" role="tablist" aria-label="log level filter">
-        {#each LEVEL_FILTERS as choice (choice)}
+        {#each LOG_LEVEL_FILTERS as choice (choice)}
           <button
             type="button"
             class="chip"
-            class:active={levelFilter === choice}
-            onclick={() => (levelFilter = choice)}
+            class:active={level === choice}
+            onclick={() => (level = choice)}
           >
             {choice}
           </button>
@@ -116,7 +156,8 @@
       <input
         class="search"
         type="search"
-        placeholder="filter"
+        placeholder="filter  (/)"
+        bind:this={searchInput}
         bind:value={search}
       />
       {#if selectedActivityId !== null}
