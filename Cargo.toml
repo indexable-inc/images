@@ -24,10 +24,13 @@ publish = false
 warnings = "deny"
 
 [workspace.lints.clippy]
-all = "deny"
-pedantic = "deny"
-nursery = "deny"
-cargo = "deny"
+# Group lints need priority below per-lint overrides so allowlist entries
+# (such as `multiple_crate_versions`) can opt out without disabling the group.
+# Cargo emits `lint_groups_priority` errors otherwise.
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
 multiple_crate_versions = "allow"
 
 [workspace.dependencies]

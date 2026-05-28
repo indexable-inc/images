@@ -748,6 +748,7 @@ in
     buildPackage
     cargoAuditCheck
     cargoLockFile
+    clippyLintArgs
     defaultRustToolchain
     nativeBuildInputsForPolicy
     policyChecksFor

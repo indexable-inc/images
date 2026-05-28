@@ -276,6 +276,22 @@ let
           inherit unitGraphJson vendorDir;
         }
       );
+      perUnitClippyEnabled = args.policy.clippy.enable;
+      # Per-unit clippy runs `clippy-driver` directly on each non-external
+      # unit. Suppress the legacy workspace-level `cargoClippy` derivation in
+      # that mode so the same lints don't run twice and so a single source
+      # edit doesn't invalidate every other crate's clippy.
+      extraPolicyChecksFromRust = rust.policyChecksFor (
+        rawArgs
+        // {
+          inherit vendorDir;
+          policy =
+            args.policy
+            // lib.optionalAttrs perUnitClippyEnabled {
+              clippy = args.policy.clippy // { enable = false; };
+            };
+        }
+      );
       units = import unitsNix {
         inherit pkgs vendorDir vendorSources;
         inherit (args)
@@ -285,15 +301,17 @@ let
           ;
         inherit workspaceRoot;
         extraNativeBuildInputs = args.nativeBuildInputs ++ rust.nativeBuildInputsForPolicy args.policy;
+        # `clippy-driver` ships in the clippy package; `rustToolchain` only
+        # guarantees rustc + cargo. Adding the resolved clippy package keeps
+        # version drift impossible because the toolchain pins the rustc that
+        # `clippy-driver` links against.
+        extraClippyNativeBuildInputs =
+          lib.optional perUnitClippyEnabled args.policy.clippy.package;
         extraEnv = args.env;
         extraRustcArgsForPlatform = rust.rustcArgsForPolicyForPlatform args.policy;
-        extraPolicyChecks = rust.policyChecksFor (
-          rawArgs
-          // {
-            inherit vendorDir;
-            inherit (args) policy;
-          }
-        );
+        extraClippyLintArgs = rust.clippyLintArgs args.policy;
+        clippyEnabled = perUnitClippyEnabled;
+        extraPolicyChecks = extraPolicyChecksFromRust;
       };
       targetSetNames =
         if args.cargoTargetNames == null then

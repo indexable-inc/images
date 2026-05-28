@@ -2967,8 +2967,34 @@ let
         message = "cargo-unit workspaces should expose a cargo-audit policy check by default";
       }
       {
-        assertion = cargoUnitWorkspace.policyChecks ? cargoClippy;
-        message = "cargo-unit workspaces should expose a clippy policy check by default";
+        assertion = cargoUnitWorkspace.policyChecks ? clippy;
+        message = "cargo-unit workspaces should expose per-unit clippy checks under policyChecks.clippy";
+      }
+      {
+        assertion = !(cargoUnitWorkspace.policyChecks ? cargoClippy);
+        message = "cargo-unit buildWorkspace should suppress the legacy workspace-level cargoClippy when per-unit clippy is on";
+      }
+      {
+        assertion = builtins.isAttrs cargoUnitWorkspace.policyChecks.clippy;
+        message = "cargo-unit policyChecks.clippy should be a fan-out attrset, one entry per linted unit";
+      }
+      {
+        assertion = builtins.length (builtins.attrNames cargoUnitWorkspace.policyChecks.clippy) >= 2;
+        message = "cargo-unit policyChecks.clippy should produce multiple per-unit derivations for a multi-target fixture";
+      }
+      {
+        assertion = builtins.all (
+          unit: lib.isDerivation unit
+        ) (builtins.attrValues cargoUnitWorkspace.policyChecks.clippy);
+        message = "cargo-unit policyChecks.clippy entries should each be a derivation";
+      }
+      {
+        # clippyUnits sits at the top of the units attrset so callers that
+        # don't want the policyChecks aggregator can still pick individual
+        # units by their unit attribute name (matches `units.<name>`).
+        assertion =
+          cargoUnitWorkspace.clippyUnits == cargoUnitWorkspace.policyChecks.clippy;
+        message = "cargo-unit should expose clippyUnits at the top level identical to policyChecks.clippy";
       }
       {
         assertion = cargoUnitWorkspace.policy.clippy.package.unchecked.pname == "llm-clippy";
@@ -3100,8 +3126,16 @@ let
         message = "repo Rust packages should expose cargo-machete policy checks by default";
       }
       {
-        assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? cargoClippy;
-        message = "repo Rust packages should expose clippy policy checks by default";
+        # Repo packages route through `cargoUnit.buildWorkspace` via
+        # `ix.rustWorkspace.units`, so they pick up per-unit clippy under
+        # `policyChecks.clippy` (a fan-out attrset) rather than the legacy
+        # workspace-level `cargoClippy` single derivation.
+        assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? clippy;
+        message = "repo Rust packages should expose per-unit clippy policy checks by default";
+      }
+      {
+        assertion = !(repoPackages.minecraft-nbt.passthru.policyChecks ? cargoClippy);
+        message = "repo Rust packages should not also expose the legacy workspace-level cargoClippy when per-unit clippy is active";
       }
       {
         assertion =

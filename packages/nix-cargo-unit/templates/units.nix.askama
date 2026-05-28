@@ -7,10 +7,21 @@
   vendorDir ? null,
   vendorSources ? {},
   extraNativeBuildInputs ? [],
+  extraClippyNativeBuildInputs ? [],
   extraEnv ? {},
   extraPolicyChecks ? {},
   extraRustcArgs ? [],
   extraRustcArgsForPlatform ? _platform: [],
+  # `-D clippy::xxx` / `-A clippy::xxx` flags appended to every per-unit
+  # clippy-driver invocation. Empty by default so the rendered units file
+  # is policy-agnostic; cargo-unit.nix derives these from the workspace
+  # clippy policy.
+  extraClippyLintArgs ? [],
+  # Cargo policy can disable per-unit clippy. The rendered template always
+  # contains the clippyUnits definitions (they're cheap text), but this gate
+  # decides whether `policyChecks.clippy` is published and therefore whether
+  # downstream consumers pick the clippy derivations up.
+  clippyEnabled ? true,
   # When true, `tests.<binary>.cases` also includes #[ignore]'d tests.
   # Off by default to match `cargo test`. Toggling this only affects
   # what shows up under `cases`; `all` always runs the harness without
@@ -115,8 +126,20 @@ let
     env = (attrs.env or {}) // extraEnv;
   });
 
+  # Shape-identical to `mkUnit`. Kept distinct so per-unit clippy derivation
+  # store paths read as `*-clippy-*` instead of being indistinguishable from
+  # their sibling build units.
+  mkClippyUnit = attrs: pkgs.stdenv.mkDerivation (attrs // {
+    dontUnpack = true;
+    dontConfigure = true;
+    env = (attrs.env or {}) // extraEnv;
+  });
+
   units = rec {
 {{ unit_entries }}  };
+
+  clippyUnits = rec {
+{{ clippy_unit_entries }}  };
 
   # Every test target in the graph, keyed the same way `tests.<name>` is.
   # The shared manifest derivation depends on every binary listed here.
@@ -643,8 +666,13 @@ let
       cases = mkDoctestCases { inherit name runCommand; };
     };
 
-  policyChecks = {
-{{ policy_check_entries }}  } // extraPolicyChecks;
+  policyChecks =
+    {
+{{ policy_check_entries }}    }
+    // pkgs.lib.optionalAttrs (clippyEnabled && clippyUnits != {}) {
+      clippy = clippyUnits;
+    }
+    // extraPolicyChecks;
   withPolicyChecks = package:
     if policyChecks == {} then package else pkgs.symlinkJoin {
       name = "${package.name}-policy-checked";
@@ -658,6 +686,7 @@ let
 in
 {
   inherit
+    clippyUnits
     doctestTargetNamesByPackage
     policyChecks
     sourceAudit

@@ -255,6 +255,7 @@ struct UnitsNixTemplate {
     source_entries: String,
     source_audit_entries: String,
     unit_entries: String,
+    clippy_unit_entries: String,
     policy_check_entries: String,
     roots: String,
     checked_roots: String,
@@ -278,6 +279,7 @@ pub fn render_units_nix(graph: &UnitGraph, options: &RenderOptions) -> Result<St
         source_entries: render_source_entries(&prepared),
         source_audit_entries: render_source_audit_entries(&prepared),
         unit_entries: render_unit_entries(graph, options, &prepared)?,
+        clippy_unit_entries: render_clippy_unit_entries(graph, options, &prepared)?,
         policy_check_entries: render_policy_check_entries(graph, options, &prepared)?,
         roots: render_roots(graph, &prepared),
         checked_roots: render_checked_roots(graph, &prepared),
@@ -326,6 +328,33 @@ fn render_unit_entries(
     }
 
     Ok(entries)
+}
+
+fn render_clippy_unit_entries(
+    graph: &UnitGraph,
+    options: &RenderOptions,
+    prepared: &PreparedGraph,
+) -> Result<String> {
+    let mut entries = String::new();
+    for (index, unit) in graph.units.iter().enumerate() {
+        if !is_clippy_unit_candidate(unit) {
+            continue;
+        }
+        write!(
+            entries,
+            "    {} = mkClippyUnit {};\n\n",
+            prepared.unit_attr(index),
+            render_clippy_unit(graph, options, prepared, index)?
+        )?;
+    }
+    Ok(entries)
+}
+
+// Clippy only lints workspace-owned code. Build-script artifacts and vendored
+// crates (registry, sparse, git) compile under `--cap-lints warn` for a
+// reason — we don't want a churning upstream to break the workspace lint gate.
+fn is_clippy_unit_candidate(unit: &Unit) -> bool {
+    !unit.is_run_custom_build() && !unit.is_custom_build_compile() && !unit.is_external()
 }
 
 fn render_policy_check_entries(
@@ -554,6 +583,24 @@ fn collect_transitive_unit_deps(
     Ok(())
 }
 
+// `Rustc` produces the build artifacts (rlib, bin, test binary).
+// `ClippyDriver` runs the same compilation through `clippy-driver` so lints
+// fire per unit, emitting metadata only — no link step, no binary output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Driver {
+    Rustc,
+    ClippyDriver,
+}
+
+impl Driver {
+    const fn binary(self) -> &'static str {
+        match self {
+            Self::Rustc => "rustc",
+            Self::ClippyDriver => "clippy-driver",
+        }
+    }
+}
+
 fn render_rustc_unit(
     graph: &UnitGraph,
     options: &RenderOptions,
@@ -584,12 +631,54 @@ fn render_rustc_unit(
     }
     attrs.multiline(
         "buildPhase",
-        &render_rustc_build_phase(graph, options, prepared, index)?,
+        &render_driver_build_phase(graph, options, prepared, index, Driver::Rustc)?,
     );
     attrs.multiline(
         "installPhase",
         &render_install_phase(unit, options, &prepared.hashes[index]),
     );
+
+    Ok(attrs.render())
+}
+
+fn render_clippy_unit(
+    graph: &UnitGraph,
+    options: &RenderOptions,
+    prepared: &PreparedGraph,
+    index: usize,
+) -> Result<String> {
+    let unit = &graph.units[index];
+    let mut attrs = Attrs::new();
+
+    attrs.string("pname", &format!("{}-clippy", unit.target.name));
+    attrs.string("version", unit.package_version());
+    attrs.expr("src", &prepared.source_ref(index));
+    // `clippy-driver` rides the rustToolchain (which carries the matching
+    // rustc); the clippy package only needs to be on PATH for the driver
+    // binary. Callers append it via `extraClippyNativeBuildInputs`.
+    attrs.expr(
+        "nativeBuildInputs",
+        "[ rustToolchain ] ++ extraNativeBuildInputs ++ extraClippyNativeBuildInputs",
+    );
+    // Clippy units link metadata-only against the build units' rlibs, just
+    // like the build units do. They never depend on other clippy units, so a
+    // touched source file only invalidates that unit's clippy plus everything
+    // downstream that links its rlib.
+    attrs.expr(
+        "buildInputs",
+        &render_build_inputs(graph, prepared, index, unit_build_script_run(graph, index)),
+    );
+    attrs.bool("dontStrip", true);
+    if options.content_addressed {
+        attrs.bool("__contentAddressed", true);
+        attrs.string("outputHashMode", "recursive");
+        attrs.string("outputHashAlgo", "sha256");
+    }
+    attrs.multiline(
+        "buildPhase",
+        &render_driver_build_phase(graph, options, prepared, index, Driver::ClippyDriver)?,
+    );
+    attrs.multiline("installPhase", "mkdir -p $out\n");
 
     Ok(attrs.render())
 }
@@ -668,15 +757,19 @@ fn is_bin_exe_candidate(unit: &Unit, candidate: &Unit) -> bool {
         && candidate.platform == unit.platform
 }
 
-fn render_rustc_build_phase(
+fn render_driver_build_phase(
     graph: &UnitGraph,
     options: &RenderOptions,
     prepared: &PreparedGraph,
     index: usize,
+    driver: Driver,
 ) -> Result<String> {
     let unit = &graph.units[index];
     let source = prepared.source_entry(index)?;
     let mut script = String::new();
+
+    let collect_unused_deps =
+        driver == Driver::Rustc && collects_unused_crate_dependencies(unit, options);
 
     script.push_str("mkdir -p build\n");
     script.push_str("build_script_flags=()\n");
@@ -695,7 +788,7 @@ fn render_rustc_build_phase(
         append_build_script_flag_reader(&mut script, &run_ref, unit);
     }
 
-    push_rustc_args(&mut script, unit, &prepared.hashes[index])?;
+    push_rustc_args(&mut script, unit, &prepared.hashes[index]);
     append_target_linker_arg(&mut script, unit);
     append_extra_rustc_args(&mut script, unit);
 
@@ -714,7 +807,7 @@ fn render_rustc_build_phase(
     if unit.is_proc_macro() {
         script.push_str("rustc_args+=( --extern proc_macro )\n");
     }
-    if collects_unused_crate_dependencies(unit, options) {
+    if collect_unused_deps {
         script.push_str("rustc_args+=( --error-format=json --json=unused-externs-silent )\n");
         push_arg(&mut script, "-W");
         push_arg(&mut script, "unused-crate-dependencies");
@@ -740,26 +833,37 @@ fn render_rustc_build_phase(
         shell::double_quote(&source_path)
     )?;
 
-    if unit.is_bin() || unit.is_test() {
-        writeln!(
-            script,
-            "rustc_args+=( -o {} )",
-            shell::quote(&format!("build/{}", unit.target.name))
-        )?;
-    } else {
-        script.push_str("rustc_args+=( --out-dir build )\n");
-        if unit.is_proc_macro() {
-            script.push_str("rustc_args+=( --emit dep-info,link )\n");
-        } else {
-            script.push_str("rustc_args+=( --emit dep-info,metadata,link )\n");
+    match driver {
+        Driver::Rustc => {
+            if unit.is_bin() || unit.is_test() {
+                writeln!(
+                    script,
+                    "rustc_args+=( -o {} )",
+                    shell::quote(&format!("build/{}", unit.target.name))
+                )?;
+            } else {
+                script.push_str("rustc_args+=( --out-dir build )\n");
+                if unit.is_proc_macro() {
+                    script.push_str("rustc_args+=( --emit dep-info,link )\n");
+                } else {
+                    script.push_str("rustc_args+=( --emit dep-info,metadata,link )\n");
+                }
+            }
+        }
+        Driver::ClippyDriver => {
+            // Clippy only needs MIR. Skip codegen and linking entirely.
+            script.push_str("rustc_args+=( --out-dir build )\n");
+            script.push_str("rustc_args+=( --emit dep-info,metadata )\n");
         }
     }
 
     script.push_str("rustc_args+=( \"''${build_script_flags[@]}\" )\n");
-    append_rustc_invocation(
-        &mut script,
-        collects_unused_crate_dependencies(unit, options),
-    );
+    if driver == Driver::ClippyDriver {
+        // Inject the workspace's clippy lint policy (-D/-W/-A clippy::...)
+        // at the rustc-args end so they override any earlier defaults.
+        script.push_str("rustc_args+=( ${pkgs.lib.escapeShellArgs extraClippyLintArgs} )\n");
+    }
+    append_driver_invocation(&mut script, driver, collect_unused_deps);
 
     Ok(script)
 }
@@ -785,13 +889,19 @@ fn append_bin_exe_env(
     Ok(())
 }
 
-fn append_rustc_invocation(script: &mut String, collect_unused_deps: bool) {
+fn append_driver_invocation(script: &mut String, driver: Driver, collect_unused_deps: bool) {
+    let binary = driver.binary();
     if collect_unused_deps {
+        // `collect_unused_deps` is only ever true for the rustc driver; the
+        // diagnostics-capture path is rustc-specific and reuses the rustc
+        // unused-extern JSON shape.
+        debug_assert_eq!(driver, Driver::Rustc);
         script.push_str("rustc_diagnostics=build/rustc-diagnostics.jsonl\n");
         script.push_str("set +e\n");
         script.push_str("set -x\n");
-        script.push_str(
-            "env \"''${rustc_env[@]}\" rustc \"''${rustc_args[@]}\" 2> \"$rustc_diagnostics\"\n",
+        let _ = writeln!(
+            script,
+            "env \"''${{rustc_env[@]}}\" {binary} \"''${{rustc_args[@]}}\" 2> \"$rustc_diagnostics\""
         );
         script.push_str("rustc_status=$?\n");
         script.push_str("set +x\n");
@@ -806,7 +916,10 @@ fn append_rustc_invocation(script: &mut String, collect_unused_deps: bool) {
         );
     } else {
         script.push_str("set -x\n");
-        script.push_str("env \"''${rustc_env[@]}\" rustc \"''${rustc_args[@]}\"\n");
+        let _ = writeln!(
+            script,
+            "env \"''${{rustc_env[@]}}\" {binary} \"''${{rustc_args[@]}}\""
+        );
     }
 }
 
@@ -814,7 +927,7 @@ fn collects_unused_crate_dependencies(unit: &Unit, options: &RenderOptions) -> b
     options.deny_unused_crate_dependencies && !unit.is_external()
 }
 
-fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) -> Result<()> {
+fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) {
     push_arg(script, "--crate-name");
     push_arg(script, &unit.target.name.replace('-', "_"));
     push_arg(script, "--edition");
@@ -902,8 +1015,6 @@ fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str) -> Result<()> {
         push_arg(script, "--cap-lints");
         push_arg(script, "warn");
     }
-
-    Ok(())
 }
 
 fn lto_for_unit(unit: &Unit) -> Option<&'static str> {
@@ -2830,6 +2941,69 @@ mod tests {
         assert!(rendered.contains("tests ="));
         assert!(rendered.contains("--json=unused-externs-silent"));
         assert!(rendered.contains("withPolicyChecks"));
+        // Per-unit clippy: the same local unit gets a sibling clippy-driver
+        // derivation in `clippyUnits`, threaded through `policyChecks.clippy`.
+        assert!(rendered.contains("clippyUnits = rec"));
+        assert!(rendered.contains("mkClippyUnit"));
+        assert!(rendered.contains("env \"''${rustc_env[@]}\" clippy-driver"));
+        assert!(rendered.contains("extraClippyLintArgs"));
+        assert!(rendered.contains("clippy = clippyUnits;"));
+    }
+
+    #[test]
+    fn external_only_graph_emits_no_clippy_units() {
+        // Vendored crates compile under `--cap-lints warn` and aren't owned by
+        // the workspace, so they should never produce per-unit clippy
+        // derivations. A graph with only external units must skip clippy
+        // entirely and keep `policyChecks` free of a `clippy` entry.
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "serde",
+                    "src_path": "/vendor/serde/src/lib.rs",
+                    "edition": "2021"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: Some(PathBuf::from("/vendor")),
+                cargo_lock_sources: cargo_lock_sources(&[(
+                    "serde",
+                    "1.0.0",
+                    "registry+https://github.com/rust-lang/crates.io-index",
+                )]),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+            },
+        )
+        .unwrap();
+
+        // `clippyUnits = rec { };` rendered empty proves no per-unit clippy
+        // derivations were emitted. The `clippy = clippyUnits;` text and
+        // the template's `mkClippyUnit` helper are template-literal and
+        // always present; the driver invocation only appears inside a
+        // rendered clippy unit's build phase, so it's the load-bearing tell.
+        assert!(rendered.contains("clippyUnits = rec {\n  };"));
+        assert!(!rendered.contains("env \"''${rustc_env[@]}\" clippy-driver"));
+        assert!(!rendered.contains("mkClippyUnit {\n      pname ="));
     }
 
     #[test]
@@ -3001,10 +3175,15 @@ version = "0.1.0"
         )
         .unwrap();
 
-        assert_eq!(rendered.matches("CARGO_BIN_EXE_dag-runner=").count(), 1);
+        // The build unit (rustc) and its sibling clippy unit each set
+        // CARGO_BIN_EXE_<name> for integration tests because clippy needs the
+        // same compilation env as rustc. The count rises with the number of
+        // unit kinds that lint the integration test target.
+        assert_eq!(rendered.matches("CARGO_BIN_EXE_dag-runner=").count(), 2);
         assert!(rendered.contains("rustc_env+=( 'CARGO_BIN_EXE_dag-runner=${units."));
         assert!(!rendered.contains("export CARGO_BIN_EXE_dag-runner"));
         assert!(rendered.contains("env \"''${rustc_env[@]}\" rustc \"''${rustc_args[@]}\""));
+        assert!(rendered.contains("env \"''${rustc_env[@]}\" clippy-driver \"''${rustc_args[@]}\""));
     }
 
     #[test]
