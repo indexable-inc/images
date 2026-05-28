@@ -6,7 +6,7 @@ optional NumPy access to per-cell character data.
 
 ## Build
 
-The wheel is built with [maturin]. From this directory:
+For now the wheel is built with [maturin]. From this directory:
 
 ```sh
 pip install maturin
@@ -18,6 +18,10 @@ Or to produce a wheel:
 ```sh
 maturin build --release
 ```
+
+The long-term path is to assemble the wheel through Nix + `cargo-unit`
+instead of maturin; tracked by
+[indexable-inc/index#262](https://github.com/indexable-inc/index/issues/262).
 
 ## Use
 
