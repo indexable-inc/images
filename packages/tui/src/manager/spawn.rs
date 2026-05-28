@@ -88,18 +88,8 @@ pub(super) fn spawn_tui(
     let parser = Arc::clone(&vt100_parser);
     let runtime_clone = Arc::clone(runtime);
 
-    // Kitty keyboard protocol enhancement so callers can deliver Ctrl+Enter and
-    // similar chords without ambiguity. See https://sw.kovidgoyal.net/kitty/keyboard-protocol/
-    // Flags: 1 = DISAMBIGUATE_ESCAPE_CODES, 2 = REPORT_EVENT_TYPES, combined = 3.
-    let keyboard_enhancement_sequence = b"\x1b[=3u";
-
     runtime_clone.spawn(async move {
-        use tokio::io::AsyncWriteExt;
-        let mut pty_clone = pty;
-        if let Err(e) = pty_clone.write_all(keyboard_enhancement_sequence).await {
-            eprintln!("Warning: Failed to enable keyboard enhancements: {e}");
-        }
-        pty_actor(id, pty_clone, command_rx, parser).await;
+        pty_actor(id, pty, command_rx, parser).await;
     });
 
     let instance = TuiInstance {

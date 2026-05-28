@@ -12,7 +12,6 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
-ndarray.workspace = true
 numpy.workspace = true
 pyo3 = { workspace = true, features = ["extension-module"] }
 tui = { workspace = true, features = ["pyo3"] }

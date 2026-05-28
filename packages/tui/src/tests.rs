@@ -34,7 +34,10 @@ fn write_and_read() {
     assert_eq!(first, "hello");
 }
 
+// Requires `vim` on PATH. Run with `cargo test -- --ignored` in an environment
+// that provides it.
 #[test]
+#[ignore = "requires vim"]
 fn vim_spawns_and_produces_output() {
     let manager = TuiManager::new();
     let instance = manager
@@ -60,6 +63,7 @@ fn vim_spawns_and_produces_output() {
 }
 
 #[test]
+#[ignore = "requires vim"]
 fn vim_help_command_changes_screen() {
     let manager = TuiManager::new();
     let instance = manager
