@@ -25,6 +25,8 @@ let
   };
   defaultMinecraftVersion = versions.default;
   defaultMinecraftModule = versions.${defaultMinecraftVersion};
+  rustToolchainFile = builtins.fromTOML (builtins.readFile ../rust-toolchain.toml);
+  rustPinnedNightlyDate = lib.removePrefix "nightly-" rustToolchainFile.toolchain.channel;
 
   # Thin wrapper to keep call sites as plain lists; delegates to ix.evalImageConfig
   # so tests exercise the same evaluation path as production image builds.
@@ -606,7 +608,7 @@ let
 
   cargoUnitCoverageRustToolchain = ix.languages.rust.toolchain pkgs {
     channel = "nightly";
-    version = ix.languages.rust.defaultNightlyDate;
+    version = rustPinnedNightlyDate;
     components = [
       "cargo"
       "llvm-tools"
@@ -1628,11 +1630,11 @@ let
     );
     rustPinnedNightly = ix.languages.rust.toolchain pkgs {
       channel = "nightly";
-      version = ix.languages.rust.defaultNightlyDate;
+      version = rustPinnedNightlyDate;
     };
     rustExtraComponents = ix.languages.rust.toolchain pkgs {
       channel = "nightly";
-      version = ix.languages.rust.defaultNightlyDate;
+      version = rustPinnedNightlyDate;
       components = [
         "cargo"
         "rust-std"
