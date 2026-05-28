@@ -24,6 +24,7 @@ use tower_http::services::{ServeDir, ServeFile};
     about = "Run a Nix command with quiet terminal output and a live browser monitor.",
     version
 )]
+#[allow(clippy::struct_field_names)] // `nix_args` is the wire-level name passed to `nix`; renaming would hurt the CLI help text.
 struct Args {
     /// Interface used by the web monitor.
     #[arg(long, default_value = "127.0.0.1")]
@@ -104,9 +105,7 @@ async fn main() -> Result<()> {
     if !args.exit_when_done {
         eprintln!(
             "nix-web-monitor: Nix command finished with {}; press Ctrl-C to stop the web UI",
-            exit_code
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "no exit code".to_owned())
+            exit_code.map_or_else(|| "no exit code".to_owned(), |code| code.to_string())
         );
         tokio::signal::ctrl_c()
             .await
