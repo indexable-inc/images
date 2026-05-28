@@ -1,13 +1,16 @@
-# superglide-tui
+# tui (Python)
 
 Python bindings for the [`tui`](../tui) Rust crate. Spawn and control multiple
 PTY-backed processes from Python with full vt100 emulation, scrollback, and
 optional NumPy access to per-cell character data.
 
-The Python API is instance-centric, uses float-seconds timeouts, and exposes
-every blocking I/O method as a native asyncio coroutine via
-[pyo3-async-runtimes][pyo3-async-runtimes]. No thread-pool hop is involved on
-the async path.
+The Python API is a single class, `Tui`. Construct it, drive it, read it. A
+single process-wide tokio runtime drives every spawned PTY; every blocking
+I/O method has an `a`-prefixed coroutine variant that bridges a real Rust
+future into asyncio via [pyo3-async-runtimes][pyo3-async-runtimes] — no
+thread-pool hop.
+
+PyPI distribution name: `ix-tui`. Import name: `tui`.
 
 ## Build
 
@@ -32,9 +35,9 @@ instead of maturin; tracked by
 
 ```python
 import re
-from superglide_tui import TuiManager
+from tui import Tui
 
-with TuiManager() as mgr, mgr.spawn("python", "-q") as tui:
+with Tui("python", "-q") as tui:
     tui.enter("1 + 2")
     snap = tui.wait_for(re.compile(r"^3$", re.MULTILINE), timeout=2.0)
     print(snap.viewport[-3:])
@@ -49,9 +52,9 @@ supports `str(snap)`, `"needle" in snap`, and `.text` / `.full_text`.
 ### Drive a REPL and read its output
 
 ```python
-from superglide_tui import TuiManager
+from tui import Tui
 
-with TuiManager() as mgr, mgr.spawn("python", "-q") as tui:
+with Tui("python", "-q") as tui:
     tui.enter("1 + 2")
     snap = tui.wait_for("3", timeout=2.0)
     print(snap.text.splitlines()[-2:])
@@ -64,13 +67,12 @@ futures bridged into asyncio — no `to_thread` shim.
 
 ```python
 import asyncio
-from superglide_tui import TuiManager
+from tui import Tui
 
 async def run(cmd: str, *args: str) -> str:
-    mgr = TuiManager()
-    async with mgr.spawn(cmd, *args) as tui:
-        await tui.aenter("printf READY")
-        snap = await tui.await_for("READY", timeout=2.0)
+    async with Tui(cmd, *args) as t:
+        await t.aenter("printf READY")
+        snap = await t.await_for("READY", timeout=2.0)
         return snap.text
 
 async def main() -> None:
@@ -91,13 +93,13 @@ asyncio.run(main())
 concatenate with literal text and pass straight to `Tui.send`:
 
 ```python
-from superglide_tui import Key, TuiManager
+from tui import Key, Tui
 
-with TuiManager() as mgr, mgr.spawn("less", "/etc/hosts") as tui:
-    tui.send(Key.PAGE_DOWN, Key.PAGE_DOWN)
-    tui.send(Key.ctrl("g"))          # any Ctrl-letter
-    tui.send(Key.alt("x"))           # any Alt-letter
-    tui.send("q")
+with Tui("less", "/etc/hosts") as t:
+    t.send(Key.PAGE_DOWN, Key.PAGE_DOWN)
+    t.send(Key.ctrl("g"))          # any Ctrl-letter
+    t.send(Key.alt("x"))           # any Alt-letter
+    t.send("q")
 ```
 
 ### Match with regex or a predicate
@@ -107,14 +109,12 @@ takes the current `Snapshot`:
 
 ```python
 import re
-from superglide_tui import TuiManager
+from tui import Tui
 
-with TuiManager() as mgr, mgr.spawn("bash", "--norc", "-i") as tui:
-    tui.enter("ls /etc | head -3")
-    snap = tui.wait_for(re.compile(r"^\S+\.conf$", re.MULTILINE), timeout=2.0)
-
-    # Or a predicate over the whole snapshot:
-    snap = tui.wait_for(lambda s: len(s.viewport) >= 5, timeout=1.0)
+with Tui("bash", "--norc", "-i") as t:
+    t.enter("ls /etc | head -3")
+    snap = t.wait_for(re.compile(r"\.conf$", re.MULTILINE), timeout=2.0)
+    snap = t.wait_for(lambda s: len(s.viewport) >= 5, timeout=1.0)
 ```
 
 ### Per-cell data
@@ -125,15 +125,15 @@ dataclasses (`char`, `fg`, `bg`, `bold`, `italic`, `underline`, `inverse`).
 
 ```python
 import numpy as np
-from superglide_tui import TuiManager
+from tui import Tui
 
-with TuiManager() as mgr, mgr.spawn("bash", "--norc", "-i") as tui:
-    tui.enter("printf 'abc'")
-    tui.wait_for("abc", timeout=1.0)
+with Tui("bash", "--norc", "-i") as t:
+    t.enter("printf 'AAA-MARKER'")
+    t.wait_for("AAA-MARKER", timeout=1.0)
 
-    cells = tui.chars()                       # NDArray[uint32], (rows, cols)
-    has_a = np.any(cells == ord("a"))
-    styled = tui.styled_cells()
+    cells = t.chars()                         # NDArray[uint32], (rows, cols)
+    has_a = bool(np.any(cells == ord("A")))
+    styled = t.styled_cells()
     bolds = [(r, c) for r, row in enumerate(styled)
                     for c, cell in enumerate(row) if cell.bold]
 ```
@@ -141,21 +141,32 @@ with TuiManager() as mgr, mgr.spawn("bash", "--norc", "-i") as tui:
 ### Handle timeouts
 
 ```python
-from superglide_tui import TuiManager, WaitTimeout
+from tui import Tui, WaitTimeout
 
-with TuiManager() as mgr, mgr.spawn("bash", "--norc", "-i") as tui:
+with Tui("bash", "--norc", "-i") as t:
     try:
-        tui.wait_for("never gonna happen", timeout=0.25)
+        t.wait_for("never gonna happen", timeout=0.25)
     except WaitTimeout as exc:
         print("missed it:", exc)
+```
+
+### List live instances
+
+`Tui.list_all()` returns every `Tui` still alive in this process — handy in
+tests or REPLs:
+
+```python
+from tui import Tui
+Tui("bash", "--norc", "-i")
+Tui("python", "-q")
+print(len(Tui.list_all()))   # 2
 ```
 
 ## Public surface
 
 | Name           | Purpose                                                |
 | -------------- | ------------------------------------------------------ |
-| `TuiManager`   | Spawn and track processes. Context-managed.            |
-| `Tui`          | One spawned process. All I/O lives here.               |
+| `Tui`          | One spawned process. Construct it and you have a PTY.  |
 | `Snapshot`     | Frozen viewport + scrollback + size.                   |
 | `Size`         | `(rows, cols)` dataclass.                              |
 | `Key`          | ANSI keystroke constants + `Key.ctrl`/`Key.alt`.       |

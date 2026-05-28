@@ -18,8 +18,7 @@ mod types;
 use pyo3::prelude::*;
 
 #[pymodule]
-fn _superglide_tui(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_class::<manager::TuiManager>()?;
+fn _tui(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<manager::TuiInstance>()?;
     module.add_class::<types::FullOutput>()?;
     module.add_class::<types::StyledCell>()?;

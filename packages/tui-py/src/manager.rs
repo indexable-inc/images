@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use ndarray::Array2;
 use numpy::PyArray2;
@@ -7,67 +7,59 @@ use pyo3_async_runtimes::tokio::future_into_py;
 
 use crate::types::{FullOutput, StyledCell};
 
-/// Low-level binding around `tui::TuiManager`. Application code should prefer
-/// the `superglide_tui.TuiManager` Python wrapper.
-#[pyclass(module = "superglide_tui._superglide_tui")]
-pub struct TuiManager {
-    inner: Arc<tui::TuiManager>,
+/// Single process-wide manager. Owns the tokio runtime that drives every
+/// spawned PTY actor, and is held alive for the lifetime of the process.
+static MANAGER: OnceLock<Arc<tui::TuiManager>> = OnceLock::new();
+
+fn global_manager() -> Arc<tui::TuiManager> {
+    MANAGER
+        .get_or_init(|| Arc::new(tui::TuiManager::new()))
+        .clone()
 }
 
-#[pymethods]
-impl TuiManager {
-    #[new]
-    fn new() -> Self {
-        Self {
-            inner: Arc::new(tui::TuiManager::new()),
-        }
-    }
-
-    /// Spawn a child process attached to a fresh PTY.
-    #[pyo3(signature = (command, args=None, scrollback_lines=10_000))]
-    fn spawn(
-        &self,
-        py: Python<'_>,
-        command: String,
-        args: Option<Vec<String>>,
-        scrollback_lines: usize,
-    ) -> PyResult<TuiInstance> {
-        let manager = Arc::clone(&self.inner);
-        let args = args.unwrap_or_default();
-        let instance = py.detach(move || manager.spawn(command, args, scrollback_lines))?;
-        Ok(TuiInstance {
-            inner: instance,
-            manager: Arc::clone(&self.inner),
-        })
-    }
-
-    /// All currently tracked instances.
-    fn list(&self) -> Vec<TuiInstance> {
-        self.inner
-            .list()
-            .into_iter()
-            .map(|inner| TuiInstance {
-                inner,
-                manager: Arc::clone(&self.inner),
-            })
-            .collect()
-    }
-}
-
-/// Low-level binding around `tui::TuiInstance`. Carries an `Arc` to the
-/// owning manager so the actor task and tokio runtime stay alive for as long
-/// as any Python reference does.
-#[pyclass(frozen, module = "superglide_tui._superglide_tui")]
+/// Low-level binding around `tui::TuiInstance`. Spawning constructs the
+/// underlying PTY child and registers it with the global manager; the
+/// `Arc<tui::TuiManager>` field keeps that manager (and its runtime) alive
+/// for as long as Python holds a handle.
+#[pyclass(frozen, module = "tui._tui")]
 pub struct TuiInstance {
     inner: tui::TuiInstance,
-    // Held to keep the tokio runtime (and the actor task spawned on it)
-    // alive while Python still has a handle to this instance.
     #[allow(dead_code, reason = "lifetime anchor for the manager runtime")]
     manager: Arc<tui::TuiManager>,
 }
 
 #[pymethods]
 impl TuiInstance {
+    /// Spawn `command` with the given positional args, attached to a fresh PTY.
+    #[new]
+    #[pyo3(signature = (command, args=None, scrollback_lines=10_000))]
+    fn new(
+        py: Python<'_>,
+        command: String,
+        args: Option<Vec<String>>,
+        scrollback_lines: usize,
+    ) -> PyResult<Self> {
+        let manager = global_manager();
+        let args = args.unwrap_or_default();
+        let m = Arc::clone(&manager);
+        let inner = py.detach(move || m.spawn(command, args, scrollback_lines))?;
+        Ok(Self { inner, manager })
+    }
+
+    /// All currently tracked instances.
+    #[staticmethod]
+    fn list_all() -> Vec<Self> {
+        let manager = global_manager();
+        manager
+            .list()
+            .into_iter()
+            .map(|inner| Self {
+                inner,
+                manager: Arc::clone(&manager),
+            })
+            .collect()
+    }
+
     // -- identity / shape -------------------------------------------------
 
     #[getter]

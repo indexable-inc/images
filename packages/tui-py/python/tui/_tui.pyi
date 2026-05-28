@@ -44,7 +44,17 @@ class FullOutput:
     def __repr__(self) -> str: ...
 
 class TuiInstance:
-    """A handle to a single spawned TUI process. I/O lives on this class."""
+    """A handle to a single spawned TUI process. Spawning is the constructor."""
+
+    def __init__(
+        self,
+        command: str,
+        args: list[str] | None = ...,
+        scrollback_lines: int = ...,
+    ) -> None: ...
+
+    @staticmethod
+    def list_all() -> list[TuiInstance]: ...
 
     @property
     def id(self) -> str: ...
@@ -78,15 +88,3 @@ class TuiInstance:
     def read_styled_cells_async(self) -> Awaitable[list[list[StyledCell]]]: ...
 
     def __repr__(self) -> str: ...
-
-class TuiManager:
-    """Manages many concurrent PTY-backed TUI processes."""
-
-    def __init__(self) -> None: ...
-    def spawn(
-        self,
-        command: str,
-        args: list[str] | None = ...,
-        scrollback_lines: int = ...,
-    ) -> TuiInstance: ...
-    def list(self) -> list[TuiInstance]: ...

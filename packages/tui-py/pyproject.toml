@@ -3,9 +3,9 @@ requires = ["maturin>=1.7,<2"]
 build-backend = "maturin"
 
 [project]
-name = "superglide-tui"
+name = "ix-tui"
 version = "0.1.0"
-description = "Python bindings for the tui PTY-backed terminal UI management library"
+description = "Python bindings for the tui PTY-backed terminal UI management library. Imported as `tui`."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -20,7 +20,7 @@ classifiers = [
 dependencies = ["numpy>=1.26"]
 
 [tool.maturin]
-module-name = "superglide_tui._superglide_tui"
+module-name = "tui._tui"
 python-source = "python"
 manifest-path = "Cargo.toml"
 features = ["pyo3/extension-module"]

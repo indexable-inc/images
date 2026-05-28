@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
 /// A single styled terminal cell: character plus VT100 attributes.
-#[pyclass(frozen, get_all, skip_from_py_object, module = "superglide_tui._superglide_tui")]
+#[pyclass(frozen, get_all, skip_from_py_object, module = "tui._tui")]
 #[derive(Debug, Clone)]
 pub struct StyledCell {
     pub character: String,
@@ -45,7 +45,7 @@ impl From<tui::StyledCell> for StyledCell {
 }
 
 /// Combined scrollback and viewport snapshot.
-#[pyclass(frozen, get_all, skip_from_py_object, module = "superglide_tui._superglide_tui")]
+#[pyclass(frozen, get_all, skip_from_py_object, module = "tui._tui")]
 #[derive(Debug, Clone)]
 pub struct FullOutput {
     pub scrollback: Vec<String>,

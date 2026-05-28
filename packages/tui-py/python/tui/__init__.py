@@ -3,7 +3,6 @@
 Spawn child processes attached to real pseudo-terminals, drive them with
 keystrokes, and observe their VT100-rendered viewport. The public surface is:
 
-    TuiManager      spawn and track many concurrent processes
     Tui             a single spawned process; the workhorse handle
     Snapshot        an immutable read-time view of one process
     Size            (rows, cols) terminal size
@@ -22,7 +21,7 @@ import asyncio
 import re
 import time
 import uuid
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from types import TracebackType
@@ -31,9 +30,8 @@ from typing import Self, TypeAlias
 import numpy as np
 from numpy.typing import NDArray
 
-from ._superglide_tui import (
+from ._tui import (
     TuiInstance as _RawTuiInstance,
-    TuiManager as _RawTuiManager,
     __version__,
 )
 
@@ -44,7 +42,6 @@ __all__ = [
     "Snapshot",
     "StyledCell",
     "Tui",
-    "TuiManager",
     "WaitTimeout",
     "__version__",
 ]
@@ -217,9 +214,16 @@ def _wrap_styled(raw_row: list) -> list[StyledCell]:
 class Tui:
     """A single spawned PTY-backed process.
 
-    Get one from `TuiManager.spawn(...)`. Sync methods release the GIL on the
-    underlying Rust call; async methods return native asyncio coroutines that
-    are driven by the pyo3-async-runtimes tokio reactor — no thread pool hop.
+    Construct directly with the command and its args:
+
+        with Tui("python", "-q") as tui:
+            tui.enter("1 + 2")
+            snap = tui.wait_for("3", timeout=2.0)
+
+    A single process-wide tokio runtime drives every spawned PTY. Sync methods
+    release the GIL on the underlying Rust call; async methods return native
+    asyncio coroutines bridged through pyo3-async-runtimes — no thread-pool
+    hop.
 
     There is no force-kill path today. `interrupt()` sends Ctrl+C, which most
     cooperative programs respect; `with` blocks will interrupt on exit.
@@ -227,8 +231,24 @@ class Tui:
 
     __slots__ = ("_raw",)
 
-    def __init__(self, raw: _RawTuiInstance) -> None:
-        self._raw = raw
+    def __init__(
+        self,
+        command: str,
+        *args: str,
+        scrollback_lines: int = 10_000,
+    ) -> None:
+        self._raw = _RawTuiInstance(command, list(args), scrollback_lines)
+
+    @classmethod
+    def _from_raw(cls, raw: _RawTuiInstance) -> Self:
+        self = cls.__new__(cls)
+        object.__setattr__(self, "_raw", raw)
+        return self
+
+    @classmethod
+    def list_all(cls) -> list[Self]:
+        """All Tui instances currently alive in this process."""
+        return [cls._from_raw(raw) for raw in _RawTuiInstance.list_all()]
 
     # -- identity / shape ---------------------------------------------------
 
@@ -437,76 +457,3 @@ class Tui:
             await self._raw.write_async(Key.CTRL_C)
         except Exception:
             pass
-
-
-# --------------------------------------------------------------------------- #
-# TuiManager
-# --------------------------------------------------------------------------- #
-
-
-class TuiManager:
-    """Spawn and track PTY-backed processes.
-
-    Construct once and reuse. `spawn` accepts the command followed by any
-    positional args:
-
-        with TuiManager() as mgr:
-            tui = mgr.spawn("vim", "-u", "NONE")
-    """
-
-    __slots__ = ("_raw",)
-
-    def __init__(self) -> None:
-        self._raw = _RawTuiManager()
-
-    def spawn(
-        self,
-        command: str,
-        *args: str,
-        scrollback_lines: int = 10_000,
-    ) -> Tui:
-        """Spawn `command` with the given positional args."""
-        raw = self._raw.spawn(command, list(args), scrollback_lines)
-        return Tui(raw)
-
-    def spawn_argv(
-        self,
-        argv: Iterable[str],
-        *,
-        scrollback_lines: int = 10_000,
-    ) -> Tui:
-        """Spawn from a pre-built argv. First element is the command."""
-        argv_list = list(argv)
-        if not argv_list:
-            raise ValueError("spawn_argv requires at least one element")
-        command, *rest = argv_list
-        raw = self._raw.spawn(command, rest, scrollback_lines)
-        return Tui(raw)
-
-    def list(self) -> list[Tui]:
-        """All currently tracked instances."""
-        return [Tui(raw) for raw in self._raw.list()]
-
-    def __iter__(self) -> Iterator[Tui]:
-        return iter(self.list())
-
-    def __len__(self) -> int:
-        return len(self._raw.list())
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        for tui in self.list():
-            try:
-                tui.interrupt()
-            except Exception:
-                pass
-
-    def __repr__(self) -> str:
-        return f"TuiManager(instances={len(self)})"
