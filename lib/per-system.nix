@@ -341,38 +341,54 @@ in
     // healthChecks.lifecyclePackages;
 
   checks = lib.optionalAttrs (system == ix.system) (
-    {
-      inherit (tests) eval;
-      agents-md = pkgs.runCommand "agents-md-check" { nativeBuildInputs = [ agentsMd ]; } ''
-        agents-md --check ${paths.root}
-        mkdir -p "$out"
-      '';
-      cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
-      # Offline schema gate for the loader manifests. `deepSeq` forces
-      # every Paper / Velocity / Fabric per-version lock through
-      # `readLoaderManifest` in `lib/artifacts.nix`, so malformed JSON or a
-      # missing key fires here before any image starts evaluating. The
-      # forced surface is the parsed-and-validated manifest data, not the
-      # wrapped `fetchurl` derivations, to keep this check pure eval.
-      loader-manifests =
-        let
-          forced = builtins.deepSeq ix.artifacts.minecraft.loaderManifests "ok";
-        in
-        pkgs.runCommand "loader-manifests-check" { } ''
-          printf '%s\n' '${forced}' > "$out"
+    let
+      rustChecks = {
+        cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
+      }
+      // rustPackageTests;
+
+      checkAttrs = {
+        inherit (tests) eval;
+        agents-md = pkgs.runCommand "agents-md-check" { nativeBuildInputs = [ agentsMd ]; } ''
+          agents-md --check ${paths.root}
+          mkdir -p "$out"
         '';
-      run-records-session = repoPackages.run.passthru.tests.recordsSession;
-      lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
-        cp -R ${lintSource} source
-        chmod -R u+w source
-        cd source
-        ${lib.getExe lint}
-        mkdir -p "$out"
-      '';
-      site-test = siteTests.all;
+        # Offline schema gate for the loader manifests. `deepSeq` forces
+        # every Paper / Velocity / Fabric per-version lock through
+        # `readLoaderManifest` in `lib/artifacts.nix`, so malformed JSON or a
+        # missing key fires here before any image starts evaluating. The
+        # forced surface is the parsed-and-validated manifest data, not the
+        # wrapped `fetchurl` derivations, to keep this check pure eval.
+        loader-manifests =
+          let
+            forced = builtins.deepSeq ix.artifacts.minecraft.loaderManifests "ok";
+          in
+          pkgs.runCommand "loader-manifests-check" { } ''
+            printf '%s\n' '${forced}' > "$out"
+          '';
+        run-records-session = repoPackages.run.passthru.tests.recordsSession;
+        lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
+          cp -R ${lintSource} source
+          chmod -R u+w source
+          cd source
+          ${lib.getExe lint}
+          mkdir -p "$out"
+        '';
+        rust-package-tests = pkgs.linkFarm "rust-package-tests" (
+          lib.mapAttrsToList (name: path: { inherit name path; }) rustChecks
+        );
+        site-case-tests = pkgs.linkFarm "site-case-tests" (
+          lib.mapAttrsToList (name: path: { inherit name path; }) siteTests.cases
+        );
+        site-test = siteTests.all;
+      };
+    in
+    checkAttrs
+    // {
+      all = pkgs.linkFarm "ix-images-checks" (
+        lib.mapAttrsToList (name: path: { inherit name path; }) checkAttrs
+      );
     }
-    // lib.mapAttrs' (caseId: drv: lib.nameValuePair "site-test-${caseId}" drv) siteTests.cases
-    // rustPackageTests
   );
 
   formatter = pkgs.nixfmt;

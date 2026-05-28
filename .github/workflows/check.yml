@@ -18,7 +18,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  flake-check:
+  check-group:
+    name: check / all checks and schema
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -50,5 +51,22 @@ jobs:
           name: indexable-inc
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      - name: nix flake check
-        run: nix flake check -L
+      - name: Run checks and schema
+        run: |
+          nix build -L .#checks.x86_64-linux.all
+          nix flake check -L --no-build
+
+  flake-check:
+    needs:
+      - check-group
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all check groups
+        env:
+          CHECK_GROUP_RESULT: ${{ needs.check-group.result }}
+        run: |
+          if [ "${CHECK_GROUP_RESULT}" != "success" ]; then
+            echo "::error::One or more check groups failed (${CHECK_GROUP_RESULT})."
+            exit 1
+          fi
