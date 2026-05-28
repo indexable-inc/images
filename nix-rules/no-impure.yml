@@ -12,4 +12,7 @@ note: |
   PREFER: FODs for network fetch, __mounts for sandbox mounts,
   ix.writeNushellApplication for orchestrators.
 rule:
-  pattern: __impure = true
+  # `__impure = true` parses as a binding only inside an attrset context.
+  pattern:
+    context: "{ __impure = true; }"
+    selector: binding

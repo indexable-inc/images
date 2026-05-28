@@ -11,7 +11,14 @@ note: |
   REPO: Use the literal string. Save `finalAttrs.*` self-reference for values that
   must move with overrides (like `version` inside `src.url`).
 rule:
+  # `repo = finalAttrs.pname` parses as a binding only inside an attrset context.
   any:
-    - pattern: repo = finalAttrs.pname
-    - pattern: owner = finalAttrs.pname
-    - pattern: pname = finalAttrs.pname
+    - pattern:
+        context: '{ repo = finalAttrs.pname; }'
+        selector: binding
+    - pattern:
+        context: '{ owner = finalAttrs.pname; }'
+        selector: binding
+    - pattern:
+        context: '{ pname = finalAttrs.pname; }'
+        selector: binding

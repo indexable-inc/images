@@ -9,4 +9,8 @@ note: |
   NIXPKGS: PR #259603 removed the legacy attribute.
   REPO: Use `cargoHash` (with SRI) or the typed `cargoLock` form.
 rule:
-  pattern: cargoSha256 = $_
+  # Match the binding by attrpath; the old `cargoSha256 = $_` never parsed.
+  kind: binding
+  has:
+    field: attrpath
+    regex: '^cargoSha256$'

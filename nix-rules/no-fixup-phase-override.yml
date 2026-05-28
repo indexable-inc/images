@@ -13,4 +13,7 @@ note: |
   `fixupPhase` only when you really mean to bypass shebang and RPATH handling,
   and document the reason inline.
 rule:
-  pattern: fixupPhase = $X
+  # `fixupPhase = $X` parses as a binding only inside an attrset context.
+  pattern:
+    context: "{ fixupPhase = $X; }"
+    selector: binding

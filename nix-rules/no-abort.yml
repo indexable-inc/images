@@ -9,6 +9,8 @@ note: |
   `assert` so the failure names the invariant.
   REPO: Use `throw "ix.<area>: ..."` for user-facing failure and `assert lib.assertMsg cond "..."` for invariants.
 rule:
+  # A bare `$_` argument makes `abort $_` parse as an apply with an ERROR node,
+  # so the pattern never matched a real call. A named metavariable parses.
   any:
-    - pattern: abort $_
-    - pattern: builtins.abort $_
+    - pattern: abort $ARG
+    - pattern: builtins.abort $ARG

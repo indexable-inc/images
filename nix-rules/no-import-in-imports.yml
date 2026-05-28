@@ -11,4 +11,7 @@ note: |
   system documentation explicitly says to use paths, not import calls.
   REPO: Banned in AGENTS.md.
 rule:
-  pattern: imports = [ $$$PRE (import $PATH) $$$POST ]
+  # `imports = [ ... ]` parses as a binding only inside an attrset context.
+  pattern:
+    context: "{ imports = [ $$$PRE (import $PATH) $$$POST ]; }"
+    selector: binding

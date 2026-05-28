@@ -11,8 +11,12 @@ note: |
   REPO: Drop the override. If you must override, use `preBuild`/`postBuild`/
   `preInstall`/`postInstall` to add work around the default.
 rule:
+  # `buildPhase = "make"` is not a standalone expression; it must be matched as
+  # a binding via a parseable context with `selector: binding`.
   any:
-    - pattern: buildPhase = "make"
-    - pattern: installPhase = "make install"
-    - pattern: buildPhase = "make "
-    - pattern: installPhase = "make install "
+    - pattern:
+        context: '{ buildPhase = "make"; }'
+        selector: binding
+    - pattern:
+        context: '{ installPhase = "make install"; }'
+        selector: binding

@@ -9,6 +9,11 @@ note: |
   NIXPKGS: nixpkgs-hammering `name-and-version`.
   REPO: Drop the manual `name = "${pname}-${version}";`.
 rule:
+  # `name = "..."` only parses as a binding inside an attrset context.
   any:
-    - pattern: name = "${pname}-${version}"
-    - pattern: name = "${finalAttrs.pname}-${finalAttrs.version}"
+    - pattern:
+        context: '{ name = "${pname}-${version}"; }'
+        selector: binding
+    - pattern:
+        context: '{ name = "${finalAttrs.pname}-${finalAttrs.version}"; }'
+        selector: binding

@@ -9,4 +9,8 @@ note: |
   REPO: Use `vendorHash = "sha256-...=";`. Set `vendorHash = null;` for vendored
   modules.
 rule:
-  pattern: vendorSha256 = $_
+  # Match the binding by attrpath; the old `vendorSha256 = $_` never parsed.
+  kind: binding
+  has:
+    field: attrpath
+    regex: '^vendorSha256$'

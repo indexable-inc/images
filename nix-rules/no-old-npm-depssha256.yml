@@ -10,4 +10,8 @@ note: |
   REPO: Use `npmDepsHash` with SRI. The pnpm-build equivalent is
   `pnpmDeps.hash` / `pnpmDepsHash` (current name — do not flag).
 rule:
-  pattern: npmDepsSha256 = $_
+  # Match the binding by attrpath; the old `npmDepsSha256 = $_` never parsed.
+  kind: binding
+  has:
+    field: attrpath
+    regex: '^npmDepsSha256$'

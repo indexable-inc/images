@@ -12,9 +12,13 @@ note: |
   REPO: Pass a Nix list. Use `lib.optional` / `lib.optionals` for conditional
   flags so each flag is its own element.
 rule:
-  any:
-    - pattern: configureFlags = "$_"
-    - pattern: cmakeFlags = "$_"
-    - pattern: mesonFlags = "$_"
-    - pattern: makeFlags = "$_"
-    - pattern: ninjaFlags = "$_"
+  # Match the binding directly: a flag attr whose value is a single string
+  # literal. The old `configureFlags = "$_"` patterns never parsed as bindings.
+  kind: binding
+  all:
+    - has:
+        field: attrpath
+        regex: '^(configureFlags|cmakeFlags|mesonFlags|makeFlags|ninjaFlags|xorgserverFlags)$'
+    - has:
+        field: expression
+        kind: string_expression
