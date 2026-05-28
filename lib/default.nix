@@ -72,10 +72,9 @@ let
     import ./bun-lock.nix {
       inherit lib pkgs;
     };
-  buildBunSite = import ./build-bun-site.nix {
-    inherit bunLockFor;
+  buildJsSite = import ./build-js-site.nix {
+    inherit bunLockFor errors;
   };
-  buildNpmSite = import ./build-npm-site.nix;
   buildSvelteSite = import ./build-svelte-site.nix {
     inherit bunLockFor errors writeNushellApplication;
   };
@@ -283,10 +282,9 @@ let
     inherit
       artifacts
       agentsMd
-      buildBunSite
       buildGradleFatJar
       buildRustPackage
-      buildNpmSite
+      buildJsSite
       buildNpmVitest
       buildSvelteSite
       buildUvApplication
@@ -370,9 +368,8 @@ let
       exampleFleetsFor
       artifacts
       agentsMd
-      buildBunSite
       buildGradleFatJar
-      buildNpmSite
+      buildJsSite
       buildNpmVitest
       buildSvelteSite
       buildUvApplication

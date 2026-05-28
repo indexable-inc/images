@@ -1071,7 +1071,8 @@ let
     ];
   };
 
-  bunSite = ix.buildBunSite pkgs {
+  bunSite = ix.buildJsSite pkgs {
+    packageManager = "bun";
     pname = "bun-site-fixture";
     version = "0.1.0";
     src = bunSiteFixture;
@@ -1092,7 +1093,7 @@ let
     ];
   };
 
-  npmSite = ix.buildNpmSite pkgs {
+  npmSite = ix.buildJsSite pkgs {
     pname = "npm-site-fixture";
     version = "0.1.0";
     src = npmSiteFixture;
