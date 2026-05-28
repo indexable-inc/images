@@ -21,6 +21,13 @@ nix develop .#minestom-hello-server-jar   # gives gradle + JDK 25
 nix develop nixpkgs#nixfmt                # nixfmt + its deps
 ```
 
+## Cargo Unit Test Runtime Inputs
+
+Use `packageTestInputs.<cargo-package> = [ pkgs.tool ];` when a package's tests
+spawn a runtime command, and `packageTestEnv.<cargo-package>` for package-local
+test environment variables. These apply to aggregate test binaries, per-test
+case derivations, and coverage runs.
+
 ## Cargo Unit Benchmarks
 
 [`ix.cargoUnit.buildWorkspace`](lib/cargo-unit.nix) exposes Cargo `[[bench]]`

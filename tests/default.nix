@@ -593,6 +593,8 @@ let
       "test"
       "bench"
     ];
+    packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
+    packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
     cargoTargets = [
       [ "--workspace" ]
       [
@@ -628,6 +630,8 @@ let
     ];
     profile = "dev";
     extraRustcArgs = [ "-Cinstrument-coverage" ];
+    packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
+    packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
     policy = {
       denyUnusedCrateDependencies = false;
       cargoAudit.enable = false;
@@ -3573,6 +3577,9 @@ let
     grep -q 'goodbye from cargo-unit' cargo-unit-goodbye.out
     test -d ${cargoUnitWorkspace.targetSets.test.tests.cargo_unit_hello.all}
     test -d ${cargoUnitWorkspace.targetSets.test.tests.cargo_unit_hello.cases."tests::returns_greeting"}
+    test -d ${
+      cargoUnitWorkspace.targetSets.test.tests.cargo_unit_hello.cases."tests::package_test_env_and_path_are_available"
+    }
     test -d ${(builtins.head (builtins.attrValues cargoUnitWorkspace.doctests)).all}
     test -d ${(builtins.head (builtins.attrValues (builtins.head (builtins.attrValues cargoUnitWorkspace.doctests)).cases))}
     test -s ${cargoUnitWorkspace.testPlan}/packages/cargo-unit-hello/test-binaries
