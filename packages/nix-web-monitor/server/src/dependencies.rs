@@ -3,7 +3,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use nix_web_monitor_parser::MonitorState;
 use tokio::process::Command;
-use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::sync::{RwLock, Semaphore, broadcast, mpsc};
+use tokio::task::JoinSet;
 
 use crate::publish_snapshot;
 
@@ -11,39 +12,81 @@ use crate::publish_snapshot;
 /// source paths; only the `.drv` references are edges in the build DAG.
 const DRV_SUFFIX: &str = ".drv";
 
+/// Concurrent `nix-store --query --references` processes. A large `nix build`
+/// reports hundreds of derivations; querying them one at a time serialises that
+/// many process spawns and the edges trickle into the tree long after the
+/// builds are visible. The cap keeps the process fan-out bounded while still
+/// filling the DAG quickly.
+const MAX_CONCURRENT_QUERIES: usize = 16;
+
 /// Resolve dependency edges for built derivations out-of-band.
 ///
 /// The internal-json stream names each derivation Nix builds but carries no
 /// edges between them. For every derivation reported, we ask `nix-store
 /// --query --references` for its direct inputs and feed them back into the
 /// monitor, where [`MonitorState::snapshot`] turns the adjacency into the
-/// rendered DAG. Runs as its own task so the per-derivation process spawn never
-/// stalls stderr parsing. The task exits when `derivations` closes, which the
-/// stderr reader does by dropping its sender once Nix's stderr ends.
+/// rendered DAG. Queries run concurrently (bounded by [`MAX_CONCURRENT_QUERIES`])
+/// so the tree fills in while builds are still in flight rather than after.
+/// Runs as its own task so the per-derivation process spawns never stall stderr
+/// parsing. The task exits once `derivations` closes (the stderr reader drops
+/// its sender when Nix's stderr ends) and the in-flight queries drain.
 pub async fn resolve_dependencies(
     mut derivations: mpsc::UnboundedReceiver<String>,
     monitor: Arc<RwLock<MonitorState>>,
     snapshots: broadcast::Sender<String>,
 ) -> Result<()> {
-    while let Some(derivation) = derivations.recv().await {
-        let inputs = match direct_input_derivations(&derivation).await {
-            Ok(inputs) => inputs,
-            // A derivation whose references cannot be queried simply has no
-            // edges. Surface it on stderr and keep resolving the rest rather
-            // than tearing down the whole graph for one missing node.
-            Err(error) => {
-                eprintln!("nix-web-monitor: dependency query failed for {derivation}: {error:#}");
-                continue;
-            }
-        };
+    let limit = Arc::new(Semaphore::new(MAX_CONCURRENT_QUERIES));
+    let mut queries: JoinSet<Result<()>> = JoinSet::new();
 
-        monitor
-            .write()
+    while let Some(derivation) = derivations.recv().await {
+        // Acquire before spawning so an unbounded receive backlog cannot
+        // outrun the process cap; the permit rides into the task and releases
+        // when the query finishes.
+        let permit = Arc::clone(&limit)
+            .acquire_owned()
             .await
-            .record_direct_dependencies(derivation, inputs);
-        publish_snapshot(&monitor, &snapshots).await?;
+            .expect("dependency query semaphore is never closed");
+        let monitor = Arc::clone(&monitor);
+        let snapshots = snapshots.clone();
+        queries.spawn(async move {
+            let _permit = permit;
+            resolve_one(derivation, &monitor, &snapshots).await
+        });
+
+        // Reap finished queries opportunistically so the set does not grow for
+        // the whole run and any serialization error surfaces promptly.
+        while let Some(joined) = queries.try_join_next() {
+            joined.context("joining dependency query task")??;
+        }
+    }
+
+    while let Some(joined) = queries.join_next().await {
+        joined.context("joining dependency query task")??;
     }
     Ok(())
+}
+
+/// Query one derivation's direct input `.drv`s and fold them into the monitor.
+/// A query failure is non-fatal: the derivation simply contributes no edges, so
+/// it is logged and swallowed rather than tearing down the whole resolver.
+async fn resolve_one(
+    derivation: String,
+    monitor: &Arc<RwLock<MonitorState>>,
+    snapshots: &broadcast::Sender<String>,
+) -> Result<()> {
+    let inputs = match direct_input_derivations(&derivation).await {
+        Ok(inputs) => inputs,
+        Err(error) => {
+            eprintln!("nix-web-monitor: dependency query failed for {derivation}: {error:#}");
+            return Ok(());
+        }
+    };
+
+    monitor
+        .write()
+        .await
+        .record_direct_dependencies(derivation, inputs);
+    publish_snapshot(monitor, snapshots).await
 }
 
 /// Direct input derivations of `derivation`, via the decade-stable
