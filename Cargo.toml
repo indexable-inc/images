@@ -20,6 +20,16 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"
+nursery = "deny"
+cargo = "deny"
+multiple_crate_versions = "allow"
+
 [workspace.dependencies]
 anyhow = "1"
 askama = { version = "0.16.0", default-features = false }

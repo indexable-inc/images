@@ -5,6 +5,9 @@ edition.workspace = true
 publish.workspace = true
 description = "Tantivy tokenizer that splits identifiers on camelCase, snake_case, and kebab-case boundaries"
 
+[lints]
+workspace = true
+
 [dependencies]
 strip-ansi-escapes.workspace = true
 tantivy.workspace = true
