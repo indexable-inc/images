@@ -2,7 +2,7 @@
 {
   ix.image = {
     name = "ix/symphony-codex";
-    tag = "2026-05-27";
+    tag = "2026-05-28";
   };
 
   networking.hostName = "symphony-codex";
@@ -32,6 +32,7 @@
     pkgs.pkg-config
     pkgs.python3
     pkgs.ripgrep
+    pkgs.symphony-room-server
     pkgs.unzip
     pkgs.which
     pkgs.zstd

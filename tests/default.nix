@@ -2320,12 +2320,12 @@ let
         message = "symphony-codex image should set the expected public OCI image name";
       }
       {
-        assertion = symphonyCodex.config.ix.image.tag == "2026-05-27";
+        assertion = symphonyCodex.config.ix.image.tag == "2026-05-28";
         message = "symphony-codex image should publish an immutable production tag";
       }
       {
-        assertion = !(builtins.elem "symphony-room-server" symphonyCodex.packageNames);
-        message = "symphony-codex image should let Symphony choose the live room-server source";
+        assertion = builtins.elem "symphony-room-server" symphonyCodex.packageNames;
+        message = "symphony-codex image should include the room-server binary it starts";
       }
       {
         assertion = builtins.elem pkgs.codex symphonyCodex.packages;

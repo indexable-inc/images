@@ -49,6 +49,12 @@
       url = "github:NousResearch/hermes-agent/v2026.5.16";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    symphony = {
+      url = "github:indexable-inc/symphony/main";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.rust-overlay.follows = "rust-overlay";
+    };
   };
 
   outputs =
@@ -58,6 +64,7 @@
       determinate,
       home-manager,
       hermes-agent,
+      symphony,
       clippy-fork,
       ...
     }:
@@ -101,6 +108,7 @@
           determinate
           home-manager
           hermes-agent
+          symphony
           clippy-fork
           ;
       };

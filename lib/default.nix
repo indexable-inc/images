@@ -7,6 +7,7 @@
   determinate,
   home-manager,
   hermes-agent,
+  symphony,
   clippy-fork,
   cliArtifacts ? { },
 }:
@@ -43,6 +44,7 @@ let
     inherit
       lib
       packageRegistry
+      symphony
       buildIxRustTool
       clippy-fork
       writePythonApplication

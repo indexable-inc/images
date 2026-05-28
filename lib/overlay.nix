@@ -1,6 +1,7 @@
 {
   lib,
   packageRegistry,
+  symphony,
   buildIxRustTool,
   clippy-fork,
   writePythonApplication,
@@ -34,3 +35,6 @@ lib.listToAttrs (
     packageRegistry.overlayEntriesFor packageSystem
   )
 )
+// {
+  symphony-room-server = symphony.packages.${packageSystem}.room-server;
+}
