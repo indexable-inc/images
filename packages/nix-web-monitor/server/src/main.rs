@@ -6,6 +6,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use axum::Json;
 use axum::Router;
 use axum::extract::State;
 use axum::response::sse::{Event, Sse};
@@ -13,7 +14,7 @@ use axum::routing::get;
 use clap::{Parser, ValueEnum};
 use futures::stream;
 use futures::{Stream, StreamExt};
-use nix_web_monitor_parser::{MonitorState, NixEvent, ParsedLine, strip_ansi};
+use nix_web_monitor_parser::{MonitorSnapshot, MonitorState, NixEvent, ParsedLine, strip_ansi};
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast, mpsc};
@@ -129,18 +130,32 @@ async fn serve(
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("binding web monitor on {addr}"))?;
-    let index = site_dir.join("index.html");
-    let static_files = ServeDir::new(&site_dir).fallback(ServeFile::new(index));
-    let app = Router::new()
-        .route("/api/events", get(events))
-        .fallback_service(static_files)
-        .with_state(state);
+    let app = router(&site_dir, state);
 
     Ok(tokio::spawn(async move {
         if let Err(error) = axum::serve(listener, app).await {
             eprintln!("nix-web-monitor: web server failed: {error}");
         }
     }))
+}
+
+/// Build the HTTP router: the JSON/SSE API routes plus the static UI fallback.
+/// Split from [`serve`] so it can be exercised without binding a socket.
+fn router(site_dir: &Path, state: AppState) -> Router {
+    let index = site_dir.join("index.html");
+    let static_files = ServeDir::new(site_dir).fallback(ServeFile::new(index));
+    Router::new()
+        .route("/api/events", get(events))
+        .route("/api/state", get(state_snapshot))
+        .fallback_service(static_files)
+        .with_state(state)
+}
+
+/// One-shot snapshot of the current monitor state as JSON, for scripts and
+/// agents that want to `curl | jq` the build tree instead of consuming the SSE
+/// stream at `/api/events`. Same payload the stream seeds each client with.
+async fn state_snapshot(State(state): State<AppState>) -> Json<MonitorSnapshot> {
+    Json(state.monitor.read().await.snapshot())
 }
 
 async fn events(
@@ -389,4 +404,45 @@ fn validate_site_dir(site_dir: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    /// `/api/state` must be a wired route that serializes the live snapshot to
+    /// JSON. Exercises route registration, the handler, and serde output in one
+    /// shot without binding a socket or shipping a real site dir.
+    #[tokio::test]
+    async fn state_endpoint_serves_snapshot_json() {
+        let (snapshots, _) = broadcast::channel(8);
+        let state = AppState {
+            monitor: Arc::new(RwLock::new(MonitorState::default())),
+            snapshots,
+        };
+        let response = router(Path::new("/nonexistent-site"), state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/state")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("body collects");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("body is JSON");
+        assert!(json.get("builds").is_some(), "snapshot exposes builds");
+        assert!(
+            json.get("activities").is_some(),
+            "snapshot exposes activities"
+        );
+    }
 }
