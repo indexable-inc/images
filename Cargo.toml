@@ -15,6 +15,7 @@ members = [
   "packages/oci-image-builder",
   "packages/repo-walker",
   "packages/tui",
+  "packages/tui-node",
   "packages/tui-py",
 ]
 resolver = "3"
@@ -53,6 +54,9 @@ ignore = "0.4"
 indicatif = "0.18"
 libc = "0.2"
 loro = "1.12"
+napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt"] }
+napi-build = "2"
+napi-derive = "3"
 ndarray = "0.16"
 nix-web-monitor-parser = { path = "packages/nix-web-monitor/parser" }
 numpy = "0.28"
