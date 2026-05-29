@@ -13,12 +13,23 @@ let
     name = "tui-node-npm-source";
     path = ./npm;
   };
+
+  # npm's `cpu`/`libc` fields gate installation. The addon is host-built, so
+  # stamp the arch of this build; a nixpkgs build is always glibc.
+  npmCpu =
+    {
+      x86_64-linux = "x64";
+      aarch64-linux = "arm64";
+    }
+    .${pkgs.stdenv.hostPlatform.system}
+      or (throw "tui-node: unsupported platform ${pkgs.stdenv.hostPlatform.system}");
 in
 pkgs.runCommand "ix-tui-node"
   {
     strictDeps = true;
     nativeBuildInputs = [
       pkgs.coreutils
+      pkgs.jq
       pkgs.patchelf
       pkgs.removeReferencesTo
     ];
@@ -45,7 +56,11 @@ pkgs.runCommand "ix-tui-node"
     fi
 
     mkdir -p "$out/native"
-    cp ${npmSource}/package.json ${npmSource}/index.js ${npmSource}/index.d.ts "$out/"
+    cp ${npmSource}/index.js ${npmSource}/index.d.ts "$out/"
+    # Stamp the artifact's arch/libc so npm refuses to install it on a host that
+    # cannot dlopen this single host-built addon.
+    jq '. + { cpu: ["${npmCpu}"], libc: ["glibc"] }' \
+      ${npmSource}/package.json >"$out/package.json"
     cp "$cdylib" "$out/native/tui_node.node"
     chmod u+w "$out/native/tui_node.node"
 
