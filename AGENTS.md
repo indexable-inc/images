@@ -296,6 +296,14 @@ When parsing, normalizing, serializing, traversing graphs, handling archives, or
 speaking protocols, start from a maintained crate. Hand-written logic is for the
 thin glue around that crate unless the dependency boundary is measurably worse.
 
+Validate `unsafe` Rust with runtime checks before trusting normal tests. Run
+Miri where it works; for blocks Miri rejects because they need FFI, platform
+syscalls, or real native execution, run [`cargo-careful`](https://github.com/RalfJung/cargo-careful)
+with `cargo +nightly careful test -p <crate>`. cargo-careful exercises code
+against a debug-assertion standard library and surfaces some unsafe-precondition
+and stdlib-invariant breakage, but it does not model aliasing, uninitialized
+reads, or data races, so it complements Miri rather than replacing it.
+
 ## Python style
 
 Default repo-owned Python apps to uv: `pyproject.toml`, committed `uv.lock`,
