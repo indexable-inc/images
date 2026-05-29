@@ -67,4 +67,10 @@ async function waitFor(tui, pattern, { timeoutMs = 5000, pollMs = 50 } = {}) {
   }
 }
 
-module.exports = { Tui, Dashboard, serve, Key, waitFor };
+// Assign each binding as its own property so Node's cjs-module-lexer detects
+// them as named exports; `import { Tui, Key, waitFor }` then works from ESM.
+exports.Tui = Tui;
+exports.Dashboard = Dashboard;
+exports.serve = serve;
+exports.Key = Key;
+exports.waitFor = waitFor;

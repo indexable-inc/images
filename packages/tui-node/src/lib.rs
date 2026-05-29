@@ -47,6 +47,13 @@ fn err(source: impl std::fmt::Display) -> Error {
     Error::from_reason(source.to_string())
 }
 
+/// JS numbers arrive as `u32`; terminal dimensions and ports are `u16`. Reject
+/// out-of-range values instead of silently wrapping them.
+fn narrow_u16(name: &str, value: u32) -> Result<u16> {
+    u16::try_from(value)
+        .map_err(|_| Error::from_reason(format!("{name} must be in 0..=65535, got {value}")))
+}
+
 /// Spawn-time terminal configuration. Unset fields fall back to the core
 /// defaults (80x24, 10,000 lines of scrollback).
 #[napi(object)]
@@ -81,10 +88,10 @@ impl Tui {
         let mut config = tui::SpawnConfig::default();
         if let Some(options) = options {
             if let Some(rows) = options.rows {
-                config.rows = rows as u16;
+                config.rows = narrow_u16("rows", rows)?;
             }
             if let Some(cols) = options.cols {
-                config.cols = cols as u16;
+                config.cols = narrow_u16("cols", cols)?;
             }
             if let Some(scrollback) = options.scrollback_lines {
                 config.scrollback_lines = scrollback as usize;
@@ -213,10 +220,9 @@ impl Tui {
     /// Resize the terminal (delivers `SIGWINCH` to the child).
     #[napi]
     pub async fn resize(&self, rows: u32, cols: u32) -> Result<()> {
-        self.inner
-            .resize_async(rows as u16, cols as u16)
-            .await
-            .map_err(err)
+        let rows = narrow_u16("rows", rows)?;
+        let cols = narrow_u16("cols", cols)?;
+        self.inner.resize_async(rows, cols).await.map_err(err)
     }
 
     /// Force-kill the child and stop tracking it, dropping it from `listAll`
@@ -267,17 +273,15 @@ impl Dashboard {
 #[napi]
 pub fn serve(host: Option<String>, port: Option<u32>, poll_ms: Option<u32>) -> Result<Dashboard> {
     let host = host.unwrap_or_else(|| "127.0.0.1".to_owned());
-    let port = port.unwrap_or(8080) as u16;
+    let port = narrow_u16("port", port.unwrap_or(8080))?;
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
         .map_err(|source| err(format!("invalid address {host}:{port}: {source}")))?;
 
-    let dashboard = tui::serve(
-        &manager(),
-        addr,
-        Duration::from_millis(u64::from(poll_ms.unwrap_or(100))),
-    )
-    .map_err(err)?;
+    // Clamp the poll interval to at least 1ms so a `0` does not spin the
+    // dashboard's sample loop, matching the Python wrapper.
+    let poll = Duration::from_millis(u64::from(poll_ms.unwrap_or(100)).max(1));
+    let dashboard = tui::serve(&manager(), addr, poll).map_err(err)?;
 
     Ok(Dashboard {
         url_value: dashboard.url(),
