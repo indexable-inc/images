@@ -18,3 +18,10 @@ tui = { workspace = true, features = ["dashboard"] }
 
 [build-dependencies]
 napi-build.workspace = true
+
+# napi-build is used only in build.rs (`napi_build::setup()`), which cargo-machete
+# with --with-metadata does not attribute, so it false-positives as unused. The
+# dep is load-bearing: setup() emits the link args (including macOS
+# `-undefined dynamic_lookup`) the cdylib needs.
+[package.metadata.cargo-machete]
+ignored = ["napi-build"]
