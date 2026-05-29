@@ -9,50 +9,27 @@
   bubblewrap,
   socat,
   binName ? "claude",
+  # Only the flake package set injects the Nushell writer; the overlay eval
+  # context does not. The updater is a maintainer-facing flake output, so the
+  # overlay build of `pkgs.claude-code` simply omits `passthru.updateScript`.
+  writeNushellApplication ? null,
 }:
 
 let
-  # Pinned to a prerelease build on purpose. Anthropic publishes new Claude
-  # Code versions to the npm `next` (prerelease) tag days before promoting
-  # them to `latest` (stable), and every channel that normally surfaces an
-  # upgrade only watches `latest`: the built-in `claude` auto-updater and
-  # `claude doctor` both reported "up to date", and sadjow/claude-code-nix
-  # (the usual Nix source) tracks stable too. At the Opus 4.8 launch 2.1.154
-  # sat on `next` while everything else still showed 2.1.153, yet 2.1.154 is
-  # the first build that defaults `/fast` to Opus 4.8. Fetching the platform
-  # binary directly by version is the only way to pin ahead of the stable
-  # promotion. When `latest` catches up, this can fall back to a channel that
-  # tracks stable. Bump by re-prefetching each platform binary:
-  #   nix store prefetch-file --json \
-  #     https://downloads.claude.ai/claude-code-releases/<version>/<slug>/claude
-  version = "2.1.154";
-
-  # Claude Code ships prebuilt Bun single-file executables per platform. The
-  # download path keys off Anthropic's own platform slugs rather than the Nix
-  # system doubles, so map between them here.
-  platforms = {
-    aarch64-darwin = {
-      slug = "darwin-arm64";
-      hash = "sha256-vJiBsQfXvhdDxkyLct1meY9dCUfbxI7Q13lkxHNmH9Q=";
-    };
-    x86_64-darwin = {
-      slug = "darwin-x64";
-      hash = "sha256-FgjZMmGHkgHc933TLcFz777qcVGH01Qv0Fr899W17E0=";
-    };
-    x86_64-linux = {
-      slug = "linux-x64";
-      hash = "sha256-Z/bKt+bBJAEPYqwY+AeLwJ4NtqW56K6HTp5zAzxFF5M=";
-    };
-    aarch64-linux = {
-      slug = "linux-arm64";
-      hash = "sha256-n3Mt4nj3rcYdKf1bBV3a8brjuybXX+bgahJWAlZXd6g=";
-    };
-  };
+  # Version and per-platform SRI hashes are generated, never hand-edited. Bump
+  # with `nix run .#claude-code.updateScript -- <version>`, which refetches
+  # Anthropic's per-version manifest and rewrites manifest.json. We pin by raw
+  # version (not the npm `latest` tag) because Anthropic ships new builds to the
+  # `next` prerelease tag days before promoting them to `latest`, and every
+  # channel that normally surfaces an upgrade (the built-in updater, `claude
+  # doctor`, sadjow/claude-code-nix) only watches `latest`.
+  manifest = lib.importJSON ./manifest.json;
+  inherit (manifest) version;
 
   inherit (stdenv.hostPlatform) system;
   target =
-    platforms.${system}
-      or (throw "claude-code: no prebuilt binary for ${system}; supported: ${lib.concatStringsSep ", " (builtins.attrNames platforms)}");
+    manifest.platforms.${system}
+      or (throw "claude-code: no prebuilt binary for ${system}; supported: ${lib.concatStringsSep ", " (builtins.attrNames manifest.platforms)}");
 
   # Primary host is the Anthropic-branded CDN so the source is verifiable; the
   # GCS bucket is the direct origin and stays as a mirror if the CDN is down.
@@ -65,6 +42,46 @@ let
     ];
     inherit (target) hash;
   };
+
+  # Refreshes manifest.json from Anthropic's published per-version manifest,
+  # converting its hex checksums to the SRI hashes the fetcher pins. The slug
+  # map lives here as the single owner; default.nix only reads it back.
+  updateScript =
+    if writeNushellApplication == null then
+      null
+    else
+      writeNushellApplication {
+        name = "claude-code-update";
+        meta.description = "Refresh packages/claude-code/manifest.json to a Claude Code release";
+        text = ''
+          const base = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases"
+          const slugs = {
+            "aarch64-darwin": "darwin-arm64",
+            "x86_64-darwin": "darwin-x64",
+            "x86_64-linux": "linux-x64",
+            "aarch64-linux": "linux-arm64"
+          }
+
+          # Run from the repo root: `nix run .#claude-code.updateScript -- [version]`.
+          # Without a version argument it tracks Anthropic's `latest` pointer.
+          def main [version?: string] {
+            let v = ($version | default (http get $"($base)/latest" | str trim))
+            let upstream = (http get $"($base)/($v)/manifest.json")
+            let platforms = (
+              $slugs
+              | transpose system slug
+              | reduce --fold {} {|row acc|
+                  let hex = ($upstream.platforms | get $row.slug | get checksum)
+                  let sri = (^nix hash convert --hash-algo sha256 --to sri $hex | str trim)
+                  $acc | insert $row.system { slug: $row.slug, hash: $sri }
+                }
+            )
+            let out = "packages/claude-code/manifest.json"
+            { version: $v, platforms: $platforms } | to json --indent 2 | save --force $out
+            print $"updated ($out) to ($v)"
+          }
+        '';
+      };
 in
 stdenv.mkDerivation {
   pname = "claude-code";
@@ -111,6 +128,10 @@ stdenv.mkDerivation {
     runHook postInstall
   '';
 
+  passthru = lib.optionalAttrs (updateScript != null) {
+    inherit updateScript;
+  };
+
   meta = {
     description = "Claude Code, Anthropic's agentic coding tool in the terminal";
     homepage = "https://www.anthropic.com/claude-code";
@@ -120,7 +141,7 @@ stdenv.mkDerivation {
     # `nix run .#claude-code`. Distribution terms are Anthropic's commercial
     # Claude Code license.
     mainProgram = binName;
-    platforms = builtins.attrNames platforms;
+    platforms = builtins.attrNames manifest.platforms;
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
   };
 }

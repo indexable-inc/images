@@ -30,6 +30,9 @@ let
       ixForPackages
       ;
     ix = ixForPackages;
+    # Pre-applied to the caller's pkgs so flake-output packages can build a
+    # `passthru.updateScript` without re-threading `ix` through callPackage.
+    writeNushellApplication = ixForPackages.writeNushellApplication pkgs;
   };
   mergePackageTrees =
     left: right:
