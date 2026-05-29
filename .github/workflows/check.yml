@@ -17,89 +17,59 @@ concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # The self-hosted runner's Nix daemon owns substituters (the indexable-inc
+  # Cachix plus the host's local cache), so the job only sets client-side eval
+  # knobs here rather than installing Nix or managing a GitHub Actions store
+  # cache.
+  #
+  # `accept-flake-config`: consume the flake's nixConfig (the indexable-inc
+  # Cachix substituter) without an interactive prompt.
+  #
+  # `extra-system-features = gccarch-znver5`: every image pins
+  # `nixpkgs.hostPlatform.gcc.arch = "znver5"`, marking each derivation in the
+  # closure as needing the `gccarch-znver5` system feature. The runner host
+  # must advertise it (daemon `system-features`); otherwise the build aborts
+  # with `missing system features ... Required features: {gccarch-znver5}`.
+  #
+  # `max-jobs = auto` builds one derivation per core; `cores = 1` keeps each
+  # build single-threaded. The closure is wide, so parallelism comes from
+  # building many derivations at once, not threads inside one build.
+  # https://nix.dev/manual/nix/2.28/advanced-topics/cores-vs-jobs
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+    extra-system-features = gccarch-znver5
+    max-jobs = auto
+    cores = 1
+
 jobs:
   # One job on one runner, on purpose. Every check shares a single
-  # znver5-tuned nixpkgs base (see the gccarch-znver5 note below). Fanning the
-  # checks across several ephemeral runners would rebuild that shared base on
-  # each one whenever the cache is cold (a thundering herd), so we keep one
-  # runner and get parallelism *inside* it from nix-fast-build plus
+  # znver5-tuned nixpkgs base, so fanning the checks across several runners
+  # would rebuild that shared base on each cold runner (a thundering herd). We
+  # keep one runner and get parallelism *inside* it from nix-fast-build plus
   # `max-jobs = auto`. Branch protection requires a status named `flake-check`;
   # this job is it, and it fails iff a check fails to build or the flake stops
   # evaluating.
   flake-check:
-    # Standard GitHub-hosted runner. A cache-cold run (e.g. a flake.lock bump)
-    # recompiles the whole znver5 closure and is CPU-bound, so if the org
-    # provisions a larger x86_64-linux runner, swapping its label in here gives
-    # the cold path more cores; nix-fast-build and `max-jobs = auto` scale to
-    # whatever core count the label provides.
-    runs-on: ubuntu-latest
+    # Dispatched to the org-wide ix-ci-dispatcher (vin-compute-1), the same
+    # self-hosted runner the ix repo uses. The `ix-ci-run-*` label is claimed
+    # by that dispatcher, which mints an ephemeral runner per job on a host
+    # with a warm, persistent /nix/store. See the ix repo's ci.yml for the
+    # label scheme.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-flake-check', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Install Determinate Nix
-        uses: DeterminateSystems/determinate-nix-action@bafaa638b9d5ec0e7e3ac1a7fc80453ef1fd265f # v3
-        with:
-          # `extra-system-features = gccarch-znver5`: every image pins
-          # `nixpkgs.hostPlatform.gcc.arch = "znver5"`, which marks each
-          # derivation in the closure as needing the `gccarch-znver5` system
-          # feature. GitHub runners don't advertise it, so without this line Nix
-          # refuses the builds with `missing system features ... Required
-          # features: {gccarch-znver5}` before a single image evaluates.
-          #
-          # `accept-flake-config = true`: consume the flake's `nixConfig` (the
-          # indexable-inc Cachix substituter) without an interactive prompt, so
-          # the znver5 closure substitutes instead of recompiling.
-          #
-          # `max-jobs = auto` runs one build per core; `cores = 1` keeps each
-          # build single-threaded. Consumed cores is `max-jobs *
-          # NIX_BUILD_CORES`, so pairing `auto` with `cores = 0` (every build
-          # grabs every core) oversubscribes to core-count^2 and thrashes on
-          # context switches. The closure is wide, so parallelism comes from
-          # building many derivations at once (max-jobs), not from threads
-          # inside one build (cores).
-          # https://nix.dev/manual/nix/2.28/advanced-topics/cores-vs-jobs
-          extra-conf: |
-            extra-system-features = gccarch-znver5
-            accept-flake-config = true
-            max-jobs = auto
-            cores = 1
-
-      # Restore the prior /nix/store so the warm path skips re-fetching the
-      # znver5 base from Cachix on every run. The key tracks `flake.lock`: the
-      # closure only churns when an input moves. The `nix-${{ runner.os }}-`
-      # prefix lets a flake.lock bump still restore the previous lock's store as
-      # a warm base (shared compiled paths survive the bump). The post-job save
-      # (success only) trims the store to `gc-max-store-size-linux` so the
-      # compressed cache stays under GitHub's 10 GB ceiling; a cache miss just
-      # falls back to Cachix.
-      - name: Cache /nix/store
-        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          gc-max-store-size-linux: 8G
-
-      # Push-event builds from main and release tags publish store paths to
-      # Cachix. Pull requests only consume the substituter (through the accepted
-      # nixConfig above), so they skip this writer setup and never hold the
-      # token.
-      - name: Set up Cachix
-        if: github.event_name == 'push'
-        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
-        with:
-          name: indexable-inc
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-
       # nix-fast-build evaluates the checks with nix-eval-jobs (parallel) and
       # streams each derivation into a build pool as it resolves, instead of
-      # waiting for one big linkFarm to finish evaluating the way `nix build
-      # .#checks.x86_64-linux.all` did. `--skip-cached` drops paths already in a
-      # substituter, so a warm run does almost no work; `--no-nom` keeps plain
-      # CI logs; `--no-link` avoids leaving result symlinks. It exits nonzero
-      # iff a build or eval fails, which is the gate. `--option
-      # accept-flake-config true` makes both the eval and the builds honor the
-      # flake's Cachix substituter. Pinned by commit to nix-fast-build 1.5.0.
+      # waiting for one big linkFarm to finish evaluating. `--skip-cached` drops
+      # paths already in a substituter, so a warm run does almost no work;
+      # `--no-nom` keeps plain CI logs; `--no-link` avoids leaving result
+      # symlinks. It exits nonzero iff a build or eval fails, which is the gate.
+      # Pinned by commit to nix-fast-build 1.5.0.
       - name: Build all flake checks
         run: |
           nix run github:Mic92/nix-fast-build/7f185e0ec37b65b4730f892e0de9a831b0610f3a -- \
