@@ -56,6 +56,11 @@ loro = "1.12"
 ndarray = "0.16"
 nix-web-monitor-parser = { path = "packages/nix-web-monitor/parser" }
 numpy = "0.28"
+object = { version = "0.37", default-features = false, features = [
+  "read",
+  "write",
+  "std",
+] }
 parking_lot = "0.12"
 pty-process = { version = "0.4", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }

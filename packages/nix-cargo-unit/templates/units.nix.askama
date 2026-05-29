@@ -8,6 +8,10 @@
   vendorSources ? {},
   extraNativeBuildInputs ? [],
   extraClippyNativeBuildInputs ? [],
+  # The nix-cargo-unit package, used by the optional panic-freedom policy check
+  # to run `scan-panics` over each library unit's rlib. Only required when that
+  # check was rendered (`--deny-panics`); the rendered check asserts non-null.
+  cargoUnit ? null,
   extraEnv ? {},
   testRunPrelude ? "",
   testArgsByPackage ? {},

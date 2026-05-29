@@ -17,6 +17,7 @@ pub struct RenderOptions {
     pub content_addressed: bool,
     pub toolchain_id: Option<String>,
     pub deny_unused_crate_dependencies: bool,
+    pub deny_panics: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -383,8 +384,74 @@ fn render_policy_check_entries(
             render_unused_crate_dependencies_check(graph, options, prepared)
         )?;
     }
+    if options.deny_panics
+        && let Some(check) = render_panic_freedom_check(graph, prepared)
+    {
+        writeln!(entries, "    panicFreedom = {check};")?;
+    }
 
     Ok(entries)
+}
+
+// Library units the panic-freedom scan inspects. The scan is relocation-based,
+// so it needs the relocatable objects inside an rlib: a linked bin/test has its
+// panic calls resolved to direct branches with no relocation left to read, and
+// recovering those needs disassembly (tracked as follow-up). Build-script runs
+// have no artifact of their own, external crates compile under `--cap-lints
+// warn` and are not the workspace's invariant to hold, and proc-macro /
+// custom-build-compile units are host build tooling, not the shipped surface.
+fn is_panic_freedom_candidate(unit: &Unit) -> bool {
+    unit.is_library()
+        && !unit.is_external()
+        && !unit.is_proc_macro()
+        && !unit.is_run_custom_build()
+        && !unit.is_custom_build_compile()
+}
+
+// Renders one panic-freedom derivation per library unit, joined under a single
+// aggregate so a touched unit only re-scans itself. Each scan runs
+// `nix-cargo-unit scan-panics` over the unit's rlib, scoped to the unit's own
+// crate, and fails if any of the crate's functions reference a
+// `core::panicking` entrypoint. The scanner is the `cargoUnit` package, asserted
+// non-null so enabling the policy without wiring the scanner fails loudly rather
+// than silently passing.
+fn render_panic_freedom_check(graph: &UnitGraph, prepared: &PreparedGraph) -> Option<String> {
+    let mut scans = String::new();
+    for (index, unit) in graph.units.iter().enumerate() {
+        if !is_panic_freedom_candidate(unit) {
+            continue;
+        }
+        let _ = writeln!(
+            scans,
+            "          (scanUnit {} {} {})",
+            nix_attr(&prepared.names[index]),
+            nix_attr(&unit.target.name),
+            prepared.unit_ref(index),
+        );
+    }
+
+    if scans.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        r#"assert pkgs.lib.assertMsg (cargoUnit != null) "cargo-unit panic-freedom needs the cargoUnit scanner package; pass it through buildWorkspace.";
+      let
+        scanUnit = drvName: crateName: unit:
+          pkgs.runCommand "cargo-unit-panic-freedom-${{drvName}}"
+            {{ nativeBuildInputs = [ cargoUnit ]; }}
+            ''
+              set -euo pipefail
+              nix-cargo-unit scan-panics --crate-name ${{pkgs.lib.escapeShellArg crateName}} "${{unit}}"
+              mkdir -p "$out"
+            '';
+      in
+      pkgs.symlinkJoin {{
+        name = "cargo-unit-panic-freedom";
+        paths = [
+{scans}        ];
+      }}"#
+    ))
 }
 
 fn render_source_entries(prepared: &PreparedGraph) -> String {
@@ -2887,6 +2954,7 @@ mod tests {
                 content_addressed: false,
                 toolchain_id: Some("rustc-test".to_string()),
                 deny_unused_crate_dependencies: true,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -2912,6 +2980,80 @@ mod tests {
         assert!(rendered.contains("extraClippyLintArgs"));
         assert!(rendered.contains("clippy = clippyPolicyAggregate;"));
         assert!(rendered.contains("clippyPolicyAggregate ="));
+    }
+
+    #[test]
+    fn deny_panics_scans_local_units_and_skips_externals() {
+        // One workspace library plus one external dependency. The panic-freedom
+        // check must scan the local unit's compiled artifact and leave the
+        // vendored crate alone, mirroring how clippy and unused-dependency
+        // policy stay scoped to workspace-owned code.
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": [{ "index": 1, "extern_crate_name": "serde" }]
+                },
+                {
+                  "pkg_id": "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "serde",
+                    "src_path": "/vendor/serde/src/lib.rs",
+                    "edition": "2021"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0]
+            }"#,
+        )
+        .unwrap();
+
+        let options = |deny_panics| RenderOptions {
+            workspace_root: PathBuf::from("/workspace"),
+            vendor_root: Some(PathBuf::from("/vendor")),
+            cargo_lock_sources: cargo_lock_sources(&[(
+                "serde",
+                "1.0.0",
+                "registry+https://github.com/rust-lang/crates.io-index",
+            )]),
+            content_addressed: false,
+            toolchain_id: None,
+            deny_unused_crate_dependencies: false,
+            deny_panics,
+        };
+
+        let rendered = render_units_nix(&graph, &options(true)).unwrap();
+        assert!(rendered.contains("panicFreedom ="));
+        assert!(rendered.contains("name = \"cargo-unit-panic-freedom\";"));
+        assert!(rendered.contains("nix-cargo-unit scan-panics --crate-name"));
+        // Fail closed when the scanner package is not wired through.
+        assert!(rendered.contains("assertMsg (cargoUnit != null)"));
+        // The local library is scanned with its own crate name; the vendored
+        // crate is not scanned at all.
+        assert!(rendered.contains("(scanUnit \"hello-0.1.0-"));
+        assert!(rendered.contains("\"hello\" units."));
+        assert!(!rendered.contains("(scanUnit \"serde-1.0.0-"));
+
+        // Off by default: no flag, no panic-freedom policy entry.
+        let unchecked = render_units_nix(&graph, &options(false)).unwrap();
+        assert!(!unchecked.contains("panicFreedom"));
     }
 
     #[test]
@@ -2956,6 +3098,7 @@ mod tests {
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3006,6 +3149,7 @@ mod tests {
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3140,6 +3284,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3209,6 +3354,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3280,6 +3426,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3339,6 +3486,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3432,6 +3580,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3559,6 +3708,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: true,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3640,6 +3790,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3714,6 +3865,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3763,6 +3915,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3810,6 +3963,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3875,6 +4029,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -3959,6 +4114,7 @@ const CRLF: &str = include_str!("../../testdata/crlf.toml");
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -4042,6 +4198,7 @@ version = "4.6.1"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -4115,6 +4272,7 @@ version = "4.6.1"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap_err()
@@ -4157,6 +4315,7 @@ version = "4.6.1"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap_err()
@@ -4199,6 +4358,7 @@ version = "4.6.1"
                 content_addressed: true,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -4242,6 +4402,7 @@ version = "4.6.1"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -4307,6 +4468,7 @@ version = "4.6.1"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -4435,6 +4597,7 @@ links = "native_ffi"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -4528,6 +4691,7 @@ links = "nested_native"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -4650,6 +4814,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();
@@ -4719,6 +4884,7 @@ version = "0.1.0"
                 content_addressed: false,
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
+                deny_panics: false,
             },
         )
         .unwrap();

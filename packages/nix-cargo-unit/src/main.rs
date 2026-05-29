@@ -1,5 +1,6 @@
 mod hash;
 mod model;
+mod panic_scan;
 mod render;
 mod shell;
 
@@ -28,6 +29,22 @@ enum Command {
 
     /// Render generated Nix from Cargo unit-graph JSON on stdin.
     Render(RenderArgs),
+
+    /// Scan compiled rlib artifacts for functions that can reach a panic.
+    ScanPanics(ScanPanicsArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct ScanPanicsArgs {
+    /// Restrict findings to functions of this crate (Cargo target name). Other
+    /// crates' monomorphized helpers in the same artifact are ignored.
+    #[arg(long, value_name = "NAME")]
+    crate_name: Option<String>,
+
+    /// Rlib artifacts or directories to scan. Directories are searched for
+    /// `*.rlib` recursively.
+    #[arg(required = true, value_name = "PATH")]
+    paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -62,6 +79,11 @@ struct RenderArgs {
     /// Collect and fail builds on dependencies unused across all local package units.
     #[arg(long)]
     deny_unused_crate_dependencies: bool,
+
+    /// Emit a per-unit panic-freedom policy check that scans each local unit's
+    /// compiled artifact for reachable panic machinery and fails if any is found.
+    #[arg(long)]
+    deny_panics: bool,
 }
 
 fn merge(args: MergeArgs) -> color_eyre::Result<()> {
@@ -103,6 +125,7 @@ fn render(args: RenderArgs) -> color_eyre::Result<()> {
             content_addressed: args.content_addressed,
             toolchain_id: args.toolchain_id,
             deny_unused_crate_dependencies: args.deny_unused_crate_dependencies,
+            deny_panics: args.deny_panics,
         },
     )
     .wrap_err("rendering Cargo unit graph as Nix")?;
@@ -111,11 +134,35 @@ fn render(args: RenderArgs) -> color_eyre::Result<()> {
     Ok(())
 }
 
+fn scan_panics(args: ScanPanicsArgs) -> color_eyre::Result<()> {
+    let ScanPanicsArgs { crate_name, paths } = args;
+    let rlibs = panic_scan::collect_rlibs(&paths)?;
+    let crate_token = crate_name.as_deref().map(panic_scan::crate_token);
+    let findings = panic_scan::scan_paths(&rlibs, crate_token.as_deref())?;
+
+    if findings.is_empty() {
+        return Ok(());
+    }
+
+    let scope = crate_name
+        .as_deref()
+        .map_or_else(String::new, |name| format!(" in {name}"));
+    eprintln!(
+        "error: cargo-unit panic-freedom: {} function(s){scope} can reach panic machinery",
+        findings.len()
+    );
+    for finding in &findings {
+        eprintln!("  {} -> {}", finding.function, finding.panic_entrypoint);
+    }
+    std::process::exit(1);
+}
+
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
     match Cli::parse().command {
         Command::Merge(args) => merge(args),
         Command::Render(args) => render(args),
+        Command::ScanPanics(args) => scan_panics(args),
     }
 }
