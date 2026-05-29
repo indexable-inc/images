@@ -99,7 +99,9 @@ impl McpServer {
         self.with_sessions(|sessions| sessions.close(&request.session_id))
     }
 
-    #[tool(description = "Evaluate a Python expression in a persistent session.")]
+    #[tool(
+        description = "Evaluate a Python expression in a persistent session. Top-level await works (e.g. `await client.get(url)`); the session keeps one event loop, so async clients and pools created in one call stay usable in later calls."
+    )]
     fn python_eval(&self, Parameters(request): Parameters<EvalRequest>) -> String {
         self.with_sessions(|sessions| {
             let session = sessions.get_or_create(request.session_id.as_deref())?;
@@ -107,7 +109,9 @@ impl McpServer {
         })
     }
 
-    #[tool(description = "Execute Python statements in a persistent session.")]
+    #[tool(
+        description = "Execute Python statements in a persistent session. Top-level await works (e.g. `await pool.fetch(sql)`); the session keeps one event loop, so async resources created in one call stay usable in later calls."
+    )]
     fn python_exec(&self, Parameters(request): Parameters<ExecRequest>) -> String {
         self.with_sessions(|sessions| {
             let session = sessions.get_or_create(request.session_id.as_deref())?;
