@@ -26,7 +26,7 @@
     reason = "napi-derive resolves exported return types by their concrete name"
 )]
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -274,9 +274,13 @@ impl Dashboard {
 pub fn serve(host: Option<String>, port: Option<u32>, poll_ms: Option<u32>) -> Result<Dashboard> {
     let host = host.unwrap_or_else(|| "127.0.0.1".to_owned());
     let port = narrow_u16("port", port.unwrap_or(8080))?;
-    let addr: SocketAddr = format!("{host}:{port}")
+    // Parse the host as a bare IP so IPv4 and IPv6 literals both work (an
+    // IPv6 address has its own colons, so `format!("{host}:{port}")` would be
+    // ambiguous). Hostnames are not resolved and fail closed here.
+    let ip: IpAddr = host
         .parse()
-        .map_err(|source| err(format!("invalid address {host}:{port}: {source}")))?;
+        .map_err(|source| err(format!("invalid host {host}: {source}")))?;
+    let addr = SocketAddr::new(ip, port);
 
     // Clamp the poll interval to at least 1ms so a `0` does not spin the
     // dashboard's sample loop, matching the Python wrapper.
