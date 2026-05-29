@@ -6,6 +6,8 @@ on:
       - "packages/minecraft/nbt/**"
       - ".github/workflows/fuzz-nbt.yml"
       - "rust-toolchain.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
 
 permissions:
   contents: read
