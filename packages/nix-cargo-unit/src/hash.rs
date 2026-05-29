@@ -24,3 +24,36 @@ pub fn short(value: &str) -> String {
 pub fn short_digest(digest: &[u8]) -> String {
     hex(&digest[..8])
 }
+
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    const fn nibble_to_hex(nibble: u8) -> u8 {
+        if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + (nibble - 10)
+        }
+    }
+
+    #[kani::proof]
+    #[kani::unwind(9)]
+    fn short_digest_encodes_every_byte_as_lowercase_hex() {
+        let digest: [u8; 8] = kani::any();
+        let encoded = short_digest(&digest);
+        let encoded_bytes = encoded.as_bytes();
+
+        assert_eq!(encoded_bytes.len(), digest.len() * 2);
+        for index in 0..digest.len() {
+            let byte = digest[index];
+            let high = encoded_bytes[index * 2];
+            let low = encoded_bytes[index * 2 + 1];
+
+            assert_eq!(high, nibble_to_hex(byte >> 4));
+            assert_eq!(low, nibble_to_hex(byte & 0x0f));
+            assert!((b'0' <= high && high <= b'9') || (b'a' <= high && high <= b'f'));
+            assert!((b'0' <= low && low <= b'9') || (b'a' <= low && low <= b'f'));
+        }
+    }
+}

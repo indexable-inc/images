@@ -26,6 +26,7 @@ publish = false
 
 [workspace.lints.rust]
 warnings = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [workspace.lints.clippy]
 # Group lints need priority below per-lint overrides so allowlist entries
