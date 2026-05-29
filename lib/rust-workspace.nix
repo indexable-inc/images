@@ -63,8 +63,7 @@ let
     packageTestInputs.tui = [ workspacePkgs.vim ];
     packageTestInputs.ix-mcp = [ workspacePkgs.python3 ];
     # `rodio` (packages/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
-    # script needs ALSA's pkg-config metadata and the final rustc link needs
-    # libasound's search path on Linux.
+    # script needs ALSA's pkg-config metadata to link `libasound` on Linux.
     # Scoped to the whole workspace because the unit graph compiles every
     # member on every system; darwin uses CoreAudio and needs nothing extra.
     #
@@ -75,10 +74,6 @@ let
     # every unit's rustc link search directly so the final binary link resolves
     # it. Harmless for crates that never reference `libasound`.
     nativeBuildInputs = lib.optional workspacePkgs.stdenv.hostPlatform.isLinux workspacePkgs.pkg-config;
-    extraRustcArgs = lib.optionals workspacePkgs.stdenv.hostPlatform.isLinux [
-      "-L"
-      "native=${workspacePkgs.alsa-lib}/lib"
-    ];
     env = lib.optionalAttrs workspacePkgs.stdenv.hostPlatform.isLinux {
       PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
     };
