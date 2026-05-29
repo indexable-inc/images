@@ -854,6 +854,16 @@ Use exact text search for exact questions and semantic search for fuzzy
 questions. Prefer machine-readable output when available, then inspect the narrow
 source files that own the behavior.
 
+Reach for semantic search first on conceptual or natural-language questions:
+`mgrep search -c "<query>" <path>` returns ranked files with the matched
+snippets. Add `-r` to recurse into subdirectories, `-m N` to raise the
+ten-result cap, `-a` to synthesize an answer from the hits, `-w` to fold in web
+results, and `--agentic` to let mgrep refine the query across several searches.
+Pass `-s` to sync local edits into the store before searching when files changed
+since the last index, or run `mgrep watch` to keep the store live. Use `rg` for
+exact strings and known symbols, and `fd` or a glob tool for known file-path
+patterns.
+
 Avoid broad agent delegation for simple search. The codebase is usually small
 enough that direct search plus a focused read gives better signal.
 
