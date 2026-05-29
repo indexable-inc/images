@@ -18,3 +18,8 @@ tui = { workspace = true, features = ["dashboard"] }
 
 [build-dependencies]
 napi-build.workspace = true
+
+[package.metadata.cargo-machete]
+# napi-build is consumed only by build.rs (`napi_build::setup()`), which
+# cargo-machete does not scan, so it reports a false-positive unused dependency.
+ignored = ["napi-build"]
