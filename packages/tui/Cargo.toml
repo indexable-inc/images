@@ -10,14 +10,20 @@ workspace = true
 
 [features]
 pyo3 = ["dep:pyo3"]
+# Expose this process's terminals over a unix socket as NDJSON frames, for an
+# out-of-process aggregator to render. Off by default and HTTP/CRDT-free so a
+# process that only publishes stays lightweight.
+publish = ["dep:serde", "dep:serde_json", "tokio/net"]
 # A read-only web dashboard that streams every live terminal to the browser as
 # a Loro CRDT document over SSE. Off by default so the core PTY library stays
-# free of the HTTP and CRDT closure.
+# free of the HTTP and CRDT closure. Shares the wire frame type with `publish`,
+# so it pulls `serde` for that shape.
 dashboard = [
     "dep:axum",
     "dep:base64",
     "dep:futures",
     "dep:loro",
+    "dep:serde",
     "dep:tokio-stream",
     "tokio/net",
 ]
@@ -31,8 +37,16 @@ ndarray.workspace = true
 parking_lot.workspace = true
 pty-process.workspace = true
 pyo3 = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
 snafu.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "process", "io-util", "time"] }
 tokio-stream = { workspace = true, optional = true, features = ["sync"] }
 uuid = { workspace = true, features = ["v4"] }
 vt100.workspace = true
+
+[dev-dependencies]
+# Drive the publish/aggregate integration test, which connects to a producer
+# socket and parses its NDJSON stream like the aggregator does.
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }

@@ -89,13 +89,43 @@ A child that has exited keeps its final screen readable; writes return
 ## Web dashboard
 
 With the `dashboard` feature, `tui::serve(&manager, addr, poll)` starts a
-read-only web grid of every live terminal. It runs on the manager's runtime,
-mirrors each viewport into a single [Loro] CRDT document, and streams updates to
-browsers over Server-Sent Events; the page imports them with `loro-crdt`. The
-returned `Dashboard` exposes `url()` and stops on `stop()` or drop. This is the
-engine behind the Python package's `serve()`.
+read-only web grid of every live terminal. It mirrors each viewport into a
+single [Loro] CRDT document and streams updates to browsers over Server-Sent
+Events; the page imports them with `loro-crdt`. The returned `Dashboard` exposes
+`url()` and stops on `stop()` or drop. This is the engine behind the Python
+package's `serve()`.
 
 [Loro]: https://loro.dev/
+
+## Multi-process dashboard
+
+`serve` renders one process. To watch many processes (several agents, each with
+its own manager) in one grid, the producer and the viewer are split:
+
+- **Producer** (`publish` feature): `tui::publish(&manager, path, poll)` binds a
+  unix socket at `path` and streams the manager's terminals as one NDJSON
+  [`ProducerSnapshot`] line per tick. Use `tui::socket_path()` for a per-process
+  path inside the discovery directory ([`socket_dir`]). The producer holds no
+  HTTP or CRDT dependency: it serializes frames and writes bytes.
+- **Aggregator** (the `tui-dashboard` binary): run it by hand. It scans the
+  discovery directory, connects to every producer socket, folds each producer's
+  stream into one document under its own scope, and serves the same web grid.
+  No producer owns the server and exactly one process binds a TCP port, so any
+  number of agents share one stable URL.
+
+```sh
+nix run .#tui-dashboard           # serve http://127.0.0.1:8080/ for the discovery dir
+nix run .#tui-dashboard -- --help # --host, --port, --dir, --rescan-ms
+```
+
+The two halves share [`serve_hub`], the page, and the SSE stream, so a single
+process (`serve`) and the aggregator render through exactly the same code. The
+discovery directory resolves to `$IX_TUI_DIR`, else `$XDG_RUNTIME_DIR/ix-tui`,
+else `/tmp/ix-tui-<user>`, kept short for the macOS 104-byte socket-path limit.
+
+[`ProducerSnapshot`]: src/frame.rs
+[`socket_dir`]: src/frame.rs
+[`serve_hub`]: src/dashboard/server.rs
 
 ## Configuration
 

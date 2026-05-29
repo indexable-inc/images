@@ -16,6 +16,7 @@ members = [
   "packages/oci-image-builder",
   "packages/repo-walker",
   "packages/tui",
+  "packages/tui-dashboard",
   "packages/tui-node",
   "packages/tui-py",
 ]

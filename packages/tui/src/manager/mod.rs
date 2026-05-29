@@ -282,13 +282,4 @@ impl TuiManager {
             .cloned()
             .ok_or(Error::TuiNotFound { id: *id })
     }
-
-    /// The shared runtime that drives every spawned actor.
-    ///
-    /// The dashboard runs its HTTP server and poll loop on this same runtime so
-    /// it never starts a second one.
-    #[cfg(feature = "dashboard")]
-    pub(crate) fn runtime(&self) -> Arc<Runtime> {
-        self.runtime.clone()
-    }
 }

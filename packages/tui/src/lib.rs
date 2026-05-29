@@ -39,14 +39,22 @@ mod actor;
 #[cfg(feature = "dashboard")]
 pub mod dashboard;
 mod error;
+#[cfg(any(feature = "dashboard", feature = "publish"))]
+mod frame;
 mod manager;
+#[cfg(feature = "publish")]
+pub mod publish;
 mod slice;
 mod types;
 
 #[cfg(feature = "dashboard")]
-pub use dashboard::{Dashboard, serve};
+pub use dashboard::{Dashboard, Hub, serve, serve_hub};
 pub use error::{Error, Result};
+#[cfg(any(feature = "dashboard", feature = "publish"))]
+pub use frame::{ProducerSnapshot, TerminalFrame, socket_dir, socket_path};
 pub use manager::{TuiInstance, TuiManager};
+#[cfg(feature = "publish")]
+pub use publish::{Publisher, publish};
 pub use slice::{ColRange, RowRange, slice_2d};
 pub use types::{Color, ExitState, FullOutput, SpawnConfig, StyledCell};
 

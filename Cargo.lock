@@ -4751,11 +4751,23 @@ dependencies = [
  "parking_lot",
  "pty-process",
  "pyo3",
+ "serde",
+ "serde_json",
  "snafu",
  "tokio",
  "tokio-stream",
  "uuid",
  "vt100",
+]
+
+[[package]]
+name = "tui-dashboard"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde_json",
+ "tokio",
+ "tui",
 ]
 
 [[package]]

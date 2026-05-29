@@ -3,54 +3,140 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>tui dashboard</title>
+<title>tui</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --bg: #08090b;
+    --panel: #0c0d10;
+    --panel-edge: #1b1d22;
+    --panel-edge-hover: #2b2e36;
+    --ink: #e7e9ee;
+    --ink-dim: #6b7078;
+    --ink-faint: #41454d;
+    --live: #4ade80;
+    --dead: #f4636b;
+    --ui: ui-sans-serif, system-ui, -apple-system, "SF Pro Text", Segoe UI, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0; padding: 16px;
-    background: #0b0e14; color: #c9d1d9;
-    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    margin: 0;
+    padding: 28px clamp(20px, 4vw, 56px) 56px;
+    background:
+      radial-gradient(1200px 600px at 50% -10%, #101218 0%, transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    font: 13px/1.5 var(--ui);
+    -webkit-font-smoothing: antialiased;
   }
-  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
-  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
-  header .status { color: #8b949e; }
-  header .status.live { color: #3fb950; }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    margin: 0 2px 24px;
+  }
+  header .mark {
+    font-family: var(--mono); font-weight: 600; font-size: 14px;
+    letter-spacing: 0.5px; color: var(--ink);
+  }
+  header .mark .accent { color: var(--ink-dim); }
+  header .spacer { flex: 1; }
+  header .stat {
+    color: var(--ink-dim); font-variant-numeric: tabular-nums;
+    font-size: 12px; letter-spacing: 0.2px;
+  }
+  header .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ink-faint); transition: background 0.3s, box-shadow 0.3s;
+  }
+  header .dot.live {
+    background: var(--live);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 18%, transparent);
+  }
+
   #grid {
-    display: grid; gap: 12px;
-    grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+    display: grid; gap: 18px;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    align-items: start;
   }
-  .card {
-    border: 1px solid #21262d; border-radius: 8px; overflow: hidden;
-    background: #010409; display: flex; flex-direction: column;
+
+  .term {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.02) inset,
+      0 12px 30px -18px rgba(0,0,0,0.9);
+    transition: border-color 0.2s, transform 0.2s;
   }
-  .card .bar {
-    display: flex; justify-content: space-between; gap: 8px;
-    padding: 6px 10px; background: #161b22; border-bottom: 1px solid #21262d;
+  .term:hover { border-color: var(--panel-edge-hover); transform: translateY(-2px); }
+  .term.dead { opacity: 0.5; }
+
+  .term .head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--panel-edge);
   }
-  .card .bar .cmd { color: #58a6ff; font-weight: 600; }
-  .card .bar .meta { color: #6e7681; display: flex; gap: 8px; }
-  .card .bar .exited { color: #f85149; }
-  .card.dead { opacity: 0.55; }
-  .card pre {
-    margin: 0; padding: 10px; white-space: pre; overflow: auto;
+  .term .led {
+    flex: none; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--live);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 16%, transparent);
+  }
+  .term.dead .led { background: var(--dead); box-shadow: none; }
+  .term .cmd {
+    font-family: var(--mono); font-size: 12.5px; font-weight: 500;
+    color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .term .spacer { flex: 1; }
+  .term .chip {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.3px;
+    color: var(--ink-faint);
+  }
+  .term .size {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .term pre {
+    margin: 0; padding: 14px 16px;
+    font-family: var(--mono); font-size: 12px; line-height: 1.38;
+    color: var(--ink);
+    white-space: pre; overflow: auto;
     max-height: 60vh; tab-size: 8;
+    scrollbar-width: thin; scrollbar-color: var(--panel-edge-hover) transparent;
   }
-  .empty { color: #6e7681; padding: 40px; text-align: center; }
+  .term pre::-webkit-scrollbar { width: 9px; height: 9px; }
+  .term pre::-webkit-scrollbar-thumb {
+    background: var(--panel-edge-hover); border-radius: 9px;
+    border: 2px solid var(--panel);
+  }
+
+  .empty {
+    grid-column: 1 / -1;
+    color: var(--ink-dim); text-align: center;
+    padding: 12vh 0; font-family: var(--mono); font-size: 13px;
+  }
+  .empty .hint { color: var(--ink-faint); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>tui dashboard</h1>
-  <span class="status" id="status">connecting…</span>
+  <span class="mark">tui<span class="accent">·dashboard</span></span>
+  <span class="dot" id="dot"></span>
+  <span class="spacer"></span>
+  <span class="stat" id="stat">connecting</span>
 </header>
-<div id="grid"><div class="empty">waiting for terminals…</div></div>
+<div id="grid"><div class="empty">connecting…</div></div>
 <script type="module">
 import { LoroDoc } from "https://esm.sh/loro-crdt@1";
 
+const SCOPE_SEP = String.fromCharCode(0x1f); // matches dashboard::hub::SCOPE_SEP
 const doc = new LoroDoc();
 const grid = document.getElementById("grid");
-const status = document.getElementById("status");
+const stat = document.getElementById("stat");
+const dot = document.getElementById("dot");
 
 function b64ToBytes(b64) {
   const bin = atob(b64);
@@ -60,51 +146,78 @@ function b64ToBytes(b64) {
 }
 
 function render() {
-  const value = doc.toJSON();
-  const terminals = value.terminals ?? {};
-  const ids = Object.keys(terminals).sort();
-  if (ids.length === 0) {
-    grid.innerHTML = '<div class="empty">no terminals in this process yet</div>';
+  const terminals = doc.toJSON().terminals ?? {};
+  const keys = Object.keys(terminals).sort();
+
+  if (keys.length === 0) {
+    grid.innerHTML =
+      '<div class="empty">no terminals yet'
+      + '<div class="hint">spawn a terminal, or start a producer with <code>tui.publish()</code></div></div>';
     return;
   }
+
+  const producers = new Set();
   grid.innerHTML = "";
-  for (const id of ids) {
-    const t = terminals[id];
+  for (const key of keys) {
+    const t = terminals[key];
+    const sep = key.indexOf(SCOPE_SEP);
+    const scope = sep === -1 ? "" : key.slice(0, sep);
+    producers.add(scope);
     const alive = t.alive !== false;
-    const card = document.createElement("div");
-    card.className = alive ? "card" : "card dead";
-    const bar = document.createElement("div");
-    bar.className = "bar";
+
+    const term = document.createElement("div");
+    term.className = alive ? "term" : "term dead";
+
+    const head = document.createElement("div");
+    head.className = "head";
+
+    const led = document.createElement("span");
+    led.className = "led";
+    led.title = alive ? "running" : "exited";
+
     const cmd = document.createElement("span");
     cmd.className = "cmd";
-    cmd.textContent = [t.command, t.args].filter(Boolean).join(" ");
-    const meta = document.createElement("span");
-    meta.className = "meta";
-    if (!alive) {
-      const exited = document.createElement("span");
-      exited.className = "exited";
-      exited.textContent = "exited";
-      meta.append(exited);
+    cmd.textContent = [t.command, t.args].filter(Boolean).join(" ") || "(terminal)";
+
+    const spacer = document.createElement("span");
+    spacer.className = "spacer";
+
+    head.append(led, cmd, spacer);
+
+    if (scope && scope !== "local") {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = scope;
+      chip.title = "producer " + scope;
+      head.append(chip);
     }
+
     const size = document.createElement("span");
+    size.className = "size";
     size.textContent = `${t.rows}×${t.cols}`;
-    meta.append(size);
-    bar.append(cmd, meta);
+    head.append(size);
+
     const pre = document.createElement("pre");
     pre.textContent = t.screen ?? "";
-    card.append(bar, pre);
-    grid.append(card);
+
+    term.append(head, pre);
+    grid.append(term);
   }
+
+  const n = keys.length;
+  const p = producers.size;
+  stat.textContent =
+    `${n} terminal${n === 1 ? "" : "s"}`
+    + (p > 1 ? ` · ${p} producers` : "");
 }
 
 const es = new EventSource("/events");
 es.addEventListener("open", () => {
-  status.textContent = "live";
-  status.classList.add("live");
+  dot.classList.add("live");
 });
 es.addEventListener("error", () => {
-  status.textContent = "reconnecting…";
-  status.classList.remove("live");
+  dot.classList.remove("live");
+  stat.textContent = "reconnecting…";
 });
 function ingest(event) {
   doc.import(b64ToBytes(event.data));

@@ -57,6 +57,13 @@ pub enum Error {
     /// `dashboard` feature.
     #[snafu(display("dashboard error: {message}"), visibility(pub(crate)))]
     Dashboard { message: String },
+
+    /// Collapses the producer's foreign-boundary failures (directory creation,
+    /// unix socket bind) into one observable message. Only constructed under the
+    /// `publish` feature.
+    #[cfg(feature = "publish")]
+    #[snafu(display("publish error: {message}"), visibility(pub(crate)))]
+    Publish { message: String },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -78,6 +85,8 @@ impl From<Error> for pyo3::PyErr {
             | Error::SignalTui { .. }
             | Error::ResizeTui { .. } => PyIOError::new_err(msg),
             Error::ArrayConversion { .. } | Error::Dashboard { .. } => PyRuntimeError::new_err(msg),
+            #[cfg(feature = "publish")]
+            Error::Publish { .. } => PyRuntimeError::new_err(msg),
         }
     }
 }
