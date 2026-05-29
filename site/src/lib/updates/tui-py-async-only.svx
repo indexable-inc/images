@@ -1,0 +1,30 @@
+---
+id: tui-py-async-only
+postedAt: 2026-05-29T14:00:00-07:00
+title: "`ix-tui` drops its sync methods for one async surface"
+tags: [interesting, python, async, agents]
+links:
+  - label: tui-py package
+    href: https://github.com/indexable-inc/index/tree/main/packages/tui-py
+---
+
+The `ix-tui` Python bindings are now async-only. Every I/O method is a coroutine with the plain name, no `a`-prefixed twin and no synchronous variant:
+
+```python
+import asyncio
+from tui import Tui
+
+async def main() -> None:
+    async with Tui("python", "-q") as t:
+        await t.enter("1 + 2")
+        snap = await t.wait_for("3", timeout=2.0)
+        print(snap.text)
+
+asyncio.run(main())
+```
+
+Before, each method shipped a blocking version plus an `a`-prefixed coroutine (`enter` / `aenter`, `wait_for` / `await_for`, `kill` / `akill`). Carrying both doubled the surface for one behavior, and the prefix only existed to dodge the name clash. With the sync twins gone the coroutines take the real names. The dashboard follows the same rule: `await serve(...)` and `await dash.stop()`.
+
+This is a breaking change. Replace `with Tui(...)` with `async with Tui(...)`, drop the `a`/`await_` prefixes, and `await` the calls. Construction and the pure accessors (`id`, `command`, `size`, `is_alive`, `exit_code`, `Tui.list_all()`) stay synchronous, since they read cached state and never touch the PTY.
+
+Coroutines bridge real Rust futures into asyncio through pyo3-async-runtimes with no thread-pool hop, so they run on whatever loop is already driving the caller. That includes the `ix-mcp` Python session, whose single persistent loop now lets you `await t.enter(...)` straight inside a `python_exec` call.
