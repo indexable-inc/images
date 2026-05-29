@@ -23,15 +23,17 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # `cargo install --locked cargo-fuzz` pins an old `rustix` that no longer
-      # compiles against current rustc, so skip `--locked` and let cargo pick a
-      # `rustix` that builds against the toolchain.
+      # Pin the cargo-fuzz version so a crates.io release cannot change the gate
+      # silently. `--locked` is incompatible with the toolchain because
+      # cargo-fuzz 0.13.1's lockfile pins an old `rustix` that no longer
+      # compiles, so resolve the install's own deps unlocked.
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.1
 
       - name: Fuzz decode_document for 60 seconds
         working-directory: packages/minecraft/nbt/fuzz
         run: |
+          cargo fetch --locked
           mkdir -p corpus/decode_document
           cp seeds/decode_document/* corpus/decode_document/
           cargo fuzz run decode_document -- -max_total_time=60 -timeout=10
