@@ -17,4 +17,4 @@ numpy.workspace = true
 parking_lot.workspace = true
 pyo3 = { workspace = true, features = ["extension-module"] }
 pyo3-async-runtimes.workspace = true
-tui = { workspace = true, features = ["pyo3", "dashboard"] }
+tui = { workspace = true, features = ["pyo3", "dashboard", "publish"] }

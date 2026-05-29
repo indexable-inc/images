@@ -259,6 +259,37 @@ to tune the viewport sampling interval in seconds.
 
 [loro]: https://loro.dev/
 
+### One dashboard across many processes
+
+`serve()` only sees the terminals in its own process, and each call binds its
+own port. When several processes run at once (for example multiple agents),
+`publish()` instead exposes this process's terminals over a unix socket and a
+single standalone aggregator renders all of them in one grid.
+
+```python
+import asyncio
+from tui import Tui, publish
+
+async def main() -> None:
+    Tui("bash", "--norc", "-i")
+    async with await publish() as pub:   # socket in the discovery dir
+        print(pub.producer_id)           # this process's scope on the grid
+        await asyncio.sleep(3600)
+
+asyncio.run(main())
+```
+
+Run the aggregator once, separately, to watch every publisher:
+
+```sh
+nix run .#tui-dashboard          # http://127.0.0.1:8080/
+```
+
+Producers come and go freely: the aggregator discovers each socket in the shared
+directory (`socket_dir()`) and drops a producer's terminals when it disconnects.
+No process owns the server, so there is no port collision and one URL shows them
+all. Pass `path=` to `publish()` to choose the socket path.
+
 ## Public surface
 
 | Name           | Purpose                                                |
@@ -272,5 +303,8 @@ to tune the viewport sampling interval in seconds.
 | `WaitTimeout`  | Raised by `wait_for` / `wait` on deadline expiry.      |
 | `serve`        | Await to start the web dashboard for every live `Tui`. |
 | `Dashboard`    | Handle to a running dashboard: `url`, `open`, `stop`.  |
+| `publish`      | Await to expose this process's terminals on a socket.  |
+| `Publisher`    | Handle to a running producer: `path`, `producer_id`, `stop`. |
+| `socket_dir`   | The discovery directory producers and the aggregator share. |
 
 [pyo3-async-runtimes]: https://docs.rs/pyo3-async-runtimes/

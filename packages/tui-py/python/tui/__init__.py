@@ -33,10 +33,13 @@ from numpy.typing import NDArray
 
 from ._tui import (
     Dashboard as _RawDashboard,
+    Publisher as _RawPublisher,
     StyledCell as StyledCell,
     TuiInstance as _RawTuiInstance,
     __version__,
+    publish as _raw_publish,
     serve as _raw_serve,
+    socket_dir as socket_dir,
 )
 
 __all__ = [
@@ -44,13 +47,16 @@ __all__ = [
     "Dashboard",
     "Key",
     "Pattern",
+    "Publisher",
     "Size",
     "Snapshot",
     "StyledCell",
     "Tui",
     "WaitTimeout",
     "__version__",
+    "publish",
     "serve",
+    "socket_dir",
 ]
 
 
@@ -496,3 +502,69 @@ async def serve(
     if open_browser:
         dashboard.open()
     return dashboard
+
+
+# --------------------------------------------------------------------------- #
+# Producer (multi-process dashboard)
+# --------------------------------------------------------------------------- #
+
+
+class Publisher:
+    """A running producer that exposes this process's terminals over a unix
+    socket for the standalone `tui-dashboard` aggregator.
+
+    Many processes can publish at once; the aggregator discovers each socket in
+    the shared directory and renders every producer in one grid, so several
+    agents share a single dashboard URL instead of each starting their own
+    server. Each terminal appears under this process's `producer_id`. Stop with
+    `await stop()`, or use the handle as an async context manager.
+
+        async with await publish() as pub:
+            ...
+    """
+
+    __slots__ = ("_raw",)
+
+    def __init__(self, raw: _RawPublisher) -> None:
+        self._raw = raw
+
+    @property
+    def path(self) -> str:
+        """The unix socket path this producer is bound to."""
+        return self._raw.path
+
+    @property
+    def producer_id(self) -> str:
+        """This process's scope on the aggregated dashboard."""
+        return self._raw.producer_id
+
+    async def stop(self) -> None:
+        """Stop streaming and unlink the socket. Idempotent."""
+        await self._raw.stop()
+
+    def __repr__(self) -> str:
+        return f"Publisher(path={self.path!r})"
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self._raw.stop()
+
+
+async def publish(path: str | None = None, *, poll: float = 0.1) -> Publisher:
+    """Publish every `Tui` alive in this process over a unix socket.
+
+    With `path` unset the socket lands in the discovery directory
+    (`socket_dir()`) under a per-process name, where the `tui-dashboard`
+    aggregator finds it. Run that aggregator separately to watch every
+    publishing process in one browser grid. `poll` is the sampling interval in
+    seconds. Await this to get the handle.
+    """
+    raw = await _raw_publish(path, max(1, int(poll * 1000)))
+    return Publisher(raw)

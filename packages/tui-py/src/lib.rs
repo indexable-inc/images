@@ -12,6 +12,7 @@
 
 mod dashboard;
 mod manager;
+mod publish;
 mod types;
 
 use pyo3::prelude::*;
@@ -21,7 +22,10 @@ fn _tui(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<manager::TuiInstance>()?;
     module.add_class::<types::StyledCell>()?;
     module.add_class::<dashboard::Dashboard>()?;
+    module.add_class::<publish::Publisher>()?;
     module.add_function(wrap_pyfunction!(dashboard::serve, module)?)?;
+    module.add_function(wrap_pyfunction!(publish::publish, module)?)?;
+    module.add_function(wrap_pyfunction!(publish::socket_dir, module)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
