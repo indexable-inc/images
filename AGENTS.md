@@ -606,6 +606,12 @@ lock output that makes later builds pure.
 Generated catalogs are build inputs, not hand-edited source. If a generated file
 is wrong, change the manifest or generator that owns it.
 
+A prebuilt-binary package pins its version and per-platform hashes in a generated
+`manifest.json` read with `lib.importJSON` and refreshed by a
+`passthru.updateScript`; bump by running the updater, never by hand-editing the
+hashes. See [`packages/claude-code`](packages/claude-code) for the worked shape:
+`nix run .#claude-code.updateScript -- <version>`.
+
 Keep binary and generated artifacts near the owner that can explain and refresh
 them. Use small manifests for curated sets, generated catalogs for URLs and
 hashes, and metadata catalogs for search or browsing surfaces.
