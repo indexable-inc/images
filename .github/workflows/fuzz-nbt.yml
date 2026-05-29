@@ -1,0 +1,32 @@
+name: Fuzz minecraft-nbt
+
+on:
+  pull_request:
+    paths:
+      - "packages/minecraft/nbt/**"
+      - ".github/workflows/fuzz-nbt.yml"
+      - "rust-toolchain.toml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nbt-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz
+
+      - name: Fuzz decode_document for 60 seconds
+        working-directory: packages/minecraft/nbt/fuzz
+        run: |
+          mkdir -p corpus/decode_document
+          cp seeds/decode_document/* corpus/decode_document/
+          cargo fuzz run decode_document -- -max_total_time=60 -timeout=10
