@@ -1,0 +1,25 @@
+---
+id: tui-multiprocess-dashboard
+postedAt: 2026-05-29T15:45:00-07:00
+title: "`tui-dashboard` aggregates many `tui` producers into one live web grid"
+tags: [rust, tui, dashboard]
+links:
+  - label: tui-dashboard
+    href: https://github.com/indexable-inc/index/tree/main/packages/tui-dashboard
+  - label: tui
+    href: https://github.com/indexable-inc/index/tree/main/packages/tui
+  - label: "#322"
+    href: https://github.com/indexable-inc/index/issues/322
+---
+
+Several processes can now share one `tui` web dashboard instead of each starting its own server. A producing process calls `tui::publish` (or `tui.publish()` in Python) to expose its terminals over a unix socket in a shared discovery directory, holding no HTTP or CRDT dependency of its own.
+
+Run the standalone aggregator once to watch all of them:
+
+```sh
+nix run .#tui-dashboard
+```
+
+It scans the discovery directory, connects to every producer socket, folds each producer's stream into one Loro document under its own scope, and serves the grid over Server-Sent Events. No producer owns the server and exactly one process binds a TCP port, so agents come and go behind a single stable URL; a producer's terminals leave the grid when it disconnects.
+
+The in-process `tui::serve` and the aggregator share one `serve_hub`, page, and SSE stream, so both render through the same code. The discovery directory resolves to `$IX_TUI_DIR`, then `$XDG_RUNTIME_DIR/ix-tui`, then `/tmp/ix-tui-<user>`, kept short for the macOS 104-byte socket-path limit.
