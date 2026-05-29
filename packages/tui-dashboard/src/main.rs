@@ -50,7 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
 
     let hub = Hub::new();
-    let (mut dashboard, _stop_rx) = serve_hub(hub.clone(), addr).await?;
+    // The process runtime outlives the dashboard, so the server and discovery
+    // loop spawned on it run for the lifetime of the binary.
+    let (mut dashboard, _stop_rx) = serve_hub(hub.clone(), addr, &tokio::runtime::Handle::current()).await?;
     println!(
         "tui-dashboard: serving {}  (watching {})",
         dashboard.url(),

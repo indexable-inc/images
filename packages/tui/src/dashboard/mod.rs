@@ -60,19 +60,20 @@ pub(crate) fn b64(bytes: &[u8]) -> String {
 /// [`Dashboard::addr`]. `poll` is the viewport sampling interval; every tick
 /// that changes a terminal produces one CRDT update broadcast to all clients.
 ///
-/// Runs on the ambient tokio runtime (the one driving this future): the server
-/// and the poll loop are spawned there, and a pure-Rust caller can
-/// `runtime.block_on(serve(..))` when it needs sync.
+/// The server and poll loop run on the manager's own runtime, not the ambient
+/// one, so a pure-Rust caller can `runtime.block_on(serve(..))` from a
+/// temporary runtime and the returned dashboard keeps running after it drops.
 pub async fn serve(
     manager: &Arc<TuiManager>,
     addr: SocketAddr,
     poll: Duration,
 ) -> Result<Dashboard> {
+    let runtime = manager.runtime_handle();
     let hub = Hub::new();
-    let (mut dashboard, mut stop_rx) = serve_hub(hub.clone(), addr).await?;
+    let (mut dashboard, mut stop_rx) = serve_hub(hub.clone(), addr, &runtime).await?;
 
     let manager = manager.clone();
-    let poller = tokio::spawn(async move {
+    let poller = runtime.spawn(async move {
         loop {
             let frames = crate::frame::collect_frames(&manager).await;
             hub.apply_scope(LOCAL_SCOPE, &frames);

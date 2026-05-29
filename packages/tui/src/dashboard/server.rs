@@ -91,11 +91,16 @@ impl Drop for Dashboard {
 /// Bind `addr`, start the HTTP server for `hub`, and return the handle plus a
 /// shutdown receiver.
 ///
-/// The server task runs on the ambient tokio runtime (whichever drives the
-/// returned future). The caller spawns its frame-source tasks against the
-/// returned receiver and attaches them with [`Dashboard::push_task`], so one
-/// shutdown signal stops the whole dashboard.
-pub async fn serve_hub(hub: Arc<Hub>, addr: SocketAddr) -> Result<(Dashboard, watch::Receiver<bool>)> {
+/// The server task runs on `runtime`, which must outlive the dashboard (the
+/// manager's runtime for the in-process [`serve`](super::serve), the process
+/// runtime for the aggregator). The caller spawns its frame-source tasks on the
+/// same runtime against the returned receiver and attaches them with
+/// [`Dashboard::push_task`], so one shutdown signal stops the whole dashboard.
+pub async fn serve_hub(
+    hub: Arc<Hub>,
+    addr: SocketAddr,
+    runtime: &tokio::runtime::Handle,
+) -> Result<(Dashboard, watch::Receiver<bool>)> {
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|source| Error::Dashboard {
@@ -115,7 +120,7 @@ pub async fn serve_hub(hub: Arc<Hub>, addr: SocketAddr) -> Result<(Dashboard, wa
 
     let http = {
         let mut rx = shutdown.subscribe();
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             let server = axum::serve(listener, app).with_graceful_shutdown(async move {
                 let _ = rx.wait_for(|stop| *stop).await;
             });

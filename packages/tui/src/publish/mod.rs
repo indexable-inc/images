@@ -84,13 +84,14 @@ impl Drop for Publisher {
 
 /// Publish `manager`'s terminals on the unix socket at `path`.
 ///
-/// `path` is usually [`socket_path`](crate::socket_path); its parent directory
-/// is created (mode `0700`) if missing and a stale socket file at `path` is
-/// removed first. `poll` is the sampling interval; every tick writes the current
-/// [`ProducerSnapshot`] to all connected readers.
+/// `path` is usually [`socket_path`](crate::socket_path); a parent directory
+/// this producer creates is mode `0700`, and a stale socket at `path` is reaped
+/// first (a non-socket there is an error, never overwritten). `poll` is the
+/// sampling interval; every tick writes the current [`ProducerSnapshot`] to all
+/// connected readers.
 ///
-/// Runs on the ambient tokio runtime: the poll and accept loops are spawned
-/// there.
+/// The poll and accept loops run on the manager's runtime, so the producer
+/// survives a temporary caller runtime being dropped.
 pub async fn publish(
     manager: &Arc<TuiManager>,
     path: PathBuf,
@@ -106,19 +107,23 @@ pub async fn publish(
     );
 
     if let Some(parent) = path.parent() {
+        // Only tighten permissions on a directory we create, never on a
+        // caller-supplied directory that already exists (it could be `.` or
+        // `$HOME`).
+        let existed = parent.exists();
         std::fs::create_dir_all(parent)
             .map_err(|source| publish_err(format!("create {}: {source}", parent.display())))?;
-        restrict_dir(parent);
+        if !existed {
+            restrict_dir(parent);
+        }
     }
-    // A stale file from a crashed producer would make `bind` fail with
-    // `EADDRINUSE`; unlink it first. A live producer never shares a path because
-    // the filename carries this process's pid and a uuid.
-    let _ = std::fs::remove_file(&path);
+    reap_stale_socket(&path)?;
 
     let listener = UnixListener::bind(&path)
         .map_err(|source| publish_err(format!("bind {}: {source}", path.display())))?;
     restrict_socket(&path);
 
+    let runtime = manager.runtime_handle();
     let initial = encode(&producer, manager).await;
     let (snapshot_tx, snapshot_rx) = watch::channel(initial);
     let (shutdown, _) = watch::channel(false);
@@ -127,7 +132,7 @@ pub async fn publish(
         let manager = manager.clone();
         let producer = producer.clone();
         let mut stop_rx = shutdown.subscribe();
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             loop {
                 tokio::select! {
                     () = tokio::time::sleep(poll) => {}
@@ -146,7 +151,7 @@ pub async fn publish(
         // A separate receiver to hand each connection task, so cloning it does
         // not collide with the `wait_for` borrow of `stop_rx` in the select.
         let child_stop = shutdown.subscribe();
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             loop {
                 tokio::select! {
                     accepted = listener.accept() => {
@@ -208,9 +213,28 @@ async fn write_loop(
     }
 }
 
-/// Restrict the discovery directory to the owner (`0700`). Best-effort: a
-/// pre-existing directory with other perms is left alone, and the socket itself
-/// is mode-restricted too.
+/// Reap a stale socket left by a crashed producer so `bind` does not fail with
+/// `EADDRINUSE`.
+///
+/// Only an actual socket is removed. A path that exists and is something else (a
+/// regular file or symlink from a caller-supplied path typo or reuse) is an
+/// error, never silently deleted, so producing never clobbers real data.
+fn reap_stale_socket(path: &Path) -> Result<()> {
+    use std::os::unix::fs::FileTypeExt as _;
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_socket() => std::fs::remove_file(path)
+            .map_err(|source| publish_err(format!("remove stale socket {}: {source}", path.display()))),
+        Ok(_) => Err(publish_err(format!(
+            "{} exists and is not a socket; refusing to overwrite",
+            path.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(publish_err(format!("stat {}: {error}", path.display()))),
+    }
+}
+
+/// Restrict the discovery directory to the owner (`0700`). Best-effort, applied
+/// only to a directory this producer created.
 fn restrict_dir(dir: &Path) {
     use std::os::unix::fs::PermissionsExt as _;
     let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
@@ -220,4 +244,33 @@ fn restrict_dir(dir: &Path) {
 fn restrict_socket(path: &Path) {
     use std::os::unix::fs::PermissionsExt as _;
     let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A caller-supplied path that already holds a real file must never be
+    /// deleted by the stale-socket reaper.
+    #[test]
+    fn reap_refuses_to_delete_a_non_socket() {
+        let path =
+            std::env::temp_dir().join(format!("ix-tui-reap-{}.notsock", std::process::id()));
+        std::fs::write(&path, b"keep me").unwrap();
+
+        let result = reap_stale_socket(&path);
+
+        assert!(result.is_err(), "a regular file must not be reaped");
+        assert!(path.exists(), "the file must survive a refused reap");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    /// A missing path is nothing to reap, not an error.
+    #[test]
+    fn reap_is_ok_when_nothing_exists() {
+        let path =
+            std::env::temp_dir().join(format!("ix-tui-reap-missing-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        assert!(reap_stale_socket(&path).is_ok());
+    }
 }
