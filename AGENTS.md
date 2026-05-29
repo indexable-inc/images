@@ -322,6 +322,18 @@ unreachable-by-test code, and keep cargo-mutants a package-owner tool rather
 than a CI gate: equivalent mutants need human judgment, runtime scales with
 mutant count, and a survivor is a prompt to look, not a regression to block.
 
+Fuzz Rust surfaces that read untrusted bytes: parsers, codecs, deserializers,
+protocol handlers, archive readers, and unsafe or FFI-adjacent input edges.
+Scaffold with `cargo fuzz init` so targets land in
+`packages/<crate>/fuzz/fuzz_targets/<name>.rs`; the fuzz crate keeps its own
+`[workspace]` table so it stays off the main `cargo --workspace` graph. Commit
+hand-picked seeds under `fuzz/seeds/<target>/`, gitignore `fuzz/corpus/`, and
+minimize crashes with `cargo fuzz cmin <target>` or
+`cargo fuzz tmin <target> <path>` before committing the reduced input as a
+regression seed. `packages/minecraft/nbt/fuzz/` is the worked example; see
+[the cargo-fuzz book](https://rust-fuzz.github.io/book/cargo-fuzz.html) for
+the libFuzzer flag surface.
+
 ## Python style
 
 Default repo-owned Python apps to uv: `pyproject.toml`, committed `uv.lock`,
