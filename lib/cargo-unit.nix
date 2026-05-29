@@ -256,7 +256,8 @@ let
         toolchainId
       ]
       ++ lib.optional args.contentAddressed "--content-addressed"
-      ++ lib.optional args.policy.denyUnusedCrateDependencies "--deny-unused-crate-dependencies";
+      ++ lib.optional args.policy.denyUnusedCrateDependencies "--deny-unused-crate-dependencies"
+      ++ lib.optional args.policy.denyPanics "--deny-panics";
     in
     pkgs.runCommand "cargo-units.nix"
       {
@@ -372,6 +373,9 @@ let
           rustToolchain
           ;
         inherit workspaceRoot;
+        # Scanner for the opt-in panic-freedom policy. The rendered check
+        # asserts this is non-null when `policy.denyPanics` is set.
+        cargoUnit = nixCargoUnit;
         extraNativeBuildInputs = args.nativeBuildInputs ++ rust.nativeBuildInputsForPolicy args.policy;
         # `clippy-driver` ships in the clippy package; `rustToolchain` only
         # guarantees rustc + cargo. Adding the resolved clippy package keeps

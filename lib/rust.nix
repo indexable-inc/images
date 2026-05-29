@@ -23,6 +23,9 @@ let
 
   defaultPolicy = {
     denyUnusedCrateDependencies = true;
+    # Opt-in: scans each unit's objects for functions that can reach a panic.
+    # Off by default because it is a best-effort gate, not a soundness proof.
+    denyPanics = false;
     cargoAudit = {
       enable = false;
       db = defaultRustsecAdvisoryDb;
@@ -63,6 +66,7 @@ let
     {
       denyUnusedCrateDependencies =
         rawPolicy.denyUnusedCrateDependencies or defaultPolicy.denyUnusedCrateDependencies;
+      denyPanics = rawPolicy.denyPanics or defaultPolicy.denyPanics;
       cargoAudit = {
         enable = cargoAudit.enable or defaultPolicy.cargoAudit.enable;
         db = cargoAudit.db or defaultPolicy.cargoAudit.db;

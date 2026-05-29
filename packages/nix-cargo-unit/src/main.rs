@@ -139,6 +139,18 @@ fn render(args: RenderArgs) -> color_eyre::Result<()> {
 fn scan_panics(args: ScanPanicsArgs) -> color_eyre::Result<()> {
     let ScanPanicsArgs { crate_names, paths } = args;
     let artifacts = panic_scan::collect_artifacts(&paths)?;
+    // Fail closed: a panic gate that finds nothing to inspect must error, not
+    // report success, or a wrong path or empty object set would pass open.
+    if artifacts.is_empty() {
+        color_eyre::eyre::bail!(
+            "cargo-unit panic-freedom: no .rlib or .o artifacts found under {}",
+            paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     let crate_tokens: Vec<String> = crate_names
         .iter()
         .map(|name| panic_scan::crate_token(name))

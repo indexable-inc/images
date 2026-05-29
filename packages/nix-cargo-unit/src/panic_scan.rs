@@ -91,14 +91,28 @@ fn scan_bytes(
         for member in archive.members() {
             let member = member.wrap_err("reading rlib archive member")?;
             let member_data = member.data(data).wrap_err("reading rlib member data")?;
-            if let Ok(object) = object::File::parse(member_data) {
+            // Archives carry non-object members (rmeta, symbol index); those are
+            // not objects and are skipped, but a member that claims to be an
+            // object and fails to parse is a real error.
+            if is_object_member(member.name()) {
+                let object = object::File::parse(member_data)
+                    .wrap_err("parsing rlib object member for panic scan")?;
                 scan_object(&object, crate_tokens, findings);
             }
         }
-    } else if let Ok(object) = object::File::parse(data) {
-        scan_object(&object, crate_tokens, findings);
+        return Ok(());
     }
+    // A collected artifact that is neither an archive nor a parseable object is
+    // a corrupt or unsupported input. Fail closed: the panic gate must not pass
+    // just because it could not read what it was handed.
+    let object = object::File::parse(data)
+        .wrap_err("artifact is neither an rlib archive nor a parseable object")?;
+    scan_object(&object, crate_tokens, findings);
     Ok(())
+}
+
+fn is_object_member(name: &[u8]) -> bool {
+    name.ends_with(b".o") || name.ends_with(b".rcgu.o")
 }
 
 struct FunctionRange {
@@ -174,11 +188,9 @@ fn containing_function(functions: &[FunctionRange], offset: u64) -> Option<&Func
         .find(|function| offset >= function.start && offset < function.end)
 }
 
-// Curated set of std panic sinks, matched as length-prefixed path fragments so
-// the same needles hit legacy (`_ZN4core9panicking...`) and v0
-// (`_RNvNt...4core9panicking...`) mangling and ignore the Mach-O leading
-// underscore. Requiring the `4core` / `3std` prefix avoids matching an
-// unrelated user module literally named `panicking`.
+// Curated set of std panic sinks, matched as length-prefixed path fragments
+// rooted at the `core` / `std` crate so the same needles hit legacy
+// (`_ZN4core9panicking...`) and v0 (`_RNvNt...4core9panicking...`) mangling.
 //
 // `core::panicking::*` is the leaf for `panic!`, formatting panics, bounds
 // checks, overflow, and asserts. `unwrap`/`expect` reach a panic through the
@@ -196,7 +208,21 @@ const PANIC_SINKS: &[&str] = &[
 ];
 
 fn is_panic_entrypoint(symbol: &str) -> bool {
-    PANIC_SINKS.iter().any(|sink| symbol.contains(sink))
+    PANIC_SINKS
+        .iter()
+        .any(|sink| at_crate_boundary(symbol, sink))
+}
+
+// `core` / `std` only count as a panic sink when they are the crate root, not a
+// nested user module. In v0 mangling the crate name follows the `Cs<id>_`
+// disambiguator, so it is preceded by `_`; in legacy mangling the crate is the
+// first path component after `_ZN`. A user path like `crate::core::panicking`
+// puts `4core` after a crate-name character instead, so it never matches.
+fn at_crate_boundary(symbol: &str, sink: &str) -> bool {
+    symbol.match_indices(sink).any(|(index, _)| {
+        let prefix = &symbol[..index];
+        prefix.ends_with('_') || prefix.ends_with("ZN")
+    })
 }
 
 // A function belongs to the workspace if its mangled symbol carries one of the
@@ -394,6 +420,24 @@ mod tests {
             Some("_ZN7n_hello9panicking6record17habcdefgEhh"),
         );
         assert!(scan(&bytes, &[]).is_empty());
+    }
+
+    #[test]
+    fn nested_user_core_module_is_not_a_panic_sink() {
+        // `crate::core::panicking::helper` mangles with the user crate as root,
+        // so `4core` sits after a crate-name character, not the crate boundary.
+        let bytes = object_calling(
+            "_ZN7n_hello3run17habcdefgEhh",
+            Some("_ZN7n_hello4core9panicking6helper17habcdefgEhh"),
+        );
+        assert!(scan(&bytes, &[]).is_empty());
+    }
+
+    #[test]
+    fn unparseable_artifact_is_an_error() {
+        // Fail closed: a corrupt or unsupported artifact must not scan as clean.
+        let mut findings = BTreeSet::new();
+        assert!(scan_bytes(b"not an object or archive", &[], &mut findings).is_err());
     }
 
     #[test]
