@@ -117,9 +117,10 @@ async fn read_producer(hub: &Hub, path: &Path) {
         Ok(stream) => stream,
         Err(error) => {
             // A bound, listening socket accepts immediately, so a refusal means
-            // the file outlived its producer. Reap it; a missing file is already
-            // gone and needs nothing.
-            if error.kind() == std::io::ErrorKind::ConnectionRefused {
+            // the socket file outlived its producer. Reap it, but only if it is
+            // actually a socket: a regular `*.sock` file the user dropped in the
+            // watched directory also refuses, and must not be deleted.
+            if error.kind() == std::io::ErrorKind::ConnectionRefused && is_socket(path) {
                 let _ = std::fs::remove_file(path);
             }
             return;
@@ -143,4 +144,11 @@ async fn read_producer(hub: &Hub, path: &Path) {
     if let Some(id) = producer_id {
         hub.remove_scope(&id);
     }
+}
+
+/// Whether `path` is a unix socket, used to avoid reaping a regular file that a
+/// user happened to name `*.sock` in the watched directory.
+fn is_socket(path: &Path) -> bool {
+    use std::os::unix::fs::FileTypeExt as _;
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_socket())
 }
