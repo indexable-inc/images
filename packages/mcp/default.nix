@@ -41,6 +41,29 @@ let
 
         	        mkdir -p "$out"
         	      '';
+  sessionVenv =
+    pkgs.runCommand "ix-mcp-session-venv"
+      {
+        nativeBuildInputs = [ package ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+
+        # A session must activate its venv for child processes so an in-session
+        # `pip` resolves the per-session venv rather than the host. Without
+        # activation, `shutil.which("pip")` misses the venv bin on PATH and
+        # returns the host pip or None.
+        ix-mcp eval '__import__("shutil").which("pip")' >stdout 2>stderr
+        if ! grep -q '/[.]venv/bin/pip' stdout; then
+          echo "in-session pip did not resolve to the venv:" >&2
+          cat stdout >&2
+          exit 1
+        fi
+
+        mkdir -p "$out"
+      '';
 in
 package.overrideAttrs (old: {
   passthru =
@@ -49,7 +72,7 @@ package.overrideAttrs (old: {
     // {
       inherit unwrapped;
       tests = (unwrapped.passthru.tests or { }) // {
-        inherit replDefault;
+        inherit replDefault sessionVenv;
       };
     };
 })

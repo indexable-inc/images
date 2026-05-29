@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    ffi::OsString,
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -238,21 +239,24 @@ struct PythonSession {
 
 impl PythonSession {
     /// Start a session on the pinned interpreter. Each session gets its own
-    /// writable venv so an agent can `pip install` into it without mutating the
-    /// read-only store interpreter.
+    /// writable venv, activated for the worker and the children it spawns, so
+    /// an agent can `pip install` into it without mutating the read-only store
+    /// interpreter.
     fn start(id: String, cwd: Option<PathBuf>) -> Result<Self> {
         let temp_dir = session_temp_dir(&id)?;
-        let venv_python = create_venv(temp_dir.path())?;
-        Self::spawn(id, temp_dir, vec![venv_python], cwd)
+        let venv_dir = create_venv(temp_dir.path())?;
+        let python = venv_dir.join("bin/python").display().to_string();
+        let env = venv_env(&venv_dir)?;
+        Self::spawn(id, temp_dir, vec![python], cwd, env)
     }
 
-    /// Spawn a worker against an explicit command, skipping the venv build.
-    /// Tests use this to inject a bare interpreter or a fake worker; production
-    /// always pins the interpreter through `start`.
+    /// Spawn a worker against an explicit command, skipping the venv build and
+    /// activation. Tests use this to inject a bare interpreter or a fake worker;
+    /// production always pins the interpreter through `start`.
     #[cfg(test)]
     fn spawn_command(id: String, command: Vec<String>, cwd: Option<PathBuf>) -> Result<Self> {
         let temp_dir = session_temp_dir(&id)?;
-        Self::spawn(id, temp_dir, command, cwd)
+        Self::spawn(id, temp_dir, command, cwd, Vec::new())
     }
 
     fn spawn(
@@ -260,6 +264,7 @@ impl PythonSession {
         temp_dir: TempDir,
         command: Vec<String>,
         cwd: Option<PathBuf>,
+        env: Vec<(OsString, OsString)>,
     ) -> Result<Self> {
         let worker_path = temp_dir.path().join("worker.py");
         fs::write(&worker_path, WORKER_SOURCE).context("failed to write Python worker")?;
@@ -271,6 +276,7 @@ impl PythonSession {
             .args(&command[1..])
             .arg(&worker_path)
             .current_dir(cwd.as_deref().unwrap_or_else(|| Path::new(".")))
+            .envs(env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Worker stderr is not part of the JSON protocol. Normal Python
@@ -367,13 +373,13 @@ fn session_temp_dir(id: &str) -> Result<TempDir> {
         .context("failed to create Python session directory")
 }
 
-/// Build a writable venv from the pinned interpreter and return its `python`.
+/// Build a writable venv from the pinned interpreter and return its directory.
 /// The interpreter is fixed at `IX_MCP_PYTHON`, which the Nix wrapper sets. A
 /// missing pin is a hard error rather than an ambient-`python3` fallback, so a
 /// wrapper regression fails loudly instead of silently running whatever is on
 /// `PATH`. The venv gives each session a writable site-packages with no
 /// per-call interpreter choice.
-fn create_venv(temp_dir: &Path) -> Result<String> {
+fn create_venv(temp_dir: &Path) -> Result<PathBuf> {
     let python = std::env::var("IX_MCP_PYTHON")
         .context("IX_MCP_PYTHON is unset; run ix-mcp via its Nix wrapper, which pins the interpreter")?;
     let venv_dir = temp_dir.join(".venv");
@@ -385,7 +391,29 @@ fn create_venv(temp_dir: &Path) -> Result<String> {
     if !status.success() {
         bail!("Python environment command exited with {status}");
     }
-    Ok(venv_dir.join("bin/python").display().to_string())
+    Ok(venv_dir)
+}
+
+/// Activation environment for a child running in `venv_dir`: point
+/// `VIRTUAL_ENV` at the venv and prepend its `bin` to `PATH`. Running the
+/// venv's own `python` already resolves the venv site-packages, but a child the
+/// session spawns (an in-session `pip`, or any `subprocess` that finds a tool
+/// by name) would otherwise hit the host `PATH`. This makes the writable-venv
+/// promise hold for those too.
+fn venv_env(venv_dir: &Path) -> Result<Vec<(OsString, OsString)>> {
+    let bin = venv_dir.join("bin");
+    let path = match std::env::var_os("PATH") {
+        Some(existing) => {
+            let mut entries = vec![bin];
+            entries.extend(std::env::split_paths(&existing));
+            std::env::join_paths(entries).context("failed to compose venv PATH")?
+        }
+        None => bin.into_os_string(),
+    };
+    Ok(vec![
+        ("VIRTUAL_ENV".into(), venv_dir.as_os_str().to_owned()),
+        ("PATH".into(), path),
+    ])
 }
 
 fn format_worker_response(response: &Value) -> String {
@@ -442,14 +470,18 @@ async fn main() -> Result<ExitCode> {
                 .prefix("ix-mcp-python-repl-")
                 .tempdir()
                 .context("failed to create Python REPL directory")?;
-            // The venv python lives inside temp_dir, so keep temp_dir bound
-            // until the interactive process exits.
-            let venv_python = create_venv(temp_dir.path())?;
+            // The venv lives inside temp_dir, so keep temp_dir bound until the
+            // interactive process exits.
+            let venv_dir = create_venv(temp_dir.path())?;
+            let venv_python = venv_dir.join("bin/python");
             let status = Command::new(&venv_python)
                 .arg("-i")
                 .current_dir(cli.cwd.as_deref().unwrap_or_else(|| Path::new(".")))
+                .envs(venv_env(&venv_dir)?)
                 .status()
-                .with_context(|| format!("failed to start Python REPL command {venv_python}"))?;
+                .with_context(|| {
+                    format!("failed to start Python REPL command {}", venv_python.display())
+                })?;
             let code = status
                 .code()
                 .and_then(|code| u8::try_from(code).ok())
