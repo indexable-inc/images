@@ -29,7 +29,7 @@ def read_packet(sock: socket.socket) -> tuple[int, int, str]:
     header = sock.recv(4)
     if len(header) != 4:
         raise RuntimeError("short RCON length header")
-    (length,) = cast(tuple[int], struct.unpack("<i", header))
+    (length,) = struct.unpack("<i", header)
     body = b""
     while len(body) < length:
         chunk = sock.recv(length - len(body))
