@@ -271,6 +271,10 @@ impl Dashboard {
 /// `host` must be an IP literal (a hostname is not resolved). Pass `port = 0`
 /// for an ephemeral port, read back from `Dashboard.url`. `pollMs` is the
 /// viewport sampling interval in milliseconds.
+// napi's async-export macro generates a `NapiRefContainer` whose layout ends in
+// a zero-sized array; clippy::nursery's `trailing_empty_array` fires on that
+// generated type, not on our code, so allow it at the export site.
+#[allow(clippy::trailing_empty_array)]
 #[napi]
 pub async fn serve(
     host: Option<String>,

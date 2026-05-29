@@ -761,7 +761,7 @@ def run(argv: list[str]) -> int:
         stderr_fd=stdio_fd("stderr", 2),
         stdout_fd=stdio_fd("stdout", 1),
     )
-    terminal = {
+    terminal: dict[str, object] = {
         "columns": columns,
         "rows": rows,
         "started_epoch_seconds": int(started.timestamp()),

@@ -1,17 +1,12 @@
-{
-  lib,
-  errors,
-  basedpyrightTypeCheckingModes,
-}:
+{ lib }:
 let
   /**
     Package a Python entrypoint as a standalone executable.
 
     Wraps `src` in a launcher script that prepends `runtimeInputs` to PATH
     and runs the file under `python`. When `check` is true (default), the
-    derivation also runs `basedpyright` over `src` in `standard` mode during
-    the build, so type regressions fail the build instead of surfacing at
-    runtime.
+    derivation also runs `ty` over `src` during the build, so type regressions
+    fail the build instead of surfacing at runtime.
 
     Arguments:
     - `name`: derivation name and `/bin/<name>` executable.
@@ -19,8 +14,8 @@ let
     - `args`: literal argv prefix prepended to user args at runtime.
     - `runtimeInputs`: extra packages prepended to PATH at runtime.
     - `python`: Python interpreter package. Defaults to `pkgs.python314`.
-    - `check`, `typeCheckingMode`, `pythonPlatform`: basedpyright knobs.
-    - `extraPaths`: extra import roots for basedpyright.
+    - `check`, `pythonPlatform`: ty knobs.
+    - `extraPaths`: extra import roots for ty.
     - `meta`: standard derivation meta, with `mainProgram` defaulted.
   */
   writePythonApplication =
@@ -32,8 +27,7 @@ let
       runtimeInputs ? [ ],
       python ? pkgs.python314,
       check ? true,
-      typeCheckingMode ? "standard",
-      pythonPlatform ? "Linux",
+      pythonPlatform ? "linux",
       extraPaths ? [ "${python}/${python.sitePackages}" ],
       meta ? { },
     }:
@@ -41,22 +35,25 @@ let
       runtimePath = lib.makeBinPath ([ python ] ++ runtimeInputs);
       srcPath = src;
       argv = builtins.toJSON ([ "${srcPath}" ] ++ args);
-      checkedTypeCheckingMode = errors.assertEnum {
-        name = "writePythonApplication.typeCheckingMode";
-        value = typeCheckingMode;
-        valid = basedpyrightTypeCheckingModes;
-      };
-      # `"${src}"` (not `builtins.toString src`) so the generated JSON
-      # carries Nix string context for the source derivation; otherwise
-      # the file references a store path with no recorded dependency
-      # and Nix prints a "without a proper context" eval warning on
-      # every consumer evaluation.
-      pyrightConfig = (pkgs.formats.json { }).generate "basedpyright-${name}.json" {
-        include = [ "${src}" ];
-        inherit extraPaths pythonPlatform;
-        typeCheckingMode = checkedTypeCheckingMode;
-        inherit (python) pythonVersion;
-      };
+      extraSearchPathArgs = lib.concatMap (path: [
+        "--extra-search-path"
+        path
+      ]) extraPaths;
+      tyCheckArgs = [
+        "check"
+        "--python"
+        (lib.getExe python)
+        "--python-platform"
+        pythonPlatform
+        "--python-version"
+        python.pythonVersion
+        "--output-format"
+        "concise"
+        "--no-progress"
+        "--error-on-warning"
+      ]
+      ++ extraSearchPathArgs
+      ++ [ "${src}" ];
     in
     pkgs.writeTextFile {
       inherit name;
@@ -75,7 +72,7 @@ let
         runpy.run_path("${srcPath}", run_name="__main__")
       '';
       checkPhase = lib.optionalString check ''
-        ${lib.getExe pkgs.basedpyright} --project ${pyrightConfig} --level warning --warnings ${src}
+        ${lib.getExe pkgs.ty} ${lib.escapeShellArgs tyCheckArgs}
       '';
       meta = meta // {
         mainProgram = meta.mainProgram or name;
