@@ -79,6 +79,19 @@ jobs:
             --no-link \
             --option accept-flake-config true
 
+      # `nix flake check` below evaluates every package output, and the `site`
+      # package builds via nixpkgs import-npm-lock, which reads its
+      # `package.json` through import-from-derivation. IFD must realize the
+      # filtered-source derivation it reads, but `--no-build` refuses to realize
+      # anything unless it is already in the store. The GitHub-hosted runner only
+      # got away with `--no-build` because its restored store cache happened to
+      # hold that source; a self-hosted runner with a cold-for-this-source store
+      # fails the schema check with "path is not valid". Realize the source
+      # explicitly here (cheap: it substitutes from the warm host caches) so the
+      # schema check reuses it instead of trying to build under `--no-build`.
+      - name: Realize IFD-backed sources for the schema check
+        run: nix build .#site --no-link
+
       # Schema/eval gate for the whole flake (packages, modules, formatter, ...),
       # broader than the checks nix-fast-build built. `--no-build` keeps it to
       # evaluation, so it is the cheap invariant guard rather than a second
