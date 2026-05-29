@@ -8,20 +8,24 @@
 //! containing function without disassembling instructions, so the same logic
 //! covers ELF and Mach-O.
 //!
-//! This operates on relocatable objects, which is why it targets library rlibs:
-//! a fully linked binary has its panic calls resolved to direct branches with
-//! no relocation left to read, and recovering them needs disassembly. Scanning
-//! linked bin/test units is deliberately out of scope here.
+//! This operates on relocatable objects (the `--emit obj` output of each unit),
+//! not on linked binaries: a linked binary resolves its panic calls to direct
+//! branches with no relocation left to read, which would need disassembly.
+//! Generic functions are codegened where they are monomorphized, so a generic
+//! that carries no relocation in its defining library's objects does carry one
+//! in the bin or test object that instantiates it. Scanning every unit's
+//! objects and scoping findings to the workspace crate set therefore attributes
+//! a monomorphized library generic back to its defining crate.
 //!
 //! This is a best-effort detector, not a soundness proof. A clean result means
-//! "no detected panic call from this crate's monomorphic code," not "cannot
-//! panic." Two classes slip through by construction:
+//! "no detected panic call from workspace code reachable through the scanned
+//! units," not "cannot panic." Two classes slip through by construction:
 //!
-//! - Uninstantiated generics. A generic function is stored as metadata in the
-//!   defining rlib and only codegened where a downstream crate monomorphizes
-//!   it, so `pub fn first<T>(xs: &[T]) -> &T { &xs[0] }` carries no relocation
-//!   here even though it can panic. Catching it requires analysis at the linked
-//!   binary where the instantiation lives.
+//! - Generics no workspace unit instantiates. A public generic that no bin,
+//!   test, or bench in the workspace ever monomorphizes is never codegened, so
+//!   it carries no relocation anywhere here. It is also not reachable from the
+//!   workspace's own entrypoints, but an external downstream consumer could
+//!   still hit a panic in it.
 //! - Panics through uncatalogued helpers. [`PANIC_SINKS`] lists the common std
 //!   sinks (`core::panicking`, `unwrap_failed`, `expect_failed`); a panic that
 //!   routes through some other std/alloc cold path is missed until its symbol
@@ -50,15 +54,19 @@ pub struct PanicFinding {
 
 /// Scans every artifact path for functions that reach panic machinery.
 ///
-/// When `crate_token` is `Some`, only functions whose mangled symbol carries
-/// that crate's length-prefixed name component are reported, so the gate covers
-/// the unit's own code rather than monomorphized helpers from its dependencies.
-pub fn scan_paths(paths: &[PathBuf], crate_token: Option<&str>) -> Result<Vec<PanicFinding>> {
+/// When `crate_tokens` is non-empty, a finding is kept only if the function's
+/// mangled symbol carries one of those crate tokens, or if it is unmangled (an
+/// FFI export defined here). This is the set of workspace crate tokens, so a
+/// library generic monomorphized inside a bin or test object is attributed to
+/// its defining workspace crate and caught, while third-party and std
+/// instantiations in the same object are ignored. An empty slice disables the
+/// filter and reports every panic-reaching function.
+pub fn scan_paths(paths: &[PathBuf], crate_tokens: &[String]) -> Result<Vec<PanicFinding>> {
     let mut findings = BTreeSet::new();
     for path in paths {
         let data = fs::read(path)
             .wrap_err_with(|| format!("reading artifact {} for panic scan", path.display()))?;
-        scan_bytes(&data, crate_token, &mut findings)
+        scan_bytes(&data, crate_tokens, &mut findings)
             .wrap_err_with(|| format!("scanning artifact {} for panic calls", path.display()))?;
     }
     Ok(findings.into_iter().collect())
@@ -73,7 +81,7 @@ pub fn crate_token(crate_name: &str) -> String {
 
 fn scan_bytes(
     data: &[u8],
-    crate_token: Option<&str>,
+    crate_tokens: &[String],
     findings: &mut BTreeSet<PanicFinding>,
 ) -> Result<()> {
     // An rlib is an `ar` archive of object members; a bare `.o` is parsed
@@ -84,11 +92,11 @@ fn scan_bytes(
             let member = member.wrap_err("reading rlib archive member")?;
             let member_data = member.data(data).wrap_err("reading rlib member data")?;
             if let Ok(object) = object::File::parse(member_data) {
-                scan_object(&object, crate_token, findings);
+                scan_object(&object, crate_tokens, findings);
             }
         }
     } else if let Ok(object) = object::File::parse(data) {
-        scan_object(&object, crate_token, findings);
+        scan_object(&object, crate_tokens, findings);
     }
     Ok(())
 }
@@ -101,7 +109,7 @@ struct FunctionRange {
 
 fn scan_object(
     object: &object::File,
-    crate_token: Option<&str>,
+    crate_tokens: &[String],
     findings: &mut BTreeSet<PanicFinding>,
 ) {
     for section in object.sections() {
@@ -120,7 +128,7 @@ fn scan_object(
                 continue;
             }
             if let Some(function) = containing_function(&functions, offset)
-                && crate_token.is_none_or(|token| belongs_to_crate(&function.name, token))
+                && belongs_to_workspace(&function.name, crate_tokens)
             {
                 findings.insert(PanicFinding {
                     function: function.name.clone(),
@@ -191,12 +199,15 @@ fn is_panic_entrypoint(symbol: &str) -> bool {
     PANIC_SINKS.iter().any(|sink| symbol.contains(sink))
 }
 
-// A function symbol is the unit's own code if it carries the crate's mangled
-// token, or if it is not Rust-mangled at all: an `#[unsafe(no_mangle)]` export
-// keeps a plain C name with no crate token, yet it is still defined in this
-// crate's object, so excluding it would hide panics in FFI entrypoints.
-fn belongs_to_crate(function: &str, crate_token: &str) -> bool {
-    function.contains(crate_token) || !is_rust_mangled(function)
+// A function belongs to the workspace if its mangled symbol carries one of the
+// workspace crate tokens, or if it is not Rust-mangled at all: an
+// `#[unsafe(no_mangle)]` export keeps a plain C name with no crate token, yet it
+// is still defined in this crate's object, so excluding it would hide panics in
+// FFI entrypoints. An empty token slice disables filtering.
+fn belongs_to_workspace(function: &str, crate_tokens: &[String]) -> bool {
+    crate_tokens.is_empty()
+        || !is_rust_mangled(function)
+        || crate_tokens.iter().any(|token| function.contains(token))
 }
 
 fn is_rust_mangled(symbol: &str) -> bool {
@@ -207,22 +218,23 @@ fn is_rust_mangled(symbol: &str) -> bool {
     stripped.starts_with("ZN") || stripped.starts_with('R')
 }
 
-/// Collects `*.rlib` artifacts under each input path. A path that is itself a
-/// file is taken as-is so callers can pass exact artifacts.
-pub fn collect_rlibs(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut rlibs = Vec::new();
+/// Collects scannable artifacts (`*.rlib` archives and `*.o` objects) under each
+/// input path. A path that is itself a file is taken as-is so callers can pass
+/// exact artifacts.
+pub fn collect_artifacts(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut artifacts = Vec::new();
     for root in roots {
-        collect_rlibs_into(root, &mut rlibs)?;
+        collect_artifacts_into(root, &mut artifacts)?;
     }
-    rlibs.sort();
-    Ok(rlibs)
+    artifacts.sort();
+    Ok(artifacts)
 }
 
-fn collect_rlibs_into(root: &Path, rlibs: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_artifacts_into(root: &Path, artifacts: &mut Vec<PathBuf>) -> Result<()> {
     let metadata = fs::symlink_metadata(root)
         .wrap_err_with(|| format!("inspecting panic-scan path {}", root.display()))?;
     if metadata.is_file() {
-        rlibs.push(root.to_path_buf());
+        artifacts.push(root.to_path_buf());
         return Ok(());
     }
     if metadata.is_dir() {
@@ -232,8 +244,12 @@ fn collect_rlibs_into(root: &Path, rlibs: &mut Vec<PathBuf>) -> Result<()> {
             let entry =
                 entry.wrap_err_with(|| format!("reading entry under {}", root.display()))?;
             let path = entry.path();
-            if path.is_dir() || path.extension().is_some_and(|ext| ext == "rlib") {
-                collect_rlibs_into(&path, rlibs)?;
+            if path.is_dir()
+                || path
+                    .extension()
+                    .is_some_and(|ext| ext == "rlib" || ext == "o")
+            {
+                collect_artifacts_into(&path, artifacts)?;
             }
         }
     }
@@ -303,16 +319,19 @@ mod tests {
         object_calling(function, callee)
     }
 
-    fn scan(data: &[u8], crate_token: Option<&str>) -> Vec<PanicFinding> {
+    // Scans with the given crate names as the workspace filter (empty = no
+    // filter), mirroring how the renderer passes the workspace crate set.
+    fn scan(data: &[u8], crate_names: &[&str]) -> Vec<PanicFinding> {
+        let tokens: Vec<String> = crate_names.iter().map(|name| crate_token(name)).collect();
         let mut findings = BTreeSet::new();
-        scan_bytes(data, crate_token, &mut findings).expect("scan fixture");
+        scan_bytes(data, &tokens, &mut findings).expect("scan fixture");
         findings.into_iter().collect()
     }
 
     #[test]
     fn flags_function_that_calls_panic_entrypoint() {
         let bytes = object_with_function("_ZN7n_hello3get17habcdefgEhh", true);
-        let findings = scan(&bytes, None);
+        let findings = scan(&bytes, &[]);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].function, "_ZN7n_hello3get17habcdefgEhh");
         assert!(findings[0].panic_entrypoint.contains("panic_bounds_check"));
@@ -321,16 +340,29 @@ mod tests {
     #[test]
     fn clean_function_produces_no_findings() {
         let bytes = object_with_function("_ZN7n_hello5clean17habcdefgEhh", false);
-        assert!(scan(&bytes, None).is_empty());
+        assert!(scan(&bytes, &[]).is_empty());
     }
 
     #[test]
-    fn crate_filter_excludes_foreign_functions() {
-        // A panic call lives in a `serde`-named function. Scoping the scan to
-        // the `n_hello` crate token must drop it; the matching token keeps it.
+    fn workspace_filter_excludes_foreign_functions() {
+        // A panic call lives in a `serde`-named function. A workspace set that
+        // does not include serde must drop it; one that does keeps it.
         let bytes = object_with_function("_ZN5serde2de17habcdefgEhh", true);
-        assert!(scan(&bytes, Some(&crate_token("n-hello"))).is_empty());
-        assert_eq!(scan(&bytes, Some(&crate_token("serde"))).len(), 1);
+        assert!(scan(&bytes, &["n-hello"]).is_empty());
+        assert_eq!(scan(&bytes, &["serde"]).len(), 1);
+    }
+
+    #[test]
+    fn workspace_set_catches_library_generic_in_consumer_object() {
+        // A library generic monomorphized in a consumer object keeps the
+        // library's crate token. Scanning the consumer with only the consumer
+        // crate misses it; the full workspace set catches it.
+        let bytes = object_calling(
+            "_ZN6thelib5first17habcdefgEhh",
+            Some("_ZN4core9panicking18panic_bounds_check17habcdefgEhh"),
+        );
+        assert!(scan(&bytes, &["app"]).is_empty());
+        assert_eq!(scan(&bytes, &["app", "thelib"]).len(), 1);
     }
 
     #[test]
@@ -349,7 +381,7 @@ mod tests {
             "_ZN4core6option13expect_failed17habcdefgEhh",
         ] {
             let bytes = object_calling("_ZN7n_hello3run17habcdefgEhh", Some(callee));
-            assert_eq!(scan(&bytes, None).len(), 1, "missed cold path {callee}");
+            assert_eq!(scan(&bytes, &[]).len(), 1, "missed cold path {callee}");
         }
     }
 
@@ -361,14 +393,14 @@ mod tests {
             "_ZN7n_hello3run17habcdefgEhh",
             Some("_ZN7n_hello9panicking6record17habcdefgEhh"),
         );
-        assert!(scan(&bytes, None).is_empty());
+        assert!(scan(&bytes, &[]).is_empty());
     }
 
     #[test]
-    fn unmangled_export_is_scanned_under_crate_filter() {
-        // An `#[unsafe(no_mangle)]` export carries no crate token; scoping to a
-        // crate must still scan it, since it is defined in this crate's object.
+    fn unmangled_export_is_scanned_under_workspace_filter() {
+        // An `#[unsafe(no_mangle)]` export carries no crate token; a workspace
+        // filter must still scan it, since it is defined in this crate's object.
         let bytes = object_calling("ffi_entry", Some("_ZN4core9panicking5panic17habcdefgEhh"));
-        assert_eq!(scan(&bytes, Some(&crate_token("n-hello"))).len(), 1);
+        assert_eq!(scan(&bytes, &["n-hello"]).len(), 1);
     }
 }

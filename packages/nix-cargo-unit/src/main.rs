@@ -36,13 +36,15 @@ enum Command {
 
 #[derive(Debug, clap::Args)]
 struct ScanPanicsArgs {
-    /// Restrict findings to functions of this crate (Cargo target name). Other
-    /// crates' monomorphized helpers in the same artifact are ignored.
-    #[arg(long, value_name = "NAME")]
-    crate_name: Option<String>,
+    /// Workspace crate (Cargo target name) whose functions findings are scoped
+    /// to. Repeat for the full workspace set so a library generic monomorphized
+    /// in another unit's object is still attributed. Omit to report every
+    /// panic-reaching function.
+    #[arg(long = "crate-name", value_name = "NAME")]
+    crate_names: Vec<String>,
 
-    /// Rlib artifacts or directories to scan. Directories are searched for
-    /// `*.rlib` recursively.
+    /// Rlib or object artifacts, or directories to scan. Directories are
+    /// searched for `*.rlib` and `*.o` recursively.
     #[arg(required = true, value_name = "PATH")]
     paths: Vec<PathBuf>,
 }
@@ -135,18 +137,23 @@ fn render(args: RenderArgs) -> color_eyre::Result<()> {
 }
 
 fn scan_panics(args: ScanPanicsArgs) -> color_eyre::Result<()> {
-    let ScanPanicsArgs { crate_name, paths } = args;
-    let rlibs = panic_scan::collect_rlibs(&paths)?;
-    let crate_token = crate_name.as_deref().map(panic_scan::crate_token);
-    let findings = panic_scan::scan_paths(&rlibs, crate_token.as_deref())?;
+    let ScanPanicsArgs { crate_names, paths } = args;
+    let artifacts = panic_scan::collect_artifacts(&paths)?;
+    let crate_tokens: Vec<String> = crate_names
+        .iter()
+        .map(|name| panic_scan::crate_token(name))
+        .collect();
+    let findings = panic_scan::scan_paths(&artifacts, &crate_tokens)?;
 
     if findings.is_empty() {
         return Ok(());
     }
 
-    let scope = crate_name
-        .as_deref()
-        .map_or_else(String::new, |name| format!(" in {name}"));
+    let scope = if crate_names.is_empty() {
+        String::new()
+    } else {
+        format!(" in {}", crate_names.join(", "))
+    };
     eprintln!(
         "error: cargo-unit panic-freedom: {} function(s){scope} can reach panic machinery",
         findings.len()

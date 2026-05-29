@@ -149,6 +149,9 @@ let
   clippyUnits = rec {
 {{ clippy_unit_entries }}  };
 
+  panicObjectUnits = rec {
+{{ panic_object_unit_entries }}  };
+
   # Every test target in the graph, keyed the same way `tests.<name>` is.
   # The shared manifest derivation depends on every binary listed here.
   testTargets = [
