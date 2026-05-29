@@ -27,11 +27,12 @@ jobs:
   # this job is it, and it fails iff a check fails to build or the flake stops
   # evaluating.
   flake-check:
-    # TODO(human): set the org's larger x86_64-linux runner label. A cache-cold
-    # run (e.g. a flake.lock bump) recompiles the whole znver5 closure and is
-    # CPU-bound, so more vCPUs shorten the long pole; nix-fast-build and
-    # `max-jobs = auto` scale to whatever core count the label provides.
-    runs-on: LARGER_RUNNER_LABEL_TODO
+    # Standard GitHub-hosted runner. A cache-cold run (e.g. a flake.lock bump)
+    # recompiles the whole znver5 closure and is CPU-bound, so if the org
+    # provisions a larger x86_64-linux runner, swapping its label in here gives
+    # the cold path more cores; nix-fast-build and `max-jobs = auto` scale to
+    # whatever core count the label provides.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
