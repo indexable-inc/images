@@ -18,9 +18,20 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check-group:
-    name: check / all checks and schema
-    runs-on: ubuntu-latest
+  # One job on one runner, on purpose. Every check shares a single
+  # znver5-tuned nixpkgs base (see the gccarch-znver5 note below). Fanning the
+  # checks across several ephemeral runners would rebuild that shared base on
+  # each one whenever the cache is cold (a thundering herd), so we keep one
+  # runner and get parallelism *inside* it from nix-fast-build plus
+  # `max-jobs = auto`. Branch protection requires a status named `flake-check`;
+  # this job is it, and it fails iff a check fails to build or the flake stops
+  # evaluating.
+  flake-check:
+    # TODO(human): set the org's larger x86_64-linux runner label. A cache-cold
+    # run (e.g. a flake.lock bump) recompiles the whole znver5 closure and is
+    # CPU-bound, so more vCPUs shorten the long pole; nix-fast-build and
+    # `max-jobs = auto` scale to whatever core count the label provides.
+    runs-on: LARGER_RUNNER_LABEL_TODO
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -28,22 +39,45 @@ jobs:
       - name: Install Determinate Nix
         uses: DeterminateSystems/determinate-nix-action@bafaa638b9d5ec0e7e3ac1a7fc80453ef1fd265f # v3
         with:
-          # Every image in this repo pins `nixpkgs.hostPlatform.gcc.arch =
-          # "znver5"`, which marks each derivation as needing the
-          # `gccarch-znver5` system feature. GitHub runners don't advertise
-          # that feature by default, so flake-check fails with
-          # `missing system features ... Required features: {gccarch-znver5}`
-          # before evaluating any image.
+          # `extra-system-features = gccarch-znver5`: every image pins
+          # `nixpkgs.hostPlatform.gcc.arch = "znver5"`, which marks each
+          # derivation in the closure as needing the `gccarch-znver5` system
+          # feature. GitHub runners don't advertise it, so without this line Nix
+          # refuses the builds with `missing system features ... Required
+          # features: {gccarch-znver5}` before a single image evaluates.
           #
-          # `accept-flake-config` lets CI consume the flake's `nixConfig`
-          # (the Cachix substituter) without an interactive prompt.
+          # `accept-flake-config = true`: consume the flake's `nixConfig` (the
+          # indexable-inc Cachix substituter) without an interactive prompt, so
+          # the znver5 closure substitutes instead of recompiling.
+          #
+          # `max-jobs = auto` / `cores = 0`: let the daemon run one build per
+          # core and each build use every core, so nix-fast-build saturates the
+          # larger runner.
           extra-conf: |
             extra-system-features = gccarch-znver5
             accept-flake-config = true
+            max-jobs = auto
+            cores = 0
 
-      # Push-event jobs from main and release tags publish store paths to
-      # Cachix. Pull requests already consume the public substituter through
-      # the flake's accepted nixConfig, so they skip this writer setup.
+      # Restore the prior /nix/store so the warm path skips re-fetching the
+      # znver5 base from Cachix on every run. The key tracks `flake.lock`: the
+      # closure only churns when an input moves. The `nix-${{ runner.os }}-`
+      # prefix lets a flake.lock bump still restore the previous lock's store as
+      # a warm base (shared compiled paths survive the bump). The post-job save
+      # (success only) trims the store to `gc-max-store-size-linux` so the
+      # compressed cache stays under GitHub's 10 GB ceiling; a cache miss just
+      # falls back to Cachix.
+      - name: Cache /nix/store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+
+      # Push-event builds from main and release tags publish store paths to
+      # Cachix. Pull requests only consume the substituter (through the accepted
+      # nixConfig above), so they skip this writer setup and never hold the
+      # token.
       - name: Set up Cachix
         if: github.event_name == 'push'
         uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
@@ -51,22 +85,27 @@ jobs:
           name: indexable-inc
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      - name: Run checks and schema
+      # nix-fast-build evaluates the checks with nix-eval-jobs (parallel) and
+      # streams each derivation into a build pool as it resolves, instead of
+      # waiting for one big linkFarm to finish evaluating the way `nix build
+      # .#checks.x86_64-linux.all` did. `--skip-cached` drops paths already in a
+      # substituter, so a warm run does almost no work; `--no-nom` keeps plain
+      # CI logs; `--no-link` avoids leaving result symlinks. It exits nonzero
+      # iff a build or eval fails, which is the gate. `--option
+      # accept-flake-config true` makes both the eval and the builds honor the
+      # flake's Cachix substituter. Pinned by commit to nix-fast-build 1.5.0.
+      - name: Build all flake checks
         run: |
-          nix build -L .#checks.x86_64-linux.all
-          nix flake check -L --no-build
+          nix run github:Mic92/nix-fast-build/7f185e0ec37b65b4730f892e0de9a831b0610f3a -- \
+            --flake ".#checks.x86_64-linux" \
+            --skip-cached \
+            --no-nom \
+            --no-link \
+            --option accept-flake-config true
 
-  flake-check:
-    needs:
-      - check-group
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require all check groups
-        env:
-          CHECK_GROUP_RESULT: ${{ needs.check-group.result }}
-        run: |
-          if [ "${CHECK_GROUP_RESULT}" != "success" ]; then
-            echo "::error::One or more check groups failed (${CHECK_GROUP_RESULT})."
-            exit 1
-          fi
+      # Schema/eval gate for the whole flake (packages, modules, formatter, ...),
+      # broader than the checks nix-fast-build built. `--no-build` keeps it to
+      # evaluation, so it is the cheap invariant guard rather than a second
+      # build pass.
+      - name: Validate flake schema
+        run: nix flake check -L --no-build
