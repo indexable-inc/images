@@ -7,3 +7,6 @@ valid:
   - 'mkOption { type = types.attrs; default = { }; example = { default = if cfg.x then "a" else "b"; }; }'
 invalid:
   - 'mkOption { type = types.str; default = if cfg.stack.enable then "0.0.0.0" else "127.0.0.1"; }'
+  # The qualified `lib.mkOption` spelling is used across the repo and must trip
+  # the rule too.
+  - 'lib.mkOption { type = types.str; default = if cfg.x then "0.0.0.0" else "127.0.0.1"; }'

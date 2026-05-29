@@ -29,8 +29,11 @@ rule:
   kind: apply_expression
   all:
     - has:
+        # Match the bare `mkOption` and the qualified `lib.mkOption` spelling
+        # (the function node is a select_expression whose text ends in
+        # `.mkOption`); both appear across the repo.
         field: function
-        regex: ^mkOption$
+        regex: (^|\.)mkOption$
     - has:
         field: argument
         has:
