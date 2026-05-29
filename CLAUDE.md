@@ -609,7 +609,9 @@ is wrong, change the manifest or generator that owns it.
 A prebuilt-binary package pins its version and per-platform hashes in a generated
 `manifest.json` read with `lib.importJSON` and refreshed by a
 `passthru.updateScript`; bump by running the updater, never by hand-editing the
-hashes. See [`packages/claude-code`](packages/claude-code) for the worked shape:
+hashes. When upstream signs its release manifest, the updater verifies that
+signature against a pinned key and fails closed before writing hashes. See
+[`packages/claude-code`](packages/claude-code) for the worked shape:
 `nix run .#claude-code.updateScript -- <version>`.
 
 Keep binary and generated artifacts near the owner that can explain and refresh
