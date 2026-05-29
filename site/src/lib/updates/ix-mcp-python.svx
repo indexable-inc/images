@@ -21,14 +21,13 @@ python_session_create  python_session_list  python_session_close
 python_eval            python_exec          python_reset
 ```
 
-By default each session boots its own venv under a temp dir using the host's `python3`. Pass `command` to `python_session_create` for a project-aware interpreter, e.g. `["uv", "run", "python"]` so the worker inherits the project's `pyproject.toml` and `uv.lock`:
+Each session boots its own writable venv under a temp dir on one pinned interpreter, so `pip install` works without mutating the read-only store python. The interpreter is fixed: there is no per-session interpreter choice. Pass `cwd` to root the session in a project directory:
 
 ```json
 {
   "name": "python_session_create",
   "arguments": {
     "session_id": "build-analysis",
-    "command": ["uv", "run", "python"],
     "cwd": "/Users/me/Projects/indexable-inc/index"
   }
 }

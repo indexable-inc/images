@@ -20,7 +20,7 @@ let
       ''
         mkdir -p $out/bin
         makeWrapper ${unwrapped}/bin/ix-mcp $out/bin/ix-mcp \
-          --set IX_MCP_DEFAULT_PYTHON ${lib.escapeShellArg (lib.getExe pkgs.python3)}
+          --set IX_MCP_PYTHON ${lib.escapeShellArg (lib.getExe pkgs.python3)}
       '';
   replDefault =
     pkgs.runCommand "ix-mcp-repl-default"

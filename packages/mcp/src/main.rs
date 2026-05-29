@@ -28,14 +28,6 @@ const WORKER_SOURCE: &str = include_str!("python_worker.py");
 #[command(name = "ix-mcp")]
 struct Cli {
     #[arg(
-        long = "python",
-        global = true,
-        allow_hyphen_values = true,
-        help = "Python command segment for CLI eval/exec/repl. Repeat for arguments, e.g. --python uv --python run --python python."
-    )]
-    python: Vec<String>,
-
-    #[arg(
         long,
         global = true,
         help = "Working directory for CLI eval/exec/repl sessions."
@@ -78,13 +70,15 @@ impl ServerHandler for McpServer {
 
 #[tool_router]
 impl McpServer {
-    #[tool(description = "Create a persistent Python session with the chosen interpreter command.")]
+    #[tool(
+        description = "Create a persistent Python session on the pinned interpreter. The interpreter is fixed; each session runs in its own writable venv so `pip install` works."
+    )]
     fn python_session_create(
         &self,
         Parameters(request): Parameters<CreateSessionRequest>,
     ) -> String {
         self.with_sessions(|sessions| {
-            sessions.create(request.session_id, request.command, request.cwd)?;
+            sessions.create(request.session_id, request.cwd)?;
             Ok("session ready".to_string())
         })
     }
@@ -139,7 +133,6 @@ impl McpServer {
 
 #[derive(Deserialize, JsonSchema)]
 struct CreateSessionRequest {
-    command: Option<Vec<String>>,
     cwd: Option<PathBuf>,
     session_id: Option<String>,
 }
@@ -175,14 +168,13 @@ impl SessionManager {
     fn create(
         &mut self,
         session_id: Option<String>,
-        command: Option<Vec<String>>,
         cwd: Option<PathBuf>,
     ) -> Result<&mut PythonSession> {
         let id = session_id.unwrap_or_else(|| uuid_like(&self.sessions));
         if self.sessions.contains_key(&id) {
             bail!("Python session {id} already exists");
         }
-        let session = PythonSession::start(id.clone(), command, cwd)?;
+        let session = PythonSession::start(id.clone(), cwd)?;
         self.sessions.insert(id.clone(), session);
         self.sessions
             .get_mut(&id)
@@ -192,7 +184,7 @@ impl SessionManager {
     fn get_or_create(&mut self, session_id: Option<&str>) -> Result<&mut PythonSession> {
         let id = session_id.unwrap_or(DEFAULT_SESSION_ID);
         if !self.sessions.contains_key(id) {
-            self.create(Some(id.to_string()), None, None)?;
+            self.create(Some(id.to_string()), None)?;
         }
         self.sessions
             .get_mut(id)
@@ -240,24 +232,38 @@ struct PythonSession {
 }
 
 impl PythonSession {
-    fn start(id: String, command: Option<Vec<String>>, cwd: Option<PathBuf>) -> Result<Self> {
-        let temp_dir = tempfile::Builder::new()
-            .prefix(&format!("ix-mcp-python-{id}-"))
-            .tempdir()
-            .context("failed to create Python session directory")?;
+    /// Start a session on the pinned interpreter. Each session gets its own
+    /// writable venv so an agent can `pip install` into it without mutating the
+    /// read-only store interpreter.
+    fn start(id: String, cwd: Option<PathBuf>) -> Result<Self> {
+        let temp_dir = session_temp_dir(&id)?;
+        let venv_python = create_venv(temp_dir.path())?;
+        Self::spawn(id, temp_dir, vec![venv_python], cwd)
+    }
+
+    /// Spawn a worker against an explicit command, skipping the venv build.
+    /// Tests use this to inject a bare interpreter or a fake worker; production
+    /// always pins the interpreter through `start`.
+    #[cfg(test)]
+    fn spawn_command(id: String, command: Vec<String>, cwd: Option<PathBuf>) -> Result<Self> {
+        let temp_dir = session_temp_dir(&id)?;
+        Self::spawn(id, temp_dir, command, cwd)
+    }
+
+    fn spawn(
+        id: String,
+        temp_dir: TempDir,
+        command: Vec<String>,
+        cwd: Option<PathBuf>,
+    ) -> Result<Self> {
         let worker_path = temp_dir.path().join("worker.py");
         fs::write(&worker_path, WORKER_SOURCE).context("failed to write Python worker")?;
 
-        let python_command = match command {
-            Some(command) => command,
-            None => create_default_environment(temp_dir.path())?,
-        };
-        if python_command.is_empty() {
+        if command.is_empty() {
             bail!("Python session command must not be empty");
         }
-
-        let mut child = Command::new(&python_command[0])
-            .args(&python_command[1..])
+        let mut child = Command::new(&command[0])
+            .args(&command[1..])
             .arg(&worker_path)
             .current_dir(cwd.as_deref().unwrap_or_else(|| Path::new(".")))
             .stdin(Stdio::piped())
@@ -267,12 +273,7 @@ impl PythonSession {
             // and block stdout responses.
             .stderr(Stdio::null())
             .spawn()
-            .with_context(|| {
-                format!(
-                    "failed to start Python command {}",
-                    python_command.join(" ")
-                )
-            })?;
+            .with_context(|| format!("failed to start Python command {}", command.join(" ")))?;
         let stdin = child
             .stdin
             .take()
@@ -284,7 +285,7 @@ impl PythonSession {
 
         let mut session = Self {
             id,
-            command: python_command,
+            command,
             cwd,
             _temp_dir: temp_dir,
             child,
@@ -354,18 +355,30 @@ struct SessionRow {
     running: bool,
 }
 
-fn create_default_environment(temp_dir: &Path) -> Result<Vec<String>> {
-    let python = std::env::var("IX_MCP_DEFAULT_PYTHON").unwrap_or_else(|_| "python3".to_string());
+fn session_temp_dir(id: &str) -> Result<TempDir> {
+    tempfile::Builder::new()
+        .prefix(&format!("ix-mcp-python-{id}-"))
+        .tempdir()
+        .context("failed to create Python session directory")
+}
+
+/// Build a writable venv from the pinned interpreter and return its `python`.
+/// The interpreter is fixed at `IX_MCP_PYTHON`, which the Nix wrapper always
+/// sets; the bare-binary fallback to `python3` on `PATH` is only for the
+/// unwrapped binary in dev and tests. The venv gives each session a writable
+/// site-packages with no per-call interpreter choice.
+fn create_venv(temp_dir: &Path) -> Result<String> {
+    let python = std::env::var("IX_MCP_PYTHON").unwrap_or_else(|_| "python3".to_string());
     let venv_dir = temp_dir.join(".venv");
     let status = Command::new(&python)
         .args(["-m", "venv"])
         .arg(&venv_dir)
         .status()
-        .with_context(|| format!("failed to create default Python environment with {python}"))?;
+        .with_context(|| format!("failed to create Python environment with {python}"))?;
     if !status.success() {
-        bail!("default Python environment command exited with {status}");
+        bail!("Python environment command exited with {status}");
     }
-    Ok(vec![venv_dir.join("bin/python").display().to_string()])
+    Ok(venv_dir.join("bin/python").display().to_string())
 }
 
 fn format_worker_response(response: &Value) -> String {
@@ -418,26 +431,18 @@ async fn main() -> Result<ExitCode> {
             service.waiting().await?;
         }
         CliCommand::Repl => {
-            let (command, _temp_dir) = if cli.python.is_empty() {
-                let temp_dir = tempfile::Builder::new()
-                    .prefix("ix-mcp-python-repl-")
-                    .tempdir()
-                    .context("failed to create Python REPL directory")?;
-                let command = create_default_environment(temp_dir.path())?;
-                // The default command points inside the venv, so keep the temp
-                // directory alive until the interactive process exits.
-                (command, Some(temp_dir))
-            } else {
-                (cli.python, None)
-            };
-            let status = Command::new(&command[0])
-                .args(&command[1..])
+            let temp_dir = tempfile::Builder::new()
+                .prefix("ix-mcp-python-repl-")
+                .tempdir()
+                .context("failed to create Python REPL directory")?;
+            // The venv python lives inside temp_dir, so keep temp_dir bound
+            // until the interactive process exits.
+            let venv_python = create_venv(temp_dir.path())?;
+            let status = Command::new(&venv_python)
                 .arg("-i")
                 .current_dir(cli.cwd.as_deref().unwrap_or_else(|| Path::new(".")))
                 .status()
-                .with_context(|| {
-                    format!("failed to start Python REPL command {}", command.join(" "))
-                })?;
+                .with_context(|| format!("failed to start Python REPL command {venv_python}"))?;
             let code = status
                 .code()
                 .and_then(|code| u8::try_from(code).ok())
@@ -446,11 +451,7 @@ async fn main() -> Result<ExitCode> {
         }
         CliCommand::Eval { expression } => {
             let mut manager = SessionManager::default();
-            let session = manager.create(
-                Some(DEFAULT_SESSION_ID.to_string()),
-                command_arg(cli.python),
-                cli.cwd,
-            )?;
+            let session = manager.create(Some(DEFAULT_SESSION_ID.to_string()), cli.cwd)?;
             println!(
                 "{}",
                 session.request("eval", json!({ "expression": expression }))?
@@ -458,23 +459,11 @@ async fn main() -> Result<ExitCode> {
         }
         CliCommand::Exec { source } => {
             let mut manager = SessionManager::default();
-            let session = manager.create(
-                Some(DEFAULT_SESSION_ID.to_string()),
-                command_arg(cli.python),
-                cli.cwd,
-            )?;
+            let session = manager.create(Some(DEFAULT_SESSION_ID.to_string()), cli.cwd)?;
             println!("{}", session.request("exec", json!({ "source": source }))?);
         }
     }
     Ok(ExitCode::SUCCESS)
-}
-
-fn command_arg(command: Vec<String>) -> Option<Vec<String>> {
-    if command.is_empty() {
-        None
-    } else {
-        Some(command)
-    }
 }
 
 #[cfg(test)]
@@ -499,9 +488,10 @@ mod tests {
 
     fn python_session(id: &str) -> Result<PythonSession> {
         // The test derivation puts `python3` on PATH via
-        // `packageTestInputs.ix-mcp` in lib/rust-workspace.nix. A bare command
-        // skips the default venv build, which the worker does not need.
-        PythonSession::start(id.to_string(), Some(vec!["python3".to_string()]), None)
+        // `packageTestInputs.ix-mcp` in lib/rust-workspace.nix. `spawn_command`
+        // runs the worker directly, skipping the venv build the worker does not
+        // need.
+        PythonSession::spawn_command(id.to_string(), vec!["python3".to_string()], None)
     }
 
     #[test]
@@ -552,7 +542,7 @@ head -c 2097152 /dev/zero >&2
             script.to_string(),
             "ix-mcp-fake-worker".to_string(),
         ];
-        let mut session = PythonSession::start("stderr-burst".to_string(), Some(command), None)?;
+        let mut session = PythonSession::spawn_command("stderr-burst".to_string(), command, None)?;
         session.request("eval", json!({ "expression": "unused" }))
     }
 }
