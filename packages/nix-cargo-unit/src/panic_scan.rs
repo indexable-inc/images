@@ -12,6 +12,24 @@
 //! a fully linked binary has its panic calls resolved to direct branches with
 //! no relocation left to read, and recovering them needs disassembly. Scanning
 //! linked bin/test units is deliberately out of scope here.
+//!
+//! This is a best-effort detector, not a soundness proof. A clean result means
+//! "no detected panic call from this crate's monomorphic code," not "cannot
+//! panic." Two classes slip through by construction:
+//!
+//! - Uninstantiated generics. A generic function is stored as metadata in the
+//!   defining rlib and only codegened where a downstream crate monomorphizes
+//!   it, so `pub fn first<T>(xs: &[T]) -> &T { &xs[0] }` carries no relocation
+//!   here even though it can panic. Catching it requires analysis at the linked
+//!   binary where the instantiation lives.
+//! - Panics through uncatalogued helpers. [`PANIC_SINKS`] lists the common std
+//!   sinks (`core::panicking`, `unwrap_failed`, `expect_failed`); a panic that
+//!   routes through some other std/alloc cold path is missed until its symbol
+//!   is added.
+//!
+//! Proving total panic-freedom needs call-graph reachability over the linked,
+//! monomorphized binary (what `findpanics` does); that is the sound successor to
+//! this per-unit check, not a tweak to it.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -102,7 +120,7 @@ fn scan_object(
                 continue;
             }
             if let Some(function) = containing_function(&functions, offset)
-                && crate_token.is_none_or(|token| function.name.contains(token))
+                && crate_token.is_none_or(|token| belongs_to_crate(&function.name, token))
             {
                 findings.insert(PanicFinding {
                     function: function.name.clone(),
@@ -148,12 +166,45 @@ fn containing_function(functions: &[FunctionRange], offset: u64) -> Option<&Func
         .find(|function| offset >= function.start && offset < function.end)
 }
 
-// Both legacy and v0 mangling encode the path component `core::panicking` as the
-// length-prefixed run `9panicking`, so the substring identifies every panic
-// entrypoint (`panic`, `panic_fmt`, `panic_bounds_check`, ...) regardless of
-// mangling scheme or the Mach-O leading-underscore prefix.
+// Curated set of std panic sinks, matched as length-prefixed path fragments so
+// the same needles hit legacy (`_ZN4core9panicking...`) and v0
+// (`_RNvNt...4core9panicking...`) mangling and ignore the Mach-O leading
+// underscore. Requiring the `4core` / `3std` prefix avoids matching an
+// unrelated user module literally named `panicking`.
+//
+// `core::panicking::*` is the leaf for `panic!`, formatting panics, bounds
+// checks, overflow, and asserts. `unwrap`/`expect` reach a panic through the
+// cold `unwrap_failed` / `expect_failed` helpers first (confirmed by inspecting
+// the relocations rustc emits at opt-level 0 and 3), so those are listed too.
+// This catalog is deliberately incomplete: see the false-negative note in the
+// module docs.
+const PANIC_SINKS: &[&str] = &[
+    "4core9panicking",
+    "3std9panicking",
+    "4core6option13unwrap_failed",
+    "4core6option13expect_failed",
+    "4core6result13unwrap_failed",
+    "4core6result13expect_failed",
+];
+
 fn is_panic_entrypoint(symbol: &str) -> bool {
-    symbol.contains("9panicking")
+    PANIC_SINKS.iter().any(|sink| symbol.contains(sink))
+}
+
+// A function symbol is the unit's own code if it carries the crate's mangled
+// token, or if it is not Rust-mangled at all: an `#[unsafe(no_mangle)]` export
+// keeps a plain C name with no crate token, yet it is still defined in this
+// crate's object, so excluding it would hide panics in FFI entrypoints.
+fn belongs_to_crate(function: &str, crate_token: &str) -> bool {
+    function.contains(crate_token) || !is_rust_mangled(function)
+}
+
+fn is_rust_mangled(symbol: &str) -> bool {
+    let stripped = symbol
+        .strip_prefix("__")
+        .or_else(|| symbol.strip_prefix('_'))
+        .unwrap_or(symbol);
+    stripped.starts_with("ZN") || stripped.starts_with('R')
 }
 
 /// Collects `*.rlib` artifacts under each input path. A path that is itself a
@@ -200,10 +251,10 @@ mod tests {
         SymbolKind, SymbolScope,
     };
 
-    // Builds a relocatable ELF object with one text function `func_bytes` long.
-    // When `panic` is set, a relocation at offset 4 targets an undefined
-    // `core::panicking` symbol, modelling a panic call inside the function.
-    fn object_with_function(function: &str, panic: bool) -> Vec<u8> {
+    // Builds a relocatable ELF object with one 16-byte text function. When
+    // `callee` is set, a relocation at offset 4 targets that undefined symbol,
+    // modelling a call from the function into the named callee.
+    fn object_calling(function: &str, callee: Option<&str>) -> Vec<u8> {
         let mut object = Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
         let text = object.section_id(StandardSection::Text);
         object.append_section_data(text, &[0u8; 16], 1);
@@ -217,9 +268,9 @@ mod tests {
             section: WriteSection::Section(text),
             flags: SymbolFlags::None,
         });
-        if panic {
-            let panic_symbol = object.add_symbol(Symbol {
-                name: b"_ZN4core9panicking18panic_bounds_check17hababababababababE".to_vec(),
+        if let Some(callee) = callee {
+            let target = object.add_symbol(Symbol {
+                name: callee.as_bytes().to_vec(),
                 value: 0,
                 size: 0,
                 kind: SymbolKind::Text,
@@ -233,7 +284,7 @@ mod tests {
                     text,
                     Relocation {
                         offset: 4,
-                        symbol: panic_symbol,
+                        symbol: target,
                         addend: 0,
                         flags: RelocationFlags::Generic {
                             kind: RelocationKind::PltRelative,
@@ -242,9 +293,14 @@ mod tests {
                         },
                     },
                 )
-                .expect("add panic relocation");
+                .expect("add relocation");
         }
         object.write().expect("serialize fixture object")
+    }
+
+    fn object_with_function(function: &str, panic: bool) -> Vec<u8> {
+        let callee = panic.then_some("_ZN4core9panicking18panic_bounds_check17hababababababababE");
+        object_calling(function, callee)
     }
 
     fn scan(data: &[u8], crate_token: Option<&str>) -> Vec<PanicFinding> {
@@ -281,5 +337,38 @@ mod tests {
     fn crate_token_normalizes_dashes() {
         assert_eq!(crate_token("n-hello"), "7n_hello");
         assert_eq!(crate_token("serde"), "5serde");
+    }
+
+    #[test]
+    fn flags_unwrap_and_expect_cold_paths() {
+        // unwrap/expect reach a panic through the *_failed helpers, not
+        // core::panicking directly, so the catalog must catch them.
+        for callee in [
+            "_ZN4core6option13unwrap_failed17habcdefgEhh",
+            "_ZN4core6result13unwrap_failed17habcdefgEhh",
+            "_ZN4core6option13expect_failed17habcdefgEhh",
+        ] {
+            let bytes = object_calling("_ZN7n_hello3run17habcdefgEhh", Some(callee));
+            assert_eq!(scan(&bytes, None).len(), 1, "missed cold path {callee}");
+        }
+    }
+
+    #[test]
+    fn user_panicking_module_is_not_a_panic_sink() {
+        // A crate's own `panicking` module mangles with its crate prefix, not
+        // `4core` / `3std`, so calling it must not trip the gate.
+        let bytes = object_calling(
+            "_ZN7n_hello3run17habcdefgEhh",
+            Some("_ZN7n_hello9panicking6record17habcdefgEhh"),
+        );
+        assert!(scan(&bytes, None).is_empty());
+    }
+
+    #[test]
+    fn unmangled_export_is_scanned_under_crate_filter() {
+        // An `#[unsafe(no_mangle)]` export carries no crate token; scoping to a
+        // crate must still scan it, since it is defined in this crate's object.
+        let bytes = object_calling("ffi_entry", Some("_ZN4core9panicking5panic17habcdefgEhh"));
+        assert_eq!(scan(&bytes, Some(&crate_token("n-hello"))).len(), 1);
     }
 }

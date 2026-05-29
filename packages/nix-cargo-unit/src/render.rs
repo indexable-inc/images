@@ -396,16 +396,25 @@ fn render_policy_check_entries(
 // Library units the panic-freedom scan inspects. The scan is relocation-based,
 // so it needs the relocatable objects inside an rlib: a linked bin/test has its
 // panic calls resolved to direct branches with no relocation left to read, and
-// recovering those needs disassembly (tracked as follow-up). Build-script runs
-// have no artifact of their own, external crates compile under `--cap-lints
-// warn` and are not the workspace's invariant to hold, and proc-macro /
-// custom-build-compile units are host build tooling, not the shipped surface.
+// recovering those needs disassembly (tracked as follow-up). The candidate must
+// actually emit an rlib, so a `cdylib` / `staticlib` / `dylib` library unit is
+// excluded rather than passing the gate against an artifact the scanner cannot
+// read. Build-script runs have no artifact of their own, external crates compile
+// under `--cap-lints warn` and are not the workspace's invariant to hold, and
+// proc-macro / custom-build-compile units are host build tooling.
 fn is_panic_freedom_candidate(unit: &Unit) -> bool {
-    unit.is_library()
+    produces_rlib(unit)
         && !unit.is_external()
         && !unit.is_proc_macro()
         && !unit.is_run_custom_build()
         && !unit.is_custom_build_compile()
+}
+
+fn produces_rlib(unit: &Unit) -> bool {
+    unit.target
+        .crate_types
+        .iter()
+        .any(|crate_type| matches!(crate_type.as_str(), "lib" | "rlib"))
 }
 
 // Renders one panic-freedom derivation per library unit, joined under a single
