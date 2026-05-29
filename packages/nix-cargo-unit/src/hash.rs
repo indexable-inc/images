@@ -40,12 +40,12 @@ mod verification {
     #[kani::proof]
     #[kani::unwind(9)]
     fn short_digest_encodes_every_byte_as_lowercase_hex() {
-        let digest: [u8; 8] = kani::any();
+        let digest: [u8; 32] = kani::any();
         let encoded = short_digest(&digest);
         let encoded_bytes = encoded.as_bytes();
 
-        assert_eq!(encoded_bytes.len(), digest.len() * 2);
-        for index in 0..digest.len() {
+        assert_eq!(encoded_bytes.len(), 8 * 2);
+        for index in 0..8 {
             let byte = digest[index];
             let high = encoded_bytes[index * 2];
             let low = encoded_bytes[index * 2 + 1];
