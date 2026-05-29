@@ -1,11 +1,13 @@
 {
   id = "tui-py";
   inRustWorkspace = true;
-  # The PyO3 extension cdylib links cleanly only where undefined symbols are
-  # allowed in a shared object (Linux), the same constraint that keeps ix's
-  # native SDK wheels Linux-only. macOS needs `-undefined dynamic_lookup`, which
-  # the shared cargo-unit graph does not thread through, so the wheel is built on
-  # Linux (manylinux). Local macOS dev uses the editable build, not this package.
+  # The cdylib links on macOS too now (build.rs emits the cdylib-scoped
+  # `-undefined dynamic_lookup` that PyO3 needs there), but this wheel's
+  # packaging is still Linux-only: it strips an ELF rpath with patchelf and
+  # stamps manylinux tags. macOS would need install-name fixups and macosx tags
+  # instead, which no caller wants yet. The mcp bundles the cdylib straight from
+  # the workspace graph (see packages/mcp) for cross-platform `import tui`, so
+  # this Linux wheel stays the distribution artifact and macOS dev uses that.
   flake.systems = [
     "x86_64-linux"
     "aarch64-linux"

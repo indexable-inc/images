@@ -383,8 +383,11 @@ fn create_venv(temp_dir: &Path) -> Result<PathBuf> {
     let python = std::env::var("IX_MCP_PYTHON")
         .context("IX_MCP_PYTHON is unset; run ix-mcp via its Nix wrapper, which pins the interpreter")?;
     let venv_dir = temp_dir.join(".venv");
+    // `--system-site-packages` exposes the pinned interpreter's bundled
+    // packages (notably `tui`) to the session while keeping the venv writable,
+    // so an in-session `pip install` still lands in the per-session venv.
     let status = Command::new(&python)
-        .args(["-m", "venv"])
+        .args(["-m", "venv", "--system-site-packages"])
         .arg(&venv_dir)
         .status()
         .with_context(|| format!("failed to create Python environment with {python}"))?;
