@@ -1,0 +1,6 @@
+id: no-mkoption-conditional-default
+valid:
+  - 'mkOption { type = types.str; default = "127.0.0.1"; }'
+  - 'mkOption { type = types.str; default = cfg.clickhouse.host; defaultText = lib.literalExpression "config.x"; }'
+invalid:
+  - 'mkOption { type = types.str; default = if cfg.stack.enable then "0.0.0.0" else "127.0.0.1"; }'

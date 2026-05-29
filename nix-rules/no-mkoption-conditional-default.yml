@@ -12,4 +12,23 @@ note: |
   REPO: Keep `mkOption.default` literal or a single named expression. Use
   `defaultText = lib.literalExpression "..."` when the literal cannot be inlined.
 rule:
-  pattern: mkOption { $$$PRE default = if $C then $A else $B; $$$POST }
+  # `mkOption { default = if ...; }` parses as an apply_expression (mkOption
+  # applied to an attrset), not a binding_set, so the old bare `pattern:` form
+  # never compiled to a query. Match the call and the conditional default node.
+  kind: apply_expression
+  all:
+    - has:
+        field: function
+        regex: ^mkOption$
+    - has:
+        field: argument
+        has:
+          kind: binding
+          stopBy: end
+          all:
+            - has:
+                field: attrpath
+                regex: ^default$
+            - has:
+                field: expression
+                kind: if_expression
