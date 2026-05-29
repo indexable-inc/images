@@ -226,14 +226,18 @@ fn at_crate_boundary(symbol: &str, sink: &str) -> bool {
 }
 
 // A function belongs to the workspace if its mangled symbol carries one of the
-// workspace crate tokens, or if it is not Rust-mangled at all: an
-// `#[unsafe(no_mangle)]` export keeps a plain C name with no crate token, yet it
-// is still defined in this crate's object, so excluding it would hide panics in
-// FFI entrypoints. An empty token slice disables filtering.
+// workspace crate tokens at a crate-root boundary, or if it is not Rust-mangled
+// at all: an `#[unsafe(no_mangle)]` export keeps a plain C name with no crate
+// token, yet it is still defined in this crate's object, so excluding it would
+// hide panics in FFI entrypoints. The boundary check (not a bare substring)
+// keeps a short crate name like `de` from matching a dependency symbol such as
+// `serde2de`. An empty token slice disables filtering.
 fn belongs_to_workspace(function: &str, crate_tokens: &[String]) -> bool {
     crate_tokens.is_empty()
         || !is_rust_mangled(function)
-        || crate_tokens.iter().any(|token| function.contains(token))
+        || crate_tokens
+            .iter()
+            .any(|token| at_crate_boundary(function, token))
 }
 
 fn is_rust_mangled(symbol: &str) -> bool {
@@ -438,6 +442,17 @@ mod tests {
         // Fail closed: a corrupt or unsupported artifact must not scan as clean.
         let mut findings = BTreeSet::new();
         assert!(scan_bytes(b"not an object or archive", &[], &mut findings).is_err());
+    }
+
+    #[test]
+    fn short_crate_token_does_not_match_dependency_substring() {
+        // crate `de` (token `2de`) must not match serde's `de` module symbol,
+        // which only contains the token mid-path, not at the crate boundary.
+        let bytes = object_calling(
+            "_ZN5serde2de9from_slice17habcdefgEhh",
+            Some("_ZN4core9panicking5panic17habcdefgEhh"),
+        );
+        assert!(scan(&bytes, &["de"]).is_empty());
     }
 
     #[test]
