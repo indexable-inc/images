@@ -25,6 +25,12 @@ use tempfile::TempDir;
 const DEFAULT_SESSION_ID: &str = "default";
 const WORKER_SOURCE: &str = include_str!("python_worker.py");
 
+// Surfaced to clients on initialize so an agent discovers the preinstalled
+// packages without reading the build. `tui` is the bundled PTY driver; naming
+// it here keeps one home for the fact instead of repeating it across every
+// `python_*` tool description.
+const SERVER_INSTRUCTIONS: &str = include_str!("server_instructions.txt");
+
 #[derive(Parser)]
 #[command(name = "ix-mcp")]
 struct Cli {
@@ -66,6 +72,7 @@ impl McpServer {
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(SERVER_INSTRUCTIONS)
     }
 }
 
