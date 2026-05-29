@@ -38,7 +38,10 @@ in
     };
 
     tokenFile = mkOption {
-      type = types.path;
+      # A runtime path string, not `types.path`: a path literal like `./token`
+      # would copy the PAT into the world-readable Nix store, which this option
+      # explicitly promises not to do.
+      type = types.str;
       example = "/run/secrets/ci-runner/token";
       description = ''
         Path to a file holding a fine-grained GitHub PAT with read and write
@@ -92,17 +95,25 @@ in
 
   config = mkIf cfg.enable {
     # A warm shared cache is the whole point of a persistent runner: let the
-    # daemon substitute index artifacts so jobs skip cold rebuilds. These list
-    # settings merge with whatever the host already declares.
+    # daemon substitute index artifacts so jobs skip cold rebuilds. Every key
+    # uses the `extra-*` form so it adds to Nix's defaults and any host config
+    # rather than replacing them (keeping cache.nixos.org, kvm, etc.).
     nix.settings = {
-      experimental-features = [
+      extra-experimental-features = [
         "nix-command"
         "flakes"
       ];
-      substituters = [ "https://indexable-inc.cachix.org" ];
-      trusted-public-keys = [
+      # Consume the repo flake's nixConfig substituters without the interactive
+      # prompt; `nix flake check` otherwise stalls waiting for confirmation.
+      accept-flake-config = true;
+      extra-substituters = [ "https://indexable-inc.cachix.org" ];
+      extra-trusted-public-keys = [
         "indexable-inc.cachix.org-1:HQ5mjdOyhgNjLVhjv0qgVMJ5YiO1zEEVMAtF9mTcpiI="
       ];
+      # Index images pin `gcc.arch = znver5`, so every derivation in the closure
+      # requires this builder feature; advertise it or the daemon refuses the
+      # builds before they evaluate.
+      extra-system-features = [ "gccarch-znver5" ];
     };
 
     services.github-runners = lib.genAttrs runnerNames (_name: {
