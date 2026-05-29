@@ -1,0 +1,24 @@
+---
+id: ix-mcp-top-level-await
+postedAt: 2026-05-29T13:30:00-07:00
+title: "`ix-mcp` Python sessions accept top-level `await`"
+tags: [interesting, mcp, agents, python, async]
+links:
+  - label: mcp package
+    href: https://github.com/indexable-inc/index/tree/main/packages/mcp
+---
+
+`python_eval` and `python_exec` now run `await` at the top level, no `asyncio.run` wrapper. Each session keeps one event loop for its whole life, so an async resource created in one call is still live in the next:
+
+```python
+python_exec(source="""
+import httpx
+client = httpx.AsyncClient()
+r = await client.get("https://example.com")
+""")
+python_eval(expression="r.status_code")  # 200, same client, same loop
+```
+
+This is the loop that `asyncio.run` cannot give you: it opens and closes a fresh loop per call, so a client or pool created on one turn is bound to a loop that is already closed by the next. The worker compiles every snippet with `ast.PyCF_ALLOW_TOP_LEVEL_AWAIT` and drives the resulting coroutine on the kept loop, the same mechanism as CPython's `python -m asyncio` REPL.
+
+Known limitation: a coroutine that never resolves blocks the worker, exactly the way a synchronous `while True` already does. Bound long awaits yourself with `asyncio.wait_for` when you need a ceiling.
