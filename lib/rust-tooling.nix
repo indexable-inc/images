@@ -29,7 +29,7 @@ let
       # `buildIxRustTool` adds the richer surface for packages that need it.
       clippyPackage = pkgs.callPackage (packagePath "llm-clippy") {
         ix.buildRustPackage = innerPkgs: (rustFor innerPkgs).buildPackage;
-        src = clippy-fork;
+        inherit clippy-fork;
       };
       rustToolchain = rustNightlyToolchainFor pkgs;
       writePythonApplication = writePythonApplication pkgs;

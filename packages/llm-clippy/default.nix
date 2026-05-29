@@ -4,11 +4,15 @@
   makeWrapper,
   pkgs,
   clippy-fork ? null,
-  src ? clippy-fork,
 }:
 
+# The fork source comes in as `clippy-fork`, never a `src` argument: a `src`
+# formal collides with `pkgs.src`, which `callPackage` auto-binds over the
+# default. nixpkgs renamed that package to a throw (2025-11-19), so an auto-
+# bound `src` turned the discovered `packages.<system>.llm-clippy` output into
+# an eval error that `nix flake check` surfaces.
 let
-  source = if src == null then throw "llm-clippy: src is required" else src;
+  source = if clippy-fork == null then throw "llm-clippy: clippy-fork is required" else clippy-fork;
   # Drive the toolchain from the fork's `rust-toolchain.toml` so a
   # `nix flake update clippy-fork` advances the rustc/rustc_private ABI in
   # lockstep with the source. If a future fork commit needs different
