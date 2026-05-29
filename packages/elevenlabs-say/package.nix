@@ -1,0 +1,5 @@
+{
+  id = "elevenlabs-say";
+  packageSet = true;
+  flake = true;
+}
