@@ -493,6 +493,43 @@ mod tests {
         Ok(())
     }
 
+    fn python_session(id: &str) -> Result<PythonSession> {
+        // The test derivation puts `python3` on PATH via
+        // `packageTestInputs.ix-mcp` in lib/rust-workspace.nix. A bare command
+        // skips the default venv build, which the worker does not need.
+        PythonSession::start(id.to_string(), Some(vec!["python3".to_string()]), None)
+    }
+
+    #[test]
+    fn top_level_await_persists_async_state_across_calls() -> Result<()> {
+        let mut session = python_session("await-persist")?;
+
+        // An async primitive created with top-level await in one call must stay
+        // usable in the next call. A fresh asyncio.run() loop per call would
+        // close the loop the queue is bound to before the second call runs, so
+        // this guards the persistent-loop design rather than await syntax alone.
+        let put = session.request(
+            "exec",
+            json!({ "source": "import asyncio\nq = asyncio.Queue()\nawait q.put(123)" }),
+        )?;
+        assert_eq!(put, "ok");
+
+        let got = session.request("eval", json!({ "expression": "await q.get()" }))?;
+        assert_eq!(got, "result:\n123");
+
+        Ok(())
+    }
+
+    #[test]
+    fn synchronous_expressions_still_evaluate() -> Result<()> {
+        // Compiling with PyCF_ALLOW_TOP_LEVEL_AWAIT must not change plain code:
+        // snippets without await run eagerly and return their value.
+        let mut session = python_session("await-sync")?;
+        let sum = session.request("eval", json!({ "expression": "1 + 1" }))?;
+        assert_eq!(sum, "result:\n2");
+        Ok(())
+    }
+
     fn run_worker_stderr_burst_session() -> Result<String> {
         let script = r#"
 i=0

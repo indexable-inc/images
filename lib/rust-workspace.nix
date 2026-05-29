@@ -61,6 +61,7 @@ let
       "bench"
     ];
     packageTestInputs.tui = [ workspacePkgs.vim ];
+    packageTestInputs.ix-mcp = [ workspacePkgs.python3 ];
     # Every policy check runs once across the whole workspace. Selected
     # package outputs expose these as explicit tests instead of making
     # downstream binary builds depend on unrelated workspace policy.
