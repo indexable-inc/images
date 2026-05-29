@@ -44,9 +44,9 @@ handle to the same process.
 ```js
 import { serve } from "@indexable/tui";
 
-const dash = serve("127.0.0.1", 8080);
+const dash = await serve("127.0.0.1", 8080);
 console.log(dash.url);   // open in a browser to see a live grid of every Tui
-dash.stop();
+await dash.stop();
 ```
 
 The server, the Loro CRDT document, and the SSE stream all live in Rust; the

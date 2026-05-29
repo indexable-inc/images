@@ -16,10 +16,12 @@
 //! use std::time::Duration;
 //! use tui::TuiManager;
 //!
+//! # async fn run() -> Result<(), tui::Error> {
 //! let manager = Arc::new(TuiManager::new());
-//! let dashboard = tui::serve(&manager, "127.0.0.1:0".parse().unwrap(), Duration::from_millis(100))?;
+//! let dashboard = tui::serve(&manager, "127.0.0.1:0".parse().unwrap(), Duration::from_millis(100)).await?;
 //! println!("open {}", dashboard.url());
-//! # Ok::<(), tui::Error>(())
+//! # Ok(())
+//! # }
 //! ```
 
 use std::collections::HashMap;
@@ -203,7 +205,6 @@ impl Hub {
 /// HTTP server and poll loop down.
 pub struct Dashboard {
     addr: SocketAddr,
-    runtime: Arc<tokio::runtime::Runtime>,
     shutdown: Option<watch::Sender<bool>>,
     tasks: Vec<JoinHandle<()>>,
 }
@@ -221,21 +222,36 @@ impl Dashboard {
         format!("http://{}/", self.addr)
     }
 
-    /// Stop the server and wait for its tasks to wind down. Idempotent.
-    pub fn stop(&mut self) {
+    /// Stop the server and poll loop, waiting for the tasks to wind down.
+    /// Idempotent.
+    ///
+    /// The tasks are aborted, not just signalled: an open Server-Sent-Events
+    /// stream never ends on its own, so `axum`'s graceful shutdown would block
+    /// forever while any browser is connected. Aborting drops those streams and
+    /// returns promptly.
+    pub async fn stop(&mut self) {
         let Some(shutdown) = self.shutdown.take() else {
             return;
         };
         let _ = shutdown.send(true);
         for task in self.tasks.drain(..) {
-            let _ = self.runtime.block_on(task);
+            task.abort();
+            let _ = task.await;
         }
     }
 }
 
 impl Drop for Dashboard {
+    /// Best-effort, non-blocking teardown for a dropped handle that was never
+    /// `stop`ped: signal shutdown and abort the tasks. They wind down on the
+    /// runtime; `Drop` cannot await, so it does not join them.
     fn drop(&mut self) {
-        self.stop();
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(true);
+        }
+        for task in self.tasks.drain(..) {
+            task.abort();
+        }
     }
 }
 
@@ -244,12 +260,20 @@ impl Drop for Dashboard {
 /// Pass `127.0.0.1:0` to bind an ephemeral port and read it back from
 /// [`Dashboard::addr`]. `poll` is the viewport sampling interval; every tick
 /// that changes a terminal produces one CRDT update broadcast to all clients.
-pub fn serve(manager: &Arc<TuiManager>, addr: SocketAddr, poll: Duration) -> Result<Dashboard> {
+///
+/// Async because the binding surface is uniformly async: bindings drive it from
+/// inside the manager's runtime (so a blocking bind would deadlock), and a
+/// pure-Rust caller can `runtime.block_on(serve(..))` when it needs sync.
+pub async fn serve(
+    manager: &Arc<TuiManager>,
+    addr: SocketAddr,
+    poll: Duration,
+) -> Result<Dashboard> {
     let runtime = manager.runtime();
     let hub = Hub::new();
 
-    let listener = runtime
-        .block_on(async { TcpListener::bind(addr).await })
+    let listener = TcpListener::bind(addr)
+        .await
         .map_err(|source| Error::Dashboard {
             message: format!("bind {addr}: {source}"),
         })?;
@@ -291,7 +315,6 @@ pub fn serve(manager: &Arc<TuiManager>, addr: SocketAddr, poll: Duration) -> Res
 
     Ok(Dashboard {
         addr: bound,
-        runtime,
         shutdown: Some(shutdown),
         tasks: vec![http, poller],
     })

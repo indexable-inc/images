@@ -68,14 +68,14 @@ export declare class Dashboard {
   /** The bound `host:port`. */
   readonly addr: string;
   /** Stop the server and its poll loop. Idempotent. */
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 /**
  * Start the Loro-backed web dashboard for every live terminal in this process.
  * `host` must be an IP literal; pass `port = 0` for an ephemeral port.
  */
-export declare function serve(host?: string, port?: number, pollMs?: number): Dashboard;
+export declare function serve(host?: string, port?: number, pollMs?: number): Promise<Dashboard>;
 
 /** A pattern for {@link waitFor}: substring, RegExp, or viewport predicate. */
 export type WaitPattern = string | RegExp | ((viewport: Array<string>) => boolean);

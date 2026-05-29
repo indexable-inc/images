@@ -256,11 +256,12 @@ impl Dashboard {
 
     /// Stop the server and its poll loop. Idempotent.
     #[napi]
-    pub fn stop(&self) {
-        if let Ok(mut guard) = self.inner.lock()
-            && let Some(mut dashboard) = guard.take()
-        {
-            dashboard.stop();
+    pub async fn stop(&self) {
+        // Take the handle out from under the lock before the await point so the
+        // guard never crosses it; the async wind-down then runs on the runtime.
+        let taken = self.inner.lock().ok().and_then(|mut guard| guard.take());
+        if let Some(mut dashboard) = taken {
+            dashboard.stop().await;
         }
     }
 }
@@ -271,7 +272,11 @@ impl Dashboard {
 /// for an ephemeral port, read back from `Dashboard.url`. `pollMs` is the
 /// viewport sampling interval in milliseconds.
 #[napi]
-pub fn serve(host: Option<String>, port: Option<u32>, poll_ms: Option<u32>) -> Result<Dashboard> {
+pub async fn serve(
+    host: Option<String>,
+    port: Option<u32>,
+    poll_ms: Option<u32>,
+) -> Result<Dashboard> {
     let host = host.unwrap_or_else(|| "127.0.0.1".to_owned());
     let port = narrow_u16("port", port.unwrap_or(8080))?;
     // Parse the host as a bare IP so IPv4 and IPv6 literals both work (an
@@ -285,7 +290,7 @@ pub fn serve(host: Option<String>, port: Option<u32>, poll_ms: Option<u32>) -> R
     // Clamp the poll interval to at least 1ms so a `0` does not spin the
     // dashboard's sample loop, matching the Python wrapper.
     let poll = Duration::from_millis(u64::from(poll_ms.unwrap_or(100)).max(1));
-    let dashboard = tui::serve(&manager(), addr, poll).map_err(err)?;
+    let dashboard = tui::serve(&manager(), addr, poll).await.map_err(err)?;
 
     Ok(Dashboard {
         url_value: dashboard.url(),

@@ -67,6 +67,13 @@ let
     # libasound's search path on Linux.
     # Scoped to the whole workspace because the unit graph compiles every
     # member on every system; darwin uses CoreAudio and needs nothing extra.
+    #
+    # `pkg-config` + `PKG_CONFIG_PATH` let `alsa-sys`'s build script find ALSA
+    # and emit `link-lib=asound`. That `-lasound` propagates to the final
+    # `minecraft-sound` link, but the build script's `link-search` path does
+    # not, so the linker reports `cannot find -lasound`. Add ALSA's lib dir to
+    # every unit's rustc link search directly so the final binary link resolves
+    # it. Harmless for crates that never reference `libasound`.
     nativeBuildInputs = lib.optional workspacePkgs.stdenv.hostPlatform.isLinux workspacePkgs.pkg-config;
     extraRustcArgs = lib.optionals workspacePkgs.stdenv.hostPlatform.isLinux [
       "-L"
@@ -75,6 +82,10 @@ let
     env = lib.optionalAttrs workspacePkgs.stdenv.hostPlatform.isLinux {
       PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
     };
+    extraRustcArgs = lib.optionals workspacePkgs.stdenv.hostPlatform.isLinux [
+      "-L"
+      "native=${workspacePkgs.alsa-lib}/lib"
+    ];
     # Every policy check runs once across the whole workspace. Selected
     # package outputs expose these as explicit tests instead of making
     # downstream binary builds depend on unrelated workspace policy.

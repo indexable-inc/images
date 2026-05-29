@@ -43,11 +43,11 @@ impl Dashboard {
     /// Stop the server and wait for its tasks to wind down. Idempotent.
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         // Take the value out under the lock before the await point so the guard
-        // never crosses it; the blocking wind-down then runs inside the future.
+        // never crosses it; the wind-down then runs inside the future.
         let taken = self.inner.lock().take();
         future_into_py(py, async move {
             if let Some(mut dashboard) = taken {
-                dashboard.stop();
+                dashboard.stop().await;
             }
             Ok(())
         })
@@ -77,7 +77,7 @@ pub fn serve<'py>(
 
     let manager = global_manager();
     future_into_py(py, async move {
-        let dashboard = tui::serve(&manager, addr, Duration::from_millis(poll_ms))?;
+        let dashboard = tui::serve(&manager, addr, Duration::from_millis(poll_ms)).await?;
         Ok(Dashboard {
             addr: dashboard.addr().to_string(),
             url: dashboard.url(),
