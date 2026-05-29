@@ -1,0 +1,27 @@
+[package]
+name = "tap"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Minimal terminal session manager for tiling-WM users: detach, attach, share"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+dirs.workspace = true
+nix = { workspace = true, features = ["term", "process"] }
+parking_lot.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tap-protocol.workspace = true
+tap-pty.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+toml = { workspace = true, features = ["parse", "serde"] }
+
+[dev-dependencies]
+# Drive the built `tap` binary on a real PTY and assert on its rendered screen.
+tui.workspace = true

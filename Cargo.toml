@@ -15,6 +15,9 @@ members = [
   "packages/nix-web-monitor/server",
   "packages/oci-image-builder",
   "packages/repo-walker",
+  "packages/tap",
+  "packages/tap/protocol",
+  "packages/tap/pty",
   "packages/tui",
   "packages/tui-dashboard",
   "packages/tui-node",
@@ -61,6 +64,7 @@ napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt
 napi-build = "2"
 napi-derive = "3"
 ndarray = "0.16"
+nix = "0.30"
 nix-web-monitor-parser = { path = "packages/nix-web-monitor/parser" }
 numpy = "0.28"
 object = { version = "0.37", default-features = false, features = [
@@ -88,6 +92,8 @@ snafu = "0.9"
 strip-ansi-escapes = "0.2"
 tango-bench = "0.7"
 tantivy = "0.26"
+tap-protocol = { path = "packages/tap/protocol" }
+tap-pty = { path = "packages/tap/pty" }
 tar = "0.4"
 tempfile = "3"
 tokio = "1"

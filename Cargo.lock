@@ -2654,6 +2654,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+dependencies = [
+ "bitflags 2.11.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nix-cargo-unit"
 version = "0.1.0"
 dependencies = [
@@ -4382,6 +4394,47 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eac258c2c6390673f2685813afeeafcb8c4e0ee7de8dd3fc46838dcc37263f98"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "tap"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs",
+ "nix",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tap-protocol",
+ "tap-pty",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tui",
+]
+
+[[package]]
+name = "tap-protocol"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "dirs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "tap-pty"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "parking_lot",
+ "pty-process",
+ "snafu",
+ "tokio",
+ "vt100",
 ]
 
 [[package]]

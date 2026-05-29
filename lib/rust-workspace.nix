@@ -60,8 +60,13 @@ let
       "test"
       "bench"
     ];
-    packageTestInputs.tui = [ workspacePkgs.vim ];
-    packageTestInputs.ix-mcp = [ workspacePkgs.python3 ];
+    packageTestInputs = {
+      tui = [ workspacePkgs.vim ];
+      ix-mcp = [ workspacePkgs.python3 ];
+      # tap's integration tests drive the `tap` binary on a PTY and run `bash`
+      # as the session child; the daemon resolves `bash` from PATH at runtime.
+      tap = [ workspacePkgs.bash ];
+    };
     # `rodio` (packages/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
     # script needs ALSA's pkg-config metadata to link `libasound` on Linux.
     # Scoped to the whole workspace because the unit graph compiles every
