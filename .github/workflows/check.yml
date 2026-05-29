@@ -51,14 +51,19 @@ jobs:
           # indexable-inc Cachix substituter) without an interactive prompt, so
           # the znver5 closure substitutes instead of recompiling.
           #
-          # `max-jobs = auto` / `cores = 0`: let the daemon run one build per
-          # core and each build use every core, so nix-fast-build saturates the
-          # larger runner.
+          # `max-jobs = auto` runs one build per core; `cores = 1` keeps each
+          # build single-threaded. Consumed cores is `max-jobs *
+          # NIX_BUILD_CORES`, so pairing `auto` with `cores = 0` (every build
+          # grabs every core) oversubscribes to core-count^2 and thrashes on
+          # context switches. The closure is wide, so parallelism comes from
+          # building many derivations at once (max-jobs), not from threads
+          # inside one build (cores).
+          # https://nix.dev/manual/nix/2.28/advanced-topics/cores-vs-jobs
           extra-conf: |
             extra-system-features = gccarch-znver5
             accept-flake-config = true
             max-jobs = auto
-            cores = 0
+            cores = 1
 
       # Restore the prior /nix/store so the warm path skips re-fetching the
       # znver5 base from Cachix on every run. The key tracks `flake.lock`: the
