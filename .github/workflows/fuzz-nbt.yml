@@ -21,8 +21,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      # `cargo install --locked cargo-fuzz` pins an old `rustix` that no longer
+      # compiles against current rustc, so skip `--locked` and let cargo pick a
+      # `rustix` that builds against the toolchain.
       - name: Install cargo-fuzz
-        run: cargo install --locked cargo-fuzz
+        run: cargo install cargo-fuzz
 
       - name: Fuzz decode_document for 60 seconds
         working-directory: packages/minecraft/nbt/fuzz
