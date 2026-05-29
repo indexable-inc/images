@@ -132,7 +132,7 @@ The full style guide lives in [AGENTS.md](AGENTS.md). Skim the section that matc
 - [Writing style](AGENTS.md#writing-style) — prose in docs, READMEs, comments, issues, PR descriptions.
 - [Inline comments](AGENTS.md#inline-comments) — when a comment earns its place and when to delete it.
 - [Rust style](AGENTS.md#rust-style) — naming, module layout, type annotations.
-- [Python style](AGENTS.md#python-style) — uv project shape, basedpyright defaults.
+- [Python style](AGENTS.md#python-style) — uv project shape, `ty` defaults.
 - [Nix style (ast-grep enforced)](AGENTS.md#nix-style-ast-grep-enforced) — the hard rules `nix run .#lint` checks.
 - [Module conventions](AGENTS.md#module-conventions) and [Image conventions](AGENTS.md#image-conventions) — option shape, registry placement, no `..` paths.
 - [Dependency intake](AGENTS.md#dependency-intake) — how new external artifacts enter the repo (lockfiles, generated catalogs, fetcher choice).

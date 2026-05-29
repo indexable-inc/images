@@ -1,8 +1,4 @@
-{
-  errors,
-  uvLockFor,
-  validTypeCheckingModes,
-}:
+{ uvLockFor }:
 
 /**
   Build a Python application from a uv project.
@@ -11,8 +7,8 @@
   `uv lock` and do not maintain a separate Nix dependency hash. Locked
   distributions are fetched into a wheelhouse, installed offline into a virtual
   environment, and the local project is built as a wheel before installation.
-  Type checking runs by default in basedpyright `standard` mode after install
-  against the installed virtual environment, matching `writePythonApplication`.
+  Type checking runs by default with `ty` after install against the installed
+  virtual environment, matching `writePythonApplication`.
 
   The default path supports registry packages with `wheels` or `sdist` entries
   in `uv.lock`. Projects that use a non-uv build backend may need to pass a
@@ -27,8 +23,7 @@
   - `groups`, `extras`: uv dependency groups and extras to install.
   - `dev`, `allGroups`, `allExtras`: dependency selection shortcuts.
   - `exportFlags`, `pipInstallFlags`, `buildFlags`: extra uv flags.
-  - `check`, `typeCheckingMode`, `pythonPlatform`, `typeCheckPaths`:
-    basedpyright knobs.
+  - `check`, `pythonPlatform`, `typeCheckPaths`, `typeCheckArgs`: ty knobs.
   - `extraNativeBuildInputs`: extra packages on PATH for the build.
   - `runtimeLibraryInputs`: shared libraries made visible to binary wheels.
   - `fetcherOpts`: per-package fetcher overrides for locked distributions.
@@ -68,8 +63,7 @@ pkgs:
   pipInstallFlags ? [ ],
   buildFlags ? [ ],
   check ? true,
-  typeCheckingMode ? "standard",
-  pythonPlatform ? "Linux",
+  pythonPlatform ? "linux",
   typeCheckPaths ? [ "." ],
   extraPaths ? [ ],
   typeCheckArgs ? [ ],
@@ -80,12 +74,6 @@ pkgs:
 }:
 let
   inherit (pkgs) lib;
-
-  checkedTypeCheckingMode = errors.assertEnum {
-    name = "buildUvApplication.typeCheckingMode";
-    value = typeCheckingMode;
-    valid = validTypeCheckingModes;
-  };
 
   uvLock = uvLockFor pkgs;
   uvWheelhouse = uvLock.buildWheelhouse {
@@ -101,12 +89,23 @@ let
     "--extra"
     extra
   ]) extras;
-  pyrightConfig = (pkgs.formats.json { }).generate "basedpyright-${pname}.json" {
-    include = typeCheckPaths;
-    inherit extraPaths pythonPlatform;
-    typeCheckingMode = checkedTypeCheckingMode;
-    inherit (python) pythonVersion;
-  };
+  extraSearchPathArgs = lib.concatMap (path: [
+    "--extra-search-path"
+    path
+  ]) extraPaths;
+  tyCheckArgs = [
+    "--python-platform"
+    pythonPlatform
+    "--python-version"
+    python.pythonVersion
+    "--output-format"
+    "concise"
+    "--no-progress"
+    "--error-on-warning"
+  ]
+  ++ extraSearchPathArgs
+  ++ typeCheckArgs
+  ++ typeCheckPaths;
   exportArgs = [
     "--frozen"
     "--no-emit-project"
@@ -162,7 +161,7 @@ pkgs.stdenvNoCC.mkDerivation (_: {
   ]
   ++ extraNativeBuildInputs;
 
-  nativeInstallCheckInputs = [ pkgs.basedpyright ];
+  nativeInstallCheckInputs = [ pkgs.ty ];
 
   dontConfigure = true;
   dontBuild = true;
@@ -199,12 +198,7 @@ pkgs.stdenvNoCC.mkDerivation (_: {
   installCheckPhase = ''
     runHook preInstallCheck
 
-    basedpyright \
-      --project ${pyrightConfig} \
-      --pythonpath "$out/venv/bin/python" \
-      --level warning \
-      --warnings \
-      ${lib.escapeShellArgs (typeCheckPaths ++ typeCheckArgs)}
+    ty check --python "$out/venv/bin/python" ${lib.escapeShellArgs tyCheckArgs}
 
     runHook postInstallCheck
   '';

@@ -26,7 +26,7 @@ let
     in
     entry.path;
 
-  inherit (import ./writers.nix { inherit lib errors basedpyrightTypeCheckingModes; })
+  inherit (import ./writers.nix { inherit lib; })
     writePythonApplication
     writeNushellApplication
     writeProcessComposeApplication
@@ -84,18 +84,7 @@ let
     import ./uv-lock.nix {
       inherit lib pkgs;
     };
-  basedpyrightTypeCheckingModes = [
-    "off"
-    "basic"
-    "standard"
-    "strict"
-    "recommended"
-    "all"
-  ];
-  buildUvApplication = import ./build-uv-application.nix {
-    inherit errors uvLockFor;
-    validTypeCheckingModes = basedpyrightTypeCheckingModes;
-  };
+  buildUvApplication = import ./build-uv-application.nix { inherit uvLockFor; };
   buildGradleFatJar = import ./build-gradle-fat-jar.nix { inherit lib; };
   secrets = import ./secrets.nix {
     inherit lib pkgs writeNushellApplication;

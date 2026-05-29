@@ -351,8 +351,8 @@ without PyPI dependencies or multiple source files. Once a script needs
 dependencies, console entry points, or a package layout, give it the uv project
 shape.
 
-The Python helpers run basedpyright in `standard` mode by default. Change the
-type-checking mode only when the package has a deliberate reason.
+The Python helpers run `ty` by default. Disable the check only when the package
+has a deliberate reason.
 
 ## Sane defaults
 

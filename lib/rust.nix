@@ -278,9 +278,8 @@ let
   # Flatten workspace inheritance in a vendored Cargo.toml before rustc sees it.
   # Vendored from nixpkgs so a downstream rename of
   # `pkgs/build-support/rust/replace-workspace-values.py` doesn't surface as a
-  # `readFile` error here; `ix.writePythonApplication` also runs basedpyright on
-  # the body at build time, which the upstream `pkgs.writers.writePython3` path
-  # did not.
+  # `readFile` error here; `ix.writePythonApplication` also runs ty on the body
+  # at build time, which the upstream `pkgs.writers.writePython3` path did not.
   replaceWorkspaceValues = writePythonApplication {
     name = "replace-workspace-values";
     src = ./rust-replace-workspace-values.py;
