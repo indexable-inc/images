@@ -7,6 +7,7 @@
 }:
 let
   inherit (lib)
+    mkDefault
     mkEnableOption
     mkIf
     mkOption
@@ -158,7 +159,8 @@ in
 
       listenAddress = mkOption {
         type = types.str;
-        default = if cfg.clickhouse.openFirewall then "0.0.0.0" else cfg.clickhouse.host;
+        default = cfg.clickhouse.host;
+        defaultText = lib.literalExpression "config.services.ix-observability.clickhouse.host";
         description = "Address ClickHouse binds for native and HTTP SQL.";
       };
 
@@ -203,7 +205,7 @@ in
 
       listenAddress = mkOption {
         type = types.str;
-        default = if cfg.stack.enable then "0.0.0.0" else "127.0.0.1";
+        default = "127.0.0.1";
         description = "Address where the collector listens for OTLP gRPC and HTTP.";
       };
 
@@ -339,6 +341,12 @@ in
   };
 
   config = lib.mkMerge [
+    {
+      services.ix-observability = {
+        clickhouse.listenAddress = mkIf cfg.clickhouse.openFirewall (mkDefault "0.0.0.0");
+        collector.listenAddress = mkIf cfg.stack.enable (mkDefault "0.0.0.0");
+      };
+    }
     (mkIf stackEnabled {
       services.clickhouse = {
         enable = true;
