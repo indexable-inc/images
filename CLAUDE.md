@@ -46,6 +46,12 @@ DRY up repeated mechanics when they express one domain fact. Do not hide
 legitimately different behavior behind a forced abstraction; three similar
 lines are better than a premature shared helper.
 
+Implement core backend and domain logic once in Rust, then expose it to other
+ecosystems through thin bindings rather than reimplementing it per language. A
+Python, Wasm, or FFI surface should wrap a Rust crate that owns the behavior and
+carry no domain logic of its own, so every caller shares one tested
+implementation.
+
 Refactor after the patch works. A passing diff with awkward ownership is not
 done. Replace string-shaped domain values with typed constructors or
 declarative helpers at the owner boundary instead of pushing parsing back into
