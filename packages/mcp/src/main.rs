@@ -132,28 +132,33 @@ impl McpServer {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct CreateSessionRequest {
     cwd: Option<PathBuf>,
     session_id: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct OptionalSessionRequest {
     session_id: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SessionRequest {
     session_id: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct EvalRequest {
     expression: String,
     session_id: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ExecRequest {
     source: String,
     session_id: Option<String>,
@@ -522,6 +527,15 @@ mod tests {
         let sum = session.request("eval", json!({ "expression": "1 + 1" }))?;
         assert_eq!(sum, "result:\n2");
         Ok(())
+    }
+
+    #[test]
+    fn create_session_rejects_unknown_fields() {
+        // A stale client that still sends the removed `command` field must fail
+        // loudly at deserialization, not silently land on the pinned venv and
+        // surface as a confusing import error later.
+        let stale = json!({ "command": ["uv", "run", "python"], "cwd": "/tmp" });
+        assert!(serde_json::from_value::<CreateSessionRequest>(stale).is_err());
     }
 
     fn run_worker_stderr_burst_session() -> Result<String> {
