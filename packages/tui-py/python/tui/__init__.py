@@ -11,16 +11,16 @@ keystrokes, and observe their VT100-rendered viewport. The public surface is:
     Color           a cell color: None (default), int (palette), or (r, g, b)
     WaitTimeout     raised by `Tui.wait_for(...)` when nothing matched in time
 
-Every blocking I/O method has an `a`-prefixed coroutine variant that returns a
+The interface is async-only. Every I/O method is a coroutine that returns a
 native asyncio-awaitable from the Rust side (via pyo3-async-runtimes); no
-thread-pool hop is involved.
+thread-pool hop is involved. Construction and the shape accessors (`id`,
+`command`, `size`, `is_alive`, `exit_code`) are the only synchronous surface.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
-import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -194,22 +194,26 @@ def _build_predicate(pattern: Pattern) -> Callable[[Snapshot], bool]:
 
 
 class Tui:
-    """A single spawned PTY-backed process.
+    """A single spawned PTY-backed process, driven asynchronously.
 
-    Construct directly with the command and its args:
+    Construct it with the command and its args, then drive it inside an
+    `async with` block:
 
-        with Tui("python", "-q") as tui:
-            tui.enter("1 + 2")
-            snap = tui.wait_for("3", timeout=2.0)
+        async with Tui("python", "-q") as tui:
+            await tui.enter("1 + 2")
+            snap = await tui.wait_for("3", timeout=2.0)
 
     The terminal opens at `rows` x `cols` (default 80x24) with `scrollback_lines`
-    of history (default 10,000). A single process-wide tokio runtime drives
-    every spawned PTY. Sync methods release the GIL on the underlying Rust call;
-    async methods return native asyncio coroutines bridged through
-    pyo3-async-runtimes, with no thread-pool hop.
+    of history (default 10,000). A single process-wide tokio runtime drives every
+    spawned PTY; each I/O method returns a native asyncio coroutine bridged
+    through pyo3-async-runtimes, with no thread-pool hop. Construction and the
+    shape accessors (`id`, `command`, `args`, `size`, `is_alive`, `exit_code`)
+    are the only synchronous surface.
 
-    There is no force-kill path today. `interrupt()` sends Ctrl+C, which most
-    cooperative programs respect; `with` blocks will interrupt on exit.
+    `kill()` sends SIGKILL; `interrupt()` sends a cooperative Ctrl+C; `close()`
+    force-kills and drops the terminal from `list_all()`. `async with` blocks
+    call `close()` on exit, so an editor or REPL that ignores Ctrl+C still goes
+    away.
     """
 
     __slots__ = ("_raw",)
@@ -235,7 +239,7 @@ class Tui:
         """All Tui instances currently alive in this process."""
         return [cls._from_raw(raw) for raw in _RawTuiInstance.list_all()]
 
-    # -- identity / shape ---------------------------------------------------
+    # -- identity / shape (synchronous) -------------------------------------
 
     @property
     def id(self) -> uuid.UUID:
@@ -257,39 +261,6 @@ class Tui:
     def scrollback_limit(self) -> int:
         return self._raw.scrollback_limit
 
-    def resize(self, rows: int, cols: int) -> Self:
-        """Resize the terminal, delivering SIGWINCH to the child.
-
-        Visible from every handle to the same process. Returns `self`.
-        """
-        self._raw.resize(rows, cols)
-        return self
-
-    # -- writing ------------------------------------------------------------
-
-    def write(self, data: str) -> Self:
-        """Send `data` to the PTY exactly. Returns `self` for chaining."""
-        self._raw.write(data)
-        return self
-
-    def send(self, *parts: str) -> Self:
-        """Concatenate and send. Mix `Key` members with literal text freely."""
-        if parts:
-            self._raw.write("".join(parts))
-        return self
-
-    def enter(self, text: str = "") -> Self:
-        """Send `text` followed by Enter."""
-        self._raw.write(text + Key.ENTER)
-        return self
-
-    def interrupt(self) -> Self:
-        """Send Ctrl+C. Cooperative: a program that traps SIGINT ignores it."""
-        self._raw.write(Key.CTRL_C)
-        return self
-
-    # -- lifecycle ----------------------------------------------------------
-
     def is_alive(self) -> bool:
         """Whether the child process is still running."""
         return self._raw.is_alive()
@@ -299,76 +270,69 @@ class Tui:
         """The exit code, or `None` while running or if killed by a signal."""
         return self._raw.exit_code()
 
-    def wait(self, timeout: float | None = None) -> int | None:
-        """Block until the child exits; return its exit code.
+    # -- writing ------------------------------------------------------------
 
-        `None` means the process was terminated by a signal (it has no exit
-        code). Raises `WaitTimeout` if `timeout` seconds pass first.
-        """
-        timeout_ms = None if timeout is None else max(1, int(timeout * 1000))
-        if not self._raw.wait(timeout_ms):
-            raise WaitTimeout(f"{self.command!r} still running after {timeout}s")
-        return self._raw.exit_code()
+    async def write(self, data: str) -> None:
+        """Send `data` to the PTY exactly."""
+        await self._raw.write_async(data)
 
-    def kill(self) -> Self:
-        """Force-terminate the child with SIGKILL. A no-op if already exited."""
-        self._raw.kill()
-        return self
+    async def send(self, *parts: str) -> None:
+        """Concatenate and send. Mix `Key` members with literal text freely."""
+        if parts:
+            await self._raw.write_async("".join(parts))
 
-    def close(self) -> Self:
-        """Force-kill the child and stop tracking it.
+    async def enter(self, text: str = "") -> None:
+        """Send `text` followed by Enter."""
+        await self._raw.write_async(text + Key.ENTER)
 
-        Drops the terminal from `Tui.list_all()` and the dashboard. This is
-        what `with` blocks call on exit, so an editor or REPL that ignores
-        Ctrl+C still goes away.
-        """
-        self._raw.close()
-        return self
+    async def interrupt(self) -> None:
+        """Send Ctrl+C. Cooperative: a program that traps SIGINT ignores it."""
+        await self._raw.write_async(Key.CTRL_C)
 
     # -- reading ------------------------------------------------------------
 
-    def viewport(self) -> list[str]:
+    async def read(self, *, timeout: float | None = None) -> list[str]:
+        """Read the viewport.
+
+        With `timeout=None` (the default), returns immediately. With `timeout`
+        set, blocks up to that many seconds waiting for output.
+        """
+        if timeout is None:
+            return await self._raw.read_viewport_async()
+        return await self._raw.read_blocking_async(int(timeout * 1000))
+
+    async def viewport(self) -> list[str]:
         """Current viewport as a list of lines."""
-        return self._raw.read_viewport()
+        return await self._raw.read_viewport_async()
 
-    def scrollback(self) -> list[str]:
+    async def scrollback(self) -> list[str]:
         """Lines that have scrolled off the viewport, oldest first."""
-        return self._raw.read_scrollback()
+        return await self._raw.read_scrollback_async()
 
-    def text(self) -> str:
+    async def text(self) -> str:
         """Current viewport joined with newlines."""
-        return "\n".join(self._raw.read_viewport())
+        return "\n".join(await self._raw.read_viewport_async())
 
-    def snapshot(self) -> Snapshot:
+    async def snapshot(self) -> Snapshot:
         """Immutable point-in-time view of viewport + scrollback."""
-        scrollback, viewport = self._raw.read_full()
+        scrollback, viewport = await self._raw.read_full_async()
         return Snapshot(
             viewport=tuple(viewport),
             scrollback=tuple(scrollback),
             size=self.size,
         )
 
-    def read(self, *, timeout: float | None = None) -> list[str]:
-        """Read the viewport.
-
-        With `timeout=None` (the default), returns immediately.
-        With `timeout` set, blocks up to that many seconds waiting for output.
-        """
-        if timeout is None:
-            return self._raw.read_viewport()
-        return self._raw.read_blocking(int(timeout * 1000))
-
-    def chars(self) -> NDArray[np.uint32]:
+    async def chars(self) -> NDArray[np.uint32]:
         """Per-cell Unicode codepoints of the viewport, shape `(rows, cols)`."""
-        return self._raw.read_chars_array()
+        return await self._raw.read_chars_array_async()
 
-    def styled_cells(self) -> list[list[StyledCell]]:
+    async def styled_cells(self) -> list[list[StyledCell]]:
         """Per-cell styling for the viewport, indexed as `[row][col]`."""
-        return self._raw.read_styled_cells()
+        return await self._raw.read_styled_cells_async()
 
     # -- waits --------------------------------------------------------------
 
-    def wait_for(
+    async def wait_for(
         self,
         pattern: Pattern,
         *,
@@ -382,75 +346,10 @@ class Tui:
         snapshot. Raises `WaitTimeout` on expiry.
         """
         check = _build_predicate(pattern)
-        deadline = time.monotonic() + timeout
-        while True:
-            snap = self.snapshot()
-            if check(snap):
-                return snap
-            if time.monotonic() >= deadline:
-                raise WaitTimeout(
-                    f"{self.command!r} did not match {pattern!r} within {timeout:.2f}s"
-                )
-            time.sleep(poll)
-
-    # -- async I/O ----------------------------------------------------------
-
-    async def awrite(self, data: str) -> None:
-        """Native asyncio-awaitable PTY write."""
-        await self._raw.write_async(data)
-
-    async def asend(self, *parts: str) -> None:
-        if parts:
-            await self._raw.write_async("".join(parts))
-
-    async def aenter(self, text: str = "") -> None:
-        await self._raw.write_async(text + Key.ENTER)
-
-    async def aread(self, *, timeout: float | None = None) -> list[str]:
-        """Native asyncio-awaitable viewport read."""
-        if timeout is None:
-            return await self._raw.read_viewport_async()
-        return await self._raw.read_blocking_async(int(timeout * 1000))
-
-    async def asnapshot(self) -> Snapshot:
-        """Native asyncio-awaitable snapshot."""
-        scrollback, viewport = await self._raw.read_full_async()
-        return Snapshot(
-            viewport=tuple(viewport),
-            scrollback=tuple(scrollback),
-            size=self.size,
-        )
-
-    async def achars(self) -> NDArray[np.uint32]:
-        return await self._raw.read_chars_array_async()
-
-    async def astyled_cells(self) -> list[list[StyledCell]]:
-        return await self._raw.read_styled_cells_async()
-
-    async def aresize(self, rows: int, cols: int) -> None:
-        """Native asyncio-awaitable resize."""
-        await self._raw.resize_async(rows, cols)
-
-    async def akill(self) -> None:
-        """Native asyncio-awaitable force-kill (SIGKILL)."""
-        await self._raw.kill_async()
-
-    async def await_exit(self) -> int | None:
-        """Await the child's exit, returning its exit code (`None` if signaled)."""
-        return await self._raw.wait_async()
-
-    async def await_for(
-        self,
-        pattern: Pattern,
-        *,
-        timeout: float = 5.0,
-        poll: float = 0.05,
-    ) -> Snapshot:
-        check = _build_predicate(pattern)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while True:
-            snap = await self.asnapshot()
+            snap = await self.snapshot()
             if check(snap):
                 return snap
             if loop.time() >= deadline:
@@ -459,31 +358,48 @@ class Tui:
                 )
             await asyncio.sleep(poll)
 
-    # -- protocol -----------------------------------------------------------
+    # -- lifecycle ----------------------------------------------------------
 
-    def __str__(self) -> str:
-        return self.text()
+    async def resize(self, rows: int, cols: int) -> None:
+        """Resize the terminal, delivering SIGWINCH to the child.
+
+        Visible from every handle to the same process.
+        """
+        await self._raw.resize_async(rows, cols)
+
+    async def wait(self, timeout: float | None = None) -> int | None:
+        """Block until the child exits; return its exit code.
+
+        `None` means the process was terminated by a signal (it has no exit
+        code). Raises `WaitTimeout` if `timeout` seconds pass first.
+        """
+        if timeout is None:
+            return await self._raw.wait_async()
+        try:
+            return await asyncio.wait_for(self._raw.wait_async(), timeout)
+        except TimeoutError as exc:
+            raise WaitTimeout(f"{self.command!r} still running after {timeout}s") from exc
+
+    async def kill(self) -> None:
+        """Force-terminate the child with SIGKILL. A no-op if already exited."""
+        await self._raw.kill_async()
+
+    async def close(self) -> None:
+        """Force-kill the child and stop tracking it.
+
+        Drops the terminal from `Tui.list_all()` and the dashboard. This is what
+        `async with` blocks call on exit, so an editor or REPL that ignores
+        Ctrl+C still goes away.
+        """
+        await self._raw.close_async()
+
+    # -- protocol -----------------------------------------------------------
 
     def __repr__(self) -> str:
         return (
             f"Tui(id={self.id}, command={self.command!r}, "
             f"args={list(self.args)!r}, size={self.size!r})"
         )
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        try:
-            self.close()
-        except Exception:
-            # Best-effort: the child may already be gone.
-            pass
 
     async def __aenter__(self) -> Self:
         return self
@@ -495,8 +411,9 @@ class Tui:
         tb: TracebackType | None,
     ) -> None:
         try:
-            self._raw.close()
+            await self._raw.close_async()
         except Exception:
+            # Best-effort: the child may already be gone.
             pass
 
 
@@ -511,10 +428,10 @@ class Dashboard:
     The server, the Loro CRDT document, and the SSE stream all live in Rust; a
     background poll loop samples each terminal's viewport into the document and
     streams updates to connected browsers. Open `url` to watch the grid. Stop
-    with `stop()`, or use the instance as a context manager.
+    with `await stop()`, or use the handle as an async context manager.
 
-        with serve() as dash:
-            webbrowser.open(dash.url)
+        async with await serve() as dash:
+            dash.open()
             ...
     """
 
@@ -540,26 +457,26 @@ class Dashboard:
         webbrowser.open(self.url)
         return self
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """Stop the server and its poll loop. Idempotent."""
-        self._raw.stop()
+        await self._raw.stop()
 
     def __repr__(self) -> str:
         return f"Dashboard(url={self.url!r})"
 
-    def __enter__(self) -> Self:
+    async def __aenter__(self) -> Self:
         return self
 
-    def __exit__(
+    async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        self.stop()
+        await self._raw.stop()
 
 
-def serve(
+async def serve(
     host: str = "127.0.0.1",
     port: int = 8080,
     *,
@@ -571,10 +488,10 @@ def serve(
     `host` must be an IP literal (`127.0.0.1` for local only, `0.0.0.0` to
     expose on the network); a hostname is not resolved. Pass `port=0` to bind an
     ephemeral port and read it back from `Dashboard.url`. `poll` is the viewport
-    sampling interval in seconds. Returns immediately; the server runs in
-    background threads owned by Rust.
+    sampling interval in seconds. The server runs in background threads owned by
+    Rust; await this to get the handle.
     """
-    raw = _raw_serve(host, port, max(1, int(poll * 1000)))
+    raw = await _raw_serve(host, port, max(1, int(poll * 1000)))
     dashboard = Dashboard(raw)
     if open_browser:
         dashboard.open()

@@ -4,11 +4,12 @@ Python bindings for the [`tui`](../tui) Rust crate. Spawn and control multiple
 PTY-backed processes from Python with full vt100 emulation, scrollback, and
 optional NumPy access to per-cell character data.
 
-The Python API is a single class, `Tui`. Construct it, drive it, read it. A
-single process-wide tokio runtime drives every spawned PTY; every blocking
-I/O method has an `a`-prefixed coroutine variant that bridges a real Rust
-future into asyncio via [pyo3-async-runtimes][pyo3-async-runtimes] — no
-thread-pool hop.
+The Python API is a single class, `Tui`. Construct it, drive it, read it. The
+API is async-only. A single process-wide tokio runtime drives every spawned
+PTY, and every I/O method is a coroutine that bridges a real Rust future into
+asyncio via [pyo3-async-runtimes][pyo3-async-runtimes], with no thread-pool hop.
+Only construction and the shape accessors (`id`, `command`, `size`, `is_alive`,
+`exit_code`) are synchronous.
 
 PyPI distribution name: `ix-tui`. Import name: `tui`.
 
@@ -35,21 +36,25 @@ not thread through. From a macOS checkout, build it on a Linux builder with
 ## Quick start
 
 ```python
+import asyncio
 import re
 from tui import Tui
 
-with Tui("python", "-q") as tui:
-    tui.enter("1 + 2")
-    snap = tui.wait_for(re.compile(r"^3$", re.MULTILINE), timeout=2.0)
-    print(snap.viewport[-3:])
-    # ('>>> 1 + 2', '3', '>>> ')
+async def main() -> None:
+    async with Tui("python", "-q") as tui:
+        await tui.enter("1 + 2")
+        snap = await tui.wait_for(re.compile(r"^3$", re.MULTILINE), timeout=2.0)
+        print(snap.viewport[-3:])
+        # ('>>> 1 + 2', '3', '>>> ')
+
+asyncio.run(main())
 ```
 
-`tui.snapshot()` returns a frozen `Snapshot` (viewport, scrollback, size). It
-supports `str(snap)`, `"needle" in snap`, and `.text` / `.full_text`.
+`await tui.snapshot()` returns a frozen `Snapshot` (viewport, scrollback, size).
+It supports `str(snap)`, `"needle" in snap`, and `.text` / `.full_text`.
 
 The terminal opens at 80x24 with 10,000 lines of scrollback. Override per
-instance with keyword args:
+instance with keyword args on the (synchronous) constructor:
 
 ```python
 Tui("bash", "--norc", "-i", rows=40, cols=120, scrollback_lines=50_000)
@@ -60,18 +65,23 @@ Tui("bash", "--norc", "-i", rows=40, cols=120, scrollback_lines=50_000)
 ### Drive a REPL and read its output
 
 ```python
+import asyncio
 from tui import Tui
 
-with Tui("python", "-q") as tui:
-    tui.enter("1 + 2")
-    snap = tui.wait_for("3", timeout=2.0)
-    print(snap.text.splitlines()[-2:])
+async def main() -> None:
+    async with Tui("python", "-q") as tui:
+        await tui.enter("1 + 2")
+        snap = await tui.wait_for("3", timeout=2.0)
+        print(snap.text.splitlines()[-2:])
+
+asyncio.run(main())
 ```
 
-### Async: many TUIs in parallel
+### Many TUIs in parallel
 
-Every I/O method has an `a`-prefixed coroutine variant. These are real Rust
-futures bridged into asyncio — no `to_thread` shim.
+Because every method is a coroutine, fanning out is plain `asyncio.gather`. The
+coroutines are real Rust futures bridged into asyncio, so there is no
+`to_thread` shim.
 
 ```python
 import asyncio
@@ -79,8 +89,8 @@ from tui import Tui
 
 async def run(cmd: str, *args: str) -> str:
     async with Tui(cmd, *args) as t:
-        await t.aenter("printf READY")
-        snap = await t.await_for("READY", timeout=2.0)
+        await t.enter("printf READY")
+        snap = await t.wait_for("READY", timeout=2.0)
         return snap.text
 
 async def main() -> None:
@@ -101,13 +111,17 @@ asyncio.run(main())
 concatenate with literal text and pass straight to `Tui.send`:
 
 ```python
+import asyncio
 from tui import Key, Tui
 
-with Tui("less", "/etc/hosts") as t:
-    t.send(Key.PAGE_DOWN, Key.PAGE_DOWN)
-    t.send(Key.ctrl("g"))          # any Ctrl-letter
-    t.send(Key.alt("x"))           # any Alt-letter
-    t.send("q")
+async def main() -> None:
+    async with Tui("less", "/etc/hosts") as t:
+        await t.send(Key.PAGE_DOWN, Key.PAGE_DOWN)
+        await t.send(Key.ctrl("g"))          # any Ctrl-letter
+        await t.send(Key.alt("x"))           # any Alt-letter
+        await t.send("q")
+
+asyncio.run(main())
 ```
 
 ### Match with regex or a predicate
@@ -116,59 +130,72 @@ with Tui("less", "/etc/hosts") as t:
 takes the current `Snapshot`:
 
 ```python
+import asyncio
 import re
 from tui import Tui
 
-with Tui("bash", "--norc", "-i") as t:
-    t.enter("ls /etc | head -3")
-    snap = t.wait_for(re.compile(r"\.conf$", re.MULTILINE), timeout=2.0)
-    snap = t.wait_for(lambda s: len(s.viewport) >= 5, timeout=1.0)
+async def main() -> None:
+    async with Tui("bash", "--norc", "-i") as t:
+        await t.enter("ls /etc | head -3")
+        snap = await t.wait_for(re.compile(r"\.conf$", re.MULTILINE), timeout=2.0)
+        snap = await t.wait_for(lambda s: len(s.viewport) >= 5, timeout=1.0)
+
+asyncio.run(main())
 ```
 
 ### Per-cell data
 
-`tui.chars()` returns a `numpy.uint32` array of Unicode codepoints, shape
-`(rows, cols)`. `tui.styled_cells()` returns a nested list of `StyledCell`
+`await tui.chars()` returns a `numpy.uint32` array of Unicode codepoints, shape
+`(rows, cols)`. `await tui.styled_cells()` returns a nested list of `StyledCell`
 objects (`char`, `fg`, `bg`, `bold`, `italic`, `underline`, `inverse`).
 
 `fg` and `bg` are `Color` values: `None` for the terminal default, an `int` in
 `0..=255` for a palette index, or an `(r, g, b)` tuple for truecolor.
 
 ```python
+import asyncio
 import numpy as np
 from tui import Tui
 
-with Tui("bash", "--norc", "-i") as t:
-    t.enter("printf 'AAA-MARKER'")
-    t.wait_for("AAA-MARKER", timeout=1.0)
+async def main() -> None:
+    async with Tui("bash", "--norc", "-i") as t:
+        await t.enter("printf 'AAA-MARKER'")
+        await t.wait_for("AAA-MARKER", timeout=1.0)
 
-    cells = t.chars()                         # NDArray[uint32], (rows, cols)
-    has_a = bool(np.any(cells == ord("A")))
-    styled = t.styled_cells()
-    bolds = [(r, c) for r, row in enumerate(styled)
-                    for c, cell in enumerate(row) if cell.bold]
-    reds = [cell.char for row in styled for cell in row if cell.fg == 1]
+        cells = await t.chars()                   # NDArray[uint32], (rows, cols)
+        has_a = bool(np.any(cells == ord("A")))
+        styled = await t.styled_cells()
+        bolds = [(r, c) for r, row in enumerate(styled)
+                        for c, cell in enumerate(row) if cell.bold]
+        reds = [cell.char for row in styled for cell in row if cell.fg == 1]
+
+asyncio.run(main())
 ```
 
 ### Handle timeouts
 
 ```python
+import asyncio
 from tui import Tui, WaitTimeout
 
-with Tui("bash", "--norc", "-i") as t:
-    try:
-        t.wait_for("never gonna happen", timeout=0.25)
-    except WaitTimeout as exc:
-        print("missed it:", exc)
+async def main() -> None:
+    async with Tui("bash", "--norc", "-i") as t:
+        try:
+            await t.wait_for("never gonna happen", timeout=0.25)
+        except WaitTimeout as exc:
+            print("missed it:", exc)
+
+asyncio.run(main())
 ```
 
 ### List live instances
 
-`Tui.list_all()` returns every `Tui` still tracked in this process — handy in
-tests or REPLs:
+`Tui.list_all()` returns every `Tui` still tracked in this process. Both it and
+the constructor are synchronous, so a quick census needs no event loop:
 
 ```python
 from tui import Tui
+
 Tui("bash", "--norc", "-i")
 Tui("python", "-q")
 print(len(Tui.list_all()))   # 2
@@ -180,19 +207,23 @@ A spawned process is more than a screen: you can wait on it, read its exit
 code, and stop it for real.
 
 ```python
+import asyncio
 from tui import Tui
 
-t = Tui("bash", "-c", "echo hi; exit 7")
-code = t.wait(timeout=3)        # blocks until exit; raises WaitTimeout on deadline
-print(code, t.is_alive())       # 7 False
-print(t.exit_code)              # 7 (None while running or if killed by a signal)
+async def main() -> None:
+    t = Tui("bash", "-c", "echo hi; exit 7")
+    code = await t.wait(timeout=3)     # blocks until exit; raises WaitTimeout on deadline
+    print(code, t.is_alive())          # 7 False
+    print(t.exit_code)                 # 7 (None while running or if killed by a signal)
+
+asyncio.run(main())
 ```
 
-`interrupt()` sends a cooperative Ctrl+C. `kill()` sends `SIGKILL`, which a
-program that traps interrupts (an editor in normal mode, a stuck REPL) cannot
-ignore. `close()` force-kills and drops the terminal from `list_all()` and the
-dashboard; `with`/`async with` blocks call it on exit, so an editor left open
-still goes away. The async twins are `akill()` and `await_exit()`.
+`await t.interrupt()` sends a cooperative Ctrl+C. `await t.kill()` sends
+`SIGKILL`, which a program that traps interrupts (an editor in normal mode, a
+stuck REPL) cannot ignore. `await t.close()` force-kills and drops the terminal
+from `list_all()` and the dashboard; `async with` blocks call it on exit, so an
+editor left open still goes away.
 
 A terminal whose child has exited keeps its final screen readable, so you can
 inspect output after the fact; writing to it raises instead.
@@ -206,16 +237,20 @@ Server-Sent-Events stream all live in Rust; the browser holds its own
 on the grid, dimmed and marked `exited`.
 
 ```python
+import asyncio
 from tui import Tui, serve
 
-Tui("bash", "--norc", "-i")
-Tui("python", "-q")
+async def main() -> None:
+    Tui("bash", "--norc", "-i")
+    Tui("python", "-q")
 
-dash = serve(port=8080)        # non-blocking; returns immediately
-print(dash.url)                # http://127.0.0.1:8080/
-# dash.open()                  # open in the default browser
-...
-dash.stop()                    # or use `with serve() as dash:`
+    dash = await serve(port=8080)  # returns the handle once the server is bound
+    print(dash.url)                # http://127.0.0.1:8080/
+    # dash.open()                  # open in the default browser
+    ...
+    await dash.stop()              # or: `async with await serve() as dash:`
+
+asyncio.run(main())
 ```
 
 Pass `host="0.0.0.0"` to expose it on the network (the host must be an IP
@@ -234,8 +269,8 @@ to tune the viewport sampling interval in seconds.
 | `Key`          | ANSI keystroke constants + `Key.ctrl`/`Key.alt`.       |
 | `StyledCell`   | One cell: `char`, `fg`/`bg`, and VT100 attributes.     |
 | `Color`        | `None` (default), `int` (palette), or `(r, g, b)`.     |
-| `WaitTimeout`  | Raised by `wait_for` / `await_for` on deadline expiry. |
-| `serve`        | Start the web dashboard for every live `Tui`.          |
-| `Dashboard`    | Handle to a running dashboard: `url`, `open`, `stop`.   |
+| `WaitTimeout`  | Raised by `wait_for` / `wait` on deadline expiry.      |
+| `serve`        | Await to start the web dashboard for every live `Tui`. |
+| `Dashboard`    | Handle to a running dashboard: `url`, `open`, `stop`.  |
 
 [pyo3-async-runtimes]: https://docs.rs/pyo3-async-runtimes/

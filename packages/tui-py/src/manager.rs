@@ -22,6 +22,11 @@ pub fn global_manager() -> Arc<tui::TuiManager> {
 /// underlying PTY child and registers it with the global manager. The wrapped
 /// `tui::TuiInstance` holds its own clone of the manager's runtime, so the
 /// runtime stays alive for as long as Python holds this handle.
+///
+/// Every I/O method returns a native asyncio-awaitable coroutine bridged
+/// through pyo3-async-runtimes; the high-level `tui.Tui` wrapper is async-only,
+/// so there are no GIL-releasing sync twins here. Only the pure accessors
+/// (`is_alive`, `exit_code`, the shape getters) stay synchronous.
 #[pyclass(frozen, module = "tui._tui")]
 pub struct TuiInstance {
     inner: tui::TuiInstance,
@@ -101,52 +106,22 @@ impl TuiInstance {
         self.inner.scrollback_limit
     }
 
-    // -- sync I/O ---------------------------------------------------------
-
-    fn write(&self, py: Python<'_>, data: &str) -> PyResult<()> {
-        let inner = self.inner.clone();
-        let data = data.to_owned();
-        py.detach(move || inner.write(&data))?;
-        Ok(())
+    /// Whether the child process is still running. Reads cached state, so it
+    /// stays synchronous.
+    fn is_alive(&self) -> bool {
+        self.inner.is_alive()
     }
 
-    fn read_viewport(&self, py: Python<'_>) -> PyResult<Vec<String>> {
-        let inner = self.inner.clone();
-        let lines = py.detach(move || inner.read_viewport())?;
-        Ok(lines)
+    /// The exit code, or `None` while running or if terminated by a signal.
+    /// Reads cached state, so it stays synchronous.
+    fn exit_code(&self) -> Option<i32> {
+        match self.inner.exit_state() {
+            tui::ExitState::Exited(code) => code,
+            tui::ExitState::Running => None,
+        }
     }
 
-    fn read_scrollback(&self, py: Python<'_>) -> PyResult<Vec<String>> {
-        let inner = self.inner.clone();
-        let lines = py.detach(move || inner.read_scrollback())?;
-        Ok(lines)
-    }
-
-    fn read_full(&self, py: Python<'_>) -> PyResult<(Vec<String>, Vec<String>)> {
-        let inner = self.inner.clone();
-        let full = py.detach(move || inner.read_full())?;
-        Ok((full.scrollback, full.viewport))
-    }
-
-    fn read_blocking(&self, py: Python<'_>, timeout_ms: u64) -> PyResult<Vec<String>> {
-        let inner = self.inner.clone();
-        let lines = py.detach(move || inner.read_blocking(Duration::from_millis(timeout_ms)))?;
-        Ok(lines)
-    }
-
-    fn read_chars_array<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<u32>>> {
-        let inner = self.inner.clone();
-        let rows = py.detach(move || inner.read_chars())?;
-        chars_to_array(py, rows)
-    }
-
-    fn read_styled_cells(&self, py: Python<'_>) -> PyResult<Vec<Vec<StyledCell>>> {
-        let inner = self.inner.clone();
-        let cells = py.detach(move || inner.read_styled_cells())?;
-        Ok(styled_to_nested(&cells))
-    }
-
-    // -- async I/O (returns asyncio-awaitable coroutines) -----------------
+    // -- async I/O (native asyncio-awaitable coroutines) ------------------
 
     fn write_async<'py>(&self, py: Python<'py>, data: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
@@ -213,46 +188,21 @@ impl TuiInstance {
         })
     }
 
-    // -- lifecycle --------------------------------------------------------
-
-    /// Whether the child process is still running.
-    fn is_alive(&self) -> bool {
-        self.inner.is_alive()
-    }
-
-    /// The exit code, or `None` while running or if terminated by a signal.
-    fn exit_code(&self) -> Option<i32> {
-        match self.inner.exit_state() {
-            tui::ExitState::Exited(code) => code,
-            tui::ExitState::Running => None,
-        }
-    }
-
-    /// Block until the child exits, returning `True`, or `False` on timeout.
-    #[pyo3(signature = (timeout_ms=None))]
-    fn wait(&self, py: Python<'_>, timeout_ms: Option<u64>) -> bool {
+    /// Resize the terminal to `rows` x `cols` (delivers SIGWINCH to the child).
+    fn resize_async<'py>(
+        &self,
+        py: Python<'py>,
+        rows: u16,
+        cols: u16,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        py.detach(move || inner.wait(timeout_ms.map(Duration::from_millis)).is_some())
+        future_into_py(py, async move {
+            inner.resize_async(rows, cols).await?;
+            Ok(())
+        })
     }
 
     /// Force-terminate the child with `SIGKILL`. A no-op if already exited.
-    fn kill(&self, py: Python<'_>) -> PyResult<()> {
-        let inner = self.inner.clone();
-        py.detach(move || inner.kill())?;
-        Ok(())
-    }
-
-    /// Force-kill the child and stop tracking it, dropping it from `list_all`
-    /// and the dashboard. Tolerates an already-exited child.
-    fn close(&self, py: Python<'_>) {
-        let inner = self.inner.clone();
-        let id = self.inner.id;
-        py.detach(move || {
-            let _ = inner.kill();
-            let _ = global_manager().remove(&id);
-        });
-    }
-
     fn kill_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {
@@ -261,6 +211,7 @@ impl TuiInstance {
         })
     }
 
+    /// Await the child's exit, returning its exit code (`None` if signaled).
     fn wait_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {
@@ -272,22 +223,14 @@ impl TuiInstance {
         })
     }
 
-    /// Resize the terminal to `rows` x `cols` (delivers SIGWINCH to the child).
-    fn resize(&self, py: Python<'_>, rows: u16, cols: u16) -> PyResult<()> {
+    /// Force-kill the child and stop tracking it, dropping it from `list_all`
+    /// and the dashboard. Tolerates an already-exited child.
+    fn close_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        py.detach(move || inner.resize(rows, cols))?;
-        Ok(())
-    }
-
-    fn resize_async<'py>(
-        &self,
-        py: Python<'py>,
-        rows: u16,
-        cols: u16,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
+        let id = self.inner.id;
         future_into_py(py, async move {
-            inner.resize_async(rows, cols).await?;
+            let _ = inner.kill_async().await;
+            let _ = global_manager().remove(&id);
             Ok(())
         })
     }
