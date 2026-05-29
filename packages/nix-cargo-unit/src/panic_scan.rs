@@ -13,19 +13,20 @@
 //! branches with no relocation left to read, which would need disassembly.
 //! Generic functions are codegened where they are monomorphized, so a generic
 //! that carries no relocation in its defining library's objects does carry one
-//! in the bin or test object that instantiates it. Scanning every unit's
+//! in the bin object that instantiates it. Scanning every production unit's
 //! objects and scoping findings to the workspace crate set therefore attributes
-//! a monomorphized library generic back to its defining crate.
+//! a monomorphized library generic back to its defining crate. Test and bench
+//! units are not scanned: their bodies legitimately panic.
 //!
 //! This is a best-effort detector, not a soundness proof. A clean result means
 //! "no detected panic call from workspace code reachable through the scanned
 //! units," not "cannot panic." Two classes slip through by construction:
 //!
-//! - Generics no workspace unit instantiates. A public generic that no bin,
-//!   test, or bench in the workspace ever monomorphizes is never codegened, so
-//!   it carries no relocation anywhere here. It is also not reachable from the
-//!   workspace's own entrypoints, but an external downstream consumer could
-//!   still hit a panic in it.
+//! - Generics no production unit instantiates. A public generic that no bin in
+//!   the workspace ever monomorphizes is never codegened, so it carries no
+//!   relocation anywhere here. It is also not reachable from the workspace's own
+//!   production entrypoints, but an external downstream consumer could still hit
+//!   a panic in it.
 //! - Panics through uncatalogued helpers. [`PANIC_SINKS`] lists the common std
 //!   sinks (`core::panicking`, `unwrap_failed`, `expect_failed`); a panic that
 //!   routes through some other std/alloc cold path is missed until its symbol

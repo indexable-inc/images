@@ -418,23 +418,28 @@ fn render_policy_check_entries(
     Ok(entries)
 }
 
-// Units the panic-freedom scan inspects. Every workspace Rust compile is a
-// candidate (lib, bin, test, bench): each contributes a panic-objects
-// derivation whose monomorphized objects the scan reads. Build-script runs have
-// no compile of their own, external crates compile under `--cap-lints warn` and
-// are not the workspace's invariant to hold, and proc-macro / custom-build
-// compile units are host build tooling rather than the shipped surface.
+// Production units the panic-freedom scan inspects: workspace lib and bin
+// compiles, each contributing a panic-objects derivation whose monomorphized
+// objects the scan reads. Test and bench bodies legitimately panic (`assert!`,
+// `unwrap`, explicit `panic!`), so they are excluded; a library generic that
+// only a test instantiates is consequently not covered, which is correct because
+// it is not on a production code path. Build-script runs have no compile of their
+// own, external crates compile under `--cap-lints warn` and are not the
+// workspace's invariant to hold, and proc-macro / custom-build compile units are
+// host build tooling rather than the shipped surface.
 fn is_panic_freedom_candidate(unit: &Unit) -> bool {
     !unit.is_external()
         && !unit.is_proc_macro()
         && !unit.is_run_custom_build()
         && !unit.is_custom_build_compile()
+        && !unit.is_test()
+        && !unit.is_benchmark()
 }
 
 // Every workspace crate name that can appear as a mangled symbol prefix, used to
-// scope findings. A library generic monomorphized inside a bin or test object
-// keeps the library's crate token, so the scan needs the whole set, not just the
-// unit under inspection.
+// scope findings. A library generic monomorphized inside a bin object keeps the
+// library's crate token, so the scan needs the whole set, not just the unit
+// under inspection.
 fn workspace_crate_names(graph: &UnitGraph) -> Vec<String> {
     let mut names: BTreeSet<String> = BTreeSet::new();
     for unit in &graph.units {
@@ -3163,6 +3168,68 @@ mod tests {
         let unchecked = render_units_nix(&graph, &options(false)).unwrap();
         assert!(!unchecked.contains("panicFreedom"));
         assert!(!unchecked.contains("panic-objects"));
+    }
+
+    #[test]
+    fn deny_panics_skips_test_units() {
+        // Test bodies legitimately panic, so a test target must not become a
+        // panic-objects candidate even though it is workspace-owned.
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["test"],
+                    "crate_types": ["bin"],
+                    "name": "helloit",
+                    "src_path": "/workspace/tests/it.rs",
+                    "edition": "2024",
+                    "test": true
+                  },
+                  "profile": { "name": "test", "opt_level": "0" },
+                  "features": [],
+                  "mode": "test",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0, 1]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: true,
+            },
+        )
+        .unwrap();
+
+        assert!(rendered.contains("pname = \"hello-panic-objects\""));
+        assert!(!rendered.contains("helloit-panic-objects"));
+        assert!(!rendered.contains("(scanUnit \"helloit-"));
     }
 
     #[test]
