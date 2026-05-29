@@ -92,6 +92,39 @@ ix.cargoUnit.buildWorkspace {
 Use `makeCoverageReport { testArgsByPackage = { my-crate = [ "--skip" "slow" ]; }; }`
 when a package needs the same libtest arguments every coverage run.
 
+## Cargo Unit Sanitizers
+
+Use native sanitizers when Rust changes touch `unsafe`, FFI, allocator-sensitive
+code, async runtime integration, networking, or concurrency that Miri cannot
+execute. Keep Miri in the validation ladder for undefined behavior it can model;
+native sanitizers cover compiled integration paths.
+
+The smallest native sanitizer smoke is an AddressSanitizer test pass on Linux:
+
+```sh
+CARGO_TARGET_DIR=target/sanitizers/address \
+RUSTFLAGS="-Zsanitizer=address" \
+RUSTDOCFLAGS="-Zsanitizer=address" \
+cargo test --workspace --tests -Zbuild-std --target x86_64-unknown-linux-gnu
+```
+
+For a GitHub Actions smoke job, run the same command after checkout on an
+Ubuntu runner with rustup enabled. `rust-toolchain.toml` pins the nightly
+toolchain and includes `rust-src`, which `-Zbuild-std` needs.
+
+| Mode | Run when | Supported target triples |
+| --- | --- | --- |
+| AddressSanitizer (`address`) | First native sanitizer for ix Rust packages. It catches bounds errors, use-after-free, invalid free, double-free, and many stack lifetime bugs. Linux ASan also enables leak detection by default. | `aarch64-apple-darwin`, `aarch64-unknown-fuchsia`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `x86_64-unknown-fuchsia`, `x86_64-unknown-freebsd`, `x86_64-unknown-linux-gnu` |
+| ThreadSanitizer (`thread`) | Concurrency changes where races are plausible. It needs visibility into synchronization, so partially instrumented code can report false positives, and Rust's upstream docs call out unsupported atomic fences. | `aarch64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `x86_64-unknown-freebsd`, `x86_64-unknown-linux-gnu` |
+| MemorySanitizer (`memory`) | Uninitialized-read hunts where every dependency in the process can be rebuilt with MSan instrumentation. Treat false positives as expected when C/C++ or Rust std stays uninstrumented. | `aarch64-unknown-linux-gnu`, `x86_64-unknown-freebsd`, `x86_64-unknown-linux-gnu` |
+| LeakSanitizer (`leak`) | Leak budgets for long-running services or focused tests where leaks are the signal. Prefer ASan's Linux leak coverage unless a separate leak-only run gives a cleaner failure. | `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` |
+
+The other Rust sanitizer modes are specialized. Reach for CFI, DataFlow,
+HWAddress, MemTag, SafeStack, ShadowCallStack, or RealtimeSanitizer only when
+the package owns that hardening, hardware, ABI, kernel, or realtime constraint.
+Rust's upstream target matrix and flag details live in the
+[Unstable Book sanitizer chapter](https://doc.rust-lang.org/unstable-book/compiler-flags/sanitizer.html).
+
 ## Coding standards
 
 The full style guide lives in [AGENTS.md](AGENTS.md). Skim the section that matches what you're touching:
