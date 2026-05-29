@@ -304,6 +304,13 @@ against a debug-assertion standard library and surfaces some unsafe-precondition
 and stdlib-invariant breakage, but it does not model aliasing, uninitialized
 reads, or data races, so it complements Miri rather than replacing it.
 
+Use [`loom`](https://docs.rs/loom/latest/loom/) for small deterministic
+concurrency primitives whose state fits inside modeled threads, atomics, and
+`std::sync` replacements. Use [`shuttle`](https://docs.rs/shuttle/latest/shuttle/)
+for larger randomized scheduler tests, especially Tokio-shaped workflows; skip
+both when the test would mainly prove a dependency's lock, channel, or runtime
+works instead of a repo-owned invariant.
+
 When auditing a crate with deterministic, fast tests, run
 [`cargo-mutants`](https://mutants.rs/) with
 `nix shell nixpkgs#cargo-mutants -c cargo mutants --package <name>` to surface
