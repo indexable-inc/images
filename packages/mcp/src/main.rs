@@ -368,12 +368,14 @@ fn session_temp_dir(id: &str) -> Result<TempDir> {
 }
 
 /// Build a writable venv from the pinned interpreter and return its `python`.
-/// The interpreter is fixed at `IX_MCP_PYTHON`, which the Nix wrapper always
-/// sets; the bare-binary fallback to `python3` on `PATH` is only for the
-/// unwrapped binary in dev and tests. The venv gives each session a writable
-/// site-packages with no per-call interpreter choice.
+/// The interpreter is fixed at `IX_MCP_PYTHON`, which the Nix wrapper sets. A
+/// missing pin is a hard error rather than an ambient-`python3` fallback, so a
+/// wrapper regression fails loudly instead of silently running whatever is on
+/// `PATH`. The venv gives each session a writable site-packages with no
+/// per-call interpreter choice.
 fn create_venv(temp_dir: &Path) -> Result<String> {
-    let python = std::env::var("IX_MCP_PYTHON").unwrap_or_else(|_| "python3".to_string());
+    let python = std::env::var("IX_MCP_PYTHON")
+        .context("IX_MCP_PYTHON is unset; run ix-mcp via its Nix wrapper, which pins the interpreter")?;
     let venv_dir = temp_dir.join(".venv");
     let status = Command::new(&python)
         .args(["-m", "venv"])
