@@ -54,9 +54,11 @@ is the recommended low-latency choice and supports this endpoint. The model
 
 ## Defaults
 
-- Voice: Rachel (`21m00Tcm4TlvDq8ikWAM`), a premade voice on every account. A
-  `--voice` value that matches a voice name is resolved to its id; otherwise it
-  is used as a literal id.
+- Voice: George (`JBFqnCBsd6RMkjVDRZzb`), a current ElevenLabs default voice that
+  works on every tier including free. A `--voice` value that matches a voice name
+  is resolved to its id; otherwise it is used as a literal id. The legacy premade
+  voices (such as Rachel) are now Voice Library voices, which the API refuses for
+  free accounts with `402 paid_plan_required`.
 - Model: `eleven_flash_v2_5`, chosen for low latency.
 - Format: `mp3_44100_128`.
 

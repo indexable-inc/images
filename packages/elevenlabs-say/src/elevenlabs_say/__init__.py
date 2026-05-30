@@ -27,10 +27,13 @@ from elevenlabs import ElevenLabs
 from elevenlabs.core import ApiError
 from elevenlabs.realtime_tts import RealtimeTextToSpeechClient
 
-# Rachel is a stable ElevenLabs premade voice that is available on every account,
-# so it is a safe default for a `say` replacement.
-# https://elevenlabs.io/docs/api-reference/voices/get
-DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
+# George is a current ElevenLabs default voice and the one the official quickstart
+# ships, so it works on every tier including free. The legacy premade voices (such
+# as Rachel, 21m00Tcm4TlvDq8ikWAM) became Voice Library voices, which the API
+# refuses for free accounts with HTTP 402 paid_plan_required. Default voices are
+# scheduled to retire on 2026-12-31, so this id may need refreshing then.
+# https://elevenlabs.io/docs/quickstart
+DEFAULT_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"
 DEFAULT_MODEL_ID = "eleven_flash_v2_5"
 DEFAULT_OUTPUT_FORMAT = "mp3_44100_128"
 
@@ -88,7 +91,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         default=DEFAULT_VOICE_ID,
         help=(
             "Voice name or id. A value that matches a voice name is resolved to "
-            f"its id; otherwise it is used verbatim. Defaults to Rachel ({DEFAULT_VOICE_ID})."
+            f"its id; otherwise it is used verbatim. Defaults to George ({DEFAULT_VOICE_ID})."
         ),
     )
     _ = parser.add_argument(
