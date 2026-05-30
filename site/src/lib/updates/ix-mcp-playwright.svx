@@ -1,0 +1,26 @@
+---
+id: ix-mcp-playwright
+postedAt: 2026-05-29T22:55:00-07:00
+title: "`ix-mcp` Python sessions ship `playwright` with browsers wired"
+tags: [interesting, mcp, agents, python, browser]
+links:
+  - label: mcp package
+    href: https://github.com/indexable-inc/index/tree/main/packages/mcp
+---
+
+`playwright` is now preinstalled in every `ix-mcp` Python session, alongside numpy, polars, matplotlib, and asyncssh. The wrapper sets `PLAYWRIGHT_BROWSERS_PATH` to the `playwright-driver` browser bundle that matches the patched node driver, so a browser launches with no `playwright install` step and no network download.
+
+Use the async API so it shares the session event loop:
+
+```python
+from playwright.async_api import async_playwright
+
+p = await async_playwright().start()
+browser = await p.chromium.launch()
+page = await browser.new_page()
+await page.goto("https://example.com")
+print(await page.title())
+await browser.close()
+```
+
+Chromium and Firefox are the reliable engines under Nix; WebKit is known to be flaky. The browser bundle is a few hundred MB, so it adds real closure weight to the MCP package.
