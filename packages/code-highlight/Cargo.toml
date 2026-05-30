@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 anstyle.workspace = true
+file-language.workspace = true
 tree-sitter.workspace = true
 tree-sitter-highlight.workspace = true
 tree-sitter-bash.workspace = true

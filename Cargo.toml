@@ -5,6 +5,7 @@ members = [
   "packages/code-highlight",
   "packages/code-tokenizer",
   "packages/dag-runner",
+  "packages/file-language",
   "packages/file-search",
   "packages/ix-dev-diagnose",
   "packages/mcp",
@@ -66,6 +67,7 @@ code-highlight = { path = "packages/code-highlight" }
 code-tokenizer = { path = "packages/code-tokenizer" }
 color-eyre = "0.6"
 dirs = "5"
+file-language = { path = "packages/file-language" }
 futures = "0.3"
 hegeltest = { version = "0.14", default-features = false }
 ignore = "0.4"

@@ -1,11 +1,11 @@
 //! Tree-sitter syntax highlighting for source files, rendered as ANSI text.
 //!
 //! The crate owns one job: turn a source string plus a language hint (a file
-//! path or extension) into colored terminal output. It wraps the official
-//! [`tree_sitter_highlight`] crate and a curated set of `tree-sitter-<lang>`
-//! grammars, maps the standard highlight capture names to a small
-//! [`anstyle`]-based theme, and renders ANSI escapes when the caller asks for
-//! color.
+//! path or extension) into colored terminal output. It resolves the language
+//! through [`file_language`], wraps the official [`tree_sitter_highlight`] crate
+//! and a curated set of `tree-sitter-<lang>` grammars, maps the standard
+//! highlight capture names to a small [`anstyle`]-based theme, and renders ANSI
+//! escapes when the caller asks for color.
 //!
 //! Two public entry points cover the shapes a snippet renderer needs:
 //!
@@ -26,6 +26,8 @@ use std::sync::LazyLock;
 
 use anstyle::{Color, RgbColor, Style};
 use tree_sitter_highlight::{Highlight, HighlightConfiguration, HighlightEvent, Highlighter};
+
+pub use file_language::Language;
 
 /// Capture names the theme understands, in a fixed order shared by every
 /// [`HighlightConfiguration`]. The index a grammar reports for a capture is the
@@ -71,355 +73,175 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "variable.parameter",
 ];
 
-/// A supported source language. Each variant owns a grammar and a highlights
-/// query; [`Language::from_path`] maps a file path to a variant by extension.
+/// The grammar and highlights query for a language, or `None` when this crate
+/// bundles no grammar for it.
 ///
-/// The set mirrors the curated grammar list in the ix repo's `ast-merge-langs`
-/// crate (extensions and filenames included), minus the few grammars whose
-/// published Rust bindings do not export a usable highlights query (Dockerfile,
-/// Svelte). All variants resolve through the maintained `tree-sitter-<lang>`
-/// crates; an extension this enum does not cover renders as plain text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum Language {
-    /// Rust (`.rs`).
-    Rust,
-    /// Python (`.py`, `.pyi`, `.bzl`, `.bazel`).
-    Python,
-    /// JavaScript (`.js`, `.mjs`, `.cjs`, `.jsx`).
-    JavaScript,
-    /// TypeScript (`.ts`, `.mts`, `.cts`).
-    TypeScript,
-    /// TSX (`.tsx`).
-    Tsx,
-    /// Go (`.go`).
-    Go,
-    /// C (`.c`, `.h`).
-    C,
-    /// C++ (`.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.h++`, `.c++`).
-    Cpp,
-    /// C# (`.cs`).
-    CSharp,
-    /// Java (`.java`).
-    Java,
-    /// Scala (`.scala`, `.sc`).
-    Scala,
-    /// Swift (`.swift`).
-    Swift,
-    /// Ruby (`.rb`, `.rake`, `.gemspec`).
-    Ruby,
-    /// PHP (`.php`, `.phtml`, `.php3`-`.php7`, `.phps`).
-    Php,
-    /// Lua (`.lua`).
-    Lua,
-    /// Haskell (`.hs`, `.lhs`).
-    Haskell,
-    /// Elixir (`.ex`, `.exs`).
-    Elixir,
-    /// OCaml (`.ml`, `.mli`).
-    OCaml,
-    /// HTML (`.html`, `.htm`, `.xhtml`).
-    Html,
-    /// CSS (`.css`).
-    Css,
-    /// JSON (`.json`, `.jsonc`).
-    Json,
-    /// TOML (`.toml`).
-    Toml,
-    /// YAML (`.yaml`, `.yml`).
-    Yaml,
-    /// SQL (`.sql`).
-    Sql,
-    /// Nix (`.nix`).
-    Nix,
-    /// Bash and POSIX shell (`.sh`, `.bash`, `.zsh`).
-    Bash,
-    /// Markdown block structure (`.md`, `.markdown`, `.mdown`, `.mkd`).
-    Markdown,
+/// Each grammar exports its highlights query under a slightly different constant
+/// name (`HIGHLIGHTS_QUERY`, `HIGHLIGHT_QUERY`, or the block query for
+/// Markdown), so the per-language arm names the right one. TypeScript and TSX
+/// inherit the JavaScript highlights query: the TypeScript grammar's own query
+/// only adds type-level rules and expects the ECMAScript rules to be present, so
+/// the JS query is prepended. JavaScript and TSX additionally fold in the JSX
+/// highlights query so embedded JSX colors instead of rendering plain.
+///
+/// [`Language`] is `#[non_exhaustive]`, so the wildcard arm covers any future
+/// detection-only variant that has no grammar here: it resolves to plain text.
+#[allow(
+    clippy::too_many_lines,
+    reason = "flat one-arm-per-language dispatch table; splitting it would hide the grammar-to-query mapping"
+)]
+fn grammar_query(language: Language) -> Option<(tree_sitter::Language, String)> {
+    let pair = match language {
+        Language::Rust => (
+            tree_sitter_rust::LANGUAGE.into(),
+            tree_sitter_rust::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Python => (
+            tree_sitter_python::LANGUAGE.into(),
+            tree_sitter_python::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::JavaScript => (
+            tree_sitter_javascript::LANGUAGE.into(),
+            format!(
+                "{}\n{}",
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
+            ),
+        ),
+        Language::TypeScript => (
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            format!(
+                "{}\n{}",
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_typescript::HIGHLIGHTS_QUERY
+            ),
+        ),
+        Language::Tsx => (
+            tree_sitter_typescript::LANGUAGE_TSX.into(),
+            format!(
+                "{}\n{}\n{}",
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY,
+                tree_sitter_typescript::HIGHLIGHTS_QUERY
+            ),
+        ),
+        Language::Go => (
+            tree_sitter_go::LANGUAGE.into(),
+            tree_sitter_go::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::C => (
+            tree_sitter_c::LANGUAGE.into(),
+            tree_sitter_c::HIGHLIGHT_QUERY.to_owned(),
+        ),
+        Language::Cpp => (
+            tree_sitter_cpp::LANGUAGE.into(),
+            tree_sitter_cpp::HIGHLIGHT_QUERY.to_owned(),
+        ),
+        Language::CSharp => (
+            tree_sitter_c_sharp::LANGUAGE.into(),
+            tree_sitter_c_sharp::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Java => (
+            tree_sitter_java::LANGUAGE.into(),
+            tree_sitter_java::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Scala => (
+            tree_sitter_scala::LANGUAGE.into(),
+            tree_sitter_scala::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Swift => (
+            tree_sitter_swift::LANGUAGE.into(),
+            tree_sitter_swift::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Ruby => (
+            tree_sitter_ruby::LANGUAGE.into(),
+            tree_sitter_ruby::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Php => (
+            tree_sitter_php::LANGUAGE_PHP.into(),
+            tree_sitter_php::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Lua => (
+            tree_sitter_lua::LANGUAGE.into(),
+            tree_sitter_lua::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Haskell => (
+            tree_sitter_haskell::LANGUAGE.into(),
+            tree_sitter_haskell::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Elixir => (
+            tree_sitter_elixir::LANGUAGE.into(),
+            tree_sitter_elixir::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::OCaml => (
+            tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+            tree_sitter_ocaml::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Html => (
+            tree_sitter_html::LANGUAGE.into(),
+            tree_sitter_html::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Css => (
+            tree_sitter_css::LANGUAGE.into(),
+            tree_sitter_css::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Json => (
+            tree_sitter_json::LANGUAGE.into(),
+            tree_sitter_json::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Toml => (
+            tree_sitter_toml_ng::LANGUAGE.into(),
+            tree_sitter_toml_ng::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Yaml => (
+            tree_sitter_yaml::LANGUAGE.into(),
+            tree_sitter_yaml::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Sql => (
+            tree_sitter_sequel::LANGUAGE.into(),
+            tree_sitter_sequel::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Nix => (
+            tree_sitter_nix::LANGUAGE.into(),
+            tree_sitter_nix::HIGHLIGHTS_QUERY.to_owned(),
+        ),
+        Language::Bash => (
+            tree_sitter_bash::LANGUAGE.into(),
+            tree_sitter_bash::HIGHLIGHT_QUERY.to_owned(),
+        ),
+        Language::Markdown => (
+            tree_sitter_md::LANGUAGE.into(),
+            tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.to_owned(),
+        ),
+        // A detection-only language with no bundled grammar renders as plain
+        // text. Reachable only if `file_language` adds a variant ahead of a
+        // grammar here.
+        _ => return None,
+    };
+    Some(pair)
 }
 
-impl Language {
-    /// Every supported language, the single source of truth for the set. The
-    /// config cache and tests iterate this slice so adding a variant only needs
-    /// one edit here plus its `build_config` arm.
-    pub const ALL: &'static [Self] = &[
-        Self::Rust,
-        Self::Python,
-        Self::JavaScript,
-        Self::TypeScript,
-        Self::Tsx,
-        Self::Go,
-        Self::C,
-        Self::Cpp,
-        Self::CSharp,
-        Self::Java,
-        Self::Scala,
-        Self::Swift,
-        Self::Ruby,
-        Self::Php,
-        Self::Lua,
-        Self::Haskell,
-        Self::Elixir,
-        Self::OCaml,
-        Self::Html,
-        Self::Css,
-        Self::Json,
-        Self::Toml,
-        Self::Yaml,
-        Self::Sql,
-        Self::Nix,
-        Self::Bash,
-        Self::Markdown,
-    ];
-
-    /// Resolves a language from a file path.
-    ///
-    /// A recognized full filename wins over the extension (so `Gemfile` resolves
-    /// to Ruby and `Cargo.toml` to TOML), then the extension is tried. Returns
-    /// `None` when neither matches; callers treat `None` as "render as plain
-    /// text".
-    #[must_use]
-    pub fn from_path(path: &Path) -> Option<Self> {
-        if let Some(language) = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(Self::from_file_name)
-        {
-            return Some(language);
-        }
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .and_then(Self::from_extension)
-    }
-
-    /// Resolves a language from a bare extension (without the leading dot).
-    ///
-    /// The match is case-insensitive. Returns `None` for unrecognized
-    /// extensions.
-    #[must_use]
-    pub fn from_extension(ext: &str) -> Option<Self> {
-        let ext = ext.to_ascii_lowercase();
-        Some(match ext.as_str() {
-            "rs" => Self::Rust,
-            "py" | "pyi" | "bzl" | "bazel" => Self::Python,
-            "js" | "mjs" | "cjs" | "jsx" => Self::JavaScript,
-            "ts" | "mts" | "cts" => Self::TypeScript,
-            "tsx" => Self::Tsx,
-            "go" => Self::Go,
-            "c" | "h" => Self::C,
-            "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" | "h++" | "c++" => Self::Cpp,
-            "cs" => Self::CSharp,
-            "java" => Self::Java,
-            "scala" | "sc" => Self::Scala,
-            "swift" => Self::Swift,
-            "rb" | "rake" | "gemspec" => Self::Ruby,
-            "php" | "phtml" | "php3" | "php4" | "php5" | "php7" | "phps" => Self::Php,
-            "lua" => Self::Lua,
-            "hs" | "lhs" => Self::Haskell,
-            "ex" | "exs" => Self::Elixir,
-            "ml" | "mli" => Self::OCaml,
-            "html" | "htm" | "xhtml" => Self::Html,
-            "css" => Self::Css,
-            "json" | "jsonc" => Self::Json,
-            "toml" => Self::Toml,
-            "yaml" | "yml" => Self::Yaml,
-            "sql" => Self::Sql,
-            "nix" => Self::Nix,
-            "sh" | "bash" | "zsh" => Self::Bash,
-            "md" | "markdown" | "mdown" | "mkd" => Self::Markdown,
-            _ => return None,
+/// Builds a [`HighlightConfiguration`] for a language, or `None` when the
+/// grammar is absent or its query fails to compile.
+///
+/// The injection and locals queries are left empty: this crate highlights one
+/// language per file and resolves no injections, so the queries would do nothing
+/// and only add per-grammar constant-name fragility.
+fn build_config(language: Language) -> Option<HighlightConfiguration> {
+    let (ts_language, highlights) = grammar_query(language)?;
+    let mut config = HighlightConfiguration::new(ts_language, language.name(), &highlights, "", "")
+        .inspect_err(|error| {
+            // A query that fails to compile is a grammar-version skew bug, not a
+            // user error; surface it once at startup rather than silently
+            // dropping the language to plain text.
+            eprintln!(
+                "code-highlight: {} highlights query failed to compile: {error}",
+                language.name()
+            );
         })
-    }
-
-    /// Resolves a language from a full file name with no significant extension,
-    /// such as `Gemfile` or `Rakefile`. The match is case-sensitive because
-    /// these names are conventionally cased. Returns `None` otherwise.
-    #[must_use]
-    pub fn from_file_name(name: &str) -> Option<Self> {
-        Some(match name {
-            "Gemfile" | "Rakefile" | "Guardfile" | "Capfile" => Self::Ruby,
-            "mix.exs" => Self::Elixir,
-            "BUILD" | "BUILD.bazel" => Self::Python,
-            ".bashrc" | ".bash_profile" | ".zshrc" | ".profile" => Self::Bash,
-            _ => return None,
-        })
-    }
-
-    /// The lowercase identifier for this language, suitable as an injection name
-    /// or a cache key.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Rust => "rust",
-            Self::Python => "python",
-            Self::JavaScript => "javascript",
-            Self::TypeScript => "typescript",
-            Self::Tsx => "tsx",
-            Self::Go => "go",
-            Self::C => "c",
-            Self::Cpp => "cpp",
-            Self::CSharp => "c_sharp",
-            Self::Java => "java",
-            Self::Scala => "scala",
-            Self::Swift => "swift",
-            Self::Ruby => "ruby",
-            Self::Php => "php",
-            Self::Lua => "lua",
-            Self::Haskell => "haskell",
-            Self::Elixir => "elixir",
-            Self::OCaml => "ocaml",
-            Self::Html => "html",
-            Self::Css => "css",
-            Self::Json => "json",
-            Self::Toml => "toml",
-            Self::Yaml => "yaml",
-            Self::Sql => "sql",
-            Self::Nix => "nix",
-            Self::Bash => "bash",
-            Self::Markdown => "markdown",
-        }
-    }
-
-    /// Builds a [`HighlightConfiguration`] for this language.
-    ///
-    /// Each grammar exports its highlights query under a slightly different
-    /// constant name (`HIGHLIGHTS_QUERY`, `HIGHLIGHT_QUERY`, or the block query
-    /// for Markdown), so the per-language arm names the right one. TypeScript and
-    /// TSX inherit the JavaScript highlights query: the TypeScript grammar's own
-    /// query only adds type-level rules and expects the ECMAScript rules to be
-    /// present, so the JS query is prepended.
-    ///
-    /// The injection and locals queries are left empty: this crate highlights
-    /// one language per file and resolves no injections, so the queries would do
-    /// nothing and only add per-grammar constant-name fragility.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "flat one-arm-per-language dispatch table; splitting it would hide the grammar-to-query mapping"
-    )]
-    fn build_config(self) -> Result<HighlightConfiguration, tree_sitter::QueryError> {
-        let (language, highlights) = match self {
-            Self::Rust => (
-                tree_sitter_rust::LANGUAGE.into(),
-                tree_sitter_rust::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Python => (
-                tree_sitter_python::LANGUAGE.into(),
-                tree_sitter_python::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::JavaScript => (
-                tree_sitter_javascript::LANGUAGE.into(),
-                tree_sitter_javascript::HIGHLIGHT_QUERY.to_owned(),
-            ),
-            Self::TypeScript => (
-                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-                format!(
-                    "{}\n{}",
-                    tree_sitter_javascript::HIGHLIGHT_QUERY,
-                    tree_sitter_typescript::HIGHLIGHTS_QUERY
-                ),
-            ),
-            Self::Tsx => (
-                tree_sitter_typescript::LANGUAGE_TSX.into(),
-                format!(
-                    "{}\n{}",
-                    tree_sitter_javascript::HIGHLIGHT_QUERY,
-                    tree_sitter_typescript::HIGHLIGHTS_QUERY
-                ),
-            ),
-            Self::Go => (
-                tree_sitter_go::LANGUAGE.into(),
-                tree_sitter_go::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::C => (
-                tree_sitter_c::LANGUAGE.into(),
-                tree_sitter_c::HIGHLIGHT_QUERY.to_owned(),
-            ),
-            Self::Cpp => (
-                tree_sitter_cpp::LANGUAGE.into(),
-                tree_sitter_cpp::HIGHLIGHT_QUERY.to_owned(),
-            ),
-            Self::CSharp => (
-                tree_sitter_c_sharp::LANGUAGE.into(),
-                tree_sitter_c_sharp::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Java => (
-                tree_sitter_java::LANGUAGE.into(),
-                tree_sitter_java::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Scala => (
-                tree_sitter_scala::LANGUAGE.into(),
-                tree_sitter_scala::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Swift => (
-                tree_sitter_swift::LANGUAGE.into(),
-                tree_sitter_swift::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Ruby => (
-                tree_sitter_ruby::LANGUAGE.into(),
-                tree_sitter_ruby::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Php => (
-                tree_sitter_php::LANGUAGE_PHP.into(),
-                tree_sitter_php::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Lua => (
-                tree_sitter_lua::LANGUAGE.into(),
-                tree_sitter_lua::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Haskell => (
-                tree_sitter_haskell::LANGUAGE.into(),
-                tree_sitter_haskell::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Elixir => (
-                tree_sitter_elixir::LANGUAGE.into(),
-                tree_sitter_elixir::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::OCaml => (
-                tree_sitter_ocaml::LANGUAGE_OCAML.into(),
-                tree_sitter_ocaml::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Html => (
-                tree_sitter_html::LANGUAGE.into(),
-                tree_sitter_html::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Css => (
-                tree_sitter_css::LANGUAGE.into(),
-                tree_sitter_css::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Json => (
-                tree_sitter_json::LANGUAGE.into(),
-                tree_sitter_json::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Toml => (
-                tree_sitter_toml_ng::LANGUAGE.into(),
-                tree_sitter_toml_ng::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Yaml => (
-                tree_sitter_yaml::LANGUAGE.into(),
-                tree_sitter_yaml::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Sql => (
-                tree_sitter_sequel::LANGUAGE.into(),
-                tree_sitter_sequel::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Nix => (
-                tree_sitter_nix::LANGUAGE.into(),
-                tree_sitter_nix::HIGHLIGHTS_QUERY.to_owned(),
-            ),
-            Self::Bash => (
-                tree_sitter_bash::LANGUAGE.into(),
-                tree_sitter_bash::HIGHLIGHT_QUERY.to_owned(),
-            ),
-            Self::Markdown => (
-                tree_sitter_md::LANGUAGE.into(),
-                tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.to_owned(),
-            ),
-        };
-
-        let mut config = HighlightConfiguration::new(language, self.name(), &highlights, "", "")?;
-        config.configure(HIGHLIGHT_NAMES);
-        Ok(config)
-    }
+        .ok()?;
+    config.configure(HIGHLIGHT_NAMES);
+    Some(config)
 }
 
 /// Process-wide cache of built highlight configurations.
@@ -431,7 +253,7 @@ impl Language {
 static CONFIGS: LazyLock<HashMap<Language, Option<HighlightConfiguration>>> = LazyLock::new(|| {
     Language::ALL
         .iter()
-        .map(|&language| (language, language.build_config().ok()))
+        .map(|&language| (language, build_config(language)))
         .collect()
 });
 
@@ -499,18 +321,27 @@ fn push_styled(out: &mut String, text: &str, style: Style, color: bool) {
     }
 }
 
+/// Resolves a language from a path or a bare extension/name.
+///
+/// Tries the full path first (so `uv.lock` resolves to TOML and `main.rs` to
+/// Rust), then treats the whole string as a bare extension (so a caller that
+/// only knows `"rs"` still resolves). Returns `None` when nothing matches.
+fn detect(path_or_lang: &str) -> Option<Language> {
+    Language::from_path(Path::new(path_or_lang)).or_else(|| Language::from_extension(path_or_lang))
+}
+
 /// Highlights a full source string and returns it as a single rendered block.
 ///
 /// `path_or_lang` is the source path or bare extension used to pick a grammar;
-/// pass the real file path when you have one so the extension resolves. When
-/// `color` is `true` the output carries ANSI SGR escapes; when `false` it is the
-/// input text unchanged.
+/// pass the real file path when you have one so the filename and extension both
+/// resolve. When `color` is `true` the output carries ANSI SGR escapes; when
+/// `false` it is the input text unchanged.
 ///
 /// Unsupported languages and any highlighter failure fall back to returning the
 /// source verbatim, so this function never errors.
 #[must_use]
 pub fn highlight(path_or_lang: &str, source: &str, color: bool) -> String {
-    let Some(language) = Language::from_extension(extension_of(path_or_lang)) else {
+    let Some(language) = detect(path_or_lang) else {
         return source.to_owned();
     };
     render_spans(language, source, color).unwrap_or_else(|| source.to_owned())
@@ -537,8 +368,7 @@ pub fn highlight_lines(
     num_lines: usize,
     color: bool,
 ) -> String {
-    let language = Language::from_extension(extension_of(path_or_lang));
-    let rendered = language
+    let rendered = detect(path_or_lang)
         .and_then(|language| render_spans(language, source, color))
         .unwrap_or_else(|| source.to_owned());
 
@@ -611,16 +441,6 @@ fn render_spans(language: Language, source: &str, color: bool) -> Option<String>
     Some(out)
 }
 
-/// Extracts the extension from a path or returns the input when it has no `.`
-/// (so a bare language name like `"rust"` is rejected but `"rs"` is not; callers
-/// should pass an extension or a path).
-fn extension_of(path_or_lang: &str) -> &str {
-    Path::new(path_or_lang)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or(path_or_lang)
-}
-
 /// Number of decimal digits in `n` (at least 1, so `0` has width 1).
 const fn decimal_width(mut n: usize) -> usize {
     let mut width = 1;
@@ -657,6 +477,22 @@ mod tests {
     }
 
     #[test]
+    fn bare_extension_resolves() {
+        // A caller that only knows the extension, not a path, still highlights.
+        let out = highlight("rs", "fn main() {}\n", true);
+        assert!(out.contains(CSI), "expected ANSI escapes, got: {out:?}");
+    }
+
+    #[test]
+    fn lock_file_resolves_by_name() {
+        // `uv.lock` has no informative extension; the filename table resolves it
+        // to TOML so its snippets highlight instead of rendering plain.
+        let source = "[[package]]\nname = \"x\"\nversion = \"0.1.0\"\n";
+        let out = highlight("uv.lock", source, true);
+        assert!(out.contains(CSI), "expected ANSI escapes, got: {out:?}");
+    }
+
+    #[test]
     fn unknown_extension_falls_back_to_plain_text() {
         let source = "<<< not a known language >>>\n";
         let colored = highlight("mystery.zzz", source, true);
@@ -682,6 +518,28 @@ mod tests {
         assert!(lines[1].starts_with("3 │ "), "got: {:?}", lines[1]);
         assert!(lines[0].contains("fn b()"));
         assert!(lines[1].contains("fn c()"));
+    }
+
+    #[test]
+    fn highlight_lines_includes_first_line() {
+        // A snippet starting at line 1 must show line 1, the regression that the
+        // chunk off-by-one masked by dropping it.
+        let source = "fn first() {}\nfn second() {}\n";
+        let out = highlight_lines("x.rs", source, 1, 2, false);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("1 │ "), "got: {:?}", lines[0]);
+        assert!(lines[0].contains("fn first()"));
+    }
+
+    #[test]
+    fn single_line_file_highlights() {
+        // A one-line file with a one-line window renders that line highlighted,
+        // not empty (which would trigger the caller's plain-text fallback).
+        let source = "SELECT id FROM users;\n";
+        let out = highlight_lines("q.sql", source, 1, 1, true);
+        assert!(out.contains(CSI), "expected ANSI escapes, got: {out:?}");
+        assert!(out.contains("SELECT"));
     }
 
     #[test]
@@ -741,58 +599,103 @@ mod tests {
     }
 
     #[test]
-    fn extension_resolution_is_case_insensitive() {
-        assert_eq!(Language::from_extension("RS"), Some(Language::Rust));
-        assert_eq!(
-            Language::from_path(Path::new("a/b/C.PY")),
-            Some(Language::Python)
-        );
-    }
-
-    #[test]
-    fn full_file_name_wins_over_extension() {
-        // `Gemfile` has no extension; `Rakefile` likewise resolves to Ruby.
-        assert_eq!(
-            Language::from_path(Path::new("repo/Gemfile")),
-            Some(Language::Ruby)
-        );
-        assert_eq!(
-            Language::from_path(Path::new("Rakefile")),
-            Some(Language::Ruby)
-        );
-        // A recognized filename overrides a misleading extension match path:
-        // `mix.exs` resolves to Elixir via the filename table.
-        assert_eq!(
-            Language::from_path(Path::new("mix.exs")),
-            Some(Language::Elixir)
-        );
-    }
-
-    #[test]
-    fn every_supported_language_builds_a_config() {
+    fn every_grammar_language_builds_a_config() {
+        // Every language this crate claims a grammar for must compile its query.
+        // Detection-only languages (no grammar) are exempt and render plain.
         for &language in Language::ALL {
-            assert!(
-                config_for(language).is_some(),
-                "{} config failed to build",
-                language.name()
-            );
+            if grammar_query(language).is_some() {
+                assert!(
+                    config_for(language).is_some(),
+                    "{} config failed to build",
+                    language.name()
+                );
+            }
         }
     }
 
     #[test]
-    fn a_sample_of_languages_highlight_with_color() {
-        // One representative file per grammar family proves the query compiles
-        // and produces at least one colored span end to end.
+    fn every_grammar_language_highlights_a_sample() {
+        // One representative file per grammar proves the query compiles and
+        // produces at least one themed span end to end. The samples are
+        // deliberately non-trivial: a grammar's highlights query only tags the
+        // constructs it names, and a bare `int f() { return 1; }` can tag
+        // nothing this theme styles (the C/C++ query, for one, leaves primitive
+        // types, `return`, and integer literals unstyled), so each sample
+        // includes a keyword, function, string, or member the query is known to
+        // capture.
         let cases = [
-            ("a.py", "def f():\n    return 1\n"),
-            ("a.go", "package main\nfunc main() {}\n"),
-            ("a.rb", "def greet\n  puts 'hi'\nend\n"),
-            ("a.lua", "local function f() return 1 end\n"),
-            ("a.css", "body { color: red; }\n"),
-            ("a.yaml", "key: value\nlist:\n  - one\n"),
-            ("a.sql", "SELECT id FROM users WHERE id = 1;\n"),
-            ("a.nix", "{ pkgs }: pkgs.hello\n"),
-            ("a.ts", "const x: number = 1;\n"),
+            (
+                "a.rs",
+                "fn needle() {\n  let value = 42;\n  println!(\"x\");\n}\n",
+            ),
+            ("a.py", "def needle():\n    value = 42\n    return \"x\"\n"),
+            (
+                "a.js",
+                "function needle() {\n  const value = 42;\n  return value;\n}\n",
+            ),
+            (
+                "a.ts",
+                "function needle(): number {\n  const value: number = 42;\n  return value;\n}\n",
+            ),
+            (
+                "a.tsx",
+                "const Needle = () => {\n  const value = 42;\n  return <div className=\"x\">{value}</div>;\n};\n",
+            ),
+            (
+                "a.go",
+                "package main\nfunc needle() int {\n  return 42\n}\n",
+            ),
+            (
+                "a.c",
+                "int needle(void) {\n  int value = 42;\n  return value;\n}\n",
+            ),
+            (
+                "a.cpp",
+                "int needle() {\n  auto value = 42;\n  return value;\n}\n",
+            ),
+            ("a.cs", "class Needle {\n  int Value() { return 42; }\n}\n"),
+            (
+                "a.java",
+                "class Needle {\n  int value() { return 42; }\n}\n",
+            ),
+            ("a.scala", "object Needle {\n  def value: Int = 42\n}\n"),
+            (
+                "a.swift",
+                "func needle() -> Int {\n  let value = 42\n  return value\n}\n",
+            ),
+            ("a.rb", "def needle\n  value = 42\n  \"x\"\nend\n"),
+            (
+                "a.php",
+                "<?php\nfunction needle() {\n  $value = 42;\n  return $value;\n}\n",
+            ),
+            (
+                "a.lua",
+                "local function needle()\n  local value = 42\n  return value\nend\n",
+            ),
+            ("a.hs", "needle :: Int\nneedle = 42\nvalue = needle\n"),
+            ("a.ex", "def needle do\n  value = 42\n  value\nend\n"),
+            ("a.ml", "let needle =\n  let value = 42 in\n  value\n"),
+            (
+                "a.html",
+                "<div class=\"needle\">\n  <span>value 42</span>\n</div>\n",
+            ),
+            ("a.css", ".needle {\n  color: red;\n  width: 42px;\n}\n"),
+            (
+                "a.json",
+                "{\n  \"needle\": \"value\",\n  \"count\": 42\n}\n",
+            ),
+            ("a.toml", "[needle]\nvalue = \"x\"\ncount = 42\n"),
+            ("a.yaml", "needle: value\ncount: 42\nlist:\n  - one\n"),
+            (
+                "a.sql",
+                "SELECT needle, value FROM users WHERE count = 42;\n",
+            ),
+            (
+                "a.nix",
+                "{ pkgs }: {\n  needle = pkgs.value;\n  count = 42;\n}\n",
+            ),
+            ("a.sh", "needle() {\n  local value=42\n  echo \"x\"\n}\n"),
+            ("a.md", "# Needle value\n\nSome text with count 42.\n"),
         ];
         for (path, source) in cases {
             let out = highlight(path, source, true);
