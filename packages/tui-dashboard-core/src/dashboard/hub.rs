@@ -41,6 +41,8 @@ struct Slot {
     meta: LoroMap,
     screen: LoroText,
     alive: bool,
+    rows: i64,
+    cols: i64,
     cursor_row: i64,
     cursor_col: i64,
     cursor_visible: bool,
@@ -84,10 +86,7 @@ impl DocState {
                 meta.insert("command", frame.command.as_str())
                     .map_err(loro_err)?;
                 meta.insert("args", frame.args.as_str()).map_err(loro_err)?;
-                meta.insert("rows", i64::from(frame.rows))
-                    .map_err(loro_err)?;
-                meta.insert("cols", i64::from(frame.cols))
-                    .map_err(loro_err)?;
+                write_size(&meta, frame)?;
                 meta.insert("alive", frame.alive).map_err(loro_err)?;
                 write_cursor(&meta, frame)?;
                 write_exit(&meta, frame)?;
@@ -100,6 +99,8 @@ impl DocState {
                         meta,
                         screen,
                         alive: frame.alive,
+                        rows: i64::from(frame.rows),
+                        cols: i64::from(frame.cols),
                         cursor_row: i64::from(frame.cursor_row),
                         cursor_col: i64::from(frame.cursor_col),
                         cursor_visible: frame.cursor_visible,
@@ -113,6 +114,13 @@ impl DocState {
             if slot.alive != frame.alive {
                 slot.meta.insert("alive", frame.alive).map_err(loro_err)?;
                 slot.alive = frame.alive;
+            }
+            let rows = i64::from(frame.rows);
+            let cols = i64::from(frame.cols);
+            if slot.rows != rows || slot.cols != cols {
+                write_size(&slot.meta, frame)?;
+                slot.rows = rows;
+                slot.cols = cols;
             }
             let cursor_row = i64::from(frame.cursor_row);
             let cursor_col = i64::from(frame.cursor_col);
@@ -208,6 +216,15 @@ fn loro_err(source: impl std::fmt::Display) -> Error {
     Error::Dashboard {
         message: source.to_string(),
     }
+}
+
+/// Write a frame's terminal size into its meta map. One owner for the size keys
+/// so the insert and per-tick update paths cannot disagree.
+fn write_size(meta: &LoroMap, frame: &TerminalFrame) -> Result<()> {
+    meta.insert("rows", i64::from(frame.rows))
+        .map_err(loro_err)?;
+    meta.insert("cols", i64::from(frame.cols))
+        .map_err(loro_err)
 }
 
 /// Write a frame's cursor fields into its meta map. One owner for the cursor
@@ -347,6 +364,29 @@ mod tests {
         assert!(state.apply_scope("a", &[frame("1", "x")]).unwrap().is_none());
         // A screen change does produce a delta.
         assert!(state.apply_scope("a", &[frame("1", "y")]).unwrap().is_some());
+    }
+
+    /// A runtime resize must re-write `rows`/`cols` into the doc even when the
+    /// screen text is byte-identical. The hub once wrote size only on a
+    /// terminal's first appearance, so a size-only frame produced no delta: the
+    /// header froze at spawn-time size (e.g. "24×80") while the content reflowed
+    /// to the new geometry. Clients read size from the CRDT every render, so the
+    /// resize has to reach the doc, not just the cache.
+    #[test]
+    fn resize_updates_size() {
+        let mut state = DocState::new();
+        state.apply_scope("a", &[frame("1", "x")]).unwrap();
+
+        let mut resized = frame("1", "x");
+        resized.rows = 40;
+        resized.cols = 120;
+        assert!(state.apply_scope("a", &[resized]).unwrap().is_some());
+
+        let key = doc_key("a", "1");
+        let meta = &state.terminals[&key].meta;
+        let rows = meta.get("rows").unwrap().get_deep_value().into_i64().unwrap();
+        let cols = meta.get("cols").unwrap().get_deep_value().into_i64().unwrap();
+        assert_eq!((rows, cols), (40, 120));
     }
 
     /// Removing a scope that holds nothing is a no-op, not a spurious broadcast.
