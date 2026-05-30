@@ -52,7 +52,7 @@ impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Convert a raw `GhosttyResult` into a `Result<()>`.
-fn check(result: sys::GhosttyResult) -> Result<()> {
+const fn check(result: sys::GhosttyResult) -> Result<()> {
     match result {
         sys::GhosttyResult::GHOSTTY_SUCCESS => Ok(()),
         sys::GhosttyResult::GHOSTTY_OUT_OF_MEMORY => Err(Error::OutOfMemory),
@@ -120,6 +120,10 @@ impl StyleColor {
 ///
 /// Booleans mirror the SGR attributes ghostty tracks; [`Style::underline`] is
 /// non-`None` when any underline style is set.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "one bool per independent SGR attribute ghostty exposes; they are not a state enum"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Style {
     /// Bold (SGR 1).
@@ -279,6 +283,10 @@ impl Terminal {
     /// The argument order is `(rows, cols, scrollback)` to read like a screen
     /// size; the underlying C struct stores `cols`/`rows` separately, so there
     /// is no ambiguity once constructed.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if ghostty cannot allocate the terminal (see
+    /// [`Self::with_options`]).
     pub fn new(rows: u16, cols: u16, scrollback: usize) -> Result<Self> {
         Self::with_options(TerminalOptions {
             cols,
@@ -288,6 +296,10 @@ impl Terminal {
     }
 
     /// Create a terminal from explicit [`TerminalOptions`].
+    ///
+    /// # Errors
+    /// Returns [`Error::OutOfMemory`] if ghostty cannot allocate the terminal,
+    /// or [`Error::InvalidValue`] if it rejects the options.
     pub fn with_options(options: TerminalOptions) -> Result<Self> {
         let mut raw: sys::GhosttyTerminal_ptr = ptr::null_mut();
         let opts = sys::GhosttyTerminalOptions {
@@ -306,6 +318,10 @@ impl Terminal {
     }
 
     /// Resize the terminal to `rows` by `cols`. Both must be greater than zero.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidValue`] if `rows` or `cols` is zero, or another
+    /// [`Error`] if ghostty rejects the resize.
     pub fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
         check(unsafe { sys::ghostty_terminal_resize(self.raw, cols, rows) })
     }
@@ -324,6 +340,10 @@ impl Terminal {
     }
 
     /// Capture an owned [`Snapshot`] of the current render state.
+    ///
+    /// # Errors
+    /// Returns an [`Error`] if the render state cannot be allocated, updated
+    /// from the terminal, or read back.
     pub fn render(&self) -> Result<Snapshot> {
         let state = RenderState::new()?;
         check(unsafe { sys::ghostty_render_state_update(state.raw, self.raw) })?;

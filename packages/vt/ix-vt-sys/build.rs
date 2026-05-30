@@ -27,10 +27,10 @@ const LIB_DIR_ENV: &str = "IX_VT_GHOSTTY_LIB_DIR";
 fn main() {
     println!("cargo:rerun-if-env-changed={LIB_DIR_ENV}");
 
-    if let Ok(lib_dir) = env::var(LIB_DIR_ENV) {
-        if !lib_dir.is_empty() {
-            println!("cargo:rustc-link-search=native={lib_dir}");
-        }
+    if let Ok(lib_dir) = env::var(LIB_DIR_ENV)
+        && !lib_dir.is_empty()
+    {
+        println!("cargo:rustc-link-search=native={lib_dir}");
     }
 
     // Link the self-contained shared library. The matching `-L` search path is
