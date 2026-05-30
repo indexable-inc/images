@@ -34,16 +34,26 @@ pub struct TerminalFrame {
     /// encoding per-cell color and attributes. The dashboard parses the SGR
     /// back into styled spans; a plain reader still sees the text.
     pub screen: String,
+    // These fields were added after the first wire shape. `#[serde(default)]`
+    // keeps a mixed-version dashboard working: a producer built before this
+    // change streams frames without them, and the aggregator drops a frame
+    // whose JSON fails to parse, so without defaults those older producers'
+    // terminals would silently vanish from the dashboard.
     /// Cursor row in viewport cell coordinates (0-based, top first).
+    #[serde(default)]
     pub cursor_row: u16,
     /// Cursor column in viewport cell coordinates (0-based, left first).
+    #[serde(default)]
     pub cursor_col: u16,
     /// Whether the screen is showing its cursor (the inverse of `CSI ?25l`).
+    #[serde(default)]
     pub cursor_visible: bool,
     /// The cursor shape token: `"block"`, `"underline"`, or `"bar"`.
+    #[serde(default)]
     pub cursor_shape: String,
     /// The child's exit code when it has exited with one, else `None` (still
     /// running, or terminated by a signal).
+    #[serde(default)]
     pub exit_code: Option<i32>,
 }
 
@@ -134,4 +144,28 @@ pub async fn collect_frames(manager: &crate::TuiManager) -> Vec<TerminalFrame> {
         });
     }
     frames
+}
+
+#[cfg(all(test, feature = "publish"))]
+mod tests {
+    use super::TerminalFrame;
+
+    /// A frame streamed by a producer built before the cursor/exit fields were
+    /// added still deserializes: the new fields fall back to their defaults
+    /// instead of failing the whole `ProducerSnapshot` parse and dropping the
+    /// terminal from the dashboard.
+    #[test]
+    fn old_wire_shape_deserializes_with_field_defaults() {
+        let old = r#"{
+            "id": "t1", "command": "vim", "args": "-u NONE",
+            "rows": 24, "cols": 80, "alive": true, "screen": "hi"
+        }"#;
+        let frame: TerminalFrame = serde_json::from_str(old).expect("old shape parses");
+        assert_eq!(frame.screen, "hi");
+        assert_eq!(frame.cursor_row, 0);
+        assert_eq!(frame.cursor_col, 0);
+        assert!(!frame.cursor_visible);
+        assert_eq!(frame.cursor_shape, "");
+        assert_eq!(frame.exit_code, None);
+    }
 }
