@@ -1,0 +1,17 @@
+---
+id: tui-dashboard-color-scheme
+postedAt: 2026-05-30T12:00:00-07:00
+title: "tui dashboard follows the browser's light/dark scheme"
+tags: [interesting, ui, css]
+links:
+  - label: tui dashboard page
+    href: https://github.com/indexable-inc/index/blob/main/packages/tui-dashboard-core/src/dashboard/dashboard.html
+  - label: CSS light-dark()
+    href: https://developer.mozilla.org/en-US/docs/Web/CSS/color_value/light-dark
+---
+
+The tui dashboard now tracks the browser or OS color scheme. Each themeable token is a single `light-dark(lightValue, darkValue)` declaration under `color-scheme: light dark`, so the ghostty light and dark palettes live in one source of truth per token instead of a `:root` block shadowed by a `@media (prefers-color-scheme: dark)` override.
+
+A `<meta name="color-scheme" content="light dark">` in `<head>` lets the user agent settle on the scheme before CSS parses. That tag is the actual fix for webviews that rendered the light theme even in dark mode: the CSS already flipped correctly under an emulated dark scheme, so the bug was the host not advertising its scheme early enough.
+
+Browsers without `light-dark()` (roughly 15% as of 2026) fall back to the classic dark override inside `@supports not (color: light-dark(#000, #fff))`. Verified with Playwright: emulated dark resolves `--bg` to `#151515`, light to `#ececec`.
