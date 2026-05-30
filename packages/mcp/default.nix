@@ -57,6 +57,7 @@ let
   # `--system-site-packages`, so `tui` and numpy are importable by default while
   # an in-session `pip install` still writes to the per-session venv.
   mcpPython = pkgs.python3.withPackages (ps: [
+    ps.asyncssh
     ps.numpy
     tuiModule
   ]);
