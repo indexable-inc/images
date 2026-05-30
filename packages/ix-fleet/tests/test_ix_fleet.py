@@ -339,6 +339,228 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(ready, ["api"])
 
 
+class NodeWorkflowDagTests(unittest.TestCase):
+    def test_up_dag_includes_transitive_dependencies_and_forwards_flags(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(
+            fleet_plan(["db", "web"], [fleet_node("web", depends_on=["db"]), fleet_node("db")])
+        )
+        spec = captured_dag(
+            ix_fleet.cmd_up,
+            plan,
+            argparse_namespace(
+                plan=Path("fleet.json"),
+                on=["web"],
+                dry_run=False,
+                skip_push=True,
+                skip_health=True,
+            ),
+        )
+
+        self.assertEqual(list(spec["nodes"]), ["db", "web"])
+        self.assertEqual(spec["nodes"]["db"]["depends_on"], [])
+        self.assertEqual(spec["nodes"]["web"]["depends_on"], ["db"])
+        self.assertEqual(
+            spec["nodes"]["web"]["command"],
+            [
+                "/bin/ix-fleet",
+                "--plan",
+                "fleet.json",
+                "_up-node",
+                "web",
+                "--skip-push",
+                "--skip-health",
+            ],
+        )
+
+    def test_replace_dag_forwards_replace_flags(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
+        spec = captured_dag(
+            ix_fleet.cmd_replace,
+            plan,
+            argparse_namespace(
+                plan=Path("/plans/fleet.json"),
+                on=[],
+                dry_run=False,
+                skip_push=True,
+                skip_health=True,
+            ),
+        )
+
+        self.assertEqual(
+            spec["nodes"]["api"]["command"],
+            [
+                "/bin/ix-fleet",
+                "--plan",
+                "/plans/fleet.json",
+                "_replace-node",
+                "api",
+                "--skip-push",
+                "--skip-health",
+            ],
+        )
+
+    def test_push_dag_serializes_shared_image_destination(self) -> None:
+        api = fleet_node("api")
+        worker = fleet_node("worker")
+        worker["replacementImage"]["destination"] = api["replacementImage"]["destination"]
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api", "worker"], [api, worker]))
+
+        spec = captured_dag(
+            ix_fleet.cmd_up,
+            plan,
+            argparse_namespace(plan=Path("fleet.json"), on=[], dry_run=False, skip_push=False, skip_health=True),
+        )
+
+        self.assertEqual(spec["nodes"]["worker"]["depends_on"], ["api"])
+
+    def test_switch_dag_forwards_switch_flags(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
+        spec = captured_dag(
+            ix_fleet.cmd_switch,
+            plan,
+            argparse_namespace(
+                plan=Path("/plans/fleet.json"),
+                on=["api"],
+                dry_run=False,
+                no_snapshot=True,
+                skip_health=True,
+                source_root=Path("/source"),
+                source_workdir=Path("subdir"),
+            ),
+        )
+
+        self.assertEqual(
+            spec["nodes"]["api"]["command"],
+            [
+                "/bin/ix-fleet",
+                "--plan",
+                "/plans/fleet.json",
+                "_switch-node",
+                "api",
+                "--no-snapshot",
+                "--skip-health",
+                "--source-root",
+                "/source",
+                "--source-workdir",
+                "subdir",
+            ],
+        )
+
+    def test_dag_runner_exit_status_becomes_process_exit_status(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
+        args = argparse_namespace(
+            plan=Path("fleet.json"),
+            on=[],
+            dry_run=False,
+            skip_push=True,
+            skip_health=True,
+        )
+
+        with TemporaryDirectory() as temporary_directory:
+            runner = Path(temporary_directory) / "dag-runner"
+            runner.write_text("#!/bin/sh\nexit 17\n")
+            runner.chmod(0o755)
+
+            with patch.dict(ix_fleet.os.environ, {"IX_FLEET_DAG_RUNNER": str(runner)}):
+                with self.assertRaises(SystemExit) as raised:
+                    asyncio.run(ix_fleet.cmd_up(plan, args))
+
+        self.assertEqual(raised.exception.code, 17)
+
+    def test_dry_run_runs_inline_so_child_output_is_visible(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
+        calls: list[str] = []
+
+        async def fail_run_dag_runner(spec: dict[str, typing.Any]) -> None:
+            self.fail("dry-run should not send child output through dag-runner")
+
+        with (
+            patch.object(ix_fleet, "run_dag_runner", fail_run_dag_runner),
+            patch.object(ix_fleet, "run_up_node_workflow", async_recorder(calls, "api")),
+        ):
+            asyncio.run(
+                ix_fleet.cmd_up(
+                    plan,
+                    argparse_namespace(plan=Path("fleet.json"), on=[], dry_run=True, skip_push=True, skip_health=True),
+                )
+            )
+
+        self.assertEqual(calls, ["api"])
+
+
+class SingleNodeWorkflowTests(unittest.TestCase):
+    def test_up_node_workflow_runs_the_existing_up_sequence(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
+        args = argparse_namespace(
+            node="api",
+            dry_run=False,
+            skip_push=False,
+            skip_health=False,
+        )
+        calls: list[str] = []
+
+        with (
+            patch.object(
+                ix_fleet,
+                "push_replacement_image",
+                async_recorder(calls, "push", "registry.ix.dev/example/api:pushed"),
+            ),
+            patch.object(ix_fleet, "up_node", async_recorder(calls, "up")),
+            patch.object(ix_fleet, "ensure_node_groups", async_recorder(calls, "groups")),
+            patch.object(ix_fleet, "run_node_health_checks", async_recorder(calls, "health")),
+        ):
+            asyncio.run(ix_fleet.cmd_up_node(plan, args))
+
+        self.assertEqual(calls, ["push", "up", "groups", "health"])
+
+    def test_replace_node_workflow_runs_the_existing_replace_sequence(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
+        args = argparse_namespace(
+            node="api",
+            dry_run=False,
+            skip_push=False,
+            skip_health=False,
+        )
+        calls: list[str] = []
+
+        with (
+            patch.object(
+                ix_fleet,
+                "push_replacement_image",
+                async_recorder(calls, "push", "registry.ix.dev/example/api:pushed"),
+            ),
+            patch.object(ix_fleet, "replace_node", async_recorder(calls, "replace")),
+            patch.object(ix_fleet, "ensure_node_groups", async_recorder(calls, "groups")),
+            patch.object(ix_fleet, "run_node_health_checks", async_recorder(calls, "health")),
+        ):
+            asyncio.run(ix_fleet.cmd_replace_node(plan, args))
+
+        self.assertEqual(calls, ["push", "replace", "groups", "health"])
+
+    def test_switch_node_workflow_runs_the_existing_switch_sequence(self) -> None:
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
+        args = argparse_namespace(
+            node="api",
+            dry_run=False,
+            no_snapshot=False,
+            skip_health=False,
+            source_root=Path("/source"),
+            source_workdir=Path("subdir"),
+        )
+        calls: list[str] = []
+
+        with (
+            patch.object(ix_fleet, "ensure_node", async_recorder(calls, "ensure", False)),
+            patch.object(ix_fleet, "ensure_node_groups", async_recorder(calls, "groups")),
+            patch.object(ix_fleet, "snapshot_node", async_recorder(calls, "snapshot")),
+            patch.object(ix_fleet, "switch_node", async_recorder(calls, "switch")),
+            patch.object(ix_fleet, "run_node_health_checks", async_recorder(calls, "health")),
+        ):
+            asyncio.run(ix_fleet.cmd_switch_node(plan, args))
+
+        self.assertEqual(calls, ["ensure", "groups", "snapshot", "switch", "health"])
+
+
 class DownTests(unittest.TestCase):
     def test_down_continues_after_node_failure(self) -> None:
         plan = ix_fleet.FleetPlan.model_validate(
@@ -433,6 +655,38 @@ class SwitchSourceTests(unittest.TestCase):
 
 def argparse_namespace(**kwargs: typing.Any) -> typing.Any:
     return type("Args", (), kwargs)()
+
+
+def captured_dag(
+    command: typing.Callable[[ix_fleet.FleetPlan, typing.Any], typing.Coroutine[typing.Any, typing.Any, None]],
+    plan: ix_fleet.FleetPlan,
+    args: typing.Any,
+) -> dict[str, typing.Any]:
+    specs: list[dict[str, typing.Any]] = []
+
+    async def fake_run_dag_runner(spec: dict[str, typing.Any]) -> None:
+        specs.append(spec)
+
+    with (
+        patch.object(ix_fleet, "run_dag_runner", fake_run_dag_runner),
+        patch.object(ix_fleet.sys, "argv", ["/bin/ix-fleet"]),
+    ):
+        asyncio.run(command(plan, args))
+
+    return specs[0]
+
+
+def async_recorder(
+    calls: list[str],
+    name: str,
+    result: typing.Any = None,
+) -> typing.Callable[..., typing.Coroutine[typing.Any, typing.Any, typing.Any]]:
+    async def record(*args: typing.Any, **kwargs: typing.Any) -> typing.Any:
+        del args, kwargs
+        calls.append(name)
+        return result
+
+    return record
 
 
 if __name__ == "__main__":

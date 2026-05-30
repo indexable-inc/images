@@ -5,10 +5,12 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import shlex
 import string
 import subprocess
 import sys
+import tempfile
 import typing
 from pathlib import Path
 
@@ -682,47 +684,146 @@ async def cmd_diff(plan: FleetPlan, args: argparse.Namespace) -> None:
             print(f"{node.name}\twant {node.switch.target} ({node.switch.buildOn})")
 
 
-async def cmd_switch(plan: FleetPlan, args: argparse.Namespace) -> None:
+async def run_switch_node_workflow(node: FleetNode, args: argparse.Namespace) -> None:
     source_root = (args.source_root or default_source_root(Path.cwd())).resolve()
     source_workdir = args.source_workdir or default_source_workdir(Path.cwd(), source_root)
+    created = await ensure_node(node, dry_run=args.dry_run)
+    await ensure_node_groups(node, dry_run=args.dry_run)
+    if not created and node.snapshot and not args.no_snapshot:
+        await snapshot_node(node, dry_run=args.dry_run)
+    if node.switch.buildOn == "remote":
+        await switch_node_from_source(
+            node,
+            source_root,
+            source_workdir,
+            dry_run=args.dry_run,
+        )
+    else:
+        await switch_node(node, dry_run=args.dry_run)
+    if not args.skip_health:
+        await run_node_health_checks(node, dry_run=args.dry_run)
+
+
+async def run_replace_node_workflow(node: FleetNode, args: argparse.Namespace) -> None:
+    image = node.replacementImage.destination
+    if not args.skip_push:
+        image = await push_replacement_image(node, dry_run=args.dry_run)
+    await replace_node(node, image, dry_run=args.dry_run)
+    await ensure_node_groups(node, dry_run=args.dry_run)
+    if not args.skip_health:
+        await run_node_health_checks(node, dry_run=args.dry_run)
+
+
+async def run_up_node_workflow(node: FleetNode, args: argparse.Namespace) -> None:
+    image = node.replacementImage.destination
+    if not args.skip_push:
+        image = await push_replacement_image(node, dry_run=args.dry_run)
+    await up_node(node, image, dry_run=args.dry_run)
+    await ensure_node_groups(node, dry_run=args.dry_run)
+    if not args.skip_health:
+        await run_node_health_checks(node, dry_run=args.dry_run)
+
+
+async def run_node_workflow_dag(
+    plan: FleetPlan,
+    args: argparse.Namespace,
+    subcommand: str,
+    extra_args: list[str],
+) -> None:
+    pushes_images = subcommand in {"_up-node", "_replace-node"} and "--skip-push" not in extra_args
+    last_push_by_destination: dict[str, str] = {}
+    nodes: dict[str, dict[str, typing.Any]] = {}
     for node in selected_nodes(plan, args.on):
-        created = await ensure_node(node, dry_run=args.dry_run)
-        await ensure_node_groups(node, dry_run=args.dry_run)
-        if not created and node.snapshot and not args.no_snapshot:
-            await snapshot_node(node, dry_run=args.dry_run)
-        if node.switch.buildOn == "remote":
-            await switch_node_from_source(
-                node,
-                source_root,
-                source_workdir,
-                dry_run=args.dry_run,
-            )
-        else:
-            await switch_node(node, dry_run=args.dry_run)
-        if not args.skip_health:
-            await run_node_health_checks(node, dry_run=args.dry_run)
+        depends_on = list(node.dependsOn)
+        if pushes_images:
+            previous = last_push_by_destination.get(node.replacementImage.destination)
+            if previous is not None and previous not in depends_on:
+                depends_on.append(previous)
+            last_push_by_destination[node.replacementImage.destination] = node.name
+        nodes[node.name] = {
+            "command": [
+                sys.argv[0],
+                "--plan",
+                str(args.plan),
+                subcommand,
+                node.name,
+                *extra_args,
+            ],
+            "depends_on": depends_on,
+        }
+    await run_dag_runner({"nodes": nodes})
+
+
+async def run_dag_runner(spec: dict[str, typing.Any]) -> None:
+    dag_runner = os.environ.get("IX_FLEET_DAG_RUNNER") or shutil.which("dag-runner")
+    if dag_runner is None:
+        raise RuntimeError("dag-runner is unavailable; set IX_FLEET_DAG_RUNNER or add dag-runner to PATH")
+
+    with tempfile.TemporaryDirectory(prefix="ix-fleet-dag-") as temporary_directory:
+        spec_path = Path(temporary_directory) / "spec.json"
+        spec_path.write_text(json.dumps(spec, indent=2))
+        process = await asyncio.create_subprocess_exec(dag_runner, str(spec_path))
+        returncode = await process.wait()
+    if returncode != 0:
+        raise SystemExit(returncode)
+
+
+async def cmd_switch(plan: FleetPlan, args: argparse.Namespace) -> None:
+    if args.dry_run:
+        for node in selected_nodes(plan, args.on):
+            await run_switch_node_workflow(node, args)
+        return
+
+    extra_args: list[str] = []
+    if args.no_snapshot:
+        extra_args.append("--no-snapshot")
+    if args.skip_health:
+        extra_args.append("--skip-health")
+    if args.source_root is not None:
+        extra_args.extend(["--source-root", str(args.source_root)])
+    if args.source_workdir is not None:
+        extra_args.extend(["--source-workdir", str(args.source_workdir)])
+    await run_node_workflow_dag(plan, args, "_switch-node", extra_args)
 
 
 async def cmd_replace(plan: FleetPlan, args: argparse.Namespace) -> None:
-    for node in selected_nodes(plan, args.on):
-        image = node.replacementImage.destination
-        if not args.skip_push:
-            image = await push_replacement_image(node, dry_run=args.dry_run)
-        await replace_node(node, image, dry_run=args.dry_run)
-        await ensure_node_groups(node, dry_run=args.dry_run)
-        if not args.skip_health:
-            await run_node_health_checks(node, dry_run=args.dry_run)
+    if args.dry_run:
+        for node in selected_nodes(plan, args.on):
+            await run_replace_node_workflow(node, args)
+        return
+
+    extra_args: list[str] = []
+    if args.skip_push:
+        extra_args.append("--skip-push")
+    if args.skip_health:
+        extra_args.append("--skip-health")
+    await run_node_workflow_dag(plan, args, "_replace-node", extra_args)
 
 
 async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
-    for node in selected_nodes(plan, args.on):
-        image = node.replacementImage.destination
-        if not args.skip_push:
-            image = await push_replacement_image(node, dry_run=args.dry_run)
-        await up_node(node, image, dry_run=args.dry_run)
-        await ensure_node_groups(node, dry_run=args.dry_run)
-        if not args.skip_health:
-            await run_node_health_checks(node, dry_run=args.dry_run)
+    if args.dry_run:
+        for node in selected_nodes(plan, args.on):
+            await run_up_node_workflow(node, args)
+        return
+
+    extra_args: list[str] = []
+    if args.skip_push:
+        extra_args.append("--skip-push")
+    if args.skip_health:
+        extra_args.append("--skip-health")
+    await run_node_workflow_dag(plan, args, "_up-node", extra_args)
+
+
+async def cmd_switch_node(plan: FleetPlan, args: argparse.Namespace) -> None:
+    await run_switch_node_workflow(plan.nodes[args.node], args)
+
+
+async def cmd_replace_node(plan: FleetPlan, args: argparse.Namespace) -> None:
+    await run_replace_node_workflow(plan.nodes[args.node], args)
+
+
+async def cmd_up_node(plan: FleetPlan, args: argparse.Namespace) -> None:
+    await run_up_node_workflow(plan.nodes[args.node], args)
 
 
 async def cmd_health(plan: FleetPlan, args: argparse.Namespace) -> None:
@@ -760,6 +861,9 @@ def parser() -> argparse.ArgumentParser:
             default=False if defaults else argparse.SUPPRESS,
         )
 
+    def add_dry_run_option(target: argparse.ArgumentParser) -> None:
+        target.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS)
+
     p = argparse.ArgumentParser(prog="ix-fleet")
     p.add_argument("--plan", required=True, type=Path)
     add_common_options(p, defaults=True)
@@ -789,6 +893,23 @@ def parser() -> argparse.ArgumentParser:
     add_common_options(up, defaults=False)
     up.add_argument("--skip-push", action="store_true")
     up.add_argument("--skip-health", action="store_true")
+    switch_node_parser = sub.add_parser("_switch-node", help=argparse.SUPPRESS)
+    switch_node_parser.add_argument("node")
+    add_dry_run_option(switch_node_parser)
+    switch_node_parser.add_argument("--no-snapshot", action="store_true")
+    switch_node_parser.add_argument("--skip-health", action="store_true")
+    switch_node_parser.add_argument("--source-root", type=Path)
+    switch_node_parser.add_argument("--source-workdir", type=Path)
+    replace_node_parser = sub.add_parser("_replace-node", help=argparse.SUPPRESS)
+    replace_node_parser.add_argument("node")
+    add_dry_run_option(replace_node_parser)
+    replace_node_parser.add_argument("--skip-push", action="store_true")
+    replace_node_parser.add_argument("--skip-health", action="store_true")
+    up_node_parser = sub.add_parser("_up-node", help=argparse.SUPPRESS)
+    up_node_parser.add_argument("node")
+    add_dry_run_option(up_node_parser)
+    up_node_parser.add_argument("--skip-push", action="store_true")
+    up_node_parser.add_argument("--skip-health", action="store_true")
     return p
 
 
@@ -812,6 +933,12 @@ async def main() -> None:
         await cmd_replace(plan, args)
     elif args.command == "up":
         await cmd_up(plan, args)
+    elif args.command == "_switch-node":
+        await cmd_switch_node(plan, args)
+    elif args.command == "_replace-node":
+        await cmd_replace_node(plan, args)
+    elif args.command == "_up-node":
+        await cmd_up_node(plan, args)
     else:
         raise AssertionError(args.command)
 
