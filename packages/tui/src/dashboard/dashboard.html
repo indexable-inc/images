@@ -310,8 +310,13 @@ function renderScreen(pre, screen, cursor) {
       if (start < run.text.length) pre.append(styledSpan(run.text.slice(start), run.style));
       col += run.text.length;
     }
-    // The cursor sits at or past the row's last character: draw it on a space.
-    if (cursorCol >= col) pre.append(cursorSpan(" ", freshStyle(), cursor.shape));
+    // The cursor sits at or past the row's last cell. The encoder trims the
+    // blank tail, so pad to the cursor column before drawing it; otherwise a
+    // cursor at column 10 on a 2-char row would render right after the text.
+    if (cursorCol >= col) {
+      if (cursorCol > col) pre.append(document.createTextNode(" ".repeat(cursorCol - col)));
+      pre.append(cursorSpan(" ", freshStyle(), cursor.shape));
+    }
   });
 }
 
@@ -385,7 +390,12 @@ function render() {
 
     const pre = document.createElement("pre");
     const screen = t.screen ?? "";
-    const hasOutput = screen.replace(/[\x1b][[][0-9;]*m/g, "").trim() !== "";
+    // A frame has output if it has visible text once SGR is stripped, or any
+    // SGR run at all: a styled-whitespace screen (a colored progress bar, a
+    // selection drawn with background cells) carries no plain text but is not
+    // empty, and the encoder only emits an escape when a cell is styled.
+    const stripped = screen.replace(/[\x1b][[][0-9;]*m/g, "");
+    const hasOutput = stripped.trim() !== "" || stripped.length !== screen.length;
 
     if (!hasOutput) {
       // Keep dead and blank cards in the grid, but show why they are empty.
