@@ -16,6 +16,12 @@ from typing import Any
 # balloon one response. The Rust side enforces the same ceiling.
 MAX_IMAGES = 8
 
+# Cap on characters returned per text field (stdout, stderr, result). A cell
+# that prints a large file or reprs a huge object would otherwise stream
+# straight into the caller's context window. Truncation is explicit: the marker
+# names the dropped count so a clipped field never reads as complete.
+MAX_OUTPUT_CHARS = 100_000
+
 # Compile every snippet with this flag so `await` is legal at the top level.
 # Without it, `await x` outside a function raises SyntaxError. CPython's own
 # `python -m asyncio` REPL drives top-level await the same way: compile with the
@@ -112,11 +118,17 @@ class PythonSession:
 
         return {
             "ok": ok,
-            "stdout": stdout.getvalue(),
-            "stderr": stderr.getvalue(),
-            "result": value,
+            "stdout": _truncate(stdout.getvalue()),
+            "stderr": _truncate(stderr.getvalue()),
+            "result": _truncate(value),
             "images": self._collect_images(),
         }
+
+
+def _truncate(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n... [ix-mcp truncated {len(text) - limit} chars]"
 
 
 def _object_png(obj: object) -> dict[str, str] | None:
