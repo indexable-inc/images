@@ -310,16 +310,43 @@ in
             oil-nvim
           ];
         };
-        # ix-islands colorscheme shipped as Neovim color files.
-        # Faithful port of JetBrains Islands Dark/Light (see
-        # andrewgazelka/vscode-islands for the VS Code variant);
-        # init.lua picks the dark variant by default. Both are
-        # available via `:colorscheme ix-islands-{dark,light}` at
-        # runtime.
-        runtime = {
-          "colors/ix-islands-dark.lua".source = ./nvim/colors/ix-islands-dark.lua;
-          "colors/ix-islands-light.lua".source = ./nvim/colors/ix-islands-light.lua;
-        };
+        # ix-islands colorscheme, generated from the shared islands palette so
+        # the editor and the semantic-search `-c` highlighter never drift. Both
+        # variants live in packages/code-highlight/src/islands-theme.json (the
+        # single source of truth, exposed here as ix.islandsTheme), and
+        # nvim/islands-body.lua holds the highlight-group wiring both variants
+        # share. Faithful port of JetBrains Islands Dark/Light (see
+        # andrewgazelka/vscode-islands for the VS Code variant); init.lua picks
+        # the dark variant by default. Both are available via
+        # `:colorscheme ix-islands-{dark,light}` at runtime.
+        runtime =
+          let
+            body = builtins.readFile ./nvim/islands-body.lua;
+            colorscheme =
+              variant: slots:
+              pkgs.writeText "ix-islands-${variant}.lua" ''
+                -- ix-islands-${variant}
+                --
+                -- Generated from packages/code-highlight/src/islands-theme.json
+                -- and nvim/islands-body.lua. Edit those, not this file.
+                vim.cmd("highlight clear")
+                if vim.fn.exists("syntax_on") == 1 then
+                  vim.cmd("syntax reset")
+                end
+                vim.o.background = "${variant}"
+                vim.g.colors_name = "ix-islands-${variant}"
+
+                local c = {
+                ${lib.concatStringsSep "\n" (lib.mapAttrsToList (slot: hex: ''${slot} = "${hex}",'') slots)}
+                }
+
+                ${body}
+              '';
+          in
+          {
+            "colors/ix-islands-dark.lua".source = colorscheme "dark" ix.islandsTheme.dark;
+            "colors/ix-islands-light.lua".source = colorscheme "light" ix.islandsTheme.light;
+          };
       };
     };
 
