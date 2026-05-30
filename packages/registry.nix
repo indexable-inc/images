@@ -148,7 +148,13 @@ let
 
   passthruTestEntriesFor =
     system:
-    lib.filter (entry: enabledForSystem system entry.packageSet && entry.passthruTests != null) entries;
+    lib.filter (
+      entry:
+      entry.passthruTests != null
+      && (
+        if entry.packageSet != null then enabledForSystem system entry.packageSet else entry.inRustWorkspace
+      )
+    ) entries;
 
   rustWorkspaceEntries = lib.filter (entry: entry.inRustWorkspace) entries;
 in

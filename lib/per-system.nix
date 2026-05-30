@@ -210,29 +210,37 @@ let
 
   rustPackageTests =
     let
+      cargoUnit = ix.cargoUnitFor pkgs;
+      rustWorkspace = ix.rustWorkspaceFor pkgs;
+      # A crate with a `packageSet` is built through `repoPackages` and carries
+      # its own `passthru.tests`. A lib-only workspace crate has no `packageSet`
+      # and is not in `repoPackages`, so select its library straight from the
+      # shared unit graph (same path ix-vt's default.nix uses). The library unit
+      # key is the Cargo package name with dashes underscored.
+      packageTestsFor =
+        entry:
+        if entry.packageSet != null then
+          (lib.attrByPath entry.packageSet.attrPath
+            (throw "packages/${entry.relativePath}/package.nix: passthruTests needs packageSet.attrPath")
+            repoPackages
+          ).passthru.tests or { }
+        else
+          (cargoUnit.selectLibraryWithTests rustWorkspace.units {
+            library = lib.replaceStrings [ "-" ] [ "_" ] entry.id;
+            packageName = entry.id;
+          }).passthru.tests or { };
       repoRustPackageTests = lib.mergeAttrsList (
         map (
           entry:
-          let
-            package =
-              lib.attrByPath entry.packageSet.attrPath
-                (throw "packages/${entry.relativePath}/package.nix: passthruTests needs packageSet.attrPath")
-                repoPackages;
-          in
           lib.mapAttrs' (testName: test: lib.nameValuePair "${entry.passthruTests.prefix}-${testName}" test) (
-            package.passthru.tests or { }
+            packageTestsFor entry
           )
         ) (packageRegistry.passthruTestEntriesFor system)
       );
       moduleRustPackages = {
-        resource-monitor-stats-writer =
-          let
-            cargoUnit = ix.cargoUnitFor pkgs;
-            rustWorkspace = ix.rustWorkspaceFor pkgs;
-          in
-          cargoUnit.selectBinaryWithTests rustWorkspace.units {
-            binary = "resource-monitor-stats-writer";
-          };
+        resource-monitor-stats-writer = cargoUnit.selectBinaryWithTests rustWorkspace.units {
+          binary = "resource-monitor-stats-writer";
+        };
       };
       moduleRustPackageTests = lib.concatMapAttrs (
         packageName: package:
