@@ -228,6 +228,31 @@ let
 
         mkdir -p "$out"
       '';
+  sessionSubprocessStdin =
+    pkgs.runCommand "ix-mcp-session-subprocess-stdin"
+      {
+        nativeBuildInputs = [ package ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+
+        # A child spawned inside a session inherits fd 0. The worker speaks
+        # JSON-RPC over its own stdin, so an inherited fd 0 pointing at that pipe
+        # lets a stdin-reading child (a path-less `cat`/`rg`) steal the protocol
+        # channel and hang the session forever. The worker detaches fd 0 to
+        # /dev/null, so `cat` with no path reads EOF and returns at once. The
+        # timeout turns a regression into a failure instead of a hung build.
+        timeout 60 ix-mcp exec 'import subprocess; print("cat-rc", subprocess.run(["cat"], capture_output=True, text=True).returncode)' >stdout 2>stderr
+        if ! grep -q '^cat-rc 0$' stdout; then
+          echo "session subprocess inherited the RPC stdin (hang regression):" >&2
+          cat stdout stderr >&2
+          exit 1
+        fi
+
+        mkdir -p "$out"
+      '';
 in
 package.overrideAttrs (old: {
   passthru =
@@ -241,6 +266,7 @@ package.overrideAttrs (old: {
           sessionVenv
           tuiBundled
           semanticSearchBundled
+          sessionSubprocessStdin
           ;
       };
     };
