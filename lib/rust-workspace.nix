@@ -4,6 +4,7 @@
   packageRegistry,
   cargoUnitFor,
   ghostty,
+  writeNushellApplication,
 }:
 workspacePkgs:
 let
@@ -15,7 +16,7 @@ let
   # build script's own link-search does not propagate to the final per-unit
   # link in this graph; see the alsa note below for the same shape). The dylib
   # dir is also a runtime input for the ix-vt tests, which dlopen it.
-  libghosttyVt = (import ./libghostty-vt.nix { inherit lib; }) workspacePkgs {
+  libghosttyVt = (import ./libghostty-vt.nix { inherit lib writeNushellApplication; }) workspacePkgs {
     ghosttySource = ghostty;
   };
   ghosttyLibDir = "${libghosttyVt}/lib";

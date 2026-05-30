@@ -80,7 +80,7 @@ let
   };
   buildNpmVitest = import ./build-npm-vitest.nix;
   buildZigPackage = import ./build-zig-package.nix { };
-  buildLibghosttyVt = import ./libghostty-vt.nix { inherit lib; };
+  buildLibghosttyVt = import ./libghostty-vt.nix { inherit lib writeNushellApplication; };
   uvLockFor =
     pkgs:
     import ./uv-lock.nix {
@@ -261,6 +261,7 @@ let
       packageRegistry
       cargoUnitFor
       ghostty
+      writeNushellApplication
       ;
   };
   rustWorkspace = rustWorkspaceFor pkgs;

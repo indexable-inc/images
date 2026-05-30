@@ -495,7 +495,9 @@ let
     selectRootWithTests workspace {
       rootDrv =
         workspace.libraries.${library}
-          or (throw "selectLibraryWithTests: no library `${library}` in workspace; available: ${lib.concatStringsSep ", " (builtins.attrNames (workspace.libraries or { }))}");
+          or (throw "selectLibraryWithTests: no library `${library}` in workspace; available: ${
+            lib.concatStringsSep ", " (builtins.attrNames (workspace.libraries or { }))
+          }");
       inherit
         packageName
         testTargets

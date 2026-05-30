@@ -11,7 +11,7 @@
   ...
 }:
 let
-  lib = pkgs.lib;
+  inherit (pkgs) lib;
   package = ix.buildLibghosttyVt pkgs { ghosttySource = ghostty; };
 
   # Confirm the build emitted the artifacts `ix-vt-sys` links against and the

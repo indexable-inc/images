@@ -1,4 +1,7 @@
-{ lib }:
+{
+  lib,
+  writeNushellApplication,
+}:
 
 /**
   Build libghostty-vt: ghostty's terminal VT engine as a standalone C library.
@@ -52,19 +55,25 @@ let
   # `isSdkInstalled` -> `xcode-select --print-path`. Neither tool is in the
   # sandbox, so without these shims the build crashes with `DarwinSdkNotFound`.
   # Returning the pinned Nix SDK path keeps the build hermetic.
-  xcrunShim = pkgs.writeShellScriptBin "xcrun" ''
-    printf '%s\n' "${appleSdkRoot}"
-  '';
-  xcodeSelectShim = pkgs.writeShellScriptBin "xcode-select" ''
-    printf '%s\n' "${appleSdk}"
-  '';
+  # `--wrapped main [...args]` lets the shim swallow every flag zig passes
+  # (`xcrun --sdk macosx --show-sdk-path`, `xcode-select --print-path`) and just
+  # echo the pinned path. writeShellScriptBin is banned (no nu-check, no declared
+  # deps), so these go through the checked Nushell writer.
+  xcrunShim = writeNushellApplication pkgs {
+    name = "xcrun";
+    text = ''def --wrapped main [...args] { print "${appleSdkRoot}" }'';
+  };
+  xcodeSelectShim = writeNushellApplication pkgs {
+    name = "xcode-select";
+    text = ''def --wrapped main [...args] { print "${appleSdk}" }'';
+  };
 
   darwinSdkInputs = lib.optionals isDarwin [
     xcrunShim
     xcodeSelectShim
   ];
 in
-stdenv.mkDerivation (finalAttrs: {
+stdenv.mkDerivation {
   pname = "libghostty-vt";
   inherit version;
 
@@ -132,4 +141,4 @@ stdenv.mkDerivation (finalAttrs: {
     license = lib.licenses.mit;
     platforms = lib.platforms.unix;
   };
-})
+}
