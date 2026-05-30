@@ -300,10 +300,14 @@ fn render(hit: &DisplayHit, show_content: bool, palette: &Palette, root: &Path) 
 
 /// Render the matched content as a readable block.
 ///
-/// When the hit carries a start line, each line gets its 1-based number in a
-/// right-aligned, dim gutter (ripgrep/mgrep feel); otherwise the text prints
-/// as-is (web hits). Trailing whitespace is trimmed and an empty snippet
-/// returns `None`, so nothing is printed.
+/// With color (a terminal, or `CLICOLOR_FORCE`), each line carries its 1-based
+/// number in a right-aligned, dim gutter over syntax-highlighted source
+/// (ripgrep/mgrep feel). Without color (piped to an agent, script, or file, or
+/// `NO_COLOR`), it switches to `cat -n` style: `number<tab>line`, the same shape
+/// a coding agent's file reader feeds an LLM, which tokenizes cleaner than a
+/// box-drawing gutter and drops highlighting that is noise without color. Web
+/// hits with no start line print as-is. Trailing whitespace is trimmed and an
+/// empty snippet returns `None`, so nothing is printed.
 fn render_snippet(hit: &DisplayHit, palette: &Palette, root: &Path) -> Option<String> {
     let body = hit.text.trim_end();
     if body.is_empty() {
@@ -313,6 +317,13 @@ fn render_snippet(hit: &DisplayHit, palette: &Palette, root: &Path) -> Option<St
     let Some(start) = hit.start_line else {
         return Some(body.to_owned());
     };
+
+    // Machine-readable mode: output is not a colored terminal, so a consumer is
+    // a script or an LLM. Emit `cat -n` style and skip the rich path entirely
+    // (no syntax highlighting, no aligned `│` gutter).
+    if !palette.color {
+        return Some(numbered_plain(body, start));
+    }
 
     // Prefer syntax-highlighting the real file lines: tree-sitter gets full
     // parse context and code-highlight renders its own line-number gutter. Falls
@@ -351,4 +362,56 @@ fn render_snippet(hit: &DisplayHit, palette: &Palette, root: &Path) -> Option<St
         .collect::<Vec<_>>()
         .join("\n");
     Some(rendered)
+}
+
+/// `cat -n` style numbering: `number<tab>line`, 1-based from `start`.
+///
+/// No alignment padding and no separator glyph: a tab is one token and lets a
+/// downstream reader split the number from the line trivially. `start` is the
+/// 0-based line index of the first body line, matching `DisplayHit::start_line`.
+fn numbered_plain(body: &str, start: u32) -> String {
+    let first = u64::from(start) + 1;
+    body.lines()
+        .enumerate()
+        .map(|(offset, line)| format!("{}\t{}", first + offset as u64, line.trim_end()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use semantic_search_core::DisplayHit;
+
+    use super::{Palette, render_snippet};
+
+    /// A web hit so the snippet path renders the chunk text without reading a
+    /// real file, isolating the gutter-vs-`cat -n` decision from the filesystem.
+    fn hit(text: &str) -> DisplayHit {
+        DisplayHit {
+            label: "web://example".to_owned(),
+            start_line: Some(4),
+            num_lines: Some(2),
+            score: 0.5,
+            text: text.to_owned(),
+            is_web: true,
+        }
+    }
+
+    #[test]
+    fn piped_content_is_cat_n_style() {
+        let out = render_snippet(&hit("alpha\nbeta"), &Palette::plain(), Path::new("."))
+            .expect("snippet");
+        assert_eq!(out, "5\talpha\n6\tbeta");
+        assert!(!out.contains('│'), "machine output must drop the gutter glyph");
+    }
+
+    #[test]
+    fn terminal_content_keeps_the_gutter() {
+        let out = render_snippet(&hit("alpha\nbeta"), &Palette::colored(), Path::new("."))
+            .expect("snippet");
+        assert!(out.contains('│'), "interactive output keeps the aligned gutter");
+        assert!(!out.contains('\t'), "interactive output is not tab-numbered");
+    }
 }
