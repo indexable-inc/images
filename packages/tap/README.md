@@ -83,7 +83,7 @@ The code is three composable crates:
 - [`tap-protocol`](protocol) is the wire types and runtime paths, with no I/O.
 - `tap` (this crate) is the CLI, the daemon, and the attach client.
 
-Integration tests in [`tests/integration.rs`](tests/integration.rs) drive the
+Integration tests in [`tests/session.rs`](tests/session.rs) drive the
 real `tap` binary on a PTY using this repository's [`tui`](../tui) driver and
 assert on the rendered grid: round-trip input, full-screen resync on a second
 attach, multiplayer min-size negotiation, and resize-while-attached.
