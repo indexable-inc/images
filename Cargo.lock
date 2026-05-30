@@ -951,6 +951,7 @@ dependencies = [
  "futures",
  "indicatif",
  "libc",
+ "progress-style",
  "serde",
  "serde_json",
  "tempfile",
@@ -3325,6 +3326,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "progress-style"
+version = "0.1.0"
+dependencies = [
+ "indicatif",
+]
+
+[[package]]
 name = "pty-process"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4095,6 +4103,7 @@ dependencies = [
  "dirs",
  "indicatif",
  "mixedbread",
+ "progress-style",
  "semantic-search-core",
  "tokio",
 ]

@@ -16,6 +16,7 @@ members = [
   "packages/nix-web-monitor/parser",
   "packages/nix-web-monitor/server",
   "packages/oci-image-builder",
+  "packages/progress-style",
   "packages/repo-walker",
   "packages/semantic-search",
   "packages/semantic-search-core",
@@ -85,6 +86,7 @@ object = { version = "0.37", default-features = false, features = [
   "std",
 ] }
 parking_lot = "0.12"
+progress-style = { path = "packages/progress-style" }
 pty-process = { version = "0.4", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }

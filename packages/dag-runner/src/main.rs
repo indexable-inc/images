@@ -30,7 +30,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
@@ -420,15 +420,7 @@ async fn run(
 
 fn make_spinner(multi: &MultiProgress, name: &str) -> ProgressBar {
     let pb = multi.add(ProgressBar::new_spinner());
-    // The template uses indicatif's own substitution syntax, which clippy's
-    // literal-string-with-formatting-args lint mistakes for a `format!`
-    // template; allow it on this one call.
-    #[allow(clippy::literal_string_with_formatting_args)]
-    let style =
-        ProgressStyle::with_template("{spinner:.cyan} {prefix:.bold} {wide_msg} {elapsed:.dim}")
-            .expect("static template")
-            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ");
-    pb.set_style(style);
+    pb.set_style(progress_style::spinner());
     pb.set_prefix(name.to_string());
     pb.set_message("pending");
     pb

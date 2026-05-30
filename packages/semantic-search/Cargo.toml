@@ -21,5 +21,6 @@ code-highlight.workspace = true
 dirs.workspace = true
 indicatif.workspace = true
 mixedbread.workspace = true
+progress-style.workspace = true
 semantic-search-core.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anstyle::{AnsiColor, Style};
 use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::ProgressBar;
 use semantic_search_core::{
     Config, DEFAULT_STORE, DisplayHit, MixedbreadStore, Query, SearchOptions, StoreStatus,
 };
@@ -116,7 +116,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         .is_terminal()
         .then(ProgressBar::new_spinner);
     if let Some(bar) = &bar {
-        bar.set_style(upload_style());
+        bar.set_style(progress_style::bar("cyan"));
+        bar.set_prefix("indexing files");
     }
     let embedding = AtomicBool::new(false);
     // Captured during upload so the embedding bar knows its length: the number
@@ -141,7 +142,8 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let remaining = (status.pending + status.in_progress).min(len);
             bar.set_position(len - remaining);
             if !embedding.swap(true, Ordering::Relaxed) {
-                bar.set_style(embed_style());
+                bar.set_style(progress_style::bar("magenta"));
+                bar.set_prefix("embedding files");
                 bar.set_length(len);
                 bar.enable_steady_tick(Duration::from_millis(120));
             }
@@ -175,22 +177,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-fn upload_style() -> ProgressStyle {
-    ProgressStyle::with_template(
-        "{spinner:.green} indexing {pos}/{len} files {wide_bar:.cyan/blue} {elapsed}",
-    )
-    .expect("valid progress template")
-    .progress_chars("=>-")
-}
-
-fn embed_style() -> ProgressStyle {
-    ProgressStyle::with_template(
-        "{spinner:.green} embedding {pos}/{len} files {wide_bar:.magenta/blue} {elapsed}",
-    )
-    .expect("valid progress template")
-    .progress_chars("=>-")
 }
 
 fn resolve_root(path: Option<&str>) -> anyhow::Result<PathBuf> {
