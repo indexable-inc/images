@@ -158,6 +158,9 @@ pub fn ensure_published(py: Python<'_>, poll_ms: u64) {
     });
     if let Ok(publisher) = publisher {
         *guard = Some(publisher);
+        // Release the bind lock before the atomic store, which needs no lock;
+        // holding the guard across it trips `clippy::significant_drop_tightening`.
+        drop(guard);
         PROCESS_PUBLISHED.store(true, Ordering::Release);
     }
 }
