@@ -19,6 +19,7 @@ let
     (section "rustStyle" "06-rust-style.md")
     (section "pythonStyle" "07-python-style.md")
     (section "saneDefaults" "08-sane-defaults.md")
+    (section "whyDagRunner" "08b-why-dag-runner.md")
     (section "userFacingCommands" "08a-user-facing-commands.md")
     (section "nixPhilosophy" "09-nix-philosophy.md")
     (section "moduleConventions" "10-module-conventions.md")
@@ -70,6 +71,7 @@ let
       "intro"
       "indexGitPush"
       "siteUpdates"
+      "whyDagRunner"
       "moduleConventions"
       "imageConventions"
       "layout"
