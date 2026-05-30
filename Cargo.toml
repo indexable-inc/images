@@ -15,6 +15,7 @@ members = [
   "packages/oci-image-builder",
   "packages/repo-walker",
   "packages/tui",
+  "packages/tui-dashboard-core",
   "packages/tui-py",
 ]
 resolver = "3"

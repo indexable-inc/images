@@ -1,0 +1,19 @@
+[package]
+name = "tui-dashboard-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Typed MCP dashboard resource model plus a Loro-backed hub that retains per-producer history"
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+# CRDT document that retains the dashboard's edit history; the hub never trims
+# it, so browsers can time-travel over past resource states.
+loro = { version = "1", default-features = false }
+rmp-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
+snafu.workspace = true
+url = { workspace = true, features = ["serde"] }
