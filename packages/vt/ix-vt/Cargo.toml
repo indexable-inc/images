@@ -8,7 +8,10 @@ repository = "https://github.com/indexable-inc/index"
 publish = true
 
 [dependencies]
-ix-vt-sys = { path = "../ix-vt-sys" }
+# `version` alongside `path` so `cargo publish -p ix-vt` accepts the dependency
+# (a path-only dep is rejected for a `publish = true` crate); the path is used
+# for in-workspace builds and the version for the published manifest.
+ix-vt-sys = { path = "../ix-vt-sys", version = "0.1.0" }
 
 [lints]
 workspace = true
