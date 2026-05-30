@@ -31,9 +31,26 @@ nix run .#elevenlabs-say -- "save me" --output /tmp/out.mp3
 # Pick a voice by name or id, and override the model or format.
 nix run .#elevenlabs-say -- "different voice" --voice Adam
 nix run .#elevenlabs-say -- "slower model" --model eleven_multilingual_v2 --format mp3_44100_192
+
+# Stream a producer's output: forward text as it arrives and play audio as it
+# synthesizes, instead of waiting for the producer to finish.
+my-llm --prompt "tell me a story" | nix run .#elevenlabs-say -- --stream
 ```
 
 Text source precedence is positional argument, then `--file`, then stdin.
+
+## Streaming input
+
+`--stream` switches synthesis to the ElevenLabs [WebSocket input-streaming
+endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input).
+The CLI reads stdin as each read returns (rather than buffering to EOF), forwards
+the text token by token, and plays or writes audio as it comes back. Put it at the
+end of a pipe whose producer emits text over time, such as an LLM token stream.
+
+`--stream` works with `--output` too, writing audio to the file as it arrives. It
+honors `--voice`, `--model`, and `--format`; the default `eleven_flash_v2_5` model
+is the recommended low-latency choice and supports this endpoint. The model
+`eleven_v3` does not, so streaming will fail with it.
 
 ## Defaults
 
@@ -55,3 +72,6 @@ PATH. `--output` skips playback and writes the audio bytes directly.
 - A name that collides with a 20-character voice id would resolve as a name
   first. ElevenLabs voice ids are opaque tokens, so this does not happen in
   practice.
+- `--stream` plays MP3 over a pipe, so it assumes an MP3 `--format` (the
+  default). A raw PCM format has no container for `ffplay` to detect from the
+  stream and will not play; use the default or `--output` for raw formats.

@@ -4,20 +4,28 @@ Reads text from a positional argument, a file, or stdin, synthesizes speech with
 the ElevenLabs API, and either plays it through the speakers with ``ffplay`` or
 writes the audio to a file. The API key comes from ``ELEVENLABS_API_KEY``; there
 is no embedded key and no silent fallback.
+
+With ``--stream`` the CLI uses the ElevenLabs WebSocket input-streaming endpoint:
+stdin is forwarded token by token and audio is played as it arrives, so it can
+sit at the end of a pipe that emits text incrementally (for example an LLM token
+stream) instead of waiting for the whole input.
 """
 
 from __future__ import annotations
 
 import argparse
+import codecs
 import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from elevenlabs import ElevenLabs
 from elevenlabs.core import ApiError
+from elevenlabs.realtime_tts import RealtimeTextToSpeechClient
 
 # Rachel is a stable ElevenLabs premade voice that is available on every account,
 # so it is a safe default for a `say` replacement.
@@ -27,6 +35,12 @@ DEFAULT_MODEL_ID = "eleven_flash_v2_5"
 DEFAULT_OUTPUT_FORMAT = "mp3_44100_128"
 
 API_KEY_ENV = "ELEVENLABS_API_KEY"
+
+# Shared so the batch and streaming playback paths report the same fix.
+FFPLAY_NOT_FOUND = (
+    "ffplay was not found on PATH; install ffmpeg to play audio, "
+    "or use --output PATH to save the audio instead"
+)
 
 
 class SayError(Exception):
@@ -41,6 +55,7 @@ class CliArgs:
     voice: str
     model: str
     output_format: str
+    stream: bool
 
 
 def parse_args(argv: list[str] | None = None) -> CliArgs:
@@ -87,6 +102,15 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         default=DEFAULT_OUTPUT_FORMAT,
         help=f"Output audio format. Defaults to {DEFAULT_OUTPUT_FORMAT}.",
     )
+    _ = parser.add_argument(
+        "--stream",
+        action="store_true",
+        help=(
+            "Stream input over the ElevenLabs WebSocket: forward stdin as it "
+            "arrives and play or write audio incrementally. Use it at the end of "
+            "a pipe whose producer emits text over time."
+        ),
+    )
     namespace = parser.parse_args(argv)
 
     text: str | None = namespace.text
@@ -95,6 +119,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
     voice: str = namespace.voice
     model: str = namespace.model
     output_format: str = namespace.output_format
+    stream: bool = namespace.stream
 
     return CliArgs(
         text=text,
@@ -103,6 +128,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         voice=voice,
         model=model,
         output_format=output_format,
+        stream=stream,
     )
 
 
@@ -128,6 +154,51 @@ def read_text(args: CliArgs) -> str:
     return text
 
 
+def stdin_text_chunks() -> Iterator[str]:
+    """Yield decoded text from stdin as each read returns.
+
+    ``os.read`` returns as soon as any bytes are available, so a slow producer's
+    tokens are forwarded immediately. Iterating ``sys.stdin`` line by line would
+    instead block until a newline, which a token stream may never emit. An
+    incremental UTF-8 decoder keeps multi-byte characters intact when one is split
+    across two reads.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    fd = sys.stdin.fileno()
+    while True:
+        data = os.read(fd, 4096)
+        if not data:
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                yield tail
+            return
+        text = decoder.decode(data)
+        if text:
+            yield text
+
+
+def text_source(args: CliArgs) -> Iterator[str]:
+    """Yield text incrementally for streaming synthesis.
+
+    A positional argument or --file resolves to a single chunk; stdin is read in
+    small reads so a producer that streams tokens is forwarded with low latency
+    rather than buffered until EOF.
+    """
+    if args.text is not None:
+        yield args.text
+    elif args.file is not None:
+        try:
+            yield args.file.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise SayError(f"cannot read text file {args.file}: {exc}") from exc
+    elif not sys.stdin.isatty():
+        yield from stdin_text_chunks()
+    else:
+        raise SayError(
+            "no text to speak: pass TEXT, use --file PATH, or pipe text on stdin"
+        )
+
+
 def make_client() -> ElevenLabs:
     if not os.environ.get(API_KEY_ENV):
         raise SayError(
@@ -135,6 +206,23 @@ def make_client() -> ElevenLabs:
             f"for example: export {API_KEY_ENV}=sk_..."
         )
     return ElevenLabs()
+
+
+def stream_client(client: ElevenLabs) -> RealtimeTextToSpeechClient:
+    """Narrow ``client.text_to_speech`` to the realtime client.
+
+    ``ElevenLabs.__init__`` wires ``text_to_speech`` to a
+    ``RealtimeTextToSpeechClient``, but the inherited accessor is typed as the
+    base ``TextToSpeechClient``, so ``convert_realtime`` is invisible to the type
+    checker. Narrow it here and fail loudly if a future SDK drops the wiring.
+    """
+    tts = client.text_to_speech
+    if not isinstance(tts, RealtimeTextToSpeechClient):
+        raise SayError(
+            "this elevenlabs build does not expose WebSocket input streaming "
+            "(RealtimeTextToSpeechClient); --stream needs elevenlabs>=2.0"
+        )
+    return tts
 
 
 def resolve_voice_id(client: ElevenLabs, voice: str) -> str:
@@ -170,6 +258,24 @@ def synthesize(client: ElevenLabs, text: str, args: CliArgs, voice_id: str) -> b
         raise SayError(format_api_error("synthesize speech", exc)) from exc
 
 
+def stream_synthesize(
+    client: ElevenLabs, args: CliArgs, voice_id: str
+) -> Iterator[bytes]:
+    """Stream audio for stdin text over the WebSocket input-streaming endpoint.
+
+    The SDK generator interleaves sending each text chunk with a short
+    non-blocking receive, so audio comes back while later input is still being
+    typed. It pins ``chunk_length_schedule=[50]`` for low latency, which is the
+    intended trade for a pipe.
+    """
+    return stream_client(client).convert_realtime(
+        voice_id=voice_id,
+        text=text_source(args),
+        model_id=args.model,
+        output_format=args.output_format,
+    )
+
+
 def format_api_error(action: str, exc: ApiError) -> str:
     if exc.status_code is not None:
         return f"failed to {action}: ElevenLabs API returned status {exc.status_code}: {exc.body}"
@@ -181,6 +287,23 @@ def write_output(audio: bytes, output: Path) -> None:
         _ = output.write_bytes(audio)
     except OSError as exc:
         raise SayError(f"cannot write audio to {output}: {exc}") from exc
+
+
+def write_stream(chunks: Iterable[bytes], output: Path) -> None:
+    """Write audio chunks to ``output`` as they arrive, failing on empty input."""
+    wrote = False
+    try:
+        with output.open("wb") as handle:
+            for chunk in chunks:
+                _ = handle.write(chunk)
+                wrote = True
+    except OSError as exc:
+        raise SayError(f"cannot write audio to {output}: {exc}") from exc
+
+    if not wrote:
+        # An empty mp3 is worse than no file: it looks like success.
+        output.unlink(missing_ok=True)
+        raise SayError("no audio was produced; the input may have been empty")
 
 
 def play(audio: bytes) -> None:
@@ -207,17 +330,71 @@ def play(audio: bytes) -> None:
         if completed.returncode != 0:
             raise SayError(f"ffplay exited with status {completed.returncode}")
     except FileNotFoundError as exc:
-        raise SayError(
-            "ffplay was not found on PATH; install ffmpeg to play audio, "
-            "or use --output PATH to save the audio instead"
-        ) from exc
+        raise SayError(FFPLAY_NOT_FOUND) from exc
     finally:
         temp_path.unlink(missing_ok=True)
 
 
+def play_stream(chunks: Iterable[bytes]) -> None:
+    """Pipe MP3 audio chunks to ``ffplay`` as they arrive for low-latency playback.
+
+    ``ffplay`` reads from ``pipe:0`` and starts decoding before EOF, so audio
+    begins while later chunks are still synthesizing. The process starts lazily
+    on the first chunk, so empty input gives a clear error instead of an ffplay
+    "no stream found" failure.
+    """
+    proc: subprocess.Popen[bytes] | None = None
+    try:
+        for chunk in chunks:
+            if proc is None:
+                proc = _spawn_ffplay()
+            stdin = proc.stdin
+            assert stdin is not None  # PIPE is always set; narrows for the checker
+            try:
+                _ = stdin.write(chunk)
+                stdin.flush()
+            except BrokenPipeError:
+                # ffplay exited early; stop feeding and report via its exit code.
+                break
+    finally:
+        if proc is not None and proc.stdin is not None:
+            proc.stdin.close()
+
+    if proc is None:
+        raise SayError("no audio was produced; the input may have been empty")
+
+    returncode = proc.wait()
+    if returncode != 0:
+        raise SayError(f"ffplay exited with status {returncode}")
+
+
+def _spawn_ffplay() -> subprocess.Popen[bytes]:
+    try:
+        return subprocess.Popen(
+            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-i", "pipe:0"],
+            stdin=subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise SayError(FFPLAY_NOT_FOUND) from exc
+
+
 def run(args: CliArgs) -> None:
-    text = read_text(args)
     client = make_client()
+
+    if args.stream:
+        voice_id = resolve_voice_id(client, args.voice)
+        chunks = stream_synthesize(client, args, voice_id)
+        try:
+            if args.output is not None:
+                write_stream(chunks, args.output)
+                print(f"wrote {args.output}", file=sys.stderr)
+            else:
+                play_stream(chunks)
+        except ApiError as exc:
+            raise SayError(format_api_error("stream speech", exc)) from exc
+        return
+
+    text = read_text(args)
     voice_id = resolve_voice_id(client, args.voice)
     audio = synthesize(client, text, args, voice_id)
 

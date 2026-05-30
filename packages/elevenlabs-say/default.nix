@@ -68,11 +68,28 @@ let
         esac
         mkdir -p "$out"
       '';
+
+  # Exercise the --stream input path offline against the installed module: the
+  # WebSocket client is constructed but never connected, so no network or audio
+  # device is needed. Guards incremental stdin reading and the realtime wiring.
+  streaming =
+    pkgs.runCommand "elevenlabs-say-streaming"
+      {
+        strictDeps = true;
+        # Constructing ElevenLabs() builds an httpx SSL context, which reads
+        # SSL_CERT_FILE. No request is sent, but the file must exist in the
+        # sandbox for the realtime-client narrowing check to run.
+        SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+      }
+      ''
+        ${unwrapped}/venv/bin/python ${./tests/test_streaming.py}
+        mkdir -p "$out"
+      '';
 in
 package.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
     tests = {
-      inherit printsHelp;
+      inherit printsHelp streaming;
     };
   };
 })
