@@ -253,6 +253,19 @@ pub struct Snapshot {
     pub cursor: Cursor,
 }
 
+/// How to move the viewport over the scrollback, for
+/// [`Terminal::scroll_viewport`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollViewport {
+    /// Scroll to the oldest scrollback row.
+    Top,
+    /// Scroll back to the active (bottom) viewport.
+    Bottom,
+    /// Scroll by `delta` rows: positive scrolls down toward the bottom,
+    /// negative scrolls up into history.
+    Delta(isize),
+}
+
 /// Options for creating a [`Terminal`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalOptions {
@@ -325,6 +338,30 @@ impl Terminal {
     /// [`Error`] if ghostty rejects the resize.
     pub fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
         check(unsafe { sys::ghostty_terminal_resize(self.raw, cols, rows) })
+    }
+
+    /// Move the viewport over the scrollback history.
+    ///
+    /// [`render`](Self::render) always reads the current viewport, so a caller
+    /// that wants scrollback content scrolls the viewport up, renders, and
+    /// scrolls back. The viewport position is terminal state, so this takes
+    /// `&mut self`.
+    pub fn scroll_viewport(&mut self, behavior: ScrollViewport) {
+        let raw = match behavior {
+            ScrollViewport::Top => sys::GhosttyTerminalScrollViewport {
+                tag: sys::GhosttyTerminalScrollViewportTag::GHOSTTY_SCROLL_VIEWPORT_TOP,
+                value: sys::GhosttyTerminalScrollViewportValue { _padding: [0, 0] },
+            },
+            ScrollViewport::Bottom => sys::GhosttyTerminalScrollViewport {
+                tag: sys::GhosttyTerminalScrollViewportTag::GHOSTTY_SCROLL_VIEWPORT_BOTTOM,
+                value: sys::GhosttyTerminalScrollViewportValue { _padding: [0, 0] },
+            },
+            ScrollViewport::Delta(delta) => sys::GhosttyTerminalScrollViewport {
+                tag: sys::GhosttyTerminalScrollViewportTag::GHOSTTY_SCROLL_VIEWPORT_DELTA,
+                value: sys::GhosttyTerminalScrollViewportValue { delta },
+            },
+        };
+        unsafe { sys::ghostty_terminal_scroll_viewport(self.raw, raw) };
     }
 
     /// Read a scalar value of type `T` from the terminal via
