@@ -110,6 +110,13 @@ let
       # alsa-lib path below).
       "-L"
       "native=${ghosttyLibDir}"
+      # Embed an rpath to the libghostty-vt store path so the linked binaries
+      # (the ix-vt test binaries cargo-unit executes, and any future consumer)
+      # resolve `libghostty-vt.so` at runtime without `LD_LIBRARY_PATH`. The
+      # `-L` above only covers link time. Harmless for crates that never load it
+      # because the binary keeps no `DT_NEEDED` entry for the lib.
+      "-C"
+      "link-arg=-Wl,-rpath,${ghosttyLibDir}"
     ]
     ++ lib.optionals workspacePkgs.stdenv.hostPlatform.isLinux [
       "-L"
