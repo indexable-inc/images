@@ -1,7 +1,25 @@
-"""High-level Python API for the `tui` PTY-backed terminal manager.
+"""High-level async API for the `tui` PTY-backed terminal manager.
 
 Spawn child processes attached to real pseudo-terminals, drive them with
-keystrokes, and observe their VT100-rendered viewport. The public surface is:
+keystrokes, and observe their VT100-rendered viewport. The whole I/O surface is
+async: every method that touches the terminal is a coroutine you must `await`.
+
+    async with Tui("python", "-q") as t:
+        await t.enter("print('hi')")
+        snap = await t.wait_for("hi", timeout=2.0)
+
+The awaitables are native asyncio coroutines bridged from Rust via
+pyo3-async-runtimes, with no thread-pool hop. The only synchronous surface is
+construction and the cached accessors: `id`, `command`, `args`, `size`,
+`is_alive`, `exit_code`. Everything else (`send`, `enter`, `read`, `viewport`,
+`text`, `snapshot`, `wait_for`, `resize`, `kill`, `close`) is a coroutine.
+
+Every spawned terminal auto-shows in the web dashboard. The first `Tui(...)`
+binds a process-global producer, so running `nix run .#tui-dashboard` (it
+watches `socket_dir()`) renders this process's terminals with no explicit
+`tui.publish()`. Opt out by setting `IX_TUI_AUTOPUBLISH=0`.
+
+The public surface:
 
     Tui             a single spawned process; the workhorse handle
     Snapshot        an immutable read-time view of one process
@@ -10,11 +28,6 @@ keystrokes, and observe their VT100-rendered viewport. The public surface is:
     StyledCell      one viewport cell: character + VT100 attributes
     Color           a cell color: None (default), int (palette), or (r, g, b)
     WaitTimeout     raised by `Tui.wait_for(...)` when nothing matched in time
-
-The interface is async-only. Every I/O method is a coroutine that returns a
-native asyncio-awaitable from the Rust side (via pyo3-async-runtimes); no
-thread-pool hop is involved. Construction and the shape accessors (`id`,
-`command`, `size`, `is_alive`, `exit_code`) are the only synchronous surface.
 """
 
 from __future__ import annotations
@@ -37,6 +50,7 @@ from ._tui import (
     StyledCell as StyledCell,
     TuiInstance as _RawTuiInstance,
     __version__,
+    ensure_published as _raw_ensure_published,
     publish as _raw_publish,
     serve as _raw_serve,
     socket_dir as socket_dir,
@@ -195,6 +209,21 @@ def _build_predicate(pattern: Pattern) -> Callable[[Snapshot], bool]:
 
 
 # --------------------------------------------------------------------------- #
+# Auto-publish
+# --------------------------------------------------------------------------- #
+
+def _ensure_autopublish() -> None:
+    """Bind the process-global dashboard producer once, on first `Tui(...)`.
+
+    Spawned terminals then appear in `nix run .#tui-dashboard` with no explicit
+    `tui.publish()`. Idempotency (bind at most once per process) and the
+    `IX_TUI_AUTOPUBLISH=0` opt-out both live in the Rust `ensure_published`, so
+    this stays a thin call into it rather than re-implementing either guard here.
+    """
+    _raw_ensure_published()
+
+
+# --------------------------------------------------------------------------- #
 # Tui
 # --------------------------------------------------------------------------- #
 
@@ -214,7 +243,11 @@ class Tui:
     spawned PTY; each I/O method returns a native asyncio coroutine bridged
     through pyo3-async-runtimes, with no thread-pool hop. Construction and the
     shape accessors (`id`, `command`, `args`, `size`, `is_alive`, `exit_code`)
-    are the only synchronous surface.
+    are the only synchronous surface; everything else is a coroutine to await.
+
+    The first `Tui(...)` auto-publishes this process to the web dashboard, so
+    `nix run .#tui-dashboard` shows the terminal without an explicit
+    `tui.publish()`. Set `IX_TUI_AUTOPUBLISH=0` to opt out.
 
     `kill()` sends SIGKILL; `interrupt()` sends a cooperative Ctrl+C; `close()`
     force-kills and drops the terminal from `list_all()`. `async with` blocks
@@ -232,6 +265,7 @@ class Tui:
         cols: int | None = None,
         scrollback_lines: int | None = None,
     ) -> None:
+        _ensure_autopublish()
         self._raw = _RawTuiInstance(command, list(args), rows, cols, scrollback_lines)
 
     @classmethod

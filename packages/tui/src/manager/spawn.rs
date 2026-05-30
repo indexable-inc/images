@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::actor::{PtyCommand, pty_actor};
 use crate::manager::TuiInstance;
-use crate::types::{ExitState, SpawnConfig};
+use crate::types::{CursorShape, ExitState, SpawnConfig};
 use crate::{Error, Result};
 
 const CHANNEL_BUFFER_SIZE: usize = 100;
@@ -81,13 +81,26 @@ pub(super) fn spawn_tui(
 
     let (command_tx, command_rx) = mpsc::channel::<PtyCommand>(CHANNEL_BUFFER_SIZE);
     let (exit_tx, exit_rx) = watch::channel(ExitState::Running);
+    // Cursor shape is sniffed from the byte stream by the actor and read by the
+    // frame builder, so it is shared like `size` rather than channelled.
+    let cursor_shape = Arc::new(parking_lot::RwLock::new(CursorShape::default()));
 
     // The actor owns the child: it reaps it (so short-lived commands leave no
     // zombie), publishes the exit code through `exit_tx`, and can signal it on
     // a kill request.
     let actor_parser = Arc::clone(&parser);
+    let actor_cursor_shape = Arc::clone(&cursor_shape);
     runtime.spawn(async move {
-        pty_actor(id, pty, child, command_rx, actor_parser, exit_tx).await;
+        pty_actor(
+            id,
+            pty,
+            child,
+            command_rx,
+            actor_parser,
+            exit_tx,
+            actor_cursor_shape,
+        )
+        .await;
     });
 
     let instance = TuiInstance {
@@ -97,6 +110,7 @@ pub(super) fn spawn_tui(
         spawned_at: SystemTime::now(),
         scrollback_limit: scrollback_lines,
         size: Arc::new(parking_lot::RwLock::new((rows, cols))),
+        cursor_shape,
         command_tx,
         exit_rx,
         runtime: Arc::clone(runtime),

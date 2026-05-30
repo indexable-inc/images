@@ -56,7 +56,7 @@ pub use manager::{TuiInstance, TuiManager};
 #[cfg(feature = "publish")]
 pub use publish::{Publisher, publish};
 pub use slice::{ColRange, RowRange, slice_2d};
-pub use types::{Color, ExitState, FullOutput, SpawnConfig, StyledCell};
+pub use types::{Color, CursorShape, ExitState, FullOutput, SpawnConfig, StyledCell};
 
 #[cfg(test)]
 mod tests;

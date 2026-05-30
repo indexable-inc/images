@@ -1,3 +1,15 @@
 Persistent Python sessions on a pinned interpreter. Every session can `import tui` with no install step: `tui` is the bundled PyO3 PTY driver (spawn and drive PTY-backed processes with full vt100 emulation, scrollback, and optional NumPy access to per-cell data; the API is async-only, so use it from python_exec/python_eval with top-level await). numpy is preinstalled too, and each session's writable venv keeps `pip install` working for anything else.
 
 Execution model: each session is single-threaded with one persistent asyncio event loop, reused across calls. Write top-level `await` directly (e.g. `rows = await pool.fetch(sql)`); because the loop is shared, an async client or pool created in one call stays usable in later ones. Do not call `asyncio.run()`: inside an awaited block it raises `RuntimeError: asyncio.run() cannot be called from a running event loop`, and outside one it spins up a throwaway loop your resources cannot outlive. `asyncio.get_running_loop()` resolves only inside awaited code. A blocking synchronous call (heavy CPU, `time.sleep`, sync network I/O) freezes the whole session, so reach for the async equivalent.
+
+Driving a terminal with `tui`: spawn and control a process in one block, awaiting every I/O step.
+
+    from tui import Tui, Key
+    async with Tui("python", "-q") as t:
+        await t.enter("print(2 + 2)")
+        snap = await t.wait_for("4", timeout=2.0)
+        print(snap.text)
+
+Every method that touches the terminal is a coroutine you must `await`: `send`, `enter`, `read`, `viewport`, `text`, `snapshot`, `wait_for`, `resize`, `kill`, `close`. Only the cached accessors are synchronous: `id`, `command`, `args`, `size`, `is_alive`, `exit_code`. Send keystrokes with the `Key` enum (`Key.ENTER`, `Key.ctrl("c")`, arrows). The `async with` block calls `close()` on exit, so an editor or REPL that ignores Ctrl+C still goes away.
+
+Terminals auto-show in the dashboard. The first `Tui(...)` publishes this process, so a running `nix run .#tui-dashboard` (it watches `tui.socket_dir()`) renders every spawned terminal with no `tui.publish()` call. Set `IX_TUI_AUTOPUBLISH=0` to opt out.

@@ -69,9 +69,10 @@
     box-shadow:
       0 1px 0 rgba(255,255,255,0.02) inset,
       0 12px 30px -18px rgba(0,0,0,0.9);
-    transition: border-color 0.2s, transform 0.2s;
+    transition: border-color 0.2s;
   }
-  .term:hover { border-color: var(--panel-edge-hover); transform: translateY(-2px); }
+  /* Border color reacts to hover; the up/down motion was removed deliberately. */
+  .term:hover { border-color: var(--panel-edge-hover); }
   .term.dead { opacity: 0.5; }
 
   .term .head {
@@ -104,6 +105,8 @@
     font-family: var(--mono); font-size: 12px; line-height: 1.38;
     color: var(--ink);
     white-space: pre; overflow: auto;
+    /* A stable floor so an empty or one-line screen does not collapse the card. */
+    min-height: 3.6em;
     max-height: 60vh; tab-size: 8;
     scrollbar-width: thin; scrollbar-color: var(--panel-edge-hover) transparent;
   }
@@ -111,6 +114,25 @@
   .term pre::-webkit-scrollbar-thumb {
     background: var(--panel-edge-hover); border-radius: 9px;
     border: 2px solid var(--panel);
+  }
+  /* Style attributes carried by the SGR runs. */
+  .term pre .b { font-weight: 700; }
+  .term pre .i { font-style: italic; }
+  .term pre .u { text-decoration: underline; }
+
+  /* Cursor overlays. Inline so the cell text stays selectable underneath. */
+  .term pre .cur { position: relative; }
+  .term pre .cur::after {
+    content: ""; position: absolute; pointer-events: none;
+    left: 0; top: 0; right: 0; bottom: 0;
+  }
+  .term pre .cur.block::after { background: var(--ink); mix-blend-mode: difference; }
+  .term pre .cur.hollow::after { box-shadow: inset 0 0 0 1px var(--ink); }
+  .term pre .cur.bar::after { right: auto; width: 1px; background: var(--ink); }
+  .term pre .cur.underline::after { top: auto; height: 1px; background: var(--ink); }
+
+  .placeholder {
+    color: var(--ink-faint); font-style: italic;
   }
 
   .empty {
@@ -145,6 +167,175 @@ function b64ToBytes(b64) {
   return out;
 }
 
+// ----- color -------------------------------------------------------------- //
+
+// The 256-color palette: 16 base ANSI, a 6x6x6 cube, then a 24-step gray ramp.
+// Matches the standard xterm layout the tui crate's SGR encoder targets.
+const PALETTE = (() => {
+  const base = [
+    [0, 0, 0], [205, 0, 0], [0, 205, 0], [205, 205, 0],
+    [0, 0, 238], [205, 0, 205], [0, 205, 205], [229, 229, 229],
+    [127, 127, 127], [255, 0, 0], [0, 255, 0], [255, 255, 0],
+    [92, 92, 255], [255, 0, 255], [0, 255, 255], [255, 255, 255],
+  ];
+  const table = base.slice();
+  const cube = [0, 95, 135, 175, 215, 255];
+  for (let r = 0; r < 6; r++)
+    for (let g = 0; g < 6; g++)
+      for (let b = 0; b < 6; b++) table.push([cube[r], cube[g], cube[b]]);
+  for (let i = 0; i < 24; i++) {
+    const v = 8 + i * 10;
+    table.push([v, v, v]);
+  }
+  return table;
+})();
+
+// Resolve an SGR color descriptor to a CSS color, or null for the terminal
+// default (which inherits the panel ink / background).
+function cssColor(c) {
+  if (!c) return null;
+  if (c.kind === "idx") {
+    const rgb = PALETTE[c.value] ?? [0, 0, 0];
+    return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+  }
+  if (c.kind === "rgb") return `rgb(${c.r},${c.g},${c.b})`;
+  return null;
+}
+
+// ----- SGR parsing -------------------------------------------------------- //
+
+// A fresh, all-default style. The encoder resets per row, so each row starts
+// here regardless of the previous row.
+function freshStyle() {
+  return { fg: null, bg: null, bold: false, italic: false, underline: false, inverse: false };
+}
+
+// Apply one SGR escape's numeric params to `style` in place. Mirrors the codes
+// the tui crate emits: 0 reset, 1/3/4/7 attributes, 30-37/90-97 + 38;5/38;2 fg,
+// 40-47/100-107 + 48;5/48;2 bg.
+function applySgr(style, params) {
+  for (let i = 0; i < params.length; i++) {
+    const p = params[i];
+    if (p === 0) Object.assign(style, freshStyle());
+    else if (p === 1) style.bold = true;
+    else if (p === 3) style.italic = true;
+    else if (p === 4) style.underline = true;
+    else if (p === 7) style.inverse = true;
+    else if (p === 22) style.bold = false;
+    else if (p === 23) style.italic = false;
+    else if (p === 24) style.underline = false;
+    else if (p === 27) style.inverse = false;
+    else if (p >= 30 && p <= 37) style.fg = { kind: "idx", value: p - 30 };
+    else if (p === 39) style.fg = null;
+    else if (p >= 40 && p <= 47) style.bg = { kind: "idx", value: p - 40 };
+    else if (p === 49) style.bg = null;
+    else if (p >= 90 && p <= 97) style.fg = { kind: "idx", value: p - 90 + 8 };
+    else if (p >= 100 && p <= 107) style.bg = { kind: "idx", value: p - 100 + 8 };
+    else if (p === 38 || p === 48) {
+      const target = p === 38 ? "fg" : "bg";
+      if (params[i + 1] === 5) { style[target] = { kind: "idx", value: params[i + 2] }; i += 2; }
+      else if (params[i + 1] === 2) {
+        style[target] = { kind: "rgb", r: params[i + 2], g: params[i + 3], b: params[i + 4] };
+        i += 4;
+      }
+    }
+  }
+}
+
+// Split one SGR-coded row into runs of `{ text, style }`. A run is a maximal
+// span of cells sharing one style; the escape sequences themselves are consumed.
+function parseRow(line) {
+  const runs = [];
+  const style = freshStyle();
+  let text = "";
+  let i = 0;
+  while (i < line.length) {
+    const esc = line.indexOf("\x1b[", i);
+    if (esc === -1) { text += line.slice(i); break; }
+    text += line.slice(i, esc);
+    const end = line.indexOf("m", esc);
+    if (end === -1) { text += line.slice(esc); break; }
+    if (text) { runs.push({ text, style: { ...style } }); text = ""; }
+    const body = line.slice(esc + 2, end);
+    const params = body === "" ? [0] : body.split(";").map((s) => parseInt(s, 10) || 0);
+    applySgr(style, params);
+    i = end + 1;
+  }
+  if (text) runs.push({ text, style: { ...style } });
+  return runs;
+}
+
+// ----- screen rendering --------------------------------------------------- //
+
+// Style two colors into a span's CSS, honoring inverse video by swapping fg/bg.
+function applyStyleCss(span, style) {
+  let fg = cssColor(style.fg);
+  let bg = cssColor(style.bg);
+  if (style.inverse) {
+    const ink = "var(--ink)";
+    const panel = "var(--panel)";
+    [fg, bg] = [bg ?? panel, fg ?? ink];
+  }
+  if (fg) span.style.color = fg;
+  if (bg) span.style.background = bg;
+  let cls = "";
+  if (style.bold) cls += " b";
+  if (style.italic) cls += " i";
+  if (style.underline) cls += " u";
+  if (cls) span.className = cls.trim();
+}
+
+// Build the styled-and-cursored <pre> children for one screen.
+//
+// `cursor` is `{ row, col, shape }` to draw, or null. The cursor cell is split
+// out of its run so its overlay class lands on exactly one character; a cursor
+// past the row end gets a synthetic space so it still shows.
+function renderScreen(pre, screen, cursor) {
+  const lines = screen.split("\n");
+  lines.forEach((line, row) => {
+    if (row > 0) pre.append(document.createTextNode("\n"));
+    const runs = parseRow(line);
+    const cursorCol = cursor && cursor.row === row ? cursor.col : -1;
+    let col = 0;
+    for (const run of runs) {
+      // Emit the run, splitting at the cursor column when it falls inside.
+      let start = 0;
+      for (let k = 0; k < run.text.length; k++) {
+        if (col + k === cursorCol) {
+          if (k > start) pre.append(styledSpan(run.text.slice(start, k), run.style));
+          pre.append(cursorSpan(run.text[k], run.style, cursor.shape));
+          start = k + 1;
+        }
+      }
+      if (start < run.text.length) pre.append(styledSpan(run.text.slice(start), run.style));
+      col += run.text.length;
+    }
+    // The cursor sits at or past the row's last cell. The encoder trims the
+    // blank tail, so pad to the cursor column before drawing it; otherwise a
+    // cursor at column 10 on a 2-char row would render right after the text.
+    if (cursorCol >= col) {
+      if (cursorCol > col) pre.append(document.createTextNode(" ".repeat(cursorCol - col)));
+      pre.append(cursorSpan(" ", freshStyle(), cursor.shape));
+    }
+  });
+}
+
+function styledSpan(text, style) {
+  const span = document.createElement("span");
+  span.textContent = text;
+  applyStyleCss(span, style);
+  return span;
+}
+
+function cursorSpan(ch, style, shape) {
+  const span = styledSpan(ch || " ", style);
+  // hollow outline for a block on a (typically background) terminal reads
+  // better than a filled block; "block" maps to the inverse-fill overlay.
+  const kind = shape === "bar" ? "bar" : shape === "underline" ? "underline" : "block";
+  span.classList.add("cur", kind);
+  return span;
+}
+
 function render() {
   const terminals = doc.toJSON().terminals ?? {};
   const keys = Object.keys(terminals).sort();
@@ -152,7 +343,7 @@ function render() {
   if (keys.length === 0) {
     grid.innerHTML =
       '<div class="empty">no terminals yet'
-      + '<div class="hint">spawn a terminal, or start a producer with <code>tui.publish()</code></div></div>';
+      + '<div class="hint">spawn a <code>tui.Tui(...)</code>; it shows up here automatically</div></div>';
     return;
   }
 
@@ -198,7 +389,36 @@ function render() {
     head.append(size);
 
     const pre = document.createElement("pre");
-    pre.textContent = t.screen ?? "";
+    const screen = t.screen ?? "";
+    // A frame has output if it has visible text once SGR is stripped, or any
+    // SGR run at all: a styled-whitespace screen (a colored progress bar, a
+    // selection drawn with background cells) carries no plain text but is not
+    // empty, and the encoder only emits an escape when a cell is styled.
+    const stripped = screen.replace(/[\x1b][[][0-9;]*m/g, "");
+    const hasOutput = stripped.trim() !== "" || stripped.length !== screen.length;
+
+    if (!hasOutput) {
+      // Keep dead and blank cards in the grid, but show why they are empty.
+      const ph = document.createElement("span");
+      ph.className = "placeholder";
+      if (!alive) {
+        ph.textContent =
+          typeof t.exit_code === "number"
+            ? `· exited (code ${t.exit_code})`
+            : "· exited";
+      } else {
+        ph.textContent = "· no output";
+      }
+      pre.append(ph);
+    } else {
+      // Draw the cursor only on a live terminal that is showing it; a dead
+      // screen keeps its final frame but no blinking cursor.
+      const cursor =
+        alive && t.cursor_visible !== false && typeof t.cursor_row === "number"
+          ? { row: t.cursor_row, col: t.cursor_col ?? 0, shape: t.cursor_shape ?? "block" }
+          : null;
+      renderScreen(pre, screen, cursor);
+    }
 
     term.append(head, pre);
     grid.append(term);

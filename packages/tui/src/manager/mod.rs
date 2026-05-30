@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::actor::PtyCommand;
-use crate::types::{ExitState, FullOutput, SpawnConfig, StyledCell};
+use crate::types::{CursorShape, ExitState, FullOutput, SpawnConfig, StyledCell};
 use crate::{Error, Result};
 
 /// A handle to one spawned PTY-backed process.
@@ -37,6 +37,10 @@ pub struct TuiInstance {
     /// Live terminal size, shared across clones so a [`resize`](Self::resize)
     /// on one handle is visible from every handle to the same process.
     pub(crate) size: Arc<RwLock<(u16, u16)>>,
+    /// Latest cursor shape sniffed from the byte stream by the actor. Shared
+    /// across clones like `size`: vt100 does not model cursor shape, so it is
+    /// tracked next to the parser rather than inside it.
+    pub(crate) cursor_shape: Arc<RwLock<CursorShape>>,
     pub(crate) command_tx: mpsc::Sender<PtyCommand>,
     pub(crate) exit_rx: watch::Receiver<ExitState>,
     pub(crate) runtime: Arc<Runtime>,
@@ -53,6 +57,24 @@ impl TuiInstance {
     #[must_use]
     pub fn cols(&self) -> u16 {
         self.size.read().1
+    }
+
+    /// The cursor shape the child last requested via `DECSCUSR`, or the default
+    /// block. Reads cached state, so it stays synchronous.
+    #[must_use]
+    pub fn cursor_shape(&self) -> CursorShape {
+        *self.cursor_shape.read()
+    }
+
+    /// The cursor's `(row, col, visible)` in viewport cell coordinates.
+    pub fn read_cursor(&self) -> Result<(u16, u16, bool)> {
+        self.runtime
+            .block_on(reader::read_cursor(self.id, &self.command_tx))
+    }
+
+    /// [`TuiInstance::read_cursor`] as a future.
+    pub async fn read_cursor_async(&self) -> Result<(u16, u16, bool)> {
+        reader::read_cursor(self.id, &self.command_tx).await
     }
 
     /// Resize the terminal to `rows` x `cols`.
