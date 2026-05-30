@@ -1,0 +1,21 @@
+---
+id: elevenlabs-say-streaming-input
+postedAt: 2026-05-29T21:00:00-07:00
+title: "`elevenlabs-say --stream` speaks a pipe as it streams"
+tags: [interesting, python, cli, audio]
+links:
+  - label: elevenlabs-say package
+    href: https://github.com/indexable-inc/index/tree/main/packages/elevenlabs-say
+  - label: WebSocket input streaming
+    href: https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input
+---
+
+`elevenlabs-say` can now sit at the end of a pipe whose producer emits text over time. Pass `--stream` and stdin is forwarded as each read returns, with audio played the moment it comes back:
+
+```sh
+my-llm --prompt "tell me a story" | nix run .#elevenlabs-say -- --stream
+```
+
+Without the flag the CLI still reads all of stdin, synthesizes once, and plays. `--stream` switches to the ElevenLabs WebSocket input-streaming endpoint instead. It reads stdin with `os.read` rather than line iteration, so a token stream that never emits a newline is still spoken instead of buffering until EOF, and a multi-byte character split across two reads is rejoined. Audio chunks pipe into `ffplay` as they arrive, so playback starts before synthesis finishes.
+
+It honors `--voice`, `--model`, `--format`, and `--output` (which writes the file as audio streams in). The default `eleven_flash_v2_5` model is the low-latency choice and supports the endpoint; `eleven_v3` does not.
