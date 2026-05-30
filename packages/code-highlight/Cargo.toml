@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 anstyle.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 tree-sitter.workspace = true
 tree-sitter-highlight.workspace = true
 tree-sitter-bash.workspace = true

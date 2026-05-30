@@ -25,6 +25,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use anstyle::{Color, RgbColor, Style};
+use serde::Deserialize;
 use tree_sitter_highlight::{Highlight, HighlightConfiguration, HighlightEvent, Highlighter};
 
 /// Capture names the theme understands, in a fixed order shared by every
@@ -441,44 +442,98 @@ fn config_for(language: Language) -> Option<&'static HighlightConfiguration> {
     CONFIGS.get(&language).and_then(Option::as_ref)
 }
 
-/// The `JetBrains` New UI Dark theme, expressed as `anstyle` styles keyed by
-/// highlight capture name. Colors are 24-bit RGB; terminals without true-color
-/// support degrade them to the nearest palette entry. The dark palette matches
-/// the precedent highlighter (superglide's `JetBrainsNewDark`).
-fn style_for_name(name: &str) -> Style {
-    /// `#RRGGBB` to an `anstyle` foreground style.
-    const fn fg(r: u8, g: u8, b: u8) -> Style {
-        Style::new().fg_color(Some(Color::Rgb(RgbColor(r, g, b))))
-    }
-
-    match name {
-        "keyword" | "constant.builtin" | "variable.builtin" => fg(0xCF, 0x8E, 0x6D), // orange
-        "function" | "function.builtin" | "function.method" => fg(0x56, 0xA8, 0xF5), // blue
-        "function.macro" | "attribute" => fg(0xB2, 0x00, 0xB2).bold(),               // macro/attr
-        "type" | "type.builtin" | "constructor" | "module" => fg(0x6F, 0xAF, 0xBD),  // cyan-blue
-        "string" | "string.special" | "string.escape" | "escape" => fg(0x6A, 0xAB, 0x73), // green
-        "number" => fg(0x2A, 0xAC, 0xB8),                                            // cyan
-        "comment" => fg(0x7A, 0x7E, 0x85).italic(),                                  // gray
-        "comment.documentation" => fg(0x5F, 0x82, 0x6B).italic(),                    // green-gray
-        "constant" => fg(0xC7, 0x7D, 0xBB).italic(),                                 // purple
-        "property" | "variable.member" => fg(0xC7, 0x7D, 0xBB), // purple/magenta
-        "tag" | "label" => fg(0xFF, 0xC6, 0x6D),                // yellow-orange
-        // Plain identifiers, parameters, operators, and punctuation get the
-        // foreground gray so ordinary code still reads as colored rather than
-        // falling through to the terminal default and looking unhighlighted.
-        "variable" | "variable.parameter" | "operator" | "punctuation" => fg(0xBC, 0xBE, 0xC4),
-        _ => Style::new(),
-    }
+/// A color variant of the islands theme.
+///
+/// The renderer takes one per call so a caller can match the terminal
+/// background; the slot colors come from `islands-theme.json`, the single
+/// source of truth this crate shares with the base-profile Neovim colorscheme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Theme {
+    /// Islands Dark, the default for a dark or unknown background.
+    #[default]
+    Dark,
+    /// Islands Light, for a light background.
+    Light,
 }
 
-/// Resolves the style for a capture name, falling back from the most specific
-/// dotted name to its prefixes (`function.method` to `function`).
-fn style_for(name: &str) -> Style {
+/// The islands palette: one named-slot color table per variant, deserialized
+/// from the embedded JSON. The provenance `_comment` field is ignored.
+#[derive(Debug, Deserialize)]
+struct IslandsTheme {
+    dark: HashMap<String, String>,
+    light: HashMap<String, String>,
+}
+
+/// The palette, parsed once from the embedded source of truth. The JSON ships in
+/// the crate, so a parse failure is a build-time-authored bug and panicking is
+/// the right signal rather than a silent fallback.
+static THEME: LazyLock<IslandsTheme> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("islands-theme.json"))
+        .expect("islands-theme.json is valid JSON with `dark` and `light` tables")
+});
+
+/// Looks up a palette slot's color for a variant, returning `None` when the slot
+/// is absent or its value is not a `#RRGGBB` hex string.
+fn slot_color(theme: Theme, slot: &str) -> Option<RgbColor> {
+    let table = match theme {
+        Theme::Dark => &THEME.dark,
+        Theme::Light => &THEME.light,
+    };
+    parse_hex(table.get(slot)?)
+}
+
+/// Parses `#RRGGBB`. An optional 8-digit alpha suffix is ignored: terminals have
+/// no alpha, so the few UI slots that carry one degrade to their opaque color.
+fn parse_hex(hex: &str) -> Option<RgbColor> {
+    let digits = hex.strip_prefix('#')?;
+    if digits.len() < 6 {
+        return None;
+    }
+    let byte = |range: std::ops::Range<usize>| u8::from_str_radix(digits.get(range)?, 16).ok();
+    Some(RgbColor(byte(0..2)?, byte(2..4)?, byte(4..6)?))
+}
+
+/// Maps a tree-sitter capture name to an islands palette slot and whether it
+/// renders italic. The mapping mirrors the `@capture` wiring in the Neovim
+/// colorscheme so the terminal and the editor color the same constructs alike;
+/// the colors themselves live only in `islands-theme.json`. Returns `None` for
+/// captures the theme leaves at the terminal default.
+fn slot_for_name(name: &str) -> Option<(&'static str, bool)> {
+    Some(match name {
+        "keyword" | "constant.builtin" | "type.builtin" | "function.macro" | "label" => {
+            ("keyword", false)
+        }
+        "variable.builtin" => ("this_self", false),
+        "function" | "function.builtin" | "function.method" | "constructor" => ("func", false),
+        "attribute" => ("decorator", false),
+        "type" => ("type", false),
+        "module" | "embedded" => ("fg", false),
+        "string" | "string.special" => ("string", false),
+        "escape" | "string.escape" | "punctuation.special" => ("string_escape", false),
+        "number" => ("number", false),
+        "property" | "variable.member" => ("property", false),
+        "tag" => ("tag", false),
+        "variable" => ("variable", false),
+        "variable.parameter" => ("parameter", false),
+        "operator" => ("operator", false),
+        "punctuation" | "punctuation.bracket" | "punctuation.delimiter" => ("punctuation", false),
+        "comment" => ("comment", true),
+        "comment.documentation" => ("doc_comment", true),
+        "constant" => ("constant", true),
+        _ => return None,
+    })
+}
+
+/// Resolves the [`Style`] for a capture name in a theme variant, falling back
+/// from the most specific dotted name to its prefixes (`function.method` to
+/// `function`) and then to the terminal default.
+fn style_for(name: &str, theme: Theme) -> Style {
     let mut current = name;
     loop {
-        let style = style_for_name(current);
-        if style != Style::new() {
-            return style;
+        if let Some((slot, italic)) = slot_for_name(current) {
+            let style = slot_color(theme, slot)
+                .map_or_else(Style::new, |rgb| Style::new().fg_color(Some(Color::Rgb(rgb))));
+            return if italic { style.italic() } else { style };
         }
         match current.rfind('.') {
             Some(dot) => current = &current[..dot],
@@ -502,18 +557,18 @@ fn push_styled(out: &mut String, text: &str, style: Style, color: bool) {
 /// Highlights a full source string and returns it as a single rendered block.
 ///
 /// `path_or_lang` is the source path or bare extension used to pick a grammar;
-/// pass the real file path when you have one so the extension resolves. When
-/// `color` is `true` the output carries ANSI SGR escapes; when `false` it is the
-/// input text unchanged.
+/// pass the real file path when you have one so the extension resolves. `theme`
+/// selects the islands color variant. When `color` is `true` the output carries
+/// ANSI SGR escapes; when `false` it is the input text unchanged.
 ///
 /// Unsupported languages and any highlighter failure fall back to returning the
 /// source verbatim, so this function never errors.
 #[must_use]
-pub fn highlight(path_or_lang: &str, source: &str, color: bool) -> String {
+pub fn highlight(path_or_lang: &str, source: &str, theme: Theme, color: bool) -> String {
     let Some(language) = Language::from_extension(extension_of(path_or_lang)) else {
         return source.to_owned();
     };
-    render_spans(language, source, color).unwrap_or_else(|| source.to_owned())
+    render_spans(language, source, theme, color).unwrap_or_else(|| source.to_owned())
 }
 
 /// Highlights a line range and prefixes a 1-based line-number gutter.
@@ -535,11 +590,12 @@ pub fn highlight_lines(
     source: &str,
     start_line: usize,
     num_lines: usize,
+    theme: Theme,
     color: bool,
 ) -> String {
     let language = Language::from_extension(extension_of(path_or_lang));
     let rendered = language
-        .and_then(|language| render_spans(language, source, color))
+        .and_then(|language| render_spans(language, source, theme, color))
         .unwrap_or_else(|| source.to_owned());
 
     // Slice the rendered output by line. Splitting on '\n' is safe even with
@@ -580,7 +636,7 @@ pub fn highlight_lines(
 /// which the public functions translate into a plain-text fallback. A
 /// `Highlighter` is cheap to construct and not `Sync`, so one is built per call
 /// rather than cached.
-fn render_spans(language: Language, source: &str, color: bool) -> Option<String> {
+fn render_spans(language: Language, source: &str, theme: Theme, color: bool) -> Option<String> {
     let config = config_for(language)?;
     let mut highlighter = Highlighter::new();
 
@@ -603,7 +659,7 @@ fn render_spans(language: Language, source: &str, color: bool) -> Option<String>
                 let style = stack
                     .last()
                     .and_then(|highlight| HIGHLIGHT_NAMES.get(highlight.0))
-                    .map_or_else(Style::new, |name| style_for(name));
+                    .map_or_else(Style::new, |name| style_for(name, theme));
                 push_styled(&mut out, text, style, color);
             }
         }
@@ -641,7 +697,7 @@ mod tests {
     #[test]
     fn rust_snippet_is_colored_with_color_true() {
         let source = "fn main() { let x = 42; }\n";
-        let out = highlight("main.rs", source, true);
+        let out = highlight("main.rs", source, Theme::Dark, true);
         assert!(out.contains(CSI), "expected ANSI escapes, got: {out:?}");
         // The visible text survives once escapes are stripped of CSI markers.
         assert!(out.contains("main"));
@@ -651,7 +707,7 @@ mod tests {
     #[test]
     fn rust_snippet_is_plain_with_color_false() {
         let source = "fn main() { let x = 42; }\n";
-        let out = highlight("main.rs", source, false);
+        let out = highlight("main.rs", source, Theme::Dark, false);
         assert!(!out.contains(CSI), "expected no ANSI escapes, got: {out:?}");
         assert_eq!(out, source);
     }
@@ -659,8 +715,8 @@ mod tests {
     #[test]
     fn unknown_extension_falls_back_to_plain_text() {
         let source = "<<< not a known language >>>\n";
-        let colored = highlight("mystery.zzz", source, true);
-        let plain = highlight("mystery.zzz", source, false);
+        let colored = highlight("mystery.zzz", source, Theme::Dark, true);
+        let plain = highlight("mystery.zzz", source, Theme::Dark, false);
         assert_eq!(colored, source);
         assert_eq!(plain, source);
         assert!(!colored.contains(CSI));
@@ -669,13 +725,13 @@ mod tests {
     #[test]
     fn no_extension_falls_back_to_plain_text() {
         let source = "anything at all\n";
-        assert_eq!(highlight("LICENSE", source, true), source);
+        assert_eq!(highlight("LICENSE", source, Theme::Dark, true), source);
     }
 
     #[test]
     fn highlight_lines_emits_one_based_gutter() {
         let source = "fn a() {}\nfn b() {}\nfn c() {}\n";
-        let out = highlight_lines("x.rs", source, 2, 2, false);
+        let out = highlight_lines("x.rs", source, 2, 2, Theme::Dark, false);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("2 │ "), "got: {:?}", lines[0]);
@@ -687,14 +743,14 @@ mod tests {
     #[test]
     fn highlight_lines_color_carries_escapes() {
         let source = "fn a() {}\nfn b() {}\n";
-        let out = highlight_lines("x.rs", source, 1, 2, true);
+        let out = highlight_lines("x.rs", source, 1, 2, Theme::Dark, true);
         assert!(out.contains(CSI), "expected ANSI escapes, got: {out:?}");
     }
 
     #[test]
     fn highlight_lines_plain_has_no_escapes() {
         let source = "fn a() {}\nfn b() {}\n";
-        let out = highlight_lines("x.rs", source, 1, 2, false);
+        let out = highlight_lines("x.rs", source, 1, 2, Theme::Dark, false);
         assert!(!out.contains(CSI), "expected no ANSI escapes, got: {out:?}");
     }
 
@@ -705,7 +761,7 @@ mod tests {
         for n in 1..=12 {
             let _ = writeln!(source, "line{n}");
         }
-        let out = highlight_lines("x.txt", &source, 9, 3, false);
+        let out = highlight_lines("x.txt", &source, 9, 3, Theme::Dark, false);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 3);
         assert!(lines[0].starts_with(" 9 │ "), "got: {:?}", lines[0]);
@@ -717,7 +773,7 @@ mod tests {
     fn highlight_lines_clamps_past_end_of_file() {
         let source = "one\ntwo\n";
         // Request more lines than exist starting at line 2.
-        let out = highlight_lines("x.txt", source, 2, 10, false);
+        let out = highlight_lines("x.txt", source, 2, 10, Theme::Dark, false);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 1);
         assert!(lines[0].starts_with("2 │ two"));
@@ -726,13 +782,13 @@ mod tests {
     #[test]
     fn highlight_lines_start_past_end_is_empty() {
         let source = "one\ntwo\n";
-        assert_eq!(highlight_lines("x.txt", source, 99, 3, false), "");
+        assert_eq!(highlight_lines("x.txt", source, 99, 3, Theme::Dark, false), "");
     }
 
     #[test]
     fn unknown_language_lines_still_get_gutter() {
         let source = "alpha\nbeta\n";
-        let out = highlight_lines("notes.zzz", source, 1, 2, true);
+        let out = highlight_lines("notes.zzz", source, 1, 2, Theme::Dark, true);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("alpha"));
@@ -795,7 +851,7 @@ mod tests {
             ("a.ts", "const x: number = 1;\n"),
         ];
         for (path, source) in cases {
-            let out = highlight(path, source, true);
+            let out = highlight(path, source, Theme::Dark, true);
             assert!(
                 out.contains(CSI),
                 "{path}: expected ANSI escapes, got {out:?}"
@@ -807,8 +863,51 @@ mod tests {
     fn dotted_capture_falls_back_to_prefix_style() {
         // `function.method` has its own style; an unmapped dotted name resolves
         // to its prefix.
-        assert_ne!(style_for("function.method"), Style::new());
-        assert_eq!(style_for("function.weird.nested"), style_for("function"));
-        assert_eq!(style_for("totally.unknown"), Style::new());
+        assert_ne!(style_for("function.method", Theme::Dark), Style::new());
+        assert_eq!(
+            style_for("function.weird.nested", Theme::Dark),
+            style_for("function", Theme::Dark)
+        );
+        assert_eq!(style_for("totally.unknown", Theme::Dark), Style::new());
+    }
+
+    #[test]
+    fn theme_variants_color_the_same_token_differently() {
+        // `fn` is a keyword, which islands renders orange on dark and blue on
+        // light. The two outputs must differ, proving the variant flows through
+        // to the rendered escapes rather than being ignored.
+        let source = "fn main() {}\n";
+        let dark = highlight("a.rs", source, Theme::Dark, true);
+        let light = highlight("a.rs", source, Theme::Light, true);
+        assert!(dark.contains(CSI) && light.contains(CSI));
+        assert_ne!(dark, light, "dark and light should color the keyword apart");
+    }
+
+    #[test]
+    fn parse_hex_ignores_alpha_suffix() {
+        // UI slots may carry an 8-digit `#RRGGBBAA`; the terminal has no alpha,
+        // so the parse keeps the opaque color and drops the suffix.
+        assert_eq!(parse_hex("#11495780"), parse_hex("#114957"));
+        assert_eq!(parse_hex("#114957"), Some(RgbColor(0x11, 0x49, 0x57)));
+        assert_eq!(parse_hex("nope"), None);
+    }
+
+    #[test]
+    fn every_mapped_slot_exists_in_both_variants() {
+        // Cross-file invariant: every slot the capture map names must exist in
+        // both palettes, or a capture would silently render uncolored. Guards
+        // against a typo in the Rust map or a missing key in the JSON.
+        for &name in HIGHLIGHT_NAMES {
+            if let Some((slot, _)) = slot_for_name(name) {
+                assert!(
+                    slot_color(Theme::Dark, slot).is_some(),
+                    "dark palette missing slot {slot:?} for capture {name:?}"
+                );
+                assert!(
+                    slot_color(Theme::Light, slot).is_some(),
+                    "light palette missing slot {slot:?} for capture {name:?}"
+                );
+            }
+        }
     }
 }

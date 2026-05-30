@@ -1,89 +1,12 @@
--- ix-islands-dark
+-- ix-islands shared body (wiring only).
 --
--- Faithful port of JetBrains' Islands Dark theme to Neovim. Colors
--- mirror the IntelliJ source (ManyIslandsDark.theme.json,
--- IslandSchemeDark.xml). See andrewgazelka/vscode-islands for the
--- VS Code variant; this file is the Neovim port shipped inline so
--- the ix base profile gives operators the same theme across editors.
-
-vim.cmd("highlight clear")
-if vim.fn.exists("syntax_on") == 1 then
-  vim.cmd("syntax reset")
-end
-vim.o.background = "dark"
-vim.g.colors_name = "ix-islands-dark"
-
--- Palette ------------------------------------------------------------
-local c = {
-  bg                  = "#191A1C",
-  fg                  = "#BCBEC4",
-  cursor              = "#CED0D6",
-  line_hl             = "#1F2024",
-  selection           = "#233558",
-  inactive_selection  = "#26282C",
-  word_hl             = "#373B39",
-  word_hl_strong      = "#402F33",
-  find_match          = "#114957",
-  find_match_hl       = "#11495780",
-
-  line_nr             = "#4B5059",
-  line_nr_active      = "#A1A3AB",
-  bracket_match       = "#43454A",
-  indent_guide        = "#323438",
-  indent_guide_active = "#4E5157",
-  whitespace          = "#6F737A",
-
-  ui_panel            = "#191A1C",
-  ui_input_bg         = "#33353B",
-  ui_input_border     = "#40434A",
-  ui_border           = "#3871E1",
-  ui_dim              = "#9FA2A8",
-  ui_subtle_bg        = "#26282C",
-  ui_hover_bg         = "#FFFFFF08",
-
-  error               = "#F57E84",
-  warning             = "#D59637",
-  info                = "#71A1FE",
-  hint                = "#71A1FE",
-  diag_unnecessary    = "#7A7E85",
-
-  git_add             = "#549159",
-  git_change          = "#375FAD",
-  git_delete          = "#E4656E",
-
-  -- Syntax
-  comment             = "#7A7E85",
-  doc_comment         = "#5F826B",
-  doc_comment_tag     = "#67A37C",
-  doc_tag_value       = "#ABADB3",
-  string              = "#6AAB73",
-  string_escape       = "#CF8E6D",
-  number              = "#2AACB8",
-  keyword             = "#CF8E6D",
-  storage             = "#CF8E6D",
-  operator            = "#BCBEC4",
-  func                = "#56A8F5",
-  static              = "#57AAF7",
-  type                = "#BCBEC4",
-  type_param          = "#16BAAC",
-  variable            = "#BCBEC4",
-  constant            = "#C77DBB",
-  property            = "#C77DBB",
-  parameter           = "#BCBEC4",
-  this_self           = "#CF8E6D",
-  punctuation         = "#BCBEC4",
-  tag                 = "#D5B778",
-  attribute           = "#BCBEC4",
-  decorator           = "#B3AE60",
-  regexp              = "#42C3D4",
-  jsx_component       = "#9C9CFF",
-  html_custom         = "#2FBAA3",
-  shell_var           = "#C77DBB",
-  todo                = "#8BB33D",
-  invalid             = "#F75464",
-  link                = "#56A8F5",
-  heading             = "#CF8E6D",
-}
+-- This is the highlight-group layout both ix-islands variants share. The base
+-- profile generates colors/ix-islands-{dark,light}.lua by prepending the
+-- per-variant header and a `local c = { ... }` palette built from the single
+-- source of truth (packages/code-highlight/src/islands-theme.json, read through
+-- ix.islandsTheme) to this file. Every color comes from `c`, so editing a color
+-- means editing the JSON, not this file. The semantic-search `-c` highlighter
+-- reads the same JSON, so terminal and editor stay in step.
 
 local hi = function(group, opts) vim.api.nvim_set_hl(0, group, opts) end
 
@@ -358,10 +281,10 @@ hi("WhichKeyFloat",            { bg = c.ui_subtle_bg })
 hi("WhichKeyBorder",           { fg = c.ui_input_border, bg = c.ui_subtle_bg })
 
 -- Diff ---------------------------------------------------------------
-hi("DiffAdd",     { bg = "#1F2E1F" })
-hi("DiffChange",  { bg = "#1F2435" })
-hi("DiffDelete",  { bg = "#2E1F22" })
-hi("DiffText",    { bg = "#2A3450" })
+hi("DiffAdd",     { bg = c.diff_add_bg })
+hi("DiffChange",  { bg = c.diff_change_bg })
+hi("DiffDelete",  { bg = c.diff_delete_bg })
+hi("DiffText",    { bg = c.diff_text_bg })
 
 -- Oil ----------------------------------------------------------------
 hi("OilDir",       { fg = c.link, bold = true })

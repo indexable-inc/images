@@ -92,6 +92,11 @@ let
     inherit lib pkgs writeNushellApplication;
   };
   agentsMd = import ./agents-md.nix { inherit lib paths; };
+  # Shared JetBrains Islands palette (both variants), the single source of truth
+  # for syntax color across the repo: the code-highlight crate embeds this JSON
+  # for the semantic-search `-c` output, and the base profile generates its
+  # Neovim colorscheme from the same data through this value.
+  islandsTheme = lib.importJSON (paths.packagesRoot + "/code-highlight/src/islands-theme.json");
   languages = {
     cpp = import ./languages/cpp.nix { inherit errors; };
     dhall = import ./languages/dhall.nix { };
@@ -285,6 +290,7 @@ let
       buildLibghosttyVt
       cargoUnit
       goUnit
+      islandsTheme
       languages
       minecraft
       mkMinecraftLoader
