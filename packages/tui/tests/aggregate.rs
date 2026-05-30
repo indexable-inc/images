@@ -118,10 +118,11 @@ fn producer_carries_sgr_and_cursor_shape() {
                 }
                 let snapshot: ProducerSnapshot =
                     serde_json::from_str(&line).expect("parse snapshot");
-                if let Some(frame) = snapshot.terminals.into_iter().next() {
-                    if frame.cursor_shape == "bar" && frame.screen.contains("hi") {
-                        return frame;
-                    }
+                if let Some(frame) = snapshot.terminals.into_iter().next()
+                    && frame.cursor_shape == "bar"
+                    && frame.screen.contains("hi")
+                {
+                    return frame;
                 }
             }
         })
