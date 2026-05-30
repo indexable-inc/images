@@ -274,11 +274,17 @@ def stream_synthesize(
     typed. It pins ``chunk_length_schedule=[50]`` for low latency, which is the
     intended trade for a pipe.
     """
+    # voice_settings must be passed explicitly as None. The SDK defaults it to its
+    # OMIT sentinel (the Ellipsis ...), then builds the init frame with
+    # `voice_settings.dict() if voice_settings else None`; Ellipsis is truthy, so
+    # the default crashes with AttributeError. None is falsy and means "use the
+    # voice's stored settings". https://github.com/elevenlabs/elevenlabs-python
     return stream_client(client).convert_realtime(
         voice_id=voice_id,
         text=text_source(args),
         model_id=args.model,
         output_format=args.output_format,
+        voice_settings=None,
     )
 
 

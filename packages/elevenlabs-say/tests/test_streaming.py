@@ -6,12 +6,15 @@ is never touched: the WebSocket client is only constructed, not connected.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
+
+import elevenlabs.realtime_tts as realtime_module
 
 import elevenlabs_say as say
 
@@ -121,10 +124,61 @@ def test_should_stream_auto_and_overrides() -> None:
         sys.stdin = original
 
 
+def test_stream_init_does_not_crash_on_omit_voice_settings() -> None:
+    """Regression: building convert_realtime's init frame must not trip the SDK's
+    OMIT-sentinel bug, where voice_settings defaults to Ellipsis (truthy, no
+    .dict()) and crashes. stream_synthesize passes voice_settings=None; assert the
+    init frame is sent and carries a null voice_settings.
+    """
+    os.environ["ELEVENLABS_API_KEY"] = "test-key-not-used"
+    client = say.make_client()
+
+    class _StopAfterInit(Exception):
+        pass
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        def send(self, message: str) -> None:
+            self.sent.append(message)
+            raise _StopAfterInit
+
+        def recv(self, *args: object) -> str:
+            raise _StopAfterInit
+
+    socket = FakeSocket()
+
+    class FakeConnection:
+        def __enter__(self) -> FakeSocket:
+            return socket
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+    original_connect = realtime_module.connect
+    realtime_module.connect = lambda *a, **k: FakeConnection()  # type: ignore[assignment]
+    try:
+        chunks = say.stream_synthesize(
+            client, say.parse_args(["hi", "--stream"]), "voice-id"
+        )
+        try:
+            next(iter(chunks))
+        except _StopAfterInit:
+            pass
+    finally:
+        realtime_module.connect = original_connect  # type: ignore[assignment]
+
+    assert socket.sent, "init frame was never sent"
+    init = json.loads(socket.sent[0])
+    assert init["voice_settings"] is None, init
+
+
 if __name__ == "__main__":
     test_stdin_yields_before_eof_and_rejoins_split_utf8()
     test_write_stream_writes_chunks_and_rejects_empty()
     test_play_stream_rejects_empty_without_spawning_ffplay()
     test_stream_client_narrows_to_realtime()
     test_should_stream_auto_and_overrides()
+    test_stream_init_does_not_crash_on_omit_voice_settings()
     print("elevenlabs-say streaming tests passed")
