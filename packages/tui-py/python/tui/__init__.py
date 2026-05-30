@@ -33,7 +33,6 @@ The public surface:
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import uuid
 from collections.abc import Callable, Iterator
@@ -213,25 +212,14 @@ def _build_predicate(pattern: Pattern) -> Callable[[Snapshot], bool]:
 # Auto-publish
 # --------------------------------------------------------------------------- #
 
-#: One-shot guard so the FFI auto-publish bind runs at most once per process.
-#: The Rust `ensure_published` is itself idempotent and honors the opt-out; this
-#: flag just skips the call after the first construction.
-_autopublish_done = False
-
-
 def _ensure_autopublish() -> None:
     """Bind the process-global dashboard producer once, on first `Tui(...)`.
 
     Spawned terminals then appear in `nix run .#tui-dashboard` with no explicit
-    `tui.publish()`. Set `IX_TUI_AUTOPUBLISH=0` to opt out; the env check lives
-    in Rust too, so the opt-out holds even if something calls the FFI directly.
+    `tui.publish()`. Idempotency (bind at most once per process) and the
+    `IX_TUI_AUTOPUBLISH=0` opt-out both live in the Rust `ensure_published`, so
+    this stays a thin call into it rather than re-implementing either guard here.
     """
-    global _autopublish_done
-    if _autopublish_done:
-        return
-    _autopublish_done = True
-    if os.environ.get("IX_TUI_AUTOPUBLISH") == "0":
-        return
     _raw_ensure_published()
 
 
