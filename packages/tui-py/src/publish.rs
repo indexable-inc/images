@@ -13,6 +13,7 @@
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -28,6 +29,13 @@ use crate::manager::global_manager;
 /// call the binder; the inner `Mutex<Option<_>>` holds the live producer (or
 /// `None` once a bind was attempted and skipped or torn down).
 static AUTOPUBLISHER: OnceLock<Mutex<Option<tui::Publisher>>> = OnceLock::new();
+
+/// Set once any producer is bound for this process, by either [`publish`] or
+/// [`ensure_published`]. Auto-publish checks it so an explicit
+/// `tui.publish(...)` (chosen for a custom socket path or poll interval) is not
+/// shadowed by a second process-global producer on the next `Tui(...)`, which
+/// would make the aggregator list every terminal twice.
+static PROCESS_PUBLISHED: AtomicBool = AtomicBool::new(false);
 
 /// The env var that opts a process out of auto-publishing. The literal `"0"`
 /// disables it; any other value (or unset) leaves auto-publish on.
@@ -87,7 +95,18 @@ pub fn publish(py: Python<'_>, path: Option<String>, poll_ms: u64) -> PyResult<B
     let path = path.map_or_else(tui::socket_path, PathBuf::from);
     let manager = global_manager();
     future_into_py(py, async move {
+        // An explicit publish supersedes auto-publish: stop the process-global
+        // producer if one was already bound, so the process exposes exactly one
+        // producer rather than a duplicate under a second id. `take()` releases
+        // the lock before the await.
+        let previous = AUTOPUBLISHER.get().and_then(|slot| slot.lock().take());
+        if let Some(mut previous) = previous {
+            previous.stop().await;
+        }
         let publisher = tui::publish(&manager, path, Duration::from_millis(poll_ms)).await?;
+        // Mark the process published so a later `Tui(...)` does not auto-bind a
+        // second producer on top of this explicit one.
+        PROCESS_PUBLISHED.store(true, Ordering::Release);
         Ok(Publisher {
             path: publisher.path().display().to_string(),
             producer: publisher.producer_id().to_owned(),
@@ -116,6 +135,11 @@ pub fn ensure_published(py: Python<'_>, poll_ms: u64) {
     if std::env::var(AUTOPUBLISH_OPT_OUT).as_deref() == Ok("0") {
         return;
     }
+    // An explicit `tui.publish(...)` already exposed this process; do not bind a
+    // second producer on top of it.
+    if PROCESS_PUBLISHED.load(Ordering::Acquire) {
+        return;
+    }
 
     let slot = AUTOPUBLISHER.get_or_init(|| Mutex::new(None));
     let mut guard = slot.lock();
@@ -134,6 +158,7 @@ pub fn ensure_published(py: Python<'_>, poll_ms: u64) {
     });
     if let Ok(publisher) = publisher {
         *guard = Some(publisher);
+        PROCESS_PUBLISHED.store(true, Ordering::Release);
     }
 }
 
