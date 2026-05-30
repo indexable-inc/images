@@ -1,5 +1,5 @@
 //! PTY-backed terminal management: spawn child processes attached to real
-//! pseudo-terminals, drive them with input, and read back a VT100-rendered
+//! pseudo-terminals, drive them with input, and read back a VT-rendered
 //! viewport, scrollback, and per-cell styling.
 //!
 //! [`TuiManager`] spawns processes and tracks them; each spawn returns a
@@ -24,15 +24,15 @@
 )]
 #![allow(
     clippy::significant_drop_tightening,
-    reason = "guard-then-extract is the natural read pattern for the VT100 parser"
+    reason = "guard-then-extract is the natural read pattern for the shared CRDT and cache locks"
 )]
 #![allow(
     clippy::struct_excessive_bools,
-    reason = "VT100 cell attributes are intrinsically four parallel booleans"
+    reason = "terminal cell attributes are intrinsically four parallel booleans"
 )]
 #![allow(
     clippy::option_if_let_else,
-    reason = "explicit match is clearer than map_or for cell extraction sites"
+    reason = "explicit match is clearer than map_or at the cell extraction sites"
 )]
 
 mod actor;

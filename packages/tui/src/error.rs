@@ -33,6 +33,12 @@ pub enum Error {
     #[snafu(display("TUI {id} has no buffered output available"))]
     NoOutputAvailable { id: Uuid },
 
+    #[snafu(
+        display("VT engine error for TUI {id}: {message}"),
+        visibility(pub(crate))
+    )]
+    VtEngine { id: Uuid, message: String },
+
     #[snafu(display("Invalid row range: {message}"))]
     InvalidRowRange { message: String },
 
@@ -84,7 +90,9 @@ impl From<Error> for pyo3::PyErr {
             | Error::ReadFromTui { .. }
             | Error::SignalTui { .. }
             | Error::ResizeTui { .. } => PyIOError::new_err(msg),
-            Error::ArrayConversion { .. } | Error::Dashboard { .. } => PyRuntimeError::new_err(msg),
+            Error::ArrayConversion { .. }
+            | Error::Dashboard { .. }
+            | Error::VtEngine { .. } => PyRuntimeError::new_err(msg),
             #[cfg(feature = "publish")]
             Error::Publish { .. } => PyRuntimeError::new_err(msg),
         }

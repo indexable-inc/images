@@ -4810,6 +4810,7 @@ dependencies = [
  "axum",
  "base64",
  "futures",
+ "ix-vt",
  "loro",
  "ndarray 0.16.1",
  "parking_lot",
@@ -4821,7 +4822,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "uuid",
- "vt100",
 ]
 
 [[package]]

@@ -1,18 +1,14 @@
-mod decscusr;
-mod extract;
+pub mod engine;
 
-use std::sync::Arc;
-use parking_lot::RwLock as SyncRwLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{RwLock, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use crate::types::{CursorShape, ExitState};
+use crate::types::ExitState;
 use crate::{Error, error::Result};
-use decscusr::Scanner;
-use extract::{
-    extract_chars, extract_cursor, extract_scrollback_lines, extract_styled_cells,
-    extract_viewport_lines,
+use engine::{
+    EngineRequest, snapshot_to_chars, snapshot_to_cursor, snapshot_to_styled_cells,
+    snapshot_to_viewport_lines,
 };
 
 pub enum PtyCommand {
@@ -49,6 +45,10 @@ pub enum PtyCommand {
 /// task that touches either, so every read, write, signal, and the exit reap
 /// serialize through this one mailbox.
 ///
+/// The VT engine lives on its own OS thread (the terminal is `!Send`); the actor
+/// forwards bytes and read requests to it through `engine_tx` and never touches
+/// the terminal directly.
+///
 /// The child is reaped here rather than in a side task so its exit code lands
 /// in `exit_tx` and a [`PtyCommand::Kill`] has something to signal. After the
 /// child exits the actor keeps serving reads (the final screen stays
@@ -58,14 +58,12 @@ pub async fn pty_actor(
     mut pty: pty_process::Pty,
     mut child: tokio::process::Child,
     mut commands: mpsc::Receiver<PtyCommand>,
-    parser: Arc<RwLock<vt100::Parser>>,
+    engine_tx: std::sync::mpsc::Sender<EngineRequest>,
     exit_tx: watch::Sender<ExitState>,
-    cursor_shape: Arc<SyncRwLock<CursorShape>>,
 ) {
     let mut read_buffer = [0u8; 8192];
     let mut pty_active = true;
     let mut child_exited = false;
-    let mut scanner = Scanner::default();
 
     loop {
         tokio::select! {
@@ -97,45 +95,49 @@ pub async fn pty_actor(
                         if pty_active {
                             // Resize the kernel PTY window first (this is what
                             // delivers SIGWINCH to the child), then match the
-                            // emulator so reads reflect the new geometry.
+                            // engine so reads reflect the new geometry.
                             let result = pty
                                 .resize(pty_process::Size::new(rows, cols))
                                 .map_err(|e| Error::ResizeTui {
                                     id,
                                     source: std::io::Error::other(e),
                                 });
-                            if result.is_ok() {
-                                parser.write().await.screen_mut().set_size(rows, cols);
-                            }
+                            let result = match result {
+                                Ok(()) => resize_engine(id, &engine_tx, rows, cols).await,
+                                Err(e) => Err(e),
+                            };
                             let _ = response.send(result);
                         } else {
                             let _ = response.send(Err(Error::TuiNotFound { id }));
                         }
                     }
                     PtyCommand::ReadViewport { response } => {
-                        let parser_guard = parser.read().await;
-                        let lines = extract_viewport_lines(&parser_guard);
-                        let _ = response.send(Ok(lines));
+                        let result = snapshot(id, &engine_tx)
+                            .await
+                            .map(|snap| snapshot_to_viewport_lines(&snap));
+                        let _ = response.send(result);
                     }
                     PtyCommand::ReadScrollback { response } => {
-                        let mut parser_guard = parser.write().await;
-                        let result = extract_scrollback_lines(&mut parser_guard);
-                        let _ = response.send(Ok(result));
+                        let result = scrollback(id, &engine_tx).await;
+                        let _ = response.send(result);
                     }
                     PtyCommand::ReadChars { response } => {
-                        let parser_guard = parser.read().await;
-                        let result = extract_chars(id, &parser_guard);
+                        let result = snapshot(id, &engine_tx)
+                            .await
+                            .and_then(|snap| snapshot_to_chars(id, &snap));
                         let _ = response.send(result);
                     }
                     PtyCommand::ReadStyledCells { response } => {
-                        let parser_guard = parser.read().await;
-                        let result = extract_styled_cells(id, &parser_guard);
+                        let result = snapshot(id, &engine_tx)
+                            .await
+                            .and_then(|snap| snapshot_to_styled_cells(id, &snap));
                         let _ = response.send(result);
                     }
                     PtyCommand::ReadCursor { response } => {
-                        let parser_guard = parser.read().await;
-                        let cursor = extract_cursor(&parser_guard);
-                        let _ = response.send(Ok(cursor));
+                        let result = snapshot(id, &engine_tx)
+                            .await
+                            .map(|snap| snapshot_to_cursor(&snap));
+                        let _ = response.send(result);
                     }
                 }
             }
@@ -148,12 +150,12 @@ pub async fn pty_actor(
                     Ok(n) => {
                         #[allow(clippy::indexing_slicing, reason = "n is guaranteed to be <= read_buffer.len() by read()")]
                         let chunk = &read_buffer[..n];
-                        // vt100 applies cursor position but not cursor shape, so
-                        // sniff DECSCUSR from the same bytes before feeding them.
-                        if let Some(shape) = scanner.feed(chunk) {
-                            *cursor_shape.write() = shape;
+                        // Forward to the engine thread, which owns the !Send
+                        // terminal. A closed channel means the engine is gone,
+                        // so stop feeding the PTY.
+                        if engine_tx.send(EngineRequest::Process(chunk.to_vec())).is_err() {
+                            pty_active = false;
                         }
-                        parser.write().await.process(chunk);
                     }
                 }
             }
@@ -169,4 +171,46 @@ pub async fn pty_actor(
             else => break,
         }
     }
+}
+
+/// Round-trip a render snapshot through the engine thread.
+///
+/// A closed channel or a dropped reply means the engine thread is gone, which
+/// surfaces as [`Error::TuiNotFound`]; a render failure surfaces as the inner
+/// [`Error::VtEngine`].
+async fn snapshot(
+    id: Uuid,
+    engine_tx: &std::sync::mpsc::Sender<EngineRequest>,
+) -> Result<ix_vt::Snapshot> {
+    let (reply, response) = oneshot::channel();
+    engine_tx
+        .send(EngineRequest::Snapshot { reply })
+        .map_err(|_| Error::TuiNotFound { id })?;
+    response.await.map_err(|_| Error::TuiNotFound { id })?
+}
+
+/// Read the scrollback history through the engine thread.
+async fn scrollback(
+    id: Uuid,
+    engine_tx: &std::sync::mpsc::Sender<EngineRequest>,
+) -> Result<Vec<String>> {
+    let (reply, response) = oneshot::channel();
+    engine_tx
+        .send(EngineRequest::Scrollback { reply })
+        .map_err(|_| Error::TuiNotFound { id })?;
+    response.await.map_err(|_| Error::TuiNotFound { id })?
+}
+
+/// Resize the engine's terminal through the engine thread.
+async fn resize_engine(
+    id: Uuid,
+    engine_tx: &std::sync::mpsc::Sender<EngineRequest>,
+    rows: u16,
+    cols: u16,
+) -> Result<()> {
+    let (reply, response) = oneshot::channel();
+    engine_tx
+        .send(EngineRequest::Resize { rows, cols, reply })
+        .map_err(|_| Error::TuiNotFound { id })?;
+    response.await.map_err(|_| Error::TuiNotFound { id })?
 }

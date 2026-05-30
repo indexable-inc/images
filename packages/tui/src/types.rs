@@ -17,12 +17,12 @@ pub enum Color {
     Rgb(u8, u8, u8),
 }
 
-impl From<vt100::Color> for Color {
-    fn from(color: vt100::Color) -> Self {
+impl From<ix_vt::StyleColor> for Color {
+    fn from(color: ix_vt::StyleColor) -> Self {
         match color {
-            vt100::Color::Default => Self::Default,
-            vt100::Color::Idx(index) => Self::Indexed(index),
-            vt100::Color::Rgb(r, g, b) => Self::Rgb(r, g, b),
+            ix_vt::StyleColor::None => Self::Default,
+            ix_vt::StyleColor::Palette(index) => Self::Indexed(index),
+            ix_vt::StyleColor::Rgb(rgb) => Self::Rgb(rgb.r, rgb.g, rgb.b),
         }
     }
 }
@@ -58,34 +58,32 @@ impl Default for StyledCell {
 
 /// The shape the terminal cursor is drawn as.
 ///
-/// Tracked from the `DECSCUSR` escape (`CSI Ps SP q`) in the byte stream: `0`
-/// and `1` are a blinking block, `2` a steady block, `3`/`4` an underline, and
-/// `5`/`6` a bar. vt100 itself does not model cursor shape, so the actor sniffs
-/// the sequence and the frame builder carries the result to the renderer. The
-/// blink distinction is dropped because the dashboard does not animate.
+/// Sourced from the VT engine's render state ([`ix_vt::CursorVisualStyle`]),
+/// which models the `DECSCUSR` shape natively. The blink distinction is dropped
+/// because the dashboard does not animate, and ghostty's unfocused hollow block
+/// collapses to a plain block for the same reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorShape {
-    /// A filled cell. The terminal default and the `0`/`1`/`2` shapes.
+    /// A filled cell. Ghostty's `Block` and `BlockHollow`, the terminal default.
     #[default]
     Block,
-    /// A line under the cell (`3`/`4`).
+    /// A line under the cell.
     Underline,
-    /// A vertical bar at the cell's left edge (`5`/`6`).
+    /// A vertical bar at the cell's left edge.
     Bar,
 }
 
-impl CursorShape {
-    /// Map a `DECSCUSR` parameter to a shape. An unknown value falls back to the
-    /// default block, matching how a real terminal treats an unsupported style.
-    #[must_use]
-    pub const fn from_decscusr(param: u16) -> Self {
-        match param {
-            3 | 4 => Self::Underline,
-            5 | 6 => Self::Bar,
-            _ => Self::Block,
+impl From<ix_vt::CursorVisualStyle> for CursorShape {
+    fn from(style: ix_vt::CursorVisualStyle) -> Self {
+        match style {
+            ix_vt::CursorVisualStyle::Bar => Self::Bar,
+            ix_vt::CursorVisualStyle::Underline => Self::Underline,
+            ix_vt::CursorVisualStyle::Block | ix_vt::CursorVisualStyle::BlockHollow => Self::Block,
         }
     }
+}
 
+impl CursorShape {
     /// A short stable token for the wire and the browser parser.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

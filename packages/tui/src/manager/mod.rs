@@ -37,9 +37,8 @@ pub struct TuiInstance {
     /// Live terminal size, shared across clones so a [`resize`](Self::resize)
     /// on one handle is visible from every handle to the same process.
     pub(crate) size: Arc<RwLock<(u16, u16)>>,
-    /// Latest cursor shape sniffed from the byte stream by the actor. Shared
-    /// across clones like `size`: vt100 does not model cursor shape, so it is
-    /// tracked next to the parser rather than inside it.
+    /// Latest cursor shape, updated by the VT engine on every render. Shared
+    /// across clones like `size` so the frame builder can read it synchronously.
     pub(crate) cursor_shape: Arc<RwLock<CursorShape>>,
     pub(crate) command_tx: mpsc::Sender<PtyCommand>,
     pub(crate) exit_rx: watch::Receiver<ExitState>,

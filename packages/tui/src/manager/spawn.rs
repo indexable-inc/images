@@ -2,11 +2,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use tokio::runtime::Runtime;
-use tokio::sync::{RwLock, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
+use crate::actor::engine;
 use crate::actor::{PtyCommand, pty_actor};
 use crate::manager::TuiInstance;
+use crate::manager::reader;
 use crate::types::{CursorShape, ExitState, SpawnConfig};
 use crate::{Error, Result};
 
@@ -14,16 +16,26 @@ const CHANNEL_BUFFER_SIZE: usize = 100;
 const INITIAL_OUTPUT_TIMEOUT: Duration = Duration::from_millis(100);
 const INITIAL_OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-async fn has_output(parser: &Arc<RwLock<vt100::Parser>>) -> bool {
-    !parser.read().await.screen().contents().is_empty()
-}
-
 /// Give the child a brief window to paint its first frame so callers that read
 /// immediately after spawn see content instead of an empty screen.
-fn wait_for_initial_output(runtime: &Runtime, parser: &Arc<RwLock<vt100::Parser>>) {
+///
+/// Polls the viewport through the actor mailbox rather than the engine directly:
+/// `read_viewport` drops trailing blank rows, so a non-empty result means the
+/// child has painted something.
+fn wait_for_initial_output(
+    runtime: &Runtime,
+    id: Uuid,
+    command_tx: &mpsc::Sender<PtyCommand>,
+) {
     let start = Instant::now();
     runtime.block_on(async {
-        while !has_output(parser).await && start.elapsed() < INITIAL_OUTPUT_TIMEOUT {
+        loop {
+            let painted = reader::read_viewport(id, command_tx)
+                .await
+                .is_ok_and(|lines| !lines.is_empty());
+            if painted || start.elapsed() >= INITIAL_OUTPUT_TIMEOUT {
+                break;
+            }
             tokio::time::sleep(INITIAL_OUTPUT_POLL_INTERVAL).await;
         }
     });
@@ -73,34 +85,19 @@ pub(super) fn spawn_tui(
         Ok::<_, Error>((pty, child))
     })?;
 
-    let parser = Arc::new(RwLock::new(vt100::Parser::new(
-        rows,
-        cols,
-        scrollback_lines,
-    )));
-
     let (command_tx, command_rx) = mpsc::channel::<PtyCommand>(CHANNEL_BUFFER_SIZE);
     let (exit_tx, exit_rx) = watch::channel(ExitState::Running);
-    // Cursor shape is sniffed from the byte stream by the actor and read by the
-    // frame builder, so it is shared like `size` rather than channelled.
+    // The VT engine owns the !Send terminal on its own thread and updates the
+    // cursor shape on every render. The cache is read by the frame builder, so
+    // it is shared like `size` rather than channelled.
     let cursor_shape = Arc::new(parking_lot::RwLock::new(CursorShape::default()));
+    let engine_tx = engine::spawn(id, rows, cols, scrollback_lines, Arc::clone(&cursor_shape))?;
 
     // The actor owns the child: it reaps it (so short-lived commands leave no
     // zombie), publishes the exit code through `exit_tx`, and can signal it on
-    // a kill request.
-    let actor_parser = Arc::clone(&parser);
-    let actor_cursor_shape = Arc::clone(&cursor_shape);
+    // a kill request. It forwards bytes and reads to the engine thread.
     runtime.spawn(async move {
-        pty_actor(
-            id,
-            pty,
-            child,
-            command_rx,
-            actor_parser,
-            exit_tx,
-            actor_cursor_shape,
-        )
-        .await;
+        pty_actor(id, pty, child, command_rx, engine_tx, exit_tx).await;
     });
 
     let instance = TuiInstance {
@@ -116,7 +113,7 @@ pub(super) fn spawn_tui(
         runtime: Arc::clone(runtime),
     };
 
-    wait_for_initial_output(runtime, &parser);
+    wait_for_initial_output(runtime, id, &instance.command_tx);
 
     Ok(instance)
 }

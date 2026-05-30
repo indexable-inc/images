@@ -33,6 +33,7 @@ axum = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 loro = { workspace = true, optional = true }
+ix-vt = { path = "../vt/ix-vt" }
 ndarray.workspace = true
 parking_lot.workspace = true
 pty-process.workspace = true
@@ -43,7 +44,6 @@ snafu.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "process", "io-util", "time"] }
 tokio-stream = { workspace = true, optional = true, features = ["sync"] }
 uuid = { workspace = true, features = ["v4"] }
-vt100.workspace = true
 
 [dev-dependencies]
 # Drive the publish/aggregate integration test, which connects to a producer
