@@ -139,6 +139,9 @@ stdenv.mkDerivation {
     # convention) and name it for the product so the prompt reads "Claude Code"
     # instead of ".claude-unwrapped". The basename is the human-facing product
     # label, independent of the command alias, since it is only what macOS shows.
+    # 1Password docs confirm the prompt shows "the process being authorized (for
+    # example, iTerm2 or Terminal)", not the code signature or CFBundleName:
+    # https://developer.1password.com/docs/cli/app-integration-security/
     helper="$out/libexec/Claude Code"
     install -m755 ${nativeBinary} "$helper"
 
