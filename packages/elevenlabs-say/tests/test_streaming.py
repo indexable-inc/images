@@ -95,9 +95,36 @@ def test_stream_client_narrows_to_realtime() -> None:
     assert hasattr(realtime, "convert_realtime"), realtime
 
 
+def test_should_stream_auto_and_overrides() -> None:
+    """Pipe auto-streams, TEXT/--file batch, explicit --stream/--no-stream win."""
+
+    class FakeStdin:
+        def __init__(self, tty: bool) -> None:
+            self._tty = tty
+
+        def isatty(self) -> bool:
+            return self._tty
+
+    original = sys.stdin
+    try:
+        sys.stdin = FakeStdin(tty=False)  # type: ignore[assignment]
+        assert say.should_stream(say.parse_args([])) is True
+        assert say.should_stream(say.parse_args(["--no-stream"])) is False
+        assert say.should_stream(say.parse_args(["hello"])) is False
+        assert say.should_stream(say.parse_args(["hello", "--stream"])) is True
+        assert say.should_stream(say.parse_args(["--file", "notes.txt"])) is False
+
+        sys.stdin = FakeStdin(tty=True)  # type: ignore[assignment]
+        assert say.should_stream(say.parse_args([])) is False
+        assert say.should_stream(say.parse_args(["--stream"])) is True
+    finally:
+        sys.stdin = original
+
+
 if __name__ == "__main__":
     test_stdin_yields_before_eof_and_rejoins_split_utf8()
     test_write_stream_writes_chunks_and_rejects_empty()
     test_play_stream_rejects_empty_without_spawning_ffplay()
     test_stream_client_narrows_to_realtime()
+    test_should_stream_auto_and_overrides()
     print("elevenlabs-say streaming tests passed")

@@ -22,8 +22,12 @@ nix run .#elevenlabs-say -- "the first move sets everything in motion"
 # Speak the contents of a file.
 nix run .#elevenlabs-say -- --file notes.txt
 
-# Speak text piped on stdin.
-echo "hello from index" | nix run .#elevenlabs-say
+# Pipe text on stdin. This streams by default: a producer that emits text over
+# time is spoken as it arrives, instead of waiting for it to finish.
+my-llm --prompt "tell me a story" | nix run .#elevenlabs-say
+
+# Force the batch path on a pipe (buffer all stdin, then synthesize once).
+cat notes.txt | nix run .#elevenlabs-say -- --no-stream
 
 # Save audio instead of playing it.
 nix run .#elevenlabs-say -- "save me" --output /tmp/out.mp3
@@ -31,26 +35,28 @@ nix run .#elevenlabs-say -- "save me" --output /tmp/out.mp3
 # Pick a voice by name or id, and override the model or format.
 nix run .#elevenlabs-say -- "different voice" --voice Adam
 nix run .#elevenlabs-say -- "slower model" --model eleven_multilingual_v2 --format mp3_44100_192
-
-# Stream a producer's output: forward text as it arrives and play audio as it
-# synthesizes, instead of waiting for the producer to finish.
-my-llm --prompt "tell me a story" | nix run .#elevenlabs-say -- --stream
 ```
 
 Text source precedence is positional argument, then `--file`, then stdin.
 
 ## Streaming input
 
-`--stream` switches synthesis to the ElevenLabs [WebSocket input-streaming
-endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input).
-The CLI reads stdin as each read returns (rather than buffering to EOF), forwards
-the text token by token, and plays or writes audio as it comes back. Put it at the
-end of a pipe whose producer emits text over time, such as an LLM token stream.
+When text is piped on stdin, the CLI streams by default: it reads stdin as each
+read returns (rather than buffering to EOF), forwards the text token by token over
+the ElevenLabs [WebSocket input-streaming
+endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input),
+and plays or writes audio as it comes back. This is what you want at the end of a
+pipe whose producer emits text over time, such as an LLM token stream.
 
-`--stream` works with `--output` too, writing audio to the file as it arrives. It
+A positional `TEXT` argument or `--file` stays on the batch path, since the whole
+text is already in hand and the plain `convert` endpoint gives slightly better
+prosody. Override either way with `--stream` or `--no-stream`. Use `--no-stream` on
+a pipe when you are feeding a complete document and prefer the batch quality.
+
+Streaming works with `--output` too, writing audio to the file as it arrives. It
 honors `--voice`, `--model`, and `--format`; the default `eleven_flash_v2_5` model
-is the recommended low-latency choice and supports this endpoint. The model
-`eleven_v3` does not, so streaming will fail with it.
+is the low-latency choice and supports this endpoint. The model `eleven_v3` does
+not, so forcing `--stream` with it will fail.
 
 ## Defaults
 

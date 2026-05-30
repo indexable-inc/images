@@ -58,7 +58,8 @@ class CliArgs:
     voice: str
     model: str
     output_format: str
-    stream: bool
+    # None means auto: stream when text is piped on stdin, batch otherwise.
+    stream: bool | None
 
 
 def parse_args(argv: list[str] | None = None) -> CliArgs:
@@ -107,11 +108,13 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
     )
     _ = parser.add_argument(
         "--stream",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
             "Stream input over the ElevenLabs WebSocket: forward stdin as it "
-            "arrives and play or write audio incrementally. Use it at the end of "
-            "a pipe whose producer emits text over time."
+            "arrives and play or write audio incrementally. Defaults on when text "
+            "is piped on stdin and off for TEXT or --file; pass --stream or "
+            "--no-stream to force it."
         ),
     )
     namespace = parser.parse_args(argv)
@@ -122,7 +125,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
     voice: str = namespace.voice
     model: str = namespace.model
     output_format: str = namespace.output_format
-    stream: bool = namespace.stream
+    stream: bool | None = namespace.stream
 
     return CliArgs(
         text=text,
@@ -381,10 +384,23 @@ def _spawn_ffplay() -> subprocess.Popen[bytes]:
         raise SayError(FFPLAY_NOT_FOUND) from exc
 
 
+def should_stream(args: CliArgs) -> bool:
+    """Decide whether to take the streaming path.
+
+    An explicit --stream/--no-stream wins. Otherwise stream when text is piped on
+    stdin, the case where incremental playback matters, and stay on the batch path
+    for a positional argument or --file, where the whole text is already in hand
+    and the higher-quality convert endpoint costs nothing extra.
+    """
+    if args.stream is not None:
+        return args.stream
+    return args.text is None and args.file is None and not sys.stdin.isatty()
+
+
 def run(args: CliArgs) -> None:
     client = make_client()
 
-    if args.stream:
+    if should_stream(args):
         voice_id = resolve_voice_id(client, args.voice)
         chunks = stream_synthesize(client, args, voice_id)
         try:
