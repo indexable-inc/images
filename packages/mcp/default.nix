@@ -95,9 +95,9 @@ let
   );
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
-  # `--system-site-packages`, so `tui`, `semantic_search`, numpy, and polars are
-  # importable by default while an in-session `pip install` still writes to the
-  # per-session venv.
+  # `--system-site-packages`, so `tui`, `semantic_search`, numpy, polars, and
+  # playwright are importable by default while an in-session `pip install` still
+  # writes to the per-session venv.
   mcpPython = pkgs.python3.withPackages (ps: [
     ps.asyncssh
     ps.numpy
@@ -106,9 +106,22 @@ let
     # capturable out of the box: the worker renders any open figure / object
     # with a `_repr_png_` back as an MCP image block.
     ps.matplotlib
+    # playwright for browser automation out of the box. The Nix python package
+    # is patched to use `playwright-driver` as its node driver, and the wrapper
+    # below points PLAYWRIGHT_BROWSERS_PATH at the matching browser bundle, so
+    # `from playwright.async_api import async_playwright` works with no
+    # `playwright install` step. Driver and browsers are version-locked in
+    # nixpkgs; keep them sourced from the same `playwright-driver` to stay in
+    # sync. https://playwright.dev/python/docs/library
+    ps.playwright
     tuiModule
     semanticSearchModule
   ]);
+
+  # Browser bundle that matches the playwright-driver the python package is
+  # patched to use. Exposed to the worker through PLAYWRIGHT_BROWSERS_PATH on the
+  # wrapper below so launched browsers resolve without a network download.
+  playwrightBrowsers = pkgs.playwright-driver.browsers;
 
   package =
     pkgs.runCommand "ix-mcp"
@@ -122,7 +135,8 @@ let
       ''
         mkdir -p $out/bin
         makeWrapper ${unwrapped}/bin/ix-mcp $out/bin/ix-mcp \
-          --set IX_MCP_PYTHON ${lib.escapeShellArg (lib.getExe mcpPython)}
+          --set IX_MCP_PYTHON ${lib.escapeShellArg (lib.getExe mcpPython)} \
+          --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers}
       '';
   replDefault =
     pkgs.runCommand "ix-mcp-repl-default"
