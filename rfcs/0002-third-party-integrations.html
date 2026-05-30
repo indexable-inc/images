@@ -85,7 +85,7 @@
   <dt>Status</dt><dd>Draft</dd>
   <dt>Authors</dt><dd>wyattgill9</dd>
   <dt>Created</dt><dd>2026-05-29</dd>
-  <dt>Updated</dt><dd>2026-05-29</dd>
+  <dt>Updated</dt><dd>2026-05-30</dd>
   <dt>Tracking issue</dt><dd><a href="https://github.com/indexable-inc/index/issues/45">#45</a></dd>
   <dt>Supersedes</dt><dd>—</dd>
   <dt>Superseded by</dt><dd>—</dd>
@@ -104,7 +104,7 @@
 <ul>
   <li><strong>No secrets in the Nix store.</strong> Nix evaluation and fleet plans carry provider IDs, scopes, paths, and non-secret metadata only. Credential bytes are created at runtime.</li>
   <li><strong>Per-VM credentials.</strong> ix creates one scoped credential, scoped key, or upstream sub-account per VM and per declared claim. A VM never receives a long-lived platform-wide credential.</li>
-  <li><strong>Runtime materialization.</strong> The guest receives credentials through a file under <code>/run/...</code>, mode <code>0600</code>, owned by the consuming service user or unit. The file path behaves like existing <code>lib/secrets.nix</code> refs so consumers do not learn a new secret API.</li>
+  <li><strong>Runtime materialization.</strong> The guest receives credentials through a file under <code>/run/...</code>, mode <code>0600</code>, with an explicit <code>owner</code> and <code>group</code> declared on the claim so the materializer has a machine-readable consumer identity to <code>chown</code> the file to before the consumer starts. The file path behaves like existing <code>lib/secrets.nix</code> refs so consumers do not learn a new secret API. Where the consuming unit prefers systemd's <code>LoadCredential=</code> over a long-lived <code>/run</code> path, the claim can opt into credential-delivery mode and the materializer drops the file into the unit's credential directory instead.</li>
   <li><strong>No guest-trusted billing.</strong> Billable usage comes from provider-side records or a host/ix-controlled metering channel. Guest-reported counters are diagnostics only.</li>
   <li><strong>No silent fallback.</strong> Missing claims, provisioning failures, metadata fetch failures, absent credential files, and unreconcilable usage all fail closed with typed integration errors.</li>
 </ul>
@@ -120,11 +120,19 @@
 ix.integrations.claims.mock-egress = {
   provider = "mock";
   capability = "egress";
-  credentialPaths.token = "/run/secrets/ix-integrations/mock/token";
+  owner = "mock-egress";
+  group = "mock-egress";
+  credentialPaths.token = {
+    path = "/run/secrets/ix-integrations/mock/token";
+    mode = "0600";
+    # owner/group default to the claim defaults above;
+    # set per-path overrides only when one file must be readable by a different unit.
+  };
   scopes = [ "egress:residential" ];
   environment.MOCK_TOKEN_FILE = "/run/secrets/ix-integrations/mock/token";
   metering.dimensions = [ "bytes" "requests" ];
 };</code></pre>
+<p>The claim carries the consumer identity directly. <code>owner</code> and <code>group</code> are required scalars on each claim and act as defaults for every entry in <code>credentialPaths</code>; per-path submodules accept <code>owner</code>, <code>group</code>, and <code>mode</code> overrides only when one file must be readable by a different unit. The generic materializer is responsible for applying those values before the consumer starts, so provider modules do not invent incompatible ownership fields and a root-owned 0600 file is impossible by construction.</p>
 <p>The main alternative is only provider-specific options, with no shared <code>ix.integrations.claims</code> surface. That is simpler for the first provider but makes fleet planning, validation, and provisioning learn each provider's option tree. The recommendation is to add the generic claim primitive first and keep provider modules as narrow lowering layers. Reviewers should accept or reject that topology before code lands.</p>
 
 <h3>Materialization mechanism</h3>
@@ -137,7 +145,9 @@ ix.integrations.claims.mock-egress = {
 
 <h3>Auth handoff</h3>
 <p>The repo-owned interface is declarative. A service module declares which provider capability it needs, which scopes are required, and which runtime file path the consuming unit expects. Fleet evaluation serializes that claim into the node plan. The ix-side provisioner authenticates to the partner using platform-held credentials that the guest cannot reach, creates or binds a scoped upstream credential, and records the binding against the VM identity and claim name.</p>
-<p>At boot, the materializer asks the ix metadata endpoint for the credential bound to this VM and claim. The endpoint returns the credential only to the matching VM. The materializer writes it to the declared <code>/run/...</code> path, sets <code>0600</code>, applies the configured owner, and exits non-zero if anything is missing or invalid. The consuming service should depend on this unit with ordinary systemd ordering, for example <code>After=network-online.target</code> and <code>Before=&lt;consumer&gt;.service</code>.</p>
+<p>At boot, the materializer asks the ix metadata endpoint for the credential bound to this VM and claim. The endpoint writes the credential to the declared <code>/run/...</code> path, sets <code>0600</code>, applies the claim's <code>owner</code> and <code>group</code>, and exits non-zero if anything is missing or invalid.</p>
+<p><strong>VM identity is host-attested, not guest-supplied.</strong> The metadata endpoint is reached over an ix-controlled transport that the guest cannot forge or relay: a hypervisor-attached vsock socket, a link-local address routable only through the host bridge, or mTLS with a per-VM client certificate that ix injects out of band and rotates per boot. The endpoint binds each request to the VM identity ix recorded at fleet-time and refuses any request whose claim name, node name, or transport binding does not match. A guest-supplied node name, claim name, or bearer token is never sufficient on its own. The first implementation must name one primitive (vsock plus per-VM token, signed instance identity document, or host-provisioned mTLS) and document its fail-closed behavior: any signature, attestation, or transport-binding failure returns a typed error and writes no file. The mock provider exercises this path against a mock identity source so the contract is wired before a real partner is connected.</p>
+<p><strong>Systemd wiring pulls units into the boot transaction.</strong> The materializer unit declares <code>Wants=network-online.target</code> and <code>After=network-online.target</code> so the network is actually pulled in, not merely ordered against. Each consuming unit declares <code>Requires=ix-integration-&lt;claim&gt;.service</code> and <code>After=ix-integration-&lt;claim&gt;.service</code>; equivalently, the materializer carries <code>RequiredBy=&lt;consumer&gt;.service</code> through a generated drop-in so the consumer's failure surface still names the materializer. A bare <code>After=</code> / <code>Before=</code> example is rejected because <code>After=</code> only orders units already in the transaction and does not start them, so a consumer wired that way can run before the credential file exists.</p>
 
 <h3>Billing pass-through and metering</h3>
 <p>ix is the billing counterparty for the upstream partner relationship and the merchant of record for ix users. A provider integration is eligible for ix-billed usage only when usage can be attributed to a VM, customer, and scoped credential from records the guest cannot forge.</p>
@@ -145,6 +155,7 @@ ix.integrations.claims.mock-egress = {
 
 <h3>Credential lifecycle</h3>
 <p>Credential lifecycle belongs to the ix-side service, not the guest. On VM create or switch, ix provisions or updates the scoped credential for each claim. On VM teardown, ix revokes the upstream scoped credential or sub-account. On scope changes, ix replaces the credential rather than mutating an unbounded credential in place. If revocation fails, ix reports an operator-visible cleanup error and keeps retryable state outside the guest.</p>
+<p><strong><code>ix-fleet switch</code> activates new credentials in the guest as part of the same transaction.</strong> The switch does not wait for the next reboot. Once the control plane mints or rebinds the upstream credential, the activation step triggers the in-guest materializer (over the same host-attested transport used at boot) to refetch and rewrite every affected file under <code>/run/...</code>, then restarts or sends a reload signal to every consuming unit declared against that claim. The order is fixed: write the new credential file, restart consumers, and only after every consumer reports healthy does ix revoke the previous upstream credential. A failed activation fails the switch with a typed integration error and leaves the previous credential in place rather than half-rotating, so consumers cannot be stranded on stale files or on a no-credential gap. Scope changes follow the same path: rebind upstream, rematerialize, restart consumers, then revoke the prior credential. Pure-data fleet changes that do not touch the claim skip activation entirely.</p>
 <p>The guest cannot reach the partner platform API directly for provisioning, cannot mint sibling credentials, and cannot revoke or list credentials outside its own claim. Runtime credential files may be read by a compromised root process inside the VM, so the credential must be scoped to only what that VM is allowed to do.</p>
 
 <h3>Partner onboarding requirements</h3>
@@ -204,6 +215,7 @@ ix.integrations.claims.mock-egress = {
   <li><strong>Claim topology.</strong> Should the repo accept the recommended two-layer design with generic <code>ix.integrations.claims</code> plus provider-specific lowering modules?</li>
   <li><strong>Materialization.</strong> Should implementation use the recommended fleet-time binding plus boot-time metadata materialization, or choose only one mechanism?</li>
   <li><strong>Metering primitive.</strong> What is the ix-side host-controlled endpoint for usage records that cannot be forged by the guest? If none exists, this RFC asks ix to add one before real ix-billed usage ships.</li>
+  <li><strong>VM identity primitive.</strong> Which host-attested transport does the metadata endpoint trust: hypervisor-attached vsock, host-injected mTLS, signed instance identity document, or something else? The first implementation must pick one before real credentials are wired.</li>
   <li><strong>Revenue share.</strong> How does ix represent vendor wholesale cost, ix margin, customer-visible price, refunds, and credits?</li>
   <li><strong>Umbrella-account failure.</strong> What operator and customer behavior follows when a vendor suspends or revokes the ix platform account?</li>
   <li><strong>Upstream outage behavior.</strong> Which failures are retryable, and where should retry state live, while still honoring the no-fallback rule?</li>
