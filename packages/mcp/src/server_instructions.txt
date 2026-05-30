@@ -1,4 +1,4 @@
-Persistent Python sessions on a pinned interpreter. Every session can `import tui` with no install step: `tui` is the bundled PyO3 PTY driver (spawn and drive PTY-backed processes with full vt100 emulation, scrollback, and optional NumPy access to per-cell data; the API is async-only, so use it from python_exec/python_eval with top-level await). `semantic_search` is bundled too: `await semantic_search.search(query, path)` runs content-addressed semantic code search over a checkout and returns scored hits (also exposed directly as the `semantic_search` tool). numpy, polars, and matplotlib are preinstalled for data work, as is `asyncssh` for SSH-based remote process control (run commands on remote hosts, SFTP) that fits the shared async event loop, and each session's writable venv keeps `pip install` working for anything else. `playwright` is preinstalled too, with its browsers already wired (PLAYWRIGHT_BROWSERS_PATH is set), so `from playwright.async_api import async_playwright` drives a real browser with no `playwright install` step; use the async API so it shares the session event loop (`p = await async_playwright().start()`, then `browser = await p.chromium.launch()`). Chromium and Firefox are the reliable engines; WebKit is known to be flaky under Nix. python_eval and python_exec return rendered images automatically: any open matplotlib figure, PIL image, `display()`ed object, or value with a `_repr_png_` comes back as an inline image alongside the text output.
+Persistent Python sessions on a pinned interpreter. Every session can `import tui` with no install step: `tui` is the bundled PyO3 PTY driver (spawn and drive PTY-backed processes with full vt100 emulation, scrollback, and optional NumPy access to per-cell data; the API is async-only, so use it from python_exec/python_eval with top-level await). `semantic_search` is bundled too: `await semantic_search.search(query, path)` runs content-addressed semantic code search over a checkout and returns scored hits (also exposed directly as the `semantic_search` tool). numpy, polars, and matplotlib are preinstalled for data work, as is `asyncssh` for SSH-based remote process control (run commands on remote hosts, SFTP) that fits the shared async event loop, and each session's writable venv keeps `pip install` working for anything else. `playwright` is preinstalled too, with its browsers already wired (PLAYWRIGHT_BROWSERS_PATH is set), so `from playwright.async_api import async_playwright` drives a real browser with no `playwright install` step; use the async API so it shares the session event loop. Reuse a browser instead of relaunching one per call: a fresh `chromium.launch()` every turn wastes startup time and throws away cookies and logins, so launch once and reuse the handle (see the playwright paragraph below), and connect over CDP to share one browser across separate sessions. Chromium and Firefox are the reliable engines; WebKit is known to be flaky under Nix. python_eval and python_exec return rendered images automatically: any open matplotlib figure, PIL image, `display()`ed object, or value with a `_repr_png_` comes back as an inline image alongside the text output.
 
 Execution model: each session is single-threaded with one persistent asyncio event loop, reused across calls. Write top-level `await` directly (e.g. `rows = await pool.fetch(sql)`); because the loop is shared, an async client or pool created in one call stays usable in later ones. Do not call `asyncio.run()`: inside an awaited block it raises `RuntimeError: asyncio.run() cannot be called from a running event loop`, and outside one it spins up a throwaway loop your resources cannot outlive. `asyncio.get_running_loop()` resolves only inside awaited code. A blocking synchronous call (heavy CPU, `time.sleep`, sync network I/O) freezes the whole session, so reach for the async equivalent.
 
@@ -13,3 +13,40 @@ Driving a terminal with `tui`: spawn and control a process in one block, awaitin
 Every method that touches the terminal is a coroutine you must `await`: `send`, `enter`, `read`, `viewport`, `text`, `snapshot`, `wait_for`, `resize`, `kill`, `close`. Only the cached accessors are synchronous: `id`, `command`, `args`, `size`, `is_alive`, `exit_code`. Send keystrokes with the `Key` enum (`Key.ENTER`, `Key.ctrl("c")`, arrows). The `async with` block calls `close()` on exit, so an editor or REPL that ignores Ctrl+C still goes away.
 
 Terminals auto-show in the dashboard. The first `Tui(...)` publishes this process, so a running `nix run .#tui-dashboard` (it watches `tui.socket_dir()`) renders every spawned terminal with no `tui.publish()` call. Set `IX_TUI_AUTOPUBLISH=0` to opt out.
+
+Driving a browser with `playwright`, reuse-first. Within one session, launch once and keep the handle in a module global; the persistent loop keeps the browser and its cookies alive across calls, so later calls reuse it instead of paying a fresh launch.
+
+    from playwright.async_api import async_playwright
+
+    if "browser" not in globals():
+        p = await async_playwright().start()
+        browser = await p.chromium.launch()  # one launch, reused below
+    page = await browser.new_page()
+    await page.goto("https://example.com")
+    print(await page.title())
+
+To share one browser across separate sessions or processes, connect over CDP (Chromium only). Decide connect-vs-launch on a recorded endpoint, not a swallowed exception: the first session launches a persistent browser on a fixed debug port and records the endpoint; later sessions read the file and attach. Connecting reuses the running browser's open contexts and their state; `connect_over_cdp` returns it via `browser.contexts[0]`.
+
+    import json
+    from pathlib import Path
+    from playwright.async_api import async_playwright
+
+    endpoint = Path("/tmp/ix-mcp-chromium-cdp")
+    p = await async_playwright().start()
+    if endpoint.exists():
+        cdp = endpoint.read_text()
+        print(f"reusing browser at {cdp}")
+        browser = await p.chromium.connect_over_cdp(cdp)
+        context = browser.contexts[0]
+    else:
+        port = 9222
+        cdp = f"http://localhost:{port}"
+        print(f"no recorded endpoint, launching chromium at {cdp}")
+        await p.chromium.launch(args=[f"--remote-debugging-port={port}"])
+        endpoint.write_text(cdp)
+        browser = await p.chromium.connect_over_cdp(cdp)
+        context = browser.contexts[0]
+    page = await context.new_page()
+    await page.goto("https://example.com")
+
+`connect_over_cdp` detaching with `browser.close()` leaves the launched browser running for the next attach; the launching session owns the real shutdown. If the recorded endpoint is stale (the browser exited), the connect raises rather than silently relaunching: delete the file and run the launch branch again.
