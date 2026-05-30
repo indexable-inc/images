@@ -273,11 +273,20 @@ fn render(hit: &DisplayHit, show_content: bool, palette: &Palette, root: &Path) 
     let prefix = if hit.is_web { "" } else { "./" };
     let path = paint(palette.path, &format!("{prefix}{}", hit.label));
 
+    // `start_line` is 0-based and `num_lines` is a line count, so the displayed
+    // range is the 1-based inclusive span `[start + 1, start + num]`. A
+    // single-line chunk collapses to one number rather than `:n-n`.
     let location = match (hit.start_line, hit.num_lines) {
-        (Some(start), Some(num)) => paint(
-            palette.range,
-            &format!(":{}-{}", start + 1, start + 1 + num),
-        ),
+        (Some(start), Some(num)) => {
+            let first = start + 1;
+            let last = start + num.max(1);
+            let range = if last <= first {
+                format!(":{first}")
+            } else {
+                format!(":{first}-{last}")
+            };
+            paint(palette.range, &range)
+        }
         (Some(start), None) => paint(palette.range, &format!(":{}", start + 1)),
         _ => String::new(),
     };

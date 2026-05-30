@@ -16,7 +16,7 @@ pub struct DisplayHit {
     pub label: String,
     /// Zero-based start line within the file, when known.
     pub start_line: Option<u32>,
-    /// Number of lines the chunk spans, when known.
+    /// Number of lines in the chunk (a count, not a span), when known.
     pub num_lines: Option<u32>,
     /// Relevance score in `0.0..=1.0`.
     pub score: f32,

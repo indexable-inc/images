@@ -122,9 +122,11 @@ pub struct Chunk {
     pub score: f32,
     /// Filename or URL of the source.
     pub filename: Option<String>,
-    /// Zero-based start line within the source file, when known.
+    /// One-based start line within the source file, as reported by the API.
     pub start_line: Option<u32>,
-    /// Number of lines spanned, when known.
+    /// Line span of the chunk (`end_line - start_line`), as reported by the API,
+    /// so a chunk of N lines reports `num_lines == N - 1`. Consumers that want a
+    /// line count add one.
     pub num_lines: Option<u32>,
     /// Metadata attached to the source file at upload time.
     pub metadata: Option<serde_json::Value>,

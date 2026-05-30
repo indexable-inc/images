@@ -56,13 +56,19 @@ const fn to_client_options(options: SearchOptions) -> mixedbread::SearchOptions 
 fn hit_from_chunk(chunk: mixedbread::Chunk) -> SearchHit {
     let hash = metadata_str(chunk.metadata.as_ref(), "hash");
     let path_meta = metadata_str(chunk.metadata.as_ref(), "path");
+    // The mixedbread API reports `start_line` 1-based and `num_lines` as a line
+    // span (end - start), so an N-line chunk arrives as (start=1, num=N-1). The
+    // rest of this crate (and the local backend) use a 0-based start and a line
+    // count, so normalize at this boundary: shift the start down by one and turn
+    // the span into a count. Without this the renderer drops the chunk's first
+    // line and empties single-line chunks, which then fall back to plain text.
     SearchHit {
         hash,
         path: path_meta.or(chunk.filename),
         text: chunk.text.unwrap_or_default(),
         score: chunk.score,
-        start_line: chunk.start_line,
-        num_lines: chunk.num_lines,
+        start_line: chunk.start_line.map(|line| line.saturating_sub(1)),
+        num_lines: chunk.num_lines.map(|span| span.saturating_add(1)),
     }
 }
 
@@ -150,5 +156,44 @@ impl Store for MixedbreadStore {
             pending: status.pending,
             in_progress: status.in_progress,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(start_line: Option<u32>, num_lines: Option<u32>) -> mixedbread::Chunk {
+        mixedbread::Chunk {
+            text: Some("body".to_owned()),
+            score: 0.5,
+            filename: Some("a.rs".to_owned()),
+            start_line,
+            num_lines,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn normalizes_one_based_span_to_zero_based_count() {
+        // The API's (start=1, span=N-1) for an N-line chunk becomes the internal
+        // (start=0, count=N): a whole 6-line file reported as (1, 5).
+        let hit = hit_from_chunk(chunk(Some(1), Some(5)));
+        assert_eq!(hit.start_line, Some(0));
+        assert_eq!(hit.num_lines, Some(6));
+
+        // A single-line chunk arrives as (start=1, span=0) and must become a
+        // count of 1 line, not 0, so the renderer emits it instead of an empty
+        // window that falls back to plain text.
+        let single = hit_from_chunk(chunk(Some(1), Some(0)));
+        assert_eq!(single.start_line, Some(0));
+        assert_eq!(single.num_lines, Some(1));
+    }
+
+    #[test]
+    fn missing_line_metadata_stays_none() {
+        let hit = hit_from_chunk(chunk(None, None));
+        assert_eq!(hit.start_line, None);
+        assert_eq!(hit.num_lines, None);
     }
 }

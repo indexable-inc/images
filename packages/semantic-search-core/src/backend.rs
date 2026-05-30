@@ -52,7 +52,7 @@ pub struct SearchHit {
     pub score: f32,
     /// Zero-based start line of the chunk within its file, when known.
     pub start_line: Option<u32>,
-    /// Number of lines the chunk spans, when known.
+    /// Number of lines in the chunk (a count, not a span), when known.
     pub num_lines: Option<u32>,
 }
 
