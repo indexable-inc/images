@@ -1,0 +1,311 @@
+# Property Discovery
+
+## Goal
+
+Systematically discover testable properties by examining the system from multiple
+independent perspectives. Each perspective (attention focus) looks at the same
+codebase but prioritizes different failure modes, producing properties that a
+single unstructured pass would miss.
+
+This process runs after the SUT analysis is complete and produces candidate
+properties in the standard catalog format defined in `references/property-catalog.md`.
+
+## Prerequisites
+
+- `antithesis/scratchbook/sut-analysis.md` exists and is current
+- `antithesis/scratchbook/existing-assertions.md` exists (scan results — may
+  indicate no existing instrumentation, but must be present before agents are
+  spawned)
+
+## Attention Focuses
+
+Each focus defines a lens for examining the system. Every focus should produce
+properties in the standard catalog format.
+
+### 1. Data Integrity
+
+Consistency guarantees, invariants on stored state, corruption paths. Look for:
+write ordering assumptions, transaction boundaries, constraint enforcement, data
+loss scenarios under concurrent access.
+
+### 2. Concurrency
+
+Races, atomicity, ordering dependencies, shared mutable state. Look for: lock
+ordering, TOCTOU patterns, concurrent container access, thread-safety assumptions
+in documentation vs. implementation.
+
+### 3. Failure Recovery
+
+Crash recovery, restart correctness, partial failure handling, retry semantics.
+Look for: incomplete operations that survive restarts, recovery procedures that
+assume clean state, retry storms, idempotency gaps in recovery paths.
+Also note candidate SUT instrumentation points for retry outcomes, recovery
+subphases, and dangerous internal fallback paths that workloads may not observe
+cleanly.
+
+### 4. Protocol Contracts
+
+API guarantees, message ordering, schema validation, backward compatibility. Look
+for: documented API guarantees that aren't enforced, ordering assumptions between
+services, response codes that mask errors.
+
+### 5. Resource Boundaries
+
+Exhaustion, leaks, backpressure, capacity limits, queue depths. Look for:
+unbounded queues, missing backpressure, file descriptor leaks, memory growth under
+sustained load, connection pool exhaustion.
+
+### 6. Security Boundaries
+
+Authentication/authorization invariants, privilege escalation paths, input
+validation. Look for: operations that bypass auth checks, role escalation through
+sequences of valid operations, injection points.
+
+### 7. Distributed Coordination
+
+Consensus, leader election, split-brain, network partition behavior, replication.
+Look for: split-brain recovery, replication lag visibility, quorum loss handling,
+stale leader commands. May yield no properties for single-process systems.
+Also note candidate SUT instrumentation points for redirect emission, leader
+handoff, stepdown, and leadership-loss retry internals.
+
+### 8. Lifecycle Transitions
+
+Startup, shutdown, upgrade, migration, initialization ordering. Look for: requests
+during startup before subsystems are ready, graceful shutdown that drops in-flight
+work, migration steps that assume no concurrent traffic.
+Also note candidate SUT instrumentation points for distinct lifecycle outcomes,
+not just broad "entered startup/shutdown path" markers.
+
+### 9. Idempotency and Replay
+
+Duplicate handling, at-least-once delivery, reprocessing safety. Look for: side
+effects on retry, message deduplication gaps, replay of already-applied operations.
+
+### 10. Version Compatibility
+
+Behavioral differences across client/server version combinations, backward/forward
+compatibility guarantees, deprecation boundary correctness. Look for: changed
+serialization formats, removed/renamed fields, different default values across
+versions, protocol negotiation failures.
+
+### 11. Wildcard
+
+The other 10 focuses have fixed lenses — they see what their descriptions tell
+them to look for. This focus has no fixed lens. Its job is to find what they will
+all miss: the weird, the novel, the property that doesn't fit any category but
+matters anyway. These are not principles — this focus is deliberately unconstrained.
+
+1. **Know the covered territory.** The orchestrator provides a one-line summary of
+   each other focus. Understand their territory. Your job starts where theirs ends.
+
+2. **Look for the non-obvious.** Properties that emerge from behaviors nobody would
+   think to check. The system works, the standard invariants hold, but something
+   about the interaction pattern is surprising. Trust that instinct and turn it into
+   a testable property.
+
+3. **Find missing concepts.** Not missing data integrity checks (Focus 1 handles
+   that) or missing concurrency properties (Focus 2 handles that) — but missing
+   *angles*. A failure scenario nobody considers. A guarantee the system implicitly
+   provides but never claims. A property that only matters under a specific
+   combination of conditions that no single focus would construct.
+
+4. **Cross-cut.** Properties that live at the intersection of multiple focus areas.
+   Where failure recovery interacts with idempotency in ways neither focus captures
+   alone. Where resource exhaustion triggers a protocol violation. Where a lifecycle
+   transition exposes a concurrency bug that only manifests during version upgrades.
+
+5. **Question the frame.** The other focuses look for properties within their
+   domains. You can question whether the domains are complete. Is there an entire
+   class of failure that the focus set doesn't cover? Is there a property the system
+   *should* have but nobody would think to assert because it seems too obvious?
+
+6. **Report what's odd.** If a code path feels like it would produce an interesting
+   property but you can't fully specify the invariant, describe the intuition. A
+   vague signal from the wildcard is still signal.
+
+## Ensemble Mode
+
+If your environment supports spawning sub-agents, run property discovery as an
+ensemble — one agent per attention focus, in parallel.
+
+### Agent Instructions
+
+Spawn one agent per focus. Each agent receives:
+
+- The contents of `antithesis/scratchbook/sut-analysis.md`
+- The property catalog format from `references/property-catalog.md`
+- One attention focus (its full description and "look for" guidance from above)
+- The path to `antithesis/scratchbook/existing-assertions.md` — read this before
+  writing evidence files; for each property, note which assertions already exist
+  vs. which are missing
+- The list of user-named external references with their `why` notes (from the scope question), so the agent can consult them as part of its analysis
+- These instructions:
+
+> Examine the codebase through the lens of your assigned attention focus. Produce
+> properties in the standard catalog format. For each property, include your
+> confidence (high/medium/low) and what evidence in the codebase supports it. If
+> this focus yields no relevant properties for this system, say so and explain why.
+
+**Wildcard agent:** The wildcard agent (Focus 11) runs in parallel with the others
+but receives different context. Instead of a "look for" list, it receives:
+
+- The contents of `antithesis/scratchbook/sut-analysis.md`
+- The property catalog format from `references/property-catalog.md`
+- The wildcard directives from its focus description above
+- A one-line summary of each other focus, derived from the focus names and opening
+  sentences above (e.g., "Focus 1: Data Integrity — consistency guarantees,
+  invariants on stored state, corruption paths"). Do not include the detailed
+  "Look for:" lists — the wildcard should know what territory is covered, not how
+  the others search it.
+- The path to `antithesis/scratchbook/existing-assertions.md`
+- Access to the codebase
+- The list of user-named external references with their `why` notes (from the scope question), so the agent can consult them as part of its analysis
+
+### Agent Output
+
+Each agent writes detailed evidence to disk and returns a compact summary.
+
+**Written to disk:** For each property, write an evidence file to
+`properties/{slug}.md` in the scratchbook, where `{slug}` is a descriptive
+kebab-case name for the property. If a file already exists at the chosen name
+(another agent got there first), pick a different slug. Capture the specific
+code paths examined (files, functions, line numbers), the failure scenario, key
+observations, and any open questions with context on why they matter and what the
+answer would change. Write everything a future reader would need to understand
+why this property was identified and how the code is involved. For each
+property's SUT-side instrumentation suggestions, cross-reference
+`existing-assertions.md` and explicitly note whether each suggested assertion
+already exists in the codebase, is partially present, or is missing.
+
+**Returned to synthesis:**
+
+- Properties in catalog format (may be empty). Populate the Open Questions list
+  directly from the questions written into the evidence file, following
+  `references/property-catalog.md` ("Open Questions Conventions"). At this
+  stage, questions are typically untagged — they haven't been investigated
+  yet. The synthesis "Investigate Open Questions" step adds tags.
+- If a question you raised would contradict a prose claim you'd otherwise
+  write in **Property**, **Invariant**, **Antithesis Angle**, or **Why It
+  Matters**, write the prose at the level of generality the analysis
+  supports — don't overcommit to an answer the Open Questions list says is
+  uncertain. The list does the work of surfacing uncertainty; the prose
+  doesn't need parenthetical hedges. See `references/property-catalog.md`
+  ("Honest Summaries").
+- For each property, the evidence file slug and a brief rationale summary —
+  enough for synthesis to deduplicate, resolve conflicts, and evaluate assertion
+  type, but not the full evidence narrative
+- A brief note on what areas of the codebase it examined beyond specific properties
+- Assumptions made that affect multiple properties
+
+### Synthesis
+
+After all agents complete, synthesize into a single property catalog:
+
+- **Deduplicate:** Multiple agents finding the same property is a confidence
+  signal. Merge duplicates, noting which focuses identified them.
+- **Preserve unique finds:** Properties found by only one focus are the primary
+  value of the ensemble — don't drop them without cause.
+- **Resolve conflicts:** When agents disagree on assertion type or priority for
+  the same property, evaluate which reasoning is stronger. Note the disagreement
+  and resolution in the property's rationale.
+- **Assign slugs and organize:** Each agent already assigned a slug and wrote
+  an evidence file. For unique properties, accept the agent's slug. For merged
+  properties, pick the best slug from the contributing agents. If the canonical
+  slug differs from an agent's file, rename the evidence file to match. Group
+  properties into categories per the catalog format. The slug is the canonical
+  ID — see `references/property-catalog.md` for details.
+- **Record provenance:** For each property, note which focus(es) surfaced it.
+- **Merge duplicate evidence:** For properties found by multiple agents, read
+  the relevant evidence files and combine them into a single coherent file under
+  the canonical slug. Delete the extra evidence files. Unique properties already
+  have their final evidence file on disk — don't read them into context.
+- **Write property relationships:** Review the complete property set and write
+  `property-relationships.md` in the scratchbook. Group properties that share
+  evidence, code paths, or failure mechanisms into clusters. Note any suspected
+  dominance (where one property likely implies another). This is lightweight —
+  flag connections you noticed during synthesis, don't do deep analysis.
+- **Apply provenance frontmatter:** Write `sut_path`, current `commit`, today's `updated`, and the list of `external_references` (from the user's scope answer) to `property-catalog.md` and `property-relationships.md` per `references/scratchbook-setup.md`.
+- **Investigate open questions:** see "Investigate Open Questions" below.
+
+#### Investigate Open Questions
+
+For each property that has open questions in its evidence file, spawn an agent to investigate. Run these in parallel — one agent per property with open questions.
+
+Each agent receives the path to the evidence file, codebase access, and the path to `antithesis/scratchbook/existing-assertions.md`.
+
+Each agent must:
+
+- Read the evidence file's explanation of why each question matters and investigate the code to answer it.
+- Not fabricate answers. If a question can't be resolved from code, docs, or other available evidence, leave it open with partial findings noted. Tag `(partial: ...)` when there are partial findings; tag `(needs human input)` only after exhausting investigation against code and docs. Some questions legitimately need human input — that is a normal outcome, not a failure of the step.
+- Record an investigation log in the evidence file under an `### Investigation Log` heading (see `references/property-catalog.md` "Investigation Log") so the "attempted" check in `SKILL.md` self-review is auditable.
+- Update the evidence file: remove resolved questions, note partial findings, apply human-input tags. Correct any instrumentation suggestions against `existing-assertions.md` to reflect what already exists vs. what is missing.
+
+Each agent returns a short structured summary (not the full evidence file) describing: which questions were resolved, which remain (and in what state), whether the property changed (different invariant, different assertion type), and whether the property was invalidated with the reason.
+
+After all agents return, review the summaries. Update the catalog whenever a property is invalidated, changed, or has remaining unresolved questions — sync the Open Questions list under each affected property from the evidence file, following `references/property-catalog.md` ("Open Questions Conventions"). If a resolution makes a parametric term in the prose more specific, refine the prose field accordingly. Re-evaluate property relationships if any property changed or was invalidated.
+
+## Single-Agent Mode
+
+If your environment does not support sub-agents, work through the attention
+focuses as a sequential checklist:
+
+1. Read the SUT analysis.
+2. Read `antithesis/scratchbook/existing-assertions.md` so you have the full
+   picture of what's already instrumented before writing any evidence files.
+3. For each attention focus 1–10 in order, make an explicit pass through the
+   codebase with that lens. After each pass, add new properties to a running
+   catalog. If a focus yields nothing for this system, note why and move on.
+4. Run the wildcard pass (Focus 11) last. Unlike the other passes, the wildcard is
+   not a fresh examination — it deliberately builds on awareness of what the
+   previous passes covered, looking for properties they missed.
+5. After all 11 passes, review the full catalog for duplicates, gaps, and
+   consistency.
+6. Assign a descriptive kebab-case slug to each property and organize into final
+   form per the catalog format.
+7. Apply provenance frontmatter to `property-catalog.md` per `references/scratchbook-setup.md`.
+8. For each property, write an evidence file to `properties/{slug}.md` in the
+   scratchbook. Capture the supporting evidence, relevant code paths, failure
+   scenario, and key observations you encountered during your passes. For each
+   property's SUT-side instrumentation suggestions, cross-reference
+   `existing-assertions.md` and explicitly note whether each suggested assertion
+   already exists in the codebase, is partially present, or is missing.
+9. Review the complete property set and write `property-relationships.md` in the
+   scratchbook. Group properties that share evidence, code paths, or failure
+   mechanisms into clusters. Note any suspected dominance relationships. This is
+   lightweight — flag connections you noticed during the passes, don't do deep
+   analysis. Apply provenance frontmatter per `references/scratchbook-setup.md`.
+10. For each property with open questions in its evidence file, investigate the
+    code to answer them:
+
+    - Read the evidence file's explanation of why each question matters and
+      trace the code to answer it.
+    - Don't fabricate answers. Tag `(partial: ...)` when partial findings exist;
+      tag `(needs human input)` only after exhausting investigation against code
+      and docs.
+    - Record an investigation log in the evidence file under an `### Investigation Log` heading (see `references/property-catalog.md` "Investigation Log") so
+      the "attempted" check in `SKILL.md` self-review is auditable.
+    - Update the evidence file with resolved answers and their implications,
+      including correcting any instrumentation suggestions against
+      `existing-assertions.md`.
+    - Sync the Open Questions list under each property from the evidence file,
+      following `references/property-catalog.md` ("Open Questions Conventions").
+      If a resolution makes a parametric term in the prose more specific,
+      refine the prose field accordingly.
+    - If an answer changes the property or invalidates it, update accordingly.
+      Mark invalidated properties in the catalog with the reason.
+
+Treat each focus pass (Focuses 1–10) as a fresh examination. Resist the pull to
+skip a focus because earlier passes "already covered" that area — the point is
+to look at the same code from different angles. The wildcard pass is the
+exception — it runs last and uses knowledge of the covered territory to find
+gaps.
+
+## Output
+
+- `antithesis/scratchbook/property-catalog.md` — using the format defined in
+  `references/property-catalog.md`, including provenance frontmatter per
+  `references/scratchbook-setup.md`
+- `antithesis/scratchbook/properties/{slug}.md` — one per cataloged property
+- `antithesis/scratchbook/property-relationships.md` — suspected clusters and
+  connections, including provenance frontmatter per `references/scratchbook-setup.md`

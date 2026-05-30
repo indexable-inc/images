@@ -83,6 +83,7 @@
       paths = {
         root = ./.;
         agentsMd = ./agents-md;
+        skills = ./skills;
         images = ./images;
         modules = ./modules;
         examples = ./examples;

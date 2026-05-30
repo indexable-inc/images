@@ -92,6 +92,7 @@ let
     inherit lib pkgs writeNushellApplication;
   };
   agentsMd = import ./agents-md.nix { inherit lib paths; };
+  skills = import ./skills.nix { inherit lib paths; };
   # Shared JetBrains Islands palette (both variants), the single source of truth
   # for syntax color across the repo: the code-highlight crate embeds this JSON
   # for the semantic-search `-c` output, and the base profile generates its
@@ -280,6 +281,7 @@ let
     inherit
       artifacts
       agentsMd
+      skills
       buildGradleFatJar
       buildRustPackage
       buildJsSite
@@ -367,6 +369,7 @@ let
       exampleFleetsFor
       artifacts
       agentsMd
+      skills
       buildGradleFatJar
       buildJsSite
       buildNpmVitest
