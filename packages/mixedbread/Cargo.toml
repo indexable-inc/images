@@ -1,0 +1,19 @@
+[package]
+name = "mixedbread"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Minimal async Rust client for the Mixedbread vector store API (stores, files, search, question-answering)"
+
+[lints]
+workspace = true
+
+[dependencies]
+dirs.workspace = true
+reqwest = { workspace = true, features = ["json", "rustls-tls", "multipart"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

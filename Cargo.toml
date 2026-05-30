@@ -10,11 +10,13 @@ members = [
   "packages/minecraft/nbt",
   "packages/minecraft/sound",
   "packages/minecraft/sync-managed",
+  "packages/mixedbread",
   "packages/nix-cargo-unit",
   "packages/nix-web-monitor/parser",
   "packages/nix-web-monitor/server",
   "packages/oci-image-builder",
   "packages/repo-walker",
+  "packages/semantic-search",
   "packages/tap",
   "packages/tap/protocol",
   "packages/tap/pty",
@@ -62,6 +64,7 @@ hegeltest = { version = "0.14", default-features = false }
 ignore = "0.4"
 indicatif = "0.18"
 libc = "0.2"
+mixedbread = { path = "packages/mixedbread" }
 loro = "1.12"
 napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt"] }
 napi-build = "2"
@@ -81,9 +84,15 @@ pyo3 = { version = "0.28", features = ["abi3-py311"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 quartz_nbt = "0.2.9"
 repo-walker = { path = "packages/repo-walker" }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+  "multipart",
+] }
 rmcp = "1.7"
 rmp-serde = "1"
 rodio = { version = "0.19", default-features = false, features = ["vorbis"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
 schemars = "1"
