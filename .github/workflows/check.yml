@@ -79,22 +79,48 @@ jobs:
             --no-link \
             --option accept-flake-config true
 
-      # `nix flake check` below evaluates every package output, and the `site`
-      # package builds via nixpkgs import-npm-lock, which reads its
-      # `package.json` through import-from-derivation. IFD must realize the
-      # filtered-source derivation it reads, but `--no-build` refuses to realize
-      # anything unless it is already in the store. The GitHub-hosted runner only
-      # got away with `--no-build` because its restored store cache happened to
-      # hold that source; a self-hosted runner with a cold-for-this-source store
-      # fails the schema check with "path is not valid". Realize the source
-      # explicitly here (cheap: it substitutes from the warm host caches) so the
-      # schema check reuses it instead of trying to build under `--no-build`.
-      - name: Realize IFD-backed sources for the schema check
-        run: nix build .#site --no-link
-
-      # Schema/eval gate for the whole flake (packages, modules, formatter, ...),
-      # broader than the checks nix-fast-build built. `--no-build` keeps it to
-      # evaluation, so it is the cheap invariant guard rather than a second
-      # build pass.
-      - name: Validate flake schema
-        run: nix flake check -L --no-build
+      # Schema/eval gate for the package outputs, broader than the `checks`
+      # nix-fast-build built above. This was `nix flake check -L --no-build`,
+      # which evaluates single-threaded and across all three flake systems
+      # (x86_64-linux plus two darwin), making the schema eval the CI long pole
+      # (~3min; packages.x86_64-linux alone ~47s) while this many-core host sat
+      # idle. The Nix flake eval cache cannot amortize it: Nix keys that cache on
+      # the locked flake fingerprint, which for a git source comes from the
+      # commit rev, so every CI commit is a cold cache.
+      #
+      # nix-eval-jobs is the same parallel evaluator nix-fast-build wraps. Run it
+      # eval-only over the x86_64-linux packages (the system this runner builds
+      # for), spreading the per-attribute evaluation across workers. It realizes
+      # IFD (the `site` import-npm-lock source) on demand during eval, so it
+      # needs none of the old `--no-build` pre-realize step. Workers are capped:
+      # each is a full evaluator that can grow to nix-eval-jobs' 4 GiB-per-worker
+      # cap, and this host runs many CI jobs at once; 16-way already collapses
+      # the eval toward the slowest single attribute. Darwin package outputs are
+      # intentionally not evaluated here, because a linux runner can only
+      # pure-eval cross-platform image derivations and that cross-eval is most of
+      # what made the single-threaded check slow; validate darwin on a darwin
+      # runner if that coverage is wanted.
+      #
+      # The eval cache is disabled: it is keyed per commit so it never hits on a
+      # fresh CI commit, and with it on the parallel workers all contend writing
+      # the same per-commit sqlite (`SQLite database ... is busy`). Off, the run
+      # is clean. Measured on a warm store (eval-cache off, this packages set):
+      # 342s with 1 worker, 75s with 16, 70s with 32, so 16 captures the win.
+      #
+      # nix-eval-jobs reports a per-attribute eval failure as a JSON `error` line
+      # and still exits 0, so the gate is the error-line check below; a startup
+      # or lock failure exits nonzero and trips the default `pipefail`. Pinned by
+      # commit to nix-eval-jobs v2.34.1, matching the host Nix 2.34.x.
+      - name: Validate flake schema (parallel eval)
+        run: |
+          nix run github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7 -- \
+            --flake ".#packages.x86_64-linux" \
+            --workers 16 \
+            --gc-roots-dir "$RUNNER_TEMP/flake-schema-eval-gc" \
+            --option accept-flake-config true \
+            --option eval-cache false \
+            | tee "$RUNNER_TEMP/flake-schema-eval.jsonl"
+          if grep -q '"error":' "$RUNNER_TEMP/flake-schema-eval.jsonl"; then
+            echo "flake schema evaluation failed; see the error lines above" >&2
+            exit 1
+          fi
