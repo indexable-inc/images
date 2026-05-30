@@ -35,9 +35,25 @@ nix run .#elevenlabs-say -- "save me" --output /tmp/out.mp3
 # Pick a voice by name or id, and override the model or format.
 nix run .#elevenlabs-say -- "different voice" --voice Adam
 nix run .#elevenlabs-say -- "slower model" --model eleven_multilingual_v2 --format mp3_44100_192
+
+# macOS `say`-style flags: -v voice, -r rate (words per minute).
+nix run .#elevenlabs-say -- -v Adam -r 300 "talk faster"
 ```
 
 Text source precedence is positional argument, then `--file`, then stdin.
+
+## macOS `say` compatibility
+
+The CLI mirrors the common macOS `say` flags so it can stand in for it: `-v`
+(voice), `-r` (rate in words per minute), `-o`/`--output` (write a file), and
+`-f`/`--file` (read input from a file).
+
+`-r RATE` matches `say -r`: it retimes playback with ffmpeg's `atempo` filter
+(pitch preserved) relative to a 175 wpm baseline, so `-r 350` is 2x speed and
+`-r 88` is roughly half. It does not change synthesis, so it works on every model
+including the default `eleven_flash_v2_5` (whose API `speed` setting is ignored).
+`-r` assumes an mp3 `--format`; with `--output` it adds one ffmpeg pass, so a raw
+PCM `--format` is not supported there.
 
 ## Streaming input
 

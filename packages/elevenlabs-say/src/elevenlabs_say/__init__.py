@@ -37,12 +37,18 @@ DEFAULT_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"
 DEFAULT_MODEL_ID = "eleven_flash_v2_5"
 DEFAULT_OUTPUT_FORMAT = "mp3_44100_128"
 
+# macOS `say` defaults to ~175 wpm; --rate is interpreted against this baseline.
+DEFAULT_WPM = 175
+
 API_KEY_ENV = "ELEVENLABS_API_KEY"
 
 # Shared so the batch and streaming playback paths report the same fix.
 FFPLAY_NOT_FOUND = (
     "ffplay was not found on PATH; install ffmpeg to play audio, "
     "or use --output PATH to save the audio instead"
+)
+FFMPEG_NOT_FOUND = (
+    "ffmpeg was not found on PATH; install ffmpeg to use --rate with --output"
 )
 
 
@@ -58,6 +64,8 @@ class CliArgs:
     voice: str
     model: str
     output_format: str
+    # Words per minute, like macOS `say -r`. None leaves tempo untouched.
+    rate: int | None
     # None means auto: stream when text is piped on stdin, batch otherwise.
     stream: bool | None
 
@@ -88,11 +96,24 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         help="Write audio to this file instead of playing it.",
     )
     _ = parser.add_argument(
+        "-v",
         "--voice",
         default=DEFAULT_VOICE_ID,
         help=(
             "Voice name or id. A value that matches a voice name is resolved to "
             f"its id; otherwise it is used verbatim. Defaults to George ({DEFAULT_VOICE_ID})."
+        ),
+    )
+    _ = parser.add_argument(
+        "-r",
+        "--rate",
+        type=int,
+        default=None,
+        metavar="WPM",
+        help=(
+            "Speech rate in words per minute, like macOS `say -r`. Adjusts the "
+            f"playback tempo (pitch preserved) against the {DEFAULT_WPM} wpm "
+            "baseline. Assumes an mp3 --format."
         ),
     )
     _ = parser.add_argument(
@@ -125,6 +146,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
     voice: str = namespace.voice
     model: str = namespace.model
     output_format: str = namespace.output_format
+    rate: int | None = namespace.rate
     stream: bool | None = namespace.stream
 
     return CliArgs(
@@ -134,6 +156,7 @@ def parse_args(argv: list[str] | None = None) -> CliArgs:
         voice=voice,
         model=model,
         output_format=output_format,
+        rate=rate,
         stream=stream,
     )
 
@@ -294,6 +317,69 @@ def format_api_error(action: str, exc: ApiError) -> str:
     return f"failed to {action}: {exc.body}"
 
 
+def atempo_filter(rate: int | None) -> str | None:
+    """Build an ffmpeg ``atempo`` chain emulating macOS ``say -r`` (words/min).
+
+    ``tempo = rate / DEFAULT_WPM``. ``atempo`` accepts only 0.5–100.0 per stage,
+    so the multiplier is factored into in-range stages and chained. ``atempo``
+    changes tempo while preserving pitch, which matches ``say -r`` semantics;
+    ElevenLabs' ``speed`` is rejected here because the default Flash model ignores
+    it and it resynthesizes prosody rather than just retiming.
+    Returns ``None`` when no rate is requested.
+    """
+    if rate is None:
+        return None
+    if rate <= 0:
+        raise SayError(
+            f"invalid --rate {rate}: expected a positive words-per-minute value"
+        )
+
+    tempo = rate / DEFAULT_WPM
+    stages: list[float] = []
+    remaining = tempo
+    while remaining < 0.5:
+        stages.append(0.5)
+        remaining /= 0.5
+    while remaining > 100.0:
+        stages.append(100.0)
+        remaining /= 100.0
+    stages.append(remaining)
+    return ",".join(f"atempo={stage:g}" for stage in stages)
+
+
+def apply_tempo(audio: bytes, tempo: str) -> bytes:
+    """Retime ``audio`` through ffmpeg's ``atempo`` filter for ``--output``.
+
+    Playback passes ``-af`` straight to ``ffplay``, but a file write has no
+    player, so this runs a single ffmpeg pass (mp3 in, mp3 out, matching the
+    default ``--format``).
+    """
+    try:
+        completed = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-af",
+                tempo,
+                "-f",
+                "mp3",
+                "pipe:1",
+            ],
+            input=audio,
+            stdout=subprocess.PIPE,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise SayError(FFMPEG_NOT_FOUND) from exc
+    if completed.returncode != 0:
+        raise SayError(f"ffmpeg failed to apply --rate (status {completed.returncode})")
+    return completed.stdout
+
+
 def write_output(audio: bytes, output: Path) -> None:
     try:
         _ = output.write_bytes(audio)
@@ -318,27 +404,22 @@ def write_stream(chunks: Iterable[bytes], output: Path) -> None:
         raise SayError("no audio was produced; the input may have been empty")
 
 
-def play(audio: bytes) -> None:
+def play(audio: bytes, tempo: str | None = None) -> None:
     """Play MP3 bytes through the speakers with ``ffplay``.
 
     ``ffplay`` is provided by ``ffmpeg``, which the Nix wrapper puts on PATH. It
-    is the cross-platform, Nix-pinnable counterpart to macOS ``afplay``.
+    is the cross-platform, Nix-pinnable counterpart to macOS ``afplay``. When
+    ``tempo`` is set (from ``--rate``) it is applied with ffplay's ``-af``.
     """
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as handle:
         temp_path = Path(handle.name)
         _ = handle.write(audio)
+    command = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error"]
+    if tempo is not None:
+        command += ["-af", tempo]
+    command.append(str(temp_path))
     try:
-        completed = subprocess.run(
-            [
-                "ffplay",
-                "-nodisp",
-                "-autoexit",
-                "-loglevel",
-                "error",
-                str(temp_path),
-            ],
-            check=False,
-        )
+        completed = subprocess.run(command, check=False)
         if completed.returncode != 0:
             raise SayError(f"ffplay exited with status {completed.returncode}")
     except FileNotFoundError as exc:
@@ -347,19 +428,19 @@ def play(audio: bytes) -> None:
         temp_path.unlink(missing_ok=True)
 
 
-def play_stream(chunks: Iterable[bytes]) -> None:
+def play_stream(chunks: Iterable[bytes], tempo: str | None = None) -> None:
     """Pipe MP3 audio chunks to ``ffplay`` as they arrive for low-latency playback.
 
     ``ffplay`` reads from ``pipe:0`` and starts decoding before EOF, so audio
     begins while later chunks are still synthesizing. The process starts lazily
     on the first chunk, so empty input gives a clear error instead of an ffplay
-    "no stream found" failure.
+    "no stream found" failure. ``tempo`` (from ``--rate``) is applied with ``-af``.
     """
     proc: subprocess.Popen[bytes] | None = None
     try:
         for chunk in chunks:
             if proc is None:
-                proc = _spawn_ffplay()
+                proc = _spawn_ffplay(tempo)
             stdin = proc.stdin
             assert stdin is not None  # PIPE is always set; narrows for the checker
             try:
@@ -380,12 +461,13 @@ def play_stream(chunks: Iterable[bytes]) -> None:
         raise SayError(f"ffplay exited with status {returncode}")
 
 
-def _spawn_ffplay() -> subprocess.Popen[bytes]:
+def _spawn_ffplay(tempo: str | None = None) -> subprocess.Popen[bytes]:
+    command = ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error"]
+    if tempo is not None:
+        command += ["-af", tempo]
+    command += ["-i", "pipe:0"]
     try:
-        return subprocess.Popen(
-            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", "-i", "pipe:0"],
-            stdin=subprocess.PIPE,
-        )
+        return subprocess.Popen(command, stdin=subprocess.PIPE)
     except FileNotFoundError as exc:
         raise SayError(FFPLAY_NOT_FOUND) from exc
 
@@ -405,16 +487,27 @@ def should_stream(args: CliArgs) -> bool:
 
 def run(args: CliArgs) -> None:
     client = make_client()
+    tempo = atempo_filter(args.rate)
 
     if should_stream(args):
         voice_id = resolve_voice_id(client, args.voice)
         chunks = stream_synthesize(client, args, voice_id)
         try:
             if args.output is not None:
-                write_stream(chunks, args.output)
+                if tempo is None:
+                    write_stream(chunks, args.output)
+                else:
+                    # --rate needs the whole clip for one ffmpeg pass, so collect
+                    # the stream before retiming. File output is not latency-bound.
+                    audio = b"".join(chunks)
+                    if not audio:
+                        raise SayError(
+                            "no audio was produced; the input may have been empty"
+                        )
+                    write_output(apply_tempo(audio, tempo), args.output)
                 print(f"wrote {args.output}", file=sys.stderr)
             else:
-                play_stream(chunks)
+                play_stream(chunks, tempo)
         except ApiError as exc:
             raise SayError(format_api_error("stream speech", exc)) from exc
         return
@@ -424,10 +517,12 @@ def run(args: CliArgs) -> None:
     audio = synthesize(client, text, args, voice_id)
 
     if args.output is not None:
+        if tempo is not None:
+            audio = apply_tempo(audio, tempo)
         write_output(audio, args.output)
         print(f"wrote {args.output}", file=sys.stderr)
     else:
-        play(audio)
+        play(audio, tempo)
 
 
 def main() -> None:

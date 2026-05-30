@@ -174,6 +174,37 @@ def test_stream_init_does_not_crash_on_omit_voice_settings() -> None:
     assert init["voice_settings"] is None, init
 
 
+def test_atempo_filter_maps_wpm_to_in_range_stages() -> None:
+    """--rate maps WPM to an atempo chain whose stages stay in ffmpeg's range and
+    multiply back to rate/175. Guards the say -r emulation and the stage decomposition.
+    """
+    assert say.atempo_filter(None) is None
+    for rate in (350, 525, 175, 88, 43, 700, 20):
+        chain = say.atempo_filter(rate)
+        assert chain is not None
+        stages = [float(part.removeprefix("atempo=")) for part in chain.split(",")]
+        assert all(0.5 <= s <= 100.0 for s in stages), (rate, stages)
+        product = 1.0
+        for s in stages:
+            product *= s
+        assert abs(product - rate / say.DEFAULT_WPM) < 1e-3, (rate, product)
+    for bad in (0, -5):
+        try:
+            say.atempo_filter(bad)
+        except say.SayError:
+            pass
+        else:
+            raise AssertionError(f"expected SayError for rate={bad}")
+
+
+def test_say_compat_flags_parse() -> None:
+    """macOS-style `-v` (voice) and `-r` (rate) aliases parse into CliArgs."""
+    args = say.parse_args(["hello", "-v", "Adam", "-r", "300"])
+    assert args.voice == "Adam"
+    assert args.rate == 300
+    assert say.parse_args(["hello"]).rate is None
+
+
 if __name__ == "__main__":
     test_stdin_yields_before_eof_and_rejoins_split_utf8()
     test_write_stream_writes_chunks_and_rejects_empty()
@@ -181,4 +212,6 @@ if __name__ == "__main__":
     test_stream_client_narrows_to_realtime()
     test_should_stream_auto_and_overrides()
     test_stream_init_does_not_crash_on_omit_voice_settings()
+    test_atempo_filter_maps_wpm_to_in_range_stages()
+    test_say_compat_flags_parse()
     print("elevenlabs-say streaming tests passed")
