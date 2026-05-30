@@ -22,6 +22,8 @@ members = [
   "packages/tui-dashboard",
   "packages/tui-node",
   "packages/tui-py",
+  "packages/vt/ix-vt",
+  "packages/vt/ix-vt-sys",
 ]
 resolver = "3"
 

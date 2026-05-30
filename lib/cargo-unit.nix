@@ -459,9 +459,71 @@ let
       meta ? { },
       passthru ? { },
     }:
+    selectRootWithTests workspace {
+      rootDrv = workspace.binaries.${binary} or workspace.default;
+      inherit
+        packageName
+        testTargets
+        doctestTargets
+        includeTestCases
+        meta
+        passthru
+        ;
+      defaultTestTargets = [ binary ];
+    };
+
+  /**
+    Pick a library target from a pre-built `buildWorkspace` plus its test and
+    doctest derivations, ready for `passthru.tests` consumption.
+
+    The library version of `selectBinaryWithTests`, for crates that ship a
+    `lib` target rather than a binary. `library` is the crate's library unit
+    key (Cargo's underscored name, e.g. `ix_vt`); `packageName` is the Cargo
+    package name used to look up test targets (e.g. `ix-vt`).
+  */
+  selectLibraryWithTests =
+    workspace:
+    {
+      library,
+      packageName,
+      testTargets ? null,
+      doctestTargets ? null,
+      includeTestCases ? true,
+      meta ? { },
+      passthru ? { },
+    }:
+    selectRootWithTests workspace {
+      rootDrv =
+        workspace.libraries.${library}
+          or (throw "selectLibraryWithTests: no library `${library}` in workspace; available: ${lib.concatStringsSep ", " (builtins.attrNames (workspace.libraries or { }))}");
+      inherit
+        packageName
+        testTargets
+        doctestTargets
+        includeTestCases
+        meta
+        passthru
+        ;
+      defaultTestTargets = [ packageName ];
+    };
+
+  # Shared core for `selectBinaryWithTests` / `selectLibraryWithTests`: take a
+  # selected root derivation and assemble its `passthru.tests` from the shared
+  # workspace's test/doctest targets and policy checks.
+  selectRootWithTests =
+    workspace:
+    {
+      rootDrv,
+      packageName,
+      defaultTestTargets,
+      testTargets ? null,
+      doctestTargets ? null,
+      includeTestCases ? true,
+      meta ? { },
+      passthru ? { },
+    }:
     let
-      binaryDrv = workspace.binaries.${binary} or workspace.default;
-      uncheckedBinary = binaryDrv.passthru.unchecked or binaryDrv;
+      uncheckedRoot = rootDrv.passthru.unchecked or rootDrv;
       namesForPackage =
         attrName: fallback:
         if builtins.hasAttr attrName workspace && builtins.hasAttr packageName workspace.${attrName} then
@@ -469,7 +531,10 @@ let
         else
           fallback;
       selectedTestTargets =
-        if testTargets == null then namesForPackage "testTargetNamesByPackage" [ binary ] else testTargets;
+        if testTargets == null then
+          namesForPackage "testTargetNamesByPackage" defaultTestTargets
+        else
+          testTargets;
       selectedDoctestTargets =
         if doctestTargets == null then
           namesForPackage "doctestTargetNamesByPackage" [ ]
@@ -494,20 +559,20 @@ let
         flattenCaseTargets "" selectedTestTargets (workspace.tests or { })
         // flattenCaseTargets "doctest-" selectedDoctestTargets (workspace.doctests or { });
       tests = {
-        package = uncheckedBinary;
+        package = uncheckedRoot;
       }
       // flattenAllTargets "" selectedTestTargets (workspace.tests or { })
       // flattenAllTargets "doctest-" selectedDoctestTargets (workspace.doctests or { })
       // lib.optionalAttrs includeTestCases testCases;
     in
-    binaryDrv
+    rootDrv
     // {
-      meta = (binaryDrv.meta or { }) // meta;
+      meta = (rootDrv.meta or { }) // meta;
       passthru =
-        (binaryDrv.passthru or { })
+        (rootDrv.passthru or { })
         // passthru
         // {
-          tests = (binaryDrv.passthru.tests or { }) // policyChecks // (passthru.tests or { }) // tests;
+          tests = (rootDrv.passthru.tests or { }) // policyChecks // (passthru.tests or { }) // tests;
           inherit policyChecks;
           inherit (workspace) policy;
         };
@@ -581,6 +646,7 @@ in
     buildBinaries
     buildWorkspace
     selectBinaryWithTests
+    selectLibraryWithTests
     auditCargoLock
     generateUnitGraph
     generateUnitsNix

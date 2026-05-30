@@ -8,6 +8,7 @@
   hermes-agent,
   symphony,
   clippy-fork,
+  ghostty,
   cliArtifacts ? { },
 }:
 let
@@ -79,6 +80,7 @@ let
   };
   buildNpmVitest = import ./build-npm-vitest.nix;
   buildZigPackage = import ./build-zig-package.nix { };
+  buildLibghosttyVt = import ./libghostty-vt.nix { inherit lib; };
   uvLockFor =
     pkgs:
     import ./uv-lock.nix {
@@ -237,6 +239,7 @@ let
       rustWorkspaceFor
       cliArtifacts
       clippy-fork
+      ghostty
       ;
   };
 
@@ -257,6 +260,7 @@ let
       paths
       packageRegistry
       cargoUnitFor
+      ghostty
       ;
   };
   rustWorkspace = rustWorkspaceFor pkgs;
@@ -277,6 +281,7 @@ let
       buildSvelteSite
       buildUvApplication
       buildZigPackage
+      buildLibghosttyVt
       cargoUnit
       goUnit
       languages
@@ -361,6 +366,7 @@ let
       buildSvelteSite
       buildUvApplication
       buildZigPackage
+      buildLibghosttyVt
       bunLockFor
       cargoUnit
       cargoUnitFor

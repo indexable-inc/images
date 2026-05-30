@@ -50,6 +50,18 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.rust-overlay.follows = "rust-overlay";
     };
+
+    # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
+    # `packages/vt/libghostty-vt` owns the build. Pinned to the commit the
+    # local clone validated against; `requireZig` in `build.zig.zon` is exact
+    # minor (0.15.x), so the build uses `pkgs.zig_0_15`. The pinned tree ships
+    # `build.zig.zon.nix` (zon2nix output), which vendors every lazy Zig
+    # dependency with SRI hashes for a network-free build. Bump by repointing
+    # this rev and running `nix flake update ghostty`.
+    ghostty = {
+      url = "github:ghostty-org/ghostty/fd49716ea2084108aa098db390931c007495a1ab";
+      flake = false;
+    };
   };
 
   outputs =
@@ -60,6 +72,7 @@
       hermes-agent,
       symphony,
       clippy-fork,
+      ghostty,
       ...
     }:
     let
@@ -104,6 +117,7 @@
           hermes-agent
           symphony
           clippy-fork
+          ghostty
           ;
       };
       devSystems = [

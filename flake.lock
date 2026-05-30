@@ -37,6 +37,23 @@
         "type": "github"
       }
     },
+    "ghostty": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1774297202,
+        "narHash": "sha256-zJwCCkqH/4TNwzxidiCLmj9hhkTiUMvQoIKFgGNPuHM=",
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "fd49716ea2084108aa098db390931c007495a1ab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ghostty-org",
+        "repo": "ghostty",
+        "rev": "fd49716ea2084108aa098db390931c007495a1ab",
+        "type": "github"
+      }
+    },
     "hermes-agent": {
       "inputs": {
         "flake-parts": "flake-parts",
@@ -227,6 +244,7 @@
     "root": {
       "inputs": {
         "clippy-fork": "clippy-fork",
+        "ghostty": "ghostty",
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
         "nixpkgs": "nixpkgs",

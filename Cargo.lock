@@ -2040,6 +2040,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ix-vt"
+version = "0.1.0"
+dependencies = [
+ "ix-vt-sys",
+]
+
+[[package]]
+name = "ix-vt-sys"
+version = "0.1.0"
+
+[[package]]
 name = "jni"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

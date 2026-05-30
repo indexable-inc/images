@@ -1,0 +1,14 @@
+[package]
+name = "ix-vt"
+description = "Safe Rust wrapper over libghostty-vt: drive a terminal VT engine and snapshot its render state"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/indexable-inc/index"
+publish = true
+
+[dependencies]
+ix-vt-sys = { path = "../ix-vt-sys" }
+
+[lints]
+workspace = true

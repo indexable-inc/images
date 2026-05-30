@@ -26,6 +26,15 @@ let
       ++ explicitTargetPaths "examples" (manifest.example or [ ])
       ++ lib.optional (builtins.pathExists (workspaceRoot + "/${member}/src/main.rs")) "src/main.rs"
       ++ lib.optional (builtins.pathExists (workspaceRoot + "/${member}/src/lib.rs")) "src/lib.rs"
+      # A `links` key (or an explicit `package.build`) makes Cargo require the
+      # crate's build script to even parse the manifest, so stub it too. The
+      # default location is `build.rs`; an explicit `package.build = "x.rs"`
+      # path is honored.
+      ++ lib.optional (
+        (manifest.package.build or null) != null
+        || (manifest.package.links or null) != null
+        || builtins.pathExists (workspaceRoot + "/${member}/build.rs")
+      ) (manifest.package.build or "build.rs")
     );
   siblingTargetStubs = lib.concatMap (
     member: lib.optionals (member != "packages/nix-cargo-unit") (memberTargetStubs member)

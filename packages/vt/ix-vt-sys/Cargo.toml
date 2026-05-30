@@ -1,0 +1,12 @@
+[package]
+name = "ix-vt-sys"
+description = "Raw FFI bindings to libghostty-vt, ghostty's terminal VT engine"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/indexable-inc/index"
+publish = true
+links = "ghostty-vt"
+
+[lints]
+workspace = true

@@ -7,6 +7,7 @@
   rustWorkspaceFor,
   cliArtifacts,
   clippy-fork,
+  ghostty,
 }:
 pkgs:
 let
@@ -27,6 +28,7 @@ let
       packageSystem
       cliArtifacts
       clippy-fork
+      ghostty
       ixForPackages
       ;
     ix = ixForPackages;
