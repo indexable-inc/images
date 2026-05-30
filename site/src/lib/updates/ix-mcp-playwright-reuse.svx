@@ -1,0 +1,24 @@
+---
+id: ix-mcp-playwright-reuse
+postedAt: 2026-05-29T23:30:00-07:00
+title: "`ix-mcp` `playwright` instructions default to reusing a browser"
+tags: [interesting, mcp, agents, python, browser]
+links:
+  - label: mcp package
+    href: https://github.com/indexable-inc/index/tree/main/packages/mcp
+---
+
+The `ix-mcp` session instructions now tell the model to reuse a browser rather than launch a fresh Chromium every call. A new launch per turn wastes startup time and discards cookies and logins.
+
+Within one session the persistent event loop keeps a launched browser and its state alive, so the recipe launches once and keeps the handle in a module global:
+
+```python
+from playwright.async_api import async_playwright
+
+if "browser" not in globals():
+    p = await async_playwright().start()
+    browser = await p.chromium.launch()
+page = await browser.new_page()
+```
+
+To share one browser across separate sessions, the instructions connect over CDP (Chromium only). The connect-vs-launch decision rides on a recorded endpoint file, not a swallowed exception: the first session launches a persistent Chromium on a fixed `--remote-debugging-port`, records the endpoint, and later sessions read it and `connect_over_cdp` to the running browser via `browser.contexts[0]`. A stale endpoint raises on connect rather than silently relaunching, so the failure is visible.
