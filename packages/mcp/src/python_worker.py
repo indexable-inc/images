@@ -6,6 +6,7 @@ import base64
 import contextlib
 import io
 import json
+import os
 import sys
 import traceback
 from collections.abc import Callable
@@ -185,8 +186,18 @@ def _matplotlib_pngs() -> list[dict[str, str]]:
 
 
 def main() -> None:
+    # Detach the JSON-RPC channel from fd 0 before any session code runs. The
+    # Rust server talks to this worker over stdin/stdout, but a child process
+    # spawned from a session (subprocess.run([...])) inherits fd 0, so a
+    # path-less `rg`/`cat`/`grep` would read this RPC pipe and block the whole
+    # session forever. Read requests from a dup and point fd 0 at /dev/null so
+    # inherited stdin returns EOF immediately instead of stealing the pipe.
+    rpc_in = os.fdopen(os.dup(sys.stdin.fileno()), "r", encoding="utf-8")
+    with open(os.devnull, "rb") as devnull:
+        os.dup2(devnull.fileno(), sys.stdin.fileno())
+
     session = PythonSession()
-    for line in sys.stdin:
+    for line in rpc_in:
         response = handle_request(session, line)
         sys.stdout.write(json.dumps(response) + "\n")
         sys.stdout.flush()
