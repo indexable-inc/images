@@ -6,6 +6,8 @@
 //! shapes and on where the sockets live ([`socket_dir`]), so neither side
 //! reaches into the other.
 
+mod sgr;
+
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -28,8 +30,21 @@ pub struct TerminalFrame {
     pub cols: u16,
     /// Whether the child is still running.
     pub alive: bool,
-    /// The visible screen, rows newline-joined.
+    /// The visible screen, rows newline-joined, with minimal ANSI SGR runs
+    /// encoding per-cell color and attributes. The dashboard parses the SGR
+    /// back into styled spans; a plain reader still sees the text.
     pub screen: String,
+    /// Cursor row in viewport cell coordinates (0-based, top first).
+    pub cursor_row: u16,
+    /// Cursor column in viewport cell coordinates (0-based, left first).
+    pub cursor_col: u16,
+    /// Whether the screen is showing its cursor (the inverse of `CSI ?25l`).
+    pub cursor_visible: bool,
+    /// The cursor shape token: `"block"`, `"underline"`, or `"bar"`.
+    pub cursor_shape: String,
+    /// The child's exit code when it has exited with one, else `None` (still
+    /// running, or terminated by a signal).
+    pub exit_code: Option<i32>,
 }
 
 /// One producer process's terminals, as sent over its discovery socket.
@@ -81,15 +96,25 @@ pub fn socket_path() -> PathBuf {
 
 /// Sample every terminal the manager tracks into a frame list.
 ///
-/// A terminal whose read fails this tick is skipped, not dropped from the set:
-/// the next tick re-reads it. Shared by the in-process dashboard poller and the
-/// producer so both render the same snapshot of a manager.
+/// A terminal whose styled-cell read fails this tick is skipped, not dropped
+/// from the set: the next tick re-reads it. The screen is encoded as minimal
+/// ANSI SGR ([`sgr::encode`]) so the dashboard can paint color and attributes;
+/// the cursor position and shape and the exit code ride alongside. Shared by the
+/// in-process dashboard poller and the producer so both render the same
+/// snapshot of a manager.
 pub async fn collect_frames(manager: &crate::TuiManager) -> Vec<TerminalFrame> {
     let mut frames = Vec::new();
     for instance in manager.list() {
-        let Ok(full) = instance.read_full_async().await else {
+        let Ok(cells) = instance.read_styled_cells_async().await else {
             continue;
         };
+        // Cursor and exit are best-effort: a failed cursor read defaults to the
+        // top-left, never dropping the whole frame.
+        let (cursor_row, cursor_col, cursor_visible) =
+            instance.read_cursor_async().await.unwrap_or((0, 0, true));
+        let rows: Vec<Vec<crate::StyledCell>> =
+            cells.rows().into_iter().map(|row| row.to_vec()).collect();
+
         frames.push(TerminalFrame {
             id: instance.id.to_string(),
             command: instance.command.clone(),
@@ -97,7 +122,15 @@ pub async fn collect_frames(manager: &crate::TuiManager) -> Vec<TerminalFrame> {
             rows: instance.rows(),
             cols: instance.cols(),
             alive: instance.is_alive(),
-            screen: full.viewport.join("\n"),
+            screen: sgr::encode(&rows),
+            cursor_row,
+            cursor_col,
+            cursor_visible,
+            cursor_shape: instance.cursor_shape().as_str().to_owned(),
+            exit_code: match instance.exit_state() {
+                crate::ExitState::Exited(code) => code,
+                crate::ExitState::Running => None,
+            },
         });
     }
     frames

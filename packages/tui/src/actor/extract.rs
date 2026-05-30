@@ -18,6 +18,17 @@ pub fn extract_viewport_lines(parser: &vt100::Parser) -> Vec<String> {
         .collect()
 }
 
+/// The cursor's `(row, col, visible)` as the screen reports it.
+///
+/// `visible` is the inverse of vt100's `hide_cursor`: a screen that hid its
+/// cursor (`CSI ?25l`) should not draw one in the dashboard. Position is in
+/// viewport cell coordinates, the same basis as [`extract_styled_cells`].
+pub fn extract_cursor(parser: &vt100::Parser) -> (u16, u16, bool) {
+    let screen = parser.screen();
+    let (row, col) = screen.cursor_position();
+    (row, col, !screen.hide_cursor())
+}
+
 pub fn extract_scrollback_lines(parser: &mut vt100::Parser) -> Vec<String> {
     parser.screen_mut().set_scrollback(SCROLLBACK_OFFSET_MAX);
     let total_scrollback_lines = parser.screen().scrollback();

@@ -56,6 +56,47 @@ impl Default for StyledCell {
     }
 }
 
+/// The shape the terminal cursor is drawn as.
+///
+/// Tracked from the `DECSCUSR` escape (`CSI Ps SP q`) in the byte stream: `0`
+/// and `1` are a blinking block, `2` a steady block, `3`/`4` an underline, and
+/// `5`/`6` a bar. vt100 itself does not model cursor shape, so the actor sniffs
+/// the sequence and the frame builder carries the result to the renderer. The
+/// blink distinction is dropped because the dashboard does not animate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorShape {
+    /// A filled cell. The terminal default and the `0`/`1`/`2` shapes.
+    #[default]
+    Block,
+    /// A line under the cell (`3`/`4`).
+    Underline,
+    /// A vertical bar at the cell's left edge (`5`/`6`).
+    Bar,
+}
+
+impl CursorShape {
+    /// Map a `DECSCUSR` parameter to a shape. An unknown value falls back to the
+    /// default block, matching how a real terminal treats an unsupported style.
+    #[must_use]
+    pub const fn from_decscusr(param: u16) -> Self {
+        match param {
+            3 | 4 => Self::Underline,
+            5 | 6 => Self::Bar,
+            _ => Self::Block,
+        }
+    }
+
+    /// A short stable token for the wire and the browser parser.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Underline => "underline",
+            Self::Bar => "bar",
+        }
+    }
+}
+
 /// The lifecycle state of a spawned process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitState {

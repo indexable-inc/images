@@ -34,10 +34,18 @@ fn doc_key(scope: &str, id: &str) -> String {
 
 /// The Loro handles backing one terminal card, cached across applies so a tick
 /// does not re-resolve containers by key. Valid until the key is deleted.
+///
+/// The scalar fields are cached so a tick only re-inserts a value that changed,
+/// keeping idle terminals from producing a delta.
 struct Slot {
     meta: LoroMap,
     screen: LoroText,
     alive: bool,
+    cursor_row: i64,
+    cursor_col: i64,
+    cursor_visible: bool,
+    cursor_shape: String,
+    exit_code: Option<i32>,
 }
 
 /// The shared document plus the per-terminal handles and the version already
@@ -81,6 +89,8 @@ impl DocState {
                 meta.insert("cols", i64::from(frame.cols))
                     .map_err(loro_err)?;
                 meta.insert("alive", frame.alive).map_err(loro_err)?;
+                write_cursor(&meta, frame)?;
+                write_exit(&meta, frame)?;
                 let screen = meta
                     .insert_container("screen", LoroText::new())
                     .map_err(loro_err)?;
@@ -90,6 +100,11 @@ impl DocState {
                         meta,
                         screen,
                         alive: frame.alive,
+                        cursor_row: i64::from(frame.cursor_row),
+                        cursor_col: i64::from(frame.cursor_col),
+                        cursor_visible: frame.cursor_visible,
+                        cursor_shape: frame.cursor_shape.clone(),
+                        exit_code: frame.exit_code,
                     },
                 );
             }
@@ -98,6 +113,23 @@ impl DocState {
             if slot.alive != frame.alive {
                 slot.meta.insert("alive", frame.alive).map_err(loro_err)?;
                 slot.alive = frame.alive;
+            }
+            let cursor_row = i64::from(frame.cursor_row);
+            let cursor_col = i64::from(frame.cursor_col);
+            if slot.cursor_row != cursor_row
+                || slot.cursor_col != cursor_col
+                || slot.cursor_visible != frame.cursor_visible
+                || slot.cursor_shape != frame.cursor_shape
+            {
+                write_cursor(&slot.meta, frame)?;
+                slot.cursor_row = cursor_row;
+                slot.cursor_col = cursor_col;
+                slot.cursor_visible = frame.cursor_visible;
+                slot.cursor_shape.clone_from(&frame.cursor_shape);
+            }
+            if slot.exit_code != frame.exit_code {
+                write_exit(&slot.meta, frame)?;
+                slot.exit_code = frame.exit_code;
             }
             if slot.screen.to_string() != frame.screen {
                 slot.screen
@@ -178,6 +210,33 @@ fn loro_err(source: impl std::fmt::Display) -> Error {
     }
 }
 
+/// Write a frame's cursor fields into its meta map. One owner for the cursor
+/// keys so the insert and per-tick update paths cannot disagree.
+fn write_cursor(meta: &LoroMap, frame: &TerminalFrame) -> Result<()> {
+    meta.insert("cursor_row", i64::from(frame.cursor_row))
+        .map_err(loro_err)?;
+    meta.insert("cursor_col", i64::from(frame.cursor_col))
+        .map_err(loro_err)?;
+    meta.insert("cursor_visible", frame.cursor_visible)
+        .map_err(loro_err)?;
+    meta.insert("cursor_shape", frame.cursor_shape.as_str())
+        .map_err(loro_err)
+}
+
+/// Write a frame's exit code into its meta map: an `i64` when the process exited
+/// with a code, otherwise absent (still running, or signalled).
+fn write_exit(meta: &LoroMap, frame: &TerminalFrame) -> Result<()> {
+    match frame.exit_code {
+        Some(code) => meta.insert("exit_code", i64::from(code)).map_err(loro_err),
+        None => {
+            // A signalled or still-running process has no code; clear any prior
+            // value so a re-spawned id under the same key never shows a stale
+            // exit code. delete on an absent key is a harmless no-op.
+            meta.delete("exit_code").map_err(loro_err)
+        }
+    }
+}
+
 /// Owns the shared document and fans CRDT updates out to SSE subscribers.
 ///
 /// One hub backs any number of frame sources. The in-process dashboard drives
@@ -248,6 +307,11 @@ mod tests {
             cols: 80,
             alive: true,
             screen: screen.to_owned(),
+            cursor_row: 0,
+            cursor_col: 0,
+            cursor_visible: true,
+            cursor_shape: "block".to_owned(),
+            exit_code: None,
         }
     }
 

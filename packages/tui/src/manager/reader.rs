@@ -102,6 +102,16 @@ pub(super) async fn read_styled_cells(
     .await
 }
 
+pub(super) async fn read_cursor(
+    id: Uuid,
+    command_tx: &mpsc::Sender<PtyCommand>,
+) -> Result<(u16, u16, bool)> {
+    request(id, command_tx, |response| PtyCommand::ReadCursor {
+        response,
+    })
+    .await
+}
+
 pub(super) async fn read_full(
     id: Uuid,
     command_tx: &mpsc::Sender<PtyCommand>,

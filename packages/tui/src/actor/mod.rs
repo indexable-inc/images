@@ -1,14 +1,18 @@
+mod decscusr;
 mod extract;
 
 use std::sync::Arc;
+use parking_lot::RwLock as SyncRwLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 use uuid::Uuid;
 
-use crate::types::ExitState;
+use crate::types::{CursorShape, ExitState};
 use crate::{Error, error::Result};
+use decscusr::Scanner;
 use extract::{
-    extract_chars, extract_scrollback_lines, extract_styled_cells, extract_viewport_lines,
+    extract_chars, extract_cursor, extract_scrollback_lines, extract_styled_cells,
+    extract_viewport_lines,
 };
 
 pub enum PtyCommand {
@@ -36,6 +40,9 @@ pub enum PtyCommand {
     ReadStyledCells {
         response: oneshot::Sender<Result<ndarray::Array2<crate::types::StyledCell>>>,
     },
+    ReadCursor {
+        response: oneshot::Sender<Result<(u16, u16, bool)>>,
+    },
 }
 
 /// Owns the PTY master and the child process for one terminal. It is the only
@@ -53,10 +60,12 @@ pub async fn pty_actor(
     mut commands: mpsc::Receiver<PtyCommand>,
     parser: Arc<RwLock<vt100::Parser>>,
     exit_tx: watch::Sender<ExitState>,
+    cursor_shape: Arc<SyncRwLock<CursorShape>>,
 ) {
     let mut read_buffer = [0u8; 8192];
     let mut pty_active = true;
     let mut child_exited = false;
+    let mut scanner = Scanner::default();
 
     loop {
         tokio::select! {
@@ -123,6 +132,11 @@ pub async fn pty_actor(
                         let result = extract_styled_cells(id, &parser_guard);
                         let _ = response.send(result);
                     }
+                    PtyCommand::ReadCursor { response } => {
+                        let parser_guard = parser.read().await;
+                        let cursor = extract_cursor(&parser_guard);
+                        let _ = response.send(Ok(cursor));
+                    }
                 }
             }
 
@@ -132,9 +146,14 @@ pub async fn pty_actor(
                         pty_active = false;
                     }
                     Ok(n) => {
-                        let mut parser_guard = parser.write().await;
                         #[allow(clippy::indexing_slicing, reason = "n is guaranteed to be <= read_buffer.len() by read()")]
-                        parser_guard.process(&read_buffer[..n]);
+                        let chunk = &read_buffer[..n];
+                        // vt100 applies cursor position but not cursor shape, so
+                        // sniff DECSCUSR from the same bytes before feeding them.
+                        if let Some(shape) = scanner.feed(chunk) {
+                            *cursor_shape.write() = shape;
+                        }
+                        parser.write().await.process(chunk);
                     }
                 }
             }
