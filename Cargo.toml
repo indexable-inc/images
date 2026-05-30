@@ -20,6 +20,7 @@ members = [
   "packages/tap/pty",
   "packages/tui",
   "packages/tui-dashboard",
+  "packages/tui-dashboard-core",
   "packages/tui-node",
   "packages/tui-py",
   "packages/vt/ix-vt",
@@ -104,6 +105,7 @@ toml = { version = "1.1.2", default-features = false }
 tower = "0.5"
 tower-http = "0.6"
 tui = { path = "packages/tui" }
+tui-dashboard-core = { path = "packages/tui-dashboard-core" }
 url = { version = "2.5.8", default-features = false }
 uuid = "1"
 vt100 = "0.16"

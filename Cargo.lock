@@ -4807,20 +4807,15 @@ dependencies = [
 name = "tui"
 version = "0.1.0"
 dependencies = [
- "axum",
- "base64",
- "futures",
  "ix-vt",
- "loro",
  "ndarray 0.16.1",
  "parking_lot",
  "pty-process",
  "pyo3",
- "serde",
  "serde_json",
  "snafu",
  "tokio",
- "tokio-stream",
+ "tui-dashboard-core",
  "uuid",
 ]
 
@@ -4831,7 +4826,24 @@ dependencies = [
  "clap",
  "serde_json",
  "tokio",
- "tui",
+ "tui-dashboard-core",
+]
+
+[[package]]
+name = "tui-dashboard-core"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "futures",
+ "loro",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tokio",
+ "tokio-stream",
+ "uuid",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 //! Encode a viewport of styled cells into minimal ANSI SGR runs.
 //!
-//! [`TerminalFrame::screen`](super::TerminalFrame) stays a `String` on the
-//! wire, but now carries SGR escapes so the dashboard can paint color, weight,
+//! [`TerminalFrame::screen`](tui_dashboard_core::TerminalFrame) stays a `String`
+//! on the wire, but now carries SGR escapes so the dashboard can paint color, weight,
 //! and inverse video. Rust owns this encoding so every reader (the producer's
 //! JSON and the in-process Loro doc) renders identical bytes; the browser only
 //! parses.

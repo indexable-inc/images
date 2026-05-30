@@ -92,10 +92,15 @@ impl Drop for Dashboard {
 /// shutdown receiver.
 ///
 /// The server task runs on `runtime`, which must outlive the dashboard (the
-/// manager's runtime for the in-process [`serve`](super::serve), the process
-/// runtime for the aggregator). The caller spawns its frame-source tasks on the
-/// same runtime against the returned receiver and attaches them with
+/// manager's runtime for the in-process `tui::serve`, the process runtime for
+/// the aggregator). The caller spawns its frame-source tasks on the same runtime
+/// against the returned receiver and attaches them with
 /// [`Dashboard::push_task`], so one shutdown signal stops the whole dashboard.
+///
+/// # Errors
+///
+/// Returns [`Error::Dashboard`] when `addr` cannot be bound or its resolved
+/// local address cannot be read.
 pub async fn serve_hub(
     hub: Arc<Hub>,
     addr: SocketAddr,

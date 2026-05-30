@@ -12,37 +12,26 @@ workspace = true
 pyo3 = ["dep:pyo3"]
 # Expose this process's terminals over a unix socket as NDJSON frames, for an
 # out-of-process aggregator to render. Off by default and HTTP/CRDT-free so a
-# process that only publishes stays lightweight.
-publish = ["dep:serde", "dep:serde_json", "tokio/net"]
+# process that only publishes stays lightweight. Pulls `tui-dashboard-core` for
+# the wire frame type, and `serde_json` to serialize it onto the socket.
+publish = ["dep:tui-dashboard-core", "dep:serde_json", "tokio/net"]
 # A read-only web dashboard that streams every live terminal to the browser as
 # a Loro CRDT document over SSE. Off by default so the core PTY library stays
-# free of the HTTP and CRDT closure. Shares the wire frame type with `publish`,
-# so it pulls `serde` for that shape.
-dashboard = [
-    "dep:axum",
-    "dep:base64",
-    "dep:futures",
-    "dep:loro",
-    "dep:serde",
-    "dep:tokio-stream",
-    "tokio/net",
-]
+# free of the HTTP and CRDT closure. The browser-facing server and the wire
+# frame type live in `tui-dashboard-core`; this feature pulls that crate and
+# drives it from a live manager.
+dashboard = ["dep:tui-dashboard-core", "tokio/net"]
 
 [dependencies]
-axum = { workspace = true, optional = true }
-base64 = { workspace = true, optional = true }
-futures = { workspace = true, optional = true }
-loro = { workspace = true, optional = true }
 ix-vt = { path = "../vt/ix-vt" }
 ndarray.workspace = true
 parking_lot.workspace = true
 pty-process.workspace = true
 pyo3 = { workspace = true, optional = true }
-serde = { workspace = true, optional = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
 snafu.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "process", "io-util", "time"] }
-tokio-stream = { workspace = true, optional = true, features = ["sync"] }
+tui-dashboard-core = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]

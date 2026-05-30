@@ -58,9 +58,9 @@ pub enum Error {
         source: ndarray::ShapeError,
     },
 
-    /// Collapses the dashboard's foreign-boundary failures (TCP bind, Loro
-    /// encode) into one observable message. Only constructed under the
-    /// `dashboard` feature.
+    /// Wraps a dashboard failure surfaced by `tui-dashboard-core` (TCP bind,
+    /// Loro encode) into this crate's error. Only constructed under the
+    /// `dashboard` feature, when [`crate::serve`] starts the server.
     #[snafu(display("dashboard error: {message}"), visibility(pub(crate)))]
     Dashboard { message: String },
 

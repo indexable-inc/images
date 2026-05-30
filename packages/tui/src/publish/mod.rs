@@ -20,7 +20,9 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::frame::{ProducerSnapshot, collect_frames};
+use tui_dashboard_core::ProducerSnapshot;
+
+use crate::frame::collect_frames;
 use crate::{Error, Result, TuiManager};
 
 fn publish_err(message: impl Into<String>) -> Error {

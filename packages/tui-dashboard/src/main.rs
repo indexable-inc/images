@@ -2,8 +2,9 @@
 //! machine.
 //!
 //! Each producing process exposes its terminals over a unix socket in the
-//! discovery directory ([`socket_dir`](tui::socket_dir)); see the producer side
-//! in `tui::publish`. This binary is started by hand, scans that directory,
+//! discovery directory ([`socket_dir`](tui_dashboard_core::socket_dir)); see the
+//! producer side in `tui::publish`. This binary is started by hand, scans that
+//! directory,
 //! connects to every socket, folds each producer's stream into one Loro document
 //! under its own scope, and serves the shared grid over HTTP + SSE. No producer
 //! owns the server and exactly one process binds a TCP port, so any number of
@@ -18,7 +19,7 @@ use std::time::Duration;
 use clap::Parser;
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::net::UnixStream;
-use tui::{Hub, ProducerSnapshot, serve_hub, socket_dir};
+use tui_dashboard_core::{Hub, ProducerSnapshot, serve_hub, socket_dir};
 
 /// Aggregate every ix `tui` producer socket into one live web dashboard.
 #[derive(Parser)]

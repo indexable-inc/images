@@ -1,0 +1,24 @@
+[package]
+name = "tui-dashboard-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Engine-free wire types and browser-facing dashboard server shared by the tui producer and the standalone aggregator"
+
+[lints]
+workspace = true
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+futures.workspace = true
+loro.workspace = true
+parking_lot.workspace = true
+serde = { workspace = true, features = ["derive"] }
+snafu.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "net", "time"] }
+tokio-stream = { workspace = true, features = ["sync"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+serde_json.workspace = true

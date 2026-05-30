@@ -226,23 +226,21 @@ fn write_cursor(meta: &LoroMap, frame: &TerminalFrame) -> Result<()> {
 /// Write a frame's exit code into its meta map: an `i64` when the process exited
 /// with a code, otherwise absent (still running, or signalled).
 fn write_exit(meta: &LoroMap, frame: &TerminalFrame) -> Result<()> {
-    match frame.exit_code {
-        Some(code) => meta.insert("exit_code", i64::from(code)).map_err(loro_err),
-        None => {
-            // A signalled or still-running process has no code; clear any prior
-            // value so a re-spawned id under the same key never shows a stale
-            // exit code. delete on an absent key is a harmless no-op.
-            meta.delete("exit_code").map_err(loro_err)
-        }
-    }
+    frame.exit_code.map_or_else(
+        // A signalled or still-running process has no code; clear any prior
+        // value so a re-spawned id under the same key never shows a stale exit
+        // code. delete on an absent key is a harmless no-op.
+        || meta.delete("exit_code").map_err(loro_err),
+        |code| meta.insert("exit_code", i64::from(code)).map_err(loro_err),
+    )
 }
 
 /// Owns the shared document and fans CRDT updates out to SSE subscribers.
 ///
 /// One hub backs any number of frame sources. The in-process dashboard drives
-/// it from a poll loop over a [`TuiManager`](crate::TuiManager); the aggregator
-/// drives it from many unix-socket readers. Both call [`apply_scope`] and
-/// [`remove_scope`]; the hub serializes them under one lock.
+/// it from a poll loop over a `TuiManager`; the aggregator drives it from many
+/// unix-socket readers. Both call [`apply_scope`](Self::apply_scope) and
+/// [`remove_scope`](Self::remove_scope); the hub serializes them under one lock.
 pub struct Hub {
     state: Mutex<DocState>,
     updates: broadcast::Sender<Arc<str>>,

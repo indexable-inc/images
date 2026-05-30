@@ -1,19 +1,14 @@
-//! A read-only web dashboard for live PTY terminals.
+//! The in-process dashboard: poll one [`TuiManager`] and render its terminals.
 //!
-//! The dashboard renders whatever sits in a [`Hub`]'s Loro document and streams
-//! changes to browsers over Server-Sent Events. Two frame sources drive a hub:
+//! [`serve`] binds the engine-free dashboard server from `tui-dashboard-core`
+//! and drives it from a poll loop over a single [`TuiManager`] in this process,
+//! filing every terminal under one scope. The browser-facing surface (the
+//! [`Hub`] Loro document, the router, the SSE stream, the [`Dashboard`] handle)
+//! lives in `tui-dashboard-core`; this module only owns the bridge from a live
+//! manager to that surface.
 //!
-//! * [`serve`] polls one [`TuiManager`] in this process (the single-process
-//!   view) and applies its terminals under one scope.
-//! * the standalone aggregator (`tui-dashboard`) reads many producer sockets
-//!   ([`crate::publish`]) and applies each producer under its own scope.
-//!
-//! Both paths share [`serve_hub`], the router, the page, and the SSE stream, so
-//! there is one owner for the browser-facing surface. Loro is only the view-sync
-//! layer: the PTYs stay in their owning process, browsers never write back, so
-//! the doc has a single editor per scope and conflict resolution never runs; the
-//! CRDT buys cheap incremental text diffs and a late joiner catching up from one
-//! snapshot.
+//! The standalone aggregator (`tui-dashboard`) drives the same surface from many
+//! producer sockets instead, so the only engine-bound frame source stays here.
 //!
 //! ```no_run
 //! use std::sync::Arc;
@@ -28,31 +23,18 @@
 //! # }
 //! ```
 
-mod hub;
-mod server;
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
+use tui_dashboard_core::{Dashboard, Hub, serve_hub};
 
-use crate::{Result, TuiManager};
-
-pub use hub::Hub;
-pub use server::{Dashboard, serve_hub};
+use crate::{Error, Result, TuiManager};
 
 /// The scope the in-process dashboard files its terminals under. A single
 /// process has one frame source, so one scope keeps every terminal namespaced
 /// consistently with the multi-producer aggregator.
 const LOCAL_SCOPE: &str = "local";
-
-/// Base64 for the SSE wire. One spelling shared by the snapshot and update
-/// encoders in [`server`].
-pub(crate) fn b64(bytes: &[u8]) -> String {
-    BASE64.encode(bytes)
-}
 
 /// Serve a read-only dashboard of `manager`'s live terminals on `addr`.
 ///
@@ -63,6 +45,10 @@ pub(crate) fn b64(bytes: &[u8]) -> String {
 /// The server and poll loop run on the manager's own runtime, not the ambient
 /// one, so a pure-Rust caller can `runtime.block_on(serve(..))` from a
 /// temporary runtime and the returned dashboard keeps running after it drops.
+///
+/// # Errors
+///
+/// Returns [`Error::Dashboard`] when the server cannot bind `addr`.
 pub async fn serve(
     manager: &Arc<TuiManager>,
     addr: SocketAddr,
@@ -70,7 +56,11 @@ pub async fn serve(
 ) -> Result<Dashboard> {
     let runtime = manager.runtime_handle();
     let hub = Hub::new();
-    let (mut dashboard, mut stop_rx) = serve_hub(hub.clone(), addr, &runtime).await?;
+    let (mut dashboard, mut stop_rx) = serve_hub(hub.clone(), addr, &runtime)
+        .await
+        .map_err(|source| Error::Dashboard {
+            message: source.to_string(),
+        })?;
 
     let manager = manager.clone();
     let poller = runtime.spawn(async move {
