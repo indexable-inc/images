@@ -9,10 +9,15 @@
   <!-- <a href="https://scorecard.dev/viewer/?uri=github.com/indexable-inc/index"><img src="https://api.scorecard.dev/projects/github.com/indexable-inc/index/badge" alt="OpenSSF Scorecard" /></a> -->
 </p>
 
+<p align="center">
+  <a href="https://ix.dev">ix.dev</a>
+</p>
+
 # Index
 
 `index` builds ready-to-run VM images from NixOS modules. Every image targets
-x86_64 Linux and ships as an OCI archive.
+x86_64 Linux and ships as an OCI archive. It is the open-source layer over the
+[ix](https://ix.dev) sandbox platform.
 
 Use it for runnable images and reusable service modules.
 
