@@ -422,8 +422,9 @@ The switch landed in
 [`d9e2fa1`](https://github.com/indexable-inc/index/commit/d9e2fa1) ("lib: add
 dag-runner and switch nix run .#health-checks to use it"). Lifecycle scripts
 per example (rm-then-up-then-rm) were unchanged; only the orchestrator swapped.
-The JSON spec is a flat map of `{ name → { command, depends_on, ... } }` owned
-by this repo, documented in [`packages/dag-runner/README.md`](packages/dag-runner/README.md).
+The JSON spec is a top-level `nodes` map of `{ name → { command, depends_on?,
+env?, timeout_secs? } }`, owned by this repo and documented in
+[`packages/dag-runner/README.md`](packages/dag-runner/README.md).
 
 If a third consumer arrives needing something dag-runner does not, extend the
 runner. Pulling in `process-compose` or `devenv-tasks` alongside it for "the
