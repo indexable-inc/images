@@ -271,10 +271,11 @@ pub struct Terminal {
     raw: sys::GhosttyTerminal_ptr,
 }
 
-// The handle is a heap-owned pointer with no shared interior state; moving it
-// across threads is sound. It is not `Sync` because concurrent mutation is not
-// guarded.
-unsafe impl Send for Terminal {}
+// `Terminal` is intentionally left `!Send` and `!Sync` (the raw pointer makes it
+// so by default). libghostty-vt's terminal has thread affinity, so the handle
+// must stay on the thread that created it; a caller that needs it from async or
+// another thread owns it on a pinned thread behind a channel API rather than
+// moving the handle. Do not add an `unsafe impl Send`/`Sync`.
 
 impl Terminal {
     /// Create a terminal sized `rows` by `cols` with `scrollback` lines of
