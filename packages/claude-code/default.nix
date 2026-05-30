@@ -131,14 +131,21 @@ stdenv.mkDerivation {
 
   installPhase = ''
     runHook preInstall
-    mkdir -p $out/bin
+    mkdir -p $out/bin $out/libexec
 
-    install -m755 ${nativeBinary} $out/bin/.${binName}-unwrapped
+    # 1Password's "CLI access requested" prompt labels the request with the
+    # basename of the process that spawns `op`, which is this real binary rather
+    # than the wrapper. Keep it in libexec (off PATH, no leading-dot wrapper
+    # convention) and name it for the product so the prompt reads "Claude Code"
+    # instead of ".claude-unwrapped". The basename is the human-facing product
+    # label, independent of the command alias, since it is only what macOS shows.
+    helper="$out/libexec/Claude Code"
+    install -m755 ${nativeBinary} "$helper"
 
     # The store output is read-only, so the bundled self-updater can never
     # write; disable it and the install checks, and pin the bundled ripgrep to
     # the Nix one so PATH stays reproducible. The wrapper owns the version pin.
-    makeBinaryWrapper $out/bin/.${binName}-unwrapped $out/bin/${binName} \
+    makeBinaryWrapper "$helper" $out/bin/${binName} \
       --inherit-argv0 \
       --set DISABLE_AUTOUPDATER 1 \
       --set DISABLE_INSTALLATION_CHECKS 1 \
