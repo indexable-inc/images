@@ -21,6 +21,9 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSData, NSError, NSPoint, NSRect, NSSize};
 use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
+// Named explicitly so the dependency is a direct, visible use (the type is
+// otherwise only reachable through `NSView::layer()`'s return type).
+use objc2_quartz_core::CALayer;
 
 /// kIOSurfaceLockReadOnly: read-only lock, no dirty tracking.
 const LOCK_READ_ONLY: IOSurfaceLockOptions = IOSurfaceLockOptions(1);
@@ -151,7 +154,7 @@ fn schedule_captures(
 /// The guest framebuffer IOSurface object, if the view has started rendering.
 fn frame_surface(view: &VZVirtualMachineView) -> Option<Retained<AnyObject>> {
     let first = view.subviews().firstObject()?;
-    let layer = first.layer()?;
+    let layer: Retained<CALayer> = first.layer()?;
     unsafe { layer.contents() }
 }
 
