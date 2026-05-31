@@ -1,0 +1,16 @@
+[package]
+name = "reel"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Record a terminal demo reel by driving real CLIs through the tui PTY driver and rasterizing the styled grid to an animated WebP"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
+fontdue.workspace = true
+ndarray.workspace = true
+tui.workspace = true
