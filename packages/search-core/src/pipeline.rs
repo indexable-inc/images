@@ -5,12 +5,15 @@
 use std::path::Path;
 use std::time::Duration;
 
+use mixedbread::Filter;
+
 use crate::backend::{GrepOptions, SearchOptions, Store, StoreStatus};
 use crate::config::Config;
 use crate::db::Db;
 use crate::error::Result;
 use crate::manifest::Manifest;
-use crate::search::{AnswerView, DisplayHit, ask, grep, semantic};
+use crate::repo::repo_slug;
+use crate::search::{AnswerView, CodeScope, DisplayHit, ask, grep, semantic};
 use crate::sync::{sync, wait_until_indexed};
 
 /// What to query and how, independent of the backend and progress reporting.
@@ -31,6 +34,12 @@ pub struct Query<'a> {
     pub sync: bool,
     /// Mix in web results.
     pub include_web: bool,
+    /// Metadata filter applied server-side (source/repo/channel/...). `None`
+    /// means all sources.
+    pub filters: Option<&'a Filter>,
+    /// How code hits are scoped: worktree-exact (manifest intersection) or
+    /// server-filtered (a repo / all-repos query).
+    pub code_scope: CodeScope,
     /// How long to wait for new files to embed before querying anyway.
     pub index_timeout: Duration,
 }
@@ -56,11 +65,13 @@ async fn prepare(
     };
 
     if query.sync {
+        let repo = repo_slug(query.root);
         let report = sync(
             store,
             query.store_name,
             query.root,
             &manifest,
+            &repo,
             config.max_files,
             on_upload,
         )
@@ -94,6 +105,8 @@ pub async fn index_and_semantic(
         query.top_k,
         query.options,
         query.include_web,
+        query.filters,
+        query.code_scope,
     )
     .await
 }
@@ -123,6 +136,8 @@ pub async fn index_and_grep(
         query.text,
         query.top_k,
         options,
+        query.filters,
+        query.code_scope,
     )
     .await
 }
@@ -148,6 +163,8 @@ pub async fn index_and_answer(
         query.top_k,
         query.options,
         query.include_web,
+        query.filters,
+        query.code_scope,
     )
     .await
 }

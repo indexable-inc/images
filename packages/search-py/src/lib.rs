@@ -16,7 +16,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use search_core::{
-    Config, DEFAULT_STORE, DisplayHit, GrepOptions, GrepTargets, MixedbreadStore, Query,
+    CodeScope, Config, DEFAULT_STORE, DisplayHit, GrepOptions, GrepTargets, MixedbreadStore, Query,
     SearchOptions,
 };
 
@@ -187,6 +187,8 @@ async fn run_search(args: SearchArgs) -> search_core::Result<Vec<DisplayHit>> {
         options: args.options,
         sync: args.sync,
         include_web: args.include_web,
+        filters: None,
+        code_scope: CodeScope::WorktreeExact,
         index_timeout: INDEX_TIMEOUT,
     };
 
@@ -227,6 +229,8 @@ async fn run_grep(args: GrepArgs) -> search_core::Result<Vec<DisplayHit>> {
         },
         sync: args.sync,
         include_web: false,
+        filters: None,
+        code_scope: CodeScope::WorktreeExact,
         index_timeout: INDEX_TIMEOUT,
     };
 
@@ -249,7 +253,7 @@ fn hit_to_dict<'py>(py: Python<'py>, hit: &DisplayHit) -> PyResult<Bound<'py, Py
     dict.set_item("start_line", hit.start_line)?;
     dict.set_item("num_lines", hit.num_lines)?;
     dict.set_item("text", &hit.text)?;
-    dict.set_item("is_web", hit.is_web)?;
+    dict.set_item("source", hit.source.as_str())?;
     Ok(dict)
 }
 

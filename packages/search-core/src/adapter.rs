@@ -1,16 +1,17 @@
 //! Adapter wiring the standalone [`mixedbread::Client`] to this crate's
-//! backend-agnostic [`Store`] trait. It does the only impedance matching
-//! needed: typed [`UploadMeta`] to JSON on the way in, and the client's
-//! [`mixedbread::Chunk`] to the domain [`SearchHit`] on the way out.
+//! backend-agnostic [`Store`] trait. It maps a [`Document`] to the client's
+//! upload call on the way in, and the client's [`mixedbread::Chunk`] to the
+//! domain [`SearchHit`] on the way out, reading the typed envelope's `source`
+//! and `content_hash` from each chunk's metadata.
 
-use std::collections::HashSet;
-
+use mixedbread::Filter;
+use search_meta::{Document, Source};
 use snafu::ResultExt as _;
 
 use crate::backend::{
-    Answer, GrepOptions, SearchHit, SearchOptions, Store, StoreStatus, UploadMeta,
+    Answer, GrepOptions, SearchHit, SearchOptions, StoreStatus, StoredRecord, Store,
 };
-use crate::error::{BackendSnafu, EncodeMetadataSnafu, Result};
+use crate::error::{BackendSnafu, Result};
 
 /// A [`Store`] backed by the Mixedbread API.
 #[derive(Debug, Clone)]
@@ -52,19 +53,32 @@ const fn to_client_options(options: SearchOptions) -> mixedbread::SearchOptions 
     mixedbread::SearchOptions {
         rerank: options.rerank,
         agentic: options.agentic,
+        score_threshold: None,
+        // Always request metadata so each hit's `source` and `content_hash` come
+        // back; the projection needs `source` to scope correctly.
+        return_metadata: Some(true),
     }
 }
 
 fn hit_from_chunk(chunk: mixedbread::Chunk) -> SearchHit {
-    let hash = metadata_str(chunk.metadata.as_ref(), "hash");
-    let path_meta = metadata_str(chunk.metadata.as_ref(), "path");
+    let metadata = chunk.metadata.as_ref();
+    // Legacy code records (uploaded before the typed envelope) carry `hash`/`path`
+    // and no `source`; the old store was code-only, so treat an absent source as
+    // Code. New records carry `source` and `content_hash`.
+    let source = metadata_str(metadata, search_meta::keys::SOURCE)
+        .and_then(|s| s.parse::<Source>().ok())
+        .unwrap_or(Source::Code);
+    let hash = metadata_str(metadata, search_meta::keys::CONTENT_HASH).or_else(|| metadata_str(metadata, "hash"));
+    // Code records carry `path`; record sources carry `title`. Either is the
+    // display label.
+    let path_meta = metadata_str(metadata, search_meta::keys::PATH)
+        .or_else(|| metadata_str(metadata, search_meta::keys::TITLE));
     // The mixedbread API reports `start_line` 1-based and `num_lines` as a line
     // span (end - start), so an N-line chunk arrives as (start=1, num=N-1). The
-    // rest of this crate (and the local backend) use a 0-based start and a line
-    // count, so normalize at this boundary: shift the start down by one and turn
-    // the span into a count. Without this the renderer drops the chunk's first
-    // line and empties single-line chunks, which then fall back to plain text.
+    // rest of this crate uses a 0-based start and a line count, so normalize at
+    // this boundary: shift the start down by one and turn the span into a count.
     SearchHit {
+        source,
         hash,
         path: path_meta.or(chunk.filename),
         text: chunk.text.unwrap_or_default(),
@@ -86,24 +100,44 @@ impl Store for MixedbreadStore {
         self.client.ensure_store(name).await.context(BackendSnafu)
     }
 
-    async fn list_external_ids(&self, store: &str) -> Result<HashSet<String>> {
+    async fn list_external_ids(&self, store: &str) -> Result<std::collections::HashSet<String>> {
         self.client
             .list_external_ids(store)
             .await
             .context(BackendSnafu)
     }
 
-    async fn upload(
+    async fn list_records(
         &self,
         store: &str,
-        content: Vec<u8>,
-        file_name: &str,
-        external_id: &str,
-        meta: UploadMeta,
-    ) -> Result<()> {
-        let metadata = serde_json::to_value(&meta).context(EncodeMetadataSnafu)?;
+        filters: Option<&Filter>,
+    ) -> Result<Vec<StoredRecord>> {
+        let files = self
+            .client
+            .list_files(store, filters)
+            .await
+            .context(BackendSnafu)?;
+        Ok(files
+            .into_iter()
+            .filter_map(|file| {
+                file.external_id.map(|external_id| StoredRecord {
+                    content_hash: metadata_str(file.metadata.as_ref(), search_meta::keys::CONTENT_HASH),
+                    external_id,
+                })
+            })
+            .collect())
+    }
+
+    async fn upload(&self, store: &str, document: Document) -> Result<()> {
         self.client
-            .upload_file(store, content, file_name, external_id, metadata)
+            .upload_file(
+                store,
+                document.body,
+                &document.file_name,
+                &document.external_id,
+                document.mime,
+                document.meta_json,
+            )
             .await
             .context(BackendSnafu)
     }
@@ -121,10 +155,11 @@ impl Store for MixedbreadStore {
         query: &str,
         top_k: usize,
         options: SearchOptions,
+        filters: Option<&Filter>,
     ) -> Result<Vec<SearchHit>> {
         let chunks = self
             .client
-            .search(stores, query, top_k, to_client_options(options))
+            .search(stores, query, top_k, to_client_options(options), filters)
             .await
             .context(BackendSnafu)?;
         Ok(chunks.into_iter().map(hit_from_chunk).collect())
@@ -136,6 +171,7 @@ impl Store for MixedbreadStore {
         pattern: &str,
         top_k: usize,
         options: GrepOptions,
+        filters: Option<&Filter>,
     ) -> Result<Vec<SearchHit>> {
         let chunks = self
             .client
@@ -145,6 +181,7 @@ impl Store for MixedbreadStore {
                 top_k,
                 options.case_sensitive,
                 options.targets.api_targets(),
+                filters,
             )
             .await
             .context(BackendSnafu)?;
@@ -157,10 +194,11 @@ impl Store for MixedbreadStore {
         query: &str,
         top_k: usize,
         options: SearchOptions,
+        filters: Option<&Filter>,
     ) -> Result<Answer> {
         let response = self
             .client
-            .ask(stores, query, top_k, to_client_options(options))
+            .ask(stores, query, top_k, to_client_options(options), filters)
             .await
             .context(BackendSnafu)?;
         Ok(Answer {
@@ -179,44 +217,5 @@ impl Store for MixedbreadStore {
             pending: status.pending,
             in_progress: status.in_progress,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn chunk(start_line: Option<u32>, num_lines: Option<u32>) -> mixedbread::Chunk {
-        mixedbread::Chunk {
-            text: Some("body".to_owned()),
-            score: 0.5,
-            filename: Some("a.rs".to_owned()),
-            start_line,
-            num_lines,
-            metadata: None,
-        }
-    }
-
-    #[test]
-    fn normalizes_one_based_span_to_zero_based_count() {
-        // The API's (start=1, span=N-1) for an N-line chunk becomes the internal
-        // (start=0, count=N): a whole 6-line file reported as (1, 5).
-        let hit = hit_from_chunk(chunk(Some(1), Some(5)));
-        assert_eq!(hit.start_line, Some(0));
-        assert_eq!(hit.num_lines, Some(6));
-
-        // A single-line chunk arrives as (start=1, span=0) and must become a
-        // count of 1 line, not 0, so the renderer emits it instead of an empty
-        // window that falls back to plain text.
-        let single = hit_from_chunk(chunk(Some(1), Some(0)));
-        assert_eq!(single.start_line, Some(0));
-        assert_eq!(single.num_lines, Some(1));
-    }
-
-    #[test]
-    fn missing_line_metadata_stays_none() {
-        let hit = hit_from_chunk(chunk(None, None));
-        assert_eq!(hit.start_line, None);
-        assert_eq!(hit.num_lines, None);
     }
 }

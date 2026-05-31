@@ -21,7 +21,7 @@ class Hit(TypedDict):
     start_line: int | None
     num_lines: int | None
     text: str
-    is_web: bool
+    source: str
 
 def semantic(
     query: str,

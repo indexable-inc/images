@@ -33,6 +33,7 @@ members = [
   "packages/repo-walker",
   "packages/search",
   "packages/search-core",
+  "packages/search-meta",
   "packages/search-py",
   "packages/tap",
   "packages/tap/protocol",
@@ -137,6 +138,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-native-certs = "0.8"
 schemars = "1"
 search-core = { path = "packages/search-core" }
+search-meta = { path = "packages/search-meta" }
 serde = "1"
 serde_json = "1"
 sha2 = "0.10"

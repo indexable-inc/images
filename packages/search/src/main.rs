@@ -15,8 +15,8 @@ use anstyle::{AnsiColor, Style};
 use clap::{Args, Parser, Subcommand};
 use indicatif::ProgressBar;
 use search_core::{
-    Config, DEFAULT_STORE, DisplayHit, GrepOptions, GrepTargets, MixedbreadStore, Query,
-    SearchOptions, StoreStatus,
+    CodeScope, Config, DEFAULT_STORE, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets,
+    MixedbreadStore, Query, SearchOptions, Source, StoreStatus, build_filter, repo_slug,
 };
 
 /// How long to wait for freshly uploaded files to finish embedding.
@@ -46,6 +46,69 @@ struct Cli {
 enum Command {
     /// Grep the indexed chunks with a regular expression.
     Grep(GrepArgs),
+}
+
+/// Scope selectors shared by the semantic and grep paths. With no selector the
+/// default is all sources, with code scoped to the current worktree.
+#[derive(Debug, Args)]
+struct ScopeArgs {
+    /// Restrict to these sources (repeatable): code, slack, linear, web.
+    #[arg(long = "source", value_name = "SOURCE")]
+    sources: Vec<String>,
+
+    /// Exclude these sources (repeatable).
+    #[arg(long = "not-source", value_name = "SOURCE")]
+    not_sources: Vec<String>,
+
+    /// Restrict code to a repository slug (e.g. indexable-inc/index).
+    #[arg(long)]
+    repo: Option<String>,
+
+    /// Search code across all repositories, not just this checkout.
+    #[arg(long = "all-repos")]
+    all_repos: bool,
+
+    /// Search this repository across all worktrees, not just files checked out
+    /// here.
+    #[arg(long = "all-worktrees")]
+    all_worktrees: bool,
+}
+
+/// Resolve scope selectors into a server-side metadata filter and the code
+/// scoping mode.
+fn resolve_scope(scope: &ScopeArgs, root: &Path) -> anyhow::Result<(Option<Filter>, CodeScope)> {
+    let sources = parse_sources(&scope.sources)?;
+    let exclude_sources = parse_sources(&scope.not_sources)?;
+
+    // A repo / all-repos / all-worktrees query is server-filtered: the manifest
+    // can only answer "files checked out here", so anything coarser must trust
+    // the metadata filter instead.
+    let (repo, code_scope) = if scope.all_repos {
+        (None, CodeScope::ServerFiltered)
+    } else if let Some(repo) = scope.repo.clone() {
+        (Some(repo), CodeScope::ServerFiltered)
+    } else if scope.all_worktrees {
+        (Some(repo_slug(root).as_str().to_owned()), CodeScope::ServerFiltered)
+    } else {
+        (None, CodeScope::WorktreeExact)
+    };
+
+    let spec = FilterSpec {
+        sources,
+        exclude_sources,
+        repo,
+    };
+    Ok((build_filter(&spec), code_scope))
+}
+
+fn parse_sources(values: &[String]) -> anyhow::Result<Vec<Source>> {
+    values
+        .iter()
+        // A source may arrive comma-joined (`--source code,slack`) or repeated.
+        .flat_map(|value| value.split(','))
+        .filter(|value| !value.is_empty())
+        .map(|value| value.parse::<Source>().map_err(anyhow::Error::from))
+        .collect()
 }
 
 /// Arguments for the default search path. Flags mirror `mgrep search`
@@ -89,6 +152,10 @@ struct SemanticArgs {
     #[arg(long)]
     agentic: bool,
 
+    /// Source and repo scope selectors.
+    #[command(flatten)]
+    scope: ScopeArgs,
+
     /// Store name (one store holds every worktree's content).
     #[arg(long, env = "MXBAI_STORE")]
     store: Option<String>,
@@ -123,6 +190,10 @@ struct GrepArgs {
     /// Search the store as-is: skip detecting and embedding new files.
     #[arg(long = "no-sync")]
     no_sync: bool,
+
+    /// Source and repo scope selectors.
+    #[command(flatten)]
+    scope: ScopeArgs,
 
     /// Store name (one store holds every worktree's content).
     #[arg(long, env = "MXBAI_STORE")]
@@ -171,6 +242,7 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
     let store = MixedbreadStore::from_login(base_url).await?;
 
+    let (filter, code_scope) = resolve_scope(&cli.scope, &root)?;
     let query = Query {
         root: &root,
         store_name: &store_name,
@@ -182,6 +254,8 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         },
         sync: !cli.no_sync,
         include_web: cli.web,
+        filters: filter.as_ref(),
+        code_scope,
         index_timeout: INDEX_TIMEOUT,
     };
 
@@ -278,6 +352,7 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
 
     // Grep reuses the shared `Query` shape; its semantic-only knobs (rerank,
     // agentic, web) are inert here, and the grep pattern travels in `text`.
+    let (filter, code_scope) = resolve_scope(&cli.scope, &root)?;
     let query = Query {
         root: &root,
         store_name: &store_name,
@@ -289,6 +364,8 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
         },
         sync: !cli.no_sync,
         include_web: false,
+        filters: filter.as_ref(),
+        code_scope,
         index_timeout: INDEX_TIMEOUT,
     };
     let grep_options = GrepOptions {
@@ -463,7 +540,9 @@ fn render(
     root: &Path,
     theme: code_highlight::Theme,
 ) -> String {
-    let prefix = if hit.is_web { "" } else { "./" };
+    // Only local code gets the `./path` prefix; web URLs and record titles
+    // (Slack threads, Linear issues) print as-is.
+    let prefix = if hit.source == Source::Code { "./" } else { "" };
     let path = paint(palette.path, &format!("{prefix}{}", hit.label));
 
     // `start_line` is 0-based and `num_lines` is a line count, so the displayed
@@ -533,10 +612,10 @@ fn render_snippet(
     }
 
     // Prefer syntax-highlighting the real file lines: tree-sitter gets full
-    // parse context and code-highlight renders its own line-number gutter. Falls
-    // through to a plain gutter over the chunk text if the file is unreadable
-    // (e.g. a web hit or a file changed since indexing).
-    if !hit.is_web
+    // parse context and code-highlight renders its own line-number gutter. Only
+    // local code has a readable file; web/Slack/Linear hits fall through to a
+    // plain gutter over the chunk text.
+    if hit.source == Source::Code
         && let Some(num) = hit.num_lines
         && let Ok(source) = std::fs::read_to_string(root.join(&hit.label))
     {
@@ -590,7 +669,7 @@ fn numbered_plain(body: &str, start: u32) -> String {
 mod tests {
     use std::path::Path;
 
-    use search_core::DisplayHit;
+    use search_core::{DisplayHit, Source};
 
     use super::{Palette, render_snippet};
 
@@ -599,11 +678,11 @@ mod tests {
     fn hit(text: &str) -> DisplayHit {
         DisplayHit {
             label: "web://example".to_owned(),
+            source: Source::Web,
             start_line: Some(4),
             num_lines: Some(2),
             score: 0.5,
             text: text.to_owned(),
-            is_web: true,
         }
     }
 

@@ -15,6 +15,9 @@ use serde::Deserialize;
 use snafu::{OptionExt as _, ResultExt as _, Snafu};
 
 pub mod auth;
+pub mod filter;
+
+pub use filter::{Condition, Filter, Group, Operator};
 
 /// Default API base URL.
 pub const DEFAULT_BASE_URL: &str = "https://api.mixedbread.com";
@@ -96,12 +99,23 @@ pub enum Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Search tuning forwarded to the API.
+///
+/// `score_threshold` and `return_metadata` are skipped when unset, so a caller
+/// that only sets `rerank`/`agentic` produces the same wire body as before.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct SearchOptions {
     /// Apply the second-stage reranker.
     pub rerank: bool,
     /// Let the API plan and run multiple searches.
     pub agentic: bool,
+    /// Drop hits scoring below this threshold (`0.0..=1.0`). Used to keep a
+    /// low-relevance source from crowding a multi-source result list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score_threshold: Option<f32>,
+    /// Ask the API to return each chunk's file metadata, so a result can be
+    /// mapped back to its source. Skipped when `None` (API default applies).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_metadata: Option<bool>,
 }
 
 /// A file as reported by the store's file listing.
@@ -234,13 +248,18 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if any page request fails or cannot be decoded.
-    pub async fn list_files(&self, store: &str) -> Result<Vec<StoredFile>> {
+    pub async fn list_files(
+        &self,
+        store: &str,
+        filters: Option<&filter::Filter>,
+    ) -> Result<Vec<StoredFile>> {
         let mut files = Vec::new();
         let mut after: Option<String> = None;
         loop {
             let request = ListRequest {
                 limit: 100,
                 after: after.as_deref(),
+                filters,
             };
             let resp = self
                 .http
@@ -275,7 +294,7 @@ impl Client {
     /// Returns an error if the listing fails.
     pub async fn list_external_ids(&self, store: &str) -> Result<HashSet<String>> {
         Ok(self
-            .list_files(store)
+            .list_files(store, None)
             .await?
             .into_iter()
             .filter_map(|file| file.external_id)
@@ -293,11 +312,12 @@ impl Client {
         content: Vec<u8>,
         file_name: &str,
         external_id: &str,
+        mime: &str,
         metadata: serde_json::Value,
     ) -> Result<()> {
         let part = reqwest::multipart::Part::bytes(content)
             .file_name(file_name.to_owned())
-            .mime_str("text/plain")
+            .mime_str(mime)
             .context(HttpSnafu)?;
         let form = reqwest::multipart::Form::new().part("file", part);
 
@@ -353,12 +373,14 @@ impl Client {
         query: &str,
         top_k: usize,
         options: SearchOptions,
+        filters: Option<&filter::Filter>,
     ) -> Result<Vec<Chunk>> {
         let request = SearchRequest {
             query,
             store_identifiers: stores,
             top_k,
             search_options: options,
+            filters,
         };
         let resp = self
             .http
@@ -391,6 +413,7 @@ impl Client {
         top_k: usize,
         case_sensitive: bool,
         targets: &[&str],
+        filters: Option<&filter::Filter>,
     ) -> Result<Vec<Chunk>> {
         let request = GrepRequest {
             store_identifiers: stores,
@@ -398,6 +421,7 @@ impl Client {
             top_k,
             case_sensitive,
             targets,
+            filters,
         };
         let resp = self
             .http
@@ -421,12 +445,14 @@ impl Client {
         query: &str,
         top_k: usize,
         options: SearchOptions,
+        filters: Option<&filter::Filter>,
     ) -> Result<AnswerResponse> {
         let request = SearchRequest {
             query,
             store_identifiers: stores,
             top_k,
             search_options: options,
+            filters,
         };
         let resp = self
             .http
@@ -489,6 +515,8 @@ struct ListRequest<'a> {
     limit: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     after: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filters: Option<&'a filter::Filter>,
 }
 
 #[derive(Deserialize)]
@@ -534,6 +562,8 @@ struct SearchRequest<'a> {
     store_identifiers: &'a [String],
     top_k: usize,
     search_options: SearchOptions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filters: Option<&'a filter::Filter>,
 }
 
 #[derive(serde::Serialize)]
@@ -543,6 +573,8 @@ struct GrepRequest<'a> {
     top_k: usize,
     case_sensitive: bool,
     targets: &'a [&'a str],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filters: Option<&'a filter::Filter>,
 }
 
 #[derive(Deserialize)]

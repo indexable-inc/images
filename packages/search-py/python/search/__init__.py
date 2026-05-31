@@ -21,7 +21,8 @@ this package is a thin PyO3 binding over it.
 Each awaitable is a native asyncio coroutine bridged from Rust via
 pyo3-async-runtimes, so ``await`` it on your own event loop. Each hit is a dict
 with keys ``path``, ``score``, ``start_line``, ``num_lines``, ``text``, and
-``is_web``. Authentication mirrors the ``search`` CLI: ``MXBAI_API_KEY``,
+``source`` (one of ``code``, ``slack``, ``linear``, ``web``). Authentication
+mirrors the ``search`` CLI: ``MXBAI_API_KEY``,
 or the token written by ``mgrep login``.
 """
 

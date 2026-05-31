@@ -85,6 +85,29 @@ pub enum Error {
         source: serde_json::Error,
     },
 
+    /// A stored or built document had missing or malformed metadata.
+    #[snafu(display("document {external_id} has invalid metadata: missing or bad key {key:?}"))]
+    InvalidMetadata {
+        /// The record whose metadata was invalid.
+        external_id: String,
+        /// The metadata key that was missing or unparseable.
+        key: &'static str,
+    },
+
+    /// A document's metadata exceeded the store's size or key limits.
+    #[snafu(display("metadata limit exceeded: {source}"))]
+    MetadataLimit {
+        /// Underlying limit error.
+        source: search_meta::MetadataError,
+    },
+
+    /// A source adapter failed while producing a document.
+    #[snafu(display("source adapter failed: {message}"))]
+    Adapter {
+        /// The adapter's error, rendered.
+        message: String,
+    },
+
     /// The storage backend (Mixedbread client) returned an error.
     #[snafu(display("storage backend error: {source}"))]
     Backend {

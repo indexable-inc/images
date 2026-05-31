@@ -19,11 +19,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt as _};
+use search_meta::{Document, RepoSlug};
 use snafu::ResultExt as _;
 use tokio::time::sleep;
 
-use crate::backend::{Store, StoreStatus, UploadMeta};
-use crate::error::{ReadFileSnafu, Result, TooManyFilesSnafu};
+use crate::backend::{Store, StoreStatus};
+use crate::error::{MetadataLimitSnafu, ReadFileSnafu, Result, TooManyFilesSnafu};
 use crate::manifest::{FileEntry, Manifest};
 
 /// Maximum concurrent uploads in flight.
@@ -60,6 +61,7 @@ pub async fn sync(
     store_name: &str,
     root: &Path,
     manifest: &Manifest,
+    repo: &RepoSlug,
     max_files: usize,
     on_progress: impl Fn(usize, usize) + Send + Sync,
 ) -> Result<SyncReport> {
@@ -107,6 +109,7 @@ pub async fn sync(
                 store,
                 store_name,
                 root,
+                repo,
                 entry,
                 upload_target,
                 &done,
@@ -138,6 +141,7 @@ async fn upload_entry(
     store: &(impl Store + Sync),
     store_name: &str,
     root: &Path,
+    repo: &RepoSlug,
     entry: FileEntry,
     upload_target: usize,
     done: &AtomicUsize,
@@ -147,16 +151,35 @@ async fn upload_entry(
     let content = tokio::fs::read(&abs)
         .await
         .context(ReadFileSnafu { path: abs })?;
-    let file_name = file_name_of(&entry.rel_path);
-    let meta = UploadMeta {
-        path: entry.rel_path.clone(),
-        hash: entry.hash.as_str().to_owned(),
-    };
-    store
-        .upload(store_name, content, file_name, entry.hash.as_str(), meta)
-        .await?;
+    let document = code_document(repo, &entry, content)?;
+    store.upload(store_name, document).await?;
     on_progress(done.fetch_add(1, Ordering::Relaxed) + 1, upload_target);
     Ok(())
+}
+
+/// Build the [`Document`] for one code file: the file bytes are the body, the
+/// content hash is the manifest hash (sha256 of those bytes) and doubles as the
+/// `external_id`, and the flat metadata carries the typed code envelope so a
+/// query can filter by `source` and `repo`.
+fn code_document(repo: &RepoSlug, entry: &FileEntry, body: Vec<u8>) -> Result<Document> {
+    let hash = entry.hash.as_str().to_owned();
+    let meta_json = serde_json::json!({
+        "source": "code",
+        "external_id": hash,
+        "content_hash": hash,
+        "title": entry.rel_path,
+        "repo": repo.as_str(),
+        "path": entry.rel_path,
+    });
+    search_meta::check_metadata(&hash, &meta_json).context(MetadataLimitSnafu)?;
+    Ok(Document {
+        external_id: hash.clone(),
+        file_name: file_name_of(&entry.rel_path).to_owned(),
+        mime: "text/plain",
+        body,
+        meta_json,
+        content_hash: hash,
+    })
 }
 
 /// Poll the store until newly uploaded files finish embedding.
@@ -194,9 +217,15 @@ fn file_name_of(rel_path: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use search_meta::RepoSlug;
+
     use super::sync;
     use crate::backend::MemoryStore;
     use crate::manifest::Manifest;
+
+    fn repo() -> RepoSlug {
+        RepoSlug::Local("test".to_owned())
+    }
 
     fn write_repo() -> tempfile::TempDir {
         let dir = tempfile::TempDir::new().expect("tempdir");
@@ -211,7 +240,7 @@ mod tests {
         let store = MemoryStore::new();
         let manifest = Manifest::build(dir.path(), None, 1024 * 1024).expect("manifest");
 
-        let first = sync(&store, "s", dir.path(), &manifest, 1000, |_, _| {})
+        let first = sync(&store, "s", dir.path(), &manifest, &repo(), 1000, |_, _| {})
             .await
             .expect("first sync");
         assert_eq!(first.uploaded, 2);
@@ -219,7 +248,7 @@ mod tests {
 
         // Re-syncing the same content must not re-upload: this is the
         // cross-worktree / re-run win that mgrep lacks.
-        let second = sync(&store, "s", dir.path(), &manifest, 1000, |_, _| {})
+        let second = sync(&store, "s", dir.path(), &manifest, &repo(), 1000, |_, _| {})
             .await
             .expect("second sync");
         assert_eq!(second.uploaded, 0);
@@ -234,13 +263,13 @@ mod tests {
         let store = MemoryStore::new();
 
         let manifest_a = Manifest::build(dir_a.path(), None, 1024 * 1024).expect("a");
-        sync(&store, "s", dir_a.path(), &manifest_a, 1000, |_, _| {})
+        sync(&store, "s", dir_a.path(), &manifest_a, &repo(), 1000, |_, _| {})
             .await
             .expect("sync a");
         assert_eq!(store.upload_count(), 2);
 
         let manifest_b = Manifest::build(dir_b.path(), None, 1024 * 1024).expect("b");
-        let report_b = sync(&store, "s", dir_b.path(), &manifest_b, 1000, |_, _| {})
+        let report_b = sync(&store, "s", dir_b.path(), &manifest_b, &repo(), 1000, |_, _| {})
             .await
             .expect("sync b");
 
@@ -255,7 +284,7 @@ mod tests {
         let store = MemoryStore::new();
         let manifest = Manifest::build(dir.path(), None, 1024 * 1024).expect("manifest");
 
-        let err = sync(&store, "s", dir.path(), &manifest, 1, |_, _| {})
+        let err = sync(&store, "s", dir.path(), &manifest, &repo(), 1, |_, _| {})
             .await
             .expect_err("should refuse");
         assert!(matches!(err, crate::error::Error::TooManyFiles { .. }));

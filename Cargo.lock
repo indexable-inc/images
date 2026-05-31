@@ -4443,17 +4443,29 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "futures",
+ "git2",
  "mixedbread",
  "rayon",
  "regex",
  "repo-walker",
  "rusqlite",
+ "search-meta",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "snafu",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "search-meta"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
 ]
 
 [[package]]

@@ -1,0 +1,18 @@
+[package]
+name = "search-meta"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Shared typed metadata envelope and source-adapter trait for multi-source search"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
