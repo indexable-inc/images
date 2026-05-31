@@ -9,10 +9,12 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+axum.workspace = true
 clap = { workspace = true, features = ["derive"] }
-rmcp = { workspace = true, features = ["transport-io"] }
+rmcp = { workspace = true, features = ["transport-io", "transport-streamable-http-server"] }
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["io-std", "macros", "process", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-std", "macros", "net", "process", "rt-multi-thread", "signal"] }
+tokio-util.workspace = true

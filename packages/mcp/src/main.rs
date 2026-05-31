@@ -15,7 +15,12 @@ use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
-    transport::stdio,
+    transport::{
+        stdio,
+        streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        },
+    },
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -24,6 +29,15 @@ use tempfile::TempDir;
 
 const DEFAULT_SESSION_ID: &str = "default";
 const WORKER_SOURCE: &str = include_str!("python_worker.py");
+
+/// Address bound when `serve --http` is passed without an explicit value. Loopback
+/// only, matching the Streamable HTTP server's default loopback `Host` allowlist
+/// (DNS-rebinding guard); a public bind needs both a routable address here and a
+/// matching `allowed_hosts` override.
+const DEFAULT_HTTP_ADDRESS: &str = "127.0.0.1:8000";
+
+/// Path the Streamable HTTP endpoint is mounted at, the de facto MCP convention.
+const HTTP_MCP_PATH: &str = "/mcp";
 
 // Surfaced to clients on initialize so an agent discovers the preinstalled
 // packages without reading the build. `tui` is the bundled PTY driver; naming
@@ -47,7 +61,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum CliCommand {
-    Serve,
+    Serve {
+        /// Serve over Streamable HTTP instead of stdio. Pass the flag bare to
+        /// bind the loopback default, or give an explicit `host:port`. Stdio
+        /// stays the default when the flag is absent, so existing MCP clients
+        /// that launch `ix-mcp` over a pipe are unaffected.
+        #[arg(
+            long,
+            value_name = "ADDR",
+            num_args = 0..=1,
+            default_missing_value = DEFAULT_HTTP_ADDRESS,
+        )]
+        http: Option<String>,
+    },
     Repl,
     Eval { expression: String },
     Exec { source: String },
@@ -594,11 +620,42 @@ fn uuid_like(sessions: &HashMap<String, PythonSession>) -> String {
     unreachable!("unbounded session id search exhausted")
 }
 
+/// Serve over Streamable HTTP, the spec's HTTP transport (POST for requests,
+/// SSE for streamed responses), at `addr`. Each MCP session gets a fresh
+/// [`McpServer`] from the factory, so its Python sessions are owned by that
+/// session and torn down when it ends, mirroring the one-owner lifecycle stdio
+/// already has. The cancellation token tied to ctrl-c terminates in-flight SSE
+/// sessions on shutdown rather than leaving them hanging.
+async fn serve_http(addr: &str) -> Result<()> {
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let service = StreamableHttpService::new(
+        || Ok(McpServer::new()),
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default().with_cancellation_token(cancel.child_token()),
+    );
+
+    let router = axum::Router::new().nest_service(HTTP_MCP_PATH, service);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("failed to bind Streamable HTTP listener on {addr}"))?;
+    eprintln!("ix-mcp Streamable HTTP listening on http://{addr}{HTTP_MCP_PATH}");
+
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            cancel.cancel();
+        })
+        .await
+        .context("Streamable HTTP server error")?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
-    match cli.command.unwrap_or(CliCommand::Serve) {
-        CliCommand::Serve => {
+    match cli.command.unwrap_or(CliCommand::Serve { http: None }) {
+        CliCommand::Serve { http: Some(addr) } => serve_http(&addr).await?,
+        CliCommand::Serve { http: None } => {
             let service = McpServer::new().serve(stdio()).await?;
             service.waiting().await?;
         }

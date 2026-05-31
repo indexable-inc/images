@@ -153,6 +153,7 @@ terminal-light = "1"
 terminal-theme = { path = "packages/terminal-theme" }
 tokio = "1"
 tokio-stream = "0.1"
+tokio-util = "0.7"
 toml = { version = "1.1.2", default-features = false }
 tower = "0.5"
 tower-http = "0.6"
