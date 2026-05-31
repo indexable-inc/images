@@ -198,6 +198,9 @@ struct SemanticArgs {
 
 /// Arguments for the `grep` subcommand. Grep is local-corpus only (no web
 /// store) and shares the connection flags with the semantic path.
+// Like `SemanticArgs`, this is a flat surface of independent boolean flags; a
+// state machine would obscure rather than clarify it.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Args)]
 struct GrepArgs {
     /// The regular expression to match against the indexed chunks.
@@ -436,15 +439,7 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         if let Some(bar) = &bar {
             bar.finish_and_clear();
         }
-        if cli.json {
-            // Machine-readable mode: one JSON array on stdout for the eval
-            // harness and any other consumer, instead of the human listing.
-            println!("{}", search_core::hits_to_json(&hits)?);
-        } else {
-            for hit in &hits {
-                println!("{}", render(hit, cli.content, &palette, &root, theme));
-            }
-        }
+        print_hits(&hits, cli.json, cli.content, &palette, &root, theme)?;
     }
 
     Ok(())
@@ -542,15 +537,7 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
         bar.finish_and_clear();
     }
 
-    if cli.json {
-        // Machine-readable mode: one JSON array on stdout, same shape as the
-        // semantic path.
-        println!("{}", search_core::hits_to_json(&hits)?);
-    } else {
-        for hit in &hits {
-            println!("{}", render(hit, cli.content, &palette, &root, theme));
-        }
-    }
+    print_hits(&hits, cli.json, cli.content, &palette, &root, theme)?;
 
     Ok(())
 }
@@ -659,6 +646,33 @@ fn detect_theme(color: bool) -> code_highlight::Theme {
         terminal_theme::Theme::Light => code_highlight::Theme::Light,
         terminal_theme::Theme::Dark => code_highlight::Theme::Dark,
     }
+}
+
+/// Print hits as a JSON array (`--json`) or the human listing.
+///
+/// Shared by the semantic and grep paths so the machine-readable contract is
+/// emitted in exactly one place.
+///
+/// # Errors
+/// Returns an error if JSON serialization of the hits fails.
+fn print_hits(
+    hits: &[DisplayHit],
+    json: bool,
+    show_content: bool,
+    palette: &Palette,
+    root: &Path,
+    theme: code_highlight::Theme,
+) -> anyhow::Result<()> {
+    if json {
+        // Machine-readable mode: one JSON array on stdout for the eval harness
+        // and any other consumer, instead of the human listing.
+        println!("{}", search_core::hits_to_json(hits)?);
+    } else {
+        for hit in hits {
+            println!("{}", render(hit, show_content, palette, root, theme));
+        }
+    }
+    Ok(())
 }
 
 fn render(

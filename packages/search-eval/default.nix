@@ -13,12 +13,11 @@ let
 
   # Corpus and eval sets ship as plain files (not wheel data): `search` needs a
   # real directory to index. The wrapper points SEARCH_EVAL_DATA_DIR here.
-  data =
-    pkgs.runCommand "search-eval-data" { strictDeps = true; } ''
-      mkdir -p "$out/corpus" "$out/datasets"
-      cp -r ${./corpus}/. "$out/corpus/"
-      cp -r ${./datasets}/. "$out/datasets/"
-    '';
+  data = pkgs.runCommand "search-eval-data" { strictDeps = true; } ''
+    mkdir -p "$out/corpus" "$out/datasets"
+    cp -r ${./corpus}/. "$out/corpus/"
+    cp -r ${./datasets}/. "$out/datasets/"
+  '';
 
   unwrapped = ix.buildUvApplication pkgs {
     pname = "search-eval";
@@ -46,7 +45,12 @@ let
       ''
         mkdir -p $out/bin
         makeWrapper ${lib.getExe unwrapped} $out/bin/search-eval \
-          --prefix PATH : ${lib.makeBinPath [ searchBin claudeBin ]} \
+          --prefix PATH : ${
+            lib.makeBinPath [
+              searchBin
+              claudeBin
+            ]
+          } \
           --set SEARCH_EVAL_DATA_DIR ${data}
       '';
 
