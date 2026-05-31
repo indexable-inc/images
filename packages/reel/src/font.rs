@@ -1,9 +1,10 @@
 //! The embedded monospace faces and a glyph rasterization cache.
 //!
-//! Four JetBrains Mono faces (SIL Open Font License 1.1) are baked into the
-//! binary so a render never depends on a system-installed font: the result is
-//! identical on a clean machine and in CI. JetBrains Mono ships static weights,
-//! so the bold face is a real bold rather than a synthesized one.
+//! Four JetBrains Mono Nerd Font faces (the base font is SIL Open Font License
+//! 1.1) are baked into the binary so a render never depends on a system font:
+//! the result is identical on a clean machine and in CI. Static weights give a
+//! real bold rather than a synthesized one, and the Nerd Font glyphs render the
+//! file-type icons that tools like git-log-pretty emit.
 
 use std::collections::HashMap;
 

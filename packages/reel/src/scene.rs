@@ -56,30 +56,33 @@ pub enum Action {
 #[must_use]
 pub fn script(fps: u32) -> Vec<Action> {
     let secs = |n: f32| -> u32 { (n * fps as f32) as u32 };
+    // A short captioned tour run against the real tools. Each `#` line is a shell
+    // comment, so it shows as a caption without producing output. Both commands
+    // run offline, so anyone can regenerate this clip.
     vec![
-        // One repo, real history.
-        Action::Type("git --no-pager -c color.ui=always log --graph --oneline -10"),
+        // 1. git-log-pretty: recent commits as colored file-icon trees.
+        Action::Type("# recent work, as a colored file-icon tree"),
         Action::Send("\r"),
-        Action::Hold(secs(2.4)),
-        // Clear, then drive a real interactive program: a live Python REPL.
+        Action::Hold(secs(0.7)),
+        Action::Type("git-log-pretty --no-pager"),
+        Action::Send("\r"),
+        Action::Hold(secs(3.6)),
         Action::Type("clear"),
         Action::Send("\r"),
-        Action::Hold(secs(0.4)),
+        Action::Hold(secs(0.3)),
+        // 2. The PTY driver: this whole clip is code typing into a real shell.
+        Action::Type("# drive any terminal program from code"),
+        Action::Send("\r"),
+        Action::Hold(secs(0.7)),
         Action::Type("python3 -q"),
         Action::Send("\r"),
         Action::WaitFor {
             needle: ">>>",
             max: secs(4.0),
         },
-        Action::Type("import sys; sys.version.split()[0]"),
+        Action::Type("[tool.upper() for tool in ('search', 'tui', 'clone', 'mcp')]"),
         Action::Send("\r"),
-        Action::Hold(secs(1.2)),
-        Action::Type("sum(range(10_000_000))"),
-        Action::Send("\r"),
-        Action::Hold(secs(1.4)),
-        Action::Type("[tool.upper() for tool in ('search', 'tui', 'mcp')]"),
-        Action::Send("\r"),
-        Action::Hold(secs(2.2)),
+        Action::Hold(secs(2.4)),
         // Leave the REPL cleanly so the last frame is a calm prompt.
         Action::Send("\x04"),
         Action::Hold(secs(0.8)),
