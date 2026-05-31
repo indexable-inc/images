@@ -32,30 +32,32 @@ let
 
   cfg = config.services.ix-spark;
   dataDir = "/var/lib/spark";
-  java = cfg.jrePackage;
-  javaHome = java.home or "${java}";
   masterUrl = "spark://${cfg.master.host}:${toString cfg.master.port}";
 
-  # nixpkgs `spark_3_5` bakes `jdk = hadoop.jdk` (JDK 11) and its bin wrappers
-  # `--set JAVA_HOME` unconditionally, which would override any JAVA_HOME we
-  # export. Gluten 1.6 only supports JDK 8 and 17, so re-point the package's jdk
-  # (the `finalAttrs` pattern threads this into the wrappers) at our JDK 17.
-  sparkPackage = cfg.package.overrideAttrs (_: {
-    jdk = cfg.jrePackage;
-  });
-  sparkClass = "${sparkPackage}/bin/spark-class";
+  # `spark-hive` is the official complete distribution (hadoop3 + Hive) pinned to
+  # JDK 17. Hive support is mandatory: Gluten's HiveTableScanExecTransformer
+  # eagerly loads Hive input-format classes during planning, so the lean
+  # nixpkgs `spark` (no hive-exec) cannot initialize it. The package's bin
+  # wrappers `--set JAVA_HOME`, so the daemons run on its JDK 17.
+  sparkClass = "${cfg.package}/bin/spark-class";
 
-  # Driver/executor JVM options for the native path. The `--add-opens` cover
-  # Arrow's JNI reflection into java.nio on JDK 17. `java.io.tmpdir` is pinned to
-  # the on-disk state dir because Gluten extracts ~270 MiB of native libraries
-  # (libvelox.so et al.) per JVM out of the jar at startup; the default `/tmp` is
-  # RAM-backed tmpfs here, so leaving it there would burn that much RAM per
-  # executor on top of the off-heap budget.
+  # Driver/executor JVM options for the native path:
+  # - `--add-opens` open the modules Arrow's JNI reflects into on JDK 17.
+  # - `io.netty.tryReflectionSetAccessible=true` is required for Arrow's off-heap
+  #   allocator: Netty (which Arrow's memory layer uses) refuses the
+  #   `DirectByteBuffer(long, int)` constructor on JDK 9+ unless this is set, even
+  #   with java.nio opened, surfacing as "sun.misc.Unsafe or
+  #   java.nio.DirectByteBuffer.<init>(long, int) not available".
+  # - `java.io.tmpdir` is pinned to the on-disk state dir because Gluten extracts
+  #   ~270 MiB of native libraries (libvelox.so et al.) per JVM out of the jar at
+  #   startup; the default `/tmp` is RAM-backed tmpfs here, so leaving it there
+  #   would burn that much RAM per executor on top of the off-heap budget.
   nativeJavaOpts = lib.concatStringsSep " " [
     "-XX:+IgnoreUnrecognizedVMOptions"
     "--add-opens=java.base/java.nio=ALL-UNNAMED"
     "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
     "--add-opens=java.base/java.lang=ALL-UNNAMED"
+    "-Dio.netty.tryReflectionSetAccessible=true"
     "-Djava.io.tmpdir=${dataDir}/tmp"
   ];
 
@@ -97,10 +99,10 @@ let
   '';
 
   # Master/worker run via `spark-class` in the foreground (Type=simple), so their
-  # logs go to the journal rather than SPARK_LOG_DIR; no log dir is set.
+  # logs go to the journal rather than SPARK_LOG_DIR; no log dir is set. JAVA_HOME
+  # is baked into the package's bin wrappers, so it is not set here.
   sparkEnv = {
-    JAVA_HOME = javaHome;
-    SPARK_HOME = "${sparkPackage}";
+    SPARK_HOME = "${cfg.package}";
     SPARK_CONF_DIR = "${confDir}";
     SPARK_WORKER_DIR = "${dataDir}/work";
     SPARK_LOCAL_DIRS = "${dataDir}/local";
@@ -129,25 +131,12 @@ in
   options.services.ix-spark = {
     enable = mkEnableOption "Apache Spark standalone cluster with the Gluten/Velox native engine";
 
-    package = mkOption {
-      type = types.package;
-      default = pkgs.spark_3_5;
-      defaultText = lib.literalExpression "pkgs.spark_3_5";
-      description = ''
-        Spark distribution. Pinned to the 3.5 line because the Gluten Velox
-        bundle in {option}`services.ix-spark.nativeEngine.package` is built
-        against Spark 3.5; pairing it with another major fails to load the
-        plugin.
-      '';
-    };
-
-    jrePackage = mkOption {
-      type = types.package;
-      default = pkgs.jdk17_headless;
-      defaultText = lib.literalExpression "pkgs.jdk17_headless";
-      description = ''
-        JDK/JRE used to run the master and workers. Gluten 1.6 with Spark 3.5 is
-        tested on JDK 17; other majors are not covered upstream.
+    package = mkPackageOption pkgs "spark-hive" {
+      extraDescription = ''
+        The official complete Spark 3.5 distribution (hadoop3 + Hive) pinned to
+        JDK 17. Hive support is mandatory for the Gluten native engine, and the
+        Gluten Velox bundle in {option}`services.ix-spark.nativeEngine.package`
+        is built against Spark 3.5, so keep these versions aligned.
       '';
     };
 
@@ -241,6 +230,16 @@ in
   };
 
   config = mkIf cfg.enable {
+    # Velox (bundled in the Gluten jar) resolves the IANA tz database through its
+    # date library, which hardcodes the FHS `/usr/share/zoneinfo` and ignores
+    # $TZDIR. NixOS does not populate that path, so point it at the tzdata store
+    # path; without it every Gluten query fails with
+    # "discover_tz_dir failed to find zoneinfo". Global (not unit-scoped) so a
+    # `spark-submit` driver run outside the service units resolves it too.
+    systemd.tmpfiles.rules = [
+      "L+ /usr/share/zoneinfo - - - - ${pkgs.tzdata}/share/zoneinfo"
+    ];
+
     users.users.spark = {
       isSystemUser = true;
       group = "spark";
