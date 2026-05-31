@@ -1,0 +1,29 @@
+[
+  {
+    "id": "U0SYNTHAAA",
+    "name": "ada",
+    "deleted": false,
+    "is_bot": false,
+    "is_app_user": false,
+    "team_id": "T0SYNTH",
+    "profile": { "display_name": "ada", "real_name": "Ada Synthetic" }
+  },
+  {
+    "id": "U0SYNTHBBB",
+    "name": "bob",
+    "deleted": false,
+    "is_bot": false,
+    "is_app_user": false,
+    "team_id": "T0SYNTH",
+    "profile": { "display_name": "", "real_name": "Bob Builder" }
+  },
+  {
+    "id": "U0SYNTHBOT",
+    "name": "robot",
+    "deleted": false,
+    "is_bot": true,
+    "is_app_user": true,
+    "team_id": "T0SYNTH",
+    "profile": { "display_name": "", "real_name": "Synthetic Bot" }
+  }
+]

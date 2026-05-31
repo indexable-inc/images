@@ -397,10 +397,12 @@ impl MemoryStore {
                     hits.push(SearchHit {
                         source: stored.source,
                         hash: Some(stored.document.content_hash.clone()),
+                        // Code records label by `path`; record sources by `title`.
                         path: stored
                             .document
                             .meta_json
                             .get(search_meta::keys::PATH)
+                            .or_else(|| stored.document.meta_json.get(search_meta::keys::TITLE))
                             .and_then(serde_json::Value::as_str)
                             .map(str::to_owned),
                         text: line.to_owned(),

@@ -21,7 +21,7 @@ pub struct FilterSpec {
 impl FilterSpec {
     /// Whether any selector is set.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.sources.is_empty() && self.exclude_sources.is_empty() && self.repo.is_none()
     }
 }

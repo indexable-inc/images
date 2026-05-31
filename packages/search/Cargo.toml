@@ -20,8 +20,10 @@ clap = { workspace = true, features = ["derive", "env"] }
 code-highlight.workspace = true
 dirs.workspace = true
 indicatif.workspace = true
+linear-export.workspace = true
 mixedbread.workspace = true
 progress-style.workspace = true
 search-core.workspace = true
+slack-export.workspace = true
 terminal-theme.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

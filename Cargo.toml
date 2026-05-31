@@ -31,10 +31,12 @@ members = [
   "packages/oci-image-builder",
   "packages/progress-style",
   "packages/repo-walker",
+  "packages/linear-export",
   "packages/search",
   "packages/search-core",
   "packages/search-meta",
   "packages/search-py",
+  "packages/slack-export",
   "packages/tap",
   "packages/tap/protocol",
   "packages/tap/pty",
@@ -101,6 +103,7 @@ indicatif = "0.18"
 insta = { version = "1.42", features = ["json"] }
 lazy-regex = "3.4"
 libc = "0.2"
+linear-export = { path = "packages/linear-export" }
 mixedbread = { path = "packages/mixedbread" }
 loro = "1.12"
 napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt"] }
@@ -143,6 +146,7 @@ serde = "1"
 serde_json = "1"
 sha2 = "0.10"
 similar = "2"
+slack-export = { path = "packages/slack-export" }
 snafu = "0.9"
 strip-ansi-escapes = "0.2"
 tango-bench = "0.7"

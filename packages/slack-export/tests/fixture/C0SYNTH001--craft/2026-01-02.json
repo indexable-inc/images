@@ -1,0 +1,19 @@
+[
+  {
+    "type": "message",
+    "ts": "1735776000.000500",
+    "thread_ts": "1735689700.000200",
+    "user": "U0SYNTHBBB",
+    "text": "use itzg/minecraft-server, it just works",
+    "files": [
+      { "name": "diagram.png", "title": "diagram.png", "filetype": "png", "pretty_type": "PNG" }
+    ]
+  },
+  {
+    "type": "message",
+    "subtype": "channel_leave",
+    "ts": "1735776100.000600",
+    "user": "U0SYNTHBBB",
+    "text": "<@U0SYNTHBBB> has left the channel"
+  }
+]

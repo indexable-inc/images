@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::{ResultExt as _, Snafu, ensure};
 
-/// Which corpus a record came from. Serializes to the snake_case tag stored
+/// Which corpus a record came from. Serializes to the `snake_case` tag stored
 /// under [`keys::SOURCE`] and used as the primary scope filter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,7 +44,7 @@ pub enum Source {
 }
 
 impl Source {
-    /// The snake_case tag, matching the serialized form.
+    /// The `snake_case` tag, matching the serialized form.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

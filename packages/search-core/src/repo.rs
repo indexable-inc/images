@@ -35,23 +35,18 @@ fn origin_slug(root: &Path) -> Option<String> {
 ///
 /// Handles both `https://host/owner/repo(.git)` and `git@host:owner/repo(.git)`.
 fn slug_from_url(url: &str) -> Option<String> {
-    // Split off the host: everything after the last ':' (scp form) or the path
-    // after the host in URL form. Normalizing both to a '/'-joined path tail.
-    let after_host = url
-        .rsplit_once("://")
-        .map_or(url, |(_, rest)| rest)
-        .split_once('/')
-        .map_or_else(
-            || url.rsplit_once(':').map_or(url, |(_, rest)| rest),
-            |(_, path)| path,
-        );
-    let trimmed = after_host.trim_end_matches('/').strip_suffix(".git").unwrap_or_else(|| after_host.trim_end_matches('/'));
-    let mut segments: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
-    if segments.len() < 2 {
-        return None;
-    }
-    let repo = segments.pop()?;
-    let owner = segments.pop()?;
+    let url = url.trim();
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    // Reduce to the path after the host. The URL form `scheme://host/owner/repo`
+    // drops the leading host segment; the scp form `user@host:owner/repo` takes
+    // the part after the colon.
+    let path = match url.split_once("://") {
+        Some((_, after)) => after.split_once('/').map(|(_, path)| path)?,
+        None => url.split_once(':').map_or(url, |(_, after)| after),
+    };
+    let mut segments = path.rsplit('/').filter(|segment| !segment.is_empty());
+    let repo = segments.next()?;
+    let owner = segments.next()?;
     Some(format!("{owner}/{repo}"))
 }
 

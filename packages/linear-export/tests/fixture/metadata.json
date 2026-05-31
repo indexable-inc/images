@@ -1,0 +1,20 @@
+{
+  "exported_at": "2026-01-01T00:00:00.000000",
+  "source": "synthetic fixture for tests",
+  "organization": {
+    "name": "Acme",
+    "urlKey": "acme",
+    "id": "00000000-0000-0000-0000-000000000000"
+  },
+  "team": {
+    "key": "FIX",
+    "name": "Fixtures",
+    "id": "11111111-1111-1111-1111-111111111111"
+  },
+  "counts": {
+    "issues": 4,
+    "projects": 1,
+    "cycles": 1
+  },
+  "includes_archived": true
+}

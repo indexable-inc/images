@@ -1,0 +1,18 @@
+[package]
+name = "slack-export"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Adapter turning a Slack export into per-thread embeddable search documents"
+
+[lints]
+workspace = true
+
+[dependencies]
+search-meta.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
