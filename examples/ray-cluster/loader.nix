@@ -10,13 +10,16 @@
   env).
 */
 { lib, pkgs }:
-rec {
+let
   libs = [
     pkgs.stdenv.cc.cc.lib
     pkgs.zlib
   ];
   libraryPath = lib.makeLibraryPath libs;
   nixLdDir = "/run/current-system/sw/share/nix-ld/lib";
+in
+{
+  inherit libs libraryPath nixLdDir;
   nixLd = "${nixLdDir}/ld.so";
   # The standalone binaries search NIX_LD_LIBRARY_PATH; include the same libs
   # plus the image's default nix-ld bundle.

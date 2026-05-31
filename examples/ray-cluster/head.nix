@@ -10,7 +10,14 @@ let
   gcsPort = 6379;
   clientPort = 10001;
   rayAddress = "${headHost}:${toString gcsPort}";
-  rayCli = import ./cli.nix { inherit ix lib pkgs rayAddress; };
+  rayCli = import ./cli.nix {
+    inherit
+      ix
+      lib
+      pkgs
+      rayAddress
+      ;
+  };
 
   # Every fleet node here runs Ray, so the node count is the cluster size the
   # health check should wait for. Bumping `ray-worker.replicas` in default.nix
@@ -20,7 +27,12 @@ in
 {
   imports = [
     (import ./cluster-node.nix {
-      inherit ix lib pkgs rayAddress;
+      inherit
+        ix
+        lib
+        pkgs
+        rayAddress
+        ;
       role = "head";
       extraStartArgs = [
         "--head"

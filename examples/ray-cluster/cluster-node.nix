@@ -26,7 +26,14 @@
 { config, ... }:
 let
   package = import ./package.nix { inherit ix lib pkgs; };
-  rayCli = import ./cli.nix { inherit ix lib pkgs rayAddress; };
+  rayCli = import ./cli.nix {
+    inherit
+      ix
+      lib
+      pkgs
+      rayAddress
+      ;
+  };
   loader = import ./loader.nix { inherit lib pkgs; };
 
   ports = {
@@ -41,43 +48,52 @@ let
   # enough to overflow it once Ray appends its session and socket names.
   tempDir = "/run/ray";
 
-  rayStartArgs = lib.escapeShellArgs (
-    [ "start" ]
-    ++ extraStartArgs
-    ++ [
-      "--node-manager-port"
-      (toString ports.nodeManager)
-      "--object-manager-port"
-      (toString ports.objectManager)
-      "--min-worker-port"
-      (toString ports.workerLow)
-      "--max-worker-port"
-      (toString ports.workerHigh)
-      "--temp-dir"
-      tempDir
-    ]
-  );
+  rayStartArgs = [
+    "start"
+  ]
+  ++ extraStartArgs
+  ++ [
+    "--node-manager-port"
+    (toString ports.nodeManager)
+    "--object-manager-port"
+    (toString ports.objectManager)
+    "--min-worker-port"
+    (toString ports.workerLow)
+    "--max-worker-port"
+    (toString ports.workerHigh)
+    "--temp-dir"
+    tempDir
+  ];
+
+  # Render the arg list as a Nushell list literal so the start script can splat
+  # it; each element is JSON-quoted, which is valid Nu string syntax.
+  rayStartArgsNu = "[ ${lib.concatMapStringsSep " " builtins.toJSON rayStartArgs} ]";
 
   # Ray's default node-IP autodetect opens a UDP socket toward a public resolver
   # and falls back to 127.0.0.1 when that fails. These nodes are east-west only
   # with no internet egress, so derive the address from the routing table
   # instead and bind Ray to the interface workers actually reach.
-  startScript = pkgs.writeShellApplication {
+  startScript = ix.writeNushellApplication pkgs {
     name = "ray-${role}-start";
     runtimeInputs = [
       pkgs.iproute2
-      pkgs.gawk
       pkgs.coreutils
     ];
     text = ''
-      node_ip="$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -n1)"
-      if [ -z "''${node_ip}" ]; then
-        echo "ray-${role}: no global IPv4 address found" >&2
+      let node_ip = (
+        ip -4 -o addr show scope global
+        | lines
+        | parse --regex 'inet (?<ip>\d+\.\d+\.\d+\.\d+)'
+        | get ip?
+        | get 0?
+        | default ""
+      )
+      if ($node_ip | is-empty) {
+        print --stderr "ray-${role}: no global IPv4 address found"
         exit 1
-      fi
-      exec ${package}/venv/bin/ray ${rayStartArgs} \
-        --node-ip-address "''${node_ip}" \
-        --block
+      }
+      let ray_args = [ ...${rayStartArgsNu} "--node-ip-address" $node_ip "--block" ]
+      exec ${package}/venv/bin/ray ...$ray_args
     '';
   };
 in
@@ -96,25 +112,23 @@ in
       HOME = tempDir;
       RAY_DISABLE_USAGE_STATS = "1";
     };
-    serviceConfig =
-      ix.systemdHardening
-      // {
-        ExecStart = lib.getExe startScript;
-        # SIGTERM to the foreground `--block` process is Ray's shutdown path;
-        # `ray stop` cannot see its own processes under ProtectProc and races
-        # the RuntimeDirectory teardown, so there is no ExecStop.
-        Restart = "on-failure";
-        RestartSec = 5;
-        DynamicUser = true;
-        RuntimeDirectory = "ray";
-        WorkingDirectory = tempDir;
-        # Ray's object store is host shared memory, and the health-check driver
-        # attaches from outside this unit's namespace. A private /dev (hence a
-        # private /dev/shm) or a private user namespace would stop that driver
-        # from mapping the store, so both are disabled for this service.
-        PrivateDevices = false;
-        PrivateUsers = false;
-      };
+    serviceConfig = ix.systemdHardening // {
+      ExecStart = lib.getExe startScript;
+      # SIGTERM to the foreground `--block` process is Ray's shutdown path;
+      # `ray stop` cannot see its own processes under ProtectProc and races
+      # the RuntimeDirectory teardown, so there is no ExecStop.
+      Restart = "on-failure";
+      RestartSec = 5;
+      DynamicUser = true;
+      RuntimeDirectory = "ray";
+      WorkingDirectory = tempDir;
+      # Ray's object store is host shared memory, and the health-check driver
+      # attaches from outside this unit's namespace. A private /dev (hence a
+      # private /dev/shm) or a private user namespace would stop that driver
+      # from mapping the store, so both are disabled for this service.
+      PrivateDevices = false;
+      PrivateUsers = false;
+    };
   };
 
   networking.firewall = {
