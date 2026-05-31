@@ -94,30 +94,34 @@ Examples:
 EOF
 }
 
-# Parse --flags into SET-style "col = value" assignments.
-# Echoes one assignment per line; validates enums and ranges.
+# Parse --flags into a single comma-joined SET clause ("a = 1, b = '...'").
+# Validates enums and ranges. Joined here rather than echoed one-per-line so a
+# value may itself contain newlines (a multi-paragraph --description) without the
+# caller splitting it apart; command substitution preserves interior newlines.
 parse_fields() {
-  local assigns=""
+  local clause="" sep="" assign
   while [ "$#" -gt 0 ]; do
     local flag="$1" val="${2:-}"
     [ "$#" -ge 2 ] || die "missing value for $flag"
     case "$flag" in
-      --title)       assigns+="title = '$(sq "$val")'"$'\n' ;;
-      --description) assigns+="description = '$(sq "$val")'"$'\n' ;;
-      --progress) assigns+="progress = $val"$'\n' ;;
-      --position) assigns+="position = $val"$'\n' ;;
-      --visible)  assigns+="visible = $val"$'\n' ;;
+      --title)       assign="title = '$(sq "$val")'" ;;
+      --description) assign="description = '$(sq "$val")'" ;;
+      --progress)    assign="progress = $val" ;;
+      --position)    assign="position = $val" ;;
+      --visible)     assign="visible = $val" ;;
       --color)
         in_list "$val" "$COLORS" || die "color must be one of: $COLORS"
-        assigns+="color = '$val'"$'\n' ;;
+        assign="color = '$val'" ;;
       --overlay)
         in_list "$val" "$OVERLAYS" || die "overlay must be one of: $OVERLAYS"
-        assigns+="overlay = '$val'"$'\n' ;;
+        assign="overlay = '$val'" ;;
       *) die "unknown flag: $flag" ;;
     esac
+    clause+="$sep$assign"
+    sep=", "
     shift 2
   done
-  printf '%s' "$assigns"
+  printf '%s' "$clause"
 }
 
 cmd="${1:-}"
@@ -128,9 +132,11 @@ case "$cmd" in
     [ "$#" -ge 1 ] || die "add needs a <title>"
     title="$1"; shift
     ensure_db
-    assigns="$(parse_fields "$@")"
     set_clause="title = '$(sq "$title")'"
-    while IFS= read -r line; do [ -n "$line" ] && set_clause+=", $line"; done <<< "$assigns"
+    extra="$(parse_fields "$@")"
+    if [ -n "$extra" ]; then
+      set_clause+=", $extra"
+    fi
     sqlite3 "$DB" "INSERT INTO bossbars DEFAULT VALUES;
                    UPDATE bossbars SET $set_clause WHERE id = last_insert_rowid();"
     ;;
@@ -139,13 +145,7 @@ case "$cmd" in
     sel="$(selector "$1")"; shift
     [ "$#" -ge 1 ] || die "set needs at least one field flag"
     ensure_db
-    assigns="$(parse_fields "$@")"
-    set_clause=""
-    while IFS= read -r line; do
-      [ -n "$line" ] || continue
-      [ -n "$set_clause" ] && set_clause+=", "
-      set_clause+="$line"
-    done <<< "$assigns"
+    set_clause="$(parse_fields "$@")"
     sqlite3 "$DB" "UPDATE bossbars SET $set_clause WHERE $sel;"
     ;;
   rm)

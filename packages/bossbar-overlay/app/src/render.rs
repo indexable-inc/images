@@ -410,10 +410,13 @@ impl Renderer {
                 title_px,
                 has_title,
             });
-            y = track_y + bar_h + bar_gap;
-            if let Some((_, panel_h)) = panel {
-                y += gap + panel_h + bar_gap;
-            }
+            // Advance past whatever this bar drew last: its panel bottom when it
+            // has one (sitting `gap` below the bar), otherwise the bar bottom.
+            let bottom = match panel {
+                Some((_, panel_h)) => track_y + bar_h + gap + panel_h,
+                None => track_y + bar_h,
+            };
+            y = bottom + bar_gap;
         }
         boxes
     }
@@ -744,7 +747,7 @@ impl Renderer {
             .zip(&sizes)
             .map(|((bar, geom), size)| {
                 let panel = size.map(|(panel_w, panel_h)| PanelBox {
-                    x: (width as f32 - panel_w) * 0.5,
+                    x: ((width as f32 - panel_w) * 0.5).max(0.0),
                     y: geom.track_y + geom.bar_h + gap,
                     w: panel_w,
                     h: panel_h,
