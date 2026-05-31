@@ -16,6 +16,10 @@ dist-ssr
 # them. `bun run fetch-assets` downloads them locally. See scripts/fetch-assets.sh.
 src/assets/boss_bar/
 
+# The Minecraft title TTF (tryashtar/minecraft-ttf) is Mojang-derived art and is
+# not redistributed here; the nix build fetches it into src/assets/fonts/.
+src/assets/fonts/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

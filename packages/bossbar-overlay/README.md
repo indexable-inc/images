@@ -98,8 +98,9 @@ your writers never block the overlay's reader.
   `id`, so progress changes animate instead of flickering.
 - `src/styles.css` — stacks the four sprite layers per bar and clips the
   progress layers to the fill fraction, scaled from the native 182x5 textures.
-  Titles use the open-source [Monocraft](https://github.com/IdreesInc/Monocraft)
-  font (SIL OFL).
+  Titles use a pixel-accurate Minecraft TTF generated from the real Minecraft
+  font definitions ([tryashtar/minecraft-ttf](https://github.com/tryashtar/minecraft-ttf)),
+  rendered 1:1 at an integer multiple-of-12px size with antialiasing off.
 
 ## Notes / limits
 
@@ -107,9 +108,9 @@ your writers never block the overlay's reader.
   is rejected by the Mac App Store.
 - The window covers the top ~45% of the **primary** monitor. Multi-monitor and
   per-monitor placement aren't handled yet.
-- The boss bar textures are Mojang's art and are **not** redistributed in this
-  repo; `fetch-assets.sh` downloads them locally for personal use. Monocraft is
-  independent (SIL OFL). This project is not affiliated with or endorsed by
-  Mojang.
+- The boss bar textures and the Minecraft title TTF are Mojang-derived art and
+  are **not** redistributed in this repo; they are fetched at build time
+  (`fetch-assets.sh` for the sprites, the nix derivation for the font) for
+  personal use. This project is not affiliated with or endorsed by Mojang.
 
 Implemented with AI assistance (Claude, Opus 4.8).

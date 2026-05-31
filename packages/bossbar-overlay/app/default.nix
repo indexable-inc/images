@@ -10,10 +10,22 @@
   rustc,
   curl,
   cacert,
+  fetchurl,
   makeWrapper,
   writableTmpDirAsHomeHook,
 }:
 let
+  # Pixel-accurate Minecraft "Mojangles" TTF generated from the real Minecraft
+  # font definitions (tryashtar/minecraft-ttf), so the boss bar title renders in
+  # the exact proportional font Minecraft draws. Like the boss bar sprites above,
+  # this is Mojang-derived art: fetched at build time and NOT redistributed by
+  # this repo. It is intentionally not an OFL lookalike; the operator chose a
+  # true 1:1 font over a pure-OFL substitute.
+  minecraftFont = fetchurl {
+    url = "https://github.com/tryashtar/minecraft-ttf/releases/download/v1.4/MinecraftDefault-Regular.ttf";
+    hash = "sha256-/DH9yXRU/qFDJacCuoJOWwtQRsADevs8oFWgPircqSA=";
+  };
+
   # Vanilla Minecraft boss bar sprite textures the overlay renders. These are
   # Mojang's art, gitignored and NOT redistributed in this repo; the fetcher
   # pulls them at build time, pinned to a Minecraft version, from the
@@ -169,6 +181,11 @@ rustPlatform.buildRustPackage {
     mkdir -p src/assets/boss_bar
     cp ${bossBarSprites}/*.png src/assets/boss_bar/
     chmod -R u+w src/assets/boss_bar
+
+    # Pre-seed the Mojang-derived Minecraft TTF so `vite` bundles it offline.
+    mkdir -p src/assets/fonts
+    cp ${minecraftFont} src/assets/fonts/MinecraftDefault-Regular.ttf
+    chmod -R u+w src/assets/fonts
   '';
 
   postInstall = lib.optionalString stdenv.hostPlatform.isDarwin ''

@@ -1,6 +1,6 @@
 @font-face {
-  font-family: "Monocraft";
-  src: url("./assets/fonts/Monocraft.ttf") format("truetype");
+  font-family: "Minecraft";
+  src: url("./assets/fonts/MinecraftDefault-Regular.ttf") format("truetype");
   font-display: block;
 }
 
@@ -11,6 +11,10 @@
    * little so they read as an overlay, the way Minecraft's HUD boss bar is
    * translucent over the world. Tune 0.0 (invisible) .. 1.0 (fully opaque). */
   --bar-opacity: 0.85;
+  /* tryashtar's MinecraftDefault TTF renders pixel-perfect only at integer
+   * font sizes that are a multiple of 12px (with integer line/letter spacing).
+   * Keep this an integer multiple of 12px; default 24px at --scale 2. */
+  --title-px: calc(12px * var(--scale));
 }
 
 html,
@@ -22,7 +26,7 @@ body {
 }
 
 body {
-  font-family: "Monocraft", monospace;
+  font-family: "Minecraft", monospace;
   -webkit-user-select: none;
   user-select: none;
   cursor: default;
@@ -47,8 +51,14 @@ body {
 .bar__title {
   margin: 0 0 calc(1px * var(--scale));
   text-align: center;
-  font-size: calc(8px * var(--scale));
+  /* Integer multiple-of-12px size + integer spacing + no antialiasing keeps the
+   * tryashtar TTF pixel-exact, matching how Minecraft rasterizes the title. */
+  font-family: "Minecraft", monospace;
+  font-size: var(--title-px);
   line-height: 1;
+  letter-spacing: 0;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
   color: #ffffff;
   /* Vanilla text shadow: one dark pixel offset, scaled, no blur. */
   text-shadow: calc(1px * var(--scale)) calc(1px * var(--scale)) 0 #3f3f3f;
