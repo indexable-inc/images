@@ -1,0 +1,27 @@
+[package]
+name = "ast-merge"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "AST-aware git merge driver using tree-sitter"
+
+[[bin]]
+name = "ast-merge"
+path = "src/main.rs"
+
+[dependencies]
+snafu.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+clap = { workspace = true, features = ["derive"] }
+ast-merge-ast.workspace = true
+ast-merge-matcher.workspace = true
+ast-merge-diff.workspace = true
+ast-merge-langs.workspace = true
+ast-merge-git.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[lints]
+workspace = true

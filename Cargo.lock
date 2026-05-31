@@ -276,6 +276,107 @@ dependencies = [
 ]
 
 [[package]]
+name = "ast-merge"
+version = "0.1.0"
+dependencies = [
+ "ast-merge-ast",
+ "ast-merge-diff",
+ "ast-merge-git",
+ "ast-merge-langs",
+ "ast-merge-matcher",
+ "clap",
+ "insta",
+ "snafu",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ast-merge-ast"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "rustc-hash",
+ "snafu",
+ "tree-sitter",
+ "tree-sitter-language",
+ "tree-sitter-rust",
+]
+
+[[package]]
+name = "ast-merge-diff"
+version = "0.1.0"
+dependencies = [
+ "ast-merge-ast",
+ "ast-merge-langs",
+ "ast-merge-matcher",
+ "insta",
+ "rustc-hash",
+ "similar",
+ "tree-sitter",
+]
+
+[[package]]
+name = "ast-merge-git"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "lazy-regex",
+ "snafu",
+]
+
+[[package]]
+name = "ast-merge-langs"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-css",
+ "tree-sitter-dockerfile-updated",
+ "tree-sitter-elixir",
+ "tree-sitter-go",
+ "tree-sitter-haskell",
+ "tree-sitter-html",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-kotlin-ng",
+ "tree-sitter-lua",
+ "tree-sitter-md",
+ "tree-sitter-nix",
+ "tree-sitter-ocaml",
+ "tree-sitter-php",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-scala",
+ "tree-sitter-svelte-ng",
+ "tree-sitter-swift",
+ "tree-sitter-toml-ng",
+ "tree-sitter-typescript",
+ "tree-sitter-yaml",
+]
+
+[[package]]
+name = "ast-merge-matcher"
+version = "0.1.0"
+dependencies = [
+ "ast-merge-ast",
+ "insta",
+ "rayon",
+ "rustc-hash",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-language",
+ "tree-sitter-rust",
+ "tree-sitter-toml-ng",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -653,6 +754,77 @@ name = "clap_lex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
+
+[[package]]
+name = "clone-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "clone-detect",
+ "clone-hash",
+ "clone-scanner",
+ "glob",
+ "serde",
+ "serde_json",
+ "snafu",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "clone-detect"
+version = "0.1.0"
+dependencies = [
+ "ast-merge-ast",
+ "ast-merge-langs",
+ "ast-merge-matcher",
+ "clone-hash",
+ "clone-scanner",
+ "insta",
+ "rayon",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "clone-hash"
+version = "0.1.0"
+dependencies = [
+ "ast-merge-ast",
+ "ast-merge-langs",
+ "insta",
+ "rustc-hash",
+ "tree-sitter",
+]
+
+[[package]]
+name = "clone-pragma"
+version = "0.1.0"
+dependencies = [
+ "ast-merge-ast",
+ "ast-merge-langs",
+ "tree-sitter",
+]
+
+[[package]]
+name = "clone-scanner"
+version = "0.1.0"
+dependencies = [
+ "ast-merge-ast",
+ "ast-merge-langs",
+ "clone-hash",
+ "clone-pragma",
+ "ignore",
+ "insta",
+ "parking_lot",
+ "rustc-hash",
+ "snafu",
+ "tempfile",
+ "tracing",
+]
 
 [[package]]
 name = "cobs"
@@ -2163,6 +2335,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "insta"
+version = "1.47.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b4a6248eb93a4401ed2f37dfe8ea592d3cf05b7cf4f8efa867b6895af7e094e"
+dependencies = [
+ "console",
+ "once_cell",
+ "serde",
+ "similar",
+ "tempfile",
+]
+
+[[package]]
 name = "inventory"
 version = "0.3.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2328,6 +2513,29 @@ dependencies = [
  "futures-util",
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "lazy-regex"
+version = "3.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bae91019476d3ec7147de9aa291cadb6d870abf2f3015d2da73a90325ac1496"
+dependencies = [
+ "lazy-regex-proc_macros",
+ "once_cell",
+ "regex",
+]
+
+[[package]]
+name = "lazy-regex-proc_macros"
+version = "3.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4de9c1e1439d8b7b3061b2d209809f447ca33241733d9a3c01eabf2dc8d94358"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -5316,6 +5524,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-dockerfile-updated"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e61eb704364be179ab9be89e2891c8e77c0041eca5891a5c04164a21f6df7a0"
+dependencies = [
+ "cc",
+ "tree-sitter",
+]
+
+[[package]]
 name = "tree-sitter-elixir"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5392,6 +5610,16 @@ name = "tree-sitter-json"
 version = "0.24.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d727acca406c0020cffc6cf35516764f36c8e3dc4408e5ebe2cb35a947ec471"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-kotlin-ng"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e800ebbda938acfbf224f4d2c34947a31994b1295ee6e819b65226c7b51b4450"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -5498,6 +5726,16 @@ name = "tree-sitter-sequel"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d198ad3c319c02e43c21efa1ec796b837afcb96ffaef1a40c1978fbdcec7d17"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-svelte-ng"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef0a71f9cf5e94373cc86c64893630c8a29bb25d3390a248268d08af2165fa37"
 dependencies = [
  "cc",
  "tree-sitter-language",

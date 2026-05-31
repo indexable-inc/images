@@ -1,0 +1,16 @@
+[package]
+name = "clone-pragma"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Pragma detection for clone detection (e.g., clone:ignore comments)"
+
+[dependencies]
+ast-merge-ast.workspace = true
+tree-sitter.workspace = true
+
+[dev-dependencies]
+ast-merge-langs.workspace = true
+
+[lints]
+workspace = true

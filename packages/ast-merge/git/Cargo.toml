@@ -1,0 +1,16 @@
+[package]
+name = "ast-merge-git"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Git merge driver integration for ast-merge"
+
+[dependencies]
+snafu.workspace = true
+lazy-regex.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[lints]
+workspace = true
