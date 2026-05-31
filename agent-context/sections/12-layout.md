@@ -12,8 +12,17 @@ flake.nix                                  # manifest: inputs + delegated output
 lib/                                       # public helpers, builders, discovery
 modules/                                   # registered NixOS modules and profiles
 images/                                    # image modules plus optional versions
+packages/                                  # repo-owned packages (Rust crates, apps, tools)
+skills/                                    # Claude Code skills, one dir per skill
+agent-context/                             # source fragments for generated AGENTS.md/CLAUDE.md
 nix-rules/                                 # ast-grep lint rules
 ```
+
+Skills are this repo's custom agent-skill system: each `skills/<name>/SKILL.md`
+(frontmatter `name` + a trigger `description`, optional `references/` and
+`assets/`) is auto-discovered by [`lib/skills.nix`](lib/skills.nix), so adding a
+directory is the only step to publish one. They surface to agents by name; reach
+for one when its description matches the task.
 
 Folders should preserve conceptual paths. When siblings share a real domain,
 nest them under that domain instead of flattening the name into repeated dashed
