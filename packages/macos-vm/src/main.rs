@@ -16,11 +16,18 @@
 //!
 //! The graphics/screenshot, vsock IPC, OCI-disk, and macOS-guest paths build on
 //! the same `VZVirtualMachineConfiguration` and are tracked in the README.
+//!
+//! Off macOS the binary builds (so the Linux CI workspace graph stays green) but
+//! is a single typed refusal: all Virtualization.framework code lives in the
+//! `cfg(target_os = "macos")` module below, so the Linux compile sees only the
+//! `main` at the bottom of this file.
 
 use std::process::ExitCode;
 
+#[cfg(target_os = "macos")]
 use clap::{Parser, Subcommand};
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Parser)]
 #[command(
     name = "macos-vm",
@@ -31,6 +38,7 @@ struct Cli {
     command: Command,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Report whether Virtualization.framework can run a VM on this host.
@@ -62,9 +70,10 @@ enum Command {
     },
 }
 
+#[cfg(target_os = "macos")]
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match run(cli.command) {
+    match imp::dispatch(cli.command) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("macos-vm: {error}");
@@ -73,54 +82,31 @@ fn main() -> ExitCode {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn run(command: Command) -> Result<(), imp::Error> {
-    match command {
-        Command::Info => imp::info(),
-        Command::BootLinux {
-            kernel,
-            initramfs,
-            cpus,
-            memory_mib,
-            cmdline,
-            timeout_secs,
-        } => imp::boot_linux(imp::LinuxBoot {
-            kernel,
-            initramfs,
-            cpus,
-            memory_bytes: memory_mib * 1024 * 1024,
-            cmdline,
-            timeout: std::time::Duration::from_secs(timeout_secs),
-        }),
-    }
-}
-
-/// On non-macOS targets the binary still builds (so the Linux CI workspace graph
-/// stays green) but every command is a typed refusal rather than a silent
-/// fallback.
 #[cfg(not(target_os = "macos"))]
-fn run(_command: Command) -> Result<(), NotMacOs> {
-    Err(NotMacOs)
+fn main() -> ExitCode {
+    eprintln!("macos-vm: requires macOS and Apple's Virtualization.framework");
+    ExitCode::FAILURE
 }
-
-#[cfg(not(target_os = "macos"))]
-#[derive(Debug, snafu::Snafu)]
-#[snafu(display("macos-vm requires macOS and Apple's Virtualization.framework"))]
-struct NotMacOs;
 
 #[cfg(target_os = "macos")]
 mod imp {
-    //! The Virtualization.framework glue. Everything here runs on the process
-    //! main thread, which is the queue VZ binds the VM to by default; the guest
-    //! vCPUs run on framework-owned threads, and `dispatch_main` drains the main
-    //! queue so VZ's completion handlers fire (mirroring Apple's sample app,
-    //! which wraps the same calls in `dispatchMain()`).
+    //! The Virtualization.framework glue.
+    //!
+    //! VZ binds a VM to a dispatch queue and requires every VM operation
+    //! (`initWithConfiguration`, `start`, the completion handlers) to run on
+    //! that queue. We use the main queue: the VM is created and started inside a
+    //! block submitted to the main queue, and `dispatch_main` then drains that
+    //! queue (mirroring Apple's sample app). objc2 objects are not `Send`, so
+    //! the VM and its config must be built *inside* that block rather than moved
+    //! into it; the block captures only the `Send` boot parameters.
 
     use std::path::PathBuf;
     use std::time::Duration;
 
     use block2::RcBlock;
+    use dispatch2::{DispatchQueue, dispatch_main};
     use objc2::AllocAnyThread;
+    use objc2::rc::Retained;
     use objc2_foundation::{NSArray, NSError, NSFileHandle, NSPipe, NSString, NSURL};
     use objc2_virtualization::{
         VZBootLoader, VZEntropyDeviceConfiguration, VZFileHandleSerialPortAttachment,
@@ -131,87 +117,119 @@ mod imp {
     };
     use snafu::Snafu;
 
+    use crate::Command;
+
     #[derive(Debug, Snafu)]
     pub enum Error {
         #[snafu(display("virtualization is not available on this host"))]
         Unsupported,
+        #[snafu(display("guest memory {mib} MiB is too large to express in bytes"))]
+        MemoryTooLarge { mib: u64 },
         #[snafu(display(
             "virtual machine configuration is invalid: {message} \
              (an unsigned binary, or one missing com.apple.security.virtualization, \
              fails configuration validation)"
         ))]
         InvalidConfiguration { message: String },
-        #[snafu(display("failed to start the virtual machine: {message}"))]
-        StartFailed { message: String },
     }
 
     /// Parameters for a Linux guest boot. A named struct rather than a wide
-    /// tuple so callers (and the future IPC layer) name each field.
+    /// tuple so callers (and the future IPC layer) name each field. Every field
+    /// is `Send`, which is what lets the boot block be submitted to the queue.
     pub struct LinuxBoot {
         pub kernel: PathBuf,
         pub initramfs: PathBuf,
         pub cpus: usize,
-        pub memory_bytes: u64,
+        pub memory_mib: u64,
         pub cmdline: String,
         pub timeout: Duration,
     }
 
-    pub fn info() -> Result<(), Error> {
-        let supported = unsafe { VZVirtualMachine::isSupported() };
-        println!("virtualization_supported={supported}");
-        if supported {
-            Ok(())
-        } else {
-            Err(Error::Unsupported)
+    pub fn dispatch(command: Command) -> Result<(), Error> {
+        match command {
+            Command::Info => info(),
+            Command::BootLinux {
+                kernel,
+                initramfs,
+                cpus,
+                memory_mib,
+                cmdline,
+                timeout_secs,
+            } => boot_linux(LinuxBoot {
+                kernel,
+                initramfs,
+                cpus,
+                memory_mib,
+                cmdline,
+                timeout: Duration::from_secs(timeout_secs),
+            }),
         }
     }
 
-    pub fn boot_linux(boot: LinuxBoot) -> Result<(), Error> {
+    fn info() -> Result<(), Error> {
+        let supported = unsafe { VZVirtualMachine::isSupported() };
+        println!("virtualization_supported={supported}");
+        if supported { Ok(()) } else { Err(Error::Unsupported) }
+    }
+
+    fn boot_linux(boot: LinuxBoot) -> Result<(), Error> {
         if !unsafe { VZVirtualMachine::isSupported() } {
             return Err(Error::Unsupported);
         }
 
-        let config = build_linux_config(&boot)?;
+        let timeout = boot.timeout;
 
-        // Validate before constructing the VM: this is where a missing
-        // entitlement surfaces as a clear error instead of a later crash.
-        if let Err(error) = unsafe { config.validateWithError() } {
-            return Err(Error::InvalidConfiguration {
-                message: ns_error_message(&error),
+        // Create and start the VM on the main queue, which is the queue VZ binds
+        // the VM to by default. Building inside the block keeps every non-`Send`
+        // objc2 object on that thread; the block captures only `boot`.
+        DispatchQueue::main().exec_async(move || {
+            let config = match build_linux_config(&boot) {
+                Ok(config) => config,
+                Err(error) => {
+                    eprintln!("macos-vm: {error}");
+                    std::process::exit(1);
+                }
+            };
+            let vm = unsafe {
+                VZVirtualMachine::initWithConfiguration(VZVirtualMachine::alloc(), &config)
+            };
+            let completion = RcBlock::new(|error: *mut NSError| {
+                if error.is_null() {
+                    eprintln!("macos-vm: guest started");
+                } else {
+                    // Safety: VZ hands us a valid retained NSError on failure.
+                    let error = unsafe { &*error };
+                    eprintln!("macos-vm: guest failed to start: {}", ns_error_message(error));
+                    std::process::exit(1);
+                }
             });
-        }
-
-        let vm = unsafe { VZVirtualMachine::initWithConfiguration(VZVirtualMachine::alloc(), &config) };
-
-        // Completion handler runs on the main queue once `dispatch_main` drains
-        // it. The error pointer is null on success.
-        let completion = RcBlock::new(|error: *mut NSError| {
-            if error.is_null() {
-                eprintln!("macos-vm: guest started");
-            } else {
-                // Safety: VZ hands us a valid, retained NSError on failure.
-                let error = unsafe { &*error };
-                eprintln!("macos-vm: guest failed to start: {}", ns_error_message(error));
-                std::process::exit(1);
-            }
+            unsafe { vm.startWithCompletionHandler(&completion) };
+            // The VM must outlive this block: dropping the last `Retained` would
+            // tear the running VM down. The process runs until the timeout, so
+            // hand the VM to the process for its lifetime.
+            std::mem::forget(vm);
         });
-        unsafe { vm.startWithCompletionHandler(&completion) };
 
         // Hard stop so a background invocation never hangs: a separate thread
         // sleeps the timeout, then exits the process. The guest console has
-        // already streamed to stdout by then.
-        let timeout = boot.timeout;
+        // streamed to stdout by then.
         std::thread::spawn(move || {
             std::thread::sleep(timeout);
             eprintln!("macos-vm: timeout reached, stopping");
             std::process::exit(0);
         });
 
-        // Drains the main queue forever; the timeout thread ends the process.
-        dispatch2::dispatch_main();
+        // Drains the main queue forever (`-> !`); the timeout thread ends the
+        // process. Runs the boot block submitted above.
+        dispatch_main();
     }
 
-    fn build_linux_config(boot: &LinuxBoot) -> Result<objc2::rc::Retained<VZVirtualMachineConfiguration>, Error> {
+    fn build_linux_config(boot: &LinuxBoot) -> Result<Retained<VZVirtualMachineConfiguration>, Error> {
+        let memory_bytes = boot
+            .memory_mib
+            .checked_mul(1024 * 1024)
+            .ok_or(Error::MemoryTooLarge { mib: boot.memory_mib })?;
+
         let kernel_url = file_url(&boot.kernel);
         let initramfs_url = file_url(&boot.initramfs);
 
@@ -249,15 +267,24 @@ mod imp {
         unsafe {
             config.setBootLoader(Some(boot_loader_ref));
             config.setCPUCount(boot.cpus);
-            config.setMemorySize(boot.memory_bytes);
+            config.setMemorySize(memory_bytes);
             config.setSerialPorts(&NSArray::from_slice(&[serial_ref]));
             config.setEntropyDevices(&NSArray::from_slice(&[entropy_ref]));
             config.setMemoryBalloonDevices(&NSArray::from_slice(&[balloon_ref]));
         }
+
+        // Validation surfaces a missing entitlement as a clear error rather than
+        // a later crash.
+        if let Err(error) = unsafe { config.validateWithError() } {
+            return Err(Error::InvalidConfiguration {
+                message: ns_error_message(&error),
+            });
+        }
+
         Ok(config)
     }
 
-    fn file_url(path: &std::path::Path) -> objc2::rc::Retained<NSURL> {
+    fn file_url(path: &std::path::Path) -> Retained<NSURL> {
         let s = NSString::from_str(&path.to_string_lossy());
         NSURL::fileURLWithPath(&s)
     }
