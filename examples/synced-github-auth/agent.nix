@@ -47,40 +47,48 @@ let
     printf 'password=%s\n' "$token"
   '';
 
-  # Secret-independent health probe: assert the wiring, not a returned token.
-  # git must resolve the helper path, the helper must be executable, and it must
-  # exit 0 while emitting nothing for the empty request fed here (which never
-  # matches the host guard, so no token is read even once one is delivered). The
-  # stdout redirect is belt-and-suspenders so a token can never reach the
-  # health-check log. This passes in CI and on a fresh boot with no token.
+  # Secret-independent health probe: assert THIS example's wiring, not a
+  # returned token. Credential helpers are additive across scopes, so `--get`
+  # would return whatever helper has highest priority (a user's global config
+  # could shadow it); `--get-all` plus an exact match is the honest check that
+  # the system config registered our helper for github.com. Then run that exact
+  # helper and require exit 0 with no output for the empty request fed here
+  # (which never matches the host guard, so no token is read even once one is
+  # delivered; the stdout redirect is belt-and-suspenders against a token
+  # reaching the health-check log). Passes in CI and on a fresh boot with no
+  # token.
   credentialHelperCheck = pkgs.writeShellScript "check-github-credential-helper" ''
     set -eu
-    helper=$(${lib.getExe pkgs.git} config --get 'credential.https://github.com.helper')
-    test -x "$helper"
-    "$helper" get </dev/null >/dev/null
+    ${lib.getExe pkgs.git} config --get-all 'credential.https://github.com.helper' \
+      | ${lib.getExe pkgs.gnugrep} -qxF ${credentialHelper}
+    test -x ${credentialHelper}
+    ${credentialHelper} get </dev/null >/dev/null
   '';
 in
 {
-  # System git config. It sits below any user's `~/.config/git/config`, so an
-  # operator can still override per user, but no user here defines a github
-  # helper, so this is the one that answers. git execs the helper directly
-  # because the value is an absolute path.
+  # System git config in `/etc/gitconfig`. Credential helpers are additive
+  # across scopes, so a user's `~/.config/git/config` can add its own helper but
+  # does not replace this one; no user here defines a github helper, so this is
+  # the one that answers. git execs the helper directly because the value is an
+  # absolute path.
   environment.etc."gitconfig".text = ''
     [credential "https://github.com"]
     	helper = ${credentialHelper}
 
     # Route SSH-style remotes through HTTPS so the same token authenticates
-    # `git@github.com:` and `ssh://git@github.com/` clones. Drop this block if
-    # a node should keep using SSH keys for GitHub instead.
+    # `git@github.com:` and `ssh://git@github.com/` clones. This applies to
+    # every user on the node. Drop this block if a node should keep using SSH
+    # keys for GitHub instead.
     [url "https://github.com/"]
     	insteadOf = git@github.com:
     	insteadOf = ssh://git@github.com/
   '';
 
-  # `gh` does not use git's credential helper; it reads `GH_TOKEN`. It is left
-  # out of the global environment on purpose (an exported token is visible in
-  # every process's `/proc/<pid>/environ`). Operators who want the `gh` CLI
-  # authenticated point it at the same file per shell, e.g.
+  # `gh` does not use git's credential helper; it reads `GH_TOKEN` (or
+  # `GITHUB_TOKEN`). It is left out of the global environment on purpose: an
+  # exported token is visible in that process's `/proc/<pid>/environ`, is
+  # inherited by every descendant, and can land in a core dump. Operators who
+  # want the `gh` CLI authenticated point it at the same file per shell, e.g.
   #   export GH_TOKEN="$(cat /run/secrets/github/token)"
   # See the README for why this is not baked in.
 

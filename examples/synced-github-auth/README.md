@@ -44,10 +44,11 @@ where no real token exists.
 
 ## The `gh` CLI
 
-`gh` ignores git's credential helper; it reads `GH_TOKEN`. This example does
-not export `GH_TOKEN` globally, because an exported token shows up in every
-process's `/proc/<pid>/environ` and in core dumps. To authenticate `gh` in a
-shell, point it at the same file:
+`gh` ignores git's credential helper; it reads `GH_TOKEN` (or `GITHUB_TOKEN`).
+This example does not export it globally, because an exported token is visible
+in that process's `/proc/<pid>/environ`, is inherited by every descendant
+process, and can land in a core dump. To authenticate `gh` in a shell, point it
+at the same file:
 
 ```sh
 export GH_TOKEN="$(cat /run/secrets/github/token)"
