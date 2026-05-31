@@ -1,37 +1,35 @@
 {
   lib,
   stdenv,
-  stdenvNoCC,
   rustPlatform,
-  cargo-tauri,
-  bun,
-  nodejs,
-  cargo,
-  rustc,
+  fetchurl,
   curl,
   cacert,
-  fetchurl,
   makeWrapper,
-  writableTmpDirAsHomeHook,
+  # Linux runtime libraries. winit dlopens X11/Wayland/xkbcommon and wgpu
+  # dlopens the Vulkan loader, so they must be on the runtime library path.
+  wayland,
+  libxkbcommon,
+  vulkan-loader,
+  libGL,
+  xorg,
 }:
 let
   # Pixel-accurate Minecraft "Mojangles" TTF generated from the real Minecraft
-  # font definitions (tryashtar/minecraft-ttf), so the boss bar title renders in
-  # the exact proportional font Minecraft draws. Like the boss bar sprites above,
-  # this is Mojang-derived art: fetched at build time and NOT redistributed by
-  # this repo. It is intentionally not an OFL lookalike; the operator chose a
-  # true 1:1 font over a pure-OFL substitute.
+  # font definitions (tryashtar/minecraft-ttf), so boss bar titles render in the
+  # exact proportional font Minecraft draws. Mojang-derived art: fetched at
+  # build time and NOT redistributed by this repo. It is intentionally not an
+  # OFL lookalike; the operator chose a true 1:1 font over a pure-OFL substitute.
   minecraftFont = fetchurl {
     url = "https://github.com/tryashtar/minecraft-ttf/releases/download/v1.4/MinecraftDefault-Regular.ttf";
     hash = "sha256-/DH9yXRU/qFDJacCuoJOWwtQRsADevs8oFWgPircqSA=";
   };
 
-  # Vanilla Minecraft boss bar sprite textures the overlay renders. These are
-  # Mojang's art, gitignored and NOT redistributed in this repo; the fetcher
-  # pulls them at build time, pinned to a Minecraft version, from the
-  # InventivetalentDev/minecraft-assets mirror. This mirrors the offline-only
-  # `scripts/fetch-assets.sh` so the `prebuild` hook no-ops against pre-seeded
-  # files.
+  # Vanilla Minecraft boss bar sprite textures the overlay renders. Mojang's
+  # art, gitignored and NOT redistributed in this repo; the fetcher pulls them
+  # at build time, pinned to a Minecraft version, from the
+  # InventivetalentDev/minecraft-assets mirror. This mirrors the offline
+  # `app/scripts/fetch-assets.sh` used for local development.
   minecraftVersion = "1.21";
   spriteColors = [
     "pink"
@@ -53,7 +51,7 @@ let
     "${base}_progress.png"
   ]) (spriteColors ++ spriteNotches);
 
-  bossBarSprites = stdenvNoCC.mkDerivation {
+  bossBarSprites = stdenv.mkDerivation {
     pname = "bossbar-overlay-sprites";
     version = minecraftVersion;
 
@@ -82,126 +80,67 @@ let
     outputHash = "sha256-XPq8Ik6YUiwVyy2wXWR9V2wxi1TwyudVwdB0IuQLk50=";
   };
 
-  # Frontend dependencies, resolved from the tracked `bun.lock`. A fixed-output
-  # derivation so the rest of the build stays offline.
-  node_modules = stdenvNoCC.mkDerivation {
-    pname = "bossbar-overlay-node_modules";
-    version = "0.1.0";
-
-    src = lib.fileset.toSource {
-      root = ../.;
-      fileset = lib.fileset.unions [
-        ../package.json
-        ../bun.lock
-      ];
-    };
-
-    impureEnvVars = lib.fetchers.proxyImpureEnvVars ++ [
-      "GIT_PROXY_COMMAND"
-      "SOCKS_SERVER"
-    ];
-
-    nativeBuildInputs = [
-      bun
-      writableTmpDirAsHomeHook
-    ];
-
-    dontConfigure = true;
-
-    buildPhase = ''
-      runHook preBuild
-      bun install \
-        --frozen-lockfile \
-        --no-progress \
-        --ignore-scripts \
-        --cpu="*" \
-        --os="*"
-      runHook postBuild
-    '';
-
-    installPhase = ''
-      runHook preInstall
-      mkdir -p $out
-      cp -R node_modules $out/node_modules
-      runHook postInstall
-    '';
-
-    dontFixup = true;
-
-    outputHashMode = "recursive";
-    outputHashAlgo = "sha256";
-    outputHash = "sha256-97uhbMuDtHGPv9WIwcHzIQ8aEOheYUBKjCoVguPs8vo=";
-  };
+  # winit + wgpu need these at runtime on Linux; empty on Darwin, which uses
+  # Metal and the system window server.
+  runtimeLibs = lib.optionals stdenv.hostPlatform.isLinux [
+    wayland
+    libxkbcommon
+    vulkan-loader
+    libGL
+    xorg.libX11
+    xorg.libXcursor
+    xorg.libXrandr
+    xorg.libXi
+  ];
 in
 rustPlatform.buildRustPackage {
   pname = "bossbar-overlay";
   version = "0.1.0";
 
   src = lib.fileset.toSource {
-    root = ../.;
+    root = ./.;
     fileset = lib.fileset.unions [
-      ../package.json
-      ../bun.lock
-      ../tsconfig.json
-      ../vite.config.ts
-      ../index.html
-      ../src
-      ../src-tauri
-      ../scripts
+      ./Cargo.toml
+      ./Cargo.lock
+      ./src
     ];
   };
 
-  cargoRoot = "src-tauri";
-  buildAndTestSubdir = "src-tauri";
-  cargoLock.lockFile = ../src-tauri/Cargo.lock;
+  cargoLock.lockFile = ./Cargo.lock;
 
   strictDeps = true;
 
-  nativeBuildInputs = [
-    cargo-tauri.hook
-    bun
-    nodejs
-    cargo
-    rustc
-    makeWrapper
-  ];
-
-  # macOS uses the system WKWebView, so no gtk/webkit buildInputs are needed.
-  # The Linux toolchain would require them; gate when that target lands.
-
-  tauriBuildFlags = [ "--no-sign" ];
+  nativeBuildInputs = [ makeWrapper ];
+  buildInputs = runtimeLibs;
 
   preBuild = ''
-    cp -a ${node_modules}/node_modules .
-    chmod -R u+w node_modules
-    patchShebangs node_modules
-
-    # Pre-seed the gitignored Mojang sprites so the `prebuild` fetch-assets
-    # hook finds them and stays offline.
-    mkdir -p src/assets/boss_bar
-    cp ${bossBarSprites}/*.png src/assets/boss_bar/
-    chmod -R u+w src/assets/boss_bar
-
-    # Pre-seed the Mojang-derived Minecraft TTF so `vite` bundles it offline.
-    mkdir -p src/assets/fonts
-    cp ${minecraftFont} src/assets/fonts/MinecraftDefault-Regular.ttf
-    chmod -R u+w src/assets/fonts
+    # The Mojang sprites and TTF are gitignored, so the source closure never
+    # carries them; drop them where `include_bytes!` expects before compiling.
+    mkdir -p assets/boss_bar assets/fonts
+    cp ${bossBarSprites}/*.png assets/boss_bar/
+    cp ${minecraftFont} assets/fonts/MinecraftDefault-Regular.ttf
+    chmod -R u+w assets
   '';
 
-  postInstall = lib.optionalString stdenv.hostPlatform.isDarwin ''
-    mkdir -p $out/bin
-    ln -s "$out/Applications/Boss Bar Overlay.app/Contents/MacOS/bossbar-overlay" $out/bin/bossbar-overlay
+  # Point the binary at the dlopened X11/Wayland/Vulkan libraries on Linux.
+  postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
+    patchelf --add-rpath "${lib.makeLibraryPath runtimeLibs}" "$out/bin/bossbar-overlay"
+    wrapProgram "$out/bin/bossbar-overlay" \
+      --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath runtimeLibs}"
   '';
 
   meta = {
     description = "Minecraft-style boss bar desktop overlay driven by an SQLite file";
-    # MIT (Copyright 2026 Indexable Inc.). The boss bar sprites are Mojang art
-    # fetched at build time, not redistributed by this package.
+    # MIT (Copyright 2026 Indexable Inc.). The boss bar sprites and the
+    # Minecraft TTF are Mojang(-derived) art fetched at build time, not
+    # redistributed by this package.
     license = lib.licenses.mit;
     mainProgram = "bossbar-overlay";
     platforms = [
       "aarch64-darwin"
       "x86_64-darwin"
+      "x86_64-linux"
+      "aarch64-linux"
     ];
   };
 }

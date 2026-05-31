@@ -1,32 +1,17 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
+# Rust build output
+/app/target
 
 # Vanilla Minecraft boss bar textures are Mojang's art; we do not redistribute
-# them. `bun run fetch-assets` downloads them locally. See scripts/fetch-assets.sh.
-src/assets/boss_bar/
+# them. `app/scripts/fetch-assets.sh` downloads them locally and the Nix build
+# fetches them at build time. See app/scripts/fetch-assets.sh.
+/app/assets/boss_bar/
 
 # The Minecraft title TTF (tryashtar/minecraft-ttf) is Mojang-derived art and is
-# not redistributed here; the nix build fetches it into src/assets/fonts/.
-src/assets/fonts/
+# not redistributed here; it is fetched into app/assets/fonts/ the same way.
+/app/assets/fonts/
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+# Editor / OS cruft
+.vscode/
 .idea
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+*.swp

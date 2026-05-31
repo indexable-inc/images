@@ -1,0 +1,32 @@
+# Empty `[workspace]` makes this crate its own workspace root so it stays off
+# the repo's top-level `cargo --workspace` graph. The overlay is a standalone
+# desktop app built through Nix (`app/default.nix`); nothing in the repo depends
+# on it as a library.
+[workspace]
+
+[package]
+name = "bossbar-overlay"
+version = "0.1.0"
+description = "Minecraft-style boss bar desktop overlay driven by an SQLite file"
+authors = ["Andrew Gazelka"]
+edition = "2024"
+
+[[bin]]
+name = "bossbar-overlay"
+path = "src/main.rs"
+
+[dependencies]
+winit = "0.30"
+wgpu = "28"
+glyphon = "0.10"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Bundled SQLite so users don't need a system libsqlite3.
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "6"
+
+[profile.release]
+# A desktop HUD: trim the binary, no need for fat debug info.
+opt-level = "s"
+strip = true
