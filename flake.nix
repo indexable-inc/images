@@ -144,6 +144,9 @@
     {
       lib = ix;
       inherit (ix) nixosModules;
+      # Workstation-facing home-manager module: declare a service once, get a
+      # native launchd agent on macOS and native systemd user units on Linux.
+      homeModules.portable-services = ix.portableServices.homeModule;
       overlays.default = ix.overlay;
       packages = collect "packages";
       checks = collect "checks";

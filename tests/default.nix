@@ -11,6 +11,7 @@ let
   inherit (ix) pkgs;
   fs = lib.fileset;
   repoPackages = ix.packageSetFor pkgs;
+  portableServicesTest = import ./portable-services.nix { inherit lib pkgs ix; };
   packageRegistry = import ../packages/registry.nix {
     inherit lib;
     root = ../packages;
@@ -3702,6 +3703,7 @@ in
 {
   inherit imageTests groups cargoUnitRealWorkspaceAssertions;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
+  portableServices = portableServicesTest;
 
   # Aggregate. Pulls every per-image test into one derivation so
   # `nix flake check` covers the whole suite.
@@ -3710,6 +3712,7 @@ in
     ++ [
       fleetTest
       helperTest
+      portableServicesTest
     ]
   );
 }

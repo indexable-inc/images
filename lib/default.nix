@@ -62,6 +62,12 @@ let
   # `discoverImages` for symmetry; see its doc-comment for the discovery rules.
   nixosModules = discoverModules { root = paths.modules; };
 
+  # Portable user-service layer (launchd + systemd from one spec). Lives
+  # outside `modules/` on purpose: it is a home-manager module, not a NixOS
+  # module, so it must not be swept into `nixosModules` above. Exposed to
+  # consumers as `homeModules.portable-services` from the flake.
+  portableServices = import ./portable-services.nix { inherit lib; };
+
   # Flat list of module paths from the auto-discovered registry under
   # `modules/`. Pulled in unconditionally so every option is in scope; each
   # module stays inert until its `enable` flag is set.
@@ -383,6 +389,7 @@ let
       discoverImages
       discoverModules
       nixosModules
+      portableServices
       exampleFleetsFor
       artifacts
       agentsMd
