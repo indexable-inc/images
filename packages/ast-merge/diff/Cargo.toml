@@ -1,0 +1,20 @@
+[package]
+name = "ast-merge-diff"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "3DM merge algorithm and PCS changesets for ast-merge"
+
+[dependencies]
+ast-merge-ast.workspace = true
+ast-merge-matcher.workspace = true
+rustc-hash.workspace = true
+similar.workspace = true
+tree-sitter.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+ast-merge-langs.workspace = true
+
+[lints]
+workspace = true

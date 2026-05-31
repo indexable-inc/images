@@ -21,7 +21,7 @@ devicons.workspace = true
 # pkg-config first, which would add a system dependency to the workspace build.
 git2 = { workspace = true, default-features = false, features = ["vendored-libgit2"] }
 strip-ansi-escapes.workspace = true
-terminal-light.workspace = true
+terminal-theme.workspace = true
 
 [dev-dependencies]
 git2 = { workspace = true, default-features = false, features = ["vendored-libgit2"] }

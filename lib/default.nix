@@ -268,9 +268,26 @@ let
       cargoUnitFor
       ghostty
       writeNushellApplication
+      macosSdk
+      appleSdkToolchain
       ;
+    rustToolchainFor = languages.rust.toolchain;
   };
   rustWorkspace = rustWorkspaceFor pkgs;
+
+  /**
+    Pinned macOS SDK used to cross-compile Rust to Darwin from Linux. A
+    function `{ pkgs }: derivation`; override it to supply your own SDK.
+    See [`lib/macos-sdk.nix`](lib/macos-sdk.nix).
+  */
+  macosSdk = import ./macos-sdk.nix;
+
+  /**
+    zig + macOS SDK cross toolchain. `{ appleSdk, lib, pkgs, target }` returns
+    `{ env, runtimeInputs, rustcArgsForPlatform }` consumed by
+    `rustWorkspace.unitsFor`. See [`lib/apple-sdk-toolchain.nix`](lib/apple-sdk-toolchain.nix).
+  */
+  appleSdkToolchain = import ./apple-sdk-toolchain.nix;
 
   /**
     Cross-cutting helpers handed to every module through `specialArgs.ix`.
@@ -384,6 +401,8 @@ let
       goUnit
       goUnitFor
       languages
+      macosSdk
+      appleSdkToolchain
       minecraft
       mkMinecraftLoader
       mkMinecraftNbtFormat

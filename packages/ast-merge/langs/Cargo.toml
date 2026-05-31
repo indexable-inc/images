@@ -1,0 +1,68 @@
+[package]
+name = "ast-merge-langs"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Language profiles and tree-sitter grammars for ast-merge"
+
+[dependencies]
+tree-sitter.workspace = true
+
+# Tree-sitter language grammars (compatible with tree-sitter 0.25)
+# Core languages
+tree-sitter-rust.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-go.workspace = true
+
+# JVM languages
+tree-sitter-java.workspace = true
+tree-sitter-kotlin-ng.workspace = true
+tree-sitter-scala.workspace = true
+
+# Systems languages
+tree-sitter-c.workspace = true
+tree-sitter-cpp.workspace = true
+
+# .NET languages
+tree-sitter-c-sharp.workspace = true
+
+# Mobile languages
+tree-sitter-swift.workspace = true
+
+# Scripting languages
+tree-sitter-ruby.workspace = true
+tree-sitter-php.workspace = true
+tree-sitter-bash.workspace = true
+tree-sitter-lua.workspace = true
+
+# Functional languages
+tree-sitter-haskell.workspace = true
+tree-sitter-elixir.workspace = true
+tree-sitter-ocaml.workspace = true
+
+# Web languages
+tree-sitter-html.workspace = true
+tree-sitter-css.workspace = true
+tree-sitter-svelte-ng.workspace = true
+
+# Data formats
+tree-sitter-json.workspace = true
+tree-sitter-toml-ng.workspace = true
+tree-sitter-yaml.workspace = true
+
+# Documentation
+tree-sitter-md.workspace = true
+
+# DevOps
+tree-sitter-dockerfile-updated.workspace = true
+
+# Configuration languages
+tree-sitter-nix.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[lints]
+workspace = true

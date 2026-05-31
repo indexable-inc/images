@@ -1,0 +1,19 @@
+[package]
+name = "ast-merge-ast"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "AST types and tree-sitter parsing for ast-merge"
+
+[dependencies]
+snafu.workspace = true
+tree-sitter.workspace = true
+rustc-hash.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-language.workspace = true
+
+[lints]
+workspace = true

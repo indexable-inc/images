@@ -36,7 +36,7 @@ pub fn render(files: &[String], theme: Theme) -> String {
     collapse(&mut root);
 
     let mut lines = Vec::new();
-    render_children(&root, theme, "    ", &mut lines);
+    render_children(&root, theme, "  ", &mut lines);
     lines.join("\n")
 }
 
@@ -79,14 +79,15 @@ fn collapse(node: &mut Node) {
     }
 }
 
-/// Render each child of `node`, drawing the `├──`/`└──` connector and recursing
-/// with an extended prefix for grandchildren.
+/// Render each child of `node`, drawing the `├`/`└` connector and recursing with
+/// an extended prefix for grandchildren. Each level adds a 2-column step so deep
+/// trees stay compact.
 fn render_children(node: &Node, theme: Theme, prefix: &str, lines: &mut Vec<String>) {
     let count = node.children.len();
 
     for (index, (name, child)) in node.children.iter().enumerate() {
         let is_last = index == count - 1;
-        let connector = if is_last { "└── " } else { "├── " };
+        let connector = if is_last { "└ " } else { "├ " };
 
         let label = node_label(name, child, theme);
         lines.push(format!(
@@ -100,16 +101,18 @@ fn render_children(node: &Node, theme: Theme, prefix: &str, lines: &mut Vec<Stri
             } else {
                 palette::paint(palette::fg(Color::Rgb(GRAY)), "│")
             };
-            let next_prefix = format!("{prefix}{continuation}    ");
+            let next_prefix = format!("{prefix}{continuation} ");
             render_children(child, theme, &next_prefix, lines);
         }
     }
 }
 
 /// Build the styled label for one node: a gray directory name, or a file name
-/// (gray directory segments, white basename) followed by its colored icon.
+/// (gray directory segments, high-contrast basename) followed by its colored
+/// icon. The basename follows the detected theme so it stays readable on light
+/// terminals (black) as well as dark ones (white).
 fn node_label(name: &str, child: &Node, theme: Theme) -> String {
-    let white = Color::Rgb(palette::chip_foreground(Theme::Dark));
+    let basename_fg = Color::Rgb(palette::chip_foreground(theme));
     let gray = palette::fg(Color::Rgb(GRAY));
 
     if !child.is_file {
@@ -120,16 +123,16 @@ fn node_label(name: &str, child: &Node, theme: Theme) -> String {
         );
     }
 
-    let icon = icon_for_file(name, &Some(theme.devicons()));
+    let icon = icon_for_file(name, &Some(palette::devicons(theme)));
     let icon_style = palette::fg(Color::Rgb(palette::parse_hex(icon.color)));
 
     let name_part = name.rfind('/').map_or_else(
-        || palette::paint(palette::fg(white), name),
+        || palette::paint(palette::fg(basename_fg), name),
         |slash| {
             format!(
                 "{}{}",
                 palette::paint(gray, &name[..=slash]),
-                palette::paint(palette::fg(white), &name[slash + 1..]),
+                palette::paint(palette::fg(basename_fg), &name[slash + 1..]),
             )
         },
     );
@@ -168,7 +171,7 @@ mod tests {
             &["src/a.rs".to_string(), "src/b.rs".to_string()],
             Theme::Dark,
         ));
-        assert!(rendered.contains("├── "), "got: {rendered}");
-        assert!(rendered.contains("└── "), "got: {rendered}");
+        assert!(rendered.contains("├ "), "got: {rendered}");
+        assert!(rendered.contains("└ "), "got: {rendered}");
     }
 }

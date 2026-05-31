@@ -1,39 +1,22 @@
-//! Terminal color helpers and light/dark theme detection.
+//! Terminal color helpers keyed off the detected light/dark theme.
 //!
 //! Styling goes through [`anstyle`] so callers render SGR sequences the same way
-//! the rest of the repo's terminal surfaces do. Theme detection asks the
-//! terminal for its background luma via [`terminal_light`]; a dark terminal gets
+//! the rest of the repo's terminal surfaces do. The light/dark decision is owned
+//! by [`terminal_theme`] and re-exported here as [`Theme`]; a dark terminal gets
 //! brighter foregrounds and a light terminal gets darker, higher-contrast ones.
 
 use std::hash::{Hash, Hasher};
 
 use anstyle::{Color, RgbColor, Style};
 
-/// Whether the terminal background is light or dark. The variant selects file
-/// icon themes and the contrast direction for hashed conventional-commit chips.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Theme {
-    Light,
-    Dark,
-}
+pub use terminal_theme::{Theme, detect};
 
-impl Theme {
-    /// Probe the terminal background. Anything brighter than mid-gray counts as
-    /// a light theme; an unreadable or absent response falls back to `Dark`,
-    /// matching the common terminal default.
-    pub fn detect() -> Self {
-        match terminal_light::luma() {
-            Ok(luma) if luma > 0.5 => Self::Light,
-            _ => Self::Dark,
-        }
-    }
-
-    /// Map to the [`devicons`] theme so file icons pick readable glyph colors.
-    pub const fn devicons(self) -> devicons::Theme {
-        match self {
-            Self::Light => devicons::Theme::Light,
-            Self::Dark => devicons::Theme::Dark,
-        }
+/// Map a [`Theme`] to the [`devicons`] theme so file icons pick readable glyph
+/// colors against the detected background.
+pub const fn devicons(theme: Theme) -> devicons::Theme {
+    match theme {
+        Theme::Light => devicons::Theme::Light,
+        Theme::Dark => devicons::Theme::Dark,
     }
 }
 

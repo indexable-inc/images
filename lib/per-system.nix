@@ -197,6 +197,42 @@ let
   };
 
   repoPackages = ix.packageSetFor pkgs;
+
+  # Cross-compiled standalone binaries, exposed as `packages.<host>.<bin>-<triple>`.
+  # Linux-only: the Apple (zig + macOS SDK) and musl cross toolchains run on a
+  # Linux build host; an aarch64-darwin Mac builds Darwin targets natively and
+  # cannot host the Linux→Darwin path, so gating here keeps darwin evaluation
+  # from pulling an unbuildable graph. Start with `dag-runner` (pure Rust, no C
+  # deps); widen `crossBinaries` as crates are confirmed cross-clean.
+  # macOS targets only for now: the zig + SDK toolchain produces a working
+  # linker out of the box. A musl target additionally needs a static musl
+  # linker wrapper (clang + mold against a musl sysroot); until that lands,
+  # `unitsFor` still accepts any triple but no musl package is exposed.
+  crossTargets = [
+    "aarch64-apple-darwin"
+    "x86_64-apple-darwin"
+  ];
+  crossBinaries = [ "dag-runner" ];
+  crossWorkspace = ix.rustWorkspaceFor pkgs;
+  crossPackages = lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+    lib.mergeAttrsList (
+      map (
+        target:
+        let
+          units = crossWorkspace.unitsFor { inherit target; };
+        in
+        lib.listToAttrs (
+          map (
+            binary:
+            lib.nameValuePair "${binary}-${target}" (
+              units.binaries.${binary} or (throw "cross: workspace has no binary `${binary}` for ${target}")
+            )
+          ) crossBinaries
+        )
+      ) crossTargets
+    )
+  );
+
   repoFlakePackages = lib.listToAttrs (
     map (
       entry:
@@ -353,6 +389,7 @@ in
     }
     // repoFlakePackages
     // examplePackages
+    // crossPackages
     // healthChecks.lifecyclePackages;
 
   checks = lib.optionalAttrs (system == ix.system) (
@@ -392,6 +429,23 @@ in
       rust-package-tests = pkgs.linkFarm "rust-package-tests" (
         lib.mapAttrsToList (name: path: { inherit name path; }) rustChecks
       );
+      # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
+      # which a successful build alone does not assert. `file` reads the Mach-O
+      # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
+      # rather than silently shipping a wrong-arch binary.
+      cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" { nativeBuildInputs = [ pkgs.file ]; } ''
+        bin=${crossPackages."dag-runner-aarch64-apple-darwin"}/bin/dag-runner
+        info=$(file -b "$bin")
+        echo "$info"
+        case "$info" in
+          *Mach-O*arm64*) ;;
+          *)
+            echo "expected Mach-O arm64, got: $info" >&2
+            exit 1
+            ;;
+        esac
+        mkdir -p "$out"
+      '';
       site-case-tests = pkgs.linkFarm "site-case-tests" (
         lib.mapAttrsToList (name: path: { inherit name path; }) siteTests.cases
       );
