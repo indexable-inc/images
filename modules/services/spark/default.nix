@@ -8,6 +8,11 @@
 # `spark-defaults.conf` wires the plugin, off-heap memory, and columnar shuffle
 # together. Turn {option}`services.ix-spark.nativeEngine.enable` off to drop
 # back to stock JVM execution.
+#
+# Scoped to a single node: master and worker run on the same host and the Gluten
+# jar is referenced by its absolute store path on `extraClassPath`. A real
+# multi-node cluster would need that same store path present on every worker
+# (shared nix store or copied closure).
 {
   config,
   ix,
@@ -30,15 +35,28 @@ let
   java = cfg.jrePackage;
   javaHome = java.home or "${java}";
   masterUrl = "spark://${cfg.master.host}:${toString cfg.master.port}";
-  sparkClass = "${cfg.package}/bin/spark-class";
 
-  # Arrow's JNI bridge reflects into java.nio on JDK 17; Spark adds its own
-  # module opens, these cover the Arrow/Gluten path specifically.
-  arrowOpens = lib.concatStringsSep " " [
+  # nixpkgs `spark_3_5` bakes `jdk = hadoop.jdk` (JDK 11) and its bin wrappers
+  # `--set JAVA_HOME` unconditionally, which would override any JAVA_HOME we
+  # export. Gluten 1.6 only supports JDK 8 and 17, so re-point the package's jdk
+  # (the `finalAttrs` pattern threads this into the wrappers) at our JDK 17.
+  sparkPackage = cfg.package.overrideAttrs (_: {
+    jdk = cfg.jrePackage;
+  });
+  sparkClass = "${sparkPackage}/bin/spark-class";
+
+  # Driver/executor JVM options for the native path. The `--add-opens` cover
+  # Arrow's JNI reflection into java.nio on JDK 17. `java.io.tmpdir` is pinned to
+  # the on-disk state dir because Gluten extracts ~270 MiB of native libraries
+  # (libvelox.so et al.) per JVM out of the jar at startup; the default `/tmp` is
+  # RAM-backed tmpfs here, so leaving it there would burn that much RAM per
+  # executor on top of the off-heap budget.
+  nativeJavaOpts = lib.concatStringsSep " " [
     "-XX:+IgnoreUnrecognizedVMOptions"
     "--add-opens=java.base/java.nio=ALL-UNNAMED"
     "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
     "--add-opens=java.base/java.lang=ALL-UNNAMED"
+    "-Djava.io.tmpdir=${dataDir}/tmp"
   ];
 
   nativeSettings = optionalAttrs cfg.nativeEngine.enable {
@@ -50,8 +68,8 @@ let
     "spark.memory.offHeap.size" = cfg.nativeEngine.offHeapSize;
     "spark.driver.extraClassPath" = cfg.nativeEngine.package.jar;
     "spark.executor.extraClassPath" = cfg.nativeEngine.package.jar;
-    "spark.driver.extraJavaOptions" = arrowOpens;
-    "spark.executor.extraJavaOptions" = arrowOpens;
+    "spark.driver.extraJavaOptions" = nativeJavaOpts;
+    "spark.executor.extraJavaOptions" = nativeJavaOpts;
   };
 
   # Tuned defaults; `cfg.settings` is merged over the top so a user key wins.
@@ -78,11 +96,12 @@ let
     cp ${sparkDefaultsConf} "$out/spark-defaults.conf"
   '';
 
+  # Master/worker run via `spark-class` in the foreground (Type=simple), so their
+  # logs go to the journal rather than SPARK_LOG_DIR; no log dir is set.
   sparkEnv = {
     JAVA_HOME = javaHome;
-    SPARK_HOME = "${cfg.package}";
+    SPARK_HOME = "${sparkPackage}";
     SPARK_CONF_DIR = "${confDir}";
-    SPARK_LOG_DIR = "${dataDir}/logs";
     SPARK_WORKER_DIR = "${dataDir}/work";
     SPARK_LOCAL_DIRS = "${dataDir}/local";
   };
@@ -99,7 +118,7 @@ let
       Group = "spark";
       StateDirectory = "spark";
       WorkingDirectory = dataDir;
-      ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${dataDir}/logs ${dataDir}/work ${dataDir}/local";
+      ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${dataDir}/work ${dataDir}/local ${dataDir}/tmp";
       ExecStart = execStart;
       Restart = "on-failure";
       RestartSec = 5;

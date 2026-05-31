@@ -25,9 +25,6 @@
   patchelf,
   unzip,
   zip,
-  zlib,
-  openssl,
-  numactl,
 }:
 let
   version = "1.6.0";
@@ -56,16 +53,14 @@ stdenv.mkDerivation (finalAttrs: {
     zip
   ];
 
-  # The CentOS 7 build statically links most of Velox/Arrow, so the residual
-  # dynamic deps are small: libc/libstdc++ come from the compiler runtime
-  # automatically, leaving these. autoPatchelf only adds an rpath entry for a
-  # library that is actually referenced, so an unused entry here stays out of the
-  # runtime closure.
+  # The CentOS 7 build statically links Velox/Arrow and their third-party deps
+  # (vcpkg static), so the only dynamic dependencies of the bundled `.so`s are
+  # glibc and the intra-bundle libvelox.so -> libgluten.so sibling link. glibc is
+  # provided by the host JVM's already-loaded namespace at runtime; libgcc_s /
+  # libstdc++ are kept here as a defensive rpath entry in case a future bundle
+  # links them dynamically.
   buildInputs = [
     (lib.getLib stdenv.cc.cc)
-    zlib
-    openssl
-    numactl
   ];
 
   # libvelox.so is ~246 MiB; stripping a vendored binary is slow and pointless.
