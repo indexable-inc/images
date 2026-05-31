@@ -16,13 +16,26 @@ pub struct FilterSpec {
     pub exclude_sources: Vec<Source>,
     /// Restrict code to this repository slug.
     pub repo: Option<String>,
+    /// Restrict to records authored by these users. Empty means all users; one
+    /// value (e.g. the current `$USER`) is "only my messages".
+    pub users: Vec<String>,
+    /// Restrict to records recorded on these hosts. Empty means all hosts.
+    pub hosts: Vec<String>,
+    /// Restrict to these project slugs (the per-source project tag, e.g. the
+    /// directory a Claude transcript was recorded under). Empty means all.
+    pub projects: Vec<String>,
 }
 
 impl FilterSpec {
     /// Whether any selector is set.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.sources.is_empty() && self.exclude_sources.is_empty() && self.repo.is_none()
+        self.sources.is_empty()
+            && self.exclude_sources.is_empty()
+            && self.repo.is_none()
+            && self.users.is_empty()
+            && self.hosts.is_empty()
+            && self.projects.is_empty()
     }
 }
 
@@ -48,12 +61,25 @@ pub fn build_filter(spec: &FilterSpec) -> Option<Filter> {
     if let Some(repo) = &spec.repo {
         clauses.push(Filter::eq(keys::REPO, repo.clone()));
     }
+    clauses.extend(any_of_strings(keys::USER, &spec.users));
+    clauses.extend(any_of_strings(keys::HOST, &spec.hosts));
+    clauses.extend(any_of_strings(keys::PROJECT, &spec.projects));
 
     match clauses.len() {
         0 => None,
         1 => clauses.pop(),
         _ => Some(Filter::all(clauses)),
     }
+}
+
+/// An `in` filter over `key` for a set of string values, or `None` when the set
+/// is empty (no constraint on that key).
+fn any_of_strings(key: &str, values: &[String]) -> Option<Filter> {
+    if values.is_empty() {
+        return None;
+    }
+    let array: Vec<serde_json::Value> = values.iter().map(|v| v.as_str().into()).collect();
+    Some(Filter::any_of(key, serde_json::Value::Array(array)))
 }
 
 #[cfg(test)]
@@ -91,6 +117,40 @@ mod tests {
         assert_eq!(
             value,
             serde_json::json!({ "none": [ { "key": "source", "operator": "eq", "value": "slack" } ] })
+        );
+    }
+
+    #[test]
+    fn single_user_builds_an_in_filter() {
+        let spec = FilterSpec {
+            users: vec!["andrew".to_owned()],
+            ..FilterSpec::default()
+        };
+        let filter = build_filter(&spec).expect("filter");
+        let value = serde_json::to_value(&filter).expect("ser");
+        assert_eq!(
+            value,
+            serde_json::json!({ "key": "user", "operator": "in", "value": ["andrew"] })
+        );
+    }
+
+    #[test]
+    fn user_host_project_combine_under_all() {
+        let spec = FilterSpec {
+            users: vec!["andrew".to_owned()],
+            hosts: vec!["hydra".to_owned()],
+            projects: vec!["ix".to_owned(), "index".to_owned()],
+            ..FilterSpec::default()
+        };
+        let filter = build_filter(&spec).expect("filter");
+        let value = serde_json::to_value(&filter).expect("ser");
+        assert_eq!(
+            value,
+            serde_json::json!({ "all": [
+                { "key": "user", "operator": "in", "value": ["andrew"] },
+                { "key": "host", "operator": "in", "value": ["hydra"] },
+                { "key": "project", "operator": "in", "value": ["ix", "index"] }
+            ] })
         );
     }
 

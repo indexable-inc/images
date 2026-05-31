@@ -156,6 +156,14 @@
         indexPackages = system: (collect "packages").${system};
         portableServicesModule = ix.portableServices.homeModule;
       };
+      # Workstation-facing module to sync this user's Claude Code history to an
+      # S3/R2 parquet archive and/or Mixedbread, as a portable timer service.
+      # Closed over the per-system packages so it resolves claude-history-sync
+      # for the host. See packages/claude-history-sync/home-module.nix.
+      homeModules.claude-history-sync = import ./packages/claude-history-sync/home-module.nix {
+        indexPackages = system: (collect "packages").${system};
+        portableServicesModule = ix.portableServices.homeModule;
+      };
       overlays.default = ix.overlay;
       packages = collect "packages";
       checks = collect "checks";
