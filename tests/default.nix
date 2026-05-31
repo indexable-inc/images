@@ -3146,7 +3146,13 @@ let
         message = "repo Rust package outputs should not wrap unrelated workspace policy checks";
       }
       {
-        assertion = builtins.hasAttr "integration-all" repoPackages.dag-runner.passthru.tests;
+        # cargo-unit suffixes integration-test keys with -<version>-<hash> when
+        # two workspace crates both name a test crate `integration` (dag-runner's
+        # and git-log-pretty's), so the key is not a fixed `integration-all`. The
+        # hash is source-derived, so match the package-owned target by shape.
+        assertion = lib.any (n: lib.hasPrefix "integration" n && lib.hasSuffix "-all" n) (
+          builtins.attrNames repoPackages.dag-runner.passthru.tests
+        );
         message = "repo Rust package tests should include package-owned integration test targets";
       }
       {
