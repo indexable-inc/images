@@ -36,7 +36,10 @@ def run_retrieval(
     for case in cases:
         progress(f"retrieval: {case.id}")
         hits = backend.search(case.query, no_sync=True)
-        retrieved = [hit.path for hit in hits]
+        # De-duplicate by path, keeping the best (first) rank: a real checkout
+        # can return several chunks of one file, which would otherwise count a
+        # relevant doc more than once and miscalibrate nDCG/precision.
+        retrieved = list(dict.fromkeys(hit.path for hit in hits))
         result = RetrievalResult(
             case=case,
             retrieved=retrieved,

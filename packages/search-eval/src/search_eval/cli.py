@@ -109,7 +109,7 @@ def _emit(report: dict[str, object], table: str, json_out: Path | None) -> None:
 
 def _run_retrieval(args: argparse.Namespace) -> dict[str, float]:
     cases = data.load_retrieval(args.dataset)
-    if args.limit:
+    if args.limit is not None:
         cases = cases[: args.limit]
     judge = None if getattr(args, "no_judge", False) else Judge(model=args.judge_model)
     results = run_retrieval(
@@ -121,7 +121,7 @@ def _run_retrieval(args: argparse.Namespace) -> dict[str, float]:
 
 def _run_agentic(args: argparse.Namespace) -> dict[str, float]:
     cases = data.load_tasks(getattr(args, "dataset", None))
-    if args.limit:
+    if args.limit is not None:
         cases = cases[: args.limit]
     backend = _agent_backend(args)
     # The agent's search tool runs with --no-sync, so the corpus must be indexed

@@ -89,16 +89,23 @@ analog of the GPT-4.1 grader Exa reports; override with `--judge-model`.
 
 The agent runs behind a pluggable backend:
 
-- `--backend local` (default) runs each `claude -p` in a throwaway temp
-  directory whose only tool is a generated `corpus-search` wrapper. The empty
-  working directory plus a tool allowlist means the agent cannot read or grep the
-  corpus directly: it must search.
-- `--backend ixvm` is the typed seam for running each agent inside a disposable
-  ix VM, the production isolation boundary (the same shape Symphony uses to run
-  Codex). It is not implemented yet and returns an explicit error rather than
-  silently falling back: ix VMs run on x86_64-linux compute nodes, so wiring this
-  up belongs in a follow-up. The interface lives in
-  [`agent.py`](src/search_eval/agent.py).
+- `--backend local` (default) runs each `claude -p` in a throwaway empty temp
+  directory whose only declared tool is a one-tool MCP search server
+  ([`mcp_server.py`](src/search_eval/mcp_server.py)), with Bash and every
+  file/web reader denied and the corpus path kept out of the agent's view (the
+  MCP config lives outside the working directory; the prompt never names a path).
+  This is **best-effort isolation for a cooperative agent, not a security
+  boundary.** Claude Code still executes read-only shell regardless of the tool
+  allow/deny lists, so an adversarial agent that hunts the filesystem could read
+  the corpus without searching. For a cooperative agent answering a question it
+  has only the search tool and no path, so the number reflects search; treat it
+  accordingly and use the airtight backend below when the isolation must hold.
+- `--backend ixvm` is the typed seam for the **airtight** boundary: run each
+  agent inside a disposable ix VM whose only view of the corpus is the search
+  tool (the same shape Symphony uses to run Codex). It is not implemented yet and
+  returns an explicit error rather than silently falling back: ix VMs run on
+  x86_64-linux compute nodes, so wiring this up belongs in a follow-up. The
+  interface lives in [`agent.py`](src/search_eval/agent.py).
 
 ## Why Python here
 

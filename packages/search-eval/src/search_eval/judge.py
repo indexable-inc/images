@@ -86,7 +86,13 @@ class Judge:
         )
         for block in resp.content:
             if isinstance(block, anthropic.types.ToolUseBlock):
-                return cast("dict[str, Any]", block.input)
+                out = cast("dict[str, Any]", block.input)
+                missing = [key for key in schema if key not in out]
+                if missing:
+                    # A grade missing required fields is an error, not a default:
+                    # silently treating it as 0/false would hide a broken judge.
+                    raise RuntimeError(f"judge omitted required fields: {missing}")
+                return out
         raise RuntimeError("judge returned no tool call")
 
     def grade_relevance(self, query: str, hit: Hit) -> RelevanceGrade:

@@ -8,14 +8,18 @@ command, so a correct answer is evidence the retrieval surfaced the fact.
 Isolation is a pluggable backend:
 
 - [`LocalBackend`] runs the agent in a fresh empty temp directory with a
-  generated ``corpus-search`` wrapper on PATH. The empty cwd plus a tool
-  allowlist means the agent cannot read or grep the corpus directly; it must
-  search. This is the default and is what runs in CI-style local runs.
-- [`IxVmBackend`] is the typed seam for running each agent inside a disposable
-  ix VM (the production isolation boundary, the same pattern Symphony uses for
-  Codex). It is not wired up yet: ix VMs run on x86_64-linux compute nodes, so
-  this backend is implemented as an explicit, observable error rather than a
-  silent fallback to local.
+  one-tool MCP search server (see [`mcp_server`]) and Bash plus every file/web
+  reader denied, and keeps the corpus path out of the agent's view (the MCP
+  config lives outside the working directory and the prompt never names a path).
+  This is **best-effort isolation for a cooperative agent**, not a security
+  boundary: Claude Code still executes read-only shell regardless of the tool
+  allow/deny lists, so an adversarial agent that goes hunting on the filesystem
+  could read the corpus without searching. It is the default for local runs.
+- [`IxVmBackend`] is the typed seam for the **airtight** boundary: run each
+  agent inside a disposable ix VM whose only view of the corpus is the search
+  tool (the same pattern Symphony uses for Codex). It is not wired up yet: ix
+  VMs run on x86_64-linux compute nodes, so this backend is implemented as an
+  explicit, observable error rather than a silent fallback to local.
 """
 
 from __future__ import annotations
@@ -23,17 +27,26 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from .model import TaskCase
 
+# The MCP tool id Claude Code exposes for the `search` tool on the `corpus`
+# server (see mcp_server.py): `mcp__<server>__<tool>`.
+_SEARCH_TOOL = "mcp__corpus__search"
+
+# Tools the agent must not have, so the only way to read the corpus is the MCP
+# search tool. Bash is denied (a Bash allowlist does not reliably restrict
+# commands), along with every direct file/web reader.
+_DENIED_TOOLS = "Bash,Read,Grep,Glob,Edit,Write,WebSearch,WebFetch,Task,NotebookEdit"
+
 _PROMPT = """\
 You are answering a question about a small codebase. You have exactly ONE tool: \
-the shell command `corpus-search "<query>"`, which runs a semantic search over \
-the codebase and prints matching files with their contents. You cannot read or \
-list files any other way.
+a semantic `search` over the codebase that returns matching files with their \
+contents. You cannot read, list, or grep files any other way.
 
 Question: {task}
 
@@ -66,38 +79,51 @@ class LocalBackend:
     timeout_seconds: float = 300.0
 
     def run_task(self, case: TaskCase) -> str:
-        with tempfile.TemporaryDirectory(prefix="search-eval-") as sandbox:
-            bin_dir = Path(sandbox) / "bin"
-            bin_dir.mkdir()
-            self._write_wrapper(bin_dir / "corpus-search")
-            env = dict(os.environ)
-            env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        # Two temp dirs: an empty working directory for the agent, and a separate
+        # config directory the agent's cwd cannot see, so `ls`/`cat` in the cwd
+        # never reveals the corpus path that the MCP config carries.
+        with (
+            tempfile.TemporaryDirectory(prefix="search-eval-cwd-") as cwd,
+            tempfile.TemporaryDirectory(prefix="search-eval-cfg-") as cfg_dir,
+        ):
+            config = Path(cfg_dir) / "mcp.json"
+            config.write_text(self._mcp_config(), encoding="utf-8")
             args = [
                 self.claude_bin,
                 "-p",
                 _PROMPT.format(task=case.task),
                 "--output-format",
                 "json",
+                "--mcp-config",
+                str(config),
                 "--allowedTools",
-                "Bash(corpus-search:*)",
+                _SEARCH_TOOL,
                 "--disallowedTools",
-                "Read,Grep,Glob,Edit,Write,WebSearch,WebFetch,Task",
+                _DENIED_TOOLS,
             ]
             if self.agent_model:
                 args += ["--model", self.agent_model]
-            return self._invoke(args, cwd=sandbox, env=env)
+            return self._invoke(args, cwd=cwd, env=dict(os.environ))
 
-    def _write_wrapper(self, path: Path) -> None:
-        # The agent calls `corpus-search "<query>"`; the wrapper pins the corpus
-        # path, code-only scope, and content display so the model sees snippets.
-        path.write_text(
-            "#!/usr/bin/env bash\n"
-            "set -euo pipefail\n"
-            f'exec {self.search_bin} --source code -c --no-sync -m {self.max_results} '
-            f'"$1" {self.corpus}\n',
-            encoding="utf-8",
+    def _mcp_config(self) -> str:
+        # Spawn the one-tool MCP search server with this interpreter so it shares
+        # the installed `search_eval` + `mcp` packages; `search` resolves from
+        # the inherited PATH. Corpus and scope travel via the environment.
+        return json.dumps(
+            {
+                "mcpServers": {
+                    "corpus": {
+                        "command": sys.executable,
+                        "args": ["-m", "search_eval.mcp_server"],
+                        "env": {
+                            "SEARCH_EVAL_CORPUS": str(self.corpus),
+                            "SEARCH_EVAL_SEARCH_BIN": self.search_bin,
+                            "SEARCH_EVAL_MAX_RESULTS": str(self.max_results),
+                        },
+                    }
+                }
+            }
         )
-        path.chmod(0o755)
 
     def _invoke(self, args: list[str], *, cwd: str, env: dict[str, str]) -> str:
         try:

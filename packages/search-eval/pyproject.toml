@@ -5,6 +5,7 @@ description = "Exa-style evaluation harness for the `search` engine"
 requires-python = ">=3.13"
 dependencies = [
     "anthropic>=0.40.0",
+    "mcp>=1.0.0",
 ]
 
 [project.scripts]
