@@ -278,8 +278,9 @@ def provision(
         raise MacVmError(f"provision timed out after {timeout}s") from exc
     if result.returncode != 0:
         raise MacVmError(f"provision failed: {result.stderr.strip()}")
-    # Record the credential beside the bundle so `login`/`run_app` can recover it
-    # without spelunking. Only when a password was given (autologin path).
+    # Record the credential beside the bundle whenever one was provided, so a
+    # later session's login()/run_app can recover it without spelunking (not only
+    # on the autologin path: a caller may record the password for login() use).
     if password:
         _write_bundle_login(bundle, user, password)
 
@@ -289,15 +290,25 @@ def _bundle_login_path(bundle: str | os.PathLike) -> pathlib.Path:
 
 
 def _write_bundle_login(bundle: str | os.PathLike, user: str, password: str) -> None:
-    """Persist ``{user, password}`` to ``<bundle>/login.json`` (mode 0600)."""
+    """Persist ``{user, password}`` to ``<bundle>/login.json`` at mode 0600.
+
+    Created 0600 from the start (no world-readable window before a later chmod),
+    since the file holds a plaintext password."""
     import json
 
     path = _bundle_login_path(bundle)
-    path.write_text(json.dumps({"user": user, "password": password}))
+    data = json.dumps({"user": user, "password": password})
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+        with os.fdopen(fd, "w") as handle:
+            handle.write(data)
+    finally:
+        # If the file pre-existed with looser bits, O_CREAT did not change them;
+        # narrow them now.
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
 
 def _bundle_login(bundle: str | os.PathLike | None) -> dict[str, str] | None:
@@ -342,6 +353,10 @@ def login(
             "no password for login (pass password=, or provision the bundle so "
             "login.json records it)"
         )
+    if "\n" in password or "\r" in password:
+        # `type_` sends one stdin line; a newline would split it and desync every
+        # subsequent ack.
+        raise MacVmError("login password must not contain a newline")
     before = driver.shot()
     driver.click(*field)
     driver.type_(password)
@@ -799,7 +814,10 @@ class Driver:
         if self._size is None:
             ack = self.send("size")  # 'ok size W H'
             parts = ack.split()
-            self._size = (int(parts[2]), int(parts[3]))
+            w, h = int(parts[2]), int(parts[3])
+            if w <= 0 or h <= 0:
+                raise MacVmError(f"guest reported a non-positive framebuffer size ({w}x{h})")
+            self._size = (w, h)
         return self._size
 
     def show_cursor(self, on: bool = True) -> str:

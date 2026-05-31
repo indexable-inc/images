@@ -228,40 +228,45 @@ pub fn frame_size(view: &VZVirtualMachineView) -> Option<(usize, usize)> {
     Some((surface.width(), surface.height()))
 }
 
+/// Set one opaque RGBA pixel at `(x, y)` if it is in bounds. The casts are sound:
+/// `x`/`y` are compared against `width`/`height` before any cast, so the `usize`
+/// conversion only runs on non-negative, in-range values.
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+fn put_pixel(rgba: &mut [u8], width: usize, height: usize, x: isize, y: isize, rgb: [u8; 3]) {
+    if x < 0 || y < 0 || x >= width as isize || y >= height as isize {
+        return;
+    }
+    let o = (y as usize * width + x as usize) * 4;
+    rgba[o..o + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+}
+
 /// Draw a high-contrast pointer marker (a red cross with a white halo) into the
 /// RGBA buffer at display fraction `(fx, fy)`, top-left origin. The synthetic
 /// pointing device's cursor is not always part of the captured scanout, so this
 /// shows a caller exactly where the driver's pointer is. Fully bounds-checked.
+/// The fraction-to-pixel casts are intentional rasterization rounding; `fx`/`fy`
+/// are display fractions the driver clamps to `0..=1`, so the result is in range.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn draw_cursor_marker(rgba: &mut [u8], width: usize, height: usize, fx: f64, fy: f64) {
-    if width == 0 || height == 0 {
-        return;
-    }
-    fn put(rgba: &mut [u8], width: usize, height: usize, x: isize, y: isize, rgb: [u8; 3]) {
-        if x < 0 || y < 0 || x >= width as isize || y >= height as isize {
-            return;
-        }
-        let o = (y as usize * width + x as usize) * 4;
-        rgba[o] = rgb[0];
-        rgba[o + 1] = rgb[1];
-        rgba[o + 2] = rgb[2];
-        rgba[o + 3] = 255;
-    }
-    let cx = (fx * width as f64).round() as isize;
-    let cy = (fy * height as f64).round() as isize;
     const ARM: isize = 10;
     const RED: [u8; 3] = [255, 40, 40];
     const WHITE: [u8; 3] = [255, 255, 255];
+    if width == 0 || height == 0 {
+        return;
+    }
+    let cx = (fx * width as f64).round() as isize;
+    let cy = (fy * height as f64).round() as isize;
     // White halo first (the cross one pixel thick on each side), so the red cross
     // stays visible over any background colour.
     for d in -ARM..=ARM {
         for off in [-1_isize, 1] {
-            put(rgba, width, height, cx + d, cy + off, WHITE);
-            put(rgba, width, height, cx + off, cy + d, WHITE);
+            put_pixel(rgba, width, height, cx + d, cy + off, WHITE);
+            put_pixel(rgba, width, height, cx + off, cy + d, WHITE);
         }
     }
     for d in -ARM..=ARM {
-        put(rgba, width, height, cx + d, cy, RED);
-        put(rgba, width, height, cx, cy + d, RED);
+        put_pixel(rgba, width, height, cx + d, cy, RED);
+        put_pixel(rgba, width, height, cx, cy + d, RED);
     }
 }
 

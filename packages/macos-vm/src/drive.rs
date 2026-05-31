@@ -121,11 +121,27 @@ fn parse_fraction_pair(
     let (Ok(fx), Ok(fy)) = (fx.parse::<f64>(), fy.parse::<f64>()) else {
         return Err(format!("err {verb} fractions must be numbers 0..1 (from top-left)"));
     };
-    if !(fx.is_finite() && fy.is_finite()) || !(0.0..=1.0).contains(&fx) || !(0.0..=1.0).contains(&fy)
-    {
+    let in_range = |f: f64| f.is_finite() && (0.0..=1.0).contains(&f);
+    if !in_range(fx) || !in_range(fy) {
         return Err(format!("err {verb} fractions must be within 0..1 (from top-left)"));
     }
     Ok((fx, fy))
+}
+
+/// Apply a pointer command at display fractions `(fx, fy)` and record the new
+/// pointer position. Shared by the `click` and `move` verbs: with `do_click` the
+/// pointer is pressed there, otherwise it only moves (hover).
+fn pointer_action(view_ptr: usize, fx: f64, fy: f64, do_click: bool, state: &mut State) {
+    on_main(view_ptr, move |view| {
+        let (x, y) = view_point(view, fx, fy);
+        if do_click {
+            input::click(view, x, y);
+        } else {
+            input::mouse_move(view, x, y);
+        }
+    });
+    state.last_cursor = Some((fx, fy));
+    std::thread::sleep(KEY_GAP_AFTER);
 }
 
 /// Execute one command line, returning its acknowledgement.
@@ -154,43 +170,22 @@ fn execute(view_ptr: usize, trimmed: &str, state: &mut State) -> String {
         return "ok".to_owned();
     };
     match command {
-        "click" => {
-            let (fx, fy) = match parse_fraction_pair(&mut parts, "click") {
+        "click" | "move" => {
+            let (fx, fy) = match parse_fraction_pair(&mut parts, command) {
                 Ok(pair) => pair,
                 Err(message) => return message,
             };
-            on_main(view_ptr, move |view| {
-                let (x, y) = view_point(view, fx, fy);
-                input::click(view, x, y);
-            });
-            state.last_cursor = Some((fx, fy));
-            std::thread::sleep(KEY_GAP_AFTER);
-            format!("ok click {fx} {fy}")
-        }
-        "move" => {
-            let (fx, fy) = match parse_fraction_pair(&mut parts, "move") {
-                Ok(pair) => pair,
-                Err(message) => return message,
-            };
-            on_main(view_ptr, move |view| {
-                let (x, y) = view_point(view, fx, fy);
-                input::mouse_move(view, x, y);
-            });
-            state.last_cursor = Some((fx, fy));
-            std::thread::sleep(KEY_GAP_AFTER);
-            format!("ok move {fx} {fy}")
+            pointer_action(view_ptr, fx, fy, command == "click", state);
+            format!("ok {command} {fx} {fy}")
         }
         "cursor" => match state.last_cursor {
             Some((fx, fy)) => format!("ok cursor {fx} {fy}"),
             None => "err cursor unknown (no click/move yet)".to_owned(),
         },
-        "size" => {
-            let size = frame_size(view_ptr);
-            match size {
-                Some((w, h)) => format!("ok size {w} {h}"),
-                None => "err size guest framebuffer not available yet".to_owned(),
-            }
-        }
+        "size" => match frame_size(view_ptr) {
+            Some((w, h)) => format!("ok size {w} {h}"),
+            None => "err size guest framebuffer not available yet".to_owned(),
+        },
         "cursor-show" => match parts.next() {
             Some("on") => {
                 state.show_cursor = true;

@@ -67,7 +67,7 @@ fn send_mouse(view: &VZVirtualMachineView, event_type: NSEventType, x: f64, y: f
     let window_number = view.window().map_or(0, |window| window.windowNumber());
     // A button press carries click count 1; a bare move (no button) is 0, which
     // is what AppKit and the HID stack expect for a `mouseMoved:`.
-    let click_count = if event_type == NSEventType::MouseMoved { 0 } else { 1 };
+    let click_count = isize::from(event_type != NSEventType::MouseMoved);
     let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
         event_type,
         NSPoint::new(x, y),
