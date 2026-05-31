@@ -66,8 +66,7 @@ app in, launch it, return a frame of the guest display).
 
 What is designed but not yet built (see [Roadmap](#roadmap)):
 
-- a vsock control channel and a long-lived `serve` mode,
-- booting an OCI image as a disk.
+- a vsock control channel and a long-lived `serve` mode.
 
 ## Off-screen capture
 
@@ -271,6 +270,12 @@ that surface, including the GPU path, and the maintenance cost of rebuilding it
 is not justified yet. If a single backend ever becomes a hard requirement, that
 decision should be made deliberately, not by accretion.
 
+The first option above is proven minimally: `boot-linux --disk` attaches a
+flattened OCI rootfs as a virtio-blk disk, and `examples/oci-boot.sh` boots a
+busybox OCI image to userspace over the serial console. See
+[`docs/oci-guest.md`](docs/oci-guest.md) for the build-vs-delegate decision, the
+proof, and its gaps (squashfs not ext4, externally fetched kernel).
+
 ## Build notes
 
 - This is the first workspace crate that links an Apple framework. The objc2
@@ -307,4 +312,7 @@ decision should be made deliberately, not by accretion.
    module exposes `info`, `install`, `provision`, `stage_binary`, `screenshot`,
    `screenshot_many`, `drive`, `Driver`, and `run_app`, returning PIL images that
    render inline.
-7. OCI-disk boot for Linux guests; document the libkrun handoff for microVMs.
+7. ~~OCI-disk boot for Linux guests; document the libkrun handoff for
+   microVMs.~~ Done minimally: `boot-linux --disk` + `examples/oci-boot.sh` boot
+   a flattened OCI rootfs as a virtio-blk disk; build-vs-delegate decision and
+   gaps in [`docs/oci-guest.md`](docs/oci-guest.md).

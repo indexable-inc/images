@@ -10,7 +10,9 @@
 //! `macos-vm boot-linux` boots a Linux guest from a raw kernel `Image` and
 //! initramfs, streaming the guest serial console to stdout. boot-linux is the
 //! end-to-end smoke path: a real guest reaching userspace proves the binding,
-//! the entitlement, and the boot all work.
+//! the entitlement, and the boot all work. `--disk` attaches raw disk images as
+//! virtio-blk devices, which is how a flattened OCI rootfs is booted (see
+//! `docs/oci-guest.md`).
 //!
 //! The graphics/screenshot, vsock IPC, OCI-disk, and macOS-guest paths build on
 //! the same `VZVirtualMachineConfiguration` and are tracked in the README.
@@ -52,6 +54,12 @@ enum Command {
         /// Path to an initramfs/initrd.
         #[arg(long)]
         initramfs: std::path::PathBuf,
+        /// Attach a raw disk image as a virtio-blk device, repeatable. The
+        /// guest sees these as `/dev/vda`, `/dev/vdb`, ... in order. Used to
+        /// boot a flattened OCI rootfs: pass the rootfs disk here and a matching
+        /// `root=` (or an initramfs that mounts it) in `--cmdline`.
+        #[arg(long = "disk", value_name = "PATH")]
+        disks: Vec<std::path::PathBuf>,
         /// Number of virtual CPUs.
         #[arg(long, default_value_t = 2)]
         cpus: usize,
@@ -302,9 +310,10 @@ mod imp {
     use objc2::rc::Retained;
     use objc2_foundation::{NSArray, NSError, NSFileHandle, NSPipe, NSString, NSURL};
     use objc2_virtualization::{
-        VZBootLoader, VZEntropyDeviceConfiguration, VZFileHandleSerialPortAttachment,
-        VZLinuxBootLoader, VZMemoryBalloonDeviceConfiguration, VZSerialPortAttachment,
-        VZSerialPortConfiguration, VZVirtioConsoleDeviceSerialPortConfiguration,
+        VZBootLoader, VZDiskImageStorageDeviceAttachment, VZEntropyDeviceConfiguration,
+        VZFileHandleSerialPortAttachment, VZLinuxBootLoader, VZMemoryBalloonDeviceConfiguration,
+        VZSerialPortAttachment, VZSerialPortConfiguration, VZStorageDeviceConfiguration,
+        VZVirtioBlockDeviceConfiguration, VZVirtioConsoleDeviceSerialPortConfiguration,
         VZVirtioEntropyDeviceConfiguration, VZVirtioTraditionalMemoryBalloonDeviceConfiguration,
         VZVirtualMachine, VZVirtualMachineConfiguration,
     };
@@ -330,6 +339,8 @@ mod imp {
         NoFramebuffer,
         #[snafu(display("invalid guest bundle: {message}"))]
         Bundle { message: String },
+        #[snafu(display("cannot attach disk {path:?}: {message}"))]
+        Disk { path: PathBuf, message: String },
         #[snafu(display("screenshot encode/write failed: {message}"))]
         CaptureEncode { message: String },
         #[snafu(display("staging the binary guest-portable failed: {source}"))]
@@ -344,6 +355,8 @@ mod imp {
     pub struct LinuxBoot {
         pub kernel: PathBuf,
         pub initramfs: PathBuf,
+        /// Raw disk images attached as virtio-blk devices, in `/dev/vda` order.
+        pub disks: Vec<PathBuf>,
         pub cpus: usize,
         pub memory_mib: u64,
         pub cmdline: String,
@@ -356,6 +369,7 @@ mod imp {
             Command::BootLinux {
                 kernel,
                 initramfs,
+                disks,
                 cpus,
                 memory_mib,
                 cmdline,
@@ -363,6 +377,7 @@ mod imp {
             } => boot_linux(LinuxBoot {
                 kernel,
                 initramfs,
+                disks,
                 cpus,
                 memory_mib,
                 cmdline,
@@ -564,6 +579,15 @@ mod imp {
         let entropy = unsafe { VZVirtioEntropyDeviceConfiguration::new() };
         let balloon = unsafe { VZVirtioTraditionalMemoryBalloonDeviceConfiguration::new() };
 
+        // Build the virtio-blk devices first and hold them in a Vec so the
+        // retained configs outlive the upcast refs handed to setStorageDevices.
+        // The guest exposes them as /dev/vda, /dev/vdb, ... in this order.
+        let blocks = boot
+            .disks
+            .iter()
+            .map(|path| build_block_device(path, false))
+            .collect::<Result<Vec<_>, Error>>()?;
+
         let config = unsafe { VZVirtualMachineConfiguration::new() };
         let boot_loader_ref: &VZBootLoader = &boot_loader;
         let serial_ref: &VZSerialPortConfiguration = &serial;
@@ -577,6 +601,16 @@ mod imp {
             config.setEntropyDevices(&NSArray::from_slice(&[entropy_ref]));
             config.setMemoryBalloonDevices(&NSArray::from_slice(&[balloon_ref]));
         }
+        if !blocks.is_empty() {
+            let block_refs: Vec<&VZStorageDeviceConfiguration> = blocks
+                .iter()
+                .map(|block| {
+                    let block_ref: &VZStorageDeviceConfiguration = block;
+                    block_ref
+                })
+                .collect();
+            unsafe { config.setStorageDevices(&NSArray::from_slice(&block_refs)) };
+        }
 
         // Validation surfaces a missing entitlement as a clear error rather than
         // a later crash.
@@ -587,6 +621,34 @@ mod imp {
         }
 
         Ok(config)
+    }
+
+    /// Build one virtio-blk device backed by a raw disk image. The attachment
+    /// fails up front (rather than at VM start) if the image is missing or not a
+    /// usable raw image, so the error names the offending path.
+    fn build_block_device(
+        path: &std::path::Path,
+        read_only: bool,
+    ) -> Result<Retained<VZVirtioBlockDeviceConfiguration>, Error> {
+        let url = file_url(path);
+        let attachment = unsafe {
+            VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_error(
+                VZDiskImageStorageDeviceAttachment::alloc(),
+                &url,
+                read_only,
+            )
+        }
+        .map_err(|error| Error::Disk {
+            path: path.to_path_buf(),
+            message: ns_error_message(&error),
+        })?;
+        let block = unsafe {
+            VZVirtioBlockDeviceConfiguration::initWithAttachment(
+                VZVirtioBlockDeviceConfiguration::alloc(),
+                &attachment,
+            )
+        };
+        Ok(block)
     }
 
     pub fn file_url(path: &std::path::Path) -> Retained<NSURL> {
