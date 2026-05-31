@@ -13,7 +13,6 @@
 //! non-activating raise are [`overlay_core::window`].
 
 use std::collections::HashMap;
-use std::f32::consts::TAU;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -25,7 +24,7 @@ use overlay_core::winit::dpi::{LogicalPosition, PhysicalPosition, PhysicalSize};
 use overlay_core::winit::event::{ElementState, MouseButton, WindowEvent};
 use overlay_core::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use overlay_core::winit::window::{CursorIcon, Window, WindowId};
-use overlay_core::{window as ocwin, DragClick, Gpu};
+use overlay_core::{anim, window as ocwin, DragClick, Gpu, HoverAnim};
 
 use crate::bars::BossBar;
 use crate::db;
@@ -38,12 +37,15 @@ use crate::scene::{self, BarTextures};
 const AUTO_TOP: f64 = 40.0;
 const AUTO_GAP: f64 = 6.0;
 
-/// Hover grow/shrink time (seconds): an ease-out tween at the responsive end of
-/// the feedback range. See the `animation` skill.
-const GROW_SECS: f32 = 0.16;
-/// Full breathing cycle (seconds) while hovered. ~2.6s reads calm and alive,
-/// near a resting heart rate, rather than urgent.
-const BREATHE_PERIOD: f32 = 2.6;
+/// Hover grow/shrink time: an ease-out tween at the responsive end of the
+/// feedback range. See the `animation` skill.
+const GROW: Duration = Duration::from_millis(160);
+/// Full breathing cycle while hovered. ~2.6s reads calm and alive, near a resting
+/// heart rate, rather than urgent.
+const BREATHE_PERIOD: Duration = Duration::from_millis(2600);
+/// Largest animation step a single frame may apply, so a stall (the loop slept
+/// for a tick) does not jump the hover; frames are otherwise ~16ms.
+const MAX_STEP: Duration = Duration::from_millis(50);
 /// Animation frame budget while something is moving (~60 fps).
 const FRAME: Duration = Duration::from_millis(16);
 /// Redraw cadence for a bar showing a live elapsed counter: once a second is
@@ -58,12 +60,6 @@ const DRAG_THRESHOLD: f64 = 5.0;
 /// apply an externally-read position again. Must exceed the DB watch poll so the
 /// watcher's lagged read-back of our own drag never snaps the window back.
 const SETTLE: Duration = Duration::from_millis(700);
-
-/// Ease-out cubic: fast start, soft landing. The default feedback curve.
-fn ease_out_cubic(t: f32) -> f32 {
-    let u = 1.0 - t.clamp(0.0, 1.0);
-    1.0 - u * u * u
-}
 
 /// Current wall-clock time as Unix seconds, for the live elapsed counter. Before
 /// the epoch (clock unset) it clamps to 0, which reads as a 0 counter.
@@ -106,9 +102,9 @@ struct BarWin {
     bar: BossBar,
     /// Hover target: the pointer is currently over this bar.
     hovered: bool,
-    /// Eased hover amount in `0..=1`, animated toward `hovered` each frame. Drives
-    /// the grow + opacity; the breathing fades in with it.
-    hover_anim: f32,
+    /// Hover amount animated toward `hovered` each frame. Drives the grow +
+    /// opacity (via its eased value); the breathing fades in with it.
+    hover_anim: HoverAnim,
     /// Timestamp of the last animation step, for frame-rate-independent easing.
     last: Instant,
     /// Press/drag/click disambiguation for this window's left-button gesture.
@@ -130,7 +126,7 @@ struct BarWin {
 impl BarWin {
     /// Still moving: easing toward/away from hover, or breathing while hovered.
     fn animating(&self) -> bool {
-        self.hovered || self.hover_anim > 0.0
+        self.hovered || !self.hover_anim.is_resting()
     }
 
     /// The window should be grown for the panel while the bar is hovered or still
@@ -229,7 +225,7 @@ impl App {
             config,
             bar,
             hovered: false,
-            hover_anim: 0.0,
+            hover_anim: HoverAnim::default(),
             last: now,
             gesture: DragClick::new(DRAG_THRESHOLD),
             self_set: Some(pos),
@@ -305,26 +301,21 @@ impl App {
 
     fn render_id(&mut self, id: i64) {
         let now = Instant::now();
-        // Continuous breathing phase: a sine over the whole run, never reset, so it
-        // never snaps when a bar starts or stops being hovered.
-        let breathe = (TAU * now.duration_since(self.start).as_secs_f32() / BREATHE_PERIOD).sin();
+        // Continuous breathing phase over the whole run, never reset, so it never
+        // snaps when a bar starts or stops being hovered.
+        let breathe = anim::breathe(now.duration_since(self.start), BREATHE_PERIOD);
 
-        // Advance this bar's eased hover amount toward its target, then map it
-        // through ease-out for the visible grow/opacity.
+        // Advance this bar's hover amount toward its target, then read its eased
+        // value for the visible grow/opacity.
         let hover = {
             let Some(win) = self.wins.get_mut(&id) else {
                 return;
             };
-            let dt = now.duration_since(win.last).as_secs_f32().min(0.05);
+            let dt = now.duration_since(win.last).min(MAX_STEP);
             win.last = now;
-            let target = if win.hovered { 1.0 } else { 0.0 };
-            let step = dt / GROW_SECS;
-            win.hover_anim = if win.hover_anim < target {
-                (win.hover_anim + step).min(target)
-            } else {
-                (win.hover_anim - step).max(target)
-            };
-            ease_out_cubic(win.hover_anim)
+            win.hover_anim
+                .approach(if win.hovered { 1.0 } else { 0.0 }, dt, GROW);
+            win.hover_anim.eased()
         };
 
         let Some(core) = self.core.as_ref() else {

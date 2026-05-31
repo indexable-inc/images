@@ -17,9 +17,9 @@ use overlay_core::wgpu;
 use overlay_core::winit::application::ApplicationHandler;
 use overlay_core::winit::dpi::{LogicalPosition, PhysicalPosition};
 use overlay_core::winit::event::{ElementState, MouseButton, WindowEvent};
-use overlay_core::winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use overlay_core::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use overlay_core::winit::window::{CursorIcon, Window, WindowId};
-use overlay_core::{window as ocwin, DragClick, Gpu};
+use overlay_core::{window as ocwin, DragClick, Gpu, HoverAnim};
 
 use crate::book::Book;
 use crate::db;
@@ -31,6 +31,22 @@ const DRAG_THRESHOLD: f64 = 5.0;
 /// read position is applied again, so the watcher's lagged read-back of our own
 /// drag never snaps it back.
 const SETTLE: Duration = Duration::from_millis(700);
+/// Hover grow/shrink time: an ease-out tween at the responsive end of the
+/// feedback range, matching the boss bar. The hover animates in over this time
+/// and then holds still so the page stays readable. See the `animation` skill.
+const GROW: Duration = Duration::from_millis(160);
+/// Largest animation step a single frame may apply, so a stall (the loop slept)
+/// does not jump the hover; frames are otherwise ~16ms.
+const MAX_STEP: Duration = Duration::from_millis(50);
+/// Animation frame budget while something is moving (~60 fps).
+const FRAME: Duration = Duration::from_millis(16);
+
+/// Which page-turn arrow the pointer is over, if any.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Arrow {
+    Back,
+    Fwd,
+}
 
 struct WinState {
     window: Arc<Window>,
@@ -38,12 +54,35 @@ struct WinState {
     config: wgpu::SurfaceConfiguration,
     textures: BookTextures,
     gesture: DragClick,
+    /// The pointer is on the window: drives the whole-book grow + breathe.
     hovered: bool,
+    /// Hover amounts advanced toward their targets each frame. `book` follows
+    /// `hovered`; `back`/`fwd` follow whether the pointer is over that arrow. The
+    /// scene module applies the easing curves to their raw values.
+    book_anim: HoverAnim,
+    back_anim: HoverAnim,
+    fwd_anim: HoverAnim,
+    /// Which arrow the pointer is currently over (resting space), for the cursor
+    /// icon and to drive the per-arrow hover.
+    over_arrow: Option<Arrow>,
+    /// Last pointer position (physical px), for per-frame arrow hit-testing.
+    cursor: Option<PhysicalPosition<f64>>,
+    /// Timestamp of the last animation step, for frame-rate-independent easing.
+    last: Instant,
     /// Last position we know the window holds (logical points): what we set, or
     /// where the OS placed it. Lets `Moved` skip echoes of our own placement.
     self_set: Option<LogicalPosition<f64>>,
     /// When the window last moved during a drag, for the reconcile settle guard.
     last_move: Instant,
+}
+
+impl WinState {
+    /// Still mid-transition (the grow or an arrow easing in/out). There is no
+    /// perpetual motion, so once every hover has settled to its target this is
+    /// false and the loop sleeps, leaving the page still to read.
+    fn animating(&self) -> bool {
+        self.book_anim.is_animating() || self.back_anim.is_animating() || self.fwd_anim.is_animating()
+    }
 }
 
 pub struct App {
@@ -63,15 +102,39 @@ pub struct App {
     ready: bool,
 }
 
+/// Which page-turn arrow (if any) sits under the pointer at `c` (physical px).
+/// The whole-book grow displaces the arrows from their resting layout, so the
+/// cursor is mapped back through `mul` about the window centre before testing the
+/// resting arrow rects. The rects are the stable hit region; the visual pop grows
+/// past them without moving their centres, so a pointer inside never oscillates.
+fn arrow_under(
+    c: PhysicalPosition<f64>,
+    mul: f32,
+    scale: u32,
+    win_w: u32,
+    win_h: u32,
+    show_back: bool,
+    show_fwd: bool,
+) -> Option<Arrow> {
+    let cx = win_w as f64 * 0.5;
+    let cy = win_h as f64 * 0.5;
+    let m = mul as f64;
+    let px = cx + (c.x - cx) / m;
+    let py = cy + (c.y - cy) / m;
+    let hit = |r: (f32, f32, f32, f32)| {
+        let (x, y, rw, rh) = r;
+        px >= x as f64 && px <= (x + rw) as f64 && py >= y as f64 && py <= (y + rh) as f64
+    };
+    if show_fwd && hit(scene::fwd_arrow_rect(scale, win_w, win_h)) {
+        Some(Arrow::Fwd)
+    } else if show_back && hit(scene::back_arrow_rect(scale, win_w, win_h)) {
+        Some(Arrow::Back)
+    } else {
+        None
+    }
+}
+
 impl App {
-    fn show_back(&self) -> bool {
-        self.spread > 0
-    }
-
-    fn show_fwd(&self) -> bool {
-        self.spread + 2 <= self.book.last_spread()
-    }
-
     /// Auto-centered window position (logical points) for the spread.
     fn center_pos(&self) -> LogicalPosition<f64> {
         let (w_px, h_px) = scene::spread_window_px(self.scale);
@@ -125,13 +188,66 @@ impl App {
             textures,
             gesture: DragClick::new(DRAG_THRESHOLD),
             hovered: false,
+            book_anim: HoverAnim::default(),
+            back_anim: HoverAnim::default(),
+            fwd_anim: HoverAnim::default(),
+            over_arrow: None,
+            cursor: None,
+            last: Instant::now(),
             self_set: Some(pos),
             last_move: Instant::now() - SETTLE,
         });
     }
 
     fn render(&mut self) {
-        let (Some(gpu), Some(win)) = (self.gpu.as_ref(), self.win.as_mut()) else {
+        let now = Instant::now();
+        let show_back = self.spread > 0;
+        let show_fwd = self.spread + 2 <= self.book.last_spread();
+        let scale = self.scale;
+
+        // Advance the hover amounts toward their targets (disjoint field borrows:
+        // `win` and `gpu`/`book`/`spread` are separate fields).
+        let Some(win) = self.win.as_mut() else {
+            return;
+        };
+        let (cw, ch) = (win.config.width, win.config.height);
+        let dt = now.duration_since(win.last).min(MAX_STEP);
+        win.last = now;
+        win.book_anim
+            .approach(if win.hovered { 1.0 } else { 0.0 }, dt, GROW);
+
+        // Which arrow is the pointer over, accounting for the current whole-book
+        // grow so the target tracks the arrow where it is actually drawn.
+        let mul = scene::book_mul(win.book_anim.raw());
+        let over = win
+            .cursor
+            .and_then(|c| arrow_under(c, mul, scale, cw, ch, show_back, show_fwd));
+        win.back_anim
+            .approach(if over == Some(Arrow::Back) { 1.0 } else { 0.0 }, dt, GROW);
+        win.fwd_anim
+            .approach(if over == Some(Arrow::Fwd) { 1.0 } else { 0.0 }, dt, GROW);
+
+        // A pointer cursor over a live arrow signals it is clickable; otherwise the
+        // grab/default icon for the draggable book. Skip while the OS owns a drag.
+        if !win.gesture.dragging() && over != win.over_arrow {
+            let icon = if over.is_some() {
+                CursorIcon::Pointer
+            } else if win.hovered {
+                CursorIcon::Grab
+            } else {
+                CursorIcon::Default
+            };
+            win.window.set_cursor(icon);
+        }
+        win.over_arrow = over;
+
+        let hover = scene::Hover {
+            book: win.book_anim.raw(),
+            back: win.back_anim.raw(),
+            fwd: win.fwd_anim.raw(),
+        };
+
+        let Some(gpu) = self.gpu.as_ref() else {
             return;
         };
         let frame = match win.surface.get_current_texture() {
@@ -153,35 +269,40 @@ impl App {
             &win.textures,
             &self.book,
             self.spread,
-            self.scale,
-            win.config.width,
-            win.config.height,
-            self.spread > 0,
-            self.spread + 2 <= self.book.last_spread(),
+            scale,
+            cw,
+            ch,
+            show_back,
+            show_fwd,
+            &hover,
         );
-        let _ = gpu.draw(&view, win.config.width, win.config.height, &quads);
+        let _ = gpu.draw(&view, cw, ch, &quads);
         frame.present();
     }
 
     /// A click landed at `pos` (physical px); flip the spread if it hit an arrow.
     fn on_click(&mut self, pos: PhysicalPosition<f64>) {
+        let show_back = self.spread > 0;
+        let show_fwd = self.spread + 2 <= self.book.last_spread();
+        let scale = self.scale;
         let Some(win) = self.win.as_ref() else {
             return;
         };
+        let mul = scene::book_mul(win.book_anim.raw());
         let (w, h) = (win.config.width, win.config.height);
-        let hit = |r: (f32, f32, f32, f32)| {
-            let (x, y, rw, rh) = r;
-            pos.x as f32 >= x
-                && pos.x as f32 <= x + rw
-                && pos.y as f32 >= y
-                && pos.y as f32 <= y + rh
-        };
-        if self.show_back() && hit(scene::back_arrow_rect(self.scale, w, h)) {
-            self.spread = self.spread.saturating_sub(2);
-            self.win.as_ref().unwrap().window.request_redraw();
-        } else if self.show_fwd() && hit(scene::fwd_arrow_rect(self.scale, w, h)) {
-            self.spread = (self.spread + 2).min(self.book.last_spread());
-            self.win.as_ref().unwrap().window.request_redraw();
+        let window = win.window.clone();
+        match arrow_under(pos, mul, scale, w, h, show_back, show_fwd) {
+            Some(Arrow::Back) => {
+                self.spread = self.spread.saturating_sub(2);
+                crate::sound::page_flip();
+                window.request_redraw();
+            }
+            Some(Arrow::Fwd) => {
+                self.spread = (self.spread + 2).min(self.book.last_spread());
+                crate::sound::page_flip();
+                window.request_redraw();
+            }
+            None => {}
         }
     }
 
@@ -274,19 +395,26 @@ impl ApplicationHandler<Book> for App {
                 }
                 if let Some(win) = self.win.as_mut() {
                     win.hovered = true;
+                    win.window.request_redraw();
                 }
             }
             WindowEvent::CursorLeft { .. } => {
                 if let Some(win) = self.win.as_mut() {
                     win.hovered = false;
+                    win.cursor = None;
+                    win.over_arrow = None;
                     win.window.set_cursor(CursorIcon::Default);
+                    win.window.request_redraw();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let start_drag = self
-                    .win
-                    .as_mut()
-                    .is_some_and(|win| win.gesture.cursor_moved(position));
+                let start_drag = self.win.as_mut().is_some_and(|win| {
+                    win.cursor = Some(position);
+                    // Redraw so the arrow under the pointer updates promptly; while
+                    // animating `about_to_wait` already keeps frames coming.
+                    win.window.request_redraw();
+                    win.gesture.cursor_moved(position)
+                });
                 if start_drag {
                     if let Some(win) = self.win.as_ref() {
                         win.window.set_cursor(CursorIcon::Grabbing);
@@ -325,6 +453,21 @@ impl ApplicationHandler<Book> for App {
             }
             WindowEvent::Moved(pos) => self.on_moved(pos),
             _ => {}
+        }
+    }
+
+    /// Keep redrawing at ~60 fps while the book is animating (growing, shrinking,
+    /// breathing, or an arrow highlighting); otherwise let the loop sleep until the
+    /// next event so an idle overlay costs nothing.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let animating = self.win.as_ref().is_some_and(WinState::animating);
+        if animating {
+            if let Some(win) = self.win.as_ref() {
+                win.window.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + FRAME));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
 }

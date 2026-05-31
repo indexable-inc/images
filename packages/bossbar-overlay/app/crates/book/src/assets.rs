@@ -10,3 +10,11 @@ pub const BOOK: &[u8] = include_bytes!("../assets/gui/book.png");
 
 pub const PAGE_FORWARD: &[u8] = include_bytes!("../assets/gui/page_forward.png");
 pub const PAGE_BACKWARD: &[u8] = include_bytes!("../assets/gui/page_backward.png");
+
+/// The hovered (brightened) variants Mojang ships for the page-turn buttons. The
+/// overlay crossfades to these as the pointer moves onto an arrow, matching the
+/// vanilla book screen's button highlight.
+pub const PAGE_FORWARD_HIGHLIGHTED: &[u8] =
+    include_bytes!("../assets/gui/page_forward_highlighted.png");
+pub const PAGE_BACKWARD_HIGHLIGHTED: &[u8] =
+    include_bytes!("../assets/gui/page_backward_highlighted.png");

@@ -9,13 +9,14 @@
 //! Usage:
 //!   book-overlay                 run the overlay
 //!   book-overlay --snapshot OUT  render the current spread to a PNG and exit
-//!                [--scale N] [--page N]
+//!                [--scale N] [--page N] [--hover]
 
 mod assets;
 mod book;
 mod db;
 mod overlay;
 mod scene;
+mod sound;
 
 use std::path::PathBuf;
 
@@ -30,6 +31,10 @@ struct Args {
     scale: u32,
     /// Left page of the spread to snapshot (0-based; clamped to the book).
     page: usize,
+    /// Render the snapshot in the hovered state (book grown, forward arrow
+    /// highlighted), so the PNG verifies the hover styling the live overlay only
+    /// shows under the pointer.
+    hover: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -41,6 +46,7 @@ fn parse_args() -> Result<Args, String> {
         snapshot: None,
         scale,
         page: 0,
+        hover: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -63,9 +69,10 @@ fn parse_args() -> Result<Args, String> {
                     .parse()
                     .map_err(|_| "--page must be an integer")?;
             }
+            "--hover" => args.hover = true,
             "-h" | "--help" => {
                 println!(
-                    "book-overlay [--snapshot OUT] [--scale N] [--page N]\n\
+                    "book-overlay [--snapshot OUT] [--scale N] [--page N] [--hover]\n\
                      SQLite-driven Minecraft book overlay. DB path: BOOK_DB or the \
                      per-OS app-data path."
                 );
@@ -97,6 +104,18 @@ fn main() {
         // Snapshot starts a spread on an even page, the same as the live overlay.
         let spread = (args.page - (args.page % 2)).min(book.last_spread());
         let (w, h) = scene::spread_window_px(scale);
+        // At rest by default; `--hover` showcases the hover styling (whole-book
+        // grow plus the forward arrow highlighted and popped) so the PNG can
+        // verify what the live overlay only reveals under the pointer.
+        let hover = if args.hover {
+            scene::Hover {
+                book: 1.0,
+                back: 0.0,
+                fwd: 1.0,
+            }
+        } else {
+            scene::Hover::default()
+        };
         let result = overlay_core::snapshot::render_to_png(
             w,
             h,
@@ -112,6 +131,7 @@ fn main() {
                     h,
                     spread > 0,
                     spread + 2 <= book.last_spread(),
+                    &hover,
                 )
             },
             &out,

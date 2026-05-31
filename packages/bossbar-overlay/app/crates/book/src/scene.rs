@@ -6,6 +6,7 @@
 //! open book is real Mojang art with no synthetic texture. Page bodies render in
 //! the vanilla bitmap font; page-turn arrows sit at the bottom outer corners.
 
+use overlay_core::anim::{ease_out_back, ease_out_cubic, scale_quads_about};
 use overlay_core::{Gpu, Quad, TexHandle};
 
 use crate::book::Book;
@@ -48,28 +49,69 @@ const INK: [f32; 4] = [
     1.0,
 ];
 
-/// The overlay's textures, registered once into the shared [`Gpu`].
+/// How much the whole spread grows when the pointer is on the book. A subtle
+/// one-shot lift that animates in and then holds still: the book is for reading,
+/// so it must settle, never keep moving. See the `animation` skill (and the UI
+/// rule against perpetual hover motion).
+const BOOK_HOVER_SCALE: f32 = 1.03;
+/// Largest multiplier the spread can reach. The window reserves this much margin
+/// so the book grows in place without resizing.
+const MAX_BOOK_MUL: f32 = BOOK_HOVER_SCALE;
+
+/// How much a fully-hovered arrow pops, before its ease-out-back overshoot. A
+/// page-turn arrow is a small, playful target, so it gets a bigger, springier
+/// lift than the whole book. It is one-shot too: it pops on hover and settles.
+const ARROW_HOVER_SCALE: f32 = 1.22;
+
+/// Eased hover amounts, raw linear progress in `0..=1` (this module applies the
+/// easing curves). `book` grows the whole spread once while the pointer is on it;
+/// `back`/`fwd` add the per-arrow highlight crossfade and pop. All settle to a
+/// still state so the page text stays readable.
+#[derive(Clone, Copy, Default)]
+pub struct Hover {
+    pub book: f32,
+    pub back: f32,
+    pub fwd: f32,
+}
+
+/// Whole-spread scale multiplier for the current hover: a one-shot eased grow
+/// toward [`BOOK_HOVER_SCALE`] that holds once the hover settles. Public so the
+/// overlay can map the cursor back into resting space for arrow hit-testing while
+/// the book is grown.
+pub fn book_mul(book_hover: f32) -> f32 {
+    1.0 + (BOOK_HOVER_SCALE - 1.0) * ease_out_cubic(book_hover)
+}
+
+/// The overlay's textures, registered once into the shared [`Gpu`]. Each arrow
+/// keeps its resting sprite and Mojang's hovered (brightened) variant so the
+/// overlay can crossfade between them.
 pub struct BookTextures {
     book: TexHandle,
     fwd: TexHandle,
+    fwd_hi: TexHandle,
     bwd: TexHandle,
+    bwd_hi: TexHandle,
 }
 
-/// Register the book sheet and the page-turn arrows.
+/// Register the book sheet and the page-turn arrows (resting + highlighted).
 pub fn register(gpu: &mut Gpu) -> BookTextures {
     BookTextures {
         book: gpu.register_png(crate::assets::BOOK),
         fwd: gpu.register_png(crate::assets::PAGE_FORWARD),
+        fwd_hi: gpu.register_png(crate::assets::PAGE_FORWARD_HIGHLIGHTED),
         bwd: gpu.register_png(crate::assets::PAGE_BACKWARD),
+        bwd_hi: gpu.register_png(crate::assets::PAGE_BACKWARD_HIGHLIGHTED),
     }
 }
 
-/// Physical-pixel window size that holds one spread at `scale`.
+/// Physical-pixel window size that holds one spread at `scale`, including the
+/// hover-grow headroom so the book grows and breathes in place without the window
+/// resizing. The resting spread sits centred within this margin.
 pub fn spread_window_px(scale: u32) -> (u32, u32) {
     let s = scale.max(1) as f32;
     (
-        (2.0 * PAGE_W * s).ceil() as u32,
-        (PAGE_H * s).ceil() as u32,
+        (2.0 * PAGE_W * s * MAX_BOOK_MUL).ceil() as u32,
+        (PAGE_H * s * MAX_BOOK_MUL).ceil() as u32,
     )
 }
 
@@ -126,7 +168,10 @@ fn text_box(page_ox: f32, scale: u32, mirror: bool) -> (f32, f32) {
 }
 
 /// Build the spread for `book` showing the two pages starting at `spread`.
-/// `show_back`/`show_fwd` gate the arrows (drawn only when that turn is possible).
+/// `show_back`/`show_fwd` gate the arrows (drawn only when that turn is possible);
+/// `hover` drives the highlight crossfade, the arrow pop, and the whole-book
+/// grow/breathe.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     gpu: &Gpu,
     tex: &BookTextures,
@@ -137,6 +182,7 @@ pub fn build(
     win_h: u32,
     show_back: bool,
     show_fwd: bool,
+    hover: &Hover,
 ) -> Vec<Quad> {
     let s = scale.max(1) as f32;
     let (ox, oy) = spread_origin(scale, win_w, win_h);
@@ -151,15 +197,47 @@ pub fn build(
     page_content(gpu, &mut quads, book, spread, ox, oy, scale, true);
     page_content(gpu, &mut quads, book, spread + 1, ox + pw, oy, scale, false);
 
+    // Arrows, at rest positions; the per-arrow hover pops them and crossfades to
+    // the highlighted sprite. The whole-book transform below then carries them
+    // along with the spread.
     if show_back {
-        let (x, y, w, h) = back_arrow_rect(scale, win_w, win_h);
-        quads.push(Quad::new(tex.bwd, x, y, w, h, WHITE));
+        push_arrow(&mut quads, tex.bwd, tex.bwd_hi, back_arrow_rect(scale, win_w, win_h), hover.back);
     }
     if show_fwd {
-        let (x, y, w, h) = fwd_arrow_rect(scale, win_w, win_h);
-        quads.push(Quad::new(tex.fwd, x, y, w, h, WHITE));
+        push_arrow(&mut quads, tex.fwd, tex.fwd_hi, fwd_arrow_rect(scale, win_w, win_h), hover.fwd);
     }
+
+    // Grow the entire spread about the window centre (where the resting spread is
+    // already centred), so the book lifts as one object on hover and then holds
+    // still. No-op at rest.
+    let mul = book_mul(hover.book);
+    scale_quads_about(&mut quads, win_w as f32 * 0.5, win_h as f32 * 0.5, mul);
     quads
+}
+
+/// Append one page-turn arrow: pop it about its own centre with an ease-out-back
+/// overshoot, and crossfade from the resting sprite to Mojang's highlighted one
+/// as `hover` rises.
+fn push_arrow(
+    quads: &mut Vec<Quad>,
+    base: TexHandle,
+    highlighted: TexHandle,
+    rect: (f32, f32, f32, f32),
+    hover: f32,
+) {
+    let (x, y, w, h) = rect;
+    let mul = 1.0 + (ARROW_HOVER_SCALE - 1.0) * ease_out_back(hover);
+    let nw = w * mul;
+    let nh = h * mul;
+    let rx = x - (nw - w) * 0.5;
+    let ry = y - (nh - h) * 0.5;
+    let fade = ease_out_cubic(hover);
+    if fade < 1.0 {
+        quads.push(Quad::new(base, rx, ry, nw, nh, [1.0, 1.0, 1.0, 1.0 - fade]));
+    }
+    if fade > 0.0 {
+        quads.push(Quad::new(highlighted, rx, ry, nw, nh, [1.0, 1.0, 1.0, fade]));
+    }
 }
 
 /// Draw one page's header and wrapped body, if the page exists.
