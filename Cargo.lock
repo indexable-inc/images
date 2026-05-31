@@ -3085,12 +3085,12 @@ dependencies = [
 name = "minecraft-sound"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
  "dirs",
  "rodio",
  "serde",
  "serde_json",
+ "snafu 0.9.1",
 ]
 
 [[package]]
