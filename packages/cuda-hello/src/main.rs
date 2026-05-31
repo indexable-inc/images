@@ -27,12 +27,13 @@ mod kernels {
     #[kernel]
     pub fn squares(mut out: DisjointSlice<u32>) {
         let idx = thread::index_1d();
+        // Read the raw index before `get_mut` consumes the (non-`Copy`)
+        // `ThreadIndex`. It stays well under `u32::MAX` for any realistic
+        // launch, so the square below cannot overflow.
+        let i = idx.get() as u32;
         // `get_mut` returns `None` for threads past the buffer end, so an
         // over-launched grid can never write out of bounds.
         if let Some(slot) = out.get_mut(idx) {
-            // `idx.get()` stays well under `u32::MAX` for any realistic launch,
-            // so the square cannot overflow here.
-            let i = idx.get() as u32;
             *slot = i * i;
         }
     }

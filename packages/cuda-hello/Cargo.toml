@@ -1,10 +1,11 @@
 # Standalone crate: deliberately NOT a member of the index cargo workspace.
 #
 # cuda-oxide is a custom rustc codegen backend. It needs its own pinned nightly
-# (see rust-toolchain.toml), the `cargo oxide` driver, LLVM 21 with the NVPTX
+# (see rust-toolchain.toml), the `cargo oxide` driver, LLVM 22 with the NVPTX
 # backend, and the CUDA toolkit. The index workspace pins a different stable
 # toolchain, so this crate builds on its own through `cargo oxide`, not the repo
-# build. Wiring it in as a nix-cargo-unit is tracked separately (see README).
+# build. The crate-local flake.nix provides that toolchain (`nix develop`);
+# wiring it in as a nix-cargo-unit is tracked separately (see README).
 [package]
 name = "cuda-hello"
 version = "0.1.0"

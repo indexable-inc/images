@@ -3,12 +3,13 @@
 A minimal CUDA kernel written in pure, idiomatic Rust and compiled to PTX with
 [cuda-oxide](https://github.com/NVlabs/cuda-oxide), NVIDIA's experimental
 Rust-to-CUDA compiler backend. Host and device code share one file
-([`src/main.rs`](src/main.rs)); the kernel just writes `i*i` for each thread, the
-GPU "hello, world".
+([`src/main.rs`](src/main.rs)); the kernel writes `i*i` for each thread, the GPU
+"hello, world".
 
-This is the seed for first-class CUDA-in-Rust support in this repo. It is a draft:
-the crate is written against cuda-oxide's real API, but it is not yet wired into
-the Nix build (see [Status](#status)).
+This is the seed for first-class CUDA-in-Rust support in this repo. The kernel is
+written against cuda-oxide's real API (a faithful subset of upstream's `vecadd`
+example) and is verified to lower to PTX; the crate is deliberately standalone
+(see [Why standalone](#why-standalone)).
 
 ## Compiling vs running
 
@@ -21,45 +22,59 @@ emitted PTX; you just cannot execute it.
 
 ## Build
 
-cuda-oxide is its own toolchain, not a library you drop into a normal build. From
-this directory:
+The crate-local [`flake.nix`](flake.nix) inherits cuda-oxide's dev shell, so you
+get the exact toolchain (the `cargo oxide` driver, the pinned nightly, LLVM 22
+with NVPTX, CUDA 13, and libclang) with no manual setup. From this directory:
 
 ```sh
-cargo oxide run        # build to PTX, then launch on the GPU
-cargo oxide build      # build only (no GPU required)
+nix develop            # enter the cuda-oxide toolchain (Linux only)
+cargo oxide build      # compile to PTX (no GPU required)
+cargo oxide run        # compile to PTX, then launch on the GPU
 ```
 
-`cargo oxide` is the driver from the cuda-oxide repo; it sets the custom codegen
-backend and emits a `.ptx` next to the host binary.
+`cargo oxide` is cuda-oxide's driver: it sets the custom codegen backend and emits
+a `.ptx` next to the host binary. On a standalone crate like this one it
+auto-fetches and builds `librustc_codegen_cuda.so` on first use and caches it, so
+the first build is much slower than later ones.
 
-### Requirements
+### Without Nix
 
-cuda-oxide is Linux-only today (tested on Ubuntu 24.04) and pins an exact
-toolchain. You need all of:
+cuda-oxide is Linux-only today. Outside the dev shell you need all of:
 
 - Rust `nightly-2026-04-03` with `rust-src`, `rustc-dev`, `llvm-tools` (see
   [`rust-toolchain.toml`](rust-toolchain.toml)).
 - The `cargo oxide` subcommand from cuda-oxide.
-- LLVM 21+ with the NVPTX backend (`llc` on `PATH`).
-- CUDA Toolkit 12.x+ and Clang/libclang headers.
+- LLVM 22 with the NVPTX backend (`llc` on `PATH`).
+- CUDA Toolkit 13.x and Clang/libclang headers.
 
-The cuda-oxide dependencies are pinned by git rev in
-[`Cargo.toml`](Cargo.toml); bump the rev and the toolchain channel together.
+The cuda-oxide rev is pinned in lockstep in both [`Cargo.toml`](Cargo.toml) and
+[`flake.nix`](flake.nix); bump the rev and the toolchain channel together.
+
+## Why standalone
+
+The crate is intentionally not a member of the index cargo workspace (note the
+empty `[workspace]` table in `Cargo.toml`) and has no `package.nix`, so the repo's
+stable toolchain never tries to build it and the root `nix flake check` is
+untouched. cuda-oxide is its own toolchain on a pinned nightly that the workspace
+toolchain cannot build; the crate-local flake keeps that toolchain self-contained.
 
 ## Status
 
 Done:
 
-- Idiomatic single-source kernel + host launch against cuda-oxide's API.
-- Pinned toolchain and dependency revs.
+- Idiomatic single-source kernel + host launch against cuda-oxide's real API.
+- Toolchain and dependency revs pinned in lockstep, provided by `nix develop`.
+- Verified end to end on the compile path: the kernel lowers to PTX via
+  `cargo oxide build` (no GPU). The run path needs an NVIDIA device.
 
-Not done (the work to carry this to a real `nix run .#cuda-hello`):
+Not done (the work to carry this to a pure `nix build .#cuda-hello`):
 
-- Package the cuda-oxide toolchain in Nix: the nightly with `rustc-dev`, the
-  `cargo oxide` driver and `librustc_codegen_cuda` backend, LLVM 21 NVPTX, and
-  the CUDA toolkit, then build this crate as a nix-cargo-unit.
-- A compile-only CI check that asserts the kernel still lowers to PTX (no GPU),
-  so regressions in the cuda-oxide rev surface here.
+- Package the cuda-oxide backend in a pure derivation and build this crate as a
+  nix-cargo-unit. cuda-oxide itself does not yet ship a pure build
+  (`librustc_codegen_cuda.so` is built on first use and cached outside the Nix
+  store), so this is upstream work as much as repo work.
+- A compile-only CI check that asserts the kernel still lowers to PTX, so a bad
+  cuda-oxide rev bump surfaces here.
 
 See the tracking issue linked from the pull request.
 
