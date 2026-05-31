@@ -159,8 +159,7 @@ in
     services.portable.claude-history-sync = {
       description = "Sync Claude Code history to parquet + Mixedbread";
       command = [ "${cfg.package}/bin/claude-history-sync" ] ++ dirFlags ++ s3Flags ++ mixedbreadFlags;
-      environment = cfg.environment;
-      interval = cfg.interval;
+      inherit (cfg) environment interval;
     };
   };
 }
