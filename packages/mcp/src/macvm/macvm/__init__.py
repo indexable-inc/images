@@ -35,6 +35,10 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 __all__ = ["MacVmError", "info", "install", "screenshot"]
 
@@ -68,22 +72,26 @@ def install(ipsw: str | os.PathLike, bundle: str | os.PathLike, disk_gib: int = 
 
     Takes ~15-20 minutes. Raises :class:`MacVmError` on failure.
     """
-    result = subprocess.run(
-        [_binary(), "install-macos", "--ipsw", str(ipsw), "--bundle", str(bundle), "--disk-gib", str(disk_gib)],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout,
-    )
+    try:
+        result = subprocess.run(
+            [_binary(), "install-macos", "--ipsw", str(ipsw), "--bundle", str(bundle), "--disk-gib", str(disk_gib)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MacVmError(f"install-macos timed out after {timeout}s") from exc
     if result.returncode != 0:
         raise MacVmError(f"install-macos failed: {result.stderr.strip()}")
 
 
-def screenshot(bundle: str | os.PathLike, seconds: int = 20, timeout: float | None = None):
+def screenshot(bundle: str | os.PathLike, seconds: int = 20, timeout: float | None = None) -> "Image.Image":
     """Boot the macOS guest in ``bundle`` off-screen and return a ``PIL.Image``
     of its display after ``seconds`` (the last frame captured).
 
-    Raises :class:`MacVmError` if the binary fails or produces no frame.
+    Raises :class:`MacVmError` if the binary fails, times out, or produces no
+    frame.
     """
     from PIL import Image
 
@@ -91,13 +99,16 @@ def screenshot(bundle: str | os.PathLike, seconds: int = 20, timeout: float | No
     deadline = timeout if timeout is not None else seconds + 120
     with tempfile.TemporaryDirectory(prefix="ix-macvm-") as tmp:
         prefix = pathlib.Path(tmp) / "shot"
-        result = subprocess.run(
-            [bin_path, "boot-macos", "--bundle", str(bundle), "--out-prefix", str(prefix), "--seconds", str(seconds)],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=deadline,
-        )
+        try:
+            result = subprocess.run(
+                [bin_path, "boot-macos", "--bundle", str(bundle), "--out-prefix", str(prefix), "--seconds", str(seconds)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=deadline,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise MacVmError(f"boot-macos timed out after {deadline}s") from exc
         shots = sorted(pathlib.Path(tmp).glob("shot.*.png"))
         if not shots:
             raise MacVmError(
