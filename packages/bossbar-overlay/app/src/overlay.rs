@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use glam::DVec2;
 use winit::application::ApplicationHandler;
@@ -43,11 +43,24 @@ const GROW_SECS: f32 = 0.16;
 const BREATHE_PERIOD: f32 = 2.6;
 /// Animation frame budget while something is moving (~60 fps).
 const FRAME: Duration = Duration::from_millis(16);
+/// Redraw cadence for a bar showing a live elapsed counter: once a second is
+/// enough to advance a clock that ticks in seconds, and lets the loop sleep the
+/// rest of the time.
+const TICK: Duration = Duration::from_secs(1);
 
 /// Ease-out cubic: fast start, soft landing. The default feedback curve.
 fn ease_out_cubic(t: f32) -> f32 {
     let u = 1.0 - t.clamp(0.0, 1.0);
     1.0 - u * u * u
+}
+
+/// Current wall-clock time as Unix seconds, for the live elapsed counter. Before
+/// the epoch (clock unset) it clamps to 0, which reads as a 0 counter.
+fn now_unix() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// GPU state shared by every bar window: one device/queue and one renderer
@@ -351,6 +364,7 @@ impl App {
             &view,
             win.config.width,
             win.config.height,
+            now_unix(),
             &win.bar,
             hover,
             breathe,
@@ -509,8 +523,9 @@ impl ApplicationHandler<Vec<BossBar>> for App {
     }
 
     /// Keep redrawing while any bar is animating (growing, shrinking, or
-    /// breathing), capped to ~60 fps; otherwise let the loop sleep until the
-    /// next event so an idle overlay costs nothing.
+    /// breathing), capped to ~60 fps; tick once a second while any bar shows a
+    /// live elapsed counter so its clock advances; otherwise let the loop sleep
+    /// until the next event so an idle overlay costs nothing.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Settle each window's size to its hover state first: grow for an open
         // panel, shrink back once the hover has fully eased out. Done here, off
@@ -522,14 +537,22 @@ impl ApplicationHandler<Vec<BossBar>> for App {
         }
 
         let mut animating = false;
+        let mut ticking = false;
         for win in self.wins.values() {
+            // A live counter only needs the once-a-second TICK, but anything
+            // mid-animation also wants its redraw now (the faster cadence wins).
             if win.animating() {
                 animating = true;
+                win.window.request_redraw();
+            } else if win.bar.since.is_some() {
+                ticking = true;
                 win.window.request_redraw();
             }
         }
         event_loop.set_control_flow(if animating {
             ControlFlow::WaitUntil(Instant::now() + FRAME)
+        } else if ticking {
+            ControlFlow::WaitUntil(Instant::now() + TICK)
         } else {
             ControlFlow::Wait
         });

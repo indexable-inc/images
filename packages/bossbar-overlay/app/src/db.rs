@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS bossbars (
   visible     INTEGER NOT NULL DEFAULT 1,
   position    INTEGER NOT NULL DEFAULT 0,
   x           REAL,
-  y           REAL
+  y           REAL,
+  since       INTEGER
 );";
 
 /// Columns added after the initial schema shipped. `ALTER TABLE ADD COLUMN` is
@@ -41,16 +42,18 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("x", "REAL"),
     ("y", "REAL"),
     ("description", "TEXT NOT NULL DEFAULT ''"),
+    ("since", "INTEGER"),
 ];
 
 /// Rows inserted only when the DB file is created for the first time, so a
 /// brand-new install shows something and documents the contract by example. The
-/// third bar carries a multi-paragraph description to show off the hover panel.
+/// third bar carries a multi-paragraph description (the hover panel) and a
+/// `since` of now, so its title shows a live elapsed counter from first launch.
 const SEED: &str = "\
-INSERT INTO bossbars (title, description, progress, color, overlay, position) VALUES
-  ('Ender Dragon', 'The final boss of the End. Destroy all the End Crystals on the obsidian pillars first, or it heals back to full.', 0.82, 'pink', 'notched_20', 0),
-  ('Wither', '', 0.55, 'blue', 'notched_6', 1),
-  ('Build: compiling', 'Hover any bar to read more.\n\nThe panel wraps long lines and keeps your paragraph breaks, so a bar can carry a sentence or a few.', 0.40, 'green', 'progress', 2);";
+INSERT INTO bossbars (title, description, progress, color, overlay, position, since) VALUES
+  ('Ender Dragon', 'The final boss of the End. Destroy all the End Crystals on the obsidian pillars first, or it heals back to full.', 0.82, 'pink', 'notched_20', 0, NULL),
+  ('Wither', '', 0.55, 'blue', 'notched_6', 1, NULL),
+  ('Build: compiling', 'Hover any bar to read more.\n\nThe panel wraps long lines and keeps your paragraph breaks, so a bar can carry a sentence or a few.', 0.40, 'green', 'progress', 2, strftime('%s','now'));";
 
 /// Resolve the database path: `BOSSBAR_DB` wins, otherwise the per-OS app-data
 /// path the `bossbar` CLI also computes.
@@ -112,7 +115,7 @@ pub fn set_position(path: &Path, id: i64, pos: glam::DVec2) -> rusqlite::Result<
 
 fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, progress, color, overlay, position, x, y, description
+        "SELECT id, title, progress, color, overlay, position, x, y, description, since
          FROM bossbars
          WHERE visible != 0
          ORDER BY position ASC, id ASC",
@@ -120,10 +123,14 @@ fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
     let rows = stmt.query_map([], |r| {
         let x: Option<f64> = r.get(6)?;
         let y: Option<f64> = r.get(7)?;
+        // A non-positive stored value reads as "no counter", so a caller can clear
+        // the clock with `--since 0` without a NULL.
+        let since: Option<i64> = r.get::<_, Option<i64>>(9)?.filter(|s| *s > 0);
         Ok(BossBar {
             id: r.get(0)?,
             title: r.get(1)?,
             description: r.get(8)?,
+            since,
             progress: r.get::<_, f64>(2)?.clamp(0.0, 1.0) as f32,
             color: Color::parse(&r.get::<_, String>(3)?),
             overlay: Overlay::parse(&r.get::<_, String>(4)?),
@@ -217,6 +224,27 @@ mod tests {
         // The seed documents the description contract by example.
         assert!(bars[0].description.contains("End Crystals"));
         assert_eq!(bars[1].description, "", "the Wither seed has no panel");
+        // The Build seed stamps `since`, so it shows a live counter from launch.
+        assert!(bars[2].since.is_some(), "Build seed should have a live counter");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn since_round_trips_and_nonpositive_reads_as_none() {
+        let path = temp_db("since");
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            "INSERT INTO bossbars (title, since) VALUES ('live', 1700000000), ('zero', 0), ('null', NULL)",
+            [],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
+        assert_eq!(by("live").since, Some(1_700_000_000));
+        // A 0 or NULL is "no counter", so the overlay shows a plain title.
+        assert_eq!(by("zero").since, None);
+        assert_eq!(by("null").since, None);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

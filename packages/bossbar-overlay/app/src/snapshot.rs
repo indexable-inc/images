@@ -45,9 +45,13 @@ pub fn run(
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let mut renderer = Renderer::new(device.clone(), queue.clone(), FORMAT, scale);
     renderer
-        .render(&view, width, height, bars, None)
+        .render(&view, width, height, now_unix, bars, None)
         .map_err(|e| format!("render: {e:?}"))?;
 
     // Copy the texture into a readback buffer with the 256-byte row alignment

@@ -52,6 +52,11 @@ while you hover, so the area below a bar stays click-through the rest of the
 time; a bar with an empty description behaves exactly as before. See the
 seeded Ender Dragon bar for an example.
 
+A bar can also carry a `since` (Unix epoch). When set, the overlay appends a
+live elapsed timer to the title (`Build (2:05)`) and ticks it once a second on
+its own, so you write the start time once instead of rewriting the title to
+advance a clock. The seeded "Build: compiling" bar shows this.
+
 Known limitations: some Linux tiling window managers force-place or tile
 borderless windows, which can fight the free-drag placement. An auto-stacked
 bar's open panel can overlap the bar stacked below it while you hover; pin bars
@@ -109,7 +114,8 @@ CREATE TABLE bossbars (
   visible     INTEGER NOT NULL DEFAULT 1,    -- 0 hides the row
   position    INTEGER NOT NULL DEFAULT 0,    -- sort order in the auto column
   x           REAL,                          -- pinned location (logical points)
-  y           REAL                           -- NULL/NULL = auto-stacked
+  y           REAL,                          -- NULL/NULL = auto-stacked
+  since       INTEGER                        -- Unix epoch; live elapsed timer in the title
 );
 ```
 
@@ -120,6 +126,10 @@ CREATE TABLE bossbars (
 - **description**: longer text shown in the panel that unfolds below the bar on
   hover. Empty (the default) means no panel. Lines wrap to the bar's width;
   newlines start new paragraphs.
+- **since**: a Unix epoch (seconds) to count up from. When set, the overlay
+  appends a live elapsed timer to the title (`Build (2:05)`) and ticks it once a
+  second, so you write the start once instead of rewriting the title to advance a
+  clock. `NULL` or a non-positive value means no timer.
 - **x / y**: pinned screen location in logical points, written when you drag a
   bar. Leave both `NULL` (the default) to keep the bar in the auto-stacked
   top-center column ordered by `position`; setting them floats the bar free.

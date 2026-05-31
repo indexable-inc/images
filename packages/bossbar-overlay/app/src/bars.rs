@@ -101,6 +101,12 @@ pub struct BossBar {
     /// Empty means the bar has no pop-down and behaves exactly as it did before.
     /// Newlines separate paragraphs; the panel wraps long lines to its width.
     pub description: String,
+    /// Unix epoch (seconds) the bar started counting from. When set, the overlay
+    /// appends a live, self-ticking elapsed time to the title (e.g. "2:05") and
+    /// redraws once a second, so a caller writes the start once instead of
+    /// rewriting the title to advance a clock. `None` (or a non-positive value in
+    /// the DB) means no counter.
+    pub since: Option<i64>,
     /// Fill fraction, always clamped to `0.0..=1.0` at construction.
     pub progress: f32,
     pub color: Color,

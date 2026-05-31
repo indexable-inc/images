@@ -79,6 +79,30 @@ fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Compact elapsed time that ticks every second: "M:SS" under an hour, else
+/// "H:MM:SS". Drives the live counter a bar with a `since` shows in its title.
+fn fmt_elapsed(secs: i64) -> String {
+    let secs = secs.max(0);
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = secs / 3600;
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// A bar's on-screen title: the stored title plus a live elapsed counter when the
+/// bar has a `since` (e.g. "US East: VMs (2:05)"). An empty title stays empty, so
+/// a counter never appears on its own.
+fn title_with_elapsed(title: &str, since: Option<i64>, now_unix: i64) -> String {
+    match since {
+        Some(start) if !title.is_empty() => format!("{title} ({})", fmt_elapsed(now_unix - start)),
+        _ => title.to_string(),
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
@@ -428,6 +452,7 @@ impl Renderer {
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
+        now_unix: i64,
         items: &[DrawItem<'_>],
     ) -> Result<(), wgpu::SurfaceError> {
         // A shaped run of text plus where, how opaque, and the rect to clip it
@@ -461,6 +486,10 @@ impl Renderer {
             let tint = [1.0, 1.0, 1.0, alpha];
 
             if bx.has_title {
+                // The title carries the live elapsed counter when the bar has a
+                // `since`; recomputed every frame so it ticks on the overlay's
+                // own redraws, with no DB write to advance it.
+                let shown = title_with_elapsed(&b.title, b.since, now_unix);
                 let mut buffer =
                     Buffer::new(&mut self.font_system, Metrics::new(bx.title_px, bx.title_px));
                 // Center the title within the bar width via cosmic-text's own
@@ -468,7 +497,7 @@ impl Renderer {
                 buffer.set_size(&mut self.font_system, Some(bx.bar_w), Some(bx.title_px * 1.5));
                 buffer.set_text(
                     &mut self.font_system,
-                    &b.title,
+                    &shown,
                     &Attrs::new().family(Family::Name(&self.font_family)),
                     Shaping::Advanced,
                     Some(glyphon::cosmic_text::Align::Center),
@@ -733,6 +762,7 @@ impl Renderer {
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
+        now_unix: i64,
         bars: &[BossBar],
         highlight: Option<i64>,
     ) -> Result<(), wgpu::SurfaceError> {
@@ -767,7 +797,7 @@ impl Renderer {
                 }
             })
             .collect();
-        self.draw(view, width, height, &items)
+        self.draw(view, width, height, now_unix, &items)
     }
 
     /// Render a single bar centered in its own window. `hover` is the eased
@@ -786,6 +816,7 @@ impl Renderer {
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
+        now_unix: i64,
         bar: &BossBar,
         hover: f32,
         breathe: f32,
@@ -857,7 +888,7 @@ impl Renderer {
             alpha,
             panel,
         }];
-        self.draw(view, width, height, &items)
+        self.draw(view, width, height, now_unix, &items)
     }
 
     /// Panel metrics in physical pixels at the current scale:
@@ -1048,4 +1079,33 @@ fn upload_white_pixel(
             },
         ],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fmt_elapsed_ticks_in_seconds_then_minutes_then_hours() {
+        assert_eq!(fmt_elapsed(0), "0:00");
+        assert_eq!(fmt_elapsed(5), "0:05");
+        assert_eq!(fmt_elapsed(65), "1:05");
+        assert_eq!(fmt_elapsed(600), "10:00");
+        assert_eq!(fmt_elapsed(3661), "1:01:01");
+        // A clock that ran backwards (since in the future) clamps to zero.
+        assert_eq!(fmt_elapsed(-10), "0:00");
+    }
+
+    #[test]
+    fn title_with_elapsed_only_appends_when_counting() {
+        // since=1000, now=1125 -> 125s = 2:05.
+        assert_eq!(
+            title_with_elapsed("US East: VMs", Some(1000), 1125),
+            "US East: VMs (2:05)"
+        );
+        // No `since` leaves the title untouched.
+        assert_eq!(title_with_elapsed("Idle", None, 1125), "Idle");
+        // A counter never appears on its own when there is no title.
+        assert_eq!(title_with_elapsed("", Some(1000), 1125), "");
+    }
 }
