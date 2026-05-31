@@ -116,7 +116,7 @@ pub fn drive_linux(drive: DriveLinux) -> Result<(), Error> {
     }
 
     let view = crate::macguest::start_vm_offscreen(mtm, &config);
-    crate::drive::drive_view(mtm, view);
+    crate::drive::drive_view(mtm, view, "Linux guest");
     Ok(())
 }
 

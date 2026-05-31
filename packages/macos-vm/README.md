@@ -127,6 +127,27 @@ capture a frame, locate a control in it (the host side can use any image
 tooling), `click` it, capture again. Modifiers via `down`/`up` give chords like
 Spotlight: `down cmd`, `key space`, `up cmd`.
 
+A `drive-macos` or `drive-linux` session also publishes the guest screen to the
+local dashboard automatically, the same way a terminal producer does: it binds a
+producer socket in the [discovery directory](../dashboard-core) and streams the
+framebuffer as a live image pane. Run the standalone `dashboard` aggregator and
+the running guest appears on the canvas next to any terminals, with no extra
+flag.
+
+The pane is a downscaled PNG (capped at 900px wide, aspect preserved) sampled
+about once a second; an unchanged frame is dropped before encoding, so an idle
+desktop publishes one frame and then nothing. The raw frame is copied off the
+`IOSurface` on the main queue and converted, scaled, and compared off it, to keep
+guest rendering and lockstep input responsive. The capture is best-effort: if the
+socket cannot be bound the driver logs one line and keeps running. Set
+`IX_MACVM_NO_DASHBOARD` (to any value) to turn it off, e.g. a lockstep automated
+driver that does not want the extra framebuffer sampling.
+
+Known limit: the dashboard keeps pane history in a CRDT, so a screen that changes
+continuously for a very long session grows the aggregator's in-memory state. For
+the interactive, mostly-static desktops this targets it stays small; a smaller
+cap or lower rate bounds it further.
+
 Modal screens that make a network call (Apple ID, Screen Time) hang on a host
 without working guest internet. Where the goal is just a usable desktop, it is
 simpler to mark Setup Assistant complete offline by editing the guest disk

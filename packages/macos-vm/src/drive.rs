@@ -27,6 +27,8 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use base64::Engine as _;
+use dashboard_core::{Pane, Publisher, socket_path};
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
@@ -35,7 +37,10 @@ use objc2_virtualization::VZVirtualMachineView;
 
 use crate::imp::Error;
 use crate::input;
-use crate::macguest::{DirShare, capture, frame_size as guest_frame_size, start_guest_offscreen};
+use crate::macguest::{
+    DirShare, bgra_to_rgba, capture, downscale_rgba, encode_png_rgba,
+    frame_size as guest_frame_size, read_frame_bgra, start_guest_offscreen,
+};
 
 /// Gap between a key's down and up, and after its release, so the guest HID
 /// stack registers discrete presses instead of coalescing them. The sleeps run
@@ -68,7 +73,7 @@ pub fn drive_macos(drive: DriveMacos) -> Result<(), Error> {
     let DriveMacos { bundle, shares } = drive;
     let mtm = MainThreadMarker::new().ok_or(Error::NotMainThread)?;
     let view = start_guest_offscreen(mtm, &bundle, &shares)?;
-    drive_view(mtm, view);
+    drive_view(mtm, view, "macOS guest");
     Ok(())
 }
 
@@ -76,8 +81,13 @@ pub fn drive_macos(drive: DriveMacos) -> Result<(), Error> {
 /// run the `AppKit` run loop until `quit`/EOF exits the process. Guest-agnostic:
 /// shared by the macOS ([`drive_macos`]) and Linux
 /// ([`crate::linuxguest::drive_linux`]) drivers, since every command operates on
-/// the `VZVirtualMachineView` regardless of guest type.
-pub(crate) fn drive_view(mtm: MainThreadMarker, view: Retained<VZVirtualMachineView>) {
+/// the `VZVirtualMachineView` regardless of guest type. `label` titles the live
+/// screen pane this session publishes to the dashboard.
+pub(crate) fn drive_view(
+    mtm: MainThreadMarker,
+    view: Retained<VZVirtualMachineView>,
+    label: &'static str,
+) {
     // Leak the view (it lives for the process) and hand the raw pointer to the
     // driver thread; the view is not `Send`, so we only re-borrow it on the main
     // queue, where it is valid.
@@ -86,11 +96,142 @@ pub(crate) fn drive_view(mtm: MainThreadMarker, view: Retained<VZVirtualMachineV
         "macos-vm: driving guest; stdin commands: \
          key/down/up/type/click/move/cursor/size/cursor-show/wait/shot/quit"
     );
+    // Stream the guest screen to the local dashboard so the session shows up on
+    // the canvas automatically, the same way a terminal producer does.
+    spawn_screen_publisher(view_ptr, label);
     std::thread::spawn(move || run_commands(view_ptr));
 
     // The view needs the `AppKit` run loop to build its layer tree and receive
     // guest frames; the driver thread exits the process on `quit` or EOF.
     NSApplication::sharedApplication(mtm).run();
+}
+
+/// How often the dashboard producer samples the guest framebuffer. ~1 fps: a
+/// remote-desktop thumbnail does not need to be smooth, and an unchanged frame is
+/// skipped anyway, so an idle desktop costs one published frame and then nothing.
+const SCREEN_PUBLISH_INTERVAL: Duration = Duration::from_millis(1000);
+/// Cap the published frame's width (aspect ratio preserved). A dashboard card is
+/// far smaller than a 1920px scanout, and the smaller PNG keeps the stream light.
+const SCREEN_MAX_WIDTH: usize = 900;
+/// Set this to disable publishing the guest screen to the dashboard (e.g. a
+/// lockstep automated driver that does not want the extra main-queue sampling).
+/// Any value disables it.
+const NO_DASHBOARD_ENV: &str = "IX_MACVM_NO_DASHBOARD";
+
+/// Publish the guest framebuffer to the local dashboard as a live image pane, so
+/// a `drive` session appears on the canvas automatically alongside terminals and
+/// other producers.
+///
+/// Best-effort: a runtime/bind failure disables the pane and never touches the
+/// VM. The work runs on its own thread because this binary drives an `AppKit`
+/// run loop, not an async one; that thread owns a small tokio runtime (for the
+/// publisher's socket) and the [`Publisher`], both kept alive for the process by
+/// the never-returning sample loop.
+///
+/// Each tick reads the raw frame on the main queue (the only main-thread work),
+/// then converts, downscales, and compares it off the queue: an unchanged frame
+/// is dropped before the expensive PNG encode and before any publish, so a static
+/// desktop adds no traffic and no aggregator state.
+fn spawn_screen_publisher(view_ptr: usize, label: &'static str) {
+    if std::env::var_os(NO_DASHBOARD_ENV).is_some() {
+        return;
+    }
+    std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                eprintln!("macos-vm: dashboard screen disabled (runtime: {error})");
+                return;
+            }
+        };
+        let publisher = match Publisher::bind(socket_path(), runtime.handle()) {
+            Ok(publisher) => publisher,
+            Err(error) => {
+                eprintln!("macos-vm: dashboard screen disabled ({error})");
+                return;
+            }
+        };
+        eprintln!(
+            "macos-vm: publishing guest screen to dashboard ({})",
+            publisher.path().display()
+        );
+        let sink = publisher.sink();
+        // Log a persistent read/encode fault once rather than every tick.
+        let mut warned_read = false;
+        let mut warned_encode = false;
+        // The last published downscaled RGBA frame, to skip a static screen.
+        let mut last_frame: Option<Vec<u8>> = None;
+        loop {
+            std::thread::sleep(SCREEN_PUBLISH_INTERVAL);
+            // Main-queue work: copy the raw BGRA frame out.
+            let (mut bgra, width, height) = match read_bgra_on_main(view_ptr) {
+                Ok(frame) => frame,
+                // The guest has not rendered a frame yet; the pane appears once it
+                // does. Any other read error is logged once, then tolerated.
+                Err(Error::NoFramebuffer) => continue,
+                Err(error) => {
+                    if !warned_read {
+                        eprintln!("macos-vm: dashboard screen capture: {error}");
+                        warned_read = true;
+                    }
+                    continue;
+                }
+            };
+            // Off-queue work: convert, downscale, and skip an unchanged frame.
+            bgra_to_rgba(&mut bgra);
+            let (small, w, h) = match downscale_rgba(bgra, width, height, SCREEN_MAX_WIDTH) {
+                Ok(frame) => frame,
+                Err(_) => continue,
+            };
+            if last_frame.as_deref() == Some(small.as_slice()) {
+                continue;
+            }
+            let png = match encode_png_rgba(&small, w as usize, h as usize) {
+                Ok(png) => png,
+                Err(error) => {
+                    if !warned_encode {
+                        eprintln!("macos-vm: dashboard screen encode: {error}");
+                        warned_encode = true;
+                    }
+                    continue;
+                }
+            };
+            last_frame = Some(small);
+            let mut data_url = String::from("data:image/png;base64,");
+            base64::engine::general_purpose::STANDARD.encode_string(&png, &mut data_url);
+            let mut pane = Pane::html("screen", label, screen_html(&data_url));
+            pane.subtitle = format!("{w}x{h}");
+            sink.publish(std::slice::from_ref(&pane));
+        }
+        // `runtime` and `publisher` are owned here and kept alive by the loop
+        // above; the process exits via `quit`/EOF, never by leaving this thread.
+    });
+}
+
+/// The HTML body for the live screen pane: the captured frame as a data-URL
+/// image, scaled to the card width over a black field.
+fn screen_html(data_url: &str) -> String {
+    format!(
+        "<div style=\"margin:0;background:#000;line-height:0\">\
+         <img src=\"{data_url}\" alt=\"guest screen\" \
+         style=\"display:block;width:100%;height:auto;image-rendering:auto\"/></div>"
+    )
+}
+
+/// Copy the guest framebuffer (raw BGRA) on the main queue (where the view and
+/// its `IOSurface` are valid), mirroring [`shot`] and [`frame_size`]. The
+/// BGRA→RGBA conversion is left to the caller so it runs off the main queue.
+fn read_bgra_on_main(view_ptr: usize) -> Result<(Vec<u8>, usize, usize), Error> {
+    let mut result = Err(Error::NoFramebuffer);
+    DispatchQueue::main().exec_sync(|| {
+        let view: &VZVirtualMachineView = unsafe { &*(view_ptr as *const VZVirtualMachineView) };
+        result = read_frame_bgra(view);
+    });
+    result
 }
 
 /// Mutable driver state carried across commands: the last pointer position this

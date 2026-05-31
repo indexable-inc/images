@@ -3430,8 +3430,10 @@ dependencies = [
 name = "macos-vm"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "block2",
  "clap",
+ "dashboard-core",
  "dispatch2",
  "image",
  "objc2",
@@ -3443,6 +3445,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snafu 0.8.9",
+ "tokio",
 ]
 
 [[package]]
