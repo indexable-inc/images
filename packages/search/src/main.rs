@@ -143,8 +143,9 @@ fn parse_sources(values: &[String]) -> anyhow::Result<Vec<Source>> {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Args)]
 struct SemanticArgs {
-    /// The query to search for.
-    pattern: String,
+    /// The query to search for. Required for a bare search; omitted when a
+    /// subcommand (grep/ingest/gc) is used.
+    pattern: Option<String>,
 
     /// Directory to search in (defaults to the current directory).
     path: Option<String>,
@@ -309,6 +310,12 @@ async fn run_one_source(
 }
 
 async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
+    // `pattern` is optional at the clap layer so a subcommand can be given
+    // without it; a bare search still requires one.
+    let pattern = cli
+        .pattern
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("a query is required: `search <pattern> [path]`"))?;
     let root = resolve_root(cli.path.as_deref())?;
     anyhow::ensure!(
         !at_or_above_home(&root),
@@ -341,7 +348,7 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
     let query = Query {
         root: &root,
         store_name: &store_name,
-        text: &cli.pattern,
+        text: &pattern,
         top_k: cli.max_count.max(1),
         options: SearchOptions {
             rerank: !cli.no_rerank,
