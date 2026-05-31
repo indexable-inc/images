@@ -5,6 +5,12 @@
   cargoUnitFor,
   ghostty,
   writeNushellApplication,
+  # Cross-compilation leaves, threaded in so `unitsFor { target }` can build a
+  # second unit graph for a non-host triple without `rust-workspace.nix` having
+  # to reach back into the assembled `ix` surface.
+  rustToolchainFor,
+  appleSdkToolchain,
+  macosSdk,
 }:
 workspacePkgs:
 let
@@ -46,92 +52,161 @@ let
     );
   };
   cargoLock = root + "/Cargo.lock";
+
+  # `cargo` cfg-excludes platform-gated deps per target, so an Apple-Silicon or
+  # Intel macOS unit graph never sees `alsa-sys`; gate the ALSA plumbing on the
+  # *target* OS rather than the build host so a Linux→macOS cross build does not
+  # drag Linux audio inputs into a Darwin graph.
+  targetIsLinux =
+    target:
+    if target == null then workspacePkgs.stdenv.hostPlatform.isLinux else lib.hasInfix "-linux-" target;
+
+  # The Apple cross toolchain (zig cc + macOS SDK), or null for host/musl/Linux
+  # targets that build with the ordinary linker.
+  appleToolchainFor =
+    target:
+    if target != null && lib.hasSuffix "-apple-darwin" target then
+      appleSdkToolchain {
+        appleSdk = macosSdk { pkgs = workspacePkgs; };
+        inherit lib target;
+        pkgs = workspacePkgs;
+      }
+    else
+      null;
+
+  # rust-overlay toolchain carrying the cross target's `rust-std`. The native
+  # graph keeps `cargo-unit`'s default (nixpkgs cargo + rustc).
+  crossRustToolchain =
+    target:
+    rustToolchainFor workspacePkgs {
+      channel = "stable";
+      version = "latest";
+      targets = [ target ];
+    };
+
   # One workspace-wide unit graph for every repo-owned Rust crate. Each
-  # crate's `default.nix` picks its binary and test targets out of this
-  # via `ix.cargoUnit.selectBinaryWithTests`, so the unit graph + vendor
-  # closure get generated once instead of per crate. `nix-cargo-unit`
-  # itself stays on the bootstrap path (it's what builds this graph).
-  units = (cargoUnitFor workspacePkgs).buildWorkspace {
-    pname = "ix-rust-workspace";
-    inherit src;
-    cargoLock.lockFile = cargoLock;
-    workspaceRoot = root;
-    cargoArgs = [ "--workspace" ];
-    cargoTargets = [
-      [ "--workspace" ]
-      [
-        "--workspace"
-        "--tests"
-      ]
-      [
-        "--workspace"
-        "--benches"
-      ]
-    ];
-    cargoTargetNames = [
-      "build"
-      "test"
-      "bench"
-    ];
-    packageTestInputs = {
-      tui = [ workspacePkgs.vim ];
-      ix-mcp = [ workspacePkgs.python3 ];
-      # tap's integration tests drive the `tap` binary on a PTY and run `bash`
-      # as the session child; the daemon resolves `bash` from PATH at runtime.
-      tap = [ workspacePkgs.bash ];
-      # ix-vt's tests dlopen the libghostty-vt dylib at runtime; make its lib
-      # dir available so the loader resolves `@rpath`/`-l ghostty-vt`.
-      ix-vt = [ libghosttyVt ];
-    };
-    # `rodio` (packages/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
-    # script needs ALSA's pkg-config metadata to link `libasound` on Linux.
-    # Scoped to the whole workspace because the unit graph compiles every
-    # member on every system; darwin uses CoreAudio and needs nothing extra.
-    #
-    # `pkg-config` + `PKG_CONFIG_PATH` let `alsa-sys`'s build script find ALSA
-    # and emit `link-lib=asound`. That `-lasound` propagates to the final
-    # `minecraft-sound` link, but the build script's `link-search` path does
-    # not, so the linker reports `cannot find -lasound`. Add ALSA's lib dir to
-    # every unit's rustc link search directly so the final binary link resolves
-    # it. Harmless for crates that never reference `libasound`.
-    nativeBuildInputs = lib.optional workspacePkgs.stdenv.hostPlatform.isLinux workspacePkgs.pkg-config;
-    env = {
-      # ix-vt-sys's build script reads this to emit the libghostty-vt link
-      # search path. Set workspace-wide; only ix-vt-sys reads it.
-      IX_VT_GHOSTTY_LIB_DIR = ghosttyLibDir;
-    }
-    // lib.optionalAttrs workspacePkgs.stdenv.hostPlatform.isLinux {
-      PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
-    };
-    extraRustcArgs = [
-      # The libghostty-vt search path for the final per-unit link. A build
-      # script's `rustc-link-search` does not reach the final binary link in
-      # this graph, so the directory is added directly here (same shape as the
-      # alsa-lib path below).
-      "-L"
-      "native=${ghosttyLibDir}"
-      # Embed an rpath to the libghostty-vt store path so the linked binaries
-      # (the ix-vt test binaries cargo-unit executes, and any future consumer)
-      # resolve `libghostty-vt.so` at runtime without `LD_LIBRARY_PATH`. The
-      # `-L` above only covers link time. Harmless for crates that never load it
-      # because the binary keeps no `DT_NEEDED` entry for the lib.
-      "-C"
-      "link-arg=-Wl,-rpath,${ghosttyLibDir}"
-    ]
-    ++ lib.optionals workspacePkgs.stdenv.hostPlatform.isLinux [
-      "-L"
-      "native=${workspacePkgs.alsa-lib}/lib"
-    ];
-    # Every policy check runs once across the whole workspace. Selected
-    # package outputs expose these as explicit tests instead of making
-    # downstream binary builds depend on unrelated workspace policy.
-    policy = {
-      denyUnusedCrateDependencies = true;
-      cargoAudit.enable = true;
-      cargoMachete.enable = true;
-      clippy.enable = true;
-    };
-  };
+  # crate's `default.nix` picks its binary and test targets out of the native
+  # graph via `ix.cargoUnit.selectBinaryWithTests`, so the unit graph + vendor
+  # closure get generated once instead of per crate. `nix-cargo-unit` itself
+  # stays on the bootstrap path (it's what builds this graph). `target != null`
+  # produces a separate cross graph used only to emit binaries.
+  mkUnits =
+    {
+      target ? null,
+    }:
+    let
+      appleToolchain = appleToolchainFor target;
+      isCross = target != null;
+    in
+    (cargoUnitFor workspacePkgs).buildWorkspace (
+      {
+        pname = "ix-rust-workspace${lib.optionalString isCross "-${target}"}";
+        inherit src;
+        cargoLock.lockFile = cargoLock;
+        workspaceRoot = root;
+        cargoArgs = [ "--workspace" ];
+        # Cross test/bench binaries can't execute on the build host, so a cross
+        # graph builds only the `--workspace` root set; the native graph keeps
+        # the test and bench roots for `passthru.tests`.
+        cargoTargets = [
+          [ "--workspace" ]
+        ]
+        ++ lib.optionals (!isCross) [
+          [
+            "--workspace"
+            "--tests"
+          ]
+          [
+            "--workspace"
+            "--benches"
+          ]
+        ];
+        cargoTargetNames = [
+          "build"
+        ]
+        ++ lib.optionals (!isCross) [
+          "test"
+          "bench"
+        ];
+        packageTestInputs = {
+          tui = [ workspacePkgs.vim ];
+          ix-mcp = [ workspacePkgs.python3 ];
+          # tap's integration tests drive the `tap` binary on a PTY and run `bash`
+          # as the session child; the daemon resolves `bash` from PATH at runtime.
+          tap = [ workspacePkgs.bash ];
+          # ix-vt's tests dlopen the libghostty-vt dylib at runtime; make its lib
+          # dir available so the loader resolves `@rpath`/`-l ghostty-vt`.
+          ix-vt = [ libghosttyVt ];
+        };
+        # `rodio` (packages/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
+        # script needs ALSA's pkg-config metadata to link `libasound` on Linux.
+        #
+        # `pkg-config` + `PKG_CONFIG_PATH` let `alsa-sys`'s build script find ALSA
+        # and emit `link-lib=asound`. That `-lasound` propagates to the final
+        # `minecraft-sound` link, but the build script's `link-search` path does
+        # not, so the linker reports `cannot find -lasound`. Add ALSA's lib dir to
+        # every unit's rustc link search directly so the final binary link resolves
+        # it. Harmless for crates that never reference `libasound`.
+        nativeBuildInputs =
+          lib.optional (targetIsLinux target) workspacePkgs.pkg-config
+          ++ lib.optionals (appleToolchain != null) appleToolchain.runtimeInputs;
+        env = {
+          # ix-vt-sys's build script reads this to emit the libghostty-vt link
+          # search path. Set workspace-wide; only ix-vt-sys reads it.
+          IX_VT_GHOSTTY_LIB_DIR = ghosttyLibDir;
+        }
+        // lib.optionalAttrs (targetIsLinux target) {
+          PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
+        }
+        // lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
+        extraRustcArgs = [
+          # The libghostty-vt search path for the final per-unit link. A build
+          # script's `rustc-link-search` does not reach the final binary link in
+          # this graph, so the directory is added directly here (same shape as the
+          # alsa-lib path below).
+          "-L"
+          "native=${ghosttyLibDir}"
+          # Embed an rpath to the libghostty-vt store path so the linked binaries
+          # (the ix-vt test binaries cargo-unit executes, and any future consumer)
+          # resolve `libghostty-vt.so` at runtime without `LD_LIBRARY_PATH`. The
+          # `-L` above only covers link time. Harmless for crates that never load it
+          # because the binary keeps no `DT_NEEDED` entry for the lib.
+          "-C"
+          "link-arg=-Wl,-rpath,${ghosttyLibDir}"
+        ]
+        ++ lib.optionals (targetIsLinux target) [
+          "-L"
+          "native=${workspacePkgs.alsa-lib}/lib"
+        ];
+        # The native graph runs every policy check once across the whole
+        # workspace (selected package outputs expose these as explicit tests).
+        # A cross graph is a pure build artifact, so it skips policy to avoid
+        # re-running clippy/audit/machete that the native graph already covers.
+        policy =
+          if isCross then
+            {
+              denyUnusedCrateDependencies = false;
+              cargoAudit.enable = false;
+              cargoMachete.enable = false;
+              clippy.enable = false;
+            }
+          else
+            {
+              denyUnusedCrateDependencies = true;
+              cargoAudit.enable = true;
+              cargoMachete.enable = true;
+              clippy.enable = true;
+            };
+      }
+      // lib.optionalAttrs isCross {
+        inherit target;
+        rustToolchain = crossRustToolchain target;
+        extraRustcArgsForPlatform =
+          if appleToolchain != null then appleToolchain.rustcArgsForPlatform else (_platform: [ ]);
+      }
+    );
+
+  units = mkUnits { };
 in
 {
   inherit
@@ -140,4 +215,21 @@ in
     cargoLock
     units
     ;
+
+  /**
+    Build a cross-compiled unit graph for a non-host `target` triple.
+
+    `target` is a Rust target triple. `aarch64-apple-darwin` /
+    `x86_64-apple-darwin` build through the zig + macOS SDK toolchain (see
+    [`lib/apple-sdk-toolchain.nix`](lib/apple-sdk-toolchain.nix)); other triples
+    (e.g. `x86_64-unknown-linux-musl`) build with the ordinary linker and only
+    need a toolchain carrying the target `rust-std`. Returns the same shape as
+    `units`; select a binary with `ix.cargoUnit.selectBinaryWithTests` or
+    `workspace.binaries.<name>`.
+  */
+  unitsFor =
+    {
+      target,
+    }:
+    mkUnits { inherit target; };
 }
