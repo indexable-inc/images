@@ -61,6 +61,9 @@
 
   * { box-sizing: border-box; }
   html, body { height: 100%; }
+  /* The dashboard fits every terminal to its card width (see TermCard.fit), so
+     nothing should overflow sideways. Pin the page against it regardless. */
+  body { overflow-x: hidden; }
   ::selection { background: var(--sel); }
 
   body {
@@ -95,85 +98,103 @@
   }
   header .dot.live { background: var(--live); }
 
+  /* Cards flow left to right and wrap. Each card is sized to the natural width
+     of its terminal (cols x cell width), so an 80-column shell and a
+     200-column log get cards matched to their shape instead of being crammed
+     into one fixed track. A terminal too wide for the row spans the full width
+     and scales its font down to fit. Either way the content fills the card and
+     never scrolls sideways. */
   #grid {
-    display: grid; gap: 14px;
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-    align-items: start;
+    display: flex; flex-wrap: wrap; align-items: flex-start;
+    gap: 14px;
   }
 
   /* Flat, square terminal cards. A hairline border gives separation: no
-     rounding, no shadow, no hover reaction. The card stays still. */
-  .term {
-    position: relative;
+     rounding, no shadow, no hover reaction. The card stays still; the only
+     motion is a brief fade as a card joins or changes run state, marking a real
+     event rather than decorating a hover. */
+  term-card {
+    display: flex; flex-direction: column;
     background: var(--panel);
     border: 1px solid var(--edge);
     overflow: hidden;
+    min-width: 0;
   }
-  .term.dead { opacity: 0.55; }
+  term-card.dead { opacity: 0.55; }
+  @media (prefers-reduced-motion: no-preference) {
+    term-card { animation: card-in 140ms ease-out; transition: opacity 140ms ease; }
+  }
+  @keyframes card-in { from { opacity: 0; } to { opacity: 1; } }
 
-  .term .head {
+  term-card .head {
     display: flex; align-items: center; gap: 9px;
     padding: 9px 13px;
     border-bottom: 1px solid var(--edge);
   }
   /* Run state: a small flat dot, green while live, red once exited. */
-  .term .led {
+  term-card .led {
     flex: none; width: 7px; height: 7px; border-radius: 50%;
     background: var(--live);
   }
-  .term.dead .led { background: var(--dead); }
-  .term .cmd {
+  term-card.dead .led { background: var(--dead); }
+  term-card .cmd {
     font-family: var(--mono); font-size: 12.5px; font-weight: 500;
     color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .term .spacer { flex: 1; }
-  .term .chip {
+  term-card .spacer { flex: 1; }
+  term-card .chip {
     font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.3px;
-    color: var(--ink-faint);
+    color: var(--ink-faint); white-space: nowrap;
   }
-  .term .size {
+  term-card .size {
     font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
-    font-variant-numeric: tabular-nums;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
   }
 
-  .term pre {
-    margin: 0; padding: 12px 14px;
-    font-family: var(--mono); font-size: 12px; line-height: 1.4;
+  term-card pre {
+    margin: 0; padding: 10px 12px;
+    font-family: var(--mono);
+    /* font-size and line-height are set per card by fit(); these are the floor
+       used before the first measurement. */
+    font-size: 12px; line-height: 1.25;
     color: var(--ink);
-    white-space: pre; overflow: auto;
+    /* Horizontal never scrolls: fit() keeps content within the card width and
+       any sub-pixel remainder is clipped, not turned into a scrollbar. Vertical
+       scrolls only when a tall screen exceeds the height cap. */
+    white-space: pre; overflow-x: hidden; overflow-y: auto;
     /* A stable floor so an empty or one-line screen does not collapse the card. */
     min-height: 3.4em;
-    max-height: 60vh; tab-size: 8;
+    max-height: 78vh; tab-size: 8;
     scrollbar-width: thin; scrollbar-color: var(--edge-strong) transparent;
   }
-  .term pre::-webkit-scrollbar { width: 9px; height: 9px; }
-  .term pre::-webkit-scrollbar-thumb {
+  term-card pre::-webkit-scrollbar { width: 9px; height: 9px; }
+  term-card pre::-webkit-scrollbar-thumb {
     background: var(--edge-strong);
     border: 2px solid var(--panel);
   }
   /* Style attributes carried by the SGR runs. */
-  .term pre .b { font-weight: 700; }
-  .term pre .i { font-style: italic; }
-  .term pre .u { text-decoration: underline; }
+  term-card pre .b { font-weight: 700; }
+  term-card pre .i { font-style: italic; }
+  term-card pre .u { text-decoration: underline; }
 
   /* Cursor overlays in the ghostty cursor color. Inline so the cell text stays
      selectable underneath. */
-  .term pre .cur { position: relative; }
-  .term pre .cur::after {
+  term-card pre .cur { position: relative; }
+  term-card pre .cur::after {
     content: ""; position: absolute; pointer-events: none;
     left: 0; top: 0; right: 0; bottom: 0;
   }
-  .term pre .cur.block::after { background: var(--cursor); mix-blend-mode: difference; }
-  .term pre .cur.hollow::after { box-shadow: inset 0 0 0 1px var(--cursor); }
-  .term pre .cur.bar::after { right: auto; width: 1px; background: var(--cursor); }
-  .term pre .cur.underline::after { top: auto; height: 1px; background: var(--cursor); }
+  term-card pre .cur.block::after { background: var(--cursor); mix-blend-mode: difference; }
+  term-card pre .cur.hollow::after { box-shadow: inset 0 0 0 1px var(--cursor); }
+  term-card pre .cur.bar::after { right: auto; width: 1px; background: var(--cursor); }
+  term-card pre .cur.underline::after { top: auto; height: 1px; background: var(--cursor); }
 
   .placeholder {
     color: var(--ink-faint); font-style: italic;
   }
 
   .empty {
-    grid-column: 1 / -1;
+    width: 100%;
     color: var(--ink-dim); text-align: center;
     padding: 12vh 0; font-family: var(--mono); font-size: 13px;
   }
@@ -202,6 +223,41 @@ function b64ToBytes(b64) {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+// ----- fit-to-width sizing ------------------------------------------------- //
+
+// Target cell font size for a card that fits its row without shrinking. Cards
+// narrower than the row keep this size; a card too wide to fit gets a smaller
+// font so its content still fills exactly one card with no sideways scroll.
+const BASE_FONT = 12.5;
+const LINE_H = 1.25;
+const MIN_FONT = 5;       // floor for an ultra-wide terminal on a narrow page
+const MIN_CARD = 260;     // keep the header legible even for a 1-column terminal
+const PRE_PAD_X = 12;     // must match `term-card pre` padding-inline
+const CARD_BORDER = 1;    // must match `term-card` border width
+// Card chrome around the monospace content box, both sides summed.
+const CHROME_X = 2 * PRE_PAD_X + 2 * CARD_BORDER;
+
+// Width in px of one monospace cell at font-size 1px, measured against the same
+// font stack the cards use. Monospace advance scales linearly with font size,
+// so one measurement converts cols <-> px at any size. Remeasured once the web
+// font (Berkeley Mono, if present) finishes loading.
+let CELL_RATIO = 0.6;
+function measureCellRatio() {
+  // getPropertyValue keeps the leading space from the CSS declaration; trim it
+  // so the canvas font shorthand is clean ("100px <stack>", not a double space).
+  const probe = getComputedStyle(document.documentElement).getPropertyValue("--mono").trim();
+  const canvas = (measureCellRatio._c ??= document.createElement("canvas"));
+  const ctx = canvas.getContext("2d");
+  ctx.font = `100px ${probe}`;
+  // A run of glyphs averages out fractional-advance rounding; divide back out.
+  const w = ctx.measureText("MMMMMMMMMM").width / 10;
+  if (w > 0) CELL_RATIO = w / 100;
+}
+measureCellRatio();
+if (document.fonts?.ready) {
+  document.fonts.ready.then(() => { measureCellRatio(); layout(); });
 }
 
 // ----- color -------------------------------------------------------------- //
@@ -245,7 +301,7 @@ let PALETTE = buildPalette(darkScheme.matches ? ANSI_16.dark : ANSI_16.light);
 // content (this palette) never disagree.
 darkScheme.addEventListener("change", () => {
   PALETTE = buildPalette(darkScheme.matches ? ANSI_16.dark : ANSI_16.light);
-  render();
+  repaintAll();
 });
 
 // Resolve an SGR color descriptor to a CSS color, or null for the terminal
@@ -343,15 +399,15 @@ function applyStyleCss(span, style) {
   if (cls) span.className = cls.trim();
 }
 
-// Build the styled-and-cursored <pre> children for one screen.
+// Append the styled-and-cursored children for one screen into `frag`.
 //
 // `cursor` is `{ row, col, shape }` to draw, or null. The cursor cell is split
 // out of its run so its overlay class lands on exactly one character; a cursor
 // past the row end gets a synthetic space so it still shows.
-function renderScreen(pre, screen, cursor) {
+function renderScreen(frag, screen, cursor) {
   const lines = screen.split("\n");
   lines.forEach((line, row) => {
-    if (row > 0) pre.append(document.createTextNode("\n"));
+    if (row > 0) frag.append(document.createTextNode("\n"));
     const runs = parseRow(line);
     const cursorCol = cursor && cursor.row === row ? cursor.col : -1;
     let col = 0;
@@ -360,20 +416,20 @@ function renderScreen(pre, screen, cursor) {
       let start = 0;
       for (let k = 0; k < run.text.length; k++) {
         if (col + k === cursorCol) {
-          if (k > start) pre.append(styledSpan(run.text.slice(start, k), run.style));
-          pre.append(cursorSpan(run.text[k], run.style, cursor.shape));
+          if (k > start) frag.append(styledSpan(run.text.slice(start, k), run.style));
+          frag.append(cursorSpan(run.text[k], run.style, cursor.shape));
           start = k + 1;
         }
       }
-      if (start < run.text.length) pre.append(styledSpan(run.text.slice(start), run.style));
+      if (start < run.text.length) frag.append(styledSpan(run.text.slice(start), run.style));
       col += run.text.length;
     }
     // The cursor sits at or past the row's last cell. The encoder trims the
     // blank tail, so pad to the cursor column before drawing it; otherwise a
     // cursor at column 10 on a 2-char row would render right after the text.
     if (cursorCol >= col) {
-      if (cursorCol > col) pre.append(document.createTextNode(" ".repeat(cursorCol - col)));
-      pre.append(cursorSpan(" ", freshStyle(), cursor.shape));
+      if (cursorCol > col) frag.append(document.createTextNode(" ".repeat(cursorCol - col)));
+      frag.append(cursorSpan(" ", freshStyle(), cursor.shape));
     }
   });
 }
@@ -387,66 +443,79 @@ function styledSpan(text, style) {
 
 function cursorSpan(ch, style, shape) {
   const span = styledSpan(ch || " ", style);
-  // hollow outline for a block on a (typically background) terminal reads
+  // A hollow outline for a block on a (typically background) terminal reads
   // better than a filled block; "block" maps to the inverse-fill overlay.
   const kind = shape === "bar" ? "bar" : shape === "underline" ? "underline" : "block";
   span.classList.add("cur", kind);
   return span;
 }
 
-function render() {
-  const terminals = doc.toJSON().terminals ?? {};
-  const keys = Object.keys(terminals).sort();
+// ----- term-card component ------------------------------------------------ //
 
-  if (keys.length === 0) {
-    grid.innerHTML =
-      '<div class="empty">no terminals yet'
-      + '<div class="hint">spawn a <code>tui.Tui(...)</code>; it shows up here automatically</div></div>';
-    return;
-  }
+// One terminal's card. Owns its head + pre and updates them in place across
+// frames, so a live SSE stream repaints only the bytes that changed instead of
+// tearing down and rebuilding the whole grid (which flickered and dropped
+// scroll position).
+class TermCard extends HTMLElement {
+  // Build the card's DOM lazily on first use. update() runs before the element
+  // is attached to the grid (the grid batches inserts), so this cannot live in
+  // connectedCallback: appending happens later, but the fields are needed now.
+  _build() {
+    if (this._built) return;
+    this._built = true;
 
-  const producers = new Set();
-  grid.innerHTML = "";
-  for (const key of keys) {
-    const t = terminals[key];
-    const sep = key.indexOf(SCOPE_SEP);
-    const scope = sep === -1 ? "" : key.slice(0, sep);
-    producers.add(scope);
-    const alive = t.alive !== false;
-
-    const term = document.createElement("div");
-    term.className = alive ? "term" : "term dead";
-
-    const head = document.createElement("div");
-    head.className = "head";
-
-    const led = document.createElement("span");
-    led.className = "led";
-    led.title = alive ? "running" : "exited";
-
-    const cmd = document.createElement("span");
-    cmd.className = "cmd";
-    cmd.textContent = [t.command, t.args].filter(Boolean).join(" ") || "(terminal)";
-
+    this._head = document.createElement("div");
+    this._head.className = "head";
+    this._led = document.createElement("span");
+    this._led.className = "led";
+    this._cmd = document.createElement("span");
+    this._cmd.className = "cmd";
     const spacer = document.createElement("span");
     spacer.className = "spacer";
+    this._chip = document.createElement("span");
+    this._chip.className = "chip";
+    this._chip.hidden = true;
+    this._size = document.createElement("span");
+    this._size.className = "size";
+    this._head.append(this._led, this._cmd, spacer, this._chip, this._size);
 
-    head.append(led, cmd, spacer);
+    this._pre = document.createElement("pre");
+    this.append(this._head, this._pre);
 
-    if (scope && scope !== "local") {
-      const chip = document.createElement("span");
-      chip.className = "chip";
-      chip.textContent = scope;
-      chip.title = "producer " + scope;
-      head.append(chip);
+    this.cols = 80;          // last-known column count, drives fit()
+    this._lastScreen = null; // skip a pre rebuild when the frame is unchanged
+    this._lastCursor = "";
+    this._last = null;       // last record, so repaintAll() can redraw on theme flip
+  }
+
+  connectedCallback() { this._build(); }
+
+  // Fold one terminal record from the Loro doc into the card.
+  update(t) {
+    this._build();
+    this._last = t;
+    const alive = t.alive !== false;
+    this.classList.toggle("dead", !alive);
+    this._led.title = alive ? "running" : "exited";
+
+    const label = [t.command, t.args].filter(Boolean).join(" ") || "(terminal)";
+    if (this._cmd.textContent !== label) {
+      this._cmd.textContent = label;
+      this._cmd.title = label;
     }
 
-    const size = document.createElement("span");
-    size.className = "size";
-    size.textContent = `${t.rows}×${t.cols}`;
-    head.append(size);
+    const scope = t._scope;
+    const showChip = scope && scope !== "local";
+    this._chip.hidden = !showChip;
+    if (showChip && this._chip.textContent !== scope) {
+      this._chip.textContent = scope;
+      this._chip.title = "producer " + scope;
+    }
 
-    const pre = document.createElement("pre");
+    const size = `${t.rows}×${t.cols}`;
+    if (this._size.textContent !== size) this._size.textContent = size;
+    if (typeof t.cols === "number" && t.cols > 0) this.cols = t.cols;
+
     const screen = t.screen ?? "";
     // A frame has output if it has visible text once SGR is stripped, or any
     // SGR run at all: a styled-whitespace screen (a colored progress bar, a
@@ -455,39 +524,157 @@ function render() {
     const stripped = screen.replace(/[\x1b][[][0-9;]*m/g, "");
     const hasOutput = stripped.trim() !== "" || stripped.length !== screen.length;
 
+    const cursor =
+      alive && hasOutput && t.cursor_visible !== false && typeof t.cursor_row === "number"
+        ? { row: t.cursor_row, col: t.cursor_col ?? 0, shape: t.cursor_shape ?? "block" }
+        : null;
+    const cursorKey = cursor ? `${cursor.row},${cursor.col},${cursor.shape}` : "";
+
+    // Repaint the screen only when the bytes or the cursor actually moved.
+    if (this._painted && screen === this._lastScreen && cursorKey === this._lastCursor) return;
+    this._lastScreen = screen;
+    this._lastCursor = cursorKey;
+    this._painted = true;
+
+    const frag = document.createDocumentFragment();
     if (!hasOutput) {
-      // Keep dead and blank cards in the grid, but show why they are empty.
       const ph = document.createElement("span");
       ph.className = "placeholder";
-      if (!alive) {
-        ph.textContent =
-          typeof t.exit_code === "number"
-            ? `· exited (code ${t.exit_code})`
-            : "· exited";
-      } else {
-        ph.textContent = "· no output";
-      }
-      pre.append(ph);
+      ph.textContent = alive
+        ? "· no output"
+        : typeof t.exit_code === "number"
+          ? `· exited (code ${t.exit_code})`
+          : "· exited";
+      frag.append(ph);
     } else {
-      // Draw the cursor only on a live terminal that is showing it; a dead
-      // screen keeps its final frame but no blinking cursor.
-      const cursor =
-        alive && t.cursor_visible !== false && typeof t.cursor_row === "number"
-          ? { row: t.cursor_row, col: t.cursor_col ?? 0, shape: t.cursor_shape ?? "block" }
-          : null;
-      renderScreen(pre, screen, cursor);
+      renderScreen(frag, screen, cursor);
     }
-
-    term.append(head, pre);
-    grid.append(term);
+    this._pre.replaceChildren(frag);
   }
 
-  const n = keys.length;
-  const p = producers.size;
-  stat.textContent =
-    `${n} terminal${n === 1 ? "" : "s"}`
-    + (p > 1 ? ` · ${p} producers` : "");
+  // Force a screen repaint on the next update (used when the palette changes).
+  invalidate() { this._lastScreen = null; }
+
+  // Size the card and its cell font so `cols` columns fill the card width with
+  // no horizontal scroll. `row` is the content width available in the grid; a
+  // terminal whose natural width exceeds it spans the full row and shrinks its
+  // font, everything else keeps BASE_FONT at its natural width.
+  fit(row) {
+    if (!this._built) return;
+    const cols = this.cols || 80;
+    const natural = cols * BASE_FONT * CELL_RATIO; // content px at the target size
+    let cardW, font;
+    if (natural + CHROME_X <= row) {
+      cardW = Math.max(MIN_CARD, Math.ceil(natural + CHROME_X));
+      font = BASE_FONT;
+    } else {
+      cardW = row;
+      const content = row - CHROME_X;
+      // Floor to 0.1px so rounding leaves the content a hair under the box
+      // rather than a hair over, which would clip the last column.
+      font = Math.max(MIN_FONT, Math.floor((content / (cols * CELL_RATIO)) * 10) / 10);
+    }
+    this.style.width = cardW + "px";
+    this._pre.style.fontSize = font + "px";
+    this._pre.style.lineHeight = LINE_H;
+  }
 }
+customElements.define("term-card", TermCard);
+
+// ----- grid controller ---------------------------------------------------- //
+
+const cards = new Map(); // key -> TermCard, reused across frames
+let order = "";          // last applied key order, to skip needless reordering
+
+function render() {
+  const terminals = doc.toJSON().terminals ?? {};
+  const keys = Object.keys(terminals).sort();
+
+  // Drop cards whose terminal is gone.
+  for (const [key, card] of cards) {
+    if (!(key in terminals)) { card.remove(); cards.delete(key); }
+  }
+
+  if (keys.length === 0) {
+    cards.clear();
+    order = "";
+    grid.replaceChildren(emptyState());
+    setStat(0, 0);
+    return;
+  }
+
+  const producers = new Set();
+  for (const key of keys) {
+    const t = terminals[key];
+    const sep = key.indexOf(SCOPE_SEP);
+    t._scope = sep === -1 ? "" : key.slice(0, sep);
+    producers.add(t._scope);
+
+    let card = cards.get(key);
+    if (!card) {
+      card = document.createElement("term-card");
+      cards.set(key, card);
+    }
+    card.update(t);
+  }
+
+  // Reattach in sorted order only when the set or ordering changed; appendChild
+  // moves an existing node without recreating it, so a steady stream of frames
+  // touches DOM order zero times.
+  const nextOrder = keys.join("\n");
+  if (nextOrder !== order) {
+    order = nextOrder;
+    const frag = document.createDocumentFragment();
+    for (const key of keys) frag.append(cards.get(key));
+    grid.replaceChildren(frag);
+  }
+
+  layout();
+  setStat(keys.length, producers.size);
+}
+
+// Redraw every card's screen with the current palette, then refit. Used when
+// the OS theme flips: the chrome follows the CSS tokens automatically but the
+// terminal content is painted from the JS palette and must be rebuilt.
+function repaintAll() {
+  for (const card of cards.values()) {
+    card.invalidate();
+    if (card._last) card.update(card._last);
+  }
+  layout();
+}
+
+function emptyState() {
+  const div = document.createElement("div");
+  div.className = "empty";
+  div.innerHTML =
+    "no terminals yet"
+    + '<div class="hint">spawn a <code>tui.Tui(...)</code>; it shows up here automatically</div>';
+  return div;
+}
+
+function setStat(n, p) {
+  stat.textContent =
+    `${n} terminal${n === 1 ? "" : "s"}` + (p > 1 ? ` · ${p} producers` : "");
+}
+
+// Refit every card to the current row width. Called on each frame and whenever
+// the page resizes; cheap because it only touches inline width/font.
+function layout() {
+  const row = grid.clientWidth;
+  if (row <= 0) return;
+  for (const card of cards.values()) card.fit(row);
+}
+
+// Relayout on resize without re-importing the doc.
+let resizePending = false;
+new ResizeObserver(() => {
+  if (resizePending) return;
+  resizePending = true;
+  requestAnimationFrame(() => { resizePending = false; layout(); });
+}).observe(grid);
+
+// ----- event stream ------------------------------------------------------- //
 
 const es = new EventSource("/events");
 es.addEventListener("open", () => {
