@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ix": {
+      "type": "stdio",
+      "command": "nix",
+      "args": ["run", "${CLAUDE_PROJECT_DIR:-.}#mcp", "--", "serve"]
+    }
+  }
+}
