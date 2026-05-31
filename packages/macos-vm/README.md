@@ -70,9 +70,11 @@ What works today:
 The `macvm` Python module bundled into ix-mcp exposes the full surface:
 `info`, `install`, `provision`, `stage_binary`, `screenshot`,
 `screenshot_many`, `drive`, `Driver`, and the one-call `run_app` (share a host
-app in, launch it, return a frame of the guest display). For Linux GUI guests it
-adds `boot_linux_gui` (boot a raw EFI disk off-screen, return a `PIL.Image` of
-the render), `drive_linux`, and `Driver(disk=...)`.
+app in, launch it, return a frame of the guest display). For Linux guests it
+adds `boot_linux` (boot a raw kernel `Image` + initramfs headlessly, attach OCI
+rootfs disks via `disks=[...]`, return the serial console as a string),
+`boot_linux_gui` (boot a raw EFI disk off-screen, return a `PIL.Image` of the
+render), `drive_linux`, and `Driver(disk=...)`.
 
 What is designed but not yet built (see [Roadmap](#roadmap)):
 
@@ -321,7 +323,8 @@ proof, and its gaps (squashfs not ext4, externally fetched kernel).
 6. ~~`macvm` Python module bundled into ix-mcp (like `tui`/`screen`).~~ Done: the
    module exposes `info`, `install`, `provision`, `stage_binary`, `screenshot`,
    `screenshot_many`, `drive`, `Driver`, and `run_app`, returning PIL images that
-   render inline.
+   render inline, plus the Linux helpers `boot_linux` (headless serial console),
+   `boot_linux_gui`, and `drive_linux`.
 7. ~~OCI-disk boot for Linux guests; document the libkrun handoff for
    microVMs.~~ Done minimally: `boot-linux --disk` + `examples/oci-boot.sh` boot
    a flattened OCI rootfs as a virtio-blk disk; build-vs-delegate decision and

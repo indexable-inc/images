@@ -98,6 +98,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Driver",
     "MacVmError",
+    "boot_linux",
     "boot_linux_gui",
     "drive",
     "drive_linux",
@@ -384,6 +385,62 @@ def _writable_disk(disk: str | os.PathLike, staging_dir: str) -> str:
         shutil.copyfile(src, dst)
     os.chmod(dst, 0o644)
     return dst
+
+
+def boot_linux(
+    kernel: str | os.PathLike,
+    initramfs: str | os.PathLike,
+    disks: Sequence[str | os.PathLike] | None = None,
+    cpus: int = 2,
+    memory_mib: int = 1024,
+    cmdline: str = "console=hvc0",
+    seconds: int = 20,
+    timeout: float | None = None,
+) -> str:
+    """Boot an aarch64 Linux guest headlessly from a raw kernel ``Image`` and
+    ``initramfs``, attaching each path in ``disks`` as a virtio-blk device
+    (``/dev/vda``, ``/dev/vdb``, ... in order), and return the guest serial
+    console captured until it stops or ``seconds`` elapses.
+
+    The headless, serial-only analogue of :func:`boot_linux_gui` (which renders a
+    framebuffer): no display is captured, only ``console=hvc0`` output. This is
+    how a flattened OCI rootfs is booted and inspected: pass the rootfs image in
+    ``disks`` and a matching ``root=`` (or an initramfs that mounts it) in
+    ``cmdline``. See the ``macos-vm`` package's ``examples/oci-boot.sh`` and
+    ``docs/oci-guest.md``. Raises :class:`MacVmError` if the binary fails or does
+    not stop within the deadline.
+    """
+    deadline = timeout if timeout is not None else seconds + 60
+    argv = [
+        _binary(),
+        "boot-linux",
+        "--kernel",
+        str(kernel),
+        "--initramfs",
+        str(initramfs),
+        "--cpus",
+        str(cpus),
+        "--memory-mib",
+        str(memory_mib),
+        "--cmdline",
+        cmdline,
+        "--timeout-secs",
+        str(seconds),
+    ]
+    for disk in disks or []:
+        argv += ["--disk", str(disk)]
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, check=False, timeout=deadline
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MacVmError(f"boot-linux timed out after {deadline}s") from exc
+    if result.returncode != 0:
+        raise MacVmError(
+            f"boot-linux failed (rc={result.returncode}): {result.stderr.strip()}"
+        )
+    # The guest serial console streams to stdout; boot/log lines go to stderr.
+    return result.stdout
 
 
 def boot_linux_gui(
