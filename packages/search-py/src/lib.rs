@@ -177,11 +177,12 @@ struct SearchArgs {
 async fn run_search(args: SearchArgs) -> search_core::Result<Vec<DisplayHit>> {
     let root: PathBuf =
         std::fs::canonicalize(&args.path).unwrap_or_else(|_| PathBuf::from(&args.path));
-    let store = MixedbreadStore::from_login(args.base).await?;
+    let store = MixedbreadStore::from_login(args.base.clone()).await?;
 
     let query = Query {
         root: &root,
         store_name: &args.store_name,
+        base_url: &args.base,
         text: &args.query,
         top_k: args.top_k,
         options: args.options,
@@ -214,13 +215,14 @@ struct GrepArgs {
 async fn run_grep(args: GrepArgs) -> search_core::Result<Vec<DisplayHit>> {
     let root: PathBuf =
         std::fs::canonicalize(&args.path).unwrap_or_else(|_| PathBuf::from(&args.path));
-    let store = MixedbreadStore::from_login(args.base).await?;
+    let store = MixedbreadStore::from_login(args.base.clone()).await?;
 
     // Grep ignores semantic-only knobs (`options`, `include_web`); they are set
     // to inert defaults so the shared `Query` shape stays reusable.
     let query = Query {
         root: &root,
         store_name: &args.store_name,
+        base_url: &args.base,
         text: &args.pattern,
         top_k: args.top_k,
         options: SearchOptions {

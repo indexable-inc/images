@@ -7,7 +7,6 @@
 //! search (`/v1/stores/search`), regex grep (`/v1/stores/grep`), and
 //! question-answering (`/v1/stores/question-answering`).
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use reqwest::{Client as HttpClient, StatusCode};
@@ -292,20 +291,6 @@ impl Client {
             }
         }
         Ok(files)
-    }
-
-    /// Convenience over [`list_files`](Self::list_files): collect the set of
-    /// non-null external ids.
-    ///
-    /// # Errors
-    /// Returns an error if the listing fails.
-    pub async fn list_external_ids(&self, store: &str) -> Result<HashSet<String>> {
-        Ok(self
-            .list_files(store, None)
-            .await?
-            .into_iter()
-            .filter_map(|file| file.external_id)
-            .collect())
     }
 
     /// Upload one file: send the bytes to `/v1/files`, then attach the returned

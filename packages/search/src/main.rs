@@ -355,12 +355,13 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
     let base_url = cli
         .base_url
         .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
-    let store = MixedbreadStore::from_login(base_url).await?;
+    let store = MixedbreadStore::from_login(base_url.clone()).await?;
 
     let (filter, code_scope) = resolve_scope(&cli.scope, &root)?;
     let query = Query {
         root: &root,
         store_name: &store_name,
+        base_url: &base_url,
         text: &pattern,
         top_k: cli.max_count.max(1),
         options: SearchOptions {
@@ -515,7 +516,7 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
     let base_url = cli
         .base_url
         .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
-    let store = MixedbreadStore::from_login(base_url).await?;
+    let store = MixedbreadStore::from_login(base_url.clone()).await?;
 
     // Grep reuses the shared `Query` shape; its semantic-only knobs (rerank,
     // agentic, web) are inert here, and the grep pattern travels in `text`.
@@ -523,6 +524,7 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
     let query = Query {
         root: &root,
         store_name: &store_name,
+        base_url: &base_url,
         text: &cli.pattern,
         top_k: cli.max_count.max(1),
         options: SearchOptions {
