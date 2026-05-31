@@ -167,6 +167,7 @@ dependencies = [
  "glam",
  "glyphon",
  "image",
+ "objc2-app-kit",
  "pollster",
  "rusqlite",
  "wgpu",

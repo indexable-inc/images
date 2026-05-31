@@ -60,7 +60,7 @@
 </script>
 
 <div class="term" class:dead={!alive} class:grabbed style="width: {width}px; font-size: {FONT}px;">
-  <div class="head" data-drag-handle>
+  <div class="head">
     <span class="led" title={alive ? 'running' : 'exited'}></span>
     <span class="cmd" title={label}>{label}</span>
     <span class="spacer"></span>

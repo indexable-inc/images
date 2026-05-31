@@ -28,6 +28,13 @@ dirs = "6"
 # 2D vectors for bar positions, instead of bare (f64, f64).
 glam = "0.30"
 
+# macOS: raise a hovered bar's window above its always-on-top siblings without
+# taking keyboard focus (`-[NSWindow orderFrontRegardless]`), so its pop-down
+# panel paints over the neighbouring bars. These features and versions are a
+# subset of what winit 0.30 already enables, so this pulls in no extra crate.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.2.2", features = ["NSResponder", "NSWindow"] }
+
 [profile.release]
 # A desktop HUD: trim the binary, no need for fat debug info.
 opt-level = "s"

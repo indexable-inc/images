@@ -85,6 +85,42 @@ fn open_url(url: &str) {
     }
 }
 
+/// Raise `window` above its same-level siblings without taking keyboard focus,
+/// so a hovered bar's pop-down panel paints over the neighbouring bars instead
+/// of slipping under them. Every bar is its own `WindowLevel::AlwaysOnTop`
+/// window, and windows sharing one level stack by front-to-back order, so a bar
+/// created earlier would otherwise expand beneath a later one.
+///
+/// `-[NSWindow orderFrontRegardless]` reorders the window without making it key,
+/// so the user's keyboard focus stays where it was: a passive HUD must never
+/// steal it, which rules out winit's `focus_window`. winit exposes no
+/// non-activating raise, so reach the `NSWindow` through the raw AppKit handle.
+#[cfg(target_os = "macos")]
+fn raise_to_front(window: &Window) {
+    use objc2_app_kit::NSView;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: `ns_view` points at the live NSView backing this winit window, kept
+    // alive for the whole call by the caller's `Arc<Window>`, so the `&NSView`
+    // borrow stays valid (it is dropped before we return). We run inside the
+    // winit event loop on the main thread, as these MainThreadOnly types require.
+    let view: &NSView = unsafe { appkit.ns_view.cast().as_ref() };
+    if let Some(ns_window) = view.window() {
+        unsafe { ns_window.orderFrontRegardless() };
+    }
+}
+
+/// Non-macOS: X11 and Wayland give an app no non-activating raise among
+/// same-level always-on-top windows, so leave stacking to the compositor.
+#[cfg(not(target_os = "macos"))]
+fn raise_to_front(_window: &Window) {}
+
 /// GPU state shared by every bar window: one device/queue and one renderer
 /// (pipeline, sprite textures, font). Each window only owns its surface.
 struct GpuCore {
@@ -533,6 +569,9 @@ impl ApplicationHandler<Vec<BossBar>> for App {
                 if let Some(win) = self.wins.get_mut(&id) {
                     win.hovered = true;
                     win.window.set_cursor(CursorIcon::Grab);
+                    // Bring this bar above its siblings so its pop-down panel
+                    // covers them instead of unfolding underneath.
+                    raise_to_front(&win.window);
                 }
                 self.render_id(id);
             }

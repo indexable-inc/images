@@ -1,9 +1,21 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { store, SCOPE_SEP } from '$lib/stream.svelte';
-  import { loadPositions, savePositions, autoPlace } from '$lib/positions';
+  import {
+    loadPositions,
+    savePositions,
+    loadZOrder,
+    saveZOrder,
+    autoPlace,
+  } from '$lib/positions';
   import type { Term, Point } from '$lib/types';
   import TermCard from './TermCard.svelte';
+
+  const MIN_SCALE = 0.2;
+  const MAX_SCALE = 4;
+  // Wheel/pinch zoom sensitivity. Larger = snappier; the per-event factor is
+  // clamped so one big trackpad fling cannot jump the whole range at once.
+  const ZOOM_SENSITIVITY = 0.01;
 
   let boardEl: HTMLElement | undefined = $state();
   // View transform: translate (tx,ty) then scale. Card positions live in board
@@ -13,8 +25,21 @@
   let scale = $state(1);
   let panning = $state(false);
   let grabbedKey = $state<string | null>(null);
+  // True while the text-select modifier (Alt/Option) is held: the whole card is
+  // a drag handle by default, so selecting terminal text is gated behind it.
+  let selecting = $state(false);
 
   const positions = $state<Record<string, Point>>(loadPositions());
+  // Stacking order: highest z is on top. Bumped whenever a card is touched so
+  // the last-dragged card comes to the front.
+  const zOrder = $state<Record<string, number>>(loadZOrder());
+  let zTop = Math.max(0, ...Object.values(zOrder));
+
+  function bringToFront(key: string): void {
+    zTop += 1;
+    zOrder[key] = zTop;
+    saveZOrder(zOrder);
+  }
 
   const items = $derived(
     Object.keys(store.terminals)
@@ -51,7 +76,10 @@
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       if (e.ctrlKey) {
-        zoomAbout(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015));
+        // Pinch-zoom about the cursor. Clamp the per-event factor so a single
+        // fast pinch is responsive without teleporting across the zoom range.
+        const factor = clamp(Math.exp(-e.deltaY * ZOOM_SENSITIVITY), 0.5, 2);
+        zoomAbout(e.clientX, e.clientY, factor);
       } else {
         tx -= e.deltaX;
         ty -= e.deltaY;
@@ -61,6 +89,10 @@
     return () => el.removeEventListener('wheel', onWheel);
   });
 
+  function clamp(v: number, lo: number, hi: number): number {
+    return Math.min(hi, Math.max(lo, v));
+  }
+
   // Scale by `factor` while keeping the board point under (clientX,clientY)
   // fixed on screen.
   function zoomAbout(clientX: number, clientY: number, factor: number): void {
@@ -69,7 +101,7 @@
     const rect = el.getBoundingClientRect();
     const mx = clientX - rect.left;
     const my = clientY - rect.top;
-    const ns = Math.min(3, Math.max(0.25, scale * factor));
+    const ns = clamp(scale * factor, MIN_SCALE, MAX_SCALE);
     const bx = (mx - tx) / scale;
     const by = (my - ty) / scale;
     tx = mx - bx * ns;
@@ -77,15 +109,38 @@
     scale = ns;
   }
 
+  // Track the text-select modifier so the cursor and user-select reflect it.
+  $effect(() => {
+    const sync = (e: KeyboardEvent) => {
+      selecting = e.altKey;
+    };
+    const clear = () => {
+      selecting = false;
+    };
+    window.addEventListener('keydown', sync);
+    window.addEventListener('keyup', sync);
+    window.addEventListener('blur', clear);
+    return () => {
+      window.removeEventListener('keydown', sync);
+      window.removeEventListener('keyup', sync);
+      window.removeEventListener('blur', clear);
+    };
+  });
+
   function onPointerDown(e: PointerEvent): void {
+    if (e.button !== 0) return; // left button only
     const target = e.target as Element;
+    if (target.closest('.hud')) return; // let HUD controls handle their own clicks
     const node = target.closest('.node') as HTMLElement | null;
-    if (node && target.closest('[data-drag-handle]')) {
-      startCardDrag(e, node.dataset.key as string);
+    if (node) {
+      const key = node.dataset.key as string;
+      bringToFront(key); // any interaction raises the card
+      // The whole card is a drag handle. Hold Alt/Option to select terminal
+      // text instead of moving it.
+      if (selecting || e.altKey) return;
+      startCardDrag(e, key);
       return;
     }
-    // Clicking a card body selects text; only the empty board pans.
-    if (node) return;
     startPan(e);
   }
 
@@ -171,6 +226,7 @@
 <div
   class="board"
   class:panning
+  class:selecting
   role="application"
   aria-label="terminal board"
   bind:this={boardEl}
@@ -182,7 +238,9 @@
       <div
         class="node"
         data-key={it.key}
-        style="left: {positions[it.key]?.x ?? 0}px; top: {positions[it.key]?.y ?? 0}px;"
+        style="left: {positions[it.key]?.x ?? 0}px; top: {positions[it.key]?.y ?? 0}px; z-index: {zOrder[
+          it.key
+        ] ?? 0};"
       >
         <TermCard term={it.term} grabbed={grabbedKey === it.key} />
       </div>
@@ -197,9 +255,10 @@
   {/if}
 
   <div class="hud">
-    <button onclick={() => zoomCentered(1 / 1.2)} aria-label="zoom out">−</button>
+    <span class="tip">⌥ drag to select</span>
+    <button onclick={() => zoomCentered(1 / 1.4)} aria-label="zoom out">−</button>
     <span class="zoom">{Math.round(scale * 100)}%</span>
-    <button onclick={() => zoomCentered(1.2)} aria-label="zoom in">+</button>
+    <button onclick={() => zoomCentered(1.4)} aria-label="zoom in">+</button>
     <button onclick={resetView}>reset</button>
     <button onclick={tidy}>tidy</button>
   </div>

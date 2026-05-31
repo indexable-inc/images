@@ -70,10 +70,22 @@ jobs:
       # `--no-nom` keeps plain CI logs; `--no-link` avoids leaving result
       # symlinks. It exits nonzero iff a build or eval fails, which is the gate.
       # Pinned by commit to nix-fast-build 1.5.0.
+      #
+      # `--eval-max-memory-size` raises the per-worker eval-heap cap above
+      # nix-eval-jobs' 4096 MiB default: a single heavy attribute
+      # (`rust-package-tests`, which evaluates every workspace crate's test unit)
+      # grew past 4 GiB as the workspace did and got SIGKILLed mid-eval ("worker
+      # got killed by SIGKILL, maybe memory limit reached"), failing the whole
+      # check. `--eval-workers` caps concurrent evaluators (default is nproc, 128
+      # on this host) so the higher per-worker ceiling cannot multiply into host
+      # memory pressure when many CI jobs share the runner; 16 already collapses
+      # eval toward the slowest single attribute (see the schema-eval step below).
       - name: Build all flake checks
         run: |
           nix run github:Mic92/nix-fast-build/7f185e0ec37b65b4730f892e0de9a831b0610f3a -- \
             --flake ".#checks.x86_64-linux" \
+            --eval-max-memory-size 8192 \
+            --eval-workers 16 \
             --skip-cached \
             --no-nom \
             --no-link \
