@@ -124,6 +124,7 @@ fn main() -> ExitCode {
 fn ensure_signed_and_reexec() -> std::io::Result<()> {
     use std::hash::{Hash, Hasher};
     use std::io::{Error, ErrorKind};
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
     use std::path::PathBuf;
 
@@ -144,28 +145,63 @@ fn ensure_signed_and_reexec() -> std::io::Result<()> {
         .ok_or_else(|| Error::new(ErrorKind::NotFound, "no HOME or XDG_CACHE_HOME"))?;
     let dir = cache_home.join("ix").join("macos-vm");
     std::fs::create_dir_all(&dir)?;
+    // The cache holds an entitled binary; keep it owner-only.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
     let signed = dir.join(format!("macos-vm-{key}"));
 
-    if !signed.exists() {
-        let tmp = dir.join(format!("macos-vm-{key}.tmp"));
+    // Re-sign unless a valid signature already exists (covers a partial/corrupt
+    // copy left by a killed run).
+    let already_valid = signed.exists()
+        && std::process::Command::new("/usr/bin/codesign")
+            .args(["--verify", "--strict"])
+            .arg(&signed)
+            .status()
+            .is_ok_and(|s| s.success());
+    if !already_valid {
+        // Per-process temp paths so two concurrent first-runs cannot truncate
+        // each other's copy mid-codesign; the final rename publishes atomically
+        // (last writer wins a byte-identical, validly-signed file).
+        let pid = std::process::id();
+        let tmp = dir.join(format!("macos-vm-{key}.{pid}.tmp"));
+        let entitlements = dir.join(format!("virtualization.{pid}.entitlements"));
         std::fs::copy(&exe, &tmp)?;
-        let entitlements = dir.join("virtualization.entitlements");
         std::fs::write(&entitlements, ENTITLEMENTS)?;
         let status = std::process::Command::new("/usr/bin/codesign")
             .args(["--force", "--sign", "-", "--entitlements"])
             .arg(&entitlements)
             .arg(&tmp)
             .status()?;
+        let _ = std::fs::remove_file(&entitlements);
         if !status.success() {
+            let _ = std::fs::remove_file(&tmp);
             return Err(Error::other("codesign failed"));
         }
-        std::fs::rename(&tmp, &signed)?; // publish atomically
+        std::fs::rename(&tmp, &signed)?;
+        prune_stale_signed(&dir, &signed);
     }
 
     Err(std::process::Command::new(&signed)
         .env("IX_MACVM_SIGNED", "1")
         .args(std::env::args_os().skip(1))
         .exec())
+}
+
+/// Remove signed copies from prior store paths so the cache does not grow with
+/// every rebuild. Leaves any in-progress `.tmp` (another process may be writing
+/// it) and the copy we just published.
+#[cfg(target_os = "macos")]
+fn prune_stale_signed(dir: &std::path::Path, keep: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("macos-vm-") && !name.ends_with(".tmp") && path != keep {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

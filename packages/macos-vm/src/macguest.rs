@@ -277,9 +277,15 @@ fn start_install(bundle: &Path, ipsw: &Path, hw_data: &[u8], disk_gib: u64) -> R
     std::fs::write(bundle.join("machine-id.bin"), &id_data)
         .map_err(|e| Error::Bundle { message: format!("write machine-id.bin: {e}") })?;
 
+    if disk_gib == 0 {
+        return Err(Error::Bundle { message: "disk-gib must be greater than 0".into() });
+    }
+    let disk_bytes = disk_gib
+        .checked_mul(1024 * 1024 * 1024)
+        .ok_or_else(|| Error::Bundle { message: format!("disk-gib {disk_gib} is too large") })?;
     let disk = bundle.join("disk.img");
     let file = std::fs::File::create(&disk).map_err(|e| Error::Bundle { message: format!("create disk.img: {e}") })?;
-    file.set_len(disk_gib * 1024 * 1024 * 1024)
+    file.set_len(disk_bytes)
         .map_err(|e| Error::Bundle { message: format!("size disk.img: {e}") })?;
 
     // Auxiliary storage: create fresh (remove any stale copy so the no-overwrite
