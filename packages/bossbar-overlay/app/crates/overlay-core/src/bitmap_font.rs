@@ -10,6 +10,28 @@
 //! sampling its cell, so titles and page text flow through the same wgpu pipeline
 //! as every sprite.
 
+use std::sync::LazyLock;
+
+/// `ascii.png`, extracted from the official Minecraft jar by the
+/// `minecraft-assets` Nix derivation and dropped here before the build (see
+/// `app/scripts/fetch-assets.sh` for the local-dev copy step). The font module
+/// owns the sheet; [`crate::gpu`] borrows it for the glyph texture.
+pub const ASCII_PNG: &[u8] = include_bytes!("../assets/ascii.png");
+
+/// The basic-Latin face, decoded once from the embedded sheet. Layout that has no
+/// GPU yet (sizing a window to its title before the wgpu surface exists) measures
+/// through this; the live [`crate::gpu::Gpu`] shares the same metrics.
+pub fn shared() -> &'static BitmapFont {
+    static FONT: LazyLock<BitmapFont> = LazyLock::new(|| {
+        let ascii = image::load_from_memory(ASCII_PNG)
+            .expect("decode embedded ascii.png")
+            .to_rgba8();
+        let (w, h) = ascii.dimensions();
+        BitmapFont::from_ascii_rgba(&ascii, w, h)
+    });
+    &FONT
+}
+
 /// Glyph cell side, in source pixels.
 const CELL: u32 = 8;
 /// Cells per row/column in the sheet.

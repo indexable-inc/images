@@ -2361,6 +2361,15 @@ let
         assertion = !(builtins.elem "cursor-cli" developmentBase.packageNames);
         message = "development-base should keep unrelated unfree CLIs out of the image";
       }
+      {
+        # The bypass-permissions default is reconciled into root's settings.json
+        # via the mutable-json module. A refactor that drops it would silently
+        # restore per-tool prompts, so pin the declared value.
+        assertion =
+          developmentBase.config.home-manager.users.root.home.mutableJsonFiles.claude-code.value.permissions.defaultMode
+          == "bypassPermissions";
+        message = "development-base should default root's Claude Code to bypassPermissions";
+      }
     ];
 
     vitest = [

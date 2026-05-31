@@ -122,8 +122,17 @@ impl Publisher {
         }
         reap_stale_socket(&path)?;
 
-        let listener = UnixListener::bind(&path)
-            .map_err(|source| publish_err(format!("bind {}: {source}", path.display())))?;
+        // `UnixListener::bind` registers the socket with the IO driver, which
+        // requires an active runtime context on the *calling* thread. The whole
+        // point of taking a `Handle` is to let a caller bind from a thread that
+        // is not itself a runtime worker (e.g. one driving a native run loop), so
+        // enter the handle's context for the bind. Re-entering is harmless when
+        // the caller is already inside this runtime.
+        let listener = {
+            let _enter = runtime.enter();
+            UnixListener::bind(&path)
+                .map_err(|source| publish_err(format!("bind {}: {source}", path.display())))?
+        };
         restrict_socket(&path);
 
         let initial = encode(&producer, &[]);

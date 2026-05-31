@@ -291,13 +291,18 @@ fn draw_cursor_marker(rgba: &mut [u8], width: usize, height: usize, fx: f64, fy:
     }
 }
 
-/// Read the framebuffer `IOSurface` (BGRA) and encode a PNG. With `cursor` set
-/// (display fractions, top-left), a pointer marker is drawn into the PNG.
-pub fn capture(
+/// Copy the framebuffer `IOSurface` out as tightly-packed BGRA8 plus
+/// `(width, height)` in pixels. A guest that has not rendered a frame yet
+/// surfaces as [`Error::NoFramebuffer`].
+///
+/// Touches the view's layer and the `IOSurface` mapping, so it must run on the
+/// main queue (callers hop onto it). Does the minimal work there: a per-row
+/// memcpy that drops any stride padding. The BGRA→RGBA conversion
+/// ([`bgra_to_rgba`]) is left to the caller so the live producer can run it off
+/// the main queue and keep AppKit rendering responsive.
+pub(crate) fn read_frame_bgra(
     view: &VZVirtualMachineView,
-    path: &Path,
-    cursor: Option<(f64, f64)>,
-) -> Result<usize, Error> {
+) -> Result<(Vec<u8>, usize, usize), Error> {
     let contents = frame_contents(view).ok_or(Error::NoFramebuffer)?;
     // Verify the layer contents really is an IOSurface before any unsafe access.
     let surface_obj: Retained<IOSurface> = contents
@@ -326,30 +331,44 @@ pub fn capture(
     }
 
     // Allocate before locking so an allocation failure cannot leak the lock; the
-    // locked region below does only an in-bounds memcpy (no panics, no `?`).
-    let mut rgba = vec![0u8; width * height * 4];
+    // locked region below does only in-bounds row memcpys (no panics, no `?`).
+    let row_bytes = width * 4;
+    let mut bgra = vec![0u8; row_bytes * height];
     unsafe {
         let _ = surface.lock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
         let bytes_per_row = surface.bytes_per_row();
         let base = surface.base_address().as_ptr() as *const u8;
         for y in 0..height {
-            let row = base.add(y * bytes_per_row);
-            for x in 0..width {
-                let p = row.add(x * 4);
-                let o = (y * width + x) * 4;
-                rgba[o] = *p.add(2); // R <- BGRA.R
-                rgba[o + 1] = *p.add(1); // G
-                rgba[o + 2] = *p; // B
-                rgba[o + 3] = *p.add(3); // A
-            }
+            let src = std::slice::from_raw_parts(base.add(y * bytes_per_row), row_bytes);
+            bgra[y * row_bytes..(y + 1) * row_bytes].copy_from_slice(src);
         }
         let _ = surface.unlock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
     }
 
-    if let Some((fx, fy)) = cursor {
-        draw_cursor_marker(&mut rgba, width, height, fx, fy);
-    }
+    Ok((bgra, width, height))
+}
 
+/// Convert 32-bit BGRA8 pixels to RGBA8 in place (swap each pixel's B and R).
+/// Pure CPU; the live producer runs this off the main queue.
+pub(crate) fn bgra_to_rgba(pixels: &mut [u8]) {
+    for px in pixels.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+}
+
+/// Read the framebuffer as tightly-packed RGBA8 plus `(width, height)`.
+/// Convenience for callers already on the main queue (e.g. [`capture`]); the
+/// live producer instead reads BGRA on the main queue and converts off it.
+pub(crate) fn read_frame_rgba(
+    view: &VZVirtualMachineView,
+) -> Result<(Vec<u8>, usize, usize), Error> {
+    let (mut pixels, width, height) = read_frame_bgra(view)?;
+    bgra_to_rgba(&mut pixels);
+    Ok((pixels, width, height))
+}
+
+/// PNG-encode tightly-packed RGBA8 pixels of size `width` x `height` in memory.
+pub(crate) fn encode_png_rgba(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, Error> {
     let w = u32::try_from(width).map_err(|_| Error::CaptureEncode {
         message: "width too large".into(),
     })?;
@@ -359,7 +378,7 @@ pub fn capture(
     let mut buf = std::io::Cursor::new(Vec::new());
     image::ImageEncoder::write_image(
         image::codecs::png::PngEncoder::new(&mut buf),
-        &rgba,
+        rgba,
         w,
         h,
         image::ExtendedColorType::Rgba8,
@@ -367,7 +386,62 @@ pub fn capture(
     .map_err(|e| Error::CaptureEncode {
         message: e.to_string(),
     })?;
-    let png = buf.into_inner();
+    Ok(buf.into_inner())
+}
+
+/// Downscale RGBA8 pixels so the width is at most `max_width` (aspect ratio
+/// preserved), returning the scaled pixels and their `(width, height)`. A frame
+/// already within `max_width` is returned unchanged.
+///
+/// Keeps the live dashboard pane light: a desktop scanout is often 1920x1080 or
+/// larger, far more than a canvas card needs. Returning the raw pixels (not a
+/// PNG) lets the producer compare successive frames and skip re-encoding a static
+/// screen.
+pub(crate) fn downscale_rgba(
+    rgba: Vec<u8>,
+    width: usize,
+    height: usize,
+    max_width: usize,
+) -> Result<(Vec<u8>, u32, u32), Error> {
+    if width == 0 || height == 0 {
+        return Err(Error::NoFramebuffer);
+    }
+    let src_w = u32::try_from(width).map_err(|_| Error::CaptureEncode {
+        message: "width too large".into(),
+    })?;
+    let src_h = u32::try_from(height).map_err(|_| Error::CaptureEncode {
+        message: "height too large".into(),
+    })?;
+    if width <= max_width {
+        return Ok((rgba, src_w, src_h));
+    }
+    let dst_w = u32::try_from(max_width).unwrap_or(src_w);
+    // Scale height by the same ratio in u64 to avoid overflow, floored to >= 1.
+    let dst_h =
+        u32::try_from((height as u64 * max_width as u64 / width as u64).max(1)).unwrap_or(src_h);
+    let buffer = image::RgbaImage::from_raw(src_w, src_h, rgba).ok_or_else(|| {
+        Error::CaptureEncode {
+            message: "frame buffer length does not match its dimensions".into(),
+        }
+    })?;
+    let scaled =
+        image::imageops::resize(&buffer, dst_w, dst_h, image::imageops::FilterType::Triangle);
+    Ok((scaled.into_raw(), dst_w, dst_h))
+}
+
+/// Read the framebuffer `IOSurface` (BGRA), encode a full-resolution PNG, and
+/// write it to `path`, returning the bytes written. With `cursor` set (display
+/// fractions, top-left), a pointer marker is drawn into the PNG.
+pub fn capture(
+    view: &VZVirtualMachineView,
+    path: &Path,
+    cursor: Option<(f64, f64)>,
+) -> Result<usize, Error> {
+    let (mut rgba, width, height) = read_frame_rgba(view)?;
+    if let Some((fx, fy)) = cursor {
+        draw_cursor_marker(&mut rgba, width, height, fx, fy);
+    }
+    let png = encode_png_rgba(&rgba, width, height)?;
     std::fs::write(path, &png).map_err(|e| Error::CaptureEncode {
         message: e.to_string(),
     })?;
