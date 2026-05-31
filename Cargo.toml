@@ -20,6 +20,7 @@ members = [
   "packages/file-search",
   "packages/git-log-pretty",
   "packages/ix-dev-diagnose",
+  "packages/macos-vm",
   "packages/mcp",
   "packages/minecraft/nbt",
   "packages/minecraft/sound",
