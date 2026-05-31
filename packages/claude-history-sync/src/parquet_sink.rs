@@ -126,6 +126,7 @@ pub async fn sync(messages: &[Message], config: &Config) -> Result<Report> {
 
     let mut uploaded = 0;
     let mut skipped = 0;
+    let mut failure = None;
     for (session_id, session) in &by_session {
         let Some(first) = session.first().copied() else {
             continue;
@@ -139,15 +140,25 @@ pub async fn sync(messages: &[Message], config: &Config) -> Result<Report> {
         let batch = record_batch(session)?;
         let bytes = encode_parquet(&batch)?;
         let key = object_key(config, first, session_id);
-        store
-            .put(&key, PutPayload::from(bytes))
-            .await
-            .context(PutSnafu { path: key.to_string() })?;
-        manifest.insert((*session_id).to_owned(), hash);
-        uploaded += 1;
+        // Record each success in the manifest as it lands, and persist the
+        // manifest even if a later put fails, so a re-run does not re-upload the
+        // sessions that already succeeded this pass.
+        match store.put(&key, PutPayload::from(bytes)).await {
+            Ok(_) => {
+                manifest.insert((*session_id).to_owned(), hash);
+                uploaded += 1;
+            }
+            Err(source) => {
+                failure = Some(PutSnafu { path: key.to_string() }.into_error(source));
+                break;
+            }
+        }
     }
 
     save_manifest(&store, &manifest_path, &manifest).await?;
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
     Ok(Report { uploaded, skipped })
 }
 
@@ -202,14 +213,19 @@ async fn save_manifest(
     Ok(())
 }
 
-/// The arrow schema: every transcript tag as a nullable column.
+/// The arrow schema: the per-message fields as nullable columns.
+///
+/// `host`/`user`/`project`/`session` are intentionally NOT columns: they are the
+/// hive partition keys in the object path. Polars `hive_partitioning=True` would
+/// otherwise drop a same-named file column and substitute the (sanitized) path
+/// value, which for `project` loses the real `/`-bearing path. The authoritative
+/// per-message working directory is kept in `cwd` (not a partition key, so it
+/// survives), and `session_id` is kept too (the `session=` key uses a different
+/// name, so there is no clobber).
 fn schema() -> Schema {
     let text = |name: &str| Field::new(name, DataType::Utf8, true);
     let int = |name: &str| Field::new(name, DataType::Int64, true);
     Schema::new(vec![
-        text("host"),
-        text("user"),
-        text("project"),
         text("session_id"),
         text("message_uuid"),
         text("parent_uuid"),
@@ -221,6 +237,7 @@ fn schema() -> Schema {
         text("tool_name"),
         int("input_tokens"),
         int("output_tokens"),
+        // Epoch seconds (matches the Mixedbread `timestamp` tag).
         int("timestamp"),
         text("body"),
     ])
@@ -229,9 +246,6 @@ fn schema() -> Schema {
 /// Build one session's record batch (one row per message).
 fn record_batch(session: &[&Message]) -> Result<RecordBatch> {
     let columns: Vec<ArrayRef> = vec![
-        text_column(session, |m| Some(m.host.as_str())),
-        text_column(session, |m| Some(m.user.as_str())),
-        text_column(session, |m| Some(m.project.as_str())),
         text_column(session, |m| Some(m.session_id.as_str())),
         text_column(session, |m| Some(m.uuid.as_str())),
         text_column(session, |m| m.parent_uuid.as_deref()),
@@ -295,4 +309,79 @@ fn sanitize(value: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Config, object_key, record_batch, sanitize, schema, session_hash};
+    use claude_history::Message;
+
+    fn sample(uuid: &str, body: &str) -> Message {
+        Message {
+            host: "host1".to_owned(),
+            user: "user1".to_owned(),
+            project: "/Users/x/proj".to_owned(),
+            session_id: "sess1".to_owned(),
+            uuid: uuid.to_owned(),
+            parent_uuid: None,
+            role: "user".to_owned(),
+            record_type: "user".to_owned(),
+            model: None,
+            cwd: Some("/Users/x/proj".to_owned()),
+            git_branch: None,
+            tool_name: None,
+            input_tokens: None,
+            output_tokens: None,
+            timestamp: Some(1),
+            body: body.to_owned(),
+        }
+    }
+
+    #[test]
+    fn sanitize_replaces_path_unsafe_chars() {
+        assert_eq!(sanitize("/Users/x/a-b.c"), "_Users_x_a-b.c");
+        assert_eq!(sanitize("plain"), "plain");
+        assert_eq!(sanitize("a b/c=d"), "a_b_c_d");
+    }
+
+    #[test]
+    fn session_hash_is_stable_and_body_sensitive() {
+        let first = sample("u1", "hello");
+        let same = sample("u1", "hello");
+        let changed = sample("u1", "changed");
+        assert_eq!(session_hash(&[&first]), session_hash(&[&same]));
+        assert_ne!(session_hash(&[&first]), session_hash(&[&changed]));
+    }
+
+    #[test]
+    fn distinct_messages_do_not_collide() {
+        let a = sample("u1", "x");
+        let b = sample("u2", "y");
+        assert_ne!(session_hash(&[&a]), session_hash(&[&b]));
+    }
+
+    #[test]
+    fn object_key_is_hive_partitioned_and_sanitized() {
+        let config = Config {
+            bucket: "b".to_owned(),
+            endpoint: None,
+            region: "auto".to_owned(),
+            prefix: "claude-history".to_owned(),
+            host: "host1".to_owned(),
+        };
+        let key = object_key(&config, &sample("u1", "x"), "sess1");
+        assert_eq!(
+            key.to_string(),
+            "claude-history/host=host1/user=user1/project=_Users_x_proj/session=sess1.parquet"
+        );
+    }
+
+    #[test]
+    fn record_batch_columns_match_schema() {
+        let a = sample("u1", "x");
+        let b = sample("u2", "y");
+        let batch = record_batch(&[&a, &b]).expect("batch");
+        assert_eq!(batch.num_columns(), schema().fields().len());
+        assert_eq!(batch.num_rows(), 2);
+    }
 }
