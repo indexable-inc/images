@@ -1,0 +1,15 @@
+{"id": "retry-backoff", "query": "where is the exponential backoff retry delay configured", "relevant": {"retry.py": 1}}
+{"id": "retry-max-attempts", "query": "how many times do we retry a failed RPC before giving up", "relevant": {"retry.py": 1}}
+{"id": "auth-ratelimit", "query": "how is the authentication endpoint rate limited", "relevant": {"ratelimit.py": 1}}
+{"id": "ratelimit-burst", "query": "what is the burst capacity of the rate limiter", "relevant": {"ratelimit.py": 1}}
+{"id": "cache-eviction", "query": "how does the cache decide what to evict when it is full", "relevant": {"lru_cache.py": 1}}
+{"id": "http-timeouts", "query": "what connect and read timeouts does the outbound HTTP client use", "relevant": {"http_client.py": 1}}
+{"id": "env-config", "query": "where are service settings loaded from environment variables", "relevant": {"envconfig.py": 1}}
+{"id": "db-pool-size", "query": "what is the maximum database connection pool size", "relevant": {"dbpool.py": 1}}
+{"id": "event-encoding", "query": "how are domain events serialized for the message bus", "relevant": {"events.py": 1}}
+{"id": "metrics-counters", "query": "where are prometheus request counters registered", "relevant": {"telemetry.py": 1}}
+{"id": "task-scheduling", "query": "how does the periodic task scheduler decide a task is due", "relevant": {"scheduler.py": 1}}
+{"id": "encryption-at-rest", "query": "how are secrets encrypted at rest with AES-GCM", "relevant": {"crypto.py": 1}}
+{"id": "cursor-pagination", "query": "how does opaque cursor pagination encode the cursor token", "relevant": {"pagination.py": 1}}
+{"id": "feature-flag-rollout", "query": "how is a percentage feature flag rollout evaluated per user", "relevant": {"featureflags.py": 1}}
+{"id": "connection-limits", "query": "what configuration values control connection and pool limits", "relevant": {"dbpool.py": 2, "http_client.py": 1, "ratelimit.py": 1}}

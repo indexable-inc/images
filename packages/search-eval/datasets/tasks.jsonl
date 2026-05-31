@@ -1,0 +1,8 @@
+{"id": "base-delay", "task": "What is the base delay in milliseconds before the first retry?", "answer": "250 milliseconds"}
+{"id": "max-attempts", "task": "How many total attempts does the retry policy make before giving up?", "answer": "5 attempts"}
+{"id": "bucket-capacity", "task": "What is the token bucket capacity (burst ceiling) for the auth rate limiter?", "answer": "40 tokens"}
+{"id": "cache-size", "task": "How many entries can the LRU cache hold before it evicts the oldest?", "answer": "1024 entries"}
+{"id": "connect-timeout", "task": "What is the HTTP client connect timeout in seconds?", "answer": "3.5 seconds"}
+{"id": "pool-max", "task": "What is the maximum database connection pool size?", "answer": "32 connections"}
+{"id": "schema-version", "task": "What is the current event wire schema version number?", "answer": "3"}
+{"id": "nonce-length", "task": "How many bytes long is the AES-GCM nonce used for envelope encryption?", "answer": "12 bytes"}

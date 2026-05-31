@@ -178,6 +178,11 @@ struct SemanticArgs {
     #[arg(long)]
     agentic: bool,
 
+    /// Emit results as a JSON array on stdout instead of the human listing.
+    /// Each element is `{path, source, start_line, num_lines, score, text}`.
+    #[arg(long)]
+    json: bool,
+
     /// Source and repo scope selectors.
     #[command(flatten)]
     scope: ScopeArgs,
@@ -216,6 +221,11 @@ struct GrepArgs {
     /// Search the store as-is: skip detecting and embedding new files.
     #[arg(long = "no-sync")]
     no_sync: bool,
+
+    /// Emit results as a JSON array on stdout instead of the human listing.
+    /// Each element is `{path, source, start_line, num_lines, score, text}`.
+    #[arg(long)]
+    json: bool,
 
     /// Source and repo scope selectors.
     #[command(flatten)]
@@ -402,6 +412,10 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
     };
 
     if cli.answer {
+        anyhow::ensure!(
+            !cli.json,
+            "--json is not supported with --answer; pass one or the other",
+        );
         let view =
             search_core::index_and_answer(&store, &query, &config, on_upload, on_poll)
                 .await?;
@@ -422,8 +436,14 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         if let Some(bar) = &bar {
             bar.finish_and_clear();
         }
-        for hit in &hits {
-            println!("{}", render(hit, cli.content, &palette, &root, theme));
+        if cli.json {
+            // Machine-readable mode: one JSON array on stdout for the eval
+            // harness and any other consumer, instead of the human listing.
+            println!("{}", search_core::hits_to_json(&hits)?);
+        } else {
+            for hit in &hits {
+                println!("{}", render(hit, cli.content, &palette, &root, theme));
+            }
         }
     }
 
@@ -522,8 +542,14 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
         bar.finish_and_clear();
     }
 
-    for hit in &hits {
-        println!("{}", render(hit, cli.content, &palette, &root, theme));
+    if cli.json {
+        // Machine-readable mode: one JSON array on stdout, same shape as the
+        // semantic path.
+        println!("{}", search_core::hits_to_json(&hits)?);
+    } else {
+        for hit in &hits {
+            println!("{}", render(hit, cli.content, &palette, &root, theme));
+        }
     }
 
     Ok(())
