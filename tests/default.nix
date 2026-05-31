@@ -2392,7 +2392,7 @@ let
         message = "symphony-codex image should set the expected public OCI image name";
       }
       {
-        assertion = symphonyCodex.config.ix.image.tag == "2026-05-28";
+        assertion = symphonyCodex.config.ix.image.tag == "2026-05-31";
         message = "symphony-codex image should publish an immutable production tag";
       }
       {
@@ -2436,6 +2436,16 @@ let
           && claims.symphony-room-webtransport.protocol == "udp"
           && claims.symphony-room-webtransport.port == 4433;
         message = "symphony-codex image should register Room listener port claims";
+      }
+      {
+        assertion =
+          let
+            workspace = symphonyCodex.config.fileSystems."/workspace" or null;
+          in
+          workspace != null
+          && workspace.fsType == "tmpfs"
+          && builtins.elem "size=32g" workspace.options;
+        message = "symphony-codex image should back /workspace with a sized tmpfs so the per-run checkout skips the vmfsd write path";
       }
     ];
 
