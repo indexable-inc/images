@@ -1367,6 +1367,21 @@ let
       plan = fleet.planValue.nodes.nginx;
     };
 
+  s3StorageExample =
+    let
+      fleet = import ../examples/s3-storage {
+        index = {
+          lib = ix;
+        };
+      };
+      config = fleet.nodes.s3;
+    in
+    {
+      inherit fleet config;
+      cfg = config.services.ix-seaweedfs;
+      plan = fleet.planValue.nodes.s3;
+    };
+
   observabilityStackExample =
     let
       fleet = import ../examples/observability-stack {
@@ -2082,6 +2097,57 @@ let
               "http://127.0.0.1/"
             ];
         message = "nginx-lifecycle fleet plan should prove the service unit and HTTP loopback path";
+      }
+    ];
+
+    s3-storage = [
+      {
+        assertion = s3StorageExample.cfg.enable && s3StorageExample.cfg.configFile != null;
+        message = "s3-storage example should enable SeaweedFS with an S3 identities config";
+      }
+      {
+        assertion = !(s3StorageExample.plan.recreateOnUp or false);
+        message = "s3-storage node should persist data across ix-fleet up, not recreate";
+      }
+      {
+        # Defends the module's headline claim: only the S3 port is exposed.
+        # `samePorts` (not `elem`) fails if the master/volume/filer ports
+        # ever leak into the firewall alongside the base sidecar ports.
+        assertion =
+          let
+            claims = s3StorageExample.config.ix.networking.portClaims;
+          in
+          claims.ix-seaweedfs.protocol == "tcp"
+          && claims.ix-seaweedfs.port == 8333
+          && samePorts s3StorageExample.config.networking.firewall.allowedTCPPorts (
+            baseFirewallTcpPorts ++ [ 8333 ]
+          );
+        message = "s3-storage example should open only the S3 port, not master/volume/filer";
+      }
+      {
+        assertion =
+          let
+            check = s3StorageExample.plan.healthChecks.ix-seaweedfs;
+          in
+          check.from == "guest"
+          && lib.hasSuffix "/bin/curl" (builtins.head check.command)
+          && lib.last check.command == "http://127.0.0.1:8333/healthz";
+        message = "s3-storage health check should probe the unauthenticated S3 /healthz route";
+      }
+      {
+        # The module must refuse an S3 endpoint with neither credentials nor
+        # an explicit anonymous opt-in, rather than silently serving open.
+        assertion =
+          let
+            failures = failedAssertionsFor [ { services.ix-seaweedfs.enable = true; } ];
+          in
+          builtins.any (a: lib.hasInfix "configFile" a.message) failures;
+        message = "ix-seaweedfs should fail evaluation when run with no credentials and no allowAnonymous";
+      }
+      {
+        # The example supplies a configFile, so it must clear that gate.
+        assertion = failedAssertionsFor [ ../examples/s3-storage/service.nix ] == [ ];
+        message = "s3-storage example should satisfy the ix-seaweedfs credentials assertion";
       }
     ];
 
