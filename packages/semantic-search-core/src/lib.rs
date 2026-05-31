@@ -32,12 +32,15 @@ mod search;
 mod sync;
 
 pub use adapter::MixedbreadStore;
-pub use backend::{Answer, MemoryStore, SearchHit, SearchOptions, Store, StoreStatus, UploadMeta};
+pub use backend::{
+    Answer, GrepOptions, GrepTargets, MemoryStore, SearchHit, SearchOptions, Store, StoreStatus,
+    UploadMeta,
+};
 pub use config::{Config, DEFAULT_STORE, WEB_STORE};
 pub use content::ContentHash;
 pub use db::{Db, db_path};
 pub use error::{Error, Result};
 pub use manifest::{FileEntry, Manifest};
-pub use pipeline::{Query, index_and_answer, index_and_search};
-pub use search::{AnswerView, DisplayHit, ask, search};
+pub use pipeline::{Query, index_and_answer, index_and_grep, index_and_semantic};
+pub use search::{AnswerView, DisplayHit, ask, grep, semantic};
 pub use sync::{SyncReport, sync, wait_until_indexed};

@@ -4,8 +4,8 @@
 //!
 //! Endpoints covered: store create/get (`/v1/stores`), the two-step file upload
 //! (`/v1/files` then `/v1/stores/{store}/files`), file listing and deletion,
-//! search (`/v1/stores/search`), and question-answering
-//! (`/v1/stores/question-answering`).
+//! search (`/v1/stores/search`), regex grep (`/v1/stores/grep`), and
+//! question-answering (`/v1/stores/question-answering`).
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -372,6 +372,45 @@ impl Client {
         Ok(response.data.into_iter().map(Chunk::from).collect())
     }
 
+    /// Grep one or more stores: run a regular expression over the same indexed
+    /// chunks search covers, on the server's `/v1/stores/grep` endpoint.
+    ///
+    /// `pattern` is the regex; `top_k` caps the returned matches;
+    /// `case_sensitive` toggles case folding server-side; `targets` selects
+    /// which chunk fields to match against (e.g. `["text"]`). The response is
+    /// decoded the same way [`search`](Self::search) decodes its chunks, so a
+    /// grep hit and a search hit share the [`Chunk`] shape (line metadata may be
+    /// absent and then deserializes as `None`).
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or cannot be decoded.
+    pub async fn grep(
+        &self,
+        stores: &[String],
+        pattern: &str,
+        top_k: usize,
+        case_sensitive: bool,
+        targets: &[&str],
+    ) -> Result<Vec<Chunk>> {
+        let request = GrepRequest {
+            store_identifiers: stores,
+            pattern,
+            top_k,
+            case_sensitive,
+            targets,
+        };
+        let resp = self
+            .http
+            .post(self.url("/v1/stores/grep"))
+            .bearer_auth(&self.api_key)
+            .json(&request)
+            .send()
+            .await
+            .context(HttpSnafu)?;
+        let response: SearchResponse = decode(resp).await?;
+        Ok(response.data.into_iter().map(Chunk::from).collect())
+    }
+
     /// Ask a natural-language question against one or more stores.
     ///
     /// # Errors
@@ -495,6 +534,15 @@ struct SearchRequest<'a> {
     store_identifiers: &'a [String],
     top_k: usize,
     search_options: SearchOptions,
+}
+
+#[derive(serde::Serialize)]
+struct GrepRequest<'a> {
+    store_identifiers: &'a [String],
+    pattern: &'a str,
+    top_k: usize,
+    case_sensitive: bool,
+    targets: &'a [&'a str],
 }
 
 #[derive(Deserialize)]

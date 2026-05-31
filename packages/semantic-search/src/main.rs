@@ -12,22 +12,49 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anstyle::{AnsiColor, Style};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use indicatif::ProgressBar;
 use semantic_search_core::{
-    Config, DEFAULT_STORE, DisplayHit, MixedbreadStore, Query, SearchOptions, StoreStatus,
+    Config, DEFAULT_STORE, DisplayHit, GrepOptions, GrepTargets, MixedbreadStore, Query,
+    SearchOptions, StoreStatus,
 };
 
 /// How long to wait for freshly uploaded files to finish embedding.
 const INDEX_TIMEOUT: Duration = Duration::from_mins(2);
 
-/// Command-line arguments. Flags mirror `mgrep search` where they overlap.
+/// Command-line arguments.
+///
+/// A bare invocation (`semantic-search <pattern> [path]`) runs a natural-language
+/// semantic search, preserving the original flat interface. The `grep`
+/// subcommand runs a regular expression over the same indexed chunks. Both
+/// honor the shared connection flags (`--store`, `--base-url`).
+#[derive(Debug, Parser)]
+#[command(name = "semantic-search", about, version)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+struct Cli {
+    /// Semantic-search arguments for a bare invocation (no subcommand).
+    #[command(flatten)]
+    semantic: SemanticArgs,
+
+    /// Run a regex grep instead of a semantic search.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+/// Subcommands. Absent means the bare semantic-search path runs.
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Grep the indexed chunks with a regular expression.
+    Grep(GrepArgs),
+}
+
+/// Arguments for the default semantic-search path. Flags mirror `mgrep search`
+/// where they overlap.
 // A CLI naturally has many independent boolean flags; a state machine would
 // obscure, not clarify, the argument surface.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Parser)]
-#[command(name = "semantic-search", about, version)]
-struct Cli {
+#[derive(Debug, Args)]
+struct SemanticArgs {
     /// The query to search for.
     pattern: String,
 
@@ -71,12 +98,51 @@ struct Cli {
     base_url: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    run(Cli::parse()).await
+/// Arguments for the `grep` subcommand. Grep is local-corpus only (no web
+/// store) and shares the connection flags with the semantic path.
+#[derive(Debug, Args)]
+struct GrepArgs {
+    /// The regular expression to match against the indexed chunks.
+    pattern: String,
+
+    /// Directory to search in (defaults to the current directory).
+    path: Option<String>,
+
+    /// Maximum number of results to return.
+    #[arg(short = 'm', long = "max-count", default_value_t = 10)]
+    max_count: usize,
+
+    /// Show the matched content under each result.
+    #[arg(short = 'c', long)]
+    content: bool,
+
+    /// Match the pattern case-sensitively (case-insensitive by default).
+    #[arg(short = 's', long = "case-sensitive")]
+    case_sensitive: bool,
+
+    /// Search the store as-is: skip detecting and embedding new files.
+    #[arg(long = "no-sync")]
+    no_sync: bool,
+
+    /// Store name (one store holds every worktree's content).
+    #[arg(long, env = "MXBAI_STORE")]
+    store: Option<String>,
+
+    /// Mixedbread API base URL.
+    #[arg(long = "base-url", env = "MXBAI_BASE_URL")]
+    base_url: Option<String>,
 }
 
-async fn run(cli: Cli) -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
+        Some(Command::Grep(args)) => run_grep(args).await,
+        None => run(cli.semantic).await,
+    }
+}
+
+async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
     let root = resolve_root(cli.path.as_deref())?;
     anyhow::ensure!(
         !at_or_above_home(&root),
@@ -175,7 +241,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         }
     } else {
         let hits =
-            semantic_search_core::index_and_search(&store, &query, &config, on_upload, on_poll)
+            semantic_search_core::index_and_semantic(&store, &query, &config, on_upload, on_poll)
                 .await?;
         if let Some(bar) = &bar {
             bar.finish_and_clear();
@@ -183,6 +249,102 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         for hit in &hits {
             println!("{}", render(hit, cli.content, &palette, &root, theme));
         }
+    }
+
+    Ok(())
+}
+
+async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
+    let root = resolve_root(cli.path.as_deref())?;
+    anyhow::ensure!(
+        !at_or_above_home(&root),
+        "refusing to index {} (it is at or above your home directory); run from a project directory",
+        root.display(),
+    );
+
+    let palette = Palette::for_stdout();
+    let theme = if cli.content {
+        detect_theme(palette.color)
+    } else {
+        code_highlight::Theme::default()
+    };
+
+    let config = Config::default();
+    let store_name = cli.store.unwrap_or_else(|| DEFAULT_STORE.to_owned());
+    let base_url = cli
+        .base_url
+        .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
+    let store = MixedbreadStore::from_login(base_url).await?;
+
+    // Grep reuses the shared `Query` shape; its semantic-only knobs (rerank,
+    // agentic, web) are inert here, and the grep pattern travels in `text`.
+    let query = Query {
+        root: &root,
+        store_name: &store_name,
+        text: &cli.pattern,
+        top_k: cli.max_count.max(1),
+        options: SearchOptions {
+            rerank: false,
+            agentic: false,
+        },
+        sync: !cli.no_sync,
+        include_web: false,
+        index_timeout: INDEX_TIMEOUT,
+    };
+    let grep_options = GrepOptions {
+        case_sensitive: cli.case_sensitive,
+        targets: GrepTargets::Text,
+    };
+
+    // Progress UI, terminal only: an upload bar that flips to an embedding bar
+    // on the first poll. Identical to the semantic path so a grep on a fresh
+    // tree shows the same indexing feedback. Piped output stays clean (no bar).
+    let bar = std::io::stderr()
+        .is_terminal()
+        .then(ProgressBar::new_spinner);
+    if let Some(bar) = &bar {
+        bar.set_style(progress_style::bar("cyan"));
+        bar.set_prefix("indexing files");
+    }
+    let embedding = AtomicBool::new(false);
+    let embed_total = AtomicU64::new(0);
+    let on_upload = |done: usize, total: usize| {
+        if let (Some(bar), true) = (&bar, total > 0) {
+            let total = u64::try_from(total).unwrap_or(u64::MAX);
+            embed_total.store(total, Ordering::Relaxed);
+            bar.set_length(total);
+            bar.set_position(u64::try_from(done).unwrap_or(u64::MAX));
+        }
+    };
+    let on_poll = |status: StoreStatus| {
+        if let Some(bar) = &bar {
+            let len = embed_total.load(Ordering::Relaxed);
+            let remaining = (status.pending + status.in_progress).min(len);
+            bar.set_position(len - remaining);
+            if !embedding.swap(true, Ordering::Relaxed) {
+                bar.set_style(progress_style::bar("magenta"));
+                bar.set_prefix("embedding files");
+                bar.set_length(len);
+                bar.enable_steady_tick(Duration::from_millis(120));
+            }
+        }
+    };
+
+    let hits = semantic_search_core::index_and_grep(
+        &store,
+        &query,
+        grep_options,
+        &config,
+        on_upload,
+        on_poll,
+    )
+    .await?;
+    if let Some(bar) = &bar {
+        bar.finish_and_clear();
+    }
+
+    for hit in &hits {
+        println!("{}", render(hit, cli.content, &palette, &root, theme));
     }
 
     Ok(())

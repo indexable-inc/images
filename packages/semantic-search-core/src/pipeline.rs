@@ -1,16 +1,16 @@
 //! High-level orchestration: build the manifest, embed any new files, then
-//! search or answer in one call. The CLI and the `PyO3` bindings both go through
-//! here, so the index-then-query flow lives in exactly one place.
+//! search, grep, or answer in one call. The CLI and the `PyO3` bindings both go
+//! through here, so the index-then-query flow lives in exactly one place.
 
 use std::path::Path;
 use std::time::Duration;
 
-use crate::backend::{SearchOptions, Store, StoreStatus};
+use crate::backend::{GrepOptions, SearchOptions, Store, StoreStatus};
 use crate::config::Config;
 use crate::db::Db;
 use crate::error::Result;
 use crate::manifest::Manifest;
-use crate::search::{AnswerView, DisplayHit, ask, search};
+use crate::search::{AnswerView, DisplayHit, ask, grep, semantic};
 use crate::sync::{sync, wait_until_indexed};
 
 /// What to query and how, independent of the backend and progress reporting.
@@ -20,7 +20,8 @@ pub struct Query<'a> {
     pub root: &'a Path,
     /// Store name (one store holds every worktree's content).
     pub store_name: &'a str,
-    /// Natural-language query.
+    /// The query text: a natural-language query for semantic search, or a
+    /// regular expression for grep.
     pub text: &'a str,
     /// Maximum results to return.
     pub top_k: usize,
@@ -77,7 +78,7 @@ async fn prepare(
 ///
 /// # Errors
 /// Returns an error if indexing or the search request fails.
-pub async fn index_and_search(
+pub async fn index_and_semantic(
     store: &(impl Store + Sync),
     query: &Query<'_>,
     config: &Config,
@@ -85,7 +86,7 @@ pub async fn index_and_search(
     on_poll: impl Fn(StoreStatus) + Send + Sync,
 ) -> Result<Vec<DisplayHit>> {
     let manifest = prepare(store, query, config, on_upload, on_poll).await?;
-    search(
+    semantic(
         store,
         query.store_name,
         &manifest,
@@ -93,6 +94,35 @@ pub async fn index_and_search(
         query.top_k,
         query.options,
         query.include_web,
+    )
+    .await
+}
+
+/// Index the checkout (unless `query.sync` is false) and return regex grep hits.
+///
+/// The pattern is `query.text`; `options` carries case sensitivity and the
+/// matched target field. Grep is local-corpus only, so `query.options` and
+/// `query.include_web` are ignored here.
+///
+/// # Errors
+/// Returns an error if indexing fails, the pattern is not a valid regular
+/// expression, or the grep request fails.
+pub async fn index_and_grep(
+    store: &(impl Store + Sync),
+    query: &Query<'_>,
+    options: GrepOptions,
+    config: &Config,
+    on_upload: impl Fn(usize, usize) + Send + Sync,
+    on_poll: impl Fn(StoreStatus) + Send + Sync,
+) -> Result<Vec<DisplayHit>> {
+    let manifest = prepare(store, query, config, on_upload, on_poll).await?;
+    grep(
+        store,
+        query.store_name,
+        &manifest,
+        query.text,
+        query.top_k,
+        options,
     )
     .await
 }

@@ -17,6 +17,7 @@ dirs.workspace = true
 futures.workspace = true
 mixedbread.workspace = true
 rayon.workspace = true
+regex.workspace = true
 repo-walker.workspace = true
 rusqlite = { workspace = true, features = ["bundled"] }
 serde = { workspace = true, features = ["derive"] }

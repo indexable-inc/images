@@ -14,7 +14,10 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Mutex, PoisonError};
 
-use crate::error::Result;
+use regex::RegexBuilder;
+use snafu::ResultExt as _;
+
+use crate::error::{InvalidPatternSnafu, Result};
 
 /// Metadata attached to every stored file.
 ///
@@ -36,6 +39,39 @@ pub struct SearchOptions {
     pub rerank: bool,
     /// Let the backend plan and run several searches itself.
     pub agentic: bool,
+}
+
+/// Knobs forwarded to the backend's grep call.
+#[derive(Debug, Clone, Copy)]
+pub struct GrepOptions {
+    /// Match the pattern case-sensitively. When false, the pattern matches
+    /// regardless of case.
+    pub case_sensitive: bool,
+    /// Which chunk field(s) the pattern is matched against.
+    pub targets: GrepTargets,
+}
+
+/// Which indexed field a grep pattern is matched against.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum GrepTargets {
+    /// Match the chunk's raw text (the source content).
+    #[default]
+    Text,
+    /// Match the chunk's generated metadata text.
+    Generated,
+}
+
+impl GrepTargets {
+    /// The API target strings for this selection: `Text` maps to `["text"]`,
+    /// `Generated` maps to `["generated"]`. Returned as a borrowed slice of
+    /// static strings so it can be passed straight to the client's `grep` call.
+    #[must_use]
+    pub const fn api_targets(self) -> &'static [&'static str] {
+        match self {
+            Self::Text => &["text"],
+            Self::Generated => &["generated"],
+        }
+    }
 }
 
 /// One scored chunk returned by a search.
@@ -126,6 +162,21 @@ pub trait Store {
         query: &str,
         top_k: usize,
         options: SearchOptions,
+    ) -> impl Future<Output = Result<Vec<SearchHit>>> + Send;
+
+    /// Grep one or more stores with a regular expression over the same chunks
+    /// search covers. `pattern` is the regex, `top_k` caps the matches, and
+    /// `options` carries case sensitivity and the matched target field.
+    ///
+    /// # Errors
+    /// Returns an error if the pattern is not a valid regular expression, or if
+    /// the grep request fails or the response cannot be decoded.
+    fn grep(
+        &self,
+        stores: &[String],
+        pattern: &str,
+        top_k: usize,
+        options: GrepOptions,
     ) -> impl Future<Output = Result<Vec<SearchHit>>> + Send;
 
     /// Ask a natural-language question against one or more stores.
@@ -246,6 +297,47 @@ impl Store for MemoryStore {
             let text = String::from_utf8_lossy(&file.content);
             for (index, line) in text.lines().enumerate() {
                 if line.to_lowercase().contains(&needle) {
+                    hits.push(SearchHit {
+                        hash: Some(file.meta.hash.clone()),
+                        path: Some(file.meta.path.clone()),
+                        text: line.to_owned(),
+                        score: 1.0,
+                        start_line: u32::try_from(index).ok(),
+                        num_lines: Some(1),
+                    });
+                }
+                if hits.len() >= top_k {
+                    break;
+                }
+            }
+            if hits.len() >= top_k {
+                break;
+            }
+        }
+        drop(inner);
+        Ok(hits)
+    }
+
+    async fn grep(
+        &self,
+        _stores: &[String],
+        pattern: &str,
+        top_k: usize,
+        options: GrepOptions,
+    ) -> Result<Vec<SearchHit>> {
+        let regex = RegexBuilder::new(pattern)
+            .case_insensitive(!options.case_sensitive)
+            .build()
+            .with_context(|_| InvalidPatternSnafu {
+                pattern: pattern.to_owned(),
+            })?;
+
+        let inner = self.lock();
+        let mut hits = Vec::new();
+        for file in inner.files.values() {
+            let text = String::from_utf8_lossy(&file.content);
+            for (index, line) in text.lines().enumerate() {
+                if regex.is_match(line) {
                     hits.push(SearchHit {
                         hash: Some(file.meta.hash.clone()),
                         path: Some(file.meta.path.clone()),

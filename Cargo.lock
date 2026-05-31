@@ -4277,6 +4277,7 @@ dependencies = [
  "futures",
  "mixedbread",
  "rayon",
+ "regex",
  "repo-walker",
  "rusqlite",
  "serde",

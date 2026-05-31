@@ -142,11 +142,39 @@ impl McpServer {
             // cannot break out of the expression.
             let source = format!(
                 "import json, semantic_search\n\
-                 _ix_hits = await semantic_search.search({query}, {path}, top_k={top_k})\n\
+                 _ix_hits = await semantic_search.semantic({query}, {path}, top_k={top_k})\n\
                  print(json.dumps(_ix_hits))\n",
                 query = json!(request.query),
                 path = json!(request.path.as_deref().unwrap_or(".")),
                 top_k = request.top_k.unwrap_or(10),
+            );
+            session.request("exec", json!({ "source": source }))
+        })
+    }
+
+    #[tool(
+        description = "Regex grep over a checkout via the bundled `semantic_search` module: run a regular expression over the SAME indexed chunks `semantic_search` covers (content-addressed, deduplicated across worktrees), and return matching chunks scoped to the checkout as JSON. New/changed files are indexed first. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
+    )]
+    fn grep_search(&self, Parameters(request): Parameters<GrepSearchRequest>) -> String {
+        self.with_sessions(|sessions| {
+            let session = sessions.get_or_create(request.session_id.as_deref())?;
+            // Run the grep inside the session's persistent event loop via the
+            // bundled module: import it, await `grep`, then emit JSON. The
+            // pattern and path are interpolated as JSON literals, which are valid
+            // Python literals too, so content with quotes or newlines cannot
+            // break out of the expression.
+            let source = format!(
+                "import json, semantic_search\n\
+                 _ix_hits = await semantic_search.grep({pattern}, {path}, top_k={top_k}, case_sensitive={case_sensitive})\n\
+                 print(json.dumps(_ix_hits))\n",
+                pattern = json!(request.pattern),
+                path = json!(request.path.as_deref().unwrap_or(".")),
+                top_k = request.top_k.unwrap_or(10),
+                case_sensitive = if request.case_sensitive.unwrap_or(false) {
+                    "True"
+                } else {
+                    "False"
+                },
             );
             session.request("exec", json!({ "source": source }))
         })
@@ -225,6 +253,21 @@ struct SemanticSearchRequest {
     path: Option<String>,
     /// Maximum number of results to return (default 10).
     top_k: Option<usize>,
+    session_id: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GrepSearchRequest {
+    /// Regular expression to match against the indexed chunks.
+    pattern: String,
+    /// Checkout directory to index and scope results to. Defaults to the
+    /// session's working directory.
+    path: Option<String>,
+    /// Maximum number of results to return (default 10).
+    top_k: Option<usize>,
+    /// Match the pattern case-sensitively (default false).
+    case_sensitive: Option<bool>,
     session_id: Option<String>,
 }
 

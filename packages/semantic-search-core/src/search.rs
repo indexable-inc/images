@@ -4,7 +4,7 @@
 //! manifest, mapping each back to its local path. Web results (no hash) pass
 //! through when the caller asked for them.
 
-use crate::backend::{SearchHit, SearchOptions, Store};
+use crate::backend::{GrepOptions, SearchHit, SearchOptions, Store};
 use crate::config::WEB_STORE;
 use crate::error::Result;
 use crate::manifest::Manifest;
@@ -40,7 +40,7 @@ pub struct AnswerView {
 ///
 /// # Errors
 /// Returns an error if the backend search request fails.
-pub async fn search(
+pub async fn semantic(
     store: &(impl Store + Sync),
     store_name: &str,
     manifest: &Manifest,
@@ -54,6 +54,31 @@ pub async fn search(
         .search(&stores, query, overfetch(top_k), options)
         .await?;
     Ok(project(manifest, hits, include_web, top_k))
+}
+
+/// Grep `store_name` with a regular expression, scoped to this checkout.
+///
+/// Runs the pattern over the same chunks [`semantic`] searches, returning only
+/// hits present in this checkout, capped at `top_k`. Grep is local-corpus only:
+/// the web store is never queried, so the projection runs with `include_web`
+/// false.
+///
+/// # Errors
+/// Returns an error if the pattern is not a valid regular expression or the
+/// backend grep request fails.
+pub async fn grep(
+    store: &(impl Store + Sync),
+    store_name: &str,
+    manifest: &Manifest,
+    pattern: &str,
+    top_k: usize,
+    options: GrepOptions,
+) -> Result<Vec<DisplayHit>> {
+    let stores = store_identifiers(store_name, false);
+    let hits = store
+        .grep(&stores, pattern, overfetch(top_k), options)
+        .await?;
+    Ok(project(manifest, hits, false, top_k))
 }
 
 /// Ask a question against `store_name` (and optionally the web store).
@@ -134,8 +159,10 @@ fn project(
 
 #[cfg(test)]
 mod tests {
-    use super::search;
-    use crate::backend::{MemoryStore, SearchOptions, Store, UploadMeta};
+    use super::{grep, semantic};
+    use crate::backend::{
+        GrepOptions, GrepTargets, MemoryStore, SearchOptions, Store, UploadMeta,
+    };
     use crate::content::ContentHash;
     use crate::manifest::{FileEntry, Manifest};
 
@@ -187,7 +214,7 @@ mod tests {
         // Manifest only knows about `mine.rs`, so the other worktree's hit must
         // be dropped even though both match the query in the shared store.
         let manifest = manifest_with(&[("mine.rs", &mine)]);
-        let hits = search(&store, "s", &manifest, "needle", 10, opts(), false)
+        let hits = semantic(&store, "s", &manifest, "needle", 10, opts(), false)
             .await
             .expect("search");
 
@@ -202,9 +229,82 @@ mod tests {
         let _ = put(&store, "a.rs", "needle").await;
         let manifest = Manifest::default();
 
-        let hits = search(&store, "s", &manifest, "needle", 10, opts(), false)
+        let hits = semantic(&store, "s", &manifest, "needle", 10, opts(), false)
             .await
             .expect("search");
         assert!(hits.is_empty());
+    }
+
+    fn grep_opts(case_sensitive: bool) -> GrepOptions {
+        GrepOptions {
+            case_sensitive,
+            targets: GrepTargets::Text,
+        }
+    }
+
+    #[tokio::test]
+    async fn grep_matches_regex_and_projects_to_local_paths() {
+        let store = MemoryStore::new();
+        let alpha = put(&store, "alpha.rs", "fn handler() {}\nlet other = 1;").await;
+        let beta = put(&store, "beta.rs", "struct Thing;\nfn render() {}").await;
+
+        let manifest = manifest_with(&[("alpha.rs", &alpha), ("beta.rs", &beta)]);
+        let hits = grep(&store, "s", &manifest, r"fn \w+\(\)", 10, grep_opts(false))
+            .await
+            .expect("grep");
+
+        // The regex matches the two `fn name()` lines, one per file, and each
+        // hit projects back to its local repo-relative path.
+        assert_eq!(hits.len(), 2);
+        let mut labels: Vec<&str> = hits.iter().map(|hit| hit.label.as_str()).collect();
+        labels.sort_unstable();
+        assert_eq!(labels, vec!["alpha.rs", "beta.rs"]);
+        assert!(hits.iter().all(|hit| !hit.is_web));
+    }
+
+    #[tokio::test]
+    async fn grep_case_sensitive_excludes_differently_cased_match() {
+        let store = MemoryStore::new();
+        let lower = put(&store, "lower.rs", "let token = read();").await;
+        let upper = put(&store, "upper.rs", "let TOKEN = read();").await;
+
+        let manifest = manifest_with(&[("lower.rs", &lower), ("upper.rs", &upper)]);
+
+        // Case-insensitive grep catches both spellings of the word.
+        let insensitive = grep(&store, "s", &manifest, "token", 10, grep_opts(false))
+            .await
+            .expect("grep");
+        assert_eq!(insensitive.len(), 2);
+
+        // Case-sensitive grep keeps only the lowercase line.
+        let sensitive = grep(&store, "s", &manifest, "token", 10, grep_opts(true))
+            .await
+            .expect("grep");
+        assert_eq!(sensitive.len(), 1);
+        assert_eq!(sensitive[0].label, "lower.rs");
+    }
+
+    #[tokio::test]
+    async fn grep_respects_top_k() {
+        let store = MemoryStore::new();
+        let many = put(&store, "many.rs", "fn a() {}\nfn b() {}\nfn c() {}").await;
+        let manifest = manifest_with(&[("many.rs", &many)]);
+
+        let hits = grep(&store, "s", &manifest, r"fn \w", 2, grep_opts(false))
+            .await
+            .expect("grep");
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn grep_invalid_pattern_is_an_error() {
+        let store = MemoryStore::new();
+        let only = put(&store, "only.rs", "anything").await;
+        let manifest = manifest_with(&[("only.rs", &only)]);
+
+        // An unbalanced group is not a valid regex, so grep must surface a typed
+        // error rather than panic.
+        let result = grep(&store, "s", &manifest, "fn (", 10, grep_opts(false)).await;
+        assert!(result.is_err());
     }
 }

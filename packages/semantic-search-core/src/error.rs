@@ -91,6 +91,15 @@ pub enum Error {
         /// Underlying client error.
         source: mixedbread::Error,
     },
+
+    /// A grep pattern was not a valid regular expression.
+    #[snafu(display("invalid grep pattern {pattern:?}: {source}"))]
+    InvalidPattern {
+        /// The pattern that failed to compile.
+        pattern: String,
+        /// Underlying regex compilation error.
+        source: regex::Error,
+    },
 }
 
 /// Convenient result alias defaulting to this crate's [`Error`].

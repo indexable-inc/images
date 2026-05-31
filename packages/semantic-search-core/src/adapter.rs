@@ -7,7 +7,9 @@ use std::collections::HashSet;
 
 use snafu::ResultExt as _;
 
-use crate::backend::{Answer, SearchHit, SearchOptions, Store, StoreStatus, UploadMeta};
+use crate::backend::{
+    Answer, GrepOptions, SearchHit, SearchOptions, Store, StoreStatus, UploadMeta,
+};
 use crate::error::{BackendSnafu, EncodeMetadataSnafu, Result};
 
 /// A [`Store`] backed by the Mixedbread API.
@@ -123,6 +125,27 @@ impl Store for MixedbreadStore {
         let chunks = self
             .client
             .search(stores, query, top_k, to_client_options(options))
+            .await
+            .context(BackendSnafu)?;
+        Ok(chunks.into_iter().map(hit_from_chunk).collect())
+    }
+
+    async fn grep(
+        &self,
+        stores: &[String],
+        pattern: &str,
+        top_k: usize,
+        options: GrepOptions,
+    ) -> Result<Vec<SearchHit>> {
+        let chunks = self
+            .client
+            .grep(
+                stores,
+                pattern,
+                top_k,
+                options.case_sensitive,
+                options.targets.api_targets(),
+            )
             .await
             .context(BackendSnafu)?;
         Ok(chunks.into_iter().map(hit_from_chunk).collect())
