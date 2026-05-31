@@ -79,12 +79,23 @@ struct BarWin {
     /// Last position we know the window holds (logical points): what we set, or
     /// where the OS placed it. Lets `Moved` skip echoes of our own placement.
     self_set: Option<LogicalPosition<f64>>,
+    /// This bar carries a description, so it has a hover pop-down panel.
+    has_description: bool,
+    /// The window is currently grown to fit the open panel. Collapsed otherwise,
+    /// so the empty area below the bar never intercepts the mouse (click-through).
+    expanded: bool,
 }
 
 impl BarWin {
     /// Still moving: easing toward/away from hover, or breathing while hovered.
     fn animating(&self) -> bool {
         self.hovered || self.hover_anim > 0.0
+    }
+
+    /// The window should be grown for the panel while the bar is hovered or
+    /// still easing back from a hover, but only when it has a description.
+    fn wants_expanded(&self) -> bool {
+        self.has_description && self.animating()
     }
 }
 
@@ -219,6 +230,7 @@ impl App {
         let window = Arc::new(event_loop.create_window(attrs).ok()?);
         let (surface, config) = self.make_surface(&window);
         window.request_redraw();
+        let has_description = !bar.description.trim().is_empty();
         Some(BarWin {
             window,
             surface,
@@ -229,6 +241,10 @@ impl App {
             last: Instant::now(),
             dragging: false,
             self_set: Some(pos),
+            has_description,
+            // Windows are created at the collapsed (bar-only) size; the panel
+            // grows them on hover.
+            expanded: false,
         })
     }
 
@@ -249,7 +265,12 @@ impl App {
             };
 
             if let Some(win) = self.wins.get_mut(&b.id) {
-                let title_presence_changed = win.bar.title.is_empty() != b.title.is_empty();
+                // A change to title presence or the description (while open)
+                // changes the window's collapsed or expanded size.
+                let size_affecting_changed = win.bar.title.is_empty() != b.title.is_empty()
+                    || win.bar.description.trim().is_empty() != b.description.trim().is_empty()
+                    || (win.expanded && win.bar.description != b.description);
+                win.has_description = !b.description.trim().is_empty();
                 win.bar = b.clone();
                 // Honor a position set in the DB by something other than our own
                 // drag (e.g. the CLI), but ignore the echo of our last move.
@@ -260,7 +281,11 @@ impl App {
                         win.self_set = Some(lp);
                     }
                 }
-                if title_presence_changed {
+                if size_affecting_changed {
+                    // Reset to the resting size; if the bar is still hovered the
+                    // settle pass in `about_to_wait` re-expands it to the new
+                    // panel height on the next tick.
+                    win.expanded = false;
                     let (w_px, h_px) = render::bar_window_px(self.scale, !b.title.is_empty());
                     let _ = win.window.request_inner_size(PhysicalSize::new(w_px, h_px));
                 }
@@ -356,6 +381,32 @@ impl App {
         if let Err(e) = db::set_position(&self.db, id, dv) {
             eprintln!("bossbar-overlay: save position failed: {e}");
         }
+    }
+
+    /// Grow or shrink a bar's window to match its hover state. Expanding makes
+    /// room for the description panel to unfold; collapsing restores the bar-only
+    /// size so the area below the bar stops intercepting the mouse, keeping the
+    /// desktop click-through everywhere off a bar. No-op when already in the
+    /// target state or when the bar has no panel.
+    fn set_window_expanded(&mut self, id: i64, expand: bool) {
+        let Some(core) = self.core.as_mut() else {
+            return;
+        };
+        let Some(win) = self.wins.get_mut(&id) else {
+            return;
+        };
+        if win.expanded == expand || (expand && !win.has_description) {
+            return;
+        }
+        let (w_px, h_px) = if expand {
+            core.renderer.expanded_window_px(&win.bar)
+        } else {
+            render::bar_window_px(self.scale, !win.bar.title.is_empty())
+        };
+        win.expanded = expand;
+        // Rely on the resulting `Resized` event to reconfigure the surface, the
+        // same way a title-presence change in `reconcile` does.
+        let _ = win.window.request_inner_size(PhysicalSize::new(w_px, h_px));
     }
 }
 
@@ -461,6 +512,15 @@ impl ApplicationHandler<Vec<BossBar>> for App {
     /// breathing), capped to ~60 fps; otherwise let the loop sleep until the
     /// next event so an idle overlay costs nothing.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Settle each window's size to its hover state first: grow for an open
+        // panel, shrink back once the hover has fully eased out. Done here, off
+        // the per-frame easing, so the window resizes only twice per hover.
+        let ids: Vec<i64> = self.wins.keys().copied().collect();
+        for id in ids {
+            let want = self.wins.get(&id).is_some_and(BarWin::wants_expanded);
+            self.set_window_expanded(id, want);
+        }
+
         let mut animating = false;
         for win in self.wins.values() {
             if win.animating() {

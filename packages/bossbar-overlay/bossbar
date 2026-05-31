@@ -25,14 +25,21 @@ DB="$(db_path)"
 ensure_db() {
   mkdir -p "$(dirname "$DB")"
   sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS bossbars (
-    id        INTEGER PRIMARY KEY,
-    title     TEXT    NOT NULL DEFAULT '',
-    progress  REAL    NOT NULL DEFAULT 1.0,
-    color     TEXT    NOT NULL DEFAULT 'purple',
-    overlay   TEXT    NOT NULL DEFAULT 'progress',
-    visible   INTEGER NOT NULL DEFAULT 1,
-    position  INTEGER NOT NULL DEFAULT 0
+    id          INTEGER PRIMARY KEY,
+    title       TEXT    NOT NULL DEFAULT '',
+    description TEXT    NOT NULL DEFAULT '',
+    progress    REAL    NOT NULL DEFAULT 1.0,
+    color       TEXT    NOT NULL DEFAULT 'purple',
+    overlay     TEXT    NOT NULL DEFAULT 'progress',
+    visible     INTEGER NOT NULL DEFAULT 1,
+    position    INTEGER NOT NULL DEFAULT 0
   );"
+  # `description` shipped after the first schema; add it to a pre-existing table
+  # so `--description` works on a DB created by an older bossbar. SQLite has no
+  # ADD COLUMN IF NOT EXISTS, so guard on the column being absent.
+  if [ -z "$(sqlite3 "$DB" "SELECT 1 FROM pragma_table_info('bossbars') WHERE name = 'description' LIMIT 1;")" ]; then
+    sqlite3 "$DB" "ALTER TABLE bossbars ADD COLUMN description TEXT NOT NULL DEFAULT '';"
+  fi
 }
 
 die() {
@@ -64,20 +71,24 @@ usage() {
 bossbar - control the Minecraft boss bar overlay (SQLite-backed)
 
 Usage:
-  bossbar add <title> [--progress P] [--color C] [--overlay O] [--position N]
-  bossbar set <id|title> [--title T] [--progress P] [--color C]
+  bossbar add <title> [--description D] [--progress P] [--color C]
+                      [--overlay O] [--position N]
+  bossbar set <id|title> [--title T] [--description D] [--progress P] [--color C]
                          [--overlay O] [--position N] [--visible 0|1]
   bossbar rm <id|title>
   bossbar list
   bossbar clear
   bossbar db                 print the database path
 
+  D        longer text shown in a panel that unfolds below the bar on hover
+           (newlines start new paragraphs); pass '' to clear it
   P        fill fraction 0.0 .. 1.0
   C        pink | blue | red | green | yellow | purple | white
   O        progress | notched_6 | notched_10 | notched_12 | notched_20
 
 Examples:
-  bossbar add "Ender Dragon" --color pink --overlay notched_20
+  bossbar add "Ender Dragon" --color pink --overlay notched_20 \
+    --description "Destroy the End Crystals first or it heals to full."
   bossbar set "Ender Dragon" --progress 0.5
   bossbar rm "Ender Dragon"
 EOF
@@ -91,7 +102,8 @@ parse_fields() {
     local flag="$1" val="${2:-}"
     [ "$#" -ge 2 ] || die "missing value for $flag"
     case "$flag" in
-      --title)    assigns+="title = '$(sq "$val")'"$'\n' ;;
+      --title)       assigns+="title = '$(sq "$val")'"$'\n' ;;
+      --description) assigns+="description = '$(sq "$val")'"$'\n' ;;
       --progress) assigns+="progress = $val"$'\n' ;;
       --position) assigns+="position = $val"$'\n' ;;
       --visible)  assigns+="visible = $val"$'\n' ;;

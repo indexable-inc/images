@@ -15,11 +15,11 @@ struct Globals {
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    @location(1) alpha: f32,
+    @location(1) color: vec4<f32>,
 };
 
 @vertex
-fn vs(@location(0) px: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) alpha: f32) -> VsOut {
+fn vs(@location(0) px: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>) -> VsOut {
     var out: VsOut;
     let ndc = vec2<f32>(
         px.x / globals.size.x * 2.0 - 1.0,
@@ -27,7 +27,7 @@ fn vs(@location(0) px: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) alpha
     );
     out.pos = vec4<f32>(ndc, 0.0, 1.0);
     out.uv = uv;
-    out.alpha = alpha;
+    out.color = color;
     return out;
 }
 
@@ -37,6 +37,9 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     // Straight alpha out; the pipeline's ALPHA_BLENDING state composites it into
     // the premultiplied framebuffer, the same blend glyphon uses for text, so
     // sprites and titles layer consistently over the transparent desktop. The
-    // per-vertex alpha lets the hovered bar paint solid over the translucent rest.
-    return vec4<f32>(c.rgb, c.a * in.alpha);
+    // per-vertex color tints the sampled texel: sprites pass white (so they show
+    // unchanged, with the tint's alpha letting a hovered bar paint solid), while
+    // the description panel samples a 1x1 white texture so the tint *is* the
+    // flat fill or border color.
+    return vec4<f32>(c.rgb * in.color.rgb, c.a * in.color.a);
 }
