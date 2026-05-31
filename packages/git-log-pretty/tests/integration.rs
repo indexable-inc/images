@@ -95,6 +95,19 @@ fn log_lists_commits_ahead_of_main() {
 }
 
 #[test]
+fn no_pager_flag_is_accepted_and_renders_log() {
+    // The pager only engages on a TTY, which the test harness never is, so this
+    // mainly guards that `--no-pager` parses and the writer path still renders.
+    let dir = repo_ahead_of_main();
+    let output = run(dir.path(), &["--no-pager"]);
+    assert!(output.status.success(), "stderr: {}", plain(&output.stderr));
+
+    let stdout = plain(&output.stdout);
+    assert!(stdout.contains("commit ahead of main"), "got: {stdout}");
+    assert!(stdout.contains("src/lib.rs"), "missing file tree: {stdout}");
+}
+
+#[test]
 fn log_shows_recent_history_on_main() {
     // On `main` there is nothing to be ahead of, so the default view lists
     // main's own recent commits rather than reporting "caught up".

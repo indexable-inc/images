@@ -62,9 +62,13 @@ fn format_summary(summary: &str, theme: Theme) -> String {
     )
 }
 
-/// Print one commit block: a `shorthash summary • relative-time` line followed
-/// by the indented changed-file tree and a trailing blank line.
-pub fn print_commit(ahead: &git::AheadCommit<'_>, theme: Theme) -> color_eyre::eyre::Result<()> {
+/// Write one commit block to `out`: a `shorthash summary • relative-time` line
+/// followed by the indented changed-file tree and a trailing blank line.
+pub fn print_commit(
+    out: &mut dyn std::io::Write,
+    ahead: &git::AheadCommit<'_>,
+    theme: Theme,
+) -> color_eyre::eyre::Result<()> {
     let commit = &ahead.commit;
     let short = commit
         .id()
@@ -78,19 +82,20 @@ pub fn print_commit(ahead: &git::AheadCommit<'_>, theme: Theme) -> color_eyre::e
     let yellow = palette::fg(Color::Ansi(AnsiColor::Yellow));
     let dim = palette::fg(Color::Ansi256(Ansi256Color(8)));
 
-    println!(
+    writeln!(
+        out,
         "  {short} {summary} {bullet} {when}",
         short = palette::paint(yellow, &short),
         summary = format_summary(summary, theme),
         bullet = palette::paint(dim, "•"),
         when = palette::paint(dim, &when),
-    );
+    )?;
 
     let icons = tree::render(&ahead.changed_files, theme);
     if !icons.is_empty() {
-        println!("{icons}");
+        writeln!(out, "{icons}")?;
     }
-    println!();
+    writeln!(out)?;
 
     Ok(())
 }
