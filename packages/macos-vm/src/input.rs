@@ -54,8 +54,20 @@ pub fn click(view: &VZVirtualMachineView, x: f64, y: f64) {
     send_mouse(view, NSEventType::LeftMouseUp, x, y, 0.0);
 }
 
+/// Move the guest cursor to view point `(x, y)` (`AppKit` window coordinates,
+/// bottom-left origin) without pressing a button. The screen-coordinate pointing
+/// device maps the location to the guest's absolute cursor, so the guest's own
+/// pointer jumps there. Lets a caller hover (revealing hover-state UI) and
+/// confirm a target before committing a click. Must run on the main thread.
+pub fn mouse_move(view: &VZVirtualMachineView, x: f64, y: f64) {
+    send_mouse(view, NSEventType::MouseMoved, x, y, 0.0);
+}
+
 fn send_mouse(view: &VZVirtualMachineView, event_type: NSEventType, x: f64, y: f64, pressure: f32) {
     let window_number = view.window().map_or(0, |window| window.windowNumber());
+    // A button press carries click count 1; a bare move (no button) is 0, which
+    // is what AppKit and the HID stack expect for a `mouseMoved:`.
+    let click_count = if event_type == NSEventType::MouseMoved { 0 } else { 1 };
     let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
         event_type,
         NSPoint::new(x, y),
@@ -64,14 +76,14 @@ fn send_mouse(view: &VZVirtualMachineView, event_type: NSEventType, x: f64, y: f
         window_number,
         None,
         0,
-        1,
+        click_count,
         pressure,
     );
     let Some(event) = event else { return };
-    if event_type == NSEventType::LeftMouseDown {
-        view.mouseDown(&event);
-    } else {
-        view.mouseUp(&event);
+    match event_type {
+        NSEventType::LeftMouseDown => view.mouseDown(&event),
+        NSEventType::MouseMoved => view.mouseMoved(&event),
+        _ => view.mouseUp(&event),
     }
 }
 

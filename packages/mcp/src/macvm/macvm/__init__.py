@@ -102,10 +102,14 @@ __all__ = [
     "boot_linux_gui",
     "drive",
     "drive_linux",
+    "grid",
     "info",
     "install",
+    "login",
     "provision",
     "run_app",
+    "run_binary",
+    "run_oci",
     "screenshot",
     "screenshot_many",
     "stage_binary",
@@ -180,10 +184,12 @@ def stage_binary(
     ``@loader_path`` reference, then ad-hoc re-signs the result. It verifies no
     ``/nix/store`` path remains and raises :class:`MacVmError` otherwise.
 
-    With ``out`` omitted, the staged binary is written to a temp directory under
-    the same basename and that path is returned; pass ``out`` to choose the
-    location (its parent directory is created). Use the staged directory as the
-    ``app_dir`` for :func:`run_app` so a guest can run the app.
+    Returns the staged binary's path, which is a *file*, not a directory. With
+    ``out`` omitted it is written under a fresh temp directory using the same
+    basename; pass ``out`` to choose the path (its parent is created). Note that
+    :func:`run_app` shares a *directory*, so to run a staged binary either share
+    its parent directory or, simpler, use :func:`run_binary`, which stages and
+    runs in one call.
     """
     src = pathlib.Path(path)
     if out is None:
@@ -225,13 +231,25 @@ def provision(
 
     A host-side disk edit (the guest must not be running): it attaches the
     bundle's ``disk.img``, marks system and per-user Setup Assistant complete for
-    ``user`` (the account created during :func:`install`), and detaches. With
-    ``autologin`` it also enables password-less login for ``user`` (``password``
-    is only used to encode the auto-login secret; default empty). The password is
-    passed to the binary over stdin, never as a command-line argument, so it does
-    not appear in the process table. Raises :class:`MacVmError` on failure,
-    including if the image already appears in use.
-    """
+    ``user`` (the account created during :func:`install`), and detaches.
+
+    With ``autologin`` the guest boots straight to ``user``'s desktop with no
+    password prompt. This is the deterministic path, and it requires the *real*
+    account password (the one set for ``user`` during install/Setup Assistant):
+    macOS encodes it into ``/etc/kcpassword`` and auto-login fails to a login
+    window if it does not match (a blank password never auto-logs in). The
+    password is passed over stdin, never as an argument, so it stays out of the
+    process table.
+
+    The credential is also recorded in ``<bundle>/login.json`` (mode 0600) so a
+    later session can drive the guest with :func:`login` without rediscovering
+    it. Raises :class:`MacVmError` on failure, including if the image already
+    appears in use, or if ``autologin`` is set without a password."""
+    if autologin and not password:
+        raise MacVmError(
+            "autologin needs the account's real password (a blank password does "
+            "not auto-log in); pass password=..."
+        )
     args = [
         _binary(),
         "provision",
@@ -260,6 +278,82 @@ def provision(
         raise MacVmError(f"provision timed out after {timeout}s") from exc
     if result.returncode != 0:
         raise MacVmError(f"provision failed: {result.stderr.strip()}")
+    # Record the credential beside the bundle so `login`/`run_app` can recover it
+    # without spelunking. Only when a password was given (autologin path).
+    if password:
+        _write_bundle_login(bundle, user, password)
+
+
+def _bundle_login_path(bundle: str | os.PathLike) -> pathlib.Path:
+    return pathlib.Path(os.fspath(bundle)) / "login.json"
+
+
+def _write_bundle_login(bundle: str | os.PathLike, user: str, password: str) -> None:
+    """Persist ``{user, password}`` to ``<bundle>/login.json`` (mode 0600)."""
+    import json
+
+    path = _bundle_login_path(bundle)
+    path.write_text(json.dumps({"user": user, "password": password}))
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _bundle_login(bundle: str | os.PathLike | None) -> dict[str, str] | None:
+    """Read ``<bundle>/login.json`` if present, else ``None``."""
+    if bundle is None:
+        return None
+    import json
+
+    path = _bundle_login_path(bundle)
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def login(
+    driver: "Driver",
+    password: str | None = None,
+    *,
+    field: tuple[float, float] = (0.5, 0.83),
+    settle: float = 8.0,
+) -> None:
+    """Log a guest in at the macOS login window through an open :class:`Driver`.
+
+    For a bundle that is *not* set up for auto-login (see :func:`provision`), call
+    this once the guest has reached the login window: it focuses the password
+    field at fraction ``field``, types the password, presses Return, waits
+    ``settle`` for the desktop, and verifies the screen changed. ``password``
+    falls back to ``<bundle>/login.json`` (written by :func:`provision`). Raises
+    :class:`MacVmError` if no password is available or the screen did not change
+    (wrong password, or the guest was not at the login window).
+
+    This types the password, so only call it when the guest is actually at the
+    login window. A provisioned auto-login bundle reaches the desktop on its own
+    and needs no :func:`login` call."""
+    if password is None:
+        creds = _bundle_login(driver._bundle)
+        password = creds.get("password") if creds else None
+    if not password:
+        raise MacVmError(
+            "no password for login (pass password=, or provision the bundle so "
+            "login.json records it)"
+        )
+    before = driver.shot()
+    driver.click(*field)
+    driver.type_(password)
+    driver.key("return")
+    if settle > 0:
+        driver.wait(settle)
+    after = driver.shot()
+    if not _frames_differ(before, after, 0.02):
+        raise MacVmError(
+            "login did not change the screen (wrong password, or the guest was "
+            "not at the login window)"
+        )
 
 
 def screenshot(
@@ -551,6 +645,8 @@ class Driver:
         self._shares = list(shares) if shares else []
         self.timeout = timeout
         self._proc: subprocess.Popen[str] | None = None
+        # Cached captured-framebuffer size in pixels (see `size()`).
+        self._size: tuple[int, int] | None = None
 
     def __enter__(self) -> "Driver":
         bin_path = _binary()
@@ -678,6 +774,80 @@ class Driver:
         (resolution-independent, both in ``0..1``)."""
         return self.send(f"click {fx} {fy}")
 
+    def move(self, fx: float, fy: float) -> str:
+        """Move the pointer to fraction ``(fx, fy)`` of the display (top-left,
+        both ``0..1``) without clicking, so hover-state UI appears and a target
+        can be confirmed before committing a :meth:`click`."""
+        return self.send(f"move {fx} {fy}")
+
+    # `hover` reads better than `move` at some call sites; same command.
+    hover = move
+
+    def cursor(self) -> tuple[float, float]:
+        """Return the last pointer fraction this driver set with
+        :meth:`click`/:meth:`move` (top-left, ``0..1``). The pointer is absolute,
+        so this is the driver's own record, not a guest read-back. Raises
+        :class:`MacVmError` if no pointer command has run yet."""
+        ack = self.send("cursor")  # 'ok cursor FX FY'
+        parts = ack.split()
+        return (float(parts[2]), float(parts[3]))
+
+    def size(self) -> tuple[int, int]:
+        """Return the captured framebuffer size in pixels ``(width, height)``,
+        cached after the first call. The authoritative size for pixel<->fraction
+        conversion (the configured and actual display sizes can differ)."""
+        if self._size is None:
+            ack = self.send("size")  # 'ok size W H'
+            parts = ack.split()
+            self._size = (int(parts[2]), int(parts[3]))
+        return self._size
+
+    def show_cursor(self, on: bool = True) -> str:
+        """Toggle drawing a pointer marker into subsequent :meth:`shot`s. Off by
+        default, so a plain ``shot`` stays a faithful framebuffer capture."""
+        return self.send(f"cursor-show {'on' if on else 'off'}")
+
+    def click_px(self, x: int, y: int) -> str:
+        """Left-click at pixel ``(x, y)`` of the captured framebuffer (top-left).
+        Converts to a fraction via :meth:`size`."""
+        w, h = self.size()
+        return self.click(x / w, y / h)
+
+    def move_px(self, x: int, y: int) -> str:
+        """Move the pointer to pixel ``(x, y)`` of the captured framebuffer
+        (top-left) without clicking. Converts to a fraction via :meth:`size`."""
+        w, h = self.size()
+        return self.move(x / w, y / h)
+
+    def click_and_verify(
+        self,
+        fx: float,
+        fy: float,
+        *,
+        settle: float = 0.4,
+        min_changed: float = 0.002,
+    ) -> bool:
+        """Click at ``(fx, fy)`` and report whether the display changed.
+
+        Positions the pointer first, captures, clicks, waits ``settle`` for the
+        UI to react, captures again, and returns ``True`` if at least
+        ``min_changed`` (fraction of pixels) differ notably. Turns a missed click
+        (a wrong target, a no-op) into an observable ``False`` instead of a silent
+        nothing. This is a heuristic: it moves the pointer to the target before
+        both captures so the cursor is identical in each (otherwise a moved cursor
+        always reads as change), but a screensaver, idle-dim, or an unrelated
+        animation can still register; tune ``min_changed`` for the surface."""
+        # Move first so the pointer sits at the target in both frames; only the
+        # click's effect differs, not the cursor's position.
+        self.move(fx, fy)
+        self.wait(0.15)
+        before = self.shot()
+        self.click(fx, fy)
+        if settle > 0:
+            self.wait(settle)
+        after = self.shot()
+        return _frames_differ(before, after, min_changed)
+
     def wait(self, seconds: float) -> str:
         """Sleep ``seconds`` in the guest driver (fractional allowed)."""
         return self.send(f"wait {seconds}")
@@ -749,6 +919,7 @@ def run_app(
     seconds: float = 15,
     shares_tag: str = "auto",
     boot_seconds: float = 30,
+    login_password: str | None = None,
     timeout: float = 300,
 ) -> "Image.Image":
     """Share a host directory into a guest, launch a command in it, and return a
@@ -770,10 +941,13 @@ def run_app(
 
     ``boot_seconds`` is how long to wait after boot before driving (the guest
     must reach the desktop); ``seconds`` is how long to wait after launching the
-    command before capturing. ``timeout`` bounds the whole driver session. The
-    guest must already be provisioned to a logged-in desktop (see
-    :func:`provision`). Raises :class:`MacVmError` on failure, including if
-    ``command`` contains a newline.
+    command before capturing. ``timeout`` bounds the whole driver session.
+
+    The guest must reach a logged-in desktop. A bundle provisioned with
+    ``autologin`` does this on its own; for a bundle that stops at the login
+    window, pass ``login_password`` (or persist it via :func:`provision`) and
+    this logs in first via :func:`login`. Raises :class:`MacVmError` on failure,
+    including if ``command`` contains a newline.
     """
     # A newline in `command` would split the driver's `type` line into two stdin
     # commands, desyncing every subsequent ack. Reject it up front rather than
@@ -792,9 +966,12 @@ def run_app(
         mount = ""
 
     with Driver(bundle, shares=[share_spec], timeout=timeout) as d:
-        # Let the guest reach the desktop before driving it.
+        # Let the guest reach the desktop (or the login window) before driving it.
         if boot_seconds > 0:
             d.wait(boot_seconds)
+        # A non-autologin bundle stops at the login window; log in first.
+        if login_password is not None:
+            login(d, login_password)
         # Open Spotlight, search for Terminal, launch it.
         d.press_down("cmd")
         d.key("space")
@@ -819,6 +996,137 @@ def run_app(
         return d.shot()
 
 
+def run_binary(
+    bundle: str | os.PathLike,
+    host_binary: str | os.PathLike,
+    args: str = "",
+    *,
+    name: str | None = None,
+    **run_app_kwargs: object,
+) -> "Image.Image":
+    """Stage a nix-built macOS binary guest-portable, run it in the guest, and
+    return a frame of the display: :func:`stage_binary` + :func:`run_app` in one
+    call.
+
+    :func:`stage_binary` writes a single *file*, but :func:`run_app` shares a
+    *directory*; this stages ``host_binary`` into a fresh directory, shares that
+    directory in, and launches the binary from it in the background, so a caller
+    never has to juggle the file-vs-directory handoff. ``args`` is appended to the
+    launch command (already shell-safe for the binary path; quote your own args).
+    ``name`` overrides the in-guest binary name (default: the host basename).
+    Extra keyword arguments pass through to :func:`run_app` (``seconds``,
+    ``boot_seconds``, ``timeout``). Raises :class:`MacVmError` on failure."""
+    src = pathlib.Path(os.fspath(host_binary))
+    app_name = name or src.name
+    # The shared directory must outlive staging but not the call: the guest only
+    # needs it while the Driver session in run_app is alive, so clean it after.
+    staged_dir = tempfile.mkdtemp(prefix="ix-macvm-app-")
+    try:
+        stage_binary(str(src), str(pathlib.Path(staged_dir) / app_name))
+        launch = _shell_quote(f"./{app_name}")
+        if args:
+            launch += f" {args}"
+        # Background it (and drop its output) so the guest shell stays responsive
+        # while we wait for the app to render, then capture.
+        command = f"{launch} >/tmp/ix-run-binary.log 2>&1 &"
+        return run_app(bundle, staged_dir, command, **run_app_kwargs)  # type: ignore[arg-type]
+    finally:
+        shutil.rmtree(staged_dir, ignore_errors=True)
+
+
+def run_oci(
+    disk: str | os.PathLike,
+    *,
+    kernel: str | os.PathLike | None = None,
+    initramfs: str | os.PathLike | None = None,
+    cmdline: str = "console=hvc0",
+    gui: bool = False,
+    seconds: int | None = None,
+    require_aarch64: bool = True,
+    **kwargs: object,
+) -> "str | Image.Image":
+    """Boot a flattened OCI / Linux guest in the VZ Linux VM, the generic entry
+    point over :func:`boot_linux` (headless) and :func:`boot_linux_gui` (GUI).
+
+    VZ runs *same-architecture* Linux guests only, so this host (aarch64) boots
+    aarch64 images; ``require_aarch64`` guards that with a typed error rather than
+    a confusing boot failure (set it false only if you know what you are doing).
+
+    - ``gui=False`` (default): headless boot of a flattened rootfs ``disk`` as
+      ``/dev/vda``. Needs ``kernel`` and ``initramfs`` (an initramfs that mounts
+      the rootfs, e.g. the artifacts built by the ``macos-vm`` package's
+      ``examples/oci-boot.sh``). Returns the guest serial console as ``str``.
+    - ``gui=True``: boot an EFI GUI ``disk`` (e.g. the ``vz-linux-guest`` image)
+      and return a ``PIL.Image`` of the framebuffer.
+
+    Turning an OCI *reference* into the rootfs (plus kernel/initramfs) is the
+    flatten step the package deliberately leaves to ``oci-boot.sh`` / a future
+    ``.#vm-run`` (see ``docs/oci-guest.md``); this owns the boot. Extra keyword
+    arguments pass through to the underlying boot function. Raises
+    :class:`MacVmError` on an arch mismatch or a missing kernel/initramfs."""
+    import platform
+
+    if require_aarch64 and not platform.machine().lower().startswith(("arm64", "aarch64")):
+        raise MacVmError(
+            f"run_oci needs an aarch64 host (this is {platform.machine()}); VZ runs "
+            "same-architecture Linux guests"
+        )
+    extra = dict(kwargs)
+    if seconds is not None:
+        extra["seconds"] = seconds
+    if gui:
+        return boot_linux_gui(disk, **extra)  # type: ignore[arg-type]
+    if kernel is None or initramfs is None:
+        raise MacVmError(
+            "headless run_oci needs kernel= and initramfs= (an initramfs that "
+            "mounts the rootfs as /dev/vda); see the macos-vm package's "
+            "examples/oci-boot.sh"
+        )
+    return boot_linux(kernel, initramfs, disks=[disk], cmdline=cmdline, **extra)  # type: ignore[arg-type]
+
+
 def _shell_quote(path: str) -> str:
     """Single-quote a path for a guest POSIX shell (the driver types it as-is)."""
     return "'" + path.replace("'", "'\\''") + "'"
+
+
+def _frames_differ(before: "Image.Image", after: "Image.Image", min_changed: float) -> bool:
+    """Whether two frames differ in at least ``min_changed`` (fraction) of pixels.
+
+    A per-pixel threshold first (ignoring tiny noise like antialiasing or a
+    blinking caret), then a histogram count of the pixels that crossed it.
+    """
+    from PIL import ImageChops
+
+    a = before.convert("RGB")
+    b = after.convert("RGB")
+    if a.size != b.size:
+        b = b.resize(a.size)
+    diff = ImageChops.difference(a, b).convert("L").point(lambda p: 255 if p > 24 else 0)
+    changed = diff.histogram()[-1]  # count of pixels at 255 (crossed the threshold)
+    total = diff.width * diff.height
+    return total > 0 and changed / total >= min_changed
+
+
+def grid(image: "Image.Image", n: int = 10) -> "Image.Image":
+    """Return a copy of ``image`` with a labelled fraction grid drawn on top.
+
+    A calibration aid for clicking: every line is annotated with its ``0..1``
+    fraction (the same coordinate space :class:`Driver` ``click``/``move`` take),
+    so a target's fraction can be read straight off a captured frame. ``n`` is
+    the number of divisions per axis (default 10, i.e. every 0.1)."""
+    from PIL import ImageDraw
+
+    out = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(out)
+    w, h = out.size
+    line = (255, 40, 40)
+    for i in range(1, n):
+        f = i / n
+        x = round(f * w)
+        y = round(f * h)
+        draw.line([(x, 0), (x, h)], fill=line, width=1)
+        draw.line([(0, y), (w, y)], fill=line, width=1)
+        draw.text((x + 2, 2), f"{f:.1f}", fill=line)
+        draw.text((2, y + 2), f"{f:.1f}", fill=line)
+    return out

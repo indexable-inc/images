@@ -8,13 +8,20 @@
 //! - `key <name> [count]` press a named key `count` times (default 1)
 //! - `down <name>` / `up <name>` hold / release a key (e.g. a modifier)
 //! - `type <text>` type the rest of the line as characters
+//! - `click <fx> <fy>` left-click at fraction `(fx, fy)` of the display (top-left)
+//! - `move <fx> <fy>` move the pointer there without clicking (hover)
+//! - `cursor` report the last pointer fraction set by `click`/`move`
+//! - `size` report the captured framebuffer size in pixels (`ok size <w> <h>`)
+//! - `cursor-show <on|off>` draw a marker at the pointer in subsequent `shot`s
 //! - `wait <seconds>` sleep (fractional seconds allowed)
 //! - `shot <path>` screenshot the guest framebuffer to a PNG
 //! - `quit` stop the VM and exit
 //!
 //! Each command prints a one-line `ok ...` / `err ...` acknowledgement to stdout
 //! (flushed), so a caller can drive the guest in lockstep. Names accepted by
-//! `key`/`down`/`up` are in [`crate::input::named_key`].
+//! `key`/`down`/`up` are in [`crate::input::named_key`]. `click`/`move`
+//! fractions are clamped-checked to `0..=1`; the pointer is absolute, so the
+//! reported `cursor` is the last fraction this driver set, not a guest read-back.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -28,7 +35,7 @@ use objc2_virtualization::VZVirtualMachineView;
 
 use crate::imp::Error;
 use crate::input;
-use crate::macguest::{DirShare, capture, start_guest_offscreen};
+use crate::macguest::{DirShare, capture, frame_size as guest_frame_size, start_guest_offscreen};
 
 /// Gap between a key's down and up, and after its release, so the guest HID
 /// stack registers discrete presses instead of coalescing them. The sleeps run
@@ -60,7 +67,10 @@ pub(crate) fn drive_view(mtm: MainThreadMarker, view: Retained<VZVirtualMachineV
     // driver thread; the view is not `Send`, so we only re-borrow it on the main
     // queue, where it is valid.
     let view_ptr = Retained::into_raw(view) as usize;
-    eprintln!("macos-vm: driving guest; stdin commands: key/down/up/type/click/wait/shot/quit");
+    eprintln!(
+        "macos-vm: driving guest; stdin commands: \
+         key/down/up/type/click/move/cursor/size/cursor-show/wait/shot/quit"
+    );
     std::thread::spawn(move || run_commands(view_ptr));
 
     // The view needs the `AppKit` run loop to build its layer tree and receive
@@ -68,10 +78,21 @@ pub(crate) fn drive_view(mtm: MainThreadMarker, view: Retained<VZVirtualMachineV
     NSApplication::sharedApplication(mtm).run();
 }
 
+/// Mutable driver state carried across commands: the last pointer position this
+/// driver set (fractions, top-left), and whether `shot` draws a marker there.
+/// The pointer is absolute, so this is the source of truth for `cursor`; the
+/// guest is never queried back.
+#[derive(Default)]
+struct State {
+    last_cursor: Option<(f64, f64)>,
+    show_cursor: bool,
+}
+
 /// Read and execute commands until stdin closes or `quit` exits the process.
 fn run_commands(view_ptr: usize) -> ! {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
+    let mut state = State::default();
     // `lines()` yields each line without its trailing newline; trailing spaces
     // are preserved so `type` can emit them.
     for line in stdin.lock().lines() {
@@ -80,15 +101,35 @@ fn run_commands(view_ptr: usize) -> ! {
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        let ack = execute(view_ptr, trimmed);
+        let ack = execute(view_ptr, trimmed, &mut state);
         let _ = writeln!(stdout, "{ack}");
         let _ = stdout.flush();
     }
     std::process::exit(0);
 }
 
+/// Parse a `<fx> <fy>` pair of display fractions, validating both are finite and
+/// within `0..=1` (the pointer is absolute, so an out-of-range fraction would
+/// land off-screen and silently no-op).
+fn parse_fraction_pair(
+    parts: &mut std::str::SplitWhitespace<'_>,
+    verb: &str,
+) -> Result<(f64, f64), String> {
+    let (Some(fx), Some(fy)) = (parts.next(), parts.next()) else {
+        return Err(format!("err {verb} needs two fractions 0..1 (from top-left)"));
+    };
+    let (Ok(fx), Ok(fy)) = (fx.parse::<f64>(), fy.parse::<f64>()) else {
+        return Err(format!("err {verb} fractions must be numbers 0..1 (from top-left)"));
+    };
+    if !(fx.is_finite() && fy.is_finite()) || !(0.0..=1.0).contains(&fx) || !(0.0..=1.0).contains(&fy)
+    {
+        return Err(format!("err {verb} fractions must be within 0..1 (from top-left)"));
+    }
+    Ok((fx, fy))
+}
+
 /// Execute one command line, returning its acknowledgement.
-fn execute(view_ptr: usize, trimmed: &str) -> String {
+fn execute(view_ptr: usize, trimmed: &str, state: &mut State) -> String {
     if let Some(text) = trimmed.strip_prefix("type ") {
         let (typed, skipped) = type_text(view_ptr, text);
         return if skipped == 0 {
@@ -99,7 +140,10 @@ fn execute(view_ptr: usize, trimmed: &str) -> String {
     }
     if let Some(path) = trimmed.strip_prefix("shot ") {
         let path = Path::new(path.trim());
-        return match shot(view_ptr, path) {
+        // Draw the pointer marker only when asked, so the default `shot` stays a
+        // faithful capture of the guest framebuffer (existing callers unchanged).
+        let cursor = state.show_cursor.then_some(state.last_cursor).flatten();
+        return match shot(view_ptr, path, cursor) {
             Ok(bytes) => format!("ok shot {} {bytes}", path.display()),
             Err(error) => format!("err shot {error}"),
         };
@@ -111,23 +155,53 @@ fn execute(view_ptr: usize, trimmed: &str) -> String {
     };
     match command {
         "click" => {
-            let (Some(fx), Some(fy)) = (parts.next(), parts.next()) else {
-                return "err click needs two fractions 0..1 (from top-left)".to_owned();
-            };
-            let (Ok(fx), Ok(fy)) = (fx.parse::<f64>(), fy.parse::<f64>()) else {
-                return "err click fractions must be numbers 0..1 (from top-left)".to_owned();
+            let (fx, fy) = match parse_fraction_pair(&mut parts, "click") {
+                Ok(pair) => pair,
+                Err(message) => return message,
             };
             on_main(view_ptr, move |view| {
-                let bounds = view.bounds();
-                let x = fx * bounds.size.width;
-                // Fraction is from the top; AppKit window coordinates are
-                // bottom-left origin, so flip y.
-                let y = fy.mul_add(-bounds.size.height, bounds.size.height);
+                let (x, y) = view_point(view, fx, fy);
                 input::click(view, x, y);
             });
+            state.last_cursor = Some((fx, fy));
             std::thread::sleep(KEY_GAP_AFTER);
             format!("ok click {fx} {fy}")
         }
+        "move" => {
+            let (fx, fy) = match parse_fraction_pair(&mut parts, "move") {
+                Ok(pair) => pair,
+                Err(message) => return message,
+            };
+            on_main(view_ptr, move |view| {
+                let (x, y) = view_point(view, fx, fy);
+                input::mouse_move(view, x, y);
+            });
+            state.last_cursor = Some((fx, fy));
+            std::thread::sleep(KEY_GAP_AFTER);
+            format!("ok move {fx} {fy}")
+        }
+        "cursor" => match state.last_cursor {
+            Some((fx, fy)) => format!("ok cursor {fx} {fy}"),
+            None => "err cursor unknown (no click/move yet)".to_owned(),
+        },
+        "size" => {
+            let size = frame_size(view_ptr);
+            match size {
+                Some((w, h)) => format!("ok size {w} {h}"),
+                None => "err size guest framebuffer not available yet".to_owned(),
+            }
+        }
+        "cursor-show" => match parts.next() {
+            Some("on") => {
+                state.show_cursor = true;
+                "ok cursor-show on".to_owned()
+            }
+            Some("off") => {
+                state.show_cursor = false;
+                "ok cursor-show off".to_owned()
+            }
+            _ => "err cursor-show needs on|off".to_owned(),
+        },
         "key" => {
             let Some(name) = parts.next() else {
                 return "err key needs a name".to_owned();
@@ -211,15 +285,40 @@ fn press_key(view_ptr: usize, code: u16, shift: bool) {
 }
 
 /// Screenshot the guest framebuffer on the main queue and return bytes written.
-fn shot(view_ptr: usize, path: &Path) -> Result<usize, Error> {
+/// `cursor` (display fractions, top-left) draws a pointer marker into the PNG
+/// when set, so a caller can see where the driver's pointer is.
+fn shot(view_ptr: usize, path: &Path, cursor: Option<(f64, f64)>) -> Result<usize, Error> {
     let mut result: Result<usize, Error> = Err(Error::NoFramebuffer);
     // `exec_sync` blocks until the block finishes, so borrowing `result` and
     // `path` across the queue boundary is sound (no `'static` needed).
     DispatchQueue::main().exec_sync(|| {
         let view: &VZVirtualMachineView = unsafe { &*(view_ptr as *const VZVirtualMachineView) };
-        result = capture(view, path);
+        result = capture(view, path, cursor);
     });
     result
+}
+
+/// The captured framebuffer size in pixels, read on the main queue. `None` until
+/// the guest has rendered a frame.
+fn frame_size(view_ptr: usize) -> Option<(usize, usize)> {
+    let mut size = None;
+    DispatchQueue::main().exec_sync(|| {
+        let view: &VZVirtualMachineView = unsafe { &*(view_ptr as *const VZVirtualMachineView) };
+        size = guest_frame_size(view);
+    });
+    size
+}
+
+/// Map display fractions `(fx, fy)` (top-left origin, `0..=1`) to a point in the
+/// view's `AppKit` window coordinates (bottom-left origin). Must run on the main
+/// thread (touches the view).
+fn view_point(view: &VZVirtualMachineView, fx: f64, fy: f64) -> (f64, f64) {
+    let bounds = view.bounds();
+    let x = fx * bounds.size.width;
+    // Fraction is from the top; AppKit window coordinates are bottom-left origin,
+    // so flip y.
+    let y = fy.mul_add(-bounds.size.height, bounds.size.height);
+    (x, y)
 }
 
 /// Run `f` on the main queue with a re-borrow of the leaked view, blocking until
