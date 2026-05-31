@@ -68,6 +68,11 @@ let
   # consumers as `homeModules.portable-services` from the flake.
   portableServices = import ./portable-services.nix { inherit lib; };
 
+  # Declarative-but-writable JSON config files (last-applied 3-way merge for
+  # files an app rewrites at runtime). Also a home-manager module, not a NixOS
+  # one, so it stays outside `modules/`. Exposed as `homeModules.mutable-json`.
+  mutableJson = import ./mutable-json.nix { inherit lib; };
+
   # Flat list of module paths from the auto-discovered registry under
   # `modules/`. Pulled in unconditionally so every option is in scope; each
   # module stays inert until its `enable` flag is set.
@@ -321,6 +326,7 @@ let
       mkMinecraftLoader
       mkMinecraftNbtFormat
       mkMinecraftSyncManaged
+      mutableJson
       relativePath
       rustWorkspace
       rustWorkspaceFor
@@ -390,6 +396,7 @@ let
       discoverModules
       nixosModules
       portableServices
+      mutableJson
       exampleFleetsFor
       artifacts
       agentContext

@@ -148,6 +148,9 @@
         # Workstation-facing home-manager module: declare a service once, get a
         # native launchd agent on macOS and native systemd user units on Linux.
         portable-services = ix.portableServices.homeModule;
+        # Declarative-but-writable JSON config files (last-applied 3-way merge),
+        # for config an app rewrites at runtime. See lib/mutable-json.nix.
+        mutable-json = ix.mutableJson.homeModule;
         # Personal-but-shareable workstation module for github:andrewgazelka: the
         # ix.dev downtime watcher + boss bar overlay + the shared say-detached
         # sound helper, all as portable services. Closed over the per-system
