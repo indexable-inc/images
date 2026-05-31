@@ -11,5 +11,17 @@
     "mixedbread-search@mixedbread-skills": true,
     "mxbai-cli@mixedbread-skills": true,
     "mixedbread-parsing@mixedbread-skills": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/agent-instructions.sh claude-md"
+          }
+        ]
+      }
+    ]
   }
 }

@@ -127,7 +127,24 @@ let
     meta.description = "Copy git-ignored files into an ix shell workspace";
   };
 
-  agentsMd = repoPackages.agents-md;
+  # Always-on instruction documents. Forcing either string evaluates the
+  # `agent-context` always-on cap assertion (see lib/agent-context.nix).
+  agentContextClaudeMd = pkgs.writeText "CLAUDE.md" ix.agentContext.alwaysDoc;
+  agentContextCodexMd = pkgs.writeText "AGENTS.md" ix.agentContext.alwaysDoc;
+
+  # One link farm holding every handwritten skill plus one generated skill per
+  # `disclosure: progressive` section, ready to symlink into `.claude/skills`.
+  agentContextProgressiveSkills = ix.agentContext.mkProgressiveSkills { inherit pkgs; };
+  agentContextSkillCollisions = lib.intersectLists ix.skills.allSkills (
+    lib.attrNames agentContextProgressiveSkills
+  );
+  agentContextSkills =
+    assert lib.assertMsg (agentContextSkillCollisions == [ ])
+      "agent-context: progressive section names collide with handwritten skills: ${lib.concatStringsSep ", " agentContextSkillCollisions}";
+    ix.skills.mkSkillsDir {
+      inherit pkgs;
+      extraSkills = agentContextProgressiveSkills;
+    };
 
   mcSource = ix.writeNushellApplication pkgs {
     name = "mc-source";
@@ -386,6 +403,9 @@ in
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
       update-sounds = updateSounds;
+      claude-md = agentContextClaudeMd;
+      codex-md = agentContextCodexMd;
+      skills = agentContextSkills;
     }
     // repoFlakePackages
     // examplePackages
@@ -401,8 +421,14 @@ in
     in
     {
       inherit (tests) eval;
-      agents-md = pkgs.runCommand "agents-md-check" { nativeBuildInputs = [ agentsMd ]; } ''
-        agents-md --check ${paths.root}
+      # Instruction files are not committed; they are rendered live by the
+      # SessionStart hook. This gate forces the rendered always-on documents
+      # (which evaluates the always-on char cap assertion) and the combined
+      # skills link farm (which evaluates the name-collision assertion) to build.
+      agent-context = pkgs.runCommand "agent-context-check" { } ''
+        test -s ${agentContextClaudeMd}
+        test -s ${agentContextCodexMd}
+        test -d ${agentContextSkills}
         mkdir -p "$out"
       '';
       # Offline schema gate for the loader manifests. `deepSeq` forces

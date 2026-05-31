@@ -82,7 +82,7 @@
       # lib/per-system.nix have a single source of truth.
       paths = {
         root = ./.;
-        agentsMd = ./agents-md;
+        agentContext = ./agent-context;
         skills = ./skills;
         images = ./images;
         modules = ./modules;

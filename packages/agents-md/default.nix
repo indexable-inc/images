@@ -8,7 +8,7 @@ let
     binary = "agents-md";
     meta.mainProgram = "agents-md";
   };
-  package = ix.agentsMd.mkApp {
+  package = ix.agentContext.mkApp {
     inherit pkgs;
     binary = unwrapped;
   };

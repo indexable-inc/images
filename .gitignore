@@ -52,5 +52,16 @@ __pycache__/
 # Claude Code per-machine overrides
 .claude/settings.local.json
 
+# Agent instruction files are rendered live by the SessionStart hook
+# (.claude/hooks/agent-instructions.sh) from agent-context/sections, not
+# committed. Preview with `nix build .#claude-md --print-out-paths | xargs cat`.
+/AGENTS.md
+/CLAUDE.md
+
+# Skills are built into a nix-store link farm (the `skills` flake package) and
+# symlinked here by the hook for Claude Code and Codex.
+/.claude/skills
+/.agents/
+
 # macOS
 .DS_Store

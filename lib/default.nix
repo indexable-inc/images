@@ -97,7 +97,7 @@ let
   secrets = import ./secrets.nix {
     inherit lib pkgs writeNushellApplication;
   };
-  agentsMd = import ./agents-md.nix { inherit lib paths; };
+  agentContext = import ./agent-context.nix { inherit lib paths; };
   skills = import ./skills.nix { inherit lib paths; };
   # Shared JetBrains Islands palette (both variants), the single source of truth
   # for syntax color across the repo: the code-highlight crate embeds this JSON
@@ -303,7 +303,7 @@ let
   ixSpecialArgs = {
     inherit
       artifacts
-      agentsMd
+      agentContext
       skills
       buildGradleFatJar
       buildRustPackage
@@ -392,7 +392,7 @@ let
       portableServices
       exampleFleetsFor
       artifacts
-      agentsMd
+      agentContext
       skills
       buildGradleFatJar
       buildJsSite

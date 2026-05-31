@@ -1,0 +1,25 @@
+---
+id: agent-context-progressive
+postedAt: 2026-05-30T21:40:00-07:00
+title: "Agent instructions load progressively as skills"
+tags: [interesting, nix, agents, cli]
+links:
+  - label: agent-context lib
+    href: https://github.com/indexable-inc/index/blob/main/lib/agent-context.nix
+  - label: fragments
+    href: https://github.com/indexable-inc/index/tree/main/agent-context/sections
+---
+
+The contributor guide is no longer one always-on file. Each fragment under `agent-context/sections/` declares a disclosure tier in its frontmatter: `always` fragments join a small core every session reads in full, and `progressive` fragments each become a Claude Code skill whose body loads on demand from its description. There are no committed `AGENTS.md` / `CLAUDE.md` files anymore; a SessionStart hook renders the core live and points `.claude/skills` at a generated link farm.
+
+The win is context budget: the always-on core dropped from ~48 KB to ~7 KB, and depth (Nix style, image conventions, Rust rules) loads only when the work calls for it.
+
+The size of the always-on tier is a build-time invariant. Marking too much `always` fails the build with a clear message instead of silently overflowing Claude Code's per-value context cap.
+
+```bash
+nix build .#claude-md --no-link --print-out-paths | xargs cat   # always-on core
+nix build .#skills    --no-link --print-out-paths | xargs ls    # handwritten + generated skills
+nix run  .#agent-context -- --write                             # write the core to disk (gitignored)
+```
+
+Sibling repos consume `index.lib.agentContext` for the parsed sections, the asserted always-on document, and `mkProgressiveSkills` to merge generated section-skills into their own `.claude/skills`.
