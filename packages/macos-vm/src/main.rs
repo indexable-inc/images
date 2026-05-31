@@ -6,13 +6,11 @@
 //! it and control a VM over IPC. The entitlement lives on *this* signed
 //! process, never on the interpreter.
 //!
-//! v1 surface:
-//!   * `macos-vm info`        — report whether virtualization is available.
-//!   * `macos-vm boot-linux`  — boot a Linux guest from a raw kernel `Image`
-//!                              and initramfs, streaming the guest serial
-//!                              console to stdout. This is the end-to-end smoke
-//!                              path: a real guest reaching userspace proves the
-//!                              binding, the entitlement, and the boot work.
+//! v1 surface. `macos-vm info` reports whether virtualization is available.
+//! `macos-vm boot-linux` boots a Linux guest from a raw kernel `Image` and
+//! initramfs, streaming the guest serial console to stdout. boot-linux is the
+//! end-to-end smoke path: a real guest reaching userspace proves the binding,
+//! the entitlement, and the boot all work.
 //!
 //! The graphics/screenshot, vsock IPC, OCI-disk, and macOS-guest paths build on
 //! the same `VZVirtualMachineConfiguration` and are tracked in the README.
