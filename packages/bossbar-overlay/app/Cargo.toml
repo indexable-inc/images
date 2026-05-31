@@ -34,13 +34,17 @@ dirs = "6"
 glam = "0.30"
 # macOS AppKit, reached through the raw window handle for two things winit has no
 # API for: raise a hovered window above its always-on-top siblings without taking
-# keyboard focus (`-[NSWindow orderFrontRegardless]`), and a right-click context
-# menu to close an overlay (`NSMenu`/`NSMenuItem`/`NSEvent`). These features/version
-# are a subset of what winit 0.30 already enables, so this pulls in no extra crate.
+# keyboard focus (`-[NSWindow orderFrontRegardless]`), a right-click context menu
+# to close an overlay (`NSMenu`/`NSMenuItem`/`NSEvent`), and an always-active
+# `NSTrackingArea` so a background overlay still receives hover. These
+# features/version are a subset of what winit 0.30 already enables, so this pulls
+# in no extra crate.
 objc2 = "0.5"
 # NSString for menu labels, NSThread for `MainThreadMarker`, NSObjCRuntime for
-# `NSObjectProtocol` (declared here rather than relying on winit's feature unification).
+# `NSObjectProtocol`, NSGeometry for `NSRect`/`NSPoint`/`NSSize` (declared here
+# rather than relying on winit's feature unification).
 objc2-foundation = { version = "0.2.2", features = [
+  "NSGeometry",
   "NSObjCRuntime",
   "NSString",
   "NSThread",
@@ -50,6 +54,7 @@ objc2-app-kit = { version = "0.2.2", features = [
   "NSMenu",
   "NSMenuItem",
   "NSResponder",
+  "NSTrackingArea",
   "NSView",
   "NSWindow",
 ] }

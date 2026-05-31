@@ -215,6 +215,9 @@ impl App {
         };
         let attrs = ocwin::float_attributes("Boss Bar", w_px, h_px, Some(pos));
         let window = Arc::new(event_loop.create_window(attrs).ok()?);
+        // Each bar is a background window, so hover (grow + breathe + description
+        // panel) only reaches it through an always-active tracking area.
+        ocwin::enable_background_hover(&window);
         let (surface, config) = self.make_surface(&window);
         window.request_redraw();
         let has_description = !bar.description.trim().is_empty();

@@ -150,3 +150,71 @@ pub fn raise_to_front(window: &Window) {
 /// same-level always-on-top windows, so stacking is left to the compositor.
 #[cfg(not(target_os = "macos"))]
 pub fn raise_to_front(_window: &Window) {}
+
+/// Make `window` react to pointer hover even when another application is the
+/// active one. An overlay runs under the Accessory activation policy, so it is
+/// never the active app and never owns a key window. winit's built-in mouse
+/// tracking uses a legacy `addTrackingRect:`, whose `mouseEntered:` /
+/// `mouseMoved:` / `mouseExited:` only reach the active app's key window, so a
+/// background overlay receives no `CursorEntered`/`CursorMoved`/`CursorLeft` and
+/// its hover state (the whole-book grow, the page-turn arrow highlight, the boss
+/// bar panel) never fires while the user works in another app: the normal case
+/// for a desktop HUD. A button event still reaches a background window, which is
+/// why a click worked while hover did not.
+///
+/// Adding an `NSTrackingArea` with `NSTrackingActiveAlways` to winit's content
+/// view (which already implements those responder methods) routes hover to the
+/// overlay regardless of which app is active. `NSTrackingInVisibleRect` makes the
+/// area track the view's visible rect, so it follows resizes with no re-add.
+#[cfg(target_os = "macos")]
+pub fn enable_background_hover(window: &Window) {
+    use objc2::runtime::AnyObject;
+    use objc2::ClassType;
+    use objc2_app_kit::{NSTrackingArea, NSTrackingAreaOptions, NSView};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: `ns_view` points at the live NSView backing this winit window, kept
+    // alive for the whole call by the caller's `Arc<Window>`. We run on the main
+    // thread inside the winit event loop, as these AppKit types require. The same
+    // pointer yields both the typed `&NSView` (to add the area) and the
+    // `&AnyObject` owner the area records (that view, which handles the events).
+    let view: &NSView = unsafe { appkit.ns_view.cast().as_ref() };
+    let owner: &AnyObject = unsafe { appkit.ns_view.cast().as_ref() };
+
+    // A tracking area with `NSTrackingMouseMoved` delivers moves within it, but a
+    // background window still needs to accept mouse-moved events for them to flow.
+    if let Some(ns_window) = view.window() {
+        ns_window.setAcceptsMouseMovedEvents(true);
+    }
+
+    let options = NSTrackingAreaOptions::NSTrackingMouseEnteredAndExited
+        | NSTrackingAreaOptions::NSTrackingMouseMoved
+        | NSTrackingAreaOptions::NSTrackingActiveAlways
+        | NSTrackingAreaOptions::NSTrackingInVisibleRect;
+    // The rect is ignored because of `NSTrackingInVisibleRect`.
+    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
+    // SAFETY: a standard `NSTrackingArea` init; `view.addTrackingArea` retains the
+    // area, so it outlives this `Retained` going out of scope.
+    let area = unsafe {
+        NSTrackingArea::initWithRect_options_owner_userInfo(
+            NSTrackingArea::alloc(),
+            rect,
+            options,
+            Some(owner),
+            None,
+        )
+    };
+    unsafe { view.addTrackingArea(&area) };
+}
+
+/// Non-macOS: X11/Wayland deliver pointer-motion events to a window without an
+/// active-app gate, so winit's default tracking already drives hover.
+#[cfg(not(target_os = "macos"))]
+pub fn enable_background_hover(_window: &Window) {}

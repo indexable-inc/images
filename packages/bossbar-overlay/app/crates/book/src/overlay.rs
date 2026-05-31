@@ -162,6 +162,10 @@ impl App {
                 return;
             }
         };
+        // The book is an accessory (background) window, so hover only reaches it
+        // with an always-active tracking area; without this the page-turn arrows
+        // never highlight while another app is focused.
+        ocwin::enable_background_hover(&window);
 
         let surface = self
             .instance
