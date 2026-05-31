@@ -120,9 +120,18 @@ struct ScopeArgs {
 
 /// Resolve scope selectors into a server-side metadata filter and the code
 /// scoping mode.
-fn resolve_scope(scope: &ScopeArgs, root: &Path) -> anyhow::Result<(Option<Filter>, CodeScope)> {
+fn resolve_scope(
+    scope: &ScopeArgs,
+    root: &Path,
+) -> anyhow::Result<(Option<Filter>, CodeScope, bool)> {
     let sources = parse_sources(&scope.sources)?;
     let exclude_sources = parse_sources(&scope.not_sources)?;
+
+    // The local checkout is read only when `code` is in scope: no source
+    // selector (every source) or an explicit `code`, and not excluded. A
+    // record-only query (slack/linear/claude_history) skips the worktree walk.
+    let index_code = (sources.is_empty() || sources.iter().any(Source::is_code))
+        && !exclude_sources.iter().any(Source::is_code);
 
     // A repo / all-repos / all-worktrees query is server-filtered: the manifest
     // can only answer "files checked out here", so anything coarser must trust
@@ -154,7 +163,7 @@ fn resolve_scope(scope: &ScopeArgs, root: &Path) -> anyhow::Result<(Option<Filte
         hosts: split_csv(&scope.hosts),
         projects: split_csv(&scope.projects),
     };
-    Ok((build_filter(&spec), code_scope))
+    Ok((build_filter(&spec), code_scope, index_code))
 }
 
 fn parse_sources(values: &[String]) -> anyhow::Result<Vec<Source>> {
@@ -391,11 +400,6 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         .clone()
         .ok_or_else(|| anyhow::anyhow!("a query is required: `search <pattern> [path]`"))?;
     let root = resolve_root(cli.path.as_deref())?;
-    anyhow::ensure!(
-        !at_or_above_home(&root),
-        "refusing to index {} (it is at or above your home directory); run from a project directory",
-        root.display(),
-    );
 
     // Color is decided once on stdout, where results print. `anstream` folds in
     // TTY detection, `NO_COLOR`, and `CLICOLOR_FORCE`, so piped output and
@@ -418,7 +422,17 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
     let store = MixedbreadStore::from_login(base_url.clone()).await?;
 
-    let (filter, code_scope) = resolve_scope(&cli.scope, &root)?;
+    let (filter, code_scope, index_code) = resolve_scope(&cli.scope, &root)?;
+    // Only a code query reads the local checkout, so guard the home-directory
+    // check on it: a record-source query (e.g. `--source slack`) consults the
+    // store alone and must work from any directory, including `$HOME`.
+    if index_code {
+        anyhow::ensure!(
+            !at_or_above_home(&root),
+            "refusing to index {} (it is at or above your home directory); run from a project directory",
+            root.display(),
+        );
+    }
     let query = Query {
         root: &root,
         store_name: &store_name,
@@ -433,6 +447,7 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         include_web: cli.web,
         filters: filter.as_ref(),
         code_scope,
+        index_code,
         index_timeout: INDEX_TIMEOUT,
     };
 
@@ -559,11 +574,6 @@ impl IndexProgress {
 
 async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
     let root = resolve_root(cli.path.as_deref())?;
-    anyhow::ensure!(
-        !at_or_above_home(&root),
-        "refusing to index {} (it is at or above your home directory); run from a project directory",
-        root.display(),
-    );
 
     let palette = Palette::for_stdout();
     let theme = if cli.content {
@@ -581,7 +591,14 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
 
     // Grep reuses the shared `Query` shape; its semantic-only knobs (rerank,
     // agentic, web) are inert here, and the grep pattern travels in `text`.
-    let (filter, code_scope) = resolve_scope(&cli.scope, &root)?;
+    let (filter, code_scope, index_code) = resolve_scope(&cli.scope, &root)?;
+    if index_code {
+        anyhow::ensure!(
+            !at_or_above_home(&root),
+            "refusing to index {} (it is at or above your home directory); run from a project directory",
+            root.display(),
+        );
+    }
     let query = Query {
         root: &root,
         store_name: &store_name,
@@ -596,6 +613,7 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
         include_web: false,
         filters: filter.as_ref(),
         code_scope,
+        index_code,
         index_timeout: INDEX_TIMEOUT,
     };
     let grep_options = GrepOptions {

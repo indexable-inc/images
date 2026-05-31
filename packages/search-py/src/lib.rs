@@ -190,6 +190,8 @@ async fn run_search(args: SearchArgs) -> search_core::Result<Vec<DisplayHit>> {
         include_web: args.include_web,
         filters: None,
         code_scope: CodeScope::WorktreeExact,
+        // The Python/MCP binding searches a checkout (code is always in scope).
+        index_code: true,
         index_timeout: INDEX_TIMEOUT,
     };
 
@@ -233,6 +235,8 @@ async fn run_grep(args: GrepArgs) -> search_core::Result<Vec<DisplayHit>> {
         include_web: false,
         filters: None,
         code_scope: CodeScope::WorktreeExact,
+        // The Python/MCP binding searches a checkout (code is always in scope).
+        index_code: true,
         index_timeout: INDEX_TIMEOUT,
     };
 

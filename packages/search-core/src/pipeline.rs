@@ -45,6 +45,11 @@ pub struct Query<'a> {
     /// How code hits are scoped: worktree-exact (manifest intersection) or
     /// server-filtered (a repo / all-repos query).
     pub code_scope: CodeScope,
+    /// Whether `code` is among the queried sources. When false (e.g. a
+    /// `--source slack` query) the local checkout is never consulted, so the
+    /// worktree walk, manifest persistence, and code sync are all skipped: they
+    /// would be pure latency. Record sources still resolve entirely server-side.
+    pub index_code: bool,
     /// How long to wait for new files to embed before querying anyway.
     pub index_timeout: Duration,
 }
@@ -59,6 +64,15 @@ async fn prepare(
     on_upload: impl Fn(usize, usize) + Send + Sync,
     on_poll: impl Fn(StoreStatus) + Send + Sync,
 ) -> Result<Manifest> {
+    // A query that does not include the `code` source never reads the worktree:
+    // record-source hits (slack/linear/claude_history) are scoped purely by the
+    // server-side metadata filter, not the manifest. Skip the walk + sync
+    // entirely and hand back an empty manifest, so a `--source slack` query in a
+    // large repo does not pay to enumerate and hash the whole checkout.
+    if !query.index_code {
+        return Ok(Manifest::default());
+    }
+
     // Identity of the store this checkout is synced against: the same store name
     // on a different API endpoint is a different store, so both must key the
     // "already synced" gate, or pointing at a fresh instance would be skipped.
