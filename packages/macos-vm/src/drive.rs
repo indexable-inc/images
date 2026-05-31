@@ -184,9 +184,9 @@ fn glide(view_ptr: usize, start: Option<(f64, f64)>, end: (f64, f64)) {
         #[allow(clippy::cast_precision_loss)]
         let t = i as f64 / steps as f64;
         // Smoothstep ease-in-out: accelerate off the start, decelerate into the
-        // target, like a hand moving a pointer.
-        let e = t * t * (3.0 - 2.0 * t);
-        let (fx, fy) = (sx + dx * e, sy + dy * e);
+        // target, like a hand moving a pointer (`3 - 2t` via mul_add).
+        let e = t * t * 2.0f64.mul_add(-t, 3.0);
+        let (fx, fy) = (dx.mul_add(e, sx), dy.mul_add(e, sy));
         on_main(view_ptr, move |view| {
             let (x, y) = view_point(view, fx, fy);
             input::mouse_move(view, x, y);

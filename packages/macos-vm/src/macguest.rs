@@ -252,7 +252,11 @@ fn put_pixel(rgba: &mut [u8], width: usize, height: usize, x: isize, y: isize, r
 /// cross on a 2048px capture vanishes when the shot is viewed at ~600px, so the
 /// arms scale with the display and are several pixels thick. A small centre gap
 /// keeps the exact target pixel readable, and the centre dot marks it precisely.
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap
+)]
 fn draw_cursor_marker(rgba: &mut [u8], width: usize, height: usize, fx: f64, fy: f64) {
     const RED: [u8; 3] = [255, 40, 40];
     const WHITE: [u8; 3] = [255, 255, 255];
