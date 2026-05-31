@@ -36,7 +36,7 @@ pub fn render(files: &[String], theme: Theme) -> String {
     collapse(&mut root);
 
     let mut lines = Vec::new();
-    render_children(&root, theme, "    ", &mut lines);
+    render_children(&root, theme, "  ", &mut lines);
     lines.join("\n")
 }
 
@@ -79,14 +79,15 @@ fn collapse(node: &mut Node) {
     }
 }
 
-/// Render each child of `node`, drawing the `├──`/`└──` connector and recursing
-/// with an extended prefix for grandchildren.
+/// Render each child of `node`, drawing the `├`/`└` connector and recursing with
+/// an extended prefix for grandchildren. Each level adds a 2-column step so deep
+/// trees stay compact.
 fn render_children(node: &Node, theme: Theme, prefix: &str, lines: &mut Vec<String>) {
     let count = node.children.len();
 
     for (index, (name, child)) in node.children.iter().enumerate() {
         let is_last = index == count - 1;
-        let connector = if is_last { "└── " } else { "├── " };
+        let connector = if is_last { "└ " } else { "├ " };
 
         let label = node_label(name, child, theme);
         lines.push(format!(
@@ -100,7 +101,7 @@ fn render_children(node: &Node, theme: Theme, prefix: &str, lines: &mut Vec<Stri
             } else {
                 palette::paint(palette::fg(Color::Rgb(GRAY)), "│")
             };
-            let next_prefix = format!("{prefix}{continuation}    ");
+            let next_prefix = format!("{prefix}{continuation} ");
             render_children(child, theme, &next_prefix, lines);
         }
     }
@@ -170,7 +171,7 @@ mod tests {
             &["src/a.rs".to_string(), "src/b.rs".to_string()],
             Theme::Dark,
         ));
-        assert!(rendered.contains("├── "), "got: {rendered}");
-        assert!(rendered.contains("└── "), "got: {rendered}");
+        assert!(rendered.contains("├ "), "got: {rendered}");
+        assert!(rendered.contains("└ "), "got: {rendered}");
     }
 }
