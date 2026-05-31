@@ -197,11 +197,11 @@ pub fn based(base: &str, left: &str, right: &str) -> Result {
                     right: Region::new(0, r.len(), r.to_owned()),
                 });
             }
-            (Some(_), None, Some(r)) | (None, None, Some(r)) => {
+            (Some(_) | None, None, Some(r)) => {
                 output.push_str(r);
                 output.push('\n');
             }
-            (Some(_), Some(l), None) | (None, Some(l), None) => {
+            (Some(_) | None, Some(l), None) => {
                 output.push_str(l);
                 output.push('\n');
             }

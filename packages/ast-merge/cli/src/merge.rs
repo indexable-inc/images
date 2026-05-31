@@ -83,14 +83,16 @@ pub fn resolve_language(
     language: Option<&str>,
     left: &std::path::Path,
 ) -> Result<Option<ast_merge_langs::Lang>, CliError> {
-    match language {
-        Some(name) => detect_by_name(name)
-            .map(Some)
-            .ok_or_else(|| CliError::UnknownLanguageName {
-                name: name.to_owned(),
-            }),
-        None => Ok(ast_merge_langs::detect(left)),
-    }
+    language.map_or_else(
+        || Ok(ast_merge_langs::detect(left)),
+        |name| {
+            detect_by_name(name)
+                .map(Some)
+                .ok_or_else(|| CliError::UnknownLanguageName {
+                    name: name.to_owned(),
+                })
+        },
+    )
 }
 
 struct TreeInput<'a> {
