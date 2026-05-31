@@ -1,23 +1,26 @@
-//! Headless render to a PNG. This is the overlay's observability hook: it runs
-//! the exact same [`Renderer`] the window uses against an offscreen texture, so
-//! a transparent always-on-top window (which is awkward to screenshot) can
-//! still be verified pixel-for-pixel from a file.
+//! Headless render of an overlay scene to a transparent PNG: the observability
+//! hook. It runs the same [`Gpu`] the live window uses against an offscreen
+//! texture, so an always-on-top transparent window (awkward to screenshot) is
+//! verifiable pixel-for-pixel from a file.
 
 use std::path::Path;
 
-use crate::bars::BossBar;
-use crate::render::Renderer;
+use crate::gpu::{Gpu, Quad};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-/// Render `bars` at `scale` into a `width`x`height` transparent PNG at `out`.
-pub fn run(
-    scale: u32,
+/// Render a scene into a `width`x`height` transparent PNG at `out`. `build`
+/// receives a fresh [`Gpu`] to register its textures and returns the quads to
+/// draw, exactly as the live overlay would build them.
+pub fn render_to_png<F>(
     width: u32,
     height: u32,
-    bars: &[BossBar],
+    build: F,
     out: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnOnce(&mut Gpu) -> Vec<Quad>,
+{
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
@@ -25,12 +28,15 @@ pub fn run(
         force_fallback_adapter: false,
     }))?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("bossbar.snapshot.device"),
+        label: Some("overlay.snapshot.device"),
         ..Default::default()
     }))?;
 
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("bossbar.snapshot.target"),
+    let mut gpu = Gpu::new(device, queue, FORMAT);
+    let quads = build(&mut gpu);
+
+    let target = gpu.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("overlay.snapshot.target"),
         size: wgpu::Extent3d {
             width,
             height,
@@ -44,14 +50,7 @@ pub fn run(
         view_formats: &[],
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-
-    let now_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let mut renderer = Renderer::new(device.clone(), queue.clone(), FORMAT, scale);
-    renderer
-        .render(&view, width, height, now_unix, bars, None)
+    gpu.draw(&view, width, height, &quads)
         .map_err(|e| format!("render: {e:?}"))?;
 
     // Copy the texture into a readback buffer with the 256-byte row alignment
@@ -60,16 +59,18 @@ pub fn run(
     let unpadded = width * bytes_per_pixel;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let padded = unpadded.div_ceil(align) * align;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("bossbar.snapshot.readback"),
+    let buffer = gpu.device().create_buffer(&wgpu::BufferDescriptor {
+        label: Some("overlay.snapshot.readback"),
         size: (padded * height) as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("bossbar.snapshot.copy"),
-    });
+    let mut encoder = gpu
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("overlay.snapshot.copy"),
+        });
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: &target,
@@ -91,14 +92,14 @@ pub fn run(
             depth_or_array_layers: 1,
         },
     );
-    queue.submit(Some(encoder.finish()));
+    gpu.queue().submit(Some(encoder.finish()));
 
     let slice = buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    device.poll(wgpu::PollType::wait_indefinitely())?;
+    gpu.device().poll(wgpu::PollType::wait_indefinitely())?;
     rx.recv()??;
 
     let data = slice.get_mapped_range();
@@ -110,12 +111,6 @@ pub fn run(
     drop(data);
     buffer.unmap();
 
-    image::save_buffer(
-        out,
-        &pixels,
-        width,
-        height,
-        image::ExtendedColorType::Rgba8,
-    )?;
+    image::save_buffer(out, &pixels, width, height, image::ExtendedColorType::Rgba8)?;
     Ok(())
 }

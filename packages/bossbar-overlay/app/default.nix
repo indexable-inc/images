@@ -2,86 +2,27 @@
   lib,
   stdenv,
   rustPlatform,
-  fetchurl,
-  curl,
-  cacert,
   makeWrapper,
-  # Linux runtime libraries. winit dlopens X11/Wayland/xkbcommon and wgpu
-  # dlopens the Vulkan loader, so they must be on the runtime library path.
+  # The Minecraft art (boss bar sprites, book texture, bitmap font) extracted from
+  # Mojang's official client jar by a reproducible Nix derivation.
+  minecraft-assets,
+  # Linux runtime libraries. winit dlopens X11/Wayland/xkbcommon and wgpu dlopens
+  # the Vulkan loader, so they must be on the runtime library path.
   wayland,
   libxkbcommon,
   vulkan-loader,
   libGL,
   xorg,
 }:
+# Builds the whole desktop-overlay workspace: `bossbar-overlay` and `book-overlay`
+# share the `overlay-core` float + wgpu engine and are produced from one
+# `Cargo.lock`. The Mojang art is dropped in from `minecraft-assets` before
+# compiling (the source closure carries only code), so nothing here trusts a
+# third-party mirror. `meta.mainProgram` is `bossbar-overlay`; the `book-overlay`
+# flake output is this same build with its main program overridden.
 let
-  # Pixel-accurate Minecraft "Mojangles" TTF generated from the real Minecraft
-  # font definitions (tryashtar/minecraft-ttf), so boss bar titles render in the
-  # exact proportional font Minecraft draws. Mojang-derived art: fetched at
-  # build time and NOT redistributed by this repo. It is intentionally not an
-  # OFL lookalike; the operator chose a true 1:1 font over a pure-OFL substitute.
-  minecraftFont = fetchurl {
-    url = "https://github.com/tryashtar/minecraft-ttf/releases/download/v1.4/MinecraftDefault-Regular.ttf";
-    hash = "sha256-/DH9yXRU/qFDJacCuoJOWwtQRsADevs8oFWgPircqSA=";
-  };
-
-  # Vanilla Minecraft boss bar sprite textures the overlay renders. Mojang's
-  # art, gitignored and NOT redistributed in this repo; the fetcher pulls them
-  # at build time, pinned to a Minecraft version, from the
-  # InventivetalentDev/minecraft-assets mirror. This mirrors the offline
-  # `app/scripts/fetch-assets.sh` used for local development.
-  minecraftVersion = "1.21";
-  spriteColors = [
-    "pink"
-    "blue"
-    "red"
-    "green"
-    "yellow"
-    "purple"
-    "white"
-  ];
-  spriteNotches = [
-    "notched_6"
-    "notched_10"
-    "notched_12"
-    "notched_20"
-  ];
-  spriteNames = lib.concatMap (base: [
-    "${base}_background.png"
-    "${base}_progress.png"
-  ]) (spriteColors ++ spriteNotches);
-
-  bossBarSprites = stdenv.mkDerivation {
-    pname = "bossbar-overlay-sprites";
-    version = minecraftVersion;
-
-    dontUnpack = true;
-    strictDeps = true;
-    nativeBuildInputs = [
-      curl
-      cacert
-    ];
-
-    buildPhase = ''
-      runHook preBuild
-      base="https://raw.githubusercontent.com/InventivetalentDev/minecraft-assets/${minecraftVersion}/assets/minecraft/textures/gui/sprites/boss_bar"
-      mkdir -p "$out"
-      for name in ${lib.concatStringsSep " " spriteNames}; do
-        curl -fsSL -o "$out/$name" "$base/$name"
-      done
-      runHook postBuild
-    '';
-
-    dontInstall = true;
-    dontFixup = true;
-
-    outputHashMode = "recursive";
-    outputHashAlgo = "sha256";
-    outputHash = "sha256-XPq8Ik6YUiwVyy2wXWR9V2wxi1TwyudVwdB0IuQLk50=";
-  };
-
-  # winit + wgpu need these at runtime on Linux; empty on Darwin, which uses
-  # Metal and the system window server.
+  # winit + wgpu need these at runtime on Linux; empty on Darwin (Metal + the
+  # system window server).
   runtimeLibs = lib.optionals stdenv.hostPlatform.isLinux [
     wayland
     libxkbcommon
@@ -92,17 +33,28 @@ let
     xorg.libXrandr
     xorg.libXi
   ];
+  bins = [
+    "bossbar-overlay"
+    "book-overlay"
+  ];
 in
 rustPlatform.buildRustPackage {
-  pname = "bossbar-overlay";
+  pname = "minecraft-overlays";
   version = "0.1.0";
 
+  # Only the code: the gitignored Mojang art under each crate's `assets/` is left
+  # out and supplied by `minecraft-assets` in preBuild.
   src = lib.fileset.toSource {
     root = ./.;
     fileset = lib.fileset.unions [
       ./Cargo.toml
       ./Cargo.lock
-      ./src
+      ./crates/overlay-core/Cargo.toml
+      ./crates/overlay-core/src
+      ./crates/bossbar/Cargo.toml
+      ./crates/bossbar/src
+      ./crates/book/Cargo.toml
+      ./crates/book/src
     ];
   };
 
@@ -114,26 +66,28 @@ rustPlatform.buildRustPackage {
   buildInputs = runtimeLibs;
 
   preBuild = ''
-    # The Mojang sprites and TTF are gitignored, so the source closure never
-    # carries them; drop them where `include_bytes!` expects before compiling.
-    mkdir -p assets/boss_bar assets/fonts
-    cp ${bossBarSprites}/*.png assets/boss_bar/
-    cp ${minecraftFont} assets/fonts/MinecraftDefault-Regular.ttf
-    chmod -R u+w assets
+    # Drop the extracted Minecraft art where each crate's `include_bytes!` expects
+    # it: the shared font into overlay-core, the sprites into each app.
+    mkdir -p crates/overlay-core/assets crates/bossbar/assets/boss_bar crates/book/assets/gui
+    cp ${minecraft-assets}/font/ascii.png crates/overlay-core/assets/ascii.png
+    cp ${minecraft-assets}/boss_bar/*.png crates/bossbar/assets/boss_bar/
+    cp ${minecraft-assets}/gui/*.png crates/book/assets/gui/
+    chmod -R u+w crates
   '';
 
-  # Point the binary at the dlopened X11/Wayland/Vulkan libraries on Linux.
-  postFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
-    patchelf --add-rpath "${lib.makeLibraryPath runtimeLibs}" "$out/bin/bossbar-overlay"
-    wrapProgram "$out/bin/bossbar-overlay" \
-      --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath runtimeLibs}"
-  '';
+  # Point each binary at the dlopened X11/Wayland/Vulkan libraries on Linux.
+  postFixup = lib.optionalString stdenv.hostPlatform.isLinux (
+    lib.concatMapStringsSep "\n" (b: ''
+      patchelf --add-rpath "${lib.makeLibraryPath runtimeLibs}" "$out/bin/${b}"
+      wrapProgram "$out/bin/${b}" \
+        --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath runtimeLibs}"
+    '') bins
+  );
 
   meta = {
-    description = "Minecraft-style boss bar desktop overlay driven by an SQLite file";
-    # MIT (Copyright 2026 Indexable Inc.). The boss bar sprites and the
-    # Minecraft TTF are Mojang(-derived) art fetched at build time, not
-    # redistributed by this package.
+    description = "Minecraft-style desktop overlays (boss bar + book), wgpu, SQLite-driven";
+    # MIT (Copyright 2026 Indexable Inc.). The Minecraft textures and font are
+    # Mojang(-derived) art extracted at build time, not redistributed here.
     license = lib.licenses.mit;
     mainProgram = "bossbar-overlay";
     platforms = [

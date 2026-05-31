@@ -1,0 +1,20 @@
+[package]
+name = "bossbar"
+description = "Minecraft-style boss bar desktop overlay driven by an SQLite file"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# The binary keeps its historical name so `nix run .#bossbar-overlay` and the
+# portable-services unit are unchanged by the workspace split.
+[[bin]]
+name = "bossbar-overlay"
+path = "src/main.rs"
+
+[dependencies]
+# winit/wgpu/the bitmap font come through overlay-core's re-exports; only the
+# domain deps are direct here.
+overlay-core.workspace = true
+glam.workspace = true
+rusqlite.workspace = true
+dirs.workspace = true

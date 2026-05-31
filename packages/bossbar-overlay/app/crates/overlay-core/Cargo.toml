@@ -1,0 +1,17 @@
+[package]
+name = "overlay-core"
+description = "Reusable float window + wgpu pixel/text engine for Minecraft-style desktop overlays"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+winit.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+bytemuck.workspace = true
+image.workspace = true
+glam.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit.workspace = true

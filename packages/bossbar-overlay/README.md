@@ -1,87 +1,70 @@
-# Boss Bar Overlay
+# Minecraft Desktop Overlays
 
-A transparent, always-on-top, click-through desktop overlay that draws
-Minecraft boss bars across the top of your screen. The bars are driven entirely
-by a single SQLite file: write rows into it from anything (a shell, a script, a
-cron job, another program) and they appear on screen within ~200ms.
+Two transparent, always-on-top, click-through desktop overlays drawn in the
+Minecraft style with [`wgpu`](https://github.com/gfx-rs/wgpu): a **boss bar** HUD
+and an open **book**. Both are driven entirely by a single SQLite file each: write
+rows from anything (a shell, a script, a cron job, another program) and the change
+appears on screen within ~200ms.
 
-The bars are rendered from Minecraft's actual boss bar sprite textures, layered
-the same way the game's `BossHealthOverlay` does (color background, color
-progress clipped to the fill, then the notch overlay), so the result is a 1:1
-match. It is a native [`winit`](https://github.com/rust-windowing/winit) +
-[`wgpu`](https://github.com/gfx-rs/wgpu) app with no webview: the window is
-transparent, always-on-top, and passes the mouse straight through, so the bars
-float over whatever you're doing.
+Both share one engine, [`overlay-core`](app/crates/overlay-core), which owns the
+float window (transparent, borderless, always-on-top, click-through, drag-to-move)
+and a single textured-quad wgpu pipeline. Text is the real Minecraft bitmap font
+rendered as glyph quads through that same pipeline, so titles and page text are
+just more sprites. The two apps ([`bossbar`](app/crates/bossbar),
+[`book`](app/crates/book)) are thin domain layers on top.
+
+All Minecraft art (boss bar sprites, the book texture and page widgets, the font
+sheet) is extracted from Mojang's official `client.jar` by the
+[`minecraft-assets`](../minecraft-assets) Nix derivation, pinned by Mojang's own
+hash. Nothing is vendored into the repo or pulled from a third-party mirror.
 
 ![preview](docs/preview.png)
 
 ## Run
 
 ```sh
-nix run .#bossbar-overlay
+nix run .#bossbar-overlay     # the boss bar HUD across the top of the screen
+nix run .#book-overlay        # a floating open book
 ```
 
-For local Rust development, fetch the Mojang art once (sprites + the Minecraft
-TTF), then build with cargo:
+For local Rust development, populate the gitignored art once (it is copied out of
+the `minecraft-assets` derivation), then build with cargo:
 
 ```sh
 cd app
-bash scripts/fetch-assets.sh   # downloads into app/assets/, no-op once present
-cargo run                      # the overlay
+bash scripts/fetch-assets.sh   # nix-builds minecraft-assets and copies the slices
+cargo run -p bossbar           # or: cargo run -p book
 ```
 
+There is no tray; quit either overlay the way you quit any foreground process
+(Ctrl-C, or stop the service that runs it).
+
+## Boss bar
+
 Each bar is its own small transparent, always-on-top, borderless window sized to
-just that bar. Because there is no window except over a bar, the desktop stays
-fully usable everywhere else: only the bars intercept the mouse. There is no
-tray; quit it the way you quit any foreground process (Ctrl-C from the terminal,
-or stop the service that runs it). `BOSSBAR_SCALE=3` (or `--scale 3`) enlarges
-the bars.
+just that bar, so the desktop stays usable everywhere else: only the bars
+intercept the mouse. `BOSSBAR_SCALE=3` (or `--scale 3`) enlarges the bars.
 
-The bars are interactive: hover one and it eases to fully opaque and gently
-grows with a slow breathing pulse (the cursor becomes a grab hand). A press that
-moves past a few pixels starts a drag (the platform's native window drag); the
-drop location is saved to the bar's `x`/`y` columns, so it stays put across
-restarts. A press that does not move is a click: it opens the bar's `url` if it
-has one. Bars without a saved position auto-stack in a top-center column. This
-works the same on macOS and Linux.
+The bars are rendered from Minecraft's actual boss bar sprite textures, layered
+the same way the game's `BossHealthOverlay` does (color background, color progress
+clipped to the fill, then the notch overlay). Hover one and it eases to fully
+opaque and gently grows with a slow breathing pulse; a press that moves past a few
+pixels starts the platform's native window drag, and the drop location is saved to
+the bar's `x`/`y` columns so it stays put across restarts. A press that does not
+move is a click: it opens the bar's `url` if it has one. A bar with a
+`description` unfolds a flat panel beneath it on hover; a bar with a `since` (Unix
+epoch) shows a live elapsed timer in its title (`Build (2:05)`).
 
-A bar can carry a longer `description`. When it does, hovering unfolds a flat
-panel below the bar with the description wrapped to the bar's width, in the same
-Minecraft font, with a one-pixel border tinted to the bar's color. Newlines in
-the description start new paragraphs. The window only grows to fit the panel
-while you hover, so the area below a bar stays click-through the rest of the
-time; a bar with an empty description behaves exactly as before. See the
-seeded Ender Dragon bar for an example.
-
-A bar can also carry a `since` (Unix epoch). When set, the overlay appends a
-live elapsed timer to the title (`Build (2:05)`) and ticks it once a second on
-its own, so you write the start time once instead of rewriting the title to
-advance a clock. The seeded "Build: compiling" bar shows this.
-
-A bar can carry a `url`. Clicking the bar (a press without a drag) opens it with
-the system opener (`open` on macOS, `xdg-open` on Linux), so a status bar can
-link straight to its dashboard. The seeded Ender Dragon bar links to the wiki.
-
-Known limitations: some Linux tiling window managers force-place or tile
-borderless windows, which can fight the free-drag placement. An auto-stacked
-bar's open panel can overlap the bar stacked below it while you hover; pin bars
-apart by dragging if that bothers you. A panel on a bar pinned near the bottom
-of the screen unfolds off-screen.
-
-To verify rendering without a window, render the current bars straight to a
-transparent PNG:
+Render the current bars straight to a transparent PNG to verify without a window:
 
 ```sh
 nix run .#bossbar-overlay -- --snapshot out.png --scale 3 --size 760x620
 ```
 
-The snapshot draws every described bar with its panel fully open, so it doubles
-as a way to proof-read a description's wrapping without hovering.
+### Boss bar CLI
 
-## CLI
-
-`./bossbar` is a small wrapper around the same database the overlay reads, so
-you don't have to hand-write SQL. It works whether or not the app is running and
+`./bossbar` is a small wrapper around the same database the overlay reads, so you
+don't have to hand-write SQL. It works whether or not the app is running and
 creates the schema on demand.
 
 ```sh
@@ -89,30 +72,20 @@ creates the schema on demand.
   --description "Destroy the End Crystals first or it heals back to full."
 ./bossbar set "Ender Dragon" --progress 0.5      # match by title ...
 ./bossbar set 1 --color red --visible 1          # ... or by id
-./bossbar set 1 --description ''                 # clear the hover panel
 ./bossbar list
 ./bossbar rm "Ender Dragon"
-./bossbar clear
 ./bossbar db                                     # print the database path
 ```
 
-Or skip the wrapper and write SQL directly:
+### Boss bar data contract
 
-```sh
-DB="$(./bossbar db)"
-sqlite3 "$DB" "UPDATE bossbars SET progress = 0.5 WHERE title = 'Ender Dragon';"
-```
-
-## The data contract
-
-The overlay reads one table. On first launch it creates the database and seeds
-three example bars so you can see it working.
+The overlay reads one table; on first launch it seeds three example bars.
 
 ```sql
 CREATE TABLE bossbars (
   id          INTEGER PRIMARY KEY,
   title       TEXT    NOT NULL DEFAULT '',   -- text shown above the bar
-  description TEXT    NOT NULL DEFAULT '',   -- hover pop-down body (may wrap/paragraph)
+  description TEXT    NOT NULL DEFAULT '',   -- hover pop-down body (wraps/paragraphs)
   progress    REAL    NOT NULL DEFAULT 1.0,  -- fill fraction, 0.0 .. 1.0
   color       TEXT    NOT NULL DEFAULT 'purple',
   overlay     TEXT    NOT NULL DEFAULT 'progress',
@@ -125,74 +98,83 @@ CREATE TABLE bossbars (
 );
 ```
 
-- **color**: `pink`, `blue`, `red`, `green`, `yellow`, `purple`, `white`
-  (Minecraft's seven boss bar colors). Unknown values fall back to `purple`.
-- **overlay**: `progress` (smooth) or `notched_6` / `notched_10` / `notched_12`
-  / `notched_20` (segmented), matching Minecraft's overlay styles.
-- **description**: longer text shown in the panel that unfolds below the bar on
-  hover. Empty (the default) means no panel. Lines wrap to the bar's width;
-  newlines start new paragraphs.
-- **since**: a Unix epoch (seconds) to count up from. When set, the overlay
-  appends a live elapsed timer to the title (`Build (2:05)`) and ticks it once a
-  second, so you write the start once instead of rewriting the title to advance a
-  clock. `NULL` or a non-positive value means no timer.
-- **url**: opened with the system opener (`open` / `xdg-open`) when the bar is
-  clicked without dragging. Empty (the default) means a click does nothing. Any
-  URI, file, or path the opener accepts works.
-- **x / y**: pinned screen location in logical points, written when you drag a
-  bar. Leave both `NULL` (the default) to keep the bar in the auto-stacked
-  top-center column ordered by `position`; setting them floats the bar free.
+- **color**: `pink`, `blue`, `red`, `green`, `yellow`, `purple`, `white`. Unknown
+  values fall back to `purple`.
+- **overlay**: `progress` (smooth) or `notched_6` / `notched_10` / `notched_12` /
+  `notched_20` (segmented).
 
-This mirrors Minecraft's own boss bar API, so the fields should feel familiar.
-
-### Where the database lives
-
-Default: `~/Library/Application Support/bossbar-overlay/bossbars.db` on macOS
-(`$XDG_DATA_HOME/bossbar-overlay/bossbars.db` on Linux). The resolved path is
-printed to stdout on launch and printed by `./bossbar db`. Override it with
+Default DB: `~/Library/Application Support/bossbar-overlay/bossbars.db` on macOS
+(`$XDG_DATA_HOME/bossbar-overlay/bossbars.db` on Linux). Override with
 `BOSSBAR_DB=/path/to.db`.
 
-Any committed write bumps SQLite's `PRAGMA data_version`, which the app polls
-four times a second to know when to re-read. The database runs in WAL mode so
-your writers never block the overlay's reader.
+## Book
+
+A single floating window shows an open book as a two-page spread. Minecraft ships
+a one-page book texture; the spread is that page drawn twice, mirrored on the left
+so the spiral binding meets at the centre spine and normal on the right. Pages of
+text come from SQLite; each page shows a `Page N of M` header and its wrapped
+body. Click the page-turn arrows at the bottom outer corners to advance, drag the
+book to move it (its position is saved), and hover to raise it above other
+windows. `BOOK_SCALE=3` (or `--scale 3`) resizes it.
+
+```sh
+nix run .#book-overlay
+nix run .#book-overlay -- --snapshot spread.png --scale 3 --page 0
+```
+
+### Book data contract
+
+```sql
+CREATE TABLE book (
+  id    INTEGER PRIMARY KEY CHECK (id = 1),  -- the singleton book row
+  title TEXT    NOT NULL DEFAULT '',
+  x     REAL, y REAL                         -- pinned window position (logical points)
+);
+CREATE TABLE pages (
+  id   INTEGER PRIMARY KEY,
+  idx  INTEGER NOT NULL DEFAULT 0,           -- page order
+  body TEXT    NOT NULL DEFAULT ''           -- newlines start new lines/paragraphs
+);
+```
+
+On first launch the DB is seeded with a short four-page book. Default DB:
+`~/Library/Application Support/book-overlay/book.db` (XDG on Linux); override with
+`BOOK_DB=/path/to.db`. The current page (spread) is in-memory state changed by the
+arrows; only the position persists.
 
 ## How it works
 
-The app lives under `app/` as a standalone Rust crate (its own Cargo workspace,
-off the repo's main graph):
+The workspace lives under `app/` as its own Cargo workspace (off the repo's main
+graph, so the GUI crates skip the strict workspace lints), with one vendored
+`Cargo.lock`. `app/default.nix` builds both binaries from it.
 
-- `app/src/db.rs` — opens the DB (bundled SQLite via `rusqlite`), polls
-  `data_version` four times a second, and hands fresh bars to the UI thread on
-  every change.
-- `app/src/overlay.rs` — the winit event loop: one transparent, always-on-top,
-  borderless window **per bar**, each sized to just that bar, so the desktop is
-  click-through everywhere off a bar with no `set_cursor_hittest`. macOS runs as
-  an `Accessory` app (no Dock icon). Hover fires native `CursorEntered`/`Left`
-  (the bar grows; a described bar grows its window to make room for the panel and
-  shrinks back once the hover eases out); pressing calls the native
-  `Window::drag_window`. The watcher wakes the loop on every DB write.
-- `app/src/render.rs` — the wgpu renderer: one textured-quad pipeline draws the
-  same layer stack Minecraft uses, clipping the progress layers to the fill
-  fraction with nearest sampling (crisp pixels). Titles and the description panel
-  are drawn with [`glyphon`](https://github.com/grovesNL/glyphon) in a
-  pixel-accurate Minecraft TTF
-  ([tryashtar/minecraft-ttf](https://github.com/tryashtar/minecraft-ttf)), with
-  the vanilla one-pixel drop shadow. The same pipeline draws the panel's flat
-  fill and border via a 1x1 white texture tinted by a per-vertex color.
-- `app/src/snapshot.rs` — runs the identical renderer headlessly into a PNG, so
-  the transparent overlay can be verified from a file.
+- [`overlay-core`](app/crates/overlay-core) — the shared engine. `window.rs`: the
+  float window attributes, surface/adapter setup, transparent alpha-mode
+  selection, and a non-activating raise (`-[NSWindow orderFrontRegardless]` on
+  macOS). `gpu.rs`: one textured-quad pipeline with a texture registry, plus the
+  bitmap font baked in so `text()`/`text_shadow()` emit glyph quads.
+  `bitmap_font.rs`: measures the vanilla `ascii.png` glyphs (white-on-transparent,
+  width = rightmost inked column + 1) the way the game does. `gesture.rs`: the
+  press/drag/click state machine. `snapshot.rs`: the same engine rendered
+  headlessly into a PNG.
+- [`bossbar`](app/crates/bossbar) — bars domain (`bars.rs`), the SQLite source
+  (`db.rs`), the bar/panel scene builder, and the per-bar window loop.
+- [`book`](app/crates/book) — book domain (`book.rs`), its SQLite source
+  (`db.rs`), the two-page spread scene builder, and the single-window loop.
+- [`minecraft-assets`](../minecraft-assets) — the reproducible Mojang extraction:
+  `client.jar` pinned by Mojang's hash, unzipped to the textures and font sheet
+  both overlays embed.
 
-## Notes / limits
+## Notes and limits
 
-- There is no tray icon; quit the overlay like any foreground process
-  (Ctrl-C, or via the service that runs it).
-- Click-through relies on `set_cursor_hittest`, which some Wayland compositors
-  do not implement; on those the window may capture clicks.
-- The window covers the top ~45% of the **primary** monitor. Multi-monitor and
-  per-monitor placement aren't handled yet.
-- The boss bar textures and the Minecraft title TTF are Mojang-derived art and
-  are **not** redistributed in this repo; they are fetched at build time (the
-  Nix derivation, or `app/scripts/fetch-assets.sh` for local builds) for
+- No tray icon; quit like any foreground process.
+- Click-through is structural (no window off an overlay), not `set_cursor_hittest`;
+  some Wayland tiling compositors may still force-place or tile borderless windows
+  and fight free-drag placement.
+- The boss bar covers the top of the **primary** monitor; multi-monitor placement
+  is not handled yet. The book opens centred on the primary monitor.
+- The Minecraft textures and font are Mojang's art and are **not** redistributed
+  in this repo; they are extracted from the official client jar at build time for
   personal use. This project is not affiliated with or endorsed by Mojang.
 
 Implemented with AI assistance (Claude, Opus 4.8).

@@ -1,41 +1,46 @@
-# Empty `[workspace]` makes this crate its own workspace root so it stays off
-# the repo's top-level `cargo --workspace` graph. The overlay is a standalone
-# desktop app built through Nix (`app/default.nix`); nothing in the repo depends
-# on it as a library.
+# Standalone Cargo workspace for the Minecraft desktop overlays. It is its own
+# workspace root (not listed in the repo's top-level `members`) so the GUI crates
+# stay off the strict `cargo --workspace` graph: winit/wgpu desktop apps would
+# otherwise trip the repo's restriction lints and darwin platform-gating, and
+# their heavy deps would slow every workspace build.
+#
+# `overlay-core` owns the reusable float window + wgpu pixel/text engine; the two
+# binaries (`bossbar`, `book`) are thin domain layers on top. One vendored
+# `Cargo.lock` is shared, and `app/default.nix` builds the whole workspace.
 [workspace]
+resolver = "2"
+members = [
+  "crates/overlay-core",
+  "crates/bossbar",
+  "crates/book",
+]
 
-[package]
-name = "bossbar-overlay"
+[workspace.package]
 version = "0.1.0"
-description = "Minecraft-style boss bar desktop overlay driven by an SQLite file"
-authors = ["Andrew Gazelka"]
 edition = "2024"
+authors = ["Andrew Gazelka"]
 
-[[bin]]
-name = "bossbar-overlay"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
+overlay-core = { path = "crates/overlay-core" }
 winit = "0.30"
 wgpu = "28"
-glyphon = "0.10"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Bundled SQLite so users don't need a system libsqlite3.
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "6"
-# 2D vectors for bar positions, instead of bare (f64, f64).
+# 2D vectors for window positions, instead of bare (f64, f64).
 glam = "0.30"
-
-# macOS: raise a hovered bar's window above its always-on-top siblings without
-# taking keyboard focus (`-[NSWindow orderFrontRegardless]`), so its pop-down
-# panel paints over the neighbouring bars. These features and versions are a
-# subset of what winit 0.30 already enables, so this pulls in no extra crate.
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.2.2", features = ["NSResponder", "NSWindow"] }
+# macOS: raise a hovered window above its always-on-top siblings without taking
+# keyboard focus (`-[NSWindow orderFrontRegardless]`). These features/version are
+# a subset of what winit 0.30 already enables, so this pulls in no extra crate.
+objc2-app-kit = { version = "0.2.2", features = [
+  "NSResponder",
+  "NSWindow",
+] }
 
 [profile.release]
-# A desktop HUD: trim the binary, no need for fat debug info.
+# Desktop HUDs: trim the binaries, no need for fat debug info.
 opt-level = "s"
 strip = true

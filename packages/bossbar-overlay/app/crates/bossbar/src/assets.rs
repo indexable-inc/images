@@ -1,15 +1,11 @@
-//! Embedded Mojang art. The boss bar sprite PNGs and the Minecraft "Mojangles"
-//! TTF are Mojang-derived and are *not* committed to this repo (they are
-//! gitignored). The Nix build and `scripts/fetch-assets.sh` drop them into
-//! `assets/` before compilation, and `include_bytes!` bakes them into the
-//! single binary so there is no runtime asset path to resolve.
+//! Embedded Mojang art. The boss bar sprite PNGs are Mojang-derived and are
+//! *not* committed to this repo (they are gitignored). The Nix build and
+//! `scripts/fetch-assets.sh` drop them into `assets/` before compilation, and
+//! `include_bytes!` bakes them into the single binary so there is no runtime
+//! asset path to resolve. The Minecraft font now lives in `overlay-core`, so it
+//! is no longer embedded here.
 
 use crate::bars::{Color, Notch};
-
-/// The Minecraft title font (tryashtar/minecraft-ttf). Its internal family name
-/// (`"Minecraft Default"`) is read back from the font at load time rather than
-/// hardcoded, so the renderer's family selector cannot drift from the TTF.
-pub const FONT: &[u8] = include_bytes!("../assets/fonts/MinecraftDefault-Regular.ttf");
 
 macro_rules! sprite {
     ($name:literal) => {

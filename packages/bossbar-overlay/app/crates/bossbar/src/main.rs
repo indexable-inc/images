@@ -14,7 +14,7 @@ mod assets;
 mod bars;
 mod db;
 mod overlay;
-mod render;
+mod scene;
 mod snapshot;
 
 use std::path::PathBuf;
