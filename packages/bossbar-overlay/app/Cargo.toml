@@ -32,11 +32,25 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "6"
 # 2D vectors for window positions, instead of bare (f64, f64).
 glam = "0.30"
-# macOS: raise a hovered window above its always-on-top siblings without taking
-# keyboard focus (`-[NSWindow orderFrontRegardless]`). These features/version are
-# a subset of what winit 0.30 already enables, so this pulls in no extra crate.
+# macOS AppKit, reached through the raw window handle for two things winit has no
+# API for: raise a hovered window above its always-on-top siblings without taking
+# keyboard focus (`-[NSWindow orderFrontRegardless]`), and a right-click context
+# menu to close an overlay (`NSMenu`/`NSMenuItem`/`NSEvent`). These features/version
+# are a subset of what winit 0.30 already enables, so this pulls in no extra crate.
+objc2 = "0.5"
+# NSString for menu labels, NSThread for `MainThreadMarker`, NSObjCRuntime for
+# `NSObjectProtocol` (declared here rather than relying on winit's feature unification).
+objc2-foundation = { version = "0.2.2", features = [
+  "NSObjCRuntime",
+  "NSString",
+  "NSThread",
+] }
 objc2-app-kit = { version = "0.2.2", features = [
+  "NSEvent",
+  "NSMenu",
+  "NSMenuItem",
   "NSResponder",
+  "NSView",
   "NSWindow",
 ] }
 

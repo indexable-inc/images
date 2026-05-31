@@ -451,6 +451,17 @@ impl ApplicationHandler<Book> for App {
                     self.on_click(pos);
                 }
             }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            } => {
+                // Right-click opens a native menu to dismiss the book (its one
+                // window, so closing it quits the overlay).
+                if overlay_core::menu::popup(&["Close"]) == Some(0) {
+                    event_loop.exit();
+                }
+            }
             WindowEvent::Moved(pos) => self.on_moved(pos),
             _ => {}
         }

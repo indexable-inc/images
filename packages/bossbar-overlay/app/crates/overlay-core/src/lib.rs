@@ -7,6 +7,7 @@
 //! - one textured-quad wgpu pipeline with a texture registry, plus the vanilla
 //!   bitmap font so text is just more quads ([`gpu`], [`bitmap_font`]),
 //! - press/drag/click disambiguation for draggable windows ([`gesture`]),
+//! - a native right-click context menu to close/dismiss an overlay ([`menu`]),
 //! - a headless render-to-PNG for verification ([`snapshot`]),
 //! - the shared animation primitives the overlays drive their hovers with
 //!   ([`anim`]: easing curves, a hover stepper, a breathe oscillator).
@@ -20,6 +21,7 @@ pub mod anim;
 pub mod bitmap_font;
 pub mod gesture;
 pub mod gpu;
+pub mod menu;
 pub mod snapshot;
 pub mod window;
 

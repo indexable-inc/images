@@ -524,6 +524,18 @@ impl ApplicationHandler<Vec<BossBar>> for App {
                     open_url(&url);
                 }
             }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            } => {
+                // Right-click opens a native menu to dismiss the HUD. Each bar is
+                // its own window, but the bars are one downtime display, so the
+                // action quits all of them.
+                if overlay_core::menu::popup(&["Quit Boss Bars"]) == Some(0) {
+                    event_loop.exit();
+                }
+            }
             WindowEvent::Moved(pos) => self.on_moved(id, pos),
             _ => {}
         }
