@@ -37,8 +37,9 @@ tray; quit it the way you quit any foreground process (Ctrl-C from the terminal,
 or stop the service that runs it). `BOSSBAR_SCALE=3` (or `--scale 3`) enlarges
 the bars.
 
-The bars are interactive: hover one and it goes fully opaque (the cursor becomes
-a grab hand), and you can drag it anywhere on screen. Dragging uses the
+The bars are interactive: hover one and it eases to fully opaque and gently
+grows with a slow breathing pulse (the cursor becomes a grab hand), and you can
+drag it anywhere on screen. Dragging uses the
 platform's native window drag, and the drop location is saved to the bar's
 `x`/`y` columns, so it stays put across restarts. Bars without a saved position
 auto-stack in a top-center column. This works the same on macOS and Linux.

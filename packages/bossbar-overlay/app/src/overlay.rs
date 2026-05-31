@@ -12,14 +12,16 @@
 //! `set_cursor_hittest`, no coordinate reconciliation.
 
 use std::collections::HashMap;
+use std::f32::consts::TAU;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use glam::DVec2;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{CursorIcon, Window, WindowId, WindowLevel};
 
 use crate::bars::BossBar;
@@ -32,6 +34,21 @@ use crate::render::{self, Renderer};
 /// nudge would otherwise read as a move).
 const AUTO_TOP: f64 = 40.0;
 const AUTO_GAP: f64 = 6.0;
+
+/// Hover grow/shrink time (seconds): an ease-out tween at the responsive end of
+/// the feedback range. See the `animation` skill.
+const GROW_SECS: f32 = 0.16;
+/// Full breathing cycle (seconds) while hovered. ~2.6s reads calm and alive,
+/// near a resting heart rate, rather than urgent.
+const BREATHE_PERIOD: f32 = 2.6;
+/// Animation frame budget while something is moving (~60 fps).
+const FRAME: Duration = Duration::from_millis(16);
+
+/// Ease-out cubic: fast start, soft landing. The default feedback curve.
+fn ease_out_cubic(t: f32) -> f32 {
+    let u = 1.0 - t.clamp(0.0, 1.0);
+    1.0 - u * u * u
+}
 
 /// GPU state shared by every bar window: one device/queue and one renderer
 /// (pipeline, sprite textures, font). Each window only owns its surface.
@@ -48,7 +65,13 @@ struct BarWin {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     bar: BossBar,
+    /// Hover target: the pointer is currently over this bar.
     hovered: bool,
+    /// Eased hover amount in `0..=1`, animated toward `hovered` each frame. Drives
+    /// the grow + opacity; the breathing fades in with it.
+    hover_anim: f32,
+    /// Timestamp of the last animation step, for frame-rate-independent easing.
+    last: Instant,
     /// True between a left-press and its release: only then does a `Moved`
     /// count as a user drag worth persisting. Window placement nudges by the OS
     /// (e.g. clamping below the menu bar) arrive with this false and are ignored.
@@ -56,6 +79,13 @@ struct BarWin {
     /// Last position we know the window holds (logical points): what we set, or
     /// where the OS placed it. Lets `Moved` skip echoes of our own placement.
     self_set: Option<LogicalPosition<f64>>,
+}
+
+impl BarWin {
+    /// Still moving: easing toward/away from hover, or breathing while hovered.
+    fn animating(&self) -> bool {
+        self.hovered || self.hover_anim > 0.0
+    }
 }
 
 pub struct App {
@@ -73,6 +103,8 @@ pub struct App {
     scale_factor: f64,
     /// Physical sprite scale, `round(base_scale * scale_factor)`.
     scale: u32,
+    /// App start, the zero point for the continuous breathing phase.
+    start: Instant,
     ready: bool,
 }
 
@@ -193,6 +225,8 @@ impl App {
             config,
             bar,
             hovered: false,
+            hover_anim: 0.0,
+            last: Instant::now(),
             dragging: false,
             self_set: Some(pos),
         })
@@ -245,6 +279,29 @@ impl App {
     }
 
     fn render_id(&mut self, id: i64) {
+        let now = Instant::now();
+        // Continuous breathing phase: a sine over the whole run, never reset, so
+        // it never snaps when a bar starts or stops being hovered.
+        let breathe = (TAU * now.duration_since(self.start).as_secs_f32() / BREATHE_PERIOD).sin();
+
+        // Advance this bar's eased hover amount toward its target, then map it
+        // through ease-out for the visible grow/opacity.
+        let hover = {
+            let Some(win) = self.wins.get_mut(&id) else {
+                return;
+            };
+            let dt = now.duration_since(win.last).as_secs_f32().min(0.05);
+            win.last = now;
+            let target = if win.hovered { 1.0 } else { 0.0 };
+            let step = dt / GROW_SECS;
+            win.hover_anim = if win.hover_anim < target {
+                (win.hover_anim + step).min(target)
+            } else {
+                (win.hover_anim - step).max(target)
+            };
+            ease_out_cubic(win.hover_anim)
+        };
+
         let Some(core) = self.core.as_mut() else {
             return;
         };
@@ -265,9 +322,14 @@ impl App {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let _ =
-            core.renderer
-                .render_one(&view, win.config.width, win.config.height, &win.bar, win.hovered);
+        let _ = core.renderer.render_one(
+            &view,
+            win.config.width,
+            win.config.height,
+            &win.bar,
+            hover,
+            breathe,
+        );
         frame.present();
     }
 
@@ -394,6 +456,24 @@ impl ApplicationHandler<Vec<BossBar>> for App {
             _ => {}
         }
     }
+
+    /// Keep redrawing while any bar is animating (growing, shrinking, or
+    /// breathing), capped to ~60 fps; otherwise let the loop sleep until the
+    /// next event so an idle overlay costs nothing.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let mut animating = false;
+        for win in self.wins.values() {
+            if win.animating() {
+                animating = true;
+                win.window.request_redraw();
+            }
+        }
+        event_loop.set_control_flow(if animating {
+            ControlFlow::WaitUntil(Instant::now() + FRAME)
+        } else {
+            ControlFlow::Wait
+        });
+    }
 }
 
 /// Run the overlay event loop. Blocks until the last window closes.
@@ -410,6 +490,7 @@ pub fn run(db: PathBuf, base_scale: u32) -> Result<(), Box<dyn std::error::Error
         mon_logical: (1920.0, 1080.0),
         scale_factor: 1.0,
         scale: base_scale.max(1),
+        start: Instant::now(),
         ready: false,
     };
     event_loop.run_app(&mut app)?;

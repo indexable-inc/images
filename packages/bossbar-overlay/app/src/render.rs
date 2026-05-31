@@ -26,10 +26,18 @@ const BAR_H: u32 = 5;
 /// overlay by letting the desktop bleed through a little.
 const DEFAULT_OPACITY: f32 = 0.85;
 
-/// How much a hovered bar grows. A small, deliberate scale-up (on top of going
-/// opaque) so the hover is unmistakable. Each bar window reserves this headroom
-/// so the bar grows in place without the window resizing or shifting.
-const HOVER_SCALE: f32 = 1.08;
+/// How much a fully-hovered bar grows, before breathing. A small, deliberate
+/// scale-up (on top of going opaque) so the hover is unmistakable.
+const HOVER_SCALE: f32 = 1.06;
+
+/// Breathing amplitude: a hovered bar gently scales +/- this fraction around its
+/// grown size on a slow sine, so it reads as alive rather than frozen.
+const BREATHE_AMP: f32 = 0.02;
+
+/// Largest scale a bar can reach (grown + breathing in). Each window reserves
+/// this much headroom so the bar grows and breathes in place without the window
+/// resizing or shifting.
+const MAX_SCALE: f32 = HOVER_SCALE * (1.0 + BREATHE_AMP);
 
 /// Vanilla title shadow: one dark pixel offset, scaled, no blur.
 const SHADOW: GColor = GColor::rgb(0x3f, 0x3f, 0x3f);
@@ -587,19 +595,29 @@ impl Renderer {
         self.draw(view, width, height, &items)
     }
 
-    /// Render a single bar centered in its own window. `hovered` paints it
-    /// opaque and grows it by [`HOVER_SCALE`]; otherwise it sits at base size
-    /// with the hover headroom as transparent margin. The window size must come
-    /// from [`bar_window_px`] so the grown bar fits without resizing.
+    /// Render a single bar centered in its own window. `hover` is the eased
+    /// hover amount (0 = resting, 1 = fully hovered); `breathe` is a sine in
+    /// `-1..1` for the idle breathing. Together they grow the bar by up to
+    /// [`MAX_SCALE`] and fade it to opaque; at `hover == 0` the bar is base size
+    /// and translucent and the hover headroom is transparent margin. The window
+    /// size must come from [`bar_window_px`] so the grown bar fits without
+    /// resizing.
     pub fn render_one(
         &mut self,
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
         bar: &BossBar,
-        hovered: bool,
+        hover: f32,
+        breathe: f32,
     ) -> Result<(), wgpu::SurfaceError> {
-        let s = self.scale as f32 * if hovered { HOVER_SCALE } else { 1.0 };
+        let hover = hover.clamp(0.0, 1.0);
+        // Grow toward HOVER_SCALE with hover, then breathe around that; the
+        // breathe fades in with hover so a resting bar is perfectly still.
+        let grow = 1.0 + (HOVER_SCALE - 1.0) * hover;
+        let scale_mul = grow * (1.0 + BREATHE_AMP * breathe * hover);
+        let alpha = self.opacity + (1.0 - self.opacity) * hover;
+        let s = self.scale as f32 * scale_mul;
         let shadow = self.scale as f32;
         let has_title = !bar.title.is_empty();
         let title_px = 8.0 * s;
@@ -624,7 +642,6 @@ impl Renderer {
             title_px,
             has_title,
         };
-        let alpha = if hovered { 1.0 } else { self.opacity };
         let items = [DrawItem { bar, geom, alpha }];
         self.draw(view, width, height, &items)
     }
@@ -635,7 +652,7 @@ impl Renderer {
 /// hovered bar grows in place. `has_title` adds the title row; plus a
 /// one-pixel-scaled shadow margin.
 pub fn bar_window_px(scale: u32, has_title: bool) -> (u32, u32) {
-    let s = scale.max(1) as f32 * HOVER_SCALE;
+    let s = scale.max(1) as f32 * MAX_SCALE;
     let bar_w = BAR_W as f32 * s;
     let bar_h = BAR_H as f32 * s;
     let title = if has_title { 8.0 * s + 1.0 * s } else { 0.0 };
