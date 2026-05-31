@@ -155,15 +155,33 @@ let
     ];
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
-  # `--system-site-packages`, so `tui`, `search`, numpy, polars, and
-  # playwright are importable by default while an in-session `pip install` still
-  # writes to the per-session venv.
+  # `--system-site-packages`, so `tui`, `search`, numpy, polars (incl. Postgres
+  # via psycopg + SQLAlchemy), duckdb, pyarrow, httpx, and playwright are
+  # importable by default while an in-session `pip install` still writes to the
+  # per-session venv.
   mcpPython = pkgs.python3.withPackages (
     ps:
     [
       ps.asyncssh
       ps.numpy
       ps.polars
+      # psycopg (v3) + SQLAlchemy so `polars.read_database` reaches Postgres out
+      # of the box: `pl.read_database(sql, create_engine("postgresql+psycopg://…"))`.
+      # connectorx and the ADBC drivers (what `read_database_uri` wants) are not
+      # packaged in nixpkgs, so the SQLAlchemy-engine path is the supported one
+      # here; psycopg also works as a raw DBAPI connection for `read_database`.
+      ps.psycopg
+      ps.sqlalchemy
+      # duckdb: in-process analytical SQL over CSV/Parquet/Arrow with no external
+      # service; `duckdb.sql(q).pl()` hands results straight back to polars.
+      ps.duckdb
+      # pyarrow: the columnar interchange the rest of the data stack assumes —
+      # `polars.to_arrow()`, Parquet/Feather/IPC round-trips, and `duckdb.arrow()`.
+      ps.pyarrow
+      # httpx: an HTTP client for the shared async loop (the session already speaks
+      # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
+      # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
+      ps.httpx
       # matplotlib (and Pillow, pulled in transitively) so plots and images are
       # capturable out of the box: the worker renders any open figure / object
       # with a `_repr_png_` back as an MCP image block.
