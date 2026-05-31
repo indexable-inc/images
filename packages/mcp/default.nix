@@ -156,9 +156,9 @@ let
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
   # `--system-site-packages`, so `tui`, `search`, numpy, polars (incl. Postgres
-  # via psycopg + SQLAlchemy), duckdb, pyarrow, httpx, and playwright are
-  # importable by default while an in-session `pip install` still writes to the
-  # per-session venv.
+  # via psycopg + SQLAlchemy), duckdb, httpx, and playwright are importable by
+  # default while an in-session `pip install` still writes to the per-session
+  # venv.
   mcpPython = pkgs.python3.withPackages (
     ps:
     [
@@ -172,12 +172,13 @@ let
       # here; psycopg also works as a raw DBAPI connection for `read_database`.
       ps.psycopg
       ps.sqlalchemy
-      # duckdb: in-process analytical SQL over CSV/Parquet/Arrow with no external
+      # duckdb: in-process analytical SQL over CSV/Parquet with no external
       # service; `duckdb.sql(q).pl()` hands results straight back to polars.
+      # pyarrow is deliberately not bundled: it pulls arrow-cpp + grpc + the
+      # aws/gcp/azure C++ SDKs (~300 MB) that this use case never touches, and
+      # the polars/duckdb paths return frames natively. A session that needs
+      # explicit Arrow tables (`pl.to_arrow()`) can `pip install pyarrow`.
       ps.duckdb
-      # pyarrow: the columnar interchange the rest of the data stack assumes —
-      # `polars.to_arrow()`, Parquet/Feather/IPC round-trips, and `duckdb.arrow()`.
-      ps.pyarrow
       # httpx: an HTTP client for the shared async loop (the session already speaks
       # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
       # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
@@ -359,6 +360,32 @@ let
 
         mkdir -p "$out"
       '';
+  dataLibsBundled =
+    pkgs.runCommand "ix-mcp-data-libs-bundled"
+      {
+        nativeBuildInputs = [ package ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+
+        # The data/HTTP libraries ship in the pinned interpreter, so a bare
+        # session imports them with no install step. This guards against a future
+        # nixpkgs bump dropping or breaking one of them: importing exercises the
+        # native links (psycopg's libpq C extension, duckdb's extension module),
+        # and resolving the `postgresql+psycopg` dialect proves SQLAlchemy can
+        # actually reach psycopg. A live query needs a server the build sandbox
+        # lacks, so leave that to runtime.
+        ix-mcp exec 'import psycopg, sqlalchemy, duckdb, httpx; from sqlalchemy import create_engine; create_engine("postgresql+psycopg://u@h/db"); print("data-libs-ok")' >stdout 2>stderr
+        if ! grep -q '^data-libs-ok$' stdout; then
+          echo "a bundled data/HTTP library was not importable in a default session:" >&2
+          cat stdout stderr >&2
+          exit 1
+        fi
+
+        mkdir -p "$out"
+      '';
   sessionSubprocessStdin =
     pkgs.runCommand "ix-mcp-session-subprocess-stdin"
       {
@@ -399,6 +426,7 @@ package.overrideAttrs (old: {
             sessionVenv
             tuiBundled
             searchBundled
+            dataLibsBundled
             sessionSubprocessStdin
             ;
         }
