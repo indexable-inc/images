@@ -7,6 +7,7 @@ members = [
   "packages/dag-runner",
   "packages/file-language",
   "packages/file-search",
+  "packages/git-log-pretty",
   "packages/ix-dev-diagnose",
   "packages/mcp",
   "packages/minecraft/nbt",
@@ -66,9 +67,11 @@ clap = "4"
 code-highlight = { path = "packages/code-highlight" }
 code-tokenizer = { path = "packages/code-tokenizer" }
 color-eyre = "0.6"
+devicons = "0.6"
 dirs = "5"
 file-language = { path = "packages/file-language" }
 futures = "0.3"
+git2 = { version = "0.20", default-features = false }
 hegeltest = { version = "0.14", default-features = false }
 ignore = "0.4"
 indicatif = "0.18"

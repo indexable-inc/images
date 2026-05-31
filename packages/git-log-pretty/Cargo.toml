@@ -1,0 +1,28 @@
+[package]
+name = "git-log-pretty"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Pretty git log viewer that lists commits ahead of main with file-icon trees"
+
+[lints]
+workspace = true
+
+[dependencies]
+anstyle.workspace = true
+chrono = { workspace = true, features = ["clock"] }
+clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
+devicons.workspace = true
+# `default-features = false` drops the https/ssh transports (and their openssl /
+# libssh2 system deps) we never use for reading a local repo; `vendored-libgit2`
+# compiles the bundled libgit2 C source with `cc`, so the build needs no system
+# libgit2 or cmake. See libgit2-sys: with no `vendored` feature it probes
+# pkg-config first, which would add a system dependency to the workspace build.
+git2 = { workspace = true, default-features = false, features = ["vendored-libgit2"] }
+strip-ansi-escapes.workspace = true
+terminal-light.workspace = true
+
+[dev-dependencies]
+git2 = { workspace = true, default-features = false, features = ["vendored-libgit2"] }
+tempfile.workspace = true
