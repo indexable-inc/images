@@ -136,16 +136,16 @@ impl Manifest {
     pub fn signature(&self) -> String {
         use sha2::{Digest as _, Sha256};
 
-        let mut hashes: Vec<&str> = self.entries.iter().map(|e| e.hash.as_str()).collect();
-        hashes.sort_unstable();
-        hashes.dedup();
+        let mut sorted: Vec<&str> = self.entries.iter().map(|e| e.hash.as_str()).collect();
+        sorted.sort_unstable();
+        sorted.dedup();
 
-        let mut hasher = Sha256::new();
-        for hash in hashes {
-            hasher.update(hash.as_bytes());
-            hasher.update(b"\n");
+        let mut digest = Sha256::new();
+        for value in sorted {
+            digest.update(value.as_bytes());
+            digest.update(b"\n");
         }
-        format!("{:x}", hasher.finalize())
+        format!("{:x}", digest.finalize())
     }
 
     /// The first relative path that maps to `hash`, if any. Identical content
