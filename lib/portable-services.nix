@@ -132,7 +132,10 @@ let
         };
 
         launchd.config = mkOption {
-          type = types.attrs;
+          # Foreign-format boundary: a launchd plist is an arbitrary nested
+          # attrset of plist values, so this is a typed freeform escape hatch
+          # rather than `types.attrs` (which loses merge semantics and docs).
+          type = types.attrsOf types.anything;
           default = { };
           example = {
             ProcessType = "Background";
@@ -146,7 +149,10 @@ let
         };
 
         systemd.service = mkOption {
-          type = types.attrs;
+          # Foreign-format boundary: systemd unit sections are an arbitrary
+          # nested attrset (`Unit` / `Service` / `Install`), so this is a typed
+          # freeform escape hatch rather than `types.attrs`.
+          type = types.attrsOf types.anything;
           default = { };
           example = {
             Service.MemoryMax = "512M";
@@ -189,6 +195,11 @@ let
       // optionalAttrs (svc.standardOutPath != null) { StandardOutPath = svc.standardOutPath; }
       // optionalAttrs (svc.standardErrorPath != null) { StandardErrorPath = svc.standardErrorPath; };
     in
+    # Deliberate deep merge: the escape hatch must override generated keys at the
+    # leaf (e.g. add `Service.MemoryMax` without dropping the generated
+    # `Service.ExecStart`). A shallow `//` would replace whole sections, so
+    # recursiveUpdate's leaf-level override is the wanted behavior here, not a bug.
+    # ast-grep-ignore: no-recursive-update
     lib.recursiveUpdate generated svc.launchd.config;
 
   /**
@@ -266,6 +277,10 @@ let
           null;
     in
     {
+      # Deliberate deep merge: the escape hatch must override generated unit keys
+      # at the leaf (e.g. add `Service.MemoryMax` while keeping the generated
+      # `Service.ExecStart`). A shallow `//` would replace whole sections.
+      # ast-grep-ignore: no-recursive-update
       service = lib.recursiveUpdate generatedService svc.systemd.service;
       timer = generatedTimer;
     };
