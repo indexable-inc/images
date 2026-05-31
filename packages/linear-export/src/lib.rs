@@ -162,7 +162,7 @@ struct TeamMeta {
 
 /// One issue object from `issues.json`. Optional JSON fields use
 /// `#[serde(default)]` since this is an external schema, not runtime config.
-/// The exporter emits camelCase keys, mirrored here to snake_case fields.
+/// The exporter emits `camelCase` keys, mirrored here to `snake_case` fields.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Issue {

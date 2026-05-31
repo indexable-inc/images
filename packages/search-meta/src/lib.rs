@@ -87,9 +87,11 @@ impl std::str::FromStr for Source {
     }
 }
 
-/// The repository a code record belongs to, used for cross-repo vs single-repo
-/// scoping. There is no silent empty-string fallback: a checkout with no git
-/// remote is named by its directory, observably [`RepoSlug::Local`].
+/// The repository a code record belongs to.
+///
+/// Used for cross-repo vs single-repo scoping. There is no silent empty-string
+/// fallback: a checkout with no git remote is named by its directory, observably
+/// [`RepoSlug::Local`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "value")]
 pub enum RepoSlug {
