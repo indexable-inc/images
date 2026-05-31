@@ -66,8 +66,7 @@ fn hit_from_chunk(chunk: mixedbread::Chunk) -> SearchHit {
     // and no `source`; the old store was code-only, so an absent source means
     // code. A present source tag is preserved verbatim (any corpus, open set).
     let source = metadata_str(metadata, search_meta::keys::SOURCE)
-        .map(Source::from)
-        .unwrap_or_else(Source::code);
+        .map_or_else(Source::code, Source::from);
     let hash = metadata_str(metadata, search_meta::keys::CONTENT_HASH).or_else(|| metadata_str(metadata, "hash"));
     // Code records carry `path`; record sources carry `title`. Either is the
     // display label.

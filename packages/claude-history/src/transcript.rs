@@ -167,9 +167,8 @@ fn render_blocks(blocks: Vec<Block>) -> (String, Option<String>) {
             "text" => push_section(&mut body, block.text.as_deref()),
             "thinking" => push_section(&mut body, block.thinking.as_deref()),
             "tool_use" => {
-                if tool_name.is_none() {
-                    tool_name = block.name.clone();
-                }
+                // Keep the first tool name seen; `or_else` only clones when unset.
+                tool_name = tool_name.or_else(|| block.name.clone());
                 let name = block.name.as_deref().unwrap_or("tool");
                 let input = block.input.map_or_else(String::new, render_value);
                 push_section(&mut body, Some(&format!("[tool_use {name}] {input}")));

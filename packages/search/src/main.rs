@@ -47,7 +47,7 @@ struct Cli {
 enum Command {
     /// Grep the indexed chunks with a regular expression.
     Grep(GrepArgs),
-    /// Ingest a non-code source (slack, linear, claude_history) from a directory.
+    /// Ingest a non-code source (slack, linear, `claude_history`) from a directory.
     Ingest(IngestArgs),
     /// Garbage-collect a non-code source: delete store records absent from the
     /// export (a full-snapshot reconcile, never a window slice).
@@ -58,7 +58,7 @@ enum Command {
 /// these cover the record sources only.
 #[derive(Debug, Args)]
 struct IngestArgs {
-    /// Which source to ingest: slack, linear, or claude_history.
+    /// Which source to ingest: slack, linear, or `claude_history`.
     source: String,
 
     /// Path to the export directory.

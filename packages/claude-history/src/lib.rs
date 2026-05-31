@@ -81,13 +81,13 @@ impl ClaudeHistoryExport {
 
     /// Number of parsed messages.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.messages.len()
     }
 
     /// Whether no messages were parsed.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.messages.is_empty()
     }
 }
