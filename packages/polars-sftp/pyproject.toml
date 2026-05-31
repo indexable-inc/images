@@ -1,0 +1,23 @@
+# Metadata only: the wheel is assembled by Nix (default.nix builds the PyO3
+# cdylib and wheel/mkwheel.py packages it), not a PEP 517 backend. There is no
+# [build-system]; build with `nix build .#polars-sftp`.
+[project]
+name = "polars-sftp"
+version = "0.1.0"
+description = "Polars IO source for remote files over SFTP. Imported as polars_sftp; use scan_sftp()."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "indexable" }]
+classifiers = [
+  "License :: Other/Proprietary License",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Rust",
+]
+
+[tool.pyright]
+include = ["python"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+useLibraryCodeForTypes = false
+reportMissingModuleSource = "none"

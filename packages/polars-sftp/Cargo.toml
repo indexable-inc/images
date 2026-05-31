@@ -1,0 +1,33 @@
+# Standalone crate (its own workspace root, off the repo's top-level graph) so the
+# heavy polars + pyo3-polars + ssh2 dependency tree stays out of the core cargo
+# workspace and its strict lints, the same isolation the bossbar-overlay app uses.
+#
+# Versions are pinned to match the Python-side Polars: polars 1.40.1 (the version
+# in the index MCP session) corresponds to the Rust `polars` 0.53 crate, which is
+# what `pyo3-polars` 0.26 bridges. The Rust and Python Polars versions MUST line
+# up or the PyDataFrame Arrow-FFI transfer breaks.
+[workspace]
+
+[package]
+name = "polars-sftp"
+version = "0.1.0"
+edition = "2021"
+description = "Polars IO source that reads remote files over SFTP (the Rust core behind scan_sftp)"
+
+[lib]
+name = "polars_sftp"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py311"] }
+pyo3-polars = "0.26"
+polars = { version = "0.53", default-features = false, features = [
+  "parquet",
+  "ipc",
+  "csv",
+] }
+ssh2 = "0.9"
+
+[profile.release]
+opt-level = 2
+strip = true
