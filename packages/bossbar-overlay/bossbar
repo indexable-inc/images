@@ -25,14 +25,21 @@ DB="$(db_path)"
 ensure_db() {
   mkdir -p "$(dirname "$DB")"
   sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS bossbars (
-    id        INTEGER PRIMARY KEY,
-    title     TEXT    NOT NULL DEFAULT '',
-    progress  REAL    NOT NULL DEFAULT 1.0,
-    color     TEXT    NOT NULL DEFAULT 'purple',
-    overlay   TEXT    NOT NULL DEFAULT 'progress',
-    visible   INTEGER NOT NULL DEFAULT 1,
-    position  INTEGER NOT NULL DEFAULT 0
+    id          INTEGER PRIMARY KEY,
+    title       TEXT    NOT NULL DEFAULT '',
+    description TEXT    NOT NULL DEFAULT '',
+    progress    REAL    NOT NULL DEFAULT 1.0,
+    color       TEXT    NOT NULL DEFAULT 'purple',
+    overlay     TEXT    NOT NULL DEFAULT 'progress',
+    visible     INTEGER NOT NULL DEFAULT 1,
+    position    INTEGER NOT NULL DEFAULT 0
   );"
+  # `description` shipped after the first schema; add it to a pre-existing table
+  # so `--description` works on a DB created by an older bossbar. SQLite has no
+  # ADD COLUMN IF NOT EXISTS, so guard on the column being absent.
+  if [ -z "$(sqlite3 "$DB" "SELECT 1 FROM pragma_table_info('bossbars') WHERE name = 'description' LIMIT 1;")" ]; then
+    sqlite3 "$DB" "ALTER TABLE bossbars ADD COLUMN description TEXT NOT NULL DEFAULT '';"
+  fi
 }
 
 die() {
@@ -64,48 +71,57 @@ usage() {
 bossbar - control the Minecraft boss bar overlay (SQLite-backed)
 
 Usage:
-  bossbar add <title> [--progress P] [--color C] [--overlay O] [--position N]
-  bossbar set <id|title> [--title T] [--progress P] [--color C]
+  bossbar add <title> [--description D] [--progress P] [--color C]
+                      [--overlay O] [--position N]
+  bossbar set <id|title> [--title T] [--description D] [--progress P] [--color C]
                          [--overlay O] [--position N] [--visible 0|1]
   bossbar rm <id|title>
   bossbar list
   bossbar clear
   bossbar db                 print the database path
 
+  D        longer text shown in a panel that unfolds below the bar on hover
+           (newlines start new paragraphs); pass '' to clear it
   P        fill fraction 0.0 .. 1.0
   C        pink | blue | red | green | yellow | purple | white
   O        progress | notched_6 | notched_10 | notched_12 | notched_20
 
 Examples:
-  bossbar add "Ender Dragon" --color pink --overlay notched_20
+  bossbar add "Ender Dragon" --color pink --overlay notched_20 \
+    --description "Destroy the End Crystals first or it heals to full."
   bossbar set "Ender Dragon" --progress 0.5
   bossbar rm "Ender Dragon"
 EOF
 }
 
-# Parse --flags into SET-style "col = value" assignments.
-# Echoes one assignment per line; validates enums and ranges.
+# Parse --flags into a single comma-joined SET clause ("a = 1, b = '...'").
+# Validates enums and ranges. Joined here rather than echoed one-per-line so a
+# value may itself contain newlines (a multi-paragraph --description) without the
+# caller splitting it apart; command substitution preserves interior newlines.
 parse_fields() {
-  local assigns=""
+  local clause="" sep="" assign
   while [ "$#" -gt 0 ]; do
     local flag="$1" val="${2:-}"
     [ "$#" -ge 2 ] || die "missing value for $flag"
     case "$flag" in
-      --title)    assigns+="title = '$(sq "$val")'"$'\n' ;;
-      --progress) assigns+="progress = $val"$'\n' ;;
-      --position) assigns+="position = $val"$'\n' ;;
-      --visible)  assigns+="visible = $val"$'\n' ;;
+      --title)       assign="title = '$(sq "$val")'" ;;
+      --description) assign="description = '$(sq "$val")'" ;;
+      --progress)    assign="progress = $val" ;;
+      --position)    assign="position = $val" ;;
+      --visible)     assign="visible = $val" ;;
       --color)
         in_list "$val" "$COLORS" || die "color must be one of: $COLORS"
-        assigns+="color = '$val'"$'\n' ;;
+        assign="color = '$val'" ;;
       --overlay)
         in_list "$val" "$OVERLAYS" || die "overlay must be one of: $OVERLAYS"
-        assigns+="overlay = '$val'"$'\n' ;;
+        assign="overlay = '$val'" ;;
       *) die "unknown flag: $flag" ;;
     esac
+    clause+="$sep$assign"
+    sep=", "
     shift 2
   done
-  printf '%s' "$assigns"
+  printf '%s' "$clause"
 }
 
 cmd="${1:-}"
@@ -116,9 +132,11 @@ case "$cmd" in
     [ "$#" -ge 1 ] || die "add needs a <title>"
     title="$1"; shift
     ensure_db
-    assigns="$(parse_fields "$@")"
     set_clause="title = '$(sq "$title")'"
-    while IFS= read -r line; do [ -n "$line" ] && set_clause+=", $line"; done <<< "$assigns"
+    extra="$(parse_fields "$@")"
+    if [ -n "$extra" ]; then
+      set_clause+=", $extra"
+    fi
     sqlite3 "$DB" "INSERT INTO bossbars DEFAULT VALUES;
                    UPDATE bossbars SET $set_clause WHERE id = last_insert_rowid();"
     ;;
@@ -127,13 +145,7 @@ case "$cmd" in
     sel="$(selector "$1")"; shift
     [ "$#" -ge 1 ] || die "set needs at least one field flag"
     ensure_db
-    assigns="$(parse_fields "$@")"
-    set_clause=""
-    while IFS= read -r line; do
-      [ -n "$line" ] || continue
-      [ -n "$set_clause" ] && set_clause+=", "
-      set_clause+="$line"
-    done <<< "$assigns"
+    set_clause="$(parse_fields "$@")"
     sqlite3 "$DB" "UPDATE bossbars SET $set_clause WHERE $sel;"
     ;;
   rm)

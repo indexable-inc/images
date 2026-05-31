@@ -31,6 +31,21 @@ impl Color {
             _ => Self::Purple,
         }
     }
+
+    /// Representative RGB for this bar color (0..=255), approximating the vanilla
+    /// boss bar sprite hue. Used to tint the hover panel's border so the pop-down
+    /// reads as belonging to its bar; the bar sprites themselves stay textured.
+    pub fn accent_rgb(self) -> [u8; 3] {
+        match self {
+            Self::Pink => [0xE0, 0x6A, 0xB8],
+            Self::Blue => [0x46, 0x6C, 0xE6],
+            Self::Red => [0xD8, 0x3A, 0x32],
+            Self::Green => [0x5A, 0xC0, 0x3A],
+            Self::Yellow => [0xE6, 0xC8, 0x3A],
+            Self::Purple => [0x9B, 0x59, 0xD6],
+            Self::White => [0xD8, 0xD8, 0xD8],
+        }
+    }
 }
 
 /// The notch overlays Minecraft draws on top of the color bar. `None` is the
@@ -82,6 +97,10 @@ pub enum Notch {
 pub struct BossBar {
     pub id: i64,
     pub title: String,
+    /// Longer free text revealed in a panel that unfolds below the bar on hover.
+    /// Empty means the bar has no pop-down and behaves exactly as it did before.
+    /// Newlines separate paragraphs; the panel wraps long lines to its width.
+    pub description: String,
     /// Fill fraction, always clamped to `0.0..=1.0` at construction.
     pub progress: f32,
     pub color: Color,

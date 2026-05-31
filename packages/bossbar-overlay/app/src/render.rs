@@ -42,15 +42,53 @@ const MAX_SCALE: f32 = HOVER_SCALE * (1.0 + BREATHE_AMP);
 /// Vanilla title shadow: one dark pixel offset, scaled, no blur.
 const SHADOW: GColor = GColor::rgb(0x3f, 0x3f, 0x3f);
 
+/// Description pop-down panel, in native (unscaled) pixels. Everything is
+/// multiplied by the integer sprite `scale`, so the panel stays pixel-crisp and
+/// proportional to the bars at any display scale.
+mod panel {
+    /// Body font size and line advance (leading). The face matches the title's
+    /// Minecraft font; the extra leading gives wrapped paragraphs room.
+    pub const FONT: f32 = 8.0;
+    pub const LINE: f32 = 10.0;
+    /// Inner text padding and the flat one-pixel border frame.
+    pub const PAD: f32 = 5.0;
+    pub const BORDER: f32 = 1.0;
+    /// Gap between the bar's reserved (hover-headroom) area and the panel top.
+    pub const GAP: f32 = 3.0;
+    /// Flat dark-slate fill, kept slightly translucent so the desktop bleeds
+    /// through like the bars. Straight (non-premultiplied) RGBA in 0..=1.
+    pub const BG: [f32; 4] = [0x12 as f32 / 255.0, 0x0f as f32 / 255.0, 0x1a as f32 / 255.0, 0.92];
+    /// Border opacity; its RGB comes from the bar color's accent.
+    pub const BORDER_ALPHA: f32 = 0.95;
+}
+
+/// Straight-alpha RGBA in 0..=1 from an 8-bit RGB triple and an alpha.
+fn rgba(rgb: [u8; 3], a: f32) -> [f32; 4] {
+    [
+        rgb[0] as f32 / 255.0,
+        rgb[1] as f32 / 255.0,
+        rgb[2] as f32 / 255.0,
+        a,
+    ]
+}
+
+/// Smoothstep ramp: 0 below `lo`, 1 above `hi`, eased between. Lets the panel
+/// text fade in only after the box has begun to unfold.
+fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
+    let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     pos: [f32; 2],
     uv: [f32; 2],
-    /// Per-quad opacity. The hovered or dragged bar paints at 1.0 while the
-    /// rest stay at [`DEFAULT_OPACITY`], so hovering reads as the bar going
-    /// solid rather than any motion.
-    alpha: f32,
+    /// Straight-alpha RGBA tint multiplied into the sampled texel. Bars pass
+    /// white so they show unchanged (the alpha lets a hovered bar paint solid
+    /// over the translucent rest); the panel samples a 1x1 white texture, so the
+    /// tint *is* its flat fill or border color.
+    color: [f32; 4],
 }
 
 #[repr(C)]
@@ -60,13 +98,15 @@ struct Globals {
     _pad: [f32; 2],
 }
 
-/// Which preloaded sprite a layer samples.
+/// Which preloaded sprite a layer samples. `Solid` is a 1x1 white texture used
+/// by the description panel's flat fill and border, tinted via the vertex color.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum TexId {
     ColorBg(Color),
     ColorFill(Color),
     NotchBg(Notch),
     NotchFill(Notch),
+    Solid,
 }
 
 /// One textured quad to draw, in physical pixels.
@@ -78,8 +118,8 @@ struct Quad {
     h: f32,
     /// UV span; fill layers narrow `u1` so the sprite is cut off, not squished.
     u1: f32,
-    /// Opacity for this quad's bar; see [`Vertex::alpha`].
-    alpha: f32,
+    /// Straight-alpha RGBA tint for this quad; see [`Vertex::color`].
+    color: [f32; 4],
 }
 
 /// Physical-pixel geometry of one laid-out bar, in the target's local space.
@@ -96,11 +136,36 @@ struct BarBox {
     has_title: bool,
 }
 
-/// One bar to paint: which bar, its box in target-local pixels, and its opacity.
+/// Physical-pixel geometry of the description pop-down panel, plus its current
+/// reveal. The box unfolds downward as `reveal` goes 0..1; the text fades in via
+/// `text_alpha` slightly behind it. Width matches the bar; produced by
+/// [`Renderer::render_one`] (hover-driven) and [`Renderer::render`] (fully open,
+/// for the `--snapshot` PNG).
+#[derive(Clone, Copy)]
+struct PanelBox {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    border: f32,
+    pad: f32,
+    font_px: f32,
+    line_px: f32,
+    /// Vertical unfold of the box in `0..=1`, anchored at the top edge.
+    reveal: f32,
+    /// Text fade in `0..=1`, lagged behind `reveal` so the box opens first.
+    text_alpha: f32,
+    /// Border RGB (the bar color's accent), 0..=255; the fill is [`panel::BG`].
+    border_rgb: [u8; 3],
+}
+
+/// One bar to paint: which bar, its box in target-local pixels, its opacity, and
+/// an optional description panel unfolding beneath it.
 struct DrawItem<'a> {
     bar: &'a BossBar,
     geom: BarBox,
     alpha: f32,
+    panel: Option<PanelBox>,
 }
 
 pub struct Renderer {
@@ -195,7 +260,7 @@ impl Renderer {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -262,6 +327,12 @@ impl Renderer {
                 upload_png(&device, &queue, &tex_layout, &sampler, fill),
             );
         }
+        // A single white texel the panel quads sample so the vertex color tints
+        // them directly: white * color = color (a flat fill or border).
+        textures.insert(
+            TexId::Solid,
+            upload_white_pixel(&device, &queue, &tex_layout, &sampler),
+        );
 
         // Load *only* the embedded Minecraft font into an otherwise empty
         // database. cosmic-text's default `FontSystem::new` also loads every
@@ -305,8 +376,16 @@ impl Renderer {
 
     /// Physical-pixel geometry of every bar auto-stacked down the top-center
     /// column, in draw order. Used by the multi-bar `--snapshot` render; the
-    /// live overlay gives each bar its own window and uses `render_one`.
-    fn layout(&self, bars: &[BossBar], width: f32) -> Vec<BarBox> {
+    /// live overlay gives each bar its own window and uses `render_one`. `panels`
+    /// is the per-bar panel size (parallel to `bars`); a bar with a panel
+    /// reserves `gap + panel_h` extra vertical space so the next bar clears it.
+    fn layout(
+        &self,
+        bars: &[BossBar],
+        width: f32,
+        panels: &[Option<(f32, f32)>],
+        gap: f32,
+    ) -> Vec<BarBox> {
         let s = self.scale as f32;
         let bar_w = BAR_W as f32 * s;
         let bar_h = BAR_H as f32 * s;
@@ -318,7 +397,7 @@ impl Renderer {
 
         let mut boxes = Vec::with_capacity(bars.len());
         let mut y = top_pad;
-        for b in bars {
+        for (b, panel) in bars.iter().zip(panels) {
             let has_title = !b.title.is_empty();
             let title_h = if has_title { title_px } else { 0.0 };
             let track_y = y + title_h + if has_title { title_gap } else { 0.0 };
@@ -331,7 +410,13 @@ impl Renderer {
                 title_px,
                 has_title,
             });
-            y = track_y + bar_h + bar_gap;
+            // Advance past whatever this bar drew last: its panel bottom when it
+            // has one (sitting `gap` below the bar), otherwise the bar bottom.
+            let bottom = match panel {
+                Some((_, panel_h)) => track_y + bar_h + gap + panel_h,
+                None => track_y + bar_h,
+            };
+            y = bottom + bar_gap;
         }
         boxes
     }
@@ -345,23 +430,35 @@ impl Renderer {
         height: u32,
         items: &[DrawItem<'_>],
     ) -> Result<(), wgpu::SurfaceError> {
-        // A shaped title plus where and how opaque to draw it.
-        struct Title {
+        // A shaped run of text plus where, how opaque, and the rect to clip it
+        // to. Titles span the whole target; description lines clip to the
+        // unfolding panel so they reveal with the box.
+        struct Text {
             buffer: Buffer,
             left: f32,
             top: f32,
             alpha: f32,
+            clip: TextBounds,
         }
 
         let shadow_off = self.scale as f32;
+        let full_bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
 
         let mut quads: Vec<Quad> = Vec::new();
-        let mut titles: Vec<Title> = Vec::new();
+        let mut texts: Vec<Text> = Vec::new();
 
         for item in items {
             let b = item.bar;
             let bx = item.geom;
             let alpha = item.alpha;
+            // Bars sample real sprites, so the tint is white with the bar's
+            // opacity; only the alpha channel matters for them.
+            let tint = [1.0, 1.0, 1.0, alpha];
 
             if bx.has_title {
                 let mut buffer =
@@ -377,11 +474,12 @@ impl Renderer {
                     Some(glyphon::cosmic_text::Align::Center),
                 );
                 buffer.shape_until_scroll(&mut self.font_system, false);
-                titles.push(Title {
+                texts.push(Text {
                     buffer,
                     left: bx.left,
                     top: bx.title_top,
                     alpha,
+                    clip: full_bounds,
                 });
             }
 
@@ -393,7 +491,7 @@ impl Renderer {
                 w: bx.bar_w,
                 h: bx.bar_h,
                 u1: 1.0,
-                alpha,
+                color: tint,
             });
             if b.progress > 0.0 {
                 quads.push(Quad {
@@ -403,7 +501,7 @@ impl Renderer {
                     w: bx.bar_w * b.progress,
                     h: bx.bar_h,
                     u1: b.progress,
-                    alpha,
+                    color: tint,
                 });
             }
             // Optional notch overlay on top, same draw order.
@@ -415,7 +513,7 @@ impl Renderer {
                     w: bx.bar_w,
                     h: bx.bar_h,
                     u1: 1.0,
-                    alpha,
+                    color: tint,
                 });
                 if b.progress > 0.0 {
                     quads.push(Quad {
@@ -425,7 +523,68 @@ impl Renderer {
                         w: bx.bar_w * b.progress,
                         h: bx.bar_h,
                         u1: b.progress,
-                        alpha,
+                        color: tint,
+                    });
+                }
+            }
+
+            // Description pop-down: a flat bordered box that unfolds downward,
+            // with the wrapped paragraph fading in behind it.
+            if let Some(p) = item.panel.filter(|p| p.reveal > 0.001) {
+                let revealed_h = (p.h * p.reveal).max(0.0);
+                // Border frame first, then the fill inset by the border. While
+                // unfolding (revealed_h < 2*border) only the accent strip shows,
+                // so the box reads as opening from a thin line.
+                quads.push(Quad {
+                    tex: TexId::Solid,
+                    x: p.x,
+                    y: p.y,
+                    w: p.w,
+                    h: revealed_h,
+                    u1: 1.0,
+                    color: rgba(p.border_rgb, panel::BORDER_ALPHA),
+                });
+                let inner_x = p.x + p.border;
+                let inner_w = (p.w - 2.0 * p.border).max(0.0);
+                let inner_y = p.y + p.border;
+                let inner_h = (revealed_h - 2.0 * p.border).max(0.0);
+                quads.push(Quad {
+                    tex: TexId::Solid,
+                    x: inner_x,
+                    y: inner_y,
+                    w: inner_w,
+                    h: inner_h,
+                    u1: 1.0,
+                    color: panel::BG,
+                });
+
+                if p.text_alpha > 0.001 && !b.description.trim().is_empty() {
+                    let text_w = (p.w - 2.0 * (p.border + p.pad)).max(1.0);
+                    let mut buffer =
+                        Buffer::new(&mut self.font_system, Metrics::new(p.font_px, p.line_px));
+                    buffer.set_size(&mut self.font_system, Some(text_w), None);
+                    buffer.set_text(
+                        &mut self.font_system,
+                        &b.description,
+                        &Attrs::new().family(Family::Name(&self.font_family)),
+                        Shaping::Advanced,
+                        None,
+                    );
+                    buffer.shape_until_scroll(&mut self.font_system, false);
+                    // Clip to the revealed inner area so lines wipe in with the
+                    // box rather than popping in fully formed.
+                    let clip = TextBounds {
+                        left: inner_x as i32,
+                        top: inner_y as i32,
+                        right: (inner_x + inner_w) as i32,
+                        bottom: (p.y + revealed_h - p.border) as i32,
+                    };
+                    texts.push(Text {
+                        buffer,
+                        left: inner_x + p.pad,
+                        top: inner_y + p.pad,
+                        alpha: p.text_alpha,
+                        clip,
                     });
                 }
             }
@@ -437,11 +596,11 @@ impl Renderer {
         for q in &quads {
             let base = verts.len() as u32;
             let (x0, y0, x1, y1) = (q.x, q.y, q.x + q.w, q.y + q.h);
-            let a = q.alpha;
+            let color = q.color;
             let v = |px, py, u, vv| Vertex {
                 pos: [px, py],
                 uv: [u, vv],
-                alpha: a,
+                color,
             };
             verts.extend_from_slice(&[
                 v(x0, y0, 0.0, 0.0),
@@ -473,7 +632,7 @@ impl Renderer {
                     bytemuck::cast_slice(&[Vertex {
                         pos: [0.0, 0.0],
                         uv: [0.0, 0.0],
-                        alpha: 0.0,
+                        color: [0.0, 0.0, 0.0, 0.0],
                     }])
                 } else {
                     bytemuck::cast_slice(&verts)
@@ -481,35 +640,29 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX,
             });
 
-        // Prepare text. Each title's alpha tracks its own bar, so a hovered bar
-        // goes opaque (title included) while the rest stay translucent.
-        let bounds = TextBounds {
-            left: 0,
-            top: 0,
-            right: width as i32,
-            bottom: height as i32,
-        };
+        // Prepare text. Each run's alpha tracks its own bar (a hovered bar goes
+        // opaque, title and description included) and clips to its own rect.
         let mut areas: Vec<TextArea> = Vec::new();
-        for title in &titles {
-            let a = (title.alpha * 255.0) as u8;
+        for text in &texts {
+            let a = (text.alpha * 255.0) as u8;
             let fg = GColor::rgba(0xff, 0xff, 0xff, a);
             let shadow = GColor::rgba(SHADOW.r(), SHADOW.g(), SHADOW.b(), a);
             // Shadow first, then the white face one pixel up-left of it.
             areas.push(TextArea {
-                buffer: &title.buffer,
-                left: title.left + shadow_off,
-                top: title.top + shadow_off,
+                buffer: &text.buffer,
+                left: text.left + shadow_off,
+                top: text.top + shadow_off,
                 scale: 1.0,
-                bounds,
+                bounds: text.clip,
                 default_color: shadow,
                 custom_glyphs: &[],
             });
             areas.push(TextArea {
-                buffer: &title.buffer,
-                left: title.left,
-                top: title.top,
+                buffer: &text.buffer,
+                left: text.left,
+                top: text.top,
                 scale: 1.0,
-                bounds,
+                bounds: text.clip,
                 default_color: fg,
                 custom_glyphs: &[],
             });
@@ -572,7 +725,9 @@ impl Renderer {
     }
 
     /// Render all bars auto-stacked into one target (the `--snapshot` PNG path).
-    /// `highlight` is the id of a bar to paint opaque.
+    /// `highlight` is the id of a bar to paint opaque. Every bar with a
+    /// description shows its panel fully open, so the snapshot verifies the
+    /// pop-down the live overlay only reveals on hover.
     pub fn render(
         &mut self,
         view: &wgpu::TextureView,
@@ -582,14 +737,34 @@ impl Renderer {
         highlight: Option<i64>,
     ) -> Result<(), wgpu::SurfaceError> {
         let opacity = self.opacity;
-        let boxes = self.layout(bars, width as f32);
+        let (border, pad, font_px, line_px, gap) = self.panel_metrics();
+        let sizes: Vec<Option<(f32, f32)>> =
+            bars.iter().map(|b| self.panel_size(&b.description)).collect();
+        let boxes = self.layout(bars, width as f32, &sizes, gap);
         let items: Vec<DrawItem<'_>> = bars
             .iter()
             .zip(boxes)
-            .map(|(bar, geom)| DrawItem {
-                bar,
-                geom,
-                alpha: if Some(bar.id) == highlight { 1.0 } else { opacity },
+            .zip(&sizes)
+            .map(|((bar, geom), size)| {
+                let panel = size.map(|(panel_w, panel_h)| PanelBox {
+                    x: ((width as f32 - panel_w) * 0.5).max(0.0),
+                    y: geom.track_y + geom.bar_h + gap,
+                    w: panel_w,
+                    h: panel_h,
+                    border,
+                    pad,
+                    font_px,
+                    line_px,
+                    reveal: 1.0,
+                    text_alpha: 1.0,
+                    border_rgb: bar.color.accent_rgb(),
+                });
+                DrawItem {
+                    bar,
+                    geom,
+                    alpha: if Some(bar.id) == highlight { 1.0 } else { opacity },
+                    panel,
+                }
             })
             .collect();
         self.draw(view, width, height, &items)
@@ -602,6 +777,10 @@ impl Renderer {
     /// and translucent and the hover headroom is transparent margin. The window
     /// size must come from [`bar_window_px`] so the grown bar fits without
     /// resizing.
+    ///
+    /// When the bar has a description and the window has grown tall enough (the
+    /// overlay enlarges it on hover, see [`Renderer::expanded_window_px`]), a
+    /// description panel unfolds beneath the bar, revealing with `hover`.
     pub fn render_one(
         &mut self,
         view: &wgpu::TextureView,
@@ -626,12 +805,18 @@ impl Renderer {
         let bar_w = BAR_W as f32 * s;
         let bar_h = BAR_H as f32 * s;
 
-        // Center the content (plus its shadow offset) in the window so growth on
-        // hover expands evenly from the middle rather than shifting a corner.
+        // The bar lives in the top region: the collapsed window size, which holds
+        // it plus its grow/breathe headroom. Any extra window height below that
+        // is the panel's drop area, so the bar stays put as the panel unfolds.
+        let collapsed_h = bar_window_px(self.scale, has_title).1 as f32;
+        let top_region_h = collapsed_h.min(height as f32);
+
+        // Center the content (plus its shadow offset) in the top region so growth
+        // on hover expands evenly from the middle rather than shifting a corner.
         let content_w = bar_w + shadow;
         let content_h = title_h + title_gap + bar_h + shadow;
         let left = ((width as f32 - content_w) * 0.5).max(0.0);
-        let top = ((height as f32 - content_h) * 0.5).max(0.0);
+        let top = ((top_region_h - content_h) * 0.5).max(0.0);
 
         let geom = BarBox {
             left,
@@ -642,8 +827,99 @@ impl Renderer {
             title_px,
             has_title,
         };
-        let items = [DrawItem { bar, geom, alpha }];
+
+        // Only build the panel when the window was actually grown for it; a
+        // collapsed window (height == top_region_h) has no room and skips it.
+        let panel = if height as f32 > collapsed_h + 0.5 {
+            self.panel_size(&bar.description).map(|(panel_w, panel_h)| {
+                let (border, pad, font_px, line_px, gap) = self.panel_metrics();
+                PanelBox {
+                    x: ((width as f32 - panel_w) * 0.5).max(0.0),
+                    y: collapsed_h + gap,
+                    w: panel_w,
+                    h: panel_h,
+                    border,
+                    pad,
+                    font_px,
+                    line_px,
+                    reveal: hover,
+                    text_alpha: ramp(hover, 0.35, 1.0),
+                    border_rgb: bar.color.accent_rgb(),
+                }
+            })
+        } else {
+            None
+        };
+
+        let items = [DrawItem {
+            bar,
+            geom,
+            alpha,
+            panel,
+        }];
         self.draw(view, width, height, &items)
+    }
+
+    /// Panel metrics in physical pixels at the current scale:
+    /// `(border, pad, font, line, gap)`.
+    fn panel_metrics(&self) -> (f32, f32, f32, f32, f32) {
+        let s = self.scale as f32;
+        (
+            panel::BORDER * s,
+            panel::PAD * s,
+            panel::FONT * s,
+            panel::LINE * s,
+            panel::GAP * s,
+        )
+    }
+
+    /// Physical-pixel size `(width, height)` of the description panel for
+    /// `description` at the current scale: width matches the bar, height fits the
+    /// wrapped, padded text. `None` for an empty description (no panel).
+    fn panel_size(&mut self, description: &str) -> Option<(f32, f32)> {
+        if description.trim().is_empty() {
+            return None;
+        }
+        let (border, pad, font_px, line_px, _gap) = self.panel_metrics();
+        let panel_w = BAR_W as f32 * self.scale as f32;
+        let text_w = (panel_w - 2.0 * (border + pad)).max(1.0);
+        let lines = self.measure_lines(description, text_w, font_px, line_px).max(1);
+        let panel_h = 2.0 * (border + pad) + lines as f32 * line_px;
+        Some((panel_w, panel_h))
+    }
+
+    /// Count the wrapped visual lines `description` shapes to at `text_w`. Drives
+    /// panel height, so it uses the same font, size, and wrap width as the draw.
+    fn measure_lines(&mut self, description: &str, text_w: f32, font_px: f32, line_px: f32) -> usize {
+        let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font_px, line_px));
+        buffer.set_size(&mut self.font_system, Some(text_w), None);
+        buffer.set_text(
+            &mut self.font_system,
+            description,
+            &Attrs::new().family(Family::Name(&self.font_family)),
+            Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        buffer.layout_runs().count()
+    }
+
+    /// Physical-pixel window size for `bar` with its hover panel open: the
+    /// collapsed bar window grown downward by the gap plus the panel. Returns the
+    /// collapsed size when the bar has no description. The overlay grows the
+    /// window to this on hover so the panel has room to unfold.
+    pub fn expanded_window_px(&mut self, bar: &BossBar) -> (u32, u32) {
+        let (cw, ch) = bar_window_px(self.scale, !bar.title.is_empty());
+        match self.panel_size(&bar.description) {
+            Some((panel_w, panel_h)) => {
+                let gap = panel::GAP * self.scale as f32;
+                (
+                    cw.max(panel_w.ceil() as u32),
+                    ch + (gap + panel_h).ceil() as u32,
+                )
+            }
+            None => (cw, ch),
+        }
     }
 }
 
@@ -705,6 +981,61 @@ fn upload_png(
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("bossbar.sprite.bind"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
+/// Upload a 1x1 opaque-white sRGB texel with its own bind group. The panel quads
+/// sample it so the per-vertex color becomes a flat fill: white * color = color.
+fn upload_white_pixel(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    let size = wgpu::Extent3d {
+        width: 1,
+        height: 1,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("bossbar.solid.tex"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &[0xff, 0xff, 0xff, 0xff],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: Some(1),
+        },
+        size,
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("bossbar.solid.bind"),
         layout,
         entries: &[
             wgpu::BindGroupEntry {

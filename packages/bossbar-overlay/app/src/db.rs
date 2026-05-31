@@ -21,29 +21,36 @@ pub const POLL: Duration = Duration::from_millis(200);
 
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS bossbars (
-  id        INTEGER PRIMARY KEY,
-  title     TEXT    NOT NULL DEFAULT '',
-  progress  REAL    NOT NULL DEFAULT 1.0,
-  color     TEXT    NOT NULL DEFAULT 'purple',
-  overlay   TEXT    NOT NULL DEFAULT 'progress',
-  visible   INTEGER NOT NULL DEFAULT 1,
-  position  INTEGER NOT NULL DEFAULT 0,
-  x         REAL,
-  y         REAL
+  id          INTEGER PRIMARY KEY,
+  title       TEXT    NOT NULL DEFAULT '',
+  description TEXT    NOT NULL DEFAULT '',
+  progress    REAL    NOT NULL DEFAULT 1.0,
+  color       TEXT    NOT NULL DEFAULT 'purple',
+  overlay     TEXT    NOT NULL DEFAULT 'progress',
+  visible     INTEGER NOT NULL DEFAULT 1,
+  position    INTEGER NOT NULL DEFAULT 0,
+  x           REAL,
+  y           REAL
 );";
 
 /// Columns added after the initial schema shipped. `ALTER TABLE ADD COLUMN` is
 /// the supported online migration in SQLite, and it errors if the column
-/// already exists, so each runs through `add_column_if_missing`.
-const ADDED_COLUMNS: &[(&str, &str)] = &[("x", "REAL"), ("y", "REAL")];
+/// already exists, so each runs through `add_column_if_missing`. A constant
+/// default keeps the migration legal on an existing table.
+const ADDED_COLUMNS: &[(&str, &str)] = &[
+    ("x", "REAL"),
+    ("y", "REAL"),
+    ("description", "TEXT NOT NULL DEFAULT ''"),
+];
 
 /// Rows inserted only when the DB file is created for the first time, so a
-/// brand-new install shows something and documents the contract by example.
+/// brand-new install shows something and documents the contract by example. The
+/// third bar carries a multi-paragraph description to show off the hover panel.
 const SEED: &str = "\
-INSERT INTO bossbars (title, progress, color, overlay, position) VALUES
-  ('Ender Dragon',  0.82, 'pink',   'notched_20', 0),
-  ('Wither',        0.55, 'blue',   'notched_6',  1),
-  ('Build: compiling', 0.40, 'green', 'progress',  2);";
+INSERT INTO bossbars (title, description, progress, color, overlay, position) VALUES
+  ('Ender Dragon', 'The final boss of the End. Destroy all the End Crystals on the obsidian pillars first, or it heals back to full.', 0.82, 'pink', 'notched_20', 0),
+  ('Wither', '', 0.55, 'blue', 'notched_6', 1),
+  ('Build: compiling', 'Hover any bar to read more.\n\nThe panel wraps long lines and keeps your paragraph breaks, so a bar can carry a sentence or a few.', 0.40, 'green', 'progress', 2);";
 
 /// Resolve the database path: `BOSSBAR_DB` wins, otherwise the per-OS app-data
 /// path the `bossbar` CLI also computes.
@@ -105,7 +112,7 @@ pub fn set_position(path: &Path, id: i64, pos: glam::DVec2) -> rusqlite::Result<
 
 fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, progress, color, overlay, position, x, y
+        "SELECT id, title, progress, color, overlay, position, x, y, description
          FROM bossbars
          WHERE visible != 0
          ORDER BY position ASC, id ASC",
@@ -116,6 +123,7 @@ fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
         Ok(BossBar {
             id: r.get(0)?,
             title: r.get(1)?,
+            description: r.get(8)?,
             progress: r.get::<_, f64>(2)?.clamp(0.0, 1.0) as f32,
             color: Color::parse(&r.get::<_, String>(3)?),
             overlay: Overlay::parse(&r.get::<_, String>(4)?),
@@ -206,6 +214,50 @@ mod tests {
         assert_eq!(bars[0].color, Color::Pink);
         assert_eq!(bars[0].overlay, Overlay::Notched20);
         assert!((bars[0].progress - 0.82).abs() < 1e-6);
+        // The seed documents the description contract by example.
+        assert!(bars[0].description.contains("End Crystals"));
+        assert_eq!(bars[1].description, "", "the Wither seed has no panel");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn legacy_db_without_description_is_migrated_and_round_trips() {
+        // A database created before `description` shipped (no description, x, or
+        // y columns) must gain the column on open and read back as empty, then
+        // accept a written description.
+        let path = temp_db("legacy-desc");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        {
+            let legacy = Connection::open(&path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE bossbars (
+                       id       INTEGER PRIMARY KEY,
+                       title    TEXT    NOT NULL DEFAULT '',
+                       progress REAL    NOT NULL DEFAULT 1.0,
+                       color    TEXT    NOT NULL DEFAULT 'purple',
+                       overlay  TEXT    NOT NULL DEFAULT 'progress',
+                       visible  INTEGER NOT NULL DEFAULT 1,
+                       position INTEGER NOT NULL DEFAULT 0
+                     );
+                     INSERT INTO bossbars (title) VALUES ('old');",
+                )
+                .unwrap();
+        }
+
+        let conn = open(&path).unwrap();
+        let bars = read(&conn).unwrap();
+        assert_eq!(bars.len(), 1);
+        assert_eq!(bars[0].title, "old");
+        assert_eq!(bars[0].description, "", "migrated column defaults to empty");
+
+        conn.execute(
+            "UPDATE bossbars SET description = ?1 WHERE id = ?2",
+            rusqlite::params!["line one\n\nline two", bars[0].id],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        assert_eq!(bars[0].description, "line one\n\nline two");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

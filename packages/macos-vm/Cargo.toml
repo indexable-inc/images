@@ -1,0 +1,32 @@
+# macos-vm: a thin Rust binding over Apple's Virtualization.framework
+# (`objc2-virtualization`) plus a small CLI that owns the VM lifecycle.
+#
+# This is the first crate in the workspace that links an Apple framework. ALL
+# dependencies are gated to `cfg(target_os = "macos")` (the way the unit graph
+# gates `alsa-sys`, see lib/rust-workspace.nix): on a Linux CI graph the crate
+# has zero dependencies and compiles to a one-line `main` that exits with a
+# clear "macOS only" error. Even `clap` and `snafu` are macOS-only here, because
+# everything that uses them is itself macOS-gated; leaving them unconditional
+# would trip the repo's unused-crate-dependencies check on Linux.
+[package]
+name = "macos-vm"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Drive Apple's Virtualization.framework from Rust: own a VM's lifecycle"
+
+[[bin]]
+name = "macos-vm"
+path = "src/main.rs"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+clap = { version = "4", features = ["derive"] }
+snafu = "0.8"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-virtualization = "0.3"
+block2 = "0.6"
+dispatch2 = "0.3"
+
+[lints]
+workspace = true
