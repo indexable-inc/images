@@ -98,6 +98,87 @@ let
     '';
   };
 
+  # `check` is the full CI gate as one repo-owned command: check.yml runs
+  # `nix run .#check`, so the same two steps run in CI and locally from a single
+  # definition. It targets x86_64-linux explicitly because that is the system CI
+  # builds for; a linux runner can only pure-eval the cross-platform darwin
+  # images, and that cross-eval was most of what made the old single-threaded
+  # `nix flake check` slow. `nix` is taken from the ambient PATH on purpose
+  # (this is always invoked as `nix run .#check`, so the host's daemon-matched
+  # nix is already present); pinning a client nix here could mismatch the host
+  # Nix 2.34.x daemon.
+  #
+  # Step 1 (nix-fast-build) builds every `checks.x86_64-linux` derivation: it
+  # evaluates with nix-eval-jobs (parallel) and streams each drv into a build
+  # pool as it resolves. --skip-cached drops paths already in a substituter (a
+  # warm run does almost no work), --no-nom keeps plain logs, --no-link leaves no
+  # result symlinks. It exits nonzero iff a build or eval fails: that is the gate.
+  # --eval-workers 16 with --eval-max-memory-size 6144 is a headroom guard rail
+  # (above nix-eval-jobs' 4 GiB default per worker, below the old 8 GiB), not a
+  # workaround: the per-crate check split (see the `checks` block below) keeps
+  # each worker's eval bounded by the largest single crate. Pinned by commit to
+  # nix-fast-build 1.5.0.
+  #
+  # Step 2 (nix-eval-jobs) is the schema/eval gate over the package outputs,
+  # broader than the `checks` set step 1 built. nix-eval-jobs is the same
+  # parallel evaluator nix-fast-build wraps; run eval-only over
+  # packages.x86_64-linux it spreads per-attribute eval across 16 workers and
+  # realizes IFD (the `site` import-npm-lock source) on demand. Each worker is a
+  # full evaluator that can grow to the 4 GiB-per-worker cap and the host runs
+  # many CI jobs at once, so 16 both bounds memory and already collapses the eval
+  # toward the slowest single attribute (warm store, eval-cache off: 342s at 1
+  # worker, 75s at 16, 70s at 32). The eval cache is off because it is keyed per
+  # commit (it never hits on a fresh CI commit) and parallel workers otherwise
+  # contend writing the same per-commit sqlite ("database is busy"). The
+  # resulting cold per-commit re-eval is tracked separately; a flake eval cache
+  # would amortize it. nix-eval-jobs
+  # reports a per-attribute eval failure as a JSON `error` line and still exits 0,
+  # so the gate is the error-line check; a startup or lock failure exits nonzero
+  # and aborts the run (Nushell propagates external failures like bash
+  # `set -o pipefail`). Pinned by commit to nix-eval-jobs v2.34.1, matching the
+  # host Nix 2.34.x.
+  check = ix.writeNushellApplication pkgs {
+    name = "check";
+    meta.description = "Run the full CI gate: build .#checks.x86_64-linux and eval-validate .#packages.x86_64-linux";
+    text = ''
+      const fast_build = "github:Mic92/nix-fast-build/7f185e0ec37b65b4730f892e0de9a831b0610f3a"
+      const eval_jobs = "github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7"
+
+      def main [] {
+        ^nix run $fast_build -- ...[
+          "--flake" ".#checks.x86_64-linux"
+          "--eval-max-memory-size" "6144"
+          "--eval-workers" "16"
+          "--skip-cached"
+          "--no-nom"
+          "--no-link"
+          "--option" "accept-flake-config" "true"
+        ]
+
+        let tmp = (mktemp --directory --tmpdir "ix-check.XXXXXX")
+        let report = ($tmp | path join "flake-schema-eval.jsonl")
+        do --capture-errors {
+          ^nix run $eval_jobs -- ...[
+            "--flake" ".#packages.x86_64-linux"
+            "--workers" "16"
+            "--gc-roots-dir" ($tmp | path join "flake-schema-eval-gc")
+            "--option" "accept-flake-config" "true"
+            "--option" "eval-cache" "false"
+          ]
+        } | tee { save --raw --force $report }
+
+        # nix-eval-jobs exits 0 even when an attribute fails to evaluate, so this
+        # error-line check is the gate; a nonzero exit already aborted above. The
+        # report is left in place on failure for inspection.
+        if (open --raw $report | lines | any {|line| $line | str contains '"error":' }) {
+          print --stderr "flake schema evaluation failed; see the error lines above"
+          exit 1
+        }
+        rm --recursive --force $tmp
+      }
+    '';
+  };
+
   updateMods = ix.writePythonApplication pkgs {
     name = "update-mods";
     src = paths.tools.updateMods;
@@ -394,7 +475,7 @@ in
 
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
-      inherit lint site;
+      inherit check lint site;
       site-dev = site.passthru.devServer;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
