@@ -262,19 +262,28 @@ async fn run_ingest(cli: IngestArgs, gc: bool) -> anyhow::Result<()> {
         .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
     let store = MixedbreadStore::from_login(base_url).await?;
     let dir = Path::new(&cli.dir);
-    let source: Source = cli.source.parse()?;
 
-    match source {
-        Source::Linear => {
+    // `source` is an open tag, so dispatch on the string: each record corpus has
+    // its own adapter crate. `code`/`web` are not ingested here, and an unknown
+    // tag fails loudly rather than silently doing nothing.
+    match cli.source.as_str() {
+        "linear" => {
             let adapter = linear_export::LinearExport::open(dir)?;
             run_one_source(&adapter, &store, &store_name, gc).await
         }
-        Source::Slack => {
+        "slack" => {
             let adapter = slack_export::SlackExport::open(dir)?;
             run_one_source(&adapter, &store, &store_name, gc).await
         }
-        Source::Code | Source::Web => anyhow::bail!(
-            "ingest covers record sources (slack, linear); code is indexed by a normal `search`"
+        "claude_history" => {
+            let adapter = claude_history::ClaudeHistoryExport::open(dir)?;
+            run_one_source(&adapter, &store, &store_name, gc).await
+        }
+        "code" | "web" => anyhow::bail!(
+            "ingest covers record sources (slack, linear, claude_history); code is indexed by a normal `search`"
+        ),
+        other => anyhow::bail!(
+            "no ingest adapter for source {other:?}; known record sources: slack, linear, claude_history"
         ),
     }
 }
@@ -684,7 +693,7 @@ fn render(
 ) -> String {
     // Only local code gets the `./path` prefix; web URLs and record titles
     // (Slack threads, Linear issues) print as-is.
-    let prefix = if hit.source == Source::Code { "./" } else { "" };
+    let prefix = if hit.source.is_code() { "./" } else { "" };
     let path = paint(palette.path, &format!("{prefix}{}", hit.label));
 
     // `start_line` is 0-based and `num_lines` is a line count, so the displayed
@@ -757,7 +766,7 @@ fn render_snippet(
     // parse context and code-highlight renders its own line-number gutter. Only
     // local code has a readable file; web/Slack/Linear hits fall through to a
     // plain gutter over the chunk text.
-    if hit.source == Source::Code
+    if hit.source.is_code()
         && let Some(num) = hit.num_lines
         && let Ok(source) = std::fs::read_to_string(root.join(&hit.label))
     {
@@ -820,7 +829,7 @@ mod tests {
     fn hit(text: &str) -> DisplayHit {
         DisplayHit {
             label: "web://example".to_owned(),
-            source: Source::Web,
+            source: Source::web(),
             start_line: Some(4),
             num_lines: Some(2),
             score: 0.5,

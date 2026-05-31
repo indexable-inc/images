@@ -130,7 +130,7 @@ impl SourceAdapter for LinearExport {
     type Error = Error;
 
     fn source(&self) -> Source {
-        Source::Linear
+        Source::new("linear")
     }
 
     fn documents(&self) -> impl Iterator<Item = Result<Document, Error>> + Send {
@@ -335,7 +335,7 @@ impl Issue {
         let mut meta = Map::new();
 
         // Common envelope.
-        meta.insert(keys::SOURCE.to_owned(), json!(Source::Linear.as_str()));
+        meta.insert(keys::SOURCE.to_owned(), json!(Source::new("linear").as_str()));
         meta.insert("external_id".to_owned(), json!(external_id));
         meta.insert(keys::CONTENT_HASH.to_owned(), json!(content_hash));
         meta.insert(keys::TITLE.to_owned(), json!(title));

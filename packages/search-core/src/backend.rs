@@ -395,7 +395,7 @@ impl MemoryStore {
                 }
                 if line_matches(line) {
                     hits.push(SearchHit {
-                        source: stored.source,
+                        source: stored.source.clone(),
                         hash: Some(stored.document.content_hash.clone()),
                         // Code records label by `path`; record sources by `title`.
                         path: stored

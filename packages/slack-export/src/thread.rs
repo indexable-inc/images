@@ -348,7 +348,7 @@ struct BuildMeta<'a> {
 /// extras. Every key is top-level so each is a filter key.
 fn build_meta(args: &BuildMeta<'_>) -> Value {
     let mut map = Map::new();
-    map.insert(keys::SOURCE.to_owned(), json!(search_meta::Source::Slack.as_str()));
+    map.insert(keys::SOURCE.to_owned(), json!(search_meta::Source::new("slack").as_str()));
     map.insert("external_id".to_owned(), json!(args.external_id));
     map.insert(keys::CONTENT_HASH.to_owned(), json!(args.content_hash));
     map.insert(keys::TITLE.to_owned(), json!(args.title));

@@ -8,6 +8,7 @@ members = [
   "packages/ast-merge/git",
   "packages/ast-merge/langs",
   "packages/ast-merge/matcher",
+  "packages/claude-history",
   "packages/clone-detect/cli",
   "packages/clone-detect/detect",
   "packages/clone-detect/hash",
@@ -86,6 +87,7 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
+claude-history = { path = "packages/claude-history" }
 clone-detect = { path = "packages/clone-detect/detect" }
 clone-hash = { path = "packages/clone-detect/hash" }
 clone-pragma = { path = "packages/clone-detect/pragma" }

@@ -28,62 +28,87 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::{ResultExt as _, Snafu, ensure};
 
-/// Which corpus a record came from. Serializes to the `snake_case` tag stored
-/// under [`keys::SOURCE`] and used as the primary scope filter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Source {
-    /// A file in a git checkout.
-    Code,
-    /// A Slack thread.
-    Slack,
-    /// A Linear issue.
-    Linear,
-    /// A hosted web-search result (no local record).
-    Web,
-}
+/// Which corpus a record came from: an open string tag, not a closed set.
+///
+/// A source is a tag value stored under [`keys::SOURCE`] and used as the primary
+/// scope filter, so adding a corpus (a Slack export, Claude Code history,
+/// anything later) is a new tag value, never an enum variant or a new match arm
+/// in the search pipeline. The newtype keeps it a typed boundary (callers pass a
+/// `Source`, not a bare string), while [`Source::code`] and [`Source::web`] name
+/// the two corpora the pipeline treats specially (local-manifest scoping and
+/// opt-in web results); every other tag is a generic record source.
+///
+/// `#[serde(transparent)]` keeps the wire form a bare string, identical to the
+/// values already stored (`"code"`, `"slack"`, ...), so existing records read
+/// back unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Source(String);
 
 impl Source {
-    /// The `snake_case` tag, matching the serialized form.
+    /// Wrap a tag value (e.g. `"slack"`, `"claude_history"`).
+    pub fn new(tag: impl Into<String>) -> Self {
+        Self(tag.into())
+    }
+
+    /// The `code` corpus: files in a git checkout, scoped against a local
+    /// manifest by the search pipeline.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Code => "code",
-            Self::Slack => "slack",
-            Self::Linear => "linear",
-            Self::Web => "web",
-        }
+    pub fn code() -> Self {
+        Self("code".to_owned())
+    }
+
+    /// The `web` corpus: hosted web-search results with no local record,
+    /// included only when web results are requested.
+    #[must_use]
+    pub fn web() -> Self {
+        Self("web".to_owned())
+    }
+
+    /// The tag string.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether this is the `code` corpus (manifest-scoped in the pipeline).
+    #[must_use]
+    pub fn is_code(&self) -> bool {
+        self.0 == "code"
+    }
+
+    /// Whether this is the `web` corpus (included only on web queries).
+    #[must_use]
+    pub fn is_web(&self) -> bool {
+        self.0 == "web"
     }
 }
 
 impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(&self.0)
     }
 }
 
-/// A source string that did not name a known [`Source`].
-#[derive(Debug, Snafu)]
-#[snafu(display("unknown source {value:?}; expected one of code, slack, linear, web"))]
-pub struct ParseSourceError {
-    /// The string that failed to parse.
-    pub value: String,
+impl From<&str> for Source {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+impl From<String> for Source {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
 }
 
 impl std::str::FromStr for Source {
-    type Err = ParseSourceError;
+    // Any string is a valid tag, so parsing never fails; the impl exists so
+    // `s.parse::<Source>()` keeps working at call sites.
+    type Err = std::convert::Infallible;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "code" => Ok(Self::Code),
-            "slack" => Ok(Self::Slack),
-            "linear" => Ok(Self::Linear),
-            "web" => Ok(Self::Web),
-            other => ParseSourceSnafu {
-                value: other.to_owned(),
-            }
-            .fail(),
-        }
+        Ok(Self(value.to_owned()))
     }
 }
 
@@ -263,16 +288,27 @@ mod tests {
 
     #[test]
     fn source_round_trips_through_str() {
-        for source in [Source::Code, Source::Slack, Source::Linear, Source::Web] {
-            let parsed: Source = source.as_str().parse().expect("parse");
+        for tag in ["code", "slack", "linear", "claude_history", "web", "anything-new"] {
+            let source = Source::new(tag);
+            let parsed: Source = source.as_str().parse().expect("infallible");
             assert_eq!(parsed, source);
+            assert_eq!(source.as_str(), tag);
         }
-        assert!("notes".parse::<Source>().is_err());
     }
 
     #[test]
-    fn source_serializes_to_snake_case() {
-        assert_eq!(serde_json::to_string(&Source::Linear).expect("ser"), "\"linear\"");
+    fn well_known_sources_classify() {
+        assert!(Source::code().is_code());
+        assert!(Source::web().is_web());
+        assert!(!Source::new("slack").is_code());
+        assert!(!Source::new("claude_history").is_web());
+    }
+
+    #[test]
+    fn source_serializes_as_bare_string() {
+        assert_eq!(serde_json::to_string(&Source::new("linear")).expect("ser"), "\"linear\"");
+        let parsed: Source = serde_json::from_str("\"slack\"").expect("de");
+        assert_eq!(parsed, Source::new("slack"));
     }
 
     #[test]

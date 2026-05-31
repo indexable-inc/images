@@ -34,6 +34,36 @@ pub const IS_EXTERNAL: &str = "is_external";
 /// Whether every message in the thread is from a bot/integration.
 pub const IS_BOT_THREAD: &str = "is_bot_thread";
 
+// Claude Code agent history.
+/// Short hostname the transcript was recorded on.
+pub const HOST: &str = "host";
+/// Local OS user that owns the transcript.
+pub const USER: &str = "user";
+/// Project slug (the real working-directory path the session ran in).
+pub const PROJECT: &str = "project";
+/// Claude Code session id (one transcript file).
+pub const SESSION_ID: &str = "session_id";
+/// Stable per-message uuid assigned by Claude Code.
+pub const MESSAGE_UUID: &str = "message_uuid";
+/// Parent message uuid, threading the conversation.
+pub const PARENT_UUID: &str = "parent_uuid";
+/// Message role (`user`/`assistant`/`system`).
+pub const ROLE: &str = "role";
+/// Transcript record type (`user`/`assistant`/`system`/...).
+pub const RECORD_TYPE: &str = "record_type";
+/// Model id for an assistant message.
+pub const MODEL: &str = "model";
+/// Working directory the session ran in.
+pub const CWD: &str = "cwd";
+/// Git branch checked out during the message, when recorded.
+pub const GIT_BRANCH: &str = "git_branch";
+/// Tool name for a tool-use / tool-result message, when present.
+pub const TOOL_NAME: &str = "tool_name";
+/// Assistant input token count, when recorded.
+pub const INPUT_TOKENS: &str = "input_tokens";
+/// Assistant output token count, when recorded.
+pub const OUTPUT_TOKENS: &str = "output_tokens";
+
 // Linear.
 /// Linear issue identifier, e.g. `ENG-1885`.
 pub const IDENTIFIER: &str = "identifier";

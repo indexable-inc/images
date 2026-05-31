@@ -175,55 +175,53 @@ fn project(
         if out.len() >= top_k {
             break;
         }
-        match hit.source {
-            Source::Web => {
-                if include_web {
-                    out.push(DisplayHit {
-                        label: hit.path.unwrap_or_else(|| "(web)".to_owned()),
-                        source: Source::Web,
-                        start_line: None,
-                        num_lines: None,
-                        score: hit.score,
-                        text: hit.text,
-                    });
-                }
-            }
-            Source::Code => {
-                let in_manifest = hit.hash.as_deref().is_some_and(|hash| local.contains(hash));
-                // Worktree-exact keeps only this checkout's code; a server-filtered
-                // scope (a repo / all-repos query) trusts the backend filter.
-                if code_scope == CodeScope::WorktreeExact && !in_manifest {
-                    continue;
-                }
-                let label = hit
-                    .hash
-                    .as_deref()
-                    .and_then(|hash| manifest.path_for_hash(hash))
-                    .map(str::to_owned)
-                    .or(hit.path)
-                    .or(hit.hash)
-                    .unwrap_or_default();
+        let source = hit.source;
+        if source.is_web() {
+            if include_web {
                 out.push(DisplayHit {
-                    label,
-                    source: Source::Code,
-                    start_line: hit.start_line,
-                    num_lines: hit.num_lines,
-                    score: hit.score,
-                    text: hit.text,
-                });
-            }
-            source @ (Source::Slack | Source::Linear) => {
-                // No checkout to scope against; the server-side metadata filter is
-                // authoritative, so the record passes through.
-                out.push(DisplayHit {
-                    label: hit.path.unwrap_or_default(),
+                    label: hit.path.unwrap_or_else(|| "(web)".to_owned()),
                     source,
-                    start_line: hit.start_line,
-                    num_lines: hit.num_lines,
+                    start_line: None,
+                    num_lines: None,
                     score: hit.score,
                     text: hit.text,
                 });
             }
+        } else if source.is_code() {
+            let in_manifest = hit.hash.as_deref().is_some_and(|hash| local.contains(hash));
+            // Worktree-exact keeps only this checkout's code; a server-filtered
+            // scope (a repo / all-repos query) trusts the backend filter.
+            if code_scope == CodeScope::WorktreeExact && !in_manifest {
+                continue;
+            }
+            let label = hit
+                .hash
+                .as_deref()
+                .and_then(|hash| manifest.path_for_hash(hash))
+                .map(str::to_owned)
+                .or(hit.path)
+                .or(hit.hash)
+                .unwrap_or_default();
+            out.push(DisplayHit {
+                label,
+                source,
+                start_line: hit.start_line,
+                num_lines: hit.num_lines,
+                score: hit.score,
+                text: hit.text,
+            });
+        } else {
+            // Any other tag (slack, linear, claude_history, ...) is a record
+            // source: no checkout to scope against, so the server-side metadata
+            // filter is authoritative and the record passes through.
+            out.push(DisplayHit {
+                label: hit.path.unwrap_or_default(),
+                source,
+                start_line: hit.start_line,
+                num_lines: hit.num_lines,
+                score: hit.score,
+                text: hit.text,
+            });
         }
     }
     out
@@ -334,7 +332,7 @@ mod tests {
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].label, "mine.rs");
-        assert_eq!(hits[0].source, Source::Code);
+        assert_eq!(hits[0].source, Source::code());
     }
 
     #[tokio::test]
@@ -359,7 +357,7 @@ mod tests {
         .expect("search");
 
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].source, Source::Slack);
+        assert_eq!(hits[0].source, Source::new("slack"));
         assert_eq!(hits[0].label, "craft: ship it");
     }
 
@@ -387,7 +385,7 @@ mod tests {
         .expect("search");
 
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].source, Source::Code);
+        assert_eq!(hits[0].source, Source::code());
     }
 
     fn grep_opts(case_sensitive: bool) -> GrepOptions {
@@ -421,7 +419,7 @@ mod tests {
         let mut labels: Vec<&str> = hits.iter().map(|hit| hit.label.as_str()).collect();
         labels.sort_unstable();
         assert_eq!(labels, vec!["alpha.rs", "beta.rs"]);
-        assert!(hits.iter().all(|hit| hit.source == Source::Code));
+        assert!(hits.iter().all(|hit| hit.source.is_code()));
     }
 
     #[tokio::test]

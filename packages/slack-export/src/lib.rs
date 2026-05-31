@@ -112,7 +112,7 @@ impl SourceAdapter for SlackExport {
     type Error = Error;
 
     fn source(&self) -> Source {
-        Source::Slack
+        Source::new("slack")
     }
 
     fn documents(&self) -> impl Iterator<Item = Result<Document, Error>> + Send {

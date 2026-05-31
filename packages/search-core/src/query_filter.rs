@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn single_source_builds_an_in_filter() {
         let spec = FilterSpec {
-            sources: vec![Source::Slack],
+            sources: vec![Source::new("slack")],
             ..FilterSpec::default()
         };
         let filter = build_filter(&spec).expect("filter");
@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn exclude_builds_a_none_filter() {
         let spec = FilterSpec {
-            exclude_sources: vec![Source::Slack],
+            exclude_sources: vec![Source::new("slack")],
             ..FilterSpec::default()
         };
         let filter = build_filter(&spec).expect("filter");
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn source_and_repo_combine_under_all() {
         let spec = FilterSpec {
-            sources: vec![Source::Code],
+            sources: vec![Source::code()],
             repo: Some("indexable-inc/index".to_owned()),
             ..FilterSpec::default()
         };

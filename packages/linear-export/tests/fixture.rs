@@ -61,7 +61,7 @@ fn yields_one_document_per_issue() {
 #[test]
 fn reports_source_and_team_key() {
     let export = LinearExport::open(&fixture_dir()).expect("open fixture export");
-    assert_eq!(export.source(), Source::Linear);
+    assert_eq!(export.source(), Source::new("linear"));
     assert_eq!(export.team_key(), "FIX");
     assert_eq!(export.len(), 4);
     assert!(!export.is_empty());

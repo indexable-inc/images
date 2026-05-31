@@ -465,7 +465,7 @@ mod tests {
     impl SourceAdapter for FakeSource {
         type Error = FakeError;
         fn source(&self) -> search_meta::Source {
-            search_meta::Source::Linear
+            search_meta::Source::new("linear")
         }
         fn documents(&self) -> impl Iterator<Item = std::result::Result<Document, FakeError>> + Send {
             self.docs.clone().into_iter().map(Ok)

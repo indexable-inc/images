@@ -66,8 +66,8 @@ fn hit_from_chunk(chunk: mixedbread::Chunk) -> SearchHit {
     // and no `source`; the old store was code-only, so treat an absent source as
     // Code. New records carry `source` and `content_hash`.
     let source = metadata_str(metadata, search_meta::keys::SOURCE)
-        .and_then(|s| s.parse::<Source>().ok())
-        .unwrap_or(Source::Code);
+        .map(Source::from)
+        .unwrap_or_else(Source::code);
     let hash = metadata_str(metadata, search_meta::keys::CONTENT_HASH).or_else(|| metadata_str(metadata, "hash"));
     // Code records carry `path`; record sources carry `title`. Either is the
     // display label.
