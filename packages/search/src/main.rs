@@ -97,6 +97,25 @@ struct ScopeArgs {
     /// here.
     #[arg(long = "all-worktrees")]
     all_worktrees: bool,
+
+    /// Restrict to records authored by these users (repeatable, comma-joined).
+    /// Default: every user.
+    #[arg(long = "user", value_name = "USER")]
+    users: Vec<String>,
+
+    /// Restrict to your own records (the current `$USER`); shorthand for
+    /// `--user "$USER"`.
+    #[arg(long)]
+    mine: bool,
+
+    /// Restrict to records recorded on these hosts (repeatable, comma-joined).
+    #[arg(long = "host", value_name = "HOST")]
+    hosts: Vec<String>,
+
+    /// Restrict non-code sources to these project slugs (repeatable,
+    /// comma-joined), e.g. a Claude transcript's project directory.
+    #[arg(long = "project", value_name = "PROJECT")]
+    projects: Vec<String>,
 }
 
 /// Resolve scope selectors into a server-side metadata filter and the code
@@ -118,10 +137,22 @@ fn resolve_scope(scope: &ScopeArgs, root: &Path) -> anyhow::Result<(Option<Filte
         (None, CodeScope::WorktreeExact)
     };
 
+    let mut users = split_csv(&scope.users);
+    if scope.mine {
+        let me = std::env::var("USER")
+            .map_err(|_| anyhow::anyhow!("--mine needs the USER environment variable set"))?;
+        if !users.contains(&me) {
+            users.push(me);
+        }
+    }
+
     let spec = FilterSpec {
         sources,
         exclude_sources,
         repo,
+        users,
+        hosts: split_csv(&scope.hosts),
+        projects: split_csv(&scope.projects),
     };
     Ok((build_filter(&spec), code_scope))
 }
@@ -133,6 +164,18 @@ fn parse_sources(values: &[String]) -> anyhow::Result<Vec<Source>> {
         .flat_map(|value| value.split(','))
         .filter(|value| !value.is_empty())
         .map(|value| value.parse::<Source>().map_err(anyhow::Error::from))
+        .collect()
+}
+
+/// Flatten repeatable, comma-joined string selectors (`--user a,b --user c`)
+/// into one list, trimming surrounding whitespace and dropping blanks.
+fn split_csv(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
         .collect()
 }
 
