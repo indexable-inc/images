@@ -204,10 +204,13 @@ let
   # cannot host the Linux→Darwin path, so gating here keeps darwin evaluation
   # from pulling an unbuildable graph. Start with `dag-runner` (pure Rust, no C
   # deps); widen `crossBinaries` as crates are confirmed cross-clean.
+  # macOS targets only for now: the zig + SDK toolchain produces a working
+  # linker out of the box. A musl target additionally needs a static musl
+  # linker wrapper (clang + mold against a musl sysroot); until that lands,
+  # `unitsFor` still accepts any triple but no musl package is exposed.
   crossTargets = [
     "aarch64-apple-darwin"
     "x86_64-apple-darwin"
-    "x86_64-unknown-linux-musl"
   ];
   crossBinaries = [ "dag-runner" ];
   crossWorkspace = ix.rustWorkspaceFor pkgs;
