@@ -1,0 +1,17 @@
+# Clone-detection config for this repo, consumed by `nix run .#clone`.
+# Thresholds match the ix defaults; the ignore globs drop vendored, generated,
+# build-output, and test-fixture trees so duplication numbers reflect
+# hand-written product code.
+min_lines = 8
+min_nodes = 15
+ignore = [
+    "*/target/*",
+    "*/node_modules/*",
+    "*/.direnv/*",
+    "*/vendored/*",
+    "*/tests/*",
+    "*/test/*",
+    "**/tests.rs",
+    "*/fixtures/*",
+    "*/snapshots/*",
+]
