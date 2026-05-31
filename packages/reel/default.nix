@@ -27,7 +27,7 @@ let
   };
 
   meta = {
-    description = "Record a terminal demo reel by driving real CLIs through the tui PTY driver, rasterizing the styled grid to an animated WebP";
+    description = "Record a terminal demo reel by driving real CLIs through the tui PTY driver, rasterizing the styled grid to an animated AVIF (with a WebP fallback)";
     # The crate is MIT (repo LICENSE); the binary embeds JetBrains Mono, which
     # is SIL Open Font License 1.1 (see packages/reel/fonts/OFL.txt).
     license = [

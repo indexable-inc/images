@@ -2,9 +2,9 @@
 //!
 //! `reel` drives a real CLI session through the [`tui`] PTY driver, samples the
 //! VT-rendered grid of styled cells over time, rasterizes each frame to RGBA
-//! with a flat palette and a vendored monospace face, and muxes the frames into
-//! an animated WebP with ffmpeg. The output is a dark and a light variant sized
-//! for a GitHub README `<picture>` element.
+//! with a flat palette and a vendored monospace face, and muxes the frames with
+//! ffmpeg into an animated AVIF (with a WebP fallback). The output is a dark and
+//! a light variant sized for a GitHub README `<picture>` element.
 //!
 //! The pieces:
 //! - [`theme`] owns the flat dark/light palettes and color resolution.
@@ -71,7 +71,7 @@ struct Cli {
     #[arg(long, default_value_t = 24)]
     rows: u16,
     /// Capture frame rate for the AVIF (the WebP fallback is capped at 24).
-    #[arg(long, default_value_t = 60)]
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u32).range(1..))]
     fps: u32,
 }
 
