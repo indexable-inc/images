@@ -144,25 +144,27 @@
     {
       lib = ix;
       inherit (ix) nixosModules;
-      # Workstation-facing home-manager module: declare a service once, get a
-      # native launchd agent on macOS and native systemd user units on Linux.
-      homeModules.portable-services = ix.portableServices.homeModule;
-      # Personal-but-shareable workstation module for github:andrewgazelka: the
-      # ix.dev downtime watcher + boss bar overlay + the shared say-detached
-      # sound helper, all as portable services. Closed over the per-system flake
-      # packages so it resolves bossbar / minecraft-sound for the host it runs
-      # on. See users/andrewgazelka/home.nix.
-      homeModules.andrewgazelka = import ./users/andrewgazelka/home.nix {
-        indexPackages = system: (collect "packages").${system};
-        portableServicesModule = ix.portableServices.homeModule;
-      };
-      # Workstation-facing module to sync this user's Claude Code history to an
-      # S3/R2 parquet archive and/or Mixedbread, as a portable timer service.
-      # Closed over the per-system packages so it resolves claude-history-sync
-      # for the host. See packages/claude-history-sync/home-module.nix.
-      homeModules.claude-history-sync = import ./packages/claude-history-sync/home-module.nix {
-        indexPackages = system: (collect "packages").${system};
-        portableServicesModule = ix.portableServices.homeModule;
+      homeModules = {
+        # Workstation-facing home-manager module: declare a service once, get a
+        # native launchd agent on macOS and native systemd user units on Linux.
+        portable-services = ix.portableServices.homeModule;
+        # Personal-but-shareable workstation module for github:andrewgazelka: the
+        # ix.dev downtime watcher + boss bar overlay + the shared say-detached
+        # sound helper, all as portable services. Closed over the per-system
+        # flake packages so it resolves bossbar / minecraft-sound for the host it
+        # runs on. See users/andrewgazelka/home.nix.
+        andrewgazelka = import ./users/andrewgazelka/home.nix {
+          indexPackages = system: (collect "packages").${system};
+          portableServicesModule = ix.portableServices.homeModule;
+        };
+        # Workstation-facing module to sync this user's Claude Code history to an
+        # S3/R2 parquet archive and/or Mixedbread, as a portable timer service.
+        # Closed over the per-system packages so it resolves claude-history-sync
+        # for the host. See packages/claude-history-sync/home-module.nix.
+        claude-history-sync = import ./packages/claude-history-sync/home-module.nix {
+          indexPackages = system: (collect "packages").${system};
+          portableServicesModule = ix.portableServices.homeModule;
+        };
       };
       overlays.default = ix.overlay;
       packages = collect "packages";
