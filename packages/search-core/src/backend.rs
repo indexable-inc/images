@@ -121,8 +121,11 @@ pub trait Store {
     /// created.
     fn ensure_store(&self, name: &str) -> impl Future<Output = Result<()>> + Send;
 
-    /// List the `external_id`s already present in the store. Used by the code
-    /// sync path, where the id is the content hash.
+    /// List the `external_id`s already present in the store, optionally scoped
+    /// by `filters`. Used by the code sync path, where the id is the content
+    /// hash; passing a `source == code AND repo == <slug>` filter keeps the
+    /// listing proportional to the repo being synced rather than the whole
+    /// shared store.
     ///
     /// # Errors
     /// Returns an error if the backend cannot be reached or returns an error
@@ -130,6 +133,7 @@ pub trait Store {
     fn list_external_ids(
         &self,
         store: &str,
+        filters: Option<&Filter>,
     ) -> impl Future<Output = Result<HashSet<String>>> + Send;
 
     /// List records matching `filters` (typically `source == X`) with their
@@ -281,8 +285,18 @@ impl Store for MemoryStore {
         Ok(())
     }
 
-    async fn list_external_ids(&self, _store: &str) -> Result<HashSet<String>> {
-        Ok(self.lock().files.keys().cloned().collect())
+    async fn list_external_ids(
+        &self,
+        _store: &str,
+        filters: Option<&Filter>,
+    ) -> Result<HashSet<String>> {
+        let inner = self.lock();
+        Ok(inner
+            .files
+            .values()
+            .filter(|stored| filters.is_none_or(|f| matches_filter(&stored.document.meta_json, f)))
+            .map(|stored| stored.document.external_id.clone())
+            .collect())
     }
 
     async fn list_records(

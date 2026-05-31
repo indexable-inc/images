@@ -23,6 +23,11 @@ pub struct Query<'a> {
     pub root: &'a Path,
     /// Store name (one store holds every worktree's content).
     pub store_name: &'a str,
+    /// API base URL of the backend the store lives on. Part of the store's
+    /// identity: the same store name on two different endpoints is two different
+    /// stores, so the "already synced" gate must distinguish them or it would
+    /// skip uploading to a freshly pointed-at instance.
+    pub base_url: &'a str,
     /// The query text: a natural-language query for semantic search, or a
     /// regular expression for grep.
     pub text: &'a str,
@@ -54,17 +59,33 @@ async fn prepare(
     on_upload: impl Fn(usize, usize) + Send + Sync,
     on_poll: impl Fn(StoreStatus) + Send + Sync,
 ) -> Result<Manifest> {
+    // Identity of the store this checkout is synced against: the same store name
+    // on a different API endpoint is a different store, so both must key the
+    // "already synced" gate, or pointing at a fresh instance would be skipped.
+    let synced_store = format!("{}\u{1f}{}", query.base_url, query.store_name);
+
     // Scope the database handle so it is dropped before any await: rusqlite's
     // connection is not Sync, and the returned future must be Send.
-    let manifest = {
+    let (manifest, signature, already_synced) = {
         let mut db = Db::open()?;
         let previous = db.load(query.root)?;
         let manifest = Manifest::build(query.root, Some(&previous), config.max_file_bytes)?;
         db.save(query.root, &manifest)?;
-        manifest
+        let signature = manifest.signature();
+        // If this exact content was already synced to this store, skip the sync
+        // round-trips entirely. Code sync never deletes (the module is
+        // append-only; deletion is a separate GC pass), so an unchanged
+        // signature means every blob is still present and listing the store to
+        // rediscover that is pure latency. This is what turns a repeated search
+        // on an already-indexed checkout from "re-list every file" into a no-op.
+        let already_synced = db
+            .synced_signature(query.root, &synced_store)?
+            .as_deref()
+            == Some(signature.as_str());
+        (manifest, signature, already_synced)
     };
 
-    if query.sync {
+    if query.sync && !already_synced {
         let repo = repo_slug(query.root);
         let report = sync(
             store,
@@ -79,6 +100,15 @@ async fn prepare(
         if report.uploaded > 0 {
             wait_until_indexed(store, query.store_name, query.index_timeout, on_poll).await?;
         }
+        // Record success once the uploads are accepted, not once embedding
+        // finishes. Upload acceptance is the durable fact the gate cares about
+        // (the blobs are in the store, addressed by hash); embedding completes
+        // asynchronously server-side. Gating the mark on embedding instead would
+        // force the full repo re-list on every run until a slow embed catches
+        // up, and a re-upload of identical content cannot fix a server-side
+        // embed failure anyway. Open a fresh handle: the one above was dropped
+        // before this await to keep the future Send.
+        Db::open()?.mark_synced(query.root, &synced_store, &signature)?;
     }
 
     Ok(manifest)

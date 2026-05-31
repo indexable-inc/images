@@ -24,7 +24,13 @@ CREATE TABLE IF NOT EXISTS files (
     size     INTEGER NOT NULL,
     PRIMARY KEY (root, rel_path)
 ) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS files_by_hash ON files (hash);";
+CREATE INDEX IF NOT EXISTS files_by_hash ON files (hash);
+CREATE TABLE IF NOT EXISTS synced (
+    root      TEXT NOT NULL,
+    store     TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    PRIMARY KEY (root, store)
+) WITHOUT ROWID;";
 
 /// Handle to the shared manifest database.
 #[derive(Debug)]
@@ -152,6 +158,46 @@ impl Db {
         tx.commit().context(DbSnafu)?;
         Ok(())
     }
+
+    /// The content signature last successfully synced for `root` to `store`, if
+    /// any. A match against the current manifest's signature means the store
+    /// already holds this checkout's content, so sync can skip the network.
+    ///
+    /// # Errors
+    /// Returns an error if the query fails.
+    pub fn synced_signature(&self, root: &Path, store: &str) -> Result<Option<String>> {
+        let root = root.to_string_lossy();
+        self.conn
+            .query_row(
+                "SELECT signature FROM synced WHERE root = ?1 AND store = ?2",
+                params![root.as_ref(), store],
+                |row| row.get::<_, String>(0),
+            )
+            .map(Some)
+            .or_else(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+            .context(DbSnafu)
+    }
+
+    /// Record that `root` was successfully synced to `store` at `signature`.
+    /// Keyed by `(root, store)`, so switching stores forces a fresh sync rather
+    /// than trusting another store's state.
+    ///
+    /// # Errors
+    /// Returns an error if the upsert fails.
+    pub fn mark_synced(&mut self, root: &Path, store: &str, signature: &str) -> Result<()> {
+        let root = root.to_string_lossy();
+        self.conn
+            .execute(
+                "INSERT INTO synced (root, store, signature) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(root, store) DO UPDATE SET signature = excluded.signature",
+                params![root.as_ref(), store, signature],
+            )
+            .context(DbSnafu)?;
+        Ok(())
+    }
 }
 
 /// Path to the shared manifest database, `<cache>/semantic-search/index.db`.
@@ -240,6 +286,32 @@ mod tests {
         let loaded = db.load(root).expect("load");
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].rel_path, "a.rs");
+    }
+
+    #[test]
+    fn synced_signature_round_trips_and_is_store_scoped() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut db = open(&dir);
+        let root = Path::new("/repo/a");
+
+        // Absent until recorded.
+        assert_eq!(db.synced_signature(root, "s1").expect("query"), None);
+
+        db.mark_synced(root, "s1", "sig-1").expect("mark");
+        assert_eq!(
+            db.synced_signature(root, "s1").expect("query").as_deref(),
+            Some("sig-1")
+        );
+        // A different store does not inherit s1's state, so switching stores
+        // forces a fresh sync.
+        assert_eq!(db.synced_signature(root, "s2").expect("query"), None);
+
+        // Re-marking the same (root, store) overwrites in place.
+        db.mark_synced(root, "s1", "sig-2").expect("re-mark");
+        assert_eq!(
+            db.synced_signature(root, "s1").expect("query").as_deref(),
+            Some("sig-2")
+        );
     }
 
     #[test]

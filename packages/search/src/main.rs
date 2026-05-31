@@ -373,12 +373,13 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
     let base_url = cli
         .base_url
         .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
-    let store = MixedbreadStore::from_login(base_url).await?;
+    let store = MixedbreadStore::from_login(base_url.clone()).await?;
 
     let (filter, code_scope) = resolve_scope(&cli.scope, &root)?;
     let query = Query {
         root: &root,
         store_name: &store_name,
+        base_url: &base_url,
         text: &pattern,
         top_k: cli.max_count.max(1),
         options: SearchOptions {
@@ -392,57 +393,25 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         index_timeout: INDEX_TIMEOUT,
     };
 
-    // Progress UI, terminal only: an upload bar that flips to an embedding
-    // bar on the first poll. Piped output stays clean (no bar).
-    let bar = std::io::stderr()
-        .is_terminal()
-        .then(ProgressBar::new_spinner);
-    if let Some(bar) = &bar {
-        bar.set_style(progress_style::bar("cyan"));
-        bar.set_prefix("indexing files");
-    }
-    let embedding = AtomicBool::new(false);
-    // Captured during upload so the embedding bar knows its length: the number
-    // of files uploaded is exactly the number that will embed.
-    let embed_total = AtomicU64::new(0);
-    let on_upload = |done: usize, total: usize| {
-        if let (Some(bar), true) = (&bar, total > 0) {
-            let total = u64::try_from(total).unwrap_or(u64::MAX);
-            embed_total.store(total, Ordering::Relaxed);
-            bar.set_length(total);
-            bar.set_position(u64::try_from(done).unwrap_or(u64::MAX));
-        }
-    };
-    let on_poll = |status: StoreStatus| {
-        if let Some(bar) = &bar {
-            let len = embed_total.load(Ordering::Relaxed);
-            // store_status is store-wide, so the pending count can exceed our
-            // batch; clamp to len so the bar never reads past full. Set the
-            // position before any style flip so the first embedding draw shows
-            // the real position, not the carried-over full upload position
-            // (which would flash as "len/len" for one frame).
-            let remaining = (status.pending + status.in_progress).min(len);
-            bar.set_position(len - remaining);
-            if !embedding.swap(true, Ordering::Relaxed) {
-                bar.set_style(progress_style::bar("magenta"));
-                bar.set_prefix("embedding files");
-                bar.set_length(len);
-                bar.enable_steady_tick(Duration::from_millis(120));
-            }
-        }
-    };
+    // Progress UI, terminal only: an animated spinner during the manifest +
+    // store-listing phase, flipping to determinate upload then embedding bars.
+    // Piped output stays clean (no bar).
+    let progress = IndexProgress::new();
 
     if cli.answer {
         anyhow::ensure!(
             !cli.json,
             "--json is not supported with --answer; pass one or the other",
         );
-        let view =
-            search_core::index_and_answer(&store, &query, &config, on_upload, on_poll)
-                .await?;
-        if let Some(bar) = &bar {
-            bar.finish_and_clear();
-        }
+        let view = search_core::index_and_answer(
+            &store,
+            &query,
+            &config,
+            |done, total| progress.on_upload(done, total),
+            |status| progress.on_poll(status),
+        )
+        .await?;
+        progress.finish();
         println!("{}", view.answer);
         if !view.sources.is_empty() {
             println!();
@@ -451,16 +420,98 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
             }
         }
     } else {
-        let hits =
-            search_core::index_and_semantic(&store, &query, &config, on_upload, on_poll)
-                .await?;
-        if let Some(bar) = &bar {
-            bar.finish_and_clear();
-        }
+        let hits = search_core::index_and_semantic(
+            &store,
+            &query,
+            &config,
+            |done, total| progress.on_upload(done, total),
+            |status| progress.on_poll(status),
+        )
+        .await?;
+        progress.finish();
         print_hits(&hits, cli.json, cli.content, &palette, &root, theme)?;
     }
 
     Ok(())
+}
+
+/// Terminal progress for the index-then-query flow. The phases before any
+/// upload (building the manifest, listing what the store already holds) have no
+/// known total, so the bar starts as an animated spinner instead of a frozen
+/// `0/0`; it flips to a determinate "uploading" bar once new files start
+/// uploading, then to an "embedding" bar while the store embeds them. A
+/// non-terminal stderr (piped output) gets no bar at all.
+struct IndexProgress {
+    bar: Option<ProgressBar>,
+    /// Files uploaded this run, captured so the embedding bar knows its length.
+    embed_total: AtomicU64,
+    /// Whether the spinner has already flipped to the determinate upload bar.
+    uploading: AtomicBool,
+    /// Whether the upload bar has already flipped to the embedding bar.
+    embedding: AtomicBool,
+}
+
+impl IndexProgress {
+    /// Start an animated spinner (terminal only) for the pre-upload phase, so a
+    /// slow manifest build or store listing reads as working, not hung.
+    fn new() -> Self {
+        let bar = std::io::stderr().is_terminal().then(ProgressBar::new_spinner);
+        if let Some(bar) = &bar {
+            bar.set_style(progress_style::spinner());
+            bar.set_prefix("indexing");
+            bar.set_message("scanning files, checking store");
+            bar.enable_steady_tick(Duration::from_millis(120));
+        }
+        Self {
+            bar,
+            embed_total: AtomicU64::new(0),
+            uploading: AtomicBool::new(false),
+            embedding: AtomicBool::new(false),
+        }
+    }
+
+    /// Upload-phase callback: `(uploaded_so_far, total_to_upload)`. The first
+    /// call with a real total flips the spinner to a determinate bar.
+    fn on_upload(&self, done: usize, total: usize) {
+        let (Some(bar), true) = (&self.bar, total > 0) else {
+            return;
+        };
+        let total = u64::try_from(total).unwrap_or(u64::MAX);
+        self.embed_total.store(total, Ordering::Relaxed);
+        if !self.uploading.swap(true, Ordering::Relaxed) {
+            bar.set_style(progress_style::bar("cyan"));
+            bar.set_prefix("uploading files");
+        }
+        bar.set_length(total);
+        bar.set_position(u64::try_from(done).unwrap_or(u64::MAX));
+    }
+
+    /// Embedding-phase callback: flip to the embedding bar on first poll and
+    /// track how many uploaded files remain to embed.
+    fn on_poll(&self, status: StoreStatus) {
+        let Some(bar) = &self.bar else {
+            return;
+        };
+        let len = self.embed_total.load(Ordering::Relaxed);
+        // store_status is store-wide, so the pending count can exceed our batch;
+        // clamp to len so the bar never reads past full. Set the position before
+        // any style flip so the first embedding draw shows the real position,
+        // not the carried-over full upload position (a one-frame "len/len").
+        let remaining = (status.pending + status.in_progress).min(len);
+        bar.set_position(len - remaining);
+        if !self.embedding.swap(true, Ordering::Relaxed) {
+            bar.set_style(progress_style::bar("magenta"));
+            bar.set_prefix("embedding files");
+            bar.set_length(len);
+        }
+    }
+
+    /// Clear the bar once the flow finishes.
+    fn finish(&self) {
+        if let Some(bar) = &self.bar {
+            bar.finish_and_clear();
+        }
+    }
 }
 
 async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
@@ -483,7 +534,7 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
     let base_url = cli
         .base_url
         .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
-    let store = MixedbreadStore::from_login(base_url).await?;
+    let store = MixedbreadStore::from_login(base_url.clone()).await?;
 
     // Grep reuses the shared `Query` shape; its semantic-only knobs (rerank,
     // agentic, web) are inert here, and the grep pattern travels in `text`.
@@ -491,6 +542,7 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
     let query = Query {
         root: &root,
         store_name: &store_name,
+        base_url: &base_url,
         text: &cli.pattern,
         top_k: cli.max_count.max(1),
         options: SearchOptions {
@@ -508,52 +560,20 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
         targets: GrepTargets::Text,
     };
 
-    // Progress UI, terminal only: an upload bar that flips to an embedding bar
-    // on the first poll. Identical to the semantic path so a grep on a fresh
-    // tree shows the same indexing feedback. Piped output stays clean (no bar).
-    let bar = std::io::stderr()
-        .is_terminal()
-        .then(ProgressBar::new_spinner);
-    if let Some(bar) = &bar {
-        bar.set_style(progress_style::bar("cyan"));
-        bar.set_prefix("indexing files");
-    }
-    let embedding = AtomicBool::new(false);
-    let embed_total = AtomicU64::new(0);
-    let on_upload = |done: usize, total: usize| {
-        if let (Some(bar), true) = (&bar, total > 0) {
-            let total = u64::try_from(total).unwrap_or(u64::MAX);
-            embed_total.store(total, Ordering::Relaxed);
-            bar.set_length(total);
-            bar.set_position(u64::try_from(done).unwrap_or(u64::MAX));
-        }
-    };
-    let on_poll = |status: StoreStatus| {
-        if let Some(bar) = &bar {
-            let len = embed_total.load(Ordering::Relaxed);
-            let remaining = (status.pending + status.in_progress).min(len);
-            bar.set_position(len - remaining);
-            if !embedding.swap(true, Ordering::Relaxed) {
-                bar.set_style(progress_style::bar("magenta"));
-                bar.set_prefix("embedding files");
-                bar.set_length(len);
-                bar.enable_steady_tick(Duration::from_millis(120));
-            }
-        }
-    };
+    // Progress UI, terminal only: identical to the semantic path so a grep on a
+    // fresh tree shows the same indexing feedback. Piped output stays clean.
+    let progress = IndexProgress::new();
 
     let hits = search_core::index_and_grep(
         &store,
         &query,
         grep_options,
         &config,
-        on_upload,
-        on_poll,
+        |done, total| progress.on_upload(done, total),
+        |status| progress.on_poll(status),
     )
     .await?;
-    if let Some(bar) = &bar {
-        bar.finish_and_clear();
-    }
+    progress.finish();
 
     print_hits(&hits, cli.json, cli.content, &palette, &root, theme)?;
 

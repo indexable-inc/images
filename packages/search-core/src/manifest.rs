@@ -124,6 +124,30 @@ impl Manifest {
         self.entries.iter().map(|e| e.hash.as_str()).collect()
     }
 
+    /// A stable digest of this checkout's content: a hash over the sorted,
+    /// deduplicated set of file content hashes. Two builds with identical
+    /// content produce the same signature regardless of file paths, so a pure
+    /// rename (which needs no re-upload, since blobs are content-addressed) does
+    /// not change it. Sync compares it against the last successfully synced
+    /// signature to decide whether anything could need uploading; an unchanged
+    /// signature means the store already holds this content and the listing and
+    /// upload round-trips can be skipped entirely.
+    #[must_use]
+    pub fn signature(&self) -> String {
+        use sha2::{Digest as _, Sha256};
+
+        let mut hashes: Vec<&str> = self.entries.iter().map(|e| e.hash.as_str()).collect();
+        hashes.sort_unstable();
+        hashes.dedup();
+
+        let mut hasher = Sha256::new();
+        for hash in hashes {
+            hasher.update(hash.as_bytes());
+            hasher.update(b"\n");
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
     /// The first relative path that maps to `hash`, if any. Identical content
     /// at several paths is rare in practice; the first is a fine display label.
     #[must_use]
@@ -186,6 +210,33 @@ mod tests {
         assert_eq!(
             first.entries[0].hash, second.entries[0].hash,
             "stable content keeps a stable hash across builds"
+        );
+    }
+
+    #[test]
+    fn signature_is_content_addressed_not_path_addressed() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        std::fs::write(dir.path().join("a.rs"), "alpha").expect("write");
+        std::fs::write(dir.path().join("b.rs"), "beta").expect("write");
+        let first = Manifest::build(dir.path(), None, 1024 * 1024).expect("build");
+
+        // Renaming a file (same content) leaves the signature unchanged: a
+        // content-addressed store needs no re-upload for a pure move.
+        std::fs::rename(dir.path().join("a.rs"), dir.path().join("renamed.rs")).expect("rename");
+        let renamed = Manifest::build(dir.path(), None, 1024 * 1024).expect("rebuild");
+        assert_eq!(
+            first.signature(),
+            renamed.signature(),
+            "rename keeps signature"
+        );
+
+        // Changing content changes the signature, so sync re-runs.
+        std::fs::write(dir.path().join("renamed.rs"), "alpha EDITED").expect("edit");
+        let edited = Manifest::build(dir.path(), None, 1024 * 1024).expect("rebuild");
+        assert_ne!(
+            first.signature(),
+            edited.signature(),
+            "edit changes signature"
         );
     }
 
