@@ -27,15 +27,21 @@ What works today:
 - `info` reports `VZVirtualMachine.isSupported`.
 - `boot-linux` boots a Linux guest and streams its console, then stops on a
   timeout.
+- `install-macos` installs macOS into a fresh bundle from a local restore image
+  (IPSW), via `VZMacOSInstaller`. Bypasses Apple's online catalog (gdmf), which
+  is TLS-intercepted on some networks: download the `.ipsw` and pass it.
 - `boot-macos` boots an installed macOS guest **fully off-screen** and
   screenshots its display to PNGs, with no visible window, no
   ScreenCaptureKit, and no Screen-Recording permission (see
   [Off-screen capture](#off-screen-capture)). Validated end to end: captures the
   macOS Setup Assistant from a guest whose window is parked at (-20000, -20000).
+- **Automatic self-signing**: a VM command on the read-only Nix store binary
+  re-execs an ad-hoc-signed copy from `$XDG_CACHE_HOME/ix/macos-vm` carrying the
+  `com.apple.security.virtualization` entitlement, so `nix run .#macos-vm` and
+  ix-mcp spawning work with no manual `codesign` step.
 
 What is designed but not yet built (see [Roadmap](#roadmap)):
 
-- a Rust `install-macos` (today the bundle is produced by a reference Swift tool),
 - a vsock control channel and a long-lived `serve` mode,
 - booting an OCI image as a disk,
 - guest input injection + OCR to drive the guest headlessly (e.g. past Setup
@@ -84,16 +90,13 @@ runner that the rest of the program drives.
 
 ### Signing
 
-Ad-hoc signing is enough; no paid Developer ID is required:
-
-```sh
-codesign --force --sign - --entitlements virtualization.entitlements macos-vm
-```
-
-with an entitlements plist containing `com.apple.security.virtualization`. Nix
-store outputs are read-only, so the package signs into a per-user cache on first
-run and re-execs the signed copy. (Wiring this into `default.nix` is on the
-roadmap; today the e2e signs the built binary out-of-store.)
+Ad-hoc signing is enough; no paid Developer ID is required. This is automatic:
+a VM command checks for a sentinel env var, and if unset copies the (read-only)
+Nix store binary into `$XDG_CACHE_HOME/ix/macos-vm` (keyed by the store path),
+ad-hoc-signs it with `src/virtualization.entitlements`
+(`com.apple.security.virtualization`), and re-execs it. So `nix run .#macos-vm`
+and ix-mcp spawning work with no manual `codesign`. The equivalent manual step
+is `codesign --force --sign - --entitlements src/virtualization.entitlements <bin>`.
 
 ## Visual testing without taking over the host
 
@@ -169,15 +172,12 @@ decision should be made deliberately, not by accretion.
 
 1. ~~Graphics device + off-screen screenshot.~~ Done: `boot-macos` (see
    [Off-screen capture](#off-screen-capture)).
-2. Rust `install-macos` (`VZMacOSInstaller` from a local IPSW) so the package
-   creates its own guest bundle. Today a reference Swift tool does it; the
-   Apple restore catalog (gdmf) is fetched via mesu + the CDN because gdmf is
-   TLS-intercepted on some networks.
-3. Guest input injection + Vision OCR to drive the guest headlessly (past Setup
+2. ~~Rust `install-macos` from a local IPSW.~~ Done.
+3. ~~First-run entitlement self-signer.~~ Done (see [Signing](#signing)).
+4. Guest input injection + Vision OCR to drive the guest headlessly (past Setup
    Assistant, then launch an app) without the host cursor.
-4. vsock control channel + long-lived `serve` mode for IPC.
-5. `macvm` Python module bundled into ix-mcp (like `tui`/`screen`): spawns this
+5. vsock control channel + long-lived `serve` mode for IPC.
+6. `macvm` Python module bundled into ix-mcp (like `tui`/`screen`): spawns this
    signed binary and exposes `boot`, `screenshot`, and input, returning PIL
    images that render inline.
-6. OCI-disk boot for Linux guests; document the libkrun handoff for microVMs.
-7. Nix-integrated first-run entitlement signer in `default.nix`.
+7. OCI-disk boot for Linux guests; document the libkrun handoff for microVMs.

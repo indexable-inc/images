@@ -66,6 +66,19 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         timeout_secs: u64,
     },
+    /// Install macOS into a fresh bundle directory from a local restore image
+    /// (IPSW). Bypasses Apple's online catalog (take a downloaded `.ipsw`).
+    InstallMacos {
+        /// Path to a macOS restore image (`UniversalMac_*.ipsw`).
+        #[arg(long)]
+        ipsw: std::path::PathBuf,
+        /// Bundle directory to create (disk, aux, hardware-model, machine-id).
+        #[arg(long)]
+        bundle: std::path::PathBuf,
+        /// Main disk size in GiB.
+        #[arg(long, default_value_t = 64)]
+        disk_gib: u64,
+    },
     /// Boot an installed macOS guest fully off-screen and screenshot its display
     /// to `<out-prefix>.NNN.png` via the framebuffer `IOSurface` (no window, no
     /// Screen-Recording permission). The bundle is a directory with
@@ -86,11 +99,107 @@ enum Command {
 #[cfg(target_os = "macos")]
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Operating a VM needs the `com.apple.security.virtualization` entitlement on
+    // the running process. The Nix store binary is unsigned and immutable, so on
+    // the first VM command we re-exec a self-signed copy from a per-user cache.
+    if !matches!(cli.command, Command::Info)
+        && let Err(error) = ensure_signed_and_reexec()
+    {
+        eprintln!("macos-vm: could not self-sign with the virtualization entitlement: {error}");
+        return ExitCode::FAILURE;
+    }
     match imp::dispatch(cli.command) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("macos-vm: {error}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+/// Ad-hoc sign a cached copy of this binary with the virtualization entitlement
+/// and re-exec it. Returns `Ok(())` only when already running as the signed copy
+/// (sentinel env var set); otherwise it execs and does not return on success.
+#[cfg(target_os = "macos")]
+fn ensure_signed_and_reexec() -> std::io::Result<()> {
+    use std::hash::{Hash, Hasher};
+    use std::io::{Error, ErrorKind};
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+    use std::path::PathBuf;
+
+    const ENTITLEMENTS: &str = include_str!("virtualization.entitlements");
+
+    if std::env::var_os("IX_MACVM_SIGNED").is_some() {
+        return Ok(());
+    }
+    let exe = std::env::current_exe()?;
+    // Key the cache by the store path so a rebuilt binary is re-signed.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    exe.hash(&mut hasher);
+    let key = format!("{:016x}", hasher.finish());
+
+    let cache_home = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .ok_or_else(|| Error::new(ErrorKind::NotFound, "no HOME or XDG_CACHE_HOME"))?;
+    let dir = cache_home.join("ix").join("macos-vm");
+    std::fs::create_dir_all(&dir)?;
+    // The cache holds an entitled binary; keep it owner-only.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    let signed = dir.join(format!("macos-vm-{key}"));
+
+    // Re-sign unless a valid signature already exists (covers a partial/corrupt
+    // copy left by a killed run).
+    let already_valid = signed.exists()
+        && std::process::Command::new("/usr/bin/codesign")
+            .args(["--verify", "--strict"])
+            .arg(&signed)
+            .status()
+            .is_ok_and(|s| s.success());
+    if !already_valid {
+        // Per-process temp paths so two concurrent first-runs cannot truncate
+        // each other's copy mid-codesign; the final rename publishes atomically
+        // (last writer wins a byte-identical, validly-signed file).
+        let pid = std::process::id();
+        let tmp = dir.join(format!("macos-vm-{key}.{pid}.tmp"));
+        let entitlements = dir.join(format!("virtualization.{pid}.entitlements"));
+        std::fs::copy(&exe, &tmp)?;
+        std::fs::write(&entitlements, ENTITLEMENTS)?;
+        let status = std::process::Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", "-", "--entitlements"])
+            .arg(&entitlements)
+            .arg(&tmp)
+            .status()?;
+        let _ = std::fs::remove_file(&entitlements);
+        if !status.success() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(Error::other("codesign failed"));
+        }
+        std::fs::rename(&tmp, &signed)?;
+        prune_stale_signed(&dir, &signed);
+    }
+
+    Err(std::process::Command::new(&signed)
+        .env("IX_MACVM_SIGNED", "1")
+        .args(std::env::args_os().skip(1))
+        .exec())
+}
+
+/// Remove signed copies from prior store paths so the cache does not grow with
+/// every rebuild. Leaves any in-progress `.tmp` (another process may be writing
+/// it) and the copy we just published.
+#[cfg(target_os = "macos")]
+fn prune_stale_signed(dir: &std::path::Path, keep: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("macos-vm-") && !name.ends_with(".tmp") && path != keep {
+            let _ = std::fs::remove_file(&path);
         }
     }
 }
@@ -187,6 +296,11 @@ mod imp {
                 cmdline,
                 timeout: Duration::from_secs(timeout_secs),
             }),
+            Command::InstallMacos {
+                ipsw,
+                bundle,
+                disk_gib,
+            } => crate::macguest::install_macos(ipsw, bundle, disk_gib),
             Command::BootMacos {
                 bundle,
                 out_prefix,

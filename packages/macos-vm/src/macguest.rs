@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use block2::RcBlock;
-use dispatch2::DispatchQueue;
+use dispatch2::{DispatchQueue, dispatch_main};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{AllocAnyThread, MainThreadMarker};
@@ -28,7 +28,8 @@ use objc2_virtualization::{
     VZBootLoader, VZDiskImageStorageDeviceAttachment, VZGraphicsDeviceConfiguration,
     VZKeyboardConfiguration, VZMacAuxiliaryStorage, VZMacGraphicsDeviceConfiguration,
     VZMacGraphicsDisplayConfiguration, VZMacHardwareModel, VZMacMachineIdentifier,
-    VZMacOSBootLoader, VZMacPlatformConfiguration, VZNATNetworkDeviceAttachment,
+    VZMacAuxiliaryStorageInitializationOptions, VZMacOSBootLoader, VZMacOSInstaller,
+    VZMacOSRestoreImage, VZMacPlatformConfiguration, VZNATNetworkDeviceAttachment,
     VZNetworkDeviceConfiguration, VZPlatformConfiguration, VZPointingDeviceConfiguration,
     VZStorageDeviceConfiguration, VZUSBKeyboardConfiguration,
     VZUSBScreenCoordinatePointingDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
@@ -223,6 +224,123 @@ fn capture(view: &VZVirtualMachineView, path: &Path) -> Result<usize, Error> {
     let png = buf.into_inner();
     std::fs::write(path, &png).map_err(|e| Error::CaptureEncode { message: e.to_string() })?;
     Ok(png.len())
+}
+
+/// Install macOS into a fresh bundle directory from a local restore image
+/// (IPSW). The online catalog (gdmf) is bypassed by taking a local file, since
+/// gdmf is TLS-intercepted on some networks. Writes disk/aux/hardware-model/
+/// machine-id so [`boot_macos_screenshot`] can later boot the bundle.
+pub fn install_macos(ipsw: PathBuf, bundle: PathBuf, disk_gib: u64) -> Result<(), Error> {
+    std::fs::create_dir_all(&bundle).map_err(|e| Error::Bundle { message: e.to_string() })?;
+    let ipsw_url = file_url(&ipsw);
+
+    eprintln!("macos-vm: loading restore image {} ...", ipsw.display());
+    // load completion fires on an arbitrary thread; extract the (Send) hardware
+    // model bytes there, then build the VM + installer on the main queue.
+    let load_done = RcBlock::new(move |image: *mut VZMacOSRestoreImage, error: *mut NSError| {
+        if !error.is_null() {
+            eprintln!("macos-vm: load restore image: {}", ns_error_message(unsafe { &*error }));
+            std::process::exit(1);
+        }
+        let image = unsafe { &*image };
+        let Some(req) = (unsafe { image.mostFeaturefulSupportedConfiguration() }) else {
+            eprintln!("macos-vm: restore image has no configuration supported by this host");
+            std::process::exit(1);
+        };
+        let hw = unsafe { req.hardwareModel() };
+        if !unsafe { hw.isSupported() } {
+            eprintln!("macos-vm: hardware model not supported by this host");
+            std::process::exit(1);
+        }
+        let hw_data = unsafe { hw.dataRepresentation() }.to_vec();
+        let bundle = bundle.clone();
+        let ipsw = ipsw.clone();
+        DispatchQueue::main().exec_async(move || {
+            if let Err(error) = start_install(&bundle, &ipsw, &hw_data, disk_gib) {
+                eprintln!("macos-vm: {error}");
+                std::process::exit(1);
+            }
+        });
+    });
+    unsafe { VZMacOSRestoreImage::loadFileURL_completionHandler(&ipsw_url, &load_done) };
+
+    dispatch_main();
+}
+
+/// On the main queue: materialize the bundle, then run `VZMacOSInstaller`.
+fn start_install(bundle: &Path, ipsw: &Path, hw_data: &[u8], disk_gib: u64) -> Result<(), Error> {
+    std::fs::write(bundle.join("hardware-model.bin"), hw_data)
+        .map_err(|e| Error::Bundle { message: format!("write hardware-model.bin: {e}") })?;
+
+    let machine_id = unsafe { VZMacMachineIdentifier::new() };
+    let id_data = unsafe { machine_id.dataRepresentation() }.to_vec();
+    std::fs::write(bundle.join("machine-id.bin"), &id_data)
+        .map_err(|e| Error::Bundle { message: format!("write machine-id.bin: {e}") })?;
+
+    if disk_gib == 0 {
+        return Err(Error::Bundle { message: "disk-gib must be greater than 0".into() });
+    }
+    let disk_bytes = disk_gib
+        .checked_mul(1024 * 1024 * 1024)
+        .ok_or_else(|| Error::Bundle { message: format!("disk-gib {disk_gib} is too large") })?;
+    let disk = bundle.join("disk.img");
+    let file = std::fs::File::create(&disk).map_err(|e| Error::Bundle { message: format!("create disk.img: {e}") })?;
+    file.set_len(disk_bytes)
+        .map_err(|e| Error::Bundle { message: format!("size disk.img: {e}") })?;
+
+    // Auxiliary storage: create fresh (remove any stale copy so the no-overwrite
+    // initializer succeeds on re-install).
+    let aux_path = bundle.join("aux.img");
+    let _ = std::fs::remove_file(&aux_path);
+    let hw = unsafe {
+        VZMacHardwareModel::initWithDataRepresentation(
+            VZMacHardwareModel::alloc(),
+            &NSData::with_bytes(hw_data),
+        )
+    }
+    .ok_or_else(|| Error::Bundle { message: "invalid hardware model".into() })?;
+    let aux_url = file_url(&aux_path);
+    unsafe {
+        VZMacAuxiliaryStorage::initCreatingStorageAtURL_hardwareModel_options_error(
+            VZMacAuxiliaryStorage::alloc(),
+            &aux_url,
+            &hw,
+            VZMacAuxiliaryStorageInitializationOptions(0),
+        )
+    }
+    .map_err(|e| Error::Bundle { message: format!("create aux storage: {}", ns_error_message(&e)) })?;
+
+    let config = build_macos_config(bundle)?;
+    if let Err(error) = unsafe { config.validateWithError() } {
+        return Err(Error::InvalidConfiguration {
+            message: ns_error_message(&error),
+        });
+    }
+
+    let vm = unsafe { VZVirtualMachine::initWithConfiguration(VZVirtualMachine::alloc(), &config) };
+    let installer = unsafe {
+        VZMacOSInstaller::initWithVirtualMachine_restoreImageURL(
+            VZMacOSInstaller::alloc(),
+            &vm,
+            &file_url(ipsw),
+        )
+    };
+    eprintln!("macos-vm: installing macOS into {} (this takes ~15-20 min) ...", bundle.display());
+
+    let done = RcBlock::new(|error: *mut NSError| {
+        if error.is_null() {
+            println!("macos-vm: install complete");
+            std::process::exit(0);
+        }
+        eprintln!("macos-vm: install failed: {}", ns_error_message(unsafe { &*error }));
+        std::process::exit(1);
+    });
+    unsafe { installer.installWithCompletionHandler(&done) };
+    // Keep the VM and installer alive for the duration of the install; the
+    // process runs until the completion handler exits it.
+    std::mem::forget(vm);
+    std::mem::forget(installer);
+    Ok(())
 }
 
 fn build_macos_config(bundle: &Path) -> Result<Retained<VZVirtualMachineConfiguration>, Error> {
