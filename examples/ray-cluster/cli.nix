@@ -19,11 +19,7 @@
 }:
 let
   package = import ./package.nix { inherit ix lib pkgs; };
-  loaderLibraryPath = lib.makeLibraryPath [
-    pkgs.stdenv.cc.cc.lib
-    pkgs.zlib
-  ];
-  nixLdLib = "/run/current-system/sw/share/nix-ld/lib";
+  loader = import ./loader.nix { inherit lib pkgs; };
 in
 pkgs.runCommand "ray-cli"
   {
@@ -34,9 +30,9 @@ pkgs.runCommand "ray-cli"
     mkdir -p "$out/bin"
     for entry in ray ray-demo; do
       makeWrapper ${package}/venv/bin/"$entry" "$out/bin/$entry" \
-        --prefix LD_LIBRARY_PATH : ${lib.escapeShellArg loaderLibraryPath} \
-        --set NIX_LD ${lib.escapeShellArg "${nixLdLib}/ld.so"} \
-        --set NIX_LD_LIBRARY_PATH ${lib.escapeShellArg "${loaderLibraryPath}:${nixLdLib}"} \
+        --prefix LD_LIBRARY_PATH : ${lib.escapeShellArg loader.libraryPath} \
+        --set NIX_LD ${lib.escapeShellArg loader.nixLd} \
+        --set NIX_LD_LIBRARY_PATH ${lib.escapeShellArg loader.nixLdLibraryPath} \
         --set-default RAY_ADDRESS ${lib.escapeShellArg rayAddress} \
         --set-default RAY_DISABLE_USAGE_STATS 1
     done

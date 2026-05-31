@@ -60,12 +60,19 @@ because it counts fleet nodes rather than hard-coding three.
 
 ## Ports
 
-Ray's default random high-port range cannot be firewalled, so the ports are
-pinned and opened explicitly: GCS `6379` and the Ray Client server `10001` on
-the head, the node manager `6380`, object manager `6381`, and the worker range
-`10002-10031` on every node. Widen the worker range in
+Ray's default random high-port range cannot be firewalled, so the inter-node
+ports are pinned and opened explicitly: GCS `6379` and the Ray Client server
+`10001` on the head, the node manager `6380`, object manager `6381`, and the
+worker range `10002-10031` on every node. Widen the worker range in
 [`cluster-node.nix`](cluster-node.nix) for clusters that run many concurrent
 tasks per node.
+
+Ray also starts node-local agents (a dashboard agent, a metrics exporter, a
+runtime-env agent) on other ports. Nothing crosses nodes to reach them in this
+example, so they are left on their defaults and unexposed. Each node binds Ray to
+its east-west IP (read from the routing table, since these VMs have no internet
+egress to autodetect against), and workers reach the head by its `ray-head`
+hostname.
 
 ## Known limitations
 
