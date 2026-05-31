@@ -414,69 +414,88 @@ in
 
   checks = lib.optionalAttrs (system == ix.system) (
     let
+      # Each per-crate rust test unit is its own top-level check (spread into
+      # the `checks` set below) rather than being collapsed into one aggregate
+      # linkFarm. That lets nix-eval-jobs (the evaluator CI's nix-fast-build
+      # wraps) assign each crate's test to a separate worker, so no single
+      # worker holds the whole workspace test graph in its heap. The old
+      # `rust-package-tests` linkFarm did the opposite: it forced one worker to
+      # evaluate every crate at once, and that single multi-GiB eval is what
+      # flaked the flake-check job (per-worker SIGKILL at the memory cap, and
+      # host-OOM with many workers).
       rustChecks = {
         cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
       }
       // rustPackageTests;
-    in
-    {
-      inherit (tests) eval;
-      # Instruction files are not committed; they are rendered live by the
-      # SessionStart hook. This gate forces the rendered always-on documents
-      # (which evaluates the always-on char cap assertion) and the combined
-      # skills link farm (which evaluates the name-collision assertion) to build.
-      agent-context = pkgs.runCommand "agent-context-check" { } ''
-        test -s ${agentContextClaudeMd}
-        test -s ${agentContextCodexMd}
-        test -d ${agentContextSkills}
-        mkdir -p "$out"
-      '';
-      # Offline schema gate for the loader manifests. `deepSeq` forces
-      # every Paper / Velocity / Fabric per-version lock through
-      # `readLoaderManifest` in `lib/artifacts.nix`, so malformed JSON or a
-      # missing key fires here before any image starts evaluating. The
-      # forced surface is the parsed-and-validated manifest data, not the
-      # wrapped `fetchurl` derivations, to keep this check pure eval.
-      loader-manifests =
-        let
-          forced = builtins.deepSeq ix.artifacts.minecraft.loaderManifests "ok";
-        in
-        pkgs.runCommand "loader-manifests-check" { } ''
-          printf '%s\n' '${forced}' > "$out"
+      explicitChecks = {
+        inherit (tests) eval;
+        # Instruction files are not committed; they are rendered live by the
+        # SessionStart hook. This gate forces the rendered always-on documents
+        # (which evaluates the always-on char cap assertion) and the combined
+        # skills link farm (which evaluates the name-collision assertion) to build.
+        agent-context = pkgs.runCommand "agent-context-check" { } ''
+          test -s ${agentContextClaudeMd}
+          test -s ${agentContextCodexMd}
+          test -d ${agentContextSkills}
+          mkdir -p "$out"
         '';
-      run-records-session = repoPackages.run.passthru.tests.recordsSession;
-      lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
-        cp -R ${lintSource} source
-        chmod -R u+w source
-        cd source
-        ${lib.getExe lint}
-        mkdir -p "$out"
-      '';
-      rust-package-tests = pkgs.linkFarm "rust-package-tests" (
-        lib.mapAttrsToList (name: path: { inherit name path; }) rustChecks
-      );
-      # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
-      # which a successful build alone does not assert. `file` reads the Mach-O
-      # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
-      # rather than silently shipping a wrong-arch binary.
-      cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" { nativeBuildInputs = [ pkgs.file ]; } ''
-        bin=${crossPackages."dag-runner-aarch64-apple-darwin"}/bin/dag-runner
-        info=$(file -b "$bin")
-        echo "$info"
-        case "$info" in
-          *Mach-O*arm64*) ;;
-          *)
-            echo "expected Mach-O arm64, got: $info" >&2
-            exit 1
-            ;;
-        esac
-        mkdir -p "$out"
-      '';
-      site-case-tests = pkgs.linkFarm "site-case-tests" (
-        lib.mapAttrsToList (name: path: { inherit name path; }) siteTests.cases
-      );
-      site-test = siteTests.all;
-    }
+        # Offline schema gate for the loader manifests. `deepSeq` forces
+        # every Paper / Velocity / Fabric per-version lock through
+        # `readLoaderManifest` in `lib/artifacts.nix`, so malformed JSON or a
+        # missing key fires here before any image starts evaluating. The
+        # forced surface is the parsed-and-validated manifest data, not the
+        # wrapped `fetchurl` derivations, to keep this check pure eval.
+        loader-manifests =
+          let
+            forced = builtins.deepSeq ix.artifacts.minecraft.loaderManifests "ok";
+          in
+          pkgs.runCommand "loader-manifests-check" { } ''
+            printf '%s\n' '${forced}' > "$out"
+          '';
+        run-records-session = repoPackages.run.passthru.tests.recordsSession;
+        lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
+          cp -R ${lintSource} source
+          chmod -R u+w source
+          cd source
+          ${lib.getExe lint}
+          mkdir -p "$out"
+        '';
+        # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
+        # which a successful build alone does not assert. `file` reads the Mach-O
+        # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
+        # rather than silently shipping a wrong-arch binary.
+        cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" { nativeBuildInputs = [ pkgs.file ]; } ''
+          bin=${crossPackages."dag-runner-aarch64-apple-darwin"}/bin/dag-runner
+          info=$(file -b "$bin")
+          echo "$info"
+          case "$info" in
+            *Mach-O*arm64*) ;;
+            *)
+              echo "expected Mach-O arm64, got: $info" >&2
+              exit 1
+              ;;
+          esac
+          mkdir -p "$out"
+        '';
+        site-case-tests = pkgs.linkFarm "site-case-tests" (
+          lib.mapAttrsToList (name: path: { inherit name path; }) siteTests.cases
+        );
+        site-test = siteTests.all;
+      };
+      # A rust check key is `<prefix>-<testName>`, where `prefix` defaults to
+      # `rust-<id>` but a crate may override it in its `package.nix` (e.g.
+      # `ix-fleet` uses `ix-fleet`). So the rust keys are not guaranteed to be
+      # `rust-`-prefixed, and a stray override colliding with an explicit check
+      # name would otherwise be silently swallowed by the `//` merge. Assert the
+      # two key sets are disjoint so such a collision fails loudly instead.
+      # Forcing `rustChecks`' keys realizes the cargo-unit test manifest (IFD);
+      # that is acceptable because evaluating the `checks` set at all (what CI
+      # and `nix flake check` do) already enumerates those keys.
+      checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
+    in
+    assert lib.assertMsg (checkNameCollisions == [ ])
+      "checks: rust check name(s) collide with explicit checks: ${lib.concatStringsSep ", " checkNameCollisions}";
+    explicitChecks // rustChecks
   );
 
   formatter = pkgs.nixfmt;
