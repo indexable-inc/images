@@ -7,6 +7,10 @@
 :root {
   /* Integer pixel scale of the native 182x5 vanilla sprites. 2 = 364x10. */
   --scale: 2;
+  /* Bars sit on top of whatever is on screen; let the desktop bleed through a
+   * little so they read as an overlay, the way Minecraft's HUD boss bar is
+   * translucent over the world. Tune 0.0 (invisible) .. 1.0 (fully opaque). */
+  --bar-opacity: 0.85;
 }
 
 html,
@@ -37,6 +41,7 @@ body {
   --w: calc(182px * var(--scale));
   --h: calc(5px * var(--scale));
   width: var(--w);
+  opacity: var(--bar-opacity);
 }
 
 .bar__title {
