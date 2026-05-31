@@ -7,9 +7,9 @@
 use crate::bars::{Color, Notch};
 
 /// The Minecraft title font (tryashtar/minecraft-ttf). Its internal family name
-/// is `"Minecraft"`, which the text renderer selects by name.
+/// (`"Minecraft Default"`) is read back from the font at load time rather than
+/// hardcoded, so the renderer's family selector cannot drift from the TTF.
 pub const FONT: &[u8] = include_bytes!("../assets/fonts/MinecraftDefault-Regular.ttf");
-pub const FONT_FAMILY: &str = "Minecraft";
 
 macro_rules! sprite {
     ($name:literal) => {

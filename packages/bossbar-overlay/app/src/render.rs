@@ -74,6 +74,12 @@ pub struct Renderer {
     textures: HashMap<TexId, wgpu::BindGroup>,
 
     font_system: FontSystem,
+    /// The embedded font's real family name, read back from its `name` table
+    /// rather than hardcoded. cosmic-text matches families by name and silently
+    /// substitutes a system font on a miss, so a stale literal would render a
+    /// non-Minecraft font with no error. Deriving it keeps the selector in lock
+    /// step with whatever `MinecraftDefault-Regular.ttf` actually reports.
+    font_family: String,
     swash_cache: SwashCache,
     atlas: TextAtlas,
     text_renderer: TextRenderer,
@@ -218,8 +224,21 @@ impl Renderer {
             );
         }
 
-        let mut font_system = FontSystem::new();
-        font_system.db_mut().load_font_data(assets::FONT.to_vec());
+        // Load *only* the embedded Minecraft font into an otherwise empty
+        // database. cosmic-text's default `FontSystem::new` also loads every
+        // installed system font and falls back to one when a family name does
+        // not match, which is exactly how the title silently rendered in a
+        // generic system font. With a single-font db the title is the Minecraft
+        // font or nothing, never a wrong substitute.
+        let mut db = glyphon::cosmic_text::fontdb::Database::new();
+        db.load_font_data(assets::FONT.to_vec());
+        let font_family = db
+            .faces()
+            .next()
+            .and_then(|face| face.families.first())
+            .map(|(name, _)| name.clone())
+            .expect("embedded Minecraft font is missing a family name");
+        let font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
         let swash_cache = SwashCache::new();
         let cache = Cache::new(&device);
         let viewport = Viewport::new(&device, &cache);
@@ -235,6 +254,7 @@ impl Renderer {
             globals_bind,
             textures,
             font_system,
+            font_family,
             swash_cache,
             atlas,
             text_renderer,
@@ -282,7 +302,7 @@ impl Renderer {
                 buffer.set_text(
                     &mut self.font_system,
                     &b.title,
-                    &Attrs::new().family(Family::Name(assets::FONT_FAMILY)),
+                    &Attrs::new().family(Family::Name(&self.font_family)),
                     Shaping::Advanced,
                     Some(glyphon::cosmic_text::Align::Center),
                 );
