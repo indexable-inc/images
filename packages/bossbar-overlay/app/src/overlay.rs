@@ -106,8 +106,10 @@ fn raise_to_front(window: &Window) {
     let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
         return;
     };
-    // SAFETY: `ns_view` points at the live NSView backing this winit window, and
-    // we run inside the winit event loop on the main thread, as AppKit requires.
+    // SAFETY: `ns_view` points at the live NSView backing this winit window, kept
+    // alive for the whole call by the caller's `Arc<Window>`, so the `&NSView`
+    // borrow stays valid (it is dropped before we return). We run inside the
+    // winit event loop on the main thread, as these MainThreadOnly types require.
     let view: &NSView = unsafe { appkit.ns_view.cast().as_ref() };
     if let Some(ns_window) = view.window() {
         unsafe { ns_window.orderFrontRegardless() };
