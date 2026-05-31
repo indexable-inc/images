@@ -20,10 +20,7 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSArray, NSData, NSError, NSPoint, NSRect, NSSize};
-use objc2_io_surface::{
-    IOSurfaceGetBaseAddress, IOSurfaceGetBytesPerRow, IOSurfaceGetHeight, IOSurfaceGetWidth,
-    IOSurfaceLock, IOSurfaceLockOptions, IOSurfaceRef, IOSurfaceUnlock,
-};
+use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
 
 /// kIOSurfaceLockReadOnly: read-only lock, no dirty tracking.
 const LOCK_READ_ONLY: IOSurfaceLockOptions = IOSurfaceLockOptions(1);
@@ -108,7 +105,7 @@ pub fn boot_macos_screenshot(boot: MacBootScreenshot) -> Result<(), Error> {
 
     // VZVirtualMachineView needs the AppKit run loop to build its layer tree and
     // receive guest frames; the capture thread exits the process when done.
-    unsafe { app.run() };
+    app.run();
     Ok(())
 }
 
@@ -153,9 +150,8 @@ fn schedule_captures(
 
 /// The guest framebuffer IOSurface object, if the view has started rendering.
 fn frame_surface(view: &VZVirtualMachineView) -> Option<Retained<AnyObject>> {
-    let subviews = unsafe { view.subviews() };
-    let first = subviews.firstObject()?;
-    let layer = unsafe { first.layer() }?;
+    let first = view.subviews().firstObject()?;
+    let layer = first.layer()?;
     unsafe { layer.contents() }
 }
 
@@ -166,11 +162,11 @@ fn capture(view: &VZVirtualMachineView, path: &Path) -> Result<usize, Error> {
     let surface: &IOSurfaceRef = unsafe { &*Retained::as_ptr(&contents).cast::<IOSurfaceRef>() };
 
     let (width, height, rgba) = unsafe {
-        let _ = IOSurfaceLock(surface, LOCK_READ_ONLY, std::ptr::null_mut());
-        let width = IOSurfaceGetWidth(surface);
-        let height = IOSurfaceGetHeight(surface);
-        let bytes_per_row = IOSurfaceGetBytesPerRow(surface);
-        let base = IOSurfaceGetBaseAddress(surface).as_ptr() as *const u8;
+        let _ = surface.lock(LOCK_READ_ONLY, std::ptr::null_mut());
+        let width = surface.width();
+        let height = surface.height();
+        let bytes_per_row = surface.bytes_per_row();
+        let base = surface.base_address().as_ptr() as *const u8;
 
         let mut rgba = vec![0u8; width * height * 4];
         for y in 0..height {
@@ -184,7 +180,7 @@ fn capture(view: &VZVirtualMachineView, path: &Path) -> Result<usize, Error> {
                 rgba[o + 3] = *p.add(3); // A
             }
         }
-        let _ = IOSurfaceUnlock(surface, LOCK_READ_ONLY, std::ptr::null_mut());
+        let _ = surface.unlock(LOCK_READ_ONLY, std::ptr::null_mut());
         (width, height, rgba)
     };
 
