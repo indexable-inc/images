@@ -32,6 +32,34 @@ export function savePositions(positions: Record<string, Point>): void {
   }
 }
 
+// Stacking order: a monotonically increasing z per card, bumped when a card is
+// interacted with so the last-touched one sits on top. Persisted so the stack
+// survives a reload.
+const Z_KEY = 'tui-board-z-v1';
+
+export function loadZOrder(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(Z_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function saveZOrder(zOrder: Record<string, number>): void {
+  try {
+    localStorage.setItem(Z_KEY, JSON.stringify(zOrder));
+  } catch {
+    // Non-persistent is acceptable; stacking just resets next load.
+  }
+}
+
 // Initial slot for the Nth unplaced terminal: a left-to-right, top-to-bottom
 // flow on a fixed grid. Terminals vary in size, so this is a starting point the
 // user can drag from, not a packed layout.

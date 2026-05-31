@@ -88,6 +88,8 @@ body {
   background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
 }
 .board.panning { cursor: grabbing; }
+/* Hold Alt/Option: cards become text-selectable instead of draggable. */
+.board.selecting { cursor: text; }
 
 /* The transformed plane that holds the cards; translate+scale set inline. */
 .canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
@@ -107,6 +109,7 @@ body {
 }
 .hud button:hover { color: var(--ink); border-color: var(--edge-strong); }
 .hud .zoom { min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; }
+.hud .tip { color: var(--ink-faint); margin-right: 4px; }
 
 /* ----- empty / connecting ---------------------------------------------- */
 .empty {
@@ -121,18 +124,20 @@ body {
   display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--edge);
   overflow: hidden;
+  /* The whole card is a drag handle; the body must not start a text selection
+     while dragging. Hold Alt/Option (.board.selecting) to select text. */
+  cursor: grab;
+  user-select: none;
 }
 .term.dead { opacity: 0.6; }
-.term.grabbed { border-color: var(--edge-strong); }
+.term.grabbed { border-color: var(--edge-strong); cursor: grabbing; }
+.board.selecting .term { cursor: text; user-select: text; }
 
 .term .head {
   display: flex; align-items: center; gap: 9px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--edge);
-  cursor: grab;
-  user-select: none;
 }
-.term.grabbed .head { cursor: grabbing; }
 .term .led { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--live); }
 .term.dead .led { background: var(--dead); }
 .term .cmd {
