@@ -94,29 +94,68 @@ let
       ''
   );
 
+  # Native macOS screen capture and cursor control, bundled like `tui` and
+  # `search` so every session can `import screen`. This one is pure Python (no
+  # PyO3 cdylib): it wraps the Apple-maintained pyobjc `Quartz` binding for
+  # capture and synthetic input, and probes `AXIsProcessTrusted()` through
+  # ctypes for the Accessibility (TCC) permission check. macOS-only: the module
+  # itself raises on a non-Darwin platform, and `Quartz` is not available off
+  # Darwin, so the dependency is gated below.
+  screenPythonSource = builtins.path {
+    name = "ix-mcp-screen-python-source";
+    path = ./src/screen;
+  };
+  screenModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-screen-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Native macOS screen/cursor helper bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/screen"
+        mkdir -p "$site"
+        cp -r ${screenPythonSource}/screen/. "$site/"
+      ''
+  );
+
+  # The `screen` helper is macOS-only, so its dependencies join the interpreter
+  # only on Darwin. `pyobjc-framework-Quartz` is the maintained CoreGraphics
+  # binding the helper wraps; Pillow (already transitive via matplotlib) carries
+  # the PIL image type capture returns.
+  darwinExtraPackages =
+    ps:
+    lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+      ps.pyobjc-framework-Quartz
+      screenModule
+    ];
+
   # The interpreter the wrapper pins. Sessions build their venv from this with
   # `--system-site-packages`, so `tui`, `search`, numpy, polars, and
   # playwright are importable by default while an in-session `pip install` still
   # writes to the per-session venv.
-  mcpPython = pkgs.python3.withPackages (ps: [
-    ps.asyncssh
-    ps.numpy
-    ps.polars
-    # matplotlib (and Pillow, pulled in transitively) so plots and images are
-    # capturable out of the box: the worker renders any open figure / object
-    # with a `_repr_png_` back as an MCP image block.
-    ps.matplotlib
-    # playwright for browser automation out of the box. The Nix python package
-    # is patched to use `playwright-driver` as its node driver, and the wrapper
-    # below points PLAYWRIGHT_BROWSERS_PATH at the matching browser bundle, so
-    # `from playwright.async_api import async_playwright` works with no
-    # `playwright install` step. Driver and browsers are version-locked in
-    # nixpkgs; keep them sourced from the same `playwright-driver` to stay in
-    # sync. https://playwright.dev/python/docs/library
-    ps.playwright
-    tuiModule
-    searchModule
-  ]);
+  mcpPython = pkgs.python3.withPackages (
+    ps:
+    [
+      ps.asyncssh
+      ps.numpy
+      ps.polars
+      # matplotlib (and Pillow, pulled in transitively) so plots and images are
+      # capturable out of the box: the worker renders any open figure / object
+      # with a `_repr_png_` back as an MCP image block.
+      ps.matplotlib
+      # playwright for browser automation out of the box. The Nix python package
+      # is patched to use `playwright-driver` as its node driver, and the wrapper
+      # below points PLAYWRIGHT_BROWSERS_PATH at the matching browser bundle, so
+      # `from playwright.async_api import async_playwright` works with no
+      # `playwright install` step. Driver and browsers are version-locked in
+      # nixpkgs; keep them sourced from the same `playwright-driver` to stay in
+      # sync. https://playwright.dev/python/docs/library
+      ps.playwright
+      tuiModule
+      searchModule
+    ]
+    ++ darwinExtraPackages ps
+  );
 
   # Browser bundle that matches the playwright-driver the python package is
   # patched to use. Exposed to the worker through PLAYWRIGHT_BROWSERS_PATH on the
@@ -228,6 +267,31 @@ let
 
         mkdir -p "$out"
       '';
+  # macOS-only: `screen` ships in the pinned interpreter there, so a bare
+  # session imports it with no install step. Importing exercises the pyobjc
+  # `Quartz` link and the ctypes load of ApplicationServices for the TCC probe.
+  # A real capture or synthetic input needs a display and Accessibility grant
+  # the build sandbox lacks, so leave those to runtime; the import plus the
+  # callable surface is what this guards.
+  screenBundled =
+    pkgs.runCommand "ix-mcp-screen-bundled"
+      {
+        nativeBuildInputs = [ package ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+
+        ix-mcp exec 'import screen; print("screen-ok", callable(screen.capture), callable(screen.click), callable(screen.accessibility_trusted))' >stdout 2>stderr
+        if ! grep -q '^screen-ok True True True$' stdout; then
+          echo "screen was not importable in a default session:" >&2
+          cat stdout stderr >&2
+          exit 1
+        fi
+
+        mkdir -p "$out"
+      '';
   sessionSubprocessStdin =
     pkgs.runCommand "ix-mcp-session-subprocess-stdin"
       {
@@ -260,14 +324,18 @@ package.overrideAttrs (old: {
     // unwrapped.passthru
     // {
       inherit unwrapped;
-      tests = (unwrapped.passthru.tests or { }) // {
-        inherit
-          replDefault
-          sessionVenv
-          tuiBundled
-          searchBundled
-          sessionSubprocessStdin
-          ;
-      };
+      tests =
+        (unwrapped.passthru.tests or { })
+        // {
+          inherit
+            replDefault
+            sessionVenv
+            tuiBundled
+            searchBundled
+            sessionSubprocessStdin
+            ;
+        }
+        # `screen` is only bundled on Darwin, so its import test only exists there.
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin { inherit screenBundled; };
     };
 })
