@@ -45,6 +45,10 @@ pub fn encode_webp(
         .spawn()
         .wrap_err("spawn ffmpeg")?;
 
+    // If ffmpeg dies mid-stream the write side sees a broken pipe. Record that
+    // error but keep going to wait() so ffmpeg's own exit status, the real
+    // cause, is what gets reported.
+    let mut write_err = None;
     {
         let mut stdin = child
             .stdin
@@ -52,13 +56,19 @@ pub fn encode_webp(
             .ok_or_else(|| eyre!("ffmpeg stdin was not piped"))?;
         for frame in frames {
             let buffer = render_frame(frame, &palette, font, layout);
-            stdin.write_all(&buffer).wrap_err("write frame to ffmpeg")?;
+            if let Err(err) = stdin.write_all(&buffer) {
+                write_err = Some(err);
+                break;
+            }
         }
     }
 
     let status = child.wait().wrap_err("wait for ffmpeg")?;
     if !status.success() {
         return Err(eyre!("ffmpeg exited with status {status}"));
+    }
+    if let Some(err) = write_err {
+        return Err(err).wrap_err("write frame to ffmpeg");
     }
     Ok(())
 }

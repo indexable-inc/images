@@ -3,6 +3,9 @@
 //! Everything is flat: a chrome bar with three squared dots and a hairline
 //! rule, then either the terminal grid or a centered card. There are no
 //! gradients, shadows, or rounded corners.
+//!
+//! Each cell is placed at one monospace advance, so a wide glyph (CJK, emoji)
+//! would overflow its column. The demo scenes are ASCII, so this never bites.
 
 use crate::font::FontSet;
 use crate::scene::{Card, Frame};
@@ -18,7 +21,9 @@ pub struct Canvas {
 impl Canvas {
     #[must_use]
     fn filled(width: u32, height: u32, bg: Rgb) -> Self {
-        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        // Size the buffer in usize so a large (developer-supplied) canvas cannot
+        // overflow u32 and wrap to a too-small allocation.
+        let mut pixels = vec![0u8; width as usize * height as usize * 4];
         for px in pixels.chunks_exact_mut(4) {
             px[0] = bg.r;
             px[1] = bg.g;
@@ -32,13 +37,14 @@ impl Canvas {
         }
     }
 
-    /// Fill an axis-aligned rectangle with an opaque color, clamped to bounds.
+    /// Fill an axis-aligned rectangle with an opaque color, clamping the right
+    /// and bottom edges to the canvas. Callers keep `left`/`top` in range.
     fn rect(&mut self, left: u32, top: u32, right: u32, bottom: u32, color: Rgb) {
         let right = right.min(self.width);
         let bottom = bottom.min(self.height);
         for y in top..bottom {
             for x in left..right {
-                let idx = ((y * self.width + x) * 4) as usize;
+                let idx = (y as usize * self.width as usize + x as usize) * 4;
                 self.pixels[idx] = color.r;
                 self.pixels[idx + 1] = color.g;
                 self.pixels[idx + 2] = color.b;
@@ -52,7 +58,7 @@ impl Canvas {
         if x < 0 || y < 0 || x as u32 >= self.width || y as u32 >= self.height {
             return;
         }
-        let idx = ((y as u32 * self.width + x as u32) * 4) as usize;
+        let idx = (y as usize * self.width as usize + x as usize) * 4;
         let af = f32::from(alpha) / 255.0;
         for (offset, channel) in [color.r, color.g, color.b].into_iter().enumerate() {
             let dst = f32::from(self.pixels[idx + offset]);
@@ -151,6 +157,7 @@ fn draw_terminal(
     let cell_w = layout.cell_w;
     let cell_h = layout.cell_h;
     let baseline_off = ((cell_h as f32 - (font.ascent - font.descent)) / 2.0 + font.ascent).round() as i32;
+    let (cell_rows, cell_cols) = cells.dim();
 
     for ((row, col), cell) in cells.indexed_iter() {
         let cell_x = origin_x + col as u32 * cell_w;
@@ -180,7 +187,7 @@ fn draw_terminal(
         }
     }
 
-    if cursor.visible && (cursor.row as usize) < layout.rows && (cursor.col as usize) < layout.cols {
+    if cursor.visible && (cursor.row as usize) < cell_rows && (cursor.col as usize) < cell_cols {
         let cur_x = origin_x + u32::from(cursor.col) * cell_w;
         let cur_y = origin_y + u32::from(cursor.row) * cell_h;
         canvas.rect(cur_x, cur_y, cur_x + cell_w, cur_y + cell_h, palette.accent);
