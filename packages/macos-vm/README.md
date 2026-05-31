@@ -18,9 +18,14 @@ nix run .#macos-vm -- boot-linux --kernel ./Image --initramfs ./initramfs
 
 ## Status
 
-Proven end to end on macOS 26.5 / Apple M5 Max: a signed binary boots a real
-Linux guest (raw arm64 kernel `Image` + initramfs) through Virtualization.framework
-and streams the guest serial console to stdout. The guest reaches userspace.
+Proven end to end on macOS 26.5 / Apple M5 Max. The headline run: a signed
+binary boots an installed macOS guest fully off-screen, an operator drives it
+through Setup Assistant to a logged-in desktop with synthetic keyboard and mouse
+input (no host cursor), shares a host directory in over virtio-fs, launches a
+wgpu GUI app (the `bossbar-overlay`) from that share, and screenshots the running
+overlay by reading the guest framebuffer. Nothing appears on the host desktop and
+the host cursor is never touched. A Linux guest also boots to userspace with its
+serial console streamed to stdout.
 
 What works today:
 
@@ -33,8 +38,15 @@ What works today:
 - `boot-macos` boots an installed macOS guest **fully off-screen** and
   screenshots its display to PNGs, with no visible window, no
   ScreenCaptureKit, and no Screen-Recording permission (see
-  [Off-screen capture](#off-screen-capture)). Validated end to end: captures the
-  macOS Setup Assistant from a guest whose window is parked at (-20000, -20000).
+  [Off-screen capture](#off-screen-capture)).
+- `drive-macos` boots the guest off-screen and reads newline commands from
+  stdin to drive it: synthetic keyboard (`key`/`down`/`up`/`type`), mouse
+  (`click`), `wait`, and on-demand `shot`, with a one-line ack per command (see
+  [Driving the guest](#driving-the-guest)). Input goes straight to the guest's
+  keyboard/pointing device, so the host cursor never moves.
+- **virtio-fs directory sharing**: `--share TAG=HOSTDIR[:ro]` on `boot-macos`
+  and `drive-macos` shares a host directory into the guest. Tag `auto` uses the
+  macOS automount tag, mounting at `/Volumes/My Shared Files`.
 - **Automatic self-signing**: a VM command on the read-only Nix store binary
   re-execs an ad-hoc-signed copy from `$XDG_CACHE_HOME/ix/macos-vm` carrying the
   `com.apple.security.virtualization` entitlement, so `nix run .#macos-vm` and
@@ -44,9 +56,8 @@ What is designed but not yet built (see [Roadmap](#roadmap)):
 
 - a vsock control channel and a long-lived `serve` mode,
 - booting an OCI image as a disk,
-- guest input injection + OCR to drive the guest headlessly (e.g. past Setup
-  Assistant) without the host cursor,
-- the `macvm` Python module bundled into ix-mcp.
+- the `drive-macos`/`--share` surface exposed through the `macvm` Python module
+  (today the module exposes `info`/`install`/`screenshot`).
 
 ## Off-screen capture
 
@@ -70,6 +81,36 @@ capture a fully off-screen window ("could not create image from window"). The
 IOSurface read sidesteps all of that. Technique from
 [thecrypticace/vzautomation](https://github.com/thecrypticace/vzautomation),
 which also shows keyboard injection and Vision OCR for driving the guest.
+
+## Driving the guest
+
+`drive-macos` boots the guest off-screen and then reads commands from stdin, one
+per line, acking each on stdout. Synthetic events are delivered straight to the
+guest's USB keyboard and screen-coordinate pointing device by handing built
+`NSEvent`s to the `VZVirtualMachineView` (the technique
+[thecrypticace/vzautomation](https://github.com/thecrypticace/vzautomation)
+uses), so the host event system and cursor are never involved.
+
+Commands:
+
+- `key <name> [count]` press a named key (`return`, `tab`, `space`, `esc`,
+  arrows, `delete`, `f1`..`f12`, modifiers) `count` times
+- `down <name>` / `up <name>` hold / release a key, e.g. to chord a modifier
+- `type <text>` type the rest of the line (US-layout printable ASCII)
+- `click <fx> <fy>` left-click at a fraction `0..1` of the display, from the
+  top-left (resolution-independent, so it survives display-mode changes)
+- `wait <seconds>` sleep; `shot <path>` screenshot the framebuffer; `quit` exit
+
+Because every command acks, a controller can drive the guest in lockstep:
+capture a frame, locate a control in it (the host side can use any image
+tooling), `click` it, capture again. Modifiers via `down`/`up` give chords like
+Spotlight: `down cmd`, `key space`, `up cmd`.
+
+Modal screens that make a network call (Apple ID, Screen Time) hang on a host
+without working guest internet. Where the goal is just a usable desktop, it is
+simpler to mark Setup Assistant complete offline by editing the guest disk
+(`.AppleSetupDone` plus the per-user `com.apple.SetupAssistant` `DidSee*` keys)
+than to click through those screens.
 
 ## Why a standalone signed binary
 

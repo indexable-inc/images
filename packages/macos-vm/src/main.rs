@@ -93,6 +93,25 @@ enum Command {
         /// Stop after this many seconds.
         #[arg(long, default_value_t = 90)]
         seconds: u64,
+        /// Share a host directory into the guest over virtio-fs, repeatable.
+        /// Spec: `TAG=HOSTDIR` (append `:ro` for read-only). Tag `auto` uses the
+        /// macOS automount tag, mounting at `/Volumes/My Shared Files`.
+        #[arg(long = "share", value_name = "TAG=HOSTDIR")]
+        shares: Vec<String>,
+    },
+    /// Boot an installed macOS guest fully off-screen and drive it from stdin:
+    /// synthetic keyboard input and on-demand framebuffer screenshots, with no
+    /// host cursor or visible window. Reads newline commands
+    /// (`key`/`down`/`up`/`type`/`wait`/`shot`/`quit`) and acks each on stdout.
+    DriveMacos {
+        /// Guest bundle directory.
+        #[arg(long)]
+        bundle: std::path::PathBuf,
+        /// Share a host directory into the guest over virtio-fs, repeatable.
+        /// Spec: `TAG=HOSTDIR` (append `:ro` for read-only). Tag `auto` uses the
+        /// macOS automount tag, mounting at `/Volumes/My Shared Files`.
+        #[arg(long = "share", value_name = "TAG=HOSTDIR")]
+        shares: Vec<String>,
     },
 }
 
@@ -211,6 +230,12 @@ fn main() -> ExitCode {
 }
 
 #[cfg(target_os = "macos")]
+mod drive;
+
+#[cfg(target_os = "macos")]
+mod input;
+
+#[cfg(target_os = "macos")]
 mod macguest;
 
 #[cfg(target_os = "macos")]
@@ -305,12 +330,52 @@ mod imp {
                 bundle,
                 out_prefix,
                 seconds,
+                shares,
             } => crate::macguest::boot_macos_screenshot(crate::macguest::MacBootScreenshot {
                 bundle,
                 out_prefix,
                 seconds,
+                shares: parse_shares(&shares)?,
             }),
+            Command::DriveMacos { bundle, shares } => {
+                crate::drive::drive_macos(crate::drive::DriveMacos {
+                    bundle,
+                    shares: parse_shares(&shares)?,
+                })
+            }
         }
+    }
+
+    /// Parse `--share TAG=HOSTDIR[:ro]` specs into [`DirShare`]s. Tag `auto` maps
+    /// to the macOS automount tag.
+    fn parse_shares(specs: &[String]) -> Result<Vec<crate::macguest::DirShare>, Error> {
+        use crate::macguest::{DirShare, ShareTag};
+
+        specs
+            .iter()
+            .map(|spec| {
+                let (tag, dir) = spec.split_once('=').ok_or_else(|| Error::Bundle {
+                    message: format!("share {spec:?} must be TAG=HOSTDIR"),
+                })?;
+                let (dir, read_only) =
+                    dir.strip_suffix(":ro").map_or((dir, false), |dir| (dir, true));
+                if dir.is_empty() {
+                    return Err(Error::Bundle {
+                        message: format!("share {spec:?} has an empty host directory"),
+                    });
+                }
+                let tag = if tag == "auto" {
+                    ShareTag::Automount
+                } else {
+                    ShareTag::Named(tag.to_owned())
+                };
+                Ok(DirShare {
+                    tag,
+                    host_dir: PathBuf::from(dir),
+                    read_only,
+                })
+            })
+            .collect()
     }
 
     fn info() -> Result<(), Error> {

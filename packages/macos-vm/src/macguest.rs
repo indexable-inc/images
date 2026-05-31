@@ -19,22 +19,23 @@ use objc2::{AllocAnyThread, MainThreadMarker};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSData, NSError, NSPoint, NSRect, NSSize};
+use objc2_foundation::{NSArray, NSData, NSError, NSPoint, NSRect, NSSize, NSString};
 use objc2_io_surface::{IOSurface, IOSurfaceLockOptions, IOSurfaceRef};
 // Named explicitly so the dependency is a direct, visible use (the type is
 // otherwise only reachable through `NSView::layer()`'s return type).
 use objc2_quartz_core::CALayer;
 use objc2_virtualization::{
-    VZBootLoader, VZDiskImageStorageDeviceAttachment, VZGraphicsDeviceConfiguration,
-    VZKeyboardConfiguration, VZMacAuxiliaryStorage, VZMacGraphicsDeviceConfiguration,
-    VZMacGraphicsDisplayConfiguration, VZMacHardwareModel, VZMacMachineIdentifier,
-    VZMacAuxiliaryStorageInitializationOptions, VZMacOSBootLoader, VZMacOSInstaller,
-    VZMacOSRestoreImage, VZMacPlatformConfiguration, VZNATNetworkDeviceAttachment,
-    VZNetworkDeviceConfiguration, VZPlatformConfiguration, VZPointingDeviceConfiguration,
+    VZBootLoader, VZDirectoryShare, VZDirectorySharingDeviceConfiguration,
+    VZDiskImageStorageDeviceAttachment, VZGraphicsDeviceConfiguration, VZKeyboardConfiguration,
+    VZMacAuxiliaryStorage, VZMacGraphicsDeviceConfiguration, VZMacGraphicsDisplayConfiguration,
+    VZMacHardwareModel, VZMacMachineIdentifier, VZMacAuxiliaryStorageInitializationOptions,
+    VZMacOSBootLoader, VZMacOSInstaller, VZMacOSRestoreImage, VZMacPlatformConfiguration,
+    VZNATNetworkDeviceAttachment, VZNetworkDeviceConfiguration, VZPlatformConfiguration,
+    VZPointingDeviceConfiguration, VZSharedDirectory, VZSingleDirectoryShare,
     VZStorageDeviceConfiguration, VZUSBKeyboardConfiguration,
     VZUSBScreenCoordinatePointingDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
-    VZVirtioNetworkDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
-    VZVirtualMachineView,
+    VZVirtioFileSystemDeviceConfiguration, VZVirtioNetworkDeviceConfiguration, VZVirtualMachine,
+    VZVirtualMachineConfiguration, VZVirtualMachineView,
 };
 
 use crate::imp::{Error, file_url, ns_error_message};
@@ -42,23 +43,39 @@ use crate::imp::{Error, file_url, ns_error_message};
 /// `kCVPixelFormatType_32BGRA` ('BGRA'): the layout the `IOSurface` read assumes.
 const PIXEL_FORMAT_BGRA: u32 = 0x4247_5241;
 
+/// A host directory shared into the guest over virtio-fs.
+pub struct DirShare {
+    pub tag: ShareTag,
+    pub host_dir: PathBuf,
+    pub read_only: bool,
+}
+
+/// The virtio-fs mount tag. `Automount` uses the special macOS tag that mounts
+/// the share automatically at `/Volumes/My Shared Files` with no guest-side
+/// `mount`; `Named` requires the guest to mount the tag explicitly.
+pub enum ShareTag {
+    Automount,
+    Named(String),
+}
+
 /// Parameters for booting a macOS guest and screenshotting it.
 pub struct MacBootScreenshot {
     pub bundle: PathBuf,
     pub out_prefix: PathBuf,
     pub seconds: u64,
+    pub shares: Vec<DirShare>,
 }
 
-pub fn boot_macos_screenshot(boot: MacBootScreenshot) -> Result<(), Error> {
-    let MacBootScreenshot {
-        bundle,
-        out_prefix,
-        seconds,
-    } = boot;
-
-    let mtm = MainThreadMarker::new().ok_or(Error::NotMainThread)?;
-
-    let config = build_macos_config(&bundle)?;
+/// Build the off-screen window + `VZVirtualMachineView`, create the VM, and
+/// start it. Returns the view (retained; the caller leaks it for the process
+/// lifetime and drives the `AppKit` run loop). Shared by the screenshot path and
+/// the interactive driver, which differ only in what they do with the run loop.
+pub fn start_guest_offscreen(
+    mtm: MainThreadMarker,
+    bundle: &Path,
+    shares: &[DirShare],
+) -> Result<Retained<VZVirtualMachineView>, Error> {
+    let config = build_macos_config(bundle, shares)?;
     if let Err(error) = unsafe { config.validateWithError() } {
         return Err(Error::InvalidConfiguration {
             message: ns_error_message(&error),
@@ -100,12 +117,26 @@ pub fn boot_macos_screenshot(boot: MacBootScreenshot) -> Result<(), Error> {
         }
     });
     // We hold a MainThreadMarker, so we are on the main thread (the VM's queue);
-    // start directly. `app.run()` below drives the main run loop, which services
-    // the main dispatch queue so the completion handler fires. `vm` and
-    // `completion` live for the process because this function never returns
-    // (app.run blocks until the capture thread exits the process); `vm_view`
-    // retains the VM as well.
+    // start directly. The caller's `app.run()` drives the main run loop, which
+    // services the main dispatch queue so the completion handler fires. The
+    // window retains the view, which retains the VM; the caller keeps the view
+    // (and thus the VM) alive for the process by leaking it.
     unsafe { vm.startWithCompletionHandler(&completion) };
+    std::mem::forget(window);
+    std::mem::forget(completion);
+    Ok(vm_view)
+}
+
+pub fn boot_macos_screenshot(boot: MacBootScreenshot) -> Result<(), Error> {
+    let MacBootScreenshot {
+        bundle,
+        out_prefix,
+        seconds,
+        shares,
+    } = boot;
+
+    let mtm = MainThreadMarker::new().ok_or(Error::NotMainThread)?;
+    let vm_view = start_guest_offscreen(mtm, &bundle, &shares)?;
 
     // Tick times for screenshots: the hardcoded ticks below the deadline, then
     // the deadline itself, so a short `--seconds` stops on time and always takes
@@ -114,14 +145,14 @@ pub fn boot_macos_screenshot(boot: MacBootScreenshot) -> Result<(), Error> {
     shots.push(seconds);
     schedule_captures(vm_view, out_prefix, shots);
 
-    // VZVirtualMachineView needs the AppKit run loop to build its layer tree and
+    // VZVirtualMachineView needs the `AppKit` run loop to build its layer tree and
     // receive guest frames; the capture thread exits the process when done.
-    app.run();
+    NSApplication::sharedApplication(mtm).run();
     Ok(())
 }
 
-/// Sleep between ticks and hop each capture onto the main queue (AppKit/IOSurface
-/// access must be on the main thread), then exit the process.
+/// Sleep between ticks and hop each capture onto the main queue (`AppKit` and
+/// `IOSurface` access must be on the main thread), then exit the process.
 fn schedule_captures(view: Retained<VZVirtualMachineView>, out_prefix: PathBuf, shots: Vec<u64>) {
     // The view is not `Send`, so move only the raw pointer and re-borrow on the
     // main queue, where it is valid. The view is leaked (lives for the process)
@@ -161,7 +192,7 @@ fn frame_contents(view: &VZVirtualMachineView) -> Option<Retained<AnyObject>> {
 }
 
 /// Read the framebuffer `IOSurface` (BGRA) and encode a PNG.
-fn capture(view: &VZVirtualMachineView, path: &Path) -> Result<usize, Error> {
+pub fn capture(view: &VZVirtualMachineView, path: &Path) -> Result<usize, Error> {
     let contents = frame_contents(view).ok_or(Error::NoFramebuffer)?;
     // Verify the layer contents really is an IOSurface before any unsafe access.
     let surface_obj: Retained<IOSurface> =
@@ -310,7 +341,7 @@ fn start_install(bundle: &Path, ipsw: &Path, hw_data: &[u8], disk_gib: u64) -> R
     }
     .map_err(|e| Error::Bundle { message: format!("create aux storage: {}", ns_error_message(&e)) })?;
 
-    let config = build_macos_config(bundle)?;
+    let config = build_macos_config(bundle, &[])?;
     if let Err(error) = unsafe { config.validateWithError() } {
         return Err(Error::InvalidConfiguration {
             message: ns_error_message(&error),
@@ -343,7 +374,10 @@ fn start_install(bundle: &Path, ipsw: &Path, hw_data: &[u8], disk_gib: u64) -> R
     Ok(())
 }
 
-fn build_macos_config(bundle: &Path) -> Result<Retained<VZVirtualMachineConfiguration>, Error> {
+fn build_macos_config(
+    bundle: &Path,
+    shares: &[DirShare],
+) -> Result<Retained<VZVirtualMachineConfiguration>, Error> {
     let hw_data = std::fs::read(bundle.join("hardware-model.bin"))
         .map_err(|e| Error::Bundle { message: format!("hardware-model.bin: {e}") })?;
     let id_data = std::fs::read(bundle.join("machine-id.bin"))
@@ -410,6 +444,13 @@ fn build_macos_config(bundle: &Path) -> Result<Retained<VZVirtualMachineConfigur
     let keyboard = unsafe { VZUSBKeyboardConfiguration::new() };
     let pointing = unsafe { VZUSBScreenCoordinatePointingDeviceConfiguration::new() };
 
+    // virtio-fs directory shares (held in a Vec so the retained devices outlive
+    // the upcast refs handed to `setDirectorySharingDevices`).
+    let fs_devices = shares
+        .iter()
+        .map(build_fs_device)
+        .collect::<Result<Vec<_>, Error>>()?;
+
     let config = unsafe { VZVirtualMachineConfiguration::new() };
     let platform_ref: &VZPlatformConfiguration = &platform;
     let boot_ref: &VZBootLoader = &boot_loader;
@@ -429,5 +470,54 @@ fn build_macos_config(bundle: &Path) -> Result<Retained<VZVirtualMachineConfigur
         config.setKeyboards(&NSArray::from_slice(&[kbd_ref]));
         config.setPointingDevices(&NSArray::from_slice(&[pt_ref]));
     }
+    if !fs_devices.is_empty() {
+        let dev_refs: Vec<&VZDirectorySharingDeviceConfiguration> = fs_devices
+            .iter()
+            .map(|device| {
+                let device_ref: &VZDirectorySharingDeviceConfiguration = device;
+                device_ref
+            })
+            .collect();
+        unsafe { config.setDirectorySharingDevices(&NSArray::from_slice(&dev_refs)) };
+    }
     Ok(config)
+}
+
+/// Build one virtio-fs device for a shared host directory.
+fn build_fs_device(
+    share: &DirShare,
+) -> Result<Retained<VZVirtioFileSystemDeviceConfiguration>, Error> {
+    let tag = match &share.tag {
+        ShareTag::Automount => unsafe {
+            VZVirtioFileSystemDeviceConfiguration::macOSGuestAutomountTag()
+        },
+        ShareTag::Named(name) => {
+            let tag = NSString::from_str(name);
+            unsafe { VZVirtioFileSystemDeviceConfiguration::validateTag_error(&tag) }.map_err(
+                |error| Error::Bundle {
+                    message: format!("invalid share tag {name:?}: {}", ns_error_message(&error)),
+                },
+            )?;
+            tag
+        }
+    };
+    let dir_url = file_url(&share.host_dir);
+    let shared = unsafe {
+        VZSharedDirectory::initWithURL_readOnly(
+            VZSharedDirectory::alloc(),
+            &dir_url,
+            share.read_only,
+        )
+    };
+    let single =
+        unsafe { VZSingleDirectoryShare::initWithDirectory(VZSingleDirectoryShare::alloc(), &shared) };
+    let device = unsafe {
+        VZVirtioFileSystemDeviceConfiguration::initWithTag(
+            VZVirtioFileSystemDeviceConfiguration::alloc(),
+            &tag,
+        )
+    };
+    let share_ref: &VZDirectoryShare = &single;
+    unsafe { device.setShare(Some(share_ref)) };
+    Ok(device)
 }
