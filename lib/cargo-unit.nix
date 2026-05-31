@@ -32,6 +32,15 @@ let
     cargoTargetNames = args.cargoTargetNames or null;
     profile = args.profile or "release";
     rustToolchain = args.rustToolchain or rust.defaultRustToolchain;
+    # Optional cross-compile triple (e.g. "aarch64-apple-darwin"). When set,
+    # `--target` is threaded into the unit-graph generation; nix-cargo-unit's
+    # renderer then emits `--target` per unit and reads the matching
+    # `CARGO_TARGET_<T>_LINKER` from `env`. `null` keeps the host-native build.
+    target = args.target or null;
+    # Caller hook composed with the policy (mold) per-platform args. Receives
+    # each unit's platform string and returns extra rustc args. Used to thread
+    # the Apple framework search path for cross Darwin units only.
+    extraRustcArgsForPlatform = args.extraRustcArgsForPlatform or (_platform: [ ]);
     nativeBuildInputs = args.nativeBuildInputs or [ ];
     env = args.env or { };
     testRunPrelude = args.testRunPrelude or "";
@@ -146,6 +155,10 @@ let
         "unstable-options"
       ]
       ++ profileArgs args.profile
+      ++ lib.optionals (args.target != null) [
+        "--target"
+        args.target
+      ]
       ++ cargoTarget
       ++ [
         "--frozen"
@@ -389,7 +402,9 @@ let
           packageTestInputs
           packageTestEnv
           ;
-        extraRustcArgsForPlatform = rust.rustcArgsForPolicyForPlatform args.policy;
+        extraRustcArgsForPlatform =
+          platform:
+          rust.rustcArgsForPolicyForPlatform args.policy platform ++ args.extraRustcArgsForPlatform platform;
         # Manifest-derived flags come first so per-call `policy.clippy`
         # entries land later in argv and can override them. Cargo's
         # `[lints.clippy]` resolution is the load-bearing source for most
