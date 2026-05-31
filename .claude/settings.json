@@ -1,0 +1,15 @@
+{
+  "extraKnownMarketplaces": {
+    "mixedbread-skills": {
+      "source": {
+        "source": "github",
+        "repo": "mixedbread-ai/skills"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "mixedbread-search@mixedbread-skills": true,
+    "mxbai-cli@mixedbread-skills": true,
+    "mixedbread-parsing@mixedbread-skills": true
+  }
+}
