@@ -29,14 +29,18 @@ enters the Nix store or the fleet plan.
 scoped to `https://github.com`. When `git` needs a credential it runs the
 helper, which reads the file and prints `username=x-access-token` plus the
 token. The token is never exported into any process environment and is read
-only at the moment `git` asks. A `url.insteadOf` rule rewrites
-`git@github.com:` remotes to HTTPS so SSH-style clones use the same token.
+only at the moment `git` asks. The helper also parses the request `git` feeds
+it and emits the token only when the host is `github.com` over `https`, so it
+cannot hand the token to another host even if invoked outside its config scope.
+A `url.insteadOf` rule rewrites both `git@github.com:` and
+`ssh://git@github.com/` remotes to HTTPS so SSH-style clones use the same token.
 
 The helper is deliberately silent when the file is missing: it exits `0` with
 no output, so a node boots and anonymous fetches work even before a token is
-delivered. The [health check](agent.nix) asserts that wiring (helper resolved,
-executable, silent on empty input) rather than asserting a specific token came
-back, so it passes in CI where no real token exists.
+delivered. The [health check](agent.nix) asserts the wiring (helper resolved,
+executable, and exits `0` while emitting nothing for a request it should not
+answer) rather than asserting a specific token came back, so it passes in CI
+where no real token exists.
 
 ## The `gh` CLI
 
