@@ -43,11 +43,10 @@ use crate::imp::{Error, file_url, ns_error_message};
 /// `kCVPixelFormatType_32BGRA` ('BGRA'): the layout the `IOSurface` read assumes.
 const PIXEL_FORMAT_BGRA: u32 = 0x4247_5241;
 
-/// A host directory shared into the guest over virtio-fs.
+/// A host directory shared into the guest over virtio-fs (read-write).
 pub struct DirShare {
     pub tag: ShareTag,
     pub host_dir: PathBuf,
-    pub read_only: bool,
 }
 
 /// The virtio-fs mount tag. `Automount` uses the special macOS tag that mounts
@@ -502,12 +501,10 @@ fn build_fs_device(
         }
     };
     let dir_url = file_url(&share.host_dir);
+    // Read-write: read-only sharing, if needed, belongs behind a dedicated flag
+    // (see `parse_shares`), not an ambiguous in-path suffix.
     let shared = unsafe {
-        VZSharedDirectory::initWithURL_readOnly(
-            VZSharedDirectory::alloc(),
-            &dir_url,
-            share.read_only,
-        )
+        VZSharedDirectory::initWithURL_readOnly(VZSharedDirectory::alloc(), &dir_url, false)
     };
     let single =
         unsafe { VZSingleDirectoryShare::initWithDirectory(VZSingleDirectoryShare::alloc(), &shared) };

@@ -102,10 +102,11 @@ fn execute(view_ptr: usize, trimmed: &str) -> String {
     };
     match command {
         "click" => {
-            let fx = parts.next().and_then(|s| s.parse::<f64>().ok());
-            let fy = parts.next().and_then(|s| s.parse::<f64>().ok());
-            let (Some(fx), Some(fy)) = (fx, fy) else {
+            let (Some(fx), Some(fy)) = (parts.next(), parts.next()) else {
                 return "err click needs two fractions 0..1 (from top-left)".to_owned();
+            };
+            let (Ok(fx), Ok(fy)) = (fx.parse::<f64>(), fy.parse::<f64>()) else {
+                return "err click fractions must be numbers 0..1 (from top-left)".to_owned();
             };
             on_main(view_ptr, move |view| {
                 let bounds = view.bounds();
@@ -125,7 +126,7 @@ fn execute(view_ptr: usize, trimmed: &str) -> String {
             let Some(code) = input::named_key(name) else {
                 return format!("err unknown key {name:?}");
             };
-            let count = parts.next().and_then(|c| c.parse::<u32>().ok()).unwrap_or(1);
+            let count = parts.next().map_or(1, |c| c.parse::<u32>().unwrap_or(1));
             for _ in 0..count {
                 press_key(view_ptr, code, false);
             }
@@ -148,12 +149,13 @@ fn execute(view_ptr: usize, trimmed: &str) -> String {
             format!("ok {command} {name}")
         }
         "wait" => {
-            let Some(secs) = parts.next().and_then(|s| s.parse::<f64>().ok()) else {
-                return "err wait needs seconds".to_owned();
+            // Reject non-positive / non-finite rather than silently acking `ok`
+            // without sleeping, which would desync a lockstep caller.
+            let secs = match parts.next().map(str::parse::<f64>) {
+                Some(Ok(secs)) if secs.is_finite() && secs > 0.0 => secs,
+                _ => return "err wait needs a positive, finite number of seconds".to_owned(),
             };
-            if secs.is_finite() && secs > 0.0 {
-                std::thread::sleep(Duration::from_secs_f64(secs));
-            }
+            std::thread::sleep(Duration::from_secs_f64(secs));
             format!("ok wait {secs}")
         }
         "quit" => {

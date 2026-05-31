@@ -44,7 +44,7 @@ What works today:
   (`click`), `wait`, and on-demand `shot`, with a one-line ack per command (see
   [Driving the guest](#driving-the-guest)). Input goes straight to the guest's
   keyboard/pointing device, so the host cursor never moves.
-- **virtio-fs directory sharing**: `--share TAG=HOSTDIR[:ro]` on `boot-macos`
+- **virtio-fs directory sharing**: `--share TAG=HOSTDIR` on `boot-macos`
   and `drive-macos` shares a host directory into the guest. Tag `auto` uses the
   macOS automount tag, mounting at `/Volumes/My Shared Files`.
 - **Automatic self-signing**: a VM command on the read-only Nix store binary

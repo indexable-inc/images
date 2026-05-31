@@ -37,10 +37,10 @@ several bundles concurrently and returns one image per bundle.
 
 A host directory can be shared into the guest over virtio-fs with the ``shares``
 argument on :func:`screenshot`, :class:`Driver`, :func:`drive`, and
-:func:`screenshot_many`: a list of ``"TAG=HOSTDIR"`` specs (append ``:ro`` for
-read-only). Tag ``auto`` uses the macOS automount tag, mounting at
-``/Volumes/My Shared Files``. This is how a GUI app on the host is run inside
-the guest: share its directory in and launch it from the share.
+:func:`screenshot_many`: a list of ``"TAG=HOSTDIR"`` specs. Tag ``auto`` uses
+the macOS automount tag, mounting at ``/Volumes/My Shared Files``. This is how a
+GUI app on the host is run inside the guest: share its directory in and launch
+it from the share.
 
 Each guest is an independent ``macos-vm`` process, so :class:`Driver` instances
 and :func:`screenshot` calls are independent and safe to run in parallel; fan
@@ -99,7 +99,7 @@ def _binary() -> str:
 
 
 def _share_args(shares: Iterable[str] | None) -> list[str]:
-    """Expand ``"TAG=HOSTDIR[:ro]"`` specs into repeated ``--share`` arguments."""
+    """Expand ``"TAG=HOSTDIR"`` specs into repeated ``--share`` arguments."""
     if not shares:
         return []
     args: list[str] = []
@@ -144,7 +144,7 @@ def screenshot(
     """Boot the macOS guest in ``bundle`` off-screen and return a ``PIL.Image``
     of its display after ``seconds`` (the last frame captured).
 
-    ``shares`` is a list of ``"TAG=HOSTDIR[:ro]"`` virtio-fs specs (see the
+    ``shares`` is a list of ``"TAG=HOSTDIR"`` virtio-fs specs (see the
     module docstring). Raises :class:`MacVmError` if the binary fails, times out,
     or produces no frame.
     """
@@ -247,7 +247,7 @@ class Driver:
     ) -> None:
         """Prepare a driver for ``bundle`` (the guest boots on :meth:`__enter__`).
 
-        ``shares`` is a list of ``"TAG=HOSTDIR[:ro]"`` virtio-fs specs (see the
+        ``shares`` is a list of ``"TAG=HOSTDIR"`` virtio-fs specs (see the
         module docstring). ``timeout`` bounds how long :meth:`close` waits for
         the process to quit; per-command reads block until the ack arrives, since
         a slow guest boot can delay the first one.
