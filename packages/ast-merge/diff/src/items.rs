@@ -52,10 +52,9 @@ pub fn get_name(tree: &Tree, node: tree_sitter::Node<'_>) -> Option<String> {
 
     let name_field = match kind {
         "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item"
-        | "const_item" | "static_item" | "mod_item" => Some("name"),
+        | "const_item" | "static_item" | "mod_item" | "field_declaration"
+        | "function_signature_item" => Some("name"),
         "impl_item" => Some("type"),
-        "field_declaration" => Some("name"),
-        "function_signature_item" => Some("name"),
         "use_declaration" => {
             return Some(tree.node_text(node).to_owned());
         }
@@ -98,30 +97,28 @@ pub fn reconcile_single(trees: &ThreeWayTrees<'_>, nodes: ThreeWayNodes<'_>) -> 
     if matches!(
         kind,
         "struct_item" | "impl_item" | "enum_item" | "trait_item"
+    ) && let Some(merged) = try_reconcile(
+        trees,
+        ThreeWayNodes {
+            base: base_node,
+            left: left_node,
+            right: right_node,
+        },
     ) {
-        if let Some(merged) = try_reconcile(
-            trees,
-            ThreeWayNodes {
-                base: base_node,
-                left: left_node,
-                right: right_node,
-            },
-        ) {
-            return merged;
-        }
+        return merged;
     }
 
-    if kind == "function_item" {
-        if let Some(merged) = try_reconcile_function(
+    if kind == "function_item"
+        && let Some(merged) = try_reconcile_function(
             trees,
             ThreeWayNodes {
                 base: base_node,
                 left: left_node,
                 right: right_node,
             },
-        ) {
-            return merged;
-        }
+        )
+    {
+        return merged;
     }
 
     let left_text = left_tree.node_text(left_node);
@@ -134,10 +131,10 @@ pub fn reconcile_single(trees: &ThreeWayTrees<'_>, nodes: ThreeWayNodes<'_>) -> 
 }
 
 /// Three-way item slices for `reconcile_lists`.
-pub(crate) struct ThreeWay<'a, 'tree> {
-    pub(crate) base: &'a [tree_sitter::Node<'tree>],
-    pub(crate) left: &'a [tree_sitter::Node<'tree>],
-    pub(crate) right: &'a [tree_sitter::Node<'tree>],
+pub struct ThreeWay<'a, 'tree> {
+    pub base: &'a [tree_sitter::Node<'tree>],
+    pub left: &'a [tree_sitter::Node<'tree>],
+    pub right: &'a [tree_sitter::Node<'tree>],
 }
 
 pub fn reconcile_lists(trees: &ThreeWayTrees<'_>, items: &ThreeWay<'_, '_>) -> String {
@@ -212,18 +209,21 @@ fn build_right_to_base_map(
         .iter()
         .enumerate()
         .filter_map(|(right_idx, right_item)| {
-            if let Some(name) = get_name(right_tree, *right_item) {
-                input
-                    .base_by_name
-                    .get(&name)
-                    .map(|entry| (right_idx, entry.index))
-            } else {
-                let right_hash = compute(right_tree, *right_item);
-                input
-                    .base_hashes
-                    .get(&right_hash)
-                    .map(|&base_idx| (right_idx, base_idx))
-            }
+            get_name(right_tree, *right_item).map_or_else(
+                || {
+                    let right_hash = compute(right_tree, *right_item);
+                    input
+                        .base_hashes
+                        .get(&right_hash)
+                        .map(|&base_idx| (right_idx, base_idx))
+                },
+                |name| {
+                    input
+                        .base_by_name
+                        .get(&name)
+                        .map(|entry| (right_idx, entry.index))
+                },
+            )
         })
         .collect()
 }

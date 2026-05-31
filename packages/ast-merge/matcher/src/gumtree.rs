@@ -24,7 +24,7 @@ struct NodePairSlices<'a, 'b> {
 
 impl<'a> GumTree<'a> {
     #[must_use]
-    pub fn new(tree_a: &'a Tree, tree_b: &'a Tree, config: Config) -> Self {
+    pub const fn new(tree_a: &'a Tree, tree_b: &'a Tree, config: Config) -> Self {
         Self {
             tree_a,
             tree_b,
@@ -47,10 +47,10 @@ impl<'a> GumTree<'a> {
             "tree sizes"
         );
 
-        if let (Some(root_a), Some(root_b)) = (nodes_a.first(), nodes_b.first()) {
-            if root_a.kind_id() == root_b.kind_id() {
-                matching.add_match(0, 0);
-            }
+        if let (Some(root_a), Some(root_b)) = (nodes_a.first(), nodes_b.first())
+            && root_a.kind_id() == root_b.kind_id()
+        {
+            matching.add_match(0, 0);
         }
 
         let phase1_start = std::time::Instant::now();
@@ -65,14 +65,14 @@ impl<'a> GumTree<'a> {
             "top_down_phase complete"
         );
 
-        let phase15_start = std::time::Instant::now();
+        let leaf_phase_start = std::time::Instant::now();
         self.leaf_sibling_phase(NodePairSlices {
             nodes_a: &nodes_a,
             nodes_b: &nodes_b,
             matching: &mut matching,
         });
         tracing::debug!(
-            elapsed_ms = phase15_start.elapsed().as_millis(),
+            elapsed_ms = leaf_phase_start.elapsed().as_millis(),
             matches = matching.len(),
             "leaf_sibling_phase complete"
         );

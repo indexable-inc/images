@@ -1,6 +1,6 @@
 use crate::types::Profile;
 
-pub(crate) static RUST: Profile = Profile {
+pub static RUST: Profile = Profile {
     name: "Rust",
     extensions: &["rs"],
     file_names: &[],
@@ -14,7 +14,7 @@ pub(crate) static RUST: Profile = Profile {
     comment_nodes: &["line_comment", "block_comment"],
 };
 
-pub(crate) static C: Profile = Profile {
+pub static C: Profile = Profile {
     name: "C",
     extensions: &["c", "h"],
     file_names: &[],
@@ -33,7 +33,7 @@ pub(crate) static C: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static CPP: Profile = Profile {
+pub static CPP: Profile = Profile {
     name: "C++",
     extensions: &["cpp", "cc", "cxx", "hpp", "hh", "hxx", "h++", "c++"],
     file_names: &[],
@@ -53,7 +53,7 @@ pub(crate) static CPP: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static CSHARP: Profile = Profile {
+pub static CSHARP: Profile = Profile {
     name: "C#",
     extensions: &["cs"],
     file_names: &[],
@@ -73,7 +73,7 @@ pub(crate) static CSHARP: Profile = Profile {
     comment_nodes: &["comment", "multiline_comment"],
 };
 
-pub(crate) static SWIFT: Profile = Profile {
+pub static SWIFT: Profile = Profile {
     name: "Swift",
     extensions: &["swift"],
     file_names: &[],
@@ -88,7 +88,7 @@ pub(crate) static SWIFT: Profile = Profile {
     comment_nodes: &["comment", "multiline_comment"],
 };
 
-pub(crate) static GO: Profile = Profile {
+pub static GO: Profile = Profile {
     name: "Go",
     extensions: &["go"],
     file_names: &[],

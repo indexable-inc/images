@@ -10,7 +10,7 @@ pub struct PcsTriple {
 
 impl PcsTriple {
     #[must_use]
-    pub fn new(parent: Option<usize>, predecessor: Option<usize>, successor: usize) -> Self {
+    pub const fn new(parent: Option<usize>, predecessor: Option<usize>, successor: usize) -> Self {
         Self {
             parent,
             predecessor,

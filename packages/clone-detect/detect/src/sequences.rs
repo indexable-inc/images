@@ -217,14 +217,14 @@ fn sequence_to_fragment(scan: &Output, loc: &SeqLoc) -> Option<Fragment> {
     })
 }
 
-fn hash_kgram(hashes: &[u64], start: usize, end: usize) -> u64 {
+fn hash_kgram(values: &[u64], start: usize, end: usize) -> u64 {
     let mut hasher = FxHasher::default();
-    for h in hashes.iter().skip(start).take(end - start) {
+    for h in values.iter().skip(start).take(end - start) {
         h.hash(&mut hasher);
     }
     hasher.finish()
 }
 
-fn ranges_overlap(a: std::ops::Range<usize>, b: std::ops::Range<usize>) -> bool {
+const fn ranges_overlap(a: std::ops::Range<usize>, b: std::ops::Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }

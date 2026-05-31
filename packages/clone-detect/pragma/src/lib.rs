@@ -64,7 +64,7 @@ impl Info {
     }
 }
 
-fn ranges_overlap(a: &Range<usize>, b: &Range<usize>) -> bool {
+const fn ranges_overlap(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
@@ -109,11 +109,12 @@ pub fn scan(tree: &Tree) -> Info {
 fn scan_recursive(ctx: &mut ScanContext<'_>, node: tree_sitter::Node<'_>) {
     let kind = node.kind();
 
-    if let Some(comment_end) = ctx.state.ignore_next {
-        if node.start_byte() >= comment_end && !is_comment(kind) {
-            ctx.info.ignored_ranges.push(node.byte_range());
-            ctx.state.ignore_next = None;
-        }
+    if let Some(comment_end) = ctx.state.ignore_next
+        && node.start_byte() >= comment_end
+        && !is_comment(kind)
+    {
+        ctx.info.ignored_ranges.push(node.byte_range());
+        ctx.state.ignore_next = None;
     }
 
     if is_comment(kind) {

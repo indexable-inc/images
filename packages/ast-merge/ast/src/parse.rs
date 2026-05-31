@@ -52,7 +52,7 @@ pub struct Tree {
 
 impl Tree {
     #[must_use]
-    pub fn new(source: String, tree: tree_sitter::Tree) -> Self {
+    pub const fn new(source: String, tree: tree_sitter::Tree) -> Self {
         Self { source, tree }
     }
 
@@ -94,6 +94,10 @@ pub enum Error {
     NoTree,
 }
 
+/// Parse `source` with the given tree-sitter `language`.
+///
+/// # Errors
+/// Returns an error if the language cannot be set or the parser produces no tree.
 pub fn tree(source: &str, language: &tree_sitter::Language) -> Result<Output, Error> {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(language).context(SetLanguageSnafu)?;

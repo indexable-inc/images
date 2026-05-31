@@ -2,25 +2,25 @@ use std::hash::{Hash, Hasher};
 
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet, FxHasher};
 
-/// Number of hash functions in the MinHash signature.
+/// Number of hash functions in the `MinHash` signature.
 pub const NUM_HASHES: usize = 64;
 
 /// Number of bands for LSH banding.
 const NUM_BANDS: usize = 16;
 
-/// Rows per band = NUM_HASHES / NUM_BANDS.
+/// Rows per band = `NUM_HASHES` / `NUM_BANDS`.
 const ROWS_PER_BAND: usize = NUM_HASHES / NUM_BANDS;
 
 /// Maximum bucket size before we skip a bucket (too noisy to be useful).
 const MAX_BUCKET_SIZE: usize = 200;
 
-/// Seed generation multiplier (SplitMix64 gamma constant).
+/// Seed generation multiplier (`SplitMix64` gamma constant).
 const SEED_MUL: u64 = 0x517c_c1b7_2722_0a95;
 
-/// Seed generation addend (SplitMix64 increment).
+/// Seed generation addend (`SplitMix64` increment).
 const SEED_ADD: u64 = 0x6c62_272e_07bb_0142;
 
-/// Pre-generated seeds for MinHash hash functions.
+/// Pre-generated seeds for `MinHash` hash functions.
 /// Computed at compile time via const fn; indexing is safe because
 /// `i` is bounded by `NUM_HASHES` which equals the array length.
 #[expect(
@@ -37,7 +37,7 @@ const HASH_SEEDS: [u64; NUM_HASHES] = {
     seeds
 };
 
-/// Compute a MinHash signature from a set of features.
+/// Compute a `MinHash` signature from a set of features.
 #[must_use]
 pub fn minhash_signature(features: &[u64]) -> [u64; NUM_HASHES] {
     let mut signature = [u64::MAX; NUM_HASHES];
@@ -52,18 +52,18 @@ pub fn minhash_signature(features: &[u64]) -> [u64; NUM_HASHES] {
     signature
 }
 
-/// SplitMix64 finalizer constant (first multiply).
+/// `SplitMix64` finalizer constant (first multiply).
 const MIX_MUL_1: u64 = 0xff51_afd7_ed55_8ccd;
 
-/// SplitMix64 finalizer constant (second multiply).
+/// `SplitMix64` finalizer constant (second multiply).
 const MIX_MUL_2: u64 = 0xc4ce_b9fe_1a85_ec53;
 
-/// SplitMix64 shift width.
+/// `SplitMix64` shift width.
 const MIX_SHIFT: u32 = 32;
 
 /// Mix a value with a seed using splitmix64 finalizer.
 #[inline]
-fn mix(value: u64, seed: u64) -> u64 {
+const fn mix(value: u64, seed: u64) -> u64 {
     let mut h = value ^ seed;
     h = h.wrapping_mul(MIX_MUL_1);
     h ^= h >> MIX_SHIFT;
@@ -72,14 +72,14 @@ fn mix(value: u64, seed: u64) -> u64 {
     h
 }
 
-/// A node location: file_id + node_idx.
+/// A node location: `file_id` + `node_idx`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeLocation {
     pub file_id: usize,
     pub node_idx: usize,
 }
 
-/// A node location paired with its MinHash signature.
+/// A node location paired with its `MinHash` signature.
 pub struct LshEntry {
     pub location: NodeLocation,
     pub signature: [u64; NUM_HASHES],
@@ -99,7 +99,7 @@ pub struct LshIndex {
 }
 
 impl LshIndex {
-    /// Build an LSH index from nodes with their MinHash signatures.
+    /// Build an LSH index from nodes with their `MinHash` signatures.
     #[must_use]
     pub fn build(entries: &[LshEntry]) -> Self {
         let mut bands: Vec<FxHashMap<u64, Vec<NodeLocation>>> = Vec::with_capacity(NUM_BANDS);
@@ -145,16 +145,20 @@ impl LshIndex {
         pairs
     }
 
-    /// Look up the MinHash signature for a node location.
+    /// Look up the `MinHash` signature for a node location.
     #[must_use]
     pub fn signature(&self, loc: &NodeLocation) -> Option<&[u64; NUM_HASHES]> {
         self.signatures.get(loc)
     }
 }
 
-/// Estimate Jaccard similarity from MinHash signatures.
+/// Estimate Jaccard similarity from `MinHash` signatures.
 /// Counts matching slots: `matches / NUM_HASHES`. Zero allocation.
 #[must_use]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "match count and NUM_HASHES are tiny, well within f64 precision"
+)]
 pub fn estimated_jaccard(sig_a: &[u64; NUM_HASHES], sig_b: &[u64; NUM_HASHES]) -> f64 {
     let matches = sig_a
         .iter()
@@ -164,7 +168,7 @@ pub fn estimated_jaccard(sig_a: &[u64; NUM_HASHES], sig_b: &[u64; NUM_HASHES]) -
     matches as f64 / NUM_HASHES as f64
 }
 
-fn canonical_pair(a: NodeLocation, b: NodeLocation) -> NodePair {
+const fn canonical_pair(a: NodeLocation, b: NodeLocation) -> NodePair {
     if a.file_id < b.file_id || (a.file_id == b.file_id && a.node_idx <= b.node_idx) {
         NodePair {
             first: a,
@@ -246,11 +250,14 @@ mod tests {
         let index = LshIndex::build(&entries);
         let pairs = index.candidate_pairs();
 
-        let has_ab = pairs.contains(&canonical_pair(loc_a, loc_b));
-        assert!(has_ab, "Similar items A and B should be candidates");
+        let similar_pair = pairs.contains(&canonical_pair(loc_a, loc_b));
+        assert!(similar_pair, "Similar items A and B should be candidates");
 
-        let has_ac = pairs.contains(&canonical_pair(loc_a, loc_c));
-        assert!(!has_ac, "Dissimilar items A and C should not be candidates");
+        let dissimilar_pair = pairs.contains(&canonical_pair(loc_a, loc_c));
+        assert!(
+            !dissimilar_pair,
+            "Dissimilar items A and C should not be candidates"
+        );
     }
 
     #[test]

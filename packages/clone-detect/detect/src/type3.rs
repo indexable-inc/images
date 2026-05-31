@@ -9,7 +9,7 @@ use crate::{
     types::{CloneGroup, Fragment, Kind},
 };
 
-/// Margin for the MinHash estimate pre-check. The estimate approximates
+/// Margin for the `MinHash` estimate pre-check. The estimate approximates
 /// set Jaccard which can differ from multiset Jaccard, so we allow some slack.
 const ESTIMATION_MARGIN: f64 = 0.1;
 
@@ -139,6 +139,10 @@ fn try_make_group(scan: &Output, pair: &CandidatePair) -> Option<CloneGroup> {
 
 /// Compute structural similarity between two AST nodes.
 #[must_use]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "AST node counts are far below f64 mantissa precision"
+)]
 pub fn compute_similarity(a: &NodeInfo, b: &NodeInfo) -> f64 {
     if !a.subtree_features.is_empty() && !b.subtree_features.is_empty() {
         return multiset_sorted(&a.subtree_features, &b.subtree_features);

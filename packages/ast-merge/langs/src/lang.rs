@@ -99,7 +99,7 @@ impl Lang {
     }
 
     #[must_use]
-    pub fn all() -> &'static [Self] {
+    pub const fn all() -> &'static [Self] {
         &[
             Self::Rust,
             Self::JavaScript,

@@ -9,6 +9,9 @@ use crate::{
     types::{CloneGroup, DetectConfig, DetectionResult, DetectionStats, Fragment, Kind},
 };
 
+/// Multiplier turning a ratio into a percentage.
+const PERCENT: f64 = 100.0;
+
 #[must_use]
 pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
     let mut instances = Vec::new();
@@ -90,8 +93,10 @@ pub fn instances(scan: &Output, config: &DetectConfig) -> DetectionResult {
 
     let duplicated_lines = compute_duplicated_lines(&instances);
 
-    const PERCENT: f64 = 100.0;
-
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "line counts stay far below f64 mantissa precision"
+    )]
     let duplication_pct = if total_lines == 0 {
         0.0
     } else {
@@ -167,10 +172,10 @@ fn dedup_subsumed(groups: &mut Vec<CloneGroup>) {
                 break;
             };
 
-            if is_subsumed_by(inner, outer) {
-                if let Some(flag) = subsumed.get_mut(j) {
-                    *flag = true;
-                }
+            if is_subsumed_by(inner, outer)
+                && let Some(flag) = subsumed.get_mut(j)
+            {
+                *flag = true;
             }
         }
     }

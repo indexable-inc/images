@@ -43,10 +43,11 @@ pub fn subtrees(input: &SubtreesInput<'_, '_>, matching: &mut Map) {
     let a_id = input.nodes_a.iter().position(|n| n.id() == node_a.id());
     let b_id = input.nodes_b.iter().position(|n| n.id() == node_b.id());
 
-    if let (Some(a_id), Some(b_id)) = (a_id, b_id) {
-        if !matching.is_matched_a(a_id) && !matching.is_matched_b(b_id) {
-            matching.add_match(a_id, b_id);
-        }
+    if let (Some(a_id), Some(b_id)) = (a_id, b_id)
+        && !matching.is_matched_a(a_id)
+        && !matching.is_matched_b(b_id)
+    {
+        matching.add_match(a_id, b_id);
     }
 
     let mut cursor_a = node_a.walk();

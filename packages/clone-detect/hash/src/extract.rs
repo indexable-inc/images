@@ -37,7 +37,7 @@ pub struct NodeInfo {
     /// statement-sequence clone detection (sliding-window k-grams).
     pub children: Vec<ChildInfo>,
     /// Normalized structural tokens (unigrams + bigrams) for the entire
-    /// subtree. Used as the feature set for MinHash LSH Type-3 detection.
+    /// subtree. Used as the feature set for `MinHash` LSH Type-3 detection.
     /// Much richer than direct-child hashes: captures deep structural
     /// similarity including nested patterns.
     pub subtree_features: Vec<u64>,
@@ -120,7 +120,7 @@ fn collect_children(tree: &Tree, node: tree_sitter::Node<'_>) -> Vec<ChildInfo> 
     children
 }
 
-/// Collect structural features for MinHash LSH.
+/// Collect structural features for `MinHash` LSH.
 ///
 /// Walks the subtree in preorder, producing a normalized token per AST node
 /// (kind + normalized leaf content). Then adds bigrams of consecutive tokens

@@ -1,6 +1,6 @@
 use crate::types::Profile;
 
-pub(crate) static PYTHON: Profile = Profile {
+pub static PYTHON: Profile = Profile {
     name: "Python",
     extensions: &["py", "pyi", "bzl", "bazel"],
     file_names: &["BUILD", "BUILD.bazel"],
@@ -13,7 +13,7 @@ pub(crate) static PYTHON: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static RUBY: Profile = Profile {
+pub static RUBY: Profile = Profile {
     name: "Ruby",
     extensions: &["rb", "rake", "gemspec"],
     file_names: &["Rakefile", "Gemfile", "Guardfile", "Capfile"],
@@ -22,7 +22,7 @@ pub(crate) static RUBY: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static PHP: Profile = Profile {
+pub static PHP: Profile = Profile {
     name: "PHP",
     extensions: &["php", "phtml", "php3", "php4", "php5", "php7", "phps"],
     file_names: &[],
@@ -37,7 +37,7 @@ pub(crate) static PHP: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static BASH: Profile = Profile {
+pub static BASH: Profile = Profile {
     name: "Bash",
     extensions: &["sh", "bash", "zsh"],
     file_names: &[".bashrc", ".bash_profile", ".zshrc", ".profile"],
@@ -46,7 +46,7 @@ pub(crate) static BASH: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static LUA: Profile = Profile {
+pub static LUA: Profile = Profile {
     name: "Lua",
     extensions: &["lua"],
     file_names: &[],

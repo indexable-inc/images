@@ -1,6 +1,6 @@
 use crate::types::Profile;
 
-pub(crate) static HASKELL: Profile = Profile {
+pub static HASKELL: Profile = Profile {
     name: "Haskell",
     extensions: &["hs", "lhs"],
     file_names: &[],
@@ -14,7 +14,7 @@ pub(crate) static HASKELL: Profile = Profile {
     comment_nodes: &["comment", "haddock"],
 };
 
-pub(crate) static ELIXIR: Profile = Profile {
+pub static ELIXIR: Profile = Profile {
     name: "Elixir",
     extensions: &["ex", "exs"],
     file_names: &["mix.exs"],
@@ -23,7 +23,7 @@ pub(crate) static ELIXIR: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static OCAML: Profile = Profile {
+pub static OCAML: Profile = Profile {
     name: "OCaml",
     extensions: &["ml", "mli"],
     file_names: &[],

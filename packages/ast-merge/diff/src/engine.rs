@@ -183,6 +183,10 @@ struct SuccessorEntry<'a> {
     revisions: &'a rustc_hash::FxHashSet<Revision>,
 }
 
+#[expect(
+    clippy::similar_names,
+    reason = "class_{a,b}_{left,right} form a deliberate 2x2 of revision x entry"
+)]
 fn detect_conflicts(changeset: &ChangeSet, class_mapping: &Class) -> Vec<Conflict> {
     use rustc_hash::FxHashMap;
 

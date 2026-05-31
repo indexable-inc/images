@@ -25,6 +25,10 @@ pub struct BottomUpInput<'a, 'b> {
     pub config: &'b Config,
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "descendant counts are far below f64 mantissa precision"
+)]
 pub fn bottom_up_phase(input: &BottomUpInput<'_, '_>, matching: &mut Map) {
     let BottomUpInput {
         nodes_a,

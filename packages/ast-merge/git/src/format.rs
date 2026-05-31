@@ -24,16 +24,16 @@ pub fn conflict(input: &ConflictInput<'_>, settings: &DisplaySettings) -> String
         output.push('\n');
     }
 
-    if settings.diff3_style {
-        if let Some(base_content) = base {
-            output.push_str(&"|".repeat(settings.marker_size));
-            output.push(' ');
-            output.push_str(&settings.base_name);
+    if settings.diff3_style
+        && let Some(base_content) = base
+    {
+        output.push_str(&"|".repeat(settings.marker_size));
+        output.push(' ');
+        output.push_str(&settings.base_name);
+        output.push('\n');
+        output.push_str(base_content);
+        if !base_content.ends_with('\n') && !base_content.is_empty() {
             output.push('\n');
-            output.push_str(base_content);
-            if !base_content.ends_with('\n') && !base_content.is_empty() {
-                output.push('\n');
-            }
         }
     }
 
@@ -69,12 +69,20 @@ pub enum RevisionError {
     },
 }
 
+/// Read a revision's contents from `path`.
+///
+/// # Errors
+/// Returns an error if the file cannot be read.
 pub fn read_revision(path: &std::path::Path) -> Result<String, RevisionError> {
     std::fs::read_to_string(path).context(ReadSnafu {
         path: path.display().to_string(),
     })
 }
 
+/// Write merged `content` to `path`.
+///
+/// # Errors
+/// Returns an error if the file cannot be written.
 pub fn write_result(path: &std::path::Path, content: &str) -> Result<(), RevisionError> {
     std::fs::write(path, content).context(WriteSnafu {
         path: path.display().to_string(),

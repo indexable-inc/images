@@ -16,6 +16,10 @@ const PADDING: usize = 10;
 const SVG_SCALE: f64 = 10.0;
 const HALF: f64 = 2.0;
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "badge widths are small positive integers, exact in f64"
+)]
 pub fn write(path: &std::path::Path, pct: f64) -> Result<(), RunError> {
     let label = "duplication";
     let value = format!("{pct:.1}%");

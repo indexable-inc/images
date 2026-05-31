@@ -79,7 +79,7 @@ pub struct Scanner {
 
 impl Scanner {
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub const fn new(config: Config) -> Self {
         Self { config }
     }
 
@@ -88,6 +88,10 @@ impl Scanner {
         Self::new(Config::default())
     }
 
+    /// Scan every file under a directory tree for clone-relevant AST nodes.
+    ///
+    /// # Errors
+    /// Returns an error if the tree cannot be walked or a file cannot be read.
     pub fn directory(&self, path: &Path) -> Result<Output, Error> {
         let results: Mutex<Vec<File>> = Mutex::new(Vec::new());
         let error: Mutex<Option<Error>> = Mutex::new(None);
@@ -157,6 +161,10 @@ impl Scanner {
         Ok(Output { files, index })
     }
 
+    /// Scan a single file for clone-relevant AST nodes.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be stat-ed, read, or parsed.
     pub fn file(&self, path: &Path) -> Result<Option<File>, Error> {
         let path_str = path.display().to_string();
         let metadata = std::fs::symlink_metadata(path).context(StatSnafu { path: &path_str })?;
@@ -224,7 +232,7 @@ impl Output {
     }
 
     #[must_use]
-    pub fn total_files(&self) -> usize {
+    pub const fn total_files(&self) -> usize {
         self.files.len()
     }
 }

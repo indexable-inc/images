@@ -7,21 +7,21 @@ use crate::{
 };
 
 /// Name-map lookups for base and right items.
-pub(crate) struct NameLookups<'a, 'tree> {
-    pub(crate) base: &'a FxHashMap<String, IndexedNode<'tree>>,
-    pub(crate) right: &'a FxHashMap<String, IndexedNode<'tree>>,
+pub struct NameLookups<'a, 'tree> {
+    pub base: &'a FxHashMap<String, IndexedNode<'tree>>,
+    pub right: &'a FxHashMap<String, IndexedNode<'tree>>,
 }
 
 /// Context for merging left items against base and right.
-pub(crate) struct Context<'a, 'tree> {
-    pub(crate) trees: &'a ThreeWayTrees<'tree>,
-    pub(crate) left_items: &'a [tree_sitter::Node<'tree>],
-    pub(crate) right_items: &'a [tree_sitter::Node<'tree>],
-    pub(crate) name_lookups: &'a NameLookups<'a, 'tree>,
-    pub(crate) base_hashes: &'a FxHashMap<u64, usize>,
+pub struct Context<'a, 'tree> {
+    pub trees: &'a ThreeWayTrees<'tree>,
+    pub left_items: &'a [tree_sitter::Node<'tree>],
+    pub right_items: &'a [tree_sitter::Node<'tree>],
+    pub name_lookups: &'a NameLookups<'a, 'tree>,
+    pub base_hashes: &'a FxHashMap<u64, usize>,
 }
 
-pub(crate) fn reconcile_all(
+pub fn reconcile_all(
     ctx: &Context<'_, '_>,
     handled_right: &mut FxHashSet<usize>,
 ) -> Vec<Resolved> {

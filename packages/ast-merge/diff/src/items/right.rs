@@ -4,15 +4,15 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::items::{IndexedNode, Resolved, get_name};
 
 /// Context for collecting right-only items not present in base.
-pub(crate) struct CollectNewContext<'a, 'tree> {
-    pub(crate) right_items: &'a [tree_sitter::Node<'tree>],
-    pub(crate) handled_right: &'a FxHashSet<usize>,
-    pub(crate) base_by_name: &'a FxHashMap<String, IndexedNode<'tree>>,
-    pub(crate) base_hashes: &'a FxHashMap<u64, usize>,
-    pub(crate) right_to_base: &'a FxHashMap<usize, usize>,
+pub struct CollectNewContext<'a, 'tree> {
+    pub right_items: &'a [tree_sitter::Node<'tree>],
+    pub handled_right: &'a FxHashSet<usize>,
+    pub base_by_name: &'a FxHashMap<String, IndexedNode<'tree>>,
+    pub base_hashes: &'a FxHashMap<u64, usize>,
+    pub right_to_base: &'a FxHashMap<usize, usize>,
 }
 
-pub(crate) fn collect_new(right_tree: &Tree, ctx: &CollectNewContext<'_, '_>) -> Vec<Resolved> {
+pub fn collect_new(right_tree: &Tree, ctx: &CollectNewContext<'_, '_>) -> Vec<Resolved> {
     use ast_merge_ast::compute;
 
     let mut new_right_items: Vec<Resolved> = Vec::new();
@@ -25,11 +25,10 @@ pub(crate) fn collect_new(right_tree: &Tree, ctx: &CollectNewContext<'_, '_>) ->
         let right_hash = compute(right_tree, *right_item);
         let right_kind = right_item.kind().to_owned();
 
-        let is_new = if let Some(name) = &right_name {
-            !ctx.base_by_name.contains_key(name)
-        } else {
-            !ctx.base_hashes.contains_key(&right_hash)
-        };
+        let is_new = right_name.as_ref().map_or_else(
+            || !ctx.base_hashes.contains_key(&right_hash),
+            |name| !ctx.base_by_name.contains_key(name),
+        );
 
         if is_new {
             let predecessor_base_idx = (0..right_idx)
@@ -47,19 +46,22 @@ pub(crate) fn collect_new(right_tree: &Tree, ctx: &CollectNewContext<'_, '_>) ->
     new_right_items
 }
 
-pub(crate) fn insert_new(merged_items: &mut Vec<Resolved>, new_right_items: Vec<Resolved>) {
+pub fn insert_new(merged_items: &mut Vec<Resolved>, new_right_items: Vec<Resolved>) {
     for new_item in new_right_items {
-        let insert_pos = if let Some(pred_base_idx) = new_item.right_predecessor_base_idx {
-            merged_items
-                .iter()
-                .position(|m| m.base_index == Some(pred_base_idx))
-                .map_or(merged_items.len(), |p| p + 1)
-        } else {
-            merged_items
-                .iter()
-                .position(|m| m.kind != new_item.kind)
-                .unwrap_or(0)
-        };
+        let insert_pos = new_item.right_predecessor_base_idx.map_or_else(
+            || {
+                merged_items
+                    .iter()
+                    .position(|m| m.kind != new_item.kind)
+                    .unwrap_or(0)
+            },
+            |pred_base_idx| {
+                merged_items
+                    .iter()
+                    .position(|m| m.base_index == Some(pred_base_idx))
+                    .map_or(merged_items.len(), |p| p + 1)
+            },
+        );
 
         merged_items.insert(insert_pos, new_item);
     }

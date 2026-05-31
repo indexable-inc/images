@@ -4,7 +4,7 @@ use clone_detect::{DetectConfig, DetectionResult, instances};
 use clone_scanner::Config;
 use tempfile::TempDir;
 
-pub fn test_scan_config() -> Config {
+pub const fn test_scan_config() -> Config {
     Config {
         min_lines: 1,
         min_nodes: 1,

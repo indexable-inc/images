@@ -1,6 +1,6 @@
 use crate::types::Profile;
 
-pub(crate) static JAVA: Profile = Profile {
+pub static JAVA: Profile = Profile {
     name: "Java",
     extensions: &["java"],
     file_names: &[],
@@ -15,7 +15,7 @@ pub(crate) static JAVA: Profile = Profile {
     comment_nodes: &["line_comment", "block_comment"],
 };
 
-pub(crate) static KOTLIN: Profile = Profile {
+pub static KOTLIN: Profile = Profile {
     name: "Kotlin",
     extensions: &["kt", "kts"],
     file_names: &[],
@@ -29,7 +29,7 @@ pub(crate) static KOTLIN: Profile = Profile {
     comment_nodes: &["line_comment", "multiline_comment"],
 };
 
-pub(crate) static SCALA: Profile = Profile {
+pub static SCALA: Profile = Profile {
     name: "Scala",
     extensions: &["scala", "sc"],
     file_names: &[],

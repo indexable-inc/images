@@ -137,36 +137,33 @@ fn reconcile_named(
     let base_match = input.lookups.base.get(input.name);
     let right_match = input.lookups.right.get(input.name);
 
-    match (base_match, right_match) {
-        (Some(base_entry), Some(right_entry)) => {
-            handled_right.insert(right_entry.index);
-            let base_h = compute(input.trees.base, base_entry.node);
-            let right_h = compute(input.trees.right, right_entry.node);
+    if let (Some(base_entry), Some(right_entry)) = (base_match, right_match) {
+        handled_right.insert(right_entry.index);
+        let base_h = compute(input.trees.base, base_entry.node);
+        let right_h = compute(input.trees.right, right_entry.node);
 
-            if input.left_hash == right_h {
-                merged_children.push(input.trees.left.node_text(input.left_child).to_owned());
-            } else if input.left_hash == base_h {
-                merged_children.push(input.trees.right.node_text(right_entry.node).to_owned());
-            } else if right_h == base_h {
-                merged_children.push(input.trees.left.node_text(input.left_child).to_owned());
-            } else {
-                let merged = reconcile_single(
-                    input.trees,
-                    ThreeWayNodes {
-                        base: base_entry.node,
-                        left: input.left_child,
-                        right: right_entry.node,
-                    },
-                );
-                merged_children.push(merged);
-            }
-        }
-        _ => {
-            if let Some(right_entry) = right_match {
-                handled_right.insert(right_entry.index);
-            }
+        if input.left_hash == right_h {
             merged_children.push(input.trees.left.node_text(input.left_child).to_owned());
+        } else if input.left_hash == base_h {
+            merged_children.push(input.trees.right.node_text(right_entry.node).to_owned());
+        } else if right_h == base_h {
+            merged_children.push(input.trees.left.node_text(input.left_child).to_owned());
+        } else {
+            let merged = reconcile_single(
+                input.trees,
+                ThreeWayNodes {
+                    base: base_entry.node,
+                    left: input.left_child,
+                    right: right_entry.node,
+                },
+            );
+            merged_children.push(merged);
         }
+    } else {
+        if let Some(right_entry) = right_match {
+            handled_right.insert(right_entry.index);
+        }
+        merged_children.push(input.trees.left.node_text(input.left_child).to_owned());
     }
 }
 
@@ -217,11 +214,10 @@ fn collect_new_right(
         let right_name = get_name(right_tree, *right_child);
         let right_hash = compute(right_tree, *right_child);
 
-        let is_new = if let Some(name) = &right_name {
-            !input.base_child_names.contains_key(name)
-        } else {
-            !input.base_child_hashes.contains_key(&right_hash)
-        };
+        let is_new = right_name.as_ref().map_or_else(
+            || !input.base_child_hashes.contains_key(&right_hash),
+            |name| !input.base_child_names.contains_key(name),
+        );
 
         if is_new {
             merged_children.push(right_tree.node_text(*right_child).to_owned());

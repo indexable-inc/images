@@ -1,6 +1,6 @@
 use crate::types::Profile;
 
-pub(crate) static JAVASCRIPT: Profile = Profile {
+pub static JAVASCRIPT: Profile = Profile {
     name: "JavaScript",
     extensions: &["js", "mjs", "cjs", "jsx"],
     file_names: &[],
@@ -9,7 +9,7 @@ pub(crate) static JAVASCRIPT: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static TYPESCRIPT: Profile = Profile {
+pub static TYPESCRIPT: Profile = Profile {
     name: "TypeScript",
     extensions: &["ts", "mts", "cts"],
     file_names: &[],
@@ -31,7 +31,7 @@ pub(crate) static TYPESCRIPT: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static TSX: Profile = Profile {
+pub static TSX: Profile = Profile {
     name: "TypeScript TSX",
     extensions: &["tsx"],
     file_names: &[],
@@ -53,7 +53,7 @@ pub(crate) static TSX: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static HTML: Profile = Profile {
+pub static HTML: Profile = Profile {
     name: "HTML",
     extensions: &["html", "htm", "xhtml"],
     file_names: &["index.html"],
@@ -62,7 +62,7 @@ pub(crate) static HTML: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static CSS: Profile = Profile {
+pub static CSS: Profile = Profile {
     name: "CSS",
     extensions: &["css"],
     file_names: &[],
@@ -71,7 +71,7 @@ pub(crate) static CSS: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static SVELTE: Profile = Profile {
+pub static SVELTE: Profile = Profile {
     name: "Svelte",
     extensions: &["svelte"],
     file_names: &[],

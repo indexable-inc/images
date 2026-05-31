@@ -14,7 +14,7 @@ pub struct Region {
 
 impl Region {
     #[must_use]
-    pub fn new(start: usize, end: usize, text: String) -> Self {
+    pub const fn new(start: usize, end: usize, text: String) -> Self {
         Self { start, end, text }
     }
 }
@@ -28,7 +28,7 @@ pub struct Result {
 
 impl Result {
     #[must_use]
-    pub fn success(content: String) -> Self {
+    pub const fn success(content: String) -> Self {
         Self {
             content,
             conflicts: Vec::new(),
@@ -37,7 +37,7 @@ impl Result {
     }
 
     #[must_use]
-    pub fn with_conflicts(content: String, conflicts: Vec<Conflict>) -> Self {
+    pub const fn with_conflicts(content: String, conflicts: Vec<Conflict>) -> Self {
         Self {
             content,
             conflicts,

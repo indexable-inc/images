@@ -14,7 +14,7 @@ pub enum Revision {
 
 impl Revision {
     #[must_use]
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Base => "BASE",
             Self::Left => "LEFT",
@@ -42,17 +42,17 @@ impl<'a> Node<'a> {
     }
 
     #[must_use]
-    pub fn node(&self) -> tree_sitter::Node<'a> {
+    pub const fn node(&self) -> tree_sitter::Node<'a> {
         self.inner
     }
 
     #[must_use]
-    pub fn hash(&self) -> u64 {
+    pub const fn hash(&self) -> u64 {
         self.hash
     }
 
     #[must_use]
-    pub fn id(&self) -> NodeId {
+    pub const fn id(&self) -> NodeId {
         self.id
     }
 

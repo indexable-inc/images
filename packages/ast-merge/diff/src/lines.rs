@@ -82,10 +82,10 @@ pub fn inner(base: &str, left: &str, right: &str) -> Outcome {
         let right_insert = right_insertions.get(&i);
 
         // Conflict: both sides insert different content at the same position.
-        if let (Some(li), Some(ri)) = (left_insert, right_insert) {
-            if li != ri {
-                has_conflict = true;
-            }
+        if let (Some(li), Some(ri)) = (left_insert, right_insert)
+            && li != ri
+        {
+            has_conflict = true;
         }
 
         if let Some(lines) = left_insert {
@@ -109,10 +109,10 @@ pub fn inner(base: &str, left: &str, right: &str) -> Outcome {
     // Check for conflicts in trailing insertions (after last base line).
     let left_trailing = left_insertions.get(&base_lines.len());
     let right_trailing = right_insertions.get(&base_lines.len());
-    if let (Some(lt), Some(rt)) = (left_trailing, right_trailing) {
-        if lt != rt {
-            has_conflict = true;
-        }
+    if let (Some(lt), Some(rt)) = (left_trailing, right_trailing)
+        && lt != rt
+    {
+        has_conflict = true;
     }
 
     if let Some(lines) = left_trailing {
@@ -197,20 +197,12 @@ pub fn based(base: &str, left: &str, right: &str) -> Result {
                     right: Region::new(0, r.len(), r.to_owned()),
                 });
             }
-            (Some(_), None, Some(r)) => {
+            (Some(_), None, Some(r)) | (None, None, Some(r)) => {
                 output.push_str(r);
                 output.push('\n');
             }
-            (Some(_), Some(l), None) => {
+            (Some(_), Some(l), None) | (None, Some(l), None) => {
                 output.push_str(l);
-                output.push('\n');
-            }
-            (None, Some(l), None) => {
-                output.push_str(l);
-                output.push('\n');
-            }
-            (None, None, Some(r)) => {
-                output.push_str(r);
                 output.push('\n');
             }
             _ => {}

@@ -67,7 +67,7 @@ pub struct DriverResult {
 
 impl DriverResult {
     #[must_use]
-    pub fn success(content: String) -> Self {
+    pub const fn success(content: String) -> Self {
         Self {
             content,
             exit_code: 0,
@@ -76,7 +76,7 @@ impl DriverResult {
     }
 
     #[must_use]
-    pub fn with_conflicts(content: String, conflict_count: usize) -> Self {
+    pub const fn with_conflicts(content: String, conflict_count: usize) -> Self {
         Self {
             content,
             exit_code: 1,

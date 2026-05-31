@@ -20,9 +20,9 @@ fn foo() {
     let result = scanner.file(&path).unwrap();
 
     assert!(result.is_some());
-    let scanned = result.unwrap();
-    assert_eq!(scanned.language, Lang::Rust);
-    assert!(!scanned.nodes.is_empty());
+    let scanned_file = result.unwrap();
+    assert_eq!(scanned_file.language, Lang::Rust);
+    assert!(!scanned_file.nodes.is_empty());
 }
 
 #[test]
@@ -41,8 +41,8 @@ function calculate(a, b) {
     let result = scanner.file(&path).unwrap();
 
     assert!(result.is_some());
-    let scanned = result.unwrap();
-    assert_eq!(scanned.language, Lang::JavaScript);
+    let scanned_file = result.unwrap();
+    assert_eq!(scanned_file.language, Lang::JavaScript);
 }
 
 #[test]
@@ -60,8 +60,8 @@ def calculate(a, b):
     let result = scanner.file(&path).unwrap();
 
     assert!(result.is_some());
-    let scanned = result.unwrap();
-    assert_eq!(scanned.language, Lang::Python);
+    let scanned_file = result.unwrap();
+    assert_eq!(scanned_file.language, Lang::Python);
 }
 
 #[test]
@@ -84,8 +84,8 @@ fn empty() {
     let result = scanner.file(&path).unwrap();
 
     assert!(result.is_some());
-    let scanned = result.unwrap();
-    assert!(scanned.nodes.is_empty());
+    let scanned_file = result.unwrap();
+    assert!(scanned_file.nodes.is_empty());
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use crate::types::Profile;
 
-pub(crate) static JSON: Profile = Profile {
+pub static JSON: Profile = Profile {
     name: "JSON",
     extensions: &["json", "jsonc"],
     file_names: &["package.json", "tsconfig.json", "composer.json"],
@@ -9,7 +9,7 @@ pub(crate) static JSON: Profile = Profile {
     comment_nodes: &[],
 };
 
-pub(crate) static TOML: Profile = Profile {
+pub static TOML: Profile = Profile {
     name: "TOML",
     extensions: &["toml"],
     file_names: &["Cargo.toml", "pyproject.toml"],
@@ -18,7 +18,7 @@ pub(crate) static TOML: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static YAML: Profile = Profile {
+pub static YAML: Profile = Profile {
     name: "YAML",
     extensions: &["yaml", "yml"],
     file_names: &[],
@@ -27,7 +27,7 @@ pub(crate) static YAML: Profile = Profile {
     comment_nodes: &["comment"],
 };
 
-pub(crate) static MARKDOWN: Profile = Profile {
+pub static MARKDOWN: Profile = Profile {
     name: "Markdown",
     extensions: &["md", "markdown", "mdown", "mkd"],
     file_names: &["README.md", "CHANGELOG.md", "CONTRIBUTING.md"],
@@ -36,7 +36,7 @@ pub(crate) static MARKDOWN: Profile = Profile {
     comment_nodes: &[],
 };
 
-pub(crate) static DOCKERFILE: Profile = Profile {
+pub static DOCKERFILE: Profile = Profile {
     name: "Dockerfile",
     extensions: &[],
     file_names: &["Dockerfile", "Containerfile"],
@@ -45,7 +45,7 @@ pub(crate) static DOCKERFILE: Profile = Profile {
     comment_nodes: &["comment_line"],
 };
 
-pub(crate) static NIX: Profile = Profile {
+pub static NIX: Profile = Profile {
     name: "Nix",
     extensions: &["nix"],
     file_names: &["flake.nix", "default.nix", "shell.nix"],
