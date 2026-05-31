@@ -7,9 +7,10 @@
 //!
 //! The pager is `$PAGER` when set (run through `sh -c`, so `PAGER="less -R"`
 //! and pipelines work), falling back to `less`. An empty `$PAGER` disables
-//! paging, matching git. We default `$LESS` to `FRX` when unset: quit if the
-//! output fits one screen, keep ANSI color, and leave the text in scrollback
-//! instead of an alternate screen.
+//! paging, matching git. We default `$LESS` to `FrX` when unset: quit if the
+//! output fits one screen, pass raw bytes through so Nerd Font icons render
+//! (and color with them), and leave the text in scrollback instead of an
+//! alternate screen.
 
 use std::io::{self, IsTerminal, Write};
 use std::process::{Child, Command, Stdio};
@@ -67,11 +68,19 @@ fn spawn() -> Option<Child> {
         Err(_) => "less".to_string(),
     };
 
-    if std::env::var_os("LESS").is_none() {
-        // Match git's defaults: -F quit if one screen, -R keep color, -X stay in
-        // scrollback. SAFETY note: set before spawning, single-threaded here.
-        unsafe { std::env::set_var("LESS", "FRX") };
-    }
+    // When paging with less, force raw mode plus scrollback-friendly defaults:
+    // -F quit if it fits one screen, -r pass raw bytes through, -X stay in
+    // scrollback. The file-icon tree uses Nerd Font glyphs in the Unicode
+    // Private Use Area, which less renders as literal `<U+E5FF>` escapes under
+    // -R; -r passes them to the terminal font instead. Appending after any user
+    // flags and `$LESS` means our -r wins over an inherited -R, and our output
+    // is only SGR color plus printable glyphs (no cursor motion), so raw is
+    // safe. Non-less pagers are left exactly as the user configured them.
+    let command = if is_less(&command) {
+        format!("{command} -F -r -X")
+    } else {
+        command
+    };
 
     let child = Command::new("sh")
         .arg("-c")
@@ -82,6 +91,16 @@ fn spawn() -> Option<Child> {
     // A missing or unlaunchable pager should not fail the command; fall back to
     // writing directly to stdout instead.
     child.ok()
+}
+
+/// Whether `command` invokes `less`, by the program's basename, so an inherited
+/// `PAGER=/usr/bin/less` or `PAGER="less -S"` is still recognized.
+fn is_less(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .next()
+        .map(|prog| prog.rsplit('/').next().unwrap_or(prog))
+        == Some("less")
 }
 
 #[cfg(test)]
@@ -105,5 +124,20 @@ mod tests {
     #[test]
     fn non_io_error_passes_through() {
         assert!(swallow_broken_pipe(Err(eyre!("unrelated"))).is_err());
+    }
+
+    #[test]
+    fn recognizes_less_invocations() {
+        assert!(is_less("less"));
+        assert!(is_less("less -S"));
+        assert!(is_less("/usr/bin/less"));
+        assert!(is_less("/opt/homebrew/bin/less -R"));
+    }
+
+    #[test]
+    fn other_pagers_are_left_alone() {
+        assert!(!is_less("bat"));
+        assert!(!is_less("moar"));
+        assert!(!is_less("/usr/bin/cat"));
     }
 }
