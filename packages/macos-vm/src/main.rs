@@ -66,6 +66,21 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         timeout_secs: u64,
     },
+    /// Boot an installed macOS guest fully off-screen and screenshot its display
+    /// to `<out-prefix>.NNN.png` via the framebuffer IOSurface (no window, no
+    /// Screen-Recording permission). The bundle is a directory with
+    /// `disk.img`, `aux.img`, `hardware-model.bin`, `machine-id.bin`.
+    BootMacos {
+        /// Guest bundle directory.
+        #[arg(long)]
+        bundle: std::path::PathBuf,
+        /// Output path prefix for screenshots.
+        #[arg(long)]
+        out_prefix: std::path::PathBuf,
+        /// Stop after this many seconds.
+        #[arg(long, default_value_t = 90)]
+        seconds: u64,
+    },
 }
 
 #[cfg(target_os = "macos")]
@@ -85,6 +100,9 @@ fn main() -> ExitCode {
     eprintln!("macos-vm: requires macOS and Apple's Virtualization.framework");
     ExitCode::FAILURE
 }
+
+#[cfg(target_os = "macos")]
+mod macguest;
 
 #[cfg(target_os = "macos")]
 mod imp {
@@ -129,6 +147,14 @@ mod imp {
              fails configuration validation)"
         ))]
         InvalidConfiguration { message: String },
+        #[snafu(display("must run on the main thread"))]
+        NotMainThread,
+        #[snafu(display("guest framebuffer not available yet"))]
+        NoFramebuffer,
+        #[snafu(display("invalid guest bundle: {message}"))]
+        Bundle { message: String },
+        #[snafu(display("screenshot encode/write failed: {message}"))]
+        CaptureEncode { message: String },
     }
 
     /// Parameters for a Linux guest boot. A named struct rather than a wide
@@ -160,6 +186,15 @@ mod imp {
                 memory_mib,
                 cmdline,
                 timeout: Duration::from_secs(timeout_secs),
+            }),
+            Command::BootMacos {
+                bundle,
+                out_prefix,
+                seconds,
+            } => crate::macguest::boot_macos_screenshot(crate::macguest::MacBootScreenshot {
+                bundle,
+                out_prefix,
+                seconds: seconds as f64,
             }),
         }
     }
@@ -282,12 +317,12 @@ mod imp {
         Ok(config)
     }
 
-    fn file_url(path: &std::path::Path) -> Retained<NSURL> {
+    pub fn file_url(path: &std::path::Path) -> Retained<NSURL> {
         let s = NSString::from_str(&path.to_string_lossy());
         NSURL::fileURLWithPath(&s)
     }
 
-    fn ns_error_message(error: &NSError) -> String {
+    pub fn ns_error_message(error: &NSError) -> String {
         error.localizedDescription().to_string()
     }
 }

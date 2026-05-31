@@ -27,6 +27,14 @@ objc2-foundation = "0.3"
 objc2-virtualization = "0.3"
 block2 = "0.6"
 dispatch2 = "0.3"
+# macOS-guest boot + off-screen framebuffer screenshot. The guest frame is an
+# IOSurface in the VZVirtualMachineView's framebuffer subview's layer; we read
+# its BGRA bytes directly and encode PNG with the pure-Rust `image` crate (no
+# CoreImage, no window-server capture, no Screen-Recording permission).
+objc2-app-kit = "0.3"
+objc2-quartz-core = "0.3"
+objc2-io-surface = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints]
 workspace = true

@@ -27,14 +27,43 @@ What works today:
 - `info` reports `VZVirtualMachine.isSupported`.
 - `boot-linux` boots a Linux guest and streams its console, then stops on a
   timeout.
+- `boot-macos` boots an installed macOS guest **fully off-screen** and
+  screenshots its display to PNGs, with no visible window, no
+  ScreenCaptureKit, and no Screen-Recording permission (see
+  [Off-screen capture](#off-screen-capture)). Validated end to end: captures the
+  macOS Setup Assistant from a guest whose window is parked at (-20000, -20000).
 
 What is designed but not yet built (see [Roadmap](#roadmap)):
 
-- graphics device + offscreen screenshot,
+- a Rust `install-macos` (today the bundle is produced by a reference Swift tool),
 - a vsock control channel and a long-lived `serve` mode,
 - booting an OCI image as a disk,
-- a macOS guest installer,
+- guest input injection + OCR to drive the guest headlessly (e.g. past Setup
+  Assistant) without the host cursor,
 - the `macvm` Python module bundled into ix-mcp.
+
+## Off-screen capture
+
+The guest framebuffer is an `IOSurface` living in the `VZVirtualMachineView`'s
+framebuffer subview's layer contents:
+
+```rust
+let surface = vm_view.subviews().firstObject()?.layer()?.contents(); // IOSurface
+```
+
+`boot-macos` reads that IOSurface's BGRA bytes directly and encodes a PNG with
+the pure-Rust [`image`](https://docs.rs/image) crate, entirely in-process. The
+view lives in an off-screen, non-activating window, so nothing appears on the
+host desktop and the cursor is never captured.
+
+This matters because the host-side capture paths do **not** work for a headless
+VM: the VZ display is a Metal-backed layer, so AppKit's `cacheDisplay` reads it
+black; ScreenCaptureKit needs a per-process Screen-Recording grant (a fresh
+helper gets `SCStreamError -3811`); and `screencapture -l <windowID>` cannot
+capture a fully off-screen window ("could not create image from window"). The
+IOSurface read sidesteps all of that. Technique from
+[thecrypticace/vzautomation](https://github.com/thecrypticace/vzautomation),
+which also shows keyboard injection and Vision OCR for driving the guest.
 
 ## Why a standalone signed binary
 
@@ -138,12 +167,17 @@ decision should be made deliberately, not by accretion.
 
 ## Roadmap
 
-1. Graphics device + offscreen screenshot (`screenshot` subcommand returning a
-   PNG).
-2. vsock control channel + long-lived `serve` mode for IPC.
-3. `macvm` Python module bundled into ix-mcp (like `tui`/`screen`): spawns this
+1. ~~Graphics device + off-screen screenshot.~~ Done: `boot-macos` (see
+   [Off-screen capture](#off-screen-capture)).
+2. Rust `install-macos` (`VZMacOSInstaller` from a local IPSW) so the package
+   creates its own guest bundle. Today a reference Swift tool does it; the
+   Apple restore catalog (gdmf) is fetched via mesu + the CDN because gdmf is
+   TLS-intercepted on some networks.
+3. Guest input injection + Vision OCR to drive the guest headlessly (past Setup
+   Assistant, then launch an app) without the host cursor.
+4. vsock control channel + long-lived `serve` mode for IPC.
+5. `macvm` Python module bundled into ix-mcp (like `tui`/`screen`): spawns this
    signed binary and exposes `boot`, `screenshot`, and input, returning PIL
    images that render inline.
-4. macOS guest installer (`VZMacOSInstaller` from an IPSW) for the bossbar test.
-5. OCI-disk boot for Linux guests; document the libkrun handoff for microVMs.
-6. Nix-integrated first-run entitlement signer in `default.nix`.
+6. OCI-disk boot for Linux guests; document the libkrun handoff for microVMs.
+7. Nix-integrated first-run entitlement signer in `default.nix`.
