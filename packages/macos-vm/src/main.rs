@@ -66,6 +66,19 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         timeout_secs: u64,
     },
+    /// Install macOS into a fresh bundle directory from a local restore image
+    /// (IPSW). Bypasses Apple's online catalog (take a downloaded `.ipsw`).
+    InstallMacos {
+        /// Path to a macOS restore image (`UniversalMac_*.ipsw`).
+        #[arg(long)]
+        ipsw: std::path::PathBuf,
+        /// Bundle directory to create (disk, aux, hardware-model, machine-id).
+        #[arg(long)]
+        bundle: std::path::PathBuf,
+        /// Main disk size in GiB.
+        #[arg(long, default_value_t = 64)]
+        disk_gib: u64,
+    },
     /// Boot an installed macOS guest fully off-screen and screenshot its display
     /// to `<out-prefix>.NNN.png` via the framebuffer `IOSurface` (no window, no
     /// Screen-Recording permission). The bundle is a directory with
@@ -86,6 +99,15 @@ enum Command {
 #[cfg(target_os = "macos")]
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Operating a VM needs the `com.apple.security.virtualization` entitlement on
+    // the running process. The Nix store binary is unsigned and immutable, so on
+    // the first VM command we re-exec a self-signed copy from a per-user cache.
+    if !matches!(cli.command, Command::Info)
+        && let Err(error) = ensure_signed_and_reexec()
+    {
+        eprintln!("macos-vm: could not self-sign with the virtualization entitlement: {error}");
+        return ExitCode::FAILURE;
+    }
     match imp::dispatch(cli.command) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -93,6 +115,57 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Ad-hoc sign a cached copy of this binary with the virtualization entitlement
+/// and re-exec it. Returns `Ok(())` only when already running as the signed copy
+/// (sentinel env var set); otherwise it execs and does not return on success.
+#[cfg(target_os = "macos")]
+fn ensure_signed_and_reexec() -> std::io::Result<()> {
+    use std::hash::{Hash, Hasher};
+    use std::io::{Error, ErrorKind};
+    use std::os::unix::process::CommandExt;
+    use std::path::PathBuf;
+
+    const ENTITLEMENTS: &str = include_str!("virtualization.entitlements");
+
+    if std::env::var_os("IX_MACVM_SIGNED").is_some() {
+        return Ok(());
+    }
+    let exe = std::env::current_exe()?;
+    // Key the cache by the store path so a rebuilt binary is re-signed.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    exe.hash(&mut hasher);
+    let key = format!("{:016x}", hasher.finish());
+
+    let cache_home = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .ok_or_else(|| Error::new(ErrorKind::NotFound, "no HOME or XDG_CACHE_HOME"))?;
+    let dir = cache_home.join("ix").join("macos-vm");
+    std::fs::create_dir_all(&dir)?;
+    let signed = dir.join(format!("macos-vm-{key}"));
+
+    if !signed.exists() {
+        let tmp = dir.join(format!("macos-vm-{key}.tmp"));
+        std::fs::copy(&exe, &tmp)?;
+        let entitlements = dir.join("virtualization.entitlements");
+        std::fs::write(&entitlements, ENTITLEMENTS)?;
+        let status = std::process::Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", "-", "--entitlements"])
+            .arg(&entitlements)
+            .arg(&tmp)
+            .status()?;
+        if !status.success() {
+            return Err(Error::other("codesign failed"));
+        }
+        std::fs::rename(&tmp, &signed)?; // publish atomically
+    }
+
+    Err(std::process::Command::new(&signed)
+        .env("IX_MACVM_SIGNED", "1")
+        .args(std::env::args_os().skip(1))
+        .exec())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -187,6 +260,11 @@ mod imp {
                 cmdline,
                 timeout: Duration::from_secs(timeout_secs),
             }),
+            Command::InstallMacos {
+                ipsw,
+                bundle,
+                disk_gib,
+            } => crate::macguest::install_macos(ipsw, bundle, disk_gib),
             Command::BootMacos {
                 bundle,
                 out_prefix,
