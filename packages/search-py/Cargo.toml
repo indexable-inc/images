@@ -1,12 +1,12 @@
 [package]
-name = "semantic-search-py"
+name = "search-py"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Python bindings for semantic-search-core: one async `search` entry point over the content-addressed code index"
+description = "Python bindings for search-core: one async `search` entry point over the content-addressed code index"
 
 [lib]
-name = "semantic_search_py"
+name = "search_py"
 crate-type = ["cdylib"]
 
 [lints]
@@ -16,4 +16,4 @@ workspace = true
 mixedbread.workspace = true
 pyo3 = { workspace = true, features = ["extension-module"] }
 pyo3-async-runtimes.workspace = true
-semantic-search-core.workspace = true
+search-core.workspace = true

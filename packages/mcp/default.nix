@@ -53,32 +53,32 @@ let
       ''
   );
 
-  # The semantic-search package, baked into the pinned interpreter so every
-  # session can `import semantic_search` and `await semantic_search.search(...)`
+  # The search package, baked into the pinned interpreter so every
+  # session can `import search` and `await search.semantic(...)`
   # with no setup. Same shape as `tuiModule`: the PyO3 cdylib comes from the
   # shared workspace graph (not the Linux-only wheel), so this also works on
   # macOS dev.
-  semanticSearchPythonSource = builtins.path {
-    name = "semantic-search-py-python-source";
-    path = ../semantic-search-py/python;
+  searchPythonSource = builtins.path {
+    name = "search-py-python-source";
+    path = ../search-py/python;
   };
-  semanticSearchModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-semantic-search-python-module"
+  searchModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-search-python-module"
       {
         strictDeps = true;
-        meta.description = "ix-semantic-search PyO3 module bundled into the ix-mcp interpreter";
+        meta.description = "ix-search PyO3 module bundled into the ix-mcp interpreter";
       }
       ''
-        site="$out/${pkgs.python3.sitePackages}/semantic_search"
+        site="$out/${pkgs.python3.sitePackages}/search"
         mkdir -p "$site"
-        cp -r ${semanticSearchPythonSource}/semantic_search/. "$site/"
+        cp -r ${searchPythonSource}/search/. "$site/"
 
         cdylib=""
         for candidate in \
-          ${ix.rustWorkspace.units.libraries.semantic_search_py}/lib/libsemantic_search_py.so \
-          ${ix.rustWorkspace.units.libraries.semantic_search_py}/lib/libsemantic_search_py-*.so \
-          ${ix.rustWorkspace.units.libraries.semantic_search_py}/lib/libsemantic_search_py.dylib \
-          ${ix.rustWorkspace.units.libraries.semantic_search_py}/lib/libsemantic_search_py-*.dylib
+          ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py.so \
+          ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py-*.so \
+          ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py.dylib \
+          ${ix.rustWorkspace.units.libraries.search_py}/lib/libsearch_py-*.dylib
         do
           if [ -f "$candidate" ]; then
             cdylib="$candidate"
@@ -86,16 +86,16 @@ let
           fi
         done
         if [ -z "$cdylib" ]; then
-          echo "ix-semantic-search module: no cdylib under ${ix.rustWorkspace.units.libraries.semantic_search_py}/lib" >&2
-          ls -la ${ix.rustWorkspace.units.libraries.semantic_search_py}/lib >&2 || true
+          echo "ix-search module: no cdylib under ${ix.rustWorkspace.units.libraries.search_py}/lib" >&2
+          ls -la ${ix.rustWorkspace.units.libraries.search_py}/lib >&2 || true
           exit 1
         fi
-        install -m555 "$cdylib" "$site/_semantic_search.abi3.so"
+        install -m555 "$cdylib" "$site/_search.abi3.so"
       ''
   );
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
-  # `--system-site-packages`, so `tui`, `semantic_search`, numpy, polars, and
+  # `--system-site-packages`, so `tui`, `search`, numpy, polars, and
   # playwright are importable by default while an in-session `pip install` still
   # writes to the per-session venv.
   mcpPython = pkgs.python3.withPackages (ps: [
@@ -115,7 +115,7 @@ let
     # sync. https://playwright.dev/python/docs/library
     ps.playwright
     tuiModule
-    semanticSearchModule
+    searchModule
   ]);
 
   # Browser bundle that matches the playwright-driver the python package is
@@ -204,8 +204,8 @@ let
 
         mkdir -p "$out"
       '';
-  semanticSearchBundled =
-    pkgs.runCommand "ix-mcp-semantic-search-bundled"
+  searchBundled =
+    pkgs.runCommand "ix-mcp-search-bundled"
       {
         nativeBuildInputs = [ package ];
         strictDeps = true;
@@ -214,14 +214,14 @@ let
         export HOME=$TMPDIR/home
         mkdir -p "$HOME"
 
-        # `semantic_search` ships in the pinned interpreter, so a bare session
+        # `search` ships in the pinned interpreter, so a bare session
         # imports it with no install step. Importing loads the PyO3 cdylib, which
         # exercises the link (the macOS dynamic_lookup path in particular).
         # Running a real search needs network and a credential the build sandbox
         # lacks, so leave that to runtime.
-        ix-mcp exec 'import semantic_search; print("semantic-search-ok", semantic_search.__version__)' >stdout 2>stderr
-        if ! grep -q '^semantic-search-ok ' stdout; then
-          echo "semantic_search was not importable in a default session:" >&2
+        ix-mcp exec 'import search; print("search-ok", search.__version__)' >stdout 2>stderr
+        if ! grep -q '^search-ok ' stdout; then
+          echo "search was not importable in a default session:" >&2
           cat stdout stderr >&2
           exit 1
         fi
@@ -265,7 +265,7 @@ package.overrideAttrs (old: {
           replDefault
           sessionVenv
           tuiBundled
-          semanticSearchBundled
+          searchBundled
           sessionSubprocessStdin
           ;
       };

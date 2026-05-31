@@ -311,7 +311,7 @@ in
           ];
         };
         # ix-islands colorscheme, generated from the shared islands palette so
-        # the editor and the semantic-search `-c` highlighter never drift. Both
+        # the editor and the search `-c` highlighter never drift. Both
         # variants live in packages/code-highlight/src/islands-theme.json (the
         # single source of truth, exposed here as ix.islandsTheme), and
         # nvim/islands-body.lua holds the highlight-group wiring both variants

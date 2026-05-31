@@ -1,5 +1,5 @@
 [package]
-name = "semantic-search-core"
+name = "search-core"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -9,7 +9,7 @@ description = "Content-addressed semantic code search core: indexing, manifest, 
 workspace = true
 
 [lib]
-name = "semantic_search_core"
+name = "search_core"
 path = "src/lib.rs"
 
 [dependencies]

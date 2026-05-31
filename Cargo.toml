@@ -20,9 +20,9 @@ members = [
   "packages/oci-image-builder",
   "packages/progress-style",
   "packages/repo-walker",
-  "packages/semantic-search",
-  "packages/semantic-search-core",
-  "packages/semantic-search-py",
+  "packages/search",
+  "packages/search-core",
+  "packages/search-py",
   "packages/tap",
   "packages/tap/protocol",
   "packages/tap/pty",
@@ -111,7 +111,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
 schemars = "1"
-semantic-search-core = { path = "packages/semantic-search-core" }
+search-core = { path = "packages/search-core" }
 serde = "1"
 serde_json = "1"
 sha2 = "0.10"

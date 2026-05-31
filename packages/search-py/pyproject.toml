@@ -1,14 +1,14 @@
 # The wheel is built by Nix, not a PEP 517 backend:
-# packages/semantic-search-py/default.nix compiles the PyO3 cdylib through the
+# packages/search-py/default.nix compiles the PyO3 cdylib through the
 # shared cargo-unit workspace graph and packages it with wheel/mkwheel.py. This
 # file stays as project metadata (the version is read by the Nix build) plus the
 # pyright config. There is no `[build-system]`; `pip install .` is not a
-# supported path. Build with `nix build .#semantic-search-py`.
+# supported path. Build with `nix build .#search-py`.
 
 [project]
-name = "ix-semantic-search"
+name = "ix-search"
 version = "0.1.0"
-description = "Python bindings for content-addressed semantic code search. Imported as `semantic_search`."
+description = "Python bindings for content-addressed semantic code search. Imported as `search`."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }

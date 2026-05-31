@@ -1,5 +1,5 @@
 {
-  id = "semantic-search";
+  id = "search";
   packageSet = true;
   flake = true;
   inRustWorkspace = true;

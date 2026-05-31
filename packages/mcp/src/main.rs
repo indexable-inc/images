@@ -130,19 +130,19 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Semantic code search over a checkout via the bundled `semantic_search` module. Indexes new/changed files (content-addressed, deduplicated across worktrees), then returns matching chunks scoped to the checkout as JSON. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
+        description = "Semantic code search over a checkout via the bundled `search` module. Indexes new/changed files (content-addressed, deduplicated across worktrees), then returns matching chunks scoped to the checkout as JSON. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
     )]
-    fn semantic_search(&self, Parameters(request): Parameters<SemanticSearchRequest>) -> String {
+    fn search_semantic(&self, Parameters(request): Parameters<SemanticSearchRequest>) -> String {
         self.with_sessions(|sessions| {
             let session = sessions.get_or_create(request.session_id.as_deref())?;
             // Run the search inside the session's persistent event loop via the
-            // bundled module: import it, await `search`, then emit JSON. Both
+            // bundled module: import it, await `semantic`, then emit JSON. Both
             // arguments are interpolated as JSON literals, which are valid Python
             // literals too, so a query or path containing quotes or newlines
             // cannot break out of the expression.
             let source = format!(
-                "import json, semantic_search\n\
-                 _ix_hits = await semantic_search.semantic({query}, {path}, top_k={top_k})\n\
+                "import json, search\n\
+                 _ix_hits = await search.semantic({query}, {path}, top_k={top_k})\n\
                  print(json.dumps(_ix_hits))\n",
                 query = json!(request.query),
                 path = json!(request.path.as_deref().unwrap_or(".")),
@@ -153,9 +153,9 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Regex grep over a checkout via the bundled `semantic_search` module: run a regular expression over the SAME indexed chunks `semantic_search` covers (content-addressed, deduplicated across worktrees), and return matching chunks scoped to the checkout as JSON. New/changed files are indexed first. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
+        description = "Regex grep over a checkout via the bundled `search` module: run a regular expression over the SAME indexed chunks the semantic search covers (content-addressed, deduplicated across worktrees), and return matching chunks scoped to the checkout as JSON. New/changed files are indexed first. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
     )]
-    fn grep_search(&self, Parameters(request): Parameters<GrepSearchRequest>) -> String {
+    fn search_grep(&self, Parameters(request): Parameters<GrepSearchRequest>) -> String {
         self.with_sessions(|sessions| {
             let session = sessions.get_or_create(request.session_id.as_deref())?;
             // Run the grep inside the session's persistent event loop via the
@@ -164,8 +164,8 @@ impl McpServer {
             // Python literals too, so content with quotes or newlines cannot
             // break out of the expression.
             let source = format!(
-                "import json, semantic_search\n\
-                 _ix_hits = await semantic_search.grep({pattern}, {path}, top_k={top_k}, case_sensitive={case_sensitive})\n\
+                "import json, search\n\
+                 _ix_hits = await search.grep({pattern}, {path}, top_k={top_k}, case_sensitive={case_sensitive})\n\
                  print(json.dumps(_ix_hits))\n",
                 pattern = json!(request.pattern),
                 path = json!(request.path.as_deref().unwrap_or(".")),

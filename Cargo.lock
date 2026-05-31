@@ -4229,6 +4229,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "search"
+version = "0.1.0"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "anyhow",
+ "clap",
+ "code-highlight",
+ "dirs",
+ "indicatif",
+ "mixedbread",
+ "progress-style",
+ "search-core",
+ "terminal-light",
+ "tokio",
+]
+
+[[package]]
+name = "search-core"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "futures",
+ "mixedbread",
+ "rayon",
+ "regex",
+ "repo-walker",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "search-py"
+version = "0.1.0"
+dependencies = [
+ "mixedbread",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "search-core",
+]
+
+[[package]]
 name = "security-framework"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4249,53 +4296,6 @@ checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
 dependencies = [
  "core-foundation-sys",
  "libc",
-]
-
-[[package]]
-name = "semantic-search"
-version = "0.1.0"
-dependencies = [
- "anstream",
- "anstyle",
- "anyhow",
- "clap",
- "code-highlight",
- "dirs",
- "indicatif",
- "mixedbread",
- "progress-style",
- "semantic-search-core",
- "terminal-light",
- "tokio",
-]
-
-[[package]]
-name = "semantic-search-core"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "futures",
- "mixedbread",
- "rayon",
- "regex",
- "repo-walker",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "snafu",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "semantic-search-py"
-version = "0.1.0"
-dependencies = [
- "mixedbread",
- "pyo3",
- "pyo3-async-runtimes",
- "semantic-search-core",
 ]
 
 [[package]]

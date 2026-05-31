@@ -1,4 +1,4 @@
-# semantic-search
+# search
 
 Semantic code search over a [Mixedbread](https://www.mixedbread.com) store,
 content-addressed so it deduplicates across git worktrees and never deletes one
@@ -9,9 +9,9 @@ It is two crates: [`mixedbread`](../mixedbread) is a standalone async API client
 with no domain logic; this crate owns the indexing, manifest, and search logic
 and consumes that client behind a [`Store`] trait.
 
-The indexing and search engine lives in [`semantic-search-core`](../semantic-search-core);
-this crate is the CLI over it, and [`semantic-search-py`](../semantic-search-py)
-is the PyO3 binding (`import semantic_search`, also bundled into the `ix-mcp`
+The indexing and search engine lives in [`search-core`](../search-core);
+this crate is the CLI over it, and [`search-py`](../search-py)
+is the PyO3 binding (`import search`, also bundled into the `ix-mcp`
 interpreter).
 
 ## Why it exists
@@ -66,16 +66,16 @@ export MXBAI_API_KEY=...           # optional, from https://mixedbread.com
 
 # Search the current checkout. New/changed files are detected, uploaded, and
 # embedded automatically before the search runs.
-semantic-search "where is the retry backoff configured"
+search "where is the retry backoff configured"
 
 # Show matched content.
-semantic-search -c "http client construction"
+search -c "http client construction"
 
 # Synthesize an answer with sources.
-semantic-search -a "how does sync decide what to upload"
+search -a "how does sync decide what to upload"
 
 # Skip the index step and search the store as-is.
-semantic-search --no-sync "anything"
+search --no-sync "anything"
 ```
 
 Flags mirror `mgrep search` where they overlap: `-c/--content`, `-m/--max-count`,

@@ -95,7 +95,7 @@ let
   skills = import ./skills.nix { inherit lib paths; };
   # Shared JetBrains Islands palette (both variants), the single source of truth
   # for syntax color across the repo: the code-highlight crate embeds this JSON
-  # for the semantic-search `-c` output, and the base profile generates its
+  # for the search `-c` output, and the base profile generates its
   # Neovim colorscheme from the same data through this value.
   islandsTheme = lib.importJSON (paths.packagesRoot + "/code-highlight/src/islands-theme.json");
   languages = {

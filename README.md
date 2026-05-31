@@ -21,7 +21,7 @@ move. Add something useful, and everyone gets it.
 
 A few things already here:
 
-- **Semantic code search** ([`semantic-search`](packages/semantic-search/)) that
+- **Semantic code search** ([`search`](packages/search/)) that
   finds code by meaning, not just exact strings.
 - A [PTY driver](packages/tui/) that lets code **drive any interactive terminal
   program** (gdb, vim, REPLs) like a human typing into it.

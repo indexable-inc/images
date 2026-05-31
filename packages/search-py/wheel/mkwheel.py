@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Package a pre-built PyO3 cdylib plus the Python source into a PEP 427 wheel.
 
-Nix builds the `semantic-search-py` cdylib through cargo-unit and calls this to
-assemble the `ix-semantic-search` wheel, so there is no maturin / PEP 517
+Nix builds the `search-py` cdylib through cargo-unit and calls this to
+assemble the `ix-search` wheel, so there is no maturin / PEP 517
 backend in the loop. The extension is abi3 (`pyo3/abi3-py311`), hence the
 `cp311-abi3` tag: one wheel loads on CPython 3.11+.
 """
@@ -15,15 +15,15 @@ import hashlib
 import pathlib
 import zipfile
 
-# Import package vs. PyPI distribution: `import semantic_search`, but the wheel
-# and dist-info carry the distribution name `ix-semantic-search` (normalized to
-# `ix_semantic_search`).
-PKG = "semantic_search"
-DIST = "ix_semantic_search"
-DIST_NAME = "ix-semantic-search"
-SO_NAME = "_semantic_search.abi3.so"
+# Import package vs. PyPI distribution: `import search`, but the wheel
+# and dist-info carry the distribution name `ix-search` (normalized to
+# `ix_search`).
+PKG = "search"
+DIST = "ix_search"
+DIST_NAME = "ix-search"
+SO_NAME = "_search.abi3.so"
 # Files copied verbatim from the Python source tree into the wheel.
-SOURCE_FILES = ["__init__.py", "_semantic_search.pyi", "py.typed"]
+SOURCE_FILES = ["__init__.py", "_search.pyi", "py.typed"]
 
 
 def sha256_b64(data: bytes) -> str:
@@ -57,7 +57,7 @@ def build_wheel(
         f"Name: {DIST_NAME}\n"
         f"Version: {version}\n"
         "Summary: Python bindings for content-addressed semantic code search. "
-        "Imported as `semantic_search`.\n"
+        "Imported as `search`.\n"
         "Author: indexable\n"
         "Requires-Python: >=3.11\n"
     ).encode()

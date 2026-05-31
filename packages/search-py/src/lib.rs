@@ -1,7 +1,7 @@
-//! Python bindings for `semantic-search-core`.
+//! Python bindings for `search-core`.
 //!
 //! Two thin async entry points, [`semantic`] and [`grep`], which marshal Python
-//! arguments into a [`semantic_search_core::Query`], run the index-then-query
+//! arguments into a [`search_core::Query`], run the index-then-query
 //! pipeline, and return each hit as a plain Python dict. All indexing, dedup,
 //! and query logic lives in the core crate; this module only converts at the
 //! boundary.
@@ -15,7 +15,7 @@ use std::time::Duration;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use semantic_search_core::{
+use search_core::{
     Config, DEFAULT_STORE, DisplayHit, GrepOptions, GrepTargets, MixedbreadStore, Query,
     SearchOptions,
 };
@@ -174,7 +174,7 @@ struct SearchArgs {
 /// Run the index-then-search pipeline and return owned hits. Keeping every
 /// value `Query` borrows owned in this frame is what lets the caller's future
 /// stay `'static`.
-async fn run_search(args: SearchArgs) -> semantic_search_core::Result<Vec<DisplayHit>> {
+async fn run_search(args: SearchArgs) -> search_core::Result<Vec<DisplayHit>> {
     let root: PathBuf =
         std::fs::canonicalize(&args.path).unwrap_or_else(|_| PathBuf::from(&args.path));
     let store = MixedbreadStore::from_login(args.base).await?;
@@ -190,7 +190,7 @@ async fn run_search(args: SearchArgs) -> semantic_search_core::Result<Vec<Displa
         index_timeout: INDEX_TIMEOUT,
     };
 
-    semantic_search_core::index_and_semantic(&store, &query, &Config::default(), |_, _| {}, |_| {})
+    search_core::index_and_semantic(&store, &query, &Config::default(), |_, _| {}, |_| {})
         .await
 }
 
@@ -209,7 +209,7 @@ struct GrepArgs {
 /// Run the index-then-grep pipeline and return owned hits. Keeping every value
 /// `Query` borrows owned in this frame is what lets the caller's future stay
 /// `'static`.
-async fn run_grep(args: GrepArgs) -> semantic_search_core::Result<Vec<DisplayHit>> {
+async fn run_grep(args: GrepArgs) -> search_core::Result<Vec<DisplayHit>> {
     let root: PathBuf =
         std::fs::canonicalize(&args.path).unwrap_or_else(|_| PathBuf::from(&args.path));
     let store = MixedbreadStore::from_login(args.base).await?;
@@ -230,7 +230,7 @@ async fn run_grep(args: GrepArgs) -> semantic_search_core::Result<Vec<DisplayHit
         index_timeout: INDEX_TIMEOUT,
     };
 
-    semantic_search_core::index_and_grep(
+    search_core::index_and_grep(
         &store,
         &query,
         args.options,
@@ -254,7 +254,7 @@ fn hit_to_dict<'py>(py: Python<'py>, hit: &DisplayHit) -> PyResult<Bound<'py, Py
 }
 
 #[pymodule]
-fn _semantic_search(module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _search(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(semantic, module)?)?;
     module.add_function(wrap_pyfunction!(grep, module)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;

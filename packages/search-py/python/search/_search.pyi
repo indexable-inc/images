@@ -1,6 +1,6 @@
 """Type stubs for the native PyO3 module.
 
-Hand-maintained to mirror packages/semantic-search-py/src/lib.rs. Keep in sync
+Hand-maintained to mirror packages/search-py/src/lib.rs. Keep in sync
 when changing the binding. `semantic` and `grep` each return a native
 asyncio-awaitable coroutine produced by pyo3-async-runtimes; awaiting it drives
 the underlying tokio future.

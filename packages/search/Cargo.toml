@@ -1,15 +1,15 @@
 [package]
-name = "semantic-search"
+name = "search"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "CLI for content-addressed semantic code search (thin wrapper over semantic-search-core)"
+description = "CLI for content-addressed semantic code search (thin wrapper over search-core)"
 
 [lints]
 workspace = true
 
 [[bin]]
-name = "semantic-search"
+name = "search"
 path = "src/main.rs"
 
 [dependencies]
@@ -22,6 +22,6 @@ dirs.workspace = true
 indicatif.workspace = true
 mixedbread.workspace = true
 progress-style.workspace = true
-semantic-search-core.workspace = true
+search-core.workspace = true
 terminal-light.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

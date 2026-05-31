@@ -1,6 +1,6 @@
 //! Minimal async client for the [Mixedbread](https://www.mixedbread.com) vector
 //! store API. It owns HTTP and JSON shapes only; it carries no domain logic, so
-//! it can back a semantic-search tool or any other consumer.
+//! it can back a search tool or any other consumer.
 //!
 //! Endpoints covered: store create/get (`/v1/stores`), the two-step file upload
 //! (`/v1/files` then `/v1/stores/{store}/files`), file listing and deletion,

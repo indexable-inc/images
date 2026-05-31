@@ -10,9 +10,9 @@ let
   # The PyO3 cdylib is already built by the shared workspace unit graph (the
   # same one mcp selects its binary from), so the wheel is just packaging: no
   # maturin, no second compile.
-  library = ix.rustWorkspace.units.libraries.semantic_search_py;
+  library = ix.rustWorkspace.units.libraries.search_py;
 
-  # Linux-only: the package set restricts semantic-search-py to Linux (see
+  # Linux-only: the package set restricts search-py to Linux (see
   # package.nix), so only the manylinux tags are reachable here.
   platformTag =
     {
@@ -20,14 +20,14 @@ let
       aarch64-linux = "manylinux_2_34_aarch64";
     }
     .${pkgs.stdenv.hostPlatform.system}
-      or (throw "semantic-search-py: wheel is Linux-only, got ${pkgs.stdenv.hostPlatform.system}");
+      or (throw "search-py: wheel is Linux-only, got ${pkgs.stdenv.hostPlatform.system}");
 
   pythonSource = builtins.path {
-    name = "semantic-search-py-python-source";
+    name = "search-py-python-source";
     path = ./python;
   };
 in
-pkgs.runCommand "ix-semantic-search-wheel"
+pkgs.runCommand "ix-search-wheel"
   {
     strictDeps = true;
     nativeBuildInputs = [
@@ -37,17 +37,17 @@ pkgs.runCommand "ix-semantic-search-wheel"
       pkgs.removeReferencesTo
     ];
     passthru = { inherit library; };
-    meta.description = "ix-semantic-search Python wheel (PyO3 bindings for content-addressed code search)";
+    meta.description = "ix-search Python wheel (PyO3 bindings for content-addressed code search)";
   }
   ''
     set -euo pipefail
 
     cdylib=""
     for candidate in \
-      ${library}/lib/libsemantic_search_py.so \
-      ${library}/lib/libsemantic_search_py-*.so \
-      ${library}/lib/libsemantic_search_py.dylib \
-      ${library}/lib/libsemantic_search_py-*.dylib
+      ${library}/lib/libsearch_py.so \
+      ${library}/lib/libsearch_py-*.so \
+      ${library}/lib/libsearch_py.dylib \
+      ${library}/lib/libsearch_py-*.dylib
     do
       if [ -f "$candidate" ]; then
         cdylib="$candidate"
@@ -55,7 +55,7 @@ pkgs.runCommand "ix-semantic-search-wheel"
       fi
     done
     if [ -z "$cdylib" ]; then
-      echo "semantic-search-py: no cdylib under ${library}/lib" >&2
+      echo "search-py: no cdylib under ${library}/lib" >&2
       ls -la ${library}/lib >&2 || true
       exit 1
     fi

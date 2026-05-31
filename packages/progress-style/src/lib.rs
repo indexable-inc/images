@@ -1,7 +1,7 @@
 //! Shared terminal progress styling for ix command-line tools.
 //!
 //! One owner for the glyphs, colors, and templates every ix CLI uses to draw
-//! progress, so `semantic-search`, `dag-runner`, and future commands render the
+//! progress, so `search`, `dag-runner`, and future commands render the
 //! same shape instead of each hand-rolling an [`indicatif`] template. Pick a
 //! style here, then set the per-run label with [`ProgressBar::set_prefix`] and
 //! the per-run status with [`ProgressBar::set_message`].

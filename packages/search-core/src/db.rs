@@ -58,7 +58,7 @@ impl Db {
             path: path.to_path_buf(),
         })?;
 
-        // WAL + a busy timeout let several `semantic-search` processes share
+        // WAL + a busy timeout let several `search` processes share
         // this DB: concurrent readers plus one writer, writers serialized with
         // retry. auto_vacuum reclaims space in place after deletes.
         // synchronous=NORMAL is the right durability for a rebuildable cache

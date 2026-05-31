@@ -1,4 +1,4 @@
-//! `semantic-search`: a daemon-free, content-addressed semantic code search.
+//! `search`: a daemon-free, content-addressed semantic code search.
 //!
 //! Every run rebuilds a local manifest (cheap; unchanged files are not
 //! re-hashed), uploads only content the store is missing, waits for it to
@@ -14,7 +14,7 @@ use std::time::Duration;
 use anstyle::{AnsiColor, Style};
 use clap::{Args, Parser, Subcommand};
 use indicatif::ProgressBar;
-use semantic_search_core::{
+use search_core::{
     Config, DEFAULT_STORE, DisplayHit, GrepOptions, GrepTargets, MixedbreadStore, Query,
     SearchOptions, StoreStatus,
 };
@@ -24,15 +24,15 @@ const INDEX_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// Command-line arguments.
 ///
-/// A bare invocation (`semantic-search <pattern> [path]`) runs a natural-language
+/// A bare invocation (`search <pattern> [path]`) runs a natural-language
 /// semantic search, preserving the original flat interface. The `grep`
 /// subcommand runs a regular expression over the same indexed chunks. Both
 /// honor the shared connection flags (`--store`, `--base-url`).
 #[derive(Debug, Parser)]
-#[command(name = "semantic-search", about, version)]
+#[command(name = "search", about, version)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 struct Cli {
-    /// Semantic-search arguments for a bare invocation (no subcommand).
+    /// Semantic search arguments for a bare invocation (no subcommand).
     #[command(flatten)]
     semantic: SemanticArgs,
 
@@ -41,14 +41,14 @@ struct Cli {
     command: Option<Command>,
 }
 
-/// Subcommands. Absent means the bare semantic-search path runs.
+/// Subcommands. Absent means the bare search path runs.
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Grep the indexed chunks with a regular expression.
     Grep(GrepArgs),
 }
 
-/// Arguments for the default semantic-search path. Flags mirror `mgrep search`
+/// Arguments for the default search path. Flags mirror `mgrep search`
 /// where they overlap.
 // A CLI naturally has many independent boolean flags; a state machine would
 // obscure, not clarify, the argument surface.
@@ -227,7 +227,7 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
 
     if cli.answer {
         let view =
-            semantic_search_core::index_and_answer(&store, &query, &config, on_upload, on_poll)
+            search_core::index_and_answer(&store, &query, &config, on_upload, on_poll)
                 .await?;
         if let Some(bar) = &bar {
             bar.finish_and_clear();
@@ -241,7 +241,7 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         }
     } else {
         let hits =
-            semantic_search_core::index_and_semantic(&store, &query, &config, on_upload, on_poll)
+            search_core::index_and_semantic(&store, &query, &config, on_upload, on_poll)
                 .await?;
         if let Some(bar) = &bar {
             bar.finish_and_clear();
@@ -330,7 +330,7 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
         }
     };
 
-    let hits = semantic_search_core::index_and_grep(
+    let hits = search_core::index_and_grep(
         &store,
         &query,
         grep_options,
@@ -592,7 +592,7 @@ fn numbered_plain(body: &str, start: u32) -> String {
 mod tests {
     use std::path::Path;
 
-    use semantic_search_core::DisplayHit;
+    use search_core::DisplayHit;
 
     use super::{Palette, render_snippet};
 
