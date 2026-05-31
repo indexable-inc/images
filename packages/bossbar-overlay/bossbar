@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# bossbar - tiny CLI for the Boss Bar Overlay's SQLite database.
+#
+# Resolves the same database the overlay reads (BOSSBAR_DB, else the per-OS
+# app-data path) and creates the schema on demand, so it works whether or not
+# the overlay app has ever run. The overlay picks up every change live.
+set -euo pipefail
+
+COLORS="pink blue red green yellow purple white"
+OVERLAYS="progress notched_6 notched_10 notched_12 notched_20"
+
+db_path() {
+  if [ -n "${BOSSBAR_DB:-}" ]; then
+    printf '%s\n' "$BOSSBAR_DB"
+    return
+  fi
+  case "$(uname -s)" in
+    Darwin) printf '%s\n' "$HOME/Library/Application Support/bossbar-overlay/bossbars.db" ;;
+    *) printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/bossbar-overlay/bossbars.db" ;;
+  esac
+}
+
+DB="$(db_path)"
+
+ensure_db() {
+  mkdir -p "$(dirname "$DB")"
+  sqlite3 "$DB" "CREATE TABLE IF NOT EXISTS bossbars (
+    id        INTEGER PRIMARY KEY,
+    title     TEXT    NOT NULL DEFAULT '',
+    progress  REAL    NOT NULL DEFAULT 1.0,
+    color     TEXT    NOT NULL DEFAULT 'purple',
+    overlay   TEXT    NOT NULL DEFAULT 'progress',
+    visible   INTEGER NOT NULL DEFAULT 1,
+    position  INTEGER NOT NULL DEFAULT 0
+  );"
+}
+
+die() {
+  printf 'bossbar: %s\n' "$1" >&2
+  exit 1
+}
+
+# Double single quotes for safe inlining into SQL string literals.
+sq() { printf "%s" "${1//\'/\'\'}"; }
+
+# A numeric argument matches by id; anything else matches by title.
+selector() {
+  case "$1" in
+    '' ) die "empty selector" ;;
+    *[!0-9]* ) printf "title = '%s'" "$(sq "$1")" ;;
+    * ) printf "id = %s" "$1" ;;
+  esac
+}
+
+in_list() {
+  local needle="$1" item
+  shift
+  for item in $1; do [ "$item" = "$needle" ] && return 0; done
+  return 1
+}
+
+usage() {
+  cat <<'EOF'
+bossbar - control the Minecraft boss bar overlay (SQLite-backed)
+
+Usage:
+  bossbar add <title> [--progress P] [--color C] [--overlay O] [--position N]
+  bossbar set <id|title> [--title T] [--progress P] [--color C]
+                         [--overlay O] [--position N] [--visible 0|1]
+  bossbar rm <id|title>
+  bossbar list
+  bossbar clear
+  bossbar db                 print the database path
+
+  P        fill fraction 0.0 .. 1.0
+  C        pink | blue | red | green | yellow | purple | white
+  O        progress | notched_6 | notched_10 | notched_12 | notched_20
+
+Examples:
+  bossbar add "Ender Dragon" --color pink --overlay notched_20
+  bossbar set "Ender Dragon" --progress 0.5
+  bossbar rm "Ender Dragon"
+EOF
+}
+
+# Parse --flags into SET-style "col = value" assignments.
+# Echoes one assignment per line; validates enums and ranges.
+parse_fields() {
+  local assigns=""
+  while [ "$#" -gt 0 ]; do
+    local flag="$1" val="${2:-}"
+    [ "$#" -ge 2 ] || die "missing value for $flag"
+    case "$flag" in
+      --title)    assigns+="title = '$(sq "$val")'"$'\n' ;;
+      --progress) assigns+="progress = $val"$'\n' ;;
+      --position) assigns+="position = $val"$'\n' ;;
+      --visible)  assigns+="visible = $val"$'\n' ;;
+      --color)
+        in_list "$val" "$COLORS" || die "color must be one of: $COLORS"
+        assigns+="color = '$val'"$'\n' ;;
+      --overlay)
+        in_list "$val" "$OVERLAYS" || die "overlay must be one of: $OVERLAYS"
+        assigns+="overlay = '$val'"$'\n' ;;
+      *) die "unknown flag: $flag" ;;
+    esac
+    shift 2
+  done
+  printf '%s' "$assigns"
+}
+
+cmd="${1:-}"
+[ "$#" -gt 0 ] && shift || true
+
+case "$cmd" in
+  add)
+    [ "$#" -ge 1 ] || die "add needs a <title>"
+    title="$1"; shift
+    ensure_db
+    assigns="$(parse_fields "$@")"
+    set_clause="title = '$(sq "$title")'"
+    while IFS= read -r line; do [ -n "$line" ] && set_clause+=", $line"; done <<< "$assigns"
+    sqlite3 "$DB" "INSERT INTO bossbars DEFAULT VALUES;
+                   UPDATE bossbars SET $set_clause WHERE id = last_insert_rowid();"
+    ;;
+  set)
+    [ "$#" -ge 1 ] || die "set needs an <id|title>"
+    sel="$(selector "$1")"; shift
+    [ "$#" -ge 1 ] || die "set needs at least one field flag"
+    ensure_db
+    assigns="$(parse_fields "$@")"
+    set_clause=""
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      [ -n "$set_clause" ] && set_clause+=", "
+      set_clause+="$line"
+    done <<< "$assigns"
+    sqlite3 "$DB" "UPDATE bossbars SET $set_clause WHERE $sel;"
+    ;;
+  rm)
+    [ "$#" -ge 1 ] || die "rm needs an <id|title>"
+    ensure_db
+    sqlite3 "$DB" "DELETE FROM bossbars WHERE $(selector "$1");"
+    ;;
+  list)
+    ensure_db
+    sqlite3 -header -column "$DB" \
+      "SELECT id, title, round(progress,2) AS progress, color, overlay, visible, position
+       FROM bossbars ORDER BY position, id;"
+    ;;
+  clear)
+    ensure_db
+    sqlite3 "$DB" "DELETE FROM bossbars;"
+    ;;
+  db)
+    printf '%s\n' "$DB"
+    ;;
+  ""|-h|--help|help)
+    usage
+    ;;
+  *)
+    die "unknown command: $cmd (try 'bossbar --help')"
+    ;;
+esac
