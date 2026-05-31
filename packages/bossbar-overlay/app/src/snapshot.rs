@@ -45,8 +45,7 @@ pub fn run(
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
-    // Snapshots have no display scaling, so logical points map 1:1 to pixels.
-    let mut renderer = Renderer::new(device.clone(), queue.clone(), FORMAT, scale, 1.0);
+    let mut renderer = Renderer::new(device.clone(), queue.clone(), FORMAT, scale);
     renderer
         .render(&view, width, height, bars, None)
         .map_err(|e| format!("render: {e:?}"))?;

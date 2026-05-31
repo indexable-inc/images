@@ -30,16 +30,21 @@ bash scripts/fetch-assets.sh   # downloads into app/assets/, no-op once present
 cargo run                      # the overlay
 ```
 
-The window is transparent, always-on-top, and click-through, so the desktop
-underneath stays usable. There is no tray; quit it the way you quit any
-foreground process (Ctrl-C from the terminal, or stop the service that runs it).
-`BOSSBAR_SCALE=3` (or `--scale 3`) enlarges the bars.
+Each bar is its own small transparent, always-on-top, borderless window sized to
+just that bar. Because there is no window except over a bar, the desktop stays
+fully usable everywhere else: only the bars intercept the mouse. There is no
+tray; quit it the way you quit any foreground process (Ctrl-C from the terminal,
+or stop the service that runs it). `BOSSBAR_SCALE=3` (or `--scale 3`) enlarges
+the bars.
 
-On macOS the bars are interactive: hover one and it brightens to fully opaque
-(the cursor becomes a grab hand), and you can drag it anywhere on the screen.
-The drop location is saved to the bar's `x`/`y` columns, so it stays put across
-restarts. Only the bars intercept the mouse; everywhere else the window stays
-click-through. Other platforms render the same overlay without the drag path.
+The bars are interactive: hover one and it goes fully opaque (the cursor becomes
+a grab hand), and you can drag it anywhere on screen. Dragging uses the
+platform's native window drag, and the drop location is saved to the bar's
+`x`/`y` columns, so it stays put across restarts. Bars without a saved position
+auto-stack in a top-center column. This works the same on macOS and Linux.
+
+Known limitation: some Linux tiling window managers force-place or tile
+borderless windows, which can fight the free-drag placement.
 
 To verify rendering without a window, render the current bars straight to a
 transparent PNG:

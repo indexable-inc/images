@@ -25,14 +25,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Bundled SQLite so users don't need a system libsqlite3.
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "6"
-# 2D vectors for bar positions and hit-testing, instead of bare (f64, f64).
+# 2D vectors for bar positions, instead of bare (f64, f64).
 glam = "0.30"
-
-# Reading the global cursor location to wake the click-through overlay only when
-# the pointer is over a bar is macOS-specific (CoreGraphics). Other platforms
-# keep the non-interactive click-through overlay.
-[target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.24"
 
 [profile.release]
 # A desktop HUD: trim the binary, no need for fat debug info.

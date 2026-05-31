@@ -26,6 +26,11 @@ const BAR_H: u32 = 5;
 /// overlay by letting the desktop bleed through a little.
 const DEFAULT_OPACITY: f32 = 0.85;
 
+/// How much a hovered bar grows. A small, deliberate scale-up (on top of going
+/// opaque) so the hover is unmistakable. Each bar window reserves this headroom
+/// so the bar grows in place without the window resizing or shifting.
+const HOVER_SCALE: f32 = 1.08;
+
 /// Vanilla title shadow: one dark pixel offset, scaled, no blur.
 const SHADOW: GColor = GColor::rgb(0x3f, 0x3f, 0x3f);
 
@@ -69,12 +74,11 @@ struct Quad {
     alpha: f32,
 }
 
-/// Physical-pixel geometry of one laid-out bar. Computed by
-/// [`Renderer::layout`] so the draw pass and pointer hit-testing agree on where
-/// every bar sits, including bars pinned to a dragged location.
+/// Physical-pixel geometry of one laid-out bar, in the target's local space.
+/// Produced by [`Renderer::layout`] (multi-bar, for the `--snapshot` PNG) and by
+/// [`Renderer::render_one`] (a single bar filling its own window).
 #[derive(Clone, Copy)]
-pub struct BarBox {
-    pub id: i64,
+struct BarBox {
     left: f32,
     title_top: f32,
     track_y: f32,
@@ -84,21 +88,11 @@ pub struct BarBox {
     has_title: bool,
 }
 
-impl BarBox {
-    /// Top-left of the bar's title (its drag anchor), in physical pixels.
-    pub fn origin(&self) -> glam::Vec2 {
-        glam::vec2(self.left, self.title_top)
-    }
-
-    /// Whether a physical-pixel point falls on the bar. Covers the title plus
-    /// the track so the whole visible bar is grabbable.
-    pub fn contains(&self, p: glam::Vec2) -> bool {
-        let top = if self.has_title { self.title_top } else { self.track_y };
-        p.x >= self.left
-            && p.x <= self.left + self.bar_w
-            && p.y >= top
-            && p.y <= self.track_y + self.bar_h
-    }
+/// One bar to paint: which bar, its box in target-local pixels, and its opacity.
+struct DrawItem<'a> {
+    bar: &'a BossBar,
+    geom: BarBox,
+    alpha: f32,
 }
 
 pub struct Renderer {
@@ -124,9 +118,6 @@ pub struct Renderer {
 
     /// Integer pixel scale of the native 182x5 sprites.
     scale: u32,
-    /// Display backing-scale factor (e.g. 2.0 on Retina). Converts the logical
-    /// screen points stored for pinned bars into framebuffer pixels.
-    scale_factor: f32,
     opacity: f32,
 }
 
@@ -136,7 +127,6 @@ impl Renderer {
         queue: wgpu::Queue,
         format: wgpu::TextureFormat,
         scale: u32,
-        scale_factor: f32,
     ) -> Self {
         let scale = scale.max(1);
 
@@ -301,18 +291,15 @@ impl Renderer {
             text_renderer,
             viewport,
             scale,
-            scale_factor,
             opacity: DEFAULT_OPACITY,
         }
     }
 
-    /// Physical-pixel geometry of every bar, in draw order. Pinned bars
-    /// (`BossBar::pos`) sit at their stored logical point scaled to pixels;
-    /// the rest auto-stack down the top-center column. Shared by the draw pass
-    /// and pointer hit-testing so they never disagree.
-    pub fn layout(&self, bars: &[BossBar], width: f32) -> Vec<BarBox> {
+    /// Physical-pixel geometry of every bar auto-stacked down the top-center
+    /// column, in draw order. Used by the multi-bar `--snapshot` render; the
+    /// live overlay gives each bar its own window and uses `render_one`.
+    fn layout(&self, bars: &[BossBar], width: f32) -> Vec<BarBox> {
         let s = self.scale as f32;
-        let sf = self.scale_factor;
         let bar_w = BAR_W as f32 * s;
         let bar_h = BAR_H as f32 * s;
         let title_px = 8.0 * s;
@@ -322,60 +309,33 @@ impl Renderer {
         let center_x = (width - bar_w) * 0.5;
 
         let mut boxes = Vec::with_capacity(bars.len());
-        let mut auto_y = top_pad;
+        let mut y = top_pad;
         for b in bars {
             let has_title = !b.title.is_empty();
             let title_h = if has_title { title_px } else { 0.0 };
-            let (left, group_top) = match b.pos {
-                Some(p) => (p.x as f32 * sf, p.y as f32 * sf),
-                None => (center_x, auto_y),
-            };
-            let track_y = group_top + title_h + if has_title { title_gap } else { 0.0 };
+            let track_y = y + title_h + if has_title { title_gap } else { 0.0 };
             boxes.push(BarBox {
-                id: b.id,
-                left,
-                title_top: group_top,
+                left: center_x,
+                title_top: y,
                 track_y,
                 bar_w,
                 bar_h,
                 title_px,
                 has_title,
             });
-            // Only the auto-stacked column advances; a pinned bar floats free.
-            if b.pos.is_none() {
-                auto_y = track_y + bar_h + bar_gap;
-            }
+            y = track_y + bar_h + bar_gap;
         }
         boxes
     }
 
-    /// The topmost bar under a physical-pixel point, if any. Iterates back to
-    /// front so the last-drawn (visually top) bar wins an overlap.
-    pub fn hit(&self, bars: &[BossBar], width: f32, point: glam::Vec2) -> Option<i64> {
-        self.layout(bars, width)
-            .into_iter()
-            .rev()
-            .find(|bx| bx.contains(point))
-            .map(|bx| bx.id)
-    }
-
-    /// The drag anchor (title top-left, physical pixels) of one bar by id.
-    pub fn origin_of(&self, bars: &[BossBar], width: f32, id: i64) -> Option<glam::Vec2> {
-        self.layout(bars, width)
-            .into_iter()
-            .find(|bx| bx.id == id)
-            .map(|bx| bx.origin())
-    }
-
-    /// Draw the given bars into `view`, a `width`x`height` target. `highlight`
-    /// is the id of the hovered or dragged bar, drawn opaque for feedback.
-    pub fn render(
+    /// Low-level draw: paint each item (a bar, its box, its opacity) into
+    /// `view`. Shared by the multi-bar snapshot render and the per-window render.
+    fn draw(
         &mut self,
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
-        bars: &[BossBar],
-        highlight: Option<i64>,
+        items: &[DrawItem<'_>],
     ) -> Result<(), wgpu::SurfaceError> {
         // A shaped title plus where and how opaque to draw it.
         struct Title {
@@ -386,21 +346,14 @@ impl Renderer {
         }
 
         let shadow_off = self.scale as f32;
-        let boxes = self.layout(bars, width as f32);
 
-        // Build the sprite quads and lay out the titles in one pass, walking the
-        // shared layout so draw and hit-testing agree on every bar's box.
         let mut quads: Vec<Quad> = Vec::new();
         let mut titles: Vec<Title> = Vec::new();
 
-        for (b, bx) in bars.iter().zip(&boxes) {
-            // The hovered/dragged bar goes solid; every other bar stays at the
-            // HUD's default translucency.
-            let alpha = if Some(b.id) == highlight {
-                1.0
-            } else {
-                self.opacity
-            };
+        for item in items {
+            let b = item.bar;
+            let bx = item.geom;
+            let alpha = item.alpha;
 
             if bx.has_title {
                 let mut buffer =
@@ -609,6 +562,85 @@ impl Renderer {
         self.atlas.trim();
         Ok(())
     }
+
+    /// Render all bars auto-stacked into one target (the `--snapshot` PNG path).
+    /// `highlight` is the id of a bar to paint opaque.
+    pub fn render(
+        &mut self,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        bars: &[BossBar],
+        highlight: Option<i64>,
+    ) -> Result<(), wgpu::SurfaceError> {
+        let opacity = self.opacity;
+        let boxes = self.layout(bars, width as f32);
+        let items: Vec<DrawItem<'_>> = bars
+            .iter()
+            .zip(boxes)
+            .map(|(bar, geom)| DrawItem {
+                bar,
+                geom,
+                alpha: if Some(bar.id) == highlight { 1.0 } else { opacity },
+            })
+            .collect();
+        self.draw(view, width, height, &items)
+    }
+
+    /// Render a single bar centered in its own window. `hovered` paints it
+    /// opaque and grows it by [`HOVER_SCALE`]; otherwise it sits at base size
+    /// with the hover headroom as transparent margin. The window size must come
+    /// from [`bar_window_px`] so the grown bar fits without resizing.
+    pub fn render_one(
+        &mut self,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        bar: &BossBar,
+        hovered: bool,
+    ) -> Result<(), wgpu::SurfaceError> {
+        let s = self.scale as f32 * if hovered { HOVER_SCALE } else { 1.0 };
+        let shadow = self.scale as f32;
+        let has_title = !bar.title.is_empty();
+        let title_px = 8.0 * s;
+        let title_h = if has_title { title_px } else { 0.0 };
+        let title_gap = if has_title { 1.0 * s } else { 0.0 };
+        let bar_w = BAR_W as f32 * s;
+        let bar_h = BAR_H as f32 * s;
+
+        // Center the content (plus its shadow offset) in the window so growth on
+        // hover expands evenly from the middle rather than shifting a corner.
+        let content_w = bar_w + shadow;
+        let content_h = title_h + title_gap + bar_h + shadow;
+        let left = ((width as f32 - content_w) * 0.5).max(0.0);
+        let top = ((height as f32 - content_h) * 0.5).max(0.0);
+
+        let geom = BarBox {
+            left,
+            title_top: top,
+            track_y: top + title_h + title_gap,
+            bar_w,
+            bar_h,
+            title_px,
+            has_title,
+        };
+        let alpha = if hovered { 1.0 } else { self.opacity };
+        let items = [DrawItem { bar, geom, alpha }];
+        self.draw(view, width, height, &items)
+    }
+}
+
+/// Physical-pixel size of the window that holds one bar at `scale` (base scale
+/// times the display factor), including the [`HOVER_SCALE`] headroom so a
+/// hovered bar grows in place. `has_title` adds the title row; plus a
+/// one-pixel-scaled shadow margin.
+pub fn bar_window_px(scale: u32, has_title: bool) -> (u32, u32) {
+    let s = scale.max(1) as f32 * HOVER_SCALE;
+    let bar_w = BAR_W as f32 * s;
+    let bar_h = BAR_H as f32 * s;
+    let title = if has_title { 8.0 * s + 1.0 * s } else { 0.0 };
+    let shadow = scale.max(1) as f32;
+    ((bar_w + shadow).ceil() as u32, (title + bar_h + shadow).ceil() as u32)
 }
 
 /// Decode a PNG and upload it as an sRGB texture with its own bind group.
