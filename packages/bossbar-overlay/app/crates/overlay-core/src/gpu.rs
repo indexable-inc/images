@@ -7,14 +7,9 @@
 //! overlays build a `Vec<Quad>` and hand it to [`Gpu::draw`] (live window) or
 //! [`crate::snapshot`] (headless PNG).
 
-use crate::bitmap_font::BitmapFont;
+use crate::bitmap_font::{self, BitmapFont};
 
 use wgpu::util::DeviceExt;
-
-/// `ascii.png`, extracted from the official Minecraft jar by the
-/// `minecraft-assets` Nix derivation and dropped here before the build (see
-/// `app/scripts/fetch-assets.sh` for the local-dev copy step).
-const ASCII_PNG: &[u8] = include_bytes!("../assets/ascii.png");
 
 /// Vanilla title-shadow grey: one scaled pixel down-right of the glyph.
 pub const SHADOW: [f32; 4] = [
@@ -108,7 +103,6 @@ pub struct Gpu {
     tex_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     textures: Vec<wgpu::BindGroup>,
-    font: BitmapFont,
     font_tex: TexHandle,
     white_tex: TexHandle,
 }
@@ -218,10 +212,13 @@ impl Gpu {
             ..Default::default()
         });
 
-        // Register the well-known textures before constructing self, so there is
-        // no placeholder font to replace: a 1x1 white pixel, then the Minecraft
-        // font sheet. ascii.png is decoded once, feeding both the glyph metrics
-        // and the texture.
+        // Register the well-known textures before constructing self: a 1x1 white
+        // pixel, then the Minecraft font sheet. The glyph metrics come from the
+        // shared CPU face ([`bitmap_font::shared`]), which retains only the widths,
+        // so the sheet is decoded again here for the texture's pixels. Both read
+        // the same embedded `ASCII_PNG`, so metrics and texture never disagree;
+        // this decode is intentionally separate, not a candidate to fold into
+        // `shared()` (doing so would couple GPU bring-up to the lazy metrics init).
         let mut textures = Vec::new();
         let white_tex = {
             let bind =
@@ -230,11 +227,10 @@ impl Gpu {
             textures.push(bind);
             h
         };
-        let ascii = image::load_from_memory(ASCII_PNG)
+        let ascii = image::load_from_memory(bitmap_font::ASCII_PNG)
             .expect("decode embedded ascii.png")
             .to_rgba8();
         let (fw, fh) = ascii.dimensions();
-        let font = BitmapFont::from_ascii_rgba(&ascii, fw, fh);
         let font_tex = {
             let bind = upload_texture(&device, &queue, &tex_layout, &sampler, &ascii, fw, fh);
             let h = TexHandle(textures.len() as u32);
@@ -251,7 +247,6 @@ impl Gpu {
             tex_layout,
             sampler,
             textures,
-            font,
             font_tex,
             white_tex,
         }
@@ -265,9 +260,11 @@ impl Gpu {
         &self.queue
     }
 
-    /// The Minecraft bitmap font, for measuring text and laying out wraps.
-    pub fn font(&self) -> &BitmapFont {
-        &self.font
+    /// The Minecraft bitmap font, for measuring text and laying out wraps. Same
+    /// shared face window sizing measures with, so on-CPU layout and the drawn
+    /// glyphs always agree.
+    pub fn font(&self) -> &'static BitmapFont {
+        bitmap_font::shared()
     }
 
     /// A 1x1 opaque-white texture; tint a quad sampling it to paint a flat fill.
@@ -303,13 +300,14 @@ impl Gpu {
     /// Lay out `text` as glyph quads at `(x, y)` top-left, `scale` px per source
     /// pixel, tinted `color`. Returns the advance width drawn.
     pub fn text(&self, text: &str, x: f32, y: f32, scale: f32, color: [f32; 4], out: &mut Vec<Quad>) -> f32 {
+        let font = bitmap_font::shared();
         let cell = BitmapFont::cell_px() * scale;
         let mut pen = x;
         for c in text.chars() {
-            if let Some(uv) = self.font.glyph_uv(c) {
+            if let Some(uv) = font.glyph_uv(c) {
                 out.push(Quad::sub(self.font_tex, pen, y, cell, cell, uv, color));
             }
-            pen += self.font.advance(c, scale);
+            pen += font.advance(c, scale);
         }
         pen - x
     }
@@ -332,7 +330,7 @@ impl Gpu {
 
     /// Measure `text`'s advance width at `scale` without drawing.
     pub fn measure(&self, text: &str, scale: f32) -> f32 {
-        self.font.measure(text, scale)
+        bitmap_font::shared().measure(text, scale)
     }
 
     /// Paint `quads` into `view` over a transparent clear. Quads draw in order, so

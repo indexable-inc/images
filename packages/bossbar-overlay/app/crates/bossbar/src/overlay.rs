@@ -114,9 +114,11 @@ struct BarWin {
     self_set: Option<LogicalPosition<f64>>,
     /// This bar carries a description, so it has a hover pop-down panel.
     has_description: bool,
-    /// The window is currently grown to fit the open panel. Collapsed otherwise,
-    /// so the empty area below the bar never intercepts the mouse (click-through).
-    expanded: bool,
+    /// The window size (physical px) last requested for this bar. The size-settle
+    /// pass recomputes the target each tick and resizes only when it changes, so
+    /// growing for the hover panel and widening as a title (or its live counter)
+    /// grows both flow through one place without per-frame resize churn.
+    last_size: (u32, u32),
     /// When the window last moved (a `Moved` during a drag). The reconcile guard
     /// ignores externally-read positions until the window has been still for
     /// SETTLE, so the watcher's lagged read-back never snaps a live drag back.
@@ -207,8 +209,12 @@ impl App {
         bar: BossBar,
         slot: usize,
     ) -> Option<BarWin> {
-        let has_title = !bar.title.is_empty();
-        let (w_px, h_px) = scene::bar_window_px(self.scale, has_title);
+        // Size the window to the title, not just the 182px bar: a long downtime
+        // title is wider than the bar and would otherwise be clipped at the window
+        // edge. Measured on the CPU font, so this works before the GPU core exists
+        // (the first window is created before its surface).
+        let title_w = scene::title_extent_px(&bar, self.scale, now_unix());
+        let (w_px, h_px) = scene::bar_window_px(self.scale, title_w);
         let pos = match bar.pos {
             Some(p) => LogicalPosition::new(p.x, p.y),
             None => self.auto_pos(slot, w_px, h_px),
@@ -233,9 +239,9 @@ impl App {
             gesture: DragClick::new(DRAG_THRESHOLD),
             self_set: Some(pos),
             has_description,
-            // Windows are created at the collapsed (bar-only) size; the panel
-            // grows them on hover.
-            expanded: false,
+            // The window was just created at this size; the settle pass grows it
+            // for the panel on hover and tracks any later title-width changes.
+            last_size: (w_px, h_px),
             // Far enough in the past that a fresh window accepts an external
             // position immediately (the SETTLE guard only fires after a real move).
             last_move: now - SETTLE,
@@ -259,11 +265,6 @@ impl App {
             };
 
             if let Some(win) = self.wins.get_mut(&b.id) {
-                // A change to title presence or the description (while open)
-                // changes the window's collapsed or expanded size.
-                let size_affecting_changed = win.bar.title.is_empty() != b.title.is_empty()
-                    || win.bar.description.trim().is_empty() != b.description.trim().is_empty()
-                    || (win.expanded && win.bar.description != b.description);
                 win.has_description = !b.description.trim().is_empty();
                 win.bar = b.clone();
                 // Honor a position set in the DB by something other than our own
@@ -280,14 +281,10 @@ impl App {
                         win.self_set = Some(lp);
                     }
                 }
-                if size_affecting_changed {
-                    // Reset to the resting size; if the bar is still hovered the
-                    // settle pass in `about_to_wait` re-expands it to the new panel
-                    // height on the next tick.
-                    win.expanded = false;
-                    let (w_px, h_px) = scene::bar_window_px(self.scale, !b.title.is_empty());
-                    let _ = win.window.request_inner_size(PhysicalSize::new(w_px, h_px));
-                }
+                // A title or description change can alter the window size (wider for
+                // a longer title, taller for a panel). The settle pass in
+                // `about_to_wait` recomputes the target from the new bar and
+                // resizes if needed; the redraw wakes the loop so it runs now.
                 win.window.request_redraw();
             } else if let Some(win) = self.create_win(event_loop, b.clone(), this_slot) {
                 self.wins.insert(b.id, win);
@@ -387,30 +384,65 @@ impl App {
         }
     }
 
-    /// Grow or shrink a bar's window to match its hover state. Expanding makes room
-    /// for the description panel to unfold; collapsing restores the bar-only size
-    /// so the area below the bar stops intercepting the mouse, keeping the desktop
-    /// click-through everywhere off a bar. No-op when already in the target state
-    /// or when the bar has no panel.
-    fn set_window_expanded(&mut self, id: i64, expand: bool) {
+    /// Settle a bar's window to the size its current state asks for, resizing only
+    /// when that size changes. The target is the expanded (panel-open) size while
+    /// the bar is hovered or easing back, otherwise the collapsed bar size; either
+    /// way it is widened to hold the title (which a live elapsed counter can lengthen
+    /// mid-session). Doing it here, off the per-frame easing, keeps the window from
+    /// resizing every frame: it only resizes when the bar opens, closes, or the
+    /// title's width actually changes.
+    ///
+    /// An auto-stacked bar (no pinned position) is re-centered as its width changes
+    /// so the column stays centered; a pinned bar keeps its dragged top-left and
+    /// grows rightward.
+    fn settle_window_size(&mut self, id: i64) {
         let Some(core) = self.core.as_ref() else {
             return;
         };
+        let now = now_unix();
         let Some(win) = self.wins.get_mut(&id) else {
             return;
         };
-        if win.expanded == expand || (expand && !win.has_description) {
+        let expand = win.wants_expanded();
+        let (w_px, h_px) = if expand {
+            scene::expanded_window_px(&core.gpu, &win.bar, self.scale, now)
+        } else {
+            let title_w = scene::title_extent_px(&win.bar, self.scale, now);
+            scene::bar_window_px(self.scale, title_w)
+        };
+        let (prev_w, _) = win.last_size;
+        if win.last_size == (w_px, h_px) {
             return;
         }
-        let (w_px, h_px) = if expand {
-            scene::expanded_window_px(&core.gpu, &win.bar, self.scale)
-        } else {
-            scene::bar_window_px(self.scale, !win.bar.title.is_empty())
-        };
-        win.expanded = expand;
-        // Rely on the resulting `Resized` event to reconfigure the surface, the
-        // same way a title-presence change in `reconcile` does.
-        let _ = win.window.request_inner_size(PhysicalSize::new(w_px, h_px));
+        win.last_size = (w_px, h_px);
+        // Apply the resize. winit returns `Some(new)` when it resized the window
+        // synchronously, in which case no `Resized` event follows (notably on a 1x
+        // display in winit 0.30), so reconfigure the surface here; otherwise the
+        // `Resized` handler does it. Without this an unmatched synchronous resize
+        // leaves `config` stale and the title clips against the old surface extent.
+        if let Some(new) = win.window.request_inner_size(PhysicalSize::new(w_px, h_px)) {
+            win.config.width = new.width.max(1);
+            win.config.height = new.height.max(1);
+            win.surface.configure(core.gpu.device(), &win.config);
+        }
+
+        // Keep an auto-stacked bar centered as it widens: shift its window left by
+        // half the width change. winit grows the window from its top-left, so
+        // without this the centered bar would drift right each time the counter
+        // gains a digit. Record the new position in `self_set` first so the
+        // resulting `Moved` reads as our own echo (no DB write, no snap-back). Skip
+        // while a drag is in flight so the re-center never moves the window out from
+        // under the OS-owned drag.
+        if win.bar.pos.is_none()
+            && !win.gesture.dragging()
+            && w_px != prev_w
+            && let Some(ss) = win.self_set
+        {
+            let dx = (w_px as f64 - prev_w as f64) / 2.0 / self.scale_factor;
+            let np = LogicalPosition::new((ss.x - dx).max(0.0), ss.y);
+            win.self_set = Some(np);
+            win.window.set_outer_position(np);
+        }
     }
 }
 
@@ -558,13 +590,13 @@ impl ApplicationHandler<Vec<BossBar>> for App {
     /// elapsed counter so its clock advances; otherwise let the loop sleep until
     /// the next event so an idle overlay costs nothing.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Settle each window's size to its hover state first: grow for an open
-        // panel, shrink back once the hover has fully eased out. Done here, off the
-        // per-frame easing, so the window resizes only twice per hover.
+        // Settle each window's size first: grow for an open panel, shrink back once
+        // the hover has fully eased out, and widen as the title (or its live
+        // counter) grows. Done here, off the per-frame easing, so the window
+        // resizes only when its target size actually changes.
         let ids: Vec<i64> = self.wins.keys().copied().collect();
         for id in ids {
-            let want = self.wins.get(&id).is_some_and(BarWin::wants_expanded);
-            self.set_window_expanded(id, want);
+            self.settle_window_size(id);
         }
 
         let mut animating = false;
