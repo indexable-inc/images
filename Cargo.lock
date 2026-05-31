@@ -285,7 +285,6 @@ dependencies = [
  "ast-merge-langs",
  "ast-merge-matcher",
  "clap",
- "insta",
  "snafu",
  "tracing",
  "tracing-subscriber",
@@ -295,11 +294,9 @@ dependencies = [
 name = "ast-merge-ast"
 version = "0.1.0"
 dependencies = [
- "insta",
  "rustc-hash",
  "snafu",
  "tree-sitter",
- "tree-sitter-language",
  "tree-sitter-rust",
 ]
 
@@ -310,7 +307,6 @@ dependencies = [
  "ast-merge-ast",
  "ast-merge-langs",
  "ast-merge-matcher",
- "insta",
  "rustc-hash",
  "similar",
  "tree-sitter",
@@ -320,7 +316,6 @@ dependencies = [
 name = "ast-merge-git"
 version = "0.1.0"
 dependencies = [
- "insta",
  "lazy-regex",
  "snafu",
 ]
@@ -329,7 +324,6 @@ dependencies = [
 name = "ast-merge-langs"
 version = "0.1.0"
 dependencies = [
- "insta",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-c",
@@ -366,12 +360,10 @@ name = "ast-merge-matcher"
 version = "0.1.0"
 dependencies = [
  "ast-merge-ast",
- "insta",
  "rayon",
  "rustc-hash",
  "tracing",
  "tree-sitter",
- "tree-sitter-language",
  "tree-sitter-rust",
  "tree-sitter-toml-ng",
 ]
@@ -761,7 +753,6 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "clone-detect",
- "clone-hash",
  "clone-scanner",
  "glob",
  "serde",
@@ -776,12 +767,8 @@ dependencies = [
 name = "clone-detect"
 version = "0.1.0"
 dependencies = [
- "ast-merge-ast",
- "ast-merge-langs",
- "ast-merge-matcher",
  "clone-hash",
  "clone-scanner",
- "insta",
  "rayon",
  "rustc-hash",
  "serde",
@@ -795,7 +782,6 @@ version = "0.1.0"
 dependencies = [
  "ast-merge-ast",
  "ast-merge-langs",
- "insta",
  "rustc-hash",
  "tree-sitter",
 ]
@@ -818,7 +804,6 @@ dependencies = [
  "clone-hash",
  "clone-pragma",
  "ignore",
- "insta",
  "parking_lot",
  "rustc-hash",
  "snafu",
@@ -2332,19 +2317,6 @@ dependencies = [
  "unicode-width",
  "unit-prefix",
  "web-time",
-]
-
-[[package]]
-name = "insta"
-version = "1.47.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4a6248eb93a4401ed2f37dfe8ea592d3cf05b7cf4f8efa867b6895af7e094e"
-dependencies = [
- "console",
- "once_cell",
- "serde",
- "similar",
- "tempfile",
 ]
 
 [[package]]

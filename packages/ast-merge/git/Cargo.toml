@@ -9,8 +9,5 @@ description = "Git merge driver integration for ast-merge"
 snafu.workspace = true
 lazy-regex.workspace = true
 
-[dev-dependencies]
-insta.workspace = true
-
 [lints]
 workspace = true

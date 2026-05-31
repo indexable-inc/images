@@ -13,7 +13,6 @@ similar.workspace = true
 tree-sitter.workspace = true
 
 [dev-dependencies]
-insta.workspace = true
 ast-merge-langs.workspace = true
 
 [lints]

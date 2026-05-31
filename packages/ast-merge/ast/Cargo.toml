@@ -11,9 +11,7 @@ tree-sitter.workspace = true
 rustc-hash.workspace = true
 
 [dev-dependencies]
-insta.workspace = true
 tree-sitter-rust.workspace = true
-tree-sitter-language.workspace = true
 
 [lints]
 workspace = true

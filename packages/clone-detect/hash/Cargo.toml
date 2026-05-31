@@ -11,8 +11,5 @@ rustc-hash.workspace = true
 ast-merge-ast.workspace = true
 ast-merge-langs.workspace = true
 
-[dev-dependencies]
-insta.workspace = true
-
 [lints]
 workspace = true

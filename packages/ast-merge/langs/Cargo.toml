@@ -61,8 +61,5 @@ tree-sitter-dockerfile-updated.workspace = true
 # Configuration languages
 tree-sitter-nix.workspace = true
 
-[dev-dependencies]
-insta.workspace = true
-
 [lints]
 workspace = true

@@ -11,7 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 snafu.workspace = true
-clone-hash.workspace = true
 clone-scanner.workspace = true
 clone-detect.workspace = true
 clap = { workspace = true, features = ["derive"] }
