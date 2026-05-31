@@ -12,12 +12,20 @@ engine github.com serves), not just from docs. Full evidence and source URLs:
 ## The one decision
 
 For a clip that must **autoplay, loop, swap on dark/light, and regenerate in CI
-with no manual browser step**: commit an **animated WebP** and reference it
-through a `<picture>` element. This is the only approach that satisfies all four
-at once.
+with no manual browser step**: commit an **animated image** and reference it
+through a `<picture>` element. Pick the codec by frame rate:
+
+- **AVIF (AV1) is the primary** when the clip is high-fps or detailed. AV1's real
+  inter-frame compression makes static hold-frames almost free, so a 60fps
+  terminal clip lands around 140 KB where the same WebP is multiple MB. It
+  animates on github.com (verified) and in every current browser.
+- **WebP is the fallback** (and the `<img>`), thinned to a lower fps so it stays
+  under GitHub's 10 MB image cap for renderers that lack AVIF.
 
 ```html
 <picture>
+  <source media="(prefers-color-scheme: dark)"  srcset="docs/demo-dark.avif"  type="image/avif">
+  <source media="(prefers-color-scheme: light)" srcset="docs/demo-light.avif" type="image/avif">
   <source media="(prefers-color-scheme: dark)"  srcset="docs/demo-dark.webp">
   <source media="(prefers-color-scheme: light)" srcset="docs/demo-light.webp">
   <img alt="demo" src="docs/demo-dark.webp" width="800">
@@ -25,8 +33,15 @@ at once.
 ```
 
 The paths are repo-relative committed files. The `<img>` is the fallback for
-renderers that ignore `<picture>`. WebP does not loop unless the encoder sets it,
-so encode with ffmpeg `-loop 0`.
+renderers that ignore `<picture>`. Neither format loops unless the encoder sets
+it, so pass ffmpeg `-loop 0`. AVIF is undocumented by GitHub (works when
+committed and served via `/raw/`, but is not a valid drag-drop attachment type),
+which is why WebP stays as the documented fallback.
+
+ffmpeg gotcha: its AVIF **muxer** writes animation (`-c:v libsvtav1 -loop 0
+out.avif`), but its AVIF **decoder** only extracts the first frame, and
+`mediainfo`/`ffprobe` misreport AVIF sequences as a single frame. Verify
+animation in a real browser, not with those CLIs.
 
 ## Why not inline video
 

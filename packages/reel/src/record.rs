@@ -43,9 +43,12 @@ pub fn record(cols: u16, rows: u16, fps: u32) -> Result<Vec<Frame>> {
     term.write("clear\n").wrap_err("clear screen")?;
     sleep(Duration::from_millis(450));
 
+    // Hold each typed character for this many frames so typing reads at a steady
+    // ~18 chars/sec regardless of the capture frame rate.
+    let frames_per_char = ((fps + 9) / 18).max(1);
     let mut frames = Vec::new();
     for action in script(fps) {
-        run_action(&term, &action, frame_dur, &mut frames)?;
+        run_action(&term, &action, frame_dur, frames_per_char, &mut frames)?;
     }
     Ok(frames)
 }
@@ -66,21 +69,20 @@ fn run_action(
     term: &TuiInstance,
     action: &Action,
     frame_dur: Duration,
+    frames_per_char: u32,
     frames: &mut Vec<Frame>,
 ) -> Result<()> {
     match action {
         Action::Type(text) => {
-            // Emit one frame per few characters rather than per character: the
-            // typing still reads as live, but the frame count (and so the WebP
-            // size) stays bounded for long commands.
-            const CHARS_PER_FRAME: usize = 2;
-            let chars: Vec<char> = text.chars().collect();
-            for chunk in chars.chunks(CHARS_PER_FRAME) {
-                let mut piece = String::new();
-                piece.extend(chunk);
-                term.write(&piece).wrap_err("type")?;
-                sleep(frame_dur);
-                capture(term, frames)?;
+            // Reveal one character at a time, holding each for frames_per_char
+            // frames so typing reads at a steady speed at any capture rate.
+            let mut buf = [0u8; 4];
+            for ch in text.chars() {
+                term.write(ch.encode_utf8(&mut buf)).wrap_err("type")?;
+                for _ in 0..frames_per_char {
+                    sleep(frame_dur);
+                    capture(term, frames)?;
+                }
             }
         }
         Action::Send(raw) => {

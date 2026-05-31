@@ -44,18 +44,18 @@ use std::path::PathBuf;
 use clap::Parser;
 use color_eyre::eyre::Result;
 
-use crate::encode::encode_webp;
+use crate::encode::{Codec, Encoding, encode};
 use crate::font::FontSet;
 use crate::raster::Layout;
 use crate::record::record;
 use crate::scene::{Frame, outro_card, title_card};
 use crate::theme::Theme;
 
-/// Record a terminal demo reel to animated WebP.
+/// Record a terminal demo reel to animated AVIF (with a WebP fallback).
 #[derive(Parser)]
 #[command(name = "reel", version, about)]
 struct Cli {
-    /// Directory to write demo-dark.webp and demo-light.webp into.
+    /// Directory to write the demo-{dark,light}.{avif,webp} files into.
     #[arg(long, default_value = "docs")]
     out_dir: PathBuf,
     /// Output width in pixels; height follows the recorded aspect ratio.
@@ -70,8 +70,8 @@ struct Cli {
     /// Terminal height in rows.
     #[arg(long, default_value_t = 24)]
     rows: u16,
-    /// Capture frame rate.
-    #[arg(long, default_value_t = 12)]
+    /// Capture frame rate for the AVIF (the WebP fallback is capped at 24).
+    #[arg(long, default_value_t = 60)]
     fps: u32,
 }
 
@@ -95,11 +95,24 @@ fn main() -> Result<()> {
     let mut font = FontSet::new(cli.font_size, 1.34)?;
     let layout = Layout::new(&font, cli.cols as usize, cli.rows as usize);
 
+    // AVIF carries the full frame rate; the WebP fallback is thinned to keep it
+    // under GitHub's 10 MB image cap.
+    let webp_fps = cli.fps.min(24);
     for theme in [Theme::Dark, Theme::Light] {
-        let out = cli.out_dir.join(format!("demo-{}.webp", theme.name()));
-        eprintln!("reel: encoding {}…", out.display());
-        encode_webp(&out, &frames, theme, &mut font, &layout, cli.fps, cli.width)?;
-        println!("wrote {}", out.display());
+        for (codec, output_fps) in [(Codec::Avif, cli.fps), (Codec::Webp, webp_fps)] {
+            let encoding = Encoding {
+                codec,
+                render_fps: cli.fps,
+                output_fps,
+                width: cli.width,
+            };
+            let out = cli
+                .out_dir
+                .join(format!("demo-{}.{}", theme.name(), codec.extension()));
+            eprintln!("reel: encoding {}…", out.display());
+            encode(&out, &frames, theme, &mut font, &layout, encoding)?;
+            println!("wrote {}", out.display());
+        }
     }
     Ok(())
 }
