@@ -67,7 +67,26 @@ pub async fn sync(
     on_progress: impl Fn(usize, usize) + Send + Sync,
 ) -> Result<SyncReport> {
     store.ensure_store(store_name).await?;
-    let remote = store.list_external_ids(store_name).await?;
+
+    // Scope the "what's already there" listing to this repo's code records.
+    // The shared store also holds every other repo, every worktree, and the
+    // non-code sources (Slack, Linear, ...); listing it unfiltered means one
+    // sync paginates the whole world before a single byte uploads, which is the
+    // dominant first-run stall on an established store.
+    //
+    // A blob is addressed by its content hash and upload overwrites by that id,
+    // so a too-narrow scope never duplicates or corrupts: the worst case is a
+    // file whose content is byte-identical across two repos getting re-uploaded
+    // (a cheap, idempotent overwrite) the first time each repo syncs it. The
+    // default worktree search intersects by content hash and is unaffected; only
+    // a `--repo`/`--all-worktrees` query for such a shared blob sees its repo
+    // attribution follow the most recent sync. That is rare (shared content is
+    // usually boilerplate) and was already arbitrary under the unfiltered list.
+    let scope = Filter::all(vec![
+        Filter::eq(keys::SOURCE, search_meta::Source::Code.as_str()),
+        Filter::eq(keys::REPO, repo.as_str()),
+    ]);
+    let remote = store.list_external_ids(store_name, Some(&scope)).await?;
 
     // New content only: skip hashes the store already has, and collapse
     // duplicate content within this checkout to a single upload.
@@ -437,6 +456,41 @@ mod tests {
         assert_eq!(report_b.uploaded, 0, "identical worktree embeds nothing");
         assert_eq!(store.upload_count(), 2, "store still holds one copy");
         assert_eq!(store.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn dedup_listing_is_scoped_per_repo() {
+        // The dedup listing is scoped to the syncing repo, so a blob already in
+        // the store under a *different* repo is not seen and is uploaded again
+        // (an idempotent overwrite, keyed by content hash). This is the cost of
+        // not paginating the whole shared store on every sync; the win is that
+        // one repo's sync never reads another repo's (or Slack's, Linear's...)
+        // records.
+        let dir = write_repo();
+        let store = MemoryStore::new();
+        let manifest = Manifest::build(dir.path(), None, 1024 * 1024).expect("manifest");
+        let repo_a = RepoSlug::Remote("org/a".to_owned());
+        let repo_b = RepoSlug::Remote("org/b".to_owned());
+
+        let a = sync(&store, "s", dir.path(), &manifest, &repo_a, 1000, |_, _| {})
+            .await
+            .expect("sync a");
+        assert_eq!(a.uploaded, 2);
+
+        // Identical content under repo B: B's repo-scoped listing does not see
+        // A's copies, so B re-uploads. The store still holds one entry per hash.
+        let b = sync(&store, "s", dir.path(), &manifest, &repo_b, 1000, |_, _| {})
+            .await
+            .expect("sync b");
+        assert_eq!(b.uploaded, 2, "different repo re-uploads identical content");
+        assert_eq!(store.len(), 2, "overwrite by content hash, no duplicates");
+
+        // A second B sync is a no-op: its own records now match the scope.
+        let b_again = sync(&store, "s", dir.path(), &manifest, &repo_b, 1000, |_, _| {})
+            .await
+            .expect("sync b again");
+        assert_eq!(b_again.uploaded, 0);
+        assert_eq!(b_again.skipped, 2);
     }
 
     #[tokio::test]

@@ -100,11 +100,20 @@ impl Store for MixedbreadStore {
         self.client.ensure_store(name).await.context(BackendSnafu)
     }
 
-    async fn list_external_ids(&self, store: &str) -> Result<std::collections::HashSet<String>> {
-        self.client
-            .list_external_ids(store)
+    async fn list_external_ids(
+        &self,
+        store: &str,
+        filters: Option<&Filter>,
+    ) -> Result<std::collections::HashSet<String>> {
+        let files = self
+            .client
+            .list_files(store, filters)
             .await
-            .context(BackendSnafu)
+            .context(BackendSnafu)?;
+        Ok(files
+            .into_iter()
+            .filter_map(|file| file.external_id)
+            .collect())
     }
 
     async fn list_records(

@@ -22,6 +22,13 @@ pub use filter::{Condition, Filter, Group, Operator};
 /// Default API base URL.
 pub const DEFAULT_BASE_URL: &str = "https://api.mixedbread.com";
 
+/// Page size for paginated `files/list` requests. The API rejects anything
+/// over 100 (HTTP 422), so this is the ceiling; listing follows a cursor and is
+/// therefore inherently sequential. Callers that must reconcile against a large
+/// store should avoid listing when local state already says nothing changed,
+/// rather than expecting a bigger page.
+const LIST_PAGE_SIZE: u32 = 100;
+
 /// Environment variable holding the API key.
 pub const API_KEY_ENV: &str = "MXBAI_API_KEY";
 
@@ -257,7 +264,7 @@ impl Client {
         let mut after: Option<String> = None;
         loop {
             let request = ListRequest {
-                limit: 100,
+                limit: LIST_PAGE_SIZE,
                 after: after.as_deref(),
                 filters,
             };

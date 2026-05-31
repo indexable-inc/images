@@ -56,15 +56,26 @@ async fn prepare(
 ) -> Result<Manifest> {
     // Scope the database handle so it is dropped before any await: rusqlite's
     // connection is not Sync, and the returned future must be Send.
-    let manifest = {
+    let (manifest, signature, already_synced) = {
         let mut db = Db::open()?;
         let previous = db.load(query.root)?;
         let manifest = Manifest::build(query.root, Some(&previous), config.max_file_bytes)?;
         db.save(query.root, &manifest)?;
-        manifest
+        let signature = manifest.signature();
+        // If this exact content was already synced to this store, skip the sync
+        // round-trips entirely. Code sync never deletes (the module is
+        // append-only; deletion is a separate GC pass), so an unchanged
+        // signature means every blob is still present and listing the store to
+        // rediscover that is pure latency. This is what turns a repeated search
+        // on an already-indexed checkout from "re-list every file" into a no-op.
+        let already_synced = db
+            .synced_signature(query.root, query.store_name)?
+            .as_deref()
+            == Some(signature.as_str());
+        (manifest, signature, already_synced)
     };
 
-    if query.sync {
+    if query.sync && !already_synced {
         let repo = repo_slug(query.root);
         let report = sync(
             store,
@@ -79,6 +90,10 @@ async fn prepare(
         if report.uploaded > 0 {
             wait_until_indexed(store, query.store_name, query.index_timeout, on_poll).await?;
         }
+        // Record success so the next unchanged run takes the skip path above.
+        // Open a fresh handle: the one above was dropped before this await to
+        // keep the future Send.
+        Db::open()?.mark_synced(query.root, query.store_name, &signature)?;
     }
 
     Ok(manifest)
