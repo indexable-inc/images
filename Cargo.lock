@@ -1629,7 +1629,7 @@ dependencies = [
  "git2",
  "strip-ansi-escapes",
  "tempfile",
- "terminal-light",
+ "terminal-theme",
 ]
 
 [[package]]
@@ -4265,7 +4265,7 @@ dependencies = [
  "mixedbread",
  "progress-style",
  "semantic-search-core",
- "terminal-light",
+ "terminal-theme",
  "tokio",
 ]
 
@@ -4905,6 +4905,13 @@ dependencies = [
  "crossterm",
  "thiserror 1.0.69",
  "xterm-query",
+]
+
+[[package]]
+name = "terminal-theme"
+version = "0.1.0"
+dependencies = [
+ "terminal-light",
 ]
 
 [[package]]

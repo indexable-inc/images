@@ -1,8 +1,10 @@
 //! `git-log-pretty`: a pretty `git log` viewer.
 //!
-//! With no subcommand it lists the commits HEAD is ahead of `main`, newest
-//! first, each as a one-line summary plus an icon tree of the files it touched.
-//! The `diff` subcommand renders just the changed-file tree between two refs.
+//! With no subcommand it shows recent history newest-first, each commit a
+//! one-line summary plus an icon tree of the files it touched. On `main` it
+//! lists `main`'s own recent commits; on any other branch it lists only the
+//! commits HEAD is ahead of `main`. The `diff` subcommand renders just the
+//! changed-file tree between two refs.
 
 use anstyle::{AnsiColor, Color};
 use clap::{Parser, Subcommand};
@@ -14,7 +16,7 @@ mod palette;
 mod time;
 mod tree;
 
-use palette::{Theme, fg, paint};
+use palette::{Theme, detect, fg, paint};
 
 /// How many ahead-of-base commits to print before summarizing the rest. The
 /// list is newest-first, so the cap keeps the common "what have I done lately"
@@ -51,19 +53,27 @@ fn main() -> Result<()> {
     }
 }
 
-/// Render the ahead-of-`main` commit log for the current repository.
+/// Render the default commit log for the current repository. On `main` this is
+/// `main`'s own recent history; on any other branch it is the commits HEAD is
+/// ahead of `main`.
 fn run_log() -> Result<()> {
     let repo = git::discover()?;
-    let ahead = git::commits_ahead(&repo, "main")?;
+    let theme = detect();
 
+    // On `main` there is nothing to be ahead of, so an ahead-of-main diff would
+    // always be empty. Show recent history instead of "All caught up".
+    if git::head_branch_name(&repo).as_deref() == Some("main") {
+        let recent = git::recent_commits(&repo, MAX_COMMITS)?;
+        return print_log("Recent commits on main", &recent, theme);
+    }
+
+    let ahead = git::commits_ahead(&repo, "main")?;
     if ahead.is_empty() {
         println!("{}", paint(fg(Color::Ansi(AnsiColor::Green)), "All caught up with main"));
         return Ok(());
     }
 
-    let theme = Theme::detect();
     let hidden = ahead.len().saturating_sub(MAX_COMMITS);
-
     let header = if hidden > 0 {
         let detail = paint(
             fg(Color::Ansi(AnsiColor::BrightBlack)),
@@ -74,12 +84,16 @@ fn run_log() -> Result<()> {
         let label = if ahead.len() == 1 { "commit" } else { "commits" };
         format!("{count} {label} ahead of main", count = ahead.len())
     };
-    println!("{}\n", paint(fg(Color::Ansi(AnsiColor::Cyan)), &header));
 
-    for commit in ahead.iter().take(MAX_COMMITS) {
+    print_log(&header, &ahead[..ahead.len().min(MAX_COMMITS)], theme)
+}
+
+/// Print a cyan header followed by each commit block.
+fn print_log(header: &str, commits: &[git::AheadCommit<'_>], theme: Theme) -> Result<()> {
+    println!("{}\n", paint(fg(Color::Ansi(AnsiColor::Cyan)), header));
+    for commit in commits {
         display::print_commit(commit, theme)?;
     }
-
     Ok(())
 }
 
@@ -93,7 +107,7 @@ fn run_diff(base: &str, head: &str) -> Result<()> {
         return Ok(());
     }
 
-    let theme = Theme::detect();
+    let theme = detect();
     let header = format!(
         "{count} files changed in {base}...{head}",
         count = files.len(),

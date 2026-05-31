@@ -26,6 +26,7 @@ members = [
   "packages/tap",
   "packages/tap/protocol",
   "packages/tap/pty",
+  "packages/terminal-theme",
   "packages/tui",
   "packages/tui-dashboard",
   "packages/tui-dashboard-core",
@@ -124,6 +125,7 @@ tap-pty = { path = "packages/tap/pty" }
 tar = "0.4"
 tempfile = "3"
 terminal-light = "1"
+terminal-theme = { path = "packages/terminal-theme" }
 tokio = "1"
 tokio-stream = "0.1"
 toml = { version = "1.1.2", default-features = false }

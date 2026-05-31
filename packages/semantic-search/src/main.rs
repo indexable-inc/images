@@ -280,19 +280,17 @@ fn paint(style: Style, text: &str) -> String {
 
 /// Resolve the islands theme variant from the terminal background.
 ///
-/// Queries the background luminance once (OSC 11, via `terminal-light`) and
-/// picks the light palette above 0.5 luma, the dark palette below. Returns the
-/// dark default when color is off, stdout is not a TTY, or the terminal does not
-/// answer, so a piped or unsupported terminal never blocks on a reply that will
-/// not come.
+/// Probes the terminal background once via [`terminal_theme`] and maps it to the
+/// highlighter's palette. Returns the dark default when color is off, leaving the
+/// TTY-gating and luma probe to the shared crate so a piped or unsupported
+/// terminal never blocks on a reply that will not come.
 fn detect_theme(color: bool) -> code_highlight::Theme {
-    use code_highlight::Theme;
-    if !color || !std::io::stdout().is_terminal() {
-        return Theme::Dark;
+    if !color {
+        return code_highlight::Theme::Dark;
     }
-    match terminal_light::luma() {
-        Ok(luma) if luma > 0.5 => Theme::Light,
-        _ => Theme::Dark,
+    match terminal_theme::detect() {
+        terminal_theme::Theme::Light => code_highlight::Theme::Light,
+        terminal_theme::Theme::Dark => code_highlight::Theme::Dark,
     }
 }
 

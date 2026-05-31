@@ -95,12 +95,65 @@ fn log_lists_commits_ahead_of_main() {
 }
 
 #[test]
-fn log_reports_caught_up_when_head_is_main() {
+fn log_shows_recent_history_on_main() {
+    // On `main` there is nothing to be ahead of, so the default view lists
+    // main's own recent commits rather than reporting "caught up".
     let (_repo, dir, _main_oid) = init_on_main();
 
     let output = run(dir.path(), &[]);
     assert!(output.status.success(), "stderr: {}", plain(&output.stderr));
+
+    let stdout = plain(&output.stdout);
+    assert!(stdout.contains("Recent commits on main"), "got: {stdout}");
+    assert!(stdout.contains("initial commit"), "missing commit: {stdout}");
+}
+
+#[test]
+fn log_reports_caught_up_off_main_when_level_with_main() {
+    // A non-main branch sitting exactly at main has no ahead commits, so the
+    // caught-up message still applies there.
+    let (repo, dir, main_oid) = init_on_main();
+    let main_commit = repo.find_commit(main_oid).unwrap();
+    repo.branch("feature", &main_commit, false).expect("create feature");
+    repo.set_head("refs/heads/feature").expect("checkout feature");
+
+    let output = run(dir.path(), &[]);
+    assert!(output.status.success(), "stderr: {}", plain(&output.stderr));
     assert!(plain(&output.stdout).contains("All caught up with main"));
+}
+
+#[test]
+fn diff_uses_merge_base_after_main_advances() {
+    // main advances past the branch point. The branch only touched src/lib.rs,
+    // so the `main...HEAD` diff must not include main-only files.
+    let (repo, dir, main_oid) = init_on_main();
+    let sig = signature();
+
+    let main_commit = repo.find_commit(main_oid).unwrap();
+    repo.branch("feature", &main_commit, false).expect("create feature");
+
+    // One commit on main after the fork point, touching a file the branch never
+    // sees.
+    std::fs::write(dir.path().join("main-only.md"), "main\n").unwrap();
+    commit(&repo, &sig, &["main-only.md"], "docs: main only", &[main_oid]);
+
+    // The feature branch diverges with its own file. Reset the shared index to
+    // the fork-point tree first; otherwise main-only.md staged above would leak
+    // into the feature commit's tree.
+    repo.set_head("refs/heads/feature").expect("checkout feature");
+    let mut index = repo.index().unwrap();
+    index.read_tree(&main_commit.tree().unwrap()).unwrap();
+    index.write().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/lib.rs"), "// code\n").unwrap();
+    commit(&repo, &sig, &["src/lib.rs"], "feat(core): add lib", &[main_oid]);
+
+    let output = run(dir.path(), &["diff", "main", "HEAD"]);
+    assert!(output.status.success(), "stderr: {}", plain(&output.stderr));
+
+    let stdout = plain(&output.stdout);
+    assert!(stdout.contains("src/lib.rs"), "missing branch file: {stdout}");
+    assert!(!stdout.contains("main-only.md"), "leaked main-only file: {stdout}");
 }
 
 #[test]

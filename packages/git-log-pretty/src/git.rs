@@ -18,6 +18,43 @@ pub fn discover() -> Result<Repository> {
     Repository::discover(".").wrap_err("failed to discover a git repository from the current directory")
 }
 
+/// The short name of the branch HEAD points at, or `None` when HEAD is detached
+/// or otherwise not on a branch. Used to decide whether to show recent history
+/// (on `main`) or the ahead-of-`main` diff (anywhere else).
+pub fn head_branch_name(repo: &Repository) -> Option<String> {
+    let head = repo.head().ok()?;
+    head.is_branch().then(|| head.shorthand().map(str::to_string))?
+}
+
+/// Pair a commit with the files it changed, the shape the display layer expects.
+fn into_ahead<'repo>(repo: &Repository, commit: Commit<'repo>) -> Result<AheadCommit<'repo>> {
+    let changed_files = changed_files(repo, &commit)?;
+    Ok(AheadCommit {
+        commit,
+        changed_files,
+    })
+}
+
+/// The most recent `limit` commits reachable from HEAD, newest-first, each
+/// paired with the files it changed. Used when HEAD is `main` and there is
+/// nothing to be ahead of.
+pub fn recent_commits(repo: &Repository, limit: usize) -> Result<Vec<AheadCommit<'_>>> {
+    let mut revwalk = repo.revwalk().wrap_err("failed to start a revwalk")?;
+    revwalk
+        .set_sorting(git2::Sort::TIME)
+        .wrap_err("failed to set revwalk sorting")?;
+    revwalk.push_head().wrap_err("failed to seed the revwalk from HEAD")?;
+
+    revwalk
+        .take(limit)
+        .map(|oid| {
+            let oid = oid.wrap_err("failed to walk commit history")?;
+            let commit = repo.find_commit(oid).wrap_err("failed to load a commit")?;
+            into_ahead(repo, commit)
+        })
+        .collect()
+}
+
 /// Resolve the single commit id a reference points at, erroring when the ref is
 /// symbolic or otherwise has no direct target.
 fn target_oid(reference: &git2::Reference, label: &str) -> Result<Oid> {
@@ -37,6 +74,10 @@ fn resolve_ref<'repo>(repo: &'repo Repository, name: &str) -> Result<git2::Refer
     let candidates = [
         format!("refs/heads/{name}"),
         format!("refs/remotes/{name}"),
+        // Single-branch clones (CI, fresh checkouts) often have only the feature
+        // branch locally while the base lives at `origin/<name>`, so fall back to
+        // the remote-tracking branch before giving up.
+        format!("refs/remotes/origin/{name}"),
         name.to_string(),
     ];
 
@@ -94,35 +135,35 @@ pub fn commits_ahead<'repo>(repo: &'repo Repository, base: &str) -> Result<Vec<A
 
     ahead.sort_by_key(|commit| std::cmp::Reverse(commit.time().seconds()));
 
-    ahead
-        .into_iter()
-        .map(|commit| {
-            let changed_files = changed_files(repo, &commit)?;
-            Ok(AheadCommit {
-                commit,
-                changed_files,
-            })
-        })
-        .collect()
+    ahead.into_iter().map(|commit| into_ahead(repo, commit)).collect()
 }
 
-/// Paths that differ between `base` and `head` trees, used by the `diff`
-/// subcommand. `head` accepts `"HEAD"` for the current head.
+/// Paths `head` changed relative to where it forked from `base`, used by the
+/// `diff` subcommand. This is the `base...head` (merge-base) view git's `diff`
+/// advertises with the triple dot: diffing the merge base against `head` so
+/// commits that landed on `base` after the fork point do not pollute the tree.
+/// `head` accepts `"HEAD"` for the current head.
 pub fn diff_stat_files(repo: &Repository, base: &str, head: &str) -> Result<Vec<String>> {
-    let base_commit = repo
-        .find_commit(target_oid(&resolve_ref(repo, base)?, base)?)
-        .wrap_err("failed to load the base commit")?;
+    let base_oid = target_oid(&resolve_ref(repo, base)?, base)?;
+    let head_oid = target_oid(&resolve_ref(repo, head)?, head)?;
+
+    let merge_base_oid = repo
+        .merge_base(base_oid, head_oid)
+        .wrap_err("failed to find the merge base of base and head")?;
+    let merge_base_commit = repo
+        .find_commit(merge_base_oid)
+        .wrap_err("failed to load the merge-base commit")?;
     let head_commit = repo
-        .find_commit(target_oid(&resolve_ref(repo, head)?, head)?)
+        .find_commit(head_oid)
         .wrap_err("failed to load the head commit")?;
 
-    let base_tree = base_commit.tree().wrap_err("failed to read base tree")?;
+    let base_tree = merge_base_commit.tree().wrap_err("failed to read merge-base tree")?;
     let head_tree = head_commit.tree().wrap_err("failed to read head tree")?;
 
     let mut options = DiffOptions::new();
     let diff = repo
         .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut options))
-        .wrap_err("failed to diff base against head")?;
+        .wrap_err("failed to diff merge base against head")?;
 
     Ok(collect_diff_paths(&diff))
 }
