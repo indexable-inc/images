@@ -3221,13 +3221,12 @@ let
         message = "repo Rust package outputs should not wrap unrelated workspace policy checks";
       }
       {
-        # cargo-unit suffixes integration-test keys with -<version>-<hash> when
-        # two workspace crates both name a test crate `integration` (dag-runner's
-        # and git-log-pretty's), so the key is not a fixed `integration-all`. The
-        # hash is source-derived, so match the package-owned target by shape.
-        assertion = lib.any (n: lib.hasPrefix "integration" n && lib.hasSuffix "-all" n) (
-          builtins.attrNames repoPackages.dag-runner.passthru.tests
-        );
+        # dag-runner's integration test target is renamed `integration_dag_runner`
+        # (packages/dag-runner/Cargo.toml) so it does not collide with the other
+        # `integration` test targets (git-log-pretty, clone-detect) in cargo-unit's
+        # flat target namespace. The unique name keeps the generated key stable
+        # instead of `-<version>-<hash>`-suffixed.
+        assertion = builtins.hasAttr "integration_dag_runner-all" repoPackages.dag-runner.passthru.tests;
         message = "repo Rust package tests should include package-owned integration test targets";
       }
       {
