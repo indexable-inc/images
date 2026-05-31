@@ -269,6 +269,11 @@ pub fn run() {
         .manage(db.clone())
         .invoke_handler(tauri::generate_handler![get_bars])
         .setup(move |app| {
+            // Live in the menu bar only: Accessory keeps the tray icon and the
+            // overlay window but drops the Dock icon and app-switcher entry, so
+            // a background HUD does not take a Dock slot.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             configure_overlay(app);
             build_tray(app, db.clone())?;
             spawn_watcher(app.handle().clone(), db.clone());
