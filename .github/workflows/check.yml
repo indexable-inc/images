@@ -63,89 +63,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # nix-fast-build evaluates the checks with nix-eval-jobs (parallel) and
-      # streams each derivation into a build pool as it resolves, instead of
-      # waiting for one big linkFarm to finish evaluating. `--skip-cached` drops
-      # paths already in a substituter, so a warm run does almost no work;
-      # `--no-nom` keeps plain CI logs; `--no-link` avoids leaving result
-      # symlinks. It exits nonzero iff a build or eval fails, which is the gate.
-      # Pinned by commit to nix-fast-build 1.5.0.
-      #
-      # The per-crate rust test units are now separate top-level
-      # `checks.x86_64-linux.*` attributes (one per crate test, e.g.
-      # `rust-<crate>-<test>` / `cargo-unit-real-workspaces`; see the
-      # `rustChecks` spread in lib/per-system.nix), not one `rust-package-tests`
-      # linkFarm. That single aggregate forced one nix-eval-jobs worker to hold
-      # the whole workspace test graph in its heap, which flaked this job two
-      # ways: at nix-eval-jobs' 4096 MiB default per-worker cap it was SIGKILLed
-      # by the limiter ("memory limit reached"), and with the cap raised but many
-      # workers live it instead got OS-OOM-killed ("worker pipe got closed but
-      # evaluation worker still running"). Split, each crate evaluates in its own
-      # worker, so per-worker eval memory is bounded by the single largest crate
-      # rather than the sum, and the eval parallelizes across workers like the
-      # schema-eval step below. With that, the #440/#443 stopgap is relaxed back
-      # to the schema step's 16 workers and the default per-worker cap; we keep a
-      # modest `--eval-max-memory-size 6144` headroom (above the 4 GiB default,
-      # below the old 8 GiB) as a guard rail, not a workaround.
-      #
-      # Complementary follow-up: an eval cache would skip the cold per-commit
-      # re-eval entirely. Nix keys that cache on the locked flake fingerprint,
-      # which for a git source is the commit rev, so every CI commit is a cold
-      # cache today; the `indexable-inc/nix` fork (RFC #405) makes flake eval use
-      # the cache. That is orthogonal to this split and tracked separately.
+      # Run the full gate through the repo-owned `check` app (lib/per-system.nix),
+      # so CI and a local `nix run .#check` execute the same two commands from one
+      # definition: nix-fast-build over `.#checks.x86_64-linux`, then nix-eval-jobs
+      # over `.#packages.x86_64-linux` with the JSON error-line gate. The
+      # command-specific rationale (tool choice, the worker/memory tuning, why the
+      # eval cache is off, the error-line gate) and the pinned tool revisions live
+      # next to that wrapper. The job inherits NIX_CONFIG (above), so the inner
+      # builds still see `gccarch-znver5` and the eval knobs. Branch protection
+      # requires a status named `flake-check`; this job is it, and it fails iff a
+      # check fails to build or the flake stops evaluating.
       - name: Build all flake checks
-        run: |
-          nix run github:Mic92/nix-fast-build/7f185e0ec37b65b4730f892e0de9a831b0610f3a -- \
-            --flake ".#checks.x86_64-linux" \
-            --eval-max-memory-size 6144 \
-            --eval-workers 16 \
-            --skip-cached \
-            --no-nom \
-            --no-link \
-            --option accept-flake-config true
-
-      # Schema/eval gate for the package outputs, broader than the `checks`
-      # nix-fast-build built above. This was `nix flake check -L --no-build`,
-      # which evaluates single-threaded and across all three flake systems
-      # (x86_64-linux plus two darwin), making the schema eval the CI long pole
-      # (~3min; packages.x86_64-linux alone ~47s) while this many-core host sat
-      # idle. The Nix flake eval cache cannot amortize it: Nix keys that cache on
-      # the locked flake fingerprint, which for a git source comes from the
-      # commit rev, so every CI commit is a cold cache.
-      #
-      # nix-eval-jobs is the same parallel evaluator nix-fast-build wraps. Run it
-      # eval-only over the x86_64-linux packages (the system this runner builds
-      # for), spreading the per-attribute evaluation across workers. It realizes
-      # IFD (the `site` import-npm-lock source) on demand during eval, so it
-      # needs none of the old `--no-build` pre-realize step. Workers are capped:
-      # each is a full evaluator that can grow to nix-eval-jobs' 4 GiB-per-worker
-      # cap, and this host runs many CI jobs at once; 16-way already collapses
-      # the eval toward the slowest single attribute. Darwin package outputs are
-      # intentionally not evaluated here, because a linux runner can only
-      # pure-eval cross-platform image derivations and that cross-eval is most of
-      # what made the single-threaded check slow; validate darwin on a darwin
-      # runner if that coverage is wanted.
-      #
-      # The eval cache is disabled: it is keyed per commit so it never hits on a
-      # fresh CI commit, and with it on the parallel workers all contend writing
-      # the same per-commit sqlite (`SQLite database ... is busy`). Off, the run
-      # is clean. Measured on a warm store (eval-cache off, this packages set):
-      # 342s with 1 worker, 75s with 16, 70s with 32, so 16 captures the win.
-      #
-      # nix-eval-jobs reports a per-attribute eval failure as a JSON `error` line
-      # and still exits 0, so the gate is the error-line check below; a startup
-      # or lock failure exits nonzero and trips the default `pipefail`. Pinned by
-      # commit to nix-eval-jobs v2.34.1, matching the host Nix 2.34.x.
-      - name: Validate flake schema (parallel eval)
-        run: |
-          nix run github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7 -- \
-            --flake ".#packages.x86_64-linux" \
-            --workers 16 \
-            --gc-roots-dir "$RUNNER_TEMP/flake-schema-eval-gc" \
-            --option accept-flake-config true \
-            --option eval-cache false \
-            | tee "$RUNNER_TEMP/flake-schema-eval.jsonl"
-          if grep -q '"error":' "$RUNNER_TEMP/flake-schema-eval.jsonl"; then
-            echo "flake schema evaluation failed; see the error lines above" >&2
-            exit 1
-          fi
+        run: nix run .#check
