@@ -2442,9 +2442,7 @@ let
           let
             workspace = symphonyCodex.config.fileSystems."/workspace" or null;
           in
-          workspace != null
-          && workspace.fsType == "tmpfs"
-          && builtins.elem "size=32g" workspace.options;
+          workspace != null && workspace.fsType == "tmpfs" && builtins.elem "size=32g" workspace.options;
         message = "symphony-codex image should back /workspace with a sized tmpfs so the per-run checkout skips the vmfsd write path";
       }
     ];
