@@ -157,13 +157,15 @@ let
 
         let tmp = (mktemp --directory --tmpdir "ix-check.XXXXXX")
         let report = ($tmp | path join "flake-schema-eval.jsonl")
-        ^nix run $eval_jobs -- ...[
-          "--flake" ".#packages.x86_64-linux"
-          "--workers" "16"
-          "--gc-roots-dir" ($tmp | path join "flake-schema-eval-gc")
-          "--option" "accept-flake-config" "true"
-          "--option" "eval-cache" "false"
-        ] | tee { save --raw --force $report }
+        do --capture-errors {
+          ^nix run $eval_jobs -- ...[
+            "--flake" ".#packages.x86_64-linux"
+            "--workers" "16"
+            "--gc-roots-dir" ($tmp | path join "flake-schema-eval-gc")
+            "--option" "accept-flake-config" "true"
+            "--option" "eval-cache" "false"
+          ]
+        } | tee { save --raw --force $report }
 
         # nix-eval-jobs exits 0 even when an attribute fails to evaluate, so this
         # error-line check is the gate; a nonzero exit already aborted above. The
