@@ -135,14 +135,21 @@ fn arrow_under(
 }
 
 impl App {
-    /// Auto-centered window position (logical points) for the spread.
+    /// Auto-centered window position (logical points) for the spread, within the
+    /// screen's usable area so the book and its bottom page-turn arrows clear the
+    /// menu bar and Dock. Falls back to the full display if the visible frame is
+    /// unavailable. When the spread is larger than the usable area (a small
+    /// display at a high scale) the offset clamps to zero, pinning it just below
+    /// the menu bar rather than centering it under the bar.
     fn center_pos(&self) -> LogicalPosition<f64> {
         let (w_px, h_px) = scene::spread_window_px(self.scale);
         let wl = w_px as f64 / self.scale_factor;
         let hl = h_px as f64 / self.scale_factor;
+        let (left, top, vw, vh) = ocwin::visible_frame_logical()
+            .unwrap_or((0.0, 0.0, self.mon_logical.0, self.mon_logical.1));
         LogicalPosition::new(
-            ((self.mon_logical.0 - wl) * 0.5).max(0.0),
-            ((self.mon_logical.1 - hl) * 0.5).max(0.0),
+            left + ((vw - wl) * 0.5).max(0.0),
+            top + ((vh - hl) * 0.5).max(0.0),
         )
     }
 

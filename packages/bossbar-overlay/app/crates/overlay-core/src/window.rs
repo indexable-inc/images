@@ -218,3 +218,29 @@ pub fn enable_background_hover(window: &Window) {
 /// active-app gate, so winit's default tracking already drives hover.
 #[cfg(not(target_os = "macos"))]
 pub fn enable_background_hover(_window: &Window) {}
+
+/// The main screen's usable area (excluding the menu bar and Dock) in winit's
+/// top-left logical points as `(left, top, width, height)`, or `None` off macOS
+/// or with no screen. Auto-placing an overlay within this rather than the full
+/// display keeps it clear of the menu bar and Dock.
+#[cfg(target_os = "macos")]
+pub fn visible_frame_logical() -> Option<(f64, f64, f64, f64)> {
+    use objc2_app_kit::NSScreen;
+    use objc2_foundation::MainThreadMarker;
+
+    // AppKit screen geometry is main-thread only; we are called from the winit
+    // event loop, which is the main thread. Decline rather than risk UB if not.
+    let mtm = MainThreadMarker::new()?;
+    let screen = NSScreen::mainScreen(mtm)?;
+    let full = screen.frame();
+    let visible = screen.visibleFrame();
+    // Cocoa frames use a bottom-left origin; convert the visible region's top edge
+    // to a top-left inset (the menu bar height) for winit's coordinate space.
+    let top = full.size.height - (visible.origin.y + visible.size.height);
+    Some((visible.origin.x, top, visible.size.width, visible.size.height))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn visible_frame_logical() -> Option<(f64, f64, f64, f64)> {
+    None
+}
