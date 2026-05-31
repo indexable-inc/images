@@ -121,9 +121,12 @@ struct BarWin {
     /// Last cursor position within the window (physical px), tracked so a press
     /// can measure drag distance and tell a click from a drag.
     cursor: Option<PhysicalPosition<f64>>,
-    /// Cursor position at the left-press while the gesture is still ambiguous
-    /// (button down, not yet past the drag threshold). `None` once it became a
-    /// drag or the button is up. A release with this still set is a click.
+    /// The left button is down. A release while this is set and the gesture never
+    /// became a drag is a click. Independent of `press` so a press with no prior
+    /// cursor sample still registers a click.
+    pressing: bool,
+    /// The anchor a drag's distance is measured from (cursor at press, or the
+    /// first move after a press that had no cursor yet). `None` until anchored.
     press: Option<PhysicalPosition<f64>>,
     /// When the window last moved (a `Moved` during a drag). The reconcile guard
     /// ignores externally-read positions until the window has been still for
@@ -292,6 +295,7 @@ impl App {
             // grows them on hover.
             expanded: false,
             cursor: None,
+            pressing: false,
             press: None,
             // Far enough in the past that a fresh window accepts an external
             // position immediately (the SETTLE guard only fires after a real move).
@@ -542,14 +546,16 @@ impl ApplicationHandler<Vec<BossBar>> for App {
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(win) = self.wins.get_mut(&id) {
                     win.cursor = Some(position);
-                    // While a press is still ambiguous, watch for travel past the
-                    // threshold: that turns the gesture into a drag and hands off
-                    // to the native window drag (which then drives `Moved`).
-                    if let Some(p) = win.press {
-                        let dx = position.x - p.x;
-                        let dy = position.y - p.y;
+                    // While the button is down and not yet dragging, measure travel
+                    // from the anchor (the cursor at press, or this first move if
+                    // the press had no cursor sample). Past the threshold it becomes
+                    // a drag and hands off to the native window drag, which then
+                    // drives `Moved`.
+                    if win.pressing && !win.dragging {
+                        let origin = *win.press.get_or_insert(position);
+                        let dx = position.x - origin.x;
+                        let dy = position.y - origin.y;
                         if (dx * dx + dy * dy).sqrt() >= DRAG_THRESHOLD {
-                            win.press = None;
                             win.dragging = true;
                             win.window.set_cursor(CursorIcon::Grabbing);
                             if let Err(e) = win.window.drag_window() {
@@ -568,6 +574,7 @@ impl ApplicationHandler<Vec<BossBar>> for App {
                     // Defer the native drag until the pointer travels past the
                     // threshold (see CursorMoved), so a stationary press stays a
                     // click whose mouse-up we actually receive.
+                    win.pressing = true;
                     win.press = win.cursor;
                     win.dragging = false;
                 }
@@ -577,11 +584,12 @@ impl ApplicationHandler<Vec<BossBar>> for App {
                 button: MouseButton::Left,
                 ..
             } => {
-                // A release while the press never became a drag is a click: open
-                // the bar's URL if it has one. (A drag swallows its own mouse-up
-                // on macOS, but by then `press` is already cleared.)
+                // A release where the button-down gesture never became a drag is a
+                // click: open the bar's URL if it has one. (A drag swallows its own
+                // mouse-up on macOS, but `dragging` is already set by then.)
                 let url = self.wins.get_mut(&id).and_then(|win| {
-                    let clicked = win.press.is_some() && !win.dragging;
+                    let clicked = win.pressing && !win.dragging;
+                    win.pressing = false;
                     win.press = None;
                     win.dragging = false;
                     win.window.set_cursor(if win.hovered {
