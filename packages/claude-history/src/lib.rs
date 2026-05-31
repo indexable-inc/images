@@ -28,8 +28,9 @@ use search_meta::{Document, Source, SourceAdapter};
 use snafu::ResultExt as _;
 
 pub use crate::error::Error;
+pub use crate::record::Message;
 use crate::error::{HostNameSnafu, ListDirSnafu, Result};
-use crate::record::{Message, MessageOrigin};
+use crate::record::MessageOrigin;
 
 /// The `source` tag every Claude transcript document carries.
 pub const SOURCE_TAG: &str = "claude_history";
@@ -89,6 +90,14 @@ impl ClaudeHistoryExport {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.messages.is_empty()
+    }
+
+    /// The parsed messages, in transcript order across all sessions. The R2
+    /// parquet sink consumes these as rows; the Mixedbread sink uses the
+    /// [`SourceAdapter`] projection instead.
+    #[must_use]
+    pub fn messages(&self) -> &[Message] {
+        &self.messages
     }
 }
 

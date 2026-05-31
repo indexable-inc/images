@@ -9,6 +9,7 @@ members = [
   "packages/ast-merge/langs",
   "packages/ast-merge/matcher",
   "packages/claude-history",
+  "packages/claude-history-sync",
   "packages/clone-detect/cli",
   "packages/clone-detect/detect",
   "packages/clone-detect/hash",
@@ -76,6 +77,7 @@ multiple_crate_versions = "allow"
 anstream = "1"
 anstyle = "1"
 anyhow = "1"
+arrow = "58"
 askama = { version = "0.16.0", default-features = false }
 ast-merge-ast = { path = "packages/ast-merge/ast" }
 ast-merge-diff = { path = "packages/ast-merge/diff" }
@@ -124,7 +126,9 @@ object = { version = "0.37", default-features = false, features = [
   "write",
   "std",
 ] }
+object_store = { version = "0.13", features = ["aws"] }
 parking_lot = "0.12"
+parquet = { version = "58", features = ["arrow"] }
 progress-style = { path = "packages/progress-style" }
 pty-process = { version = "0.4", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }
