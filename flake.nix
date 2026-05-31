@@ -170,5 +170,7 @@
       packages = collect "packages";
       checks = collect "checks";
       formatter = collect "formatter";
+      apps = collect "apps";
+      devShells = collect "devShells";
     };
 }

@@ -21,6 +21,7 @@ members = [
   "packages/file-language",
   "packages/file-search",
   "packages/git-log-pretty",
+  "packages/indexbench",
   "packages/ix-dev-diagnose",
   "packages/macos-vm",
   "packages/mcp",
@@ -107,6 +108,7 @@ git2 = { version = "0.20", default-features = false }
 glob = "0.3"
 hegeltest = { version = "0.14", default-features = false }
 ignore = "0.4"
+indexbench = { path = "packages/indexbench" }
 indicatif = "0.18"
 insta = { version = "1.42", features = ["json"] }
 lazy-regex = "3.4"

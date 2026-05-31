@@ -163,6 +163,37 @@ let
 
   benchFilesystem = import paths.bench.filesystem { inherit ix pkgs; };
 
+  # The indexbench CLI built for this system, fed to `mkBenchSuite` and the
+  # `apps.bench` perf job. Also surfaced as `packages.indexbench` through the
+  # registry; this binding just avoids re-resolving the package set here.
+  inherit (repoPackages) indexbench;
+
+  # The reproducible alloc-count bench binary from the shared workspace graph.
+  # It installs the counting allocator and prints an `@bench name=allocations`
+  # line, so its metric is deterministic and gateable as a flake check.
+  indexbenchAllocDemo = ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
+    binary = "indexbench-alloc-demo";
+    packageName = "indexbench";
+    includeTestCases = false;
+    meta.mainProgram = "indexbench-alloc-demo";
+  };
+
+  # The repo's own demonstration suite: a trivial macro command, run through the
+  # framework end to end. `nix run .#bench` invokes this perf job. Consumers add
+  # their own suites the same way via `ix.mkBenchSuite`. The `allocCheck` wires
+  # the reproducible alloc-count bench into a flake check.
+  indexbenchSelfDemo = ix.mkBenchSuite pkgs {
+    name = "self-demo";
+    inherit indexbench;
+    macros = [
+      {
+        name = "true";
+        command = "true";
+      }
+    ];
+    allocCheck.bench = lib.getExe indexbenchAllocDemo;
+  };
+
   siteSrc = fs.toSource {
     root = paths.site;
     fileset = fs.intersection (fs.gitTracked paths.site) (
@@ -453,6 +484,11 @@ in
             printf '%s\n' '${forced}' > "$out"
           '';
         run-records-session = repoPackages.run.passthru.tests.recordsSession;
+        # Deterministic alloc-count gate for indexbench: runs the counting-
+        # allocator demo bench twice through the CLI and fails on any worsening.
+        # Reproducible, unlike timing/RSS, so it earns a flake check; the
+        # timing/RSS perf job lives under `apps.bench` instead.
+        indexbench-self-demo-alloc = indexbenchSelfDemo.check;
         lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
           cp -R ${lintSource} source
           chmod -R u+w source
@@ -499,4 +535,31 @@ in
   );
 
   formatter = pkgs.nixfmt;
+
+  # `nix run .#bench` runs the repo's self-demo perf job (timing + RSS + custom
+  # metrics, gated on regressions). The flake's package-with-mainProgram
+  # convention already gives `nix run .#indexbench` for the bare CLI; this `apps`
+  # entry is the named perf-job entry point the framework documents.
+  apps = {
+    bench = {
+      type = "app";
+      program = lib.getExe indexbenchSelfDemo.app;
+      meta.description = "Run the indexbench self-demo perf suite";
+    };
+  };
+
+  # `nix develop .#bench` drops into a shell with the bench + profiling tools.
+  # tango is already a workspace dependency (built per-crate by cargo-unit); the
+  # shell adds the out-of-process profilers a bench author reaches for.
+  devShells = {
+    bench = pkgs.mkShellNoCC {
+      packages = [
+        indexbench
+        pkgs.hyperfine
+        pkgs.valgrind
+        pkgs.samply
+        pkgs.jemalloc
+      ];
+    };
+  };
 }

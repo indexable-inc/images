@@ -172,6 +172,27 @@ let
   mkMinecraftLoader = import ./minecraft-loader.nix;
 
   /**
+    Declare a continuous-benchmark suite against the `indexbench` CLI.
+
+    `mkBenchSuite pkgs { name; indexbench; macros ? []; allocCheck ? null; runs ? 5; }`
+    returns `{ app; check ? }`:
+
+    - `app` is a `nix run`-able wrapper that runs the suite's macro commands
+      through `indexbench run`, recording timing, peak RSS, and any `@bench`
+      custom metrics, and exiting non-zero on a regression. Belongs in
+      `apps.bench` / the perf job, never in `checks` (timing and RSS are not
+      reproducible in the Nix sandbox).
+    - `check`, present only when `allocCheck` is set, is a `nix flake check`
+      derivation that gates a deterministic allocation-count bench. Allocation
+      counts are reproducible, so this path is a real CI gate.
+
+    See [`lib/bench.nix`](lib/bench.nix) for the argument shape.
+  */
+  mkBenchSuite = import ./bench.nix {
+    inherit lib writeNushellApplication;
+  };
+
+  /**
     Repo-owned Minecraft helpers exposed through `specialArgs.ix` and the
     flake's `lib` output.
 
@@ -318,6 +339,7 @@ let
       islandsTheme
       languages
       minecraft
+      mkBenchSuite
       mkMinecraftLoader
       mkMinecraftNbtFormat
       mkMinecraftSyncManaged
@@ -411,6 +433,7 @@ let
       macosSdk
       appleSdkToolchain
       minecraft
+      mkBenchSuite
       mkMinecraftLoader
       mkMinecraftNbtFormat
       mkMinecraftSyncManaged
