@@ -42,14 +42,15 @@ Inspect the cluster from the head:
 ix shell ray-head -- ray status
 ```
 
-Run the distributed demo by hand and require work to span all three nodes:
+Run the distributed demo by hand and require all three nodes to be present:
 
 ```sh
-ix shell ray-head -- ray-demo --address ray-head:6379 --min-nodes 3
+ix shell ray-head -- ray-demo --min-nodes 3
 ```
 
 It prints a per-node task count and exits non-zero unless the cluster has at
-least `--min-nodes` alive nodes.
+least `--min-nodes` alive nodes. Both `ray` and `ray-demo` default to the head's
+address (`RAY_ADDRESS`), so no `--address` flag is needed on a cluster node.
 
 ## Scale
 

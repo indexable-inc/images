@@ -18,10 +18,12 @@
   pkgs,
   role,
   extraStartArgs,
+  rayAddress,
 }:
 { config, ... }:
 let
   package = import ./package.nix { inherit ix lib pkgs; };
+  rayCli = import ./cli.nix { inherit ix lib pkgs rayAddress; };
   # buildUvApplication wraps only the `ray-demo` main program; the Ray CLI
   # itself lives unwrapped in the venv, so reference it directly and set the
   # loader environment on the unit below.
@@ -69,7 +71,7 @@ let
   startArgs = [ ray "start" ] ++ extraStartArgs ++ commonStartArgs ++ [ "--block" ];
 in
 {
-  environment.systemPackages = [ package ];
+  environment.systemPackages = [ rayCli ];
 
   systemd.services."ray-${role}" = {
     description = "Ray cluster ${role}";

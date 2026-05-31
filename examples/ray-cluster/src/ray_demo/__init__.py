@@ -36,8 +36,8 @@ def parse_args() -> CliArgs:
     )
     _ = parser.add_argument(
         "--address",
-        default="auto",
-        help="Ray cluster address. 'auto' attaches to the head on this node.",
+        default=os.environ.get("RAY_ADDRESS", "auto"),
+        help="Ray cluster address. Defaults to $RAY_ADDRESS, else 'auto'.",
     )
     _ = parser.add_argument(
         "--tasks",

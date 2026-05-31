@@ -6,21 +6,21 @@
   ...
 }:
 let
-  package = import ./package.nix { inherit ix lib pkgs; };
   headHost = nodes.ray-head.config.ix.networking.eastWest.hostName;
+  gcsPort = 6379;
+  clientPort = 10001;
+  rayAddress = "${headHost}:${toString gcsPort}";
+  rayCli = import ./cli.nix { inherit ix lib pkgs rayAddress; };
 
   # Every fleet node here runs Ray, so the node count is the cluster size the
   # health check should wait for. Bumping `ray-worker.replicas` in default.nix
   # raises this automatically.
   expectedNodes = builtins.length (builtins.attrNames nodes);
-
-  gcsPort = 6379;
-  clientPort = 10001;
 in
 {
   imports = [
     (import ./cluster-node.nix {
-      inherit ix lib pkgs;
+      inherit ix lib pkgs rayAddress;
       role = "head";
       extraStartArgs = [
         "--head"
@@ -62,9 +62,9 @@ in
   ix.healthChecks.ray-cluster = {
     description = "Ray cluster reached ${toString expectedNodes} nodes and ran distributed tasks";
     command = [
-      (lib.getExe package)
+      (lib.getExe rayCli)
       "--address"
-      "${headHost}:${toString gcsPort}"
+      rayAddress
       "--min-nodes"
       (toString expectedNodes)
     ];
