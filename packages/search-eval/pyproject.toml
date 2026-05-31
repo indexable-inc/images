@@ -1,0 +1,16 @@
+[project]
+name = "search-eval"
+version = "0.1.0"
+description = "Exa-style evaluation harness for the `search` engine"
+requires-python = ">=3.13"
+dependencies = [
+    "anthropic>=0.40.0",
+    "mcp>=1.0.0",
+]
+
+[project.scripts]
+search-eval = "search_eval.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"

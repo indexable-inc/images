@@ -22,9 +22,14 @@ use crate::error::Result;
 use crate::manifest::Manifest;
 
 /// A search result projected for display.
-#[derive(Debug, Clone)]
+///
+/// Serializes to the stable `search --json` object. `label` is renamed to `path`
+/// there to match the [`search-py`](../search-py) binding's dict, the other
+/// established machine-readable contract over the same hits.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DisplayHit {
     /// Repo-relative path, record title, or a URL for a web result.
+    #[serde(rename = "path")]
     pub label: String,
     /// Which corpus the hit came from.
     pub source: Source,
@@ -36,6 +41,19 @@ pub struct DisplayHit {
     pub score: f32,
     /// Matched snippet text.
     pub text: String,
+}
+
+/// Serialize hits as the machine-readable JSON array `search --json` prints.
+///
+/// Lives here, at the owner of [`DisplayHit`], so both the CLI and any other
+/// consumer share one serialization and the JSON shape stays defined in one
+/// place.
+///
+/// # Errors
+/// Returns an error if serialization fails, which is not expected for these
+/// scalar/string fields.
+pub fn hits_to_json(hits: &[DisplayHit]) -> serde_json::Result<String> {
+    serde_json::to_string(hits)
 }
 
 /// A question-answering result projected for display.
