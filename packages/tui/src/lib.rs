@@ -51,9 +51,9 @@ mod types;
 pub use dashboard::serve;
 pub use error::{Error, Result};
 #[cfg(any(feature = "dashboard", feature = "publish"))]
-pub use tui_dashboard_core::{ProducerSnapshot, TerminalFrame, socket_dir, socket_path};
+pub use dashboard_core::{Pane, ProducerSnapshot, TerminalView, View, discovery_dir, socket_path};
 #[cfg(feature = "dashboard")]
-pub use tui_dashboard_core::{Dashboard, Hub, serve_hub};
+pub use dashboard_core::{Dashboard, Hub, serve_hub};
 pub use manager::{TuiInstance, TuiManager};
 #[cfg(feature = "publish")]
 pub use publish::{Publisher, publish};

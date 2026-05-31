@@ -43,9 +43,9 @@ members = [
   "packages/tap/protocol",
   "packages/tap/pty",
   "packages/terminal-theme",
+  "packages/dashboard",
+  "packages/dashboard-core",
   "packages/tui",
-  "packages/tui-dashboard",
-  "packages/tui-dashboard-core",
   "packages/tui-node",
   "packages/tui-py",
   "packages/vt/ix-vt",
@@ -93,6 +93,7 @@ clone-scanner = { path = "packages/clone-detect/scanner" }
 code-highlight = { path = "packages/code-highlight" }
 code-tokenizer = { path = "packages/code-tokenizer" }
 color-eyre = "0.6"
+dashboard-core = { path = "packages/dashboard-core" }
 devicons = "0.6"
 dirs = "5"
 file-language = { path = "packages/file-language" }
@@ -201,7 +202,6 @@ tree-sitter-toml-ng = "0.7"
 tree-sitter-typescript = "0.23"
 tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui" }
-tui-dashboard-core = { path = "packages/tui-dashboard-core" }
 url = { version = "2.5.8", default-features = false }
 uuid = "1"
 vt100 = "0.16"

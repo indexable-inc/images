@@ -103,29 +103,32 @@ package's `serve()`.
 its own manager) in one grid, the producer and the viewer are split:
 
 - **Producer** (`publish` feature): `tui::publish(&manager, path, poll)` binds a
-  unix socket at `path` and streams the manager's terminals as one NDJSON
-  [`ProducerSnapshot`] line per tick. Use `tui::socket_path()` for a per-process
-  path inside the discovery directory ([`socket_dir`]). The producer holds no
-  HTTP or CRDT dependency: it serializes frames and writes bytes.
-- **Aggregator** (the `tui-dashboard` binary): run it by hand. It scans the
-  discovery directory, connects to every producer socket, folds each producer's
-  stream into one document under its own scope, and serves the same web grid.
-  No producer owns the server and exactly one process binds a TCP port, so any
-  number of agents share one stable URL.
+  unix socket at `path` and streams the manager's terminals as NDJSON
+  [`ProducerSnapshot`] pane lines. Use `tui::socket_path()` for a per-process
+  path inside the discovery directory ([`discovery_dir`]). The socket, the wire
+  serialization, and the fan-out live in `dashboard-core`; this crate only adapts
+  a live manager into terminal panes, so a publishing process stays HTTP- and
+  CRDT-free.
+- **Aggregator** (the `dashboard` binary): run it by hand. It scans the discovery
+  directory, connects to every producer socket, folds each producer's panes into
+  one document under its own scope, and serves the same web canvas. No producer
+  owns the server and exactly one process binds a TCP port, so any number of
+  agents share one stable URL.
 
 ```sh
-nix run .#tui-dashboard           # serve http://127.0.0.1:8080/ for the discovery dir
-nix run .#tui-dashboard -- --help # --host, --port, --dir, --rescan-ms
+nix run .#dashboard           # serve http://127.0.0.1:8080/ for the discovery dir
+nix run .#dashboard -- --help # --host, --port, --dir, --rescan-ms
+nix run .#dashboard demo      # publish one terminal/html/data pane to exercise it
 ```
 
 The two halves share [`serve_hub`], the page, and the SSE stream, so a single
 process (`serve`) and the aggregator render through exactly the same code. The
-discovery directory resolves to `$IX_TUI_DIR`, else `$XDG_RUNTIME_DIR/ix-tui`,
-else `/tmp/ix-tui-<user>`, kept short for the macOS 104-byte socket-path limit.
+discovery directory resolves to `$IX_DASH_DIR`, else `$XDG_RUNTIME_DIR/ix-dash`,
+else `/tmp/ix-dash-<user>`, kept short for the macOS 104-byte socket-path limit.
 
-[`ProducerSnapshot`]: src/frame.rs
-[`socket_dir`]: src/frame.rs
-[`serve_hub`]: src/dashboard/server.rs
+[`ProducerSnapshot`]: ../dashboard-core/src/pane.rs
+[`discovery_dir`]: ../dashboard-core/src/pane.rs
+[`serve_hub`]: ../dashboard-core/src/dashboard/server.rs
 
 ## Configuration
 

@@ -1,5 +1,5 @@
-//! End-to-end producer wire test: a real PTY's rendered screen reaches a
-//! reader (the aggregator's role) over the unix socket as a `ProducerSnapshot`.
+//! End-to-end producer wire test: a real PTY's rendered screen reaches a reader
+//! (the aggregator's role) over the unix socket as a `ProducerSnapshot` of panes.
 //!
 //! Compiled only with the `dashboard` + `publish` features, the same pair the
 //! aggregator builds with. Without them the file is empty.
@@ -15,7 +15,16 @@ use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::net::UnixStream;
-use tui::{ProducerSnapshot, SpawnConfig, TuiManager, publish};
+use tui::{ProducerSnapshot, SpawnConfig, TerminalView, TuiManager, View, publish};
+
+/// The first terminal pane in a snapshot, as `(id, view)`. The producer wraps
+/// every terminal as a `Pane` whose body is a `View::Terminal`.
+fn first_terminal(snapshot: &ProducerSnapshot) -> Option<(String, TerminalView)> {
+    snapshot.panes.first().and_then(|pane| match &pane.view {
+        View::Terminal(view) => Some((pane.id.clone(), view.clone())),
+        _ => None,
+    })
+}
 
 #[test]
 fn producer_streams_live_terminal_over_socket() {
@@ -26,7 +35,7 @@ fn producer_streams_live_terminal_over_socket() {
     // `cat` echoes its input, so the marker lands on the rendered screen.
     term.write("AGG-MARKER\n").expect("write");
 
-    let path = std::env::temp_dir().join(format!("ix-tui-it-{}.sock", std::process::id()));
+    let path = std::env::temp_dir().join(format!("ix-dash-it-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&path);
 
     let runtime = tokio::runtime::Runtime::new().expect("test runtime");
@@ -58,10 +67,10 @@ fn producer_streams_live_terminal_over_socket() {
                     "producer id should carry this pid: {}",
                     snapshot.producer
                 );
-                if let Some(frame) = snapshot.terminals.first() {
-                    assert_eq!(frame.command, "cat");
-                    if frame.screen.contains("AGG-MARKER") {
-                        return frame.id.clone();
+                if let Some((id, view)) = first_terminal(&snapshot) {
+                    assert_eq!(view.command, "cat");
+                    if view.screen.contains("AGG-MARKER") {
+                        return id;
                     }
                 }
             }
@@ -79,7 +88,7 @@ fn producer_streams_live_terminal_over_socket() {
 
 /// A child that emits a colored run and a `DECSCUSR` bar reaches the reader with
 /// SGR-encoded screen bytes and a `cursor_shape` of `"bar"`. This crosses the
-/// real boundary: byte stream -> actor sniff + vt100 -> frame -> JSON wire, the
+/// real boundary: byte stream -> actor sniff + vt100 -> pane -> JSON wire, the
 /// same path the dashboard's browser parser consumes.
 #[test]
 fn producer_carries_sgr_and_cursor_shape() {
@@ -94,7 +103,7 @@ fn producer_carries_sgr_and_cursor_shape() {
         .expect("spawn printf");
     drop(term);
 
-    let path = std::env::temp_dir().join(format!("ix-tui-sgr-{}.sock", std::process::id()));
+    let path = std::env::temp_dir().join(format!("ix-dash-sgr-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&path);
 
     let runtime = tokio::runtime::Runtime::new().expect("test runtime");
@@ -106,7 +115,7 @@ fn producer_carries_sgr_and_cursor_shape() {
         let stream = UnixStream::connect(&path).await.expect("connect");
         let mut lines = BufReader::new(stream).lines();
 
-        let frame = tokio::time::timeout(Duration::from_secs(5), async {
+        let view = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let line = lines
                     .next_line()
@@ -118,33 +127,33 @@ fn producer_carries_sgr_and_cursor_shape() {
                 }
                 let snapshot: ProducerSnapshot =
                     serde_json::from_str(&line).expect("parse snapshot");
-                if let Some(frame) = snapshot.terminals.into_iter().next()
-                    && frame.cursor_shape == "bar"
-                    && frame.screen.contains("hi")
+                if let Some((_, view)) = first_terminal(&snapshot)
+                    && view.cursor_shape == "bar"
+                    && view.screen.contains("hi")
                 {
-                    return frame;
+                    return view;
                 }
             }
         })
         .await
-        .expect("timed out waiting for the SGR + bar cursor frame");
+        .expect("timed out waiting for the SGR + bar cursor pane");
 
         // The screen carries an SGR escape (ESC = 0x1b), not just plain text.
         assert!(
-            frame.screen.contains('\u{1b}'),
+            view.screen.contains('\u{1b}'),
             "screen should carry an SGR escape, got {:?}",
-            frame.screen
+            view.screen
         );
         // bold (1) and red foreground (31) both ride in the run.
         assert!(
-            frame.screen.contains("1;31m") || frame.screen.contains("31"),
+            view.screen.contains("1;31m") || view.screen.contains("31"),
             "screen should encode the red foreground, got {:?}",
-            frame.screen
+            view.screen
         );
-        assert_eq!(frame.cursor_shape, "bar");
+        assert_eq!(view.cursor_shape, "bar");
         // The cursor lands just past "hi" on the first row.
-        assert_eq!(frame.cursor_row, 0);
-        assert_eq!(frame.cursor_col, 2);
+        assert_eq!(view.cursor_row, 0);
+        assert_eq!(view.cursor_col, 2);
 
         publisher.stop().await;
     });

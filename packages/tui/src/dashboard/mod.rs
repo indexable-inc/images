@@ -1,13 +1,13 @@
 //! The in-process dashboard: poll one [`TuiManager`] and render its terminals.
 //!
-//! [`serve`] binds the engine-free dashboard server from `tui-dashboard-core`
-//! and drives it from a poll loop over a single [`TuiManager`] in this process,
-//! filing every terminal under one scope. The browser-facing surface (the
-//! [`Hub`] Loro document, the router, the SSE stream, the [`Dashboard`] handle)
-//! lives in `tui-dashboard-core`; this module only owns the bridge from a live
-//! manager to that surface.
+//! [`serve`] binds the engine-free dashboard server from `dashboard-core` and
+//! drives it from a poll loop over a single [`TuiManager`] in this process,
+//! filing every terminal as a pane under one scope. The browser-facing surface
+//! (the [`Hub`] Loro document, the router, the SSE stream, the [`Dashboard`]
+//! handle) lives in `dashboard-core`; this module only owns the bridge from a
+//! live manager to that surface.
 //!
-//! The standalone aggregator (`tui-dashboard`) drives the same surface from many
+//! The standalone aggregator (`dashboard`) drives the same surface from many
 //! producer sockets instead, so the only engine-bound frame source stays here.
 //!
 //! ```no_run
@@ -27,7 +27,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tui_dashboard_core::{Dashboard, Hub, serve_hub};
+use dashboard_core::{Dashboard, Hub, serve_hub};
 
 use crate::{Error, Result, TuiManager};
 
@@ -65,8 +65,8 @@ pub async fn serve(
     let manager = manager.clone();
     let poller = runtime.spawn(async move {
         loop {
-            let frames = crate::frame::collect_frames(&manager).await;
-            hub.apply_scope(LOCAL_SCOPE, &frames);
+            let panes = crate::frame::collect_panes(&manager).await;
+            hub.apply_scope(LOCAL_SCOPE, &panes);
             tokio::select! {
                 () = tokio::time::sleep(poll) => {}
                 _ = stop_rx.wait_for(|stop| *stop) => break,

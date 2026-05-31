@@ -1251,6 +1251,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashboard"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dashboard-core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "dashboard-core"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "futures",
+ "loro",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "snafu 0.9.1",
+ "tokio",
+ "tokio-stream",
+ "uuid",
+]
+
+[[package]]
 name = "dashu-base"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6205,6 +6232,7 @@ checksum = "2c591d83f69777866b9126b24c6dd9a18351f177e49d625920d19f989fd31cf8"
 name = "tui"
 version = "0.1.0"
 dependencies = [
+ "dashboard-core",
  "ix-vt",
  "ndarray 0.16.1",
  "parking_lot",
@@ -6213,34 +6241,6 @@ dependencies = [
  "serde_json",
  "snafu 0.9.1",
  "tokio",
- "tui-dashboard-core",
- "uuid",
-]
-
-[[package]]
-name = "tui-dashboard"
-version = "0.1.0"
-dependencies = [
- "clap",
- "serde_json",
- "tokio",
- "tui-dashboard-core",
-]
-
-[[package]]
-name = "tui-dashboard-core"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64",
- "futures",
- "loro",
- "parking_lot",
- "serde",
- "serde_json",
- "snafu 0.9.1",
- "tokio",
- "tokio-stream",
  "uuid",
 ]
 

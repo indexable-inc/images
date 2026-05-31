@@ -169,5 +169,5 @@ pub fn ensure_published(py: Python<'_>, poll_ms: u64) {
 /// looks for them.
 #[pyfunction]
 pub fn socket_dir() -> String {
-    tui::socket_dir().display().to_string()
+    tui::discovery_dir().display().to_string()
 }

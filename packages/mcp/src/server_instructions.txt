@@ -12,7 +12,7 @@ Driving a terminal with `tui`: spawn and control a process in one block, awaitin
 
 Every method that touches the terminal is a coroutine you must `await`: `send`, `enter`, `read`, `viewport`, `text`, `snapshot`, `wait_for`, `resize`, `kill`, `close`. Only the cached accessors are synchronous: `id`, `command`, `args`, `size`, `is_alive`, `exit_code`. Send keystrokes with the `Key` enum (`Key.ENTER`, `Key.ctrl("c")`, arrows). The `async with` block calls `close()` on exit, so an editor or REPL that ignores Ctrl+C still goes away.
 
-Terminals auto-show in the dashboard. The first `Tui(...)` publishes this process, so a running `nix run .#tui-dashboard` (it watches `tui.socket_dir()`) renders every spawned terminal with no `tui.publish()` call. Set `IX_TUI_AUTOPUBLISH=0` to opt out.
+Terminals auto-show in the dashboard. The first `Tui(...)` publishes this process, so a running `nix run .#dashboard` (it watches `tui.socket_dir()`) renders every spawned terminal with no `tui.publish()` call. Set `IX_TUI_AUTOPUBLISH=0` to opt out. The dashboard is a generic canvas of panes: a producer can also publish HTML or structured-data panes, not just terminals (`nix run .#dashboard demo` shows one of each).
 
 Driving a browser with `playwright`, reuse-first. Within one session, launch once and keep the handle in a module global; the persistent loop keeps the browser and its cookies alive across calls, so later calls reuse it instead of paying a fresh launch.
 
