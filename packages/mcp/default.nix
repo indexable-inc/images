@@ -118,6 +118,30 @@ let
       ''
   );
 
+  # Native macOS VM control, bundled like `screen` so every session can
+  # `import macvm` on Darwin. Pure Python: it spawns the `macos-vm` binary (a
+  # Rust binding over Virtualization.framework) and returns guest screenshots as
+  # PIL images. macOS-only; on a non-Darwin platform the module raises.
+  macvmPythonSource = builtins.path {
+    name = "ix-mcp-macvm-python-source";
+    path = ./src/macvm;
+  };
+  macvmModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-macvm-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Native macOS VM control bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/macvm"
+        mkdir -p "$site"
+        cp -r ${macvmPythonSource}/macvm/. "$site/"
+      ''
+  );
+  # The macos-vm binary `macvm` spawns. Darwin-only; referenced lazily so a Linux
+  # mcp build never forces it.
+  macosVmBin = ix.rustWorkspace.units.binaries."macos-vm";
+
   # The `screen` helper is macOS-only, so its dependencies join the interpreter
   # only on Darwin. `pyobjc-framework-Quartz` is the maintained CoreGraphics
   # binding the helper wraps; Pillow (already transitive via matplotlib) carries
@@ -127,6 +151,7 @@ let
     lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
       ps.pyobjc-framework-Quartz
       screenModule
+      macvmModule
     ];
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
@@ -175,7 +200,8 @@ let
         mkdir -p $out/bin
         makeWrapper ${unwrapped}/bin/ix-mcp $out/bin/ix-mcp \
           --set IX_MCP_PYTHON ${lib.escapeShellArg (lib.getExe mcpPython)} \
-          --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers}
+          --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
+          ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_MACVM_BIN ${lib.escapeShellArg "${macosVmBin}/bin/macos-vm"}"}
       '';
   replDefault =
     pkgs.runCommand "ix-mcp-repl-default"
@@ -292,6 +318,29 @@ let
 
         mkdir -p "$out"
       '';
+  # macOS-only: `macvm` ships in the pinned interpreter there. Importing checks
+  # the module loads and its callable surface; a real boot needs Apple's
+  # Virtualization.framework + a guest bundle the build sandbox lacks, so leave
+  # that to runtime.
+  macvmBundled =
+    pkgs.runCommand "ix-mcp-macvm-bundled"
+      {
+        nativeBuildInputs = [ package ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+
+        ix-mcp exec 'import macvm; print("macvm-ok", callable(macvm.info), callable(macvm.install), callable(macvm.screenshot))' >stdout 2>stderr
+        if ! grep -q '^macvm-ok True True True$' stdout; then
+          echo "macvm was not importable in a default session:" >&2
+          cat stdout stderr >&2
+          exit 1
+        fi
+
+        mkdir -p "$out"
+      '';
   sessionSubprocessStdin =
     pkgs.runCommand "ix-mcp-session-subprocess-stdin"
       {
@@ -336,6 +385,8 @@ package.overrideAttrs (old: {
             ;
         }
         # `screen` is only bundled on Darwin, so its import test only exists there.
-        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin { inherit screenBundled; };
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+          inherit screenBundled macvmBundled;
+        };
     };
 })
