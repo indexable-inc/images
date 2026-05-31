@@ -2994,6 +2994,8 @@ dependencies = [
  "objc2-io-surface",
  "objc2-quartz-core",
  "objc2-virtualization",
+ "serde",
+ "serde_json",
  "snafu 0.8.9",
 ]
 

@@ -35,6 +35,12 @@ objc2-app-kit = "0.3"
 objc2-quartz-core = "0.3"
 objc2-io-surface = "0.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# `provision` parses `hdiutil`/`diskutil` plist output (converted to JSON with
+# `plutil`) to find the guest's APFS Data volume and its mount point. serde lives
+# under the macOS gate like everything else here, so the Linux stub graph stays
+# dependency-free and the unused-crate-dependencies check passes there.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [lints]
 workspace = true

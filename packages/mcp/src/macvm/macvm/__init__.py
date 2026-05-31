@@ -55,6 +55,29 @@ directly, so it needs no Screen-Recording permission.
 
 This module is macOS-only: it raises on a non-Darwin platform, and the
 ``macos-vm`` binary is only bundled into the interpreter on Darwin.
+
+End-to-end example (one-time install, then provision and run an app). This needs
+a live guest plus Apple's Virtualization.framework and the entitlement, so it is
+**not** runnable in CI; run it on a Darwin host with a bundle on disk::
+
+    import macvm
+
+    # 1. Install once from a local IPSW (~15-20 min), then provision the stopped
+    #    guest past Setup Assistant to an auto-login desktop (offline disk edit).
+    macvm.install("/path/UniversalMac_26.5_Restore.ipsw", "/path/guest")
+    macvm.provision("/path/guest", user="ix", autologin=True)
+
+    # 2. Stage a nix-built GUI app so its /nix/store dylibs resolve on the guest,
+    #    then run it in the guest and capture a frame of the running app.
+    staged = macvm.stage_binary("/path/result/bin/bossbar-overlay",
+                                "/path/app/bossbar-overlay")
+    img = macvm.run_app("/path/guest", "/path/app",
+                        "'/Volumes/My Shared Files/bossbar-overlay'")
+    img   # PIL.Image of the guest desktop with the app running, rendered inline
+
+To drive the guest step by step instead, open a :class:`Driver` against the
+provisioned bundle and exercise ``key``/``type_``/``click``/``press_down``/
+``release``/``wait``/``shot`` in lockstep, asserting the returned frames change.
 """
 
 from __future__ import annotations
@@ -77,8 +100,11 @@ __all__ = [
     "drive",
     "info",
     "install",
+    "provision",
+    "run_app",
     "screenshot",
     "screenshot_many",
+    "stage_binary",
 ]
 
 
@@ -133,6 +159,88 @@ def install(ipsw: str | os.PathLike, bundle: str | os.PathLike, disk_gib: int = 
         raise MacVmError(f"install-macos timed out after {timeout}s") from exc
     if result.returncode != 0:
         raise MacVmError(f"install-macos failed: {result.stderr.strip()}")
+
+
+def stage_binary(
+    path: str | os.PathLike,
+    out: str | os.PathLike | None = None,
+    timeout: float = 120,
+) -> str:
+    """Copy a nix-built macOS binary and make it guest-portable, returning the
+    staged path.
+
+    A nix-built binary links its dylibs by absolute ``/nix/store`` path, which a
+    vanilla guest does not have. This repoints every ``/nix/store`` dependency to
+    its ``/usr/lib`` system equivalent (libiconv, libc++, libresolv, …) or, when
+    there is none, copies the dylib next to the output and rewrites it to an
+    ``@loader_path`` reference, then ad-hoc re-signs the result. It verifies no
+    ``/nix/store`` path remains and raises :class:`MacVmError` otherwise.
+
+    With ``out`` omitted, the staged binary is written to a temp directory under
+    the same basename and that path is returned; pass ``out`` to choose the
+    location (its parent directory is created). Use the staged directory as the
+    ``app_dir`` for :func:`run_app` so a guest can run the app.
+    """
+    src = pathlib.Path(path)
+    if out is None:
+        tmp = tempfile.mkdtemp(prefix="ix-macvm-stage-")
+        out_path = pathlib.Path(tmp) / src.name
+    else:
+        out_path = pathlib.Path(out)
+    try:
+        result = subprocess.run(
+            [_binary(), "stage-binary", str(src), str(out_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MacVmError(f"stage-binary timed out after {timeout}s") from exc
+    if result.returncode != 0:
+        raise MacVmError(f"stage-binary failed: {result.stderr.strip()}")
+    # The binary prints the staged path on stdout; fall back to the requested
+    # path if (unexpectedly) absent.
+    staged = result.stdout.strip()
+    return staged or str(out_path)
+
+
+def provision(
+    bundle: str | os.PathLike,
+    user: str,
+    autologin: bool = False,
+    password: str = "",
+    timeout: float = 300,
+) -> None:
+    """Provision a STOPPED guest ``bundle`` so it boots past Setup Assistant to a
+    logged-in desktop.
+
+    A host-side disk edit (the guest must not be running): it attaches the
+    bundle's ``disk.img``, marks system and per-user Setup Assistant complete for
+    ``user`` (the account created during :func:`install`), and detaches. With
+    ``autologin`` it also enables password-less login for ``user`` (``password``
+    is only used to encode the auto-login secret; default empty). Raises
+    :class:`MacVmError` on failure, including if the image already appears in use.
+    """
+    args = [
+        _binary(),
+        "provision",
+        "--bundle",
+        str(bundle),
+        "--user",
+        user,
+    ]
+    if autologin:
+        args.append("--autologin")
+        args += ["--password", password]
+    try:
+        result = subprocess.run(
+            args, capture_output=True, text=True, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MacVmError(f"provision timed out after {timeout}s") from exc
+    if result.returncode != 0:
+        raise MacVmError(f"provision failed: {result.stderr.strip()}")
 
 
 def screenshot(
@@ -409,3 +517,84 @@ def drive(
     """
     with Driver(bundle, shares=shares, timeout=timeout) as d:
         return [d.send(command) for command in commands]
+
+
+# Where the macOS automount tag (`auto`) mounts a virtio-fs share inside the
+# guest.
+_AUTOMOUNT_DIR = "/Volumes/My Shared Files"
+
+
+def run_app(
+    bundle: str | os.PathLike,
+    app_dir: str | os.PathLike,
+    command: str,
+    *,
+    seconds: float = 15,
+    shares_tag: str = "auto",
+    boot_seconds: float = 30,
+    timeout: float = 300,
+) -> "Image.Image":
+    """Share a host directory into a guest, launch a command in it, and return a
+    frame of the guest display.
+
+    The convenience that collapses the headline demo (run a host GUI app inside a
+    guest, off-screen, and screenshot it) into one call. It shares ``app_dir``
+    into the guest over virtio-fs, boots and drives the guest with a
+    :class:`Driver`, opens Terminal via Spotlight, runs ``command``, waits
+    ``seconds`` for it to render, and returns a ``PIL.Image`` of the display. The
+    host cursor and desktop are never touched.
+
+    ``command`` runs in the guest shell. Reference the shared files under the
+    mount point: with ``shares_tag="auto"`` (the default) the share is at
+    ``/Volumes/My Shared Files`` and ``app_dir``'s contents appear directly
+    there, so a binary ``app_dir/myapp`` is ``"/Volumes/My Shared Files/myapp"``.
+    Stage a nix-built binary first with :func:`stage_binary` (into ``app_dir``)
+    so its dylibs resolve on the guest.
+
+    ``boot_seconds`` is how long to wait after boot before driving (the guest
+    must reach the desktop); ``seconds`` is how long to wait after launching the
+    command before capturing. ``timeout`` bounds the whole driver session. The
+    guest must already be provisioned to a logged-in desktop (see
+    :func:`provision`). Raises :class:`MacVmError` on failure.
+    """
+    if shares_tag == "auto":
+        share_spec = f"auto={app_dir}"
+        mount = _AUTOMOUNT_DIR
+    else:
+        share_spec = f"{shares_tag}={app_dir}"
+        # A named tag is mounted by the guest wherever it chooses; the caller is
+        # responsible for referencing the right path in `command`. We still pass
+        # the share through so the device exists.
+        mount = ""
+
+    with Driver(bundle, shares=[share_spec], timeout=timeout) as d:
+        # Let the guest reach the desktop before driving it.
+        if boot_seconds > 0:
+            d.wait(boot_seconds)
+        # Open Spotlight, search for Terminal, launch it.
+        d.press_down("cmd")
+        d.key("space")
+        d.release("cmd")
+        d.wait(1.5)
+        d.type_("Terminal")
+        d.wait(1.5)
+        d.key("return")
+        d.wait(3)
+        # Run the command. `cd` into the share first when using the automount so
+        # a relative `command` resolves, then run it in the background so the
+        # shell stays responsive and the app keeps running while we capture.
+        if mount:
+            d.type_(f"cd {_shell_quote(mount)}")
+            d.key("return")
+            d.wait(0.5)
+        d.type_(command)
+        d.key("return")
+        # Wait for the app to render, then capture.
+        if seconds > 0:
+            d.wait(seconds)
+        return d.shot()
+
+
+def _shell_quote(path: str) -> str:
+    """Single-quote a path for a guest POSIX shell (the driver types it as-is)."""
+    return "'" + path.replace("'", "'\\''") + "'"

@@ -351,8 +351,8 @@ let
         export HOME=$TMPDIR/home
         mkdir -p "$HOME"
 
-        ix-mcp exec 'import macvm; print("macvm-ok", *(callable(getattr(macvm, n)) for n in ("info", "install", "screenshot", "screenshot_many", "drive", "Driver")))' >stdout 2>stderr
-        if ! grep -q '^macvm-ok True True True True True True$' stdout; then
+        ix-mcp exec 'import macvm; print("macvm-ok", *(callable(getattr(macvm, n)) for n in ("info", "install", "screenshot", "screenshot_many", "drive", "Driver", "provision", "stage_binary", "run_app")))' >stdout 2>stderr
+        if ! grep -q '^macvm-ok True True True True True True True True True$' stdout; then
           echo "macvm was not importable in a default session:" >&2
           cat stdout stderr >&2
           exit 1

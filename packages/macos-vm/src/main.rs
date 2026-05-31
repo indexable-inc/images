@@ -114,6 +114,40 @@ enum Command {
         #[arg(long = "share", value_name = "TAG=HOSTDIR")]
         shares: Vec<String>,
     },
+    /// Copy a nix-built macOS binary and make it guest-portable: repoint every
+    /// `/nix/store` dylib to its `/usr/lib` system equivalent (or bundle it
+    /// next to the output with an `@loader_path` reference) and ad-hoc re-sign,
+    /// so the result links only libraries a vanilla guest has. Verifies that no
+    /// `/nix/store` path remains.
+    StageBinary {
+        /// Input binary (typically a `/nix/store` path).
+        #[arg(value_name = "IN")]
+        input: std::path::PathBuf,
+        /// Output path for the staged, guest-portable binary.
+        #[arg(value_name = "OUT")]
+        output: std::path::PathBuf,
+    },
+    /// Provision a STOPPED macOS guest bundle so it boots straight past Setup
+    /// Assistant to a logged-in desktop. Host-side disk edit: attaches the
+    /// guest disk, marks system + per-user setup complete, optionally enables
+    /// auto-login, then detaches. Refuses to run if the bundle appears in use.
+    Provision {
+        /// Guest bundle directory (must be stopped).
+        #[arg(long)]
+        bundle: std::path::PathBuf,
+        /// Short name of the guest user whose per-user Setup Assistant to mark
+        /// complete (the first account created during install).
+        #[arg(long)]
+        user: String,
+        /// Also enable password-less auto-login for `--user` (writes
+        /// `kcpassword` + the loginwindow `autoLoginUser`).
+        #[arg(long)]
+        autologin: bool,
+        /// Password for `--user`, used only to encode `kcpassword` when
+        /// `--autologin` is set. Defaults to an empty password.
+        #[arg(long, default_value = "")]
+        password: String,
+    },
 }
 
 #[cfg(target_os = "macos")]
@@ -240,6 +274,12 @@ mod input;
 mod macguest;
 
 #[cfg(target_os = "macos")]
+mod provision;
+
+#[cfg(target_os = "macos")]
+mod stagebin;
+
+#[cfg(target_os = "macos")]
 mod imp {
     //! The Virtualization.framework glue.
     //!
@@ -290,6 +330,10 @@ mod imp {
         Bundle { message: String },
         #[snafu(display("screenshot encode/write failed: {message}"))]
         CaptureEncode { message: String },
+        #[snafu(display("staging the binary guest-portable failed: {source}"))]
+        StageBinary { source: crate::stagebin::Error },
+        #[snafu(display("provisioning the guest failed: {source}"))]
+        Provision { source: crate::provision::Error },
     }
 
     /// Parameters for a Linux guest boot. A named struct rather than a wide
@@ -344,6 +388,24 @@ mod imp {
                     shares: parse_shares(&shares)?,
                 })
             }
+            Command::StageBinary { input, output } => {
+                let staged = crate::stagebin::stage_binary(&input, &output)
+                    .map_err(|source| Error::StageBinary { source })?;
+                println!("{}", staged.display());
+                Ok(())
+            }
+            Command::Provision {
+                bundle,
+                user,
+                autologin,
+                password,
+            } => crate::provision::provision(crate::provision::Provision {
+                bundle,
+                user,
+                autologin,
+                password,
+            })
+            .map_err(|source| Error::Provision { source }),
         }
     }
 
