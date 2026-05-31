@@ -43,6 +43,18 @@ use crate::macguest::{DirShare, capture, frame_size as guest_frame_size, start_g
 const KEY_GAP_DOWN: Duration = Duration::from_millis(8);
 const KEY_GAP_AFTER: Duration = Duration::from_millis(24);
 
+/// Pointer-glide tuning: a `move`/`click` sweeps the pointer from its last
+/// position to the target through intermediate `mouseMoved` events instead of
+/// teleporting (see [`glide`]). `GLIDE_STEP` is the travel (in display fractions)
+/// per intermediate step; `GLIDE_GAP` paces them on the driver thread (~60 fps)
+/// so the guest renders the motion; the step count is clamped so a long sweep
+/// stays smooth and a short one stays quick. A hop under `GLIDE_MIN` just jumps.
+const GLIDE_MIN: f64 = 0.012;
+const GLIDE_STEP: f64 = 0.03;
+const GLIDE_MIN_STEPS: usize = 4;
+const GLIDE_MAX_STEPS: usize = 40;
+const GLIDE_GAP: Duration = Duration::from_millis(16);
+
 /// Parameters for the interactive driver.
 pub struct DriveMacos {
     pub bundle: PathBuf,
@@ -132,6 +144,12 @@ fn parse_fraction_pair(
 /// pointer position. Shared by the `click` and `move` verbs: with `do_click` the
 /// pointer is pressed there, otherwise it only moves (hover).
 fn pointer_action(view_ptr: usize, fx: f64, fy: f64, do_click: bool, state: &mut State) {
+    // Glide the pointer from its last position to the target rather than
+    // teleporting: a real pointer sweeps across the screen, and the trail of
+    // intermediate moves reliably drives motion-sensitive UI a single jump can
+    // miss (a boundary-crossing hover, velocity, and especially drags). The
+    // endpoint is set exactly below, so this only shapes the path taken there.
+    glide(view_ptr, state.last_cursor, (fx, fy));
     on_main(view_ptr, move |view| {
         let (x, y) = view_point(view, fx, fy);
         if do_click {
@@ -142,6 +160,39 @@ fn pointer_action(view_ptr: usize, fx: f64, fy: f64, do_click: bool, state: &mut
     });
     state.last_cursor = Some((fx, fy));
     std::thread::sleep(KEY_GAP_AFTER);
+}
+
+/// Sweep the pointer from `start` to `end` (display fractions, top-left) with a
+/// short series of eased `mouseMoved` events, so the motion looks human and
+/// touches every point in between. Does nothing without a known `start` (the
+/// first pointer command of a session simply teleports) or for a hop under
+/// [`GLIDE_MIN`] (already effectively on target). The endpoint is left to the
+/// caller, which places the pointer there exactly (and may click).
+fn glide(view_ptr: usize, start: Option<(f64, f64)>, end: (f64, f64)) {
+    let Some((sx, sy)) = start else {
+        return;
+    };
+    let (dx, dy) = (end.0 - sx, end.1 - sy);
+    let dist = dx.hypot(dy);
+    if dist < GLIDE_MIN {
+        return;
+    }
+    // One step per `GLIDE_STEP` of travel, clamped to the smooth/quick range.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let steps = ((dist / GLIDE_STEP).ceil() as usize).clamp(GLIDE_MIN_STEPS, GLIDE_MAX_STEPS);
+    for i in 1..steps {
+        #[allow(clippy::cast_precision_loss)]
+        let t = i as f64 / steps as f64;
+        // Smoothstep ease-in-out: accelerate off the start, decelerate into the
+        // target, like a hand moving a pointer.
+        let e = t * t * (3.0 - 2.0 * t);
+        let (fx, fy) = (sx + dx * e, sy + dy * e);
+        on_main(view_ptr, move |view| {
+            let (x, y) = view_point(view, fx, fy);
+            input::mouse_move(view, x, y);
+        });
+        std::thread::sleep(GLIDE_GAP);
+    }
 }
 
 /// Execute one command line, returning its acknowledgement.

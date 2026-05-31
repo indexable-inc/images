@@ -240,15 +240,20 @@ fn put_pixel(rgba: &mut [u8], width: usize, height: usize, x: isize, y: isize, r
     rgba[o..o + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
 }
 
-/// Draw a high-contrast pointer marker (a red cross with a white halo) into the
-/// RGBA buffer at display fraction `(fx, fy)`, top-left origin. The synthetic
-/// pointing device's cursor is not always part of the captured scanout, so this
-/// shows a caller exactly where the driver's pointer is. Fully bounds-checked.
-/// The fraction-to-pixel casts are intentional rasterization rounding; `fx`/`fy`
-/// are display fractions the driver clamps to `0..=1`, so the result is in range.
+/// Draw a high-contrast reticle (red crosshair with a white halo and a centre
+/// dot) into the RGBA buffer at display fraction `(fx, fy)`, top-left origin. The
+/// synthetic pointing device's cursor is not always part of the captured scanout,
+/// so this shows a caller exactly where the driver's pointer is. Fully
+/// bounds-checked. The fraction-to-pixel casts are intentional rasterization
+/// rounding; `fx`/`fy` are display fractions the driver clamps to `0..=1`, so the
+/// result is in range.
+///
+/// The reticle is sized to the framebuffer, not a fixed pixel count: a thin 1px
+/// cross on a 2048px capture vanishes when the shot is viewed at ~600px, so the
+/// arms scale with the display and are several pixels thick. A small centre gap
+/// keeps the exact target pixel readable, and the centre dot marks it precisely.
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn draw_cursor_marker(rgba: &mut [u8], width: usize, height: usize, fx: f64, fy: f64) {
-    const ARM: isize = 10;
     const RED: [u8; 3] = [255, 40, 40];
     const WHITE: [u8; 3] = [255, 255, 255];
     if width == 0 || height == 0 {
@@ -256,17 +261,29 @@ fn draw_cursor_marker(rgba: &mut [u8], width: usize, height: usize, fx: f64, fy:
     }
     let cx = (fx * width as f64).round() as isize;
     let cy = (fy * height as f64).round() as isize;
-    // White halo first (the cross one pixel thick on each side), so the red cross
-    // stays visible over any background colour.
-    for d in -ARM..=ARM {
-        for off in [-1_isize, 1] {
-            put_pixel(rgba, width, height, cx + d, cy + off, WHITE);
-            put_pixel(rgba, width, height, cx + off, cy + d, WHITE);
+    let dim = width.min(height) as isize;
+    let arm = (dim / 48).max(14); // length of each crosshair arm
+    let gap = (dim / 200).max(4); // empty centre so the exact target shows
+    let half = (dim / 360).max(2); // half-thickness of each arm
+
+    // Filled axis-aligned span helper (inclusive ranges), used for the arms and
+    // the centre dot. `put_pixel` is bounds-checked, so off-screen spans clip.
+    let mut fill = |x0: isize, x1: isize, y0: isize, y1: isize, color: [u8; 3]| {
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                put_pixel(rgba, width, height, x, y, color);
+            }
         }
-    }
-    for d in -ARM..=ARM {
-        put_pixel(rgba, width, height, cx + d, cy, RED);
-        put_pixel(rgba, width, height, cx, cy + d, RED);
+    };
+    // White halo (one pixel fatter) under a red core, so the reticle reads over
+    // any background. Each pass draws four arms, leaving `gap` clear at the centre.
+    for (color, pad) in [(WHITE, 1_isize), (RED, 0)] {
+        let t = half + pad;
+        fill(cx + gap, cx + gap + arm, cy - t, cy + t, color); // right arm
+        fill(cx - gap - arm, cx - gap, cy - t, cy + t, color); // left arm
+        fill(cx - t, cx + t, cy + gap, cy + gap + arm, color); // down arm
+        fill(cx - t, cx + t, cy - gap - arm, cy - gap, color); // up arm
+        fill(cx - t, cx + t, cy - t, cy + t, color); // centre dot
     }
 }
 
