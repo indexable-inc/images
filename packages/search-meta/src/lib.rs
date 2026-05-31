@@ -47,6 +47,7 @@ pub struct Source(String);
 
 impl Source {
     /// Wrap a tag value (e.g. `"slack"`, `"claude_history"`).
+    #[must_use]
     pub fn new(tag: impl Into<String>) -> Self {
         Self(tag.into())
     }

@@ -21,6 +21,7 @@ mod error;
 mod record;
 mod transcript;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use search_meta::{Document, Source, SourceAdapter};
@@ -54,7 +55,8 @@ impl ClaudeHistoryExport {
     /// read, or a line is not valid JSON.
     pub fn open_with(dir: &Path, host: &str, user: &str) -> Result<Self> {
         let mut files = Vec::new();
-        collect_transcripts(dir, &mut files)?;
+        let mut visited = HashSet::new();
+        collect_transcripts(dir, &mut files, &mut visited)?;
 
         let mut messages = Vec::new();
         for file in files {
@@ -106,19 +108,33 @@ impl SourceAdapter for ClaudeHistoryExport {
 
 /// Recursively collect `*.jsonl` transcript files under `dir`.
 ///
-/// Symlinked directories are followed because Claude's history directory is
-/// itself a symlink in some setups. This is safe for the intended unprivileged,
-/// single-user run: it reads only the invoking user's own files. A privileged or
-/// multi-user shipper must instead reject symlinks with `O_NOFOLLOW` to avoid
-/// the confused-deputy class (see ix `history-ship`'s symlink finding).
-fn collect_transcripts(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+/// Symlinks are followed because Claude's history directory is itself a symlink
+/// in some setups (`~/.claude/projects` points at the real store). `visited`
+/// holds the canonical path of every directory already entered, so a symlink
+/// cycle is broken instead of recursing forever. This is for the intended
+/// unprivileged, single-user run, reading only the invoking user's own files; a
+/// privileged or multi-user shipper must additionally reject symlinks with
+/// `O_NOFOLLOW` to avoid the confused-deputy class (see ix `history-ship`'s
+/// symlink finding).
+fn collect_transcripts(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    let canonical = std::fs::canonicalize(dir).context(ListDirSnafu { path: dir.to_path_buf() })?;
+    if !visited.insert(canonical) {
+        // Already walked this real directory (a symlink pointed back into the
+        // tree); stop rather than loop.
+        return Ok(());
+    }
+
     let entries = std::fs::read_dir(dir).context(ListDirSnafu { path: dir.to_path_buf() })?;
     for entry in entries {
         let entry = entry.context(ListDirSnafu { path: dir.to_path_buf() })?;
         let path = entry.path();
         let metadata = std::fs::metadata(&path).context(ListDirSnafu { path: path.clone() })?;
         if metadata.is_dir() {
-            collect_transcripts(&path, out)?;
+            collect_transcripts(&path, out, visited)?;
         } else if metadata.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
             out.push(path);
         }

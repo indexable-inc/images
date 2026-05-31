@@ -47,7 +47,7 @@ struct Cli {
 enum Command {
     /// Grep the indexed chunks with a regular expression.
     Grep(GrepArgs),
-    /// Ingest a non-code source (slack, linear) from an export directory.
+    /// Ingest a non-code source (slack, linear, claude_history) from a directory.
     Ingest(IngestArgs),
     /// Garbage-collect a non-code source: delete store records absent from the
     /// export (a full-snapshot reconcile, never a window slice).
@@ -58,7 +58,7 @@ enum Command {
 /// these cover the record sources only.
 #[derive(Debug, Args)]
 struct IngestArgs {
-    /// Which source to ingest: slack or linear.
+    /// Which source to ingest: slack, linear, or claude_history.
     source: String,
 
     /// Path to the export directory.
@@ -276,6 +276,15 @@ async fn run_ingest(cli: IngestArgs, gc: bool) -> anyhow::Result<()> {
             run_one_source(&adapter, &store, &store_name, gc).await
         }
         "claude_history" => {
+            // claude_history is inherently multi-host: many machines upload into
+            // one store, so a single machine's export is a partial view. gc does
+            // a full-snapshot set-difference delete, which from one host would
+            // wipe every other host's records. Refuse it; ingest is additive.
+            if gc {
+                anyhow::bail!(
+                    "gc is not supported for claude_history: it is multi-host, so reconciling against one machine's export would delete other machines' records"
+                );
+            }
             let adapter = claude_history::ClaudeHistoryExport::open(dir)?;
             run_one_source(&adapter, &store, &store_name, gc).await
         }

@@ -63,8 +63,8 @@ const fn to_client_options(options: SearchOptions) -> mixedbread::SearchOptions 
 fn hit_from_chunk(chunk: mixedbread::Chunk) -> SearchHit {
     let metadata = chunk.metadata.as_ref();
     // Legacy code records (uploaded before the typed envelope) carry `hash`/`path`
-    // and no `source`; the old store was code-only, so treat an absent source as
-    // Code. New records carry `source` and `content_hash`.
+    // and no `source`; the old store was code-only, so an absent source means
+    // code. A present source tag is preserved verbatim (any corpus, open set).
     let source = metadata_str(metadata, search_meta::keys::SOURCE)
         .map(Source::from)
         .unwrap_or_else(Source::code);
