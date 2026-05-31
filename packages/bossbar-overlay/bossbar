@@ -33,7 +33,8 @@ ensure_db() {
     overlay     TEXT    NOT NULL DEFAULT 'progress',
     visible     INTEGER NOT NULL DEFAULT 1,
     position    INTEGER NOT NULL DEFAULT 0,
-    since       INTEGER
+    since       INTEGER,
+    url         TEXT    NOT NULL DEFAULT ''
   );"
   # Columns that shipped after the first schema; add each to a pre-existing table
   # so its flag works on a DB created by an older bossbar. SQLite has no
@@ -45,6 +46,7 @@ ensure_db() {
   }
   add_col description "TEXT NOT NULL DEFAULT ''"
   add_col since "INTEGER"
+  add_col url "TEXT NOT NULL DEFAULT ''"
 }
 
 die() {
@@ -76,9 +78,9 @@ usage() {
 bossbar - control the Minecraft boss bar overlay (SQLite-backed)
 
 Usage:
-  bossbar add <title> [--description D] [--since EPOCH] [--progress P]
+  bossbar add <title> [--description D] [--since EPOCH] [--url U] [--progress P]
                       [--color C] [--overlay O] [--position N]
-  bossbar set <id|title> [--title T] [--description D] [--since EPOCH]
+  bossbar set <id|title> [--title T] [--description D] [--since EPOCH] [--url U]
                          [--progress P] [--color C] [--overlay O]
                          [--position N] [--visible 0|1]
   bossbar rm <id|title>
@@ -90,13 +92,16 @@ Usage:
            (newlines start new paragraphs); pass '' to clear it
   EPOCH    Unix seconds to count up from; the overlay appends a live elapsed
            timer to the title (e.g. "2:05") and ticks it. 0 clears the timer
+  U        URL (or any URI/path the system opener accepts) opened when the bar
+           is clicked without dragging; pass '' to clear it
   P        fill fraction 0.0 .. 1.0
   C        pink | blue | red | green | yellow | purple | white
   O        progress | notched_6 | notched_10 | notched_12 | notched_20
 
 Examples:
   bossbar add "Ender Dragon" --color pink --overlay notched_20 \
-    --description "Destroy the End Crystals first or it heals to full."
+    --description "Destroy the End Crystals first or it heals to full." \
+    --url "https://minecraft.wiki/w/Ender_Dragon"
   bossbar add "US East: VMs" --color red --since "$(date +%s)"   # live timer
   bossbar set "Ender Dragon" --progress 0.5
   bossbar rm "Ender Dragon"
@@ -116,6 +121,7 @@ parse_fields() {
       --title)       assign="title = '$(sq "$val")'" ;;
       --description) assign="description = '$(sq "$val")'" ;;
       --since)       assign="since = $val" ;;
+      --url)         assign="url = '$(sq "$val")'" ;;
       --progress)    assign="progress = $val" ;;
       --position)    assign="position = $val" ;;
       --visible)     assign="visible = $val" ;;

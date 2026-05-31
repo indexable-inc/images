@@ -107,6 +107,9 @@ pub struct BossBar {
     /// rewriting the title to advance a clock. `None` (or a non-positive value in
     /// the DB) means no counter.
     pub since: Option<i64>,
+    /// A URL (or any URI/path the OS opener accepts) opened when the bar is
+    /// clicked without dragging. Empty means a click does nothing.
+    pub url: String,
     /// Fill fraction, always clamped to `0.0..=1.0` at construction.
     pub progress: f32,
     pub color: Color,

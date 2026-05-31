@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS bossbars (
   position    INTEGER NOT NULL DEFAULT 0,
   x           REAL,
   y           REAL,
-  since       INTEGER
+  since       INTEGER,
+  url         TEXT    NOT NULL DEFAULT ''
 );";
 
 /// Columns added after the initial schema shipped. `ALTER TABLE ADD COLUMN` is
@@ -43,17 +44,18 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("y", "REAL"),
     ("description", "TEXT NOT NULL DEFAULT ''"),
     ("since", "INTEGER"),
+    ("url", "TEXT NOT NULL DEFAULT ''"),
 ];
 
 /// Rows inserted only when the DB file is created for the first time, so a
 /// brand-new install shows something and documents the contract by example. The
-/// third bar carries a multi-paragraph description (the hover panel) and a
-/// `since` of now, so its title shows a live elapsed counter from first launch.
+/// Ender Dragon bar carries a hover panel and a click URL; the Build bar stamps
+/// `since` so its title shows a live elapsed counter from first launch.
 const SEED: &str = "\
-INSERT INTO bossbars (title, description, progress, color, overlay, position, since) VALUES
-  ('Ender Dragon', 'The final boss of the End. Destroy all the End Crystals on the obsidian pillars first, or it heals back to full.', 0.82, 'pink', 'notched_20', 0, NULL),
-  ('Wither', '', 0.55, 'blue', 'notched_6', 1, NULL),
-  ('Build: compiling', 'Hover any bar to read more.\n\nThe panel wraps long lines and keeps your paragraph breaks, so a bar can carry a sentence or a few.', 0.40, 'green', 'progress', 2, strftime('%s','now'));";
+INSERT INTO bossbars (title, description, progress, color, overlay, position, since, url) VALUES
+  ('Ender Dragon', 'The final boss of the End. Destroy all the End Crystals on the obsidian pillars first, or it heals back to full.', 0.82, 'pink', 'notched_20', 0, NULL, 'https://minecraft.wiki/w/Ender_Dragon'),
+  ('Wither', '', 0.55, 'blue', 'notched_6', 1, NULL, ''),
+  ('Build: compiling', 'Hover any bar to read more.\n\nThe panel wraps long lines and keeps your paragraph breaks, so a bar can carry a sentence or a few.', 0.40, 'green', 'progress', 2, strftime('%s','now'), '');";
 
 /// Resolve the database path: `BOSSBAR_DB` wins, otherwise the per-OS app-data
 /// path the `bossbar` CLI also computes.
@@ -101,11 +103,14 @@ fn add_column_if_missing(conn: &Connection, name: &str, ty: &str) -> rusqlite::R
     Ok(())
 }
 
-/// Persist a dragged bar's pinned location (logical screen points). Uses its
-/// own connection so the overlay's read/watch connection is untouched; the
-/// commit bumps `data_version`, so the watcher re-reads and the move sticks.
+/// Persist a dragged bar's pinned location (logical screen points). Uses its own
+/// connection so the overlay's read/watch connection is untouched; the commit
+/// bumps `data_version`, so the watcher re-reads and the move sticks. This runs
+/// on the UI thread during a drag, so it deliberately skips the schema/migration
+/// setup `open` does: by drag time the table exists, and WAL is a persistent DB
+/// property, so a bare connection plus the `UPDATE` keeps each write cheap.
 pub fn set_position(path: &Path, id: i64, pos: glam::DVec2) -> rusqlite::Result<()> {
-    let conn = open(path)?;
+    let conn = Connection::open(path)?;
     conn.execute(
         "UPDATE bossbars SET x = ?1, y = ?2 WHERE id = ?3",
         rusqlite::params![pos.x, pos.y, id],
@@ -115,7 +120,7 @@ pub fn set_position(path: &Path, id: i64, pos: glam::DVec2) -> rusqlite::Result<
 
 fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, progress, color, overlay, position, x, y, description, since
+        "SELECT id, title, progress, color, overlay, position, x, y, description, since, url
          FROM bossbars
          WHERE visible != 0
          ORDER BY position ASC, id ASC",
@@ -131,6 +136,7 @@ fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
             title: r.get(1)?,
             description: r.get(8)?,
             since,
+            url: r.get(10)?,
             progress: r.get::<_, f64>(2)?.clamp(0.0, 1.0) as f32,
             color: Color::parse(&r.get::<_, String>(3)?),
             overlay: Overlay::parse(&r.get::<_, String>(4)?),
@@ -226,6 +232,26 @@ mod tests {
         assert_eq!(bars[1].description, "", "the Wither seed has no panel");
         // The Build seed stamps `since`, so it shows a live counter from launch.
         assert!(bars[2].since.is_some(), "Build seed should have a live counter");
+        // The Ender Dragon seed carries a click URL; the others none.
+        assert!(bars[0].url.contains("minecraft.wiki"));
+        assert_eq!(bars[1].url, "");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn url_round_trips() {
+        let path = temp_db("url");
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            "INSERT INTO bossbars (title, url) VALUES ('link', 'https://example.com/x'), ('plain', '')",
+            [],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
+        assert_eq!(by("link").url, "https://example.com/x");
+        assert_eq!(by("plain").url, "");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

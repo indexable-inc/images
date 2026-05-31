@@ -38,11 +38,12 @@ or stop the service that runs it). `BOSSBAR_SCALE=3` (or `--scale 3`) enlarges
 the bars.
 
 The bars are interactive: hover one and it eases to fully opaque and gently
-grows with a slow breathing pulse (the cursor becomes a grab hand), and you can
-drag it anywhere on screen. Dragging uses the
-platform's native window drag, and the drop location is saved to the bar's
-`x`/`y` columns, so it stays put across restarts. Bars without a saved position
-auto-stack in a top-center column. This works the same on macOS and Linux.
+grows with a slow breathing pulse (the cursor becomes a grab hand). A press that
+moves past a few pixels starts a drag (the platform's native window drag); the
+drop location is saved to the bar's `x`/`y` columns, so it stays put across
+restarts. A press that does not move is a click: it opens the bar's `url` if it
+has one. Bars without a saved position auto-stack in a top-center column. This
+works the same on macOS and Linux.
 
 A bar can carry a longer `description`. When it does, hovering unfolds a flat
 panel below the bar with the description wrapped to the bar's width, in the same
@@ -56,6 +57,10 @@ A bar can also carry a `since` (Unix epoch). When set, the overlay appends a
 live elapsed timer to the title (`Build (2:05)`) and ticks it once a second on
 its own, so you write the start time once instead of rewriting the title to
 advance a clock. The seeded "Build: compiling" bar shows this.
+
+A bar can carry a `url`. Clicking the bar (a press without a drag) opens it with
+the system opener (`open` on macOS, `xdg-open` on Linux), so a status bar can
+link straight to its dashboard. The seeded Ender Dragon bar links to the wiki.
 
 Known limitations: some Linux tiling window managers force-place or tile
 borderless windows, which can fight the free-drag placement. An auto-stacked
@@ -115,7 +120,8 @@ CREATE TABLE bossbars (
   position    INTEGER NOT NULL DEFAULT 0,    -- sort order in the auto column
   x           REAL,                          -- pinned location (logical points)
   y           REAL,                          -- NULL/NULL = auto-stacked
-  since       INTEGER                        -- Unix epoch; live elapsed timer in the title
+  since       INTEGER,                       -- Unix epoch; live elapsed timer in the title
+  url         TEXT    NOT NULL DEFAULT ''    -- opened with the system opener on click
 );
 ```
 
@@ -130,6 +136,9 @@ CREATE TABLE bossbars (
   appends a live elapsed timer to the title (`Build (2:05)`) and ticks it once a
   second, so you write the start once instead of rewriting the title to advance a
   clock. `NULL` or a non-positive value means no timer.
+- **url**: opened with the system opener (`open` / `xdg-open`) when the bar is
+  clicked without dragging. Empty (the default) means a click does nothing. Any
+  URI, file, or path the opener accepts works.
 - **x / y**: pinned screen location in logical points, written when you drag a
   bar. Leave both `NULL` (the default) to keep the bar in the auto-stacked
   top-center column ordered by `position`; setting them floats the bar free.

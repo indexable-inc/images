@@ -47,6 +47,14 @@ const FRAME: Duration = Duration::from_millis(16);
 /// enough to advance a clock that ticks in seconds, and lets the loop sleep the
 /// rest of the time.
 const TICK: Duration = Duration::from_secs(1);
+/// Pointer travel (physical px) past which a press becomes a drag rather than a
+/// click. Below it, the press-release opens the bar's URL; at or above it, the
+/// native window drag takes over.
+const DRAG_THRESHOLD: f64 = 5.0;
+/// How long a window must sit still after its last move before the overlay will
+/// apply an externally-read position again. Must exceed the DB watch poll so the
+/// watcher's lagged read-back of our own drag never snaps the window back.
+const SETTLE: Duration = Duration::from_millis(700);
 
 /// Ease-out cubic: fast start, soft landing. The default feedback curve.
 fn ease_out_cubic(t: f32) -> f32 {
@@ -61,6 +69,20 @@ fn now_unix() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Open a bar's click URL with the platform's opener (a URL, file, or any URI it
+/// accepts), detached so the overlay never blocks on the browser launch. A
+/// spawn failure is reported but not fatal: a bad URL should not take down the HUD.
+fn open_url(url: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Err(e) = std::process::Command::new(opener).arg(url).spawn() {
+        eprintln!("bossbar-overlay: failed to open {url}: {e}");
+    }
 }
 
 /// GPU state shared by every bar window: one device/queue and one renderer
@@ -85,9 +107,8 @@ struct BarWin {
     hover_anim: f32,
     /// Timestamp of the last animation step, for frame-rate-independent easing.
     last: Instant,
-    /// True between a left-press and its release: only then does a `Moved`
-    /// count as a user drag worth persisting. Window placement nudges by the OS
-    /// (e.g. clamping below the menu bar) arrive with this false and are ignored.
+    /// True once a press has moved past the drag threshold and the native window
+    /// drag has taken over. Drives the grabbing cursor; cleared on release.
     dragging: bool,
     /// Last position we know the window holds (logical points): what we set, or
     /// where the OS placed it. Lets `Moved` skip echoes of our own placement.
@@ -97,6 +118,17 @@ struct BarWin {
     /// The window is currently grown to fit the open panel. Collapsed otherwise,
     /// so the empty area below the bar never intercepts the mouse (click-through).
     expanded: bool,
+    /// Last cursor position within the window (physical px), tracked so a press
+    /// can measure drag distance and tell a click from a drag.
+    cursor: Option<PhysicalPosition<f64>>,
+    /// Cursor position at the left-press while the gesture is still ambiguous
+    /// (button down, not yet past the drag threshold). `None` once it became a
+    /// drag or the button is up. A release with this still set is a click.
+    press: Option<PhysicalPosition<f64>>,
+    /// When the window last moved (a `Moved` during a drag). The reconcile guard
+    /// ignores externally-read positions until the window has been still for
+    /// SETTLE, so the watcher's lagged read-back never snaps a live drag back.
+    last_move: Instant,
 }
 
 impl BarWin {
@@ -244,6 +276,7 @@ impl App {
         let (surface, config) = self.make_surface(&window);
         window.request_redraw();
         let has_description = !bar.description.trim().is_empty();
+        let now = Instant::now();
         Some(BarWin {
             window,
             surface,
@@ -251,13 +284,18 @@ impl App {
             bar,
             hovered: false,
             hover_anim: 0.0,
-            last: Instant::now(),
+            last: now,
             dragging: false,
             self_set: Some(pos),
             has_description,
             // Windows are created at the collapsed (bar-only) size; the panel
             // grows them on hover.
             expanded: false,
+            cursor: None,
+            press: None,
+            // Far enough in the past that a fresh window accepts an external
+            // position immediately (the SETTLE guard only fires after a real move).
+            last_move: now - SETTLE,
         })
     }
 
@@ -286,10 +324,15 @@ impl App {
                 win.has_description = !b.description.trim().is_empty();
                 win.bar = b.clone();
                 // Honor a position set in the DB by something other than our own
-                // drag (e.g. the CLI), but ignore the echo of our last move.
+                // drag (e.g. the CLI), but do not fight a live drag: while the
+                // user is moving the window the DB still holds an older value (the
+                // watcher reads it ~200ms behind), and forcing it would snap the
+                // window back. So only apply an external position once the window
+                // has been still for SETTLE, and skip the echo of our own move.
                 if let Some(p) = b.pos {
                     let lp = LogicalPosition::new(p.x, p.y);
-                    if win.self_set != Some(lp) {
+                    let settled = Instant::now().duration_since(win.last_move) >= SETTLE;
+                    if settled && win.self_set != Some(lp) {
                         win.window.set_outer_position(lp);
                         win.self_set = Some(lp);
                     }
@@ -375,6 +418,9 @@ impl App {
     /// A window moved. Persist it only when the move came from a user drag;
     /// otherwise (initial placement, OS menu-bar clamp) just record where the
     /// window actually sits so a later drag is measured from the right spot.
+    /// `Moved` arrives at roughly the refresh rate during a drag and the write is
+    /// cheap (see `db::set_position`), so every drag move is saved; the last one
+    /// is the exact drop position.
     fn on_moved(&mut self, id: i64, pos: PhysicalPosition<i32>) {
         let Some(win) = self.wins.get_mut(&id) else {
             return;
@@ -390,6 +436,9 @@ impl App {
         if !win.dragging {
             return; // OS-initiated placement, not a user drag
         }
+        // Mark the window as moving now, so the reconcile guard keeps the
+        // watcher's lagged read-back from snapping it back mid-drag.
+        win.last_move = Instant::now();
         let dv = DVec2::new(logical.x, logical.y);
         win.bar.pos = Some(dv);
         if let Err(e) = db::set_position(&self.db, id, dv) {
@@ -490,17 +539,37 @@ impl ApplicationHandler<Vec<BossBar>> for App {
                 }
                 self.render_id(id);
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(win) = self.wins.get_mut(&id) {
+                    win.cursor = Some(position);
+                    // While a press is still ambiguous, watch for travel past the
+                    // threshold: that turns the gesture into a drag and hands off
+                    // to the native window drag (which then drives `Moved`).
+                    if let Some(p) = win.press {
+                        let dx = position.x - p.x;
+                        let dy = position.y - p.y;
+                        if (dx * dx + dy * dy).sqrt() >= DRAG_THRESHOLD {
+                            win.press = None;
+                            win.dragging = true;
+                            win.window.set_cursor(CursorIcon::Grabbing);
+                            if let Err(e) = win.window.drag_window() {
+                                eprintln!("bossbar-overlay: drag failed: {e}");
+                            }
+                        }
+                    }
+                }
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
             } => {
                 if let Some(win) = self.wins.get_mut(&id) {
-                    win.dragging = true;
-                    win.window.set_cursor(CursorIcon::Grabbing);
-                    if let Err(e) = win.window.drag_window() {
-                        eprintln!("bossbar-overlay: drag failed: {e}");
-                    }
+                    // Defer the native drag until the pointer travels past the
+                    // threshold (see CursorMoved), so a stationary press stays a
+                    // click whose mouse-up we actually receive.
+                    win.press = win.cursor;
+                    win.dragging = false;
                 }
             }
             WindowEvent::MouseInput {
@@ -508,13 +577,22 @@ impl ApplicationHandler<Vec<BossBar>> for App {
                 button: MouseButton::Left,
                 ..
             } => {
-                if let Some(win) = self.wins.get_mut(&id) {
+                // A release while the press never became a drag is a click: open
+                // the bar's URL if it has one. (A drag swallows its own mouse-up
+                // on macOS, but by then `press` is already cleared.)
+                let url = self.wins.get_mut(&id).and_then(|win| {
+                    let clicked = win.press.is_some() && !win.dragging;
+                    win.press = None;
                     win.dragging = false;
                     win.window.set_cursor(if win.hovered {
                         CursorIcon::Grab
                     } else {
                         CursorIcon::Default
                     });
+                    (clicked && !win.bar.url.trim().is_empty()).then(|| win.bar.url.clone())
+                });
+                if let Some(url) = url {
+                    open_url(&url);
                 }
             }
             WindowEvent::Moved(pos) => self.on_moved(id, pos),
