@@ -25,6 +25,7 @@ polars = { version = "0.53", default-features = false, features = [
   "parquet",
   "ipc",
   "csv",
+  "json",
 ] }
 ssh2 = "0.9"
 

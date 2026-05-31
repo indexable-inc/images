@@ -29,6 +29,7 @@ def scan_sftp(
     private_key: str | None = None,
     storage_format: str | None = None,
     timeout_ms: int = 30_000,
+    check_host_key: bool = True,
 ) -> pl.LazyFrame:
     """Lazily scan a remote file over SFTP.
 
@@ -48,6 +49,7 @@ def scan_sftp(
         "private_key": private_key,
         "storage_format": storage_format,
         "timeout_ms": timeout_ms,
+        "check_host_key": check_host_key,
     }
 
     def _schema() -> pl.Schema:

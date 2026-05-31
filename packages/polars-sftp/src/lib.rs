@@ -15,7 +15,7 @@
 
 use std::io::{Cursor, Read};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use polars::prelude::*;
@@ -30,6 +30,8 @@ enum Format {
     Parquet,
     Ipc,
     Csv,
+    /// Newline-delimited JSON (one JSON object per line), e.g. Claude history.
+    Ndjson,
 }
 
 fn resolve_format(hint: Option<&str>, path: &str) -> PyResult<Format> {
@@ -40,8 +42,9 @@ fn resolve_format(hint: Option<&str>, path: &str) -> PyResult<Format> {
         Some("parquet" | "pq") => Ok(Format::Parquet),
         Some("ipc" | "arrow" | "feather") => Ok(Format::Ipc),
         Some("csv" | "tsv" | "txt") => Ok(Format::Csv),
+        Some("jsonl" | "ndjson") => Ok(Format::Ndjson),
         other => Err(PyValueError::new_err(format!(
-            "polars-sftp: cannot infer a format from {other:?}; pass storage_format=\"parquet\"|\"ipc\"|\"csv\""
+            "polars-sftp: cannot infer a format from {other:?}; pass storage_format=\"parquet\"|\"ipc\"|\"csv\"|\"ndjson\""
         ))),
     }
 }
@@ -57,6 +60,7 @@ fn fetch_bytes(
     private_key: Option<&str>,
     remote_path: &str,
     timeout_ms: u64,
+    check_host_key: bool,
 ) -> Result<Vec<u8>, String> {
     // Bound every blocking step: the TCP connect, the raw socket reads/writes,
     // and libssh2's own blocking calls. Without this a stuck or silent peer hangs
@@ -77,6 +81,14 @@ fn fetch_bytes(
     sess.set_timeout(timeout_ms.clamp(1, u32::MAX as u64) as u32);
     sess.set_tcp_stream(tcp);
     sess.handshake().map_err(|e| format!("ssh handshake: {e}"))?;
+
+    // Verify the server's host key against ~/.ssh/known_hosts BEFORE sending any
+    // credential, so a MITM of a known host is rejected rather than handed a
+    // password. An unknown host is accepted (trust on first use); a key that
+    // mismatches a recorded entry is refused.
+    if check_host_key {
+        verify_host_key(&sess, host, port)?;
+    }
 
     if let Some(pw) = password {
         sess.userauth_password(username, pw)
@@ -100,6 +112,34 @@ fn fetch_bytes(
     file.read_to_end(&mut bytes)
         .map_err(|e| format!("read {remote_path}: {e}"))?;
     Ok(bytes)
+}
+
+/// Verify the connected server's host key against `~/.ssh/known_hosts`. A recorded
+/// entry that mismatches is rejected (possible MITM); an unrecorded host is
+/// accepted (trust on first use). A missing known_hosts file means no recorded
+/// entries, so every host is first-use.
+fn verify_host_key(sess: &ssh2::Session, host: &str, port: u16) -> Result<(), String> {
+    let mut known = sess
+        .known_hosts()
+        .map_err(|e| format!("init known_hosts: {e}"))?;
+    if let Some(home) = std::env::var_os("HOME") {
+        let path = PathBuf::from(home).join(".ssh/known_hosts");
+        if path.exists() {
+            known
+                .read_file(&path, ssh2::KnownHostFileKind::OpenSSH)
+                .map_err(|e| format!("read {}: {e}", path.display()))?;
+        }
+    }
+    let (key, _) = sess
+        .host_key()
+        .ok_or_else(|| "server presented no host key".to_string())?;
+    match known.check_port(host, port, key) {
+        ssh2::CheckResult::Match | ssh2::CheckResult::NotFound => Ok(()),
+        ssh2::CheckResult::Mismatch => Err(format!(
+            "host key mismatch for {host}:{port} (possible MITM); fix ~/.ssh/known_hosts or pass check_host_key=False"
+        )),
+        ssh2::CheckResult::Failure => Err(format!("host key check failed for {host}:{port}")),
+    }
 }
 
 /// Decode `bytes` as `format`, applying column projection and a row limit. For
@@ -126,6 +166,15 @@ fn decode(
         Format::Ipc => IpcReader::new(cursor).finish()?,
         Format::Csv => CsvReadOptions::default()
             .into_reader_with_file_handle(cursor)
+            .finish()?,
+        // Infer the schema from the whole file (`None`), not a prefix: heterogeneous
+        // history files often introduce a key only on a late line, and a bounded
+        // window would silently drop it. Lines missing a key read back null; a key
+        // with conflicting types across the file surfaces as a decode error (which
+        // the caller can catch per file) rather than corrupting the frame.
+        Format::Ndjson => JsonReader::new(cursor)
+            .with_json_format(JsonFormat::JsonLines)
+            .infer_schema_len(None)
             .finish()?,
     };
 
@@ -156,6 +205,7 @@ fn decode(
     with_columns = None,
     n_rows = None,
     timeout_ms = 30_000,
+    check_host_key = true,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn read_sftp(
@@ -170,6 +220,7 @@ fn read_sftp(
     with_columns: Option<Vec<String>>,
     n_rows: Option<usize>,
     timeout_ms: u64,
+    check_host_key: bool,
 ) -> PyResult<PyDataFrame> {
     let user = username
         .or_else(|| std::env::var("USER").ok())
@@ -180,7 +231,7 @@ fn read_sftp(
     // Release the GIL for the blocking network read + decode: other Python
     // threads (and Polars' own engine) keep running while we wait on the socket.
     let df = py
-        .allow_threads(|| {
+        .detach(|| {
             let bytes = fetch_bytes(
                 &host,
                 port,
@@ -189,6 +240,7 @@ fn read_sftp(
                 private_key.as_deref(),
                 &path,
                 timeout_ms,
+                check_host_key,
             )?;
             decode(bytes, format, with_columns, n_rows)
                 .map_err(|e| format!("decode {path}: {e}"))

@@ -1,8 +1,8 @@
 # polars-sftp
 
 A [Polars](https://pola.rs) IO source that reads a remote file over **SFTP** and
-hands it back as a lazy `LazyFrame`. Point it at a parquet, IPC, or CSV file on
-an SSH host and query it like any other Polars source:
+hands it back as a lazy `LazyFrame`. Point it at a parquet, IPC, CSV, or NDJSON
+(`.jsonl`) file on an SSH host and query it like any other Polars source:
 
 ```python
 import polars as pl
@@ -42,11 +42,18 @@ agent. `username` defaults to `$USER`.
 
 ```python
 scan_sftp(host, path, port=22, username=None, password=None,
-          private_key="~/.ssh/id_ed25519", storage_format=None)
+          private_key="~/.ssh/id_ed25519", storage_format=None,
+          timeout_ms=30_000, check_host_key=True)
 ```
 
-`storage_format` (`"parquet"` | `"ipc"` | `"csv"`) overrides the extension-based
-format guess.
+`storage_format` (`"parquet"` | `"ipc"` | `"csv"` | `"ndjson"`) overrides the
+extension-based format guess (`.jsonl`/`.ndjson` map to NDJSON).
+
+The server's host key is checked against `~/.ssh/known_hosts` before any
+credential is sent: a recorded entry that mismatches is rejected (possible MITM),
+an unrecorded host is accepted (trust on first use). Pass `check_host_key=False`
+to skip the check. `timeout_ms` bounds the connect and read so a stuck host errors
+instead of hanging.
 
 ## Build
 
@@ -63,7 +70,6 @@ crate's Rust `polars` and your Python `polars` must be the matching release).
   decoding and output, not the bytes pulled over the wire. Selective range-reads
   over SFTP (a custom `MmapBytesReader` over `ssh2` seek) would fix that and are
   the obvious next step.
-- The host key is not verified (no `known_hosts` check) yet.
 - One chunk per scan: the reader does not stream row groups, so `batch_size` is a
   no-op and a whole file lands in memory at once.
 - The wheel links `libssh2`/`openssl` from the Nix store by rpath, so it runs in
