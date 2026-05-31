@@ -185,6 +185,9 @@ pub fn enable_background_hover(window: &Window) {
     // thread inside the winit event loop, as these AppKit types require. The same
     // pointer yields both the typed `&NSView` (to add the area) and the
     // `&AnyObject` owner the area records (that view, which handles the events).
+    // The two shared `&` borrows aliasing one Objective-C object is sound: objc2
+    // objects are interior-mutable, so `&`-aliasing carries no exclusivity claim
+    // (this mirrors `raise_to_front` above).
     let view: &NSView = unsafe { appkit.ns_view.cast().as_ref() };
     let owner: &AnyObject = unsafe { appkit.ns_view.cast().as_ref() };
 

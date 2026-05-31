@@ -467,14 +467,23 @@ impl ApplicationHandler<Vec<BossBar>> for App {
             }
             WindowEvent::RedrawRequested => self.render_id(id),
             WindowEvent::CursorEntered { .. } => {
-                if let Some(win) = self.wins.get_mut(&id) {
-                    win.hovered = true;
-                    win.window.set_cursor(CursorIcon::Grab);
-                    // Bring this bar above its siblings so its pop-down panel covers
-                    // them instead of unfolding underneath.
-                    ocwin::raise_to_front(&win.window);
+                // winit's own tracking rect and the always-active NSTrackingArea
+                // (enable_background_hover) both deliver mouseEntered:, so this can
+                // arrive twice per crossing; act only on the first.
+                let entered = self.wins.get_mut(&id).is_some_and(|win| {
+                    let first = !win.hovered;
+                    if first {
+                        win.hovered = true;
+                        win.window.set_cursor(CursorIcon::Grab);
+                        // Bring this bar above its siblings so its pop-down panel
+                        // covers them instead of unfolding underneath.
+                        ocwin::raise_to_front(&win.window);
+                    }
+                    first
+                });
+                if entered {
+                    self.render_id(id);
                 }
-                self.render_id(id);
             }
             WindowEvent::CursorLeft { .. } => {
                 if let Some(win) = self.wins.get_mut(&id) {

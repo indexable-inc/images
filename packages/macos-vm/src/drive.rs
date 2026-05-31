@@ -49,10 +49,13 @@ const KEY_GAP_AFTER: Duration = Duration::from_millis(24);
 /// per intermediate step; `GLIDE_GAP` paces them on the driver thread (~60 fps)
 /// so the guest renders the motion; the step count is clamped so a long sweep
 /// stays smooth and a short one stays quick. A hop under `GLIDE_MIN` just jumps.
+///
+/// The cap bounds the added latency before a `move`/`click` acks: a full-screen
+/// sweep is `GLIDE_MAX_STEPS * GLIDE_GAP` ≈ 384 ms (most moves are far shorter).
 const GLIDE_MIN: f64 = 0.012;
 const GLIDE_STEP: f64 = 0.03;
 const GLIDE_MIN_STEPS: usize = 4;
-const GLIDE_MAX_STEPS: usize = 40;
+const GLIDE_MAX_STEPS: usize = 24;
 const GLIDE_GAP: Duration = Duration::from_millis(16);
 
 /// Parameters for the interactive driver.

@@ -400,13 +400,17 @@ impl ApplicationHandler<Book> for App {
             }
             WindowEvent::RedrawRequested => self.render(),
             WindowEvent::CursorEntered { .. } => {
-                if let Some(win) = self.win.as_ref() {
-                    win.window.set_cursor(CursorIcon::Grab);
-                    ocwin::raise_to_front(&win.window);
-                }
+                // winit's own tracking rect and the always-active NSTrackingArea
+                // (enable_background_hover) both deliver mouseEntered:, so this can
+                // arrive twice per crossing; act only on the first to avoid a
+                // redundant raise/redraw.
                 if let Some(win) = self.win.as_mut() {
-                    win.hovered = true;
-                    win.window.request_redraw();
+                    if !win.hovered {
+                        win.hovered = true;
+                        win.window.set_cursor(CursorIcon::Grab);
+                        win.window.request_redraw();
+                        ocwin::raise_to_front(&win.window);
+                    }
                 }
             }
             WindowEvent::CursorLeft { .. } => {
