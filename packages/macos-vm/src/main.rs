@@ -67,7 +67,7 @@ enum Command {
         timeout_secs: u64,
     },
     /// Boot an installed macOS guest fully off-screen and screenshot its display
-    /// to `<out-prefix>.NNN.png` via the framebuffer IOSurface (no window, no
+    /// to `<out-prefix>.NNN.png` via the framebuffer `IOSurface` (no window, no
     /// Screen-Recording permission). The bundle is a directory with
     /// `disk.img`, `aux.img`, `hardware-model.bin`, `machine-id.bin`.
     BootMacos {
@@ -194,7 +194,7 @@ mod imp {
             } => crate::macguest::boot_macos_screenshot(crate::macguest::MacBootScreenshot {
                 bundle,
                 out_prefix,
-                seconds: seconds as f64,
+                seconds,
             }),
         }
     }

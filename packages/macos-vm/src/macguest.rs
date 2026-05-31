@@ -20,13 +20,10 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSArray, NSData, NSError, NSPoint, NSRect, NSSize};
-use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
+use objc2_io_surface::{IOSurface, IOSurfaceLockOptions, IOSurfaceRef};
 // Named explicitly so the dependency is a direct, visible use (the type is
 // otherwise only reachable through `NSView::layer()`'s return type).
 use objc2_quartz_core::CALayer;
-
-/// kIOSurfaceLockReadOnly: read-only lock, no dirty tracking.
-const LOCK_READ_ONLY: IOSurfaceLockOptions = IOSurfaceLockOptions(1);
 use objc2_virtualization::{
     VZBootLoader, VZDiskImageStorageDeviceAttachment, VZGraphicsDeviceConfiguration,
     VZKeyboardConfiguration, VZMacAuxiliaryStorage, VZMacGraphicsDeviceConfiguration,
@@ -41,17 +38,26 @@ use objc2_virtualization::{
 
 use crate::imp::{Error, file_url, ns_error_message};
 
+/// `kCVPixelFormatType_32BGRA` ('BGRA'): the layout the `IOSurface` read assumes.
+const PIXEL_FORMAT_BGRA: u32 = 0x4247_5241;
+
 /// Parameters for booting a macOS guest and screenshotting it.
 pub struct MacBootScreenshot {
     pub bundle: PathBuf,
     pub out_prefix: PathBuf,
-    pub seconds: f64,
+    pub seconds: u64,
 }
 
 pub fn boot_macos_screenshot(boot: MacBootScreenshot) -> Result<(), Error> {
+    let MacBootScreenshot {
+        bundle,
+        out_prefix,
+        seconds,
+    } = boot;
+
     let mtm = MainThreadMarker::new().ok_or(Error::NotMainThread)?;
 
-    let config = build_macos_config(&boot.bundle)?;
+    let config = build_macos_config(&bundle)?;
     if let Err(error) = unsafe { config.validateWithError() } {
         return Err(Error::InvalidConfiguration {
             message: ns_error_message(&error),
@@ -93,18 +99,19 @@ pub fn boot_macos_screenshot(boot: MacBootScreenshot) -> Result<(), Error> {
         }
     });
     // We hold a MainThreadMarker, so we are on the main thread (the VM's queue);
-    // start directly. dispatch_main below drains the queue so the completion
-    // handler fires. `vm` and `completion` live for the process because this
-    // function never returns (dispatch_main diverges), and `vm_view` retains the
-    // VM as well.
+    // start directly. `app.run()` below drives the main run loop, which services
+    // the main dispatch queue so the completion handler fires. `vm` and
+    // `completion` live for the process because this function never returns
+    // (app.run blocks until the capture thread exits the process); `vm_view`
+    // retains the VM as well.
     unsafe { vm.startWithCompletionHandler(&completion) };
 
-    // Capture loop on the main queue (AppKit objects must be touched there).
-    let seconds = boot.seconds;
-    let out_prefix = boot.out_prefix.clone();
-    let shots: Vec<f64> = vec![2.0, 18.0, 35.0, 55.0, seconds];
-    let view_for_caps = vm_view;
-    schedule_captures(view_for_caps, out_prefix, shots, seconds);
+    // Tick times for screenshots: the hardcoded ticks below the deadline, then
+    // the deadline itself, so a short `--seconds` stops on time and always takes
+    // a final shot.
+    let mut shots: Vec<u64> = [2, 18, 35, 55].into_iter().filter(|&t| t < seconds).collect();
+    shots.push(seconds);
+    schedule_captures(vm_view, out_prefix, shots);
 
     // VZVirtualMachineView needs the AppKit run loop to build its layer tree and
     // receive guest frames; the capture thread exits the process when done.
@@ -112,66 +119,82 @@ pub fn boot_macos_screenshot(boot: MacBootScreenshot) -> Result<(), Error> {
     Ok(())
 }
 
-/// Schedule screenshots on the main queue at increasing delays, then exit.
-fn schedule_captures(
-    view: Retained<VZVirtualMachineView>,
-    out_prefix: PathBuf,
-    shots: Vec<f64>,
-    deadline: f64,
-) {
-    // A background thread sleeps between shots and hops each capture onto the
-    // main queue (AppKit/IOSurface access must be on the main thread). The view
-    // is not Send, so we move only the raw pointer and re-borrow on the main
-    // queue, where it is valid.
+/// Sleep between ticks and hop each capture onto the main queue (AppKit/IOSurface
+/// access must be on the main thread), then exit the process.
+fn schedule_captures(view: Retained<VZVirtualMachineView>, out_prefix: PathBuf, shots: Vec<u64>) {
+    // The view is not `Send`, so move only the raw pointer and re-borrow on the
+    // main queue, where it is valid. The view is leaked (lives for the process)
+    // and also retained by the window, so the reborrow is never a use-after-free.
     let view_ptr = Retained::into_raw(view) as usize;
     std::thread::spawn(move || {
-        let mut elapsed = 0.0;
+        let mut elapsed = 0u64;
         for t in shots {
             if t > elapsed {
-                std::thread::sleep(Duration::from_secs_f64(t - elapsed));
+                std::thread::sleep(Duration::from_secs(t - elapsed));
                 elapsed = t;
             }
-            let path = out_prefix.with_extension(format!("{:03}.png", t as u64));
+            let path = out_prefix.with_extension(format!("{t:03}.png"));
             let p = path.clone();
             DispatchQueue::main().exec_sync(move || {
-                // Safety: the view lives for the process lifetime (leaked above)
-                // and we only touch it on the main queue.
-                let view: &VZVirtualMachineView = unsafe { &*(view_ptr as *const VZVirtualMachineView) };
+                // Safety: the view lives for the process (leaked above) and we
+                // only touch it on the main queue.
+                let view: &VZVirtualMachineView =
+                    unsafe { &*(view_ptr as *const VZVirtualMachineView) };
                 match capture(view, &p) {
                     Ok(bytes) => eprintln!("macos-vm: wrote {bytes} bytes -> {}", p.display()),
                     Err(error) => eprintln!("macos-vm: capture: {error}"),
                 }
             });
-            if elapsed >= deadline {
-                break;
-            }
         }
         eprintln!("macos-vm: done");
         std::process::exit(0);
     });
 }
 
-/// The guest framebuffer IOSurface object, if the view has started rendering.
-fn frame_surface(view: &VZVirtualMachineView) -> Option<Retained<AnyObject>> {
+/// The guest framebuffer object (an `IOSurface`), if the view has started
+/// rendering. Returns the raw layer contents; the caller verifies the type.
+fn frame_contents(view: &VZVirtualMachineView) -> Option<Retained<AnyObject>> {
     let first = view.subviews().firstObject()?;
     let layer: Retained<CALayer> = first.layer()?;
     unsafe { layer.contents() }
 }
 
-/// Read the IOSurface bytes (BGRA) and encode a PNG.
+/// Read the framebuffer `IOSurface` (BGRA) and encode a PNG.
 fn capture(view: &VZVirtualMachineView, path: &Path) -> Result<usize, Error> {
-    let contents = frame_surface(view).ok_or(Error::NoFramebuffer)?;
-    // The layer contents is an IOSurface, toll-free bridged to IOSurfaceRef.
-    let surface: &IOSurfaceRef = unsafe { &*Retained::as_ptr(&contents).cast::<IOSurfaceRef>() };
+    let contents = frame_contents(view).ok_or(Error::NoFramebuffer)?;
+    // Verify the layer contents really is an IOSurface before any unsafe access.
+    let surface_obj: Retained<IOSurface> =
+        contents.downcast::<IOSurface>().map_err(|_| Error::NoFramebuffer)?;
+    // `IOSurface` (objc) is toll-free bridged to `IOSurfaceRef` (CF), which
+    // carries the data accessors.
+    let surface: &IOSurfaceRef =
+        unsafe { &*Retained::as_ptr(&surface_obj).cast::<IOSurfaceRef>() };
 
-    let (width, height, rgba) = unsafe {
-        let _ = surface.lock(LOCK_READ_ONLY, std::ptr::null_mut());
-        let width = surface.width();
-        let height = surface.height();
+    let width = surface.width();
+    let height = surface.height();
+    // Only the single-plane 32-bit BGRA layout is handled; reject anything else
+    // rather than read past the mapping or produce garbage.
+    if surface.plane_count() > 1
+        || surface.bytes_per_element() != 4
+        || surface.pixel_format() != PIXEL_FORMAT_BGRA
+    {
+        return Err(Error::CaptureEncode {
+            message: format!(
+                "unexpected IOSurface layout: planes={} bpe={} format={:#x}",
+                surface.plane_count(),
+                surface.bytes_per_element(),
+                surface.pixel_format()
+            ),
+        });
+    }
+
+    // Allocate before locking so an allocation failure cannot leak the lock; the
+    // locked region below does only an in-bounds memcpy (no panics, no `?`).
+    let mut rgba = vec![0u8; width * height * 4];
+    unsafe {
+        let _ = surface.lock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
         let bytes_per_row = surface.bytes_per_row();
         let base = surface.base_address().as_ptr() as *const u8;
-
-        let mut rgba = vec![0u8; width * height * 4];
         for y in 0..height {
             let row = base.add(y * bytes_per_row);
             for x in 0..width {
@@ -183,16 +206,17 @@ fn capture(view: &VZVirtualMachineView, path: &Path) -> Result<usize, Error> {
                 rgba[o + 3] = *p.add(3); // A
             }
         }
-        let _ = surface.unlock(LOCK_READ_ONLY, std::ptr::null_mut());
-        (width, height, rgba)
-    };
+        let _ = surface.unlock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
+    }
 
+    let w = u32::try_from(width).map_err(|_| Error::CaptureEncode { message: "width too large".into() })?;
+    let h = u32::try_from(height).map_err(|_| Error::CaptureEncode { message: "height too large".into() })?;
     let mut buf = std::io::Cursor::new(Vec::new());
     image::ImageEncoder::write_image(
         image::codecs::png::PngEncoder::new(&mut buf),
         &rgba,
-        width as u32,
-        height as u32,
+        w,
+        h,
         image::ExtendedColorType::Rgba8,
     )
     .map_err(|e| Error::CaptureEncode { message: e.to_string() })?;
@@ -213,14 +237,14 @@ fn build_macos_config(bundle: &Path) -> Result<Retained<VZVirtualMachineConfigur
             &NSData::with_bytes(&hw_data),
         )
     }
-    .ok_or(Error::Bundle { message: "invalid hardware model".into() })?;
+    .ok_or_else(|| Error::Bundle { message: "invalid hardware model".into() })?;
     let machine_id = unsafe {
         VZMacMachineIdentifier::initWithDataRepresentation(
             VZMacMachineIdentifier::alloc(),
             &NSData::with_bytes(&id_data),
         )
     }
-    .ok_or(Error::Bundle { message: "invalid machine id".into() })?;
+    .ok_or_else(|| Error::Bundle { message: "invalid machine id".into() })?;
 
     let aux_url = file_url(&bundle.join("aux.img"));
     let aux = unsafe { VZMacAuxiliaryStorage::initWithURL(VZMacAuxiliaryStorage::alloc(), &aux_url) };
