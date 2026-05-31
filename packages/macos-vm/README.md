@@ -133,7 +133,9 @@ guest stopped, so the next boot lands on a logged-in desktop:
 
 ```sh
 nix run .#macos-vm -- install-macos --ipsw ./UniversalMac_26.5_Restore.ipsw --bundle ./guest
-nix run .#macos-vm -- provision --bundle ./guest --user ix --autologin
+# --autologin reads the password from stdin (keeps it out of the process table);
+# omit --password-stdin for an empty password.
+printf '%s' "$PASSWORD" | nix run .#macos-vm -- provision --bundle ./guest --user ix --autologin --password-stdin
 nix run .#macos-vm -- drive-macos --bundle ./guest   # lands on the desktop, no Setup Assistant
 ```
 
@@ -148,7 +150,8 @@ synthesized container's APFS **Data** and **System** volumes, and:
   `LastSeenCloudProductVersion`/`LastSeenBuddyBuildVersion` to the guest OS
   version read from the System volume's `SystemVersion.plist`, so the cloud
   screen does not re-prompt;
-- with `--autologin`, writes `/private/etc/kcpassword` and the loginwindow
+- with `--autologin`, writes `/private/etc/kcpassword` (the password read from
+  stdin via `--password-stdin`, never an argument) and the loginwindow
   `autoLoginUser` so the guest boots straight to the desktop with no password.
 
 It reads the OS version from the guest **System** volume directly: the System
@@ -174,13 +177,17 @@ otool -L ./staged/myapp    # zero /nix/store entries
 For each `/nix/store` dylib in `otool -L`, it repoints to the `/usr/lib` system
 equivalent when the guest ships one (libiconv, libc++, libresolv, libobjc, …) or,
 when it does not, copies the dylib next to the output and rewrites the reference
-to `@loader_path/<name>` (bundling it, re-signing the bundled copy too). The
-output is ad-hoc re-signed, since a Mach-O whose load commands changed needs a
-fresh signature. It verifies no `/nix/store` path remains and errors otherwise
-(no silent partial result). The common system libraries are an explicit
-allowlist: macOS 11+ serves them from the dyld shared cache, so they have no
-on-disk file and a naive `exists("/usr/lib/libiconv.2.dylib")` check returns
-false even though the library loads.
+to `@loader_path/<name>`. A bundled dylib is then staged in turn: its own install
+id (`LC_ID_DYLIB`) is rewritten to `@loader_path/<name>` with `install_name_tool
+-id`, and its own `/nix/store` load deps are repointed or bundled the same way,
+recursively, so the whole dependency closure is guest-portable, not just the
+top-level binary. Every artifact (the output and each bundled dylib) is ad-hoc
+re-signed, since a Mach-O whose load commands changed needs a fresh signature,
+and each is checked for a remaining `/nix/store` path, erroring otherwise (no
+silent partial result). The common system libraries are an explicit allowlist:
+macOS 11+ serves them from the dyld shared cache, so they have no on-disk file
+and a naive `exists("/usr/lib/libiconv.2.dylib")` check returns false even though
+the library loads.
 
 `run_app` (Python) wires this together: stage an app into a directory, `--share`
 it in, and launch it in the guest in one call.

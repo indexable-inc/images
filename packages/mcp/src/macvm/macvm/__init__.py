@@ -183,6 +183,10 @@ def stage_binary(
     """
     src = pathlib.Path(path)
     if out is None:
+        # Deliberately not a TemporaryDirectory: the staged binary (and any
+        # bundled dylibs beside it) is the return value and must outlive this
+        # call, so the directory is left for the caller/OS to reap rather than
+        # deleted on return.
         tmp = tempfile.mkdtemp(prefix="ix-macvm-stage-")
         out_path = pathlib.Path(tmp) / src.name
     else:
@@ -219,8 +223,10 @@ def provision(
     bundle's ``disk.img``, marks system and per-user Setup Assistant complete for
     ``user`` (the account created during :func:`install`), and detaches. With
     ``autologin`` it also enables password-less login for ``user`` (``password``
-    is only used to encode the auto-login secret; default empty). Raises
-    :class:`MacVmError` on failure, including if the image already appears in use.
+    is only used to encode the auto-login secret; default empty). The password is
+    passed to the binary over stdin, never as a command-line argument, so it does
+    not appear in the process table. Raises :class:`MacVmError` on failure,
+    including if the image already appears in use.
     """
     args = [
         _binary(),
@@ -230,12 +236,21 @@ def provision(
         "--user",
         user,
     ]
+    # The password goes over stdin (`--password-stdin`), so it never lands in
+    # argv where another user's `ps` could read it.
+    stdin_input: str | None = None
     if autologin:
         args.append("--autologin")
-        args += ["--password", password]
+        args.append("--password-stdin")
+        stdin_input = password
     try:
         result = subprocess.run(
-            args, capture_output=True, text=True, check=False, timeout=timeout
+            args,
+            input=stdin_input,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
         raise MacVmError(f"provision timed out after {timeout}s") from exc
@@ -555,8 +570,15 @@ def run_app(
     must reach the desktop); ``seconds`` is how long to wait after launching the
     command before capturing. ``timeout`` bounds the whole driver session. The
     guest must already be provisioned to a logged-in desktop (see
-    :func:`provision`). Raises :class:`MacVmError` on failure.
+    :func:`provision`). Raises :class:`MacVmError` on failure, including if
+    ``command`` contains a newline.
     """
+    # A newline in `command` would split the driver's `type` line into two stdin
+    # commands, desyncing every subsequent ack. Reject it up front rather than
+    # fail confusingly mid-run; run multiple commands with separate calls or `;`.
+    if "\n" in command or "\r" in command:
+        raise MacVmError("run_app command must not contain a newline")
+
     if shares_tag == "auto":
         share_spec = f"auto={app_dir}"
         mount = _AUTOMOUNT_DIR

@@ -143,10 +143,12 @@ enum Command {
         /// `kcpassword` + the loginwindow `autoLoginUser`).
         #[arg(long)]
         autologin: bool,
-        /// Password for `--user`, used only to encode `kcpassword` when
-        /// `--autologin` is set. Defaults to an empty password.
-        #[arg(long, default_value = "")]
-        password: String,
+        /// With `--autologin`, read the user's password from stdin to encode
+        /// `kcpassword` (a trailing newline is stripped). Passing it on stdin
+        /// rather than as an argument keeps it out of the process table. With no
+        /// flag (or no `--autologin`) the password is empty.
+        #[arg(long)]
+        password_stdin: bool,
     },
 }
 
@@ -398,15 +400,43 @@ mod imp {
                 bundle,
                 user,
                 autologin,
-                password,
-            } => crate::provision::provision(crate::provision::Provision {
-                bundle,
-                user,
-                autologin,
-                password,
-            })
-            .map_err(|source| Error::Provision { source }),
+                password_stdin,
+            } => {
+                // Read the autologin password from stdin (never an argument, so
+                // it stays out of the process table). Only when both --autologin
+                // and --password-stdin are set; otherwise the password is empty.
+                let password = if autologin && password_stdin {
+                    read_password_stdin()?
+                } else {
+                    String::new()
+                };
+                crate::provision::provision(crate::provision::Provision {
+                    bundle,
+                    user,
+                    autologin,
+                    password,
+                })
+                .map_err(|source| Error::Provision { source })
+            }
         }
+    }
+
+    /// Read a password from stdin, stripping a single trailing newline (and an
+    /// accompanying CR). The whole of stdin is the password, so a passphrase
+    /// containing spaces or other shell-significant bytes is passed verbatim.
+    fn read_password_stdin() -> Result<String, Error> {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| Error::Bundle { message: format!("read password from stdin: {e}") })?;
+        if let Some(stripped) = buf.strip_suffix('\n') {
+            buf.truncate(stripped.len());
+            if let Some(stripped) = buf.strip_suffix('\r') {
+                buf.truncate(stripped.len());
+            }
+        }
+        Ok(buf)
     }
 
     /// Parse `--share TAG=HOSTDIR` specs into [`DirShare`]s. Tag `auto` maps to

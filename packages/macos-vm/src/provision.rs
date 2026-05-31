@@ -95,19 +95,6 @@ pub struct Provision {
     pub password: String,
 }
 
-/// `hdiutil attach -plist` result: the devices the image attached as.
-#[derive(Deserialize)]
-struct AttachResult {
-    #[serde(rename = "system-entities")]
-    system_entities: Vec<AttachEntity>,
-}
-
-#[derive(Deserialize)]
-struct AttachEntity {
-    #[serde(rename = "dev-entry")]
-    dev_entry: Option<String>,
-}
-
 /// `diskutil apfs list -plist` result.
 #[derive(Deserialize)]
 struct ApfsList {
@@ -179,11 +166,12 @@ pub fn provision(params: Provision) -> Result<(), Error> {
 
     // Attach read-write with no auto-mount; APFS synthesizes the container as a
     // further /dev/disk we discover via `diskutil apfs list`.
-    let devices = attach_disk(&disk)?;
-    // Detach on every exit path (success, edit failure, mount failure), so the
-    // image is never left attached. `Guard` runs the teardown on drop; the mount
-    // it later records is unmounted before detaching. The guard owns its own copy
-    // of the device list since `devices` is still needed to find the volumes.
+    let attach_json = hdiutil_attach(&disk)?;
+    // Build the teardown guard from the attached devices the instant the attach
+    // succeeds, before any further parsing, so a parse failure here still
+    // detaches the image rather than leaking it. The device scan is a lenient
+    // substring pass over the raw plist-as-JSON that cannot itself fail.
+    let devices = scan_dev_entries(&attach_json);
     let mut guard = Guard::new(devices.clone());
 
     let volumes = find_guest_volumes(&devices)?;
@@ -263,23 +251,42 @@ fn image_attached(disk: &Path) -> Result<bool, Error> {
     }))
 }
 
-/// Attach `disk` read-write with no mount; return the attached `/dev/diskN`
-/// device identifiers (without the `/dev/` prefix).
-fn attach_disk(disk: &Path) -> Result<Vec<String>, Error> {
-    let json = run_plist_json(
+/// Attach `disk` read-write with no mount and return the raw plist-as-JSON of
+/// `hdiutil attach -plist`. The caller scans this for device identifiers with
+/// [`scan_dev_entries`] and builds a teardown guard before any strict parse, so
+/// a parse error never leaks the attachment.
+fn hdiutil_attach(disk: &Path) -> Result<String, Error> {
+    run_plist_json(
         "hdiutil",
         &["attach", "-plist", "-nomount", "-owners", "on", &disk.to_string_lossy()],
-    )?;
-    let parsed: AttachResult =
-        serde_json::from_str(&json).context(ParsePlistSnafu { tool: "hdiutil" })?;
-    let devices: Vec<String> = parsed
-        .system_entities
-        .into_iter()
-        .filter_map(|e| e.dev_entry)
-        .map(|d| d.trim_start_matches("/dev/").to_owned())
-        .filter(|d| d.starts_with("disk"))
-        .collect();
-    Ok(devices)
+    )
+}
+
+/// Extract the attached `/dev/diskN[sM]` device identifiers (without the `/dev/`
+/// prefix) from the raw attach output. This is a lenient substring scan rather
+/// than a typed parse so it cannot fail after a successful attach: the guard
+/// must be buildable from it even if the structured plist is unexpected. The
+/// `plutil` JSON escapes `/` as `\/`, so match the device tokens directly.
+fn scan_dev_entries(raw: &str) -> Vec<String> {
+    // Devices appear as `/dev/diskN` or, JSON-escaped, `\/dev\/diskN`. Normalize
+    // the escaping, then pull each `diskN[sM]` run after a `/dev/` marker.
+    let normalized = raw.replace("\\/", "/");
+    let mut devices: Vec<String> = Vec::new();
+    for (idx, _) in normalized.match_indices("/dev/disk") {
+        let rest = &normalized[idx + "/dev/".len()..];
+        // A device id is `disk` followed by digits and optional `sN` partition
+        // segments: take the leading run of ASCII alphanumerics.
+        let end = rest
+            .find(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or(rest.len());
+        let dev = &rest[..end];
+        if dev.starts_with("disk") && dev.len() > "disk".len() {
+            devices.push(dev.to_owned());
+        }
+    }
+    devices.sort_unstable();
+    devices.dedup();
+    devices
 }
 
 /// The guest's Data and System volume device identifiers, both from the one
@@ -464,15 +471,21 @@ fn enable_autologin(data: &Path, user: &str, password: &str) -> Result<(), Error
 }
 
 /// Encode an auto-login password the way macOS's `kcpassword` expects: XOR each
-/// byte with the fixed cipher key (cycling), then pad with NULs to the next
-/// 12-byte boundary. An empty password yields just the padding block.
+/// byte with the fixed cipher key (cycling), padding with NULs to a 12-byte
+/// boundary. Matching Apple's loginwindow, when the password length is already a
+/// multiple of 12 (including the empty password) a whole extra 12-byte block is
+/// appended, so there is always at least one trailing pad byte.
 fn encode_kcpassword(password: &str) -> Vec<u8> {
     const CIPHER: [u8; 11] = [0x7d, 0x89, 0x52, 0x23, 0xd2, 0xbc, 0xdd, 0xea, 0xa3, 0xb9, 0x1f];
+    const BLOCK: usize = 12;
     let bytes = password.as_bytes();
-    // Pad the plaintext length up to a multiple of the 12-byte block (matching
-    // Apple's loginwindow, which reads in 12-byte chunks).
-    let padded_len = bytes.len().div_ceil(12) * 12;
-    let padded_len = padded_len.max(12);
+    // Round up to the next block, then if the length already sits exactly on a
+    // block boundary add one more full block (Apple appends a trailing pad block
+    // in that case so the encrypted form is never an un-padded exact multiple).
+    let mut padded_len = bytes.len().div_ceil(BLOCK) * BLOCK;
+    if bytes.len().is_multiple_of(BLOCK) {
+        padded_len += BLOCK;
+    }
     let mut out = Vec::with_capacity(padded_len);
     for i in 0..padded_len {
         let plain = bytes.get(i).copied().unwrap_or(0);
@@ -588,7 +601,8 @@ mod tests {
 
     #[test]
     fn kcpassword_empty_is_one_padded_block() {
-        // Empty password: a single 12-byte block of cipher XOR 0.
+        // Empty password (length 0, a multiple of 12): one full 12-byte pad
+        // block, per Apple's append-a-block-on-exact-multiple rule.
         let enc = encode_kcpassword("");
         assert_eq!(enc.len(), 12);
     }
@@ -614,5 +628,26 @@ mod tests {
     fn kcpassword_block_size_rounds_up() {
         // A 13-char password needs two 12-byte blocks.
         assert_eq!(encode_kcpassword("aaaaaaaaaaaaa").len(), 24);
+    }
+
+    #[test]
+    fn kcpassword_exact_multiple_appends_a_block() {
+        // A length that is already a multiple of 12 gets a whole extra pad block
+        // (12 -> 24, 24 -> 36), matching Apple's loginwindow.
+        assert_eq!(encode_kcpassword(&"a".repeat(12)).len(), 24);
+        assert_eq!(encode_kcpassword(&"a".repeat(24)).len(), 36);
+        assert_eq!(encode_kcpassword(&"a".repeat(11)).len(), 12);
+    }
+
+    #[test]
+    fn scan_dev_entries_handles_escaped_and_plain() {
+        // The plutil JSON escapes `/` as `\/`; both forms must yield the base
+        // and partition devices, deduped and sorted.
+        let escaped = r#"{"system-entities":[{"dev-entry":"\/dev\/disk7"},{"dev-entry":"\/dev\/disk7s1"}]}"#;
+        assert_eq!(scan_dev_entries(escaped), vec!["disk7", "disk7s1"]);
+        let plain = r#"{"dev-entry":"/dev/disk4","x":"/dev/disk4s2"}"#;
+        assert_eq!(scan_dev_entries(plain), vec!["disk4", "disk4s2"]);
+        // No devices -> empty (e.g. a parse-failure-shaped blob).
+        assert!(scan_dev_entries("{}").is_empty());
     }
 }

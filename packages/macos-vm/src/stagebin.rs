@@ -79,7 +79,10 @@ pub enum Error {
 
 /// Stage `input` into `output`: copy it, repoint every `/nix/store` dylib to a
 /// system path or a bundled copy, ad-hoc re-sign, and verify no `/nix/store`
-/// reference survives. Returns the staged path (`output`).
+/// reference survives. Bundled third-party dylibs are processed transitively
+/// (their own `/nix/store` deps are repointed/bundled too) and each is staged in
+/// place, so the whole dependency closure is guest-portable. Returns the staged
+/// path (`output`).
 pub fn stage_binary(input: &Path, output: &Path) -> Result<PathBuf, Error> {
     if !input.exists() {
         return Err(Error::MissingInput { path: input.to_path_buf() });
@@ -92,40 +95,74 @@ pub fn stage_binary(input: &Path, output: &Path) -> Result<PathBuf, Error> {
 
     copy_writable(input, output)?;
 
-    // Collect every /nix/store dependency, then plan each one. A dependency may
-    // legitimately appear more than once in `otool -L` for an unusual binary;
-    // dedupe so we issue one rewrite per distinct path.
-    let deps = nix_store_deps(output)?;
+    // Work a queue of artifacts. The output is first; bundling a third-party
+    // dylib enqueues that bundled copy so its own `/nix/store` deps are processed
+    // the same way (transitive closure). `bundled` dedupes by basename so each
+    // distinct dylib is copied, processed, and re-signed exactly once.
     let mut bundled: BTreeSet<String> = BTreeSet::new();
+    let mut queue: Vec<PathBuf> = vec![output.to_path_buf()];
+    while let Some(artifact) = queue.pop() {
+        stage_artifact(&artifact, out_dir, &mut bundled, &mut queue)?;
+    }
+    Ok(output.to_path_buf())
+}
+
+/// Make one Mach-O artifact (the output binary or a bundled dylib) guest-portable
+/// in place: rewrite its own `/nix/store` install id, repoint or bundle each
+/// `/nix/store` load dependency (enqueuing newly bundled dylibs for the same
+/// treatment), re-sign, and assert no `/nix/store` reference remains.
+fn stage_artifact(
+    artifact: &Path,
+    out_dir: &Path,
+    bundled: &mut BTreeSet<String>,
+    queue: &mut Vec<PathBuf>,
+) -> Result<(), Error> {
+    // A dylib carries its own install id (LC_ID_DYLIB), which `otool -L` lists as
+    // the first indented line. For a nix-built dylib that id is a `/nix/store`
+    // path, and it must be rewritten with `-id` (not `-change`, which only
+    // touches load commands). `otool -D` prints just the id (empty for an
+    // executable), so it tells the id apart from the load deps.
+    if let Some(id) = install_id(artifact)?
+        && id.starts_with("/nix/store/")
+    {
+        let name = basename(&id).ok_or_else(|| Error::DepNoBasename { dep: id.clone() })?;
+        change_id(artifact, &format!("@loader_path/{name}"))?;
+    }
+
+    // Repoint or bundle each `/nix/store` load dependency. The id was already
+    // rewritten above, so it is no longer a `/nix/store` path here and does not
+    // reappear in this list.
+    let deps = nix_store_deps(artifact)?;
     for dep in &deps {
         if let Some(system) = system_equivalent(dep) {
-            change_dep(output, dep, &system)?;
+            change_dep(artifact, dep, &system)?;
         } else {
             let name = basename(dep).ok_or_else(|| Error::DepNoBasename { dep: dep.clone() })?;
-            // Copy the dylib next to the output (once per distinct basename) and
-            // re-sign it, since it now lives at a new path.
+            // Copy the dylib next to the output (once per distinct basename),
+            // then enqueue it so its own `/nix/store` deps are staged in turn.
             if bundled.insert(name.clone()) {
                 let bundled_path = out_dir.join(&name);
                 copy_writable(Path::new(dep), &bundled_path)?;
-                codesign_adhoc(&bundled_path)?;
+                queue.push(bundled_path);
             }
-            change_dep(output, dep, &format!("@loader_path/{name}"))?;
+            change_dep(artifact, dep, &format!("@loader_path/{name}"))?;
         }
     }
 
     // The load commands changed, so the prior signature is invalid; re-sign.
-    codesign_adhoc(output)?;
+    codesign_adhoc(artifact)?;
 
-    // No silent fallback: a surviving /nix/store reference means the staged
-    // binary would not start on a guest, so fail loudly with the offenders.
-    let remaining = nix_store_deps(output)?;
+    // No silent fallback: a surviving `/nix/store` reference means this artifact
+    // would not load on a guest, so fail loudly with the offenders. Applied to
+    // every artifact, the output and each bundled dylib.
+    let remaining = nix_store_deps(artifact)?;
     if !remaining.is_empty() {
         return Err(Error::StorePathsRemain {
-            path: output.to_path_buf(),
+            path: artifact.to_path_buf(),
             remaining: remaining.join("\n"),
         });
     }
-    Ok(output.to_path_buf())
+    Ok(())
 }
 
 /// Copy `from` to `to` and make `to` writable (a Nix store source is read-only,
@@ -185,6 +222,45 @@ fn nix_store_deps(path: &Path) -> Result<Vec<String>, Error> {
         .filter(|tok| tok.starts_with("/nix/store/"))
         .map(str::to_owned)
         .collect())
+}
+
+/// The Mach-O install id (`LC_ID_DYLIB`) of `path`, or `None` if it has none (an
+/// executable). `otool -D` prints the path then, on the next line, the id; an
+/// executable prints only the path line, so there is no second line.
+fn install_id(path: &Path) -> Result<Option<String>, Error> {
+    let output = Command::new("/usr/bin/otool")
+        .arg("-D")
+        .arg(path)
+        .output()
+        .context(SpawnSnafu { tool: "otool" })?;
+    if !output.status.success() {
+        return Err(Error::Tool {
+            tool: "otool",
+            status: output.status.to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    let text = String::from_utf8(output.stdout)
+        .map_err(|_| Error::OtoolEncoding { path: path.to_path_buf() })?;
+    // First line is the file path (with a trailing `:`); the id, if any, is the
+    // next non-empty line.
+    Ok(text
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned))
+}
+
+/// Rewrite a dylib's own install id (`LC_ID_DYLIB`) via `install_name_tool -id`.
+fn change_id(dylib: &Path, new: &str) -> Result<(), Error> {
+    run_checked(
+        "install_name_tool",
+        Command::new("/usr/bin/install_name_tool")
+            .arg("-id")
+            .arg(new)
+            .arg(dylib),
+    )
 }
 
 /// Runtime libraries macOS ships under `/usr/lib` and a fresh guest also has.
