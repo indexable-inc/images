@@ -346,25 +346,48 @@ fn panel_size(gpu: &Gpu, description: &str, scale: u32) -> Option<(f32, f32)> {
     Some((panel_w, panel_h))
 }
 
+/// Physical-pixel advance width of `bar`'s on-screen title (the stored title plus
+/// its live elapsed counter) at the fully grown hover scale, where it is widest,
+/// or 0 when the bar has no title. [`bar_window_px`] reserves at least this width
+/// so a title longer than the 182px bar is never clipped at the window edge. It
+/// measures through the shared CPU font, so the first window can be sized before
+/// any GPU surface exists.
+pub fn title_extent_px(bar: &BossBar, scale: u32, now_unix: i64) -> f32 {
+    if bar.title.is_empty() {
+        return 0.0;
+    }
+    let shown = title_with_elapsed(&bar.title, bar.since, now_unix);
+    // The grown title row is `8 * scale * MAX_SCALE` px tall, so each glyph samples
+    // at `scale * MAX_SCALE` source-px (the `title_px / 8` of `build_one`, maxed).
+    let glyph_scale = scale.max(1) as f32 * MAX_SCALE;
+    overlay_core::bitmap_font::shared().measure(&shown, glyph_scale)
+}
+
 /// Physical-pixel size of the window that holds one bar at `scale` (base scale
 /// times the display factor), including the [`HOVER_SCALE`] headroom so a hovered
-/// bar grows in place. `has_title` adds the title row; plus a one-pixel-scaled
-/// shadow margin.
-pub fn bar_window_px(scale: u32, has_title: bool) -> (u32, u32) {
+/// bar grows in place. `title_w` is the grown title advance (see
+/// [`title_extent_px`]); the window widens to hold a title longer than the bar,
+/// and a nonzero `title_w` adds the title row. Plus a one-pixel-scaled shadow
+/// margin on the right and bottom.
+pub fn bar_window_px(scale: u32, title_w: f32) -> (u32, u32) {
     let s = scale.max(1) as f32 * MAX_SCALE;
     let bar_w = BAR_W as f32 * s;
     let bar_h = BAR_H as f32 * s;
+    let has_title = title_w > 0.0;
     let title = if has_title { 8.0 * s + 1.0 * s } else { 0.0 };
     let shadow = scale.max(1) as f32;
-    ((bar_w + shadow).ceil() as u32, (title + bar_h + shadow).ceil() as u32)
+    // Hold whichever is wider, the bar sprite or the title text; both trail the
+    // one-pixel shadow down-right, so the shadow margin covers the right edge too.
+    let content_w = bar_w.max(title_w) + shadow;
+    (content_w.ceil() as u32, (title + bar_h + shadow).ceil() as u32)
 }
 
 /// Physical-pixel window size for `bar` with its hover panel open: the collapsed
 /// bar window grown downward by the gap plus the panel. Returns the collapsed
 /// size when the bar has no description. The overlay grows the window to this on
 /// hover so the panel has room to unfold.
-pub fn expanded_window_px(gpu: &Gpu, bar: &BossBar, scale: u32) -> (u32, u32) {
-    let (cw, ch) = bar_window_px(scale, !bar.title.is_empty());
+pub fn expanded_window_px(gpu: &Gpu, bar: &BossBar, scale: u32, now_unix: i64) -> (u32, u32) {
+    let (cw, ch) = bar_window_px(scale, title_extent_px(bar, scale, now_unix));
     match panel_size(gpu, &bar.description, scale) {
         Some((panel_w, panel_h)) => {
             let gap = panel::GAP * scale.max(1) as f32;
@@ -418,8 +441,9 @@ pub fn build_one(
 
     // The bar lives in the top region: the collapsed window size, which holds it
     // plus its grow/breathe headroom. Any extra window height below that is the
-    // panel's drop area, so the bar stays put as the panel unfolds.
-    let collapsed_h = bar_window_px(scale, has_title).1 as f32;
+    // panel's drop area, so the bar stays put as the panel unfolds. Only the
+    // height is read here, so the title width need not be exact.
+    let collapsed_h = bar_window_px(scale, title_extent_px(bar, scale, now_unix)).1 as f32;
     let top_region_h = collapsed_h.min(height as f32);
 
     // Center the content (plus its shadow offset) in the top region so growth on
@@ -571,6 +595,7 @@ fn layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bars::Overlay;
 
     #[test]
     fn fmt_elapsed_ticks_in_seconds_then_minutes_then_hours() {
@@ -594,5 +619,103 @@ mod tests {
         assert_eq!(title_with_elapsed("Idle", None, 1125), "Idle");
         // A counter never appears on its own when there is no title.
         assert_eq!(title_with_elapsed("", Some(1000), 1125), "");
+    }
+
+    fn bar_with_title(title: &str, since: Option<i64>) -> BossBar {
+        BossBar {
+            id: 1,
+            title: title.to_string(),
+            description: String::new(),
+            since,
+            url: String::new(),
+            progress: 0.5,
+            color: Color::Purple,
+            overlay: Overlay::None,
+            position: 0,
+            pos: None,
+        }
+    }
+
+    /// The whole point of the title-aware window: a title longer than the 182px
+    /// bar must fit inside the window the overlay reserves for it, at the widest
+    /// the bar ever draws (fully hovered and breathing in). This mirrors the
+    /// placement math in `build_one`, so a regression there that re-clips the
+    /// title (the bug this fixes) trips the assert. The pre-fix `bar_window_px`
+    /// sized to the bar alone, so this would have failed.
+    #[test]
+    fn long_title_fits_reserved_window() {
+        // A real downtime title plus a live H:MM:SS counter, far wider than 182px.
+        let bar = bar_with_title("US East: Health lifecycle image", Some(0));
+        let now = 6815; // 1:53:35
+
+        for scale in [1u32, 2, 3, 4] {
+            let text_w = title_extent_px(&bar, scale, now);
+            let (width, _h) = bar_window_px(scale, text_w);
+            let width = width as f32;
+
+            // The title overflows the bar, so the window must be widened for it.
+            let s_max = scale as f32 * MAX_SCALE;
+            let bar_w = BAR_W as f32 * s_max;
+            assert!(
+                text_w > bar_w,
+                "test title should exceed the bar at scale {scale}: {text_w} vs {bar_w}",
+            );
+            let bar_only = bar_window_px(scale, 0.0).0 as f32;
+            assert!(width > bar_only, "window must grow past bar-only at scale {scale}");
+
+            // Reproduce build_one's widest layout (hover = breathe = 1 → MAX_SCALE).
+            let shadow = scale as f32;
+            let content_w = bar_w + shadow;
+            let left = ((width - content_w) * 0.5).max(0.0);
+            let tx = left + (bar_w - text_w) * 0.5;
+            // Drawn extent runs from the foreground left edge to the shadow's right
+            // edge (one scaled pixel past the glyphs). Both must lie in [0, width].
+            assert!(tx >= -0.01, "title left edge clipped at scale {scale}: tx={tx}");
+            let right = tx + text_w + shadow;
+            assert!(
+                right <= width + 0.01,
+                "title right edge clipped at scale {scale}: right={right} width={width}",
+            );
+        }
+    }
+
+    /// Visual check (run with `--ignored`): render `build_one` for a long-titled
+    /// bar into the exact window the overlay reserves, both at rest and fully
+    /// grown, so the title can be eyeballed for clipping. Writes PNGs under the
+    /// system temp dir and prints their paths.
+    #[test]
+    #[ignore = "renders PNGs for manual inspection; needs a GPU adapter"]
+    fn render_long_title_window() {
+        let bar = bar_with_title("US East: Health lifecycle image", Some(0));
+        let now = 6815; // 1:53:35
+        let scale = 3;
+        let (width, height) = bar_window_px(scale, title_extent_px(&bar, scale, now));
+        let dir = std::env::temp_dir();
+        for (tag, hover, breathe) in [("rest", 0.0f32, 0.0f32), ("grown", 1.0, 1.0)] {
+            let out = dir.join(format!("bossbar_title_{tag}_{width}x{height}.png"));
+            overlay_core::snapshot::render_to_png(
+                width,
+                height,
+                |gpu| {
+                    let tex = register(gpu);
+                    build_one(gpu, &tex, scale, width, height, now, &bar, hover, breathe)
+                },
+                &out,
+            )
+            .expect("render");
+            println!("wrote {} ({width}x{height})", out.display());
+        }
+    }
+
+    /// A bar with no title reserves no title row and stays bar-width, exactly as
+    /// before, so the title-aware path does not bloat untitled bars.
+    #[test]
+    fn untitled_bar_is_bar_width() {
+        let bar = bar_with_title("", None);
+        let scale = 3;
+        assert_eq!(title_extent_px(&bar, scale, 1234), 0.0);
+        let s_max = scale as f32 * MAX_SCALE;
+        let expected_w = (BAR_W as f32 * s_max + scale as f32).ceil() as u32;
+        assert_eq!(bar_window_px(scale, 0.0).0, expected_w);
     }
 }
