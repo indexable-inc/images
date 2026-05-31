@@ -87,6 +87,10 @@ pub struct BossBar {
     pub color: Color,
     pub overlay: Overlay,
     pub position: i64,
+    /// Pinned on-screen location in logical screen points (top-left origin of
+    /// the title), set once the bar is dragged. `None` keeps the bar in the
+    /// auto-stacked top-center column. Persisted to the `x`/`y` DB columns.
+    pub pos: Option<glam::DVec2>,
 }
 
 #[cfg(test)]

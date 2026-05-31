@@ -45,8 +45,11 @@ pub fn run(
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut renderer = Renderer::new(device.clone(), queue.clone(), FORMAT, scale);
-    renderer.render(&view, width, height, bars).map_err(|e| format!("render: {e:?}"))?;
+    // Snapshots have no display scaling, so logical points map 1:1 to pixels.
+    let mut renderer = Renderer::new(device.clone(), queue.clone(), FORMAT, scale, 1.0);
+    renderer
+        .render(&view, width, height, bars, None)
+        .map_err(|e| format!("render: {e:?}"))?;
 
     // Copy the texture into a readback buffer with the 256-byte row alignment
     // wgpu requires, then strip the padding before writing the PNG.

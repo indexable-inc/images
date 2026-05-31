@@ -27,8 +27,15 @@ CREATE TABLE IF NOT EXISTS bossbars (
   color     TEXT    NOT NULL DEFAULT 'purple',
   overlay   TEXT    NOT NULL DEFAULT 'progress',
   visible   INTEGER NOT NULL DEFAULT 1,
-  position  INTEGER NOT NULL DEFAULT 0
+  position  INTEGER NOT NULL DEFAULT 0,
+  x         REAL,
+  y         REAL
 );";
+
+/// Columns added after the initial schema shipped. `ALTER TABLE ADD COLUMN` is
+/// the supported online migration in SQLite, and it errors if the column
+/// already exists, so each runs through `add_column_if_missing`.
+const ADDED_COLUMNS: &[(&str, &str)] = &[("x", "REAL"), ("y", "REAL")];
 
 /// Rows inserted only when the DB file is created for the first time, so a
 /// brand-new install shows something and documents the contract by example.
@@ -61,20 +68,51 @@ fn open(path: &Path) -> rusqlite::Result<Connection> {
     // WAL lets external `sqlite3` writers commit without blocking our reader.
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.execute_batch(SCHEMA)?;
+    for (name, ty) in ADDED_COLUMNS {
+        add_column_if_missing(&conn, name, ty)?;
+    }
     if fresh {
         conn.execute_batch(SEED)?;
     }
     Ok(conn)
 }
 
+/// Add a column to `bossbars` only when a pre-existing database lacks it, so
+/// upgrading an old DB does not error on the duplicate-column `ALTER TABLE`.
+fn add_column_if_missing(conn: &Connection, name: &str, ty: &str) -> rusqlite::Result<()> {
+    let present = conn
+        .prepare("SELECT 1 FROM pragma_table_info('bossbars') WHERE name = ?1")?
+        .exists([name])?;
+    if !present {
+        // Column names and types here are compile-time constants, never user
+        // input, so the format! cannot carry untrusted SQL.
+        conn.execute_batch(&format!("ALTER TABLE bossbars ADD COLUMN {name} {ty};"))?;
+    }
+    Ok(())
+}
+
+/// Persist a dragged bar's pinned location (logical screen points). Uses its
+/// own connection so the overlay's read/watch connection is untouched; the
+/// commit bumps `data_version`, so the watcher re-reads and the move sticks.
+pub fn set_position(path: &Path, id: i64, pos: glam::DVec2) -> rusqlite::Result<()> {
+    let conn = open(path)?;
+    conn.execute(
+        "UPDATE bossbars SET x = ?1, y = ?2 WHERE id = ?3",
+        rusqlite::params![pos.x, pos.y, id],
+    )?;
+    Ok(())
+}
+
 fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, progress, color, overlay, position
+        "SELECT id, title, progress, color, overlay, position, x, y
          FROM bossbars
          WHERE visible != 0
          ORDER BY position ASC, id ASC",
     )?;
     let rows = stmt.query_map([], |r| {
+        let x: Option<f64> = r.get(6)?;
+        let y: Option<f64> = r.get(7)?;
         Ok(BossBar {
             id: r.get(0)?,
             title: r.get(1)?,
@@ -82,6 +120,9 @@ fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
             color: Color::parse(&r.get::<_, String>(3)?),
             overlay: Overlay::parse(&r.get::<_, String>(4)?),
             position: r.get(5)?,
+            // Both coordinates must be present to pin a bar; a half-written row
+            // falls back to auto-stacking rather than placing it at an edge.
+            pos: x.zip(y).map(|(x, y)| glam::DVec2::new(x, y)),
         })
     })?;
     rows.collect()

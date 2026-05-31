@@ -30,9 +30,16 @@ bash scripts/fetch-assets.sh   # downloads into app/assets/, no-op once present
 cargo run                      # the overlay
 ```
 
-The window covers the top of the primary monitor. There is no tray; quit it the
-way you quit any foreground process (Ctrl-C from the terminal, or stop the
-service that runs it). `BOSSBAR_SCALE=3` (or `--scale 3`) enlarges the bars.
+The window is transparent, always-on-top, and click-through, so the desktop
+underneath stays usable. There is no tray; quit it the way you quit any
+foreground process (Ctrl-C from the terminal, or stop the service that runs it).
+`BOSSBAR_SCALE=3` (or `--scale 3`) enlarges the bars.
+
+On macOS the bars are interactive: hover one and it brightens to fully opaque
+(the cursor becomes a grab hand), and you can drag it anywhere on the screen.
+The drop location is saved to the bar's `x`/`y` columns, so it stays put across
+restarts. Only the bars intercept the mouse; everywhere else the window stays
+click-through. Other platforms render the same overlay without the drag path.
 
 To verify rendering without a window, render the current bars straight to a
 transparent PNG:
@@ -77,7 +84,9 @@ CREATE TABLE bossbars (
   color     TEXT    NOT NULL DEFAULT 'purple',
   overlay   TEXT    NOT NULL DEFAULT 'progress',
   visible   INTEGER NOT NULL DEFAULT 1,      -- 0 hides the row
-  position  INTEGER NOT NULL DEFAULT 0       -- sort order, top to bottom
+  position  INTEGER NOT NULL DEFAULT 0,      -- sort order in the auto column
+  x         REAL,                            -- pinned location (logical points)
+  y         REAL                             -- NULL/NULL = auto-stacked
 );
 ```
 
@@ -85,6 +94,9 @@ CREATE TABLE bossbars (
   (Minecraft's seven boss bar colors). Unknown values fall back to `purple`.
 - **overlay**: `progress` (smooth) or `notched_6` / `notched_10` / `notched_12`
   / `notched_20` (segmented), matching Minecraft's overlay styles.
+- **x / y**: pinned screen location in logical points, written when you drag a
+  bar. Leave both `NULL` (the default) to keep the bar in the auto-stacked
+  top-center column ordered by `position`; setting them floats the bar free.
 
 This mirrors Minecraft's own boss bar API, so the fields should feel familiar.
 

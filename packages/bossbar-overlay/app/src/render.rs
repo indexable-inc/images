@@ -34,14 +34,17 @@ const SHADOW: GColor = GColor::rgb(0x3f, 0x3f, 0x3f);
 struct Vertex {
     pos: [f32; 2],
     uv: [f32; 2],
+    /// Per-quad opacity. The hovered or dragged bar paints at 1.0 while the
+    /// rest stay at [`DEFAULT_OPACITY`], so hovering reads as the bar going
+    /// solid rather than any motion.
+    alpha: f32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Globals {
     size: [f32; 2],
-    opacity: f32,
-    _pad: f32,
+    _pad: [f32; 2],
 }
 
 /// Which preloaded sprite a layer samples.
@@ -62,6 +65,40 @@ struct Quad {
     h: f32,
     /// UV span; fill layers narrow `u1` so the sprite is cut off, not squished.
     u1: f32,
+    /// Opacity for this quad's bar; see [`Vertex::alpha`].
+    alpha: f32,
+}
+
+/// Physical-pixel geometry of one laid-out bar. Computed by
+/// [`Renderer::layout`] so the draw pass and pointer hit-testing agree on where
+/// every bar sits, including bars pinned to a dragged location.
+#[derive(Clone, Copy)]
+pub struct BarBox {
+    pub id: i64,
+    left: f32,
+    title_top: f32,
+    track_y: f32,
+    bar_w: f32,
+    bar_h: f32,
+    title_px: f32,
+    has_title: bool,
+}
+
+impl BarBox {
+    /// Top-left of the bar's title (its drag anchor), in physical pixels.
+    pub fn origin(&self) -> glam::Vec2 {
+        glam::vec2(self.left, self.title_top)
+    }
+
+    /// Whether a physical-pixel point falls on the bar. Covers the title plus
+    /// the track so the whole visible bar is grabbable.
+    pub fn contains(&self, p: glam::Vec2) -> bool {
+        let top = if self.has_title { self.title_top } else { self.track_y };
+        p.x >= self.left
+            && p.x <= self.left + self.bar_w
+            && p.y >= top
+            && p.y <= self.track_y + self.bar_h
+    }
 }
 
 pub struct Renderer {
@@ -87,6 +124,9 @@ pub struct Renderer {
 
     /// Integer pixel scale of the native 182x5 sprites.
     scale: u32,
+    /// Display backing-scale factor (e.g. 2.0 on Retina). Converts the logical
+    /// screen points stored for pinned bars into framebuffer pixels.
+    scale_factor: f32,
     opacity: f32,
 }
 
@@ -96,6 +136,7 @@ impl Renderer {
         queue: wgpu::Queue,
         format: wgpu::TextureFormat,
         scale: u32,
+        scale_factor: f32,
     ) -> Self {
         let scale = scale.max(1);
 
@@ -156,7 +197,7 @@ impl Renderer {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32],
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -260,45 +301,113 @@ impl Renderer {
             text_renderer,
             viewport,
             scale,
+            scale_factor,
             opacity: DEFAULT_OPACITY,
         }
     }
 
-    /// Draw the given bars into `view`, a `width`x`height` target.
-    pub fn render(
-        &mut self,
-        view: &wgpu::TextureView,
-        width: u32,
-        height: u32,
-        bars: &[BossBar],
-    ) -> Result<(), wgpu::SurfaceError> {
+    /// Physical-pixel geometry of every bar, in draw order. Pinned bars
+    /// (`BossBar::pos`) sit at their stored logical point scaled to pixels;
+    /// the rest auto-stack down the top-center column. Shared by the draw pass
+    /// and pointer hit-testing so they never disagree.
+    pub fn layout(&self, bars: &[BossBar], width: f32) -> Vec<BarBox> {
         let s = self.scale as f32;
+        let sf = self.scale_factor;
         let bar_w = BAR_W as f32 * s;
         let bar_h = BAR_H as f32 * s;
         let title_px = 8.0 * s;
         let title_gap = 1.0 * s;
         let bar_gap = 4.0 * s;
         let top_pad = 16.0 * s;
-        let shadow_off = s;
-        let center_x = ((width as f32) - bar_w) * 0.5;
+        let center_x = (width - bar_w) * 0.5;
 
-        // Build the sprite quads and lay out the titles in one pass so the two
-        // stay in lockstep down the screen.
-        let mut quads: Vec<Quad> = Vec::new();
-        let mut buffers: Vec<(Buffer, f32, f32, bool)> = Vec::new(); // buffer, left, top, has_text
-
-        let mut y = top_pad;
+        let mut boxes = Vec::with_capacity(bars.len());
+        let mut auto_y = top_pad;
         for b in bars {
             let has_title = !b.title.is_empty();
             let title_h = if has_title { title_px } else { 0.0 };
-            let track_y = y + title_h + if has_title { title_gap } else { 0.0 };
+            let (left, group_top) = match b.pos {
+                Some(p) => (p.x as f32 * sf, p.y as f32 * sf),
+                None => (center_x, auto_y),
+            };
+            let track_y = group_top + title_h + if has_title { title_gap } else { 0.0 };
+            boxes.push(BarBox {
+                id: b.id,
+                left,
+                title_top: group_top,
+                track_y,
+                bar_w,
+                bar_h,
+                title_px,
+                has_title,
+            });
+            // Only the auto-stacked column advances; a pinned bar floats free.
+            if b.pos.is_none() {
+                auto_y = track_y + bar_h + bar_gap;
+            }
+        }
+        boxes
+    }
 
-            if has_title {
+    /// The topmost bar under a physical-pixel point, if any. Iterates back to
+    /// front so the last-drawn (visually top) bar wins an overlap.
+    pub fn hit(&self, bars: &[BossBar], width: f32, point: glam::Vec2) -> Option<i64> {
+        self.layout(bars, width)
+            .into_iter()
+            .rev()
+            .find(|bx| bx.contains(point))
+            .map(|bx| bx.id)
+    }
+
+    /// The drag anchor (title top-left, physical pixels) of one bar by id.
+    pub fn origin_of(&self, bars: &[BossBar], width: f32, id: i64) -> Option<glam::Vec2> {
+        self.layout(bars, width)
+            .into_iter()
+            .find(|bx| bx.id == id)
+            .map(|bx| bx.origin())
+    }
+
+    /// Draw the given bars into `view`, a `width`x`height` target. `highlight`
+    /// is the id of the hovered or dragged bar, drawn opaque for feedback.
+    pub fn render(
+        &mut self,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        bars: &[BossBar],
+        highlight: Option<i64>,
+    ) -> Result<(), wgpu::SurfaceError> {
+        // A shaped title plus where and how opaque to draw it.
+        struct Title {
+            buffer: Buffer,
+            left: f32,
+            top: f32,
+            alpha: f32,
+        }
+
+        let shadow_off = self.scale as f32;
+        let boxes = self.layout(bars, width as f32);
+
+        // Build the sprite quads and lay out the titles in one pass, walking the
+        // shared layout so draw and hit-testing agree on every bar's box.
+        let mut quads: Vec<Quad> = Vec::new();
+        let mut titles: Vec<Title> = Vec::new();
+
+        for (b, bx) in bars.iter().zip(&boxes) {
+            // The hovered/dragged bar goes solid; every other bar stays at the
+            // HUD's default translucency.
+            let alpha = if Some(b.id) == highlight {
+                1.0
+            } else {
+                self.opacity
+            };
+
+            if bx.has_title {
                 let mut buffer =
-                    Buffer::new(&mut self.font_system, Metrics::new(title_px, title_px));
+                    Buffer::new(&mut self.font_system, Metrics::new(bx.title_px, bx.title_px));
                 // Center the title within the bar width via cosmic-text's own
                 // alignment, so the buffer's left edge sits at the bar's left.
-                buffer.set_size(&mut self.font_system, Some(bar_w), Some(title_px * 1.5));
+                buffer.set_size(&mut self.font_system, Some(bx.bar_w), Some(bx.title_px * 1.5));
                 buffer.set_text(
                     &mut self.font_system,
                     &b.title,
@@ -307,51 +416,58 @@ impl Renderer {
                     Some(glyphon::cosmic_text::Align::Center),
                 );
                 buffer.shape_until_scroll(&mut self.font_system, false);
-                buffers.push((buffer, center_x, y, true));
+                titles.push(Title {
+                    buffer,
+                    left: bx.left,
+                    top: bx.title_top,
+                    alpha,
+                });
             }
 
             // Color background, then color progress clipped to the fill.
             quads.push(Quad {
                 tex: TexId::ColorBg(b.color),
-                x: center_x,
-                y: track_y,
-                w: bar_w,
-                h: bar_h,
+                x: bx.left,
+                y: bx.track_y,
+                w: bx.bar_w,
+                h: bx.bar_h,
                 u1: 1.0,
+                alpha,
             });
             if b.progress > 0.0 {
                 quads.push(Quad {
                     tex: TexId::ColorFill(b.color),
-                    x: center_x,
-                    y: track_y,
-                    w: bar_w * b.progress,
-                    h: bar_h,
+                    x: bx.left,
+                    y: bx.track_y,
+                    w: bx.bar_w * b.progress,
+                    h: bx.bar_h,
                     u1: b.progress,
+                    alpha,
                 });
             }
             // Optional notch overlay on top, same draw order.
             if let Some(n) = b.overlay.notch() {
                 quads.push(Quad {
                     tex: TexId::NotchBg(n),
-                    x: center_x,
-                    y: track_y,
-                    w: bar_w,
-                    h: bar_h,
+                    x: bx.left,
+                    y: bx.track_y,
+                    w: bx.bar_w,
+                    h: bx.bar_h,
                     u1: 1.0,
+                    alpha,
                 });
                 if b.progress > 0.0 {
                     quads.push(Quad {
                         tex: TexId::NotchFill(n),
-                        x: center_x,
-                        y: track_y,
-                        w: bar_w * b.progress,
-                        h: bar_h,
+                        x: bx.left,
+                        y: bx.track_y,
+                        w: bx.bar_w * b.progress,
+                        h: bx.bar_h,
                         u1: b.progress,
+                        alpha,
                     });
                 }
             }
-
-            y = track_y + bar_h + bar_gap;
         }
 
         // Vertex data for every quad, two triangles each.
@@ -360,9 +476,11 @@ impl Renderer {
         for q in &quads {
             let base = verts.len() as u32;
             let (x0, y0, x1, y1) = (q.x, q.y, q.x + q.w, q.y + q.h);
+            let a = q.alpha;
             let v = |px, py, u, vv| Vertex {
                 pos: [px, py],
                 uv: [u, vv],
+                alpha: a,
             };
             verts.extend_from_slice(&[
                 v(x0, y0, 0.0, 0.0),
@@ -380,8 +498,7 @@ impl Renderer {
             0,
             bytemuck::bytes_of(&Globals {
                 size: [width as f32, height as f32],
-                opacity: self.opacity,
-                _pad: 0.0,
+                _pad: [0.0, 0.0],
             }),
         );
 
@@ -395,6 +512,7 @@ impl Renderer {
                     bytemuck::cast_slice(&[Vertex {
                         pos: [0.0, 0.0],
                         uv: [0.0, 0.0],
+                        alpha: 0.0,
                     }])
                 } else {
                     bytemuck::cast_slice(&verts)
@@ -402,11 +520,8 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX,
             });
 
-        // Prepare text. The alpha tracks the bar opacity so titles fade with
-        // their bars, matching the old `opacity` on the whole `.bar` element.
-        let a = (self.opacity * 255.0) as u8;
-        let fg = GColor::rgba(0xff, 0xff, 0xff, a);
-        let shadow = GColor::rgba(SHADOW.r(), SHADOW.g(), SHADOW.b(), a);
+        // Prepare text. Each title's alpha tracks its own bar, so a hovered bar
+        // goes opaque (title included) while the rest stay translucent.
         let bounds = TextBounds {
             left: 0,
             top: 0,
@@ -414,24 +529,24 @@ impl Renderer {
             bottom: height as i32,
         };
         let mut areas: Vec<TextArea> = Vec::new();
-        for (buffer, left, top, has_text) in &buffers {
-            if !has_text {
-                continue;
-            }
+        for title in &titles {
+            let a = (title.alpha * 255.0) as u8;
+            let fg = GColor::rgba(0xff, 0xff, 0xff, a);
+            let shadow = GColor::rgba(SHADOW.r(), SHADOW.g(), SHADOW.b(), a);
             // Shadow first, then the white face one pixel up-left of it.
             areas.push(TextArea {
-                buffer,
-                left: *left + shadow_off,
-                top: *top + shadow_off,
+                buffer: &title.buffer,
+                left: title.left + shadow_off,
+                top: title.top + shadow_off,
                 scale: 1.0,
                 bounds,
                 default_color: shadow,
                 custom_glyphs: &[],
             });
             areas.push(TextArea {
-                buffer,
-                left: *left,
-                top: *top,
+                buffer: &title.buffer,
+                left: title.left,
+                top: title.top,
                 scale: 1.0,
                 bounds,
                 default_color: fg,
