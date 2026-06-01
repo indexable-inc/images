@@ -192,8 +192,12 @@ let
         [ "@ANNOUNCE_LIB@" "@REPOS@" "@MERGE_SOUND@" "@LOG_DIR@" "@TRIAGE_COOLDOWN@" ]
         [
           "${announceLib}"
-          (lib.concatMapStringsSep " " (r: ''"${r}"'') cfg.prWatch.repos)
-          cfg.prWatch.mergeSound
+          # escapeShellArg per value: these land unquoted in `repos=(@REPOS@)` and
+          # `say-detached @MERGE_SOUND@`, so a value with a space or shell
+          # metacharacter must carry its own quoting (the options are author-set,
+          # but bake safely rather than rely on that).
+          (lib.concatMapStringsSep " " lib.escapeShellArg cfg.prWatch.repos)
+          (lib.escapeShellArg cfg.prWatch.mergeSound)
           cfg.logDir
           (toString cfg.prWatch.triageCooldown)
         ]

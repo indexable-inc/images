@@ -18,11 +18,11 @@
 #   5. If actionable: searches Linear for an existing matching open issue first
 #      (dedupe), and only creates a new ENG ticket via issueCreate if none.
 #
-# Linear auth: LINEAR_API_KEY is read at runtime from the login Keychain
-# (service `pr-watch-linear`) — no secret in the Nix store, the plist, or git.
-# Seed it (idempotent, from 1Password) with the host's `seed-launchd-secrets`.
-# If the entry is missing the deep dive still speaks the root cause; it just
-# tells the agent it cannot file a ticket.
+# Linear auth: the key is read at runtime from $PR_WATCH_LINEAR_KEY, else the
+# macOS login Keychain (service `pr-watch-linear`) — no secret in the Nix store,
+# the plist, or git. Seed the Keychain (idempotent, from 1Password) with the
+# host's `seed-launchd-secrets`. If neither is present the deep dive still speaks
+# the root cause; it just tells the agent it cannot file a ticket.
 #
 # CI_TRIAGE_DRY_RUN=1 makes this NON-DESTRUCTIVE for testing: no sound, no
 # speech, and NO real Linear ticket — the agent prints the GraphQL mutation it
@@ -40,8 +40,16 @@ short="${repo##*/}"
 
 dry="${CI_TRIAGE_DRY_RUN:-}"
 
-# Linear API key from the login Keychain (best-effort: tickets are optional).
-linear_key="$(security find-generic-password -s pr-watch-linear -w 2>/dev/null)" || linear_key=""
+# Linear API key (best-effort: tickets are optional). Resolution order, mirroring
+# ix-downtime's token lookup:
+#   1. $PR_WATCH_LINEAR_KEY, if the consuming config exports one (e.g. a Linux
+#      host that seeds it from its own secret store).
+#   2. the macOS login Keychain (service `pr-watch-linear`), seeded by the host's
+#      `seed-launchd-secrets`. `security` is macOS-only, so guard on its presence.
+linear_key="${PR_WATCH_LINEAR_KEY:-}"
+if [ -z "$linear_key" ] && command -v security >/dev/null 2>&1; then
+  linear_key="$(security find-generic-password -s pr-watch-linear -w 2>/dev/null)" || linear_key=""
+fi
 
 # Sound id used by stage 1 too; the deep dive reuses it before the spoken cause.
 # Low note-block bass: a gentle "down" cue, not a harsh alarm.

@@ -29,6 +29,10 @@
 
 state_dir="${PR_WATCH_STATE:-$HOME/.cache/pr-watch}"
 mkdir -p "$state_dir"
+# The detached stage-2 appends to @LOG_DIR@/ci-triage.log; ensure the dir exists
+# (launchd pre-creates it for the agent's own StandardOutPath on macOS, but
+# systemd does not guarantee a custom logDir parent).
+mkdir -p "@LOG_DIR@"
 
 # Non-overlap guard, intrinsic to the watcher so the portable service can fire it
 # on a fixed interval with no external lock wrapper. Take a NON-BLOCKING
@@ -156,7 +160,7 @@ Failed job(s): $failed_jobs"
     # deep dive can't hold the lock past this poll. CI_TRIAGE_DRY_RUN passes
     # through, so dry-run testing skips sound/voice/ticket here too.
     [ -n "$run_url" ] || run_url="https://github.com/$repo/actions/runs/$run_id"
-    /usr/bin/perl -e 'use POSIX qw(setsid); setsid() or exit 1; exec @ARGV or exit 1' \
+    perl -e 'use POSIX qw(setsid); setsid() or exit 1; exec @ARGV or exit 1' \
       -- timeout 300 ci-triage "$repo" "$run_id" "$run_url" "$run_wf" "$failed_jobs" \
       >>"@LOG_DIR@/ci-triage.log" 2>&1 9>&- &
     # Don't wait on the backgrounded detached job; let stage 1 proceed.
