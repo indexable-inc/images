@@ -47,7 +47,7 @@ let
         let nix_files = (fd --extension nix | lines)
         nixfmt --check ...$nix_files
       }
-      def "main statix" [] { statix check . }
+      def "main statix" [] { statix check --ignore '.claude/worktrees' . }
       def "main deadnix" [] { deadnix --fail --no-lambda-pattern-names . }
       def "main ast-grep" [] { ast-grep scan --error . }
       # Rule self-test: every fixture under nix-rules-tests must flag its

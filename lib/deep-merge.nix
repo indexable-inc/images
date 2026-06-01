@@ -16,7 +16,12 @@
 { lib }:
 let
   inherit (lib) concatStringsSep isDerivation;
-  inherit (builtins) attrNames foldl' hasAttr isAttrs;
+  inherit (builtins)
+    attrNames
+    foldl'
+    hasAttr
+    isAttrs
+    ;
 
   bothMergeable = a: b: isAttrs a && isAttrs b && !(isDerivation a) && !(isDerivation b);
 
@@ -44,11 +49,15 @@ let
     in
     go [ ];
 
-  strict = mergeWith (
-    path: _l: _r: throw "ix.deepMerge.strict: leaf collision at `${concatStringsSep "." path}`"
+  strictMerge = mergeWith (
+    path: _l: _r:
+    throw "ix.deepMerge.strict: leaf collision at `${concatStringsSep "." path}`"
   );
 
-  rhs = mergeWith (_path: _l: r: r);
+  rhsMerge = mergeWith (
+    _path: _l: r:
+    r
+  );
 in
 {
   /**
@@ -57,7 +66,7 @@ in
     supposed to contribute disjoint subtrees: an accidental overlap is a bug
     in the caller, not a value to silently resolve.
   */
-  strict = strict;
+  strict = strictMerge;
 
   /**
     Recursively merge two attrsets, with rhs winning at any leaf collision.
@@ -65,12 +74,12 @@ in
     override of the first (vanilla defaults plus user fields, generated unit
     plus escape-hatch keys).
   */
-  rhs = rhs;
+  rhs = rhsMerge;
 
   /**
     Strict deep-merge folded over a list of attrsets. The N-ary shape that
     `discoverModules` needs (each module tree contributes a subset of the
     final attrset; any overlap is a duplicate-output bug).
   */
-  strictList = parts: foldl' strict { } parts;
+  strictList = parts: foldl' strictMerge { } parts;
 }
