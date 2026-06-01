@@ -77,8 +77,6 @@ impl Canvas {
 /// the cell grid. All frames in one reel must share these dimensions.
 #[derive(Clone, Copy, Debug)]
 pub struct Layout {
-    pub cols: usize,
-    pub rows: usize,
     pub width: u32,
     pub height: u32,
     pad: u32,
@@ -98,8 +96,6 @@ impl Layout {
         let width = pad * 2 + cols as u32 * cell_w;
         let height = chrome + pad * 2 + rows as u32 * cell_h;
         Self {
-            cols,
-            rows,
             width,
             height,
             pad,
