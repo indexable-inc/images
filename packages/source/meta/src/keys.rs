@@ -64,6 +64,11 @@ pub const INPUT_TOKENS: &str = "input_tokens";
 /// Assistant output token count, when recorded.
 pub const OUTPUT_TOKENS: &str = "output_tokens";
 
+// Shell history (atuin, which unifies nushell/zsh/bash). `host`, `user`, `cwd`,
+// `session_id`, and `timestamp` above are reused.
+/// Process exit status of a recorded shell command.
+pub const EXIT_STATUS: &str = "exit_status";
+
 // Linear.
 /// Linear issue identifier, e.g. `ENG-1885`.
 pub const IDENTIFIER: &str = "identifier";

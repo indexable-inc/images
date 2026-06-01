@@ -8,6 +8,7 @@ members = [
   "packages/ast-merge/git",
   "packages/ast-merge/langs",
   "packages/ast-merge/matcher",
+  "packages/source/atuin",
   "packages/source/claude",
   "packages/source/codex",
   "packages/claude-history-sync",
@@ -90,6 +91,7 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
+source-atuin = { path = "packages/source/atuin" }
 source-claude = { path = "packages/source/claude" }
 source-codex = { path = "packages/source/codex" }
 clone-detect = { path = "packages/clone-detect/detect" }
