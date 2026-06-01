@@ -56,6 +56,15 @@ let
         "--msg=hello world"
       ];
     };
+
+    # runAtLoad = false on an interval service + an explicit label override:
+    # exercises the negative path of both portable improvements.
+    quiet = {
+      command = [ "/run/current-system/sw/bin/q" ];
+      interval = 600;
+      runAtLoad = false;
+      label = "com.example.quiet";
+    };
   };
 
   daemonLaunchd = ps.toLaunchdConfig specs.daemon;
@@ -63,6 +72,8 @@ let
   pollerLaunchd = ps.toLaunchdConfig specs.poller;
   pollerSystemd = ps.toSystemdUnits specs.poller;
   quotedSystemd = ps.toSystemdUnits specs.quoted;
+  quietLaunchd = ps.toLaunchdConfig specs.quiet;
+  quietSystemd = ps.toSystemdUnits specs.quiet;
 
   assertions = [
     # --- daemon: launchd ---
@@ -75,8 +86,8 @@ let
       message = "daemon launchd ProgramArguments mismatch";
     }
     {
-      assertion = daemonLaunchd.Label == "demo daemon";
-      message = "daemon launchd Label should default to description";
+      assertion = daemonLaunchd.Label == "org.nix-community.home.daemon";
+      message = "daemon launchd Label should default to the name-based home convention";
     }
     {
       assertion = daemonLaunchd.RunAtLoad == true;
@@ -121,14 +132,14 @@ let
       message = "daemon without interval must not produce a timer";
     }
 
-    # --- poller: launchd (interval => StartInterval, no RunAtLoad) ---
+    # --- poller: launchd (interval => StartInterval + RunAtLoad via runAtLoad) ---
     {
       assertion = pollerLaunchd.StartInterval == 300;
       message = "poller launchd StartInterval mismatch";
     }
     {
-      assertion = !(pollerLaunchd ? RunAtLoad);
-      message = "interval service must not set RunAtLoad on launchd";
+      assertion = pollerLaunchd.RunAtLoad == true;
+      message = "interval service should honor runAtLoad (default true) alongside StartInterval";
     }
     {
       assertion = pollerLaunchd.KeepAlive == { SuccessfulExit = false; };
@@ -153,6 +164,11 @@ let
       message = "poller should produce a timer with OnUnitActiveSec = interval";
     }
     {
+      assertion =
+        pollerSystemd.timer.Timer.OnActiveSec == "1s" && !(pollerSystemd.timer.Timer ? OnBootSec);
+      message = "runAtLoad interval service: timer fires promptly via OnActiveSec, not OnBootSec";
+    }
+    {
       assertion = pollerSystemd.timer.Install.WantedBy == [ "timers.target" ];
       message = "poller timer should be WantedBy timers.target";
     }
@@ -166,6 +182,20 @@ let
       assertion =
         quotedSystemd.service.Service.ExecStart == "/run/current-system/sw/bin/note \"--msg=hello world\"";
       message = "argv element with a space should be systemd double-quoted, not shell-escaped";
+    }
+
+    # --- quiet: runAtLoad=false interval + explicit label override ---
+    {
+      assertion = quietLaunchd.Label == "com.example.quiet";
+      message = "explicit label should override the name-based default";
+    }
+    {
+      assertion = !(quietLaunchd ? RunAtLoad);
+      message = "runAtLoad=false must not set RunAtLoad on launchd";
+    }
+    {
+      assertion = quietSystemd.timer.Timer.OnBootSec == 600 && !(quietSystemd.timer.Timer ? OnActiveSec);
+      message = "runAtLoad=false timer should wait OnBootSec, not fire via OnActiveSec";
     }
   ];
 

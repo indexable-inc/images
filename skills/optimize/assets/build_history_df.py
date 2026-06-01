@@ -1,0 +1,305 @@
+"""Normalize Claude Code history into polars frames + the aggregates /optimize reasons over.
+
+No third-party deps beyond polars. Designed to run in the index MCP python session
+(polars preinstalled), so the heavy 800 MB scan stays out of the model's context and
+only compact aggregates come back. Interactive:
+
+    import sys; sys.path.insert(0, "<CLAUDE_SKILL_DIR>/assets")
+    import build_history_df as o
+    F = o.build_frames(days=45)        # or full=True
+    o.report(F)                         # print the leaderboards
+    o.write_html(F, "~/.claude/optimize/report.html")   # browser report
+    F["df"]; F["bash"]; F["tools"]      # slice further with polars
+
+Standalone / headless (the `optimize-scan` portable service runs this via uv):
+    python build_history_df.py --days 60 --out ~/.claude/optimize
+writes parquet caches, findings.json, latest.txt, and report.html.
+
+Schema verified against real transcripts:
+  - usage.speed is a categorical label ("fast"), NOT tokens/sec
+  - usage.iterations is a LIST of per-iteration usage structs (count = len)
+  - per-command wall-clock = tool_result.ts - tool_use.ts, matched by tool_use_id
+  - a REAL human prompt is a string-content user entry with a top-level promptId;
+    harness-injected user messages have no promptId and must be excluded
+  - "tool too big / context trimmed" is detected by RESULT SIZE, not a marker string
+"""
+from __future__ import annotations
+import argparse, glob, html, json, os, re, sys
+from datetime import datetime, timezone
+
+PROJECTS = os.path.expanduser("~/.claude/projects")
+CORRECTION = re.compile(
+    r"\b(no|nope|wrong|don'?t|stop|wait|actually|revert|undo|that'?s not|not what i|"
+    r"you (broke|deleted|removed|changed)|why did you|i (said|asked)|incorrect|misread)\b",
+    re.I,
+)
+HARNESS_PREFIXES = ("<task-notification", "<system-reminder", "<local-command",
+                    "[request interrupted", "caveat:", "<command-",
+                    "a session-scoped", "this session is being continued",
+                    "the user opened", "the user's message")
+
+# Escape hatches / jank: workaround patterns in commands. A pattern recurring
+# across many sessions is a candidate for a proper architecture fix (the thing
+# the workaround compensates for). Signal 7.
+JANK = [
+    ("silenced stderr (2>/dev/null)", re.compile(r"2>\s*/dev/null")),
+    ("swallowed failure (|| true)", re.compile(r"\|\|\s*(true|:)\b")),
+    ("skipped hooks (--no-verify)", re.compile(r"--no-verify\b")),
+    ("force git (--force/-f)", re.compile(r"\b(push|commit|checkout)\b[^|;&]*(--force(-with-lease)?\b|\s-f\b)")),
+    ("sleep timing hack", re.compile(r"\bsleep\s+\d")),
+    ("retry/poll loop (while !)", re.compile(r"\bwhile\s*!")),
+    ("insecure TLS (curl -k/--insecure)", re.compile(r"\bcurl\b[^|;&]*(\s-k\b|--insecure)")),
+    ("nix --impure", re.compile(r"--impure\b")),
+    ("flake override (--override-input)", re.compile(r"--override-input\b")),
+    ("in-place patch (sed -i)", re.compile(r"\bsed\s+-i\b")),
+    ("chmod 777", re.compile(r"\bchmod\s+(-R\s+)?777\b")),
+    ("sandbox bypass", re.compile(r"(--no-sandbox|--dangerously|dangerouslyDisable)")),
+    ("disable/skip toggle", re.compile(r"\b([A-Z_]*(DISABLE|SKIP)[A-Z_]*)=")),
+]
+TRUNC = re.compile(r"\[truncated\]")
+
+
+def parse_ts(s):
+    try:
+        return datetime.fromisoformat((s or "").replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def is_real_prompt(r, content) -> bool:
+    if not isinstance(content, str) or not r.get("promptId"):
+        return False
+    return not content.lstrip().lower().startswith(HARNESS_PREFIXES)
+
+
+def strip_prefix(cmd: str) -> str:
+    c = cmd.strip()
+    c = re.sub(r"^(cd\s+\S+\s*(&&|;)\s*)+", "", c)
+    c = re.sub(r"^([A-Z_][A-Z0-9_]*=\S+\s+)+", "", c)
+    return c.strip()
+
+
+def klass(cmd: str) -> str:
+    c = strip_prefix(cmd)
+    for k in ("nix build", "nix run", "nix flake", "nix develop", "home-manager",
+              "darwin-rebuild", "cargo", "just", "git", "gh", "claude", "rg", "grep",
+              "fd", "npm", "pnpm", "bun", "python", "uv", "ssh", "docker", "kubectl"):
+        if c == k or c.startswith(k + " "):
+            return k
+    return (c.split() or ["?"])[0][:24]
+
+
+def norm_cmd(cmd: str) -> str:
+    """Canonicalize a command so the same task across sessions collapses to one key."""
+    c = strip_prefix(cmd)
+    c = re.sub(r"/[\w./-]+", "<path>", c)
+    c = re.sub(r"\b[0-9a-f]{7,40}\b", "<hash>", c)
+    c = re.sub(r"\b\d+\b", "#", c)
+    c = re.sub(r"\s+", " ", c).strip()
+    return c[:90]
+
+
+def _cstr(c) -> str:
+    return c if isinstance(c, str) else json.dumps(c, default=str)
+
+
+def build_frames(days: int = 45, full: bool = False):
+    import polars as pl
+    files = glob.glob(os.path.join(PROJECTS, "*", "*.jsonl"))
+    if not full:
+        cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+        files = [f for f in files if os.path.getmtime(f) >= cutoff]
+
+    rows, tool_calls, bash_done, tool_results, corrections, chains = [], {}, [], [], [], []
+    for f in files:
+        sess = os.path.basename(f)[:-6]
+        try:
+            lines = open(f, encoding="utf-8").read().splitlines()
+        except Exception:
+            continue
+        run_tools = run_errs = 0
+        for l in lines:
+            if not l.strip():
+                continue
+            try:
+                r = json.loads(l)
+            except Exception:
+                continue
+            t = r.get("type")
+            m = r.get("message") if isinstance(r.get("message"), dict) else {}
+            ts = parse_ts(r.get("timestamp", ""))
+            content = m.get("content")
+            if t == "assistant":
+                blocks = content if isinstance(content, list) else []
+                tu = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
+                th = sum(1 for b in blocks if isinstance(b, dict) and b.get("type") == "thinking")
+                u = m.get("usage") or {}
+                run_tools += len(tu)
+                rows.append(dict(
+                    session=sess, ts=ts, kind="assistant", model=m.get("model"),
+                    speed=u.get("speed"), n_iter=len(u.get("iterations") or []),
+                    out_tok=u.get("output_tokens"), n_tooluse=len(tu), n_think=th,
+                    is_sidechain=bool(r.get("isSidechain")),
+                ))
+                for b in tu:
+                    inp = b.get("input") or {}
+                    label = (inp.get("command") or inp.get("file_path") or inp.get("pattern")
+                             or inp.get("query") or inp.get("description") or "")
+                    tool_calls[b.get("id")] = (ts, b.get("name"), str(label)[:200], sess)
+            elif t == "user":
+                blocks = content if isinstance(content, list) else None
+                if blocks:
+                    for b in blocks:
+                        if not (isinstance(b, dict) and b.get("type") == "tool_result"):
+                            continue
+                        tid = b.get("tool_use_id")
+                        size = len(_cstr(b.get("content")))
+                        err = bool(b.get("is_error"))
+                        ts0, name, label, _ = tool_calls.get(tid, (None, "?", "", sess))
+                        tool_results.append((sess, name, label, size, err))
+                        if err:
+                            run_errs += 1
+                        if name == "Bash" and ts is not None and ts0 is not None:
+                            bash_done.append((sess, label, (ts - ts0).total_seconds(), err))
+                elif is_real_prompt(r, content):
+                    if run_tools >= 8 and run_errs >= 1:
+                        chains.append(dict(session=sess, tools=run_tools, errors=run_errs,
+                                           next_prompt=content[:160]))
+                    if CORRECTION.search(content) and run_tools >= 1:
+                        corrections.append(dict(session=sess, ts=str(ts), prior_tools=run_tools,
+                                                prior_errors=run_errs, prompt=content[:200]))
+                    run_tools = run_errs = 0
+
+    return dict(
+        df=pl.DataFrame(rows),
+        bash=pl.DataFrame(bash_done, schema=["session", "cmd", "seconds", "is_error"], orient="row"),
+        tools=pl.DataFrame(tool_results, schema=["session", "tool", "label", "size", "is_error"], orient="row"),
+        corrections=corrections, chains=chains,
+        files=len(files), window=("full" if full else f"{days}d"),
+    )
+
+
+def summary_line(F):
+    df = F["df"]
+    return (f"window: {F['window']} | files={F['files']} | rows={df.height} "
+            f"| timed_bash={F['bash'].height} | tool_results={F['tools'].height}")
+
+
+def aggregates(F, top: int = 15, oversize: int = 20000):
+    """Return an ordered list of (title, polars-frame) sections shared by the text
+    report and the HTML report, so the two never drift."""
+    import polars as pl
+    df, bash, tools = F["df"], F["bash"], F["tools"]
+    out = []
+
+    a = df.filter((pl.col("kind") == "assistant") & pl.col("model").is_not_null()
+                  & (pl.col("model") != "<synthetic>"))
+    if a.height:
+        out.append(("model loop profile", a.group_by("model").agg(
+            pl.len().alias("turns"), pl.col("out_tok").median().alias("med_out_tok"),
+            pl.col("n_tooluse").mean().round(2).alias("avg_tooluse"),
+            pl.col("n_think").mean().round(2).alias("avg_think"),
+            (pl.col("speed") == "fast").mean().round(3).alias("frac_fast"),
+        ).sort("turns", descending=True)))
+
+    if bash.height:
+        bb = bash.with_columns(pl.col("cmd").map_elements(klass, return_dtype=pl.String).alias("class"))
+        out.append(("command classes by cumulative wall-clock (s)", bb.group_by("class").agg(
+            pl.len().alias("n"), pl.col("seconds").sum().round(0).alias("total_s"),
+            pl.col("seconds").median().round(1).alias("med_s"),
+            pl.col("seconds").max().round(0).alias("max_s"),
+            pl.col("is_error").sum().alias("errs"),
+        ).sort("total_s", descending=True).head(top)))
+        out.append(("slowest single commands", bash.sort("seconds", descending=True)
+                    .select("seconds", "is_error", "cmd").head(top)))
+        out.append(("most repeated error-producing commands", bash.filter("is_error")
+                    .with_columns(pl.col("cmd").map_elements(strip_prefix, return_dtype=pl.String).str.slice(0, 60).alias("c"))
+                    .group_by("c").agg(pl.len().alias("fails"), pl.col("seconds").sum().round(0).alias("wasted_s"))
+                    .sort("fails", descending=True).head(top)))
+        out.append(("recurring tasks across sessions (candidates to script)",
+                    bash.with_columns(pl.col("cmd").map_elements(norm_cmd, return_dtype=pl.String).alias("task"))
+                    .group_by("task").agg(pl.col("session").n_unique().alias("sessions"), pl.len().alias("runs"),
+                                          pl.col("seconds").sum().round(0).alias("total_s"))
+                    .filter(pl.col("sessions") >= 3).sort(["sessions", "total_s"], descending=True).head(top)))
+        # signal 7: escape hatches / jank -> arch-fix candidates
+        jrows = []
+        for label, pat in JANK:
+            mask = bash.filter(pl.col("cmd").map_elements(lambda c, p=pat: bool(p.search(c)), return_dtype=pl.Boolean))
+            if mask.height:
+                jrows.append((label, mask.height, mask["session"].n_unique(), round(mask["seconds"].sum())))
+        if jrows:
+            out.append(("escape hatches / jank (arch-fix candidates)",
+                        pl.DataFrame(jrows, schema=["jank", "runs", "sessions", "total_s"], orient="row")
+                        .sort(["sessions", "runs"], descending=True)))
+
+    if tools.height:
+        out.append(("context bloat by tool", tools.group_by("tool").agg(
+            pl.len().alias("calls"), (pl.col("size") >= oversize).sum().alias("oversized"),
+            pl.col("size").max().alias("max_bytes"), pl.col("size").sum().alias("total_bytes"),
+        ).sort("total_bytes", descending=True).head(top)))
+        out.append(("biggest single results (scope these)", tools.sort("size", descending=True)
+                    .select("tool", "size", "label").head(top)))
+
+    if F["corrections"]:
+        out.append((f"human corrections ({len(F['corrections'])} total)",
+                    pl.DataFrame(F["corrections"]).sort("prior_tools", descending=True)
+                    .select("session", "prior_tools", "prior_errors", "prompt").head(top)))
+    if F["chains"]:
+        out.append((f"long autonomous chains w/ errors ({len(F['chains'])} total)",
+                    pl.DataFrame(F["chains"]).sort(["errors", "tools"], descending=True).head(top)))
+    return out
+
+
+def report(F, top: int = 15, oversize: int = 20000):
+    import polars as pl
+    print(summary_line(F))
+    for title, frame in aggregates(F, top, oversize):
+        print(f"\n=== {title} ===")
+        with pl.Config(tbl_rows=top, tbl_cols=20, fmt_str_lengths=70, tbl_width_chars=160):
+            print(frame)
+
+
+def write_html(F, path, top: int = 15, oversize: int = 20000):
+    import polars as pl
+    path = os.path.expanduser(path)
+    css = ("body{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;margin:2rem;"
+           "background:#fff;color:#111}h1{font-size:18px}h2{font-size:14px;margin-top:2rem;"
+           "border-bottom:1px solid #ddd;padding-bottom:.3rem}table{border-collapse:collapse;"
+           "font-size:12px}th,td{border:1px solid #ddd;padding:3px 8px;text-align:left}"
+           "th{background:#f4f4f4}@media(prefers-color-scheme:dark){body{background:#0d0d0d;"
+           "color:#ddd}h2{border-color:#333}th,td{border-color:#333}th{background:#1a1a1a}}")
+    parts = [f"<!doctype html><html><head><meta charset=utf-8><title>optimize report</title>"
+             f"<style>{css}</style></head><body>",
+             f"<h1>optimize report</h1><p>{html.escape(summary_line(F))}</p>"]
+    with pl.Config(tbl_rows=top, fmt_str_lengths=120):
+        for title, frame in aggregates(F, top, oversize):
+            parts.append(f"<h2>{html.escape(title)}</h2>")
+            parts.append(frame._repr_html_())
+    parts.append("</body></html>")
+    with open(path, "w") as fh:
+        fh.write("".join(parts))
+    return path
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--days", type=int, default=45)
+    ap.add_argument("--full", action="store_true")
+    ap.add_argument("--out", default=os.path.expanduser("~/.claude/optimize"))
+    ap.add_argument("--top", type=int, default=15)
+    ap.add_argument("--oversize", type=int, default=20000)
+    args = ap.parse_args()
+    os.makedirs(args.out, exist_ok=True)
+    F = build_frames(days=args.days, full=args.full)
+    report(F, top=args.top, oversize=args.oversize)
+    F["df"].write_parquet(os.path.join(args.out, "history_rows.parquet"))
+    F["bash"].write_parquet(os.path.join(args.out, "history_bash.parquet"))
+    F["tools"].write_parquet(os.path.join(args.out, "history_tools.parquet"))
+    with open(os.path.join(args.out, "findings.json"), "w") as fh:
+        json.dump({k: F[k] for k in ("window", "files", "corrections", "chains")}, fh, indent=2)
+    write_html(F, os.path.join(args.out, "report.html"), top=args.top, oversize=args.oversize)
+    print(f"\nwrote parquet caches + findings.json + report.html to {args.out}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

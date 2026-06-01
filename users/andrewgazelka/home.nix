@@ -104,6 +104,33 @@ let
     ];
     text = builtins.readFile ./scripts/ix-downtime.sh;
   };
+
+  # Token-free periodic refresh of the /optimize history analysis. Runs the
+  # `optimize` skill's own bundled polars library headless via `uv run --with
+  # polars` (no index MCP session under launchd/systemd, and uv is the clean way
+  # to get polars off-session; uv manages its own python). The script path is
+  # baked from the skill's asset so the service and the skill share one source of
+  # truth. It scans the last 60 days of ~/.claude history into
+  # ~/.claude/optimize/{latest.txt, *.parquet} — NO LLM, NO sound — so it is safe
+  # to run often; `/optimize` reads these fresh caches for the synthesized report.
+  # coreutils provides ls/cp/date/tail for the dated-snapshot rotation.
+  optimizeScan = mkBashApp {
+    name = "optimize-scan";
+    runtimeInputs = [
+      pkgs.uv
+      pkgs.coreutils
+    ];
+    text = ''
+      OUT="$HOME/.claude/optimize"
+      mkdir -p "$OUT"
+      uv run --with polars ${../../skills/optimize/assets/build_history_df.py} \
+        --days 60 --out "$OUT" > "$OUT/latest.txt" 2>&1
+      cp "$OUT/latest.txt" "$OUT/report-$(date +%F).txt"
+      # keep only the 14 most recent dated snapshots
+      { ls -1t "$OUT"/report-*.txt 2>/dev/null || true; } | tail -n +15 \
+        | while read -r f; do rm -f "$f"; done
+    '';
+  };
 in
 {
   imports = [ portableServicesModule ];
@@ -133,18 +160,6 @@ in
         default = 30;
         description = "Poll the status page every N seconds.";
       };
-
-      label = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = "org.nix-community.home.ix-downtime";
-        description = ''
-          launchd Label for the watcher agent. Pinned to the home-manager
-          reverse-DNS convention: it keeps the plist filename
-          (`<Label>.plist`) free of spaces and lets a switch update the
-          existing agent in place. Null leaves the portable layer's default
-          (`description`), which would otherwise be the human title.
-        '';
-      };
     };
 
     bossbarOverlay = {
@@ -153,15 +168,19 @@ in
         default = true;
         description = "Run the always-on-top Minecraft boss bar overlay GUI the watcher draws onto.";
       };
+    };
 
-      label = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = "org.nix-community.home.bossbar-overlay";
-        description = ''
-          launchd Label for the overlay agent. Pinned to the home-manager
-          convention so this updates an existing agent in place instead of
-          orphaning the old plist. Null leaves the portable layer's default.
-        '';
+    optimize = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Run the token-free /optimize history scan on a schedule (refreshes ~/.claude/optimize for the /optimize skill).";
+      };
+
+      interval = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 3600;
+        description = "Re-scan ~/.claude history every N seconds.";
       };
     };
 
@@ -200,18 +219,21 @@ in
           interval = cfg.downtime.interval;
           standardOutPath = "${cfg.logDir}/ix-downtime.log";
           standardErrorPath = "${cfg.logDir}/ix-downtime.log";
-          # Pin the launchd Label (off `description`, which has spaces) to the
-          # home-manager convention so the plist filename stays space-free and a
-          # switch updates the existing agent in place. RunAtLoad fires the first
-          # poll immediately on switch/login instead of waiting one interval
-          # (the portable layer omits it for interval services); the script's
-          # own flock guard keeps a slow poll from overlapping the next fire.
-          launchd.config = {
-            RunAtLoad = true;
-          }
-          // lib.optionalAttrs (cfg.downtime.label != null) {
-            Label = cfg.downtime.label;
-          };
+          # No launchd escape hatch needed: the portable layer's `runAtLoad`
+          # (default true) fires the first poll immediately even for interval
+          # services, and the launchd Label defaults to the space-free home
+          # convention. The script's own flock guard prevents overlap.
+        };
+      })
+      (lib.mkIf cfg.optimize.enable {
+        optimize-scan = {
+          description = "optimize history scan";
+          command = [ (lib.getExe' optimizeScan "optimize-scan") ];
+          interval = cfg.optimize.interval;
+          standardOutPath = "${cfg.logDir}/optimize-scan.log";
+          standardErrorPath = "${cfg.logDir}/optimize-scan.log";
+          # runAtLoad (default true) gives an immediate first scan on load;
+          # Label defaults to the space-free home convention. No escape hatch.
         };
       })
       (lib.mkIf cfg.bossbarOverlay.enable {
@@ -221,11 +243,7 @@ in
           restart = "always";
           standardOutPath = "${cfg.logDir}/bossbar-overlay.log";
           standardErrorPath = "${cfg.logDir}/bossbar-overlay.log";
-          # Pin the launchd Label so this updates the existing agent in place
-          # instead of orphaning the old `org.nix-community.home.*` plist.
-          launchd.config = lib.optionalAttrs (cfg.bossbarOverlay.label != null) {
-            Label = cfg.bossbarOverlay.label;
-          };
+          # Label defaults to the space-free home convention; no escape hatch.
         };
       })
     ];
