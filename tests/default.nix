@@ -2391,6 +2391,19 @@ let
           (extra.thinking.display or null) == "summarized";
         message = "development-base should request summarized thinking via CLAUDE_CODE_EXTRA_BODY";
       }
+      {
+        # Transcripts are the only on-disk record of a run; default cleanup is 30
+        # days. Pin a long retention so a refactor can't silently restore the
+        # 30-day window and delete the audit trail. (Free: local disk only.)
+        assertion =
+          let
+            managed =
+              builtins.fromJSON
+                developmentBase.config.environment.etc."claude-code/managed-settings.json".text;
+          in
+          (managed.cleanupPeriodDays or 0) >= 3650;
+        message = "development-base should retain Claude Code transcripts well beyond the 30-day default";
+      }
     ];
 
     vitest = [

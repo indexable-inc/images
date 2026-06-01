@@ -152,5 +152,14 @@ in
         display = "summarized";
       };
     };
+    # Keep session transcripts effectively forever (~2700 years). Claude Code
+    # otherwise deletes `~/.claude/projects/**/*.jsonl` after `cleanupPeriodDays`
+    # (default 30), which is the only on-disk record of a run's prompts, tool
+    # calls, and (with the summarized-thinking setting above) the agent's
+    # reasoning. Retention is FREE: these are local JSONL files on the guest
+    # disk — no tokens, no API calls, no Anthropic-side charge for keeping them.
+    # We'd rather pay disk than silently lose the audit trail of what an agent
+    # did inside a VM, especially for post-hoc triage of a bad run.
+    cleanupPeriodDays = 999999;
   };
 }
