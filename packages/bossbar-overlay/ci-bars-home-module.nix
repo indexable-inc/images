@@ -131,17 +131,26 @@ in
 
     logDir = mkOption {
       type = types.str;
-      default =
-        if pkgs.stdenv.hostPlatform.isDarwin then
-          "${config.home.homeDirectory}/Library/Logs"
-        else
-          "${config.home.homeDirectory}/.local/state";
+      # The platform-conditional resting value is seeded in `config` with
+      # mkOptionDefault, keeping this declaration a self-contained option whose
+      # docs come from defaultText (a conditional `default` here would make the
+      # rendered docs resolve to one branch).
       defaultText = lib.literalMD "`~/Library/Logs` on macOS, `~/.local/state` on Linux";
       description = "Directory the watcher appends its stdout/stderr log to.";
     };
   };
 
   config = mkIf cfg.enable {
+    # Seed the platform-conditional log directory at option-default precedence,
+    # so a downstream override still wins and the option declaration stays a
+    # self-contained literal.
+    services.ciBars.logDir = lib.mkOptionDefault (
+      if pkgs.stdenv.hostPlatform.isDarwin then
+        "${config.home.homeDirectory}/Library/Logs"
+      else
+        "${config.home.homeDirectory}/.local/state"
+    );
+
     services.portable.ci-bars = {
       description = "GitHub Actions CI progress boss bars";
       command = [ (lib.getExe' ciBars "ci-bars") ];

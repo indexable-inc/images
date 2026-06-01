@@ -442,7 +442,7 @@ in
     services.ciBars = {
       enable = true;
       repos = cfg.prWatch.repos;
-      logDir = cfg.logDir;
+      inherit (cfg) logDir;
     };
   };
 }
