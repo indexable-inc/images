@@ -3274,23 +3274,48 @@ let
       }
       {
         assertion =
-          ix.deepMerge.strict { a = { x = 1; }; b = 2; } { a = { y = 3; }; c = 4; }
-          == { a = { x = 1; y = 3; }; b = 2; c = 4; };
+          ix.deepMerge.strict
+            {
+              a = {
+                x = 1;
+              };
+              b = 2;
+            }
+            {
+              a = {
+                y = 3;
+              };
+              c = 4;
+            } == {
+            a = {
+              x = 1;
+              y = 3;
+            };
+            b = 2;
+            c = 4;
+          };
         message = "deepMerge.strict should recursively union disjoint subtrees";
       }
       {
         assertion =
-          !(builtins.tryEval (
-            builtins.deepSeq (ix.deepMerge.strict { a.b = 1; } { a.b = 2; }) null
-          )).success;
+          !(builtins.tryEval (builtins.deepSeq (ix.deepMerge.strict { a.b = 1; } { a.b = 2; }) null)).success;
         message = "deepMerge.strict should throw on a colliding leaf";
       }
       {
         assertion =
           ix.deepMerge.rhs
-            { Service = { ExecStart = "/run/wrapped"; Restart = "on-failure"; }; }
-            { Service = { Restart = "always"; MemoryMax = "512M"; }; }
-          == {
+            {
+              Service = {
+                ExecStart = "/run/wrapped";
+                Restart = "on-failure";
+              };
+            }
+            {
+              Service = {
+                Restart = "always";
+                MemoryMax = "512M";
+              };
+            } == {
             Service = {
               ExecStart = "/run/wrapped";
               Restart = "always";
@@ -3317,7 +3342,13 @@ let
             { a.x = 1; }
             { a.y = 2; }
             { b = 3; }
-          ] == { a = { x = 1; y = 2; }; b = 3; };
+          ] == {
+            a = {
+              x = 1;
+              y = 2;
+            };
+            b = 3;
+          };
         message = "deepMerge.strictList should fold strict over a list of disjoint trees";
       }
     ];
