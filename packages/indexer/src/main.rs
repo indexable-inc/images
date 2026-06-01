@@ -7,7 +7,7 @@
 //! [`sink_parquet`] sink. Pass `--mixedbread-store` and/or `--bucket` to enable a
 //! sink, and one or more source flags to choose what to ingest.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -86,6 +86,18 @@ struct Cli {
     /// Mixedbread only (code lives in git, not the parquet archive); repeatable.
     #[arg(long = "code-repo")]
     code_repos: Vec<PathBuf>,
+
+    /// Index one user's local history (claude, codex, atuin) by `NAME:HOME`,
+    /// repeatable. One process indexes many users — the fleet runs this as root
+    /// over every account — tagging each user's records with `NAME`. Symlinked
+    /// history paths are skipped so a privileged run cannot be a confused deputy.
+    #[arg(long = "user", value_name = "NAME:HOME")]
+    users: Vec<String>,
+
+    /// Host name to tag `--user` records with. Defaults to the system hostname;
+    /// the fleet module passes the NixOS `networking.hostName`.
+    #[arg(long)]
+    host: Option<String>,
 }
 
 #[tokio::main]
@@ -109,20 +121,33 @@ async fn main() -> anyhow::Result<()> {
     if store.is_none() && parquet.is_none() {
         anyhow::bail!("nothing to do: pass --mixedbread-store and/or --bucket");
     }
+    if !any_source_selected(&cli) {
+        anyhow::bail!(
+            "no sources selected: pass --local, --user NAME:HOME, --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--git-repo, or --code-repo"
+        );
+    }
     let mixedbread = store.as_ref().zip(cli.mixedbread_store.as_deref());
 
     let (indexed, failures) = run_sources(&cli, mixedbread, parquet.as_ref()).await;
 
-    let configured = indexed + failures;
-    if configured == 0 {
-        anyhow::bail!(
-            "no sources selected: pass --local and/or --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--git-repo/--code-repo"
-        );
-    }
     if failures > 0 {
-        anyhow::bail!("{failures} of {configured} source(s) failed; {indexed} succeeded");
+        anyhow::bail!("{failures} of {} source(s) failed; {indexed} succeeded", indexed + failures);
     }
     Ok(())
+}
+
+/// Whether any source flag was given (a config check, independent of how many
+/// records each source ends up producing).
+fn any_source_selected(cli: &Cli) -> bool {
+    cli.local
+        || cli.claude_dir.is_some()
+        || cli.codex_file.is_some()
+        || cli.atuin_db.is_some()
+        || cli.slack_export.is_some()
+        || cli.linear_export.is_some()
+        || !cli.git_repos.is_empty()
+        || !cli.code_repos.is_empty()
+        || !cli.users.is_empty()
 }
 
 /// Resolve the selected sources and run each one independently (a failure never
@@ -200,7 +225,142 @@ async fn run_sources(
         let result = index_code(&label, repo_dir, mixedbread).await;
         record(&label, result, &mut indexed, &mut failures);
     }
+    if !cli.users.is_empty() {
+        run_users(cli, mixedbread, parquet, &mut indexed, &mut failures).await;
+    }
     (indexed, failures)
+}
+
+/// Run the `--user NAME:HOME` multi-user phase, accumulating into the shared
+/// counters. Split out of [`run_sources`] to keep each function focused.
+async fn run_users(
+    cli: &Cli,
+    mixedbread: Option<(&MixedbreadStore, &str)>,
+    parquet: Option<&sink_parquet::Config>,
+    indexed: &mut usize,
+    failures: &mut usize,
+) {
+    let host = match resolve_host(cli) {
+        Ok(host) => host,
+        Err(error) => {
+            // Without a host tag every claude/codex record would be mislabeled,
+            // so fail the whole multi-user phase rather than emit wrong metadata.
+            eprintln!("[users] failed to resolve host: {error:#}");
+            *failures += cli.users.len();
+            return;
+        }
+    };
+    for spec in &cli.users {
+        match parse_user(spec) {
+            Ok((name, home)) => {
+                index_user(&name, &home, &host, mixedbread, parquet, indexed, failures).await;
+            }
+            Err(error) => {
+                eprintln!("[users] bad --user spec: {error:#}");
+                *failures += 1;
+            }
+        }
+    }
+}
+
+/// Index one user's local agent and shell history (claude, codex, atuin),
+/// reading under `home` and tagging records with `name` and `host`.
+///
+/// Designed for the privileged fleet run: it never follows a symlinked history
+/// path (the claude adapter's traversal refuses inner symlinks; the codex/atuin
+/// single files are gated by [`is_regular_file`]), so a user-planted symlink
+/// cannot redirect a root read at another account's files. Absent sources are
+/// skipped; a parse failure in one source is recorded but does not abort the
+/// others.
+async fn index_user(
+    name: &str,
+    home: &Path,
+    host: &str,
+    mixedbread: Option<(&MixedbreadStore, &str)>,
+    parquet: Option<&sink_parquet::Config>,
+    indexed: &mut usize,
+    failures: &mut usize,
+) {
+    // The claude adapter follows the explicitly named root (a user's
+    // `~/.claude/projects` is itself a symlink in some setups) but refuses every
+    // symlink inside the tree, so passing the directory is safe even as root.
+    let claude_dir = home.join(".claude").join("projects");
+    if claude_dir.is_dir() {
+        let label = format!("claude:{name}");
+        let parquet = user_parquet(parquet, name);
+        let result = async {
+            let adapter = source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name)
+                .with_context(|| format!("parsing Claude transcripts for {name} at {}", claude_dir.display()))?;
+            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+        }
+        .await;
+        record(&label, result, indexed, failures);
+    }
+
+    let codex_file = home.join(".codex").join("history.jsonl");
+    if is_regular_file(&codex_file) {
+        let label = format!("codex:{name}");
+        let parquet = user_parquet(parquet, name);
+        let result = async {
+            let adapter = source_codex::CodexHistory::open_with(&codex_file, host, name)
+                .with_context(|| format!("parsing Codex history for {name} at {}", codex_file.display()))?;
+            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+        }
+        .await;
+        record(&label, result, indexed, failures);
+    }
+
+    // atuin records its own `host`/`user` in each row, so it self-tags per user
+    // regardless of who runs the process; the file is still symlink-gated.
+    let atuin_db = home.join(".local").join("share").join("atuin").join("history.db");
+    if is_regular_file(&atuin_db) {
+        let label = format!("shell:{name}");
+        let parquet = user_parquet(parquet, name);
+        let result = async {
+            let adapter = source_atuin::AtuinHistory::open(&atuin_db)
+                .with_context(|| format!("reading atuin history for {name} at {}", atuin_db.display()))?;
+            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+        }
+        .await;
+        record(&label, result, indexed, failures);
+    }
+}
+
+/// Parse a `NAME:HOME` user spec. The name is everything before the first colon;
+/// both parts must be non-empty.
+fn parse_user(spec: &str) -> anyhow::Result<(String, PathBuf)> {
+    let (name, home) =
+        spec.split_once(':').with_context(|| format!("--user must be NAME:HOME, got {spec:?}"))?;
+    anyhow::ensure!(!name.is_empty(), "--user NAME must be non-empty in {spec:?}");
+    anyhow::ensure!(!home.is_empty(), "--user HOME must be non-empty in {spec:?}");
+    Ok((name.to_owned(), PathBuf::from(home)))
+}
+
+/// A per-user parquet config: partition each user's rows under `user=<name>` so
+/// concurrently indexed users never overwrite the one shared per-source file.
+fn user_parquet(config: Option<&sink_parquet::Config>, name: &str) -> Option<sink_parquet::Config> {
+    config.map(|config| sink_parquet::Config {
+        prefix: format!("{}/user={name}", config.prefix),
+        ..config.clone()
+    })
+}
+
+/// True only for a present, regular file that is not a symlink. Uses
+/// `symlink_metadata` so a user-planted symlink at a history path cannot redirect
+/// a privileged read at another account's files (the confused-deputy class; see
+/// ix `history-ship`).
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file())
+}
+
+/// The host name to tag `--user` records with: the `--host` override, else the
+/// system hostname.
+fn resolve_host(cli: &Cli) -> anyhow::Result<String> {
+    if let Some(host) = &cli.host {
+        return Ok(host.clone());
+    }
+    let raw = nix::unistd::gethostname().context("resolving the system host name")?;
+    Ok(raw.to_string_lossy().into_owned())
 }
 
 /// Index one code checkout via search-core's content-addressed reconcile

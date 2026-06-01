@@ -9,15 +9,6 @@ use snafu::Snafu;
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
 pub enum Error {
-    /// A directory under the history root could not be listed.
-    #[snafu(display("failed to list directory {}", path.display()))]
-    ListDir {
-        /// Directory that could not be read.
-        path: PathBuf,
-        /// Underlying I/O error.
-        source: std::io::Error,
-    },
-
     /// A transcript file could not be read.
     #[snafu(display("failed to read transcript {}", path.display()))]
     ReadFile {

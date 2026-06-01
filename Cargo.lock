@@ -1050,6 +1050,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snafu 0.9.1",
+ "tempfile",
 ]
 
 [[package]]
@@ -2789,6 +2790,7 @@ dependencies = [
  "clap",
  "dirs",
  "mixedbread",
+ "nix 0.30.1",
  "search-core",
  "sink-mixedbread",
  "sink-parquet",

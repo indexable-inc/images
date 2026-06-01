@@ -5,10 +5,10 @@
 //! One [`Document`] per submitted **prompt**. Codex stores history as a flat
 //! append log of `{session_id, ts, text}` lines (default `~/.codex/history.jsonl`),
 //! so a record is one user prompt; there is no assistant side.
-//! `external_id = "codex:{session_id}:{seq}"`, where `seq` is the prompt's
-//! 0-based ordinal within its session in file order, so an append-only log
-//! re-ingests only its new prompts: the content-hash reconcile in `search-core`
-//! skips everything already uploaded.
+//! `external_id = "codex:{session_id}:{ts}:{content_hash}"`, so the id is stable
+//! under history compaction (it is content-derived, not positional): an
+//! append-only log re-ingests only its new prompts, and the content-hash
+//! reconcile in `search-core` skips everything already uploaded.
 //!
 //! # Tags
 //! Every document's flat metadata carries the common header (`source`,

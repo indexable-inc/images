@@ -21,7 +21,6 @@ mod error;
 mod record;
 mod transcript;
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use source_meta::{Document, Source, SourceAdapter};
@@ -29,7 +28,7 @@ use snafu::ResultExt as _;
 
 pub use crate::error::Error;
 pub use crate::record::Message;
-use crate::error::{HostNameSnafu, ListDirSnafu, Result};
+use crate::error::{HostNameSnafu, Result};
 use crate::record::MessageOrigin;
 
 /// The `source` tag every Claude transcript document carries.
@@ -56,8 +55,7 @@ impl ClaudeHistoryExport {
     /// read, or a line is not valid JSON.
     pub fn open_with(dir: &Path, host: &str, user: &str) -> Result<Self> {
         let mut files = Vec::new();
-        let mut visited = HashSet::new();
-        collect_transcripts(dir, &mut files, &mut visited)?;
+        collect_transcripts(dir, &mut files);
 
         let mut messages = Vec::new();
         for file in files {
@@ -117,38 +115,40 @@ impl SourceAdapter for ClaudeHistoryExport {
 
 /// Recursively collect `*.jsonl` transcript files under `dir`.
 ///
-/// Symlinks are followed because Claude's history directory is itself a symlink
-/// in some setups (`~/.claude/projects` points at the real store). `visited`
-/// holds the canonical path of every directory already entered, so a symlink
-/// cycle is broken instead of recursing forever. This is for the intended
-/// unprivileged, single-user run, reading only the invoking user's own files; a
-/// privileged or multi-user shipper must additionally reject symlinks with
-/// `O_NOFOLLOW` to avoid the confused-deputy class (see ix `history-ship`'s
-/// symlink finding).
-fn collect_transcripts(
-    dir: &Path,
-    out: &mut Vec<PathBuf>,
-    visited: &mut HashSet<PathBuf>,
-) -> Result<()> {
-    let canonical = std::fs::canonicalize(dir).context(ListDirSnafu { path: dir.to_path_buf() })?;
-    if !visited.insert(canonical) {
-        // Already walked this real directory (a symlink pointed back into the
-        // tree); stop rather than loop.
-        return Ok(());
-    }
-
-    let entries = std::fs::read_dir(dir).context(ListDirSnafu { path: dir.to_path_buf() })?;
-    for entry in entries {
-        let entry = entry.context(ListDirSnafu { path: dir.to_path_buf() })?;
+/// The top-level `dir` is followed even when it is a symlink: the operator names
+/// it explicitly, and `~/.claude/projects` is itself a symlink in some setups
+/// (it points at the real store). Inside the tree, symlinks are never followed —
+/// both symlinked directories and symlinked files are skipped. This matters when
+/// the indexer runs privileged across many users' homes (`CAP_DAC_READ_SEARCH`
+/// on the fleet): a user-planted symlink must not redirect a read at another
+/// account's files (the confused-deputy class; see ix `history-ship`'s symlink
+/// finding). No-follow traversal also means there are no symlink cycles to break.
+///
+/// A missing or unreadable directory yields nothing rather than an error.
+/// Absence is normal: most homes have no Claude history, and the privileged
+/// fleet run walks many of them. This mirrors `history-ship`'s candidate
+/// enumeration.
+fn collect_transcripts(dir: &Path, out: &mut Vec<PathBuf>) {
+    // `read_dir` follows a symlinked `dir` (the explicitly named root); the
+    // per-entry `file_type` below reports the entry itself without following, so
+    // nothing reached through the tree can be a symlink.
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
         let path = entry.path();
-        let metadata = std::fs::metadata(&path).context(ListDirSnafu { path: path.clone() })?;
-        if metadata.is_dir() {
-            collect_transcripts(&path, out, visited)?;
-        } else if metadata.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
+        if file_type.is_dir() {
+            collect_transcripts(&path, out);
+        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
             out.push(path);
         }
     }
-    Ok(())
 }
 
 /// Derive a file's fallback identity tags: project from the parent directory
@@ -185,4 +185,86 @@ fn os_user() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| "unknown".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used, reason = "tests assert observable filesystem outcomes")]
+
+    use std::path::{Path, PathBuf};
+
+    use super::collect_transcripts;
+
+    fn collect(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        collect_transcripts(dir, &mut out);
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn missing_dir_yields_nothing() {
+        assert!(collect(Path::new("/nonexistent-claude-root-xyz")).is_empty());
+    }
+
+    #[test]
+    fn finds_nested_transcripts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let nested = temp.path().join("proj").join("sess");
+        std::fs::create_dir_all(&nested).expect("mkdir");
+        std::fs::write(nested.join("a.jsonl"), b"{}").expect("write a");
+        std::fs::write(temp.path().join("b.jsonl"), b"{}").expect("write b");
+        std::fs::write(temp.path().join("notes.txt"), b"x").expect("write notes");
+
+        let found = collect(temp.path());
+        assert_eq!(found.len(), 2, "only .jsonl files, collected recursively");
+        assert!(found.iter().all(|path| path.extension().is_some_and(|ext| ext == "jsonl")));
+    }
+
+    #[test]
+    fn symlinked_leaf_transcript_is_skipped() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        // Stands in for a sensitive target the privileged walk must not follow.
+        let secret = temp.path().join("secret-target");
+        std::fs::write(&secret, b"{}").expect("write secret");
+        std::os::unix::fs::symlink(&secret, temp.path().join("leak.jsonl")).expect("symlink");
+        std::fs::write(temp.path().join("real.jsonl"), b"{}").expect("write real");
+
+        let found = collect(temp.path());
+        assert_eq!(found.len(), 1, "the symlinked transcript must not be collected");
+        assert_eq!(found[0].file_name().and_then(|name| name.to_str()), Some("real.jsonl"));
+    }
+
+    #[test]
+    fn symlinked_subdir_is_not_descended() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        // A tree outside the root that a user-planted directory symlink could
+        // otherwise redirect the privileged walk into.
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("mkdir outside");
+        std::fs::write(outside.join("secret.jsonl"), b"{}").expect("write secret");
+
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(&root).expect("mkdir root");
+        std::os::unix::fs::symlink(&outside, root.join("link")).expect("symlink");
+        std::fs::write(root.join("real.jsonl"), b"{}").expect("write real");
+
+        let found = collect(&root);
+        assert_eq!(found.len(), 1, "files under a symlinked subdir must not be collected");
+        assert_eq!(found[0].file_name().and_then(|name| name.to_str()), Some("real.jsonl"));
+    }
+
+    #[test]
+    fn top_level_symlinked_root_is_followed() {
+        // The user's own ~/.claude/projects is a symlink to the real store, so
+        // the explicitly named root must still be read.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let real = temp.path().join("real-store");
+        std::fs::create_dir_all(&real).expect("mkdir real");
+        std::fs::write(real.join("s.jsonl"), b"{}").expect("write s");
+        let link = temp.path().join("projects");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+        assert_eq!(collect(&link).len(), 1, "a symlinked root is followed");
+    }
 }
