@@ -39,6 +39,10 @@ A few things already here:
   primitives to an LLM, no install step.
 - Ready-to-run [OCI images](images/) and reusable [NixOS modules](modules/), the
   layer [ix](https://ix.dev) publishes on top of its closed-source VM primitives.
+- The **ix platform docs** ([`skills/ix`](skills/ix/)) as a Claude Code skill:
+  VMs, forks, snapshots, SDKs, pricing, reliability. The real CLI is one
+  `nix run .#ix` away, so an agent can check the docs against the live tool
+  instead of trusting the prose.
 
 To explore, you could point Claude at this repo and ask whether anything here is
 useful for you.
@@ -68,6 +72,7 @@ nix build .#minecraft   # realize one image closure
 - [`modules/`](modules/) opt-in NixOS service modules, auto-discovered.
 - [`lib/`](lib/) shared helper and builder API.
 - [`examples/`](examples/) standalone consumer fleets.
+- [`skills/`](skills/) Claude Code skills, auto-discovered and shipped to agents; includes [`ix`](skills/ix/), the ix platform docs (also installable via `/plugin install ix@ix`).
 
 ## Feedback
 

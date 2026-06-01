@@ -26,8 +26,14 @@ let
     # Opt-in: scans each unit's objects for functions that can reach a panic.
     # Off by default because it is a best-effort gate, not a soundness proof.
     denyPanics = false;
+    # On by default: cargoAuditCheck is an offline, lockfile-only runCommand
+    # (`cargo-audit audit --file Cargo.lock --no-fetch --stale` against the
+    # pinned advisory DB) that inherits only Cargo.lock, so it is decoupled from
+    # compilation and re-runs only when the lockfile or DB changes. Cheap enough
+    # to audit every workspace; opt out per-workspace with a named reason (e.g.
+    # lib/rust-workspace.nix disables it on the pure-build cross graph).
     cargoAudit = {
-      enable = false;
+      enable = true;
       db = defaultRustsecAdvisoryDb;
       deny = [ ];
       ignore = [ ];

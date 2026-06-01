@@ -9,11 +9,14 @@
 //!
 //! Usage:
 //!   xp-orb-overlay                 run the pinned single-orb overlay
-//!   xp-orb-overlay feed            run the full-screen merge "rise & pop" feed
-//!   xp-orb-overlay push TEXT       queue one labelled orb for the feed and exit
-//!                  [--amount N]
-//!   xp-orb-overlay --snapshot OUT  render the current orb to a PNG and exit
-//!                  [--scale N] [--amount N] [--hover] [--label TEXT]
+//!   xp-orb-overlay feed            run the full-screen "rise & pop" karma feed
+//!   xp-orb-overlay push TEXT       queue one labelled pop for the feed and exit
+//!                  [--amount N] [--kind orb|villager]
+//!   xp-orb-overlay --snapshot OUT  render a pop/orb to a PNG and exit
+//!                  [--scale N] [--amount N] [--hover] [--label TEXT] [--kind K]
+//!
+//! The feed carries two pop kinds: `orb` (success, the green experience orb +
+//! pickup sound) and `villager` (failure, the angry-villager puff + "no" sound).
 
 mod assets;
 mod db;
@@ -21,6 +24,7 @@ mod feed;
 mod orb;
 mod overlay;
 mod scene;
+mod sound;
 
 use std::path::PathBuf;
 
@@ -46,9 +50,11 @@ struct Args {
     amount: Option<i64>,
     /// Render the snapshot in the hovered (grown) state.
     hover: bool,
-    /// Render the snapshot as a labelled merge "pop" (orb + this text) instead of
+    /// Render the snapshot as a labelled "pop" (sprite + this text) instead of
     /// the bare pinned orb, so the feed look is verifiable from a file.
     label: Option<String>,
+    /// Which pop sprite to render with `--label` (orb success / villager failure).
+    kind: scene::Kind,
     /// Run the scroll-drag cursor-follow self-test, writing a report here and
     /// exiting. Validates the fix inside the macOS guest VM, where the guest
     /// cursor is invisible to host screenshots, by reading the real cursor in-guest.
@@ -62,6 +68,7 @@ fn parse_args() -> Result<Args, String> {
         amount: None,
         hover: false,
         label: None,
+        kind: scene::Kind::Orb,
         selftest: None,
     };
     let mut it = std::env::args().skip(1);
@@ -90,6 +97,10 @@ fn parse_args() -> Result<Args, String> {
             "--label" => {
                 args.label = Some(it.next().ok_or("--label needs text")?);
             }
+            "--kind" => {
+                let k = it.next().ok_or("--kind needs a value")?;
+                args.kind = scene::Kind::parse(&k).ok_or("--kind must be orb or villager")?;
+            }
             "--selftest" => {
                 let p = it.next().ok_or("--selftest needs an output path")?;
                 args.selftest = Some(PathBuf::from(p));
@@ -97,11 +108,11 @@ fn parse_args() -> Result<Args, String> {
             "-h" | "--help" => {
                 println!(
                     "xp-orb-overlay                 pinned single-orb overlay\n\
-                     xp-orb-overlay feed            full-screen merge rise-&-pop feed\n\
-                     xp-orb-overlay push TEXT [--amount N]   queue one feed orb\n\
-                     xp-orb-overlay --snapshot OUT [--scale N] [--amount N] [--hover] [--label TEXT]\n\
-                     SQLite-driven Minecraft experience-orb overlay. DB path: ORB_DB \
-                     or the per-OS app-data path."
+                     xp-orb-overlay feed            full-screen rise-&-pop karma feed\n\
+                     xp-orb-overlay push TEXT [--amount N] [--kind orb|villager]   queue one feed pop\n\
+                     xp-orb-overlay --snapshot OUT [--scale N] [--amount N] [--hover] [--label TEXT] [--kind K]\n\
+                     SQLite-driven Minecraft overlay (orb = success, villager = failure). DB path: \
+                     ORB_DB or the per-OS app-data path."
                 );
                 std::process::exit(0);
             }
@@ -111,10 +122,12 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
-/// `xp-orb-overlay push TEXT... [--amount N]`: queue one labelled orb and exit.
-/// Positional words join into the label so the caller need not quote.
+/// `xp-orb-overlay push TEXT... [--amount N] [--kind orb|villager]`: queue one
+/// labelled pop and exit. Positional words join into the label so the caller need
+/// not quote. `--kind` defaults to `orb` (success); `villager` is the failure pop.
 fn run_push(rest: &[String], db: &std::path::Path) -> ! {
     let mut amount = DEFAULT_PUSH_AMOUNT;
+    let mut kind = scene::Kind::Orb;
     let mut parts: Vec<String> = Vec::new();
     let mut it = rest.iter();
     while let Some(a) = it.next() {
@@ -123,6 +136,13 @@ fn run_push(rest: &[String], db: &std::path::Path) -> ! {
                 Some(n) => amount = n,
                 None => {
                     eprintln!("xp-orb-overlay: push --amount needs a number");
+                    std::process::exit(2);
+                }
+            },
+            "--kind" => match it.next().map(|s| scene::Kind::parse(s)) {
+                Some(Some(k)) => kind = k,
+                _ => {
+                    eprintln!("xp-orb-overlay: push --kind must be orb or villager");
                     std::process::exit(2);
                 }
             },
@@ -136,7 +156,7 @@ fn run_push(rest: &[String], db: &std::path::Path) -> ! {
         }
     }
     let text = parts.join(" ");
-    match db::push_event(db, &text, amount) {
+    match db::push_event(db, &text, amount, kind.as_str()) {
         Ok(()) => std::process::exit(0),
         Err(e) => {
             eprintln!("xp-orb-overlay: push failed: {e}");
@@ -208,8 +228,8 @@ fn main() {
                     let tex = scene::register(gpu);
                     let mut quads = Vec::new();
                     scene::build_pop(
-                        gpu, &tex, &label, amount, scale, pad as f32, pad as f32, 1.0, 0.5,
-                        &mut quads,
+                        gpu, &tex, args.kind, &label, amount, scale, pad as f32, pad as f32, 1.0,
+                        0.5, &mut quads,
                     );
                     quads
                 },

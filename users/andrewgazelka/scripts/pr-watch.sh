@@ -1,28 +1,31 @@
 # Body of the `pr-watch` bash app (see users/andrewgazelka/home.nix).
 # No shebang / `set` line: the mkBashApp wrapper supplies bash + `set -euo
-# pipefail` and bakes gh/jq/say-detached/ci-triage/claude/coreutils onto PATH via
+# pipefail` and bakes gh/jq/ci-triage/claude/coreutils onto PATH via
 # runtimeInputs. The module bakes these placeholders at build time:
-#   @ANNOUNCE_LIB@     store path of announce-lib.sh (source'd below)
 #   @REPOS@            the watched repos as a quoted bash-array body
-#   @ORB_BIN@          absolute path to the xp-orb-overlay binary (merge feed)
+#   @ORB_BIN@          absolute path to the xp-orb-overlay binary (karma feed)
 #   @LOG_DIR@          directory the detached ci-triage stage-2 log is appended to
 #   @TRIAGE_COOLDOWN@  default seconds between stage-2 deep dives per repo+workflow
 #
+# This is the visual half of the "karma feed": successes float a green XP orb up
+# the screen, failures pop a grey angry-villager puff. Nothing is spoken; the feed
+# overlay plays the per-kind Minecraft sound (orb pickup / villager "no").
+#
 # Polls each watched repo for PRs newly merged into `main`. For each newly merged
-# PR it queues a labelled Minecraft XP orb in the merge feed overlay
-# (`xp-orb-overlay push "<repo>: <title>"`), which floats up the screen and fades
-# ("rise & pop"). NO sound: the merge alert is purely visual. It deliberately
-# does NOT report the still-open / pending PR queue. The first run per repo only
-# seeds the state file, so existing PRs stay quiet.
+# PR it queues a labelled XP orb in the feed overlay
+# (`xp-orb-overlay push "<repo>: <title>"`), which floats up and fades ("rise &
+# pop") with the orb pickup sound. It deliberately does NOT report the still-open
+# / pending PR queue. The first run per repo only seeds the state file, so
+# existing PRs stay quiet.
 #
 # It ALSO polls each repo for Actions runs that newly FAILED on `main` and
 # responds in TWO stages per newly-failed run:
-#   Stage 1 (immediate): play the failure sound + speak a SHORT haiku of the
-#     failure right away, via an isolated `claude -p` summarizer (announce()).
+#   Stage 1 (immediate): queue a silent angry-villager pop in the feed overlay,
+#     labelled with what failed (grey puff + villager "no" sound, no speech).
 #   Stage 2 (deep dive): launch `ci-triage` DETACHED (own session, like
 #     say-detached, wrapped in `timeout`) so it never blocks stage 1 for the
 #     next failure and survives a reload. ci-triage fetches the failed logs, has
-#     Opus 4.8 diagnose the root cause, speaks it, and files (or dedupes) a
+#     Opus 4.8 diagnose the root cause silently, and files (or dedupes) a
 #     Linear ENG ticket when the failure is a genuine code break.
 # A separate per-repo state file dedupes on the run's databaseId, and the first
 # run per repo seeds it quietly so the existing backlog of past failures stays
@@ -45,14 +48,7 @@ mkdir -p "@LOG_DIR@"
 exec 9>"$state_dir/poll.lock"
 perl -e 'use Fcntl ":flock"; flock(STDIN, LOCK_EX | LOCK_NB) or exit 1' <&9 || exit 0
 
-# Shared "summarize -> speak with sound" helper (announce()), used by the stage-1
-# CI-failure alert. @ANNOUNCE_LIB@ is the store path of announce-lib.sh.
-# shellcheck source=/dev/null
-. "@ANNOUNCE_LIB@"
-
 repos=(@REPOS@)
-
-ci_sys='You are a spoken alert for a busy engineer who cannot see the screen. You are told that a GitHub Actions run just FAILED on the main branch of one of their repos. You are given the repo name, the workflow name, the commit title that broke it, and the name(s) of the job(s) that failed (and possibly the failing step). In one casual spoken sentence, tell them that the main build broke in that repo, name the workflow, and name which job or jobs failed; if you are given a failing step, you may mention it. Begin like: Heads up, the main build just failed in I X. Use the repo name you are given. When the repo name is ix, write it as "I X" (two separate letters), never "ix", so it is not read aloud as the Roman numeral nine. Never mention a PR number. Plain English, spoken aloud, no preamble, no questions, no markdown, no code.'
 
 for repo in "${repos[@]}"; do
   slug="${repo//\//_}"
@@ -76,10 +72,10 @@ for repo in "${repos[@]}"; do
     short="${repo##*/}"
     echo "MERGED: [$short #$num] $title  (by $who)"
 
-    # Visual only: queue a labelled XP orb in the merge feed overlay. It floats
-    # up and fades. No sound. Best-effort: if the feed overlay is not running the
-    # event just sits in the DB (pruned after a few minutes), so never fail the
-    # poll on a push error.
+    # Queue a labelled XP orb in the feed overlay. It floats up and fades with
+    # the orb pickup sound (played by the feed). Best-effort: if the feed overlay
+    # is not running the event just sits in the DB (pruned after a few minutes),
+    # so never fail the poll on a push error.
     @ORB_BIN@ push "$short: $title" || true
   done < <(printf '%s' "$json" | jq -r '
     .[] | [ (.number|tostring),
@@ -126,18 +122,11 @@ for repo in "${repos[@]}"; do
         | join("; ")')" || failed_jobs=""
     [ -n "$failed_jobs" ] || failed_jobs="(unknown jobs)"
 
-    # --- Stage 1: immediate, fast spoken haiku of the failure --------------
-    ctx="A GitHub Actions run just failed on main.
-Repo (say this name): $short
-Workflow: $run_wf
-Commit that broke it: $run_title
-Failed job(s): $failed_jobs"
-
-    # Shared summarize -> speak: distinct (negative) sound, detached. This must
-    # happen promptly for each failure, before the heavy stage-2 work. Low
-    # note-block bass reads as "down" without being a harsh alarm.
-    announce note/bass "$ci_sys" 'Announce this CI failure.' \
-      "$ctx" "Heads up, the main build just failed in $short. Workflow $run_wf, failed job: $failed_jobs."
+    # --- Stage 1: immediate, silent angry-villager pop ---------------------
+    # Visual only: queue a failure villager in the feed overlay, labelled with
+    # what failed. The feed plays the villager "no" grunt; nothing is spoken.
+    # Best-effort, like the merge orb: never fail the poll on a push error.
+    @ORB_BIN@ push "$short: $run_wf failed: $failed_jobs" --kind villager || true
 
     # --- Stage 2: detached Opus deep dive (root cause + Linear ticket) ------
     # Cost/noise guard: when main stays red, runs fail back-to-back. Stage 1

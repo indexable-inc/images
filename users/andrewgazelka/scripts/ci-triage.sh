@@ -1,32 +1,32 @@
 # Body of the `ci-triage` bash app (see users/andrewgazelka/home.nix).
 # No shebang / `set` line: the mkBashApp wrapper supplies bash + `set -euo
-# pipefail` and bakes gh/jq/claude/coreutils + say-detached onto PATH.
+# pipefail` and bakes gh/jq/claude/coreutils onto PATH.
 #
 # Stage-2 of the pr-watch CI response: a per-run DEEP DIVE into one GitHub
-# Actions run that just FAILED on main. pr-watch (stage 1) already played the
-# failure sound and spoke a fast haiku of the failure; this script is launched
-# DETACHED (own session, see the ci-triage invocation in pr-watch) so it never
-# blocks stage 1 for the next failure and survives a launchd/systemd reload, and
-# it is wrapped in `timeout` so a stuck Opus run can't pile up.
+# Actions run that just FAILED on main. pr-watch (stage 1) already showed the
+# failure as a silent angry-villager pop in the feed overlay; this script is
+# launched DETACHED (own session, see the ci-triage invocation in pr-watch) so it
+# never blocks stage 1 for the next failure and survives a launchd/systemd reload,
+# and it is wrapped in `timeout` so a stuck Opus run can't pile up.
 #
 # It uses `claude -p` with Opus 4.8 and the Bash tool (it needs tools to read
-# the failed logs and file a ticket). The agent:
+# the failed logs and file a ticket). It is SILENT: the villager pop is the only
+# alert, so this stage neither plays a sound nor speaks. The agent:
 #   1. Fetches failed logs itself (gh run view --log-failed, capped).
 #   2. Diagnoses the ROOT CAUSE.
-#   3. SPEAKS a concise 2-3 sentence root cause via say-detached (sound + voice).
-#   4. Decides if it's a genuine, actionable code failure vs transient/infra/flaky.
-#   5. If actionable: searches Linear for an existing matching open issue first
+#   3. Decides if it's a genuine, actionable code failure vs transient/infra/flaky.
+#   4. If actionable: searches Linear for an existing matching open issue first
 #      (dedupe), and only creates a new ENG ticket via issueCreate if none.
 #
 # Linear auth: the key is read at runtime from $PR_WATCH_LINEAR_KEY, else the
 # macOS login Keychain (service `pr-watch-linear`) — no secret in the Nix store,
 # the plist, or git. Seed the Keychain (idempotent, from 1Password) with the
-# host's `seed-launchd-secrets`. If neither is present the deep dive still speaks
-# the root cause; it just tells the agent it cannot file a ticket.
+# host's `seed-launchd-secrets`. If neither is present the deep dive still runs;
+# it just notes in its summary that it cannot file a ticket.
 #
-# CI_TRIAGE_DRY_RUN=1 makes this NON-DESTRUCTIVE for testing: no sound, no
-# speech, and NO real Linear ticket — the agent prints the GraphQL mutation it
-# WOULD send instead. Logs are still fetched and Opus still analyses.
+# CI_TRIAGE_DRY_RUN=1 makes this NON-DESTRUCTIVE for testing: NO real Linear
+# ticket — the agent prints the GraphQL mutation it WOULD send instead. Logs are
+# still fetched and Opus still analyses.
 #
 # Usage: ci-triage <repo> <runId> <url> <workflow> <jobs>
 #   e.g. ci-triage indexable-inc/ix 123 https://... ci "build (step: clippy)"
@@ -51,10 +51,6 @@ if [ -z "$linear_key" ] && command -v security >/dev/null 2>&1; then
   linear_key="$(security find-generic-password -s pr-watch-linear -w 2>/dev/null)" || linear_key=""
 fi
 
-# Sound id used by stage 1 too; the deep dive reuses it before the spoken cause.
-# Low note-block bass: a gentle "down" cue, not a harsh alarm.
-sound="note/bass"
-
 # ENG team id (from the repo's linear skill). Linear auth header is the raw key
 # (NOT "Bearer ...").
 eng_team_id="a8845362-21c7-4283-ba80-cea987a3ee74"
@@ -63,11 +59,11 @@ eng_team_id="a8845362-21c7-4283-ba80-cea987a3ee74"
 # logs and (maybe) files the ticket via its Bash tool.
 ticket_clause=""
 if [ -n "$dry" ]; then
-  ticket_clause="DRY RUN MODE: Do NOT play any sound. Do NOT speak (do NOT call say-detached). Do NOT create a real Linear ticket. Instead, after your analysis, PRINT to stdout: the spoken root-cause text you WOULD have said (prefixed \"WOULD SAY: \"), your applicable/not-applicable decision with one-line reason (prefixed \"DECISION: \"), and if applicable the exact Linear GraphQL issueCreate mutation JSON you WOULD POST (prefixed \"WOULD POST: \"). Do not run any curl/POST to Linear."
+  ticket_clause="DRY RUN MODE: Do NOT create a real Linear ticket. Instead, after your analysis, PRINT to stdout: your applicable/not-applicable decision with one-line reason (prefixed \"DECISION: \"), and if applicable the exact Linear GraphQL issueCreate mutation JSON you WOULD POST (prefixed \"WOULD POST: \"). Do not run any curl/POST to Linear."
 elif [ -n "$linear_key" ]; then
   ticket_clause="You CAN file a Linear ticket. The Linear API key is in the login Keychain; read it in Bash with: LINEAR_API_KEY=\$(security find-generic-password -s pr-watch-linear -w). The Linear GraphQL endpoint is https://api.linear.app/graphql (POST, Content-Type: application/json, Authorization header is the RAW key, NOT Bearer)."
 else
-  ticket_clause="You CANNOT file a Linear ticket right now (no key in the Keychain). Do your analysis and speak the root cause as usual, but instead of filing, briefly add to the spoken sentence that you could not open a ticket because the Linear key is missing."
+  ticket_clause="You CANNOT file a Linear ticket right now (no key in the Keychain). Do your analysis and note in your summary that you could not open a ticket because the Linear key is missing."
 fi
 
 read -r -d '' task <<EOF || true
@@ -88,19 +84,14 @@ Do the following, in order, using your Bash tool:
 
 2. Diagnose the ROOT CAUSE in detail from the logs.
 
-3. SPEAK a concise root cause (2-3 sentences, plain spoken English, no markdown) by running:
-     say-detached $sound "<your 2-3 sentence root cause>"
-   Begin like: The main build broke in $short because ... . Keep the full detail for the ticket; the voice is just the gist.
+3. Decide if this is a GENUINE, ACTIONABLE code failure: a real test, build, or lint break caused by a change. If it is clearly transient/infra/flaky (runner lost, network error, cache miss, timeout with no code signal, cancelled), it is NOT actionable: do not file a ticket, and note that briefly in your summary.
 
-4. Decide if this is a GENUINE, ACTIONABLE code failure: a real test, build, or lint break caused by a change. If it is clearly transient/infra/flaky (runner lost, network error, cache miss, timeout with no code signal, cancelled), it is NOT actionable: do not file a ticket, and say so briefly (you may include that in your spoken sentence).
-
-5. If ACTIONABLE: FIRST search Linear for an existing OPEN issue matching this failure (same workflow+job signature, or the same run url in the description) to avoid duplicates. Use the searchIssues query with the "term" argument (NOT "query"): searchIssues(term: "main CI failed: $workflow", first: 10) { nodes { identifier title url } } and inspect titles/descriptions. Only if NONE matches, create one with issueCreate:
+4. If ACTIONABLE: FIRST search Linear for an existing OPEN issue matching this failure (same workflow+job signature, or the same run url in the description) to avoid duplicates. Use the searchIssues query with the "term" argument (NOT "query"): searchIssues(term: "main CI failed: $workflow", first: 10) { nodes { identifier title url } } and inspect titles/descriptions. Only if NONE matches, create one with issueCreate:
      - teamId: "$eng_team_id" (the ENG / Engineering team)
      - title: "main CI failed: $workflow/<failing job> ($repo)"
      - description (markdown): the run URL ($run_url), the failing job/step ($jobs), and your full root-cause analysis. End the description with this exact footer on its own line:
          _Filed automatically by pr-watch via Claude Opus 4.8._
-   After creating (or matching), SPEAK one short follow-up with the ticket identifier, e.g.:
-     say-detached "" "Filed ticket ENG-1234." (or "Matched existing ticket ENG-1234.")
+   After creating (or matching), include the ticket identifier in your summary (e.g. "Filed ENG-1234" or "Matched existing ENG-1234").
 
 $ticket_clause
 

@@ -1,6 +1,8 @@
 {
+  lib,
   stdenvNoCC,
   fetchurl,
+  darwin,
   cliArtifacts ? { },
   packageSystem ? stdenvNoCC.hostPlatform.system,
   binarySrc ? null,
@@ -10,19 +12,19 @@ let
   sources = {
     x86_64-linux = fetchurl {
       url = "https://ix.dev/cli/linux-x86_64/ix";
-      hash = "sha256-aqPw2lpMcr91M6MleCtmNLDG1hy0B6B3XL0NaWdaeSM=";
+      hash = "sha256-LRbnBfNRFmLV2o25V03HXV7vCIS6C8fhMSTypKnLMw8=";
     };
     aarch64-darwin = fetchurl {
       url = "https://ix.dev/cli/darwin-arm64/ix";
-      hash = "sha256-1Whto7SP/iogbInZSLXXIgcUpuuCXGDEH4im+7b0jK4=";
+      hash = "sha256-HNt7tsElD0lc+Y+fNTNWw8vLdR1flsK1lnsyjhG6hAg=";
     };
     x86_64-darwin = fetchurl {
       url = "https://ix.dev/cli/darwin-x86_64/ix";
-      hash = "sha256-PZ+WlN4L/cFj9tWothY0V4xaG3VRrVgY9sFKpPM9efg=";
+      hash = "sha256-aNjAKbnqitcj7HU9XGuFtBe2aucekE4CVwdPCuxB22k=";
     };
   };
 
-  inherit (stdenvNoCC.hostPlatform) system;
+  inherit (stdenvNoCC.hostPlatform) system isDarwin;
   artifactSrc = cliArtifacts.${packageSystem} or null;
   selectedSrc =
     if binarySrc != null then
@@ -42,12 +44,25 @@ stdenvNoCC.mkDerivation {
   dontBuild = true;
   strictDeps = true;
 
+  # The darwin binaries ix.dev serves carry an invalid code signature
+  # (`codesign --verify` reports "code or signature have been modified"), so
+  # macOS AMFI kills them with SIGKILL the moment they exec and `nix run .#ix`
+  # never prints a line. Re-sign ad-hoc at install time to make the CLI launch.
+  nativeBuildInputs = lib.optionals isDarwin [
+    darwin.sigtool
+    darwin.cctools
+  ];
+
   installPhase = ''
     runHook preInstall
 
     install -Dm755 "$src" "$out/bin/ix"
 
     runHook postInstall
+  '';
+
+  postInstall = lib.optionalString isDarwin ''
+    codesign --force --sign - "$out/bin/ix"
   '';
 
   meta = {
