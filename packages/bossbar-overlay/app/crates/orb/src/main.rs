@@ -8,12 +8,16 @@
 //! `overlay-core` crate.
 //!
 //! Usage:
-//!   xp-orb-overlay                 run the overlay
+//!   xp-orb-overlay                 run the pinned single-orb overlay
+//!   xp-orb-overlay feed            run the full-screen merge "rise & pop" feed
+//!   xp-orb-overlay push TEXT       queue one labelled orb for the feed and exit
+//!                  [--amount N]
 //!   xp-orb-overlay --snapshot OUT  render the current orb to a PNG and exit
-//!                  [--scale N] [--amount N] [--hover]
+//!                  [--scale N] [--amount N] [--hover] [--label TEXT]
 
 mod assets;
 mod db;
+mod feed;
 mod orb;
 mod overlay;
 mod scene;
@@ -23,6 +27,17 @@ use std::path::PathBuf;
 /// Default logical pixel scale of the 16x16 orb sprite; overridable with
 /// `ORB_SCALE` or `--scale`.
 const DEFAULT_SCALE: u32 = 4;
+/// Default XP amount for a pushed merge orb when `--amount` is omitted: a
+/// mid-size orb (icon 2).
+const DEFAULT_PUSH_AMOUNT: i64 = 7;
+
+/// Sprite scale from `ORB_SCALE`, else the default.
+fn env_scale() -> u32 {
+    std::env::var("ORB_SCALE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_SCALE)
+}
 
 struct Args {
     snapshot: Option<PathBuf>,
@@ -31,6 +46,9 @@ struct Args {
     amount: Option<i64>,
     /// Render the snapshot in the hovered (grown) state.
     hover: bool,
+    /// Render the snapshot as a labelled merge "pop" (orb + this text) instead of
+    /// the bare pinned orb, so the feed look is verifiable from a file.
+    label: Option<String>,
     /// Run the scroll-drag cursor-follow self-test, writing a report here and
     /// exiting. Validates the fix inside the macOS guest VM, where the guest
     /// cursor is invisible to host screenshots, by reading the real cursor in-guest.
@@ -38,15 +56,12 @@ struct Args {
 }
 
 fn parse_args() -> Result<Args, String> {
-    let scale = std::env::var("ORB_SCALE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_SCALE);
     let mut args = Args {
         snapshot: None,
-        scale,
+        scale: env_scale(),
         amount: None,
         hover: false,
+        label: None,
         selftest: None,
     };
     let mut it = std::env::args().skip(1);
@@ -72,14 +87,19 @@ fn parse_args() -> Result<Args, String> {
                 );
             }
             "--hover" => args.hover = true,
+            "--label" => {
+                args.label = Some(it.next().ok_or("--label needs text")?);
+            }
             "--selftest" => {
                 let p = it.next().ok_or("--selftest needs an output path")?;
                 args.selftest = Some(PathBuf::from(p));
             }
             "-h" | "--help" => {
                 println!(
-                    "xp-orb-overlay [--snapshot OUT] [--scale N] [--amount N] [--hover] \
-                     [--selftest OUT]\n\
+                    "xp-orb-overlay                 pinned single-orb overlay\n\
+                     xp-orb-overlay feed            full-screen merge rise-&-pop feed\n\
+                     xp-orb-overlay push TEXT [--amount N]   queue one feed orb\n\
+                     xp-orb-overlay --snapshot OUT [--scale N] [--amount N] [--hover] [--label TEXT]\n\
                      SQLite-driven Minecraft experience-orb overlay. DB path: ORB_DB \
                      or the per-OS app-data path."
                 );
@@ -91,7 +111,59 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
+/// `xp-orb-overlay push TEXT... [--amount N]`: queue one labelled orb and exit.
+/// Positional words join into the label so the caller need not quote.
+fn run_push(rest: &[String], db: &std::path::Path) -> ! {
+    let mut amount = DEFAULT_PUSH_AMOUNT;
+    let mut parts: Vec<String> = Vec::new();
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--amount" => match it.next().and_then(|s| s.parse().ok()) {
+                Some(n) => amount = n,
+                None => {
+                    eprintln!("xp-orb-overlay: push --amount needs a number");
+                    std::process::exit(2);
+                }
+            },
+            other => parts.push(other.to_string()),
+        }
+    }
+    let text = parts.join(" ");
+    match db::push_event(db, &text, amount) {
+        Ok(()) => std::process::exit(0),
+        Err(e) => {
+            eprintln!("xp-orb-overlay: push failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
+    let db = db::resolve_path();
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+
+    // Subcommands precede the flag-based forms.
+    match argv.first().map(String::as_str) {
+        Some("feed") => {
+            // The feed accepts an optional `--scale N`.
+            let mut scale = env_scale();
+            let mut it = argv[1..].iter();
+            while let Some(a) = it.next() {
+                if a == "--scale" && let Some(n) = it.next().and_then(|s| s.parse().ok()) {
+                    scale = n;
+                }
+            }
+            if let Err(e) = feed::run(db, scale) {
+                eprintln!("xp-orb-overlay: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        Some("push") => run_push(&argv[1..], &db),
+        _ => {}
+    }
+
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
@@ -111,26 +183,47 @@ fn main() {
         return;
     }
 
-    let db = db::resolve_path();
-
     if let Some(out) = args.snapshot {
-        let mut orb = db::read_once(&db).unwrap_or_default();
-        if let Some(a) = args.amount {
-            orb.amount = a.max(0);
-        }
         let scale = args.scale.max(1);
-        let (w, h) = scene::orb_window_px(scale);
-        let hover = if args.hover { 1.0 } else { 0.0 };
-        // A still frame: mid-shimmer, no bob, so the PNG is deterministic.
-        let result = overlay_core::snapshot::render_to_png(
-            w,
-            h,
-            |gpu| {
-                let tex = scene::register(gpu);
-                scene::build(&tex, &orb, scale, w, h, hover, 0.5, 0.0)
-            },
-            &out,
-        );
+        // A still, mid-shimmer frame so the PNG is deterministic. With --label,
+        // render the feed "pop" (orb + label); otherwise the bare pinned orb.
+        let result = if let Some(label) = args.label.clone() {
+            let amount = args.amount.unwrap_or(DEFAULT_PUSH_AMOUNT).max(0);
+            let (pw, ph) = scene::pop_size(&label, scale);
+            // Room for the 1px*scale text shadow on the right and bottom.
+            let pad = scale;
+            let (w, h) = (pw + 2 * pad, ph + 2 * pad);
+            overlay_core::snapshot::render_to_png(
+                w,
+                h,
+                |gpu| {
+                    let tex = scene::register(gpu);
+                    let mut quads = Vec::new();
+                    scene::build_pop(
+                        gpu, &tex, &label, amount, scale, pad as f32, pad as f32, 1.0, 0.5,
+                        &mut quads,
+                    );
+                    quads
+                },
+                &out,
+            )
+        } else {
+            let mut orb = db::read_once(&db).unwrap_or_default();
+            if let Some(a) = args.amount {
+                orb.amount = a.max(0);
+            }
+            let (w, h) = scene::orb_window_px(scale);
+            let hover = if args.hover { 1.0 } else { 0.0 };
+            overlay_core::snapshot::render_to_png(
+                w,
+                h,
+                |gpu| {
+                    let tex = scene::register(gpu);
+                    scene::build(&tex, &orb, scale, w, h, hover, 0.5, 0.0)
+                },
+                &out,
+            )
+        };
         match result {
             Ok(()) => println!("xp-orb-overlay: wrote {}", out.display()),
             Err(e) => {

@@ -3,7 +3,7 @@
 //! has), and let the caller bob and grow it. The orb art is one 64x64 sheet of
 //! 16x16 icons in a 4x4 grid.
 
-use overlay_core::{anim, Gpu, Quad, TexHandle};
+use overlay_core::{anim, BitmapFont, Gpu, Quad, TexHandle, SHADOW};
 
 use crate::assets;
 use crate::orb::Orb;
@@ -19,6 +19,11 @@ pub const MAX_MUL: f32 = 1.18;
 /// Bob amplitude in source pixels: the orb drifts +/- this (times `scale`) about
 /// its resting centre. Small, so it reads as a gentle float, not a bounce.
 const BOB_PX: u32 = 2;
+
+/// Label font size relative to the sprite scale, and the gap (source px) between
+/// the orb and its label in a merge "pop".
+const LABEL_SCALE: f32 = 0.6;
+const GAP_PX: u32 = 3;
 
 /// The registered orb texture handle.
 pub struct OrbTexture {
@@ -116,6 +121,54 @@ pub fn build(
     let mul = 1.0 + hover * (MAX_MUL - 1.0);
     anim::scale_quads_about(&mut quads, cx, cy, mul);
     quads
+}
+
+/// Label height (drawn glyph cell, physical px) at the given sprite scale.
+fn label_cell(scale: u32) -> f32 {
+    BitmapFont::cell_px() * (scale as f32) * LABEL_SCALE
+}
+
+/// Pixel size (physical) of one merge "pop": the orb plus a gap plus the measured
+/// label. Uses the shared static font, so the snapshot can pick a canvas that
+/// frames the whole thing before any [`Gpu`] exists.
+pub fn pop_size(text: &str, scale: u32) -> (u32, u32) {
+    let orb = (ORB_PX * scale) as f32;
+    let label_w = overlay_core::bitmap_font::shared().measure(text, (scale as f32) * LABEL_SCALE);
+    let w = orb + (GAP_PX * scale) as f32 + label_w;
+    (w.ceil() as u32, orb.ceil() as u32)
+}
+
+/// Build one announcement "pop": the orb with its top-left at `(x, y)` plus its
+/// label to the right, vertically centred on the orb, both scaled by `alpha`
+/// (1.0 opaque, 0.0 invisible). `shimmer` is the 0..=1 colour phase. Shared by
+/// the feed overlay and the labelled snapshot so they cannot drift.
+#[allow(clippy::too_many_arguments)]
+pub fn build_pop(
+    gpu: &Gpu,
+    tex: &OrbTexture,
+    text: &str,
+    amount: i64,
+    scale: u32,
+    x: f32,
+    y: f32,
+    alpha: f32,
+    shimmer: f32,
+    out: &mut Vec<Quad>,
+) {
+    let a = alpha.clamp(0.0, 1.0);
+    let size = (ORB_PX * scale) as f32;
+    let uv = icon_uv(icon_for(amount));
+    let mut tint = shimmer_tint(shimmer);
+    tint[3] *= a;
+    out.push(Quad::sub(tex.orb, x, y, size, size, uv, tint));
+
+    let label_scale = (scale as f32) * LABEL_SCALE;
+    let tx = x + size + (GAP_PX * scale) as f32;
+    let ty = y + (size - label_cell(scale)) * 0.5;
+    let fg = [1.0, 1.0, 1.0, a];
+    let mut shadow = SHADOW;
+    shadow[3] *= a;
+    gpu.text_shadow(text, tx, ty, label_scale, fg, shadow, out);
 }
 
 #[cfg(test)]

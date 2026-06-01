@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS orb (
   url    TEXT    NOT NULL DEFAULT '',
   x      REAL,
   y      REAL
+);
+CREATE TABLE IF NOT EXISTS events (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  text    TEXT    NOT NULL DEFAULT '',
+  amount  INTEGER NOT NULL DEFAULT 7,
+  created INTEGER NOT NULL DEFAULT (unixepoch())
 );";
 
 /// Inserted only when the DB is first created, so a fresh install shows an orb and
@@ -147,6 +153,63 @@ where
     });
 }
 
+/// One queued merge announcement: a falling/rising labelled orb to show once.
+/// `amount` picks the orb size via [`crate::scene::icon_for`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Event {
+    pub id: i64,
+    pub text: String,
+    pub amount: i64,
+}
+
+/// Open a connection for the feed reader (schema ensured). Public so the feed
+/// overlay can poll the `events` table on its own connection.
+pub fn connect(path: &Path) -> rusqlite::Result<Connection> {
+    open(path)
+}
+
+/// Queue one announcement orb. Called by `xp-orb-overlay push` (e.g. from
+/// pr-watch on a merged PR); the running feed overlay picks it up within ~200ms.
+pub fn push_event(path: &Path, text: &str, amount: i64) -> rusqlite::Result<()> {
+    let conn = open(path)?;
+    conn.execute(
+        "INSERT INTO events (text, amount) VALUES (?1, ?2)",
+        rusqlite::params![text, amount.max(0)],
+    )?;
+    Ok(())
+}
+
+/// Highest event id present, so the feed can seed its cursor on startup and stay
+/// quiet about the existing backlog (only newly inserted events animate).
+pub fn max_event_id(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("SELECT COALESCE(MAX(id), 0) FROM events", [], |r| r.get(0))
+}
+
+/// Events queued after `after` (exclusive), oldest first.
+pub fn read_events_after(conn: &Connection, after: i64) -> rusqlite::Result<Vec<Event>> {
+    let mut stmt =
+        conn.prepare("SELECT id, text, amount FROM events WHERE id > ?1 ORDER BY id ASC")?;
+    let rows = stmt.query_map([after], |r| {
+        Ok(Event {
+            id: r.get(0)?,
+            text: r.get(1)?,
+            amount: r.get::<_, i64>(2)?.max(0),
+        })
+    })?;
+    rows.collect()
+}
+
+/// Drop consumed events older than `older_than_secs` so the table stays small.
+/// Keeps a short tail so a just-restarted overlay does not miss a very recent
+/// push, while never replaying the whole history.
+pub fn prune_events(conn: &Connection, older_than_secs: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM events WHERE created < unixepoch() - ?1",
+        [older_than_secs.max(0)],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +246,25 @@ mod tests {
         let conn = open(&path).unwrap();
         conn.execute("UPDATE orb SET amount = -5 WHERE id = 1", []).unwrap();
         assert_eq!(read(&conn).unwrap().amount, 0);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn events_queue_and_read_after_cursor() {
+        let path = temp_db("events");
+        let _ = open(&path).unwrap();
+        push_event(&path, "ix \u{b7} first", 7).unwrap();
+        push_event(&path, "index \u{b7} second", -3).unwrap();
+        let conn = open(&path).unwrap();
+        let all = read_events_after(&conn, 0).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].text, "ix \u{b7} first");
+        assert_eq!(all[1].amount, 0, "negative amount clamps to zero");
+        // Cursor past the first returns only the newer event.
+        let rest = read_events_after(&conn, all[0].id).unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].text, "index \u{b7} second");
+        assert_eq!(max_event_id(&conn).unwrap(), all[1].id);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
