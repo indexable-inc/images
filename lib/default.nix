@@ -174,7 +174,7 @@ let
   /**
     Declare a continuous-benchmark suite against the `indexbench` CLI.
 
-    `mkBenchSuite pkgs { name; indexbench; macros ? []; allocCheck ? null; runs ? 5; }`
+    `mkBenchSuite pkgs { name; indexbench; macros ? []; allocCheck ? null; runs ? 10; }`
     returns `{ app; check ? }`:
 
     - `app` is a `nix run`-able wrapper that runs the suite's macro commands
@@ -182,9 +182,10 @@ let
       custom metrics, and exiting non-zero on a regression. Belongs in
       `apps.bench` / the perf job, never in `checks` (timing and RSS are not
       reproducible in the Nix sandbox).
-    - `check`, present only when `allocCheck` is set, is a `nix flake check`
-      derivation that gates a deterministic allocation-count bench. Allocation
-      counts are reproducible, so this path is a real CI gate.
+    - `check`, present only when `allocCheck = { bench; budgets; }` is set, is a
+      `nix flake check` derivation that runs the bench once through
+      `indexbench assert` and fails if a metric exceeds its budget. Allocation
+      counts are reproducible, so this path is a real, hermetic CI gate.
 
     See [`lib/bench.nix`](lib/bench.nix) for the argument shape.
   */

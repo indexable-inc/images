@@ -10,9 +10,12 @@
 #     reproducible inside the Nix sandbox, so this is a perf job (`apps.bench`),
 #     never a flake check.
 #   - `check`: an optional `nix flake check` derivation that runs a
-#     consumer-provided allocation-count bench and gates it deterministically.
-#     Allocation counts are reproducible, so they belong in `checks` where CI can
-#     fail the build on any worsening.
+#     consumer-provided allocation-count bench once and asserts each declared
+#     metric stays within its budget (`indexbench assert`). Allocation counts are
+#     reproducible, so this is a real hermetic gate: pushing a count above its
+#     budget fails the build, while raising the budget is a deliberate one-line
+#     change. (A self-comparing two-run gate cannot catch a regression — both
+#     runs measure the same binary — so a fixed budget is what actually gates.)
 #
 # Keeping both paths behind one helper means a consumer declares a suite once and
 # gets the reproducible gate and the perf job from the same description, rather
@@ -31,11 +34,13 @@ pkgs:
   # string run N times by the perf job. Each may print `@bench` lines to report
   # custom metrics.
   macros ? [ ],
-  # Optional deterministic allocation check. When set to `{ bench = <exePath>; }`
-  # (e.g. `lib.getExe someBenchBinary`), `check` runs that executable — which
-  # must install `indexbench`'s counting allocator and print an
-  # `@bench name=allocations ...` line — and gates it with the local store. Left
-  # null, no `check` is produced.
+  # Optional deterministic allocation check. Set to
+  # `{ bench = <exePath>; budgets = { <metric> = <max>; ... }; }`:
+  #   - `bench` (e.g. `lib.getExe someBenchBinary`) must install `indexbench`'s
+  #     counting allocator and print `@bench name=allocations ...` lines.
+  #   - `budgets` maps each metric to its upper bound; the check fails if a
+  #     measured metric exceeds its budget or is never reported.
+  # Left null, no `check` is produced.
   allocCheck ? null,
   # Runs per macro command in the perf job.
   runs ? 5,
@@ -64,6 +69,12 @@ let
     '';
   };
 
+  budgetFlags = lib.concatStringsSep " " (
+    lib.mapAttrsToList (metric: max: "--max ${lib.escapeShellArg "${metric}=${toString max}"}") (
+      allocCheck.budgets or { }
+    )
+  );
+
   check =
     if allocCheck == null then
       null
@@ -77,21 +88,13 @@ let
           inherit (allocCheck) bench;
         }
         ''
-          # Record into a sandbox-local store, then run a second time so the
-          # comparator has a baseline. `--gate deterministic` makes only an
-          # allocation-count regression fail the build; the bench's timing and
-          # RSS metrics are non-reproducible in the sandbox and are ignored by
-          # the gate, so this check stays a pure-eval-style reproducible gate.
-          export HOME="$TMPDIR"
-          store="$TMPDIR/store"
-
-          # First pass establishes the baseline; allocation counts are
-          # reproducible, so the two passes see identical counts and the gate
-          # passes. A future regression changes the recorded count and trips it.
-          ${exe} run --suite ${lib.escapeShellArg name} --store local --local-dir "$store" \
-            --gate deterministic --cmd "$bench" --cmd-name alloc
-          ${exe} run --suite ${lib.escapeShellArg name} --store local --local-dir "$store" \
-            --gate deterministic --cmd "$bench" --cmd-name alloc
+          # Run the bench once and assert each metric is within its budget.
+          # `--runs 1` keeps the allocation count deterministic (no distribution
+          # folding); the budget is a fixed number, so this is a real hermetic
+          # gate — an added allocation exceeds the budget and fails the build,
+          # while timing/RSS (non-reproducible in the sandbox) are simply not
+          # budgeted here and live in the apps.bench perf job instead.
+          ${exe} assert --cmd "$bench" --runs 1 ${budgetFlags}
 
           mkdir -p "$out"
         '';

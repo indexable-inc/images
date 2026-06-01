@@ -54,8 +54,11 @@ enum GateKind {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run a suite, record each run, and gate on regressions.
+    /// Run a suite, record each run, and gate on regressions vs history.
     Run(RunArgs),
+    /// Run a command and gate each metric against a fixed budget (no history).
+    /// This is the hermetic, reproducible gate a `nix flake check` uses.
+    Assert(AssertArgs),
     /// List recorded runs for a `(suite, bench)`.
     History(HistoryArgs),
     /// Stub for the HTML time-series viewer (documented fast-follow).
@@ -98,11 +101,13 @@ struct RunArgs {
     /// first token is the program; the rest are arguments. Repeat to add benches.
     #[arg(long, value_name = "COMMAND")]
     cmd: Vec<String>,
-    /// Bench name for an ad-hoc `--cmd`. Defaults to the program name.
+    /// Bench name for an ad-hoc `--cmd`, paired positionally with each `--cmd`.
+    /// Give either one `--cmd-name` per `--cmd` or none (each then defaults to
+    /// its program name).
     #[arg(long, value_name = "NAME")]
-    cmd_name: Option<String>,
+    cmd_name: Vec<String>,
     /// How many times to run each macro command.
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = indexbench::compare::DEFAULT_MACRO_RUNS)]
     runs: u32,
     /// Compare against this commit's recorded run instead of the previous run.
     #[arg(long, value_name = "COMMIT")]
@@ -122,6 +127,23 @@ struct RunArgs {
     output_json: bool,
     #[command(flatten)]
     store: StoreArgs,
+}
+
+#[derive(Debug, clap::Args)]
+struct AssertArgs {
+    /// Command to benchmark; the first token is the program, the rest are args.
+    #[arg(long, value_name = "COMMAND")]
+    cmd: String,
+    /// Upper-bound budget for a metric, repeatable: `--max allocations=64`.
+    /// Fails when the measured metric exceeds the budget, or when the command
+    /// never reports the named metric.
+    #[arg(long = "max", value_name = "METRIC=VALUE", value_parser = parse_budget)]
+    max: Vec<(String, f64)>,
+    /// How many times to run the command. Defaults to 1 so a deterministic
+    /// metric (an allocation count) stays deterministic; raise it only to budget
+    /// a distribution's median.
+    #[arg(long, default_value_t = 1)]
+    runs: u32,
 }
 
 #[derive(Debug, clap::Args)]
@@ -158,6 +180,7 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Run(args) => run_suite(&args),
+        Command::Assert(args) => assert_budgets(&args),
         Command::History(args) => show_history(&args),
         Command::Viewer(args) => Ok(show_viewer(&args)),
     }
@@ -165,6 +188,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
 /// Build the requested suite, execute it, record each run, and compare.
 fn run_suite(args: &RunArgs) -> Result<ExitCode> {
+    ensure_cmd_names(args)?;
     let store = args.store.open()?;
     let git = GitContext::resolve(&args.store.repo);
 
@@ -180,14 +204,15 @@ fn run_suite(args: &RunArgs) -> Result<ExitCode> {
     let mut json_comparisons = Vec::new();
 
     for run in &runs {
-        // Record before comparing so the baseline lookup for the *next* run sees
-        // this one, and so a comparison failure cannot lose the measurement.
-        store.append(run)?;
-
+        // Read the baseline *before* recording this run, so a run is never its
+        // own baseline (the pinned `--baseline <commit>` path included). Append
+        // immediately after — before any reporting — so a later failure cannot
+        // lose the measurement.
         let baseline = match &args.baseline {
             Some(commit) => store.run_at_commit(&run.suite, &run.bench, &run.machine_id, commit)?,
-            None => baseline_excluding_self(store.as_ref(), run)?,
+            None => store.previous_run(&run.suite, &run.bench, &run.machine_id)?,
         };
+        store.append(run)?;
 
         match baseline {
             Some(baseline) => {
@@ -208,9 +233,9 @@ fn run_suite(args: &RunArgs) -> Result<ExitCode> {
             }
             None => {
                 if args.output_json {
-                    // No comparison yet; emit the recorded run so a first-run
-                    // JSON consumer still gets the measurement.
-                    json_comparisons.push(first_run_placeholder(run));
+                    // No comparison yet; emit the measured metrics (each marked
+                    // NoBaseline) so a first-run JSON consumer still gets values.
+                    json_comparisons.push(indexbench::compare::first_run(run));
                 } else {
                     println!("{}/{}: recorded baseline (no prior run to compare)\n", run.suite, run.bench);
                 }
@@ -226,31 +251,70 @@ fn run_suite(args: &RunArgs) -> Result<ExitCode> {
     Ok(if any_regression { ExitCode::FAILURE } else { ExitCode::SUCCESS })
 }
 
-/// The previous recorded run for this bench on this machine, excluding the run
-/// just appended. The store keeps insertion order within a timestamp, so the
-/// baseline is the most recent same-machine run that is not the current one;
-/// dropping the last entry equal to `current` handles the common case where a
-/// rapid re-run shares the whole-second timestamp. Without this the freshly
-/// recorded run would be its own baseline and every comparison a no-op.
-fn baseline_excluding_self(store: &dyn HistoryStore, current: &indexbench::Run) -> Result<Option<indexbench::Run>> {
-    let mut runs = store.runs_for(&current.suite, &current.bench)?;
-    runs.retain(|candidate| candidate.machine_id == current.machine_id);
-
-    // Drop the single most-recent entry identical to `current` (the row just
-    // appended), then take the last of what remains as the baseline.
-    if let Some(position) = runs.iter().rposition(|candidate| candidate == current) {
-        runs.remove(position);
+/// Reject an inconsistent `--cmd` / `--cmd-name` pairing before doing any work.
+/// clap collects each flag into its own `Vec`, so the counts must match (or no
+/// names be given at all); otherwise names would silently misalign with commands
+/// and collide in history.
+fn ensure_cmd_names(args: &RunArgs) -> Result<()> {
+    if !args.cmd_name.is_empty() && args.cmd_name.len() != args.cmd.len() {
+        return Err(indexbench::Error::Usage {
+            detail: format!(
+                "got {names} --cmd-name but {cmds} --cmd; give one --cmd-name per --cmd, or none",
+                names = args.cmd_name.len(),
+                cmds = args.cmd.len(),
+            ),
+        });
     }
-    Ok(runs.pop())
+    Ok(())
 }
 
-/// A JSON-friendly placeholder for a first run with no baseline yet.
-fn first_run_placeholder(run: &indexbench::Run) -> indexbench::compare::Comparison {
-    indexbench::compare::Comparison {
-        suite: run.suite.clone(),
-        bench: run.bench.clone(),
-        metrics: Vec::new(),
+/// Parse a `METRIC=VALUE` budget for `assert --max`.
+fn parse_budget(raw: &str) -> std::result::Result<(String, f64), String> {
+    let (name, value) = raw.split_once('=').ok_or_else(|| format!("`{raw}` is not METRIC=VALUE"))?;
+    if name.is_empty() {
+        return Err(format!("`{raw}` has an empty metric name"));
     }
+    let parsed: f64 = value.parse().map_err(|err| format!("budget `{value}`: {err}"))?;
+    Ok((name.to_owned(), parsed))
+}
+
+/// Run a command and gate each measured metric against its declared upper-bound
+/// budget. Needs no history: it compares against fixed numbers, which is what
+/// makes a reproducible metric (an allocation count) a hermetic flake check.
+///
+/// Exits non-zero when any metric exceeds its budget or a budgeted metric was
+/// never reported. Defaults to one run so a deterministic metric stays
+/// deterministic.
+fn assert_budgets(args: &AssertArgs) -> Result<ExitCode> {
+    if args.max.is_empty() {
+        return Err(indexbench::Error::Usage {
+            detail: "assert needs at least one --max METRIC=VALUE budget".to_owned(),
+        });
+    }
+
+    let mut parts = args.cmd.split_whitespace();
+    let program = parts.next().unwrap_or("true").to_owned();
+    let cmd_args: Vec<String> = parts.map(str::to_owned).collect();
+    let metrics = indexbench::macro_harness::run_command(&program, &cmd_args, args.runs)?;
+
+    let mut all_within = true;
+    for (name, budget) in &args.max {
+        if let Some(metric) = metrics.iter().find(|metric| &metric.name == name) {
+            let within = metric.value <= *budget;
+            all_within &= within;
+            println!(
+                "{name}: {value:.3}{unit} {op} budget {budget:.3}",
+                value = metric.value,
+                unit = metric.unit,
+                op = if within { "<=" } else { ">" },
+            );
+        } else {
+            all_within = false;
+            println!("{name}: not reported by the command (budget {budget:.3})");
+        }
+    }
+
+    Ok(if all_within { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }
 
 /// Build the suite the run was asked for: the built-in `self-demo` micro+macro
@@ -268,11 +332,13 @@ fn build_suite(args: &RunArgs) -> BenchSuite<'static> {
             .macro_bench(MacroBench::new("true", "true", Vec::<String>::new()).with_runs(args.runs));
     }
 
-    for command in &args.cmd {
+    for (index, command) in args.cmd.iter().enumerate() {
         let mut parts = command.split_whitespace();
         let program = parts.next().unwrap_or("true").to_owned();
         let cmd_args: Vec<String> = parts.map(str::to_owned).collect();
-        let name = args.cmd_name.clone().unwrap_or_else(|| program.clone());
+        // `ensure_cmd_names` has already validated the pairing, so a name is
+        // either present for this index or absent for all commands.
+        let name = args.cmd_name.get(index).cloned().unwrap_or_else(|| program.clone());
         suite = suite.macro_bench(MacroBench::new(name, program, cmd_args).with_runs(args.runs));
     }
 

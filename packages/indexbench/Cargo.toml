@@ -37,6 +37,9 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 snafu.workspace = true
-# Used by the git history store for a scratch index, and by the local store /
-# tests for temp directories, so it is a regular (not dev) dependency.
+
+[dev-dependencies]
+# Temp dirs for the local-store / runner unit tests, the git-store round-trip
+# test, and the `loop` integration test. Test-only: the git store now builds its
+# tree with `git mktree` and needs no scratch index.
 tempfile.workspace = true

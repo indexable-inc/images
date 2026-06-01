@@ -191,7 +191,13 @@ let
         command = "true";
       }
     ];
-    allocCheck.bench = lib.getExe indexbenchAllocDemo;
+    allocCheck = {
+      bench = lib.getExe indexbenchAllocDemo;
+      # The demo makes exactly 64 heap allocations by construction (see
+      # packages/indexbench/src/bin/alloc-demo.rs), so this budget is an exact,
+      # toolchain-stable constant; any added allocation trips the gate.
+      budgets.allocations = 64;
+    };
   };
 
   siteSrc = fs.toSource {
@@ -485,9 +491,10 @@ in
           '';
         run-records-session = repoPackages.run.passthru.tests.recordsSession;
         # Deterministic alloc-count gate for indexbench: runs the counting-
-        # allocator demo bench twice through the CLI and fails on any worsening.
-        # Reproducible, unlike timing/RSS, so it earns a flake check; the
-        # timing/RSS perf job lives under `apps.bench` instead.
+        # allocator demo bench once through `indexbench assert` and fails if its
+        # allocation count exceeds the declared budget. Reproducible, unlike
+        # timing/RSS, so it earns a flake check; the timing/RSS perf job lives
+        # under `apps.bench` instead.
         indexbench-self-demo-alloc = indexbenchSelfDemo.check;
         lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
           cp -R ${lintSource} source

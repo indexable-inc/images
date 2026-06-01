@@ -26,14 +26,14 @@ fn run_record_compare_report_round_trip() {
     };
 
     // First run: establishes the baseline. There is nothing prior, so the
-    // previous-run lookup returns None.
+    // previous-run lookup (read before recording) returns None.
     let mut suite = demo_suite();
     let first_runs = execute(&mut suite, &git_first).expect("first execute");
     assert_eq!(first_runs.len(), 2, "one run per bench");
     for run in &first_runs {
-        store.append(run).expect("record first run");
-        let baseline = previous_excluding_self(&store, run);
+        let baseline = store.previous_run(&run.suite, &run.bench, &run.machine_id).expect("baseline read");
         assert!(baseline.is_none(), "the first run has no baseline");
+        store.append(run).expect("record first run");
     }
 
     // Second run at a later commit: each bench should now find the first run as
@@ -47,8 +47,13 @@ fn run_record_compare_report_round_trip() {
 
     let mut compared = 0;
     for run in &second_runs {
+        // Read the baseline before recording (the CLI's order), so the run is
+        // never its own baseline.
+        let baseline = store
+            .previous_run(&run.suite, &run.bench, &run.machine_id)
+            .expect("baseline read")
+            .expect("second run has a baseline");
         store.append(run).expect("record second run");
-        let baseline = previous_excluding_self(&store, run).expect("second run has a baseline");
         assert_eq!(baseline.git_commit, "commit-one", "baseline is the previous run on this machine");
 
         let comparison = compare(&baseline, run, CompareConfig::default());

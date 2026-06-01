@@ -72,7 +72,7 @@ pub enum Error {
     /// A `git` invocation backing the git history store failed.
     #[snafu(display("git {operation} failed: {detail}"))]
     Git {
-        /// The git operation that failed (e.g. `read-tree`, `commit`).
+        /// The git operation that failed (e.g. `mktree`, `commit-tree`).
         operation: String,
         /// Captured stderr or a description of the failure.
         detail: String,
@@ -83,6 +83,15 @@ pub enum Error {
     Serialize {
         /// Underlying serde error.
         source: serde_json::Error,
+    },
+
+    /// The CLI arguments were inconsistent in a way clap cannot express on its
+    /// own (e.g. a mismatched count of `--cmd` and `--cmd-name`, or an `assert`
+    /// with no budgets).
+    #[snafu(display("{detail}"))]
+    Usage {
+        /// What was wrong and how to fix it.
+        detail: String,
     },
 }
 

@@ -27,8 +27,10 @@ that form is the contract.
   `CountingAllocator` `#[global_allocator]` shim — reports a deterministic
   `allocations` count.
 - **Macro harness** (`macro_harness`): runs an external command N times, reading
-  `wall_clock` and `max_rss` from `wait4`/`getrusage(RUSAGE_CHILDREN)` (via the
-  `nix` crate). No instrumentation needed to be timed and sized.
+  `wall_clock` in the parent and `max_rss` from `libc::wait4`'s **per-child**
+  `rusage` (avoiding the `getrusage(RUSAGE_CHILDREN)` accumulation across reaped
+  children). `ru_maxrss` is normalized to bytes per platform (KiB on Linux, bytes
+  on macOS). No instrumentation needed to be timed and sized.
 - **Custom metrics**: the extensibility hook. A benchmarked command prints lines
   of the form
 
@@ -90,8 +92,12 @@ nix run index#indexbench -- run --suite mysuite --cmd "my-tool --work" --runs 10
 # Compare against a fixed commit instead of the previous run:
 nix run index#indexbench -- run --suite mysuite --cmd "my-tool" --baseline <sha>
 
-# Gate only on deterministic (reproducible) metrics — the flake-check mode:
+# Gate only on deterministic (reproducible) metrics, comparing to history:
 nix run index#indexbench -- run --cmd "my-tool" --gate deterministic
+
+# Gate a metric against a fixed budget with NO history (the hermetic flake-check
+# path): fails if the measured allocation count exceeds 64.
+nix run index#indexbench -- assert --cmd "my-tool" --runs 1 --max allocations=64
 
 # JSON output for CI / the (stubbed) viewer:
 nix run index#indexbench -- run --output-json
@@ -101,7 +107,10 @@ nix run index#indexbench -- history --suite mysuite --bench my-tool
 ```
 
 By default runs record to the `bench-history` git branch; pass `--store local
---local-dir <dir>` for a directory-backed store.
+--local-dir <dir>` for a directory-backed store. `assert` needs no store: it
+compares each measured metric against a fixed `--max` budget, which is what makes
+a reproducible metric (an allocation count) usable as a hermetic `nix flake
+check` — a self-comparing run could only ever compare a binary against itself.
 
 ## Declaring a suite (Nix)
 
@@ -114,8 +123,12 @@ mySuite = ix.mkBenchSuite pkgs {
   macros = [
     { name = "index-1k"; command = "file-search index ./corpus"; }
   ];
-  # Optional: gate a deterministic allocation count as a flake check.
-  allocCheck.bench = lib.getExe myAllocBenchBinary;
+  # Optional: gate a deterministic allocation count as a flake check. The bench
+  # prints `@bench name=allocations ...`; the check fails if it exceeds budget.
+  allocCheck = {
+    bench = lib.getExe myAllocBenchBinary;
+    budgets.allocations = 64;
+  };
 };
 # mySuite.app   -> wire into apps.bench / a perf job  (timing + RSS; NOT a check)
 # mySuite.check -> wire into checks                   (deterministic; reproducible)
@@ -124,9 +137,10 @@ mySuite = ix.mkBenchSuite pkgs {
 ## Reproducible vs non-reproducible
 
 Deterministic alloc-count metrics are reproducible, so they belong in `nix flake
-check` (CI fails on any worsening). Timing and RSS are sandbox-sensitive and
-belong in `apps.bench` (the perf job), never in flake checks. The framework
-provides both paths from one suite description.
+check` via `indexbench assert` against a fixed budget (CI fails when a count
+exceeds it). Timing and RSS are sandbox-sensitive and belong in `apps.bench` (the
+perf job), never in flake checks. The framework provides both paths from one
+suite description.
 
 ## Profiling shell
 

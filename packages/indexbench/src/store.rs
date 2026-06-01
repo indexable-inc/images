@@ -156,11 +156,11 @@ impl HistoryStore for LocalDirStore {
 ///
 /// Runs are appended to a single `history.jsonl` blob held on the `branch`
 /// (default `bench-history`), which shares no history with `main`. Each append
-/// is one commit built with plumbing (`hash-object`, `read-tree`,
-/// `update-index`, `write-tree`, `commit-tree`, `update-ref`) so the working
-/// tree is never checked out or disturbed. This makes the store usable from a
-/// dirty checkout mid-bench, and a CI job can `git push origin <branch>` to
-/// share results.
+/// is one commit built with plumbing (`hash-object` to write the blob, `mktree`
+/// to build the one-entry tree, `commit-tree`, `update-ref`) so the working tree
+/// and the index are never touched. This makes the store usable from a dirty
+/// checkout mid-bench, and a CI job can `git push origin <branch>` to share
+/// results.
 pub struct GitBranchStore {
     repo: PathBuf,
     branch: String,
@@ -170,6 +170,12 @@ pub struct GitBranchStore {
 impl GitBranchStore {
     /// Default branch name for the history store.
     pub const DEFAULT_BRANCH: &'static str = "bench-history";
+
+    /// `git update-ref` old-value meaning "this ref must not already exist".
+    /// The empty string is hash-agnostic (works for sha1 and sha256 repos),
+    /// unlike a fixed-length all-zeros oid; used as the compare-and-swap old
+    /// value when creating the branch for the first time.
+    const REF_MUST_NOT_EXIST: &'static str = "";
 
     /// Open the store for the git repository at `repo`, using `branch`.
     pub fn new(repo: impl Into<PathBuf>, branch: impl Into<String>) -> Self {
@@ -224,6 +230,12 @@ impl GitBranchStore {
         Ok(output.stdout)
     }
 
+    /// Like [`git`](Self::git) but returns trimmed UTF-8 stdout as a `String` —
+    /// the shape every object-id-producing plumbing call here wants.
+    fn git_str(&self, args: &[&str], stdin: Option<&[u8]>) -> crate::Result<String> {
+        Ok(String::from_utf8_lossy(&self.git(args, stdin)?).trim().to_owned())
+    }
+
     /// The commit the branch currently points at, or `None` when the branch does
     /// not exist yet.
     fn branch_tip(&self) -> crate::Result<Option<String>> {
@@ -263,22 +275,12 @@ impl HistoryStore for GitBranchStore {
         let mut contents = self.read_blob()?;
         contents.push_str(&run_to_jsonl(run)?);
 
-        // Stage the blob and build a one-file tree with a temporary index so the
-        // working tree and the real index are never touched.
-        let blob = String::from_utf8_lossy(&self.git(&["hash-object", "-w", "--stdin"], Some(contents.as_bytes()))?)
-            .trim()
-            .to_owned();
-
-        let temp_index = tempfile::NamedTempFile::new().map_err(|err| error::Error::Git {
-            operation: "tempfile".to_owned(),
-            detail: err.to_string(),
-        })?;
-        let index_path = temp_index.path().to_string_lossy().into_owned();
-
-        let mode_entry = format!("100644 {blob}\t{}", self.blob_path);
-        self.git_with_index(&index_path, &["read-tree", "--empty"], None)?;
-        self.git_with_index(&index_path, &["update-index", "--add", "--cacheinfo", &mode_entry], None)?;
-        let tree = String::from_utf8_lossy(&self.git_with_index(&index_path, &["write-tree"], None)?).trim().to_owned();
+        // Write the new blob, then build a one-entry tree with `mktree`, which
+        // reads `<mode> <type> <sha>\t<path>` lines on stdin and writes the tree
+        // object. No index, no working-tree touch — pure plumbing.
+        let blob = self.git_str(&["hash-object", "-w", "--stdin"], Some(contents.as_bytes()))?;
+        let tree_entry = format!("100644 blob {blob}\t{}\n", self.blob_path);
+        let tree = self.git_str(&["mktree"], Some(tree_entry.as_bytes()))?;
 
         let parent = self.branch_tip()?;
         let message = format!("bench: {}/{} on {} @ {}", run.suite, run.bench, run.machine_id, run.git_commit);
@@ -288,10 +290,15 @@ impl HistoryStore for GitBranchStore {
             commit_args.push(parent.clone());
         }
         let commit_args_ref: Vec<&str> = commit_args.iter().map(String::as_str).collect();
-        let commit = String::from_utf8_lossy(&self.git(&commit_args_ref, None)?).trim().to_owned();
+        let commit = self.git_str(&commit_args_ref, None)?;
 
+        // Compare-and-swap the ref against the tip we read, so a concurrent
+        // append (another `indexbench run` on the same branch) fails loudly
+        // instead of silently overwriting — and thus dropping — the other run.
+        // The expected old value is the empty oid when the branch did not exist.
         let refname = format!("refs/heads/{}", self.branch);
-        self.git(&["update-ref", &refname, &commit], None)?;
+        let expected = parent.as_deref().unwrap_or(Self::REF_MUST_NOT_EXIST);
+        self.git(&["update-ref", &refname, &commit, expected], None)?;
         Ok(())
     }
 
@@ -299,51 +306,6 @@ impl HistoryStore for GitBranchStore {
         let contents = self.read_blob()?;
         let source = self.repo.join(format!("{}:{}", self.branch, self.blob_path));
         parse_jsonl(&contents, &source, suite, bench)
-    }
-}
-
-impl GitBranchStore {
-    /// Run a git command with `GIT_INDEX_FILE` pointed at a scratch index, so
-    /// staging never disturbs the repo's real index.
-    fn git_with_index(&self, index_path: &str, args: &[&str], stdin: Option<&[u8]>) -> crate::Result<Vec<u8>> {
-        use std::io::Write;
-
-        let mut command = Command::new("git");
-        command
-            .arg("-C")
-            .arg(&self.repo)
-            .env("GIT_INDEX_FILE", index_path)
-            .args(args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .stdin(if stdin.is_some() {
-                std::process::Stdio::piped()
-            } else {
-                std::process::Stdio::null()
-            });
-
-        let mut child = command.spawn().map_err(|err| error::Error::Git {
-            operation: args.first().copied().unwrap_or("?").to_owned(),
-            detail: err.to_string(),
-        })?;
-        if let (Some(bytes), Some(mut sink)) = (stdin, child.stdin.take()) {
-            sink.write_all(bytes).map_err(|err| error::Error::Git {
-                operation: args.first().copied().unwrap_or("?").to_owned(),
-                detail: err.to_string(),
-            })?;
-        }
-        let output = child.wait_with_output().map_err(|err| error::Error::Git {
-            operation: args.first().copied().unwrap_or("?").to_owned(),
-            detail: err.to_string(),
-        })?;
-        ensure!(
-            output.status.success(),
-            error::GitSnafu {
-                operation: args.first().copied().unwrap_or("?").to_owned(),
-                detail: String::from_utf8_lossy(&output.stderr).into_owned(),
-            }
-        );
-        Ok(output.stdout)
     }
 }
 
@@ -408,5 +370,45 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = LocalDirStore::new(dir.path()).expect("store");
         assert!(store.runs_for("self-demo", "fib").expect("read").is_empty());
+    }
+
+    /// Append two runs through the real git plumbing (the `mktree` staging path)
+    /// and read them back. This is the regression guard for the staging bug: an
+    /// invalid `mktree`/`update-index` invocation fails `append` outright, so a
+    /// successful round-trip proves the default store actually records.
+    ///
+    /// Skips when `git` is not on `PATH` (some minimal sandboxes), so the suite
+    /// stays green there rather than failing on a missing tool.
+    #[test]
+    fn git_store_round_trips_through_mktree() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path();
+        let run_git = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(args)
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {args:?} succeeds");
+        };
+        run_git(&["init", "--quiet"]);
+        // Repo-local identity so `commit-tree` has an author/committer without
+        // depending on the sandbox's global git config.
+        run_git(&["config", "user.email", "bench@example.com"]);
+        run_git(&["config", "user.name", "bench"]);
+
+        let store = GitBranchStore::new(repo.to_path_buf(), GitBranchStore::DEFAULT_BRANCH.to_owned());
+        store.append(&sample_run(100, "aaa")).expect("append first");
+        store.append(&sample_run(200, "bbb")).expect("append second");
+
+        let runs = store.runs_for("self-demo", "fib").expect("read back");
+        assert_eq!(runs.len(), 2, "both runs are recorded on the branch");
+        assert_eq!(runs[0].timestamp_unix, 100, "runs come back ascending");
+        assert_eq!(runs[1].git_commit, "bbb");
     }
 }

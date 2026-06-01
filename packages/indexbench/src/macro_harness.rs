@@ -114,7 +114,8 @@ struct RunSample {
 /// `std::process` discards `rusage`, and `getrusage(RUSAGE_CHILDREN)` accumulates
 /// across every reaped child (so a later run would inherit an earlier run's
 /// peak); `wait4` keeps RSS attributed per run. `ru_maxrss` is in kibibytes on
-/// Linux (per `getrusage(2)`); we normalize to bytes.
+/// Linux but in bytes on the BSDs (including macOS), so [`maxrss_to_bytes`]
+/// normalizes it per platform.
 #[expect(
     clippy::cast_possible_wrap,
     reason = "POSIX pids are positive and well under i32::MAX, so the u32->i32 cast cannot wrap"
@@ -136,20 +137,28 @@ fn run_once(program: &str, args: &[String]) -> crate::Result<RunSample> {
 
     let start = Instant::now();
 
-    // Drain both streams before reaping so a chatty child cannot deadlock on a
-    // full pipe buffer while the parent blocks in `wait4`.
+    // Drain stdout and stderr *concurrently* before reaping: a child that fills
+    // one pipe while holding the other open would deadlock a parent that read
+    // them in series (and `wait4` would then block forever on a child blocked on
+    // a full pipe). stderr drains on a thread; stdout drains here; then join.
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut err) = stderr {
+            let _ = err.read_to_string(&mut buf);
+        }
+        buf
+    });
     let mut stdout_buf = String::new();
-    let mut stderr_buf = String::new();
-    if let Some(mut out) = child.stdout.take() {
+    if let Some(mut out) = stdout {
         let _ = out.read_to_string(&mut stdout_buf);
     }
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut stderr_buf);
-    }
+    let stderr_buf = stderr_reader.join().unwrap_or_default();
 
-    let (raw_status, max_rss_kib) = wait4(child.id() as i32, program)?;
+    let (raw_status, max_rss) = wait4(child.id() as i32, program)?;
     let wall_clock_ns = start.elapsed().as_nanos() as f64;
-    let max_rss_bytes = (max_rss_kib as f64) * 1024.0;
+    let max_rss_bytes = maxrss_to_bytes(max_rss);
 
     // We reaped the child ourselves with `wait4`. `std::process::Child::drop`
     // does not wait, so dropping here only closes the captured pipe handles and
@@ -187,6 +196,25 @@ fn wait4(pid: i32, program: &str) -> crate::Result<(i32, i64)> {
     }
 
     Ok((status, usage.ru_maxrss))
+}
+
+/// Convert `wait4`'s `ru_maxrss` to bytes.
+///
+/// Linux reports it in kibibytes (`getrusage(2)`); the BSDs — including macOS —
+/// already report bytes. We target only those two families, so a compile-time
+/// `cfg` picks the right unit with no runtime branch; an unconditional `* 1024`
+/// would inflate every `max_rss` 1024x on macOS.
+#[cfg(target_os = "macos")]
+#[expect(clippy::cast_precision_loss, reason = "byte counts at bench magnitudes are far below 2^52, so the f64 is exact")]
+fn maxrss_to_bytes(ru_maxrss_bytes: i64) -> f64 {
+    ru_maxrss_bytes as f64
+}
+
+/// See the macOS variant above; on Linux `ru_maxrss` is kibibytes.
+#[cfg(not(target_os = "macos"))]
+#[expect(clippy::cast_precision_loss, reason = "kibibyte counts at bench magnitudes are far below 2^52, so the f64 is exact")]
+fn maxrss_to_bytes(ru_maxrss_kib: i64) -> f64 {
+    ru_maxrss_kib as f64 * 1024.0
 }
 
 /// Classify a raw `wait` status into success or a typed failure.

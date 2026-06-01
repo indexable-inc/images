@@ -34,6 +34,20 @@ use crate::schema::{Metric, Run};
 /// metric falls back to the thresholded regime instead.
 pub const MIN_SAMPLES: usize = 8;
 
+/// Default number of macro runs (one sample each).
+///
+/// It must clear [`MIN_SAMPLES`] so the built-in `wall_clock`/`max_rss`
+/// distributions reach the distributional regime by default, instead of
+/// silently falling back to thresholded as a sub-floor default would.
+pub const DEFAULT_MACRO_RUNS: u32 = 10;
+
+// Compile-time guard: a default below the floor would quietly disable the
+// Mann-Whitney path for every default-configured macro bench.
+const _: () = assert!(
+    DEFAULT_MACRO_RUNS as usize >= MIN_SAMPLES,
+    "DEFAULT_MACRO_RUNS must reach the distributional floor MIN_SAMPLES",
+);
+
 /// Default two-sided significance level for the Mann-Whitney test.
 pub const DEFAULT_ALPHA: f64 = 0.05;
 
@@ -166,6 +180,26 @@ pub fn compare(baseline: &Run, candidate: &Run, config: CompareConfig) -> Compar
         suite: candidate.suite.clone(),
         bench: candidate.bench.clone(),
         metrics,
+    }
+}
+
+/// Build a baseline-less comparison: every candidate metric reported as
+/// [`Verdict::NoBaseline`] with its measured value intact.
+///
+/// Used for a bench's first-ever run, where there is nothing to diff against but
+/// the measurements must still surface (so `--output-json` on a first run is not
+/// an empty metric list). Reuses [`compare_metric`] with no baseline so the
+/// `NoBaseline` shape has a single source of truth.
+#[must_use]
+pub fn first_run(run: &Run) -> Comparison {
+    Comparison {
+        suite: run.suite.clone(),
+        bench: run.bench.clone(),
+        metrics: run
+            .metrics
+            .iter()
+            .map(|metric| compare_metric(None, metric, CompareConfig::default()))
+            .collect(),
     }
 }
 
@@ -553,6 +587,32 @@ mod tests {
         };
         let result = compare(&base, &cand, CompareConfig::default());
         assert!(result.has_deterministic_regression(), "a worsened alloc count is a reproducible regression");
+    }
+
+    #[test]
+    fn first_run_reports_every_metric_as_no_baseline_with_values() {
+        // A first run has no baseline, but its measurements must still appear
+        // (the `--output-json` first-run path), each marked NoBaseline and never
+        // a regression.
+        let run = Run {
+            suite: "s".to_owned(),
+            bench: "b".to_owned(),
+            metrics: vec![
+                Metric::distribution("wall_clock", "ns", true, vec![100.0; 10]),
+                Metric::deterministic("allocations", 42.0, "count", true),
+            ],
+            machine_id: "m".to_owned(),
+            git_commit: "c".to_owned(),
+            git_dirty: false,
+            timestamp_unix: 0,
+        };
+        let comparison = first_run(&run);
+        assert_eq!(comparison.metrics.len(), 2, "every measured metric surfaces");
+        assert!(comparison.metrics.iter().all(|m| m.verdict == Verdict::NoBaseline));
+        assert!(comparison.metrics.iter().all(|m| m.baseline_value.is_none()));
+        let allocations = comparison.metrics.iter().find(|m| m.name == "allocations").expect("allocations present");
+        assert!((allocations.candidate_value - 42.0).abs() < 1e-9, "the measured value is preserved");
+        assert!(!comparison.has_regression(), "a first run never regresses");
     }
 
     #[test]

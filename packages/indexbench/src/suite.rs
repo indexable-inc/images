@@ -58,15 +58,16 @@ pub struct MacroBench {
 }
 
 impl MacroBench {
-    /// Declare a macro bench. `runs` defaults to 5 — enough samples for the
-    /// distributional regime once you account for the `MIN_SAMPLES` floor while
-    /// keeping a slow command's total time bounded.
+    /// Declare a macro bench. `runs` defaults to
+    /// [`DEFAULT_MACRO_RUNS`](crate::compare::DEFAULT_MACRO_RUNS), which clears
+    /// the comparator's `MIN_SAMPLES` floor so the built-in timing/RSS metrics
+    /// land in the distributional regime by default.
     pub fn new(name: impl Into<String>, program: impl Into<String>, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
             name: name.into(),
             program: program.into(),
             args: args.into_iter().map(Into::into).collect(),
-            runs: 5,
+            runs: crate::compare::DEFAULT_MACRO_RUNS,
         }
     }
 
