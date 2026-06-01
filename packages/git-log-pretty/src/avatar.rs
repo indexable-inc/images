@@ -25,7 +25,8 @@ const ID_MASK: u32 = 0x00FF_FFFF;
 pub struct Avatar {
     /// `PNG`-encoded image bytes.
     pub png: Vec<u8>,
-    /// A stable per-author id so repeated commits reuse one transmitted image.
+    /// A per-author id, stable within this process run, so repeated commits
+    /// reuse one transmitted image. Re-derived (not persisted) on each run.
     pub id: u32,
 }
 

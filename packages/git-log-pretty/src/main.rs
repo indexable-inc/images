@@ -45,7 +45,11 @@ struct Cli {
     #[arg(long, global = true)]
     no_avatar: bool,
     /// Height of each inline avatar in terminal rows (0 disables avatars).
-    #[arg(long, global = true, default_value_t = 2)]
+    ///
+    /// Capped at 64: the width is `2 * rows` columns, which must stay within the
+    /// kitty placeholder diacritic table, and an avatar taller than a screen is
+    /// never wanted. The bound also keeps `2 * rows` from overflowing.
+    #[arg(long, global = true, default_value_t = 2, value_parser = clap::value_parser!(u32).range(0..=64))]
     avatar_rows: u32,
     #[command(subcommand)]
     command: Option<Command>,
@@ -142,12 +146,16 @@ fn emit_log(
 
     // A fetch or runtime-build failure shouldn't sink the whole log; fall back
     // to the plain, still-paged renderer.
-    let fetched = avatars_enabled.then(|| fetch_avatars(repo, commits).ok()).flatten();
+    let mut fetched = avatars_enabled.then(|| fetch_avatars(repo, commits).ok()).flatten();
 
     // Transmit the pixels before the pager starts drawing, so the placeholder
-    // cells it later prints have an image to resolve against.
-    if let Some(fetched) = &fetched {
-        transmit_avatars(fetched, avatar_rows)?;
+    // cells it later prints have an image to resolve against. If that write to
+    // the terminal fails, drop the avatars and page the plain log rather than
+    // erroring out, matching the fetch-failure fallback above.
+    if let Some(images) = &fetched
+        && transmit_avatars(images, avatar_rows).is_err()
+    {
+        fetched = None;
     }
 
     pager::paged(allow_pager, |out| {
