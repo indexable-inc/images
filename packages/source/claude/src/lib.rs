@@ -7,6 +7,10 @@
 //! append-only transcript re-ingests only its new messages: the content-hash
 //! reconcile in `search-core` skips everything already uploaded.
 //!
+//! A tool call and its output stay in one document: each `tool_result` is folded
+//! into the `tool_use` message that produced it (matched by `tool_use_id`), so a
+//! tool result is never indexed as a standalone, context-free chunk.
+//!
 //! # Tags
 //! Every document's flat metadata carries the common header (`source`,
 //! `external_id`, `content_hash`, `title`, `timestamp`) plus the agent-history

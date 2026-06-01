@@ -8,6 +8,7 @@
 //! message is skipped; a line that is not valid JSON is a typed error, because a
 //! corrupt transcript should be visible, not silently truncated.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::Deserialize;
@@ -26,7 +27,11 @@ use crate::record::{Message, MessageOrigin};
 pub fn parse(path: &Path, origin: &MessageOrigin) -> Result<Vec<Message>> {
     let raw = std::fs::read_to_string(path).context(ReadFileSnafu { path: path.to_path_buf() })?;
 
-    let mut messages = Vec::new();
+    // Parse every line first, then fold each `tool_result` into the `tool_use`
+    // that produced it (the result arrives on a later line, as its own `user`
+    // message). One document then carries the call and its output together, and
+    // the standalone tool-result line renders empty and is dropped.
+    let mut lines = Vec::new();
     for (index, line) in raw.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -34,11 +39,61 @@ pub fn parse(path: &Path, origin: &MessageOrigin) -> Result<Vec<Message>> {
         }
         let parsed: RawLine = serde_json::from_str(trimmed)
             .with_context(|_| ParseLineSnafu { path: path.to_path_buf(), line: index + 1 })?;
-        if let Some(message) = parsed.into_message(origin) {
+        lines.push(parsed);
+    }
+
+    let tools = collect_tool_index(&lines);
+    let mut messages = Vec::new();
+    for line in lines {
+        if let Some(message) = line.into_message(origin, &tools) {
             messages.push(message);
         }
     }
     Ok(messages)
+}
+
+/// A first-pass index of one transcript's tool blocks, scanned across every line
+/// so [`render_blocks`] can fold a result into the call that produced it (the
+/// result arrives on a later line than its `tool_use`).
+struct ToolIndex {
+    /// `tool_use` id to its rendered `tool_result` text, for folding into the call.
+    results: HashMap<String, String>,
+    /// Every `tool_use` id present, so an unmatched `tool_result` (a truncated or
+    /// corrupt transcript whose call is missing) is rendered standalone rather
+    /// than silently dropped.
+    calls: HashSet<String>,
+}
+
+/// Build the [`ToolIndex`]: collect every `tool_use` id and every
+/// `tool_result`'s rendered text keyed by the `tool_use_id` it answers.
+fn collect_tool_index(lines: &[RawLine]) -> ToolIndex {
+    let mut results = HashMap::new();
+    let mut calls = HashSet::new();
+    for line in lines {
+        let Some(message) = &line.message else {
+            continue;
+        };
+        let Some(Content::Blocks(blocks)) = &message.content else {
+            continue;
+        };
+        for block in blocks {
+            match block.kind.as_deref() {
+                Some("tool_use") => {
+                    if let Some(id) = &block.id {
+                        calls.insert(id.clone());
+                    }
+                }
+                Some("tool_result") => {
+                    if let Some(id) = &block.tool_use_id {
+                        let rendered = block.content.clone().map_or_else(String::new, render_value);
+                        results.insert(id.clone(), rendered);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    ToolIndex { results, calls }
 }
 
 /// One transcript line. See the module docs for why every field is optional.
@@ -65,13 +120,13 @@ struct RawLine {
 impl RawLine {
     /// Project one line into a [`Message`], or `None` when the line carries no
     /// embeddable message (a title/marker line, or an empty body).
-    fn into_message(self, origin: &MessageOrigin) -> Option<Message> {
+    fn into_message(self, origin: &MessageOrigin, tools: &ToolIndex) -> Option<Message> {
         let message = self.message?;
         let uuid = self.uuid?;
         let record_type = self.record_type;
         let role = message.role.clone().or_else(|| record_type.clone())?;
 
-        let (body, tool_name) = render_content(message.content);
+        let Rendered { body, tool_name } = render_content(message.content, tools);
         if body.trim().is_empty() {
             return None;
         }
@@ -143,21 +198,40 @@ struct Block {
     input: Option<Value>,
     #[serde(default)]
     content: Option<Value>,
+    /// A `tool_use` block's id, referenced by the matching `tool_result`.
+    #[serde(default)]
+    id: Option<String>,
+    /// A `tool_result` block's back-reference to the `tool_use` it answers.
+    #[serde(rename = "tool_use_id", default)]
+    tool_use_id: Option<String>,
 }
 
-/// Render a message's content to embeddable text, returning the text and the
-/// first tool name seen (for the `tool_name` tag). Everything is included:
-/// prose, thinking, tool calls, and tool results.
-fn render_content(content: Option<Content>) -> (String, Option<String>) {
+/// The embeddable text of a message plus the first tool name seen (for the
+/// `tool_name` tag).
+struct Rendered {
+    /// The rendered body to embed.
+    body: String,
+    /// First tool name invoked in the message, if any.
+    tool_name: Option<String>,
+}
+
+/// Render a message's content to embeddable text. Everything is included: prose,
+/// thinking, and tool calls with their results folded in.
+fn render_content(content: Option<Content>, tools: &ToolIndex) -> Rendered {
     match content {
-        None => (String::new(), None),
-        Some(Content::Text(text)) => (text, None),
-        Some(Content::Blocks(blocks)) => render_blocks(blocks),
+        None => Rendered { body: String::new(), tool_name: None },
+        Some(Content::Text(text)) => Rendered { body: text, tool_name: None },
+        Some(Content::Blocks(blocks)) => render_blocks(blocks, tools),
     }
 }
 
-/// Render typed content blocks, joining their sections with blank lines.
-fn render_blocks(blocks: Vec<Block>) -> (String, Option<String>) {
+/// Render typed content blocks, joining their sections with blank lines. Each
+/// `tool_use` is rendered with its matching `tool_result` (looked up by id)
+/// folded in right after the call, so the call and its output stay in one
+/// document. A standalone `tool_result` block is not rendered on its own; it was
+/// already folded into its `tool_use`, so a line of only tool results renders
+/// empty and is dropped by the caller.
+fn render_blocks(blocks: Vec<Block>, tools: &ToolIndex) -> Rendered {
     let mut body = String::new();
     let mut tool_name = None;
 
@@ -170,12 +244,23 @@ fn render_blocks(blocks: Vec<Block>) -> (String, Option<String>) {
                 // Keep the first tool name seen; `or_else` only clones when unset.
                 tool_name = tool_name.or_else(|| block.name.clone());
                 let name = block.name.as_deref().unwrap_or("tool");
+                let result = block.id.as_deref().and_then(|id| tools.results.get(id));
                 let input = block.input.map_or_else(String::new, render_value);
                 push_section(&mut body, Some(&format!("[tool_use {name}] {input}")));
+                // Fold the call's output into the same document.
+                if let Some(result) = result.filter(|result| !result.is_empty()) {
+                    push_section(&mut body, Some(&format!("[tool_result] {result}")));
+                }
             }
             "tool_result" => {
-                let rendered = block.content.map_or_else(String::new, render_value);
-                push_section(&mut body, Some(&format!("[tool_result] {rendered}")));
+                // Normally folded into its `tool_use` above, so skip it here. But
+                // if the matching call is absent (a truncated or corrupt
+                // transcript), render it standalone rather than drop its content.
+                let folded = block.tool_use_id.as_deref().is_some_and(|id| tools.calls.contains(id));
+                if !folded {
+                    let rendered = block.content.map_or_else(String::new, render_value);
+                    push_section(&mut body, Some(&format!("[tool_result] {rendered}")));
+                }
             }
             other => {
                 if let Some(text) = block.text.as_deref() {
@@ -184,7 +269,7 @@ fn render_blocks(blocks: Vec<Block>) -> (String, Option<String>) {
             }
         }
     }
-    (body, tool_name)
+    Rendered { body, tool_name }
 }
 
 /// Append a section to the body, separating sections with a blank line. A
@@ -234,4 +319,75 @@ fn parse_epoch_seconds(timestamp: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(timestamp)
         .ok()
         .map(|parsed| parsed.timestamp())
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used, reason = "tests assert observable parse outcomes")]
+
+    use std::io::Write as _;
+
+    use super::{MessageOrigin, parse};
+
+    fn origin() -> MessageOrigin {
+        MessageOrigin {
+            host: "h".to_owned(),
+            user: "u".to_owned(),
+            project: "p".to_owned(),
+            session_id: "s".to_owned(),
+        }
+    }
+
+    fn transcript(lines: &[&str]) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().expect("tempfile");
+        for line in lines {
+            file.write_all(line.as_bytes()).expect("write");
+            file.write_all(b"\n").expect("write");
+        }
+        file.flush().expect("flush");
+        file
+    }
+
+    #[test]
+    fn tool_result_is_folded_into_its_tool_use() {
+        let file = transcript(&[
+            r#"{"type":"assistant","uuid":"a1","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"running it"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]}}"#,
+            r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"OUTPUT-MARKER"}]}}"#,
+        ]);
+
+        let messages = parse(file.path(), &origin()).expect("parse");
+        assert_eq!(messages.len(), 1, "the standalone tool_result line is not its own document");
+        let body = &messages[0].body;
+        assert_eq!(messages[0].uuid, "a1");
+        assert!(body.contains("[tool_use Bash]"), "call present: {body}");
+        assert!(body.contains("ls"), "call input present: {body}");
+        assert!(body.contains("[tool_result] OUTPUT-MARKER"), "result folded in: {body}");
+    }
+
+    #[test]
+    fn orphan_tool_result_renders_standalone() {
+        // A tool_result whose tool_use never appears (a truncated transcript)
+        // must still surface its content rather than vanish.
+        let file = transcript(&[
+            r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"MISSING","content":"ORPHAN-OUTPUT"}]}}"#,
+        ]);
+        let messages = parse(file.path(), &origin()).expect("parse");
+        assert_eq!(messages.len(), 1, "an orphan tool_result still yields a document");
+        assert!(
+            messages[0].body.contains("[tool_result] ORPHAN-OUTPUT"),
+            "{}",
+            messages[0].body
+        );
+    }
+
+    #[test]
+    fn tool_use_without_a_result_still_renders() {
+        let file = transcript(&[
+            r#"{"type":"assistant","uuid":"a1","sessionId":"s1","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_x","name":"Read","input":{"path":"f"}}]}}"#,
+        ]);
+        let messages = parse(file.path(), &origin()).expect("parse");
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].body.contains("[tool_use Read]"), "{}", messages[0].body);
+        assert!(!messages[0].body.contains("[tool_result]"));
+    }
 }
