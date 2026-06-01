@@ -326,7 +326,12 @@ fn scope_kwargs(
     if let Some(repo) = repo.filter(|repo| !repo.is_empty()) {
         parts.push(format!("repo={}", json!(repo)));
     }
-    parts.iter().map(|part| format!(", {part}")).collect()
+    let mut suffix = String::new();
+    if !parts.is_empty() {
+        suffix.push_str(", ");
+        suffix.push_str(&parts.join(", "));
+    }
+    suffix
 }
 
 impl McpServer {
@@ -462,8 +467,8 @@ struct SemanticSearchRequest {
     query: String,
     /// Maximum number of results to return (default 10).
     top_k: Option<usize>,
-    /// Restrict to these sources: code, claude_history, codex, shell, slack,
-    /// linear, web. Omit to search every source.
+    /// Restrict to these sources: `code`, `claude_history`, `codex`, `shell`,
+    /// `slack`, `linear`, `web`. Omit to search every source.
     source: Option<Vec<String>>,
     /// Restrict to records authored by these users. Omit for every user.
     user: Option<Vec<String>>,
@@ -490,8 +495,8 @@ struct GrepSearchRequest {
     top_k: Option<usize>,
     /// Match the pattern case-sensitively (default false).
     case_sensitive: Option<bool>,
-    /// Restrict to these sources: code, claude_history, codex, shell, slack,
-    /// linear, web. Omit to search every source.
+    /// Restrict to these sources: `code`, `claude_history`, `codex`, `shell`,
+    /// `slack`, `linear`, `web`. Omit to search every source.
     source: Option<Vec<String>>,
     /// Restrict to records authored by these users. Omit for every user.
     user: Option<Vec<String>>,

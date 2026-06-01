@@ -13,6 +13,8 @@
 mod assets;
 mod bars;
 mod db;
+#[cfg(target_os = "linux")]
+mod layer_shell;
 mod overlay;
 mod scene;
 mod snapshot;

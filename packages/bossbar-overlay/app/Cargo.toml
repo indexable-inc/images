@@ -33,6 +33,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "6"
 # 2D vectors for window positions, instead of bare (f64, f64).
 glam = "0.30"
+# Wayland layer-shell backend for compositor-owned overlay placement on wlroots
+# compositors such as Hyprland.
+layershellev = "0.18.1"
 # macOS AppKit, reached through the raw window handle for two things winit has no
 # API for: raise a hovered window above its always-on-top siblings without taking
 # keyboard focus (`-[NSWindow orderFrontRegardless]`), a right-click context menu

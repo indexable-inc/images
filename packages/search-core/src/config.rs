@@ -1,8 +1,9 @@
 //! Runtime configuration with conservative, production-shaped defaults. The
 //! API base URL is owned by the [`mixedbread`] crate, not duplicated here.
 
-/// Default store name: the shared corpus the `indexer` populates (code plus
-/// agent/shell history across the fleet). One store holds everything; queries
+/// Default store name: the shared corpus the `indexer` populates.
+///
+/// One store holds code plus agent/shell history across the fleet. Queries
 /// scope it server-side with a metadata filter rather than using separate stores.
 pub const DEFAULT_STORE: &str = "index";
 
