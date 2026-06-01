@@ -57,6 +57,16 @@ JANK = [
     ("disable/skip toggle", re.compile(r"\b([A-Z_]*(DISABLE|SKIP)[A-Z_]*)=")),
 ]
 TRUNC = re.compile(r"\[truncated\]")
+# Self-correction / backtracking markers inside VISIBLE thinking text. A turn
+# whose reasoning contains these is mid-flight course-correcting (thrash). Only
+# meaningful where thinking text exists (display=summarized, e.g. Haiku); on
+# Opus 4.7/4.8 the thinking field is empty (display=omitted) so it never matches.
+# Signal 8.
+THRASH = re.compile(
+    r"\b(wait|actually|on second thought|let me reconsider|scratch that|"
+    r"i was wrong|that'?s wrong|never ?mind|hold on)\b|hmm,",
+    re.I,
+)
 
 
 def parse_ts(s):
@@ -75,7 +85,8 @@ def _row_schema(pl):
     return {
         "session": pl.String, "ts": pl.Datetime("us", "UTC"), "kind": pl.String,
         "model": pl.String, "speed": pl.String, "n_iter": pl.Int64, "out_tok": pl.Int64,
-        "n_tooluse": pl.Int64, "n_think": pl.Int64, "is_sidechain": pl.Boolean,
+        "n_tooluse": pl.Int64, "n_think": pl.Int64, "n_think_text": pl.Int64,
+        "think_chars": pl.Int64, "is_sidechain": pl.Boolean,
     }
 
 
@@ -124,6 +135,10 @@ def build_frames(days: int = 45, full: bool = False):
         files = [f for f in files if os.path.getmtime(f) >= cutoff]
 
     rows, tool_calls, bash_done, tool_results, corrections, chains = [], {}, [], [], [], []
+    # Per-session thinking-thrash tally: (text_turns, thrash_turns, thrash_hits,
+    # model). Accumulated during the scan so the aggregate can be built WITHOUT
+    # ever holding raw thinking text in a frame (signal 8).
+    thrash = {}
     for f in files:
         sess = os.path.basename(f)[:-6]
         try:
@@ -144,16 +159,36 @@ def build_frames(days: int = 45, full: bool = False):
                 if t == "assistant":
                     blocks = content if isinstance(content, list) else []
                     tu = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
-                    th = sum(1 for b in blocks if isinstance(b, dict) and b.get("type") == "thinking")
+                    # n_think counts ALL thinking blocks (incl. Opus 4.7/4.8's
+                    # signature-only, display=omitted blocks whose `thinking` is
+                    # ""); n_think_text + think_chars measure only VISIBLE
+                    # reasoning, so the omitted-vs-summarized split is legible.
+                    think = [b.get("thinking") or "" for b in blocks
+                             if isinstance(b, dict) and b.get("type") == "thinking"]
+                    th = len(think)
+                    th_text = sum(1 for s in think if s)
+                    th_chars = sum(len(s) for s in think)
                     u = m.get("usage") or {}
                     it = u.get("iterations")
                     run_tools += len(tu)
+                    model = m.get("model")
                     rows.append(dict(
-                        session=sess, ts=ts, kind="assistant", model=m.get("model"),
+                        session=sess, ts=ts, kind="assistant", model=model,
                         speed=u.get("speed"), n_iter=(len(it) if isinstance(it, list) else 0),
                         out_tok=u.get("output_tokens"), n_tooluse=len(tu), n_think=th,
+                        n_think_text=th_text, think_chars=th_chars,
                         is_sidechain=bool(r.get("isSidechain")),
                     ))
+                    # Tally thrash over visible thinking only; raw text is dropped here.
+                    if th_text:
+                        joined = "\n".join(s for s in think if s)
+                        hits = len(THRASH.findall(joined))
+                        agg = thrash.get(sess) or [0, 0, 0, model]
+                        agg[0] += 1                         # turns with visible thinking
+                        agg[1] += 1 if hits else 0          # turns that backtrack
+                        agg[2] += hits                      # total marker hits
+                        agg[3] = model or agg[3]
+                        thrash[sess] = agg
                     for b in tu:
                         inp = b.get("input") or {}
                         label = (inp.get("command") or inp.get("file_path") or inp.get("pattern")
@@ -190,6 +225,9 @@ def build_frames(days: int = 45, full: bool = False):
         bash=pl.DataFrame(bash_done, schema=["session", "cmd", "seconds", "is_error"], orient="row"),
         tools=pl.DataFrame(tool_results, schema=["session", "tool", "label", "size", "is_error"], orient="row"),
         corrections=corrections, chains=chains,
+        thrash=[dict(session=s, model=v[3], think_turns=v[0],
+                     thrash_turns=v[1], thrash_hits=v[2])
+                for s, v in thrash.items()],
         files=len(files), window=("full" if full else f"{days}d"),
     )
 
@@ -210,10 +248,16 @@ def aggregates(F, top: int = 15, oversize: int = 20000):
     a = df.filter((pl.col("kind") == "assistant") & pl.col("model").is_not_null()
                   & (pl.col("model") != "<synthetic>"))
     if a.height:
+        # avg_think counts ALL thinking blocks (Opus 4.7/4.8 emit empty,
+        # signature-only ones with display=omitted, so it looks high while no
+        # reasoning is visible). avg_think_chars / frac_visible_think measure
+        # only VISIBLE text, exposing the omitted(~0) vs summarized(>0) split.
         out.append(("model loop profile", a.group_by("model").agg(
             pl.len().alias("turns"), pl.col("out_tok").median().alias("med_out_tok"),
             pl.col("n_tooluse").mean().round(2).alias("avg_tooluse"),
             pl.col("n_think").mean().round(2).alias("avg_think"),
+            pl.col("think_chars").mean().round(1).alias("avg_think_chars"),
+            (pl.col("n_think_text") > 0).mean().round(3).alias("frac_visible_think"),
             (pl.col("speed") == "fast").mean().round(3).alias("frac_fast"),
         ).sort("turns", descending=True)))
 
@@ -262,6 +306,27 @@ def aggregates(F, top: int = 15, oversize: int = 20000):
     if F["chains"]:
         out.append((f"long autonomous chains w/ errors ({len(F['chains'])} total)",
                     pl.DataFrame(F["chains"]).sort(["errors", "tools"], descending=True).head(top)))
+
+    # signal 8: thinking thrash / backtracking. Only sessions with VISIBLE
+    # thinking text contribute (display=summarized; omitted-thinking models like
+    # Opus 4.7/4.8 emit no text so never appear). frac = thrash_turns/think_turns.
+    if F.get("thrash"):
+        tw = pl.DataFrame(F["thrash"]).filter(pl.col("think_turns") > 0)
+        if tw.height:
+            out.append(("thinking thrash by model (visible-reasoning turns)",
+                        tw.group_by("model").agg(
+                            pl.col("think_turns").sum().alias("think_turns"),
+                            pl.col("thrash_turns").sum().alias("thrash_turns"),
+                            pl.col("thrash_hits").sum().alias("thrash_hits"),
+                        ).with_columns((pl.col("thrash_turns") / pl.col("think_turns"))
+                                       .round(3).alias("frac_thrash"))
+                        .sort("thrash_turns", descending=True)))
+            out.append(("thinking thrash by session (most backtracking)",
+                        tw.with_columns((pl.col("thrash_turns") / pl.col("think_turns"))
+                                        .round(3).alias("frac_thrash"))
+                        .select("session", "model", "think_turns", "thrash_turns",
+                                "thrash_hits", "frac_thrash")
+                        .sort(["thrash_turns", "thrash_hits"], descending=True).head(top)))
     return out
 
 
@@ -311,7 +376,7 @@ def main():
     F["bash"].write_parquet(os.path.join(args.out, "history_bash.parquet"))
     F["tools"].write_parquet(os.path.join(args.out, "history_tools.parquet"))
     with open(os.path.join(args.out, "findings.json"), "w") as fh:
-        json.dump({k: F[k] for k in ("window", "files", "corrections", "chains")}, fh, indent=2)
+        json.dump({k: F[k] for k in ("window", "files", "corrections", "chains", "thrash")}, fh, indent=2)
     write_html(F, os.path.join(args.out, "report.html"), top=args.top, oversize=args.oversize)
     print(f"\nwrote parquet caches + findings.json + report.html to {args.out}")
 
