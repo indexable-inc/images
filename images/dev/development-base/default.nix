@@ -93,7 +93,8 @@ in
   #
   # Claude Code reads `/etc/claude-code/managed-settings.json` as its
   # highest-precedence, enforced layer (above user, project, local, and CLI), and
-  # only ever READS it. That makes a read-only /nix/store file the right delivery:
+  # only ever READS it. That makes a read-only /nix/store file (delivered by
+  # environment.etc as an /etc symlink to the 0444 store copy) the right delivery:
   # no activation copy, no last-applied 3-way merge, no mutable generated file.
   # `~/.claude/settings.json` is left entirely app-owned, so Claude's in-app
   # settings pane can write theme/etc. with nothing for Nix to collide with. This
@@ -107,8 +108,10 @@ in
   # warning, which managed bypass alone does not suppress. That key is ignored
   # only in *project* scope (a guard against untrusted repos), and is honored in
   # managed scope. Root additionally needs the IS_SANDBOX=1 signal from the
-  # wrapped claude-code above, or the guard rejects bypass mode regardless of
-  # which layer sets it. Mirrors the intent of the ix fleet default in ix's
+  # wrapped claude-code above (the uid-0 bypass guard rejects bypass mode for
+  # root without it); the wrapper sets it unconditionally, so the guard is
+  # satisfied however bypass is configured. Mirrors the intent of the ix fleet
+  # default in ix's
   # nix/homes/modules/llm.nix (that module is per-user home-manager, so it can't
   # write /etc; moving the fleet onto a managed file is the follow-up).
   environment.etc."claude-code/managed-settings.json".text = builtins.toJSON {
