@@ -114,8 +114,26 @@ in
   # default in ix's
   # nix/homes/modules/llm.nix (that module is per-user home-manager, so it can't
   # write /etc; moving the fleet onto a managed file is the follow-up).
+  #
+  # `env.CLAUDE_CODE_EXTRA_BODY` forces summarized thinking back on. Opus 4.7/4.8
+  # silently changed the Messages API default for `thinking.display` from
+  # "summarized" to "omitted": thinking blocks still stream, but their `thinking`
+  # field is empty (only the encrypted `signature` is returned), so the agent's
+  # reasoning is invisible in the transcript and Ctrl+O view. The in-app
+  # `showThinkingSummaries` setting does NOT fix this — it controls the transcript
+  # renderer, not the API request, and is never wired to the `display` param
+  # (anthropics/claude-code#49268). The only restore path is to send
+  # `thinking.display = "summarized"` on the request body, which Claude Code
+  # merges from this env var. We keep `type = "adaptive"` (the only mode these
+  # models support) so we override display without forcing a thinking budget.
   environment.etc."claude-code/managed-settings.json".text = builtins.toJSON {
     permissions.defaultMode = "bypassPermissions";
     skipDangerousModePermissionPrompt = true;
+    env.CLAUDE_CODE_EXTRA_BODY = builtins.toJSON {
+      thinking = {
+        type = "adaptive";
+        display = "summarized";
+      };
+    };
   };
 }

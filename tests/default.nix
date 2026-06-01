@@ -2376,6 +2376,21 @@ let
           managed.permissions.defaultMode == "bypassPermissions" && managed.skipDangerousModePermissionPrompt;
         message = "development-base should enforce root's Claude Code bypass via managed-settings.json";
       }
+      {
+        # Opus 4.7/4.8 default thinking.display to "omitted"; the only way to
+        # restore summarized thinking is the request body, sent via
+        # CLAUDE_CODE_EXTRA_BODY. Pin it so a refactor can't silently drop it and
+        # blind us to the agent's reasoning again.
+        assertion =
+          let
+            managed =
+              builtins.fromJSON
+                developmentBase.config.environment.etc."claude-code/managed-settings.json".text;
+            extra = builtins.fromJSON (managed.env.CLAUDE_CODE_EXTRA_BODY or "{}");
+          in
+          (extra.thinking.display or null) == "summarized";
+        message = "development-base should request summarized thinking via CLAUDE_CODE_EXTRA_BODY";
+      }
     ];
 
     vitest = [
