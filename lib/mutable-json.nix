@@ -1,8 +1,22 @@
-# Declarative-but-writable JSON config files.
+# Declarative-but-writable JSON config files: the fallback for app config that
+# Nix can't deliver read-only.
 #
-# Some apps (Claude Code's settings pane, Codex, ...) rewrite their own config at
-# runtime, so a read-only `/nix/store` symlink (`home.file`) makes those writes
-# fail with a permission error. The usual escape hatches each give something up:
+# PREFER the app's own managed/policy layer for any key you want to ENFORCE.
+# Many apps already merge several config layers at load time with a read-only,
+# highest-precedence "managed" scope on top: Claude Code reads
+# /etc/claude-code/managed-settings.json, Codex reads /etc/codex/requirements.toml,
+# Firefox has managed policies, etc. Enforcing a key there needs no merge logic
+# and no mutable generated file: ship a read-only /nix/store file and leave the
+# app's own config fully app-owned. That is the right tool whenever the app
+# provides it (see issue #491 and images/dev/development-base, which enforces
+# Claude's bypass keys through the managed layer rather than this module).
+#
+# This module is for what's left: a key that must live in a file the app ALSO
+# writes to and that has no managed layer, or a value you want to SEED as an
+# overridable default rather than enforce (a managed layer always wins, so it
+# can't express "default the user may change"). For those, a read-only
+# `/nix/store` symlink (`home.file`) makes the app's own writes fail with a
+# permission error, and the usual escape hatches each give something up:
 # `mkOutOfStoreSymlink` hands you a raw working-copy file with no Nix algebra
 # (no merge of contributions across modules, no types), and a plain
 # activation-copy overwrites the app's runtime writes on every switch.
@@ -20,8 +34,8 @@
 # Scope: a single declarative owner per file. Multiple Nix-side owners of one
 # file would need per-field ownership (Server-Side Apply), which this is not.
 #
-# Exposed from the flake as `homeModules.mutable-json`; see
-# `images/dev/development-base` for a consumer and `tests/` for the merge cases.
+# Exposed from the flake as `homeModules.mutable-json`; see `tests/` and the
+# `mutable-json-merge` flake check for the merge cases.
 { lib }:
 let
   inherit (lib) types mkOption;

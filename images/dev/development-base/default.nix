@@ -79,44 +79,40 @@ in
       claude-code
     ];
 
-  # Claude Code defaults for the dev image: a writable, Nix-generated
-  # settings.json.
+  # Claude Code policy for the dev image: enforce the bypass keys through
+  # Claude's own managed-settings layer, not by writing the user's settings.json.
   #
-  # This image only ever runs inside a per-tenant ix VM (or an `ix shell` user
-  # on one), which is the real trust boundary: the agent can touch nothing but
-  # this guest's disposable filesystem, network, and processes. Per-tool
-  # approval prompts buy nothing here and only stall an agent that has nowhere
-  # unsafe to go, so inside the guest we hand Claude full authority. The
-  # enforcement that actually matters belongs to the sandbox that owns the
-  # guest, whether that is the VM boundary or the OS user the agent runs as,
-  # not to a confirmation dialog the agent answers itself.
+  # This image only ever runs inside a per-tenant ix VM (or an `ix shell` user on
+  # one), which is the real trust boundary: the agent can touch nothing but this
+  # guest's disposable filesystem, network, and processes. Per-tool approval
+  # prompts buy nothing here and only stall an agent that has nowhere unsafe to
+  # go, so inside the guest we hand Claude full authority. The enforcement that
+  # actually matters belongs to the sandbox that owns the guest, whether that is
+  # the VM boundary or the OS user the agent runs as, not to a confirmation
+  # dialog the agent answers itself.
   #
-  # `permissions.defaultMode = "bypassPermissions"` runs every tool without an
-  # approval prompt; `skipDangerousModePermissionPrompt` pre-accepts the
-  # one-time bypass-mode warning so a fresh interactive launch does not stall on
-  # the confirmation dialog (both honored only in user-scope settings.json,
-  # which this is). Mirrors the ix fleet default in ix's
-  # nix/homes/modules/llm.nix. Root additionally needs the IS_SANDBOX=1 signal
-  # from the wrapped claude-code above, or this mode is rejected.
+  # Claude Code reads `/etc/claude-code/managed-settings.json` as its
+  # highest-precedence, enforced layer (above user, project, local, and CLI), and
+  # only ever READS it. That makes a read-only /nix/store file the right delivery:
+  # no activation copy, no last-applied 3-way merge, no mutable generated file.
+  # `~/.claude/settings.json` is left entirely app-owned, so Claude's in-app
+  # settings pane can write theme/etc. with nothing for Nix to collide with. This
+  # is the model #491 landed on after anna's note that layered, app-native config
+  # (a read-only managed scope merged at load time) beats consumer-side merge
+  # logic wherever the app provides it.
   #
-  # Delivered as a WRITABLE file, not a read-only /nix/store symlink (what
-  # home.file and home-manager's programs.claude-code emit): Claude's in-app
-  # settings pane writes back to settings.json, and other agents (Codex, ...)
-  # rewrite their own config too, so a read-only symlink would make every such
-  # write fail with a permission error. The mutable-json module keeps it both
-  # Nix-declared (so the defaults stay composable, unlike mkOutOfStoreSymlink's
-  # raw file) and writable, reconciling with a last-applied 3-way merge on each
-  # switch: our keys are enforced, the app's own keys are preserved. See
-  # lib/mutable-json.nix.
-  home-manager.users.root = {
-    imports = [ ix.mutableJson.homeModule ];
-    home.mutableJsonFiles.claude-code = {
-      target = ".claude/settings.json";
-      value = {
-        "$schema" = "https://json.schemastore.org/claude-code-settings.json";
-        permissions.defaultMode = "bypassPermissions";
-        skipDangerousModePermissionPrompt = true;
-      };
-    };
+  # Both keys must live in this managed file: `permissions.defaultMode =
+  # "bypassPermissions"` runs every tool without a prompt, and
+  # `skipDangerousModePermissionPrompt = true` pre-accepts the one-time bypass
+  # warning, which managed bypass alone does not suppress. That key is ignored
+  # only in *project* scope (a guard against untrusted repos), and is honored in
+  # managed scope. Root additionally needs the IS_SANDBOX=1 signal from the
+  # wrapped claude-code above, or the guard rejects bypass mode regardless of
+  # which layer sets it. Mirrors the intent of the ix fleet default in ix's
+  # nix/homes/modules/llm.nix (that module is per-user home-manager, so it can't
+  # write /etc; moving the fleet onto a managed file is the follow-up).
+  environment.etc."claude-code/managed-settings.json".text = builtins.toJSON {
+    permissions.defaultMode = "bypassPermissions";
+    skipDangerousModePermissionPrompt = true;
   };
 }

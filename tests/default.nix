@@ -2362,13 +2362,19 @@ let
         message = "development-base should keep unrelated unfree CLIs out of the image";
       }
       {
-        # The bypass-permissions default is reconciled into root's settings.json
-        # via the mutable-json module. A refactor that drops it would silently
-        # restore per-tool prompts, so pin the declared value.
+        # Bypass-permissions is enforced through Claude's managed-settings layer
+        # (/etc/claude-code/managed-settings.json): read-only, highest precedence,
+        # leaving ~/.claude/settings.json app-owned. Pin both keys so a refactor
+        # that drops them can't silently restore per-tool prompts. `.text` is a
+        # plain string (no IFD) so fromJSON can read it in eval.
         assertion =
-          developmentBase.config.home-manager.users.root.home.mutableJsonFiles.claude-code.value.permissions.defaultMode
-          == "bypassPermissions";
-        message = "development-base should default root's Claude Code to bypassPermissions";
+          let
+            managed =
+              builtins.fromJSON
+                developmentBase.config.environment.etc."claude-code/managed-settings.json".text;
+          in
+          managed.permissions.defaultMode == "bypassPermissions" && managed.skipDangerousModePermissionPrompt;
+        message = "development-base should enforce root's Claude Code bypass via managed-settings.json";
       }
     ];
 
