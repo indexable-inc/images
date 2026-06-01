@@ -50,3 +50,19 @@ Fix the root cause instead. When two places must agree, route both through one
 binding, one option default, or one generated value, and let the type checker
 or module merge enforce the link.
 
+### Before writing an assertion, run the failure test
+
+Ask: if this assertion failed, would it reveal a bug a reader could not predict
+from the source line it checks? Or would it only fire when someone deliberately
+edits that exact literal? Write it only in the first case.
+
+- Only assert genuinely useful, non-obvious behavior that a reader cannot
+  trivially derive from the source under test.
+- Do not assert a literal constant against itself (a date, tag, name, port, or
+  retention count round-tripped through `fromJSON`/`toJSON`), and do not assert
+  what the type system or `builtins.toJSON` already guarantees cannot malform.
+- A real invariant earns the line: a security or policy property, a required
+  package's presence, two files that must agree with no shared source, a
+  generated artifact that must match a manifest, or parser/round-trip behavior
+  with a genuine failure mode.
+
