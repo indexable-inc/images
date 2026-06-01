@@ -23,7 +23,9 @@ members = [
   "packages/file-language",
   "packages/file-search",
   "packages/git-log-pretty",
+  "packages/github-avatar",
   "packages/ix-dev-diagnose",
+  "packages/kitty",
   "packages/macos-vm",
   "packages/mcp",
   "packages/minecraft/nbt",
@@ -104,6 +106,8 @@ clone-pragma = { path = "packages/clone-detect/pragma" }
 clone-scanner = { path = "packages/clone-detect/scanner" }
 code-highlight = { path = "packages/code-highlight" }
 code-tokenizer = { path = "packages/code-tokenizer" }
+github-avatar = { path = "packages/github-avatar" }
+kitty = { path = "packages/kitty" }
 color-eyre = "0.6"
 dashboard-core = { path = "packages/dashboard-core" }
 devicons = "0.6"
@@ -145,6 +149,7 @@ quartz_nbt = "0.2.9"
 rayon = "1"
 regex = "1"
 repo-walker = { path = "packages/repo-walker" }
+image = { version = "0.25", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",

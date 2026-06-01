@@ -1,7 +1,11 @@
 //! Format a commit's summary line and its changed-file tree for the terminal.
 
+use std::collections::HashSet;
+use std::fmt::Write;
+
 use anstyle::{Ansi256Color, AnsiColor, Color, Style};
 
+use crate::avatar::Avatar;
 use crate::palette::{self, Theme};
 use crate::tree;
 use crate::{git, time};
@@ -62,6 +66,38 @@ fn format_summary(summary: &str, theme: Theme) -> String {
     )
 }
 
+/// Build a commit's two rendered pieces: the `shorthash summary • when` header
+/// line and the (possibly empty) indented changed-file tree.
+fn commit_block(ahead: &git::AheadCommit<'_>, theme: Theme) -> color_eyre::eyre::Result<(String, String)> {
+    let commit = &ahead.commit;
+    let short = commit.id().to_string().chars().take(7).collect::<String>();
+    let summary = commit.summary().unwrap_or("<no message>").trim();
+    let when = time::relative(commit.time().seconds())?;
+
+    let yellow = palette::fg(Color::Ansi(AnsiColor::Yellow));
+    let dim = palette::fg(Color::Ansi256(Ansi256Color(8)));
+
+    let header = format!(
+        "  {short} {summary} {bullet} {when}",
+        short = palette::paint(yellow, &short),
+        summary = format_summary(summary, theme),
+        bullet = palette::paint(dim, "•"),
+        when = palette::paint(dim, &when),
+    );
+    let icons = tree::render(&ahead.changed_files, theme);
+    Ok((header, icons))
+}
+
+/// Write the plain header / tree / blank-line form (no avatar).
+fn write_plain(out: &mut dyn std::io::Write, header: &str, icons: &str) -> color_eyre::eyre::Result<()> {
+    writeln!(out, "{header}")?;
+    if !icons.is_empty() {
+        writeln!(out, "{icons}")?;
+    }
+    writeln!(out)?;
+    Ok(())
+}
+
 /// Write one commit block to `out`: a `shorthash summary • relative-time` line
 /// followed by the indented changed-file tree and a trailing blank line.
 pub fn print_commit(
@@ -69,34 +105,67 @@ pub fn print_commit(
     ahead: &git::AheadCommit<'_>,
     theme: Theme,
 ) -> color_eyre::eyre::Result<()> {
-    let commit = &ahead.commit;
-    let short = commit
-        .id()
-        .to_string()
-        .chars()
-        .take(7)
-        .collect::<String>();
-    let summary = commit.summary().unwrap_or("<no message>").trim();
-    let when = time::relative(commit.time().seconds())?;
+    let (header, icons) = commit_block(ahead, theme)?;
+    write_plain(out, &header, &icons)
+}
 
-    let yellow = palette::fg(Color::Ansi(AnsiColor::Yellow));
-    let dim = palette::fg(Color::Ansi256(Ansi256Color(8)));
+/// Write one commit block with the author's avatar in the left gutter.
+///
+/// The avatar is drawn via the kitty graphics protocol and the text is shifted
+/// right to clear it; with no avatar this falls back to the plain form.
+/// `transmitted` tracks image ids already sent this run, so a repeated author is
+/// redrawn with a cheap placement instead of resending the pixels.
+pub fn print_commit_with_avatar(
+    out: &mut dyn std::io::Write,
+    ahead: &git::AheadCommit<'_>,
+    theme: Theme,
+    avatar: Option<&Avatar>,
+    transmitted: &mut HashSet<u32>,
+    rows: u32,
+) -> color_eyre::eyre::Result<()> {
+    let (header, icons) = commit_block(ahead, theme)?;
 
-    writeln!(
-        out,
-        "  {short} {summary} {bullet} {when}",
-        short = palette::paint(yellow, &short),
-        summary = format_summary(summary, theme),
-        bullet = palette::paint(dim, "•"),
-        when = palette::paint(dim, &when),
-    )?;
+    let Some(avatar) = avatar.filter(|_| rows > 0) else {
+        return write_plain(out, &header, &icons);
+    };
 
-    let icons = tree::render(&ahead.changed_files, theme);
-    if !icons.is_empty() {
-        writeln!(out, "{icons}")?;
+    // Cells are about twice as tall as wide, so double the column count to keep
+    // the avatar square; one extra column separates it from the text.
+    let cols = rows * 2;
+    let gutter = cols + 1;
+    let placement = kitty::Placement {
+        cols: Some(cols),
+        rows: Some(rows),
+        move_cursor: false,
+    };
+
+    let mut buf = String::new();
+    // Anchor at column 0, then draw without moving the cursor (C=1).
+    buf.push('\r');
+    if transmitted.insert(avatar.id) {
+        buf.push_str(&kitty::transmit(
+            &kitty::Image::Png(&avatar.png),
+            Some(avatar.id),
+            &placement,
+        ));
+    } else {
+        buf.push_str(&kitty::place(avatar.id, &placement));
     }
-    writeln!(out)?;
 
+    let mut lines = vec![header.as_str()];
+    if !icons.is_empty() {
+        lines.extend(icons.lines());
+    }
+    // Print at least `rows` lines so the text advances past the image.
+    let count = lines.len().max(usize::try_from(rows).unwrap_or(usize::MAX));
+    for index in 0..count {
+        let content = lines.get(index).copied().unwrap_or("");
+        // Return to column 0, step right past the avatar, then write the text.
+        let _ = write!(buf, "\r\x1b[{gutter}C{content}\n");
+    }
+    buf.push('\n');
+
+    write!(out, "{buf}")?;
     Ok(())
 }
 

@@ -1031,40 +1031,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
-name = "source-atuin"
-version = "0.1.0"
-dependencies = [
- "rusqlite",
- "serde_json",
- "snafu 0.9.1",
- "source-meta",
-]
-
-[[package]]
-name = "source-claude"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "nix 0.30.1",
- "source-meta",
- "serde",
- "serde_json",
- "snafu 0.9.1",
- "tempfile",
-]
-
-[[package]]
-name = "source-codex"
-version = "0.1.0"
-dependencies = [
- "nix 0.30.1",
- "serde",
- "serde_json",
- "snafu 0.9.1",
- "source-meta",
-]
-
-[[package]]
 name = "clone-cli"
 version = "0.1.0"
 dependencies = [
@@ -1209,6 +1175,12 @@ dependencies = [
  "tracing-core",
  "tracing-error",
 ]
+
+[[package]]
+name = "color_quant"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 
 [[package]]
 name = "colorchoice"
@@ -2215,6 +2187,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gif"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee8cfcc411d9adbbaba82fb72661cc1bcca13e8bba98b364e62b2dba8f960159"
+dependencies = [
+ "color_quant",
+ "weezl",
+]
+
+[[package]]
 name = "gimli"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2230,9 +2212,12 @@ dependencies = [
  "color-eyre",
  "devicons",
  "git2",
+ "github-avatar",
+ "kitty",
  "strip-ansi-escapes",
  "tempfile",
  "terminal-theme",
+ "tokio",
 ]
 
 [[package]]
@@ -2246,6 +2231,16 @@ dependencies = [
  "libgit2-sys",
  "log",
  "url",
+]
+
+[[package]]
+name = "github-avatar"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "reqwest",
+ "serde",
+ "snafu 0.9.1",
 ]
 
 [[package]]
@@ -2771,9 +2766,24 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
+ "color_quant",
+ "gif",
+ "image-webp",
  "moxcms",
  "num-traits",
  "png",
+ "zune-core",
+ "zune-jpeg",
+]
+
+[[package]]
+name = "image-webp"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
+dependencies = [
+ "byteorder-lite",
+ "quick-error",
 ]
 
 [[package]]
@@ -3016,6 +3026,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kitty"
+version = "0.1.0"
+dependencies = [
+ "base64",
+]
+
+[[package]]
 name = "lazy-regex"
 version = "3.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3204,26 +3221,6 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
-]
-
-[[package]]
-name = "source-git"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "snafu 0.9.1",
- "source-meta",
-]
-
-[[package]]
-name = "source-linear"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "source-meta",
- "serde",
- "serde_json",
- "snafu 0.9.1",
 ]
 
 [[package]]
@@ -4729,6 +4726,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-error"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
+
+[[package]]
 name = "quick-xml"
 version = "0.39.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5419,23 +5422,13 @@ dependencies = [
  "regex",
  "repo-walker",
  "rusqlite",
- "source-meta",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "snafu 0.9.1",
+ "source-meta",
  "tempfile",
  "tokio",
-]
-
-[[package]]
-name = "source-meta"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "snafu 0.9.1",
 ]
 
 [[package]]
@@ -5688,25 +5681,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
-name = "sized-chunks"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16d69225bde7a69b235da73377861095455d298f2b970996eec25ddbb42b3d1e"
-dependencies = [
- "bitmaps",
- "typenum",
-]
-
-[[package]]
-name = "sketches-ddsketch"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05e40b6cf54d988dc1a2223531b969c9a9e30906ad90ef64890c27b4bfbb46ea"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "sink-mixedbread"
 version = "0.1.0"
 dependencies = [
@@ -5734,20 +5708,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "sized-chunks"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16d69225bde7a69b235da73377861095455d298f2b970996eec25ddbb42b3d1e"
+dependencies = [
+ "bitmaps",
+ "typenum",
+]
+
+[[package]]
+name = "sketches-ddsketch"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05e40b6cf54d988dc1a2223531b969c9a9e30906ad90ef64890c27b4bfbb46ea"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-
-[[package]]
-name = "source-slack"
-version = "0.1.0"
-dependencies = [
- "source-meta",
- "serde",
- "serde_json",
- "snafu 0.9.1",
-]
 
 [[package]]
 name = "smallvec"
@@ -5814,6 +5797,80 @@ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "source-atuin"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
+]
+
+[[package]]
+name = "source-claude"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "nix 0.30.1",
+ "serde",
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
+ "tempfile",
+]
+
+[[package]]
+name = "source-codex"
+version = "0.1.0"
+dependencies = [
+ "nix 0.30.1",
+ "serde",
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
+]
+
+[[package]]
+name = "source-git"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
+]
+
+[[package]]
+name = "source-linear"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
+]
+
+[[package]]
+name = "source-meta"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu 0.9.1",
+]
+
+[[package]]
+name = "source-slack"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
 ]
 
 [[package]]
@@ -7273,6 +7330,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "weezl"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8085,4 +8148,19 @@ checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
 dependencies = [
  "cc",
  "pkg-config",
+]
+
+[[package]]
+name = "zune-core"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb8a0807f7c01457d0379ba880ba6322660448ddebc890ce29bb64da71fb40f9"
+
+[[package]]
+name = "zune-jpeg"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+dependencies = [
+ "zune-core",
 ]
