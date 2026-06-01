@@ -1,0 +1,25 @@
+id: no-anon-tuple
+language: rust
+severity: error
+message: "Anonymous tuple with 3+ fields. Promote it to a named struct so each field has a name."
+note: |
+  WHY: A 3+-field tuple carries several distinct domain values positionally, so
+  every call site re-derives what `.0`/`.1`/`.2` mean and a reorder is a silent
+  bug. A named struct documents each field once. Two-field pairs (key/value, a
+  parse split) stay idiomatic and are allowed; this rule flags 3 or more.
+  REPO: Replace `(A, B, C)` with a `struct` naming each field. See
+  packages/indexer (`Counts`, `User`, `Mixedbread`) for the pattern.
+  SCOPE: Enforced in the corpus/search subsystem (indexer, search*, source/*,
+  sink/*). To extend it elsewhere, add the crate's glob to `files:` below.
+rule:
+  kind: tuple_type
+  has:
+    nthChild: 3
+    stopBy: neighbor
+files:
+  - "packages/indexer/**/*.rs"
+  - "packages/search/**/*.rs"
+  - "packages/search-core/**/*.rs"
+  - "packages/search-py/**/*.rs"
+  - "packages/source/**/*.rs"
+  - "packages/sink/**/*.rs"

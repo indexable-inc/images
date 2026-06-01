@@ -9,11 +9,11 @@ only compact aggregates come back. Interactive:
     F = o.build_frames(days=45)        # or full=True
     o.report(F)                         # print the leaderboards
     o.write_html(F, "~/.claude/optimize/report.html")   # browser report
-    F["df"]; F["bash"]; F["tools"]      # slice further with polars
+    F["df"]; F["bash"]; F["tools"]; F["debug"]   # slice further with polars
 
 Standalone / headless (the `optimize-scan` portable service runs this via uv):
     python build_history_df.py --days 60 --out ~/.claude/optimize
-writes parquet caches, findings.json, latest.txt, and report.html.
+writes parquet caches (incl. history_debug.parquet), findings.json, and report.html.
 
 Schema verified against real transcripts:
   - usage.speed is a categorical label ("fast"), NOT tokens/sec
@@ -22,6 +22,14 @@ Schema verified against real transcripts:
   - a REAL human prompt is a string-content user entry with a top-level promptId;
     harness-injected user messages have no promptId and must be excluded
   - "tool too big / context trimmed" is detected by RESULT SIZE, not a marker string
+
+Debug logs (~/.claude/debug/<session>.txt) verified against real --debug runs:
+  - written ONLY for sessions launched with --debug (the `cld` alias); plain
+    `claude` writes nothing, so F["debug"] is SPARSE (a few sessions, not all)
+  - same cleanupPeriodDays retention as transcripts deletes old files
+  - filename stem == session id, so it joins to the transcript `session` column
+  - carries timing the transcript cannot: per-tool auto-mode classifier latency,
+    permission-decision + dispatch latency, and API time-to-first-byte
 """
 from __future__ import annotations
 import argparse, glob, html, json, os, re, sys
@@ -68,6 +76,21 @@ THRASH = re.compile(
     re.I,
 )
 
+# Debug logs: ~/.claude/debug/<session>.txt, one per --debug session. Each line
+# is "<iso-ts> [LEVEL] <rest>". We extract only the optimize-relevant events
+# (auto-mode classifier + permission + dispatch latency, API TTFB, ERROR/WARN),
+# never the raw DEBUG firehose, so the frame stays compact. The `latest` symlink
+# has no .txt suffix so the *.txt glob skips it (its target is globbed once).
+DEBUG_DIR = os.path.expanduser("~/.claude/debug")
+DBG_HEAD = re.compile(r"^(\S+)\s+\[(\w+)\]\s+(.*)$")
+# classifier_request_started carries the model; _finished carries the duration.
+# Join the two by reqId so each finished event is attributed to its model.
+DBG_CLASS_START = re.compile(r"\[Stall\] classifier_request_started reqId=(\S+) tool=(\S+) model=(\S+)")
+DBG_CLASS_DONE = re.compile(r"\[Stall\] classifier_request_finished reqId=(\S+) tool=(\S+).*?\bdurationMs=(\d+)")
+DBG_PERM = re.compile(r"\[Stall\] tool_dispatch_start tool=(\S+).*?\bpermissionDecisionMs=(\d+)")
+DBG_DISPATCH = re.compile(r"\[Stall\] tool_dispatch_end tool=(\S+).*?\bdurationMs=(\d+)")
+DBG_TTFB = re.compile(r"\[API:timing\] first byte after (\d+)ms")
+
 
 def parse_ts(s):
     try:
@@ -87,6 +110,17 @@ def _row_schema(pl):
         "model": pl.String, "speed": pl.String, "n_iter": pl.Int64, "out_tok": pl.Int64,
         "n_tooluse": pl.Int64, "n_think": pl.Int64, "n_think_text": pl.Int64,
         "think_chars": pl.Int64, "is_sidechain": pl.Boolean,
+    }
+
+
+def _debug_schema(pl):
+    # One row per timing/error event extracted from a --debug session log.
+    # kind in: classifier, permission, dispatch, ttfb, log. ms is the latency in
+    # milliseconds (null for log rows); level/msg are set only for log rows.
+    return {
+        "session": pl.String, "ts": pl.Datetime("us", "UTC"), "kind": pl.String,
+        "tool": pl.String, "model": pl.String, "ms": pl.Int64,
+        "level": pl.String, "msg": pl.String,
     }
 
 
@@ -125,6 +159,66 @@ def norm_cmd(cmd: str) -> str:
 
 def _cstr(c) -> str:
     return c if isinstance(c, str) else json.dumps(c, default=str)
+
+
+def _scan_debug(days: int, full: bool):
+    """Extract optimize-relevant timing/error events from --debug session logs.
+
+    Returns (rows, n_files). Sparse by nature: empty when no --debug session
+    exists in the window. Same mtime window as the transcript scan.
+    """
+    files = glob.glob(os.path.join(DEBUG_DIR, "*.txt"))
+    if not full:
+        cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+        files = [f for f in files if os.path.getmtime(f) >= cutoff]
+    rows = []
+    for f in files:
+        sess = os.path.basename(f)[:-4]  # strip ".txt" -> session id
+        try:
+            lines = open(f, encoding="utf-8").read().splitlines()
+        except Exception:
+            continue
+        models = {}  # reqId -> model, captured from classifier_request_started
+        for l in lines:
+            h = DBG_HEAD.match(l)
+            if not h:
+                continue
+            # One malformed line must not abort the file.
+            try:
+                ts, level, rest = parse_ts(h.group(1)), h.group(2), h.group(3)
+                m = DBG_CLASS_START.search(rest)
+                if m:
+                    models[m.group(1)] = m.group(3)
+                    continue
+                m = DBG_CLASS_DONE.search(rest)
+                if m:
+                    rows.append(dict(session=sess, ts=ts, kind="classifier",
+                                     tool=m.group(2), model=models.get(m.group(1)),
+                                     ms=int(m.group(3)), level=None, msg=None))
+                    continue
+                m = DBG_PERM.search(rest)
+                if m:
+                    rows.append(dict(session=sess, ts=ts, kind="permission",
+                                     tool=m.group(1), model=None, ms=int(m.group(2)),
+                                     level=None, msg=None))
+                    continue
+                m = DBG_DISPATCH.search(rest)
+                if m:
+                    rows.append(dict(session=sess, ts=ts, kind="dispatch",
+                                     tool=m.group(1), model=None, ms=int(m.group(2)),
+                                     level=None, msg=None))
+                    continue
+                m = DBG_TTFB.search(rest)
+                if m:
+                    rows.append(dict(session=sess, ts=ts, kind="ttfb", tool=None,
+                                     model=None, ms=int(m.group(1)), level=None, msg=None))
+                    continue
+                if level in ("ERROR", "WARN"):
+                    rows.append(dict(session=sess, ts=ts, kind="log", tool=None,
+                                     model=None, ms=None, level=level, msg=rest[:200]))
+            except Exception:
+                continue
+    return rows, len(files)
 
 
 def build_frames(days: int = 45, full: bool = False):
@@ -224,22 +318,29 @@ def build_frames(days: int = 45, full: bool = False):
             except Exception:
                 continue
 
+    debug_rows, debug_files = _scan_debug(days, full)
+
     return dict(
         df=pl.DataFrame(rows, schema=_row_schema(pl)),
         bash=pl.DataFrame(bash_done, schema=["session", "cmd", "seconds", "is_error"], orient="row"),
         tools=pl.DataFrame(tool_results, schema=["session", "tool", "label", "size", "is_error"], orient="row"),
+        debug=pl.DataFrame(debug_rows, schema=_debug_schema(pl)),
         corrections=corrections, chains=chains,
         thrash=[dict(session=s, model=mdl, think_turns=v[0],
                      thrash_turns=v[1], thrash_hits=v[2])
                 for (s, mdl), v in thrash.items()],
-        files=len(files), window=("full" if full else f"{days}d"),
+        files=len(files), debug_files=debug_files,
+        window=("full" if full else f"{days}d"),
     )
 
 
 def summary_line(F):
     df = F["df"]
+    dbg = F.get("debug")
     return (f"window: {F['window']} | files={F['files']} | rows={df.height} "
-            f"| timed_bash={F['bash'].height} | tool_results={F['tools'].height}")
+            f"| timed_bash={F['bash'].height} | tool_results={F['tools'].height} "
+            f"| debug_files={F.get('debug_files', 0)} "
+            f"debug_events={dbg.height if dbg is not None else 0}")
 
 
 def aggregates(F, top: int = 15, oversize: int = 20000):
@@ -335,6 +436,46 @@ def aggregates(F, top: int = 15, oversize: int = 20000):
                         ).with_columns((pl.col("thrash_turns") / pl.col("think_turns"))
                                        .round(3).alias("frac_thrash"))
                         .sort(["thrash_turns", "thrash_hits"], descending=True).head(top)))
+
+    # signal 9: harness / auto-mode overhead, from --debug session logs only.
+    # The transcript wall-clock hides this: every tool call pays a classifier
+    # request (auto-mode) + a permission decision before it runs. classifier_s
+    # is per-tool cumulative auto-mode latency; a tool with many calls and a
+    # high classifier_s is paying a fixed harness tax worth reducing (fewer
+    # calls, batch, or reconsider auto-mode for that tool). Sparse: present only
+    # if the user ran --debug sessions in the window.
+    dbg = F.get("debug")
+    if dbg is not None and dbg.height:
+        ov = dbg.filter(pl.col("kind").is_in(["classifier", "permission", "dispatch"]))
+        if ov.height:
+            # events = total dispatched calls of this tool (never 0, so a tool
+            # that ran but was not auto-mode-classified reads as classifier_calls=0,
+            # not "never ran"). overhead_s = classifier + permission latency only
+            # (the harness tax); dispatch_s is the tool's own runtime, shown for
+            # context. sum-of-empty is 0.0 (never null), so sort needs no nulls_last.
+            out.append(("auto-mode overhead by tool (harness latency, debug logs)",
+                        ov.group_by("tool").agg(
+                            pl.len().alias("events"),
+                            pl.col("ms").filter(pl.col("kind") == "classifier").len().alias("classifier_calls"),
+                            (pl.col("ms").filter(pl.col("kind") == "classifier").sum() / 1000).round(1).alias("classifier_s"),
+                            pl.col("ms").filter(pl.col("kind") == "classifier").median().round(0).alias("med_class_ms"),
+                            (pl.col("ms").filter(pl.col("kind") == "permission").sum() / 1000).round(1).alias("perm_s"),
+                            (pl.col("ms").filter(pl.col("kind") == "dispatch").sum() / 1000).round(1).alias("dispatch_s"),
+                        ).with_columns((pl.col("classifier_s") + pl.col("perm_s")).round(1).alias("overhead_s"))
+                        .sort("overhead_s", descending=True).head(top)))
+        tf = dbg.filter(pl.col("kind") == "ttfb")
+        if tf.height:
+            out.append(("API time-to-first-byte (ms, debug logs)", tf.select(
+                pl.len().alias("requests"), pl.col("ms").median().round(0).alias("med_ms"),
+                pl.col("ms").quantile(0.9).round(0).alias("p90_ms"),
+                pl.col("ms").max().alias("max_ms"))))
+        lg = dbg.filter(pl.col("kind") == "log")
+        if lg.height:
+            out.append(("runtime errors / warnings (debug logs)",
+                        lg.with_columns(pl.col("msg").str.slice(0, 80).alias("m"))
+                        .group_by("level", "m").agg(
+                            pl.len().alias("n"), pl.col("session").n_unique().alias("sessions"))
+                        .sort("n", descending=True).head(top)))
     return out
 
 
@@ -383,8 +524,9 @@ def main():
     F["df"].write_parquet(os.path.join(args.out, "history_rows.parquet"))
     F["bash"].write_parquet(os.path.join(args.out, "history_bash.parquet"))
     F["tools"].write_parquet(os.path.join(args.out, "history_tools.parquet"))
+    F["debug"].write_parquet(os.path.join(args.out, "history_debug.parquet"))
     with open(os.path.join(args.out, "findings.json"), "w") as fh:
-        json.dump({k: F[k] for k in ("window", "files", "corrections", "chains", "thrash")}, fh, indent=2)
+        json.dump({k: F[k] for k in ("window", "files", "debug_files", "corrections", "chains", "thrash")}, fh, indent=2)
     write_html(F, os.path.join(args.out, "report.html"), top=args.top, oversize=args.oversize)
     print(f"\nwrote parquet caches + findings.json + report.html to {args.out}")
 

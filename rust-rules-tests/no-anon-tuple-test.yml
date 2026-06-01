@@ -1,0 +1,18 @@
+id: no-anon-tuple
+valid:
+  # Two-field pairs are idiomatic (key/value, parse split) and allowed.
+  - "fn split(s: &str) -> (String, Option<String>) { todo!() }"
+  - "fn pairs() -> Vec<(String, usize)> { todo!() }"
+  # A named struct is the desired shape.
+  - "struct Counts { indexed: usize, failures: usize, skipped: usize }"
+  # Boundary cases the rule must NOT flag (locks behavior against an ast-grep
+  # upgrade): unit and one-element tuple types, and tuple *expressions* /
+  # *patterns* (the rule targets tuple *types* only, never values).
+  - "fn unit() -> () {}"
+  - "fn single() -> (i32,) { (0,) }"
+  - "fn expr() { let _ = (1, 2, 3); }"
+  - "fn pat(p: P) { let (a, b, c) = p; }"
+invalid:
+  - "fn run() -> (usize, usize, usize) { todo!() }"
+  - "fn build() -> (Schema, Field, Field) { todo!() }"
+  - "struct Holder { parts: (String, String, String) }"

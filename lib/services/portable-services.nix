@@ -309,7 +309,7 @@ let
     `systemd.user.services` (plus `systemd.user.timers` for interval
     services). The inactive platform's tree is simply not emitted.
   */
-  homeModule =
+  homeModuleFn =
     {
       config,
       pkgs,
@@ -343,6 +343,18 @@ let
         })
       ];
     };
+
+  # A stable `key` so the module system collapses duplicate imports into one
+  # declaration. Without it, two composed modules that each `imports` this one
+  # (e.g. homeModules.andrewgazelka + homeModules.ci-bars in the same config)
+  # would each re-declare `options.services.portable` and fail with "the option
+  # `services.portable' is already declared". The key is the module's identity,
+  # so importing it from any number of sites resolves to a single module.
+  homeModule = {
+    _file = "ix.portableServices.homeModule";
+    key = "ix.portableServices.homeModule";
+    imports = [ homeModuleFn ];
+  };
 in
 {
   inherit

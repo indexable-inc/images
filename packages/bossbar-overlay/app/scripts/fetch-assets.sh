@@ -21,11 +21,13 @@ echo "fetch-assets: minecraft-assets at $assets"
 mkdir -p "$here/crates/overlay-core/assets" \
          "$here/crates/bossbar/assets/boss_bar" \
          "$here/crates/book/assets/gui" \
-         "$here/crates/orb/assets/entity"
+         "$here/crates/orb/assets/entity" \
+         "$here/crates/orb/assets/particle"
 
 cp -f "$assets/font/ascii.png" "$here/crates/overlay-core/assets/ascii.png"
 cp -f "$assets"/boss_bar/*.png "$here/crates/bossbar/assets/boss_bar/"
 cp -f "$assets"/gui/*.png "$here/crates/book/assets/gui/"
 cp -f "$assets"/entity/experience_orb.png "$here/crates/orb/assets/entity/"
+cp -f "$assets"/particle/angry.png "$here/crates/orb/assets/particle/"
 
-echo "fetch-assets: assets ready (font -> overlay-core, boss_bar -> bossbar, gui -> book, entity -> orb)"
+echo "fetch-assets: assets ready (font -> overlay-core, boss_bar -> bossbar, gui -> book, entity + particle -> orb)"

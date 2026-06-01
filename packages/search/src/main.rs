@@ -14,13 +14,9 @@ use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use indicatif::ProgressBar;
 use search_core::{
-    CodeScope, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets, Manifest, MixedbreadStore,
-    SearchOptions, Source, build_filter,
+    CodeScope, DEFAULT_STORE, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets, Manifest,
+    MixedbreadStore, SearchOptions, Source, build_filter,
 };
-
-/// Default store: the shared corpus the `indexer` populates (code plus
-/// agent/shell history). One store, queried read-only.
-const DEFAULT_STORE: &str = "index";
 
 /// Command-line arguments.
 ///

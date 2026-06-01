@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>screencast</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js"></script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1a1a1a;
+        --muted: #6b6b6b;
+        --line: #d8d8d8;
+        --panel: #f5f5f5;
+        --sel: #e6e6e6;
+        --live: #c0392b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0e0e0e;
+          --fg: #e6e6e6;
+          --muted: #8a8a8a;
+          --line: #2a2a2a;
+          --panel: #161616;
+          --sel: #242424;
+          --live: #e74c3c;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: "Berkeley Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        height: 100vh;
+        display: grid;
+        grid-template-columns: 320px 1fr;
+      }
+      aside {
+        border-right: 1px solid var(--line);
+        overflow-y: auto;
+        background: var(--panel);
+      }
+      header {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+      }
+      header b {
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+      header span {
+        color: var(--muted);
+      }
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      li {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--line);
+        cursor: pointer;
+      }
+      li[aria-selected="true"] {
+        background: var(--sel);
+      }
+      .user {
+        font-weight: 600;
+      }
+      .sess {
+        color: var(--muted);
+        word-break: break-all;
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 2px;
+      }
+      .stat {
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .badge {
+        font-size: 10px;
+        letter-spacing: 0.5px;
+        border: 1px solid var(--line);
+        padding: 0 5px;
+      }
+      .badge.live {
+        color: var(--bg);
+        background: var(--live);
+        border-color: var(--live);
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .vidwrap {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #000;
+        min-height: 0;
+      }
+      video {
+        max-width: 100%;
+        max-height: 100%;
+      }
+      footer {
+        padding: 8px 14px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 11px;
+        word-break: break-all;
+      }
+      .empty {
+        padding: 24px 14px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <aside>
+      <header><b>SCREENCAST</b><span id="count">—</span></header>
+      <ul id="list"></ul>
+      <div class="empty" id="empty" hidden>No streams yet. Start the client:<br /><br />screencast --server &lt;this&gt;</div>
+    </aside>
+    <main>
+      <div class="vidwrap"><video id="video" controls playsinline muted></video></div>
+      <footer id="info">Select a stream.</footer>
+    </main>
+    <script>
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"']/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+        );
+      const fmtBytes = (n) => {
+        const u = ["B", "KB", "MB", "GB", "TB"];
+        let i = 0;
+        while (n >= 1024 && i < u.length - 1) {
+          n /= 1024;
+          i++;
+        }
+        return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
+      };
+      const fmtTime = (s) => (s ? new Date(s * 1000).toLocaleString() : "—");
+      const fmtDur = (a, b) => {
+        const d = Math.max(0, b - a);
+        const m = Math.floor(d / 60),
+          sec = d % 60;
+        return `${m}m${String(sec).padStart(2, "0")}s`;
+      };
+
+      const video = document.getElementById("video");
+      const list = document.getElementById("list");
+      let hls = null;
+      let current = null;
+
+      function play(s) {
+        current = s.playlist;
+        document.querySelectorAll("li").forEach((li) =>
+          li.setAttribute("aria-selected", String(li.dataset.playlist === s.playlist)),
+        );
+        document.getElementById("info").textContent =
+          `${s.user} / ${s.session} · ${fmtTime(s.started)} · ${fmtDur(s.started, s.updated)} · ${s.segments} seg · ${fmtBytes(s.bytes)}${s.live ? " · LIVE" : s.complete ? " · VOD" : ""}`;
+        if (hls) {
+          hls.destroy();
+          hls = null;
+        }
+        if (video.canPlayType("application/vnd.apple.mpegurl")) {
+          video.src = s.playlist; // Safari plays HLS natively.
+        } else if (window.Hls && Hls.isSupported()) {
+          hls = new Hls({ liveSyncDurationCount: 3 });
+          hls.loadSource(s.playlist);
+          hls.attachMedia(video);
+        }
+        video.play().catch(() => {});
+      }
+
+      async function refresh() {
+        let sessions = [];
+        try {
+          sessions = await (await fetch("/api/sessions")).json();
+        } catch (_) {}
+        document.getElementById("count").textContent = sessions.length;
+        document.getElementById("empty").hidden = sessions.length > 0;
+        list.innerHTML = "";
+        for (const s of sessions) {
+          const li = document.createElement("li");
+          li.dataset.playlist = s.playlist;
+          li.setAttribute("aria-selected", String(s.playlist === current));
+          li.innerHTML = `
+            <div class="row"><span class="user">${esc(s.user)}</span>${s.live ? '<span class="badge live">LIVE</span>' : s.complete ? '<span class="badge">VOD</span>' : ""}</div>
+            <div class="sess">${esc(s.session)}</div>
+            <div class="row"><span class="stat">${fmtDur(s.started, s.updated)} · ${s.segments} seg</span><span class="stat">${fmtBytes(s.bytes)}</span></div>`;
+          li.onclick = () => play(s);
+          list.appendChild(li);
+        }
+      }
+
+      refresh();
+      setInterval(refresh, 5000);
+    </script>
+  </body>
+</html>

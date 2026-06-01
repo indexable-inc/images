@@ -28,7 +28,7 @@ use overlay_core::{anim, window as ocwin, DragClick, Gpu, HoverAnim};
 
 use crate::db;
 use crate::orb::Orb;
-use crate::scene::{self, OrbTexture};
+use crate::scene::{self, Sprites};
 
 /// Pointer travel (physical px) past which a press becomes a window drag.
 const DRAG_THRESHOLD: f64 = 5.0;
@@ -69,7 +69,7 @@ struct WinState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    texture: OrbTexture,
+    texture: Sprites,
     /// Press/drag/click disambiguation for the left-button gesture.
     gesture: DragClick,
     /// The pointer is on the orb: drives the grow.

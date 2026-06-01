@@ -1,0 +1,15 @@
+{
+  "name": "ix",
+  "description": "Plugins from Indexable. Ships the ix sandbox docs as a Claude Code skill.",
+  "owner": {
+    "name": "Indexable",
+    "url": "https://ix.dev"
+  },
+  "plugins": [
+    {
+      "name": "ix",
+      "source": "./plugins/ix",
+      "description": "Bundles the ix sandbox docs as a Claude Code skill. Auto-loads when you are working with @indexable/sdk, the ix CLI, or evaluating ix as a sandbox provider."
+    }
+  ]
+}

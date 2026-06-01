@@ -14,7 +14,7 @@ from typing import TypedDict
 __version__: str
 
 class Hit(TypedDict):
-    """One scored search result, scoped to the queried checkout."""
+    """One scored search result from the shared corpus store."""
 
     path: str
     score: float
@@ -25,20 +25,28 @@ class Hit(TypedDict):
 
 def semantic(
     query: str,
-    path: str,
     top_k: int = ...,
     store: str | None = ...,
     base_url: str | None = ...,
-    no_sync: bool = ...,
     rerank: bool = ...,
     web: bool = ...,
+    source: list[str] | None = ...,
+    not_source: list[str] | None = ...,
+    repo: str | None = ...,
+    user: list[str] | None = ...,
+    host: list[str] | None = ...,
+    project: list[str] | None = ...,
 ) -> Awaitable[list[Hit]]: ...
 def grep(
     pattern: str,
-    path: str,
     top_k: int = ...,
     store: str | None = ...,
     base_url: str | None = ...,
-    no_sync: bool = ...,
     case_sensitive: bool = ...,
+    source: list[str] | None = ...,
+    not_source: list[str] | None = ...,
+    repo: str | None = ...,
+    user: list[str] | None = ...,
+    host: list[str] | None = ...,
+    project: list[str] | None = ...,
 ) -> Awaitable[list[Hit]]: ...

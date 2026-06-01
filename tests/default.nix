@@ -3034,6 +3034,9 @@ let
         message = "secret refs should reject unsafe relative names during eval";
       }
       {
+        # cargoAudit is on by default (lib/rust.nix defaultPolicy): the advisory
+        # scan is an offline, lockfile-only runCommand, so every workspace gets
+        # it unless it opts out. A no-policy fixture must expose it.
         assertion = cargoUnitWorkspace.policyChecks ? cargoAudit;
         message = "cargo-unit workspaces should expose a cargo-audit policy check by default";
       }

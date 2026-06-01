@@ -1,51 +1,66 @@
 # search-py
 
-PyO3 bindings for [`search-core`](../search-core), the
-content-addressed semantic code search engine. Imported as `search`.
+PyO3 bindings for [`search-core`](../search-core). Imported as `search`.
 
-All indexing, dedup, and search logic lives in the Rust core crate; this package
-is a thin binding that exposes two async entry points and converts results at the
+A read-only query surface over the shared `index` corpus the
+[`indexer`](../indexer) populates (code plus agent/shell history across the
+fleet). This binding never indexes, so importing `search` and querying never
+uploads your local checkout. All query, dedup, and filter logic lives in the
+Rust core crate; this package is a thin binding that converts results at the
 boundary.
 
 ```python
 import search
 
-hits = await search.semantic("where is retry backoff configured", ".")
+hits = await search.semantic("where is retry backoff configured")
 for hit in hits:
     print(hit["path"], hit["score"])
 
-hits = await search.grep(r"fn \w+\(", ".", case_sensitive=True)
+# only Claude history, only my records
+hits = await search.semantic("deploy steps", source=["claude_history"], user=["andrew"])
+
+hits = await search.grep(r"fn \w+\(", source=["code"], repo="indexable-inc/index")
 for hit in hits:
     print(hit["path"], hit["text"])
 ```
 
-Both verbs index the checkout at `path` (uploading only new file content,
-deduplicated across worktrees), then return the hits scoped to that checkout.
-Each returns a native asyncio coroutine, so `await` it on your own event loop.
+Each verb returns a native asyncio coroutine, so `await` it on your own event
+loop.
 
-## `semantic(query, path, ...)`
+## `semantic(query, ...)`
 
 Keyword arguments mirror the `search` CLI:
 
 - `top_k` (default `10`): maximum results.
-- `store`: store name (default `semantic-search`).
+- `store`: store name (default `index`).
 - `base_url`: Mixedbread API base URL (default the client's built-in).
-- `no_sync` (default `False`): skip indexing and search the store as-is.
 - `rerank` (default `True`): apply the second-stage reranker.
 - `web` (default `False`): mix in web results.
+- scope: `source`, `not_source`, `repo`, `user`, `host`, `project` (see below).
 
-## `grep(pattern, path, ...)`
+## `grep(pattern, ...)`
 
-Runs a regular expression over the same indexed chunks `semantic` covers:
+Runs a regular expression over the same corpus chunks `semantic` covers:
 
 - `top_k` (default `10`): maximum results.
-- `store`: store name (default `semantic-search`).
+- `store`: store name (default `index`).
 - `base_url`: Mixedbread API base URL (default the client's built-in).
-- `no_sync` (default `False`): skip indexing and grep the store as-is.
 - `case_sensitive` (default `False`): match the pattern case-sensitively.
+- scope: `source`, `not_source`, `repo`, `user`, `host`, `project`.
+
+## Scope selectors
+
+All optional; with none set the whole corpus is searched. List selectors accept
+repeated values and comma-joined strings (`source=["code", "slack,linear"]`):
+
+- `source` / `not_source`: include / exclude these source tags (`code`,
+  `claude_history`, `codex`, `shell`, `slack`, `linear`, `web`).
+- `repo`: restrict code to a repository slug, e.g. `indexable-inc/index`.
+- `user`, `host`, `project`: restrict records to these authors, machines, or
+  project slugs.
 
 Each hit is a dict with `path`, `score`, `start_line`, `num_lines`, `text`, and
-`is_web`. Authentication mirrors the CLI: `MXBAI_API_KEY`, or the token written
+`source`. Authentication mirrors the CLI: `MXBAI_API_KEY`, or the token written
 by `mgrep login`.
 
 ## Distribution
