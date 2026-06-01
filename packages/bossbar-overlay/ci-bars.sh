@@ -41,6 +41,10 @@ mkdir -p "$state_dir"
 db="$state_dir/state.db" # historical per-workflow average cache (not the overlay DB)
 avg_ttl="${CI_BARS_AVG_TTL:-3600}"
 default_avg="${CI_BARS_DEFAULT_AVG:-300}"
+# `:-` only defaults unset/empty, so an explicit CI_BARS_DEFAULT_AVG=0 would slip
+# through and later divide-by-zero (set -e aborts the watcher). Clamp to a sane
+# floor so the standalone/env-driven path can't be wedged by a 0.
+[ "${default_avg:-0}" -gt 0 ] 2>/dev/null || default_avg=300
 max_bars="${CI_BARS_MAX:-12}"
 
 # Non-overlap guard, intrinsic to the watcher so the portable service can fire it
@@ -71,9 +75,16 @@ sq() { printf "%s" "${1//\'/\'\'}"; }
 # SELECTs) to find a bar by url and to enumerate stale CI bars, but every write
 # still goes through the CLI, which owns the schema.
 bdb="$(bossbar db 2>/dev/null || true)"
+# `bossbar db` computes the path even when the file does not exist yet, so an
+# empty result means the `bossbar` binary itself is missing/broken. Bail rather
+# than fall through: without the DB path we cannot match a run to its existing
+# bar, so `add` would re-INSERT a duplicate row every poll (a bar storm).
+if [ -z "$bdb" ]; then
+  echo "ci-bars: cannot resolve the overlay DB (bossbar db); nothing to do"
+  exit 0
+fi
 
 bar_id_for_url() {
-  [ -n "$bdb" ] || { printf ''; return; }
   sqlite3 "$bdb" "SELECT id FROM bossbars WHERE url = '$(sq "$1")' ORDER BY id LIMIT 1;" 2>/dev/null || printf ''
 }
 
@@ -196,9 +207,17 @@ Progress is estimated from the average of recent successful runs of this workflo
         bossbar add "$bar_title" --color "$color" --overlay progress --progress "$prog" --position -1 --url "$url" --description "$desc" 2>/dev/null || true
       fi
     else
-      # Existing bar: refresh fill/color/title in place. Leave `since` alone so an
-      # already-ticking clock survives polls and restarts.
-      bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --description "$desc" 2>/dev/null || true
+      # Existing bar: refresh fill/color/title in place. A run first seen while
+      # QUEUED was added with no `since` (purple, no clock); once it starts
+      # running we must stamp `since` so the live elapsed timer begins. Only stamp
+      # when the bar has none yet, so an already-ticking clock survives polls and
+      # restarts (mirrors ix-downtime.sh's heal-in-place rule).
+      cur_since="$(sqlite3 "$bdb" "SELECT COALESCE(since,0) FROM bossbars WHERE id = $id;" 2>/dev/null || printf '0')"
+      if [ "${startsec:-0}" -gt 0 ] 2>/dev/null && [ "${cur_since:-0}" -le 0 ] 2>/dev/null; then
+        bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --since "$startsec" --description "$desc" 2>/dev/null || true
+      else
+        bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --description "$desc" 2>/dev/null || true
+      fi
     fi
   done < <(printf '%s' "$runs" | jq -r --argjson max "$max_bars" '
     [ .[] | select((.status // "completed") != "completed") ]
