@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use claude_history::Message;
+use source_claude::Message;
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path as ObjectPath;
 use object_store::{ObjectStoreExt, PutPayload};
@@ -314,7 +314,7 @@ fn sanitize(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Config, object_key, record_batch, sanitize, schema, session_hash};
-    use claude_history::Message;
+    use source_claude::Message;
 
     fn sample(uuid: &str, body: &str) -> Message {
         Message {

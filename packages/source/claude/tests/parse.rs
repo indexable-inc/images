@@ -2,8 +2,8 @@
 
 use std::path::PathBuf;
 
-use claude_history::ClaudeHistoryExport;
-use search_meta::{Source, SourceAdapter};
+use source_claude::ClaudeHistoryExport;
+use source_meta::{Source, SourceAdapter};
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -33,7 +33,7 @@ fn parses_messages_and_tags_them() {
     assert_eq!(user_doc.meta_json["session_id"], "sess1");
     assert_eq!(user_doc.external_id, "claude:sess1:u1");
     // The content_hash is the sha256 of the exact embedded bytes.
-    assert_eq!(user_doc.content_hash, search_meta::hash_body(&user_doc.body));
+    assert_eq!(user_doc.content_hash, source_meta::hash_body(&user_doc.body));
 
     let assistant_doc = docs
         .iter()

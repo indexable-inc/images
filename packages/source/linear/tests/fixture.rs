@@ -9,8 +9,8 @@
 
 use std::path::PathBuf;
 
-use linear_export::LinearExport;
-use search_meta::{Document, Source, SourceAdapter, hash_body};
+use source_linear::LinearExport;
+use source_meta::{Document, Source, SourceAdapter, hash_body};
 use serde_json::Value;
 
 /// Path to the synthetic fixture directory shipped with this crate.

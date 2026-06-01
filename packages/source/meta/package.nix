@@ -1,5 +1,5 @@
 {
-  id = "claude-history";
+  id = "source-meta";
   inRustWorkspace = true;
   passthruTests = true;
 }

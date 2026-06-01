@@ -5,7 +5,7 @@
 //! and `content_hash` from each chunk's metadata.
 
 use mixedbread::Filter;
-use search_meta::{Document, Source};
+use source_meta::{Document, Source};
 use snafu::ResultExt as _;
 
 use crate::backend::{
@@ -65,13 +65,13 @@ fn hit_from_chunk(chunk: mixedbread::Chunk) -> SearchHit {
     // Legacy code records (uploaded before the typed envelope) carry `hash`/`path`
     // and no `source`; the old store was code-only, so an absent source means
     // code. A present source tag is preserved verbatim (any corpus, open set).
-    let source = metadata_str(metadata, search_meta::keys::SOURCE)
+    let source = metadata_str(metadata, source_meta::keys::SOURCE)
         .map_or_else(Source::code, Source::from);
-    let hash = metadata_str(metadata, search_meta::keys::CONTENT_HASH).or_else(|| metadata_str(metadata, "hash"));
+    let hash = metadata_str(metadata, source_meta::keys::CONTENT_HASH).or_else(|| metadata_str(metadata, "hash"));
     // Code records carry `path`; record sources carry `title`. Either is the
     // display label.
-    let path_meta = metadata_str(metadata, search_meta::keys::PATH)
-        .or_else(|| metadata_str(metadata, search_meta::keys::TITLE));
+    let path_meta = metadata_str(metadata, source_meta::keys::PATH)
+        .or_else(|| metadata_str(metadata, source_meta::keys::TITLE));
     // The mixedbread API reports `start_line` 1-based and `num_lines` as a line
     // span (end - start), so an N-line chunk arrives as (start=1, num=N-1). The
     // rest of this crate uses a 0-based start and a line count, so normalize at
@@ -129,7 +129,7 @@ impl Store for MixedbreadStore {
             .into_iter()
             .filter_map(|file| {
                 file.external_id.map(|external_id| StoredRecord {
-                    content_hash: metadata_str(file.metadata.as_ref(), search_meta::keys::CONTENT_HASH),
+                    content_hash: metadata_str(file.metadata.as_ref(), source_meta::keys::CONTENT_HASH),
                     external_id,
                 })
             })

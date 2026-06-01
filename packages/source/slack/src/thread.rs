@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use search_meta::{Document, hash_body, keys};
+use source_meta::{Document, hash_body, keys};
 use serde_json::{Map, Value, json};
 use snafu::ResultExt as _;
 
@@ -171,7 +171,7 @@ fn build_document(
         thread_ts,
     });
 
-    search_meta::check_metadata(&external_id, &meta).context(MetadataSnafu {
+    source_meta::check_metadata(&external_id, &meta).context(MetadataSnafu {
         external_id: external_id.clone(),
     })?;
 
@@ -348,7 +348,7 @@ struct BuildMeta<'a> {
 /// extras. Every key is top-level so each is a filter key.
 fn build_meta(args: &BuildMeta<'_>) -> Value {
     let mut map = Map::new();
-    map.insert(keys::SOURCE.to_owned(), json!(search_meta::Source::new("slack").as_str()));
+    map.insert(keys::SOURCE.to_owned(), json!(source_meta::Source::new("slack").as_str()));
     map.insert("external_id".to_owned(), json!(args.external_id));
     map.insert(keys::CONTENT_HASH.to_owned(), json!(args.content_hash));
     map.insert(keys::TITLE.to_owned(), json!(args.title));

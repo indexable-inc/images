@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt as _};
 use mixedbread::Filter;
-use search_meta::{Document, RepoSlug, SourceAdapter, keys};
+use source_meta::{Document, RepoSlug, SourceAdapter, keys};
 use snafu::ResultExt as _;
 use tokio::time::sleep;
 
@@ -83,7 +83,7 @@ pub async fn sync(
     // attribution follow the most recent sync. That is rare (shared content is
     // usually boilerplate) and was already arbitrary under the unfiltered list.
     let scope = Filter::all(vec![
-        Filter::eq(keys::SOURCE, search_meta::Source::code().as_str()),
+        Filter::eq(keys::SOURCE, source_meta::Source::code().as_str()),
         Filter::eq(keys::REPO, repo.as_str()),
     ]);
     let remote = store.list_external_ids(store_name, Some(&scope)).await?;
@@ -195,7 +195,7 @@ fn code_document(repo: &RepoSlug, entry: &FileEntry, body: Vec<u8>) -> Result<Do
         "repo": repo.as_str(),
         "path": entry.rel_path,
     });
-    search_meta::check_metadata(&hash, &meta_json).context(MetadataLimitSnafu)?;
+    source_meta::check_metadata(&hash, &meta_json).context(MetadataLimitSnafu)?;
     Ok(Document {
         external_id: hash.clone(),
         file_name: file_name_of(&entry.rel_path).to_owned(),
@@ -397,7 +397,7 @@ where
 mod tests {
     use std::time::Duration;
 
-    use search_meta::{Document, RepoSlug, SourceAdapter};
+    use source_meta::{Document, RepoSlug, SourceAdapter};
 
     use super::{gc_documents, sync, sync_documents};
     use crate::backend::MemoryStore;
@@ -518,8 +518,8 @@ mod tests {
 
     impl SourceAdapter for FakeSource {
         type Error = FakeError;
-        fn source(&self) -> search_meta::Source {
-            search_meta::Source::new("linear")
+        fn source(&self) -> source_meta::Source {
+            source_meta::Source::new("linear")
         }
         fn documents(&self) -> impl Iterator<Item = std::result::Result<Document, FakeError>> + Send {
             self.docs.clone().into_iter().map(Ok)
@@ -527,7 +527,7 @@ mod tests {
     }
 
     fn linear_doc(id: &str, body: &str) -> Document {
-        let content_hash = search_meta::hash_body(body.as_bytes());
+        let content_hash = source_meta::hash_body(body.as_bytes());
         Document {
             external_id: format!("linear:issue:{id}"),
             file_name: format!("{id}.txt"),

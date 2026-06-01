@@ -13,7 +13,7 @@
 //! # Streaming
 //!
 //! [`SlackExport::open`] reads only the small `channels.json` and `users.json`
-//! up front. [`SlackExport::documents`](search_meta::SourceAdapter::documents)
+//! up front. [`SlackExport::documents`](source_meta::SourceAdapter::documents)
 //! then iterates **channel by channel**: it loads one channel's day files,
 //! assembles and yields that channel's thread documents, and only then moves to
 //! the next channel. The whole 344 MB export is never held in memory at once.
@@ -21,7 +21,7 @@
 //! # Identity and hashing
 //!
 //! - `external_id = "slack:{channel_id}:{thread_ts}"`.
-//! - `content_hash = search_meta::hash_body(body)` over the exact embedded
+//! - `content_hash = source_meta::hash_body(body)` over the exact embedded
 //!   bytes, so re-ingesting an unchanged export is a no-op and a record
 //!   re-embeds only when its rendered body actually changes.
 //! - `timestamp` is the root message's `ts` integer part, epoch seconds.
@@ -40,7 +40,7 @@ mod users;
 
 use std::{collections::HashMap, fs, path::Path};
 
-use search_meta::{Document, Source, SourceAdapter};
+use source_meta::{Document, Source, SourceAdapter};
 use snafu::ResultExt as _;
 
 pub use crate::error::Error;

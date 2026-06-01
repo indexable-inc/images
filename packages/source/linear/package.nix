@@ -1,5 +1,5 @@
 {
-  id = "slack-export";
+  id = "source-linear";
   inRustWorkspace = true;
   passthruTests = true;
 }

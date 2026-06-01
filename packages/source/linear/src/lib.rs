@@ -1,13 +1,13 @@
-//! Adapter turning a Linear issue export into embeddable [`search_meta`]
+//! Adapter turning a Linear issue export into embeddable [`source_meta`]
 //! documents.
 //!
 //! A Linear export is a directory of JSON written by the team's exporter:
 //! `metadata.json` (organization, team key/name, counts) and `issues.json` (an
 //! array of issue objects, description and comments inline). This crate reads
-//! that directory and projects each issue into one [`search_meta::Document`]:
+//! that directory and projects each issue into one [`source_meta::Document`]:
 //! the embedded body is a human-readable rendering of the issue (title, status
 //! line, description, and every comment, oldest first), and the flat metadata is
-//! the common [`search_meta`] envelope merged with Linear-specific filter keys
+//! the common [`source_meta`] envelope merged with Linear-specific filter keys
 //! (`identifier`, `team_key`, `state_type`, labels, `has_pr`, ...).
 //!
 //! Grain is one document per issue. Comments in the export are newest-first, so
@@ -15,14 +15,14 @@
 //! body (and therefore its `content_hash`) stable for an unchanged issue.
 //!
 //! The crate is pure: it reads two files in [`LinearExport::open`] and otherwise
-//! does no I/O. It depends only on [`search_meta`], serde, snafu, and chrono.
+//! does no I/O. It depends only on [`source_meta`], serde, snafu, and chrono.
 
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
-use search_meta::{Document, Source, SourceAdapter, keys};
+use source_meta::{Document, Source, SourceAdapter, keys};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use snafu::{ResultExt as _, Snafu};
@@ -56,7 +56,7 @@ pub enum Error {
         /// The record whose metadata overflowed.
         external_id: String,
         /// Underlying limit error.
-        source: search_meta::MetadataError,
+        source: source_meta::MetadataError,
     },
 }
 
@@ -303,13 +303,13 @@ impl Issue {
     fn into_document(self, team_key: &str) -> Result<Document> {
         let external_id = format!("linear:issue:{}", self.id);
         let body = self.render_body(team_key).into_bytes();
-        let content_hash = search_meta::hash_body(&body);
+        let content_hash = source_meta::hash_body(&body);
         let title = format!("{}: {}", self.identifier, self.title);
 
         let timestamp = parse_epoch_seconds(&self.updated_at);
         let meta_json = self.build_meta(&external_id, team_key, &content_hash, &title, timestamp);
 
-        search_meta::check_metadata(&external_id, &meta_json).context(MetadataSnafu {
+        source_meta::check_metadata(&external_id, &meta_json).context(MetadataSnafu {
             external_id: external_id.clone(),
         })?;
 

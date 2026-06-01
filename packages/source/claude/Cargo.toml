@@ -1,18 +1,20 @@
 [package]
-name = "search-meta"
+name = "source-claude"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Shared typed metadata envelope and source-adapter trait for multi-source search"
+description = "Adapter turning Claude Code agent transcripts into embeddable, tagged search documents"
 
 [lints]
 workspace = true
 
 [dependencies]
+source-meta.workspace = true
+chrono = { workspace = true, features = ["alloc"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-sha2.workspace = true
 snafu.workspace = true
+nix = { workspace = true, features = ["hostname"] }
 
 [dev-dependencies]
 serde_json.workspace = true

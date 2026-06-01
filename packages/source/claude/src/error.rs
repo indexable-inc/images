@@ -51,7 +51,7 @@ pub enum Error {
         /// The record whose metadata overflowed.
         external_id: String,
         /// Underlying limit error.
-        source: search_meta::MetadataError,
+        source: source_meta::MetadataError,
     },
 }
 

@@ -52,4 +52,4 @@ pub use sync::{GcReport, SyncReport, gc_documents, sync, sync_documents, wait_un
 // Re-export the shared metadata and filter types so binaries depend only on
 // search-core.
 pub use mixedbread::{Condition, Filter, Group, Operator};
-pub use search_meta::{Document, RepoSlug, Source, SourceAdapter};
+pub use source_meta::{Document, RepoSlug, Source, SourceAdapter};

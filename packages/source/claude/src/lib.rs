@@ -1,5 +1,5 @@
 //! Adapter turning Claude Code agent transcripts into embeddable, tagged
-//! [`search_meta`] documents for the multi-source `search` store.
+//! [`source_meta`] documents for the multi-source `search` store.
 //!
 //! # Grain
 //! One [`Document`] per transcript **message** (a `user`/`assistant` line that
@@ -24,7 +24,7 @@ mod transcript;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use search_meta::{Document, Source, SourceAdapter};
+use source_meta::{Document, Source, SourceAdapter};
 use snafu::ResultExt as _;
 
 pub use crate::error::Error;

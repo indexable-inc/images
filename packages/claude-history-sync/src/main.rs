@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use claude_history::ClaudeHistoryExport;
+use source_claude::ClaudeHistoryExport;
 use clap::Parser;
 use search_core::{MixedbreadStore, sync_documents};
 

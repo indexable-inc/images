@@ -98,7 +98,7 @@ pub enum Error {
     #[snafu(display("metadata limit exceeded: {source}"))]
     MetadataLimit {
         /// Underlying limit error.
-        source: search_meta::MetadataError,
+        source: source_meta::MetadataError,
     },
 
     /// A source adapter failed while producing a document.

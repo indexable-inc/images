@@ -9,7 +9,7 @@ description = "Sync Claude Code agent transcripts to S3/R2 parquet (polars-query
 workspace = true
 
 [dependencies]
-claude-history.workspace = true
+source-claude.workspace = true
 search-core.workspace = true
 mixedbread.workspace = true
 anyhow.workspace = true

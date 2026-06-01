@@ -8,8 +8,8 @@
 
 use std::{collections::HashMap, path::PathBuf};
 
-use search_meta::{Document, SourceAdapter};
-use slack_export::SlackExport;
+use source_meta::{Document, SourceAdapter};
+use source_slack::SlackExport;
 
 /// Absolute path to the synthetic fixture export root.
 fn fixture_dir() -> PathBuf {
@@ -77,7 +77,7 @@ fn cross_file_thread_assembled_into_one_document() {
 
     // source == slack and content_hash == hash_body(body) == meta content_hash.
     assert_eq!(thread.meta_json["source"], "slack");
-    assert_eq!(thread.content_hash, search_meta::hash_body(&thread.body));
+    assert_eq!(thread.content_hash, source_meta::hash_body(&thread.body));
     assert_eq!(thread.meta_json["content_hash"], thread.content_hash);
 
     // Authors metadata holds both resolved names.

@@ -320,11 +320,11 @@ async fn run_ingest(cli: IngestArgs, gc: bool) -> anyhow::Result<()> {
     // tag fails loudly rather than silently doing nothing.
     match cli.source.as_str() {
         "linear" => {
-            let adapter = linear_export::LinearExport::open(dir)?;
+            let adapter = source_linear::LinearExport::open(dir)?;
             run_one_source(&adapter, &store, &store_name, gc).await
         }
         "slack" => {
-            let adapter = slack_export::SlackExport::open(dir)?;
+            let adapter = source_slack::SlackExport::open(dir)?;
             run_one_source(&adapter, &store, &store_name, gc).await
         }
         "claude_history" => {
@@ -337,7 +337,7 @@ async fn run_ingest(cli: IngestArgs, gc: bool) -> anyhow::Result<()> {
                     "gc is not supported for claude_history: it is multi-host, so reconciling against one machine's export would delete other machines' records"
                 );
             }
-            let adapter = claude_history::ClaudeHistoryExport::open(dir)?;
+            let adapter = source_claude::ClaudeHistoryExport::open(dir)?;
             run_one_source(&adapter, &store, &store_name, gc).await
         }
         "code" | "web" => anyhow::bail!(

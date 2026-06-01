@@ -1,6 +1,6 @@
 //! The typed per-message record and its projection to a search [`Document`].
 
-use search_meta::{Document, keys};
+use source_meta::{Document, keys};
 use serde_json::{Map, Value, json};
 use snafu::ResultExt as _;
 
@@ -75,7 +75,7 @@ impl Message {
     /// exceeds the store's size or key limits.
     pub fn into_document(self) -> Result<Document> {
         let external_id = self.external_id();
-        let content_hash = search_meta::hash_body(self.body.as_bytes());
+        let content_hash = source_meta::hash_body(self.body.as_bytes());
         let title = title_for(&self.role, &self.project, &self.body);
 
         let mut meta = Map::new();
@@ -100,7 +100,7 @@ impl Message {
         insert_some(&mut meta, keys::TIMESTAMP, self.timestamp.map(Value::from));
         let meta_json = Value::Object(meta);
 
-        search_meta::check_metadata(&external_id, &meta_json)
+        source_meta::check_metadata(&external_id, &meta_json)
             .context(MetadataSnafu { external_id: external_id.clone() })?;
 
         Ok(Document {

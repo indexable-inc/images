@@ -21,7 +21,7 @@ rayon.workspace = true
 regex.workspace = true
 repo-walker.workspace = true
 rusqlite = { workspace = true, features = ["bundled"] }
-search-meta.workspace = true
+source-meta.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true

@@ -1,5 +1,5 @@
 {
-  id = "linear-export";
+  id = "source-claude";
   inRustWorkspace = true;
   passthruTests = true;
 }

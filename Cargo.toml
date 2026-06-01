@@ -8,7 +8,7 @@ members = [
   "packages/ast-merge/git",
   "packages/ast-merge/langs",
   "packages/ast-merge/matcher",
-  "packages/claude-history",
+  "packages/source/claude",
   "packages/claude-history-sync",
   "packages/clone-detect/cli",
   "packages/clone-detect/detect",
@@ -35,12 +35,12 @@ members = [
   "packages/progress-style",
   "packages/reel",
   "packages/repo-walker",
-  "packages/linear-export",
+  "packages/source/linear",
   "packages/search",
   "packages/search-core",
-  "packages/search-meta",
+  "packages/source/meta",
   "packages/search-py",
-  "packages/slack-export",
+  "packages/source/slack",
   "packages/tap",
   "packages/tap/protocol",
   "packages/tap/pty",
@@ -89,7 +89,7 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
-claude-history = { path = "packages/claude-history" }
+source-claude = { path = "packages/source/claude" }
 clone-detect = { path = "packages/clone-detect/detect" }
 clone-hash = { path = "packages/clone-detect/hash" }
 clone-pragma = { path = "packages/clone-detect/pragma" }
@@ -111,7 +111,7 @@ indicatif = "0.18"
 insta = { version = "1.42", features = ["json"] }
 lazy-regex = "3.4"
 libc = "0.2"
-linear-export = { path = "packages/linear-export" }
+source-linear = { path = "packages/source/linear" }
 mixedbread = { path = "packages/mixedbread" }
 loro = "1.12"
 napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt"] }
@@ -151,12 +151,12 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-native-certs = "0.8"
 schemars = "1"
 search-core = { path = "packages/search-core" }
-search-meta = { path = "packages/search-meta" }
+source-meta = { path = "packages/source/meta" }
 serde = "1"
 serde_json = "1"
 sha2 = "0.10"
 similar = "2"
-slack-export = { path = "packages/slack-export" }
+source-slack = { path = "packages/source/slack" }
 snafu = "0.9"
 strip-ansi-escapes = "0.2"
 tango-bench = "0.7"

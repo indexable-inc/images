@@ -1,7 +1,7 @@
 //! The single error type for the adapter.
 //!
 //! Every fallible step (reading a file, parsing JSON, checking metadata) maps
-//! into one [`Error`] variant so the [`SourceAdapter`](search_meta::SourceAdapter)
+//! into one [`Error`] variant so the [`SourceAdapter`](source_meta::SourceAdapter)
 //! contract is satisfied with a single `Send + Sync + 'static` type.
 
 use std::path::PathBuf;
@@ -50,6 +50,6 @@ pub enum Error {
         /// The record whose metadata was rejected.
         external_id: String,
         /// Underlying limit error from `search-meta`.
-        source: search_meta::MetadataError,
+        source: source_meta::MetadataError,
     },
 }
