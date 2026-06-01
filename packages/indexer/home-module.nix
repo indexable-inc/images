@@ -66,7 +66,11 @@ let
     ++ concatMap (repo: [
       "--git-repo"
       repo
-    ]) cfg.gitRepos;
+    ]) cfg.gitRepos
+    ++ concatMap (repo: [
+      "--code-repo"
+      repo
+    ]) cfg.codeRepos;
 
   sinkFlags =
     optionals (cfg.bucket != null) (
@@ -149,6 +153,12 @@ in
       description = "Git repositories whose commit history to ingest.";
     };
 
+    codeRepos = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      description = "Code checkouts to index (content-addressed; Mixedbread only). Needs mixedbreadStore.";
+    };
+
     bucket = mkOption {
       type = types.nullOr types.str;
       default = null;
@@ -222,8 +232,9 @@ in
           || cfg.atuinDb != null
           || cfg.slackExport != null
           || cfg.linearExport != null
-          || cfg.gitRepos != [ ];
-        message = "services.indexer: select at least one source (local, a *Dir/*File/*Export path, or gitRepos).";
+          || cfg.gitRepos != [ ]
+          || cfg.codeRepos != [ ];
+        message = "services.indexer: select at least one source (local, a *Dir/*File/*Export path, gitRepos, or codeRepos).";
       }
     ];
 

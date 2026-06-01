@@ -14,6 +14,11 @@ use anyhow::Context as _;
 use clap::Parser;
 use search_core::MixedbreadStore;
 use sink_mixedbread::sync_documents;
+
+/// Manifest limits for code repos, matching `search-core`'s defaults.
+const MAX_FILE_BYTES: u64 = 1024 * 1024;
+/// Cap on new files uploaded per code sync (a runaway guard).
+const MAX_FILES: usize = 10_000;
 use source_meta::SourceAdapter;
 
 /// How long to wait for Mixedbread to finish embedding new documents.
@@ -76,6 +81,11 @@ struct Cli {
     /// Git repository to index commit history from (repeatable).
     #[arg(long = "git-repo")]
     git_repos: Vec<PathBuf>,
+
+    /// Code checkout to index (content-addressed, like a bare `search`).
+    /// Mixedbread only (code lives in git, not the parquet archive); repeatable.
+    #[arg(long = "code-repo")]
+    code_repos: Vec<PathBuf>,
 }
 
 #[tokio::main]
@@ -101,23 +111,40 @@ async fn main() -> anyhow::Result<()> {
     }
     let mixedbread = store.as_ref().zip(cli.mixedbread_store.as_deref());
 
+    let (indexed, failures) = run_sources(&cli, mixedbread, parquet.as_ref()).await;
+
+    let configured = indexed + failures;
+    if configured == 0 {
+        anyhow::bail!(
+            "no sources selected: pass --local and/or --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--git-repo/--code-repo"
+        );
+    }
+    if failures > 0 {
+        anyhow::bail!("{failures} of {configured} source(s) failed; {indexed} succeeded");
+    }
+    Ok(())
+}
+
+/// Resolve the selected sources and run each one independently (a failure never
+/// aborts the others), returning `(indexed, failed)` counts.
+async fn run_sources(
+    cli: &Cli,
+    mixedbread: Option<(&MixedbreadStore, &str)>,
+    parquet: Option<&sink_parquet::Config>,
+) -> (usize, usize) {
     let home = dirs::home_dir();
     let default = |suffix: &str| home.as_ref().map(|h| h.join(suffix));
     let claude = cli.claude_dir.clone().or_else(|| cli.local.then(|| default(".claude/projects")).flatten());
     let codex = cli.codex_file.clone().or_else(|| cli.local.then(|| default(".codex/history.jsonl")).flatten());
     let atuin = cli.atuin_db.clone().or_else(|| cli.local.then(|| default(".local/share/atuin/history.db")).flatten());
 
-    // Each source runs independently: a failure (an unborn git repo, a missing
-    // export) is logged and counted but never aborts the run, so one broken
-    // source cannot starve every other corpus. The process still exits non-zero
-    // at the end if any source failed.
     let mut indexed = 0_usize;
     let mut failures = 0_usize;
     if let Some(dir) = claude {
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open(&dir)
                 .with_context(|| format!("parsing Claude transcripts at {}", dir.display()))?;
-            run_source("claude", &adapter, mixedbread, parquet.as_ref()).await
+            run_source("claude", &adapter, mixedbread, parquet).await
         }
         .await;
         record("claude", result, &mut indexed, &mut failures);
@@ -126,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
         let result = async {
             let adapter = source_codex::CodexHistory::open(&file)
                 .with_context(|| format!("parsing Codex history at {}", file.display()))?;
-            run_source("codex", &adapter, mixedbread, parquet.as_ref()).await
+            run_source("codex", &adapter, mixedbread, parquet).await
         }
         .await;
         record("codex", result, &mut indexed, &mut failures);
@@ -135,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
         let result = async {
             let adapter = source_atuin::AtuinHistory::open(&db)
                 .with_context(|| format!("reading atuin history at {}", db.display()))?;
-            run_source("shell", &adapter, mixedbread, parquet.as_ref()).await
+            run_source("shell", &adapter, mixedbread, parquet).await
         }
         .await;
         record("shell", result, &mut indexed, &mut failures);
@@ -144,7 +171,7 @@ async fn main() -> anyhow::Result<()> {
         let result = async {
             let adapter = source_slack::SlackExport::open(dir)
                 .with_context(|| format!("reading Slack export at {}", dir.display()))?;
-            run_source("slack", &adapter, mixedbread, parquet.as_ref()).await
+            run_source("slack", &adapter, mixedbread, parquet).await
         }
         .await;
         record("slack", result, &mut indexed, &mut failures);
@@ -153,7 +180,7 @@ async fn main() -> anyhow::Result<()> {
         let result = async {
             let adapter = source_linear::LinearExport::open(dir)
                 .with_context(|| format!("reading Linear export at {}", dir.display()))?;
-            run_source("linear", &adapter, mixedbread, parquet.as_ref()).await
+            run_source("linear", &adapter, mixedbread, parquet).await
         }
         .await;
         record("linear", result, &mut indexed, &mut failures);
@@ -163,21 +190,46 @@ async fn main() -> anyhow::Result<()> {
         let result = async {
             let adapter = source_git::GitLog::open(repo)
                 .with_context(|| format!("reading git history at {}", repo.display()))?;
-            run_source("git", &adapter, mixedbread, parquet.as_ref()).await
+            run_source("git", &adapter, mixedbread, parquet).await
         }
         .await;
         record(&label, result, &mut indexed, &mut failures);
     }
+    for repo_dir in &cli.code_repos {
+        let label = format!("code:{}", repo_dir.display());
+        let result = index_code(&label, repo_dir, mixedbread).await;
+        record(&label, result, &mut indexed, &mut failures);
+    }
+    (indexed, failures)
+}
 
-    let configured = indexed + failures;
-    if configured == 0 {
-        anyhow::bail!(
-            "no sources selected: pass --local and/or --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--git-repo"
-        );
+/// Index one code checkout via search-core's content-addressed reconcile
+/// (Mixedbread only — code lives in git, not the parquet archive). Reuses the
+/// exact code sync a bare `search` would run, so records are byte-identical
+/// (same hashes, same repo scoping).
+async fn index_code(
+    label: &str,
+    repo_dir: &std::path::Path,
+    mixedbread: Option<(&MixedbreadStore, &str)>,
+) -> anyhow::Result<()> {
+    let Some((store, store_name)) = mixedbread else {
+        anyhow::bail!("--code-repo requires --mixedbread-store (code is semantic-search only)");
+    };
+    let manifest = search_core::Manifest::build(repo_dir, None, MAX_FILE_BYTES)
+        .with_context(|| format!("building manifest for {}", repo_dir.display()))?;
+    let repo = search_core::repo_slug(repo_dir);
+    let report = search_core::sync(store, store_name, repo_dir, &manifest, &repo, MAX_FILES, |_, _| {})
+        .await
+        .with_context(|| format!("[{label}] code sync"))?;
+    if report.uploaded > 0 {
+        search_core::wait_until_indexed(store, store_name, INDEX_TIMEOUT, |_| {})
+            .await
+            .with_context(|| format!("[{label}] waiting for indexing"))?;
     }
-    if failures > 0 {
-        anyhow::bail!("{failures} of {configured} source(s) failed; {indexed} succeeded");
-    }
+    eprintln!(
+        "[{label}] mixedbread: uploaded {}, skipped {} of {}",
+        report.uploaded, report.skipped, report.total
+    );
     Ok(())
 }
 
