@@ -12,7 +12,6 @@ members = [
   "packages/source/claude",
   "packages/source/codex",
   "packages/source/git",
-  "packages/claude-history-sync",
   "packages/clone-detect/cli",
   "packages/clone-detect/detect",
   "packages/clone-detect/hash",

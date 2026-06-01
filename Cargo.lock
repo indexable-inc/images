@@ -1064,26 +1064,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude-history-sync"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrow",
- "clap",
- "source-claude",
- "dirs",
- "mixedbread",
- "nix 0.30.1",
- "object_store",
- "parquet",
- "search-core",
- "serde_json",
- "sha2 0.10.9",
- "snafu 0.9.1",
- "tokio",
-]
-
-[[package]]
 name = "clone-cli"
 version = "0.1.0"
 dependencies = [
