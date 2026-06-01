@@ -28,6 +28,29 @@ let
   manifest = lib.importJSON ./manifest.json;
   inherit (manifest) version;
 
+  # Tool-output truncation caps, declared as data (single source) and derived
+  # into wrapper flags below, rather than hand-written into the install phase. We
+  # run a trusted config (our own CLAUDE.md / AGENTS.md / hooks / MCP servers),
+  # so raise the CLI's own output knobs to its built-in maxima instead of letting
+  # output be silently pruned:
+  #   BASH_MAX_OUTPUT_LENGTH: default 30000 chars, binary clamp 150000
+  #   TASK_MAX_OUTPUT_LENGTH: default 32000 chars, clamp 160000
+  #   MAX_MCP_OUTPUT_TOKENS:  default ~25000 tokens, no clamp
+  outputCaps = {
+    BASH_MAX_OUTPUT_LENGTH = 150000;
+    TASK_MAX_OUTPUT_LENGTH = 160000;
+    MAX_MCP_OUTPUT_TOKENS = 200000;
+  };
+  # `--set-default` (not `--set`) so an explicit env or settings.json `env` value
+  # still overrides per machine.
+  outputCapFlags = lib.concatLists (
+    lib.mapAttrsToList (name: value: [
+      "--set-default"
+      name
+      (toString value)
+    ]) outputCaps
+  );
+
   inherit (stdenv.hostPlatform) system;
   target =
     manifest.platforms.${system}
@@ -148,11 +171,14 @@ stdenv.mkDerivation {
     # The store output is read-only, so the bundled self-updater can never
     # write; disable it and the install checks, and pin the bundled ripgrep to
     # the Nix one so PATH stays reproducible. The wrapper owns the version pin.
+    # Raise the output-truncation caps to trusted-config maxima (see `outputCaps`
+    # above).
     makeBinaryWrapper "$helper" $out/bin/${binName} \
       --inherit-argv0 \
       --set DISABLE_AUTOUPDATER 1 \
       --set DISABLE_INSTALLATION_CHECKS 1 \
       --set USE_BUILTIN_RIPGREP 0 \
+      ${lib.escapeShellArgs outputCapFlags} \
       --prefix PATH : ${
         lib.makeBinPath (
           [
