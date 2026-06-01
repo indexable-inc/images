@@ -2814,6 +2814,7 @@ dependencies = [
  "source-atuin",
  "source-claude",
  "source-codex",
+ "source-git",
  "source-linear",
  "source-meta",
  "source-slack",
@@ -3219,6 +3220,15 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "source-git"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
 ]
 
 [[package]]

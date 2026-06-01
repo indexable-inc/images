@@ -71,6 +71,10 @@ struct Cli {
     /// Linear export directory.
     #[arg(long)]
     linear_export: Option<PathBuf>,
+
+    /// Git repository to index commit history from (repeatable).
+    #[arg(long = "git-repo")]
+    git_repos: Vec<PathBuf>,
 }
 
 #[tokio::main]
@@ -133,10 +137,16 @@ async fn main() -> anyhow::Result<()> {
         run_source("linear", &adapter, mixedbread, parquet.as_ref()).await?;
         indexed += 1;
     }
+    for repo in &cli.git_repos {
+        let adapter = source_git::GitLog::open(repo)
+            .with_context(|| format!("reading git history at {}", repo.display()))?;
+        run_source("git", &adapter, mixedbread, parquet.as_ref()).await?;
+        indexed += 1;
+    }
 
     if indexed == 0 {
         anyhow::bail!(
-            "no sources selected: pass --local and/or --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export"
+            "no sources selected: pass --local and/or --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--git-repo"
         );
     }
     Ok(())

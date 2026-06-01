@@ -18,6 +18,14 @@ pub const REPO: &str = "repo";
 /// Repo-relative path of a code file.
 pub const PATH: &str = "path";
 
+// Git commits. `repo` and `timestamp` above are reused.
+/// Full commit SHA.
+pub const COMMIT: &str = "commit";
+/// Commit author name.
+pub const AUTHOR_NAME: &str = "author_name";
+/// Commit author email.
+pub const AUTHOR_EMAIL: &str = "author_email";
+
 // Common.
 /// Epoch-second timestamp, the primary recency axis.
 pub const TIMESTAMP: &str = "timestamp";
