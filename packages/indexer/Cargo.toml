@@ -29,3 +29,6 @@ clap = { workspace = true, features = ["derive", "env"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 dirs.workspace = true
 nix = { workspace = true, features = ["hostname"] }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -28,7 +28,7 @@ use snafu::ResultExt as _;
 
 pub use crate::error::Error;
 pub use crate::record::Message;
-use crate::error::{HostNameSnafu, Result};
+use crate::error::{HostNameSnafu, ReadDirSnafu, Result};
 use crate::record::MessageOrigin;
 
 /// The `source` tag every Claude transcript document carries.
@@ -55,7 +55,7 @@ impl ClaudeHistoryExport {
     /// read, or a line is not valid JSON.
     pub fn open_with(dir: &Path, host: &str, user: &str) -> Result<Self> {
         let mut files = Vec::new();
-        collect_transcripts(dir, &mut files);
+        collect_transcripts(dir, &mut files)?;
 
         let mut messages = Vec::new();
         for file in files {
@@ -115,40 +115,46 @@ impl SourceAdapter for ClaudeHistoryExport {
 
 /// Recursively collect `*.jsonl` transcript files under `dir`.
 ///
-/// The top-level `dir` is followed even when it is a symlink: the operator names
-/// it explicitly, and `~/.claude/projects` is itself a symlink in some setups
-/// (it points at the real store). Inside the tree, symlinks are never followed —
-/// both symlinked directories and symlinked files are skipped. This matters when
-/// the indexer runs privileged across many users' homes (`CAP_DAC_READ_SEARCH`
-/// on the fleet): a user-planted symlink must not redirect a read at another
-/// account's files (the confused-deputy class; see ix `history-ship`'s symlink
-/// finding). No-follow traversal also means there are no symlink cycles to break.
+/// The top-level `dir` is followed even when it is a symlink: callers name it
+/// explicitly, and `~/.claude/projects` is itself a symlink in some setups (it
+/// points at the real store). Inside the tree, symlinks are never followed —
+/// both symlinked directories and symlinked files are skipped — so a symlink
+/// planted *within* a transcript tree cannot redirect the read. No-follow
+/// traversal also means there are no symlink cycles to break.
 ///
-/// A missing or unreadable directory yields nothing rather than an error.
-/// Absence is normal: most homes have no Claude history, and the privileged
-/// fleet run walks many of them. This mirrors `history-ship`'s candidate
-/// enumeration.
-fn collect_transcripts(dir: &Path, out: &mut Vec<PathBuf>) {
+/// This does NOT vet the root or its ancestor directories. When running
+/// privileged over other accounts' homes (`CAP_DAC_READ_SEARCH` on the fleet),
+/// the caller must ensure the root path has no symlinked component, or a user
+/// could point the root itself at another account's files (the confused-deputy
+/// class; see ix `history-ship`'s symlink finding). The indexer does this with
+/// its `safe_path_under` resolver before calling in.
+///
+/// A missing directory yields nothing; a permission or I/O fault is a real error
+/// (not a silently empty success). Absence is normal: most homes have no Claude
+/// history, and the privileged fleet run walks many of them.
+fn collect_transcripts(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     // `read_dir` follows a symlinked `dir` (the explicitly named root); the
     // per-entry `file_type` below reports the entry itself without following, so
     // nothing reached through the tree can be a symlink.
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context(ReadDirSnafu { path: dir.to_path_buf() }),
     };
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
+    for entry in entries {
+        let entry = entry.context(ReadDirSnafu { path: dir.to_path_buf() })?;
+        let file_type = entry.file_type().context(ReadDirSnafu { path: dir.to_path_buf() })?;
         if file_type.is_symlink() {
             continue;
         }
         let path = entry.path();
         if file_type.is_dir() {
-            collect_transcripts(&path, out);
+            collect_transcripts(&path, out)?;
         } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
             out.push(path);
         }
     }
+    Ok(())
 }
 
 /// Derive a file's fallback identity tags: project from the parent directory
@@ -197,7 +203,7 @@ mod tests {
 
     fn collect(dir: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
-        collect_transcripts(dir, &mut out);
+        collect_transcripts(dir, &mut out).expect("collect");
         out.sort();
         out
     }
