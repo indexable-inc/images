@@ -24,7 +24,7 @@ o.write_html(F, "~/.claude/optimize/report.html")   # self-contained browser rep
 F["df"]      # one row per assistant turn / prompt (model, out_tok, n_tooluse, n_think, speed, ts)
 F["bash"]    # one row per timed Bash call (cmd, seconds, is_error)
 F["tools"]   # one row per tool_result (tool, label, size, is_error)
-F["debug"]   # one row per --debug timing/error event (kind, tool, model, ms, level, tag, msg)
+F["debug"]   # one row per --debug timing/error event (kind, tool, model, ms, level, msg)
 ```
 
 To avoid re-scanning across questions, cache once: `o.build_frames(...)["df"].write_parquet("~/.claude/optimize/history_rows.parquet")` (and `bash`/`tools`/`debug`), then `pl.read_parquet(...)` for instant re-slicing. The module also runs standalone for headless use (`python ${CLAUDE_SKILL_DIR}/assets/build_history_df.py --full --out ~/.claude/optimize`) on any interpreter with polars.

@@ -13,7 +13,7 @@ only compact aggregates come back. Interactive:
 
 Standalone / headless (the `optimize-scan` portable service runs this via uv):
     python build_history_df.py --days 60 --out ~/.claude/optimize
-writes parquet caches, findings.json, latest.txt, and report.html.
+writes parquet caches (incl. history_debug.parquet), findings.json, and report.html.
 
 Schema verified against real transcripts:
   - usage.speed is a categorical label ("fast"), NOT tokens/sec
@@ -83,7 +83,6 @@ THRASH = re.compile(
 # has no .txt suffix so the *.txt glob skips it (its target is globbed once).
 DEBUG_DIR = os.path.expanduser("~/.claude/debug")
 DBG_HEAD = re.compile(r"^(\S+)\s+\[(\w+)\]\s+(.*)$")
-DBG_TAG = re.compile(r"\[([A-Za-z][\w :+.-]*?)\]")
 # classifier_request_started carries the model; _finished carries the duration.
 # Join the two by reqId so each finished event is attributed to its model.
 DBG_CLASS_START = re.compile(r"\[Stall\] classifier_request_started reqId=(\S+) tool=(\S+) model=(\S+)")
@@ -117,11 +116,11 @@ def _row_schema(pl):
 def _debug_schema(pl):
     # One row per timing/error event extracted from a --debug session log.
     # kind in: classifier, permission, dispatch, ttfb, log. ms is the latency in
-    # milliseconds (null for log rows); level/tag/msg are set only for log rows.
+    # milliseconds (null for log rows); level/msg are set only for log rows.
     return {
         "session": pl.String, "ts": pl.Datetime("us", "UTC"), "kind": pl.String,
         "tool": pl.String, "model": pl.String, "ms": pl.Int64,
-        "level": pl.String, "tag": pl.String, "msg": pl.String,
+        "level": pl.String, "msg": pl.String,
     }
 
 
@@ -195,31 +194,28 @@ def _scan_debug(days: int, full: bool):
                 if m:
                     rows.append(dict(session=sess, ts=ts, kind="classifier",
                                      tool=m.group(2), model=models.get(m.group(1)),
-                                     ms=int(m.group(3)), level=None, tag=None, msg=None))
+                                     ms=int(m.group(3)), level=None, msg=None))
                     continue
                 m = DBG_PERM.search(rest)
                 if m:
                     rows.append(dict(session=sess, ts=ts, kind="permission",
                                      tool=m.group(1), model=None, ms=int(m.group(2)),
-                                     level=None, tag=None, msg=None))
+                                     level=None, msg=None))
                     continue
                 m = DBG_DISPATCH.search(rest)
                 if m:
                     rows.append(dict(session=sess, ts=ts, kind="dispatch",
                                      tool=m.group(1), model=None, ms=int(m.group(2)),
-                                     level=None, tag=None, msg=None))
+                                     level=None, msg=None))
                     continue
                 m = DBG_TTFB.search(rest)
                 if m:
                     rows.append(dict(session=sess, ts=ts, kind="ttfb", tool=None,
-                                     model=None, ms=int(m.group(1)), level=None,
-                                     tag=None, msg=None))
+                                     model=None, ms=int(m.group(1)), level=None, msg=None))
                     continue
                 if level in ("ERROR", "WARN"):
-                    tg = DBG_TAG.match(rest)
                     rows.append(dict(session=sess, ts=ts, kind="log", tool=None,
-                                     model=None, ms=None, level=level,
-                                     tag=(tg.group(1) if tg else None), msg=rest[:200]))
+                                     model=None, ms=None, level=level, msg=rest[:200]))
             except Exception:
                 continue
     return rows, len(files)
@@ -452,14 +448,21 @@ def aggregates(F, top: int = 15, oversize: int = 20000):
     if dbg is not None and dbg.height:
         ov = dbg.filter(pl.col("kind").is_in(["classifier", "permission", "dispatch"]))
         if ov.height:
+            # events = total dispatched calls of this tool (never 0, so a tool
+            # that ran but was not auto-mode-classified reads as classifier_calls=0,
+            # not "never ran"). overhead_s = classifier + permission latency only
+            # (the harness tax); dispatch_s is the tool's own runtime, shown for
+            # context. sum-of-empty is 0.0 (never null), so sort needs no nulls_last.
             out.append(("auto-mode overhead by tool (harness latency, debug logs)",
                         ov.group_by("tool").agg(
-                            pl.col("ms").filter(pl.col("kind") == "classifier").len().alias("calls"),
+                            pl.len().alias("events"),
+                            pl.col("ms").filter(pl.col("kind") == "classifier").len().alias("classifier_calls"),
                             (pl.col("ms").filter(pl.col("kind") == "classifier").sum() / 1000).round(1).alias("classifier_s"),
                             pl.col("ms").filter(pl.col("kind") == "classifier").median().round(0).alias("med_class_ms"),
                             (pl.col("ms").filter(pl.col("kind") == "permission").sum() / 1000).round(1).alias("perm_s"),
                             (pl.col("ms").filter(pl.col("kind") == "dispatch").sum() / 1000).round(1).alias("dispatch_s"),
-                        ).sort("classifier_s", descending=True, nulls_last=True).head(top)))
+                        ).with_columns((pl.col("classifier_s") + pl.col("perm_s")).round(1).alias("overhead_s"))
+                        .sort("overhead_s", descending=True).head(top)))
         tf = dbg.filter(pl.col("kind") == "ttfb")
         if tf.height:
             out.append(("API time-to-first-byte (ms, debug logs)", tf.select(
@@ -470,7 +473,7 @@ def aggregates(F, top: int = 15, oversize: int = 20000):
         if lg.height:
             out.append(("runtime errors / warnings (debug logs)",
                         lg.with_columns(pl.col("msg").str.slice(0, 80).alias("m"))
-                        .group_by("level", "tag", "m").agg(
+                        .group_by("level", "m").agg(
                             pl.len().alias("n"), pl.col("session").n_unique().alias("sessions"))
                         .sort("n", descending=True).head(top)))
     return out
