@@ -44,6 +44,7 @@ members = [
   "packages/search-py",
   "packages/source/slack",
   "packages/sink/parquet",
+  "packages/indexer",
   "packages/tap",
   "packages/tap/protocol",
   "packages/tap/pty",

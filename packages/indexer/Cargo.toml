@@ -1,0 +1,28 @@
+[package]
+name = "indexer"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Sync every configured corpus source into Mixedbread (semantic) and S3/R2 parquet"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "indexer"
+path = "src/main.rs"
+
+[dependencies]
+source-meta.workspace = true
+source-claude.workspace = true
+source-codex.workspace = true
+source-atuin.workspace = true
+source-slack.workspace = true
+source-linear.workspace = true
+search-core.workspace = true
+sink-parquet.workspace = true
+mixedbread.workspace = true
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+dirs.workspace = true
