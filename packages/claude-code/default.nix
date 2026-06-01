@@ -28,27 +28,29 @@ let
   manifest = lib.importJSON ./manifest.json;
   inherit (manifest) version;
 
-  # Tool-output truncation caps, declared as data (single source) and derived
-  # into wrapper flags below, rather than hand-written into the install phase. We
-  # run a trusted config (our own CLAUDE.md / AGENTS.md / hooks / MCP servers),
-  # so raise the CLI's own output knobs to its built-in maxima instead of letting
-  # output be silently pruned:
-  #   BASH_MAX_OUTPUT_LENGTH: default 30000 chars, binary clamp 150000
-  #   TASK_MAX_OUTPUT_LENGTH: default 32000 chars, clamp 160000
-  #   MAX_MCP_OUTPUT_TOKENS:  default ~25000 tokens, no clamp
-  outputCaps = {
+  # Env defaults applied through the wrapper, declared as data (single source)
+  # and derived into flags below rather than hand-written into the install phase.
+  # `--set-default` (not `--set`) so an explicit env or settings.json `env` value
+  # still overrides per machine. Two groups:
+  #  - Output-truncation caps raised to the CLI's built-in maxima: we run a
+  #    trusted config (our own CLAUDE.md / AGENTS.md / hooks / MCP servers), so
+  #    prefer full output over pruning. BASH_MAX_OUTPUT_LENGTH default 30000
+  #    chars (binary clamp 150000); TASK_MAX_OUTPUT_LENGTH default 32000 (clamp
+  #    160000); MAX_MCP_OUTPUT_TOKENS default ~25000 tokens (no clamp).
+  #  - Feature toggles on by default fleet-wide: agent teams, still gated behind
+  #    the EXPERIMENTAL_ env var in this build.
+  wrapperEnvDefaults = {
     BASH_MAX_OUTPUT_LENGTH = 150000;
     TASK_MAX_OUTPUT_LENGTH = 160000;
     MAX_MCP_OUTPUT_TOKENS = 200000;
+    CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = 1;
   };
-  # `--set-default` (not `--set`) so an explicit env or settings.json `env` value
-  # still overrides per machine.
-  outputCapFlags = lib.concatLists (
+  envDefaultFlags = lib.concatLists (
     lib.mapAttrsToList (name: value: [
       "--set-default"
       name
       (toString value)
-    ]) outputCaps
+    ]) wrapperEnvDefaults
   );
 
   inherit (stdenv.hostPlatform) system;
@@ -171,14 +173,21 @@ stdenv.mkDerivation {
     # The store output is read-only, so the bundled self-updater can never
     # write; disable it and the install checks, and pin the bundled ripgrep to
     # the Nix one so PATH stays reproducible. The wrapper owns the version pin.
-    # Raise the output-truncation caps to trusted-config maxima (see `outputCaps`
-    # above).
+    # Apply our env defaults (see `wrapperEnvDefaults` above).
+    #
+    # Start in debug mode by default (`--debug`): the CLI writes operational
+    # telemetry (HTTP/API timings, auto-mode classifier, MCP/LSP lifecycle,
+    # startup phases, permission decisions) to ~/.claude/debug/ for
+    # troubleshooting and the optimize history analysis. It does not pollute
+    # `claude -p` stdout (verified), and those logs are pruned on the normal
+    # cleanupPeriodDays sweep, so set a long retention in settings to keep them.
     makeBinaryWrapper "$helper" $out/bin/${binName} \
       --inherit-argv0 \
+      --add-flags --debug \
       --set DISABLE_AUTOUPDATER 1 \
       --set DISABLE_INSTALLATION_CHECKS 1 \
       --set USE_BUILTIN_RIPGREP 0 \
-      ${lib.escapeShellArgs outputCapFlags} \
+      ${lib.escapeShellArgs envDefaultFlags} \
       --prefix PATH : ${
         lib.makeBinPath (
           [
