@@ -7,19 +7,25 @@
 #     the public Better Stack status page onto a per-service Minecraft boss bar
 #     plus an Ender Dragon growl + spoken root cause;
 #   * the boss bar overlay GUI it drives (`bossbar-overlay`);
+#   * the merged-PR + CI-failure watcher (`pr-watch`), which plays a Minecraft
+#     sound on each PR newly merged to main and, on a newly failed main Actions
+#     run, speaks a one-line alert and launches a detached Opus deep dive
+#     (`ci-triage`) that files a deduped Linear ticket;
+#   * the token-free `/optimize` history scan (`optimize-scan`);
 #   * the shared "play a gentle sound, then speak it detached" helper
-#     (`say-detached`) the watcher announces through.
+#     (`say-detached`) the watchers announce through.
 #
-# All three are declared as `services.portable.<name>` so they render to a
-# native launchd agent on macOS and a native systemd user unit on Linux from one
-# spec (index lib/portable-services.nix, imported below). The module is a
-# function over the index flake's per-system package set so it can resolve the
-# `bossbar` / `bossbar-overlay` / `minecraft-sound` derivations (flake outputs,
-# not all in the nixpkgs overlay) for the host it is evaluated on.
+# Each is declared as `services.portable.<name>` so they render to a native
+# launchd agent on macOS and a native systemd user unit on Linux from one spec
+# (index lib/portable-services.nix, imported below). The module is a function
+# over the index flake's per-system package set so it can resolve the `bossbar` /
+# `bossbar-overlay` / `minecraft-sound` derivations (flake outputs, not all in
+# the nixpkgs overlay) for the host it is evaluated on.
 #
 # Host-specific glue stays in the consuming config: the Better Stack API token
-# (seeded into the macOS Keychain, or exported as IX_BETTERSTACK_TOKEN) and any
-# absolute log paths beyond the defaults here.
+# and the pr-watch Linear key (both seeded into the macOS Keychain, or exported
+# as env), `gh` auth for pr-watch, and any absolute log paths beyond the defaults
+# here.
 #
 # Closed over the index flake's per-system package set (`indexPackages system`)
 # and the portable-services home-manager module, so the consumer imports just
@@ -139,6 +145,60 @@ let
         | while read -r f; do rm -f "$f"; done
     '';
   };
+
+  # Shared "summarize -> speak with sound" helper sourced by pr-watch's stage-1
+  # CI-failure alert. Kept as a standalone store file so its absolute path can be
+  # baked into the pr-watch body via @ANNOUNCE_LIB@ (sourcing a sibling script by
+  # relative path is not safe under launchd's minimal environment).
+  announceLib = pkgs.writeText "announce-lib.sh" (builtins.readFile ./scripts/announce-lib.sh);
+
+  # Stage-2 of the pr-watch CI response: a per-run DEEP DIVE into a main-branch
+  # Actions failure. Launched DETACHED by pr-watch (own session + `timeout`), it
+  # uses `claude -p` with Opus 4.8 + the Bash tool to fetch the failed logs,
+  # diagnose the root cause, speak it, and file (or dedupe) a Linear ENG ticket
+  # when the failure is a genuine code break. The Linear API key is read at
+  # runtime from the login Keychain (service `pr-watch-linear`); see the script
+  # header. CI_TRIAGE_DRY_RUN makes it non-destructive for testing.
+  ciTriage = mkBashApp {
+    name = "ci-triage";
+    runtimeInputs = [
+      pkgs.gh
+      pkgs.jq
+      sayDetached
+      pkgs.claude-code
+      pkgs.coreutils
+    ];
+    text = builtins.readFile ./scripts/ci-triage.sh;
+  };
+
+  # The merged-PR + CI-failure watcher itself. say-detached plays the merge
+  # sound / failure cue + carries stage-1 speech; ci-triage is the detached
+  # stage-2 deep dive; claude-code summarizes a failure into one spoken line;
+  # coreutils provides `timeout`/`date`; perl supplies the intrinsic flock guard
+  # and the setsid detach. The @PLACEHOLDERS@ are baked from the options.
+  prWatch = mkBashApp {
+    name = "pr-watch";
+    runtimeInputs = [
+      pkgs.gh
+      pkgs.jq
+      sayDetached
+      ciTriage
+      pkgs.claude-code
+      pkgs.coreutils
+      pkgs.perl
+    ];
+    text =
+      builtins.replaceStrings
+        [ "@ANNOUNCE_LIB@" "@REPOS@" "@MERGE_SOUND@" "@LOG_DIR@" "@TRIAGE_COOLDOWN@" ]
+        [
+          "${announceLib}"
+          (lib.concatMapStringsSep " " (r: ''"${r}"'') cfg.prWatch.repos)
+          cfg.prWatch.mergeSound
+          cfg.logDir
+          (toString cfg.prWatch.triageCooldown)
+        ]
+        (builtins.readFile ./scripts/pr-watch.sh);
+  };
 in
 {
   imports = [ portableServicesModule ];
@@ -192,6 +252,53 @@ in
       };
     };
 
+    prWatch = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Run the merged-PR + CI-failure watcher (polls each repo's main for
+          newly merged PRs and newly failed Actions runs). Needs `gh` to be
+          authenticated for the host user; the stage-2 deep dive additionally
+          needs the `pr-watch-linear` Keychain entry to file tickets (optional).
+        '';
+      };
+
+      interval = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 30;
+        description = "Poll each watched repo every N seconds.";
+      };
+
+      repos = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [
+          "indexable-inc/ix"
+          "indexable-inc/index"
+        ];
+        description = "GitHub `owner/name` repos to watch for merges and main CI failures.";
+      };
+
+      mergeSound = lib.mkOption {
+        type = lib.types.str;
+        default = "block/bell/bell_use01";
+        description = ''
+          minecraft-sound id played (sound only, no speech) when a PR is newly
+          merged into main. See `minecraft-sound list` for the catalog.
+        '';
+      };
+
+      triageCooldown = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 1800;
+        description = ''
+          Minimum seconds between stage-2 Opus deep dives per repo+workflow, so a
+          sustained red main can't spawn a storm of Opus runs or near-duplicate
+          tickets. Overridable at runtime via CI_TRIAGE_COOLDOWN.
+        '';
+      };
+    };
+
     sound.linuxSayCommand = lib.mkOption {
       type = lib.types.str;
       default = "spd-say";
@@ -242,6 +349,18 @@ in
           standardErrorPath = "${cfg.logDir}/optimize-scan.log";
           # runAtLoad (default true) gives an immediate first scan on load;
           # Label defaults to the space-free home convention. No escape hatch.
+        };
+      })
+      (lib.mkIf cfg.prWatch.enable {
+        pr-watch = {
+          description = "merged-PR + CI-failure watcher";
+          command = [ (lib.getExe' prWatch "pr-watch") ];
+          interval = cfg.prWatch.interval;
+          standardOutPath = "${cfg.logDir}/pr-watch.log";
+          standardErrorPath = "${cfg.logDir}/pr-watch.log";
+          # runAtLoad (default true) fires the first poll immediately; the
+          # Label defaults to the space-free home convention. Overlap is handled
+          # intrinsically by the script's own flock guard, so no escape hatch.
         };
       })
       (lib.mkIf cfg.bossbarOverlay.enable {
