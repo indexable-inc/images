@@ -100,6 +100,26 @@ struct Cli {
     host: Option<String>,
 }
 
+/// The Mixedbread sink for a run: the connected store and the store name to
+/// sync into. Passed together wherever a source may fan out to Mixedbread.
+#[derive(Clone, Copy)]
+struct Mixedbread<'a> {
+    store: &'a MixedbreadStore,
+    name: &'a str,
+}
+
+/// Per-run tally of how many sources were indexed versus failed.
+struct Counts {
+    indexed: usize,
+    failures: usize,
+}
+
+/// A user account to index: its name (the `user` tag) and home directory.
+struct User {
+    name: String,
+    home: PathBuf,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -126,12 +146,18 @@ async fn main() -> anyhow::Result<()> {
             "no sources selected: pass --local, --user NAME:HOME, --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--git-repo, or --code-repo"
         );
     }
-    let mixedbread = store.as_ref().zip(cli.mixedbread_store.as_deref());
+    let mixedbread =
+        store.as_ref().zip(cli.mixedbread_store.as_deref()).map(|(store, name)| Mixedbread { store, name });
 
-    let (indexed, failures) = run_sources(&cli, mixedbread, parquet.as_ref()).await;
+    let counts = run_sources(&cli, mixedbread, parquet.as_ref()).await;
 
-    if failures > 0 {
-        anyhow::bail!("{failures} of {} source(s) failed; {indexed} succeeded", indexed + failures);
+    if counts.failures > 0 {
+        anyhow::bail!(
+            "{} of {} source(s) failed; {} succeeded",
+            counts.failures,
+            counts.indexed + counts.failures,
+            counts.indexed
+        );
     }
     Ok(())
 }
@@ -154,17 +180,16 @@ const fn any_source_selected(cli: &Cli) -> bool {
 /// aborts the others), returning `(indexed, failed)` counts.
 async fn run_sources(
     cli: &Cli,
-    mixedbread: Option<(&MixedbreadStore, &str)>,
+    mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
-) -> (usize, usize) {
+) -> Counts {
     let home = dirs::home_dir();
     let default = |suffix: &str| home.as_ref().map(|h| h.join(suffix));
     let claude = cli.claude_dir.clone().or_else(|| cli.local.then(|| default(".claude/projects")).flatten());
     let codex = cli.codex_file.clone().or_else(|| cli.local.then(|| default(".codex/history.jsonl")).flatten());
     let atuin = cli.atuin_db.clone().or_else(|| cli.local.then(|| default(".local/share/atuin/history.db")).flatten());
 
-    let mut indexed = 0_usize;
-    let mut failures = 0_usize;
+    let mut counts = Counts { indexed: 0, failures: 0 };
     if let Some(dir) = claude {
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open(&dir)
@@ -172,7 +197,7 @@ async fn run_sources(
             run_source("claude", &adapter, mixedbread, parquet).await
         }
         .await;
-        record("claude", result, &mut indexed, &mut failures);
+        record("claude", result, &mut counts);
     }
     if let Some(file) = codex {
         let result = async {
@@ -181,7 +206,7 @@ async fn run_sources(
             run_source("codex", &adapter, mixedbread, parquet).await
         }
         .await;
-        record("codex", result, &mut indexed, &mut failures);
+        record("codex", result, &mut counts);
     }
     if let Some(db) = atuin {
         let result = async {
@@ -190,7 +215,7 @@ async fn run_sources(
             run_source("shell", &adapter, mixedbread, parquet).await
         }
         .await;
-        record("shell", result, &mut indexed, &mut failures);
+        record("shell", result, &mut counts);
     }
     if let Some(dir) = &cli.slack_export {
         let result = async {
@@ -199,7 +224,7 @@ async fn run_sources(
             run_source("slack", &adapter, mixedbread, parquet).await
         }
         .await;
-        record("slack", result, &mut indexed, &mut failures);
+        record("slack", result, &mut counts);
     }
     if let Some(dir) = &cli.linear_export {
         let result = async {
@@ -208,7 +233,7 @@ async fn run_sources(
             run_source("linear", &adapter, mixedbread, parquet).await
         }
         .await;
-        record("linear", result, &mut indexed, &mut failures);
+        record("linear", result, &mut counts);
     }
     for repo in &cli.git_repos {
         let label = format!("git:{}", repo.display());
@@ -218,27 +243,26 @@ async fn run_sources(
             run_source("git", &adapter, mixedbread, parquet).await
         }
         .await;
-        record(&label, result, &mut indexed, &mut failures);
+        record(&label, result, &mut counts);
     }
     for repo_dir in &cli.code_repos {
         let label = format!("code:{}", repo_dir.display());
         let result = index_code(&label, repo_dir, mixedbread).await;
-        record(&label, result, &mut indexed, &mut failures);
+        record(&label, result, &mut counts);
     }
     if !cli.users.is_empty() {
-        run_users(cli, mixedbread, parquet, &mut indexed, &mut failures).await;
+        run_users(cli, mixedbread, parquet, &mut counts).await;
     }
-    (indexed, failures)
+    counts
 }
 
 /// Run the `--user NAME:HOME` multi-user phase, accumulating into the shared
 /// counters. Split out of [`run_sources`] to keep each function focused.
 async fn run_users(
     cli: &Cli,
-    mixedbread: Option<(&MixedbreadStore, &str)>,
+    mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
-    indexed: &mut usize,
-    failures: &mut usize,
+    counts: &mut Counts,
 ) {
     let host = match resolve_host(cli) {
         Ok(host) => host,
@@ -247,18 +271,16 @@ async fn run_users(
             // so fail the whole multi-user phase rather than emit wrong metadata.
             // Count it as one phase failure (no per-user work ran).
             eprintln!("[users] failed to resolve host, skipping all --user sources: {error:#}");
-            *failures += 1;
+            counts.failures += 1;
             return;
         }
     };
     for spec in &cli.users {
         match parse_user(spec) {
-            Ok((name, home)) => {
-                index_user(&name, &home, &host, mixedbread, parquet, indexed, failures).await;
-            }
+            Ok(user) => index_user(&user, &host, mixedbread, parquet, counts).await,
             Err(error) => {
                 eprintln!("[users] bad --user spec: {error:#}");
-                *failures += 1;
+                counts.failures += 1;
             }
         }
     }
@@ -274,14 +296,14 @@ async fn run_users(
 /// tree). Absent sources are skipped; a parse failure in one source is recorded
 /// but does not abort the others.
 async fn index_user(
-    name: &str,
-    home: &Path,
+    user: &User,
     host: &str,
-    mixedbread: Option<(&MixedbreadStore, &str)>,
+    mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
-    indexed: &mut usize,
-    failures: &mut usize,
+    counts: &mut Counts,
 ) {
+    let name = user.name.as_str();
+    let home = user.home.as_path();
     if let Some(claude_dir) = safe_path_under(home, &[".claude", "projects"], true) {
         let label = format!("claude:{name}");
         let parquet = parquet.map(|config| user_parquet(config, name));
@@ -291,7 +313,7 @@ async fn index_user(
             run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
         }
         .await;
-        record(&label, result, indexed, failures);
+        record(&label, result, counts);
     }
 
     if let Some(codex_file) = safe_path_under(home, &[".codex", "history.jsonl"], false) {
@@ -303,7 +325,7 @@ async fn index_user(
             run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
         }
         .await;
-        record(&label, result, indexed, failures);
+        record(&label, result, counts);
     }
 
     // atuin records its own `host`/`user` in each row, so it self-tags per user
@@ -317,13 +339,13 @@ async fn index_user(
             run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
         }
         .await;
-        record(&label, result, indexed, failures);
+        record(&label, result, counts);
     }
 }
 
 /// Parse a `NAME:HOME` user spec. The name is everything before the first colon;
 /// both parts must be non-empty.
-fn parse_user(spec: &str) -> anyhow::Result<(String, PathBuf)> {
+fn parse_user(spec: &str) -> anyhow::Result<User> {
     let (name, home) =
         spec.split_once(':').with_context(|| format!("--user must be NAME:HOME, got {spec:?}"))?;
     anyhow::ensure!(!name.is_empty(), "--user NAME must be non-empty in {spec:?}");
@@ -334,7 +356,7 @@ fn parse_user(spec: &str) -> anyhow::Result<(String, PathBuf)> {
         name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')),
         "--user NAME must be ascii alphanumeric plus `.`/`_`/`-`, got {name:?}"
     );
-    Ok((name.to_owned(), PathBuf::from(home)))
+    Ok(User { name: name.to_owned(), home: PathBuf::from(home) })
 }
 
 /// A per-user parquet config: partition each user's rows under `user=<name>` so
@@ -399,19 +421,19 @@ fn resolve_host(cli: &Cli) -> anyhow::Result<String> {
 async fn index_code(
     label: &str,
     repo_dir: &std::path::Path,
-    mixedbread: Option<(&MixedbreadStore, &str)>,
+    mixedbread: Option<Mixedbread<'_>>,
 ) -> anyhow::Result<()> {
-    let Some((store, store_name)) = mixedbread else {
+    let Some(Mixedbread { store, name }) = mixedbread else {
         anyhow::bail!("--code-repo requires --mixedbread-store (code is semantic-search only)");
     };
     let manifest = search_core::Manifest::build(repo_dir, None, MAX_FILE_BYTES)
         .with_context(|| format!("building manifest for {}", repo_dir.display()))?;
     let repo = search_core::repo_slug(repo_dir);
-    let report = search_core::sync(store, store_name, repo_dir, &manifest, &repo, MAX_FILES, |_, _| {})
+    let report = search_core::sync(store, name, repo_dir, &manifest, &repo, MAX_FILES, |_, _| {})
         .await
         .with_context(|| format!("[{label}] code sync"))?;
     if report.uploaded > 0 {
-        search_core::wait_until_indexed(store, store_name, INDEX_TIMEOUT, |_| {})
+        search_core::wait_until_indexed(store, name, INDEX_TIMEOUT, |_| {})
             .await
             .with_context(|| format!("[{label}] waiting for indexing"))?;
     }
@@ -424,12 +446,12 @@ async fn index_code(
 
 /// Record one source's outcome. A failure is logged and counted but does not
 /// abort the run, so one broken source cannot starve the others.
-fn record(label: &str, result: anyhow::Result<()>, indexed: &mut usize, failures: &mut usize) {
+fn record(label: &str, result: anyhow::Result<()>, counts: &mut Counts) {
     match result {
-        Ok(()) => *indexed += 1,
+        Ok(()) => counts.indexed += 1,
         Err(error) => {
             eprintln!("[{label}] failed: {error:#}");
-            *failures += 1;
+            counts.failures += 1;
         }
     }
 }
@@ -438,11 +460,11 @@ fn record(label: &str, result: anyhow::Result<()>, indexed: &mut usize, failures
 async fn run_source<A: SourceAdapter + Sync>(
     label: &str,
     adapter: &A,
-    mixedbread: Option<(&MixedbreadStore, &str)>,
+    mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
 ) -> anyhow::Result<()> {
-    if let Some((store, store_name)) = mixedbread {
-        let report = sync_documents(adapter, store, store_name, INDEX_TIMEOUT, |_, _| {})
+    if let Some(Mixedbread { store, name }) = mixedbread {
+        let report = sync_documents(adapter, store, name, INDEX_TIMEOUT, |_, _| {})
             .await
             .with_context(|| format!("[{label}] Mixedbread sync"))?;
         eprintln!(
@@ -466,7 +488,7 @@ async fn run_source<A: SourceAdapter + Sync>(
 mod tests {
     #![expect(clippy::expect_used, reason = "tests assert observable filesystem outcomes")]
 
-    use std::path::Path;
+    use std::path::PathBuf;
 
     use super::{parse_user, safe_path_under};
 
@@ -525,8 +547,8 @@ mod tests {
         assert!(parse_user(":/home/x").is_err(), "empty name");
         assert!(parse_user("alice:").is_err(), "empty home");
         assert!(parse_user("noseparator").is_err(), "missing colon");
-        let (name, home) = parse_user("alice-1.2_3:/home/alice").expect("valid spec");
-        assert_eq!(name, "alice-1.2_3");
-        assert_eq!(home, Path::new("/home/alice"));
+        let user = parse_user("alice-1.2_3:/home/alice").expect("valid spec");
+        assert_eq!(user.name, "alice-1.2_3");
+        assert_eq!(user.home, PathBuf::from("/home/alice"));
     }
 }
