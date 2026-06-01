@@ -40,6 +40,8 @@ members = [
   "packages/progress-style",
   "packages/reel",
   "packages/repo-walker",
+  "packages/screencast",
+  "packages/screencast-ingest",
   "packages/source/linear",
   "packages/search",
   "packages/search-core",
