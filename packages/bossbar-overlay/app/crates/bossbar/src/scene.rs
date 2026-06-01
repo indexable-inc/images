@@ -463,9 +463,13 @@ pub fn build_one(
         has_title,
     };
 
-    // Only build the panel when the window was actually grown for it; a collapsed
-    // window (height == top_region_h) has no room and skips it.
-    let panel = if height as f32 > collapsed_h + 0.5 {
+    // Only build the panel when the bar opts into the box (`expandable`) and the
+    // window was actually grown for it; a collapsed window (height ==
+    // top_region_h) has no room and skips it. The expandable check is also the
+    // live gate (via the overlay's window sizing); repeating it here keeps a
+    // non-expandable bar boxless even if something grows its window (e.g. a
+    // snapshot rendered at expanded size).
+    let panel = if bar.expandable && height as f32 > collapsed_h + 0.5 {
         panel_size(gpu, &bar.description, scale).map(|(panel_w, panel_h)| {
             let (border, pad, font_px, line_px, gap) = panel_metrics(scale);
             PanelBox {
@@ -514,9 +518,17 @@ pub fn build_all(
     let scale = scale.max(1);
     let opacity = DEFAULT_OPACITY;
     let (border, pad, font_px, line_px, gap) = panel_metrics(scale);
+    // A non-expandable bar has no box, so it reserves no panel size (and so no
+    // layout gap and no panel quads), matching the live per-window path.
     let sizes: Vec<Option<(f32, f32)>> = bars
         .iter()
-        .map(|b| panel_size(gpu, &b.description, scale))
+        .map(|b| {
+            if b.expandable {
+                panel_size(gpu, &b.description, scale)
+            } else {
+                None
+            }
+        })
         .collect();
     let boxes = layout(scale, bars, width as f32, &sizes, gap);
 
@@ -633,6 +645,7 @@ mod tests {
             overlay: Overlay::None,
             position: 0,
             pos: None,
+            expandable: true,
         }
     }
 

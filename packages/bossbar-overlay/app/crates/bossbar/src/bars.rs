@@ -110,6 +110,12 @@ pub struct BossBar {
     /// A URL (or any URI/path the OS opener accepts) opened when the bar is
     /// clicked without dragging. Empty means a click does nothing.
     pub url: String,
+    /// Whether hovering may unfold the description panel below the bar. `true`
+    /// (the default) keeps the old behavior; `false` makes the bar stay bar-sized
+    /// on hover with no pop-down box, even if it carries a `description`. Lets a
+    /// caller draw many compact bars (e.g. one per CI run) without each growing a
+    /// panel. Persisted to the `expandable` DB column.
+    pub expandable: bool,
     /// Fill fraction, always clamped to `0.0..=1.0` at construction.
     pub progress: f32,
     pub color: Color,

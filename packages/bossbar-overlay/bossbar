@@ -34,7 +34,8 @@ ensure_db() {
     visible     INTEGER NOT NULL DEFAULT 1,
     position    INTEGER NOT NULL DEFAULT 0,
     since       INTEGER,
-    url         TEXT    NOT NULL DEFAULT ''
+    url         TEXT    NOT NULL DEFAULT '',
+    expandable  INTEGER NOT NULL DEFAULT 1
   );"
   # Columns that shipped after the first schema; add each to a pre-existing table
   # so its flag works on a DB created by an older bossbar. SQLite has no
@@ -47,6 +48,7 @@ ensure_db() {
   add_col description "TEXT NOT NULL DEFAULT ''"
   add_col since "INTEGER"
   add_col url "TEXT NOT NULL DEFAULT ''"
+  add_col expandable "INTEGER NOT NULL DEFAULT 1"
 }
 
 die() {
@@ -79,10 +81,10 @@ bossbar - control the Minecraft boss bar overlay (SQLite-backed)
 
 Usage:
   bossbar add <title> [--description D] [--since EPOCH] [--url U] [--progress P]
-                      [--color C] [--overlay O] [--position N]
+                      [--color C] [--overlay O] [--position N] [--box 0|1]
   bossbar set <id|title> [--title T] [--description D] [--since EPOCH] [--url U]
                          [--progress P] [--color C] [--overlay O]
-                         [--position N] [--visible 0|1]
+                         [--position N] [--visible 0|1] [--box 0|1]
   bossbar rm <id|title>
   bossbar list
   bossbar clear
@@ -97,6 +99,8 @@ Usage:
   P        fill fraction 0.0 .. 1.0
   C        pink | blue | red | green | yellow | purple | white
   O        progress | notched_6 | notched_10 | notched_12 | notched_20
+  --box    1 (default) lets hover unfold the description panel; 0 keeps the bar
+           bar-sized on hover with no pop-down box
 
 Examples:
   bossbar add "Ender Dragon" --color pink --overlay notched_20 \
@@ -125,6 +129,9 @@ parse_fields() {
       --progress)    assign="progress = $val" ;;
       --position)    assign="position = $val" ;;
       --visible)     assign="visible = $val" ;;
+      --box)
+        case "$val" in 0|1) ;; *) die "--box must be 0 or 1" ;; esac
+        assign="expandable = $val" ;;
       --color)
         in_list "$val" "$COLORS" || die "color must be one of: $COLORS"
         assign="color = '$val'" ;;

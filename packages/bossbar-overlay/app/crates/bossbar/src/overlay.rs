@@ -65,6 +65,14 @@ const DRAG_THRESHOLD: f64 = 5.0;
 /// watcher's lagged read-back of our own drag never snaps the window back.
 const SETTLE: Duration = Duration::from_millis(700);
 
+/// How long the "poof" despawn animation runs before the window is actually
+/// removed. A bar that leaves the DB shrinks toward its center and fades out over
+/// this window (ease-out) instead of vanishing in a single frame.
+const POOF_DUR: Duration = Duration::from_millis(280);
+/// How far the bar shrinks at the end of the poof (1.0 - this), so it implodes to
+/// ~55% as it fades. Kept under 1.0 and centered, so it never clips the window.
+const POOF_SHRINK: f32 = 0.45;
+
 /// Current wall-clock time as Unix seconds, for the live elapsed counter. Before
 /// the epoch (clock unset) it clamps to 0, which reads as a 0 counter.
 fn now_unix() -> i64 {
@@ -127,18 +135,26 @@ struct BarWin {
     /// ignores externally-read positions until the window has been still for
     /// SETTLE, so the watcher's lagged read-back never snaps a live drag back.
     last_move: Instant,
+    /// Set when the bar has left the DB and the window is playing its poof
+    /// despawn. While `Some`, the window shrinks+fades from this instant and is
+    /// removed once `POOF_DUR` elapses; it is cleared back to `None` if the bar
+    /// reappears before the poof finishes.
+    poof: Option<Instant>,
 }
 
 impl BarWin {
-    /// Still moving: easing toward/away from hover, or breathing while hovered.
+    /// Still moving: easing toward/away from hover, breathing while hovered, or
+    /// playing the poof despawn (which must keep redrawing until it finishes).
     fn animating(&self) -> bool {
-        self.hovered || !self.hover_anim.is_resting()
+        self.hovered || !self.hover_anim.is_resting() || self.poof.is_some()
     }
 
     /// The window should be grown for the panel while the bar is hovered or still
-    /// easing back from a hover, but only when it has a description.
+    /// easing back from a hover, but only when it has a description AND the bar
+    /// opts into the pop-down (`expandable`). A non-expandable bar stays bar-sized
+    /// on hover with no box, even if it carries description text.
     fn wants_expanded(&self) -> bool {
-        self.has_description && self.animating()
+        self.has_description && self.bar.expandable && self.animating()
     }
 }
 
@@ -249,6 +265,7 @@ impl App {
             // Far enough in the past that a fresh window accepts an external
             // position immediately (the SETTLE guard only fires after a real move).
             last_move: now - SETTLE,
+            poof: None,
         })
     }
 
@@ -256,7 +273,16 @@ impl App {
     /// bars, create them for new bars, update data and (externally changed)
     /// position for existing ones.
     fn reconcile(&mut self, event_loop: &ActiveEventLoop, bars: Vec<BossBar>) {
-        self.wins.retain(|id, _| bars.iter().any(|b| b.id == *id));
+        // A bar that left the DB is not dropped instantly: mark its window
+        // poofing so it shrinks+fades, and remove it once the poof finishes (in
+        // `about_to_wait`). request_redraw kicks the animation off now.
+        let now_i = Instant::now();
+        for (id, win) in self.wins.iter_mut() {
+            if win.poof.is_none() && !bars.iter().any(|b| b.id == *id) {
+                win.poof = Some(now_i);
+                win.window.request_redraw();
+            }
+        }
 
         let mut slot = 0usize;
         for b in &bars {
@@ -269,6 +295,11 @@ impl App {
             };
 
             if let Some(win) = self.wins.get_mut(&b.id) {
+                // The bar is back in the DB; if it was mid-poof (removed then
+                // re-added before the despawn finished), cancel the poof.
+                if win.poof.take().is_some() {
+                    win.window.request_redraw();
+                }
                 win.has_description = !b.description.trim().is_empty();
                 win.bar = b.clone();
                 // Honor a position set in the DB by something other than our own
@@ -342,7 +373,7 @@ impl App {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let quads = scene::build_one(
+        let mut quads = scene::build_one(
             &core.gpu,
             &core.textures,
             self.scale,
@@ -353,6 +384,21 @@ impl App {
             hover,
             breathe,
         );
+        // Poof despawn: shrink the whole bar toward the window center and fade it
+        // out over POOF_DUR (ease-out), so a removed bar implodes instead of
+        // blinking off. Applied as a post-pass on the laid-out quads, so the
+        // scene builder stays unaware of the despawn.
+        if let Some(t0) = win.poof {
+            let t = (now.duration_since(t0).as_secs_f32() / POOF_DUR.as_secs_f32()).clamp(0.0, 1.0);
+            let e = anim::ease_out_cubic(t);
+            let cx = win.config.width as f32 * 0.5;
+            let cy = win.config.height as f32 * 0.5;
+            anim::scale_quads_about(&mut quads, cx, cy, 1.0 - POOF_SHRINK * e);
+            let fade = 1.0 - e;
+            for q in &mut quads {
+                q.color[3] *= fade;
+            }
+        }
         let _ = core.gpu.draw(&view, win.config.width, win.config.height, &quads);
         frame.present();
     }
@@ -446,6 +492,11 @@ impl App {
         let Some(win) = self.wins.get_mut(&id) else {
             return;
         };
+        // A poofing window is on its way out; leave its size fixed so it shrinks
+        // cleanly via the render transform instead of also resizing the window.
+        if win.poof.is_some() {
+            return;
+        }
         let expand = win.wants_expanded();
         let (w_px, h_px) = if expand {
             scene::expanded_window_px(&core.gpu, &win.bar, self.scale, now)
@@ -642,6 +693,13 @@ impl ApplicationHandler<Vec<BossBar>> for App {
         for id in ids {
             self.settle_window_size(id);
         }
+
+        // Remove any window whose poof despawn has finished. Dropping the BarWin
+        // closes its window. Parity with the old instant-removal: the overlay
+        // stays alive with zero bars (the watcher re-adds them), so no exit here.
+        let now_i = Instant::now();
+        self.wins
+            .retain(|_, w| w.poof.is_none_or(|t0| now_i.duration_since(t0) < POOF_DUR));
 
         let mut animating = false;
         let mut ticking = false;

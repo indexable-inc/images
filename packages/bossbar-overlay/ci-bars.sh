@@ -9,32 +9,33 @@
 #   CI_BARS_MAX          max bars per repo per poll (12)
 #   CI_BARS_STATE        state dir for the average cache + lock ($HOME/.cache/ci-bars)
 #
-# Draws a Minecraft boss bar PER in-flight GitHub Actions run across the watched
-# repos, so a glance says what CI is doing right now. This is the live-progress
-# companion to the [[ix-downtime]] outage bars (red/yellow/blue) and the
-# [[pr-watch]] karma feed (merge orb / failure villager): those react to discrete
-# events, this one reconciles a continuous "what's running" view. It is SILENT,
-# because pr-watch already owns the success/failure sound; here the bar fill is
-# the whole signal.
+# Draws ONE Minecraft boss bar per in-flight HEAD COMMIT across the watched repos
+# (not one per workflow run), so a commit with five checks shows a single bar that
+# fills as its checks complete. This is the live-progress companion to the
+# [[ix-downtime]] outage bars (red/yellow/blue) and the [[pr-watch]] karma feed
+# (merge orb / failure villager): those react to discrete events, this one
+# reconciles a continuous "what's building" view. It is SILENT, because pr-watch
+# already owns the success/failure sound; here the bar fill is the whole signal.
 #
-# Color is deliberately OUTSIDE the downtime palette so the two never read as the
-# same thing:
-#   - in_progress -> green, progress = elapsed / historical-average duration;
-#   - queued/waiting -> purple, a thin bar (no runner yet, so no elapsed clock).
+# Color is deliberately OUTSIDE the downtime palette so the two never read alike:
+#   - any check running or finished -> green;
+#   - all of the commit's checks still queued / unpicked -> purple, a thin bar.
 #
-# Progress for a running job is estimated from the mean wall-clock of the last
-# few SUCCESSFUL runs of that same workflow (cached in SQLite, refreshed at most
-# once per CI_BARS_AVG_TTL), clamped to [0.02, 0.97] so a bar never shows empty
-# and never shows full until the run actually finishes. The overlay also ticks a
-# live elapsed timer in the title from the bar's `since` (set to the run's start),
-# so the human sees both "about this far" and "for this long".
+# A commit's fill = (finished checks + summed partial progress of the running
+# ones) / total checks. Each running check's partial is elapsed / the mean
+# wall-clock of recent SUCCESSFUL runs of that workflow (cached in SQLite,
+# refreshed at most once per CI_BARS_AVG_TTL), clamped so the bar never shows
+# empty or full until the commit's CI actually finishes. The overlay ticks a live
+# elapsed timer from the bar's `since` (the earliest running check's start).
 #
-# A bar's identity is the run URL (unique per run), so CI bars never collide with
-# the downtime bars (which point at the status page) and a run heals in place
-# across polls. When a run leaves the in-flight set (it completed, was cancelled,
-# or fell off the list) its bar is removed on the next poll: we enumerate every
-# overlay row whose url is an Actions run and drop any not in the current active
-# set. pr-watch handles the completion sound, so this just clears the visual.
+# A bar's identity is the commit URL (https://github.com/<repo>/commit/<sha>), so
+# all of a commit's checks share one bar, CI bars never collide with the downtime
+# bars (status-page url), and a commit heals in place across polls. When a commit
+# leaves the in-flight set (all its checks finished or were cancelled) its bar is
+# removed on the next poll: we enumerate every overlay row whose url is a commit
+# page and drop any not in the current active set (the overlay poofs it out).
+# pr-watch handles the completion sound, so this just clears the visual. The bars
+# are boxless (--box 0): many compact commit bars with no hover pop-down.
 
 state_dir="${CI_BARS_STATE:-$HOME/.cache/ci-bars}"
 mkdir -p "$state_dir"
@@ -147,93 +148,127 @@ EOF
   printf '%s' "$avg"
 }
 
-# Active run urls seen this poll (newline-separated), used to prune finished bars.
+# Commit urls drawn this poll (newline-separated), used to prune finished bars.
+# Identity is the commit, so all of a commit's checks share ONE bar.
 active_urls=""
 
 for repo in "${repos[@]}"; do
   short="${repo##*/}"
   # One list call per repo per poll: every recent run, all branches, all
-  # workflows. Non-completed runs are filtered client-side and capped to the most
-  # recent $max_bars so a busy moment cannot flood the screen with bars.
+  # workflows, grouped below by head commit (headSha).
   runs="$(gh run list --repo "$repo" --limit 100 \
-    --json databaseId,workflowName,displayTitle,headBranch,status,startedAt,createdAt,url \
+    --json workflowName,headBranch,headSha,status,conclusion,startedAt,createdAt,url \
     2>/dev/null)" || continue
   [ -n "$runs" ] || continue
 
-  while IFS=$'\t' read -r run_id wf title branch status started created url; do
-    [ -n "${run_id:-}" ] || continue
-    [ -n "$url" ] || url="https://github.com/$repo/actions/runs/$run_id"
+  # Aggregate every run by its head commit. One bar per commit: total checks,
+  # how many have finished, and the summed partial progress of the running ones,
+  # so the fill is the commit's overall CI progress rather than a single check's.
+  # Reset before declaring: `declare -A` does NOT clear an already-set assoc
+  # array, so a prior repo's entries would otherwise leak into this one.
+  unset c_total c_done c_running c_queued c_branch c_minstart c_partmilli c_created
+  declare -A c_total c_done c_running c_queued c_branch c_minstart c_partmilli c_created
+  while IFS=$'\t' read -r sha branch status wf started created; do
+    [ -n "$sha" ] || continue
+    c_total["$sha"]=$((${c_total["$sha"]:-0} + 1))
+    [ -n "${c_branch[$sha]:-}" ] || c_branch["$sha"]="$branch"
+    cc="$(iso_to_epoch "${created:-}")"
+    [ "${cc:-0}" -gt "${c_created[$sha]:-0}" ] 2>/dev/null && c_created["$sha"]="$cc"
+    case "$status" in
+      completed)
+        c_done["$sha"]=$((${c_done["$sha"]:-0} + 1))
+        ;;
+      queued | requested | waiting | pending)
+        c_queued["$sha"]=$((${c_queued["$sha"]:-0} + 1))
+        ;;
+      *) # in_progress (and any other non-terminal state)
+        c_running["$sha"]=$((${c_running["$sha"]:-0} + 1))
+        st="$(iso_to_epoch "${started:-}")"
+        [ "${st:-0}" -gt 0 ] 2>/dev/null || st="$(iso_to_epoch "${created:-}")"
+        avg="$(get_avg "$repo" "$wf")"
+        [ "${avg:-0}" -gt 0 ] 2>/dev/null || avg="$default_avg"
+        el=$((now - st))
+        [ "$el" -ge 0 ] || el=0
+        pm=$((el * 1000 / avg))
+        [ "$pm" -lt 0 ] && pm=0
+        [ "$pm" -gt 970 ] && pm=970
+        c_partmilli["$sha"]=$((${c_partmilli["$sha"]:-0} + pm))
+        cm="${c_minstart[$sha]:-0}"
+        if [ "$cm" -eq 0 ] || { [ "${st:-0}" -gt 0 ] && [ "$st" -lt "$cm" ]; }; then
+          c_minstart["$sha"]="$st"
+        fi
+        ;;
+    esac
+  done < <(printf '%s' "$runs" | jq -r '
+    .[] | [ .headSha, .headBranch, .status, .workflowName,
+            (.startedAt // ""), (.createdAt // "") ] | @tsv')
+
+  # Select commits that still have in-flight work (running or queued), newest
+  # first, capped to $max_bars so a busy moment cannot flood the screen. Commits
+  # whose checks have all finished get no bar and are pruned below.
+  eligible=()
+  for sha in "${!c_total[@]}"; do
+    if [ $((${c_running[$sha]:-0} + ${c_queued[$sha]:-0})) -gt 0 ]; then
+      eligible+=("${c_created[$sha]:-0}	$sha")
+    fi
+  done
+  selected=""
+  [ "${#eligible[@]}" -gt 0 ] && selected="$(printf '%s\n' "${eligible[@]}" | sort -rn -k1 | head -n "$max_bars" | cut -f2)"
+
+  while IFS= read -r sha; do
+    [ -n "$sha" ] || continue
+    running=${c_running[$sha]:-0}
+    done_n=${c_done[$sha]:-0}
+    total=${c_total[$sha]:-1}
+    branch="${c_branch[$sha]:-?}"
+    sha7="${sha:0:7}"
+    url="https://github.com/$repo/commit/$sha"
     active_urls="$active_urls
 $url"
 
-    # Title carries the bitmap (ASCII-only) font, so stick to ASCII separators.
-    bar_title="$short: $wf ($branch)"
+    # Fill = (finished checks + summed partial of running ones) / total checks.
+    progmilli=$(((done_n * 1000 + ${c_partmilli[$sha]:-0}) / total))
+    [ "$progmilli" -lt 20 ] && progmilli=20
+    [ "$progmilli" -gt 970 ] && progmilli=970
+    prog="$(printf '0.%03d' "$progmilli")"
 
-    startsec=0
-    case "$status" in
-      queued | requested | waiting | pending)
-        color="purple"
-        prog="0.02"
-        desc="Queued on GitHub Actions, waiting for a runner.
+    # Green once any check is running or finished; purple while the commit's
+    # checks are all still queued / not yet picked up by a runner.
+    if [ "$running" -gt 0 ] || [ "$done_n" -gt 0 ]; then color="green"; else color="purple"; fi
+    minstart=${c_minstart[$sha]:-0}
 
-$title"
-        ;;
-      *) # in_progress (and any other non-terminal state)
-        color="green"
-        startsec="$(iso_to_epoch "${started:-}")"
-        [ "${startsec:-0}" -gt 0 ] 2>/dev/null || startsec="$(iso_to_epoch "${created:-}")"
-        avg="$(get_avg "$repo" "$wf")"
-        [ "${avg:-0}" -gt 0 ] 2>/dev/null || avg="$default_avg"
-        elapsed=$((now - startsec))
-        [ "$elapsed" -ge 0 ] || elapsed=0
-        # Integer math to avoid an awk/gawk dependency: fill in thousandths,
-        # clamped to [0.020, 0.970]. prog_milli is always < 1000, so the "0."
-        # prefix is correct.
-        prog_milli=$((elapsed * 1000 / avg))
-        [ "$prog_milli" -lt 20 ] && prog_milli=20
-        [ "$prog_milli" -gt 970 ] && prog_milli=970
-        prog="$(printf '0.%03d' "$prog_milli")"
-        desc="Running on GitHub Actions.
-
-Progress is estimated from the average of recent successful runs of this workflow. The title shows elapsed time; it clears when the run finishes."
-        ;;
-    esac
+    # ASCII-only title (bitmap font): repo, branch, finished/total, short sha.
+    bar_title="$short: $branch ($done_n/$total) $sha7"
 
     id="$(bar_id_for_url "$url")"
     if [ -z "$id" ]; then
-      if [ "${startsec:-0}" -gt 0 ] 2>/dev/null; then
-        bossbar add "$bar_title" --color "$color" --overlay progress --progress "$prog" --position -1 --since "$startsec" --url "$url" --description "$desc" 2>/dev/null || true
+      if [ "${minstart:-0}" -gt 0 ] 2>/dev/null; then
+        bossbar add "$bar_title" --color "$color" --overlay progress --progress "$prog" --position -1 --since "$minstart" --url "$url" --box 0 2>/dev/null || true
       else
-        bossbar add "$bar_title" --color "$color" --overlay progress --progress "$prog" --position -1 --url "$url" --description "$desc" 2>/dev/null || true
+        bossbar add "$bar_title" --color "$color" --overlay progress --progress "$prog" --position -1 --url "$url" --box 0 2>/dev/null || true
       fi
     else
-      # Existing bar: refresh fill/color/title in place. A run first seen while
-      # QUEUED was added with no `since` (purple, no clock); once it starts
-      # running we must stamp `since` so the live elapsed timer begins. Only stamp
-      # when the bar has none yet, so an already-ticking clock survives polls and
-      # restarts (mirrors ix-downtime.sh's heal-in-place rule).
+      # Heal in place: refresh fill/color/title. Stamp `since` only once (when the
+      # commit's first check starts running) so the live timer survives polls.
       cur_since="$(sqlite3 "$bdb" "SELECT COALESCE(since,0) FROM bossbars WHERE id = $id;" 2>/dev/null || printf '0')"
-      if [ "${startsec:-0}" -gt 0 ] 2>/dev/null && [ "${cur_since:-0}" -le 0 ] 2>/dev/null; then
-        bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --since "$startsec" --description "$desc" 2>/dev/null || true
+      if [ "${minstart:-0}" -gt 0 ] 2>/dev/null && [ "${cur_since:-0}" -le 0 ] 2>/dev/null; then
+        bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --since "$minstart" --box 0 2>/dev/null || true
       else
-        bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --description "$desc" 2>/dev/null || true
+        bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --box 0 2>/dev/null || true
       fi
     fi
-  done < <(printf '%s' "$runs" | jq -r --argjson max "$max_bars" '
-    [ .[] | select((.status // "completed") != "completed") ]
-    | sort_by(.createdAt) | reverse | .[0:$max]
-    | .[]
-    | [ (.databaseId|tostring), .workflowName, .displayTitle, .headBranch,
-        .status, (.startedAt // ""), (.createdAt // ""), (.url // "") ] | @tsv')
+  done <<EOF
+$selected
+EOF
 done
 
-# Prune bars for runs no longer in flight: any overlay row whose url is an Actions
-# run but is not in this poll's active set has completed (or was cancelled), so
-# drop it. Scoped to /actions/runs/ urls so downtime bars (status-page url) and
-# any hand-added bars are never touched.
+# Prune bars for commits no longer in flight: any overlay row whose url is a
+# commit page but is not in this poll's active set has finished all its checks
+# (or was cancelled), so drop it (the overlay poofs it out). Scoped to commit
+# urls so downtime bars (status-page url) and hand-added bars are never touched.
 if [ -n "$bdb" ]; then
   existing="$(sqlite3 -noheader -separator "	" "$bdb" \
-    "SELECT id, url FROM bossbars WHERE url LIKE '%/actions/runs/%';" 2>/dev/null || true)"
+    "SELECT id, url FROM bossbars WHERE url LIKE 'https://github.com/%/commit/%';" 2>/dev/null || true)"
   while IFS=$'\t' read -r eid eurl; do
     [ -n "${eid:-}" ] || continue
     if ! printf '%s\n' "$active_urls" | grep -qxF "$eurl"; then
