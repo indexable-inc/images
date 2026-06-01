@@ -16,7 +16,7 @@ use clap::{Args, Parser, Subcommand};
 use indicatif::ProgressBar;
 use search_core::{
     CodeScope, Config, DEFAULT_STORE, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets,
-    MixedbreadStore, Query, SearchOptions, Source, SourceAdapter, StoreStatus, build_filter,
+    MixedbreadStore, Query, SearchOptions, Source, StoreStatus, build_filter,
     repo_slug,
 };
 
@@ -47,30 +47,6 @@ struct Cli {
 enum Command {
     /// Grep the indexed chunks with a regular expression.
     Grep(GrepArgs),
-    /// Ingest a non-code source (slack, linear, `claude_history`) from a directory.
-    Ingest(IngestArgs),
-    /// Garbage-collect a non-code source: delete store records absent from the
-    /// export (a full-snapshot reconcile, never a window slice).
-    Gc(IngestArgs),
-}
-
-/// Arguments for `ingest` and `gc`. Code is indexed by an ordinary `search`, so
-/// these cover the record sources only.
-#[derive(Debug, Args)]
-struct IngestArgs {
-    /// Which source to ingest: slack, linear, or `claude_history`.
-    source: String,
-
-    /// Path to the export directory.
-    dir: String,
-
-    /// Store name (one store holds every source's content).
-    #[arg(long, env = "MXBAI_STORE")]
-    store: Option<String>,
-
-    /// Mixedbread API base URL.
-    #[arg(long = "base-url", env = "MXBAI_BASE_URL")]
-    base_url: Option<String>,
 }
 
 /// Scope selectors shared by the semantic and grep paths. With no selector the
@@ -300,96 +276,8 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Grep(args)) => run_grep(args).await,
-        Some(Command::Ingest(args)) => run_ingest(args, false).await,
-        Some(Command::Gc(args)) => run_ingest(args, true).await,
         None => run(cli.semantic).await,
     }
-}
-
-/// Ingest (or, with `gc`, garbage-collect) a record source into the store.
-async fn run_ingest(cli: IngestArgs, gc: bool) -> anyhow::Result<()> {
-    let store_name = cli.store.unwrap_or_else(|| DEFAULT_STORE.to_owned());
-    let base_url = cli
-        .base_url
-        .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
-    let store = MixedbreadStore::from_login(base_url).await?;
-    let dir = Path::new(&cli.dir);
-
-    // `source` is an open tag, so dispatch on the string: each record corpus has
-    // its own adapter crate. `code`/`web` are not ingested here, and an unknown
-    // tag fails loudly rather than silently doing nothing.
-    match cli.source.as_str() {
-        "linear" => {
-            let adapter = source_linear::LinearExport::open(dir)?;
-            run_one_source(&adapter, &store, &store_name, gc).await
-        }
-        "slack" => {
-            let adapter = source_slack::SlackExport::open(dir)?;
-            run_one_source(&adapter, &store, &store_name, gc).await
-        }
-        "claude_history" => {
-            // claude_history is inherently multi-host: many machines upload into
-            // one store, so a single machine's export is a partial view. gc does
-            // a full-snapshot set-difference delete, which from one host would
-            // wipe every other host's records. Refuse it; ingest is additive.
-            if gc {
-                anyhow::bail!(
-                    "gc is not supported for claude_history: it is multi-host, so reconciling against one machine's export would delete other machines' records"
-                );
-            }
-            let adapter = source_claude::ClaudeHistoryExport::open(dir)?;
-            run_one_source(&adapter, &store, &store_name, gc).await
-        }
-        "code" | "web" => anyhow::bail!(
-            "ingest covers record sources (slack, linear, claude_history); code is indexed by a normal `search`"
-        ),
-        other => anyhow::bail!(
-            "no ingest adapter for source {other:?}; known record sources: slack, linear, claude_history"
-        ),
-    }
-}
-
-async fn run_one_source(
-    adapter: &(impl SourceAdapter + Sync),
-    store: &MixedbreadStore,
-    store_name: &str,
-    gc: bool,
-) -> anyhow::Result<()> {
-    if gc {
-        let report = search_core::gc_documents(adapter, store, store_name).await?;
-        println!(
-            "gc {}: deleted {} stale records, kept {}",
-            adapter.source(),
-            report.deleted,
-            report.kept
-        );
-        return Ok(());
-    }
-
-    let bar = std::io::stderr().is_terminal().then(ProgressBar::new_spinner);
-    if let Some(bar) = &bar {
-        bar.set_style(progress_style::bar("cyan"));
-        bar.set_prefix("uploading records");
-    }
-    let on_progress = |done: usize, total: usize| {
-        if let (Some(bar), true) = (&bar, total > 0) {
-            bar.set_length(u64::try_from(total).unwrap_or(u64::MAX));
-            bar.set_position(u64::try_from(done).unwrap_or(u64::MAX));
-        }
-    };
-    let report =
-        search_core::sync_documents(adapter, store, store_name, INDEX_TIMEOUT, on_progress).await?;
-    if let Some(bar) = &bar {
-        bar.finish_and_clear();
-    }
-    println!(
-        "ingest {}: uploaded {}, skipped {}, total {}",
-        adapter.source(),
-        report.uploaded,
-        report.skipped,
-        report.total
-    );
-    Ok(())
 }
 
 async fn run(cli: SemanticArgs) -> anyhow::Result<()> {

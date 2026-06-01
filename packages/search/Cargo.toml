@@ -16,15 +16,12 @@ path = "src/main.rs"
 anstream.workspace = true
 anstyle.workspace = true
 anyhow.workspace = true
-source-claude.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 code-highlight.workspace = true
 dirs.workspace = true
 indicatif.workspace = true
-source-linear.workspace = true
 mixedbread.workspace = true
 progress-style.workspace = true
 search-core.workspace = true
-source-slack.workspace = true
 terminal-theme.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

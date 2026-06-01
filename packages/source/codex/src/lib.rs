@@ -90,8 +90,8 @@ impl CodexHistory {
     }
 
     /// Parse the history log at `path`, resolving `host` (via `gethostname`) and
-    /// `user` (the OS user) automatically. This is the entry point
-    /// `search ingest --source codex <file>` uses.
+    /// `user` (the OS user) automatically. This is the entry point the
+    /// `indexer`'s `--codex-file` (and `--local`) uses.
     ///
     /// # Errors
     /// Returns an error if the host name cannot be resolved, or the file cannot

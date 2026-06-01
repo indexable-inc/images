@@ -68,8 +68,8 @@ impl ClaudeHistoryExport {
     }
 
     /// Open every transcript under `dir`, resolving `host` (via `gethostname`)
-    /// and `user` (the OS user) automatically. This is the entry point
-    /// `search ingest --source claude_history <dir>` uses.
+    /// and `user` (the OS user) automatically. This is the entry point the
+    /// `indexer`'s `--claude-dir` (and `--local`) uses.
     ///
     /// # Errors
     /// Returns an error if the host name cannot be resolved, or a transcript
