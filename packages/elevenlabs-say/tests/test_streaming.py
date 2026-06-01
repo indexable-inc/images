@@ -235,19 +235,42 @@ def test_resolve_voice_id_name_searches_and_maps() -> None:
 
 
 def test_resolve_voice_id_missing_permission_is_actionable() -> None:
-    """A 401 while resolving a name raises a SayError naming voices_read."""
+    """401 and 403 while resolving a name both raise a SayError naming voices_read."""
+
+    for status in (401, 403):
+
+        class FakeVoices:
+            def search(self, search: str) -> object:
+                raise ApiError(status_code=status, body={"detail": "nope"})
+
+        client = type("C", (), {"voices": FakeVoices()})()
+        try:
+            say.resolve_voice_id(client, "George")
+        except say.SayError as exc:
+            assert "voices_read" in str(exc), (status, exc)
+        else:
+            raise AssertionError(f"expected SayError for {status} during resolution")
+
+
+def test_resolve_voice_id_other_api_error_falls_through() -> None:
+    """A non-permission ApiError (e.g. 500) keeps the generic status message.
+
+    Pins the ``in (401, 403)`` branch: an unrelated failure must not be relabeled
+    as a permissions problem.
+    """
 
     class FakeVoices:
         def search(self, search: str) -> object:
-            raise ApiError(status_code=401, body={"detail": "nope"})
+            raise ApiError(status_code=500, body={"detail": "boom"})
 
     client = type("C", (), {"voices": FakeVoices()})()
     try:
         say.resolve_voice_id(client, "George")
     except say.SayError as exc:
-        assert "voices_read" in str(exc)
+        assert "status 500" in str(exc), exc
+        assert "voices_read" not in str(exc), exc
     else:
-        raise AssertionError("expected SayError for a 401 during name resolution")
+        raise AssertionError("expected SayError for a 500 during name resolution")
 
 
 if __name__ == "__main__":
@@ -262,4 +285,5 @@ if __name__ == "__main__":
     test_resolve_voice_id_id_shape_skips_api()
     test_resolve_voice_id_name_searches_and_maps()
     test_resolve_voice_id_missing_permission_is_actionable()
+    test_resolve_voice_id_other_api_error_falls_through()
     print("elevenlabs-say streaming tests passed")
