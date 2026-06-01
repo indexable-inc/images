@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use clap::Parser;
-use search_core::{MixedbreadStore, sync_documents};
+use search_core::MixedbreadStore;
+use sink_mixedbread::sync_documents;
 use source_meta::SourceAdapter;
 
 /// How long to wait for Mixedbread to finish embedding new documents.

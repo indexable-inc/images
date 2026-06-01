@@ -21,6 +21,7 @@ source-atuin.workspace = true
 source-slack.workspace = true
 source-linear.workspace = true
 search-core.workspace = true
+sink-mixedbread.workspace = true
 sink-parquet.workspace = true
 mixedbread.workspace = true
 anyhow.workspace = true
