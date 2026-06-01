@@ -17,7 +17,7 @@ writes parquet caches, findings.json, latest.txt, and report.html.
 
 Schema verified against real transcripts:
   - usage.speed is a categorical label ("fast"), NOT tokens/sec
-  - usage.iterations is a LIST of per-iteration usage structs (count = len)
+  - usage.iterations is treated as a list of per-iteration usage structs (count = len, else 0)
   - per-command wall-clock = tool_result.ts - tool_use.ts, matched by tool_use_id
   - a REAL human prompt is a string-content user entry with a top-level promptId;
     harness-injected user messages have no promptId and must be excluded
@@ -61,9 +61,22 @@ TRUNC = re.compile(r"\[truncated\]")
 
 def parse_ts(s):
     try:
-        return datetime.fromisoformat((s or "").replace("Z", "+00:00"))
+        dt = datetime.fromisoformat((s or "").replace("Z", "+00:00"))
+        # Force timezone-aware (UTC) so naive + aware timestamps never mix in a
+        # subtraction (a single naive transcript ts would otherwise TypeError).
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
     except Exception:
         return None
+
+
+def _row_schema(pl):
+    # Explicit schema so an empty scan window still yields a frame WITH columns
+    # (a schema-less pl.DataFrame([]) has no "kind" column and later filters crash).
+    return {
+        "session": pl.String, "ts": pl.Datetime("us", "UTC"), "kind": pl.String,
+        "model": pl.String, "speed": pl.String, "n_iter": pl.Int64, "out_tok": pl.Int64,
+        "n_tooluse": pl.Int64, "n_think": pl.Int64, "is_sidechain": pl.Boolean,
+    }
 
 
 def is_real_prompt(r, content) -> bool:
@@ -121,57 +134,59 @@ def build_frames(days: int = 45, full: bool = False):
         for l in lines:
             if not l.strip():
                 continue
+            # One malformed/unexpected record must not abort the whole scan.
             try:
                 r = json.loads(l)
+                t = r.get("type")
+                m = r.get("message") if isinstance(r.get("message"), dict) else {}
+                ts = parse_ts(r.get("timestamp", ""))
+                content = m.get("content")
+                if t == "assistant":
+                    blocks = content if isinstance(content, list) else []
+                    tu = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
+                    th = sum(1 for b in blocks if isinstance(b, dict) and b.get("type") == "thinking")
+                    u = m.get("usage") or {}
+                    it = u.get("iterations")
+                    run_tools += len(tu)
+                    rows.append(dict(
+                        session=sess, ts=ts, kind="assistant", model=m.get("model"),
+                        speed=u.get("speed"), n_iter=(len(it) if isinstance(it, list) else 0),
+                        out_tok=u.get("output_tokens"), n_tooluse=len(tu), n_think=th,
+                        is_sidechain=bool(r.get("isSidechain")),
+                    ))
+                    for b in tu:
+                        inp = b.get("input") or {}
+                        label = (inp.get("command") or inp.get("file_path") or inp.get("pattern")
+                                 or inp.get("query") or inp.get("description") or "")
+                        tool_calls[b.get("id")] = (ts, b.get("name"), str(label)[:200], sess)
+                elif t == "user":
+                    blocks = content if isinstance(content, list) else None
+                    if blocks:
+                        for b in blocks:
+                            if not (isinstance(b, dict) and b.get("type") == "tool_result"):
+                                continue
+                            tid = b.get("tool_use_id")
+                            size = len(_cstr(b.get("content")))
+                            err = bool(b.get("is_error"))
+                            ts0, name, label, _ = tool_calls.get(tid, (None, "?", "", sess))
+                            tool_results.append((sess, name, label, size, err))
+                            if err:
+                                run_errs += 1
+                            if name == "Bash" and ts is not None and ts0 is not None:
+                                bash_done.append((sess, label, (ts - ts0).total_seconds(), err))
+                    elif is_real_prompt(r, content):
+                        if run_tools >= 8 and run_errs >= 1:
+                            chains.append(dict(session=sess, tools=run_tools, errors=run_errs,
+                                               next_prompt=content[:160]))
+                        if CORRECTION.search(content) and run_tools >= 1:
+                            corrections.append(dict(session=sess, ts=str(ts), prior_tools=run_tools,
+                                                    prior_errors=run_errs, prompt=content[:200]))
+                        run_tools = run_errs = 0
             except Exception:
                 continue
-            t = r.get("type")
-            m = r.get("message") if isinstance(r.get("message"), dict) else {}
-            ts = parse_ts(r.get("timestamp", ""))
-            content = m.get("content")
-            if t == "assistant":
-                blocks = content if isinstance(content, list) else []
-                tu = [b for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
-                th = sum(1 for b in blocks if isinstance(b, dict) and b.get("type") == "thinking")
-                u = m.get("usage") or {}
-                run_tools += len(tu)
-                rows.append(dict(
-                    session=sess, ts=ts, kind="assistant", model=m.get("model"),
-                    speed=u.get("speed"), n_iter=len(u.get("iterations") or []),
-                    out_tok=u.get("output_tokens"), n_tooluse=len(tu), n_think=th,
-                    is_sidechain=bool(r.get("isSidechain")),
-                ))
-                for b in tu:
-                    inp = b.get("input") or {}
-                    label = (inp.get("command") or inp.get("file_path") or inp.get("pattern")
-                             or inp.get("query") or inp.get("description") or "")
-                    tool_calls[b.get("id")] = (ts, b.get("name"), str(label)[:200], sess)
-            elif t == "user":
-                blocks = content if isinstance(content, list) else None
-                if blocks:
-                    for b in blocks:
-                        if not (isinstance(b, dict) and b.get("type") == "tool_result"):
-                            continue
-                        tid = b.get("tool_use_id")
-                        size = len(_cstr(b.get("content")))
-                        err = bool(b.get("is_error"))
-                        ts0, name, label, _ = tool_calls.get(tid, (None, "?", "", sess))
-                        tool_results.append((sess, name, label, size, err))
-                        if err:
-                            run_errs += 1
-                        if name == "Bash" and ts is not None and ts0 is not None:
-                            bash_done.append((sess, label, (ts - ts0).total_seconds(), err))
-                elif is_real_prompt(r, content):
-                    if run_tools >= 8 and run_errs >= 1:
-                        chains.append(dict(session=sess, tools=run_tools, errors=run_errs,
-                                           next_prompt=content[:160]))
-                    if CORRECTION.search(content) and run_tools >= 1:
-                        corrections.append(dict(session=sess, ts=str(ts), prior_tools=run_tools,
-                                                prior_errors=run_errs, prompt=content[:200]))
-                    run_tools = run_errs = 0
 
     return dict(
-        df=pl.DataFrame(rows),
+        df=pl.DataFrame(rows, schema=_row_schema(pl)),
         bash=pl.DataFrame(bash_done, schema=["session", "cmd", "seconds", "is_error"], orient="row"),
         tools=pl.DataFrame(tool_results, schema=["session", "tool", "label", "size", "is_error"], orient="row"),
         corrections=corrections, chains=chains,

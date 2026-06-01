@@ -119,10 +119,18 @@ let
     runtimeInputs = [
       pkgs.uv
       pkgs.coreutils
+      pkgs.perl # flock(2) for the non-overlap guard (no flock(1) on macOS)
     ];
     text = ''
       OUT="$HOME/.claude/optimize"
       mkdir -p "$OUT"
+      # Non-overlap guard: if a prior scan is still running, skip this fire. perl
+      # takes an exclusive non-blocking flock on fd 9, which the shell keeps open
+      # for the whole run, so the lock auto-releases on exit or crash. Prevents two
+      # uv processes racing the parquet/HTML writes when a slow scan overruns the
+      # interval (the old personal launchd agent had this via lockArgs).
+      exec 9>"$OUT/.scan.lock"
+      perl -e 'use Fcntl ":flock"; flock(STDIN, LOCK_EX | LOCK_NB) or exit 1' <&9 || exit 0
       uv run --with polars ${../../skills/optimize/assets/build_history_df.py} \
         --days 60 --out "$OUT" > "$OUT/latest.txt" 2>&1
       cp "$OUT/latest.txt" "$OUT/report-$(date +%F).txt"
