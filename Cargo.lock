@@ -5698,6 +5698,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sink-parquet"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "object_store",
+ "parquet",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu 0.9.1",
+ "source-meta",
+ "tokio",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
