@@ -1,3 +1,4 @@
-ruleDirs: ["./nix-rules"]
+ruleDirs: ["./nix-rules", "./rust-rules"]
 testConfigs:
   - testDir: ./nix-rules-tests
+  - testDir: ./rust-rules-tests
