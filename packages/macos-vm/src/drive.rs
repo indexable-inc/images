@@ -10,6 +10,8 @@
 //! - `type <text>` type the rest of the line as characters
 //! - `click <fx> <fy>` left-click at fraction `(fx, fy)` of the display (top-left)
 //! - `move <fx> <fy>` move the pointer there without clicking (hover)
+//! - `scroll <fx> <fy> <dy_px> [count]` move the pointer there, then post `count`
+//!   vertical pixel-scroll events of `dy_px` (drives a scroll-drag)
 //! - `cursor` report the last pointer fraction set by `click`/`move`
 //! - `size` report the captured framebuffer size in pixels (`ok size <w> <h>`)
 //! - `cursor-show <on|off>` draw a marker at the pointer in subsequent `shot`s
@@ -94,7 +96,7 @@ pub(crate) fn drive_view(
     let view_ptr = Retained::into_raw(view) as usize;
     eprintln!(
         "macos-vm: driving guest; stdin commands: \
-         key/down/up/type/click/move/cursor/size/cursor-show/wait/shot/quit"
+         key/down/up/type/click/move/scroll/cursor/size/cursor-show/wait/shot/quit"
     );
     // Stream the guest screen to the local dashboard so the session shows up on
     // the canvas automatically, the same way a terminal producer does.
@@ -372,6 +374,25 @@ fn execute(view_ptr: usize, trimmed: &str, state: &mut State) -> String {
             };
             pointer_action(view_ptr, fx, fy, command == "click", state);
             format!("ok {command} {fx} {fy}")
+        }
+        "scroll" => {
+            // scroll <fx> <fy> <dy_px> [count]: move the pointer over the target
+            // (the absolute device routes scroll to whatever is under it), then post
+            // `count` vertical pixel-scroll events of `dy_px`. Drives a scroll-drag.
+            let (fx, fy) = match parse_fraction_pair(&mut parts, "scroll") {
+                Ok(pair) => pair,
+                Err(message) => return message,
+            };
+            let Some(Ok(dy)) = parts.next().map(str::parse::<f64>) else {
+                return "err scroll needs <fx> <fy> <dy_px> [count]".to_owned();
+            };
+            let count: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+            pointer_action(view_ptr, fx, fy, false, state);
+            for _ in 0..count {
+                on_main(view_ptr, move |view| input::scroll(view, 0.0, dy));
+                std::thread::sleep(KEY_GAP_AFTER);
+            }
+            format!("ok scroll {fx} {fy} {dy} x{count}")
         }
         "cursor" => match state.last_cursor {
             Some((fx, fy)) => format!("ok cursor {fx} {fy}"),
