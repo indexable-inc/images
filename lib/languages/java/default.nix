@@ -203,7 +203,7 @@ in
       headless major pinned in [`../jvm-defaults.nix`](../jvm-defaults.nix), the same JDK every other helper in this namespace
       assumes.
     - `version`: required, Gradle major as a string (`"7" | "8" |
-      "9"`). `"9"` matches `lib/build-gradle-fat-jar.nix`.
+      "9"`). `"9"` matches `lib/build/gradle-fat-jar.nix`.
   */
   gradle =
     pkgs:

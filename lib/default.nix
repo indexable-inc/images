@@ -27,7 +27,7 @@ let
     in
     entry.path;
 
-  inherit (import ./writers.nix { inherit lib; })
+  inherit (import ./util/writers.nix { inherit lib; })
     writePythonApplication
     writeNushellApplication
     writeProcessComposeApplication
@@ -66,12 +66,12 @@ let
   # outside `modules/` on purpose: it is a home-manager module, not a NixOS
   # module, so it must not be swept into `nixosModules` above. Exposed to
   # consumers as `homeModules.portable-services` from the flake.
-  portableServices = import ./portable-services.nix { inherit lib; };
+  portableServices = import ./services/portable-services.nix { inherit lib; };
 
   # Declarative-but-writable JSON config files (last-applied 3-way merge for
   # files an app rewrites at runtime). Also a home-manager module, not a NixOS
   # one, so it stays outside `modules/`. Exposed as `homeModules.mutable-json`.
-  mutableJson = import ./mutable-json.nix { inherit lib; };
+  mutableJson = import ./services/mutable-json.nix { inherit lib; };
 
   # Flat list of module paths from the auto-discovered registry under
   # `modules/`. Pulled in unconditionally so every option is in scope; each
@@ -80,30 +80,30 @@ let
 
   bunLockFor =
     pkgs:
-    import ./bun-lock.nix {
+    import ./build/bun-lock.nix {
       inherit lib pkgs;
     };
-  buildJsSite = import ./build-js-site.nix {
+  buildJsSite = import ./build/js-site.nix {
     inherit bunLockFor errors;
   };
-  buildSvelteSite = import ./build-svelte-site.nix {
+  buildSvelteSite = import ./build/svelte-site.nix {
     inherit bunLockFor errors writeNushellApplication;
   };
-  buildNpmVitest = import ./build-npm-vitest.nix;
-  buildZigPackage = import ./build-zig-package.nix { };
-  buildLibghosttyVt = import ./libghostty-vt.nix { inherit lib writeNushellApplication; };
+  buildNpmVitest = import ./build/npm-vitest.nix;
+  buildZigPackage = import ./build/zig-package.nix { };
+  buildLibghosttyVt = import ./build/libghostty-vt.nix { inherit lib writeNushellApplication; };
   uvLockFor =
     pkgs:
-    import ./uv-lock.nix {
+    import ./build/uv-lock.nix {
       inherit lib pkgs;
     };
-  buildUvApplication = import ./build-uv-application.nix { inherit uvLockFor; };
-  buildGradleFatJar = import ./build-gradle-fat-jar.nix { inherit lib; };
-  secrets = import ./secrets.nix {
+  buildUvApplication = import ./build/uv-application.nix { inherit uvLockFor; };
+  buildGradleFatJar = import ./build/gradle-fat-jar.nix { inherit lib; };
+  secrets = import ./util/secrets.nix {
     inherit lib pkgs writeNushellApplication;
   };
-  agentContext = import ./agent-context.nix { inherit lib paths; };
-  skills = import ./skills.nix { inherit lib paths; };
+  agentContext = import ./agent-context { inherit lib paths; };
+  skills = import ./agent-context/skills.nix { inherit lib paths; };
   # Shared JetBrains Islands palette (both variants), the single source of truth
   # for syntax color across the repo: the code-highlight crate embeds this JSON
   # for the search `-c` output, and the base profile generates its
@@ -129,7 +129,7 @@ let
     zig = import ./languages/zig.nix { inherit errors; };
   };
   inherit
-    (import ./rust-tooling.nix {
+    (import ./rust/tooling.nix {
       inherit
         lib
         packagePath
@@ -147,20 +147,20 @@ let
   cargoUnit = cargoUnitFor pkgs;
   goUnitFor =
     pkgs:
-    import ./go-unit.nix {
+    import ./build/go-unit.nix {
       inherit lib pkgs;
       inherit (languages) go;
     };
   goUnit = goUnitFor pkgs;
 
-  systemdHardening = import ./systemd-hardening.nix;
+  systemdHardening = import ./services/systemd-hardening.nix;
 
   /**
     Helpers that throw with a fixable error message instead of a deep-eval
     crash. See [`lib/errors.nix`](lib/errors.nix) for the full surface:
     `assertEnum`, `requireArg`, `requireAttr`.
   */
-  errors = import ./errors.nix { inherit lib; };
+  errors = import ./util/errors.nix { inherit lib; };
 
   /**
     Recursive attrset merge with two collision policies (`strict` throws,
@@ -168,7 +168,7 @@ let
     for hand-rolled deep-merge and the patterns the `no-recursive-update`
     rule flags. See [`lib/deep-merge.nix`](lib/deep-merge.nix).
   */
-  deepMerge = import ./deep-merge.nix { inherit lib; };
+  deepMerge = import ./util/deep-merge.nix { inherit lib; };
 
   /**
     Utilities for option values that are later joined under a runtime
@@ -180,9 +180,9 @@ let
     `shellParent` return shell snippets for joining a root expression such as
     `$out` with a validated relative path.
   */
-  relativePath = import ./relative-path.nix { inherit lib; };
+  relativePath = import ./util/relative-path.nix { inherit lib; };
 
-  mkMinecraftLoader = import ./minecraft-loader.nix;
+  mkMinecraftLoader = import ./minecraft/loader.nix;
 
   /**
     Declare a continuous-benchmark suite against the `indexbench` CLI.
@@ -202,7 +202,7 @@ let
 
     See [`lib/bench.nix`](lib/bench.nix) for the argument shape.
   */
-  mkBenchSuite = import ./bench.nix {
+  mkBenchSuite = import ./util/bench.nix {
     inherit lib writeNushellApplication;
   };
 
@@ -237,7 +237,7 @@ let
 
     Returns an attrset with `type` and `generate`, matching `pkgs.formats.*`.
   */
-  mkMinecraftNbtFormat = import ./minecraft-nbt-format.nix {
+  mkMinecraftNbtFormat = import ./minecraft/nbt-format.nix {
     inherit lib buildIxRustTool packagePath;
   };
 
@@ -252,7 +252,7 @@ let
   */
   mkMinecraftSyncManaged =
     args:
-    import ./minecraft-sync-managed.nix (
+    import ./minecraft/sync-managed.nix (
       {
         package = buildIxRustTool pkgs (packagePath "minecraft-sync-managed");
         inherit writeNushellApplication;
@@ -265,7 +265,7 @@ let
     Presets must consume entries through this set (or one of the module
     options it seeds) rather than inlining URLs and hashes.
   */
-  artifacts = import ./artifacts.nix { inherit lib pkgs paths; };
+  artifacts = import ./util/artifacts.nix { inherit lib pkgs paths; };
 
   /**
     Flake-output-only repo packages, callPackage-style.
@@ -301,7 +301,7 @@ let
     caller's package set. The default `rustWorkspace` uses the repo's
     `x86_64-linux` package set for image and module evaluation.
   */
-  rustWorkspaceFor = import ./rust-workspace.nix {
+  rustWorkspaceFor = import ./rust/workspace.nix {
     inherit
       lib
       paths
@@ -321,14 +321,14 @@ let
     function `{ pkgs }: derivation`; override it to supply your own SDK.
     See [`lib/macos-sdk.nix`](lib/macos-sdk.nix).
   */
-  macosSdk = import ./macos-sdk.nix;
+  macosSdk = import ./darwin/macos-sdk.nix;
 
   /**
     zig + macOS SDK cross toolchain. `{ appleSdk, lib, pkgs, target }` returns
     `{ env, runtimeInputs, rustcArgsForPlatform }` consumed by
     `rustWorkspace.unitsFor`. See [`lib/apple-sdk-toolchain.nix`](lib/apple-sdk-toolchain.nix).
   */
-  appleSdkToolchain = import ./apple-sdk-toolchain.nix;
+  appleSdkToolchain = import ./darwin/apple-sdk-toolchain.nix;
 
   /**
     Helper surface shared by both the per-module `specialArgs.ix`
@@ -380,7 +380,7 @@ let
   };
 
   inherit
-    (import ./images.nix {
+    (import ./image {
       inherit
         lib
         nixpkgs

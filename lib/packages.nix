@@ -36,7 +36,7 @@ let
     # `passthru.updateScript` without re-threading `ix` through callPackage.
     writeNushellApplication = ixForPackages.writeNushellApplication pkgs;
   };
-  inherit (import ./deep-merge.nix { inherit lib; }) strictList;
+  inherit (import ./util/deep-merge.nix { inherit lib; }) strictList;
   buildEntry =
     entry:
     let

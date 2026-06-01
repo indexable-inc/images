@@ -209,7 +209,7 @@ let
   };
 
   # Always-on instruction documents. Forcing either string evaluates the
-  # `agent-context` always-on cap assertion (see lib/agent-context.nix).
+  # `agent-context` always-on cap assertion (see lib/agent-context/default.nix).
   agentContextClaudeMd = pkgs.writeText "CLAUDE.md" ix.agentContext.alwaysDoc;
   agentContextCodexMd = pkgs.writeText "AGENTS.md" ix.agentContext.alwaysDoc;
 
@@ -470,7 +470,7 @@ let
     ) exampleFleets;
 
   healthChecks =
-    import ./health-checks.nix
+    import ./image/health-checks.nix
       {
         inherit lib pkgs;
         inherit (ix) writeNushellApplication;

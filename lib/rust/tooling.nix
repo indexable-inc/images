@@ -22,7 +22,7 @@ let
     };
   rustFor =
     pkgs:
-    import ./rust.nix {
+    import ./build.nix {
       inherit lib pkgs;
       # llm-clippy bootstraps before cargoUnit / rustWorkspace exist, so the
       # `ix` closure it receives carries only `buildRustPackage`.

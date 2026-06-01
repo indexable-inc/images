@@ -1,6 +1,6 @@
 # Base runtime profile.
 #
-# Auto-enabled by `lib/ix-oci-layer.nix`. Ships cross-cutting CLI that should
+# Auto-enabled by `lib/image/oci-layer.nix`. Ships cross-cutting CLI that should
 # be available on every VM for debugging and introspection. Image-specific
 # runtime dependencies still belong in the image or service that needs them.
 {
@@ -376,7 +376,7 @@ in
     # zsh and fish get their NixOS modules so /etc/shells registration
     # and system-wide completion paths are wired without per-image
     # setup. Nushell is the platform default user shell (see
-    # lib/ix-platform.nix) and lands as the login shell directly,
+    # lib/image/platform.nix) and lands as the login shell directly,
     # since Home Manager owns its config files via the root attrset.
     programs = {
       zsh.enable = true;

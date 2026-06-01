@@ -17,7 +17,7 @@
   build instead of silently overflowing Claude's per-value context limit.
 */
 let
-  parseFrontmatter = import ./agent-context/frontmatter.nix { inherit lib; };
+  parseFrontmatter = import ./frontmatter.nix { inherit lib; };
 
   sectionsDir = paths.agentContext + "/sections";
 

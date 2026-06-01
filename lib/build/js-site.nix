@@ -13,7 +13,7 @@
   source-only changes do not reinstall.
 
   For a site that also needs a static preview server or a checkout dev server,
-  use [`ix.buildSvelteSite`](build-svelte-site.nix), which wraps this same
+  use [`ix.buildSvelteSite`](svelte-site.nix), which wraps this same
   package-manager branching with those extra surfaces.
 
   Arguments:

@@ -27,7 +27,7 @@ let
     mkOption
     optionalAttrs
     ;
-  inherit (import ./deep-merge.nix { inherit lib; }) rhs;
+  inherit (import ../util/deep-merge.nix { inherit lib; }) rhs;
 
   /**
     Submodule type for a single portable service.

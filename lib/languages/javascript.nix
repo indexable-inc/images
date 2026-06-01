@@ -59,7 +59,7 @@ in
 
     Single binary; nixpkgs ships exactly one `pkgs.bun`, so there is no
     version dimension to validate. Bun is also a package manager: the
-    repo's `lib/build-js-site.nix` already consumes it for static-site
+    repo's `lib/build/js-site.nix` already consumes it for static-site
     builds; this helper exposes the same binary for runtime images that
     run a Bun server.
   */

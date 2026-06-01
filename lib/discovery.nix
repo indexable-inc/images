@@ -7,7 +7,7 @@
   ixReturn,
 }:
 let
-  inherit (import ./deep-merge.nix { inherit lib; }) strictList;
+  inherit (import ./util/deep-merge.nix { inherit lib; }) strictList;
 
   listHasPrefix =
     prefix: list:

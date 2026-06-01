@@ -282,7 +282,7 @@ let
   # at build time, which the upstream `pkgs.writers.writePython3` path did not.
   replaceWorkspaceValues = writePythonApplication {
     name = "replace-workspace-values";
-    src = ./rust-replace-workspace-values.py;
+    src = ./replace-workspace-values.py;
     python = pkgs.python314.withPackages (
       ps:
       builtins.attrValues {
