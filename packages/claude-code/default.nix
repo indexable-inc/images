@@ -56,11 +56,17 @@ let
 
   # Settings-key defaults that have no env knob, shipped as a JSON the wrapper
   # injects via `--settings`. The package wraps the binary, so it can carry env
-  # vars and CLI flags but not a settings.json *key* directly; `--settings` adds
-  # a `flagSettings` source that MERGES per-key with the user's settings
-  # (precedence: managed > --settings > local > project > user; arrays concat).
-  # So these are fleet defaults that override a user's value but can still be
-  # overridden by managed settings, and they leave every other user key intact.
+  # vars and CLI flags but not a settings.json *key* directly. `--settings` adds
+  # a `flagSettings` layer that merges per-key with the other settings sources
+  # (precedence: managed > flagSettings > local > project > user; arrays concat),
+  # so it overrides a user's settings.json value but leaves every other key
+  # intact, and managed settings can still override it.
+  #
+  # IMPORTANT: between two `--settings` *flags* the CLI is first-wins (they do
+  # NOT merge with each other), so this is injected with `--append-flags` (last
+  # in argv): a user who passes their own `--settings` on the CLI wins (theirs
+  # comes first), and ours applies only when they pass none. `--add-flags` would
+  # prepend ours and silently shadow a user's `--settings`.
   #   cleanupPeriodDays: keep transcripts + the wrapper's --debug logs ~1yr for
   #     the optimize analysis and troubleshooting (CLI default 30).
   settingsDefaults = {
@@ -202,7 +208,7 @@ stdenv.mkDerivation {
     makeBinaryWrapper "$helper" $out/bin/${binName} \
       --inherit-argv0 \
       --add-flags --debug \
-      --add-flags "--settings ${settingsDefaultsFile}" \
+      --append-flags "--settings ${settingsDefaultsFile}" \
       --set DISABLE_AUTOUPDATER 1 \
       --set DISABLE_INSTALLATION_CHECKS 1 \
       --set USE_BUILTIN_RIPGREP 0 \
