@@ -247,7 +247,7 @@ in
       description = "Velocity proxy jar.";
     };
 
-    javaPackage = mkPackageOption pkgs "temurin-jre-bin-25" {
+    javaPackage = mkPackageOption pkgs "ixDefaultJre" {
       extraDescription = "Used to run Velocity.";
     };
 

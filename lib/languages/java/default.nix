@@ -3,6 +3,8 @@
   lib,
 }:
 let
+  defaultJvmVersion = import ../jvm-defaults.nix;
+
   validDistributions = [
     "openjdk"
     "temurin"
@@ -60,14 +62,14 @@ let
     Pulls from the same table as the `jdk` helper so a caller that
     overrides nothing gets one consistent JDK across the toolchain.
 
-    Hard-coded to OpenJDK 25 headless: that is the current LTS (released
-    Sep 2025) and it matches `ix.profiles.jvm`'s `temurin-jre-bin-25`
-    default plus every JVM service module in the repo, so an image
-    resolving `maven` and `gradle` without overriding does not pick up
-    a second JDK store path on top of the runtime. Pass `jdk = ...`
-    explicitly when a tool needs a different runtime.
+    Tracks the version pinned in [`../jvm-defaults.nix`](../jvm-defaults.nix),
+    which `ix.languages.scala`, `ix.profiles.jvm`, and the JVM service
+    modules also read. An image resolving `maven` and `gradle` without
+    overriding shares that one store path with the runtime JRE instead
+    of pulling a second JDK closure. Pass `jdk = ...` explicitly when a
+    tool needs a different runtime.
   */
-  defaultJdkFor = pkgs: (jdksFor pkgs).openjdk."25";
+  defaultJdkFor = pkgs: (jdksFor pkgs).openjdk.${defaultJvmVersion};
 
   /**
     Per-major-version Gradle attribute mapping. nixpkgs also exposes a
@@ -160,8 +162,8 @@ in
 
     Arguments:
     - `pkgs`: nixpkgs instance the Maven and JDK packages come from.
-    - `jdk`: optional resolved JDK package. Defaults to OpenJDK 25
-      headless, matching `ix.profiles.jvm` and the rest of this
+    - `jdk`: optional resolved JDK package. Defaults to the OpenJDK
+      headless major pinned in [`../jvm-defaults.nix`](../jvm-defaults.nix), matching `ix.profiles.jvm` and the rest of this
       namespace.
 
     Example:
@@ -197,8 +199,8 @@ in
 
     Arguments:
     - `pkgs`: nixpkgs instance the Gradle and JDK packages come from.
-    - `jdk`: optional resolved JDK package. Defaults to OpenJDK 25
-      headless, the same JDK every other helper in this namespace
+    - `jdk`: optional resolved JDK package. Defaults to the OpenJDK
+      headless major pinned in [`../jvm-defaults.nix`](../jvm-defaults.nix), the same JDK every other helper in this namespace
       assumes.
     - `version`: required, Gradle major as a string (`"7" | "8" |
       "9"`). `"9"` matches `lib/build-gradle-fat-jar.nix`.

@@ -20,15 +20,16 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.temurin-jre-bin-25;
-      defaultText = lib.literalExpression "pkgs.temurin-jre-bin-25";
+      default = pkgs.ixDefaultJre;
+      defaultText = lib.literalExpression "pkgs.ixDefaultJre";
       description = ''
         JRE package added to `environment.systemPackages` and pointed at by
-        `JAVA_HOME`. Defaults to Temurin 25 because that is the binary the
-        existing Minecraft, Minestom, and Velocity services already pin;
-        keeping the profile default aligned means an image that turns on the
-        profile and an image that hardcoded the same JRE end up with one
-        store path in the closure instead of two.
+        `JAVA_HOME`. Defaults to the Temurin JRE pinned in
+        `lib/languages/jvm-defaults.nix`, the same major the Minecraft,
+        Minestom, and Velocity service modules read off `pkgs.ixDefaultJre`. An
+        image that turns on the profile and a service that takes the
+        same default end up with one store path in the closure instead
+        of two.
 
         Override with another Temurin major or with the OpenJDK headless JDK
         when an image needs a TCK build or `javac` at runtime. For a jlink

@@ -17,6 +17,6 @@ ix.mkMinecraftLoader {
   # classes through the Java agent, but it does not dynamically load new mods or
   # mutate frozen registries.
   configFragment = _: {
-    services.minecraft.javaPackage = lib.mkDefault pkgs.temurin-jre-bin-25;
+    services.minecraft.javaPackage = lib.mkDefault pkgs.ixDefaultJre;
   };
 }

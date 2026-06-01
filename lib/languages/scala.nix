@@ -1,5 +1,7 @@
 { errors }:
 let
+  defaultJvmVersion = import ./jvm-defaults.nix;
+
   validVersions = [
     "2"
     "3"
@@ -19,16 +21,13 @@ let
 
   /**
     Default JDK paired with Scala 2/3 when the caller does not pass
-    `jdk`. OpenJDK 25 headless to match `ix.languages.java`'s
-    `defaultJdkFor` and `ix.profiles.jvm`'s `temurin-jre-bin-25`, so a
+    `jdk`. Tracks the major pinned in
+    [`./jvm-defaults.nix`](./jvm-defaults.nix), shared with
+    `ix.languages.java`'s `defaultJdkFor` and `ix.profiles.jvm`, so a
     service that resolves the Scala compiler and a Java runtime
     without overriding pulls one JDK into the closure rather than two.
-
-    Hardcoded rather than imported from the java namespace to keep this
-    file independent; if the java default moves, this constant moves
-    with it (see [`./java/default.nix`](./java/default.nix)).
   */
-  defaultJdkFor = pkgs: pkgs.jdk25_headless;
+  defaultJdkFor = pkgs: pkgs."jdk${defaultJvmVersion}_headless";
 in
 {
   /**
@@ -45,7 +44,8 @@ in
     - `version`: required, Scala major (`"2" | "3"`). Pick `"2"` only
       when an upstream library has not migrated; the long-term
       destination is `"3"`.
-    - `jdk`: optional resolved JDK. Defaults to OpenJDK 21 headless.
+    - `jdk`: optional resolved JDK. Defaults to the OpenJDK headless
+      major pinned in [`./jvm-defaults.nix`](./jvm-defaults.nix).
 
     Example:
     ```nix
