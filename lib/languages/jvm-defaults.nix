@@ -5,8 +5,7 @@
 # OpenJDK 25 is the current LTS (released Sep 2025) and matches the
 # JREs the Minecraft, Minestom, and Velocity services pin.
 #
-# Two consumers read this file: `lib/languages/{java,scala}` (which
-# receive `pkgs` from the caller and may run against a plain nixpkgs)
-# and `lib/overlay.nix` (which exposes `pkgs.ixDefaultJre` to NixOS
-# modules). Both reach this same string.
+# Consumers read this file directly while resolving the package from their
+# caller-supplied `pkgs`, so exported NixOS modules still work with a plain
+# nixpkgs package set that has not installed the repo overlay.
 "25"

@@ -39,9 +39,8 @@ lib.listToAttrs (
 // {
   symphony-room-server = symphony.packages."${packageSystem}".room-server;
 
-  # Default Temurin JRE for NixOS modules. The major lives in
-  # `lib/languages/jvm-defaults.nix`, shared with `ix.languages.{java,scala}`.
-  # Modules read this attr instead of naming `temurin-jre-bin-N` so a
-  # version bump is a one-line change in `jvm-defaults.nix`.
+  # Default Temurin JRE for repo-owned package sets. The major lives in
+  # `lib/languages/jvm-defaults.nix`, shared with `ix.languages.{java,scala}`
+  # and exported NixOS modules.
   ixDefaultJre = final."temurin-jre-bin-${import ./languages/jvm-defaults.nix}";
 }

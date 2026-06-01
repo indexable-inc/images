@@ -16,6 +16,7 @@ let
     ;
 
   cfg = config.services.velocity;
+  defaultJvmVersion = import ../../../lib/languages/jvm-defaults.nix;
   yourkit = ix.languages.java.yourkit;
   dataDir = "/var/lib/velocity";
   java = lib.getExe' cfg.javaPackage "java";
@@ -247,7 +248,7 @@ in
       description = "Velocity proxy jar.";
     };
 
-    javaPackage = mkPackageOption pkgs "ixDefaultJre" {
+    javaPackage = mkPackageOption pkgs "temurin-jre-bin-${defaultJvmVersion}" {
       extraDescription = "Used to run Velocity.";
     };
 

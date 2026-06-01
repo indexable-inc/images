@@ -13,6 +13,8 @@
 }:
 let
   cfg = config.ix.profiles.jvm;
+  defaultJvmVersion = import ../../../lib/languages/jvm-defaults.nix;
+  defaultJrePackageName = "temurin-jre-bin-${defaultJvmVersion}";
 in
 {
   options.ix.profiles.jvm = {
@@ -20,16 +22,15 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.ixDefaultJre;
-      defaultText = lib.literalExpression "pkgs.ixDefaultJre";
+      default = pkgs."${defaultJrePackageName}";
+      defaultText = lib.literalExpression ''pkgs."${defaultJrePackageName}"'';
       description = ''
         JRE package added to `environment.systemPackages` and pointed at by
         `JAVA_HOME`. Defaults to the Temurin JRE pinned in
         `lib/languages/jvm-defaults.nix`, the same major the Minecraft,
-        Minestom, and Velocity service modules read off `pkgs.ixDefaultJre`. An
-        image that turns on the profile and a service that takes the
-        same default end up with one store path in the closure instead
-        of two.
+        Minestom, and Velocity service modules use by default. An image
+        that turns on the profile and a service that takes the same
+        default end up with one store path in the closure instead of two.
 
         Override with another Temurin major or with the OpenJDK headless JDK
         when an image needs a TCK build or `javac` at runtime. For a jlink

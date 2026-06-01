@@ -18,6 +18,7 @@ let
     types
     ;
   cfg = config.services.minestom;
+  defaultJvmVersion = import ../../../lib/languages/jvm-defaults.nix;
   yourkit = ix.languages.java.yourkit;
 
   dataDir = "/var/lib/minestom";
@@ -48,7 +49,7 @@ in
       default = 85;
     };
 
-    javaPackage = mkPackageOption pkgs "ixDefaultJre" { };
+    javaPackage = mkPackageOption pkgs "temurin-jre-bin-${defaultJvmVersion}" { };
 
     jvmFlags = mkOption {
       type = types.listOf types.str;
@@ -57,8 +58,8 @@ in
         # G1 pause near MaxGCPauseMillis (~200 ms in Aikar's flags used by
         # the vanilla Minecraft module) drops multiple 20 TPS server ticks.
         # `+UseZGC` selects generational ZGC by default since JDK 23 and
-        # is the only ZGC mode left on the JDK 24+ JRE this module
-        # defaults to via `pkgs.ixDefaultJre`.
+        # is the only ZGC mode left on the JDK 24+ Temurin JRE this module
+        # defaults to.
         #   JEP 474 (default mode):   https://openjdk.org/jeps/474
         #   JEP 490 (mode removed):   https://openjdk.org/jeps/490
         #   Oracle GC tuning (JDK 25): https://docs.oracle.com/en/java/javase/25/gctuning/z-garbage-collector.html

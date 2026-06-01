@@ -9,6 +9,9 @@
   pkgs,
   ...
 }:
+let
+  defaultJvmVersion = import ../../../../lib/languages/jvm-defaults.nix;
+in
 ix.mkMinecraftLoader {
   inherit ix config lib;
   name = "fabric";
@@ -17,6 +20,6 @@ ix.mkMinecraftLoader {
   # classes through the Java agent, but it does not dynamically load new mods or
   # mutate frozen registries.
   configFragment = _: {
-    services.minecraft.javaPackage = lib.mkDefault pkgs.ixDefaultJre;
+    services.minecraft.javaPackage = lib.mkDefault pkgs."temurin-jre-bin-${defaultJvmVersion}";
   };
 }

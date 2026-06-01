@@ -25,6 +25,7 @@ let
     types
     ;
   cfg = config.services.minecraft;
+  defaultJvmVersion = import ../../../lib/languages/jvm-defaults.nix;
 
   dataDir = "/var/lib/minecraft";
   managedRoot = "/etc/minecraft";
@@ -912,7 +913,7 @@ in
       };
     };
 
-    javaPackage = mkPackageOption pkgs "ixDefaultJre" { };
+    javaPackage = mkPackageOption pkgs "temurin-jre-bin-${defaultJvmVersion}" { };
 
     jvmFlags = mkOption {
       type = types.listOf types.str;

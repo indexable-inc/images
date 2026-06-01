@@ -32,6 +32,20 @@ let
   # Thin wrapper to keep call sites as plain lists; delegates to ix.evalImageConfig
   # so tests exercise the same evaluation path as production image builds.
   evalConfig = modules: ix.evalImageConfig { inherit modules; };
+  plainPkgs = import nixpkgs {
+    inherit (pkgs.stdenv.hostPlatform) system;
+  };
+  standaloneJvmProfile = lib.nixosSystem {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    modules = [
+      ../modules/profiles/jvm
+      {
+        nixpkgs.pkgs = plainPkgs;
+        system.stateVersion = "25.05";
+        ix.profiles.jvm.enable = true;
+      }
+    ];
+  };
   failedAssertionsFor =
     modules:
     let
@@ -2858,6 +2872,10 @@ let
         message =
           "packages with default.nix should declare package.nix metadata entries: "
           + lib.concatStringsSep ", " missingPackageMetadata;
+      }
+      {
+        assertion = lib.getName standaloneJvmProfile.config.ix.profiles.jvm.package == "temurin-jre-bin";
+        message = "exported JVM profile should evaluate with plain nixpkgs and no repo overlay";
       }
       {
         assertion = cargoUnitWorkspace.policyChecks ? unusedCrateDependencies;
