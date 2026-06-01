@@ -4,9 +4,105 @@
 //! no overlay window sits, because there is simply no window there to intercept
 //! the pointer.
 
-use winit::dpi::{LogicalPosition, PhysicalSize};
+use winit::dpi::{LogicalPosition, PhysicalPosition, PhysicalSize};
 use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowAttributes, WindowLevel};
+
+/// Move `window` to `new_pos` (logical points) and warp the pointer so it stays
+/// glued to the same spot on the window.
+///
+/// A two-finger scroll-drag moves the window ourselves (unlike a press-drag, where
+/// `Window::drag_window` hands the OS a drag loop that carries the pointer along).
+/// Without warping, the window slides out from under a stationary pointer.
+/// `cursor` is the pointer's last position relative to the window in physical
+/// pixels (e.g. [`crate::DragClick::cursor`]); placing it at the same spot on the
+/// moved window drags the pointer along. `None` (pointer position unknown) just
+/// moves the window.
+///
+/// On macOS we do the warp ourselves rather than via `Window::set_cursor_position`
+/// for two reasons that otherwise make the pointer drift behind over a long drag:
+/// the warp target is computed from `new_pos` (the position we just set), not from
+/// a window-origin read-back that lags during a fast scroll; and the default 0.25s
+/// post-warp local-events suppression is disabled so no warp in the rapid stream is
+/// dropped. See `warp_cursor`.
+pub fn move_window_with_cursor(
+    window: &Window,
+    new_pos: LogicalPosition<f64>,
+    cursor: Option<PhysicalPosition<f64>>,
+) {
+    window.set_outer_position(new_pos);
+    let Some(c) = cursor else {
+        return;
+    };
+    #[cfg(target_os = "macos")]
+    {
+        // Global display point = window top-left (logical) + cursor offset (logical).
+        // A borderless overlay's outer and content origins coincide, and winit's
+        // logical screen space matches CoreGraphics' top-left global space, so this
+        // is the same mapping `set_cursor_position` uses, but anchored to the value
+        // we just set instead of a lagging read-back.
+        let sf = window.scale_factor();
+        warp_cursor(new_pos.x + c.x / sf, new_pos.y + c.y / sf);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.set_cursor_position(c);
+    }
+}
+
+/// Warp the pointer to global display point `(x, y)` (top-left origin, points)
+/// with the post-warp event suppression turned off.
+///
+/// By default macOS ignores local mouse events for 0.25s after a
+/// `CGWarpMouseCursorPosition`, which makes the pointer stutter and fall behind
+/// during a fast, continuous scroll-drag (re-associating mouse + cursor alone does
+/// not reliably cancel it). Zeroing a session event source's local-events
+/// suppression interval keeps every warp immediate; re-associating mouse and
+/// cursor afterwards restores normal pointer tracking once the drag ends.
+#[cfg(target_os = "macos")]
+pub fn warp_cursor(x: f64, y: f64) {
+    use std::ffi::c_void;
+    use std::sync::OnceLock;
+
+    #[repr(C)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+    type CGEventSourceRef = *mut c_void;
+    // kCGEventSourceStateCombinedSessionState
+    const COMBINED_SESSION_STATE: i32 = 0;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGWarpMouseCursorPosition(new_cursor_position: CGPoint) -> i32;
+        fn CGAssociateMouseAndMouseCursorPosition(connected: i32) -> i32;
+        fn CGEventSourceCreate(state_id: i32) -> CGEventSourceRef;
+        fn CGEventSourceSetLocalEventsSuppressionInterval(source: CGEventSourceRef, seconds: f64);
+    }
+
+    // Disable the suppression interval once for the process: create a session event
+    // source and zero its interval, then keep it alive (the setting holds while the
+    // source lives). Done lazily on the first warp, off the hot path thereafter.
+    static SUPPRESS_OFF: OnceLock<usize> = OnceLock::new();
+    SUPPRESS_OFF.get_or_init(|| {
+        // SAFETY: standard CoreGraphics C calls; the source is leaked on purpose so
+        // the zeroed interval persists for the process lifetime.
+        unsafe {
+            let src = CGEventSourceCreate(COMBINED_SESSION_STATE);
+            if !src.is_null() {
+                CGEventSourceSetLocalEventsSuppressionInterval(src, 0.0);
+            }
+            src as usize
+        }
+    });
+
+    // SAFETY: `CGPoint` is POD; the warp and re-association take scalar args.
+    unsafe {
+        CGWarpMouseCursorPosition(CGPoint { x, y });
+        CGAssociateMouseAndMouseCursorPosition(1);
+    }
+}
 
 /// Attributes for a floating overlay window: transparent, borderless,
 /// non-resizable, always on top, sized to `(w_px, h_px)` physical pixels and

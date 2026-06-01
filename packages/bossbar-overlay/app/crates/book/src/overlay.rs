@@ -362,7 +362,9 @@ impl App {
         if (dx != 0.0 || dy != 0.0) && let Some(cur) = win.self_set {
             let np = LogicalPosition::new(cur.x + dx, cur.y + dy);
             win.self_set = Some(np);
-            win.window.set_outer_position(np);
+            // Move the window AND warp the pointer with it, so the pointer stays on
+            // the book like a press-drag rather than the book sliding out from under it.
+            ocwin::move_window_with_cursor(&win.window, np, win.gesture.cursor());
             win.last_move = Instant::now();
             self.book.pos = Some(DVec2::new(np.x, np.y));
         }
