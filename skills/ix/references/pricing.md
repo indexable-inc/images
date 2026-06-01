@@ -65,6 +65,57 @@ IPv4 + IPv6, up to 25 Gbps per VM, no per-byte fees, no ingress or egress charge
 
 No quotas, throttles, or rate limits. Billing is pure utilization, so heavy use earns revenue rather than costing us margin. A 64-vCPU VM pinned at 100% for weeks, sustained multi-Gbps egress, or ten thousand idle forks that burst occasionally are all fine. You pay for what you use; we have no reason to cap it.
 
+## Balance and top-ups
+
+Prepaid. Add funds, usage debits the balance. No invoices, no monthly minimum.
+
+| Setting | Value |
+|---|---|
+| Minimum top-up | $5 |
+| Maximum top-up | $1,000 per transaction |
+| Presets | $10, $25, $50, $100 |
+
+Top-ups go through Stripe Checkout. Successful charges credit the balance immediately on the webhook. Failed or canceled charges never credit. Saving the payment method is opt-in at checkout and only needed if you want auto-recharge.
+
+```bash
+ix billing top-up --amount 25 --open
+```
+
+## Auto-recharge
+
+Optional. Set a threshold and a recharge amount. When the balance falls below the threshold, ix charges the saved payment method for the recharge amount.
+
+| Field | Min | Max | Default |
+|---|---|---|---|
+| Threshold | $1 | $500 | $5 |
+| Recharge amount | $5 | $1,000 | $25 |
+
+A failed charge (declined card, expired card, anything Stripe surfaces) is recorded with a reason and pauses further auto-recharge attempts until the card is fixed or you top up by hand. The balance keeps falling in the meantime; the lifecycle below takes over once it hits zero.
+
+## When the balance hits zero
+
+Four phases. The clocks key off the moment the balance first reaches zero or below.
+
+| Phase | Trigger | Duration | Effect |
+|---|---|---|---|
+| Active | balance > 0 | - | Normal use. |
+| Compute grace | balance ≤ 0 | 24 hours | No new paid actions (start VM, fork, snapshot). Already-running VMs keep running and keep accruing charges. |
+| Data retention | grace expired, balance still ≤ 0 | 30 days | VMs stopped. Snapshots, forks, and disk persist and are still billed. |
+| Deleted | retention expired, balance still ≤ 0 | - | Stored data becomes eligible for deletion. |
+
+Topping up before the deleted phase puts the account back to Active and clears the timers. The grace and retention values are product policy, not contract terms. If you need different SLA windows, ask on Slack ([access](access.md#support)).
+
+## Usage visibility
+
+Per-resource and per-VM, in near real time:
+
+```bash
+ix billing status            # balance, lifecycle phase, pending top-ups, auto-recharge
+ix billing usage --since 30d # totals by resource, daily spend, recent events
+```
+
+The same data is exposed over the SDK. A streaming RPC (`subscribe_billing_alerts`) pushes balance and lifecycle changes if you want to react programmatically (kill long-running forks below a balance threshold, page on entering compute grace, etc).
+
 ## Enterprise
 
 If ix will be a meaningful part of your stack, we can deploy bare metal into your datacenter (or colo next to your existing footprint) and run ix on it. Pricing moves from per-second utilization to a fixed monthly, sized to your fleet. Custom SLAs and region layouts are on the table. Email [andrew@ix.dev](mailto:andrew@ix.dev).
