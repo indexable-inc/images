@@ -22,7 +22,7 @@ If no changed files, audit the scope the user specifies. Default to `nix/` if un
 ### Language-Level
 
 1. **`rec` attrsets**: Cause infinite recursion when names are shadowed. `//` overrides do not propagate to self-referencing attrs. Replace with `let ... in`.
-2. **Top-level `with pkgs;` or `with lib;`**: Prevents static analysis, obscures name origins, unintuitive shadowing (outer `let` takes priority over `with`). Replace with `let inherit (pkgs) curl jq; in` or explicit `pkgs.curl`.
+2. **Top-level `with pkgs;` or `with lib;`**: Prevents static analysis, obscures name origins, unintuitive shadowing (outer `let` takes priority over `with`). Replace with `let inherit (pkgs) curl jaq; in` or explicit `pkgs.curl`.
 3. **Unquoted URLs**: Bare `https://...` works but is a maintainability hazard. Always quote.
 4. **Lookup paths (`<nixpkgs>`)**: Depend on mutable `$NIX_PATH`. Pin explicitly via flake inputs.
 5. **Shallow `//` for nested attrsets**: Only does shallow merge. Use `lib.recursiveUpdate` for deep merges.
@@ -128,16 +128,16 @@ config = lib.optionalAttrs cfg.enable {
 
 ```nix
 # ANTI-PATTERN
-with pkgs; [ curl jq ripgrep fd ]
+with pkgs; [ curl jaq ripgrep fd ]
 
 # FIX 1: inherit (small lists, clear what's used)
-let inherit (pkgs) curl jq ripgrep fd; in [ curl jq ripgrep fd ]
+let inherit (pkgs) curl jaq ripgrep fd; in [ curl jaq ripgrep fd ]
 
 # FIX 2: explicit prefix (larger lists, better for grep-ability)
-[ pkgs.curl pkgs.jq pkgs.ripgrep pkgs.fd ]
+[ pkgs.curl pkgs.jaq pkgs.ripgrep pkgs.fd ]
 
 # FIX 3: builtins.map (large generated lists)
-builtins.map (name: pkgs.${name}) [ "curl" "jq" "ripgrep" "fd" ]
+builtins.map (name: pkgs.${name}) [ "curl" "jaq" "ripgrep" "fd" ]
 ```
 
 ## Statix Linter Checks

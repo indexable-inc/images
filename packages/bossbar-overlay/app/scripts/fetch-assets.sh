@@ -17,13 +17,15 @@ repo_root="$(cd "$here/../../.." && pwd)"                  # repo flake root
 assets="$(nix build "${repo_root}#minecraft-assets" --no-link --print-out-paths)"
 echo "fetch-assets: minecraft-assets at $assets"
 
-# overlay-core embeds the shared bitmap font; the two apps embed their sprites.
+# overlay-core embeds the shared bitmap font; the apps embed their sprites.
 mkdir -p "$here/crates/overlay-core/assets" \
          "$here/crates/bossbar/assets/boss_bar" \
-         "$here/crates/book/assets/gui"
+         "$here/crates/book/assets/gui" \
+         "$here/crates/orb/assets/entity"
 
 cp -f "$assets/font/ascii.png" "$here/crates/overlay-core/assets/ascii.png"
 cp -f "$assets"/boss_bar/*.png "$here/crates/bossbar/assets/boss_bar/"
 cp -f "$assets"/gui/*.png "$here/crates/book/assets/gui/"
+cp -f "$assets"/entity/experience_orb.png "$here/crates/orb/assets/entity/"
 
-echo "fetch-assets: assets ready (font -> overlay-core, boss_bar -> bossbar, gui -> book)"
+echo "fetch-assets: assets ready (font -> overlay-core, boss_bar -> bossbar, gui -> book, entity -> orb)"

@@ -8,8 +8,10 @@ members = [
   "packages/ast-merge/git",
   "packages/ast-merge/langs",
   "packages/ast-merge/matcher",
-  "packages/claude-history",
-  "packages/claude-history-sync",
+  "packages/source/atuin",
+  "packages/source/claude",
+  "packages/source/codex",
+  "packages/source/git",
   "packages/clone-detect/cli",
   "packages/clone-detect/detect",
   "packages/clone-detect/hash",
@@ -21,8 +23,10 @@ members = [
   "packages/file-language",
   "packages/file-search",
   "packages/git-log-pretty",
+  "packages/github-avatar",
   "packages/indexbench",
   "packages/ix-dev-diagnose",
+  "packages/kitty",
   "packages/macos-vm",
   "packages/mcp",
   "packages/minecraft/nbt",
@@ -36,12 +40,15 @@ members = [
   "packages/progress-style",
   "packages/reel",
   "packages/repo-walker",
-  "packages/linear-export",
+  "packages/source/linear",
   "packages/search",
   "packages/search-core",
-  "packages/search-meta",
+  "packages/source/meta",
   "packages/search-py",
-  "packages/slack-export",
+  "packages/source/slack",
+  "packages/sink/mixedbread",
+  "packages/sink/parquet",
+  "packages/indexer",
   "packages/tap",
   "packages/tap/protocol",
   "packages/tap/pty",
@@ -90,13 +97,19 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
-claude-history = { path = "packages/claude-history" }
+source-atuin = { path = "packages/source/atuin" }
+source-claude = { path = "packages/source/claude" }
+source-codex = { path = "packages/source/codex" }
+source-git = { path = "packages/source/git" }
 clone-detect = { path = "packages/clone-detect/detect" }
 clone-hash = { path = "packages/clone-detect/hash" }
 clone-pragma = { path = "packages/clone-detect/pragma" }
 clone-scanner = { path = "packages/clone-detect/scanner" }
 code-highlight = { path = "packages/code-highlight" }
 code-tokenizer = { path = "packages/code-tokenizer" }
+github-avatar = { path = "packages/github-avatar" }
+indexbench = { path = "packages/indexbench" }
+kitty = { path = "packages/kitty" }
 color-eyre = "0.6"
 dashboard-core = { path = "packages/dashboard-core" }
 devicons = "0.6"
@@ -108,12 +121,11 @@ git2 = { version = "0.20", default-features = false }
 glob = "0.3"
 hegeltest = { version = "0.14", default-features = false }
 ignore = "0.4"
-indexbench = { path = "packages/indexbench" }
 indicatif = "0.18"
 insta = { version = "1.42", features = ["json"] }
 lazy-regex = "3.4"
 libc = "0.2"
-linear-export = { path = "packages/linear-export" }
+source-linear = { path = "packages/source/linear" }
 mixedbread = { path = "packages/mixedbread" }
 loro = "1.12"
 napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt"] }
@@ -139,6 +151,7 @@ quartz_nbt = "0.2.9"
 rayon = "1"
 regex = "1"
 repo-walker = { path = "packages/repo-walker" }
+image = { version = "0.25", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",
@@ -153,12 +166,14 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-native-certs = "0.8"
 schemars = "1"
 search-core = { path = "packages/search-core" }
-search-meta = { path = "packages/search-meta" }
+source-meta = { path = "packages/source/meta" }
 serde = "1"
 serde_json = "1"
 sha2 = "0.10"
 similar = "2"
-slack-export = { path = "packages/slack-export" }
+source-slack = { path = "packages/source/slack" }
+sink-mixedbread = { path = "packages/sink/mixedbread" }
+sink-parquet = { path = "packages/sink/parquet" }
 snafu = "0.9"
 strip-ansi-escapes = "0.2"
 tango-bench = "0.7"

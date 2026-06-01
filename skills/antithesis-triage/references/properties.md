@@ -31,31 +31,31 @@ Each entry in the `properties` array:
 
 `passingCount` and `failingCount` are comma-formatted count strings representing the total across all execution histories in the run (not just the 3-4 example rows shown in the UI).
 
-### Filtering properties with jq
+### Filtering properties with jaq
 
-Use `jq` to filter the output of `getAllProperties()` rather than calling
+Use `jaq` to filter the output of `getAllProperties()` rather than calling
 separate status-specific methods:
 
 ```bash
 # Failed properties only
 agent-browser --session "$SESSION" eval \
   "window.__antithesisTriage.report.getAllProperties()" \
-  | jq '.properties | map(select(.status == "failed"))'
+  | jaq '.properties | map(select(.status == "failed"))'
 
 # Passed properties only
 agent-browser --session "$SESSION" eval \
   "window.__antithesisTriage.report.getAllProperties()" \
-  | jq '.properties | map(select(.status == "passed"))'
+  | jaq '.properties | map(select(.status == "passed"))'
 
 # Unfound properties only
 agent-browser --session "$SESSION" eval \
   "window.__antithesisTriage.report.getAllProperties()" \
-  | jq '.properties | map(select(.status == "unfound"))'
+  | jaq '.properties | map(select(.status == "unfound"))'
 
 # Properties in a specific group
 agent-browser --session "$SESSION" eval \
   "window.__antithesisTriage.report.getAllProperties()" \
-  | jq '.properties | map(select(.group | any(test("SDK: Go"))))'
+  | jaq '.properties | map(select(.group | any(test("SDK: Go"))))'
 ```
 
 ### Using pass/fail ratios for triage prioritization
@@ -83,7 +83,7 @@ Numeric/boolean variants (e.g., `AlwaysGreaterThan`, `SometimesAll`) follow the 
 
 `report.getPropertyExamples()` returns all properties that have example tables,
 along with their example rows. All example tables are already expanded by
-`waitForReady()`, so this is a synchronous read of the DOM. Use jq to filter
+`waitForReady()`, so this is a synchronous read of the DOM. Use jaq to filter
 by status.
 
 Returns each property with `group`, `name`, `status`, and `examples` array
@@ -93,7 +93,7 @@ containing `{ index: 0, status: "failing", time: "85.75s" }` entries.
 # Failed property examples only
 agent-browser --session "$SESSION" eval \
   "window.__antithesisTriage.report.getPropertyExamples()" \
-  | jq '.properties | map(select(.status == "failed"))'
+  | jaq '.properties | map(select(.status == "failed"))'
 ```
 
 Each property may expose multiple example rows (typically 3-4), mixing failing

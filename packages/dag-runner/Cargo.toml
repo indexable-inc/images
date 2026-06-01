@@ -23,3 +23,11 @@ tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "s
 [dev-dependencies]
 libc.workspace = true
 tempfile.workspace = true
+
+# cargo-unit flattens every workspace test target into one namespace, so a
+# bare `integration` target collides with git-log-pretty's and clone-detect's
+# and gets a non-deterministic `-<version>-<hash>` key. A unique name keeps the
+# generated test key stable (`integration_dag_runner-all`).
+[[test]]
+name = "integration_dag_runner"
+path = "tests/integration.rs"

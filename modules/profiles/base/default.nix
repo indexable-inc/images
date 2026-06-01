@@ -64,7 +64,7 @@ in
     # under /root/.config/nushell/ and follow-up tool integrations
     # (atuin, zoxide, starship) hang off the same root user attrset.
     home-manager.users.root = {
-      home.stateVersion = "25.05";
+      home.stateVersion = "25.11";
 
       # Workaround for upstream nixpkgs#485682: `make-options-doc` strips
       # string context from `options.json` via `unsafeDiscardStringContext`,
@@ -493,7 +493,7 @@ in
           helix
           htop
           micro
-          jq
+          jaq
           lldb
           lsof
           mgrep

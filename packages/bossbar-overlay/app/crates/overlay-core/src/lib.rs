@@ -6,7 +6,8 @@
 //!   non-activating raise ([`window`]),
 //! - one textured-quad wgpu pipeline with a texture registry, plus the vanilla
 //!   bitmap font so text is just more quads ([`gpu`], [`bitmap_font`]),
-//! - press/drag/click disambiguation for draggable windows ([`gesture`]),
+//! - press/drag/click disambiguation plus two-finger scroll-drag for draggable
+//!   windows ([`gesture`]),
 //! - a native right-click context menu to close/dismiss an overlay ([`menu`]),
 //! - a headless render-to-PNG for verification ([`snapshot`]),
 //! - the shared animation primitives the overlays drive their hovers with
@@ -27,7 +28,7 @@ pub mod window;
 
 pub use anim::HoverAnim;
 pub use bitmap_font::BitmapFont;
-pub use gesture::DragClick;
+pub use gesture::{scroll_drag_delta, DragClick};
 pub use gpu::{Gpu, Quad, TexHandle, SHADOW};
 
 // Re-export the heavy deps so consumers name the exact versions this workspace

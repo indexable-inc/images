@@ -16,7 +16,7 @@ use std::sync::{Mutex, PoisonError};
 
 use mixedbread::{Condition, Filter, Operator};
 use regex::RegexBuilder;
-use search_meta::{Document, Source};
+use source_meta::{Document, Source};
 use snafu::{OptionExt as _, ResultExt as _};
 
 use crate::error::{InvalidMetadataSnafu, InvalidPatternSnafu, Result};
@@ -271,12 +271,12 @@ impl MemoryStore {
 fn source_of(document: &Document) -> Result<Source> {
     document
         .meta_json
-        .get(search_meta::keys::SOURCE)
+        .get(source_meta::keys::SOURCE)
         .and_then(serde_json::Value::as_str)
         .and_then(|s| s.parse::<Source>().ok())
         .context(InvalidMetadataSnafu {
             external_id: document.external_id.clone(),
-            key: search_meta::keys::SOURCE,
+            key: source_meta::keys::SOURCE,
         })
 }
 
@@ -415,8 +415,8 @@ impl MemoryStore {
                         path: stored
                             .document
                             .meta_json
-                            .get(search_meta::keys::PATH)
-                            .or_else(|| stored.document.meta_json.get(search_meta::keys::TITLE))
+                            .get(source_meta::keys::PATH)
+                            .or_else(|| stored.document.meta_json.get(source_meta::keys::TITLE))
                             .and_then(serde_json::Value::as_str)
                             .map(str::to_owned),
                         text: line.to_owned(),

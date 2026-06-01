@@ -14,7 +14,7 @@
 //! - **Web** results pass through only when the caller asked for them.
 
 use mixedbread::Filter;
-use search_meta::Source;
+use source_meta::Source;
 
 use crate::backend::{GrepOptions, SearchHit, SearchOptions, Store};
 use crate::config::WEB_STORE;
@@ -229,7 +229,7 @@ fn project(
 
 #[cfg(test)]
 mod tests {
-    use search_meta::{Document, Source};
+    use source_meta::{Document, Source};
 
     use super::{CodeScope, grep, semantic};
     use crate::backend::{GrepOptions, GrepTargets, MemoryStore, SearchOptions, Store};
@@ -271,7 +271,7 @@ mod tests {
     }
 
     async fn put_slack(store: &MemoryStore, external_id: &str, title: &str, content: &str) {
-        let hash = search_meta::hash_body(content.as_bytes());
+        let hash = source_meta::hash_body(content.as_bytes());
         let meta = serde_json::json!({
             "source": "slack",
             "external_id": external_id,

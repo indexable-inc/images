@@ -334,7 +334,7 @@ let
             {
               nativeBuildInputs = [
                 pkgs.cargo
-                pkgs.jq
+                pkgs.jaq
               ];
             }
             ''
@@ -343,13 +343,13 @@ let
 
               if [ -f "$tree/Cargo.toml" ]; then
                 crateCargoTOML=$(cargo metadata --format-version 1 --no-deps --manifest-path "$tree/Cargo.toml" | \
-                  jq -r '.packages[] | select(.name == "${pkg.name}") | .manifest_path' || :)
+                  jaq -r '.packages[] | select(.name == "${pkg.name}") | .manifest_path' || :)
               fi
 
               if [ -z "$crateCargoTOML" ]; then
                 while IFS= read -r manifest; do
                   crateCargoTOML=$(cargo metadata --format-version 1 --no-deps --manifest-path "$manifest" | \
-                    jq -r '.packages[] | select(.name == "${pkg.name}") | .manifest_path' || :)
+                    jaq -r '.packages[] | select(.name == "${pkg.name}") | .manifest_path' || :)
                   [ -n "$crateCargoTOML" ] && break
                 done < <(find "$tree" -name Cargo.toml)
               fi
@@ -364,7 +364,7 @@ let
               chmod -R u+w "$out"
 
               if grep -q workspace "$out/Cargo.toml"; then
-                ${lib.getExe replaceWorkspaceValues} "$out/Cargo.toml" "$(cargo metadata --format-version 1 --no-deps --manifest-path "$crateCargoTOML" | jq -r .workspace_root)/Cargo.toml"
+                ${lib.getExe replaceWorkspaceValues} "$out/Cargo.toml" "$(cargo metadata --format-version 1 --no-deps --manifest-path "$crateCargoTOML" | jaq -r .workspace_root)/Cargo.toml"
               fi
 
               printf '{"files":{},"package":null}' > "$out/.cargo-checksum.json"

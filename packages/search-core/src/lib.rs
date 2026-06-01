@@ -47,9 +47,9 @@ pub use pipeline::{Query, index_and_answer, index_and_grep, index_and_semantic};
 pub use query_filter::{FilterSpec, build_filter};
 pub use repo::repo_slug;
 pub use search::{AnswerView, CodeScope, DisplayHit, ask, grep, hits_to_json, semantic};
-pub use sync::{GcReport, SyncReport, gc_documents, sync, sync_documents, wait_until_indexed};
+pub use sync::{SyncReport, sync, wait_until_indexed};
 
 // Re-export the shared metadata and filter types so binaries depend only on
 // search-core.
 pub use mixedbread::{Condition, Filter, Group, Operator};
-pub use search_meta::{Document, RepoSlug, Source, SourceAdapter};
+pub use source_meta::{Document, RepoSlug, Source, SourceAdapter};

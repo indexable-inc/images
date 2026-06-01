@@ -1,0 +1,18 @@
+[package]
+name = "orb"
+description = "Minecraft-style floating experience-orb desktop overlay driven by an SQLite file"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "xp-orb-overlay"
+path = "src/main.rs"
+
+[dependencies]
+# winit/wgpu/the bitmap font come through overlay-core's re-exports; only the
+# domain deps are direct here.
+overlay-core.workspace = true
+glam.workspace = true
+rusqlite.workspace = true
+dirs.workspace = true

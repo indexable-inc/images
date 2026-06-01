@@ -1,0 +1,21 @@
+[package]
+name = "sink-parquet"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Generic S3/R2 parquet sink: one row per search Document, one parquet file per source"
+
+[lints]
+workspace = true
+
+[dependencies]
+source-meta.workspace = true
+arrow.workspace = true
+parquet = { workspace = true, features = ["arrow"] }
+object_store = { workspace = true, features = ["aws"] }
+serde_json.workspace = true
+sha2.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

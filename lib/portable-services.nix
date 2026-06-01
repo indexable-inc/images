@@ -84,8 +84,24 @@ let
           default = true;
           description = ''
             Start the service when the user session loads (login on macOS,
-            `default.target` on Linux). Ignored for interval services, which
-            are driven by their schedule.
+            `default.target` on Linux). For an interval service this means an
+            immediate first run on load in addition to the schedule: launchd
+            `RunAtLoad` alongside `StartInterval`, and a systemd timer that also
+            fires shortly after activation (`OnActiveSec`) rather than waiting a
+            full interval.
+          '';
+        };
+
+        label = mkOption {
+          type = types.str;
+          default = "org.nix-community.home.${name}";
+          defaultText = lib.literalExpression ''"org.nix-community.home.''${name}"'';
+          description = ''
+            launchd Label, which is also the plist filename. Defaults to the
+            home-manager reverse-DNS convention keyed on the service name, so it
+            is space-free and a switch updates the existing agent in place. This
+            is launchd-only: on systemd the unit name is the attribute name, so
+            this option has no effect there.
           '';
         };
 
@@ -184,12 +200,16 @@ let
           null;
 
       generated = {
-        Label = svc.description;
+        Label = svc.label;
         ProgramArguments = svc.command;
       }
       // optionalAttrs (svc.environment != { }) { EnvironmentVariables = svc.environment; }
       // optionalAttrs (svc.workingDirectory != null) { WorkingDirectory = svc.workingDirectory; }
-      // optionalAttrs (svc.runAtLoad && svc.interval == null) { RunAtLoad = true; }
+      # RunAtLoad fires an immediate run on load. For an interval service this
+      # rides alongside StartInterval (load now, then every interval); the older
+      # behavior of suppressing it for interval services forced every poller to
+      # re-add RunAtLoad through the escape hatch.
+      // optionalAttrs svc.runAtLoad { RunAtLoad = true; }
       // optionalAttrs (keepAlive != null) { KeepAlive = keepAlive; }
       // optionalAttrs (svc.interval != null) { StartInterval = svc.interval; }
       // optionalAttrs (svc.standardOutPath != null) { StandardOutPath = svc.standardOutPath; }
@@ -266,9 +286,14 @@ let
               Description = "Timer for ${svc.description}";
             };
             Timer = {
-              OnBootSec = svc.interval;
               OnUnitActiveSec = svc.interval;
-            };
+            }
+            // (
+              # runAtLoad => fire ~immediately after the timer activates at login
+              # (portable analogue of launchd RunAtLoad); otherwise wait one full
+              # interval from boot before the first run.
+              if svc.runAtLoad then { OnActiveSec = "1s"; } else { OnBootSec = svc.interval; }
+            );
             Install = {
               WantedBy = [ "timers.target" ];
             };

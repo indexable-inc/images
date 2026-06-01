@@ -5,7 +5,7 @@ description: >
   up runs, check status, investigate failed properties (assertions), view
   metadata, download logs, inspect findings, and examine environmental
   details. Load after a run completes or when investigating a failure.
-compatibility: Requires snouty (https://github.com/antithesishq/snouty), agent-browser (https://github.com/vercel-labs/agent-browser), and jq.
+compatibility: Requires snouty (https://github.com/antithesishq/snouty), agent-browser (https://github.com/vercel-labs/agent-browser), and jaq.
 metadata:
   version: "2026-05-15 a0f67a6"
 ---
@@ -21,7 +21,7 @@ Use this skill to read and triage Antithesis test reports.
 - DO NOT PROCEED if `snouty` is not installed. See `https://raw.githubusercontent.com/antithesishq/snouty/refs/heads/main/README.md` for installation options.
 - DO NOT PROCEED if `agent-browser` is not installed. See `https://raw.githubusercontent.com/vercel-labs/agent-browser/refs/heads/main/README.md` for installation options.
 - DO NOT PROCEED if `agent-browser` is older than version `v0.23.4`. You can upgrade with `agent-browser upgrade`.
-- DO NOT PROCEED if `jq` is not installed. See `https://jqlang.org/download/` for installation options.
+- DO NOT PROCEED if `jaq` is not installed. See `https://github.com/01mf02/jaq` for installation options.
 
 ## Gathering user input
 

@@ -5,7 +5,7 @@
 //! lives in exactly one place.
 
 use mixedbread::Filter;
-use search_meta::{Source, keys};
+use source_meta::{Source, keys};
 
 /// The scope selectors a caller can apply, before they become a [`Filter`].
 #[derive(Debug, Default, Clone)]
@@ -85,7 +85,7 @@ fn any_of_strings(key: &str, values: &[String]) -> Option<Filter> {
 #[cfg(test)]
 mod tests {
     use super::{FilterSpec, build_filter};
-    use search_meta::Source;
+    use source_meta::Source;
 
     #[test]
     fn empty_spec_builds_no_filter() {

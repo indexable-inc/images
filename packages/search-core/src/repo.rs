@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use search_meta::RepoSlug;
+use source_meta::RepoSlug;
 
 /// Resolve the repository slug for the checkout rooted at `root`.
 ///

@@ -4,9 +4,122 @@
 //! no overlay window sits, because there is simply no window there to intercept
 //! the pointer.
 
-use winit::dpi::{LogicalPosition, PhysicalSize};
+use winit::dpi::{LogicalPosition, PhysicalPosition, PhysicalSize};
 use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowAttributes, WindowLevel};
+
+/// Move `window` to `new_pos` (logical points) and warp the pointer so it stays
+/// glued to the same spot on the window.
+///
+/// A two-finger scroll-drag moves the window ourselves (unlike a press-drag, where
+/// `Window::drag_window` hands the OS a drag loop that carries the pointer along).
+/// Without warping, the window slides out from under a stationary pointer.
+/// `cursor` is the pointer's last position relative to the window in physical
+/// pixels (e.g. [`crate::DragClick::cursor`]); placing it at the same spot on the
+/// moved window drags the pointer along. `None` (pointer position unknown) just
+/// moves the window.
+///
+/// On macOS we do the warp ourselves rather than via `Window::set_cursor_position`
+/// because that recomputes the target from a window-origin read-back, which lags
+/// behind during a fast scroll and leaves the pointer drifting further behind each
+/// move until it falls off the overlay (and scroll events stop reaching it). We
+/// instead anchor the warp to `new_pos`, the position we just set, so the pointer
+/// lands exactly on the moved window every tick. See `warp_cursor`.
+pub fn move_window_with_cursor(
+    window: &Window,
+    new_pos: LogicalPosition<f64>,
+    cursor: Option<PhysicalPosition<f64>>,
+) {
+    window.set_outer_position(new_pos);
+    let Some(c) = cursor else {
+        return;
+    };
+    #[cfg(target_os = "macos")]
+    {
+        // Global display point = window top-left (logical) + cursor offset (logical).
+        // A borderless overlay's outer and content origins coincide, and winit's
+        // logical screen space matches CoreGraphics' top-left global space, so this
+        // is the same mapping `set_cursor_position` uses, but anchored to the value
+        // we just set instead of a lagging read-back.
+        let sf = window.scale_factor();
+        warp_cursor(new_pos.x + c.x / sf, new_pos.y + c.y / sf);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.set_cursor_position(c);
+    }
+}
+
+/// Warp the pointer to global display point `(x, y)` (top-left origin, points).
+///
+/// `CGWarpMouseCursorPosition` moves the cursor without posting an event; the
+/// follow-up `CGAssociateMouseAndMouseCursorPosition(true)` re-links mouse and
+/// cursor so the warp does not leave hardware pointer movement briefly suppressed
+/// (the default post-warp behavior), keeping a rapid scroll-drag smooth.
+#[cfg(target_os = "macos")]
+fn warp_cursor(x: f64, y: f64) {
+    #[repr(C)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGWarpMouseCursorPosition(new_cursor_position: CGPoint) -> i32;
+        fn CGAssociateMouseAndMouseCursorPosition(connected: i32) -> i32;
+    }
+
+    // SAFETY: `CGPoint` is a POD pair of `f64`; both calls take scalar args and run
+    // on the winit main thread. Return codes are best-effort and ignored.
+    unsafe {
+        CGWarpMouseCursorPosition(CGPoint { x, y });
+        CGAssociateMouseAndMouseCursorPosition(1);
+    }
+}
+
+/// The pointer's current global display location (top-left origin, points), or
+/// `None` if it cannot be read. Reads the *real* cursor (whatever last moved it,
+/// including a `warp_cursor`), which a self-test uses to confirm the pointer
+/// actually tracked a moved window. Needs no Accessibility permission.
+#[cfg(target_os = "macos")]
+pub fn cursor_global() -> Option<(f64, f64)> {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventCreate(source: *mut c_void) -> *mut c_void;
+        fn CGEventGetLocation(event: *mut c_void) -> CGPoint;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(cf: *const c_void);
+    }
+
+    // SAFETY: a null-source `CGEventCreate` returns a +1 event carrying the current
+    // cursor location; `CGEventGetLocation` reads it; `CFRelease` balances the +1.
+    unsafe {
+        let event = CGEventCreate(std::ptr::null_mut());
+        if event.is_null() {
+            return None;
+        }
+        let point = CGEventGetLocation(event);
+        CFRelease(event.cast());
+        Some((point.x, point.y))
+    }
+}
+
+/// Non-macOS: no portable global-cursor read is wired up (the self-test is macOS).
+#[cfg(not(target_os = "macos"))]
+pub fn cursor_global() -> Option<(f64, f64)> {
+    None
+}
 
 /// Attributes for a floating overlay window: transparent, borderless,
 /// non-resizable, always on top, sized to `(w_px, h_px)` physical pixels and

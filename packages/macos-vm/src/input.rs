@@ -5,6 +5,8 @@
 //! modifier flags); the guest keyboard device reads the HID key reports. Key-code
 //! map and technique from github.com/thecrypticace/vzautomation.
 
+use objc2::rc::Retained;
+use objc2::{msg_send, ClassType};
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_foundation::{NSPoint, NSString};
 use objc2_virtualization::VZVirtualMachineView;
@@ -85,6 +87,59 @@ fn send_mouse(view: &VZVirtualMachineView, event_type: NSEventType, x: f64, y: f
         NSEventType::MouseMoved => view.mouseMoved(&event),
         _ => view.mouseUp(&event),
     }
+}
+
+/// Scroll the guest by `(dx, dy)` pixels at the current pointer location (move the
+/// pointer first to target a window). AppKit has no scroll-wheel `NSEvent`
+/// constructor, so we build a pixel-unit scroll `CGEvent` and wrap it with
+/// `+[NSEvent eventWithCGEvent:]`, then hand it to the view, which forwards it to
+/// the guest's pointing device. Must run on the main thread. A null event is a
+/// no-op rather than a panic.
+pub fn scroll(view: &VZVirtualMachineView, dx: f64, dy: f64) {
+    use std::ffi::c_void;
+
+    // kCGScrollEventUnitPixel; wheel1 = vertical, wheel2 = horizontal.
+    const PIXEL_UNIT: u32 = 0;
+
+    // Use the NON-variadic `CGEventCreateScrollWheelEvent2`: in the variadic
+    // `...Event`, `wheel1` is a fixed (register) parameter and only wheel2/wheel3
+    // are variadic, but Apple's AArch64 ABI passes variadic args on the stack, so
+    // declaring `wheel1` variadic misroutes the vertical delta. The `2` variant
+    // takes all three wheels as fixed params, matching the `core-graphics` crate.
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventCreateScrollWheelEvent2(
+            source: *mut c_void,
+            units: u32,
+            wheel_count: u32,
+            wheel1: i32,
+            wheel2: i32,
+            wheel3: i32,
+        ) -> *mut c_void;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(cf: *const c_void);
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    let (wheel1, wheel2) = (dy as i32, dx as i32);
+    // SAFETY: standard CoreGraphics call; a null source means the event uses the
+    // current cursor location. Returns a +1 CGEvent we release below.
+    let cg = unsafe {
+        CGEventCreateScrollWheelEvent2(std::ptr::null_mut(), PIXEL_UNIT, 2, wheel1, wheel2, 0)
+    };
+    if cg.is_null() {
+        return;
+    }
+    // SAFETY: `+[NSEvent eventWithCGEvent:]` wraps the CGEvent (it does not take
+    // ownership), returning an autoreleased NSEvent that `msg_send!` retains.
+    let event: Option<Retained<NSEvent>> = unsafe { msg_send![NSEvent::class(), eventWithCGEvent: cg] };
+    if let Some(event) = event {
+        view.scrollWheel(&event);
+    }
+    // SAFETY: balances the +1 from `CGEventCreateScrollWheelEvent`.
+    unsafe { CFRelease(cg.cast()) };
 }
 
 /// Carbon virtual key code for a named key (navigation, editing, modifiers).

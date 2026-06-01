@@ -46,3 +46,35 @@ hashes, and metadata catalogs for search or browsing surfaces.
 
 Repository examples should consume those shared surfaces. Repeating URLs and
 hashes in examples creates second owners with no update story.
+
+### Packaging external Rust CLI/TUI tools
+
+Build a standalone third-party Rust binary with `pkgs.rustPlatform.buildRustPackage`
+in `packages/<name>/default.nix`, paired with a `package.nix` that carries `id`
+and the systems it builds on. Reserve [`ix.cargoUnit`](lib/cargo-unit.nix) for
+crates inside the shared workspace: its per-unit graph, nightly `RUSTC_BOOTSTRAP`,
+and workspace policy cost more than one outside tool returns, and its
+content-addressed dedup is off on macOS.
+
+Pin the source in the derivation with `pkgs.fetchFromGitHub` at a git rev. A
+flake input (the [`packages/llm-clippy`](packages/llm-clippy) shape) earns its
+top-level slot only when the source is shared across consumers or wants
+`nix flake update`. A one-off tool keeps its owner local in `default.nix`, and
+the package registry still discovers the directory.
+
+When upstream commits a `Cargo.lock`, read it with
+`cargoLock.lockFile = src + "/Cargo.lock"` so a rev bump carries the dependency
+set. Reach for `cargoHash` only when there is no committed lock. `cargoSha256`
+is banned.
+
+Two quirks recur in macOS Rust tools, each with one fix:
+- A crate that runs `bindgen` for FFI bindings needs `rustPlatform.bindgenHook`
+  in `nativeBuildInputs` for libclang.
+- A crate that reads VCS state at build time (`git_version!()`, `vergen`) fails
+  in the sandbox because the fetched tarball has no `.git`. Patch the call out in
+  `postPatch`, e.g. `--replace-fail "git_version!()" 'env!("CARGO_PKG_VERSION")'`.
+
+Set `strictDeps = true`, a typed `meta.license`, `meta.mainProgram`, and
+`meta.platforms`. A platform-bound tool gates both `meta.platforms` and the
+`package.nix` systems so `nix flake check` does not force it off-platform.
+[`packages/launchk`](packages/launchk) (Darwin-only) is the reference.

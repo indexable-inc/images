@@ -84,7 +84,7 @@ agent-browser --session "$SESSION" download \
   'a.sequence_printer_menu_button[data-triage-dl]' /tmp/error-logs.json
 ```
 
-Downloaded logs are minified single-line JSON — always use `jq` to inspect them, never `cat` or `wc -l`. `jq length <file>` is a good first command to start with.
+Downloaded logs are minified single-line JSON — always use `jaq` to inspect them, never `cat` or `wc -l`. `jaq length <file>` is a good first command to start with.
 
 For multiple log panes, repeat with each index.
 

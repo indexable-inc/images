@@ -14,14 +14,19 @@ chrono = { workspace = true, features = ["clock"] }
 clap = { workspace = true, features = ["derive"] }
 color-eyre.workspace = true
 devicons.workspace = true
+github-avatar.workspace = true
 # `default-features = false` drops the https/ssh transports (and their openssl /
 # libssh2 system deps) we never use for reading a local repo; `vendored-libgit2`
 # compiles the bundled libgit2 C source with `cc`, so the build needs no system
 # libgit2 or cmake. See libgit2-sys: with no `vendored` feature it probes
 # pkg-config first, which would add a system dependency to the workspace build.
 git2 = { workspace = true, default-features = false, features = ["vendored-libgit2"] }
+kitty.workspace = true
 strip-ansi-escapes.workspace = true
 terminal-theme.workspace = true
+# Avatars are fetched over HTTP from a sync CLI; a small current-thread tokio
+# runtime drives the async `github-avatar` client for the fetch phase only.
+tokio = { workspace = true, features = ["rt", "net", "time"] }
 
 [dev-dependencies]
 git2 = { workspace = true, default-features = false, features = ["vendored-libgit2"] }

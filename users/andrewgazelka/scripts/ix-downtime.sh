@@ -1,6 +1,6 @@
 # Body of the `ix-downtime` bash app (see users/andrewgazelka/home.nix).
 # No shebang / `set` line: the mkBashApp wrapper supplies bash + `set -euo
-# pipefail` and bakes curl/jq/sqlite/minecraft-sound/claude/coreutils + the
+# pipefail` and bakes curl/jaq/sqlite/minecraft-sound/claude/coreutils + the
 # bossbar CLI + say-detached onto PATH via runtimeInputs.
 #
 # Mirrors the PUBLIC ix.dev status page onto a boss bar + an Ender Dragon growl,
@@ -126,7 +126,7 @@ reconcile_bars() {
     [ -n "$bdb" ] || { printf ''; return; }
     sqlite3 "$bdb" "SELECT id FROM bossbars WHERE title = '$(sq "$1")' OR title LIKE '$(sq "$1") (%' ORDER BY id LIMIT 1;" 2>/dev/null || printf ''
   }
-  rows="$(jq -rn --argjson res "$res" --argjson secs "$secs" '
+  rows="$(jaq -rn --argjson res "$res" --argjson secs "$secs" '
     (($secs.data // []) | map({ (.id|tostring): .attributes.name }) | add // {}) as $sn
     | ($res.data // [])[]
     | ( ($sn[(.attributes.status_page_section_id|tostring)] // "ix")
@@ -171,11 +171,11 @@ EOF
 pages="$(api '/status-pages')" || exit 0
 # Bail on a malformed body (rate-limit text, HTML error, truncated read) rather
 # than silently treating it as all-clear and yanking the bar mid-outage.
-printf '%s' "$pages" | jq -e 'has("data")' >/dev/null 2>&1 || exit 0
-page="$(printf '%s' "$pages" | jq -r '.data[] | select(.attributes.subdomain=="ix") | .id' | head -1)"
-[ -n "$page" ] || page="$(printf '%s' "$pages" | jq -r '.data[0].id // empty')"
+printf '%s' "$pages" | jaq -e 'has("data")' >/dev/null 2>&1 || exit 0
+page="$(printf '%s' "$pages" | jaq -r '.data[] | select(.attributes.subdomain=="ix") | .id' | head -1)"
+[ -n "$page" ] || page="$(printf '%s' "$pages" | jaq -r '.data[0].id // empty')"
 [ -n "$page" ] || exit 0
-agg="$(printf '%s' "$pages" | jq -r --arg id "$page" \
+agg="$(printf '%s' "$pages" | jaq -r --arg id "$page" \
   '.data[] | select(.id==$id) | .attributes.aggregate_state // empty')"
 # An empty state means we could not read it; bail rather than false-clear.
 [ -n "$agg" ] || exit 0
@@ -183,7 +183,7 @@ agg="$(printf '%s' "$pages" | jq -r --arg id "$page" \
 # Public URL of the status page, for the bar's click action ("open Better Stack").
 # Prefer the custom domain (status.ix.dev), else the Better Stack subdomain host.
 # Derived from the API so it tracks the page rather than being hardcoded.
-status_url="$(printf '%s' "$pages" | jq -r --arg id "$page" '
+status_url="$(printf '%s' "$pages" | jaq -r --arg id "$page" '
   .data[] | select(.id==$id) | .attributes
   | if (.custom_domain // "") != "" then "https://" + .custom_domain
     elif (.subdomain // "") != "" then "https://" + .subdomain + ".betteruptime.com"
@@ -201,10 +201,10 @@ res="$(api "/status-pages/$page/resources")" || res=""
 secs="$(api "/status-pages/$page/sections")" || secs=""
 bars_ok=0
 # Require `.data` to be an ARRAY, not merely present: a valid body like
-# {"data":null} satisfies has("data") but makes the jq below iterate null and
+# {"data":null} satisfies has("data") but makes the jaq below iterate null and
 # fail, which under `set -euo pipefail` would abort the watcher mid-outage.
-if printf '%s' "$res" | jq -e '(.data | type) == "array"' >/dev/null 2>&1 \
-  && printf '%s' "$secs" | jq -e '(.data | type) == "array"' >/dev/null 2>&1; then
+if printf '%s' "$res" | jaq -e '(.data | type) == "array"' >/dev/null 2>&1 \
+  && printf '%s' "$secs" | jaq -e '(.data | type) == "array"' >/dev/null 2>&1; then
   bars_ok=1
 fi
 
@@ -222,7 +222,7 @@ bossbar rm "ix.dev down" 2>/dev/null || true
 # empty, so `grep -ve '^$'` exits 1, and under `set -o pipefail` an unguarded
 # command substitution would abort the script before the seed/recovery logic.
 if [ "$bars_ok" = 1 ]; then
-  down_names="$(jq -rn --argjson res "$res" --argjson secs "$secs" '
+  down_names="$(jaq -rn --argjson res "$res" --argjson secs "$secs" '
     (($secs.data // []) | map({ (.id|tostring): .attributes.name }) | add // {}) as $sn
     | ($res.data // [])[]
     | select((.attributes.status // "operational") != "operational")

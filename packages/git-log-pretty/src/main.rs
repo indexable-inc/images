@@ -9,12 +9,14 @@
 //! On a terminal the output is piped through a pager (`$PAGER`, else `less`),
 //! like `git log`; redirected output skips the pager. See [`pager`].
 
-use std::io::Write;
+use std::collections::HashSet;
+use std::io::{IsTerminal, Write};
 
 use anstyle::{AnsiColor, Color};
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::{Result, WrapErr};
 
+mod avatar;
 mod display;
 mod git;
 mod pager;
@@ -29,12 +31,22 @@ use palette::{Theme, detect, fg, paint};
 /// view short.
 const MAX_COMMITS: usize = 15;
 
+/// Avatar size to request from GitHub, in pixels. Larger than any cell box so
+/// the terminal downscales rather than upscales.
+const AVATAR_SIZE_PX: u32 = 128;
+
 #[derive(Parser)]
 #[command(name = "git-log-pretty", about = "A pretty git log viewer with file-icon trees")]
 struct Cli {
     /// Write directly to stdout instead of piping through a pager.
     #[arg(long, global = true)]
     no_pager: bool,
+    /// Don't draw author GitHub avatars inline (kitty graphics protocol).
+    #[arg(long, global = true)]
+    no_avatar: bool,
+    /// Height of each inline avatar in terminal rows (0 disables avatars).
+    #[arg(long, global = true, default_value_t = 2)]
+    avatar_rows: u32,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -58,50 +70,123 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let allow_pager = !cli.no_pager;
+    let want_avatars = !cli.no_avatar;
+    let avatar_rows = cli.avatar_rows;
     match cli.command {
         Some(Command::Diff { base, head }) => {
             run_diff(&base, &head, allow_pager).wrap_err("failed to render diff stats")
         }
-        None => run_log(allow_pager).wrap_err("failed to render git log"),
+        None => {
+            run_log(allow_pager, want_avatars, avatar_rows).wrap_err("failed to render git log")
+        }
     }
 }
 
 /// Render the default commit log for the current repository. On `main` this is
 /// `main`'s own recent history; on any other branch it is the commits HEAD is
 /// ahead of `main`.
-fn run_log(allow_pager: bool) -> Result<()> {
+fn run_log(allow_pager: bool, want_avatars: bool, avatar_rows: u32) -> Result<()> {
     let repo = git::discover()?;
     let theme = detect();
 
     // On `main` there is nothing to be ahead of, so an ahead-of-main diff would
     // always be empty. Show recent history instead of "All caught up".
-    if git::head_branch_name(&repo).as_deref() == Some("main") {
-        let recent = git::recent_commits(&repo, MAX_COMMITS)?;
-        return pager::paged(allow_pager, |out| {
-            print_log(out, "Recent commits on main", &recent, theme)
-        });
-    }
-
-    let ahead = git::commits_ahead(&repo, "main")?;
-    if ahead.is_empty() {
-        println!("{}", paint(fg(Color::Ansi(AnsiColor::Green)), "All caught up with main"));
-        return Ok(());
-    }
-
-    let hidden = ahead.len().saturating_sub(MAX_COMMITS);
-    let header = if hidden > 0 {
-        let detail = paint(
-            fg(Color::Ansi(AnsiColor::BrightBlack)),
-            &format!(" (showing first {MAX_COMMITS}, {hidden} more hidden)"),
-        );
-        format!("{count} commits ahead of main{detail}", count = ahead.len())
+    let (header, commits) = if git::head_branch_name(&repo).as_deref() == Some("main") {
+        ("Recent commits on main".to_string(), git::recent_commits(&repo, MAX_COMMITS)?)
     } else {
-        let label = if ahead.len() == 1 { "commit" } else { "commits" };
-        format!("{count} {label} ahead of main", count = ahead.len())
+        let mut ahead = git::commits_ahead(&repo, "main")?;
+        if ahead.is_empty() {
+            println!("{}", paint(fg(Color::Ansi(AnsiColor::Green)), "All caught up with main"));
+            return Ok(());
+        }
+
+        let hidden = ahead.len().saturating_sub(MAX_COMMITS);
+        let header = if hidden > 0 {
+            let detail = paint(
+                fg(Color::Ansi(AnsiColor::BrightBlack)),
+                &format!(" (showing first {MAX_COMMITS}, {hidden} more hidden)"),
+            );
+            format!("{count} commits ahead of main{detail}", count = ahead.len())
+        } else {
+            let label = if ahead.len() == 1 { "commit" } else { "commits" };
+            format!("{count} {label} ahead of main", count = ahead.len())
+        };
+
+        ahead.truncate(MAX_COMMITS);
+        (header, ahead)
     };
 
-    let shown = &ahead[..ahead.len().min(MAX_COMMITS)];
-    pager::paged(allow_pager, |out| print_log(out, &header, shown, theme))
+    emit_log(&repo, &header, &commits, theme, allow_pager, want_avatars, avatar_rows)
+}
+
+/// Render the header and commit blocks.
+///
+/// When avatars are enabled (a graphics terminal, a real TTY, and not opted
+/// out), the output bypasses the pager and goes straight to the terminal,
+/// because a pager like `less` would render the kitty graphics escapes as
+/// garbage. Otherwise it pages as usual.
+fn emit_log(
+    repo: &git2::Repository,
+    header: &str,
+    commits: &[git::AheadCommit<'_>],
+    theme: Theme,
+    allow_pager: bool,
+    want_avatars: bool,
+    avatar_rows: u32,
+) -> Result<()> {
+    let avatars_enabled = want_avatars
+        && avatar_rows > 0
+        && kitty::is_supported()
+        && std::io::stdout().is_terminal();
+
+    if !avatars_enabled {
+        return pager::paged(allow_pager, |out| print_log(out, header, commits, theme));
+    }
+
+    // A runtime-build failure shouldn't sink the whole log; fall back to the
+    // plain, pageable renderer.
+    let Ok(fetched) = fetch_avatars(repo, commits) else {
+        return pager::paged(allow_pager, |out| print_log(out, header, commits, theme));
+    };
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{}\n", paint(fg(Color::Ansi(AnsiColor::Cyan)), header))?;
+    let mut transmitted = HashSet::new();
+    for (ahead, avatar) in commits.iter().zip(&fetched) {
+        display::print_commit_with_avatar(
+            &mut out,
+            ahead,
+            theme,
+            avatar.as_ref(),
+            &mut transmitted,
+            avatar_rows,
+        )?;
+    }
+    Ok(())
+}
+
+/// Resolve and download each commit author's avatar, one slot per commit.
+///
+/// `None` marks an author that could not be resolved. The async `github-avatar`
+/// client is driven on a short-lived current-thread runtime.
+fn fetch_avatars(
+    repo: &git2::Repository,
+    commits: &[git::AheadCommit<'_>],
+) -> Result<Vec<Option<avatar::Avatar>>> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .wrap_err("failed to build the avatar fetch runtime")?;
+    let mut resolver = avatar::Resolver::new(repo, AVATAR_SIZE_PX);
+    let fetched = runtime.block_on(async {
+        let mut fetched = Vec::with_capacity(commits.len());
+        for ahead in commits {
+            let email = ahead.commit.author().email().unwrap_or_default().to_string();
+            let sha = ahead.commit.id().to_string();
+            fetched.push(resolver.avatar_for(&email, &sha).await);
+        }
+        fetched
+    });
+    Ok(fetched)
 }
 
 /// Write a cyan header followed by each commit block to `out`.

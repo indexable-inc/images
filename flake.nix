@@ -13,7 +13,11 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rust-overlay.url = "github:oxalica/rust-overlay";
+
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     # Home Manager wired in via its NixOS module for per-tool XDG-shaped
     # config (Nushell, atuin, zoxide, starship, ...). Tracks master so it
@@ -148,6 +152,9 @@
         # Workstation-facing home-manager module: declare a service once, get a
         # native launchd agent on macOS and native systemd user units on Linux.
         portable-services = ix.portableServices.homeModule;
+        # Declarative-but-writable JSON config files (last-applied 3-way merge),
+        # for config an app rewrites at runtime. See lib/mutable-json.nix.
+        mutable-json = ix.mutableJson.homeModule;
         # Personal-but-shareable workstation module for github:andrewgazelka: the
         # ix.dev downtime watcher + boss bar overlay + the shared say-detached
         # sound helper, all as portable services. Closed over the per-system
@@ -157,11 +164,12 @@
           indexPackages = system: (collect "packages").${system};
           portableServicesModule = ix.portableServices.homeModule;
         };
-        # Workstation-facing module to sync this user's Claude Code history to an
-        # S3/R2 parquet archive and/or Mixedbread, as a portable timer service.
-        # Closed over the per-system packages so it resolves claude-history-sync
-        # for the host. See packages/claude-history-sync/home-module.nix.
-        claude-history-sync = import ./packages/claude-history-sync/home-module.nix {
+        # Workstation-facing module to sync corpus sources (agent/shell history,
+        # Slack/Linear exports, git repos) to an S3/R2 parquet archive and/or
+        # Mixedbread, as a portable timer service. Closed over the per-system
+        # packages so it resolves the `indexer` for the host. See
+        # packages/indexer/home-module.nix.
+        indexer = import ./packages/indexer/home-module.nix {
           indexPackages = system: (collect "packages").${system};
           portableServicesModule = ix.portableServices.homeModule;
         };

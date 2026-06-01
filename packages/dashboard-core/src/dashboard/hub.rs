@@ -50,6 +50,46 @@ fn body_of(view: &View) -> String {
     }
 }
 
+/// Bodies up to this size are reconciled with Loro's refined text diff, which
+/// produces small deltas for the common case (a terminal screen, a tweaked HTML
+/// fragment). A larger body is replaced wholesale instead: diffing two large,
+/// dissimilar strings is quadratic, and a body that changes completely every
+/// tick (an HTML pane streaming a base64 image data URL) would otherwise stall
+/// the single aggregator and bloat the oplog with edit ops.
+const MAX_DIFF_BODY: usize = 32 * 1024;
+
+/// Ceiling on the refined diff for a small body, so a pathological input can
+/// never block the aggregator. On timeout the body falls back to a wholesale
+/// replace, same as a large body.
+const BODY_DIFF_TIMEOUT_MS: f64 = 50.0;
+
+/// Reconcile a pane's `body` text to `next`.
+///
+/// Small bodies use Loro's refined diff (cheap, small deltas) under a timeout;
+/// large bodies, and any diff that times out, are replaced wholesale: delete the
+/// current contents and insert the new ones, two bulk ops whose cost is
+/// independent of how similar the two strings are.
+fn set_body(body: &LoroText, next: &str) -> Result<()> {
+    if next.len() <= MAX_DIFF_BODY {
+        let options = loro::UpdateOptions {
+            timeout_ms: Some(BODY_DIFF_TIMEOUT_MS),
+            use_refined_diff: true,
+        };
+        if body.update(next, options).is_ok() {
+            return Ok(());
+        }
+        // The diff timed out. It may have applied partial edits before bailing,
+        // so the wholesale replace below reconciles against the container's own
+        // current length rather than any cached previous body.
+    }
+    let current_len = body.len_unicode();
+    if current_len > 0 {
+        body.delete(0, current_len).map_err(loro_err)?;
+    }
+    body.insert(0, next).map_err(loro_err)?;
+    Ok(())
+}
+
 /// The Loro handles backing one pane card, plus the scalar values already
 /// written, cached across applies so a tick only re-inserts a value that
 /// changed (an unchanged insert is still a CRDT op, so caching is what keeps an
@@ -216,11 +256,7 @@ impl DocState {
         }
         let body = body_of(&pane.view);
         if slot.body_str != body {
-            slot.body
-                .update(&body, loro::UpdateOptions::default())
-                .map_err(|source| Error::Dashboard {
-                    message: format!("body text update: {source}"),
-                })?;
+            set_body(&slot.body, &body)?;
             slot.body_str = body;
         }
         Ok(())

@@ -41,6 +41,15 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # dependency-free and the unused-crate-dependencies check passes there.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The interactive `drive` sessions publish the live guest screen to the local
+# dashboard as an image pane. Only the lightweight `Publisher` half of
+# `dashboard-core` is used; it pulls the aggregator's deps along until that crate
+# is split. tokio runs the publisher socket (this binary otherwise drives an
+# AppKit run loop), and base64 builds the frame data URL. All macOS-gated so the
+# Linux stub graph stays dependency-free.
+dashboard-core = { path = "../dashboard-core" }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "sync", "time"] }
+base64.workspace = true
 
 [lints]
 workspace = true
