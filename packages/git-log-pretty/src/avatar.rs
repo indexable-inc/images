@@ -17,6 +17,10 @@ use github_avatar::Client;
 /// Name of the on-disk `email\tlogin` resolution cache within the cache dir.
 const LOGIN_CACHE_FILE: &str = "logins.tsv";
 
+/// Mask keeping image ids within the 24 bits the kitty Unicode-placeholder
+/// foreground color can encode (`kitty::placeholder_row`).
+const ID_MASK: u32 = 0x00FF_FFFF;
+
 /// An author's avatar, ready to hand to the renderer.
 pub struct Avatar {
     /// `PNG`-encoded image bytes.
@@ -68,9 +72,11 @@ impl Resolver {
             login_cache,
             png_cache: HashMap::new(),
             login_ids: HashMap::new(),
-            // Seed the kitty image-id counter from the pid so concurrent tools
-            // sharing the terminal are unlikely to collide on image ids.
-            next_id: std::process::id().wrapping_mul(256).wrapping_add(1),
+            // Seed the kitty image-id counter from a hash of the pid so concurrent
+            // tools sharing the terminal are unlikely to collide. Kept within the
+            // 24 bits the placeholder encoding can carry (and never 0, which the
+            // protocol reserves); see [`Resolver::next_image_id`].
+            next_id: ((std::process::id().wrapping_mul(2_654_435_761) >> 8) & ID_MASK).max(1),
             cache_dir,
         }
     }
@@ -149,9 +155,20 @@ impl Resolver {
         if let Some(id) = self.login_ids.get(login) {
             return *id;
         }
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
+        let id = self.next_image_id();
         self.login_ids.insert(login.to_string(), id);
+        id
+    }
+
+    /// Reserve the next image id: 24-bit (the placeholder foreground can carry
+    /// no more) and never 0 (reserved by the protocol). Wraps on overflow, which
+    /// only matters after ~16M authors in one process.
+    const fn next_image_id(&mut self) -> u32 {
+        let id = self.next_id;
+        self.next_id = match (self.next_id + 1) & ID_MASK {
+            0 => 1,
+            next => next,
+        };
         id
     }
 

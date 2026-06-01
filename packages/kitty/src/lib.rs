@@ -5,6 +5,18 @@
 //! open a terminal, decode images, or talk to the network. Callers own those
 //! concerns and decide where the returned string is written.
 //!
+//! Two display models are supported. [`transmit`] and [`place`] draw an image at
+//! the cursor, which is simplest but pins the image to a screen position, so it
+//! cannot survive a program that repaints the screen (a pager, `tmux`, an
+//! editor). [`transmit_virtual`] plus [`placeholder_row`] use the protocol's
+//! [Unicode placeholder] feature instead: the pixels are transmitted once, then
+//! the image is displayed wherever ordinary `U+10EEEE` text cells are printed.
+//! Because those cells are normal text, a host that knows nothing about graphics
+//! moves the image around as it reflows the text, so the image scrolls with the
+//! output and pages cleanly.
+//!
+//! [Unicode placeholder]: https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders
+//!
 //! ```
 //! let png: &[u8] = b"\x89PNG..."; // real `PNG` bytes in practice
 //! let seq = kitty::transmit(
@@ -18,6 +30,7 @@
 //! [kitty terminal graphics protocol]: https://sw.kovidgoyal.net/kitty/graphics-protocol/
 
 use std::fmt::Write;
+use std::sync::OnceLock;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -128,6 +141,94 @@ pub fn place(id: u32, placement: &Placement) -> String {
     format!("{APC_START}{control}{ST}")
 }
 
+/// The Unicode placeholder character (`U+10EEEE`).
+///
+/// Printing this cell, with the image id in its foreground color and row/column
+/// diacritics, displays a fragment of a virtual image previously sent by
+/// [`transmit_virtual`].
+pub const PLACEHOLDER: char = '\u{10EEEE}';
+
+/// Transmit `image` and create an invisible *virtual placement* for it.
+///
+/// The placement is sized to a `cols`×`rows` cell box. Nothing is drawn until
+/// matching [`placeholder_row`] cells are printed; the image is then fit to the
+/// box with its aspect ratio kept.
+///
+/// `id` must be non-zero and fit in 24 bits, because [`placeholder_row`] encodes
+/// it in a cell's 24-bit foreground color. Quiet mode (`q=2`) is set so the
+/// terminal sends no acknowledgement that could corrupt a host program's output.
+#[must_use]
+pub fn transmit_virtual(image: &Image<'_>, id: u32, cols: u32, rows: u32) -> String {
+    let (format, payload, dimensions): (u16, &[u8], Option<(u32, u32)>) = match *image {
+        Image::Png(bytes) => (100, bytes, None),
+        Image::Rgba {
+            width,
+            height,
+            pixels,
+        } => (32, pixels, Some((width, height))),
+    };
+
+    // a=T transmits and (with U=1) creates a virtual placement in one command.
+    let mut control = format!("a=T,U=1,f={format},i={id},c={cols},r={rows},q=2");
+    if let Some((width, height)) = dimensions {
+        let _ = write!(control, ",s={width},v={height}");
+    }
+    encode_chunks(&control, payload)
+}
+
+/// Render row `row` of a Unicode-placeholder image as ordinary text.
+///
+/// Emits a foreground-color escape carrying the image `id`, then `cols`
+/// placeholder cells tagged with the row and column diacritics, then a
+/// foreground reset so following text is unstyled.
+///
+/// Callers lay these rows out as ordinary text (one per terminal line, in the
+/// gutter beside other content). `id` must match a prior [`transmit_virtual`]
+/// and fit in 24 bits. `row` and `col` indices beyond the diacritic table
+/// (hundreds of entries) are dropped, which only clips an unreasonably tall or
+/// wide placement.
+#[must_use]
+pub fn placeholder_row(id: u32, row: u32, cols: u32) -> String {
+    let table = diacritics();
+    let Some(row_mark) = table.get(row as usize) else {
+        return String::new();
+    };
+
+    // The image id rides in the 24-bit true-color foreground; the terminal reads
+    // it back from the cell color rather than displaying the color itself.
+    let (r, g, b) = ((id >> 16) & 0xFF, (id >> 8) & 0xFF, id & 0xFF);
+    let mut out = format!("\x1b[38;2;{r};{g};{b}m");
+    for col in 0..cols {
+        let Some(col_mark) = table.get(col as usize) else {
+            break;
+        };
+        out.push(PLACEHOLDER);
+        out.push(*row_mark);
+        out.push(*col_mark);
+    }
+    // Reset only the foreground (SGR 39) so the caller's own styling is intact.
+    out.push_str("\x1b[39m");
+    out
+}
+
+/// The row/column diacritics, parsed once from the vendored kitty table.
+///
+/// Index `i` is the combining character that encodes the number `i`.
+fn diacritics() -> &'static [char] {
+    static TABLE: OnceLock<Vec<char>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        // Source: kitty `gen/rowcolumn-diacritics.txt`. Each data line is
+        // `HEX;NAME;...`; comment lines start with `#`. We take the leading hex.
+        include_str!("rowcolumn-diacritics.txt")
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+            .filter_map(|line| line.split(';').next())
+            .filter_map(|hex| u32::from_str_radix(hex.trim(), 16).ok())
+            .filter_map(char::from_u32)
+            .collect()
+    })
+}
+
 fn push_placement(control: &mut String, placement: &Placement) {
     if let Some(cols) = placement.cols {
         let _ = write!(control, ",c={cols}");
@@ -182,7 +283,10 @@ fn encode_chunks(control: &str, payload: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{APC_START, Image, MAX_CHUNK, Placement, ST, STANDARD, place, transmit};
+    use super::{
+        APC_START, Image, MAX_CHUNK, PLACEHOLDER, Placement, ST, STANDARD, diacritics, place,
+        placeholder_row, transmit, transmit_virtual,
+    };
     use base64::Engine;
 
     fn single_command(sequence: &str) -> (&str, &str) {
@@ -242,6 +346,45 @@ mod tests {
             let payload = command.rsplit_once(';').map_or("", |(_, payload)| payload);
             assert!(payload.len() <= MAX_CHUNK);
         }
+    }
+
+    #[test]
+    fn virtual_transmit_marks_unicode_placement() {
+        let sequence = transmit_virtual(&Image::Png(b"hello"), 42, 4, 2);
+        let (control, payload) = single_command(&sequence);
+        // U=1 makes the placement virtual; q=2 silences acknowledgements.
+        for key in ["a=T", "U=1", "f=100", "i=42", "c=4", "r=2", "q=2", "m=0"] {
+            assert!(control.contains(key), "missing {key} in {control}");
+        }
+        assert_eq!(payload, STANDARD.encode(b"hello"));
+    }
+
+    #[test]
+    fn placeholder_row_encodes_id_in_foreground() {
+        // id 42 = 0x00002A -> fg color 0;0;42.
+        let row = placeholder_row(42, 0, 4);
+        assert!(row.starts_with("\x1b[38;2;0;0;42m"), "fg color must carry the id: {row:?}");
+        assert!(row.ends_with("\x1b[39m"), "must reset the foreground");
+        assert_eq!(row.matches(PLACEHOLDER).count(), 4, "one placeholder cell per column");
+    }
+
+    #[test]
+    fn placeholder_row_uses_distinct_row_and_col_diacritics() {
+        let table = diacritics();
+        let (row0, col0, col1) = (table[0], table[0], table[1]);
+        // Row 0, two columns: each cell is placeholder + row-mark + col-mark.
+        let row = placeholder_row(7, 0, 2);
+        let expected = format!("{PLACEHOLDER}{row0}{col0}{PLACEHOLDER}{row0}{col1}");
+        assert!(row.contains(&expected), "cells must tag row 0, cols 0 and 1: {row:?}");
+    }
+
+    #[test]
+    fn diacritics_table_matches_kitty_spec() {
+        let table = diacritics();
+        // The first two entries are the canonical examples from the kitty docs.
+        assert_eq!(table[0], '\u{0305}', "index 0 is COMBINING OVERLINE");
+        assert_eq!(table[1], '\u{030D}', "index 1 is COMBINING VERTICAL LINE ABOVE");
+        assert!(table.len() > 255, "need enough diacritics to index any row/column");
     }
 
     #[test]

@@ -1,6 +1,5 @@
 //! Format a commit's summary line and its changed-file tree for the terminal.
 
-use std::collections::HashSet;
 use std::fmt::Write;
 
 use anstyle::{Ansi256Color, AnsiColor, Color, Style};
@@ -109,18 +108,29 @@ pub fn print_commit(
     write_plain(out, &header, &icons)
 }
 
+/// Width in cells of an avatar `rows` tall.
+///
+/// Cells are about twice as tall as wide, so the image spans `2 * rows` columns
+/// to stay roughly square. The caller transmits the image into this same box.
+#[must_use]
+pub const fn avatar_cols(rows: u32) -> u32 {
+    rows * 2
+}
+
 /// Write one commit block with the author's avatar in the left gutter.
 ///
-/// The avatar is drawn via the kitty graphics protocol and the text is shifted
-/// right to clear it; with no avatar this falls back to the plain form.
-/// `transmitted` tracks image ids already sent this run, so a repeated author is
-/// redrawn with a cheap placement instead of resending the pixels.
+/// The avatar is drawn with kitty [Unicode placeholder] cells: the pixels were
+/// already sent once by the caller via [`kitty::transmit_virtual`], so here we
+/// only print placeholder text tagged with the image id. Because the gutter is
+/// ordinary left-to-right text (no cursor motion), the block scrolls and pages
+/// like any other output. With no avatar this falls back to the plain form.
+///
+/// [Unicode placeholder]: https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders
 pub fn print_commit_with_avatar(
     out: &mut dyn std::io::Write,
     ahead: &git::AheadCommit<'_>,
     theme: Theme,
     avatar: Option<&Avatar>,
-    transmitted: &mut HashSet<u32>,
     rows: u32,
 ) -> color_eyre::eyre::Result<()> {
     let (header, icons) = commit_block(ahead, theme)?;
@@ -129,44 +139,43 @@ pub fn print_commit_with_avatar(
         return write_plain(out, &header, &icons);
     };
 
-    // Cells are about twice as tall as wide, so double the column count to keep
-    // the avatar square; one extra column separates it from the text.
-    let cols = rows * 2;
-    let gutter = cols + 1;
-    let placement = kitty::Placement {
-        cols: Some(cols),
-        rows: Some(rows),
-        move_cursor: false,
-    };
-
-    let mut buf = String::new();
-    // Anchor at column 0, then draw without moving the cursor (C=1).
-    buf.push('\r');
-    if transmitted.insert(avatar.id) {
-        buf.push_str(&kitty::transmit(
-            &kitty::Image::Png(&avatar.png),
-            Some(avatar.id),
-            &placement,
-        ));
-    } else {
-        buf.push_str(&kitty::place(avatar.id, &placement));
-    }
-
     let mut lines = vec![header.as_str()];
     if !icons.is_empty() {
         lines.extend(icons.lines());
     }
-    // Print at least `rows` lines so the text advances past the image.
+    write!(out, "{}", compose_avatar_block(&lines, avatar.id, rows))?;
+    Ok(())
+}
+
+/// Lay out `lines` beside an avatar `rows` cells tall, returning the block as
+/// text terminated by a blank separator line.
+///
+/// The first `rows` lines carry the kitty placeholder cells for image
+/// `avatar_id` (one image row each); any further lines are padded with spaces so
+/// the text stays aligned past the image. The block always spans at least `rows`
+/// lines so the image is never clipped vertically. Pure, so it is unit-tested
+/// directly without a real commit.
+fn compose_avatar_block(lines: &[&str], avatar_id: u32, rows: u32) -> String {
+    let cols = avatar_cols(rows);
+    // The image is `cols` wide; one more column separates it from the text.
+    let gutter = cols as usize + 1;
     let count = lines.len().max(usize::try_from(rows).unwrap_or(usize::MAX));
+
+    let mut buf = String::new();
     for index in 0..count {
         let content = lines.get(index).copied().unwrap_or("");
-        // Return to column 0, step right past the avatar, then write the text.
-        let _ = write!(buf, "\r\x1b[{gutter}C{content}\n");
+        if let Ok(row) = u32::try_from(index)
+            && row < rows
+        {
+            // Placeholder cells, a one-column gap, then the text.
+            let _ = writeln!(buf, "{} {content}", kitty::placeholder_row(avatar_id, row, cols));
+        } else {
+            // Past the image: pad the gutter with spaces so the text stays aligned.
+            let _ = writeln!(buf, "{:gutter$}{content}", "");
+        }
     }
     buf.push('\n');
-
-    write!(out, "{buf}")?;
-    Ok(())
+    buf
 }
 
 #[cfg(test)]
@@ -207,5 +216,37 @@ mod tests {
     fn conventional_summary_keeps_its_text() {
         let rendered = plain(&format_summary("feat(api): add route", Theme::Dark));
         assert_eq!(rendered, "feat api add route");
+    }
+
+    #[test]
+    fn avatar_block_tags_each_image_row_with_placeholders() {
+        let block = compose_avatar_block(&["header", "tree"], 42, 2);
+        let lines: Vec<&str> = block.lines().collect();
+        // Two image rows beside the two content lines, then a blank separator.
+        assert!(lines[0].contains(kitty::PLACEHOLDER), "row 0 needs placeholder cells");
+        assert!(lines[1].contains(kitty::PLACEHOLDER), "row 1 needs placeholder cells");
+        assert!(lines[0].contains("header") && lines[1].contains("tree"));
+        assert_eq!(block.lines().last(), Some(""), "block ends with a blank line");
+    }
+
+    #[test]
+    fn avatar_block_pads_lines_below_the_image() {
+        // One image row, two content lines: the second line clears the gutter
+        // with spaces (no placeholder) so it stays aligned under the text.
+        let block = compose_avatar_block(&["header", "extra"], 7, 1);
+        let lines: Vec<&str> = block.lines().collect();
+        assert!(lines[0].contains(kitty::PLACEHOLDER));
+        assert!(!lines[1].contains(kitty::PLACEHOLDER), "padded line has no placeholder");
+        // gutter = avatar_cols(1) + 1 = 3 spaces before the text.
+        assert!(lines[1].starts_with("   extra"), "misaligned pad: {:?}", lines[1]);
+    }
+
+    #[test]
+    fn avatar_block_never_clips_image_vertically() {
+        // A single content line still emits two rows so a 2-row image fits.
+        let block = compose_avatar_block(&["only"], 9, 2);
+        let placeholder_rows =
+            block.lines().filter(|line| line.contains(kitty::PLACEHOLDER)).count();
+        assert_eq!(placeholder_rows, 2, "both image rows must be drawn");
     }
 }

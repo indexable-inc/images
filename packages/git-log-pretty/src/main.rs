@@ -119,12 +119,13 @@ fn run_log(allow_pager: bool, want_avatars: bool, avatar_rows: u32) -> Result<()
     emit_log(&repo, &header, &commits, theme, allow_pager, want_avatars, avatar_rows)
 }
 
-/// Render the header and commit blocks.
+/// Render the header and commit blocks, paging like `git log`.
 ///
 /// When avatars are enabled (a graphics terminal, a real TTY, and not opted
-/// out), the output bypasses the pager and goes straight to the terminal,
-/// because a pager like `less` would render the kitty graphics escapes as
-/// garbage. Otherwise it pages as usual.
+/// out), each unique author image is transmitted to the terminal once, up
+/// front, as a kitty Unicode-placeholder virtual placement. The paged text then
+/// only carries placeholder cells, which are ordinary characters, so the log
+/// pages and scrolls with the avatars in place instead of bypassing the pager.
 fn emit_log(
     repo: &git2::Repository,
     header: &str,
@@ -139,29 +140,44 @@ fn emit_log(
         && kitty::is_supported()
         && std::io::stdout().is_terminal();
 
-    if !avatars_enabled {
-        return pager::paged(allow_pager, |out| print_log(out, header, commits, theme));
+    // A fetch or runtime-build failure shouldn't sink the whole log; fall back
+    // to the plain, still-paged renderer.
+    let fetched = avatars_enabled.then(|| fetch_avatars(repo, commits).ok()).flatten();
+
+    // Transmit the pixels before the pager starts drawing, so the placeholder
+    // cells it later prints have an image to resolve against.
+    if let Some(fetched) = &fetched {
+        transmit_avatars(fetched, avatar_rows)?;
     }
 
-    // A runtime-build failure shouldn't sink the whole log; fall back to the
-    // plain, pageable renderer.
-    let Ok(fetched) = fetch_avatars(repo, commits) else {
-        return pager::paged(allow_pager, |out| print_log(out, header, commits, theme));
-    };
+    pager::paged(allow_pager, |out| {
+        writeln!(out, "{}\n", paint(fg(Color::Ansi(AnsiColor::Cyan)), header))?;
+        for (index, commit) in commits.iter().enumerate() {
+            match fetched.as_ref().and_then(|fetched| fetched.get(index)) {
+                Some(avatar) => {
+                    display::print_commit_with_avatar(out, commit, theme, avatar.as_ref(), avatar_rows)?;
+                }
+                None => display::print_commit(out, commit, theme)?,
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Transmit each unique avatar's pixels to the terminal as a kitty virtual
+/// placement, sized to the avatar box. Writes straight to stdout (the TTY) and
+/// flushes, so the images are stored before the pager prints any placeholders.
+fn transmit_avatars(fetched: &[Option<avatar::Avatar>], rows: u32) -> Result<()> {
+    let cols = display::avatar_cols(rows);
     let mut out = std::io::stdout().lock();
-    writeln!(out, "{}\n", paint(fg(Color::Ansi(AnsiColor::Cyan)), header))?;
-    let mut transmitted = HashSet::new();
-    for (ahead, avatar) in commits.iter().zip(&fetched) {
-        display::print_commit_with_avatar(
-            &mut out,
-            ahead,
-            theme,
-            avatar.as_ref(),
-            &mut transmitted,
-            avatar_rows,
-        )?;
+    let mut sent = HashSet::new();
+    for avatar in fetched.iter().flatten() {
+        if sent.insert(avatar.id) {
+            let sequence = kitty::transmit_virtual(&kitty::Image::Png(&avatar.png), avatar.id, cols, rows);
+            out.write_all(sequence.as_bytes())?;
+        }
     }
-    Ok(())
+    out.flush().wrap_err("failed to flush avatar images to the terminal")
 }
 
 /// Resolve and download each commit author's avatar, one slot per commit.
@@ -187,15 +203,6 @@ fn fetch_avatars(
         fetched
     });
     Ok(fetched)
-}
-
-/// Write a cyan header followed by each commit block to `out`.
-fn print_log(out: &mut dyn Write, header: &str, commits: &[git::AheadCommit<'_>], theme: Theme) -> Result<()> {
-    writeln!(out, "{}\n", paint(fg(Color::Ansi(AnsiColor::Cyan)), header))?;
-    for commit in commits {
-        display::print_commit(out, commit, theme)?;
-    }
-    Ok(())
 }
 
 /// Render the changed-file tree between `base` and `head`.
