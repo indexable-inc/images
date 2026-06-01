@@ -7,10 +7,12 @@
 #     the public Better Stack status page onto a per-service Minecraft boss bar
 #     plus an Ender Dragon growl + spoken root cause;
 #   * the boss bar overlay GUI it drives (`bossbar-overlay`);
-#   * the merged-PR + CI-failure watcher (`pr-watch`), which plays a Minecraft
-#     sound on each PR newly merged to main and, on a newly failed main Actions
+#   * the merged-PR + CI-failure watcher (`pr-watch`), which on each PR newly
+#     merged to main floats a labelled Minecraft XP orb up the screen (the
+#     `merge-orb-feed` overlay; no sound) and, on a newly failed main Actions
 #     run, speaks a one-line alert and launches a detached Opus deep dive
 #     (`ci-triage`) that files a deduped Linear ticket;
+#   * the full-screen merge feed overlay it announces onto (`merge-orb-feed`);
 #   * the token-free `/optimize` history scan (`optimize-scan`);
 #   * the shared "play a gentle sound, then speak it detached" helper
 #     (`say-detached`) the watchers announce through.
@@ -189,15 +191,17 @@ let
     ];
     text =
       builtins.replaceStrings
-        [ "@ANNOUNCE_LIB@" "@REPOS@" "@MERGE_SOUND@" "@LOG_DIR@" "@TRIAGE_COOLDOWN@" ]
+        [ "@ANNOUNCE_LIB@" "@REPOS@" "@ORB_BIN@" "@LOG_DIR@" "@TRIAGE_COOLDOWN@" ]
         [
           "${announceLib}"
-          # escapeShellArg per value: these land unquoted in `repos=(@REPOS@)` and
-          # `say-detached @MERGE_SOUND@`, so a value with a space or shell
-          # metacharacter must carry its own quoting (the options are author-set,
-          # but bake safely rather than rely on that).
+          # escapeShellArg per value: @REPOS@ lands unquoted in `repos=(@REPOS@)`,
+          # so a value with a space or shell metacharacter must carry its own
+          # quoting (the option is author-set, but bake safely rather than rely on
+          # it).
           (lib.concatMapStringsSep " " lib.escapeShellArg cfg.prWatch.repos)
-          (lib.escapeShellArg cfg.prWatch.mergeSound)
+          # The merge feed binary: a newly merged PR is announced as a labelled
+          # XP orb (`<orb> push "<repo>: <title>"`), not a sound.
+          (lib.getExe' indexPkgs.bossbar-overlay "xp-orb-overlay")
           cfg.logDir
           (toString cfg.prWatch.triageCooldown)
         ]
@@ -242,6 +246,19 @@ in
       };
     };
 
+    mergeOrbOverlay = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Run the full-screen click-through merge feed overlay (`xp-orb-overlay
+          feed`) that pr-watch announces merges onto: each merged PR floats a
+          labelled Minecraft XP orb up the screen and fades it. Needs a display,
+          so disable on headless hosts (pr-watch still queues events harmlessly).
+        '';
+      };
+    };
+
     optimize = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -281,15 +298,6 @@ in
           "indexable-inc/index"
         ];
         description = "GitHub `owner/name` repos to watch for merges and main CI failures.";
-      };
-
-      mergeSound = lib.mkOption {
-        type = lib.types.str;
-        default = "block/bell/bell_use01";
-        description = ''
-          minecraft-sound id played (sound only, no speech) when a PR is newly
-          merged into main. See `minecraft-sound list` for the catalog.
-        '';
       };
 
       triageCooldown = lib.mkOption {
@@ -374,6 +382,19 @@ in
           restart = "always";
           standardOutPath = "${cfg.logDir}/bossbar-overlay.log";
           standardErrorPath = "${cfg.logDir}/bossbar-overlay.log";
+          # Label defaults to the space-free home convention; no escape hatch.
+        };
+      })
+      (lib.mkIf cfg.mergeOrbOverlay.enable {
+        merge-orb-feed = {
+          description = "merge XP-orb feed overlay";
+          command = [
+            (lib.getExe' indexPkgs.bossbar-overlay "xp-orb-overlay")
+            "feed"
+          ];
+          restart = "always";
+          standardOutPath = "${cfg.logDir}/merge-orb-feed.log";
+          standardErrorPath = "${cfg.logDir}/merge-orb-feed.log";
           # Label defaults to the space-free home convention; no escape hatch.
         };
       })

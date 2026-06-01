@@ -4,15 +4,16 @@
 # runtimeInputs. The module bakes these placeholders at build time:
 #   @ANNOUNCE_LIB@     store path of announce-lib.sh (source'd below)
 #   @REPOS@            the watched repos as a quoted bash-array body
-#   @MERGE_SOUND@      the Minecraft sound id played on a newly merged PR
+#   @ORB_BIN@          absolute path to the xp-orb-overlay binary (merge feed)
 #   @LOG_DIR@          directory the detached ci-triage stage-2 log is appended to
 #   @TRIAGE_COOLDOWN@  default seconds between stage-2 deep dives per repo+workflow
 #
 # Polls each watched repo for PRs newly merged into `main`. For each newly merged
-# PR it plays a single Minecraft sound (the @MERGE_SOUND@ id, by default a bell
-# toll) and nothing else: no spoken summary, no `claude -p`, no `say`. It
-# deliberately does NOT report the still-open / pending PR queue. The first run
-# per repo only seeds the state file, so existing PRs stay quiet.
+# PR it queues a labelled Minecraft XP orb in the merge feed overlay
+# (`xp-orb-overlay push "<repo>: <title>"`), which floats up the screen and fades
+# ("rise & pop"). NO sound: the merge alert is purely visual. It deliberately
+# does NOT report the still-open / pending PR queue. The first run per repo only
+# seeds the state file, so existing PRs stay quiet.
 #
 # It ALSO polls each repo for Actions runs that newly FAILED on `main` and
 # responds in TWO stages per newly-failed run:
@@ -75,10 +76,11 @@ for repo in "${repos[@]}"; do
     short="${repo##*/}"
     echo "MERGED: [$short #$num] $title  (by $who)"
 
-    # Sound only: a single Minecraft sound (the @MERGE_SOUND@ id), detached so a
-    # reload can't clip it. No spoken summary, no `claude -p`, no `say`. Empty
-    # text => say-detached just plays the sound.
-    say-detached @MERGE_SOUND@ ""
+    # Visual only: queue a labelled XP orb in the merge feed overlay. It floats
+    # up and fades. No sound. Best-effort: if the feed overlay is not running the
+    # event just sits in the DB (pruned after a few minutes), so never fail the
+    # poll on a push error.
+    @ORB_BIN@ push "$short: $title" || true
   done < <(printf '%s' "$json" | jq -r '
     .[] | [ (.number|tostring),
             .title,
