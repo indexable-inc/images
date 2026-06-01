@@ -31,6 +31,10 @@ struct Args {
     amount: Option<i64>,
     /// Render the snapshot in the hovered (grown) state.
     hover: bool,
+    /// Run the scroll-drag cursor-follow self-test, writing a report here and
+    /// exiting. Validates the fix inside the macOS guest VM, where the guest
+    /// cursor is invisible to host screenshots, by reading the real cursor in-guest.
+    selftest: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -43,6 +47,7 @@ fn parse_args() -> Result<Args, String> {
         scale,
         amount: None,
         hover: false,
+        selftest: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -67,9 +72,14 @@ fn parse_args() -> Result<Args, String> {
                 );
             }
             "--hover" => args.hover = true,
+            "--selftest" => {
+                let p = it.next().ok_or("--selftest needs an output path")?;
+                args.selftest = Some(PathBuf::from(p));
+            }
             "-h" | "--help" => {
                 println!(
-                    "xp-orb-overlay [--snapshot OUT] [--scale N] [--amount N] [--hover]\n\
+                    "xp-orb-overlay [--snapshot OUT] [--scale N] [--amount N] [--hover] \
+                     [--selftest OUT]\n\
                      SQLite-driven Minecraft experience-orb overlay. DB path: ORB_DB \
                      or the per-OS app-data path."
                 );
@@ -89,6 +99,17 @@ fn main() {
             std::process::exit(2);
         }
     };
+
+    if let Some(out) = args.selftest {
+        match overlay::run_selftest(args.scale, &out) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("xp-orb-overlay: selftest failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
 
     let db = db::resolve_path();
 

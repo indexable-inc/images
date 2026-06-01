@@ -427,3 +427,120 @@ pub fn run(db: PathBuf, base_scale: u32) -> Result<(), Box<dyn std::error::Error
     event_loop.run_app(&mut app)?;
     Ok(())
 }
+
+/// Steps and per-step travel (logical points, upward) for the scroll-drag
+/// self-test. Upward and bounded so the window + warped pointer stay on screen on
+/// both the host and the smaller guest VM display.
+const SELFTEST_STEPS: usize = 30;
+const SELFTEST_DY: f64 = -10.0;
+
+/// Validate the scroll-drag pointer-follow in the *running* window server and
+/// report it, for use inside the macOS guest VM where the guest cursor is invisible
+/// to host screenshots and the driver only knows the position it injected.
+///
+/// Creates a float window, warps the pointer onto its centre, then steps the window
+/// with [`overlay_core::window::move_window_with_cursor`] (the exact production
+/// path) while reading the *real* pointer each step via
+/// [`overlay_core::window::cursor_global`]. Writes
+/// `window_delta cursor_delta drift ...` to `out` and exits. A working follow has
+/// `drift ~ 0`; a pointer that does not track the window leaves `drift_y ~ -window_dy`.
+pub fn run_selftest(base_scale: u32, out: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let event_loop: EventLoop<()> = ocwin::build_event_loop()?;
+    let mut app = SelfTest {
+        base_scale: base_scale.max(1),
+        out: out.to_path_buf(),
+        win: None,
+        step: 0,
+        win0: None,
+        rel: PhysicalPosition::new(0.0, 0.0),
+        cur0: None,
+        last_cur: None,
+        ready: false,
+    };
+    event_loop.run_app(&mut app)?;
+    Ok(())
+}
+
+struct SelfTest {
+    base_scale: u32,
+    out: PathBuf,
+    win: Option<Arc<Window>>,
+    step: usize,
+    win0: Option<LogicalPosition<f64>>,
+    /// Pointer offset within the window (physical px) held constant across steps.
+    rel: PhysicalPosition<f64>,
+    cur0: Option<(f64, f64)>,
+    last_cur: Option<(f64, f64)>,
+    ready: bool,
+}
+
+impl ApplicationHandler<()> for SelfTest {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.ready {
+            return;
+        }
+        self.ready = true;
+        let sf = event_loop
+            .primary_monitor()
+            .or_else(|| event_loop.available_monitors().next())
+            .map_or(1.0, |m| m.scale_factor());
+        let scale = ((self.base_scale as f64) * sf).round().max(1.0) as u32;
+        let (side, _) = scene::orb_window_px(scale);
+        let pos = LogicalPosition::new(300.0, 400.0);
+        let attrs = ocwin::float_attributes("XP Orb Self-Test", side, side, Some(pos));
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                eprintln!("xp-orb-overlay: selftest window failed: {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+        // Pointer offset = the window centre (physical px); held across steps so the
+        // pointer should ride along exactly as the window moves.
+        let rel = PhysicalPosition::new(f64::from(side) / 2.0, f64::from(side) / 2.0);
+        ocwin::move_window_with_cursor(&window, pos, Some(rel));
+        self.rel = rel;
+        self.win0 = Some(pos);
+        self.cur0 = ocwin::cursor_global();
+        self.last_cur = self.cur0;
+        self.win = Some(window);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if matches!(event, WindowEvent::CloseRequested) {
+            event_loop.exit();
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let (Some(window), Some(p0)) = (self.win.clone(), self.win0) else {
+            return;
+        };
+        if self.step < SELFTEST_STEPS {
+            let n = self.step as f64 + 1.0;
+            let pos = LogicalPosition::new(p0.x, p0.y + SELFTEST_DY * n);
+            ocwin::move_window_with_cursor(&window, pos, Some(self.rel));
+            if let Some(c) = ocwin::cursor_global() {
+                self.last_cur = Some(c);
+            }
+            self.step += 1;
+            event_loop
+                .set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(33)));
+        } else {
+            let win_dy = SELFTEST_DY * SELFTEST_STEPS as f64;
+            let (cx0, cy0) = self.cur0.unwrap_or((0.0, 0.0));
+            let (cx1, cy1) = self.last_cur.unwrap_or((cx0, cy0));
+            let (cur_dx, cur_dy) = (cx1 - cx0, cy1 - cy0);
+            let (drift_x, drift_y) = (cur_dx, cur_dy - win_dy);
+            let report = format!(
+                "steps={SELFTEST_STEPS} window_delta=(0.0,{win_dy:.1}) \
+                 cursor_delta=({cur_dx:.1},{cur_dy:.1}) drift=({drift_x:.1},{drift_y:.1}) \
+                 cursor0=({cx0:.1},{cy0:.1}) cursor1=({cx1:.1},{cy1:.1})\n"
+            );
+            let _ = std::fs::write(&self.out, &report);
+            print!("xp-orb-overlay selftest: {report}");
+            event_loop.exit();
+        }
+    }
+}
