@@ -9,6 +9,7 @@ members = [
   "packages/ast-merge/langs",
   "packages/ast-merge/matcher",
   "packages/source/claude",
+  "packages/source/codex",
   "packages/claude-history-sync",
   "packages/clone-detect/cli",
   "packages/clone-detect/detect",
@@ -90,6 +91,7 @@ bytes = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"
 source-claude = { path = "packages/source/claude" }
+source-codex = { path = "packages/source/codex" }
 clone-detect = { path = "packages/clone-detect/detect" }
 clone-hash = { path = "packages/clone-detect/hash" }
 clone-pragma = { path = "packages/clone-detect/pragma" }
