@@ -49,9 +49,13 @@ stdenvNoCC.mkDerivation {
   buildPhase = ''
     runHook preBuild
 
-    mkdir -p "$out/boss_bar" "$out/gui" "$out/font"
+    mkdir -p "$out/boss_bar" "$out/gui" "$out/font" "$out/entity"
 
     unzip -j -o ${clientJar} '${tex}/gui/sprites/boss_bar/*.png' -d "$out/boss_bar"
+
+    # The experience-orb sprite sheet (16x16 icons in a 4x4 grid) for the XP orb
+    # overlay. It lives under `entity/`, not the GUI sprites.
+    unzip -j -o ${clientJar} '${tex}/entity/experience_orb.png' -d "$out/entity"
 
     unzip -j -o ${clientJar} \
       '${tex}/gui/book.png' \
@@ -83,7 +87,8 @@ stdenvNoCC.mkDerivation {
     description = "Authentic Minecraft GUI textures and bitmap font, extracted from Mojang's official client jar";
     longDescription = ''
       A reproducible extraction of the boss bar sprites, the book GUI texture and
-      page widgets, and the vanilla bitmap font from the official Minecraft
+      page widgets, the experience-orb sheet, and the vanilla bitmap font from the
+      official Minecraft
       ${version} client jar. Consumed by the desktop overlays so they render real
       Mojang art instead of a hand-vendored or mirrored copy.
     '';

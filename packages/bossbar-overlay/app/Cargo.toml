@@ -4,8 +4,8 @@
 # otherwise trip the repo's restriction lints and darwin platform-gating, and
 # their heavy deps would slow every workspace build.
 #
-# `overlay-core` owns the reusable float window + wgpu pixel/text engine; the two
-# binaries (`bossbar`, `book`) are thin domain layers on top. One vendored
+# `overlay-core` owns the reusable float window + wgpu pixel/text engine; the
+# binaries (`bossbar`, `book`, `orb`) are thin domain layers on top. One vendored
 # `Cargo.lock` is shared, and `app/default.nix` builds the whole workspace.
 [workspace]
 resolver = "2"
@@ -13,6 +13,7 @@ members = [
   "crates/overlay-core",
   "crates/bossbar",
   "crates/book",
+  "crates/orb",
 ]
 
 [workspace.package]

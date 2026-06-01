@@ -1,22 +1,24 @@
 # Minecraft Desktop Overlays
 
-Two transparent, always-on-top, click-through desktop overlays drawn in the
-Minecraft style with [`wgpu`](https://github.com/gfx-rs/wgpu): a **boss bar** HUD
-and an open **book**. Both are driven entirely by a single SQLite file each: write
-rows from anything (a shell, a script, a cron job, another program) and the change
-appears on screen within ~200ms.
+Three transparent, always-on-top, click-through desktop overlays drawn in the
+Minecraft style with [`wgpu`](https://github.com/gfx-rs/wgpu): a **boss bar** HUD,
+an open **book**, and a floating **experience orb**. Each is driven entirely by a
+single SQLite file: write rows from anything (a shell, a script, a cron job,
+another program) and the change appears on screen within ~200ms.
 
-Both share one engine, [`overlay-core`](app/crates/overlay-core), which owns the
-float window (transparent, borderless, always-on-top, click-through, drag-to-move)
-and a single textured-quad wgpu pipeline. Text is the real Minecraft bitmap font
-rendered as glyph quads through that same pipeline, so titles and page text are
-just more sprites. The two apps ([`bossbar`](app/crates/bossbar),
-[`book`](app/crates/book)) are thin domain layers on top.
+They share one engine, [`overlay-core`](app/crates/overlay-core), which owns the
+float window (transparent, borderless, always-on-top, click-through, drag-to-move,
+two-finger scroll-to-move) and a single textured-quad wgpu pipeline. Text is the
+real Minecraft bitmap font rendered as glyph quads through that same pipeline, so
+titles and page text are just more sprites. The apps
+([`bossbar`](app/crates/bossbar), [`book`](app/crates/book),
+[`orb`](app/crates/orb)) are thin domain layers on top.
 
-All Minecraft art (boss bar sprites, the book texture and page widgets, the font
-sheet) is extracted from Mojang's official `client.jar` by the
-[`minecraft-assets`](../minecraft-assets) Nix derivation, pinned by Mojang's own
-hash. Nothing is vendored into the repo or pulled from a third-party mirror.
+All Minecraft art (boss bar sprites, the book texture and page widgets, the
+experience-orb sheet, the font sheet) is extracted from Mojang's official
+`client.jar` by the [`minecraft-assets`](../minecraft-assets) Nix derivation,
+pinned by Mojang's own hash. Nothing is vendored into the repo or pulled from a
+third-party mirror.
 
 ![preview](docs/preview.png)
 
@@ -25,6 +27,7 @@ hash. Nothing is vendored into the repo or pulled from a third-party mirror.
 ```sh
 nix run .#bossbar-overlay     # the boss bar HUD across the top of the screen
 nix run .#book-overlay        # a floating open book
+nix run .#xp-orb-overlay      # a floating, bobbing experience orb
 ```
 
 For local Rust development, populate the gitignored art once (it is copied out of

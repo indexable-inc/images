@@ -36,6 +36,7 @@ let
   bins = [
     "bossbar-overlay"
     "book-overlay"
+    "xp-orb-overlay"
   ];
 in
 rustPlatform.buildRustPackage {
@@ -55,6 +56,8 @@ rustPlatform.buildRustPackage {
       ./crates/bossbar/src
       ./crates/book/Cargo.toml
       ./crates/book/src
+      ./crates/orb/Cargo.toml
+      ./crates/orb/src
     ];
   };
 
@@ -68,10 +71,12 @@ rustPlatform.buildRustPackage {
   preBuild = ''
     # Drop the extracted Minecraft art where each crate's `include_bytes!` expects
     # it: the shared font into overlay-core, the sprites into each app.
-    mkdir -p crates/overlay-core/assets crates/bossbar/assets/boss_bar crates/book/assets/gui
+    mkdir -p crates/overlay-core/assets crates/bossbar/assets/boss_bar \
+      crates/book/assets/gui crates/orb/assets/entity
     cp ${minecraft-assets}/font/ascii.png crates/overlay-core/assets/ascii.png
     cp ${minecraft-assets}/boss_bar/*.png crates/bossbar/assets/boss_bar/
     cp ${minecraft-assets}/gui/*.png crates/book/assets/gui/
+    cp ${minecraft-assets}/entity/experience_orb.png crates/orb/assets/entity/
     chmod -R u+w crates
   '';
 

@@ -1319,6 +1319,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "orb"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "glam",
+ "overlay-core",
+ "rusqlite",
+]
+
+[[package]]
 name = "overlay-core"
 version = "0.1.0"
 dependencies = [
