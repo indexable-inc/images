@@ -4,8 +4,13 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, ExitCode, Stdio},
-    sync::{Arc, Mutex},
+    process::{Child, ChildStdin, Command, ExitCode, Stdio},
+    sync::{
+        Arc, Mutex, TryLockError,
+        mpsc::{self, Receiver, RecvTimeoutError},
+    },
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -26,9 +31,34 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 
 const DEFAULT_SESSION_ID: &str = "default";
 const WORKER_SOURCE: &str = include_str!("python_worker.py");
+
+/// Default wall-clock budget for a single `python_eval`/`python_exec` call. A
+/// call that runs longer is abandoned: the caller gets a timeout error and the
+/// worker is restarted, so the next call is not stuck behind the hung one. Raise
+/// it per call with `timeout_secs` for legitimately long work (training, large
+/// downloads). There is deliberately no "infinite" setting, so a runaway cell
+/// cannot wedge the session forever.
+const DEFAULT_TIMEOUT_SECS: u64 = 60;
+
+/// Default budget for the `search_*` tools. The first cold index of a large
+/// checkout can take minutes (a full Mixedbread reconcile), so these get more
+/// headroom than a plain `python_exec`. Still overridable per call.
+const SEARCH_TIMEOUT_SECS: u64 = 600;
+
+/// Budget for internal control round-trips: the startup `ping`, `reset`, and the
+/// graceful `close`. These do no user work, so they answer promptly; a worker
+/// that cannot is treated as broken and replaced.
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often the blocking wait wakes to re-check the deadline and the
+/// cancellation token. A client cancel (`notifications/cancelled`) or an elapsed
+/// deadline is therefore noticed within roughly this interval rather than only
+/// when the worker happens to reply.
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Address bound when `serve --http` is passed without an explicit value. Loopback
 /// only, matching the Streamable HTTP server's default loopback `Host` allowlist
@@ -44,6 +74,20 @@ const HTTP_MCP_PATH: &str = "/mcp";
 // it here keeps one home for the fact instead of repeating it across every
 // `python_*` tool description.
 const SERVER_INSTRUCTIONS: &str = include_str!("server_instructions.txt");
+
+/// A token that is never cancelled, for internal round-trips (startup ping,
+/// reset, close, and every CLI call) that are not tied to a client request.
+fn uncancellable() -> CancellationToken {
+    CancellationToken::new()
+}
+
+/// Translate a caller-supplied `timeout_secs` into a duration, clamping unset or
+/// `0` to `default_secs`. `0` means "use the default" rather than "no timeout":
+/// an instant timeout and an infinite one are both footguns the tool should not
+/// hand out.
+fn call_timeout(timeout_secs: Option<u64>, default_secs: u64) -> Duration {
+    Duration::from_secs(timeout_secs.filter(|secs| *secs > 0).unwrap_or(default_secs))
+}
 
 #[derive(Parser)]
 #[command(name = "ix-mcp")]
@@ -107,131 +151,213 @@ impl McpServer {
     #[tool(
         description = "Create a persistent Python session on the pinned interpreter. The interpreter is fixed; each session runs in its own writable venv so `pip install` works."
     )]
-    fn python_session_create(
+    async fn python_session_create(
         &self,
         Parameters(request): Parameters<CreateSessionRequest>,
     ) -> String {
-        self.with_sessions(|sessions| {
-            sessions.create(request.session_id, request.cwd)?;
+        self.with_registry(move |sessions| {
+            sessions.create_arc(request.session_id, request.cwd)?;
             Ok("session ready".to_string())
         })
+        .await
     }
 
     #[tool(description = "List persistent Python sessions.")]
-    fn python_session_list(&self) -> String {
-        self.with_sessions(SessionManager::list)
+    async fn python_session_list(&self) -> String {
+        self.with_registry(SessionManager::list).await
     }
 
     #[tool(description = "Close a persistent Python session.")]
-    fn python_session_close(&self, Parameters(request): Parameters<SessionRequest>) -> String {
-        self.with_sessions(|sessions| sessions.close(&request.session_id))
+    async fn python_session_close(&self, Parameters(request): Parameters<SessionRequest>) -> String {
+        self.with_registry(move |sessions| sessions.close(&request.session_id))
+            .await
     }
 
     #[tool(
-        description = "Evaluate a Python expression in a persistent session. Top-level await works (e.g. `await client.get(url)`); the session keeps one event loop, so async clients and pools created in one call stay usable in later calls."
+        description = "Evaluate a Python expression in a persistent session. Top-level await works (e.g. `await client.get(url)`); the session keeps one event loop, so async clients and pools created in one call stay usable in later calls. Times out after 60s by default; pass `timeout_secs` to allow longer. On timeout or a client cancel the call returns an error and the worker is restarted, so a hung cell never blocks later calls (session state is lost on restart)."
     )]
-    fn python_eval(&self, Parameters(request): Parameters<EvalRequest>) -> CallToolResult {
-        self.with_sessions_content(|sessions| {
-            let session = sessions.get_or_create(request.session_id.as_deref())?;
-            session.request_raw("eval", json!({ "expression": request.expression }))
-        })
+    async fn python_eval(
+        &self,
+        Parameters(request): Parameters<EvalRequest>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        let timeout = call_timeout(request.timeout_secs, DEFAULT_TIMEOUT_SECS);
+        self.call_content(
+            request.session_id,
+            "eval",
+            json!({ "expression": request.expression }),
+            timeout,
+            cancel,
+        )
+        .await
     }
 
     #[tool(
-        description = "Execute Python statements in a persistent session. Top-level await works (e.g. `await pool.fetch(sql)`); the session keeps one event loop, so async resources created in one call stay usable in later calls."
+        description = "Execute Python statements in a persistent session. Top-level await works (e.g. `await pool.fetch(sql)`); the session keeps one event loop, so async resources created in one call stay usable in later calls. Times out after 60s by default; pass `timeout_secs` to allow longer. On timeout or a client cancel the call returns an error and the worker is restarted, so a hung cell never blocks later calls (session state is lost on restart)."
     )]
-    fn python_exec(&self, Parameters(request): Parameters<ExecRequest>) -> CallToolResult {
-        self.with_sessions_content(|sessions| {
-            let session = sessions.get_or_create(request.session_id.as_deref())?;
-            session.request_raw("exec", json!({ "source": request.source }))
-        })
+    async fn python_exec(
+        &self,
+        Parameters(request): Parameters<ExecRequest>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        let timeout = call_timeout(request.timeout_secs, DEFAULT_TIMEOUT_SECS);
+        self.call_content(
+            request.session_id,
+            "exec",
+            json!({ "source": request.source }),
+            timeout,
+            cancel,
+        )
+        .await
     }
 
     #[tool(description = "Clear a persistent Python session.")]
-    fn python_reset(&self, Parameters(request): Parameters<OptionalSessionRequest>) -> String {
-        self.with_sessions(|sessions| {
-            let session = sessions.get_or_create(request.session_id.as_deref())?;
-            session.request("reset", json!({}))
-        })
+    async fn python_reset(
+        &self,
+        Parameters(request): Parameters<OptionalSessionRequest>,
+        cancel: CancellationToken,
+    ) -> String {
+        self.call_text(request.session_id, "reset", json!({}), CONTROL_TIMEOUT, cancel)
+            .await
     }
 
     #[tool(
         description = "Semantic code search over a checkout via the bundled `search` module. Indexes new/changed files (content-addressed, deduplicated across worktrees), then returns matching chunks scoped to the checkout as JSON. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
     )]
-    fn search_semantic(&self, Parameters(request): Parameters<SemanticSearchRequest>) -> String {
-        self.with_sessions(|sessions| {
-            let session = sessions.get_or_create(request.session_id.as_deref())?;
-            // Run the search inside the session's persistent event loop via the
-            // bundled module: import it, await `semantic`, then emit JSON. Both
-            // arguments are interpolated as JSON literals, which are valid Python
-            // literals too, so a query or path containing quotes or newlines
-            // cannot break out of the expression.
-            let source = format!(
-                "import json, search\n\
-                 _ix_hits = await search.semantic({query}, {path}, top_k={top_k})\n\
-                 print(json.dumps(_ix_hits))\n",
-                query = json!(request.query),
-                path = json!(request.path.as_deref().unwrap_or(".")),
-                top_k = request.top_k.unwrap_or(10),
-            );
-            session.request("exec", json!({ "source": source }))
-        })
+    async fn search_semantic(
+        &self,
+        Parameters(request): Parameters<SemanticSearchRequest>,
+        cancel: CancellationToken,
+    ) -> String {
+        // Run the search inside the session's persistent event loop via the
+        // bundled module: import it, await `semantic`, then emit JSON. Both
+        // arguments are interpolated as JSON literals, which are valid Python
+        // literals too, so a query or path containing quotes or newlines cannot
+        // break out of the expression.
+        let source = format!(
+            "import json, search\n\
+             _ix_hits = await search.semantic({query}, {path}, top_k={top_k})\n\
+             print(json.dumps(_ix_hits))\n",
+            query = json!(request.query),
+            path = json!(request.path.as_deref().unwrap_or(".")),
+            top_k = request.top_k.unwrap_or(10),
+        );
+        let timeout = call_timeout(request.timeout_secs, SEARCH_TIMEOUT_SECS);
+        self.call_text(request.session_id, "exec", json!({ "source": source }), timeout, cancel)
+            .await
     }
 
     #[tool(
         description = "Regex grep over a checkout via the bundled `search` module: run a regular expression over the SAME indexed chunks the semantic search covers (content-addressed, deduplicated across worktrees), and return matching chunks scoped to the checkout as JSON. New/changed files are indexed first. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
     )]
-    fn search_grep(&self, Parameters(request): Parameters<GrepSearchRequest>) -> String {
-        self.with_sessions(|sessions| {
-            let session = sessions.get_or_create(request.session_id.as_deref())?;
-            // Run the grep inside the session's persistent event loop via the
-            // bundled module: import it, await `grep`, then emit JSON. The
-            // pattern and path are interpolated as JSON literals, which are valid
-            // Python literals too, so content with quotes or newlines cannot
-            // break out of the expression.
-            let source = format!(
-                "import json, search\n\
-                 _ix_hits = await search.grep({pattern}, {path}, top_k={top_k}, case_sensitive={case_sensitive})\n\
-                 print(json.dumps(_ix_hits))\n",
-                pattern = json!(request.pattern),
-                path = json!(request.path.as_deref().unwrap_or(".")),
-                top_k = request.top_k.unwrap_or(10),
-                case_sensitive = if request.case_sensitive.unwrap_or(false) {
-                    "True"
-                } else {
-                    "False"
-                },
-            );
-            session.request("exec", json!({ "source": source }))
-        })
+    async fn search_grep(
+        &self,
+        Parameters(request): Parameters<GrepSearchRequest>,
+        cancel: CancellationToken,
+    ) -> String {
+        // Run the grep inside the session's persistent event loop via the bundled
+        // module: import it, await `grep`, then emit JSON. The pattern and path
+        // are interpolated as JSON literals, which are valid Python literals too,
+        // so content with quotes or newlines cannot break out of the expression.
+        let source = format!(
+            "import json, search\n\
+             _ix_hits = await search.grep({pattern}, {path}, top_k={top_k}, case_sensitive={case_sensitive})\n\
+             print(json.dumps(_ix_hits))\n",
+            pattern = json!(request.pattern),
+            path = json!(request.path.as_deref().unwrap_or(".")),
+            top_k = request.top_k.unwrap_or(10),
+            case_sensitive = if request.case_sensitive.unwrap_or(false) {
+                "True"
+            } else {
+                "False"
+            },
+        );
+        let timeout = call_timeout(request.timeout_secs, SEARCH_TIMEOUT_SECS);
+        self.call_text(request.session_id, "exec", json!({ "source": source }), timeout, cancel)
+            .await
     }
 }
 
 impl McpServer {
-    fn with_sessions(&self, f: impl FnOnce(&mut SessionManager) -> Result<String>) -> String {
-        match self.sessions.lock() {
-            Ok(mut sessions) => format_result(f(&mut sessions)),
-            Err(error) => format!("stderr:\nPython session registry lock failed: {error}"),
+    /// Run a registry-only operation (create/list/close) off the async runtime.
+    /// Session creation builds a venv, which is slow and must not block a runtime
+    /// worker thread, so even the cheap ops take the blocking pool for one
+    /// uniform path. The registry lock is held only for the duration of `f`.
+    async fn with_registry<F>(&self, f: F) -> String
+    where
+        F: FnOnce(&mut SessionManager) -> Result<String> + Send + 'static,
+    {
+        let sessions = self.sessions.clone();
+        let joined = tokio::task::spawn_blocking(move || match sessions.lock() {
+            Ok(mut registry) => f(&mut registry),
+            Err(error) => Err(anyhow!("Python session registry lock failed: {error}")),
+        })
+        .await;
+        match joined {
+            Ok(result) => format_result(result),
+            Err(error) => format!("stderr:\nPython registry task panicked: {error}"),
         }
     }
 
-    /// Like [`with_sessions`](Self::with_sessions) but returns rich content: the
-    /// formatted text plus an image block per captured figure, so a `plt.plot`,
-    /// PIL image, or `display()`ed object comes back as an actual image.
-    fn with_sessions_content(
+    /// Run a per-session round-trip off the async runtime. The registry lock is
+    /// taken only to look up (or create) this session's handle, then released, so
+    /// a long or hung call on one session never blocks calls to another session
+    /// or the management tools. The round-trip itself runs on the blocking pool
+    /// with the supplied deadline and the request's cancellation token.
+    async fn run_on_session(
         &self,
-        f: impl FnOnce(&mut SessionManager) -> Result<Value>,
+        session_id: Option<String>,
+        op: &'static str,
+        payload: Value,
+        timeout: Duration,
+        cancel: CancellationToken,
+    ) -> Result<Value> {
+        let sessions = self.sessions.clone();
+        tokio::task::spawn_blocking(move || -> Result<Value> {
+            let session = {
+                let mut registry = sessions
+                    .lock()
+                    .map_err(|error| anyhow!("Python session registry lock failed: {error}"))?;
+                registry.get_or_create_arc(session_id.as_deref())?
+            };
+            let mut session = session
+                .lock()
+                .map_err(|error| anyhow!("Python session lock failed: {error}"))?;
+            session.request_raw(op, payload, timeout, &cancel)
+        })
+        .await
+        .context("Python worker task panicked")?
+    }
+
+    /// Per-session call that returns rich content: the formatted text plus an
+    /// image block per captured figure, so a `plt.plot`, PIL image, or
+    /// `display()`ed object comes back as an actual image.
+    async fn call_content(
+        &self,
+        session_id: Option<String>,
+        op: &'static str,
+        payload: Value,
+        timeout: Duration,
+        cancel: CancellationToken,
     ) -> CallToolResult {
-        match self.sessions.lock() {
-            Ok(mut sessions) => match f(&mut sessions) {
-                Ok(response) => worker_response_content(&response),
-                Err(error) => {
-                    CallToolResult::success(vec![Content::text(format!("stderr:\n{error:#}"))])
-                }
-            },
-            Err(error) => CallToolResult::success(vec![Content::text(format!(
-                "stderr:\nPython session registry lock failed: {error}"
-            ))]),
+        match self.run_on_session(session_id, op, payload, timeout, cancel).await {
+            Ok(response) => worker_response_content(&response),
+            Err(error) => CallToolResult::success(vec![Content::text(format!("stderr:\n{error:#}"))]),
+        }
+    }
+
+    /// Per-session call that returns plain text (reset, search).
+    async fn call_text(
+        &self,
+        session_id: Option<String>,
+        op: &'static str,
+        payload: Value,
+        timeout: Duration,
+        cancel: CancellationToken,
+    ) -> String {
+        match self.run_on_session(session_id, op, payload, timeout, cancel).await {
+            Ok(response) => format_worker_response(&response),
+            Err(error) => format!("stderr:\n{error:#}"),
         }
     }
 }
@@ -260,6 +386,9 @@ struct SessionRequest {
 struct EvalRequest {
     expression: String,
     session_id: Option<String>,
+    /// Seconds to wait before abandoning the call and restarting the worker.
+    /// Defaults to 60; raise it for long-running work. `0` uses the default.
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -267,6 +396,9 @@ struct EvalRequest {
 struct ExecRequest {
     source: String,
     session_id: Option<String>,
+    /// Seconds to wait before abandoning the call and restarting the worker.
+    /// Defaults to 60; raise it for long-running work. `0` uses the default.
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -280,6 +412,9 @@ struct SemanticSearchRequest {
     /// Maximum number of results to return (default 10).
     top_k: Option<usize>,
     session_id: Option<String>,
+    /// Seconds to wait before abandoning the search. Defaults to 600 (a cold
+    /// index of a large checkout is slow). `0` uses the default.
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -295,65 +430,93 @@ struct GrepSearchRequest {
     /// Match the pattern case-sensitively (default false).
     case_sensitive: Option<bool>,
     session_id: Option<String>,
+    /// Seconds to wait before abandoning the search. Defaults to 600 (a cold
+    /// index of a large checkout is slow). `0` uses the default.
+    timeout_secs: Option<u64>,
 }
 
 #[derive(Default)]
 struct SessionManager {
-    sessions: HashMap<String, PythonSession>,
+    sessions: HashMap<String, Arc<Mutex<PythonSession>>>,
 }
 
 impl SessionManager {
-    fn create(
+    /// Build a new session and register it. Building runs the venv create and a
+    /// readiness ping, so this holds the registry lock for the build duration:
+    /// concurrent first-calls to *other* new sessions wait behind it. That cost
+    /// is one-time per session and small relative to the work itself.
+    fn create_arc(
         &mut self,
         session_id: Option<String>,
         cwd: Option<PathBuf>,
-    ) -> Result<&mut PythonSession> {
+    ) -> Result<Arc<Mutex<PythonSession>>> {
         let id = session_id.unwrap_or_else(|| uuid_like(&self.sessions));
         if self.sessions.contains_key(&id) {
             bail!("Python session {id} already exists");
         }
         let session = PythonSession::start(id.clone(), cwd)?;
-        self.sessions.insert(id.clone(), session);
-        self.sessions
-            .get_mut(&id)
-            .ok_or_else(|| anyhow!("Python session {id} disappeared after creation"))
+        let arc = Arc::new(Mutex::new(session));
+        self.sessions.insert(id, arc.clone());
+        Ok(arc)
     }
 
-    fn get_or_create(&mut self, session_id: Option<&str>) -> Result<&mut PythonSession> {
+    fn get_or_create_arc(&mut self, session_id: Option<&str>) -> Result<Arc<Mutex<PythonSession>>> {
         let id = session_id.unwrap_or(DEFAULT_SESSION_ID);
-        if !self.sessions.contains_key(id) {
-            self.create(Some(id.to_string()), None)?;
+        if let Some(existing) = self.sessions.get(id) {
+            return Ok(existing.clone());
         }
-        self.sessions
-            .get_mut(id)
-            .ok_or_else(|| anyhow!("Python session {id} does not exist"))
+        self.create_arc(Some(id.to_string()), None)
     }
 
     fn close(&mut self, session_id: &str) -> Result<String> {
-        let Some(mut session) = self.sessions.remove(session_id) else {
+        let Some(arc) = self.sessions.remove(session_id) else {
             bail!("Python session {session_id} does not exist");
         };
-        session.close();
-        Ok(format!("closed Python session {session_id}"))
+        match arc.try_lock() {
+            Ok(mut session) => {
+                session.close_worker();
+                Ok(format!("closed Python session {session_id}"))
+            }
+            // An in-flight call holds the lock. Removing it from the registry
+            // means no new call can reach it; the worker is closed when that call
+            // finishes and the last handle drops.
+            Err(TryLockError::WouldBlock) => Ok(format!(
+                "Python session {session_id} is busy; detached, it closes when the in-flight call finishes"
+            )),
+            Err(TryLockError::Poisoned(_)) => Ok(format!(
+                "Python session {session_id} was poisoned by a panic; dropped"
+            )),
+        }
     }
 
     fn list(&mut self) -> Result<String> {
         if self.sessions.is_empty() {
             return Ok("no Python sessions".to_string());
         }
-        let rows: Vec<SessionRow> = self
+        let mut rows: Vec<SessionRow> = self
             .sessions
-            .values_mut()
-            .map(|session| SessionRow {
-                id: session.id.clone(),
-                command: session.command.clone(),
-                cwd: session.cwd.clone(),
-                running: session
-                    .child
-                    .try_wait()
-                    .is_ok_and(|status| status.is_none()),
+            .iter()
+            .map(|(id, arc)| {
+                arc.try_lock().map_or_else(
+                    // Locked means a call is in flight: by definition running. We
+                    // cannot read the command/cwd without the lock, so leave them
+                    // empty rather than block the listing on a long call.
+                    |_| SessionRow {
+                        id: id.clone(),
+                        command: Vec::new(),
+                        cwd: None,
+                        running: true,
+                    },
+                    |mut session| SessionRow {
+                        id: id.clone(),
+                        command: session.command.clone(),
+                        cwd: session.cwd.clone(),
+                        running: session.conn.child.try_wait().is_ok_and(|status| status.is_none()),
+                    },
+                )
             })
             .collect();
+        rows.sort_by(|a, b| a.id.cmp(&b.id));
         serde_json::to_string_pretty(&rows).context("failed to serialize session list")
     }
 }
@@ -361,18 +524,19 @@ impl SessionManager {
 struct PythonSession {
     id: String,
     command: Vec<String>,
+    env: Vec<(OsString, OsString)>,
     cwd: Option<PathBuf>,
+    worker_path: PathBuf,
+    // The venv and worker script live inside this directory, so it must outlive
+    // the worker (including across a restart, which reuses the same venv).
     _temp_dir: TempDir,
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    next_request_id: u64,
+    conn: WorkerConn,
 }
 
 impl PythonSession {
     /// Start a session on the pinned interpreter. Each session gets its own
-    /// writable venv, activated for the worker and the children it spawns, so
-    /// an agent can `pip install` into it without mutating the read-only store
+    /// writable venv, activated for the worker and the children it spawns, so an
+    /// agent can `pip install` into it without mutating the read-only store
     /// interpreter.
     fn start(id: String, cwd: Option<PathBuf>) -> Result<Self> {
         let temp_dir = session_temp_dir(&id)?;
@@ -400,49 +564,174 @@ impl PythonSession {
     ) -> Result<Self> {
         let worker_path = temp_dir.path().join("worker.py");
         fs::write(&worker_path, WORKER_SOURCE).context("failed to write Python worker")?;
+        let conn = WorkerConn::spawn(&command, &env, &worker_path, cwd.as_deref())?;
+        Ok(Self {
+            id,
+            command,
+            env,
+            cwd,
+            worker_path,
+            _temp_dir: temp_dir,
+            conn,
+        })
+    }
 
+    /// Send a request and wait for the matching response, honouring `timeout` and
+    /// `cancel`. Any transport-level failure (timeout, client cancel, the worker
+    /// exiting, a protocol desync, or a broken pipe) replaces the worker with a
+    /// fresh one before returning the error, so the *next* call lands on a
+    /// working interpreter instead of inheriting the wedged one. A normal Python
+    /// exception is not a transport failure: it comes back as a successful
+    /// response with `ok: false`, and the worker is left alone.
+    fn request_raw(
+        &mut self,
+        op: &str,
+        payload: Value,
+        timeout: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<Value> {
+        match self.conn.roundtrip(op, payload, timeout, cancel) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                let error = error.context(format!("Python session {}", self.id));
+                match self.recover() {
+                    Ok(()) => Err(error),
+                    Err(restart) => {
+                        Err(error.context(format!("and restarting the worker failed: {restart:#}")))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Synchronous round-trip with no client cancellation, for CLI calls and
+    /// internal control ops. Formats the worker response like the tools do.
+    fn request(&mut self, op: &str, payload: Value, timeout: Duration) -> Result<String> {
+        Ok(format_worker_response(&self.request_raw(
+            op,
+            payload,
+            timeout,
+            &uncancellable(),
+        )?))
+    }
+
+    /// Replace the worker with a fresh one against the same venv. Reuses the
+    /// stored command, env, and worker script, so this does not rebuild the venv;
+    /// it just respawns the interpreter. Dropping the old connection kills its
+    /// (possibly hung) process and joins its reader thread.
+    fn recover(&mut self) -> Result<()> {
+        let fresh = WorkerConn::spawn(&self.command, &self.env, &self.worker_path, self.cwd.as_deref())
+            .context("failed to restart Python worker")?;
+        // The old connection's Drop kills the process and joins the reader.
+        drop(std::mem::replace(&mut self.conn, fresh));
+        Ok(())
+    }
+
+    /// Ask the worker to exit cleanly, then reap it. Used on session close and
+    /// drop. A worker that does not answer the graceful `close` in time is left
+    /// for the connection's Drop to kill.
+    fn close_worker(&mut self) {
+        if self.conn.child.try_wait().ok().flatten().is_none() {
+            let _ = self.conn.roundtrip("close", json!({}), CONTROL_TIMEOUT, &uncancellable());
+            let _ = self.conn.child.wait();
+        }
+    }
+}
+
+impl Drop for PythonSession {
+    fn drop(&mut self) {
+        self.close_worker();
+        // The connection's own Drop then kills the process if it is still alive
+        // and joins the reader thread.
+    }
+}
+
+/// A live worker process plus the machinery to talk to it: its stdin, a
+/// background thread draining stdout into a channel, and the next request id.
+struct WorkerConn {
+    child: Child,
+    stdin: ChildStdin,
+    rx: Receiver<String>,
+    reader: Option<JoinHandle<()>>,
+    next_id: u64,
+}
+
+impl WorkerConn {
+    fn spawn(
+        command: &[String],
+        env: &[(OsString, OsString)],
+        worker_path: &Path,
+        cwd: Option<&Path>,
+    ) -> Result<Self> {
         if command.is_empty() {
             bail!("Python session command must not be empty");
         }
         let mut child = Command::new(&command[0])
             .args(&command[1..])
-            .arg(&worker_path)
-            .current_dir(cwd.as_deref().unwrap_or_else(|| Path::new(".")))
-            .envs(env)
+            .arg(worker_path)
+            .current_dir(cwd.unwrap_or_else(|| Path::new(".")))
+            .envs(env.iter().cloned())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Worker stderr is not part of the JSON protocol. Normal Python
-            // stderr is captured in-process; raw fd 2 writes must not back up
-            // and block stdout responses.
+            // stderr is captured in-process; raw fd 2 writes must not back up and
+            // block stdout responses.
             .stderr(Stdio::null())
             .spawn()
             .with_context(|| format!("failed to start Python command {}", command.join(" ")))?;
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| anyhow!("Python session {id} is missing stdin"))?;
+            .ok_or_else(|| anyhow!("Python worker is missing stdin"))?;
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| anyhow!("Python session {id} is missing stdout"))?;
+            .ok_or_else(|| anyhow!("Python worker is missing stdout"))?;
 
-        let mut session = Self {
-            id,
-            command,
-            cwd,
-            _temp_dir: temp_dir,
+        // Drain stdout on a dedicated thread so the protocol read can wait with a
+        // deadline (std's BufRead has no timeout). Each response line is
+        // forwarded over the channel; when the worker exits or is killed, the
+        // read hits EOF, the thread ends, and the channel disconnects, which the
+        // waiter observes promptly.
+        let (tx, rx) = mpsc::channel::<String>();
+        let reader = thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        if tx.send(std::mem::take(&mut line)).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        let mut conn = Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
-            next_request_id: 0,
+            rx,
+            reader: Some(reader),
+            next_id: 0,
         };
-        session.request("ping", json!({}))?;
-        Ok(session)
+        // Confirm the worker's read loop is live before handing the session out.
+        conn.roundtrip("ping", json!({}), CONTROL_TIMEOUT, &uncancellable())
+            .context("Python worker did not become ready")?;
+        Ok(conn)
     }
 
-    fn request_raw(&mut self, op: &str, mut payload: Value) -> Result<Value> {
-        let request_id = self.next_request_id;
-        self.next_request_id += 1;
+    fn roundtrip(
+        &mut self,
+        op: &str,
+        mut payload: Value,
+        timeout: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<Value> {
+        let request_id = self.next_id;
+        self.next_id += 1;
         let request = payload
             .as_object_mut()
             .ok_or_else(|| anyhow!("Python worker request payload must be an object"))?;
@@ -455,42 +744,56 @@ impl PythonSession {
             .flush()
             .context("failed to flush Python worker request")?;
 
-        let mut line = String::new();
-        if self
-            .stdout
-            .read_line(&mut line)
-            .context("failed to read Python worker response")?
-            == 0
-        {
-            bail!("Python session {} exited before responding", self.id);
-        }
-
-        let response: Value =
-            serde_json::from_str(&line).context("failed to decode Python worker response")?;
-        if response.get("id").and_then(Value::as_u64) != Some(request_id) {
-            bail!(
-                "Python session {} returned response for the wrong request",
-                self.id
-            );
-        }
-        Ok(response)
-    }
-
-    fn request(&mut self, op: &str, payload: Value) -> Result<String> {
-        Ok(format_worker_response(&self.request_raw(op, payload)?))
-    }
-
-    fn close(&mut self) {
-        if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.request("close", json!({}));
-            let _ = self.child.wait();
+        let deadline = Instant::now() + timeout;
+        loop {
+            if cancel.is_cancelled() {
+                bail!(
+                    "Python call cancelled by the client; the worker was restarted, so session state was lost"
+                );
+            }
+            // Wake at least every POLL_INTERVAL to re-check cancellation, even
+            // when the deadline is far off.
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.rx.recv_timeout(remaining.min(POLL_INTERVAL)) {
+                Ok(line) => {
+                    let response: Value = serde_json::from_str(&line)
+                        .context("failed to decode Python worker response")?;
+                    if response.get("id").and_then(Value::as_u64) != Some(request_id) {
+                        bail!("Python worker returned a response for the wrong request");
+                    }
+                    return Ok(response);
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    if cancel.is_cancelled() {
+                        bail!(
+                            "Python call cancelled by the client; the worker was restarted, so session state was lost"
+                        );
+                    }
+                    if Instant::now() >= deadline {
+                        bail!(
+                            "Python call exceeded its {}s timeout and was abandoned; the worker was restarted (session state lost). Pass a larger `timeout_secs` for long-running work.",
+                            timeout.as_secs()
+                        );
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    bail!("Python worker exited before responding; it was restarted");
+                }
+            }
         }
     }
 }
 
-impl Drop for PythonSession {
+impl Drop for WorkerConn {
     fn drop(&mut self) {
-        self.close();
+        // Best-effort: make sure the process is gone and the reader thread is
+        // joined, so a dropped connection never leaks a Python process or a
+        // thread. Killing closes stdout, which lets the reader hit EOF and exit.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
     }
 }
 
@@ -610,7 +913,7 @@ fn format_result(result: Result<String>) -> String {
     }
 }
 
-fn uuid_like(sessions: &HashMap<String, PythonSession>) -> String {
+fn uuid_like(sessions: &HashMap<String, Arc<Mutex<PythonSession>>>) -> String {
     for index in 1.. {
         let id = format!("python-{index}");
         if !sessions.contains_key(&id) {
@@ -687,16 +990,31 @@ async fn main() -> Result<ExitCode> {
         }
         CliCommand::Eval { expression } => {
             let mut manager = SessionManager::default();
-            let session = manager.create(Some(DEFAULT_SESSION_ID.to_string()), cli.cwd)?;
-            println!(
-                "{}",
-                session.request("eval", json!({ "expression": expression }))?
-            );
+            let session = manager.create_arc(Some(DEFAULT_SESSION_ID.to_string()), cli.cwd)?;
+            // Compute the output and release the session lock before printing.
+            let output = session
+                .lock()
+                .map_err(|error| anyhow!("Python session lock failed: {error}"))?
+                .request(
+                    "eval",
+                    json!({ "expression": expression }),
+                    call_timeout(None, DEFAULT_TIMEOUT_SECS),
+                )?;
+            println!("{output}");
         }
         CliCommand::Exec { source } => {
             let mut manager = SessionManager::default();
-            let session = manager.create(Some(DEFAULT_SESSION_ID.to_string()), cli.cwd)?;
-            println!("{}", session.request("exec", json!({ "source": source }))?);
+            let session = manager.create_arc(Some(DEFAULT_SESSION_ID.to_string()), cli.cwd)?;
+            // Compute the output and release the session lock before printing.
+            let output = session
+                .lock()
+                .map_err(|error| anyhow!("Python session lock failed: {error}"))?
+                .request(
+                    "exec",
+                    json!({ "source": source }),
+                    call_timeout(None, DEFAULT_TIMEOUT_SECS),
+                )?;
+            println!("{output}");
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -741,10 +1059,15 @@ mod tests {
         let put = session.request(
             "exec",
             json!({ "source": "import asyncio\nq = asyncio.Queue()\nawait q.put(123)" }),
+            Duration::from_secs(30),
         )?;
         assert_eq!(put, "ok");
 
-        let got = session.request("eval", json!({ "expression": "await q.get()" }))?;
+        let got = session.request(
+            "eval",
+            json!({ "expression": "await q.get()" }),
+            Duration::from_secs(30),
+        )?;
         assert_eq!(got, "result:\n123");
 
         Ok(())
@@ -755,8 +1078,75 @@ mod tests {
         // Compiling with PyCF_ALLOW_TOP_LEVEL_AWAIT must not change plain code:
         // snippets without await run eagerly and return their value.
         let mut session = python_session("await-sync")?;
-        let sum = session.request("eval", json!({ "expression": "1 + 1" }))?;
+        let sum = session.request(
+            "eval",
+            json!({ "expression": "1 + 1" }),
+            Duration::from_secs(30),
+        )?;
         assert_eq!(sum, "result:\n2");
+        Ok(())
+    }
+
+    #[test]
+    fn hung_call_times_out_and_session_recovers() -> Result<()> {
+        let mut session = python_session("timeout-recover")?;
+
+        // A cell that never returns must not wedge the session. The call returns
+        // an error near its budget instead of hanging, and the worker is
+        // restarted, so the next call works on a fresh interpreter.
+        let started = Instant::now();
+        let timed_out = session.request_raw(
+            "exec",
+            json!({ "source": "while True:\n    pass" }),
+            Duration::from_millis(500),
+            &uncancellable(),
+        );
+        assert!(timed_out.is_err(), "a never-returning cell must report an error");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the timeout must fire near its budget, not hang"
+        );
+
+        // The restarted worker is a fresh interpreter (globals from before the
+        // timeout are gone), but the session is usable again.
+        let after = session.request(
+            "eval",
+            json!({ "expression": "21 * 2" }),
+            Duration::from_secs(30),
+        )?;
+        assert_eq!(after, "result:\n42");
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_call_returns_and_session_recovers() -> Result<()> {
+        let mut session = python_session("cancel-recover")?;
+
+        // A pre-cancelled token stands in for a client `notifications/cancelled`
+        // arriving while the call is in flight: the call must abandon promptly
+        // and restart the worker rather than block on the never-returning cell.
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let started = Instant::now();
+        let cancelled = session.request_raw(
+            "exec",
+            json!({ "source": "while True:\n    pass" }),
+            Duration::from_mins(1),
+            &cancel,
+        );
+        assert!(cancelled.is_err(), "a cancelled call must report an error");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a cancel must not wait out the full timeout"
+        );
+
+        // The next call lands on the restarted worker and succeeds.
+        let after = session.request(
+            "eval",
+            json!({ "expression": "1 + 1" }),
+            Duration::from_secs(30),
+        )?;
+        assert_eq!(after, "result:\n2");
         Ok(())
     }
 
@@ -788,6 +1178,6 @@ head -c 2097152 /dev/zero >&2
             "ix-mcp-fake-worker".to_string(),
         ];
         let mut session = PythonSession::spawn_command("stderr-burst".to_string(), command, None)?;
-        session.request("eval", json!({ "expression": "unused" }))
+        session.request("eval", json!({ "expression": "unused" }), Duration::from_secs(5))
     }
 }
