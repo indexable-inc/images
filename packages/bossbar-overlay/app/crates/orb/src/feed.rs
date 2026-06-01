@@ -24,7 +24,8 @@ use overlay_core::winit::window::{Window, WindowId};
 use overlay_core::{Gpu, anim, window as ocwin};
 
 use crate::db;
-use crate::scene::{self, OrbTexture};
+use crate::scene::{self, Kind, Sprites};
+use crate::sound;
 
 /// How long one announcement orb lives, start to fully faded.
 const LIFESPAN: Duration = Duration::from_millis(4500);
@@ -53,10 +54,12 @@ const PRUNE_AGE_SECS: i64 = 300;
 /// height is clamped.
 const MAX_SLOT: usize = 9;
 
-/// One in-flight announcement: a labelled orb rising in a vertical slot.
+/// One in-flight announcement: a labelled sprite rising in a vertical slot.
 struct Pop {
     text: String,
     amount: i64,
+    /// Which sprite + sound this pop is (success orb vs failure villager).
+    kind: Kind,
     born: Instant,
     /// Vertical stacking position (0 = lowest), assigned at spawn from the free
     /// slots so concurrent pops never overlap.
@@ -67,7 +70,7 @@ struct WinState {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    texture: OrbTexture,
+    texture: Sprites,
 }
 
 pub struct Feed {
@@ -160,9 +163,16 @@ impl Feed {
                 for ev in events {
                     self.last_seen = self.last_seen.max(ev.id);
                     let slot = free_slot(&self.pops);
+                    // Unknown kinds fall back to the orb, so a forward-dated row
+                    // from a newer writer still animates instead of being dropped.
+                    let kind = Kind::parse(&ev.kind).unwrap_or_default();
+                    // The feed owns presentation: play the per-kind cue here so
+                    // every pusher gets the right sound without repeating it.
+                    sound::play(kind);
                     self.pops.push(Pop {
                         text: ev.text,
                         amount: ev.amount,
+                        kind,
                         born: now,
                         slot,
                     });
@@ -190,7 +200,7 @@ impl Feed {
         };
         let (cw, ch) = (win.config.width, win.config.height);
 
-        let orb_px = (16 * self.scale) as f32; // ORB_PX * scale
+        let orb_px = (16 * self.scale) as f32; // SPRITE_PX * scale
         let row = orb_px as f64 * ROW_MUL;
         let rise_px = RISE * self.scale_factor;
         let left_px = LEFT_MARGIN * self.scale_factor;
@@ -211,6 +221,7 @@ impl Feed {
             scene::build_pop(
                 gpu,
                 &win.texture,
+                pop.kind,
                 &pop.text,
                 pop.amount,
                 self.scale,

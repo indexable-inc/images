@@ -7,15 +7,18 @@
 #     the public Better Stack status page onto a per-service Minecraft boss bar
 #     plus an Ender Dragon growl + spoken root cause;
 #   * the boss bar overlay GUI it drives (`bossbar-overlay`);
-#   * the merged-PR + CI-failure watcher (`pr-watch`), which on each PR newly
-#     merged to main floats a labelled Minecraft XP orb up the screen (the
-#     `merge-orb-feed` overlay; no sound) and, on a newly failed main Actions
-#     run, speaks a one-line alert and launches a detached Opus deep dive
-#     (`ci-triage`) that files a deduped Linear ticket;
-#   * the full-screen merge feed overlay it announces onto (`merge-orb-feed`);
+#   * the merged-PR + CI-failure watcher (`pr-watch`), the visual half of the
+#     "karma feed": each PR newly merged to main floats a labelled Minecraft XP
+#     orb up the screen (with the orb pickup sound), and each newly failed main
+#     Actions run pops a grey angry-villager puff (with the villager "no" sound),
+#     both onto the `merge-orb-feed` overlay. A failure also launches a silent
+#     detached Opus deep dive (`ci-triage`) that files a deduped Linear ticket.
+#     Nothing is spoken;
+#   * the full-screen karma feed overlay it announces onto (`merge-orb-feed`),
+#     which renders both pop kinds and plays their per-kind sounds;
 #   * the token-free `/optimize` history scan (`optimize-scan`);
 #   * the shared "play a gentle sound, then speak it detached" helper
-#     (`say-detached`) the watchers announce through.
+#     (`say-detached`), now used only by the ix-downtime watcher.
 #
 # Each is declared as `services.portable.<name>` so they render to a native
 # launchd agent on macOS and a native systemd user unit on Linux from one spec
@@ -148,59 +151,51 @@ let
     '';
   };
 
-  # Shared "summarize -> speak with sound" helper sourced by pr-watch's stage-1
-  # CI-failure alert. Kept as a standalone store file so its absolute path can be
-  # baked into the pr-watch body via @ANNOUNCE_LIB@ (sourcing a sibling script by
-  # relative path is not safe under launchd's minimal environment).
-  announceLib = pkgs.writeText "announce-lib.sh" (builtins.readFile ./scripts/announce-lib.sh);
-
   # Stage-2 of the pr-watch CI response: a per-run DEEP DIVE into a main-branch
   # Actions failure. Launched DETACHED by pr-watch (own session + `timeout`), it
   # uses `claude -p` with Opus 4.8 + the Bash tool to fetch the failed logs,
-  # diagnose the root cause, speak it, and file (or dedupe) a Linear ENG ticket
-  # when the failure is a genuine code break. The Linear API key is read at
-  # runtime from the login Keychain (service `pr-watch-linear`); see the script
-  # header. CI_TRIAGE_DRY_RUN makes it non-destructive for testing.
+  # diagnose the root cause, and file (or dedupe) a Linear ENG ticket when the
+  # failure is a genuine code break. It is SILENT (the villager pop is the alert),
+  # so it needs no say-detached. The Linear API key is read at runtime from the
+  # login Keychain (service `pr-watch-linear`); see the script header.
+  # CI_TRIAGE_DRY_RUN makes it non-destructive for testing.
   ciTriage = mkBashApp {
     name = "ci-triage";
     runtimeInputs = [
       pkgs.gh
       pkgs.jq
-      sayDetached
       pkgs.claude-code
       pkgs.coreutils
     ];
     text = builtins.readFile ./scripts/ci-triage.sh;
   };
 
-  # The merged-PR + CI-failure watcher itself. say-detached plays the merge
-  # sound / failure cue + carries stage-1 speech; ci-triage is the detached
-  # stage-2 deep dive; claude-code summarizes a failure into one spoken line;
-  # coreutils provides `timeout`/`date`; perl supplies the intrinsic flock guard
-  # and the setsid detach. The @PLACEHOLDERS@ are baked from the options.
+  # The merged-PR + CI-failure watcher itself. It is the visual half of the karma
+  # feed and speaks nothing: a merge queues an XP orb and a failure queues an
+  # angry-villager pop in the feed overlay (which plays the per-kind sound).
+  # ci-triage is the detached stage-2 deep dive; coreutils provides
+  # `timeout`/`date`; perl supplies the intrinsic flock guard and the setsid
+  # detach. The @PLACEHOLDERS@ are baked from the options.
   prWatch = mkBashApp {
     name = "pr-watch";
     runtimeInputs = [
       pkgs.gh
       pkgs.jq
-      sayDetached
       ciTriage
-      pkgs.claude-code
       pkgs.coreutils
       pkgs.perl
     ];
     text =
       builtins.replaceStrings
-        [ "@ANNOUNCE_LIB@" "@REPOS@" "@ORB_BIN@" "@LOG_DIR@" "@TRIAGE_COOLDOWN@" ]
+        [ "@REPOS@" "@ORB_BIN@" "@LOG_DIR@" "@TRIAGE_COOLDOWN@" ]
         [
-          "${announceLib}"
           # escapeShellArg per value: @REPOS@ lands unquoted in `repos=(@REPOS@)`,
           # so a value with a space or shell metacharacter must carry its own
           # quoting (the option is author-set, but bake safely rather than rely on
           # it).
           (lib.concatMapStringsSep " " lib.escapeShellArg cfg.prWatch.repos)
-          # The merge feed binary: a newly merged PR is announced as a labelled
-          # XP orb (`<orb> push "<repo>: <title>"`), not a sound.
+          # The feed binary: a merge is queued as an XP orb and a CI failure as a
+          # villager pop (`<orb> push "<repo>: <title>" [--kind villager]`).
           (lib.getExe' indexPkgs.bossbar-overlay "xp-orb-overlay")
           cfg.logDir
           (toString cfg.prWatch.triageCooldown)
@@ -332,6 +327,20 @@ in
         as a `runtimeInputs` entry without redefining the sound helper.
       '';
     };
+
+    xpOrbPackage = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      default = indexPkgs.bossbar-overlay;
+      defaultText = lib.literalMD "the index `bossbar-overlay` package (provides `xp-orb-overlay`)";
+      description = ''
+        The overlay package providing the `xp-orb-overlay` binary, exposed so a
+        consuming config can bake it onto the PATH of its own host-specific agents
+        (e.g. the nixos-gen-watch deploy watcher) to push karma-feed pops
+        (`xp-orb-overlay push ... [--kind villager]`) without re-deriving the
+        wgpu/winit workspace.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -387,12 +396,16 @@ in
       })
       (lib.mkIf cfg.mergeOrbOverlay.enable {
         merge-orb-feed = {
-          description = "merge XP-orb feed overlay";
+          description = "karma feed overlay (XP orb + villager pops)";
           command = [
             (lib.getExe' indexPkgs.bossbar-overlay "xp-orb-overlay")
             "feed"
           ];
           restart = "always";
+          # The feed owns presentation, so it plays the per-kind Minecraft sound
+          # (orb pickup / villager "no") itself. launchd/systemd units don't
+          # inherit the interactive PATH, so pin the absolute `minecraft-sound`.
+          environment.ORB_SOUND_CMD = lib.getExe' indexPkgs.minecraft-sound "minecraft-sound";
           standardOutPath = "${cfg.logDir}/merge-orb-feed.log";
           standardErrorPath = "${cfg.logDir}/merge-orb-feed.log";
           # Label defaults to the space-free home convention; no escape hatch.

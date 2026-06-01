@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS events (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
   text    TEXT    NOT NULL DEFAULT '',
   amount  INTEGER NOT NULL DEFAULT 7,
+  kind    TEXT    NOT NULL DEFAULT 'orb',
   created INTEGER NOT NULL DEFAULT (unixepoch())
 );";
 
@@ -59,10 +60,26 @@ fn open(path: &Path) -> rusqlite::Result<Connection> {
     // WAL lets external `sqlite3` writers commit without blocking our reader.
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.execute_batch(SCHEMA)?;
+    ensure_kind_column(&conn)?;
     if fresh {
         conn.execute_batch(SEED)?;
     }
     Ok(conn)
+}
+
+/// Add the `events.kind` column to a DB created before kinds existed. `CREATE
+/// TABLE IF NOT EXISTS` never alters an existing table, so an older local DB
+/// keeps the column-less schema until we add it here; new DBs already have it
+/// from `SCHEMA` and this is a no-op. Checked via `pragma_table_info` rather than
+/// catching a "duplicate column" error string.
+fn ensure_kind_column(conn: &Connection) -> rusqlite::Result<()> {
+    let has_kind = conn
+        .prepare("SELECT 1 FROM pragma_table_info('events') WHERE name = 'kind'")?
+        .exists([])?;
+    if !has_kind {
+        conn.execute_batch("ALTER TABLE events ADD COLUMN kind TEXT NOT NULL DEFAULT 'orb';")?;
+    }
+    Ok(())
 }
 
 /// Persist the orb's pinned location (logical screen points). Its own connection
@@ -153,13 +170,16 @@ where
     });
 }
 
-/// One queued merge announcement: a falling/rising labelled orb to show once.
-/// `amount` picks the orb size via [`crate::scene::icon_for`].
+/// One queued announcement: a labelled sprite to float up once. `amount` picks
+/// the orb size via [`crate::scene::icon_for`] (ignored by the villager kind);
+/// `kind` is the wire form (`"orb"` / `"villager"`) parsed by
+/// [`crate::scene::Kind::parse`], defaulting to `orb` for any unknown value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Event {
     pub id: i64,
     pub text: String,
     pub amount: i64,
+    pub kind: String,
 }
 
 /// Open a connection for the feed reader (schema ensured). Public so the feed
@@ -168,13 +188,14 @@ pub fn connect(path: &Path) -> rusqlite::Result<Connection> {
     open(path)
 }
 
-/// Queue one announcement orb. Called by `xp-orb-overlay push` (e.g. from
-/// pr-watch on a merged PR); the running feed overlay picks it up within ~200ms.
-pub fn push_event(path: &Path, text: &str, amount: i64) -> rusqlite::Result<()> {
+/// Queue one announcement. Called by `xp-orb-overlay push` (e.g. from pr-watch on
+/// a merged PR, or a watcher on a failure); the running feed overlay picks it up
+/// within ~200ms. `kind` is the wire form (`"orb"` / `"villager"`).
+pub fn push_event(path: &Path, text: &str, amount: i64, kind: &str) -> rusqlite::Result<()> {
     let conn = open(path)?;
     conn.execute(
-        "INSERT INTO events (text, amount) VALUES (?1, ?2)",
-        rusqlite::params![text, amount.max(0)],
+        "INSERT INTO events (text, amount, kind) VALUES (?1, ?2, ?3)",
+        rusqlite::params![text, amount.max(0), kind],
     )?;
     Ok(())
 }
@@ -188,12 +209,13 @@ pub fn max_event_id(conn: &Connection) -> rusqlite::Result<i64> {
 /// Events queued after `after` (exclusive), oldest first.
 pub fn read_events_after(conn: &Connection, after: i64) -> rusqlite::Result<Vec<Event>> {
     let mut stmt =
-        conn.prepare("SELECT id, text, amount FROM events WHERE id > ?1 ORDER BY id ASC")?;
+        conn.prepare("SELECT id, text, amount, kind FROM events WHERE id > ?1 ORDER BY id ASC")?;
     let rows = stmt.query_map([after], |r| {
         Ok(Event {
             id: r.get(0)?,
             text: r.get(1)?,
             amount: r.get::<_, i64>(2)?.max(0),
+            kind: r.get(3)?,
         })
     })?;
     rows.collect()
@@ -253,18 +275,56 @@ mod tests {
     fn events_queue_and_read_after_cursor() {
         let path = temp_db("events");
         let _ = open(&path).unwrap();
-        push_event(&path, "ix \u{b7} first", 7).unwrap();
-        push_event(&path, "index \u{b7} second", -3).unwrap();
+        push_event(&path, "ix \u{b7} first", 7, "orb").unwrap();
+        push_event(&path, "index \u{b7} second", -3, "villager").unwrap();
         let conn = open(&path).unwrap();
         let all = read_events_after(&conn, 0).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].text, "ix \u{b7} first");
+        assert_eq!(all[0].kind, "orb");
         assert_eq!(all[1].amount, 0, "negative amount clamps to zero");
+        assert_eq!(all[1].kind, "villager");
         // Cursor past the first returns only the newer event.
         let rest = read_events_after(&conn, all[0].id).unwrap();
         assert_eq!(rest.len(), 1);
         assert_eq!(rest[0].text, "index \u{b7} second");
         assert_eq!(max_event_id(&conn).unwrap(), all[1].id);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn legacy_events_table_migrates_and_defaults_to_orb() {
+        // A DB created before the `kind` column existed: build the old events
+        // schema by hand, insert a row, then reopen and confirm the migration
+        // added `kind` defaulting to "orb".
+        let path = temp_db("migrate");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE events (
+                   id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                   text    TEXT    NOT NULL DEFAULT '',
+                   amount  INTEGER NOT NULL DEFAULT 7,
+                   created INTEGER NOT NULL DEFAULT (unixepoch())
+                 );
+                 INSERT INTO events (text, amount) VALUES ('old row', 5);",
+            )
+            .unwrap();
+        }
+        // open() runs the migration; the pre-existing row gets the default kind.
+        let conn = open(&path).unwrap();
+        let all = read_events_after(&conn, 0).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].text, "old row");
+        assert_eq!(all[0].kind, "orb");
+        // And a new row still defaults correctly.
+        push_event(&path, "new row", 9, "villager").unwrap();
+        let rest = read_events_after(&conn, all[0].id).unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].kind, "villager");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
