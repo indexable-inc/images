@@ -20,9 +20,11 @@ These docs are leads, not authority. They drift; the shipped CLI and SDK are the
 
 What you can run with no account, right now from this repo:
 
-- `nix run .#ix -- --help` then drill into subcommands (`nix run .#ix -- vm --help`). This is the real precompiled CLI ([`packages/ix/`](../../packages/ix/)), pinned from ix.dev. When the user asks "what's the command for X", read it off `--help`, don't guess from [`references/cli.md`](references/cli.md).
+- `nix run .#ix -- --help` then drill into subcommands (`nix run .#ix -- vm --help`). This is the real precompiled CLI (`packages/ix/`), pinned from ix.dev. When the user asks "what's the command for X", read it off `--help`, don't guess from [`references/cli.md`](references/cli.md).
 - `nix flake show` and `nix build .#<image>` to realize an OCI image closure locally (for example `nix build .#minecraft`). Proves the image layer works without an ix account.
-- Browse [`examples/`](../../examples/) for runnable consumer fleets (`s3-storage`, `ray-cluster`, `nginx-lifecycle`, ...). Build one to ground a claim about how a fleet is wired.
+- Browse the `examples/` directory for runnable consumer fleets (`s3-storage`, `ray-cluster`, `nginx-lifecycle`, ...). Build one to ground a claim about how a fleet is wired.
+
+(The `nix run` / `packages/ix/` / `examples/` paths assume you have the index monorepo checked out, which is where these docs live.)
 
 What you can prove end to end once `IX_TOKEN` is set (create one at https://ix.dev/tokens, or email andrew@ix.dev for a key):
 

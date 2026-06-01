@@ -24,8 +24,7 @@ let
     };
   };
 
-  inherit (stdenvNoCC.hostPlatform) system;
-  isDarwin = stdenvNoCC.hostPlatform.isDarwin;
+  inherit (stdenvNoCC.hostPlatform) system isDarwin;
   artifactSrc = cliArtifacts.${packageSystem} or null;
   selectedSrc =
     if binarySrc != null then
