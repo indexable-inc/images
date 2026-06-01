@@ -101,13 +101,20 @@ pub fn scroll(view: &VZVirtualMachineView, dx: f64, dy: f64) {
     // kCGScrollEventUnitPixel; wheel1 = vertical, wheel2 = horizontal.
     const PIXEL_UNIT: u32 = 0;
 
+    // Use the NON-variadic `CGEventCreateScrollWheelEvent2`: in the variadic
+    // `...Event`, `wheel1` is a fixed (register) parameter and only wheel2/wheel3
+    // are variadic, but Apple's AArch64 ABI passes variadic args on the stack, so
+    // declaring `wheel1` variadic misroutes the vertical delta. The `2` variant
+    // takes all three wheels as fixed params, matching the `core-graphics` crate.
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
-        fn CGEventCreateScrollWheelEvent(
+        fn CGEventCreateScrollWheelEvent2(
             source: *mut c_void,
             units: u32,
             wheel_count: u32,
-            ...
+            wheel1: i32,
+            wheel2: i32,
+            wheel3: i32,
         ) -> *mut c_void;
     }
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -117,10 +124,10 @@ pub fn scroll(view: &VZVirtualMachineView, dx: f64, dy: f64) {
 
     #[allow(clippy::cast_possible_truncation)]
     let (wheel1, wheel2) = (dy as i32, dx as i32);
-    // SAFETY: standard CoreGraphics variadic call; a null source means the event
-    // uses the current cursor location. Returns a +1 CGEvent we release below.
+    // SAFETY: standard CoreGraphics call; a null source means the event uses the
+    // current cursor location. Returns a +1 CGEvent we release below.
     let cg = unsafe {
-        CGEventCreateScrollWheelEvent(std::ptr::null_mut(), PIXEL_UNIT, 2, wheel1, wheel2)
+        CGEventCreateScrollWheelEvent2(std::ptr::null_mut(), PIXEL_UNIT, 2, wheel1, wheel2, 0)
     };
     if cg.is_null() {
         return;
