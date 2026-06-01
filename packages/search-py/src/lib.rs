@@ -1,85 +1,84 @@
 //! Python bindings for `search-core`.
 //!
-//! Two thin async entry points, [`semantic`] and [`grep`], which marshal Python
-//! arguments into a [`search_core::Query`], run the index-then-query
-//! pipeline, and return each hit as a plain Python dict. All indexing, dedup,
-//! and query logic lives in the core crate; this module only converts at the
-//! boundary.
+//! Two thin async entry points, [`semantic`] and [`grep`], that query the shared
+//! corpus store the `indexer` populates (code plus agent/shell history) and
+//! return each hit as a plain Python dict. This binding never indexes: it is a
+//! read-only query surface, so importing `search` from the MCP session searches
+//! the fleet corpus and never uploads the local checkout. Scope a query
+//! server-side with `source`/`not_source`/`repo`/`user`/`host`/`project`; with
+//! no selector it searches the whole corpus.
+//!
+//! All query, dedup, and filter logic lives in the core crate; this module only
+//! converts at the boundary.
 //!
 //! The returned awaitable is a native asyncio coroutine bridged through
 //! pyo3-async-runtimes, so callers `await` it on their own event loop.
 
-use std::path::PathBuf;
-use std::time::Duration;
-
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use search_core::{
-    CodeScope, Config, DEFAULT_STORE, DisplayHit, GrepOptions, GrepTargets, MixedbreadStore, Query,
-    SearchOptions,
+    CodeScope, DEFAULT_STORE, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets, Manifest,
+    MixedbreadStore, SearchOptions, Source, build_filter,
 };
 
-/// How long to wait for newly uploaded files to embed before querying anyway.
-/// Matches the CLI's indexing wait so a first run on a fresh tree behaves the
-/// same through either surface.
-const INDEX_TIMEOUT: Duration = Duration::from_mins(2);
-
-/// Index the checkout at `path` (unless `no_sync`) and run a natural-language
-/// semantic search over it.
+/// Run a natural-language semantic search over the shared corpus store.
 ///
 /// Returns an awaitable resolving to a list of dicts, one per hit, each with
-/// keys `path`, `score`, `start_line`, `num_lines`, `text`, and `is_web`.
+/// keys `path`, `score`, `start_line`, `num_lines`, `text`, and `source`. The
+/// scope selectors narrow the query server-side; `web` mixes in the hosted
+/// web-search store. No local checkout is read or indexed.
 #[pyfunction]
 #[pyo3(signature = (
     query,
-    path,
     top_k = 10,
     store = None,
     base_url = None,
-    no_sync = false,
     rerank = true,
     web = false,
+    source = None,
+    not_source = None,
+    repo = None,
+    user = None,
+    host = None,
+    project = None,
 ))]
 #[allow(
     clippy::too_many_arguments,
-    reason = "thin 1:1 mirror of the Query surface"
-)]
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "each flag is a distinct independent search knob"
+    reason = "thin 1:1 mirror of the query + scope surface"
 )]
 fn semantic(
     py: Python<'_>,
     query: String,
-    path: String,
     top_k: usize,
     store: Option<String>,
     base_url: Option<String>,
-    no_sync: bool,
     rerank: bool,
     web: bool,
+    source: Option<Vec<String>>,
+    not_source: Option<Vec<String>>,
+    repo: Option<String>,
+    user: Option<Vec<String>>,
+    host: Option<Vec<String>>,
+    project: Option<Vec<String>>,
 ) -> PyResult<Bound<'_, PyAny>> {
-    // Keep the borrow-heavy pipeline in its own `async fn` returning owned
-    // `DisplayHit`s, so the future handed to `future_into_py` is a clean
-    // `'static` producer of owned data. Inlining the borrows of `Query` into the
-    // `future_into_py` block makes the compiler fail to unify the higher-ranked
-    // lifetimes in `index_and_semantic`'s generic bounds.
     let store_name = store.unwrap_or_else(|| DEFAULT_STORE.to_owned());
     let base = base_url.unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
+    let filter = scope_filter(source, not_source, repo, user, host, project)?;
     let options = SearchOptions {
         rerank,
         agentic: false,
     };
+    // Keep every value the borrowed `search_core::semantic` call reads owned in
+    // one frame, so the future handed to `future_into_py` stays `'static`.
     let args = SearchArgs {
         query,
-        path,
         top_k,
         store_name,
         base,
-        sync: !no_sync,
         include_web: web,
         options,
+        filter,
     };
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let hits = run_search(args)
@@ -96,52 +95,57 @@ fn semantic(
     })
 }
 
-/// Index the checkout at `path` (unless `no_sync`) and run a regular-expression
-/// grep over the same indexed chunks as [`semantic`].
+/// Run a regular-expression grep over the same corpus chunks as [`semantic`].
 ///
 /// Returns an awaitable resolving to a list of dicts with the same keys as
 /// [`semantic`]. `case_sensitive` toggles case folding; grep never queries the
-/// web store.
+/// web store. No local checkout is read or indexed.
 #[pyfunction]
 #[pyo3(signature = (
     pattern,
-    path,
     top_k = 10,
     store = None,
     base_url = None,
-    no_sync = false,
     case_sensitive = false,
+    source = None,
+    not_source = None,
+    repo = None,
+    user = None,
+    host = None,
+    project = None,
 ))]
 #[allow(
     clippy::too_many_arguments,
-    reason = "thin 1:1 mirror of the grep Query surface"
+    reason = "thin 1:1 mirror of the grep + scope surface"
 )]
 fn grep(
     py: Python<'_>,
     pattern: String,
-    path: String,
     top_k: usize,
     store: Option<String>,
     base_url: Option<String>,
-    no_sync: bool,
     case_sensitive: bool,
+    source: Option<Vec<String>>,
+    not_source: Option<Vec<String>>,
+    repo: Option<String>,
+    user: Option<Vec<String>>,
+    host: Option<Vec<String>>,
+    project: Option<Vec<String>>,
 ) -> PyResult<Bound<'_, PyAny>> {
-    // Mirror `semantic`: keep owned inputs in a dedicated frame so the future is
-    // `'static` over the borrowed `Query` the pipeline builds.
     let store_name = store.unwrap_or_else(|| DEFAULT_STORE.to_owned());
     let base = base_url.unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
+    let filter = scope_filter(source, not_source, repo, user, host, project)?;
     let options = GrepOptions {
         case_sensitive,
         targets: GrepTargets::Text,
     };
     let args = GrepArgs {
         pattern,
-        path,
         top_k,
         store_name,
         base,
-        sync: !no_sync,
         options,
+        filter,
     };
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let hits = run_grep(args)
@@ -158,95 +162,116 @@ fn grep(
     })
 }
 
-/// Owned inputs for one search, so [`run_search`] can build a borrowed
-/// [`Query`] from values it owns for the whole call.
+/// Build the server-side metadata filter from the scope selectors, or `None`
+/// when nothing is constrained. Shared by [`semantic`] and [`grep`] so the
+/// mapping matches the `search` CLI exactly (one builder in `search-core`).
+fn scope_filter(
+    sources: Option<Vec<String>>,
+    not_sources: Option<Vec<String>>,
+    repo: Option<String>,
+    users: Option<Vec<String>>,
+    hosts: Option<Vec<String>>,
+    projects: Option<Vec<String>>,
+) -> PyResult<Option<Filter>> {
+    let spec = FilterSpec {
+        sources: parse_sources(sources)?,
+        exclude_sources: parse_sources(not_sources)?,
+        repo: repo.filter(|value| !value.is_empty()),
+        users: split_csv(users),
+        hosts: split_csv(hosts),
+        projects: split_csv(projects),
+    };
+    Ok(build_filter(&spec))
+}
+
+/// Parse source tags, accepting repeated and comma-joined values
+/// (`["code", "slack,linear"]`). An unknown tag is a `ValueError`.
+fn parse_sources(values: Option<Vec<String>>) -> PyResult<Vec<Source>> {
+    let mut out = Vec::new();
+    for value in values.unwrap_or_default() {
+        for part in value.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let source = part.parse::<Source>().map_err(|error| {
+                PyValueError::new_err(format!("invalid source {part:?}: {error}"))
+            })?;
+            out.push(source);
+        }
+    }
+    Ok(out)
+}
+
+/// Flatten repeated, comma-joined string selectors (`["a,b", "c"]`) into one
+/// list, trimming whitespace and dropping blanks. Mirrors the CLI's `split_csv`.
+fn split_csv(values: Option<Vec<String>>) -> Vec<String> {
+    values
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Owned inputs for one search, so [`run_search`] can build the borrowed query
+/// from values it owns for the whole call.
 struct SearchArgs {
     query: String,
-    path: String,
     top_k: usize,
     store_name: String,
     base: String,
-    sync: bool,
     include_web: bool,
     options: SearchOptions,
+    filter: Option<Filter>,
 }
 
-/// Run the index-then-search pipeline and return owned hits. Keeping every
-/// value `Query` borrows owned in this frame is what lets the caller's future
-/// stay `'static`.
+/// Query the corpus store and return owned hits. The manifest is empty (this
+/// binding never reads a checkout), so code is scoped entirely server-side.
 async fn run_search(args: SearchArgs) -> search_core::Result<Vec<DisplayHit>> {
-    let root: PathBuf =
-        std::fs::canonicalize(&args.path).unwrap_or_else(|_| PathBuf::from(&args.path));
     let store = MixedbreadStore::from_login(args.base.clone()).await?;
-
-    let query = Query {
-        root: &root,
-        store_name: &args.store_name,
-        base_url: &args.base,
-        text: &args.query,
-        top_k: args.top_k,
-        options: args.options,
-        sync: args.sync,
-        include_web: args.include_web,
-        filters: None,
-        code_scope: CodeScope::WorktreeExact,
-        // The Python/MCP binding searches a checkout (code is always in scope).
-        index_code: true,
-        index_timeout: INDEX_TIMEOUT,
-    };
-
-    search_core::index_and_semantic(&store, &query, &Config::default(), |_, _| {}, |_| {})
-        .await
+    let manifest = Manifest::default();
+    search_core::semantic(
+        &store,
+        &args.store_name,
+        &manifest,
+        &args.query,
+        args.top_k,
+        args.options,
+        args.include_web,
+        args.filter.as_ref(),
+        CodeScope::ServerFiltered,
+    )
+    .await
 }
 
-/// Owned inputs for one grep, so [`run_grep`] can build a borrowed [`Query`]
-/// from values it owns for the whole call.
+/// Owned inputs for one grep, so [`run_grep`] can build the borrowed query from
+/// values it owns for the whole call.
 struct GrepArgs {
     pattern: String,
-    path: String,
     top_k: usize,
     store_name: String,
     base: String,
-    sync: bool,
     options: GrepOptions,
+    filter: Option<Filter>,
 }
 
-/// Run the index-then-grep pipeline and return owned hits. Keeping every value
-/// `Query` borrows owned in this frame is what lets the caller's future stay
-/// `'static`.
+/// Grep the corpus store and return owned hits. Like [`run_search`], the empty
+/// manifest leaves code scoping to the server-side filter.
 async fn run_grep(args: GrepArgs) -> search_core::Result<Vec<DisplayHit>> {
-    let root: PathBuf =
-        std::fs::canonicalize(&args.path).unwrap_or_else(|_| PathBuf::from(&args.path));
     let store = MixedbreadStore::from_login(args.base.clone()).await?;
-
-    // Grep ignores semantic-only knobs (`options`, `include_web`); they are set
-    // to inert defaults so the shared `Query` shape stays reusable.
-    let query = Query {
-        root: &root,
-        store_name: &args.store_name,
-        base_url: &args.base,
-        text: &args.pattern,
-        top_k: args.top_k,
-        options: SearchOptions {
-            rerank: false,
-            agentic: false,
-        },
-        sync: args.sync,
-        include_web: false,
-        filters: None,
-        code_scope: CodeScope::WorktreeExact,
-        // The Python/MCP binding searches a checkout (code is always in scope).
-        index_code: true,
-        index_timeout: INDEX_TIMEOUT,
-    };
-
-    search_core::index_and_grep(
+    let manifest = Manifest::default();
+    search_core::grep(
         &store,
-        &query,
+        &args.store_name,
+        &manifest,
+        &args.pattern,
+        args.top_k,
         args.options,
-        &Config::default(),
-        |_, _| {},
-        |_| {},
+        args.filter.as_ref(),
+        CodeScope::ServerFiltered,
     )
     .await
 }

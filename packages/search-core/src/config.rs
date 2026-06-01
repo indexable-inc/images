@@ -1,9 +1,10 @@
 //! Runtime configuration with conservative, production-shaped defaults. The
 //! API base URL is owned by the [`mixedbread`] crate, not duplicated here.
 
-/// Default store name. One store per account holds every worktree's content;
-/// cross-worktree isolation comes from the local manifest, not separate stores.
-pub const DEFAULT_STORE: &str = "semantic-search";
+/// Default store name: the shared corpus the `indexer` populates (code plus
+/// agent/shell history across the fleet). One store holds everything; queries
+/// scope it server-side with a metadata filter rather than using separate stores.
+pub const DEFAULT_STORE: &str = "index";
 
 /// Identifier of Mixedbread's hosted web-search store, mixed in when the
 /// caller opts into web results.

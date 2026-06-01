@@ -232,7 +232,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Semantic code search over a checkout via the bundled `search` module. Indexes new/changed files (content-addressed, deduplicated across worktrees), then returns matching chunks scoped to the checkout as JSON. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
+        description = "Read-only semantic search over the shared `index` corpus via the bundled `search` module: code plus Claude/Codex/shell history across the fleet. Does NOT index — the separate `indexer` populates the store, so a query never uploads your local checkout. Scope server-side with `source` (code, claude_history, codex, shell, slack, linear, web), `user`, `repo` (e.g. indexable-inc/index), `host`, `project`; with no selector the whole corpus is searched. Returns matching chunks as JSON. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
     )]
     async fn search_semantic(
         &self,
@@ -240,16 +240,22 @@ impl McpServer {
         cancel: CancellationToken,
     ) -> String {
         // Run the search inside the session's persistent event loop via the
-        // bundled module: import it, await `semantic`, then emit JSON. Both
-        // arguments are interpolated as JSON literals, which are valid Python
-        // literals too, so a query or path containing quotes or newlines cannot
-        // break out of the expression.
+        // bundled module: import it, await `semantic`, then emit JSON. Every
+        // argument is interpolated as a JSON literal, which is a valid Python
+        // literal too, so a query or scope value containing quotes or newlines
+        // cannot break out of the expression.
+        let scope = scope_kwargs(
+            request.source.as_deref(),
+            request.user.as_deref(),
+            request.repo.as_deref(),
+            request.host.as_deref(),
+            request.project.as_deref(),
+        );
         let source = format!(
             "import json, search\n\
-             _ix_hits = await search.semantic({query}, {path}, top_k={top_k})\n\
+             _ix_hits = await search.semantic({query}, top_k={top_k}{scope})\n\
              print(json.dumps(_ix_hits))\n",
             query = json!(request.query),
-            path = json!(request.path.as_deref().unwrap_or(".")),
             top_k = request.top_k.unwrap_or(10),
         );
         let timeout = call_timeout(request.timeout_secs, SEARCH_TIMEOUT_SECS);
@@ -258,7 +264,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Regex grep over a checkout via the bundled `search` module: run a regular expression over the SAME indexed chunks the semantic search covers (content-addressed, deduplicated across worktrees), and return matching chunks scoped to the checkout as JSON. New/changed files are indexed first. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
+        description = "Read-only regex grep over the shared `index` corpus via the bundled `search` module: run a regular expression over the SAME corpus chunks the semantic search covers (code plus Claude/Codex/shell history across the fleet). Does NOT index — the separate `indexer` populates the store, so a query never uploads your local checkout. Scope server-side with `source`, `user`, `repo`, `host`, `project`; with no selector the whole corpus is searched. Returns matching chunks as JSON. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
     )]
     async fn search_grep(
         &self,
@@ -266,15 +272,21 @@ impl McpServer {
         cancel: CancellationToken,
     ) -> String {
         // Run the grep inside the session's persistent event loop via the bundled
-        // module: import it, await `grep`, then emit JSON. The pattern and path
-        // are interpolated as JSON literals, which are valid Python literals too,
-        // so content with quotes or newlines cannot break out of the expression.
+        // module: import it, await `grep`, then emit JSON. Every argument is
+        // interpolated as a JSON literal, which is a valid Python literal too, so
+        // content with quotes or newlines cannot break out of the expression.
+        let scope = scope_kwargs(
+            request.source.as_deref(),
+            request.user.as_deref(),
+            request.repo.as_deref(),
+            request.host.as_deref(),
+            request.project.as_deref(),
+        );
         let source = format!(
             "import json, search\n\
-             _ix_hits = await search.grep({pattern}, {path}, top_k={top_k}, case_sensitive={case_sensitive})\n\
+             _ix_hits = await search.grep({pattern}, top_k={top_k}, case_sensitive={case_sensitive}{scope})\n\
              print(json.dumps(_ix_hits))\n",
             pattern = json!(request.pattern),
-            path = json!(request.path.as_deref().unwrap_or(".")),
             top_k = request.top_k.unwrap_or(10),
             case_sensitive = if request.case_sensitive.unwrap_or(false) {
                 "True"
@@ -286,6 +298,35 @@ impl McpServer {
         self.call_text(request.session_id, "exec", json!({ "source": source }), timeout, cancel)
             .await
     }
+}
+
+/// Build the Python keyword-argument fragment for the scope selectors, e.g.
+/// `, source=["code"], user=["andrew"]`. Each value is emitted as a JSON literal
+/// (a valid Python literal), and only provided, non-empty selectors are included,
+/// so an omitted filter leaves the corpus unscoped on that axis. The leading `, `
+/// lets the caller append it directly after the fixed positional arguments.
+fn scope_kwargs(
+    source: Option<&[String]>,
+    user: Option<&[String]>,
+    repo: Option<&str>,
+    host: Option<&[String]>,
+    project: Option<&[String]>,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for (key, values) in [
+        ("source", source),
+        ("user", user),
+        ("host", host),
+        ("project", project),
+    ] {
+        if let Some(values) = values.filter(|values| !values.is_empty()) {
+            parts.push(format!("{key}={}", json!(values)));
+        }
+    }
+    if let Some(repo) = repo.filter(|repo| !repo.is_empty()) {
+        parts.push(format!("repo={}", json!(repo)));
+    }
+    parts.iter().map(|part| format!(", {part}")).collect()
 }
 
 impl McpServer {
@@ -417,34 +458,53 @@ struct ExecRequest {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct SemanticSearchRequest {
-    /// Natural-language query to search the checkout for.
+    /// Natural-language query to search the corpus for.
     query: String,
-    /// Checkout directory to index and scope results to. Defaults to the
-    /// session's working directory.
-    path: Option<String>,
     /// Maximum number of results to return (default 10).
     top_k: Option<usize>,
+    /// Restrict to these sources: code, claude_history, codex, shell, slack,
+    /// linear, web. Omit to search every source.
+    source: Option<Vec<String>>,
+    /// Restrict to records authored by these users. Omit for every user.
+    user: Option<Vec<String>>,
+    /// Restrict code to this repository slug, e.g. indexable-inc/index. Omit for
+    /// every repository.
+    repo: Option<String>,
+    /// Restrict to records recorded on these hosts. Omit for every host.
+    host: Option<Vec<String>>,
+    /// Restrict to these project slugs (e.g. a Claude transcript's project
+    /// directory). Omit for every project.
+    project: Option<Vec<String>>,
     session_id: Option<String>,
-    /// Seconds to wait before abandoning the search. Defaults to 600 (a cold
-    /// index of a large checkout is slow). `0` uses the default.
+    /// Seconds to wait before abandoning the search. Defaults to 600. `0` uses
+    /// the default.
     timeout_secs: Option<u64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct GrepSearchRequest {
-    /// Regular expression to match against the indexed chunks.
+    /// Regular expression to match against the corpus chunks.
     pattern: String,
-    /// Checkout directory to index and scope results to. Defaults to the
-    /// session's working directory.
-    path: Option<String>,
     /// Maximum number of results to return (default 10).
     top_k: Option<usize>,
     /// Match the pattern case-sensitively (default false).
     case_sensitive: Option<bool>,
+    /// Restrict to these sources: code, claude_history, codex, shell, slack,
+    /// linear, web. Omit to search every source.
+    source: Option<Vec<String>>,
+    /// Restrict to records authored by these users. Omit for every user.
+    user: Option<Vec<String>>,
+    /// Restrict code to this repository slug, e.g. indexable-inc/index. Omit for
+    /// every repository.
+    repo: Option<String>,
+    /// Restrict to records recorded on these hosts. Omit for every host.
+    host: Option<Vec<String>>,
+    /// Restrict to these project slugs. Omit for every project.
+    project: Option<Vec<String>>,
     session_id: Option<String>,
-    /// Seconds to wait before abandoning the search. Defaults to 600 (a cold
-    /// index of a large checkout is slow). `0` uses the default.
+    /// Seconds to wait before abandoning the search. Defaults to 600. `0` uses
+    /// the default.
     timeout_secs: Option<u64>,
 }
 

@@ -1,29 +1,33 @@
-"""Async code search over a content-addressed Mixedbread index.
+"""Async read-only search over the shared Mixedbread corpus store.
 
-Two query verbs run over the same indexed, deduplicated chunks:
+Two query verbs run over the same store the ``indexer`` populates (code plus
+agent/shell history across the fleet):
 
-* ``semantic(query, path)`` runs a natural-language semantic search.
-* ``grep(pattern, path)`` runs a regular expression over the same chunks.
+* ``semantic(query)`` runs a natural-language semantic search.
+* ``grep(pattern)`` runs a regular expression over the same chunks.
 
-Both index the checkout at ``path`` first (uploading only new file content,
-deduplicated across worktrees) and return the hits scoped to it. The whole
-indexing and query pipeline lives in the Rust ``search-core`` crate;
-this package is a thin PyO3 binding over it.
+Neither indexes: this is a pure query surface, so importing ``search`` never
+uploads the local checkout. Scope a query server-side with any of ``source``,
+``not_source``, ``repo``, ``user``, ``host``, ``project``; with no selector the
+whole corpus is searched.
 
-    hits = await search.semantic("where is retry backoff configured", ".")
+    hits = await search.semantic("where is retry backoff configured")
     for hit in hits:
         print(hit["path"], hit["score"])
 
-    hits = await search.grep(r"fn \\w+\\(", ".", case_sensitive=True)
+    # only Claude history, only my records
+    hits = await search.semantic("deploy steps", source=["claude_history"], user=["andrew"])
+
+    hits = await search.grep(r"fn \\w+\\(", source=["code"], repo="indexable-inc/index")
     for hit in hits:
         print(hit["path"], hit["text"])
 
 Each awaitable is a native asyncio coroutine bridged from Rust via
 pyo3-async-runtimes, so ``await`` it on your own event loop. Each hit is a dict
 with keys ``path``, ``score``, ``start_line``, ``num_lines``, ``text``, and
-``source`` (one of ``code``, ``slack``, ``linear``, ``web``). Authentication
-mirrors the ``search`` CLI: ``MXBAI_API_KEY``,
-or the token written by ``mgrep login``.
+``source`` (e.g. ``code``, ``claude_history``, ``slack``, ``linear``, ``web``).
+Authentication mirrors the ``search`` CLI: ``MXBAI_API_KEY``, or the token
+written by ``mgrep login``.
 """
 
 from __future__ import annotations
