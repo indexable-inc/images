@@ -5399,7 +5399,6 @@ dependencies = [
  "anyhow",
  "clap",
  "code-highlight",
- "dirs",
  "indicatif",
  "mixedbread",
  "progress-style",

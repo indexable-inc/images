@@ -1,27 +1,25 @@
-//! `search`: a daemon-free, content-addressed semantic code search.
+//! `search`: read-only semantic + regex search over the shared corpus store.
 //!
-//! Every run rebuilds a local manifest (cheap; unchanged files are not
-//! re-hashed), uploads only content the store is missing, waits for it to
-//! embed, then searches. No daemon, no `--sync` flag: new files are picked up
-//! and embedded automatically at search time. `--no-sync` skips that for a pure
-//! offline search. Results are scoped to the current checkout via the manifest.
+//! `search` never indexes. It queries the store the `indexer` populates (code
+//! plus agent/shell history) and projects the hits. Scope a query with
+//! `--source`, `--repo`, `--user`, `--host`, or `--project`; with no selector it
+//! searches the whole corpus. All ingestion lives in the separate `indexer`.
 
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anstyle::{AnsiColor, Style};
 use clap::{Args, Parser, Subcommand};
 use indicatif::ProgressBar;
 use search_core::{
-    CodeScope, Config, DEFAULT_STORE, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets,
-    MixedbreadStore, Query, SearchOptions, Source, StoreStatus, build_filter,
-    repo_slug,
+    CodeScope, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets, Manifest, MixedbreadStore,
+    SearchOptions, Source, build_filter,
 };
 
-/// How long to wait for freshly uploaded files to finish embedding.
-const INDEX_TIMEOUT: Duration = Duration::from_mins(2);
+/// Default store: the shared corpus the `indexer` populates (code plus
+/// agent/shell history). One store, queried read-only.
+const DEFAULT_STORE: &str = "index";
 
 /// Command-line arguments.
 ///
@@ -50,10 +48,11 @@ enum Command {
 }
 
 /// Scope selectors shared by the semantic and grep paths. With no selector the
-/// default is all sources, with code scoped to the current worktree.
+/// query searches the whole corpus; each selector narrows it server-side.
 #[derive(Debug, Args)]
 struct ScopeArgs {
-    /// Restrict to these sources (repeatable): code, slack, linear, web.
+    /// Restrict to these sources (repeatable): code, `claude_history`, codex,
+    /// shell, slack, linear, web.
     #[arg(long = "source", value_name = "SOURCE")]
     sources: Vec<String>,
 
@@ -61,18 +60,10 @@ struct ScopeArgs {
     #[arg(long = "not-source", value_name = "SOURCE")]
     not_sources: Vec<String>,
 
-    /// Restrict code to a repository slug (e.g. indexable-inc/index).
+    /// Restrict code to a repository slug (e.g. indexable-inc/index). With no
+    /// `--repo`, code from every indexed repository is searched.
     #[arg(long)]
     repo: Option<String>,
-
-    /// Search code across all repositories, not just this checkout.
-    #[arg(long = "all-repos")]
-    all_repos: bool,
-
-    /// Search this repository across all worktrees, not just files checked out
-    /// here.
-    #[arg(long = "all-worktrees")]
-    all_worktrees: bool,
 
     /// Restrict to records authored by these users (repeatable, comma-joined).
     /// Default: every user.
@@ -94,33 +85,12 @@ struct ScopeArgs {
     projects: Vec<String>,
 }
 
-/// Resolve scope selectors into a server-side metadata filter and the code
-/// scoping mode.
-fn resolve_scope(
-    scope: &ScopeArgs,
-    root: &Path,
-) -> anyhow::Result<(Option<Filter>, CodeScope, bool)> {
+/// Resolve scope selectors into a server-side metadata filter. Code is scoped
+/// entirely server-side (search never reads the local checkout), so there is no
+/// manifest and no worktree mode.
+fn resolve_scope(scope: &ScopeArgs) -> anyhow::Result<Option<Filter>> {
     let sources = parse_sources(&scope.sources)?;
     let exclude_sources = parse_sources(&scope.not_sources)?;
-
-    // The local checkout is read only when `code` is in scope: no source
-    // selector (every source) or an explicit `code`, and not excluded. A
-    // record-only query (slack/linear/claude_history) skips the worktree walk.
-    let index_code = (sources.is_empty() || sources.iter().any(Source::is_code))
-        && !exclude_sources.iter().any(Source::is_code);
-
-    // A repo / all-repos / all-worktrees query is server-filtered: the manifest
-    // can only answer "files checked out here", so anything coarser must trust
-    // the metadata filter instead.
-    let (repo, code_scope) = if scope.all_repos {
-        (None, CodeScope::ServerFiltered)
-    } else if let Some(repo) = scope.repo.clone() {
-        (Some(repo), CodeScope::ServerFiltered)
-    } else if scope.all_worktrees {
-        (Some(repo_slug(root).as_str().to_owned()), CodeScope::ServerFiltered)
-    } else {
-        (None, CodeScope::WorktreeExact)
-    };
 
     let mut users = split_csv(&scope.users);
     if scope.mine {
@@ -134,12 +104,12 @@ fn resolve_scope(
     let spec = FilterSpec {
         sources,
         exclude_sources,
-        repo,
+        repo: scope.repo.clone(),
         users,
         hosts: split_csv(&scope.hosts),
         projects: split_csv(&scope.projects),
     };
-    Ok((build_filter(&spec), code_scope, index_code))
+    Ok(build_filter(&spec))
 }
 
 fn parse_sources(values: &[String]) -> anyhow::Result<Vec<Source>> {
@@ -189,10 +159,6 @@ struct SemanticArgs {
     /// Synthesize an answer from the results instead of listing them.
     #[arg(short = 'a', long)]
     answer: bool,
-
-    /// Search the store as-is: skip detecting and embedding new files.
-    #[arg(long = "no-sync")]
-    no_sync: bool,
 
     /// Disable result reranking (on by default).
     #[arg(long = "no-rerank")]
@@ -249,10 +215,6 @@ struct GrepArgs {
     #[arg(short = 's', long = "case-sensitive")]
     case_sensitive: bool,
 
-    /// Search the store as-is: skip detecting and embedding new files.
-    #[arg(long = "no-sync")]
-    no_sync: bool,
-
     /// Emit results as a JSON array on stdout instead of the human listing.
     /// Each element is `{path, source, start_line, num_lines, score, text}`.
     #[arg(long)]
@@ -303,61 +265,42 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         code_highlight::Theme::default()
     };
 
-    let config = Config::default();
     let store_name = cli.store.unwrap_or_else(|| DEFAULT_STORE.to_owned());
     let base_url = cli
         .base_url
         .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
-    let store = MixedbreadStore::from_login(base_url.clone()).await?;
+    let store = MixedbreadStore::from_login(base_url).await?;
 
-    let (filter, code_scope, index_code) = resolve_scope(&cli.scope, &root)?;
-    // Only a code query reads the local checkout, so guard the home-directory
-    // check on it: a record-source query (e.g. `--source slack`) consults the
-    // store alone and must work from any directory, including `$HOME`.
-    if index_code {
-        anyhow::ensure!(
-            !at_or_above_home(&root),
-            "refusing to index {} (it is at or above your home directory); run from a project directory",
-            root.display(),
-        );
-    }
-    let query = Query {
-        root: &root,
-        store_name: &store_name,
-        base_url: &base_url,
-        text: &pattern,
-        top_k: cli.max_count.max(1),
-        options: SearchOptions {
-            rerank: !cli.no_rerank,
-            agentic: cli.agentic,
-        },
-        sync: !cli.no_sync,
-        include_web: cli.web,
-        filters: filter.as_ref(),
-        code_scope,
-        index_code,
-        index_timeout: INDEX_TIMEOUT,
+    let filter = resolve_scope(&cli.scope)?;
+    // Pure query: no local checkout is read, so code is scoped server-side and
+    // the manifest is empty (it only ever held this checkout's hashes).
+    let manifest = Manifest::default();
+    let options = SearchOptions {
+        rerank: !cli.no_rerank,
+        agentic: cli.agentic,
     };
+    let top_k = cli.max_count.max(1);
 
-    // Progress UI, terminal only: an animated spinner during the manifest +
-    // store-listing phase, flipping to determinate upload then embedding bars.
-    // Piped output stays clean (no bar).
-    let progress = IndexProgress::new();
-
+    let bar = spinner();
     if cli.answer {
         anyhow::ensure!(
             !cli.json,
             "--json is not supported with --answer; pass one or the other",
         );
-        let view = search_core::index_and_answer(
+        let view = search_core::ask(
             &store,
-            &query,
-            &config,
-            |done, total| progress.on_upload(done, total),
-            |status| progress.on_poll(status),
+            &store_name,
+            &manifest,
+            &pattern,
+            top_k,
+            options,
+            cli.web,
+            filter.as_ref(),
+            CodeScope::ServerFiltered,
         )
-        .await?;
-        progress.finish();
+        .await;
+        finish(bar);
+        let view = view?;
         println!("{}", view.answer);
         if !view.sources.is_empty() {
             println!();
@@ -365,98 +308,39 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
                 println!("{index}: {}", render(hit, cli.content, &palette, &root, theme));
             }
         }
+        Ok(())
     } else {
-        let hits = search_core::index_and_semantic(
+        let hits = search_core::semantic(
             &store,
-            &query,
-            &config,
-            |done, total| progress.on_upload(done, total),
-            |status| progress.on_poll(status),
+            &store_name,
+            &manifest,
+            &pattern,
+            top_k,
+            options,
+            cli.web,
+            filter.as_ref(),
+            CodeScope::ServerFiltered,
         )
-        .await?;
-        progress.finish();
-        print_hits(&hits, cli.json, cli.content, &palette, &root, theme)?;
+        .await;
+        finish(bar);
+        print_hits(&hits?, cli.json, cli.content, &palette, &root, theme)
     }
-
-    Ok(())
 }
 
-/// Terminal progress for the index-then-query flow. The phases before any
-/// upload (building the manifest, listing what the store already holds) have no
-/// known total, so the bar starts as an animated spinner instead of a frozen
-/// `0/0`; it flips to a determinate "uploading" bar once new files start
-/// uploading, then to an "embedding" bar while the store embeds them. A
-/// non-terminal stderr (piped output) gets no bar at all.
-struct IndexProgress {
-    bar: Option<ProgressBar>,
-    /// Files uploaded this run, captured so the embedding bar knows its length.
-    embed_total: AtomicU64,
-    /// Whether the spinner has already flipped to the determinate upload bar.
-    uploading: AtomicBool,
-    /// Whether the upload bar has already flipped to the embedding bar.
-    embedding: AtomicBool,
+/// A terminal-only "searching" spinner for the query round-trip; piped output
+/// gets none. There is no upload or embedding phase to report any more.
+fn spinner() -> Option<ProgressBar> {
+    let bar = std::io::stderr().is_terminal().then(ProgressBar::new_spinner)?;
+    bar.set_style(progress_style::spinner());
+    bar.set_prefix("searching");
+    bar.enable_steady_tick(Duration::from_millis(120));
+    Some(bar)
 }
 
-impl IndexProgress {
-    /// Start an animated spinner (terminal only) for the pre-upload phase, so a
-    /// slow manifest build or store listing reads as working, not hung.
-    fn new() -> Self {
-        let bar = std::io::stderr().is_terminal().then(ProgressBar::new_spinner);
-        if let Some(bar) = &bar {
-            bar.set_style(progress_style::spinner());
-            bar.set_prefix("indexing");
-            bar.set_message("scanning files, checking store");
-            bar.enable_steady_tick(Duration::from_millis(120));
-        }
-        Self {
-            bar,
-            embed_total: AtomicU64::new(0),
-            uploading: AtomicBool::new(false),
-            embedding: AtomicBool::new(false),
-        }
-    }
-
-    /// Upload-phase callback: `(uploaded_so_far, total_to_upload)`. The first
-    /// call with a real total flips the spinner to a determinate bar.
-    fn on_upload(&self, done: usize, total: usize) {
-        let (Some(bar), true) = (&self.bar, total > 0) else {
-            return;
-        };
-        let total = u64::try_from(total).unwrap_or(u64::MAX);
-        self.embed_total.store(total, Ordering::Relaxed);
-        if !self.uploading.swap(true, Ordering::Relaxed) {
-            bar.set_style(progress_style::bar("cyan"));
-            bar.set_prefix("uploading files");
-        }
-        bar.set_length(total);
-        bar.set_position(u64::try_from(done).unwrap_or(u64::MAX));
-    }
-
-    /// Embedding-phase callback: flip to the embedding bar on first poll and
-    /// track how many uploaded files remain to embed.
-    fn on_poll(&self, status: StoreStatus) {
-        let Some(bar) = &self.bar else {
-            return;
-        };
-        let len = self.embed_total.load(Ordering::Relaxed);
-        // store_status is store-wide, so the pending count can exceed our batch;
-        // clamp to len so the bar never reads past full. Set the position before
-        // any style flip so the first embedding draw shows the real position,
-        // not the carried-over full upload position (a one-frame "len/len").
-        let remaining = (status.pending + status.in_progress).min(len);
-        bar.set_position(len - remaining);
-        if !self.embedding.swap(true, Ordering::Relaxed) {
-            bar.set_style(progress_style::bar("magenta"));
-            bar.set_prefix("embedding files");
-            bar.set_length(len);
-        }
-    }
-
-    /// Clear the bar once the flow finishes.
-    fn finish(&self) {
-        if let Some(bar) = &self.bar {
-            bar.finish_and_clear();
-        }
+/// Clear the spinner, if any, before printing results.
+fn finish(bar: Option<ProgressBar>) {
+    if let Some(bar) = bar {
+        bar.finish_and_clear();
     }
 }
 
@@ -470,61 +354,34 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
         code_highlight::Theme::default()
     };
 
-    let config = Config::default();
     let store_name = cli.store.unwrap_or_else(|| DEFAULT_STORE.to_owned());
     let base_url = cli
         .base_url
         .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
-    let store = MixedbreadStore::from_login(base_url.clone()).await?;
+    let store = MixedbreadStore::from_login(base_url).await?;
 
-    // Grep reuses the shared `Query` shape; its semantic-only knobs (rerank,
-    // agentic, web) are inert here, and the grep pattern travels in `text`.
-    let (filter, code_scope, index_code) = resolve_scope(&cli.scope, &root)?;
-    if index_code {
-        anyhow::ensure!(
-            !at_or_above_home(&root),
-            "refusing to index {} (it is at or above your home directory); run from a project directory",
-            root.display(),
-        );
-    }
-    let query = Query {
-        root: &root,
-        store_name: &store_name,
-        base_url: &base_url,
-        text: &cli.pattern,
-        top_k: cli.max_count.max(1),
-        options: SearchOptions {
-            rerank: false,
-            agentic: false,
-        },
-        sync: !cli.no_sync,
-        include_web: false,
-        filters: filter.as_ref(),
-        code_scope,
-        index_code,
-        index_timeout: INDEX_TIMEOUT,
-    };
+    let filter = resolve_scope(&cli.scope)?;
+    let manifest = Manifest::default();
     let grep_options = GrepOptions {
         case_sensitive: cli.case_sensitive,
         targets: GrepTargets::Text,
     };
 
-    // Progress UI, terminal only: identical to the semantic path so a grep on a
-    // fresh tree shows the same indexing feedback. Piped output stays clean.
-    let progress = IndexProgress::new();
-
-    let hits = search_core::index_and_grep(
+    let bar = spinner();
+    let hits = search_core::grep(
         &store,
-        &query,
+        &store_name,
+        &manifest,
+        &cli.pattern,
+        cli.max_count.max(1),
         grep_options,
-        &config,
-        |done, total| progress.on_upload(done, total),
-        |status| progress.on_poll(status),
+        filter.as_ref(),
+        CodeScope::ServerFiltered,
     )
-    .await?;
-    progress.finish();
+    .await;
+    finish(bar);
 
-    print_hits(&hits, cli.json, cli.content, &palette, &root, theme)?;
+    print_hits(&hits?, cli.json, cli.content, &palette, &root, theme)?;
 
     Ok(())
 }
@@ -537,14 +394,6 @@ fn resolve_root(path: Option<&str>) -> anyhow::Result<PathBuf> {
         None => cwd,
     };
     Ok(root.canonicalize().unwrap_or(root))
-}
-
-fn at_or_above_home(path: &Path) -> bool {
-    let Some(home) = dirs::home_dir() else {
-        return false;
-    };
-    let home = home.canonicalize().unwrap_or(home);
-    path == home || home.starts_with(path)
 }
 
 /// Styles for one result, resolved once against stdout's color support.
