@@ -124,8 +124,25 @@ in
   # renderer, not the API request, and is never wired to the `display` param
   # (anthropics/claude-code#49268). The only restore path is to send
   # `thinking.display = "summarized"` on the request body, which Claude Code
-  # merges from this env var. We keep `type = "adaptive"` (the only mode these
-  # models support) so we override display without forcing a thinking budget.
+  # merges from this env var.
+  #
+  # Why `type = "adaptive"` is here and why it's safe:
+  #   - Claude Code parses CLAUDE_CODE_EXTRA_BODY and spreads it into the request
+  #     body LAST, as a shallow top-level merge — so it REPLACES the whole
+  #     `thinking` object rather than deep-merging into it. That means we must
+  #     restate `type` here; sending `{ display = "summarized"; }` alone would
+  #     drop `type` and the API would 400 (thinking requires a type).
+  #   - `adaptive` is the only thinking type Opus 4.7/4.8 accept anyway — manual
+  #     `type = "enabled"` with a budget returns 400 on these models — so this
+  #     restates the harness's own default, it does not pick a narrower mode.
+  #   - It does NOT pin the thinking level. The effort knob (low/medium/high/
+  #     xhigh, set via /effort) is a SEPARATE top-level request field, a sibling
+  #     of `thinking`, never a property inside it. Replacing `thinking` here only
+  #     flips `display`; effort is untouched.
+  #   - Caveat: this assumes an adaptive-capable model (Opus 4.6/4.7/4.8,
+  #     Sonnet 4.6). Haiku 4.5 is manual-only and already defaults to summarized,
+  #     so it neither needs nor accepts adaptive — fine while the image defaults
+  #     to Opus.
   environment.etc."claude-code/managed-settings.json".text = builtins.toJSON {
     permissions.defaultMode = "bypassPermissions";
     skipDangerousModePermissionPrompt = true;
