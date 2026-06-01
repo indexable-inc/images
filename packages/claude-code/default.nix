@@ -10,6 +10,7 @@
   socat,
   nix,
   gnupg,
+  writeText,
   binName ? "claude",
   # Only the flake package set injects the Nushell writer; the overlay eval
   # context does not. The updater is a maintainer-facing flake output, so the
@@ -51,6 +52,22 @@ let
       name
       (toString value)
     ]) wrapperEnvDefaults
+  );
+
+  # Settings-key defaults that have no env knob, shipped as a JSON the wrapper
+  # injects via `--settings`. The package wraps the binary, so it can carry env
+  # vars and CLI flags but not a settings.json *key* directly; `--settings` adds
+  # a `flagSettings` source that MERGES per-key with the user's settings
+  # (precedence: managed > --settings > local > project > user; arrays concat).
+  # So these are fleet defaults that override a user's value but can still be
+  # overridden by managed settings, and they leave every other user key intact.
+  #   cleanupPeriodDays: keep transcripts + the wrapper's --debug logs ~1yr for
+  #     the optimize analysis and troubleshooting (CLI default 30).
+  settingsDefaults = {
+    cleanupPeriodDays = 365;
+  };
+  settingsDefaultsFile = writeText "claude-code-default-settings.json" (
+    builtins.toJSON settingsDefaults
   );
 
   inherit (stdenv.hostPlatform) system;
@@ -179,11 +196,13 @@ stdenv.mkDerivation {
     # telemetry (HTTP/API timings, auto-mode classifier, MCP/LSP lifecycle,
     # startup phases, permission decisions) to ~/.claude/debug/ for
     # troubleshooting and the optimize history analysis. It does not pollute
-    # `claude -p` stdout (verified), and those logs are pruned on the normal
-    # cleanupPeriodDays sweep, so set a long retention in settings to keep them.
+    # `claude -p` stdout (verified). Those logs prune on the cleanupPeriodDays
+    # sweep, so we also ship a long retention via --settings (see
+    # `settingsDefaults` above).
     makeBinaryWrapper "$helper" $out/bin/${binName} \
       --inherit-argv0 \
       --add-flags --debug \
+      --add-flags "--settings ${settingsDefaultsFile}" \
       --set DISABLE_AUTOUPDATER 1 \
       --set DISABLE_INSTALLATION_CHECKS 1 \
       --set USE_BUILTIN_RIPGREP 0 \
