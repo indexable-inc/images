@@ -8,9 +8,11 @@
 //! mouse off a bar. Hovering a bar fires native `CursorEntered`/`CursorLeft` (the
 //! bar paints opaque, the cursor becomes a grab hand); pressing it hands off to
 //! the native `Window::drag_window`, so the OS owns the drag and the new position
-//! is read back from `Moved` and persisted. The press/drag/click disambiguation
-//! is [`overlay_core::DragClick`]; the GPU bring-up, surface config, and
-//! non-activating raise are [`overlay_core::window`].
+//! is read back from `Moved` and persisted. A two-finger trackpad scroll over a
+//! bar nudges it the same way: a scroll has no button for `drag_window` to own, so
+//! the overlay moves the window itself ([`overlay_core::scroll_drag_delta`]). The
+//! press/drag/click disambiguation is [`overlay_core::DragClick`]; the GPU
+//! bring-up, surface config, and non-activating raise are [`overlay_core::window`].
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +23,9 @@ use overlay_core::glam::DVec2;
 use overlay_core::wgpu;
 use overlay_core::winit::application::ApplicationHandler;
 use overlay_core::winit::dpi::{LogicalPosition, PhysicalPosition, PhysicalSize};
-use overlay_core::winit::event::{ElementState, MouseButton, WindowEvent};
+use overlay_core::winit::event::{
+    ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
+};
 use overlay_core::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use overlay_core::winit::window::{CursorIcon, Window, WindowId};
 use overlay_core::{anim, window as ocwin, DragClick, Gpu, HoverAnim};
@@ -384,6 +388,43 @@ impl App {
         }
     }
 
+    /// Move a bar to follow a two-finger trackpad scroll, persisting the new
+    /// position like a drag. There is no button for `Window::drag_window` to own,
+    /// so we move the window ourselves: update `self_set` before the move so the
+    /// resulting `Moved` reads as our own echo (no double write), refresh
+    /// `last_move` so the reconcile guard does not snap it back from the watcher's
+    /// lagged read, and write the position straight to the DB. Scrolling a bar
+    /// pins it, exactly as dragging one does.
+    fn scroll_move(&mut self, id: i64, delta: MouseScrollDelta, phase: TouchPhase) {
+        let Some(win) = self.wins.get_mut(&id) else {
+            return;
+        };
+        let (dx, dy) = overlay_core::scroll_drag_delta(delta, win.window.scale_factor());
+        // Move the window live on every event, momentum tail included, so it feels
+        // like scrolling. `self_set` tracks where the window sits and is set after
+        // create; measure the scroll from there, and pin the bar (`bar.pos`) so the
+        // size-settle pass stops re-centering it, exactly as a drag does.
+        if (dx != 0.0 || dy != 0.0) && let Some(cur) = win.self_set {
+            let np = LogicalPosition::new(cur.x + dx, cur.y + dy);
+            win.self_set = Some(np);
+            win.window.set_outer_position(np);
+            win.last_move = Instant::now();
+            win.bar.pos = Some(DVec2::new(np.x, np.y));
+        }
+        // Persist only when the gesture settles, not per frame: a trackpad flick
+        // emits a long momentum tail of `MouseWheel` events, and writing on each
+        // would open a SQLite connection per frame on the UI thread. The touch and
+        // momentum ends both carry `TouchPhase::Ended`; a discrete wheel notch
+        // (`LineDelta`) has no Ended phase but is low-frequency, so save it directly.
+        let settle = phase == TouchPhase::Ended || matches!(delta, MouseScrollDelta::LineDelta(..));
+        if settle
+            && let Some(pos) = win.self_set
+            && let Err(e) = db::set_position(&self.db, id, DVec2::new(pos.x, pos.y))
+        {
+            eprintln!("bossbar-overlay: save position failed: {e}");
+        }
+    }
+
     /// Settle a bar's window to the size its current state asks for, resizing only
     /// when that size changes. The target is the expanded (panel-open) size while
     /// the bar is hovered or easing back, otherwise the collapsed bar size; either
@@ -581,6 +622,7 @@ impl ApplicationHandler<Vec<BossBar>> for App {
                 }
             }
             WindowEvent::Moved(pos) => self.on_moved(id, pos),
+            WindowEvent::MouseWheel { delta, phase, .. } => self.scroll_move(id, delta, phase),
             _ => {}
         }
     }

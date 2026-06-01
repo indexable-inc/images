@@ -6,7 +6,10 @@
 //! Off the window the desktop is click-through (there is no window there). On the
 //! window: hovering grabs focus order so the book sits on top; dragging moves it
 //! (the OS owns the drag via `Window::drag_window`, the position is read back and
-//! persisted); a click on a page-turn arrow flips the spread.
+//! persisted); a two-finger trackpad scroll also moves it (no button to hand to
+//! `drag_window`, so the overlay moves the window itself via
+//! [`overlay_core::scroll_drag_delta`]); a click on a page-turn arrow flips the
+//! spread.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,7 +19,9 @@ use overlay_core::glam::DVec2;
 use overlay_core::wgpu;
 use overlay_core::winit::application::ApplicationHandler;
 use overlay_core::winit::dpi::{LogicalPosition, PhysicalPosition};
-use overlay_core::winit::event::{ElementState, MouseButton, WindowEvent};
+use overlay_core::winit::event::{
+    ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
+};
 use overlay_core::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use overlay_core::winit::window::{CursorIcon, Window, WindowId};
 use overlay_core::{window as ocwin, DragClick, Gpu, HoverAnim};
@@ -339,6 +344,41 @@ impl App {
             eprintln!("book-overlay: save position failed: {e}");
         }
     }
+
+    /// Move the book to follow a two-finger trackpad scroll, persisting the new
+    /// position like a drag. There is no button for `Window::drag_window` to own,
+    /// so we move the window ourselves: update `self_set` before the move so the
+    /// resulting `Moved` reads as our own echo (no double write), refresh
+    /// `last_move` so the settle guard does not snap it back from the watcher's
+    /// lagged read, and write the position straight to the DB.
+    fn scroll_move(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
+        let Some(win) = self.win.as_mut() else {
+            return;
+        };
+        let (dx, dy) = overlay_core::scroll_drag_delta(delta, win.window.scale_factor());
+        // Move the window live on every event, momentum tail included, so it feels
+        // like scrolling. `self_set` tracks where the window sits and is set after
+        // create; measure the scroll from there.
+        if (dx != 0.0 || dy != 0.0) && let Some(cur) = win.self_set {
+            let np = LogicalPosition::new(cur.x + dx, cur.y + dy);
+            win.self_set = Some(np);
+            win.window.set_outer_position(np);
+            win.last_move = Instant::now();
+            self.book.pos = Some(DVec2::new(np.x, np.y));
+        }
+        // Persist only when the gesture settles, not per frame: a trackpad flick
+        // emits a long momentum tail of `MouseWheel` events, and writing on each
+        // would open a SQLite connection per frame on the UI thread. The touch and
+        // momentum ends both carry `TouchPhase::Ended`; a discrete wheel notch
+        // (`LineDelta`) has no Ended phase but is low-frequency, so save it directly.
+        let settle = phase == TouchPhase::Ended || matches!(delta, MouseScrollDelta::LineDelta(..));
+        if settle
+            && let Some(pos) = win.self_set
+            && let Err(e) = db::set_position(&self.db, DVec2::new(pos.x, pos.y))
+        {
+            eprintln!("book-overlay: save position failed: {e}");
+        }
+    }
 }
 
 impl ApplicationHandler<Book> for App {
@@ -478,6 +518,7 @@ impl ApplicationHandler<Book> for App {
                 }
             }
             WindowEvent::Moved(pos) => self.on_moved(pos),
+            WindowEvent::MouseWheel { delta, phase, .. } => self.scroll_move(delta, phase),
             _ => {}
         }
     }

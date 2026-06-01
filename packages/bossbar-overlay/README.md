@@ -50,7 +50,8 @@ the same way the game's `BossHealthOverlay` does (color background, color progre
 clipped to the fill, then the notch overlay). Hover one and it eases to fully
 opaque and gently grows with a slow breathing pulse; a press that moves past a few
 pixels starts the platform's native window drag, and the drop location is saved to
-the bar's `x`/`y` columns so it stays put across restarts. A press that does not
+the bar's `x`/`y` columns so it stays put across restarts. A two-finger trackpad
+scroll over a bar nudges it the same way, without pressing. A press that does not
 move is a click: it opens the bar's `url` if it has one. A bar with a
 `description` unfolds a flat panel beneath it on hover; a bar with a `since` (Unix
 epoch) shows a live elapsed timer in its title (`Build (2:05)`).
@@ -114,8 +115,8 @@ a one-page book texture; the spread is that page drawn twice, mirrored on the le
 so the spiral binding meets at the centre spine and normal on the right. Pages of
 text come from SQLite; each page shows a `Page N of M` header and its wrapped
 body. Click the page-turn arrows at the bottom outer corners to advance, drag the
-book to move it (its position is saved), and hover to raise it above other
-windows. `BOOK_SCALE=3` (or `--scale 3`) resizes it.
+book (or two-finger scroll over it) to move it (its position is saved), and hover
+to raise it above other windows. `BOOK_SCALE=3` (or `--scale 3`) resizes it.
 
 ```sh
 nix run .#book-overlay
