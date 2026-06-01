@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anstyle::{AnsiColor, Style};
-use clap::{Args, Parser, Subcommand};
+use clap::error::ErrorKind;
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use indicatif::ProgressBar;
 use search_core::{
     CodeScope, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets, Manifest, MixedbreadStore,
@@ -141,8 +142,9 @@ fn split_csv(values: &[String]) -> Vec<String> {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Args)]
 struct SemanticArgs {
-    /// The query to search for. Required for a bare search; omitted when the
-    /// `grep` subcommand is used.
+    /// The query to search for. Optional at the clap layer so the `grep`
+    /// subcommand can be given without it; a bare search still requires one and
+    /// `run` rejects a missing query with a clap usage error.
     pattern: Option<String>,
 
     /// Directory to search in (defaults to the current directory).
@@ -243,12 +245,19 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
-    // `pattern` is optional at the clap layer so a subcommand can be given
-    // without it; a bare search still requires one.
-    let pattern = cli
-        .pattern
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("a query is required: `search <pattern> [path]`"))?;
+    // `pattern` is optional at the clap layer so the `grep` subcommand can be
+    // invoked without it. A bare search still requires one: reject a missing
+    // query with a clap usage error (stderr, exit 2, no backtrace) rather than
+    // an `anyhow` error, whose Debug print carries a stack trace under
+    // `RUST_BACKTRACE`.
+    let Some(pattern) = cli.pattern else {
+        Cli::command()
+            .error(
+                ErrorKind::MissingRequiredArgument,
+                "a query is required: `search <pattern> [path]`",
+            )
+            .exit();
+    };
     let root = resolve_root(cli.path.as_deref())?;
 
     // Color is decided once on stdout, where results print. `anstream` folds in
