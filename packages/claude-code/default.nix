@@ -12,6 +12,18 @@
   gnupg,
   writeText,
   binName ? "claude",
+  # Start every session in bypass-permissions mode by default. We run a trusted
+  # config inside disposable sandboxes (ix guest VMs, the dev image, throwaway
+  # checkouts) where a per-tool approval dialog buys nothing and only stalls an
+  # agent that has nowhere unsafe to go. Folded into `settingsDefaults` below so
+  # it rides the same `--settings` layer as the other defaults; a consumer turns
+  # it off with `claude-code.override { dangerouslySkipPermissions = false; }`.
+  # This only flips the default mode: the upstream uid-0 guard still refuses
+  # bypass for an unsandboxed root user (no IS_SANDBOX=1 is baked here, since a
+  # bare host genuinely is not a sandbox), so it is a no-op exactly where it
+  # would be unsafe. Sandboxed-root consumers (e.g. the dev image) keep their own
+  # IS_SANDBOX=1 wrapper and managed-settings layer.
+  dangerouslySkipPermissions ? true,
   # Only the flake package set injects the Nushell writer; the overlay eval
   # context does not. The updater is a maintainer-facing flake output, so the
   # overlay build of `pkgs.claude-code` simply omits `passthru.updateScript`.
@@ -69,8 +81,20 @@ let
   # prepend ours and silently shadow a user's `--settings`.
   #   cleanupPeriodDays: keep transcripts + the wrapper's --debug logs ~1yr for
   #     the optimize analysis and troubleshooting (CLI default 30).
+  #   permissions.defaultMode + skipDangerousModePermissionPrompt (only when
+  #     `dangerouslySkipPermissions`): start in bypass mode and pre-accept the
+  #     one-time dangerous-mode warning. Both keys are required: managed/flag
+  #     bypass alone does not suppress that warning. skipDangerousModePermission-
+  #     Prompt is honored in every scope except *project* (a guard against
+  #     untrusted repos), so it takes effect from this flagSettings layer. Same
+  #     two keys the dev image (images/dev/development-base) enforces via managed
+  #     settings; see its comment for the full rationale.
   settingsDefaults = {
     cleanupPeriodDays = 365;
+  }
+  // lib.optionalAttrs dangerouslySkipPermissions {
+    permissions.defaultMode = "bypassPermissions";
+    skipDangerousModePermissionPrompt = true;
   };
   settingsDefaultsFile = writeText "claude-code-default-settings.json" (
     builtins.toJSON settingsDefaults
