@@ -76,6 +76,11 @@ impl Default for Placement {
 /// offer an opt-out.
 #[must_use]
 pub fn is_supported() -> bool {
+    // Terminal multiplexers usually swallow graphics escapes (they render as
+    // garbage), so treat tmux/screen sessions as unsupported by default.
+    if std::env::var_os("TMUX").is_some() || std::env::var_os("STY").is_some() {
+        return false;
+    }
     if std::env::var_os("KITTY_WINDOW_ID").is_some() {
         return true;
     }

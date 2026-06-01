@@ -231,7 +231,9 @@ fn load_identities(repo: &Repository) -> HashMap<String, String> {
     let Ok(config) = repo.config() else {
         return map;
     };
-    if let Ok(entries) = config.entries(Some("githublogin.map")) {
+    // git2 treats the glob as a regex over the (lowercased) entry name; anchor
+    // it so it matches only `githublogin.map` and not other keys.
+    if let Ok(entries) = config.entries(Some("^githublogin\\.map$")) {
         let _ = entries.for_each(|entry| {
             if let Some((email, login)) = entry.value().and_then(|value| value.split_once('=')) {
                 let (email, login) = (email.trim(), login.trim());

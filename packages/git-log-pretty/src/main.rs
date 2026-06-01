@@ -143,7 +143,11 @@ fn emit_log(
         return pager::paged(allow_pager, |out| print_log(out, header, commits, theme));
     }
 
-    let fetched = fetch_avatars(repo, commits)?;
+    // A runtime-build failure shouldn't sink the whole log; fall back to the
+    // plain, pageable renderer.
+    let Ok(fetched) = fetch_avatars(repo, commits) else {
+        return pager::paged(allow_pager, |out| print_log(out, header, commits, theme));
+    };
     let mut out = std::io::stdout().lock();
     writeln!(out, "{}\n", paint(fg(Color::Ansi(AnsiColor::Cyan)), header))?;
     let mut transmitted = HashSet::new();

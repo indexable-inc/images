@@ -12,6 +12,7 @@
 //! of the format the user originally uploaded.
 
 use std::io::Cursor;
+use std::time::Duration;
 
 use reqwest::StatusCode;
 use serde::Deserialize;
@@ -142,10 +143,14 @@ impl Client {
     /// avatar endpoint.
     #[must_use]
     pub fn new(token: Option<String>) -> Self {
-        Self {
-            http: reqwest::Client::new(),
-            token,
-        }
+        // A per-request timeout keeps a stalled api.github.com / github.com
+        // response from hanging the synchronous caller indefinitely; on a build
+        // failure (e.g. TLS init) fall back to the untimed default client.
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        Self { http, token }
     }
 
     /// Resolve the GitHub login that authored `sha` in `owner/repo`.
