@@ -60,8 +60,8 @@ TRUNC = re.compile(r"\[truncated\]")
 # Self-correction / backtracking markers inside VISIBLE thinking text. A turn
 # whose reasoning contains these is mid-flight course-correcting (thrash). Only
 # meaningful where thinking text exists (display=summarized, e.g. Haiku); on
-# Opus 4.7/4.8 the thinking field is empty (display=omitted) so it never matches.
-# Signal 8.
+# Opus 4.7/4.8 the thinking field is almost always empty (display=omitted) so it
+# almost never matches. Signal 8.
 THRASH = re.compile(
     r"\b(wait|actually|on second thought|let me reconsider|scratch that|"
     r"i was wrong|that'?s wrong|never ?mind|hold on)\b|hmm,",
@@ -135,9 +135,11 @@ def build_frames(days: int = 45, full: bool = False):
         files = [f for f in files if os.path.getmtime(f) >= cutoff]
 
     rows, tool_calls, bash_done, tool_results, corrections, chains = [], {}, [], [], [], []
-    # Per-session thinking-thrash tally: (text_turns, thrash_turns, thrash_hits,
-    # model). Accumulated during the scan so the aggregate can be built WITHOUT
-    # ever holding raw thinking text in a frame (signal 8).
+    # Thinking-thrash tally keyed on (session, model) -> [text_turns,
+    # thrash_turns, thrash_hits]. Keyed by model too so a mixed-model session is
+    # attributed exactly (not lumped onto whichever model thought last).
+    # Accumulated during the scan so the aggregate can be built WITHOUT ever
+    # holding raw thinking text in a frame (signal 8).
     thrash = {}
     for f in files:
         sess = os.path.basename(f)[:-6]
@@ -163,7 +165,10 @@ def build_frames(days: int = 45, full: bool = False):
                     # signature-only, display=omitted blocks whose `thinking` is
                     # ""); n_think_text + think_chars measure only VISIBLE
                     # reasoning, so the omitted-vs-summarized split is legible.
-                    think = [b.get("thinking") or "" for b in blocks
+                    # Coerce non-str `thinking` to "" so one weird record loses
+                    # only its thinking chars, not the whole row to the except.
+                    think = [b.get("thinking") if isinstance(b.get("thinking"), str) else ""
+                             for b in blocks
                              if isinstance(b, dict) and b.get("type") == "thinking"]
                     th = len(think)
                     th_text = sum(1 for s in think if s)
@@ -183,12 +188,11 @@ def build_frames(days: int = 45, full: bool = False):
                     if th_text:
                         joined = "\n".join(s for s in think if s)
                         hits = len(THRASH.findall(joined))
-                        agg = thrash.get(sess) or [0, 0, 0, model]
+                        agg = thrash.get((sess, model)) or [0, 0, 0]
                         agg[0] += 1                         # turns with visible thinking
                         agg[1] += 1 if hits else 0          # turns that backtrack
                         agg[2] += hits                      # total marker hits
-                        agg[3] = model or agg[3]
-                        thrash[sess] = agg
+                        thrash[(sess, model)] = agg
                     for b in tu:
                         inp = b.get("input") or {}
                         label = (inp.get("command") or inp.get("file_path") or inp.get("pattern")
@@ -225,9 +229,9 @@ def build_frames(days: int = 45, full: bool = False):
         bash=pl.DataFrame(bash_done, schema=["session", "cmd", "seconds", "is_error"], orient="row"),
         tools=pl.DataFrame(tool_results, schema=["session", "tool", "label", "size", "is_error"], orient="row"),
         corrections=corrections, chains=chains,
-        thrash=[dict(session=s, model=v[3], think_turns=v[0],
+        thrash=[dict(session=s, model=mdl, think_turns=v[0],
                      thrash_turns=v[1], thrash_hits=v[2])
-                for s, v in thrash.items()],
+                for (s, mdl), v in thrash.items()],
         files=len(files), window=("full" if full else f"{days}d"),
     )
 
@@ -321,11 +325,15 @@ def aggregates(F, top: int = 15, oversize: int = 20000):
                         ).with_columns((pl.col("thrash_turns") / pl.col("think_turns"))
                                        .round(3).alias("frac_thrash"))
                         .sort("thrash_turns", descending=True)))
+            # Per-session view is about which sessions thrash; sum across any
+            # models that thought in the session (no model column, see M2).
             out.append(("thinking thrash by session (most backtracking)",
-                        tw.with_columns((pl.col("thrash_turns") / pl.col("think_turns"))
-                                        .round(3).alias("frac_thrash"))
-                        .select("session", "model", "think_turns", "thrash_turns",
-                                "thrash_hits", "frac_thrash")
+                        tw.group_by("session").agg(
+                            pl.col("think_turns").sum().alias("think_turns"),
+                            pl.col("thrash_turns").sum().alias("thrash_turns"),
+                            pl.col("thrash_hits").sum().alias("thrash_hits"),
+                        ).with_columns((pl.col("thrash_turns") / pl.col("think_turns"))
+                                       .round(3).alias("frac_thrash"))
                         .sort(["thrash_turns", "thrash_hits"], descending=True).head(top)))
     return out
 
