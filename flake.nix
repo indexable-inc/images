@@ -164,6 +164,16 @@
           indexPackages = system: (collect "packages").${system};
           portableServicesModule = ix.portableServices.homeModule;
         };
+        # Reusable workstation module: draw one Minecraft boss bar per in-flight
+        # GitHub Actions run across a set of repos (green = running, filled by
+        # elapsed / average duration; purple = queued/unpicked). Import it and set
+        # `services.ciBars = { enable = true; repos = [ ... ]; }`. Closed over the
+        # per-system packages so it resolves the `bossbar` CLI for the host. See
+        # packages/bossbar-overlay/ci-bars-home-module.nix.
+        ci-bars = import ./packages/bossbar-overlay/ci-bars-home-module.nix {
+          indexPackages = system: (collect "packages").${system};
+          portableServicesModule = ix.portableServices.homeModule;
+        };
         # Workstation-facing module to sync corpus sources (agent/shell history,
         # Slack/Linear exports, git repos) to an S3/R2 parquet archive and/or
         # Mixedbread, as a portable timer service. Closed over the per-system

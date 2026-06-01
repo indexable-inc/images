@@ -16,13 +16,14 @@
 #     Nothing is spoken;
 #   * the full-screen karma feed overlay it announces onto (`merge-orb-feed`),
 #     which renders both pop kinds and plays their per-kind sounds;
-#   * the CI progress watcher (`ci-bars`), which draws one Minecraft boss bar per
-#     in-flight GitHub Actions run across the watched repos (green, filled by
+#   * the CI progress bars (`services.ciBars`, the reusable
+#     packages/bossbar-overlay/ci-bars-home-module.nix), which draw one Minecraft
+#     boss bar per in-flight GitHub Actions run across our repos (green, filled by
 #     elapsed / average-duration; purple while a run is still queued or not yet
-#     picked up by a runner) and clears each as the run finishes. It is silent:
-#     pr-watch owns the CI sounds, so the bar fill is the whole signal.
-#     Deliberately a different palette from the ix-downtime outage bars
-#     (red/yellow/blue) so the two never read alike;
+#     picked up by a runner) and clear each as the run finishes. Silent (pr-watch
+#     owns the CI sounds) and a different palette from the ix-downtime outage bars
+#     (red/yellow/blue) so the two never read alike. This module just imports that
+#     component and turns it on with our repos;
 #   * the token-free `/optimize` history scan (`optimize-scan`);
 #   * the shared "play a gentle sound, then speak it detached" helper
 #     (`say-detached`), now used only by the ix-downtime watcher.
@@ -210,32 +211,18 @@ let
         (builtins.readFile ./scripts/pr-watch.sh);
   };
 
-  # The CI progress watcher: one green progress boss bar per in-flight GitHub
-  # Actions run across the watched repos (purple while a run is still queued or
-  # unpicked), the fill estimated from each workflow's recent average duration.
-  # Silent (pr-watch owns the CI success/failure sounds); it only reconciles the
-  # overlay's CI bars. gh/jq read the runs, sqlite caches the per-workflow
-  # averages, coreutils provides date/printf, perl the flock guard, and the
-  # bossbar CLI writes the bars. @REPOS@ is baked from the option.
-  ciBars = mkBashApp {
-    name = "ci-bars";
-    runtimeInputs = [
-      pkgs.gh
-      pkgs.jq
-      pkgs.sqlite
-      pkgs.coreutils
-      pkgs.perl
-      indexPkgs.bossbar
-    ];
-    text =
-      builtins.replaceStrings
-        [ "@REPOS@" ]
-        [ (lib.concatMapStringsSep " " lib.escapeShellArg cfg.ciBars.repos) ]
-        (builtins.readFile ./scripts/ci-bars.sh);
+  # The CI progress bars are a standalone reusable component, not personal glue:
+  # this just composes it (imported below, turned on in config). Anyone can do
+  # the same with `services.ciBars = { enable = true; repos = [ ... ]; }`.
+  ciBarsModule = import ../../packages/bossbar-overlay/ci-bars-home-module.nix {
+    inherit indexPackages portableServicesModule;
   };
 in
 {
-  imports = [ portableServicesModule ];
+  imports = [
+    portableServicesModule
+    ciBarsModule
+  ];
 
   options.users.andrewgazelka = {
     enable = lib.mkEnableOption "andrewgazelka's personal services (ix-downtime watcher + boss bar overlay)";
@@ -337,34 +324,9 @@ in
       };
     };
 
-    ciBars = {
-      enable = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = ''
-          Run the CI progress watcher: one green boss bar per in-flight GitHub
-          Actions run across `repos` (purple while a run is still queued or not
-          yet picked up by a runner), filled by elapsed / average duration. Needs
-          `gh` authenticated for the host user and the boss bar overlay running to
-          be visible. Harmless on a headless host (it just writes overlay rows).
-        '';
-      };
-
-      interval = lib.mkOption {
-        type = lib.types.ints.positive;
-        default = 20;
-        description = "Poll each watched repo for in-flight runs every N seconds.";
-      };
-
-      repos = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [
-          "indexable-inc/ix"
-          "indexable-inc/index"
-        ];
-        description = "GitHub `owner/name` repos to draw in-flight CI progress bars for.";
-      };
-    };
+    # CI progress bars are configured through the reusable `services.ciBars`
+    # module (imported above); this module just turns it on with our repos in
+    # `config`. No personal options needed here.
 
     sound.linuxSayCommand = lib.mkOption {
       type = lib.types.str;
@@ -444,18 +406,6 @@ in
           # intrinsically by the script's own flock guard, so no escape hatch.
         };
       })
-      (lib.mkIf cfg.ciBars.enable {
-        ci-bars = {
-          description = "GitHub Actions CI progress boss bars";
-          command = [ (lib.getExe' ciBars "ci-bars") ];
-          interval = cfg.ciBars.interval;
-          standardOutPath = "${cfg.logDir}/ci-bars.log";
-          standardErrorPath = "${cfg.logDir}/ci-bars.log";
-          # runAtLoad (default true) draws the bars on load; the script's own
-          # flock guard prevents overlap; the Label defaults to the space-free
-          # home convention. No launchd/systemd escape hatch needed.
-        };
-      })
       (lib.mkIf cfg.bossbarOverlay.enable {
         bossbar-overlay = {
           description = "Minecraft boss bar overlay";
@@ -484,5 +434,15 @@ in
         };
       })
     ];
+
+    # Compose the reusable CI progress bars (the `services.ciBars` module imported
+    # above): one boss bar per in-flight Actions run on our repos. Everything else
+    # (script, palette, average-duration logic) lives in that shared component, so
+    # this is the whole personal config for it.
+    services.ciBars = {
+      enable = true;
+      repos = cfg.prWatch.repos;
+      logDir = cfg.logDir;
+    };
   };
 }

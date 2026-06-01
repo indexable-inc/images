@@ -1,8 +1,13 @@
-# Body of the `ci-bars` bash app (see users/andrewgazelka/home.nix).
+# Body of the `ci-bars` bash app (see ci-bars-home-module.nix).
 # No shebang / `set` line: the mkBashApp wrapper supplies bash + `set -euo
 # pipefail` and bakes gh/jq/sqlite/coreutils/perl + the bossbar CLI onto PATH via
-# runtimeInputs. The module bakes one placeholder at build time:
-#   @REPOS@   the watched repos as a quoted bash-array body
+# runtimeInputs. Everything tunable comes from the environment so the script is a
+# plain, testable file with no build-time string baking:
+#   CI_BARS_REPOS        space-separated `owner/name` repos to watch (required)
+#   CI_BARS_AVG_TTL      seconds to cache a workflow's average duration (3600)
+#   CI_BARS_DEFAULT_AVG  fallback average when a workflow has no green history (300)
+#   CI_BARS_MAX          max bars per repo per poll (12)
+#   CI_BARS_STATE        state dir for the average cache + lock ($HOME/.cache/ci-bars)
 #
 # Draws a Minecraft boss bar PER in-flight GitHub Actions run across the watched
 # repos, so a glance says what CI is doing right now. This is the live-progress
@@ -47,7 +52,14 @@ max_bars="${CI_BARS_MAX:-12}"
 exec 9>"$state_dir/poll.lock"
 perl -e 'use Fcntl ":flock"; flock(STDIN, LOCK_EX | LOCK_NB) or exit 1' <&9 || exit 0
 
-repos=(@REPOS@)
+# Repos to watch come from the environment (the module sets CI_BARS_REPOS from its
+# `repos` option). `owner/name` slugs never contain spaces, so a plain word-split
+# is safe and keeps the script free of build-time baking.
+read -ra repos <<<"${CI_BARS_REPOS:-}"
+if [ "${#repos[@]}" -eq 0 ]; then
+  echo "ci-bars: no repos configured (set CI_BARS_REPOS); nothing to do"
+  exit 0
+fi
 
 now="$(date +%s)"
 
