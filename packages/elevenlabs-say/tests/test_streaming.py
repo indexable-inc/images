@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 import elevenlabs.realtime_tts as realtime_module
+from elevenlabs.core import ApiError
 
 import elevenlabs_say as say
 
@@ -205,6 +206,50 @@ def test_say_compat_flags_parse() -> None:
     assert say.parse_args(["hello"]).rate is None
 
 
+def test_resolve_voice_id_id_shape_skips_api() -> None:
+    """A voice-id-shaped value is returned verbatim without touching the API.
+
+    Guards the synthesis-only-key path: resolving the default voice (an id) must
+    not call ``voices.search``, which needs the ``voices_read`` permission a
+    TTS-only key lacks. Accessing ``.voices`` on the sentinel would raise.
+    """
+
+    class Boom:
+        def __getattr__(self, name: str) -> object:
+            raise AssertionError(f"client.{name} must not be used for an id")
+
+    assert say.resolve_voice_id(Boom(), "JBFqnCBsd6RMkjVDRZzb") == "JBFqnCBsd6RMkjVDRZzb"
+
+
+def test_resolve_voice_id_name_searches_and_maps() -> None:
+    """A friendly name is matched case-insensitively to its id via the search."""
+
+    class FakeVoices:
+        def search(self, search: str) -> object:
+            assert search == "George"
+            voice = type("V", (), {"name": "George", "voice_id": "ID0000000000000000aa"})()
+            return type("R", (), {"voices": [voice]})()
+
+    client = type("C", (), {"voices": FakeVoices()})()
+    assert say.resolve_voice_id(client, "George") == "ID0000000000000000aa"
+
+
+def test_resolve_voice_id_missing_permission_is_actionable() -> None:
+    """A 401 while resolving a name raises a SayError naming voices_read."""
+
+    class FakeVoices:
+        def search(self, search: str) -> object:
+            raise ApiError(status_code=401, body={"detail": "nope"})
+
+    client = type("C", (), {"voices": FakeVoices()})()
+    try:
+        say.resolve_voice_id(client, "George")
+    except say.SayError as exc:
+        assert "voices_read" in str(exc)
+    else:
+        raise AssertionError("expected SayError for a 401 during name resolution")
+
+
 if __name__ == "__main__":
     test_stdin_yields_before_eof_and_rejoins_split_utf8()
     test_write_stream_writes_chunks_and_rejects_empty()
@@ -214,4 +259,7 @@ if __name__ == "__main__":
     test_stream_init_does_not_crash_on_omit_voice_settings()
     test_atempo_filter_maps_wpm_to_in_range_stages()
     test_say_compat_flags_parse()
+    test_resolve_voice_id_id_shape_skips_api()
+    test_resolve_voice_id_name_searches_and_maps()
+    test_resolve_voice_id_missing_permission_is_actionable()
     print("elevenlabs-say streaming tests passed")

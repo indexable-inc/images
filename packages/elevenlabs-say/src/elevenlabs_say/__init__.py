@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import codecs
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -254,16 +255,32 @@ def stream_client(client: ElevenLabs) -> RealtimeTextToSpeechClient:
     return tts
 
 
+# ElevenLabs voice ids are opaque 20-character base62 tokens (e.g. George's
+# "JBFqnCBsd6RMkjVDRZzb"). A human-typed name almost never collides with this
+# shape, so an input that matches it is treated as an id directly.
+_VOICE_ID_RE = re.compile(r"\A[A-Za-z0-9]{20}\Z")
+
+
 def resolve_voice_id(client: ElevenLabs, voice: str) -> str:
     """Treat ``voice`` as a name first; fall back to using it as an id verbatim.
 
-    ElevenLabs voice ids are opaque 20-character tokens, so a human-typed name
-    almost never collides with an id. Searching by name keeps the CLI usable with
-    friendly voice names while still accepting a raw id.
+    A value already shaped like a voice id is used directly without calling the
+    voices API, so the CLI works with a synthesis-only API key that lacks the
+    ``voices_read`` permission (the common case, including the default voice).
+    Resolving a friendly name still needs ``voices_read``.
     """
+    if _VOICE_ID_RE.match(voice):
+        return voice
+
     try:
         response = client.voices.search(search=voice)
     except ApiError as exc:
+        if exc.status_code in (401, 403):
+            raise SayError(
+                f"cannot resolve voice name {voice!r}: this {API_KEY_ENV} lacks the "
+                "voices_read permission. Pass a voice id with --voice instead, or "
+                "use a key that can read voices."
+            ) from exc
         raise SayError(format_api_error("resolve voice", exc)) from exc
 
     for candidate in response.voices:
