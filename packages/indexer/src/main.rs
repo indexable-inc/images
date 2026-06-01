@@ -106,50 +106,90 @@ async fn main() -> anyhow::Result<()> {
     let codex = cli.codex_file.clone().or_else(|| cli.local.then(|| default(".codex/history.jsonl")).flatten());
     let atuin = cli.atuin_db.clone().or_else(|| cli.local.then(|| default(".local/share/atuin/history.db")).flatten());
 
+    // Each source runs independently: a failure (an unborn git repo, a missing
+    // export) is logged and counted but never aborts the run, so one broken
+    // source cannot starve every other corpus. The process still exits non-zero
+    // at the end if any source failed.
     let mut indexed = 0_usize;
+    let mut failures = 0_usize;
     if let Some(dir) = claude {
-        let adapter = source_claude::ClaudeHistoryExport::open(&dir)
-            .with_context(|| format!("parsing Claude transcripts at {}", dir.display()))?;
-        run_source("claude", &adapter, mixedbread, parquet.as_ref()).await?;
-        indexed += 1;
+        let result = async {
+            let adapter = source_claude::ClaudeHistoryExport::open(&dir)
+                .with_context(|| format!("parsing Claude transcripts at {}", dir.display()))?;
+            run_source("claude", &adapter, mixedbread, parquet.as_ref()).await
+        }
+        .await;
+        record("claude", result, &mut indexed, &mut failures);
     }
     if let Some(file) = codex {
-        let adapter = source_codex::CodexHistory::open(&file)
-            .with_context(|| format!("parsing Codex history at {}", file.display()))?;
-        run_source("codex", &adapter, mixedbread, parquet.as_ref()).await?;
-        indexed += 1;
+        let result = async {
+            let adapter = source_codex::CodexHistory::open(&file)
+                .with_context(|| format!("parsing Codex history at {}", file.display()))?;
+            run_source("codex", &adapter, mixedbread, parquet.as_ref()).await
+        }
+        .await;
+        record("codex", result, &mut indexed, &mut failures);
     }
     if let Some(db) = atuin {
-        let adapter = source_atuin::AtuinHistory::open(&db)
-            .with_context(|| format!("reading atuin history at {}", db.display()))?;
-        run_source("shell", &adapter, mixedbread, parquet.as_ref()).await?;
-        indexed += 1;
+        let result = async {
+            let adapter = source_atuin::AtuinHistory::open(&db)
+                .with_context(|| format!("reading atuin history at {}", db.display()))?;
+            run_source("shell", &adapter, mixedbread, parquet.as_ref()).await
+        }
+        .await;
+        record("shell", result, &mut indexed, &mut failures);
     }
     if let Some(dir) = &cli.slack_export {
-        let adapter = source_slack::SlackExport::open(dir)
-            .with_context(|| format!("reading Slack export at {}", dir.display()))?;
-        run_source("slack", &adapter, mixedbread, parquet.as_ref()).await?;
-        indexed += 1;
+        let result = async {
+            let adapter = source_slack::SlackExport::open(dir)
+                .with_context(|| format!("reading Slack export at {}", dir.display()))?;
+            run_source("slack", &adapter, mixedbread, parquet.as_ref()).await
+        }
+        .await;
+        record("slack", result, &mut indexed, &mut failures);
     }
     if let Some(dir) = &cli.linear_export {
-        let adapter = source_linear::LinearExport::open(dir)
-            .with_context(|| format!("reading Linear export at {}", dir.display()))?;
-        run_source("linear", &adapter, mixedbread, parquet.as_ref()).await?;
-        indexed += 1;
+        let result = async {
+            let adapter = source_linear::LinearExport::open(dir)
+                .with_context(|| format!("reading Linear export at {}", dir.display()))?;
+            run_source("linear", &adapter, mixedbread, parquet.as_ref()).await
+        }
+        .await;
+        record("linear", result, &mut indexed, &mut failures);
     }
     for repo in &cli.git_repos {
-        let adapter = source_git::GitLog::open(repo)
-            .with_context(|| format!("reading git history at {}", repo.display()))?;
-        run_source("git", &adapter, mixedbread, parquet.as_ref()).await?;
-        indexed += 1;
+        let label = format!("git:{}", repo.display());
+        let result = async {
+            let adapter = source_git::GitLog::open(repo)
+                .with_context(|| format!("reading git history at {}", repo.display()))?;
+            run_source("git", &adapter, mixedbread, parquet.as_ref()).await
+        }
+        .await;
+        record(&label, result, &mut indexed, &mut failures);
     }
 
-    if indexed == 0 {
+    let configured = indexed + failures;
+    if configured == 0 {
         anyhow::bail!(
             "no sources selected: pass --local and/or --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--git-repo"
         );
     }
+    if failures > 0 {
+        anyhow::bail!("{failures} of {configured} source(s) failed; {indexed} succeeded");
+    }
     Ok(())
+}
+
+/// Record one source's outcome. A failure is logged and counted but does not
+/// abort the run, so one broken source cannot starve the others.
+fn record(label: &str, result: anyhow::Result<()>, indexed: &mut usize, failures: &mut usize) {
+    match result {
+        Ok(()) => *indexed += 1,
+        Err(error) => {
+            eprintln!("[{label}] failed: {error:#}");
+            *failures += 1;
+        }
+    }
 }
 
 /// Fan one source out to every enabled sink.

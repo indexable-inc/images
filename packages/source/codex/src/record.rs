@@ -19,10 +19,6 @@ pub struct Entry {
     pub user: String,
     /// Codex session id grouping prompts from one run.
     pub session_id: String,
-    /// 0-based ordinal of this prompt within its session, in file order. Makes
-    /// the `external_id` stable across re-runs of an append-only log even when
-    /// two prompts share a timestamp.
-    pub seq: usize,
     /// Submission time as epoch seconds, when the line carried one.
     pub timestamp: Option<i64>,
     /// The submitted prompt text to embed.
@@ -30,11 +26,17 @@ pub struct Entry {
 }
 
 impl Entry {
-    /// Stable store id: `codex:{session_id}:{seq}`. Per prompt, so an
-    /// append-only history only ever uploads its new prompts.
+    /// Stable store id: `codex:{session_id}:{ts}:{content_hash}`.
+    ///
+    /// Deliberately NOT a file-position ordinal: Codex compacts its history log
+    /// (dropping the oldest lines), which would shift any positional index and
+    /// make surviving prompts look new — re-uploading them and orphaning the old
+    /// ids. Keying on the session, timestamp, and content hash is invariant to
+    /// compaction, so a prompt keeps one id for its lifetime.
     #[must_use]
-    pub fn external_id(&self) -> String {
-        format!("codex:{}:{}", self.session_id, self.seq)
+    pub fn external_id(&self, content_hash: &str) -> String {
+        let ts = self.timestamp.map_or_else(|| "na".to_owned(), |ts| ts.to_string());
+        format!("codex:{}:{}:{}", self.session_id, ts, content_hash)
     }
 
     /// Project to a [`Document`]: the prompt text is embedded, its sha256 is the
@@ -45,8 +47,8 @@ impl Entry {
     /// Returns [`Error::Metadata`](crate::Error::Metadata) if the tag object
     /// exceeds the store's size or key limits.
     pub fn into_document(self) -> Result<Document> {
-        let external_id = self.external_id();
         let content_hash = source_meta::hash_body(self.text.as_bytes());
+        let external_id = self.external_id(&content_hash);
         let title = title_for(&self.text);
 
         let mut meta = Map::new();
@@ -65,9 +67,10 @@ impl Entry {
         source_meta::check_metadata(&external_id, &meta_json)
             .context(MetadataSnafu { external_id: external_id.clone() })?;
 
+        let file_name = format!("{external_id}.txt");
         Ok(Document {
             external_id,
-            file_name: format!("{}-{}.txt", self.session_id, self.seq),
+            file_name,
             mime: "text/plain",
             body: self.text.into_bytes(),
             meta_json,

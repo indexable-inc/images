@@ -21,7 +21,6 @@
 mod error;
 mod record;
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use source_meta::{Document, Source, SourceAdapter};
@@ -65,7 +64,6 @@ impl CodexHistory {
     /// Returns an error if the file cannot be read, or a line is not valid JSON.
     pub fn open_with(path: &Path, host: &str, user: &str) -> Result<Self> {
         let contents = std::fs::read_to_string(path).context(ReadFileSnafu { path: path.to_path_buf() })?;
-        let mut seq_by_session: HashMap<String, usize> = HashMap::new();
         let mut entries = Vec::new();
         for (index, line) in contents.lines().enumerate() {
             if line.trim().is_empty() {
@@ -75,16 +73,13 @@ impl CodexHistory {
                 path: path.to_path_buf(),
                 line: index + 1,
             })?;
-            let seq = seq_by_session.entry(raw.session_id.clone()).or_insert(0);
             entries.push(Entry {
                 host: host.to_owned(),
                 user: user.to_owned(),
                 session_id: raw.session_id,
-                seq: *seq,
                 timestamp: raw.ts,
                 text: raw.text,
             });
-            *seq += 1;
         }
         Ok(Self { entries })
     }

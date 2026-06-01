@@ -16,21 +16,22 @@ fn parses_every_prompt_skipping_blank_lines() {
 }
 
 #[test]
-fn external_ids_are_per_session_sequential() {
+fn external_ids_are_content_stable_not_positional() {
     let history = CodexHistory::open_with(&fixture(), "host1", "user1").expect("parse");
     let ids: Vec<String> = history
         .documents()
         .map(|doc| doc.expect("document").external_id)
         .collect();
-    assert_eq!(
-        ids,
-        vec![
-            "codex:019cfa3f-a908-71b0-98f0-7ecb3874a8db:0",
-            "codex:019cfa3f-a908-71b0-98f0-7ecb3874a8db:1",
-            "codex:019d0102-1111-2222-3333-444455556666:0",
-            "codex:019d0102-1111-2222-3333-444455556666:1",
-        ]
-    );
+    assert_eq!(ids.len(), 4);
+    // All distinct, and keyed on session + timestamp + content hash so Codex
+    // history compaction (which shifts file positions) never re-keys a prompt.
+    let unique: std::collections::HashSet<&String> = ids.iter().collect();
+    assert_eq!(unique.len(), 4);
+    assert!(ids[0].starts_with("codex:019cfa3f-a908-71b0-98f0-7ecb3874a8db:1773725019:sha256:"));
+    assert!(ids[1].starts_with("codex:019cfa3f-a908-71b0-98f0-7ecb3874a8db:1773725086:sha256:"));
+    assert!(ids[2].starts_with("codex:019d0102-1111-2222-3333-444455556666:1773726000:sha256:"));
+    // The last prompt carried no timestamp, so the ts segment is `na`.
+    assert!(ids[3].starts_with("codex:019d0102-1111-2222-3333-444455556666:na:sha256:"));
 }
 
 #[test]

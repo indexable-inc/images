@@ -171,8 +171,8 @@ fn split_csv(values: &[String]) -> Vec<String> {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Args)]
 struct SemanticArgs {
-    /// The query to search for. Required for a bare search; omitted when a
-    /// subcommand (grep/ingest/gc) is used.
+    /// The query to search for. Required for a bare search; omitted when the
+    /// `grep` subcommand is used.
     pattern: Option<String>,
 
     /// Directory to search in (defaults to the current directory).
