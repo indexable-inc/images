@@ -21,7 +21,7 @@ use overlay_core::winit::dpi::{LogicalPosition, PhysicalSize};
 use overlay_core::winit::event::WindowEvent;
 use overlay_core::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use overlay_core::winit::window::{Window, WindowId};
-use overlay_core::{anim, window as ocwin, Gpu};
+use overlay_core::{Gpu, anim, window as ocwin};
 
 use crate::db;
 use crate::scene::{self, OrbTexture};
@@ -47,6 +47,11 @@ const FRAME: Duration = Duration::from_millis(33);
 const SHIMMER_PERIOD: Duration = Duration::from_millis(2000);
 /// Consumed events older than this are pruned so the table stays small.
 const PRUNE_AGE_SECS: i64 = 300;
+/// Cap on the stacking slot used for vertical placement, so a rare burst of
+/// simultaneous merges overlaps near the top of the stack instead of marching
+/// off the top of the screen. Slots still allocate beyond this; only the drawn
+/// height is clamped.
+const MAX_SLOT: usize = 9;
 
 /// One in-flight announcement: a labelled orb rising in a vertical slot.
 struct Pop {
@@ -88,7 +93,8 @@ pub struct Feed {
 
 impl Feed {
     fn create_window(&mut self, event_loop: &ActiveEventLoop) {
-        let (left, top, vw, vh) = ocwin::visible_frame_logical().unwrap_or((0.0, 0.0, 1920.0, 1080.0));
+        let (left, top, vw, vh) =
+            ocwin::visible_frame_logical().unwrap_or((0.0, 0.0, 1920.0, 1080.0));
         let w_px = (vw * self.scale_factor).round().max(1.0) as u32;
         let h_px = (vh * self.scale_factor).round().max(1.0) as u32;
         let pos = LogicalPosition::new(left, top);
@@ -136,9 +142,14 @@ impl Feed {
     fn poll_events(&mut self, now: Instant) {
         if self.conn.is_none() {
             self.conn = db::connect(&self.db).ok();
-            if let Some(c) = self.conn.as_ref() {
-                // A fresh reader skips whatever predates it.
-                self.last_seen = db::max_event_id(c).unwrap_or(self.last_seen);
+            if let Some(c) = self.conn.as_ref()
+                && self.last_seen == 0
+            {
+                // Seed the cursor only on the FIRST successful connect, so the
+                // pre-existing backlog stays quiet. On a reconnect after a read
+                // error, keep the prior cursor so events queued during the
+                // outage are still picked up rather than silently skipped.
+                self.last_seen = db::max_event_id(c).unwrap_or(0);
             }
         }
         let Some(conn) = self.conn.as_ref() else {
@@ -187,13 +198,15 @@ impl Feed {
 
         let mut quads = Vec::new();
         for pop in &self.pops {
-            let p = (now.duration_since(pop.born).as_secs_f32() / LIFESPAN.as_secs_f32()).clamp(0.0, 1.0);
+            let p = (now.duration_since(pop.born).as_secs_f32() / LIFESPAN.as_secs_f32())
+                .clamp(0.0, 1.0);
             let alpha = if p < FADE_FROM {
                 1.0
             } else {
                 1.0 - (p - FADE_FROM) / (1.0 - FADE_FROM)
             };
-            let base_y = ch as f64 - bottom_px - orb_px as f64 - pop.slot as f64 * row;
+            let base_y =
+                ch as f64 - bottom_px - orb_px as f64 - pop.slot.min(MAX_SLOT) as f64 * row;
             let y = base_y - rise_px * anim::ease_out_cubic(p) as f64;
             scene::build_pop(
                 gpu,
@@ -274,11 +287,12 @@ impl ApplicationHandler<()> for Feed {
         }
         // Drop faded orbs; an emptying transition still needs one redraw to clear.
         let before = self.pops.len();
-        self.pops
-            .retain(|p| now.duration_since(p.born) < LIFESPAN);
+        self.pops.retain(|p| now.duration_since(p.born) < LIFESPAN);
         let changed = self.pops.len() != before;
         let active = !self.pops.is_empty();
-        if (active || changed) && let Some(win) = self.win.as_ref() {
+        if (active || changed)
+            && let Some(win) = self.win.as_ref()
+        {
             win.window.request_redraw();
         }
         let next = if active { FRAME } else { POLL };

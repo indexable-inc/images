@@ -126,6 +126,12 @@ fn run_push(rest: &[String], db: &std::path::Path) -> ! {
                     std::process::exit(2);
                 }
             },
+            // End of flags: everything after `--` is label text verbatim, so a
+            // title that itself contains `--amount` is not mis-parsed.
+            "--" => {
+                parts.extend(it.by_ref().cloned());
+                break;
+            }
             other => parts.push(other.to_string()),
         }
     }
@@ -150,7 +156,9 @@ fn main() {
             let mut scale = env_scale();
             let mut it = argv[1..].iter();
             while let Some(a) = it.next() {
-                if a == "--scale" && let Some(n) = it.next().and_then(|s| s.parse().ok()) {
+                if a == "--scale"
+                    && let Some(n) = it.next().and_then(|s| s.parse().ok())
+                {
                     scale = n;
                 }
             }
