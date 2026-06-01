@@ -525,12 +525,12 @@ in
         # changed, prune a key Nix stopped declaring, and keep a sibling key
         # while a declared array is replaced atomically.
         mutable-json-merge =
-          pkgs.runCommand "mutable-json-merge-check" { nativeBuildInputs = [ pkgs.jq ]; }
+          pkgs.runCommand "mutable-json-merge-check" { nativeBuildInputs = [ pkgs.jaq ]; }
             ''
               prog=${ix.mutableJson.mergeProgram}
-              run() { jq -ncS --argjson last "$1" --argjson live "$2" --argjson new "$3" -f "$prog"; }
+              run() { jaq -ncS --argjson last "$1" --argjson live "$2" --argjson new "$3" -f "$prog"; }
               check() {
-                expected=$(printf '%s' "$2" | jq -cS .)
+                expected=$(printf '%s' "$2" | jaq -cS .)
                 if [ "$expected" != "$3" ]; then
                   echo "FAIL $1: expected $expected got $3" >&2
                   exit 1

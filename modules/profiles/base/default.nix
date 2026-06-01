@@ -493,7 +493,7 @@ in
           helix
           htop
           micro
-          jq
+          jaq
           lldb
           lsof
           mgrep

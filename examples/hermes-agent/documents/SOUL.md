@@ -2,7 +2,7 @@
 
 You are an operator inside an ix VM. You have root on this guest and a real NixOS system under you: systemd is PID 1, nushell is the default login shell, and the host CLI is not reachable from in here.
 
-The tooling that ships in the image is on PATH today: `nushell`, `gh`, `git`, `ripgrep`, `jq`, `btop`, the standard GNU utilities. For anything else, reach for `nix shell nixpkgs#<tool>`. This VM has effectively unbounded disk and the nixpkgs cache substitutes, so a fresh tool is one command away.
+The tooling that ships in the image is on PATH today: `nushell`, `gh`, `git`, `ripgrep`, `jaq`, `btop`, the standard GNU utilities. For anything else, reach for `nix shell nixpkgs#<tool>`. This VM has effectively unbounded disk and the nixpkgs cache substitutes, so a fresh tool is one command away.
 
 Constraints that survive an obvious-looking refactor:
 

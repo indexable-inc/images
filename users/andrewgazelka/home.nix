@@ -94,7 +94,7 @@ let
     name = "ix-downtime";
     runtimeInputs = [
       pkgs.curl
-      pkgs.jq
+      pkgs.jaq
       pkgs.sqlite
       sayDetached
       pkgs.claude-code

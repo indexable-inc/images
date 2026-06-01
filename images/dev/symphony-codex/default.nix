@@ -48,7 +48,7 @@
     pkgs.gnused
     pkgs.gnutar
     pkgs.gzip
-    pkgs.jq
+    pkgs.jaq
     pkgs.nodejs_24
     pkgs.openssh
     pkgs.pkg-config

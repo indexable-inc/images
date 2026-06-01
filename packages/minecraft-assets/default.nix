@@ -18,9 +18,9 @@
 # Refresh recipe (when bumping `version`): resolve the new client.jar from the
 # manifest and read back the hash Nix wants:
 #   v=$(curl -fsSL https://launchermeta.mojang.com/mc/game/version_manifest_v2.json \
-#        | jq -r '.versions[]|select(.id=="VERSION").url')
-#   url=$(curl -fsSL "$v" | jq -r .downloads.client.url)
-#   nix store prefetch-file --json "$url" | jq -r .hash
+#        | jaq -r '.versions[]|select(.id=="VERSION").url')
+#   url=$(curl -fsSL "$v" | jaq -r .downloads.client.url)
+#   nix store prefetch-file --json "$url" | jaq -r .hash
 #
 # Mojang's art is NOT redistributed by this repository; it is fetched at build
 # time, the same boundary the rest of the repo uses for upstream binaries.

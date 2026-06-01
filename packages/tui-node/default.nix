@@ -29,7 +29,7 @@ pkgs.runCommand "ix-tui-node"
     strictDeps = true;
     nativeBuildInputs = [
       pkgs.coreutils
-      pkgs.jq
+      pkgs.jaq
       pkgs.patchelf
       pkgs.removeReferencesTo
     ];
@@ -59,7 +59,7 @@ pkgs.runCommand "ix-tui-node"
     cp ${npmSource}/index.js ${npmSource}/index.d.ts "$out/"
     # Stamp the artifact's arch/libc so npm refuses to install it on a host that
     # cannot dlopen this single host-built addon.
-    jq '. + { cpu: ["${npmCpu}"], libc: ["glibc"] }' \
+    jaq '. + { cpu: ["${npmCpu}"], libc: ["glibc"] }' \
       ${npmSource}/package.json >"$out/package.json"
     cp "$cdylib" "$out/native/tui_node.node"
     chmod u+w "$out/native/tui_node.node"

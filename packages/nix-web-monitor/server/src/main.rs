@@ -203,7 +203,7 @@ fn router(site_dir: &Path, state: AppState) -> Router {
 }
 
 /// One-shot snapshot of the current monitor state as JSON, for scripts and
-/// agents that want to `curl | jq` the build tree instead of opening a
+/// agents that want to `curl | jaq` the build tree instead of opening a
 /// WebTransport session. Same payload the live stream seeds each client with.
 async fn state_snapshot(State(state): State<AppState>) -> Json<MonitorSnapshot> {
     Json(state.monitor.read().await.snapshot())

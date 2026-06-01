@@ -73,11 +73,11 @@ let
         ''
           ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname ${targetArg})" ${lib.escapeShellArg stateDir}
           # An absent (or unreadable) target/state file is treated as empty `{}`;
-          # malformed JSON in either makes jq fail below and aborts the switch
+          # malformed JSON in either makes jaq fail below and aborts the switch
           # rather than silently overwriting.
           _live=$([ -f ${targetArg} ] && ${pkgs.coreutils}/bin/cat ${targetArg} || ${pkgs.coreutils}/bin/echo '{}')
           _last=$([ -f ${stateArg} ] && ${pkgs.coreutils}/bin/cat ${stateArg} || ${pkgs.coreutils}/bin/echo '{}')
-          _merged=$(${pkgs.jq}/bin/jq -n \
+          _merged=$(${pkgs.jaq}/bin/jaq -n \
             --argjson last "$_last" \
             --argjson live "$_live" \
             --argjson new "$(${pkgs.coreutils}/bin/cat ${desired})" \

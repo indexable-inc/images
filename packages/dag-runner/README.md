@@ -39,7 +39,7 @@ Nodes are spawned in topological order; siblings without a dependency relationsh
 {
   "nodes": {
     "fetch":   { "command": ["curl", "-fsSL", "https://example.test/data.json", "-o", "data.json"] },
-    "lint":    { "command": ["jq", ".", "data.json"], "depends_on": ["fetch"] },
+    "lint":    { "command": ["jaq", ".", "data.json"], "depends_on": ["fetch"] },
     "convert": { "command": ["./bin/convert", "data.json", "out.bin"], "depends_on": ["fetch"], "env": { "RUST_LOG": "debug" } },
     "upload":  { "command": ["./bin/upload", "out.bin"], "depends_on": ["lint", "convert"] }
   }

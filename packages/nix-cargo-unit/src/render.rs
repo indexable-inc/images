@@ -800,7 +800,7 @@ fn render_rustc_unit(
 ) -> Result<String> {
     let unit = &graph.units[index];
     let native_build_inputs = if collects_unused_crate_dependencies(unit, options) {
-        "[ rustToolchain pkgs.jq ] ++ extraNativeBuildInputs"
+        "[ rustToolchain pkgs.jaq ] ++ extraNativeBuildInputs"
     } else {
         "[ rustToolchain ] ++ extraNativeBuildInputs"
     };
@@ -1103,7 +1103,7 @@ fn append_driver_invocation(script: &mut String, driver: Driver, collect_unused_
         script.push_str("  exit \"$rustc_status\"\n");
         script.push_str("fi\n");
         script.push_str(
-            r#"jq -r 'select(."$message_type" == "unused_extern") | .unused_extern_names[]' "$rustc_diagnostics" | sort -u > build/unused-crate-dependencies
+            r#"jaq -r 'select(."$message_type" == "unused_extern") | .unused_extern_names[]' "$rustc_diagnostics" | sort -u > build/unused-crate-dependencies
 "#,
         );
     } else {
