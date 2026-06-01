@@ -54,6 +54,14 @@ const SEARCH_TIMEOUT_SECS: u64 = 600;
 /// that cannot is treated as broken and replaced.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Upper bound on a caller-supplied `timeout_secs`. A budget beyond this is
+/// clamped rather than honoured: 24h is longer than any single MCP call has any
+/// business running (a longer job should be polled, not held open), and clamping
+/// keeps `Instant::now() + timeout` from overflowing, which panics. Without the
+/// clamp a single call with `timeout_secs` near `u64::MAX` panics inside the held
+/// session lock and poisons it, bricking the session.
+const MAX_TIMEOUT: Duration = Duration::from_hours(24);
+
 /// How often the blocking wait wakes to re-check the deadline and the
 /// cancellation token. A client cancel (`notifications/cancelled`) or an elapsed
 /// deadline is therefore noticed within roughly this interval rather than only
@@ -82,11 +90,13 @@ fn uncancellable() -> CancellationToken {
 }
 
 /// Translate a caller-supplied `timeout_secs` into a duration, clamping unset or
-/// `0` to `default_secs`. `0` means "use the default" rather than "no timeout":
-/// an instant timeout and an infinite one are both footguns the tool should not
-/// hand out.
+/// `0` to `default_secs` and capping at [`MAX_TIMEOUT`]. `0` means "use the
+/// default" rather than "no timeout": an instant timeout and an infinite one are
+/// both footguns the tool should not hand out. The cap also keeps the later
+/// `Instant + Duration` from overflowing on an absurd budget.
 fn call_timeout(timeout_secs: Option<u64>, default_secs: u64) -> Duration {
-    Duration::from_secs(timeout_secs.filter(|secs| *secs > 0).unwrap_or(default_secs))
+    let secs = timeout_secs.filter(|secs| *secs > 0).unwrap_or(default_secs);
+    Duration::from_secs(secs).min(MAX_TIMEOUT)
 }
 
 #[derive(Parser)]
@@ -174,7 +184,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Evaluate a Python expression in a persistent session. Top-level await works (e.g. `await client.get(url)`); the session keeps one event loop, so async clients and pools created in one call stay usable in later calls. Times out after 60s by default; pass `timeout_secs` to allow longer. On timeout or a client cancel the call returns an error and the worker is restarted, so a hung cell never blocks later calls (session state is lost on restart)."
+        description = "Evaluate a Python expression in a persistent session. Top-level await works (e.g. `await client.get(url)`); the session keeps one event loop, so async clients and pools created in one call stay usable in later calls. Times out after 60s by default; pass `timeout_secs` to allow longer. On timeout or a client cancel the call returns an error and the worker is restarted, so a hung cell can't wedge the session (session state is lost on restart)."
     )]
     async fn python_eval(
         &self,
@@ -193,7 +203,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Execute Python statements in a persistent session. Top-level await works (e.g. `await pool.fetch(sql)`); the session keeps one event loop, so async resources created in one call stay usable in later calls. Times out after 60s by default; pass `timeout_secs` to allow longer. On timeout or a client cancel the call returns an error and the worker is restarted, so a hung cell never blocks later calls (session state is lost on restart)."
+        description = "Execute Python statements in a persistent session. Top-level await works (e.g. `await pool.fetch(sql)`); the session keeps one event loop, so async resources created in one call stay usable in later calls. Times out after 60s by default; pass `timeout_secs` to allow longer. On timeout or a client cancel the call returns an error and the worker is restarted, so a hung cell can't wedge the session (session state is lost on restart)."
     )]
     async fn python_exec(
         &self,
@@ -301,9 +311,12 @@ impl McpServer {
 
     /// Run a per-session round-trip off the async runtime. The registry lock is
     /// taken only to look up (or create) this session's handle, then released, so
-    /// a long or hung call on one session never blocks calls to another session
-    /// or the management tools. The round-trip itself runs on the blocking pool
-    /// with the supplied deadline and the request's cancellation token.
+    /// a long or hung call on one session never blocks calls to another session.
+    /// (The one exception is creating a brand-new session: that builds a venv
+    /// while holding the registry lock, which briefly serializes other sessions'
+    /// first call and the management tools. Existing sessions are unaffected.)
+    /// The round-trip itself runs on the blocking pool with the supplied deadline
+    /// and the request's cancellation token.
     async fn run_on_session(
         &self,
         session_id: Option<String>,
@@ -617,12 +630,18 @@ impl PythonSession {
 
     /// Replace the worker with a fresh one against the same venv. Reuses the
     /// stored command, env, and worker script, so this does not rebuild the venv;
-    /// it just respawns the interpreter. Dropping the old connection kills its
-    /// (possibly hung) process and joins its reader thread.
+    /// it just respawns the interpreter.
     fn recover(&mut self) -> Result<()> {
+        // Kill the wedged worker before spawning the replacement. This frees its
+        // resources first (lower peak memory, so the respawn is less likely to
+        // fail under pressure) and stops it producing more stale responses. If
+        // the respawn then fails, `self.conn` is the *dead* worker, so the next
+        // call's write fails fast and re-enters recovery instead of reading a
+        // stale buffered response off a still-running old worker.
+        self.conn.kill();
         let fresh = WorkerConn::spawn(&self.command, &self.env, &self.worker_path, self.cwd.as_deref())
             .context("failed to restart Python worker")?;
-        // The old connection's Drop kills the process and joins the reader.
+        // Dropping the old connection joins its reader thread.
         drop(std::mem::replace(&mut self.conn, fresh));
         Ok(())
     }
@@ -744,7 +763,12 @@ impl WorkerConn {
             .flush()
             .context("failed to flush Python worker request")?;
 
-        let deadline = Instant::now() + timeout;
+        // `Instant + Duration` panics on overflow, so cap an out-of-range budget
+        // at MAX_TIMEOUT instead. Callers route through `call_timeout`, which
+        // already clamps; this guards any direct caller (and the fixed control
+        // timeouts, which are always small).
+        let now = Instant::now();
+        let deadline = now.checked_add(timeout).unwrap_or_else(|| now + MAX_TIMEOUT);
         loop {
             if cancel.is_cancelled() {
                 bail!(
@@ -781,6 +805,14 @@ impl WorkerConn {
                 }
             }
         }
+    }
+
+    /// Terminate the worker process and reap it. Idempotent: a second call after
+    /// the child has exited is a no-op. The reader thread observes the closed
+    /// stdout (EOF) and exits; it is joined when the connection is dropped.
+    fn kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -1148,6 +1180,17 @@ mod tests {
         )?;
         assert_eq!(after, "result:\n2");
         Ok(())
+    }
+
+    #[test]
+    fn call_timeout_clamps_absurd_budgets() {
+        // A huge `timeout_secs` must clamp, not flow into `Instant + Duration`,
+        // which panics on overflow and (inside the held session lock) would
+        // poison it and brick the session. Unset/0 fall back to the default.
+        assert_eq!(call_timeout(Some(u64::MAX), DEFAULT_TIMEOUT_SECS), MAX_TIMEOUT);
+        assert_eq!(call_timeout(None, 60), Duration::from_mins(1));
+        assert_eq!(call_timeout(Some(0), 60), Duration::from_mins(1));
+        assert_eq!(call_timeout(Some(30), 60), Duration::from_secs(30));
     }
 
     #[test]
