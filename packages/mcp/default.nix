@@ -183,6 +183,18 @@ let
       # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
       # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
       ps.httpx
+      # Gmail / Google Workspace, the "third surface" for an integration alongside
+      # the MCP binding and the index CLI (rfcs/0003): a session can drive the
+      # Gmail and Calendar APIs directly with no install step. This is the official
+      # client. Gmail is a Workspace API with no dedicated Cloud Client Library, so
+      # google-api-python-client is the supported path (simplegmail rides on the
+      # deprecated oauth2client with known token-refresh bugs). google-auth-oauthlib
+      # carries the OAuth user-consent flow and google-auth-httplib2 the transport.
+      # No credentials or tokens are bundled: the caller brings its own, sourced
+      # from rbw/op per the secrets split.
+      ps.google-api-python-client
+      ps.google-auth-oauthlib
+      ps.google-auth-httplib2
       # matplotlib (and Pillow, pulled in transitively) so plots and images are
       # capturable out of the box: the worker renders any open figure / object
       # with a `_repr_png_` back as an MCP image block.
@@ -386,6 +398,32 @@ let
 
         mkdir -p "$out"
       '';
+  gmailLibsBundled =
+    pkgs.runCommand "ix-mcp-gmail-libs-bundled"
+      {
+        nativeBuildInputs = [ package ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+
+        # The official Google client ships in the pinned interpreter, so a bare
+        # session imports it with no install step. Importing exercises the package
+        # links; building a `gmail` service handle through `discovery.build` proves
+        # the bundled discovery document is present (v2 caches it rather than
+        # fetching it), so this resolves with no network. A dummy OAuth credential
+        # is passed so `build` does not fall back to Application Default Credentials
+        # (which the build sandbox lacks); real calls bring a real token at runtime.
+        ix-mcp exec 'from googleapiclient.discovery import build; from google.oauth2.credentials import Credentials; import google_auth_oauthlib, google_auth_httplib2; build("gmail", "v1", credentials=Credentials(token="x"), static_discovery=True); print("gmail-libs-ok")' >stdout 2>stderr
+        if ! grep -q '^gmail-libs-ok$' stdout; then
+          echo "a bundled Google API library was not importable in a default session:" >&2
+          cat stdout stderr >&2
+          exit 1
+        fi
+
+        mkdir -p "$out"
+      '';
   sessionSubprocessStdin =
     pkgs.runCommand "ix-mcp-session-subprocess-stdin"
       {
@@ -427,6 +465,7 @@ package.overrideAttrs (old: {
             tuiBundled
             searchBundled
             dataLibsBundled
+            gmailLibsBundled
             sessionSubprocessStdin
             ;
         }
