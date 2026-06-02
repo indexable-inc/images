@@ -41,7 +41,7 @@ jobs:
       contents: read
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_SHA: ${{ github.sha }}
     steps:
       # The default pull_request checkout is the merge ref, so its working tree
       # already carries this PR's `.#blast-radius` app, and fetch-depth 0 brings
