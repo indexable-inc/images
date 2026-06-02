@@ -17,6 +17,7 @@
     reason = "lock the pane set, reconcile it under the guard, then drop the guard before publishing: the same guard-then-extract pattern dashboard-core allows for its shared locks"
 )]
 
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -98,7 +99,7 @@ impl ExecBoard {
                 running: true,
                 ok: None,
                 trace: Vec::new(),
-                html: Vec::new(),
+                outputs: Vec::new(),
             },
         );
         pane.subtitle = format!("{op_label} · {session}");
@@ -174,14 +175,17 @@ impl ExecBoard {
             .get("trace")
             .and_then(|value| serde_json::from_value::<Vec<ExecTraceLine>>(value.clone()).ok())
             .unwrap_or_default();
-        // Rich HTML tables (see `_collect_html` in python_worker.py). Human-only:
-        // these never enter the model's tool result, just the dashboard pane.
-        // Absent for an older worker or a run with no tabular output.
-        let html = response
-            .get("html")
-            .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
+        // Rich-display bundles (see `_collect_displays` in python_worker.py): the
+        // dashboard's view of each output. The image entries also reach the model
+        // (see `worker_response_content`); the rest are operator-only. Absent for
+        // an older worker or a run with no rich output.
+        let outputs = response
+            .get("outputs")
+            .and_then(|value| {
+                serde_json::from_value::<Vec<BTreeMap<String, String>>>(value.clone()).ok()
+            })
             .unwrap_or_default();
-        self.finish(id, field("stdout"), field("stderr"), field("result"), ok, trace, html);
+        self.finish(id, field("stdout"), field("stderr"), field("result"), ok, trace, outputs);
     }
 
     /// Record a transport failure (timeout, cancel, worker death): the call
@@ -210,7 +214,7 @@ impl ExecBoard {
         result: String,
         ok: bool,
         trace: Vec<ExecTraceLine>,
-        html: Vec<String>,
+        outputs: Vec<BTreeMap<String, String>>,
     ) {
         {
             let mut panes = self.panes.lock();
@@ -225,7 +229,7 @@ impl ExecBoard {
                 view.running = false;
                 view.ok = Some(ok);
                 view.trace = trace;
-                view.html = html;
+                view.outputs = outputs;
             }
         }
         self.publish();

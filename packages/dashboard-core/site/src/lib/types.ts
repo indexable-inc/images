@@ -37,11 +37,12 @@ export interface PaneRecord {
   // and replay the run. Empty/absent for output with no line attribution (a
   // subprocess) or an older producer.
   trace?: string;
-  // exec-only: a JSON-encoded array of self-contained HTML documents (one per
-  // displayed DataFrame / eval result), each mounted in a sandboxed frame. This
-  // is the human view of tabular output; the model's tool result never carries
-  // it. Empty/absent for a run with no rich output or an older producer.
-  html?: string;
+  // exec-only: a JSON-encoded array of rich-display bundles (one per displayed
+  // object / eval result / figure), each a MIME-type -> data map (Jupyter
+  // display-data style). The frontend renders the richest representation it knows;
+  // the model's tool result carries only the images and captured text. Empty/
+  // absent for a run with no rich output or an older producer.
+  outputs?: string;
   // data-only: the name of the frontend renderer to dispatch to
   renderer?: string;
 }

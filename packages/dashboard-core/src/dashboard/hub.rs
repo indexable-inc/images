@@ -120,10 +120,10 @@ fn view_texts(view: &View) -> Vec<(&'static str, String)> {
             // Inline-trace output→line map, canonicalized to JSON text (like the
             // data view's body) so it diffs and replays; the frontend parses it.
             ("trace", serde_json::to_string(&e.trace).unwrap_or_default()),
-            // Rich HTML tables, a JSON array of self-contained documents, stored
-            // as one text so it diffs and replays like the trace; the frontend
-            // parses it and mounts each in a sandboxed frame.
-            ("html", serde_json::to_string(&e.html).unwrap_or_default()),
+            // Rich-display bundles (MIME → data), a JSON array stored as one text
+            // so it diffs and replays like the trace; the frontend parses it and
+            // renders the richest representation of each bundle.
+            ("outputs", serde_json::to_string(&e.outputs).unwrap_or_default()),
         ],
         // A data view's JSON is canonicalized to text so it diffs and replays
         // like any other body; the frontend parses it back.
@@ -612,7 +612,7 @@ mod tests {
                     running: false,
                     ok: Some(true),
                     trace: Vec::new(),
-                    html: Vec::new(),
+                    outputs: Vec::new(),
                 },
             ),
             Pane::data("d", "metrics", "gauge", serde_json::json!({"cpu": 0.5})),
@@ -654,7 +654,7 @@ mod tests {
                 running: true,
                 ok: None,
                 trace: Vec::new(),
-                html: Vec::new(),
+                outputs: Vec::new(),
             },
         );
         assert!(state.apply_scope("p", &[running]).unwrap().is_some());
@@ -673,7 +673,7 @@ mod tests {
                 running: false,
                 ok: Some(true),
                 trace: vec![ExecTraceLine { line: 1, text: "hi\n".to_owned() }],
-                html: Vec::new(),
+                outputs: Vec::new(),
             },
         );
         let finished = std::slice::from_ref(&finished);

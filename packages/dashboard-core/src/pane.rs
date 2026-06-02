@@ -22,6 +22,7 @@
 //! stamped once by the aggregator when the pane first appears, so the canvas can
 //! show each resource's age uniformly with no producer opt-in.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -229,14 +230,16 @@ pub struct ExecView {
     /// producer; defaulted so a mixed-version dashboard keeps parsing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trace: Vec<ExecTraceLine>,
-    /// Rich HTML the producer rendered for this run: one self-contained document
-    /// per displayed DataFrame or eval result, mounted as a sandboxed frame by the
-    /// frontend. This is the human view of tabular output; the model's tool result
-    /// carries only the compact captured text, never these. Empty for a run with
-    /// no rich output or an older producer; defaulted so a mixed-version dashboard
-    /// keeps parsing.
+    /// Rich-display outputs the producer rendered for this run, in emission order
+    /// (Jupyter display-data style): one MIME bundle per displayed object / eval
+    /// result / figure, each mapping a MIME type to its data (`image/*` base64,
+    /// `text/html` a self-contained document, `text/plain` raw). The frontend
+    /// renders the richest entry it knows; the model takes only the images and the
+    /// captured text, so a wide table is the operator's view, not context. Empty
+    /// for a run with no rich output or an older producer; defaulted so a
+    /// mixed-version dashboard keeps parsing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub html: Vec<String>,
+    pub outputs: Vec<BTreeMap<String, String>>,
 }
 
 /// One chunk of an [`ExecView`]'s output attributed to the source line that
@@ -323,6 +326,8 @@ pub fn socket_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{ExecView, Pane, ProducerSnapshot, TerminalView, View};
 
     fn terminal_view(screen: &str) -> TerminalView {
@@ -381,7 +386,7 @@ mod tests {
                         running: false,
                         ok: Some(true),
                         trace: Vec::new(),
-                        html: Vec::new(),
+                        outputs: Vec::new(),
                     },
                 ),
                 Pane::data("d1", "metrics", "gauge", serde_json::json!({"cpu": 0.5})),
@@ -412,7 +417,10 @@ mod tests {
                 running: true,
                 ok: None,
                 trace: Vec::new(),
-                html: vec!["<table></table>".to_owned()],
+                outputs: vec![BTreeMap::from([(
+                    "text/html".to_owned(),
+                    "<table></table>".to_owned(),
+                )])],
             },
         );
         assert_eq!(running.title, "# comment");
@@ -424,6 +432,6 @@ mod tests {
         };
         assert!(view.running);
         assert_eq!(view.ok, None);
-        assert_eq!(view.html, vec!["<table></table>".to_owned()]);
+        assert_eq!(view.outputs[0]["text/html"], "<table></table>");
     }
 }

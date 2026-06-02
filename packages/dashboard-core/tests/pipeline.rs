@@ -28,7 +28,7 @@ fn exec_pane() -> Pane {
             running: false,
             ok: Some(true),
             trace: Vec::new(),
-            html: Vec::new(),
+            outputs: Vec::new(),
         },
     )
 }

@@ -19,11 +19,10 @@ from typing import Any
 # balloon one response. The Rust side enforces the same ceiling.
 MAX_IMAGES = 8
 
-# Cap on rich-HTML tables shipped to the dashboard per call (one per displayed
-# DataFrame / last-expression result). HTML goes only to the human dashboard, not
-# the model's tool result, so the ceiling guards the producer snapshot, not the
-# context window.
-MAX_HTML = 8
+# Cap on rich-display bundles shipped per call (one per displayed object /
+# last-expression result / open figure). Guards the producer snapshot from a cell
+# that displays hundreds of objects; the per-image model cap is `MAX_IMAGES`.
+MAX_DISPLAYS = 16
 
 # Rows materialized into a single dashboard HTML table. The human view is a
 # preview, so a huge frame ships its first rows with a "showing N of M" caption
@@ -188,27 +187,24 @@ class PythonSession:
     def _display(self, *objects: object, **_kwargs: object) -> None:
         self._displayed.extend(objects)
 
-    def _collect_images(self) -> list[dict[str, str]]:
+    def _collect_displays(self) -> list[dict[str, str]]:
+        """Ordered rich-display bundles for this cell, Jupyter display-data style.
+
+        One bundle per output — each `display()`'d object, the eval result, then any
+        open matplotlib figure — in emission order. A bundle maps MIME type to data
+        (base64 for `image/*`, raw text otherwise), so a single extensible rail
+        carries every representation: the dashboard renders the richest entry it
+        knows (`text/html` table → `image/*` → text), and the model takes the
+        images plus the compact captured text. Adding a new rich type means
+        teaching the frontend one renderer, not threading a new field through the
+        worker, the wire, and the hub."""
         candidates = list(self._displayed)
         if self._last_result is not None:
             candidates.append(self._last_result)
-        images = [image for obj in candidates if (image := _object_png(obj)) is not None]
-        images.extend(_matplotlib_pngs())
-        return images[:MAX_IMAGES]
-
-    def _collect_html(self) -> list[str]:
-        """Rich HTML for each displayed object and the eval result, in order.
-
-        A DataFrame (polars or pandas) renders as a self-contained sortable grid;
-        any other object that implements the Jupyter `_repr_html_` / mimebundle
-        protocol falls back to that. Returned only to the human dashboard (see
-        `worker_response_content` in main.rs), never to the model's tool result,
-        so a wide table costs the operator a scroll, not the context window."""
-        candidates = list(self._displayed)
-        if self._last_result is not None:
-            candidates.append(self._last_result)
-        docs = [doc for obj in candidates if (doc := _object_html_doc(obj)) is not None]
-        return docs[:MAX_HTML]
+        bundles = [bundle for obj in candidates if (bundle := _display_bundle(obj))]
+        # A bare `plt.plot(...)` leaves a figure open without an explicit display.
+        bundles.extend({png["mime"]: png["base64"]} for png in _matplotlib_pngs())
+        return bundles[:MAX_DISPLAYS]
 
     # polars repr knobs this session bounds by default; also the keys it checks to
     # see whether the user already configured the repr (then it leaves it alone).
@@ -368,8 +364,7 @@ class PythonSession:
             "stdout": _truncate(_read_capture(out_file)),
             "stderr": _truncate(_read_capture(err_file)),
             "result": _truncate(value),
-            "images": self._collect_images(),
-            "html": self._collect_html(),
+            "outputs": self._collect_displays(),
             "trace": _coalesce_trace(trace),
         }
 
@@ -456,21 +451,49 @@ def _matplotlib_pngs() -> list[dict[str, str]]:
     return images
 
 
-def _object_html_doc(obj: object) -> str | None:
-    """A self-contained HTML document for `obj`, or `None` if it has no HTML form.
+def _display_bundle(obj: object) -> dict[str, str]:
+    """A MIME-type → data map for one display output, Jupyter display-data style.
 
-    A DataFrame (polars or pandas) becomes a sortable grid built from its own
-    columns and rows, independent of any `pl.Config` row/column cap. Anything else
-    that implements the Jupyter rich-display protocol (`_repr_html_` or a
-    `text/html` mimebundle) is wrapped in a minimal styled document so it mounts
-    in the dashboard's sandboxed frame."""
+    A DataFrame (polars or pandas) yields an interactive sortable-grid `text/html`
+    built from its own rows — independent of any `pl.Config` cap — plus a
+    `text/plain` repr. Any other object contributes whatever the rich-display
+    protocol offers: a `_repr_mimebundle_` first, then the per-format `_repr_*_`
+    hooks (covering `PIL.Image`, matplotlib, `IPython.display`, …). Image data is
+    base64; text is raw; `text/html` is wrapped in a self-contained styled
+    document. Empty dict when the object has no rich representation."""
     table = _table_data(obj)
     if table is not None:
-        return _render_table_doc(table)
-    fragment = _object_html(obj)
-    if fragment is not None:
-        return _wrap_html(fragment)
-    return None
+        return {"text/html": _render_table_doc(table), "text/plain": _truncate(repr(obj))}
+
+    bundle: dict[str, str] = {}
+    mb = _mime_bundle(obj)
+    if mb is not None:
+        html = mb.get("text/html")
+        if isinstance(html, str) and html:
+            bundle["text/html"] = _wrap_html(html)
+        for mime in ("image/png", "image/jpeg"):
+            data = mb.get(mime)
+            if isinstance(data, (str, bytes)) and data:
+                bundle[mime] = _encode_image(data)
+        plain = mb.get("text/plain")
+        if isinstance(plain, str) and plain:
+            bundle["text/plain"] = plain
+    # Fill gaps a mimebundle did not cover from the per-format hooks.
+    if "image/png" not in bundle and "image/jpeg" not in bundle:
+        image = _object_png(obj)
+        if image is not None:
+            bundle[image["mime"]] = image["base64"]
+    if "text/html" not in bundle:
+        fragment = _object_html(obj)
+        if fragment is not None:
+            bundle["text/html"] = _wrap_html(fragment)
+    return bundle
+
+
+def _encode_image(data: object) -> str:
+    # A mimebundle stores `image/png` as base64 already (the Jupyter convention);
+    # the per-format `_repr_png_` returns raw bytes. Normalize both to base64.
+    return data if isinstance(data, str) else base64.b64encode(bytes(data)).decode("ascii")
 
 
 def _table_data(obj: object) -> dict[str, object] | None:

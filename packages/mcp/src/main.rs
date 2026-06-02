@@ -1022,19 +1022,29 @@ fn venv_env(venv_dir: &Path) -> Result<Vec<(OsString, OsString)>> {
 const MAX_IMAGES: usize = 8;
 
 /// Build tool content from a worker response: the formatted text first, then an
-/// image block for each captured rich image (`{ "mime", "base64" }` entries in
-/// the worker's `images` field).
+/// image block for each `image/*` entry across the worker's `outputs` bundles.
+///
+/// `outputs` is the rich-display rail (Jupyter display-data style): each bundle
+/// maps a MIME type to its data (see `_collect_displays` in python_worker.py). The
+/// model takes only the images and the formatted text; the non-image
+/// representations (`text/html` tables, etc.) are the dashboard's view and never
+/// enter the model's context.
 fn worker_response_content(response: &Value) -> CallToolResult {
     let mut content = vec![Content::text(format_worker_response(response))];
-    if let Some(images) = response.get("images").and_then(Value::as_array) {
-        for image in images.iter().take(MAX_IMAGES) {
-            if let (Some(mime), Some(data)) = (
-                image.get("mime").and_then(Value::as_str),
-                image.get("base64").and_then(Value::as_str),
-            ) {
-                content.push(Content::image(data.to_owned(), mime.to_owned()));
-            }
-        }
+    let images = response
+        .get("outputs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .flat_map(|bundle| {
+            bundle
+                .iter()
+                .filter(|(mime, _)| mime.starts_with("image/"))
+                .filter_map(|(mime, data)| Some((mime.clone(), data.as_str()?.to_owned())))
+        });
+    for (mime, data) in images.take(MAX_IMAGES) {
+        content.push(Content::image(data, mime));
     }
     CallToolResult::success(content)
 }

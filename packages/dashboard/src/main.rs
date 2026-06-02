@@ -324,7 +324,7 @@ fn demo_panes(tick: u64) -> Vec<Pane> {
             } else {
                 vec![ExecTraceLine { line: 2, text: body }]
             },
-            html: Vec::new(),
+            outputs: Vec::new(),
         },
     );
     vec![terminal, html, exec, data]
