@@ -148,6 +148,14 @@
     {
       lib = ix;
       inherit (ix) nixosModules;
+      darwinModules = {
+        # Personal-but-shareable nix-darwin module for github:andrewgazelka: the
+        # Homebrew package set (GUI casks, the `mas` brew, Mac App Store apps).
+        # Companion to homeModules.andrewgazelka (which owns the home-manager
+        # services); import it from a darwin host to get the casks merged in. See
+        # users/andrewgazelka/darwin.nix.
+        andrewgazelka = ./users/andrewgazelka/darwin.nix;
+      };
       homeModules = {
         # Workstation-facing home-manager module: declare a service once, get a
         # native launchd agent on macOS and native systemd user units on Linux.
