@@ -102,7 +102,7 @@ jobs:
           set -euo pipefail
           jq -r '
             def shortsha: (. // "") | tostring | (if test("^[0-9a-f]{1,40}$") then . else "unknown" end);
-            def safename: tostring | select(test("^[A-Za-z0-9._/+-]+$"));
+            def safename: tostring | select(test("^[A-Za-z0-9._/ +():-]+$"));
             def count: (. // null) | (if type == "number" then tostring else "?" end);
             "<!-- blast-radius -->",
             "### Blast radius",
