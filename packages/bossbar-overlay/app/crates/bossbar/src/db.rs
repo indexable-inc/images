@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS bossbars (
   y           REAL,
   since       INTEGER,
   url         TEXT    NOT NULL DEFAULT '',
-  expandable  INTEGER NOT NULL DEFAULT 1
+  expandable  INTEGER NOT NULL DEFAULT 1,
+  eta         INTEGER
 );";
 
 /// Columns added after the initial schema shipped. `ALTER TABLE ADD COLUMN` is
@@ -47,6 +48,7 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("since", "INTEGER"),
     ("url", "TEXT NOT NULL DEFAULT ''"),
     ("expandable", "INTEGER NOT NULL DEFAULT 1"),
+    ("eta", "INTEGER"),
 ];
 
 /// Rows inserted only when the DB file is created for the first time, so a
@@ -122,7 +124,7 @@ pub fn set_position(path: &Path, id: i64, pos: glam::DVec2) -> rusqlite::Result<
 
 fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, progress, color, overlay, position, x, y, description, since, url, expandable
+        "SELECT id, title, progress, color, overlay, position, x, y, description, since, url, expandable, eta
          FROM bossbars
          WHERE visible != 0
          ORDER BY position ASC, id ASC",
@@ -133,12 +135,15 @@ fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
         // A non-positive stored value reads as "no counter", so a caller can clear
         // the clock with `--since 0` without a NULL.
         let since: Option<i64> = r.get::<_, Option<i64>>(9)?.filter(|s| *s > 0);
+        // Same convention for eta: a non-positive value means "no extrapolation".
+        let eta: Option<i64> = r.get::<_, Option<i64>>(12)?.filter(|s| *s > 0);
         Ok(BossBar {
             id: r.get(0)?,
             title: r.get(1)?,
             description: r.get(8)?,
             since,
             url: r.get(10)?,
+            eta,
             // Default-1 column; any non-zero value keeps the hover panel enabled.
             expandable: r.get::<_, i64>(11)? != 0,
             progress: r.get::<_, f64>(2)?.clamp(0.0, 1.0) as f32,
@@ -275,6 +280,25 @@ mod tests {
         // A 0 or NULL is "no counter", so the overlay shows a plain title.
         assert_eq!(by("zero").since, None);
         assert_eq!(by("null").since, None);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn eta_round_trips_and_nonpositive_reads_as_none() {
+        let path = temp_db("eta");
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            "INSERT INTO bossbars (title, eta) VALUES ('timed', 300), ('zero', 0), ('null', NULL)",
+            [],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
+        assert_eq!(by("timed").eta, Some(300));
+        // 0/NULL mean "no extrapolation", so the overlay uses the static progress.
+        assert_eq!(by("zero").eta, None);
+        assert_eq!(by("null").eta, None);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

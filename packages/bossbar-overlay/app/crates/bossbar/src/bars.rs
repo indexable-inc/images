@@ -110,6 +110,13 @@ pub struct BossBar {
     /// A URL (or any URI/path the OS opener accepts) opened when the bar is
     /// clicked without dragging. Empty means a click does nothing.
     pub url: String,
+    /// Expected total duration in seconds. When set together with `since`, the
+    /// overlay IGNORES the stored `progress` and instead extrapolates the fill
+    /// live as `(now - since) / eta`, clamped below 1.0, redrawing each second so
+    /// a long-running task's bar advances smoothly between the writer's polls
+    /// instead of stepping. `None` means use the static `progress`. Persisted to
+    /// the `eta` DB column.
+    pub eta: Option<i64>,
     /// Whether hovering may unfold the description panel below the bar. `true`
     /// (the default) keeps the old behavior; `false` makes the bar stay bar-sized
     /// on hover with no pop-down box, even if it carries a `description`. Lets a
