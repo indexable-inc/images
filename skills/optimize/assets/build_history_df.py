@@ -339,6 +339,8 @@ def thinking_traces(session: str | None = None, *, days: int = 45, full: bool = 
                     projects: str = PROJECTS):
     """One row per thinking block as a polars frame: session, ts, model, idx,
     text_len, sig_len, and (when with_text) the summarized reasoning `text` itself.
+    `idx` is a per-session monotonic counter in transcript (chronological) order,
+    so it gives a stable total order even across blocks that share a `ts`.
 
     Kept OUT of build_frames on purpose: build_frames only TALLIES thinking
     (n_think / n_think_text / think_chars) so raw reasoning never bloats the
@@ -356,7 +358,7 @@ def thinking_traces(session: str | None = None, *, days: int = 45, full: bool = 
     """
     import polars as pl
     files = glob.glob(os.path.join(projects, "*", "*.jsonl"))
-    if session:
+    if session is not None:  # "" is a valid (if nonsensical) id, NOT a fall-through to the window scan
         files = [f for f in files if os.path.basename(f)[:-6] == session]
     elif not full:
         cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
@@ -368,6 +370,11 @@ def thinking_traces(session: str | None = None, *, days: int = 45, full: bool = 
             lines = open(f, encoding="utf-8").read().splitlines()
         except Exception:
             continue
+        # Per-session monotonic block counter in transcript order. Claude Code
+        # writes one thinking block per record, so a per-RECORD index would be
+        # always-0 and useless; counting across the session makes idx a real,
+        # collision-free ordinal that disambiguates same-timestamp blocks.
+        idx = 0
         for l in lines:
             # Cheap prefilter: a thinking block's line always contains the
             # substring; skip the json.loads on the ~majority of lines without one.
@@ -384,7 +391,6 @@ def thinking_traces(session: str | None = None, *, days: int = 45, full: bool = 
                 if model and mdl != model:
                     continue
                 ts = parse_ts(r.get("timestamp", ""))
-                idx = 0
                 for b in m["content"]:
                     if not (isinstance(b, dict) and b.get("type") == "thinking"):
                         continue
@@ -402,7 +408,8 @@ def thinking_traces(session: str | None = None, *, days: int = 45, full: bool = 
               "idx": pl.Int64, "text_len": pl.Int64, "sig_len": pl.Int64}
     if with_text:
         schema["text"] = pl.String
-    return pl.DataFrame(rows, schema=schema).sort(["session", "ts", "idx"])
+    # (session, idx) is unique + monotonic, so the sort is deterministic.
+    return pl.DataFrame(rows, schema=schema).sort(["session", "idx"])
 
 
 def summary_line(F):
