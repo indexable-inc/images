@@ -27,6 +27,19 @@ F["tools"]   # one row per tool_result (tool, label, size, is_error)
 F["debug"]   # one row per --debug timing/error event (kind, tool, model, ms, level, msg)
 ```
 
+**Reading actual thinking traces.** `F["df"]` only *counts* reasoning per turn (`n_think` = all blocks incl. Opus's signature-only ones, `n_think_text`/`think_chars` = visible text), and the `model loop profile` aggregate exposes the omitted-vs-summarized split via `frac_visible_think`. To read the *text* of the reasoning, use the scoped helper — it is kept out of `build_frames` on purpose so raw thinking never bloats the aggregate frames:
+
+```python
+import polars as pl
+T = o.thinking_traces(session="<session-id>")     # one row per block: session, ts, model, idx, text_len, sig_len, text
+# or a time-boxed sweep across sessions (heavier — pulls text):
+T = o.thinking_traces(days=7, model="claude-opus-4-8")
+T.filter(pl.col("text_len") > 0).select("ts", "model", "text")             # readable summarized reasoning
+T.group_by("model").agg((pl.col("text_len") > 0).mean().alias("frac_visible"), pl.len())  # who persists text
+```
+
+Opus 4.7/4.8 store only an encrypted `signature` (`text_len=0`) unless the harness passes `--thinking-display summarized` (the index `claude-code` wrapper does by default, PR #576), in which case summarized `text` is present; Haiku 4.5 always stores text. It is always the API's summary, never raw CoT. Pass `with_text=False` for a lengths-only frame.
+
 To avoid re-scanning across questions, cache once: `o.build_frames(...)["df"].write_parquet("~/.claude/optimize/history_rows.parquet")` (and `bash`/`tools`/`debug`), then `pl.read_parquet(...)` for instant re-slicing. The module also runs standalone for headless use (`python ${CLAUDE_SKILL_DIR}/assets/build_history_df.py --full --out ~/.claude/optimize`) on any interpreter with polars.
 
 Default to the **last ~45 days** (current model family — old transcripts ran retired models and teach nothing actionable). Expand to `full=True` only when a pattern needs the longer baseline.
