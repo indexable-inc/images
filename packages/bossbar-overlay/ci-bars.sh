@@ -290,4 +290,18 @@ if [ -n "$bdb" ]; then
   done <<EOF
 $existing
 EOF
+
+  # Legacy migration: an earlier version of this watcher drew one bar per
+  # workflow RUN (url .../actions/runs/<id>). The per-commit scheme never creates
+  # those, and nothing else does (pr-watch uses the xp-orb feed, ix-downtime uses
+  # the status-page url), so any such row is a stale leftover from before the
+  # upgrade. Drop them so a host that ran the old version self-heals on first poll.
+  legacy="$(sqlite3 -noheader "$bdb" \
+    "SELECT id FROM bossbars WHERE url LIKE '%/actions/runs/%';" 2>/dev/null || true)"
+  while IFS= read -r eid; do
+    [ -n "${eid:-}" ] || continue
+    bossbar rm "$eid" 2>/dev/null || true
+  done <<EOF
+$legacy
+EOF
 fi
