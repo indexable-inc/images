@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: blast-radius-${{ github.ref }}
@@ -24,17 +23,27 @@ env:
 
 jobs:
   blast-radius:
+    # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml).
+    # This job runs the PR's own `.#blast-radius` flake code and needs a write
+    # token to post the comment; forks and Dependabot get a read-only token and
+    # no secrets, so the comment would 403. Restricting to same-repo PRs keeps
+    # the writable token away from untrusted authors and avoids failing forks.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     # Same self-hosted dispatcher as check.yml: the `ix-ci-run-*` label is
     # claimed by the org dispatcher, which mints an ephemeral runner with a warm
     # /nix/store. Evaluating .#checks.x86_64-linux forces an x86_64-linux IFD
     # build (lib/rust/cargo-unit.nix), so this must run on the Linux runner.
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-blast-radius', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
-      GH_TOKEN: ${{ secrets.repository_token || github.token }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -47,8 +56,11 @@ jobs:
       # parents (base.sha, head.sha) and their history into the clone, so the
       # tool's `git merge-base` and the `?rev=<sha>` flake refs resolve. This
       # auth'd fetch (mirroring ai-review-gate.yml) guarantees both objects are
-      # present even when the merge ref is unavailable.
+      # present even when the merge ref is unavailable. The token is scoped to
+      # this trusted step so the untrusted `nix run` step below never sees it.
       - name: Fetch pull request base and head
+        env:
+          GH_TOKEN: ${{ secrets.repository_token || github.token }}
         run: |
           set -euo pipefail
           auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
@@ -58,18 +70,26 @@ jobs:
             "${BASE_SHA}" \
             "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/${PR_NUMBER}/head"
 
+      # No token in this step's env: it runs PR-authored flake code. pipefail
+      # makes an eval failure (nonzero `nix run`) fail the step instead of being
+      # masked by tee's exit code.
       - name: Report blast radius
-        run: nix run .#blast-radius -- "${BASE_SHA}" "${HEAD_SHA}" | tee report.md
+        run: |
+          set -euo pipefail
+          nix run .#blast-radius -- "${BASE_SHA}" "${HEAD_SHA}" | tee report.md
 
       # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker the
-      # tool prints first. Find it, then PATCH or POST. gh runs through
+      # tool prints first. Paginate the comment list so the marker is found on
+      # busy PRs (no duplicate comments), then PATCH or POST. gh runs through
       # `nix run nixpkgs#gh` because the dispatcher has nix but not a system gh.
       - name: Post sticky comment
+        env:
+          GH_TOKEN: ${{ secrets.repository_token || github.token }}
         run: |
           set -euo pipefail
           repo="${{ github.repository }}"
-          id="$(nix run nixpkgs#gh -- api "repos/${repo}/issues/${PR_NUMBER}/comments" \
-                  --jq 'map(select(.body | startswith("<!-- blast-radius -->"))) | .[0].id // empty')"
+          id="$(nix run nixpkgs#gh -- api --paginate --slurp "repos/${repo}/issues/${PR_NUMBER}/comments" \
+                  --jq 'map(.[] | select(.body | startswith("<!-- blast-radius -->"))) | .[0].id // empty')"
           if [ -n "${id}" ]; then
             nix run nixpkgs#gh -- api -X PATCH "repos/${repo}/issues/comments/${id}" -F body=@report.md
           else
