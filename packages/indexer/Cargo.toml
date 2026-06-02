@@ -16,6 +16,7 @@ path = "src/main.rs"
 source-meta.workspace = true
 source-claude.workspace = true
 source-codex.workspace = true
+source-debug.workspace = true
 source-git.workspace = true
 source-atuin.workspace = true
 source-slack.workspace = true

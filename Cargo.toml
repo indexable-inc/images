@@ -11,6 +11,7 @@ members = [
   "packages/source/atuin",
   "packages/source/claude",
   "packages/source/codex",
+  "packages/source/debug",
   "packages/source/git",
   "packages/clone-detect/cli",
   "packages/clone-detect/detect",
@@ -102,6 +103,7 @@ clap = "4"
 source-atuin = { path = "packages/source/atuin" }
 source-claude = { path = "packages/source/claude" }
 source-codex = { path = "packages/source/codex" }
+source-debug = { path = "packages/source/debug" }
 source-git = { path = "packages/source/git" }
 clone-detect = { path = "packages/clone-detect/detect" }
 clone-hash = { path = "packages/clone-detect/hash" }
