@@ -85,6 +85,10 @@
       "Numbers" = 409203825;
       "Keynote" = 409183694;
       "Portal" = 1436994560;
+      "Microsoft Word" = 462054704;
+      "Microsoft Excel" = 462058435;
+      "Microsoft PowerPoint" = 462062816;
+      "Microsoft Outlook" = 985367838;
     };
   };
 }
