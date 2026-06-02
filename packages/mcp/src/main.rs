@@ -312,7 +312,8 @@ fn scope_kwargs(
     host: Option<&[String]>,
     project: Option<&[String]>,
 ) -> String {
-    let mut parts: Vec<String> = Vec::new();
+    use std::fmt::Write as _;
+    let mut out = String::new();
     for (key, values) in [
         ("source", source),
         ("user", user),
@@ -320,13 +321,13 @@ fn scope_kwargs(
         ("project", project),
     ] {
         if let Some(values) = values.filter(|values| !values.is_empty()) {
-            parts.push(format!("{key}={}", json!(values)));
+            let _ = write!(out, ", {key}={}", json!(values));
         }
     }
     if let Some(repo) = repo.filter(|repo| !repo.is_empty()) {
-        parts.push(format!("repo={}", json!(repo)));
+        let _ = write!(out, ", repo={}", json!(repo));
     }
-    parts.iter().map(|part| format!(", {part}")).collect()
+    out
 }
 
 impl McpServer {
@@ -462,8 +463,8 @@ struct SemanticSearchRequest {
     query: String,
     /// Maximum number of results to return (default 10).
     top_k: Option<usize>,
-    /// Restrict to these sources: code, claude_history, codex, shell, slack,
-    /// linear, web. Omit to search every source.
+    /// Restrict to these sources: `code`, `claude_history`, `codex`, `shell`,
+    /// `slack`, `linear`, `web`. Omit to search every source.
     source: Option<Vec<String>>,
     /// Restrict to records authored by these users. Omit for every user.
     user: Option<Vec<String>>,
@@ -490,8 +491,8 @@ struct GrepSearchRequest {
     top_k: Option<usize>,
     /// Match the pattern case-sensitively (default false).
     case_sensitive: Option<bool>,
-    /// Restrict to these sources: code, claude_history, codex, shell, slack,
-    /// linear, web. Omit to search every source.
+    /// Restrict to these sources: `code`, `claude_history`, `codex`, `shell`,
+    /// `slack`, `linear`, `web`. Omit to search every source.
     source: Option<Vec<String>>,
     /// Restrict to records authored by these users. Omit for every user.
     user: Option<Vec<String>>,
