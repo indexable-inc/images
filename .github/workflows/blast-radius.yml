@@ -1,0 +1,77 @@
+name: Blast radius
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: blast-radius-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The self-hosted runner's Nix daemon owns substituters; the job only sets
+  # client-side eval knobs (matching check.yml). `accept-flake-config` consumes
+  # the flake's nixConfig (the indexable-inc Cachix substituter) without a
+  # prompt, which the inner nix-eval-jobs run needs to fetch the IFD closure.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+
+jobs:
+  blast-radius:
+    # Same self-hosted dispatcher as check.yml: the `ix-ci-run-*` label is
+    # claimed by the org dispatcher, which mints an ephemeral runner with a warm
+    # /nix/store. Evaluating .#checks.x86_64-linux forces an x86_64-linux IFD
+    # build (lib/rust/cargo-unit.nix), so this must run on the Linux runner.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-blast-radius', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 30
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      GH_TOKEN: ${{ secrets.repository_token || github.token }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The default pull_request checkout is the merge ref, so its working tree
+      # already carries this PR's `.#blast-radius` app. fetch-depth 0 brings both
+      # parents (base.sha, head.sha) and their history into the clone, so the
+      # tool's `git merge-base` and the `?rev=<sha>` flake refs resolve. This
+      # auth'd fetch (mirroring ai-review-gate.yml) guarantees both objects are
+      # present even when the merge ref is unavailable.
+      - name: Fetch pull request base and head
+        run: |
+          set -euo pipefail
+          auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          git \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            fetch --no-tags origin \
+            "${BASE_SHA}" \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/${PR_NUMBER}/head"
+
+      - name: Report blast radius
+        run: nix run .#blast-radius -- "${BASE_SHA}" "${HEAD_SHA}" | tee report.md
+
+      # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker the
+      # tool prints first. Find it, then PATCH or POST. gh runs through
+      # `nix run nixpkgs#gh` because the dispatcher has nix but not a system gh.
+      - name: Post sticky comment
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          id="$(nix run nixpkgs#gh -- api "repos/${repo}/issues/${PR_NUMBER}/comments" \
+                  --jq 'map(select(.body | startswith("<!-- blast-radius -->"))) | .[0].id // empty')"
+          if [ -n "${id}" ]; then
+            nix run nixpkgs#gh -- api -X PATCH "repos/${repo}/issues/comments/${id}" -F body=@report.md
+          else
+            nix run nixpkgs#gh -- api "repos/${repo}/issues/${PR_NUMBER}/comments" -F body=@report.md
+          fi

@@ -179,6 +179,84 @@ let
     '';
   };
 
+  # Report how many .#checks.x86_64-linux derivations a PR would rebuild. For a
+  # base and head git revision it evaluates the checks at each through a
+  # per-revision git+file flake ref, diffs the attr -> drvPath maps, and prints
+  # a Markdown report. The eval forces the rust checks' import-from-derivation
+  # (lib/rust/cargo-unit.nix builds cargo-units.nix with nix-cargo-unit), which
+  # is x86_64-linux only, so an end-to-end run needs a Linux builder; locally
+  # only the wrapper builds (nu --ide-check). nix-eval-jobs (not one `nix eval`)
+  # keeps memory bounded; see the checks comment above.
+  blastRadius = ix.writeNushellApplication pkgs {
+    name = "blast-radius";
+    meta.description = "Report how many .#checks.x86_64-linux derivations a PR would rebuild";
+    runtimeInputs = [
+      pkgs.git
+      pkgs.nix
+    ];
+    text = ''
+      const eval_jobs = "github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7"
+
+      def eval-checks [repo: string, rev: string] {
+        let flakeref = $"git+file://($repo)?rev=($rev)&allRefs=1#checks.x86_64-linux"
+        let rows = (
+          ^nix run $eval_jobs -- ...[
+            "--flake" $flakeref
+            "--workers" "8"
+            "--option" "accept-flake-config" "true"
+          ]
+          | lines
+          | each {|l| if (($l | str trim) | is-not-empty) { $l | from json } }
+          | compact
+        )
+        let errors = ($rows | each {|r| if ($r.error? | is-not-empty) { $"($r.attr? | default '?'): ($r.error)" } } | compact)
+        if ($errors | is-not-empty) {
+          for e in $errors { print --stderr $"eval error @($rev): ($e)" }
+          error make { msg: $"checks failed to evaluate at ($rev)" }
+        }
+        $rows | select attr drvPath
+      }
+
+      def drv-for [tbl, name] {
+        $tbl | each {|r| if ($r.attr == $name) { $r.drvPath } } | compact | first
+      }
+
+      def main [base?: string, head?: string] {
+        let repo = (^git rev-parse --show-toplevel | str trim)
+        let head_rev = (^git rev-parse --verify $"($head | default 'HEAD')^{commit}" | str trim)
+        let base_in  = (^git rev-parse --verify $"($base | default 'origin/main')^{commit}" | str trim)
+        let base_rev = (^git merge-base $base_in $head_rev | str trim)
+
+        let b = (eval-checks $repo $base_rev)
+        let h = (eval-checks $repo $head_rev)
+        let bn = ($b | get attr)
+        let hn = ($h | get attr)
+
+        let changed = ($h | each {|r| if ($r.attr in $bn) and ((drv-for $b $r.attr) != $r.drvPath) { $r.attr } } | compact | sort)
+        let added   = ($hn | each {|a| if (not ($a in $bn)) { $a } } | compact | sort)
+        let removed = ($bn | each {|a| if (not ($a in $hn)) { $a } } | compact | sort)
+        let total = ($hn | length)
+        let nc = ($changed | length)
+        let na = ($added | length)
+        let nr = ($removed | length)
+
+        print "<!-- blast-radius -->"
+        print "### Blast radius"
+        print ""
+        print $"`($nc)` of `($total)` checks would rebuild between base `($base_rev | str substring 0..7)` and head `($head_rev | str substring 0..7)`."
+        if ($na > 0) or ($nr > 0) { print ""; print $"($na) added, ($nr) removed" }
+        if ($nc > 0) {
+          print ""
+          print "<details><summary>changed checks</summary>"
+          print ""
+          for a in $changed { print $"- ($a)" }
+          print ""
+          print "</details>"
+        }
+      }
+    '';
+  };
+
   updateMods = ix.writePythonApplication pkgs {
     name = "update-mods";
     src = paths.tools.updateMods;
@@ -513,6 +591,7 @@ in
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
       inherit check lint site;
+      blast-radius = blastRadius;
       site-dev = site.passthru.devServer;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
