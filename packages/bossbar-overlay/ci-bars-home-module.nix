@@ -160,6 +160,13 @@ in
         description = "GitHub Actions CI progress boss bars";
         command = [ (lib.getExe' ciBars "ci-bars") ];
         inherit (cfg) interval;
+        # Recover from a crashed poll without busy-looping. on-failure renders
+        # launchd KeepAlive.SuccessfulExit = false (and systemd Restart =
+        # on-failure): a clean exit waits for the next StartInterval, a non-zero
+        # exit relaunches (throttled). NOT restart = "always": with StartInterval
+        # that maps to KeepAlive = true, which keeps relaunching on every clean
+        # exit and collapses the interval poller into a ~10s busy-loop.
+        restart = "on-failure";
         # All tunables flow in as environment so the script stays a plain file and
         # the options are the single source of truth.
         environment = {
