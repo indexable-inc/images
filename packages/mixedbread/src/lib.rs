@@ -266,7 +266,12 @@ impl Client {
             if !retryable || attempt >= MAX_RETRIES {
                 return Ok(resp);
             }
-            let wait = retry_after(&resp).unwrap_or_else(|| backoff(attempt));
+            // Honor a server `Retry-After`, but never wait less than our
+            // jittered backoff: a `Retry-After: 0`/`1` under load would
+            // otherwise make every concurrent upload retry in lockstep, the
+            // very thundering herd this exists to avoid.
+            let wait = retry_after(&resp)
+                .map_or_else(|| backoff(attempt), |hint| hint.max(backoff(attempt)));
             attempt += 1;
             tokio::time::sleep(wait).await;
         }
@@ -355,7 +360,11 @@ impl Client {
         // A multipart `Part` is not `Clone`, so the retry closure rebuilds it
         // from the owned bytes each attempt. A bad MIME makes `mime_str` fail
         // identically every call, so it short-circuits the retry loop as an
-        // error rather than spinning.
+        // error rather than spinning. This POST is not idempotent: a 5xx
+        // returned after the file was created server-side can leave an orphaned,
+        // unattached file object on retry. That is acceptable here, the
+        // motivating case is 429 (request rejected, safe to retry) and the
+        // attach below is keyed on `external_id` with `overwrite: true`.
         let files_url = self.url("/v1/files");
         let resp = self
             .send_retrying(|| {
