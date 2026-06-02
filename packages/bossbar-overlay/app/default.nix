@@ -3,11 +3,13 @@
   stdenv,
   rustPlatform,
   makeWrapper,
+  pkg-config,
   # The Minecraft art (boss bar sprites, book texture, bitmap font) extracted from
   # Mojang's official client jar by a reproducible Nix derivation.
   minecraft-assets,
-  # Linux runtime libraries. winit dlopens X11/Wayland/xkbcommon and wgpu dlopens
-  # the Vulkan loader, so they must be on the runtime library path.
+  # Linux runtime libraries. winit/layer-shell dlopen or link
+  # X11/Wayland/xkbcommon and wgpu dlopens the Vulkan loader, so they must be on
+  # the runtime library path.
   wayland,
   libxkbcommon,
   vulkan-loader,
@@ -65,7 +67,7 @@ rustPlatform.buildRustPackage {
 
   strictDeps = true;
 
-  nativeBuildInputs = [ makeWrapper ];
+  nativeBuildInputs = [ makeWrapper ] ++ lib.optional stdenv.hostPlatform.isLinux pkg-config;
   buildInputs = runtimeLibs;
 
   preBuild = ''

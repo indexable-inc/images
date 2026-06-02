@@ -726,6 +726,18 @@ impl ApplicationHandler<Vec<BossBar>> for App {
 
 /// Run the overlay event loop. Blocks until the last window closes.
 pub fn run(db: PathBuf, base_scale: u32) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && std::env::var_os("BOSSBAR_WINIT").is_none()
+    {
+        match crate::layer_shell::run(db.clone(), base_scale) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                eprintln!("bossbar-overlay: layer-shell unavailable, falling back to winit: {e}");
+            }
+        }
+    }
+
     let event_loop: EventLoop<Vec<BossBar>> = ocwin::build_event_loop()?;
     let proxy = event_loop.create_proxy();
     let mut app = App {

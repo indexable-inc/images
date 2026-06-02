@@ -18,3 +18,6 @@ overlay-core.workspace = true
 glam.workspace = true
 rusqlite.workspace = true
 dirs.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+layershellev.workspace = true

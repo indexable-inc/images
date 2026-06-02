@@ -3,9 +3,8 @@
 
 /// Default store name: the shared corpus the `indexer` populates.
 ///
-/// Holds code plus agent/shell history across the fleet. One store holds
-/// everything; queries scope it server-side with a metadata filter rather than
-/// using separate stores.
+/// One store holds code plus agent/shell history across the fleet. Queries
+/// scope it server-side with a metadata filter rather than using separate stores.
 pub const DEFAULT_STORE: &str = "index";
 
 /// Identifier of Mixedbread's hosted web-search store, mixed in when the

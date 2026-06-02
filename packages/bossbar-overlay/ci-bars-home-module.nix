@@ -31,8 +31,10 @@
 let
   inherit (lib)
     mkOption
+    mkOptionDefault
     mkEnableOption
     mkIf
+    mkMerge
     types
     ;
 
@@ -140,33 +142,36 @@ in
     };
   };
 
-  config = mkIf cfg.enable {
-    # Seed the platform-conditional log directory at option-default precedence,
-    # so a downstream override still wins and the option declaration stays a
-    # self-contained literal.
-    services.ciBars.logDir = lib.mkOptionDefault (
-      if pkgs.stdenv.hostPlatform.isDarwin then
-        "${config.home.homeDirectory}/Library/Logs"
-      else
-        "${config.home.homeDirectory}/.local/state"
-    );
-
-    services.portable.ci-bars = {
-      description = "GitHub Actions CI progress boss bars";
-      command = [ (lib.getExe' ciBars "ci-bars") ];
-      inherit (cfg) interval;
-      # All tunables flow in as environment so the script stays a plain file and
-      # the options are the single source of truth.
-      environment = {
-        CI_BARS_REPOS = lib.concatStringsSep " " cfg.repos;
-        CI_BARS_AVG_TTL = toString cfg.avgTtl;
-        CI_BARS_DEFAULT_AVG = toString cfg.defaultAvg;
-        CI_BARS_MAX = toString cfg.maxBars;
+  config = mkMerge [
+    {
+      # Seed the platform-conditional log directory at option-default precedence,
+      # so a downstream override still wins and the option declaration stays a
+      # self-contained literal.
+      services.ciBars.logDir = mkOptionDefault (
+        if pkgs.stdenv.hostPlatform.isDarwin then
+          "${config.home.homeDirectory}/Library/Logs"
+        else
+          "${config.home.homeDirectory}/.local/state"
+      );
+    }
+    (mkIf cfg.enable {
+      services.portable.ci-bars = {
+        description = "GitHub Actions CI progress boss bars";
+        command = [ (lib.getExe' ciBars "ci-bars") ];
+        inherit (cfg) interval;
+        # All tunables flow in as environment so the script stays a plain file and
+        # the options are the single source of truth.
+        environment = {
+          CI_BARS_REPOS = lib.concatStringsSep " " cfg.repos;
+          CI_BARS_AVG_TTL = toString cfg.avgTtl;
+          CI_BARS_DEFAULT_AVG = toString cfg.defaultAvg;
+          CI_BARS_MAX = toString cfg.maxBars;
+        };
+        standardOutPath = "${cfg.logDir}/ci-bars.log";
+        standardErrorPath = "${cfg.logDir}/ci-bars.log";
+        # runAtLoad (default true) draws the bars on load; the script's own flock
+        # guard prevents overlap; the Label defaults to the space-free convention.
       };
-      standardOutPath = "${cfg.logDir}/ci-bars.log";
-      standardErrorPath = "${cfg.logDir}/ci-bars.log";
-      # runAtLoad (default true) draws the bars on load; the script's own flock
-      # guard prevents overlap; the Label defaults to the space-free convention.
-    };
-  };
+    })
+  ];
 }
