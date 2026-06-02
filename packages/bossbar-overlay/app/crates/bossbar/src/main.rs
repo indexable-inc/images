@@ -33,10 +33,20 @@ struct Args {
     height: u32,
 }
 
+/// Parse a scale string as a finite, positive `f32`. Rejects `inf`/`nan`/`<= 0`
+/// so a hostile `--scale inf` can't saturate `(BAR_W * scale).ceil() as u32` to
+/// `u32::MAX` and request a multi-billion-pixel window.
+fn parse_scale(s: &str) -> Result<f32, String> {
+    match s.parse::<f32>() {
+        Ok(v) if v.is_finite() && v > 0.0 => Ok(v),
+        _ => Err("--scale must be a positive, finite number".to_string()),
+    }
+}
+
 fn parse_args() -> Result<Args, String> {
     let scale = std::env::var("BOSSBAR_SCALE")
         .ok()
-        .and_then(|s| s.parse().ok())
+        .and_then(|s| parse_scale(&s).ok())
         .unwrap_or(DEFAULT_SCALE);
     let mut args = Args {
         snapshot: None,
@@ -52,11 +62,8 @@ fn parse_args() -> Result<Args, String> {
                 args.snapshot = Some(PathBuf::from(p));
             }
             "--scale" => {
-                args.scale = it
-                    .next()
-                    .ok_or("--scale needs a number")?
-                    .parse()
-                    .map_err(|_| "--scale must be a number")?;
+                let raw = it.next().ok_or("--scale needs a number")?;
+                args.scale = parse_scale(&raw)?;
             }
             "--size" => {
                 let v = it.next().ok_or("--size needs WxH")?;
