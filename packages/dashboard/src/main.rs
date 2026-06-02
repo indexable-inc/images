@@ -22,8 +22,8 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use dashboard_core::{
-    ExecView, Hub, Pane, ProducerSnapshot, Publisher, RecordingStore, TerminalView, discovery_dir,
-    serve_hub, socket_path,
+    ExecTraceLine, ExecView, Hub, Pane, ProducerSnapshot, Publisher, RecordingStore, TerminalView,
+    discovery_dir, serve_hub, socket_path,
 };
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::net::UnixStream;
@@ -303,18 +303,27 @@ fn demo_panes(tick: u64) -> Vec<Pane> {
         }),
     );
     // An exec pane: alternate running and finished so the demo shows both states
-    // (the running spinner and a captured stdout/stderr result).
+    // (the running spinner and a finished run). The finished run carries an
+    // inline-trace mapping — output paired with the line that printed it — so the
+    // demo also exercises the inline-trace view (see `ExecView::trace`).
     let running = tick.is_multiple_of(2);
+    let body = format!("{tick}.0\n{tick}.1\n{tick}.2\n");
     let exec = Pane::exec(
         "demo-exec",
         ExecView {
-            source: format!("import subprocess\nsubprocess.run(['echo', 'tick {tick}'])"),
+            source: format!("for i in range(3):\n    print(f\"{tick}.{{i}}\")"),
             lang: "python".to_owned(),
-            stdout: if running { String::new() } else { format!("tick {tick}\n") },
+            stdout: if running { String::new() } else { body.clone() },
             stderr: String::new(),
             result: String::new(),
             running,
             ok: if running { None } else { Some(true) },
+            // The loop's prints all come from the second source line.
+            trace: if running {
+                Vec::new()
+            } else {
+                vec![ExecTraceLine { line: 2, text: body }]
+            },
         },
     );
     vec![terminal, html, exec, data]

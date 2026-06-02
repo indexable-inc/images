@@ -33,7 +33,7 @@ mod publish;
 pub use dashboard::{Dashboard, Hub, RecordingInfo, RecordingStore, serve_hub};
 pub use error::{Error, Result};
 pub use pane::{
-    DataView, ExecView, HtmlView, Pane, ProducerSnapshot, TerminalView, View, discovery_dir,
-    socket_path,
+    DataView, ExecTraceLine, ExecView, HtmlView, Pane, ProducerSnapshot, TerminalView, View,
+    discovery_dir, socket_path,
 };
 pub use publish::{PaneSink, Publisher};

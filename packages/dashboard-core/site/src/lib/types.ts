@@ -30,6 +30,13 @@ export interface PaneRecord {
   running?: boolean;
   ok?: boolean;
   lang?: string;
+  // Inline-trace execution: a JSON-encoded array of `{line, text}` (the hub stores
+  // it as canonical text like the data body, so the frontend parses it). Each
+  // entry pairs a captured stdout chunk with the 1-based source line that emitted
+  // it, in order, so the feed can render output beside the line that produced it
+  // and replay the run. Empty/absent for output with no line attribution (a
+  // subprocess) or an older producer.
+  trace?: string;
   // data-only: the name of the frontend renderer to dispatch to
   renderer?: string;
 }

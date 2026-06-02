@@ -31,6 +31,14 @@ export interface Cursor {
   shape: string;
 }
 
+// Strip CSI/SGR and other escape sequences, leaving plain text. For the exec
+// renderer and the stream's one-line previews, where a captured byte stream is
+// shown as text rather than the SGR-decoded grid renderInto() builds.
+export function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\x1b[@-Z\\-_]/g, '');
+}
+
 // The 16 base ANSI colors mirror the user's ghostty themes
 // (~/.config/nix/ghostty/themes/custom-{light,dark}). Colors 16-255 are the
 // theme-independent xterm 6x6x6 cube and 24-step gray ramp the tui crate's SGR

@@ -220,6 +220,25 @@ pub struct ExecView {
     /// a Python exception or a transport failure (timeout, cancel).
     #[serde(default)]
     pub ok: Option<bool>,
+    /// Inline-trace execution: each chunk of captured stdout paired with the
+    /// 1-based `source` line that emitted it, in emission order, so the view can
+    /// render output beside the line that produced it. This is the "inline
+    /// evaluation" idea — Bret Victor's "Inventing on Principle", Light Table's
+    /// instarepl, Python Tutor, marimo — applied to a captured run. Empty for
+    /// output with no line attribution (a spawned subprocess) or an older
+    /// producer; defaulted so a mixed-version dashboard keeps parsing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trace: Vec<ExecTraceLine>,
+}
+
+/// One chunk of an [`ExecView`]'s output attributed to the source line that
+/// emitted it, for the inline-trace view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExecTraceLine {
+    /// 1-based line number within [`ExecView::source`].
+    pub line: u32,
+    /// The text that line wrote (may itself contain newlines).
+    pub text: String,
 }
 
 /// The card title for an execution: the first non-empty source line, trimmed and
@@ -353,6 +372,7 @@ mod tests {
                         result: String::new(),
                         running: false,
                         ok: Some(true),
+                        trace: Vec::new(),
                     },
                 ),
                 Pane::data("d1", "metrics", "gauge", serde_json::json!({"cpu": 0.5})),
@@ -382,6 +402,7 @@ mod tests {
                 result: String::new(),
                 running: true,
                 ok: None,
+                trace: Vec::new(),
             },
         );
         assert_eq!(running.title, "# comment");

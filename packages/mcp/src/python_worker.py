@@ -34,6 +34,63 @@ MAX_CAPTURE_BYTES = 4 * MAX_OUTPUT_CHARS
 # https://docs.python.org/3/library/asyncio-runner.html#asyncio-cli
 _AWAIT_FLAG = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
 
+# Synthetic filenames for the user's own snippet (see `evaluate`/`execute`). Output
+# is line-attributed only when the writing frame belongs to the user's code, not a
+# library it called.
+_USER_FILES = frozenset({"<ix-mcp eval>", "<ix-mcp exec>"})
+
+
+class _LineTee:
+    """Tee `sys.stdout` so each write is attributed to the user source line that
+    produced it, while still delegating to the real (fd-backed) stream — the
+    canonical stdout capture and any subprocess output are untouched.
+
+    This powers *inline-trace execution*: rendering each ``print`` beside the line
+    of code that emitted it. Precedent: Bret Victor's "Inventing on Principle",
+    Light Table's instarepl, Python Tutor, and marimo. ``print`` is a C builtin, so
+    the nearest Python frame at ``write`` time is the user's calling line; we record
+    its line number only when that frame is the user's own snippet.
+    """
+
+    def __init__(self, orig: Any, trace: list[tuple[int, str]]) -> None:
+        self._orig = orig
+        self._trace = trace
+
+    def write(self, s: str) -> int:
+        if s:
+            try:
+                frame = sys._getframe(1)  # noqa: SLF001 — deliberate caller introspection
+                if frame.f_code.co_filename in _USER_FILES:
+                    self._trace.append((frame.f_lineno, s))
+            except Exception:
+                pass
+        return self._orig.write(s)
+
+    def flush(self) -> None:
+        self._orig.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        # Delegate everything else (encoding, isatty, fileno, ...) to the real stream.
+        return getattr(self._orig, name)
+
+
+def _coalesce_trace(trace: list[tuple[int, str]]) -> list[dict[str, object]]:
+    """Merge adjacent writes from the same line and cap total size, returning
+    ``[{"line": int, "text": str}]`` in emission order for the inline-trace view."""
+    out: list[dict[str, object]] = []
+    budget = MAX_OUTPUT_CHARS
+    for line, text in trace:
+        if budget <= 0:
+            break
+        if len(text) > budget:
+            text = text[:budget]
+        budget -= len(text)
+        if out and out[-1]["line"] == line:
+            out[-1]["text"] = f"{out[-1]['text']}{text}"
+        else:
+            out.append({"line": line, "text": text})
+    return out
+
 
 class PythonSession:
     def __init__(self) -> None:
@@ -118,15 +175,24 @@ class PythonSession:
         self._displayed = []
         self._last_result = None
 
+        # Inline-trace execution: each stdout write is paired with the user source
+        # line that produced it (see `_LineTee`), so the dashboard can render output
+        # beside the line that printed it.
+        trace: list[tuple[int, str]] = []
+
         out_file = tempfile.TemporaryFile()
         err_file = tempfile.TemporaryFile()
         sys.stdout.flush()
         sys.stderr.flush()
         saved_out = os.dup(1)
         saved_err = os.dup(2)
+        saved_stdout = sys.stdout
         try:
             os.dup2(out_file.fileno(), 1)
             os.dup2(err_file.fileno(), 2)
+            # Tee for line attribution; writes still pass through to fd 1, so the
+            # canonical capture below (and subprocess output) is unaffected.
+            sys.stdout = _LineTee(saved_stdout, trace)
             try:
                 value = run()
             except Exception:
@@ -136,6 +202,7 @@ class PythonSession:
             finally:
                 sys.stdout.flush()
                 sys.stderr.flush()
+                sys.stdout = saved_stdout
         finally:
             os.dup2(saved_out, 1)
             os.dup2(saved_err, 2)
@@ -148,6 +215,7 @@ class PythonSession:
             "stderr": _truncate(_read_capture(err_file)),
             "result": _truncate(value),
             "images": self._collect_images(),
+            "trace": _coalesce_trace(trace),
         }
 
 

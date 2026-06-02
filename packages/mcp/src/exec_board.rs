@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, anyhow};
-use dashboard_core::{ExecView, Pane, PaneSink, Publisher, View, socket_path};
+use dashboard_core::{ExecTraceLine, ExecView, Pane, PaneSink, Publisher, View, socket_path};
 use parking_lot::Mutex;
 use serde_json::Value;
 
@@ -90,6 +90,7 @@ impl ExecBoard {
                 result: String::new(),
                 running: true,
                 ok: None,
+                trace: Vec::new(),
             },
         );
         pane.subtitle = format!("{op_label} · {session}");
@@ -128,16 +129,31 @@ impl ExecBoard {
         // `ok: false`; absence of the field means a control op with no flag, so
         // treat it as success.
         let ok = response.get("ok").and_then(Value::as_bool).unwrap_or(true);
-        self.finish(id, field("stdout"), field("stderr"), field("result"), ok);
+        // Inline-trace execution: the worker pairs each stdout chunk with the
+        // source line that printed it (see python_worker.py). Absent for an older
+        // worker or a run with no line-attributed output.
+        let trace = response
+            .get("trace")
+            .and_then(|value| serde_json::from_value::<Vec<ExecTraceLine>>(value.clone()).ok())
+            .unwrap_or_default();
+        self.finish(id, field("stdout"), field("stderr"), field("result"), ok, trace);
     }
 
     /// Record a transport failure (timeout, cancel, worker death): the call
     /// produced no worker response, so surface the error as the pane's stderr.
     pub fn finish_error(&self, id: &str, error: &str) {
-        self.finish(id, String::new(), error.to_owned(), String::new(), false);
+        self.finish(id, String::new(), error.to_owned(), String::new(), false, Vec::new());
     }
 
-    fn finish(&self, id: &str, stdout: String, stderr: String, result: String, ok: bool) {
+    fn finish(
+        &self,
+        id: &str,
+        stdout: String,
+        stderr: String,
+        result: String,
+        ok: bool,
+        trace: Vec<ExecTraceLine>,
+    ) {
         {
             let mut panes = self.panes.lock();
             if let Some(View::Exec(view)) = panes
@@ -150,6 +166,7 @@ impl ExecBoard {
                 view.result = result;
                 view.running = false;
                 view.ok = Some(ok);
+                view.trace = trace;
             }
         }
         self.publish();

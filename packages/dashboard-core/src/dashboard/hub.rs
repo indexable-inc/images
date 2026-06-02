@@ -117,6 +117,9 @@ fn view_texts(view: &View) -> Vec<(&'static str, String)> {
             ("stdout", e.stdout.clone()),
             ("stderr", e.stderr.clone()),
             ("result", e.result.clone()),
+            // Inline-trace output→line map, canonicalized to JSON text (like the
+            // data view's body) so it diffs and replays; the frontend parses it.
+            ("trace", serde_json::to_string(&e.trace).unwrap_or_default()),
         ],
         // A data view's JSON is canonicalized to text so it diffs and replays
         // like any other body; the frontend parses it back.
@@ -481,7 +484,7 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pane::{ExecView, TerminalView};
+    use crate::pane::{ExecTraceLine, ExecView, TerminalView};
 
     fn terminal(id: &str, screen: &str) -> Pane {
         Pane::terminal(
@@ -604,6 +607,7 @@ mod tests {
                     result: String::new(),
                     running: false,
                     ok: Some(true),
+                    trace: Vec::new(),
                 },
             ),
             Pane::data("d", "metrics", "gauge", serde_json::json!({"cpu": 0.5})),
@@ -644,6 +648,7 @@ mod tests {
                 result: String::new(),
                 running: true,
                 ok: None,
+                trace: Vec::new(),
             },
         );
         assert!(state.apply_scope("p", &[running]).unwrap().is_some());
@@ -661,12 +666,18 @@ mod tests {
                 result: String::new(),
                 running: false,
                 ok: Some(true),
+                trace: vec![ExecTraceLine { line: 1, text: "hi\n".to_owned() }],
             },
         );
         let finished = std::slice::from_ref(&finished);
         assert!(state.apply_scope("p", finished).unwrap().is_some());
         assert_eq!(state.panes[&key].text("stdout"), "hi\n");
         assert!(state.panes[&key].meta.get("ok").is_some(), "ok present when done");
+        // The inline-trace map round-trips through the doc as JSON text, so the
+        // frontend can parse it back (it is dropped if the projection omits it).
+        let trace: Vec<ExecTraceLine> =
+            serde_json::from_str(&state.panes[&key].text("trace")).expect("trace round-trips");
+        assert_eq!(trace, vec![ExecTraceLine { line: 1, text: "hi\n".to_owned() }]);
 
         // Re-applying the identical finished view produces nothing.
         assert!(state.apply_scope("p", finished).unwrap().is_none());

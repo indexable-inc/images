@@ -2,12 +2,38 @@
 // view) and a once-a-second clock so every card's age stays current without each
 // card holding its own timer.
 
+// The feed (a single chronological column of output) or the board (free canvas).
+// Feed is the default: most of the time you just want to read the stream of
+// outputs top to bottom, with nothing competing for attention. Persisted.
+export type View = 'feed' | 'board';
+const VIEW_KEY = 'dash-view-v1';
+
+function loadView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'board' ? 'board' : 'feed';
+  } catch {
+    return 'feed';
+  }
+}
+
 export const ui = $state({
-  // The key (scope<0x1f>id) of the focused pane, or null for the board.
+  // The active top-level view.
+  view: loadView() as View,
+  // The key (scope<0x1f>id) of the focused pane in the fullscreen single-pane
+  // view (opened from a feed entry or a board card), or null for none.
   focusKey: null as string | null,
   // Wall-clock milliseconds, ticked every second; cards derive their age from it.
   clock: Date.now(),
 });
+
+export function setView(view: View): void {
+  ui.view = view;
+  try {
+    localStorage.setItem(VIEW_KEY, view);
+  } catch {
+    // Non-persistent is fine; the view just resets to the default next load.
+  }
+}
 
 let ticking = false;
 

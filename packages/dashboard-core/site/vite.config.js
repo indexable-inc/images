@@ -20,6 +20,16 @@ export default defineConfig({
       external: [/^https:\/\//]
     }
   },
+  // Dev-only: proxy the data routes to a locally-running aggregator (`dashboard`
+  // on :8080) so `vite dev` shows live panes while iterating on the UI. No effect
+  // on the production single-file build.
+  server: {
+    proxy: {
+      '/events': { target: 'http://localhost:8080', changeOrigin: true },
+      '/recordings': { target: 'http://localhost:8080', changeOrigin: true },
+      '/recording': { target: 'http://localhost:8080', changeOrigin: true }
+    }
+  },
   resolve: {
     alias: {
       $lib: `${src}/lib`,
