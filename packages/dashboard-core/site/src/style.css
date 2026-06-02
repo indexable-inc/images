@@ -215,3 +215,122 @@ body {
 .json-null { color: var(--ink-faint); font-style: italic; }
 .json-empty { color: var(--ink-faint); }
 .json-raw { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--ink); }
+
+/* ----- stage (board + focus overlay) ------------------------------------ */
+/* Holds the board and, when a pane is focused, the fullscreen view over it. The
+   timeline bar sits below the stage, so both share one set of time controls. */
+.stage { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
+.stage .board { flex: 1 1 auto; }
+
+/* ----- head extras: age + focus button ---------------------------------- */
+.pane .age {
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.pane .led.run { background: light-dark(#d68a00, #e5c07b); animation: led-pulse 1.1s ease-in-out infinite; }
+.pane .led.err { background: var(--dead); }
+@keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.pane.focused { border-color: var(--accent); }
+.pane .focus-btn {
+  flex: none; align-self: center;
+  font: inherit; font-size: 12px; line-height: 1; color: var(--ink-faint);
+  background: none; border: 0; padding: 0 0 0 2px; cursor: pointer;
+}
+.pane .focus-btn:hover { color: var(--accent); }
+
+/* ----- exec body -------------------------------------------------------- */
+/* A captured run: a small bar (source toggle, language, status), the source when
+   revealed, then the captured stdout/stderr/result streams. */
+.exec { display: flex; flex-direction: column; max-height: 360px; overflow: auto; }
+.exec.expanded { max-height: 75vh; }
+.exec-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-bottom: 1px solid var(--edge);
+  font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
+  position: sticky; top: 0; background: var(--panel); z-index: 1;
+}
+.exec-toggle {
+  font: inherit; color: var(--ink-dim);
+  background: var(--bg); border: 1px solid var(--edge); padding: 2px 8px; cursor: pointer;
+}
+.exec-toggle:hover, .exec-toggle.on { color: var(--ink); border-color: var(--edge-strong); }
+.exec-lang { color: var(--ink-faint); }
+.exec-spacer { flex: 1; }
+.exec-state { font-size: 10.5px; letter-spacing: 0.3px; }
+.exec-state.ok { color: var(--live); }
+.exec-state.err { color: var(--dead); }
+.exec-state.run { color: light-dark(#d68a00, #e5c07b); }
+.exec-source {
+  margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--edge);
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.45; color: var(--ink-dim);
+  white-space: pre-wrap; word-break: break-word; background: var(--bg);
+}
+.exec-out {
+  margin: 0; padding: 8px 12px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.4; color: var(--ink);
+  white-space: pre-wrap; word-break: break-word;
+}
+.exec-out.err { color: var(--dead); }
+.exec-out.res { color: var(--accent); border-top: 1px solid var(--edge); }
+.exec-empty { padding: 10px 12px; color: var(--ink-faint); font-style: italic; font-family: var(--mono); font-size: 11.5px; }
+
+/* ----- focus view ------------------------------------------------------- */
+.focus {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; flex-direction: column;
+  background: var(--bg);
+}
+.focus-head {
+  flex: none; display: flex; align-items: baseline; gap: 10px;
+  padding: 10px clamp(12px, 2vw, 24px); border-bottom: 1px solid var(--edge);
+}
+.focus-title { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--ink); }
+.focus-sub { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); }
+.focus-spacer { flex: 1; }
+.focus-age { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.focus-kind { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); }
+.focus-close {
+  font: inherit; font-size: 13px; color: var(--ink-dim);
+  background: var(--panel); border: 1px solid var(--edge); padding: 2px 9px; cursor: pointer;
+}
+.focus-close:hover { color: var(--ink); border-color: var(--edge-strong); }
+.focus-body {
+  flex: 1 1 auto; min-height: 0; overflow: auto;
+  display: grid; place-items: start center; padding: clamp(12px, 2vw, 24px);
+}
+.focus-pane { align-self: start; max-width: 100%; }
+.focus-pane.term { width: max-content; }
+.focus-pane .body.html-body { height: 72vh; width: min(960px, 90vw); }
+.focus-pane .json { max-height: none; }
+.focus-pane .exec { max-height: none; }
+.focus-absent { color: var(--ink-faint); font-family: var(--mono); align-self: center; }
+
+/* ----- timeline bar ----------------------------------------------------- */
+/* The replay scrubber, shared by the board and the focus view. Fixed at the
+   foot of the window so it controls whichever surface is showing. */
+.timeline {
+  flex: none; z-index: 30;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px clamp(12px, 2vw, 24px);
+  background: var(--bg); border-top: 1px solid var(--edge);
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim);
+}
+.tl-btn {
+  font: inherit; color: var(--ink-dim);
+  background: var(--panel); border: 1px solid var(--edge);
+  padding: 3px 9px; cursor: pointer; min-width: 28px;
+}
+.tl-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--edge-strong); }
+.tl-btn:disabled { opacity: 0.4; cursor: default; }
+.tl-btn.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.tl-btn.live.on { background: var(--live); border-color: var(--live); }
+.tl-range { flex: 1 1 auto; min-width: 80px; accent-color: var(--accent); cursor: pointer; }
+.tl-time { font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 76px; text-align: center; }
+.tl-speed { display: flex; gap: 3px; }
+.tl-rec {
+  font: inherit; color: var(--ink-dim);
+  background: var(--panel); border: 1px solid var(--edge); padding: 3px 6px; cursor: pointer; max-width: 180px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane .led.run { animation: none; }
+}

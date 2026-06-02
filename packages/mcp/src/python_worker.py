@@ -3,11 +3,11 @@ from __future__ import annotations
 import ast
 import asyncio
 import base64
-import contextlib
 import io
 import json
 import os
 import sys
+import tempfile
 import traceback
 from collections.abc import Callable
 from typing import Any
@@ -21,6 +21,11 @@ MAX_IMAGES = 8
 # straight into the caller's context window. Truncation is explicit: the marker
 # names the dropped count so a clipped field never reads as complete.
 MAX_OUTPUT_CHARS = 100_000
+
+# Cap on bytes read back from a capture file before decoding, so a cell whose
+# subprocess writes gigabytes cannot balloon worker memory. We read a little
+# over the character cap and let `_truncate` mark the clip.
+MAX_CAPTURE_BYTES = 4 * MAX_OUTPUT_CHARS
 
 # Compile every snippet with this flag so `await` is legal at the top level.
 # Without it, `await x` outside a function raises SyntaxError. CPython's own
@@ -102,27 +107,58 @@ class PythonSession:
             self.loop.close()
 
     def capture(self, run: Callable[[], str]) -> dict[str, object]:
-        stdout = io.StringIO()
-        stderr = io.StringIO()
+        # Capture at the file-descriptor level, not just `sys.stdout`: redirect
+        # fds 1 and 2 to temp files so a subprocess the cell spawns
+        # (`subprocess.run(["echo", "hi"])`) is captured in order alongside
+        # Python `print`, instead of leaking to the worker's real stdout. The
+        # JSON-RPC channel lives on a separate fd (see `main`), so this never
+        # touches the protocol.
         ok = True
+        value = ""
         self._displayed = []
         self._last_result = None
 
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        out_file = tempfile.TemporaryFile()
+        err_file = tempfile.TemporaryFile()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        saved_out = os.dup(1)
+        saved_err = os.dup(2)
+        try:
+            os.dup2(out_file.fileno(), 1)
+            os.dup2(err_file.fileno(), 2)
             try:
                 value = run()
             except Exception:
                 ok = False
                 value = ""
                 traceback.print_exc()
+            finally:
+                sys.stdout.flush()
+                sys.stderr.flush()
+        finally:
+            os.dup2(saved_out, 1)
+            os.dup2(saved_err, 2)
+            os.close(saved_out)
+            os.close(saved_err)
 
         return {
             "ok": ok,
-            "stdout": _truncate(stdout.getvalue()),
-            "stderr": _truncate(stderr.getvalue()),
+            "stdout": _truncate(_read_capture(out_file)),
+            "stderr": _truncate(_read_capture(err_file)),
             "result": _truncate(value),
             "images": self._collect_images(),
         }
+
+
+def _read_capture(handle: io.IOBase) -> str:
+    """Read a capture temp file back as text and close it. Reads at most
+    `MAX_CAPTURE_BYTES` so a runaway producer cannot exhaust memory; the decode
+    replaces any byte sequence the cap split mid-character."""
+    handle.seek(0)
+    data = handle.read(MAX_CAPTURE_BYTES)
+    handle.close()
+    return data.decode("utf-8", "replace")
 
 
 def _truncate(text: str, limit: int = MAX_OUTPUT_CHARS) -> str:
@@ -198,21 +234,28 @@ def _matplotlib_pngs() -> list[dict[str, str]]:
 
 
 def main() -> None:
-    # Detach the JSON-RPC channel from fd 0 before any session code runs. The
-    # Rust server talks to this worker over stdin/stdout, but a child process
-    # spawned from a session (subprocess.run([...])) inherits fd 0, so a
-    # path-less `rg`/`cat`/`grep` would read this RPC pipe and block the whole
-    # session forever. Read requests from a dup and point fd 0 at /dev/null so
-    # inherited stdin returns EOF immediately instead of stealing the pipe.
+    # Detach the JSON-RPC channel from fds 0 and 1 before any session code runs.
+    # The Rust server talks to this worker over stdin/stdout, but a child process
+    # a cell spawns (`subprocess.run([...])`) inherits both: a path-less
+    # `rg`/`cat` would read this RPC pipe and block the session forever, and a
+    # bare `echo` would write onto the response stream and desync the protocol.
+    #
+    # Read requests from a dup of fd 0 and point fd 0 at /dev/null so inherited
+    # stdin returns EOF immediately. Write responses to a dup of fd 1 (`rpc_out`)
+    # and point fd 1 at /dev/null, so the capture in `PythonSession.capture` is
+    # the only thing that ever redirects fd 1, and user/subprocess output lands
+    # there instead of on the wire.
     rpc_in = os.fdopen(os.dup(sys.stdin.fileno()), "r", encoding="utf-8")
-    with open(os.devnull, "rb") as devnull:
-        os.dup2(devnull.fileno(), sys.stdin.fileno())
+    rpc_out = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8")
+    with open(os.devnull, "rb") as devnull_in, open(os.devnull, "wb") as devnull_out:
+        os.dup2(devnull_in.fileno(), sys.stdin.fileno())
+        os.dup2(devnull_out.fileno(), sys.stdout.fileno())
 
     session = PythonSession()
     for line in rpc_in:
         response = handle_request(session, line)
-        sys.stdout.write(json.dumps(response) + "\n")
-        sys.stdout.flush()
+        rpc_out.write(json.dumps(response) + "\n")
+        rpc_out.flush()
         if response.get("close", False):
             return
 

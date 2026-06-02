@@ -1,0 +1,19 @@
+---
+id: dashboard-exec-panes-replay
+postedAt: 2026-06-02T09:00:00-07:00
+title: "Dashboard shows every Python run and replays the whole session"
+tags: [interesting, ui, dashboard, agents]
+links:
+  - label: dashboard page
+    href: https://github.com/indexable-inc/index/blob/main/packages/dashboard-core/src/dashboard/dashboard.html
+  - label: exec resource type
+    href: https://github.com/indexable-inc/index/blob/main/packages/dashboard-core/src/pane.rs
+  - label: recordings store
+    href: https://github.com/indexable-inc/index/blob/main/packages/dashboard-core/src/dashboard/recordings.rs
+---
+
+Every `python_exec` and `python_eval` the ix MCP runs now appears on the dashboard as its own card: a box of the run's captured stdout and stderr, with the source behind it (a `show source` toggle, or the focus view). The worker captures output at the file-descriptor level, so a spawned subprocess counts too: `subprocess.run(["echo", "hi"])` shows `hi`, not nothing. Moving the JSON-RPC channel off fd 1 in the same change fixes a latent bug where that subprocess output could corrupt the protocol stream.
+
+The resource model is now general. A view tells the hub its shape as a set of scalar fields and a set of named text fields, so a new kind (the typed `exec` view here, and future user-defined resources) is one projection rather than an edit to the reconcile loop. Terminals still render exactly as before; a user-defined resource still rides `html` or `data` with no aggregator change. Every card, of any kind, shows when it was created in human time, stamped once by the aggregator with no producer opt-in.
+
+The board is also a recording. The hub timestamps every change, the browser keeps the full history, and a timeline bar scrubs to any past moment, plays it back at 1×–8×, or follows the live tail like a livestream. The aggregator persists the recording to disk (`$XDG_STATE_HOME/ix-dash/recordings`), serves saved sessions at `/recordings` and `/recording/<id>`, and the `share` button copies a deep link to the exact moment. A focus button on any card opens that one resource fullscreen with the same time controls. Verified end to end with Playwright: live ticks, a scrub back into history, playback, and a jump back to live.

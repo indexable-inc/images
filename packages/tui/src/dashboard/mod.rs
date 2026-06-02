@@ -56,7 +56,9 @@ pub async fn serve(
 ) -> Result<Dashboard> {
     let runtime = manager.runtime_handle();
     let hub = Hub::new();
-    let (mut dashboard, mut stop_rx) = serve_hub(hub.clone(), addr, &runtime)
+    // The in-process dashboard streams a live manager; persisted recordings are
+    // the standalone aggregator's job, so it serves the replay routes empty.
+    let (mut dashboard, mut stop_rx) = serve_hub(hub.clone(), addr, None, &runtime)
         .await
         .map_err(|source| Error::Dashboard {
             message: source.to_string(),

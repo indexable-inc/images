@@ -8,6 +8,7 @@
 // and it renders, register a renderer later for a native look.
 import type { Component } from 'svelte';
 import DataBody from '$components/DataBody.svelte';
+import ExecBody from '$components/ExecBody.svelte';
 import HtmlBody from '$components/HtmlBody.svelte';
 import TermBody from '$components/TermBody.svelte';
 import type { Pane } from './types';
@@ -15,6 +16,7 @@ import type { Pane } from './types';
 export const renderers: Record<string, Component<{ pane: Pane }>> = {
   terminal: TermBody,
   html: HtmlBody,
+  exec: ExecBody,
   data: DataBody,
 };
 

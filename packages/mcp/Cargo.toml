@@ -11,6 +11,8 @@ workspace = true
 anyhow.workspace = true
 axum.workspace = true
 clap = { workspace = true, features = ["derive"] }
+dashboard-core.workspace = true
+parking_lot.workspace = true
 rmcp = { workspace = true, features = ["transport-io", "transport-streamable-http-server"] }
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }

@@ -14,16 +14,19 @@
 //! layer: the resources stay in their owning process, browsers never write back,
 //! so the doc has a single editor per scope and conflict resolution never runs;
 //! the CRDT buys cheap incremental diffs, a late joiner catching up from one
-//! snapshot, and — because the oplog is a recording — replay of any pane's
-//! history for free.
+//! snapshot, and, because the oplog is a timestamped recording, replay of any
+//! pane's history for free. A [`RecordingStore`] persists that recording to disk
+//! so a session survives a restart and can be opened or shared after the fact.
 
 mod hub;
+mod recordings;
 mod server;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 pub use hub::Hub;
+pub use recordings::{RecordingInfo, RecordingStore};
 pub use server::{Dashboard, serve_hub};
 
 /// Base64 for the SSE wire. One spelling shared by the snapshot and update

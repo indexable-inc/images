@@ -9,10 +9,18 @@
 //! The unit is a [`Pane`]: a titled card whose body is one [`View`]. A view is a
 //! tagged union over rendering strategies, from the bandwidth-cheap ANSI
 //! [`TerminalView`] with a built-in renderer, through a producer-defined
-//! [`HtmlView`], to structured [`DataView`] JSON rendered by a named frontend
-//! renderer. The aggregator never learns what a pane *means*; it stores the view
-//! and the browser renders it by `kind`. A new resource kind reuses `Html`/`Data`
-//! with no aggregator change, or registers one small renderer for a native look.
+//! [`HtmlView`], the first-class [`ExecView`] for a captured process run, to
+//! structured [`DataView`] JSON rendered by a named frontend renderer. The
+//! aggregator never learns what a pane *means*; it stores the view and the
+//! browser renders it by `kind`. A new first-class resource adds a typed `View`
+//! variant and a native renderer; a user-defined one reuses `Html`/`Data` with
+//! no aggregator change.
+//!
+//! A view declares its storage shape to the aggregator as a set of scalar meta
+//! fields and a set of named large-text fields (see the projection in
+//! [`crate::dashboard`]). Every pane additionally carries a creation timestamp,
+//! stamped once by the aggregator when the pane first appears, so the canvas can
+//! show each resource's age uniformly with no producer opt-in.
 
 use std::path::PathBuf;
 
@@ -61,6 +69,21 @@ impl Pane {
         }
     }
 
+    /// An execution pane: one captured process run, titled with the first
+    /// non-empty line of its source so the card reads like a command. The
+    /// producer publishes a `running` view when the call starts and replaces it
+    /// with the finished view when it returns.
+    #[must_use]
+    pub fn exec(id: impl Into<String>, view: ExecView) -> Self {
+        let title = exec_title(&view.source);
+        Self {
+            id: id.into(),
+            title,
+            subtitle: String::new(),
+            view: View::Exec(view),
+        }
+    }
+
     /// A data pane: structured JSON rendered by the named frontend `renderer`,
     /// falling back to a generic tree when the name is unknown.
     #[must_use]
@@ -84,9 +107,9 @@ impl Pane {
 
 /// A pane's body: a tagged union over rendering strategies.
 ///
-/// Serialized with an internal `kind` tag (`"terminal"`, `"html"`, `"data"`) so
-/// the dashboard can store and the browser can render each body without a
-/// separate schema negotiation.
+/// Serialized with an internal `kind` tag (`"terminal"`, `"html"`, `"exec"`,
+/// `"data"`) so the dashboard can store and the browser can render each body
+/// without a separate schema negotiation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum View {
@@ -94,6 +117,8 @@ pub enum View {
     Terminal(TerminalView),
     /// A self-contained HTML document the producer renders itself.
     Html(HtmlView),
+    /// One captured process run: its source, stdout, stderr, and result.
+    Exec(ExecView),
     /// Structured JSON plus the name of a frontend renderer.
     Data(DataView),
 }
@@ -105,6 +130,7 @@ impl View {
         match self {
             Self::Terminal(_) => "terminal",
             Self::Html(_) => "html",
+            Self::Exec(_) => "exec",
             Self::Data(_) => "data",
         }
     }
@@ -159,6 +185,58 @@ pub struct TerminalView {
 pub struct HtmlView {
     /// A self-contained HTML fragment or document.
     pub html: String,
+}
+
+/// One process execution's captured state: the source behind it and the output
+/// it produced.
+///
+/// A producer publishes a `running` view (empty output, `ok` absent) when the
+/// call starts and replaces it with the finished view when the call returns, so
+/// the card animates from "running" to its result. The MCP Python tools are the
+/// first producer: each `python_exec`/`python_eval` becomes one of these, and
+/// because the worker captures output at the file-descriptor level, a spawned
+/// subprocess's `stdout`/`stderr` (e.g. an `echo`) lands here too.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExecView {
+    /// The source the producer ran: the statements (`exec`) or the expression
+    /// (`eval`). Shown behind the output when the card is opened.
+    pub source: String,
+    /// The language of `source`, for the frontend's syntax label. `"python"`
+    /// today; an empty value renders unlabelled.
+    #[serde(default)]
+    pub lang: String,
+    /// Captured standard output, including any spawned subprocess's, in order.
+    #[serde(default)]
+    pub stdout: String,
+    /// Captured standard error, including any spawned subprocess's.
+    #[serde(default)]
+    pub stderr: String,
+    /// The evaluated expression's `repr` for an `eval`, else empty.
+    #[serde(default)]
+    pub result: String,
+    /// Whether the call is still in flight: `true` until it returns.
+    pub running: bool,
+    /// Whether a finished call succeeded: `None` while running, `Some(false)` on
+    /// a Python exception or a transport failure (timeout, cancel).
+    #[serde(default)]
+    pub ok: Option<bool>,
+}
+
+/// The card title for an execution: the first non-empty source line, trimmed and
+/// length-capped so a long one-liner or a leading comment still reads as a label.
+fn exec_title(source: &str) -> String {
+    const MAX: usize = 60;
+    let line = source
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("python");
+    if line.chars().count() > MAX {
+        let head: String = line.chars().take(MAX).collect();
+        format!("{head}…")
+    } else {
+        line.to_owned()
+    }
 }
 
 /// A structured-data body plus the name of the frontend renderer for it.
@@ -218,7 +296,7 @@ pub fn socket_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{Pane, ProducerSnapshot, TerminalView, View};
+    use super::{ExecView, Pane, ProducerSnapshot, TerminalView, View};
 
     fn terminal_view(screen: &str) -> TerminalView {
         TerminalView {
@@ -265,6 +343,18 @@ mod tests {
             panes: vec![
                 Pane::terminal("t1", terminal_view("hello")),
                 Pane::html("h1", "notes", "<b>hi</b>"),
+                Pane::exec(
+                    "e1",
+                    ExecView {
+                        source: "print('hi')".to_owned(),
+                        lang: "python".to_owned(),
+                        stdout: "hi\n".to_owned(),
+                        stderr: String::new(),
+                        result: String::new(),
+                        running: false,
+                        ok: Some(true),
+                    },
+                ),
                 Pane::data("d1", "metrics", "gauge", serde_json::json!({"cpu": 0.5})),
             ],
         };
@@ -273,6 +363,35 @@ mod tests {
         assert_eq!(snapshot, back);
         assert_eq!(back.panes[0].view.kind(), "terminal");
         assert_eq!(back.panes[1].view.kind(), "html");
-        assert_eq!(back.panes[2].view.kind(), "data");
+        assert_eq!(back.panes[2].view.kind(), "exec");
+        assert_eq!(back.panes[3].view.kind(), "data");
+    }
+
+    /// An execution pane titles itself with the first non-empty source line and
+    /// preserves its captured output across the wire, including an absent `ok`
+    /// while still running.
+    #[test]
+    fn exec_pane_titles_and_round_trips() {
+        let running = Pane::exec(
+            "e1",
+            ExecView {
+                source: "\n  # comment\nsubprocess.run(['echo', 'hi'])\n".to_owned(),
+                lang: "python".to_owned(),
+                stdout: String::new(),
+                stderr: String::new(),
+                result: String::new(),
+                running: true,
+                ok: None,
+            },
+        );
+        assert_eq!(running.title, "# comment");
+        let line = serde_json::to_string(&running).expect("serialize");
+        let back: Pane = serde_json::from_str(&line).expect("deserialize");
+        assert_eq!(running, back);
+        let View::Exec(view) = back.view else {
+            panic!("expected exec view");
+        };
+        assert!(view.running);
+        assert_eq!(view.ok, None);
     }
 }
