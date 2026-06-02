@@ -6,6 +6,8 @@
   import CodeBlock from './CodeBlock.svelte';
   import ExecBody from './ExecBody.svelte';
   import InlineTrace from './InlineTrace.svelte';
+  import HtmlTables from './HtmlTables.svelte';
+  import { parseExecHtml } from '$lib/exec';
   import type { Pane } from '$lib/types';
 
   // The feed: a chronological timeline of panes, newest first. Each block puts the
@@ -94,6 +96,9 @@
             <div class="entry-box entry-trace-box">
               <InlineTrace source={p.source ?? ''} lang={p.lang ?? 'text'} trace={traceArr} />
               {#if p.stderr}<pre class="exec-out err trace-stderr">{stripAnsi(p.stderr)}</pre>{/if}
+              <!-- A traced cell can also display() a DataFrame: the inline-trace
+                   view carries no tables, so render them here too. -->
+              <HtmlTables docs={parseExecHtml(p.html)} expanded />
             </div>
           {:else if hasCode}
             <!-- No per-line trace (older producer / subprocess output): code on top,

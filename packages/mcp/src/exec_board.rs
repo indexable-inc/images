@@ -98,6 +98,7 @@ impl ExecBoard {
                 running: true,
                 ok: None,
                 trace: Vec::new(),
+                html: Vec::new(),
             },
         );
         pane.subtitle = format!("{op_label} · {session}");
@@ -173,7 +174,14 @@ impl ExecBoard {
             .get("trace")
             .and_then(|value| serde_json::from_value::<Vec<ExecTraceLine>>(value.clone()).ok())
             .unwrap_or_default();
-        self.finish(id, field("stdout"), field("stderr"), field("result"), ok, trace);
+        // Rich HTML tables (see `_collect_html` in python_worker.py). Human-only:
+        // these never enter the model's tool result, just the dashboard pane.
+        // Absent for an older worker or a run with no tabular output.
+        let html = response
+            .get("html")
+            .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
+            .unwrap_or_default();
+        self.finish(id, field("stdout"), field("stderr"), field("result"), ok, trace, html);
     }
 
     /// Record a transport failure (timeout, cancel, worker death): the call
@@ -202,6 +210,7 @@ impl ExecBoard {
         result: String,
         ok: bool,
         trace: Vec<ExecTraceLine>,
+        html: Vec<String>,
     ) {
         {
             let mut panes = self.panes.lock();
@@ -216,6 +225,7 @@ impl ExecBoard {
                 view.running = false;
                 view.ok = Some(ok);
                 view.trace = trace;
+                view.html = html;
             }
         }
         self.publish();

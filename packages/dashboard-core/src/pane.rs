@@ -229,6 +229,14 @@ pub struct ExecView {
     /// producer; defaulted so a mixed-version dashboard keeps parsing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trace: Vec<ExecTraceLine>,
+    /// Rich HTML the producer rendered for this run: one self-contained document
+    /// per displayed DataFrame or eval result, mounted as a sandboxed frame by the
+    /// frontend. This is the human view of tabular output; the model's tool result
+    /// carries only the compact captured text, never these. Empty for a run with
+    /// no rich output or an older producer; defaulted so a mixed-version dashboard
+    /// keeps parsing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub html: Vec<String>,
 }
 
 /// One chunk of an [`ExecView`]'s output attributed to the source line that
@@ -373,6 +381,7 @@ mod tests {
                         running: false,
                         ok: Some(true),
                         trace: Vec::new(),
+                        html: Vec::new(),
                     },
                 ),
                 Pane::data("d1", "metrics", "gauge", serde_json::json!({"cpu": 0.5})),
@@ -403,6 +412,7 @@ mod tests {
                 running: true,
                 ok: None,
                 trace: Vec::new(),
+                html: vec!["<table></table>".to_owned()],
             },
         );
         assert_eq!(running.title, "# comment");
@@ -414,5 +424,6 @@ mod tests {
         };
         assert!(view.running);
         assert_eq!(view.ok, None);
+        assert_eq!(view.html, vec!["<table></table>".to_owned()]);
     }
 }

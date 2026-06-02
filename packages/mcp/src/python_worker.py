@@ -7,6 +7,7 @@ import codecs
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -17,6 +18,17 @@ from typing import Any
 # Cap on images returned per call, so a cell that opens many figures cannot
 # balloon one response. The Rust side enforces the same ceiling.
 MAX_IMAGES = 8
+
+# Cap on rich-HTML tables shipped to the dashboard per call (one per displayed
+# DataFrame / last-expression result). HTML goes only to the human dashboard, not
+# the model's tool result, so the ceiling guards the producer snapshot, not the
+# context window.
+MAX_HTML = 8
+
+# Rows materialized into a single dashboard HTML table. The human view is a
+# preview, so a huge frame ships its first rows with a "showing N of M" caption
+# rather than streaming megabytes of cells into the Loro doc.
+MAX_HTML_ROWS = 500
 
 # Cap on characters returned per text field (stdout, stderr, result). A cell
 # that prints a large file or reprs a huge object would otherwise stream
@@ -156,6 +168,8 @@ class PythonSession:
         # `display()`, plus the eval result. Reset at the start of each capture.
         self._displayed: list[object] = []
         self._last_result: object = None
+        # Whether the one-time polars compact-repr config has been applied.
+        self._polars_compact_applied: bool = False
         self._reset_globals()
         # One persistent loop for the whole session. asyncio.run() would create
         # and close a fresh loop per call, orphaning any async resource (client,
@@ -181,6 +195,39 @@ class PythonSession:
         images = [image for obj in candidates if (image := _object_png(obj)) is not None]
         images.extend(_matplotlib_pngs())
         return images[:MAX_IMAGES]
+
+    def _collect_html(self) -> list[str]:
+        """Rich HTML for each displayed object and the eval result, in order.
+
+        A DataFrame (polars or pandas) renders as a self-contained sortable grid;
+        any other object that implements the Jupyter `_repr_html_` / mimebundle
+        protocol falls back to that. Returned only to the human dashboard (see
+        `worker_response_content` in main.rs), never to the model's tool result,
+        so a wide table costs the operator a scroll, not the context window."""
+        candidates = list(self._displayed)
+        if self._last_result is not None:
+            candidates.append(self._last_result)
+        docs = [doc for obj in candidates if (doc := _object_html_doc(obj)) is not None]
+        return docs[:MAX_HTML]
+
+    def _apply_polars_compact(self) -> None:
+        """Bound polars' text repr once polars is in use, so an existing
+        `print(df)` / `o.report()` stays compact in the model's captured stdout.
+        The dashboard still gets the full table as HTML. Applied once per session
+        so a later explicit `pl.Config` in user code wins."""
+        if self._polars_compact_applied:
+            return
+        pl = sys.modules.get("polars")
+        if pl is None:
+            return
+        self._polars_compact_applied = True
+        try:
+            pl.Config.set_tbl_rows(20)
+            pl.Config.set_tbl_cols(20)
+            pl.Config.set_fmt_str_lengths(50)
+        except Exception:
+            # A polars build without one of these setters must not break capture.
+            pass
 
     def evaluate(
         self, expression: str, emit: Emit | None = None, request_id: object = None
@@ -237,6 +284,7 @@ class PythonSession:
         value = ""
         self._displayed = []
         self._last_result = None
+        self._apply_polars_compact()
 
         # Inline-trace execution: each stdout write is paired with the user source
         # line that produced it (see `_LineTee`), so the dashboard can render output
@@ -305,6 +353,7 @@ class PythonSession:
             "stderr": _truncate(_read_capture(err_file)),
             "result": _truncate(value),
             "images": self._collect_images(),
+            "html": self._collect_html(),
             "trace": _coalesce_trace(trace),
         }
 
@@ -389,6 +438,176 @@ def _matplotlib_pngs() -> list[dict[str, str]]:
     except Exception:
         return images
     return images
+
+
+def _object_html_doc(obj: object) -> str | None:
+    """A self-contained HTML document for `obj`, or `None` if it has no HTML form.
+
+    A DataFrame (polars or pandas) becomes a sortable grid built from its own
+    columns and rows, independent of any `pl.Config` row/column cap. Anything else
+    that implements the Jupyter rich-display protocol (`_repr_html_` or a
+    `text/html` mimebundle) is wrapped in a minimal styled document so it mounts
+    in the dashboard's sandboxed frame."""
+    table = _table_data(obj)
+    if table is not None:
+        return _render_table_doc(table)
+    fragment = _object_html(obj)
+    if fragment is not None:
+        return _wrap_html(fragment)
+    return None
+
+
+def _table_data(obj: object) -> dict[str, object] | None:
+    """Columns, dtypes, and capped rows for a polars or pandas DataFrame.
+
+    Duck-typed so neither library is imported here: a frame is recognized by its
+    own already-imported type. Returns the full `height` so the renderer can note
+    when more rows exist than the `MAX_HTML_ROWS` preview shows."""
+    module = type(obj).__module__.split(".", 1)[0]
+    try:
+        if module == "polars" and hasattr(obj, "columns") and hasattr(obj, "rows"):
+            columns = list(obj.columns)
+            dtypes = [str(t) for t in obj.dtypes]
+            height = int(obj.height)
+            rows = obj.head(MAX_HTML_ROWS).rows()
+            return {"columns": columns, "dtypes": dtypes, "rows": rows, "height": height}
+        if module == "pandas" and hasattr(obj, "columns") and hasattr(obj, "itertuples"):
+            columns = [str(c) for c in obj.columns]
+            dtypes = [str(t) for t in obj.dtypes]
+            height = int(len(obj))
+            rows = list(obj.head(MAX_HTML_ROWS).itertuples(index=False, name=None))
+            return {"columns": columns, "dtypes": dtypes, "rows": rows, "height": height}
+    except Exception:
+        # A frame whose data cannot be materialized (lazy errors, exotic dtypes)
+        # must not break the run; it simply contributes no HTML pane.
+        return None
+    return None
+
+
+# A cell is numeric (right-aligned, sorted as a number) when its dtype name says
+# so. Covers polars (`Int64`, `Float32`, `UInt8`, `Decimal`) and pandas
+# (`int64`, `float64`, `uint32`).
+_NUMERIC_DTYPE = re.compile(r"^(u?int|float|decimal)", re.IGNORECASE)
+
+
+def _render_table_doc(table: dict[str, object]) -> str:
+    columns: list[str] = table["columns"]  # type: ignore[assignment]
+    dtypes: list[str] = table["dtypes"]  # type: ignore[assignment]
+    rows: list[tuple[object, ...]] = table["rows"]  # type: ignore[assignment]
+    height: int = table["height"]  # type: ignore[assignment]
+
+    numeric = [bool(_NUMERIC_DTYPE.match(d)) for d in dtypes]
+    head = "".join(
+        f'<th class="{"num" if numeric[i] else "txt"}" data-i="{i}">'
+        f"{_html_escape(name)}<span class=dt>{_html_escape(dtypes[i])}</span></th>"
+        for i, name in enumerate(columns)
+    )
+    body_rows = []
+    for row in rows:
+        cells = "".join(
+            f'<td class="{"num" if numeric[i] else "txt"}">{_html_escape(_cell(v))}</td>'
+            for i, v in enumerate(row)
+        )
+        body_rows.append(f"<tr>{cells}</tr>")
+    body = "".join(body_rows)
+    shown = len(rows)
+    caption = f"{height} × {len(columns)}"
+    if shown < height:
+        caption += f"  ·  showing first {shown}"
+    return _wrap_html(
+        f'<table><caption>{_html_escape(caption)}</caption>'
+        f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>{_SORT_JS}"
+    )
+
+
+def _cell(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _object_html(obj: object) -> str | None:
+    """A `text/html` fragment for `obj` via the Jupyter rich-display protocol:
+    a `text/html` mimebundle entry first, then `_repr_html_()`."""
+    bundle = _mime_bundle(obj)
+    if bundle is not None:
+        html = bundle.get("text/html")
+        if isinstance(html, str) and html:
+            return html
+    hook = getattr(obj, "_repr_html_", None)
+    if callable(hook):
+        try:
+            html = hook()
+        except Exception:
+            return None
+        if isinstance(html, str) and html:
+            return html
+    return None
+
+
+def _html_escape(text: str) -> str:
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+# Click a header to sort by that column; click again to reverse. Numeric columns
+# (`th.num`) compare as numbers with blanks last, others as strings. Pure DOM, no
+# dependency, so it runs in the dashboard's `allow-scripts` sandbox.
+_SORT_JS = """<script>
+(function(){
+  var tb=document.querySelector('tbody'), ths=document.querySelectorAll('th');
+  ths.forEach(function(th,i){
+    th.addEventListener('click',function(){
+      var asc=th.dataset.dir!=='asc'; ths.forEach(function(t){t.removeAttribute('data-dir')});
+      th.dataset.dir=asc?'asc':'desc';
+      var num=th.classList.contains('num');
+      var rows=[].slice.call(tb.querySelectorAll('tr'));
+      rows.sort(function(a,b){
+        var x=a.children[i].textContent, y=b.children[i].textContent;
+        if(num){var nx=parseFloat(x),ny=parseFloat(y);
+          if(isNaN(nx))return 1; if(isNaN(ny))return -1; return asc?nx-ny:ny-nx;}
+        return asc?x.localeCompare(y):y.localeCompare(x);
+      });
+      rows.forEach(function(r){tb.appendChild(r)});
+    });
+  });
+})();
+</script>"""
+
+
+# Flat, square, monospace, dark+light — matches the dashboard's still aesthetic.
+# A producer ships its own document into the sandboxed frame, so the styling is
+# self-contained rather than inherited from the host page.
+_HTML_STYLE = """<style>
+:root{color-scheme:light dark}
+html,body{margin:0;font:12px/1.5 'Berkeley Mono',ui-monospace,Menlo,monospace}
+body{padding:8px;background:#fff;color:#111}
+table{border-collapse:collapse;width:100%}
+caption{text-align:left;padding:0 0 6px;opacity:.6;font-size:11px}
+th,td{border:1px solid #d8d8d8;padding:2px 8px;white-space:nowrap;text-align:left}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+thead th{position:sticky;top:0;background:#f4f4f4;cursor:pointer;user-select:none;font-weight:600}
+thead th:hover{background:#eaeaea}
+th[data-dir=asc]::after{content:' ▲'}th[data-dir=desc]::after{content:' ▼'}
+.dt{display:block;font-weight:400;opacity:.45;font-size:10px}
+tbody tr:nth-child(even){background:#fafafa}
+@media (prefers-color-scheme:dark){
+  body{background:#0d0d0d;color:#e6e6e6}
+  th,td{border-color:#262626}
+  thead th{background:#161616}thead th:hover{background:#1f1f1f}
+  tbody tr:nth-child(even){background:#121212}
+}
+</style>"""
+
+
+def _wrap_html(fragment: str) -> str:
+    """Wrap an HTML fragment in a minimal self-contained document with the
+    dashboard's table styling, suitable for the sandboxed iframe."""
+    return f"<!doctype html><meta charset=utf-8>{_HTML_STYLE}{fragment}"
 
 
 def main() -> None:

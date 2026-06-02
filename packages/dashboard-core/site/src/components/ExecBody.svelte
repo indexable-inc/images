@@ -2,6 +2,8 @@
   import { stripAnsi } from '$lib/ansi';
   import type { Pane } from '$lib/types';
   import CodeBlock from './CodeBlock.svelte';
+  import HtmlTables from './HtmlTables.svelte';
+  import { parseExecHtml } from '$lib/exec';
 
   // If a captured stream is a single JSON value, return it pretty-printed so it can
   // be syntax-highlighted; else null and it renders as plain text. Guarded on the
@@ -39,7 +41,8 @@
   const source = $derived(pane.source ?? '');
   const lang = $derived(pane.lang ?? '');
   const running = $derived(pane.running === true);
-  const empty = $derived(!stdout && !stderr && !result);
+  const htmlDocs = $derived(parseExecHtml(pane.html));
+  const empty = $derived(!stdout && !stderr && !result && htmlDocs.length === 0);
 
   // The card is a drag handle; interactive controls must not start a drag.
   function swallow(e: PointerEvent): void {
@@ -53,6 +56,8 @@
   {#if empty}
     <div class="exec-empty">{running ? '· running…' : '· no output'}</div>
   {:else}
+    <!-- Rich tables lead: a DataFrame's sortable grid is the answer when present. -->
+    <HtmlTables docs={htmlDocs} {expanded} />
     {#if result}
       {#if resultJson}<div class="exec-out res exec-json"><CodeBlock code={resultJson} lang="json" /></div>
       {:else}<pre class="exec-out res">{result}</pre>{/if}
