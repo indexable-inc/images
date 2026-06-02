@@ -1,4 +1,5 @@
 # Neovim Linux CI image: toolchain and test dependencies for ix-backed jobs.
+# blast-radius test: no-op comment edit to measure single-image attribution.
 { pkgs, ... }:
 let
   python = pkgs.python3.withPackages (ps: [
