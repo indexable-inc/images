@@ -166,6 +166,9 @@ fn parse_conventional(title: &str) -> Option<(&str, Option<&str>, &str)> {
     if let Some(open) = head.find('(') {
         let kind = &head[..open];
         let scope = head[open + 1..].strip_suffix(')')?;
+        // Tolerate a non-canonical `!` inside the parens (`feat(api!)`); the
+        // canonical `feat(api)!` is already handled by the head-level strip above.
+        let scope = scope.strip_suffix('!').unwrap_or(scope);
         if is_ident(kind) && !scope.is_empty() {
             Some((kind, Some(scope), subject))
         } else {
@@ -388,9 +391,8 @@ fn build_item(gpu: &Gpu, tex: &BarTextures, scale: u32, now_unix: i64, item: &Dr
         let tx = unit_left + icon_side + icon_gap;
         let shadow = with_alpha(SHADOW, alpha);
         // Render each colored segment in sequence, advancing the pen by the
-        // returned advance width. The shadow offset is a fixed (unscaled) pixel,
-        // matching the old glyphon path which offset by `self.scale`, not the
-        // grown glyph scale.
+        // returned advance width. The shadow offset is a fixed (unscaled) pixel
+        // (`shadow_off`), not scaled with the grown glyph.
         let mut pen = tx;
         for (text, rgb) in &segments {
             let fg = [rgb[0], rgb[1], rgb[2], alpha];
