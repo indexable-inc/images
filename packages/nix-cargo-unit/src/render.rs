@@ -1107,11 +1107,19 @@ fn append_driver_invocation(script: &mut String, driver: Driver, collect_unused_
 "#,
         );
     } else {
+        // Echo the exact driver invocation, then turn xtrace back off so the
+        // trailing stdenv fixupPhase (compressManPages et al.) does not stream
+        // its own `set -x` trace into the build log. Under `set -e` a failed
+        // driver aborts before the `set +x`, which is fine: the build stops with
+        // the compiler error and no fixup runs. Mirrors the scoped trace in the
+        // rustc-diagnostics branch above. Without this, every successful rust
+        // derivation floods CI logs (and GitHub truncates the step).
         script.push_str("set -x\n");
         let _ = writeln!(
             script,
             "env \"''${{rustc_env[@]}}\" {binary} \"''${{rustc_args[@]}}\""
         );
+        script.push_str("set +x\n");
     }
 }
 
@@ -2633,6 +2641,9 @@ fn render_doctest_command(
             script.push_str("rustdoc \"''${rustdoc_args[@]}\"\n");
         }
     }
+    // Scope xtrace to the rustdoc invocation so the stdenv fixupPhase that runs
+    // afterward does not stream its own trace into the log. See the rustc branch.
+    script.push_str("set +x\n");
     Ok(script)
 }
 
