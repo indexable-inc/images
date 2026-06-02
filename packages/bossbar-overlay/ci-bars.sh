@@ -346,6 +346,7 @@ https://github.com/$repo/commits/$branch"
     # commit author's face. Titles are squeezed to one clean ASCII line for the
     # bitmap font.
     pr_key=""
+    num=""
     case "$branch" in
       refs/pull/*/*)
         num="${branch#refs/pull/}"
@@ -356,10 +357,25 @@ https://github.com/$repo/commits/$branch"
     esac
     title="${pr_title[$pr_key]:-}"
     login="${pr_login[$pr_key]:-}"
+    # A `refs/pull/<N>/head` ref whose PR is already merged/closed is not in the
+    # open-PR list, but the number is right there, so resolve #N directly (any
+    # state). This is the common eyesore: a merged PR still running post-merge CI
+    # would otherwise show the raw ref. Cache the lookup in the same per-poll maps.
+    if [ -z "$title" ] && [ -n "$num" ]; then
+      prow="$(gh pr view "$num" --repo "$repo" --json title,author \
+        --jq '[.title, (.author.login // "")] | @tsv' 2>/dev/null || printf '')"
+      if [ -n "$prow" ]; then
+        title="${prow%%	*}"
+        login="${prow#*	}"
+        pr_title["$pr_key"]="$title"
+        pr_login["$pr_key"]="$login"
+      fi
+    fi
     if [ -n "$title" ]; then
       bar_title="$(clean_title "$title")"
     else
-      # No PR: fall back to the readable branch label and the commit author's face.
+      # No PR at all (e.g. a push to main): fall back to the readable branch label
+      # and the commit author's face.
       bar_title="$short: $branch"
       [ -n "$sha" ] && login="$(commit_login "$repo" "$sha")"
     fi
