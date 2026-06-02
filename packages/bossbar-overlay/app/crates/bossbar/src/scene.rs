@@ -134,6 +134,117 @@ fn title_with_elapsed(title: &str, since: Option<i64>, now_unix: i64) -> String 
     }
 }
 
+/// Color of the live elapsed counter: a dim gray so the ticking timer recedes
+/// behind the title instead of competing with it for attention.
+const TIMER_GRAY: [f32; 3] = [0.5, 0.5, 0.5];
+
+/// Conventional-commit types recognized without a scope (`fix: ...`). A header
+/// carrying a `(scope)` is treated as conventional regardless (the parens are a
+/// strong signal); without parens we require a known type so a plain
+/// `repo: branch` label is never mistaken for a commit and recolored.
+const CC_TYPES: &[&str] = &[
+    "feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert",
+    "merge",
+];
+
+fn is_ident(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+/// Parse a conventional-commit subject `type(scope)?!?: subject` into
+/// `(type, scope, subject)`. Returns `None` for anything not clearly conventional
+/// so ordinary titles (downtime labels, free-form PR names) render unchanged.
+fn parse_conventional(title: &str) -> Option<(&str, Option<&str>, &str)> {
+    let (head, subject) = title.split_once(": ")?;
+    if subject.is_empty() {
+        return None;
+    }
+    // A breaking-change `!` may trail the type or the scope: `feat!:` / `feat(x)!:`.
+    let head = head.strip_suffix('!').unwrap_or(head);
+    if let Some(open) = head.find('(') {
+        let kind = &head[..open];
+        let scope = head[open + 1..].strip_suffix(')')?;
+        if is_ident(kind) && !scope.is_empty() {
+            Some((kind, Some(scope), subject))
+        } else {
+            None
+        }
+    } else if CC_TYPES.contains(&head) {
+        Some((head, None, subject))
+    } else {
+        None
+    }
+}
+
+/// Deterministic hue in `0..360` for a label, so a given type or scope always
+/// gets the same color across runs and hosts. FNV-1a keeps it stable without
+/// depending on the std hasher's (unspecified) seed.
+fn hue_for(s: &str) -> f32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in s.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    (h % 360) as f32
+}
+
+/// HSL -> sRGB in `0..1`. Used with a fixed saturation/lightness so hashed hues
+/// read as distinct, legible label colors over the semi-transparent bars.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h / 60.0;
+    let x = c * (1.0 - (hp.rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    [r + m, g + m, b + m]
+}
+
+/// Color for a hashed label (the type or scope of a conventional commit).
+fn label_rgb(s: &str) -> [f32; 3] {
+    hsl_to_rgb(hue_for(s), 0.65, 0.62)
+}
+
+/// Break a bar's title into colored segments to render. A conventional-commit
+/// header becomes `type scope subject`, dropping the `():` punctuation, with the
+/// type and scope in their hashed hues and the subject white; any other title
+/// stays one white run. A live elapsed counter (when the bar has `since`) is
+/// appended as a dim-gray segment. Whitespace separators are their own segments;
+/// their color is irrelevant since spaces draw nothing.
+fn title_segments(title: &str, since: Option<i64>, now_unix: i64) -> Vec<(String, [f32; 3])> {
+    let white = [WHITE[0], WHITE[1], WHITE[2]];
+    let mut segs: Vec<(String, [f32; 3])> = Vec::new();
+    match parse_conventional(title) {
+        Some((kind, scope, subject)) => {
+            segs.push((kind.to_string(), label_rgb(kind)));
+            segs.push((" ".to_string(), white));
+            if let Some(scope) = scope {
+                segs.push((scope.to_string(), label_rgb(scope)));
+                segs.push((" ".to_string(), white));
+            }
+            segs.push((subject.to_string(), white));
+        }
+        None if !title.is_empty() => segs.push((title.to_string(), white)),
+        None => {}
+    }
+    if let (Some(start), false) = (since, title.is_empty()) {
+        segs.push((" ".to_string(), white));
+        segs.push((
+            format!("({})", fmt_elapsed(now_unix - start)),
+            TIMER_GRAY,
+        ));
+    }
+    segs
+}
+
 /// Which preloaded sprite a bar layer samples.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum TexId {
@@ -247,14 +358,16 @@ fn build_item(gpu: &Gpu, tex: &BarTextures, scale: u32, now_unix: i64, item: &Dr
     let shadow_off = scale.max(1) as f32;
 
     if bx.has_title {
-        // The title carries the live elapsed counter when the bar has a `since`;
-        // recomputed every frame so it ticks on the overlay's own redraws, with
-        // no DB write to advance it.
-        let shown = title_with_elapsed(&b.title, b.since, now_unix);
+        // The title is split into colored segments: a conventional-commit header
+        // renders as `type scope subject` with the type/scope in hashed hues and
+        // a dim-gray live elapsed counter (recomputed each frame so it ticks on
+        // the overlay's own redraws, with no DB write to advance it). A plain
+        // title is a single white segment, unchanged from before.
+        let segments = title_segments(&b.title, b.since, now_unix);
         // Bitmap glyphs are 8 source px tall, so a title row of `title_px` px
         // means a scale of `title_px / 8`.
         let glyph_scale = bx.title_px / 8.0;
-        let text_w = gpu.measure(&shown, glyph_scale);
+        let text_w: f32 = segments.iter().map(|(t, _)| gpu.measure(t, glyph_scale)).sum();
         // A square avatar (when present and loaded) leads the title: lay them out
         // as one `[icon][gap]title` unit centered within the bar width, so the
         // title stays visually centered with the face beside it. The avatar fills
@@ -274,11 +387,17 @@ fn build_item(gpu: &Gpu, tex: &BarTextures, scale: u32, now_unix: i64, item: &Dr
         }
         let tx = unit_left + icon_side + icon_gap;
         let shadow = with_alpha(SHADOW, alpha);
-        let fg = with_alpha(WHITE, alpha);
-        // The shadow offset is a fixed (unscaled) pixel, matching the old
-        // glyphon path which offset by `self.scale`, not the grown glyph scale.
-        let _ = gpu.text(&shown, tx + shadow_off, text_y + shadow_off, glyph_scale, shadow, quads);
-        let _ = gpu.text(&shown, tx, text_y, glyph_scale, fg, quads);
+        // Render each colored segment in sequence, advancing the pen by the
+        // returned advance width. The shadow offset is a fixed (unscaled) pixel,
+        // matching the old glyphon path which offset by `self.scale`, not the
+        // grown glyph scale.
+        let mut pen = tx;
+        for (text, rgb) in &segments {
+            let fg = [rgb[0], rgb[1], rgb[2], alpha];
+            let _ = gpu.text(text, pen + shadow_off, text_y + shadow_off, glyph_scale, shadow, quads);
+            let w = gpu.text(text, pen, text_y, glyph_scale, fg, quads);
+            pen += w;
+        }
     }
 
     // Color background, then color progress cropped to the fill.
@@ -727,6 +846,62 @@ mod tests {
         assert_eq!(fmt_elapsed(3661), "1:01:01");
         // A clock that ran backwards (since in the future) clamps to zero.
         assert_eq!(fmt_elapsed(-10), "0:00");
+    }
+
+    #[test]
+    fn parse_conventional_splits_type_scope_subject() {
+        assert_eq!(
+            parse_conventional("feat(antithesis): cas-fabric durability"),
+            Some(("feat", Some("antithesis"), "cas-fabric durability"))
+        );
+        // No scope, but a known type.
+        assert_eq!(
+            parse_conventional("chore: nix flake update"),
+            Some(("chore", None, "nix flake update"))
+        );
+        // Breaking-change `!` on the type or the scope is stripped.
+        assert_eq!(
+            parse_conventional("feat!: drop v1"),
+            Some(("feat", None, "drop v1"))
+        );
+        assert_eq!(
+            parse_conventional("refactor(api)!: rename"),
+            Some(("refactor", Some("api"), "rename"))
+        );
+        // Any `(scope)` header is conventional even with an unknown type.
+        assert_eq!(
+            parse_conventional("wip(ui): tweak"),
+            Some(("wip", Some("ui"), "tweak"))
+        );
+        // A plain `repo: branch` label (unknown type, no scope) is NOT recolored.
+        assert_eq!(parse_conventional("index: main"), None);
+        assert_eq!(parse_conventional("US East: Health lifecycle"), None);
+        // No `: ` at all, or an empty subject, is not conventional.
+        assert_eq!(parse_conventional("just a title"), None);
+        assert_eq!(parse_conventional("feat: "), None);
+    }
+
+    #[test]
+    fn hue_is_deterministic_and_per_label() {
+        assert_eq!(hue_for("feat"), hue_for("feat"));
+        assert_ne!(hue_for("feat"), hue_for("fix"));
+        assert!((0.0..360.0).contains(&hue_for("antithesis")));
+    }
+
+    #[test]
+    fn title_segments_color_type_scope_and_dim_timer() {
+        let segs = title_segments("feat(antithesis): durability", Some(1000), 1125);
+        // type, sep, scope, sep, subject, sep, counter.
+        let texts: Vec<&str> = segs.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(texts, ["feat", " ", "antithesis", " ", "durability", " ", "(2:05)"]);
+        assert_eq!(segs[0].1, label_rgb("feat"));
+        assert_eq!(segs[2].1, label_rgb("antithesis"));
+        assert_eq!(segs.last().unwrap().1, TIMER_GRAY);
+        // A non-conventional title stays a single white run (plus a timer).
+        let plain = title_segments("index: main", None, 0);
+        assert_eq!(plain.len(), 1);
+        assert_eq!(plain[0].0, "index: main");
+        assert_eq!(plain[0].1, [WHITE[0], WHITE[1], WHITE[2]]);
     }
 
     #[test]
