@@ -257,6 +257,15 @@ in
         default = true;
         description = "Run the always-on-top Minecraft boss bar overlay GUI the watcher draws onto.";
       };
+      scale = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 1;
+        description = ''
+          Integer pixel scale for the boss bar sprites (and, proportionally,
+          their title text and pop-down panels). The overlay binary defaults to
+          2; 1 renders everything at half that size.
+        '';
+      };
     };
 
     mergeOrbOverlay = {
@@ -409,7 +418,11 @@ in
       (lib.mkIf cfg.bossbarOverlay.enable {
         bossbar-overlay = {
           description = "Minecraft boss bar overlay";
-          command = [ (lib.getExe' indexPkgs.bossbar-overlay "bossbar-overlay") ];
+          command = [
+            (lib.getExe' indexPkgs.bossbar-overlay "bossbar-overlay")
+            "--scale"
+            (toString cfg.bossbarOverlay.scale)
+          ];
           restart = "always";
           standardOutPath = "${cfg.logDir}/bossbar-overlay.log";
           standardErrorPath = "${cfg.logDir}/bossbar-overlay.log";
