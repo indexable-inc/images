@@ -125,6 +125,10 @@ function readPanes(): void {
 // following, else the frontier at `position`.
 function render(): void {
   if (timeline.following) {
+    // Keep position pinned to the live edge while following, so pressing Play
+    // restarts from the recording's start (position >= maxTs) rather than from
+    // a stale position (often 0 = the Unix epoch, which looks stuck).
+    timeline.position = timeline.maxTs;
     doc.checkoutToLatest();
   } else {
     const frontier = frontierAt(timeline.position);

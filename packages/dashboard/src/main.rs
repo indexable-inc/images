@@ -113,18 +113,23 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         dir.display()
     );
 
-    if let Some(store) = &recordings
-        && cli.record_ms > 0
-    {
-        let (id, recorder) =
-            store.spawn_recorder(hub.clone(), Duration::from_millis(cli.record_ms), &handle);
-        println!("dashboard: recording to {} ({id})", store.dir().display());
-        dashboard.push_task(recorder);
-    }
+    // Held until shutdown so a final snapshot captures the last interval of
+    // changes, which the periodic recorder task would otherwise lose when it is
+    // aborted on stop.
+    let recording_session = recordings
+        .as_ref()
+        .filter(|_| cli.record_ms > 0)
+        .map(|store| {
+            let (id, recorder) =
+                store.spawn_recorder(hub.clone(), Duration::from_millis(cli.record_ms), &handle);
+            println!("dashboard: recording to {} ({id})", store.dir().display());
+            dashboard.push_task(recorder);
+            (store.clone(), id)
+        });
 
     let connected = Arc::new(Mutex::new(HashSet::new()));
     let discovery = tokio::spawn(discover(
-        hub,
+        hub.clone(),
         dir,
         connected,
         Duration::from_millis(cli.rescan_ms),
@@ -134,6 +139,12 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     tokio::signal::ctrl_c().await?;
     println!("\ndashboard: shutting down");
     dashboard.stop().await;
+    // The periodic recorder task was aborted by `stop`; write one last snapshot
+    // now that the document is final, so the recording does not lose the last
+    // interval of changes before exit.
+    if let Some((store, id)) = recording_session {
+        let _ = store.save(&id, &hub.export_snapshot());
+    }
     Ok(())
 }
 

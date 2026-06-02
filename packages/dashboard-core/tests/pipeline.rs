@@ -51,7 +51,7 @@ fn producer_socket_streams_exec_pane() {
         .unwrap();
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
-    while stream.read(&mut byte).map(|n| n == 1).unwrap_or(false) {
+    while stream.read(&mut byte).is_ok_and(|n| n == 1) {
         if byte[0] == b'\n' {
             break;
         }

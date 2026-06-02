@@ -65,6 +65,10 @@ impl RecordingStore {
     pub fn new(dir: PathBuf) -> Result<Self> {
         fs::create_dir_all(&dir)
             .map_err(|source| recording_err(format!("create {}: {source}", dir.display())))?;
+        // Recordings capture exec source, stdout, and stderr, so keep the
+        // directory owner-only. This also stops another local user from planting
+        // a symlink at a recording path before the atomic write below.
+        restrict_dir(&dir);
         Ok(Self { dir })
     }
 
@@ -119,8 +123,7 @@ impl RecordingStore {
             .path_for(id)
             .ok_or_else(|| recording_err(format!("unsafe recording id {id:?}")))?;
         let tmp = path.with_extension(format!("{EXT}.tmp"));
-        fs::write(&tmp, bytes)
-            .map_err(|source| recording_err(format!("write {}: {source}", tmp.display())))?;
+        write_private(&tmp, bytes)?;
         fs::rename(&tmp, &path)
             .map_err(|source| recording_err(format!("rename {}: {source}", path.display())))?;
         Ok(())
@@ -149,6 +152,13 @@ impl RecordingStore {
     ) -> (String, JoinHandle<()>) {
         self.prune(KEEP_RECORDINGS.saturating_sub(1));
         let id = format!("{PREFIX}{}", now_ms());
+        // Persist once up front so a session shorter than `interval` still
+        // produces its advertised recording; the loop then refreshes it. A final
+        // snapshot on graceful shutdown is the caller's job (it owns the hub).
+        let initial = hub.export_snapshot();
+        if !initial.is_empty() {
+            let _ = self.save(&id, &initial);
+        }
         let store = self.clone();
         let task_id = id.clone();
         let task = runtime.spawn(async move {
@@ -194,6 +204,29 @@ impl RecordingStore {
             bytes: meta.len(),
         })
     }
+}
+
+/// Restrict the recordings directory to the owner (`0700`). Best-effort.
+fn restrict_dir(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+}
+
+/// Write `bytes` to `path`, creating it owner-only (`0600`). Recordings hold
+/// captured source and output, so they must not be world-readable even briefly.
+fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|source| recording_err(format!("open {}: {source}", path.display())))?;
+    file.write_all(bytes)
+        .map_err(|source| recording_err(format!("write {}: {source}", path.display())))?;
+    Ok(())
 }
 
 /// Resolve the recordings directory: `$IX_DASH_RECORDINGS`, else
