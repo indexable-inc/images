@@ -113,7 +113,7 @@ jobs:
               (.changed | type == "array") and
               (.added   | type == "array") and
               (.removed | type == "array") and
-              ((.changed + .added + .removed) | all(type == "string"))
+              ((.changed + .added + .removed) | all(type == "string" and test("^[A-Za-z0-9._/ +():-]+$")))
             )
           ' report.json > /dev/null \
             || { echo "::error::malformed blast-radius report.json"; exit 1; }
