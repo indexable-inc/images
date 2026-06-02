@@ -3641,11 +3641,13 @@ dependencies = [
 name = "mixedbread"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "dirs",
  "reqwest",
  "serde",
  "serde_json",
  "snafu 0.9.1",
+ "tokio",
 ]
 
 [[package]]

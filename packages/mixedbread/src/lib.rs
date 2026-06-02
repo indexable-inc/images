@@ -8,6 +8,7 @@
 //! question-answering (`/v1/stores/question-answering`).
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use reqwest::{Client as HttpClient, StatusCode};
 use serde::Deserialize;
@@ -30,6 +31,23 @@ const LIST_PAGE_SIZE: u32 = 100;
 
 /// Environment variable holding the API key.
 pub const API_KEY_ENV: &str = "MXBAI_API_KEY";
+
+/// Retries for a request that returns a retryable status (`429 Too Many
+/// Requests` or any `5xx`). The fleet runs one indexer per host against a single
+/// shared Mixedbread key with 16 uploads in flight each, so transient 429s are
+/// expected under load; we honor the server's `Retry-After` and otherwise back
+/// off with jitter rather than failing the source. Mixedbread's own error
+/// guidance is to retry these with exponential backoff:
+/// <https://mixedbread.com/api-reference/error-handling>.
+const MAX_RETRIES: u32 = 6;
+
+/// Base backoff: attempt `n` sleeps within `[base*2^n / 2, base*2^n]` (equal
+/// jitter), capped at [`BACKOFF_CAP`], unless the server asks for longer.
+const BACKOFF_BASE: Duration = Duration::from_millis(500);
+
+/// Upper bound on a single backoff sleep, and on a server `Retry-After` we will
+/// honor, so one absurd header value cannot stall a whole sync.
+const BACKOFF_CAP: Duration = Duration::from_secs(30);
 
 /// Failures from the Mixedbread client.
 #[derive(Debug, Snafu)]
@@ -221,32 +239,68 @@ impl Client {
         format!("{}{path}", self.base_url)
     }
 
+    /// Send a request with bearer auth, retrying on `429`/`5xx` with
+    /// `Retry-After`-aware, jittered backoff.
+    ///
+    /// `build` must produce a fresh [`reqwest::RequestBuilder`] on each call: a
+    /// request body (notably multipart) is consumed by `send`, so a retry needs
+    /// a new one. It is fallible so a body that can fail to assemble (a
+    /// multipart `Part` rejecting its MIME) surfaces as an error rather than a
+    /// panic; that error is deterministic, so it is returned on the first call
+    /// without retrying. A non-retryable response (including the final attempt)
+    /// is returned as-is for the caller to decode or turn into an [`Error::Api`].
+    async fn send_retrying(
+        &self,
+        build: impl Fn() -> Result<reqwest::RequestBuilder>,
+    ) -> Result<reqwest::Response> {
+        let mut attempt: u32 = 0;
+        loop {
+            let resp = build()?
+                .bearer_auth(&self.api_key)
+                .send()
+                .await
+                .context(HttpSnafu)?;
+            let status = resp.status();
+            let retryable =
+                status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
+            if !retryable || attempt >= MAX_RETRIES {
+                return Ok(resp);
+            }
+            // Honor a server `Retry-After`, but never wait less than our
+            // jittered backoff: a `Retry-After: 0`/`1` under load would
+            // otherwise make every concurrent upload retry in lockstep, the
+            // very thundering herd this exists to avoid.
+            let wait = retry_after(&resp)
+                .map_or_else(|| backoff(attempt), |hint| hint.max(backoff(attempt)));
+            attempt += 1;
+            tokio::time::sleep(wait).await;
+        }
+    }
+
     /// Ensure the named store exists, creating it if absent.
     ///
     /// # Errors
     /// Returns an error if the store cannot be fetched or created.
     pub async fn ensure_store(&self, name: &str) -> Result<()> {
+        let get_url = self.url(&format!("/v1/stores/{name}"));
         let resp = self
-            .http
-            .get(self.url(&format!("/v1/stores/{name}")))
-            .bearer_auth(&self.api_key)
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .send_retrying(|| Ok(self.http.get(get_url.as_str())))
+            .await?;
         if resp.status().is_success() {
             return Ok(());
         }
         if resp.status() != StatusCode::NOT_FOUND {
             return Err(api_error(resp).await);
         }
+        let create_url = self.url("/v1/stores");
         let created = self
-            .http
-            .post(self.url("/v1/stores"))
-            .bearer_auth(&self.api_key)
-            .json(&serde_json::json!({ "name": name }))
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .send_retrying(|| {
+                Ok(self
+                    .http
+                    .post(create_url.as_str())
+                    .json(&serde_json::json!({ "name": name })))
+            })
+            .await?;
         expect_ok(created).await
     }
 
@@ -261,6 +315,7 @@ impl Client {
     ) -> Result<Vec<StoredFile>> {
         let mut files = Vec::new();
         let mut after: Option<String> = None;
+        let list_url = self.url(&format!("/v1/stores/{store}/files/list"));
         loop {
             let request = ListRequest {
                 limit: LIST_PAGE_SIZE,
@@ -268,13 +323,8 @@ impl Client {
                 filters,
             };
             let resp = self
-                .http
-                .post(self.url(&format!("/v1/stores/{store}/files/list")))
-                .bearer_auth(&self.api_key)
-                .json(&request)
-                .send()
-                .await
-                .context(HttpSnafu)?;
+                .send_retrying(|| Ok(self.http.post(list_url.as_str()).json(&request)))
+                .await?;
             let page: ListResponse = decode(resp).await?;
             for item in page.data {
                 files.push(StoredFile {
@@ -307,20 +357,27 @@ impl Client {
         mime: &str,
         metadata: serde_json::Value,
     ) -> Result<()> {
-        let part = reqwest::multipart::Part::bytes(content)
-            .file_name(file_name.to_owned())
-            .mime_str(mime)
-            .context(HttpSnafu)?;
-        let form = reqwest::multipart::Form::new().part("file", part);
-
+        // A multipart `Part` is not `Clone`, so the retry closure rebuilds it
+        // from the owned bytes each attempt. A bad MIME makes `mime_str` fail
+        // identically every call, so it short-circuits the retry loop as an
+        // error rather than spinning. This POST is not idempotent: a 5xx
+        // returned after the file was created server-side can leave an orphaned,
+        // unattached file object on retry. That is acceptable here, the
+        // motivating case is 429 (request rejected, safe to retry) and the
+        // attach below is keyed on `external_id` with `overwrite: true`.
+        let files_url = self.url("/v1/files");
         let resp = self
-            .http
-            .post(self.url("/v1/files"))
-            .bearer_auth(&self.api_key)
-            .multipart(form)
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .send_retrying(|| {
+                let part = reqwest::multipart::Part::bytes(content.clone())
+                    .file_name(file_name.to_owned())
+                    .mime_str(mime)
+                    .context(HttpSnafu)?;
+                Ok(self
+                    .http
+                    .post(files_url.as_str())
+                    .multipart(reqwest::multipart::Form::new().part("file", part)))
+            })
+            .await?;
         let created: CreatedFile = decode(resp).await?;
 
         let attach = AttachRequest {
@@ -329,14 +386,10 @@ impl Client {
             overwrite: true,
             metadata,
         };
+        let attach_url = self.url(&format!("/v1/stores/{store}/files"));
         let resp = self
-            .http
-            .post(self.url(&format!("/v1/stores/{store}/files")))
-            .bearer_auth(&self.api_key)
-            .json(&attach)
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .send_retrying(|| Ok(self.http.post(attach_url.as_str()).json(&attach)))
+            .await?;
         expect_ok(resp).await
     }
 
@@ -345,13 +398,10 @@ impl Client {
     /// # Errors
     /// Returns an error if the delete request fails.
     pub async fn delete_file(&self, store: &str, external_id: &str) -> Result<()> {
+        let delete_url = self.url(&format!("/v1/stores/{store}/files/{external_id}"));
         let resp = self
-            .http
-            .delete(self.url(&format!("/v1/stores/{store}/files/{external_id}")))
-            .bearer_auth(&self.api_key)
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .send_retrying(|| Ok(self.http.delete(delete_url.as_str())))
+            .await?;
         expect_ok(resp).await
     }
 
@@ -374,14 +424,10 @@ impl Client {
             search_options: options,
             filters,
         };
+        let search_url = self.url("/v1/stores/search");
         let resp = self
-            .http
-            .post(self.url("/v1/stores/search"))
-            .bearer_auth(&self.api_key)
-            .json(&request)
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .send_retrying(|| Ok(self.http.post(search_url.as_str()).json(&request)))
+            .await?;
         let response: SearchResponse = decode(resp).await?;
         Ok(response.data.into_iter().map(Chunk::from).collect())
     }
@@ -415,14 +461,10 @@ impl Client {
             targets,
             filters,
         };
+        let grep_url = self.url("/v1/stores/grep");
         let resp = self
-            .http
-            .post(self.url("/v1/stores/grep"))
-            .bearer_auth(&self.api_key)
-            .json(&request)
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .send_retrying(|| Ok(self.http.post(grep_url.as_str()).json(&request)))
+            .await?;
         let response: SearchResponse = decode(resp).await?;
         Ok(response.data.into_iter().map(Chunk::from).collect())
     }
@@ -446,14 +488,10 @@ impl Client {
             search_options: options,
             filters,
         };
+        let ask_url = self.url("/v1/stores/question-answering");
         let resp = self
-            .http
-            .post(self.url("/v1/stores/question-answering"))
-            .bearer_auth(&self.api_key)
-            .json(&request)
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .send_retrying(|| Ok(self.http.post(ask_url.as_str()).json(&request)))
+            .await?;
         let response: RawAnswerResponse = decode(resp).await?;
         Ok(AnswerResponse {
             answer: response.answer,
@@ -467,13 +505,10 @@ impl Client {
     /// # Errors
     /// Returns an error if the request fails or cannot be decoded.
     pub async fn store_status(&self, store: &str) -> Result<StoreStatus> {
+        let status_url = self.url(&format!("/v1/stores/{store}"));
         let resp = self
-            .http
-            .get(self.url(&format!("/v1/stores/{store}")))
-            .bearer_auth(&self.api_key)
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .send_retrying(|| Ok(self.http.get(status_url.as_str())))
+            .await?;
         let object: StoreObject = decode(resp).await?;
         Ok(StoreStatus {
             pending: object.file_counts.pending,
@@ -500,6 +535,64 @@ async fn api_error(resp: reqwest::Response) -> Error {
     let status = resp.status().as_u16();
     let body = resp.text().await.unwrap_or_default();
     Error::Api { status, body }
+}
+
+/// Parse a `Retry-After` header in delta-seconds form, capped at [`BACKOFF_CAP`].
+/// Mixedbread sends integer seconds; the HTTP-date form is not used by this API
+/// and is ignored (we fall back to [`backoff`] then).
+fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
+    let secs: u64 = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(Duration::from_secs(secs).min(BACKOFF_CAP))
+}
+
+/// Exponential backoff with equal jitter: half the capped exponential delay plus
+/// a random fraction of the other half. Keeps the 16-in-flight uploads (and one
+/// indexer per fleet host against one shared key) from retrying in lockstep and
+/// re-colliding on the same rate limit.
+fn backoff(attempt: u32) -> Duration {
+    let exp = BACKOFF_BASE
+        .saturating_mul(1u32 << attempt.min(5))
+        .min(BACKOFF_CAP);
+    let half = exp / 2;
+    half + half.mul_f64(jitter_unit())
+}
+
+/// A cheap `[0.0, 1.0)` jitter value. Avoids a `rand` dependency: a process-wide
+/// xorshift, seeded once from the wall clock, is plenty for spreading retry
+/// timing across concurrent uploads. The load/store is not a CAS, but a lost
+/// update only reuses a jitter value, which does not matter here.
+fn jitter_unit() -> f64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static STATE: AtomicU64 = AtomicU64::new(0);
+    let mut x = STATE.load(Ordering::Relaxed);
+    if x == 0 {
+        // Truncating the nanos to 64 bits is fine: this only seeds a jitter PRNG.
+        #[allow(clippy::cast_possible_truncation)]
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0x9E37_79B9_7F4A_7C15, |d| d.as_nanos() as u64);
+        x = seed | 1;
+    }
+    // xorshift64
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    STATE.store(x, Ordering::Relaxed);
+    // `x >> 11` is a 53-bit integer and `2^53` is exactly representable, so the
+    // f64 division is lossless despite the lint; the result is uniform in [0, 1).
+    #[allow(clippy::cast_precision_loss)]
+    {
+        ((x >> 11) as f64) / ((1u64 << 53) as f64)
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -639,7 +732,14 @@ impl From<RawChunk> for Chunk {
 
 #[cfg(test)]
 mod tests {
-    use super::{Chunk, RawChunk};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use axum::Router;
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+
+    use super::{BACKOFF_BASE, BACKOFF_CAP, Chunk, Client, Error, MAX_RETRIES, RawChunk, backoff};
 
     #[test]
     fn raw_chunk_projects_generated_metadata() {
@@ -671,5 +771,67 @@ mod tests {
         let chunk = Chunk::from(raw);
         assert_eq!(chunk.start_line, None);
         assert_eq!(chunk.num_lines, None);
+    }
+
+    #[test]
+    fn backoff_stays_within_equal_jitter_band_and_cap() {
+        for attempt in 0..10u32 {
+            let exp = BACKOFF_BASE
+                .saturating_mul(1u32 << attempt.min(5))
+                .min(BACKOFF_CAP);
+            let delay = backoff(attempt);
+            assert!(delay >= exp / 2, "attempt {attempt}: {delay:?} below half {:?}", exp / 2);
+            assert!(delay <= exp, "attempt {attempt}: {delay:?} above exp {exp:?}");
+            assert!(delay <= BACKOFF_CAP, "attempt {attempt}: {delay:?} above cap");
+        }
+    }
+
+    /// Mock server that answers `429` (with `Retry-After: 0` so retries are
+    /// instant) for the first `fail_times` requests, then `200`. Returns the
+    /// base URL and a shared counter of total requests received.
+    async fn spawn_mock(fail_times: usize) -> (String, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().fallback({
+            let calls = Arc::clone(&calls);
+            move || {
+                let calls = Arc::clone(&calls);
+                async move {
+                    let n = calls.fetch_add(1, Ordering::SeqCst);
+                    if n < fail_times {
+                        (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "0")], "slow down")
+                            .into_response()
+                    } else {
+                        (StatusCode::OK, "{}").into_response()
+                    }
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        (format!("http://{addr}"), calls)
+    }
+
+    #[tokio::test]
+    async fn retries_429_then_succeeds() {
+        let (base, calls) = spawn_mock(2).await;
+        let client = Client::new(base, "test-key").expect("client");
+        client.ensure_store("store").await.expect("succeeds after retries");
+        // 2 rejected + 1 accepted.
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn gives_up_after_max_retries() {
+        let (base, calls) = spawn_mock(usize::MAX).await;
+        let client = Client::new(base, "test-key").expect("client");
+        let err = client.ensure_store("store").await.expect_err("never succeeds");
+        assert!(matches!(err, Error::Api { status: 429, .. }), "got {err:?}");
+        // The initial attempt plus MAX_RETRIES retries.
+        assert_eq!(calls.load(Ordering::SeqCst), (MAX_RETRIES + 1) as usize);
     }
 }
