@@ -92,28 +92,45 @@ jobs:
           name: blast-radius-${{ github.run_id }}
           path: .
 
-      # Rebuild the Markdown here from the data file, validating every
-      # interpolated value: short SHAs must be hex, the total must be a number,
-      # and check names must match a conservative charset (Nix attr names do) so
-      # a malicious PR cannot inject mentions, HTML, or spoofed markers into a
-      # comment posted with the write token. The trusted job owns the marker.
+      # report.json is produced by PR-controlled `.#blast-radius` code, so a
+      # broken or hostile app could emit `{}` (or wrong-shaped fields) and the
+      # write-token job would still post a bot comment claiming "0 of ?".
+      # Fail closed: require the full schema before rendering. Every field is
+      # type-checked, SHAs must be hex, and the `and` chain short-circuits so a
+      # non-array `.changed` never reaches the `+`/`test` that would error.
+      - name: Validate report schema
+        run: |
+          set -euo pipefail
+          jq -e '
+            (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
+            (.head    | type == "string" and test("^[0-9a-f]{7,40}$")) and
+            (.total   | type == "number") and
+            (.changed | type == "array") and
+            (.added   | type == "array") and
+            (.removed | type == "array") and
+            ((.changed + .added + .removed) | all(type == "string"))
+          ' report.json > /dev/null \
+            || { echo "::error::malformed blast-radius report.json"; exit 1; }
+
+      # Rebuild the Markdown from the validated data. Check names still pass
+      # through a conservative charset (Nix attr names do) so a malicious PR
+      # cannot inject mentions, HTML, or spoofed markers into a comment posted
+      # with the write token. The trusted job owns the marker.
       - name: Render comment
         run: |
           set -euo pipefail
           jq -r '
-            def shortsha: (. // "") | tostring | (if test("^[0-9a-f]{1,40}$") then . else "unknown" end);
-            def safename: tostring | select(test("^[A-Za-z0-9._/ +():-]+$"));
-            def count: (. // null) | (if type == "number" then tostring else "?" end);
+            def safename: select(test("^[A-Za-z0-9._/ +():-]+$"));
             "<!-- blast-radius -->",
             "### Blast radius",
             "",
-            "`\((.changed // []) | length)` of `\(.total | count)` checks would rebuild between base `\(.base | shortsha)` and head `\(.head | shortsha)`.",
-            (if (((.added // []) | length) > 0) or (((.removed // []) | length) > 0)
-             then "", "\((.added // []) | length) added, \((.removed // []) | length) removed"
+            "`\(.changed | length)` of `\(.total)` checks would rebuild between base `\(.base)` and head `\(.head)`.",
+            (if ((.added | length) > 0) or ((.removed | length) > 0)
+             then "", "\(.added | length) added, \(.removed | length) removed"
              else empty end),
-            (if ((.changed // []) | length) > 0
+            (if (.changed | length) > 0
              then "", "<details><summary>changed checks</summary>", "",
-                  ((.changed // [])[] | safename | "- \(.)"),
+                  (.changed[] | safename | "- \(.)"),
                   "", "</details>"
              else empty end)
           ' report.json > comment.md
