@@ -181,11 +181,30 @@ struct DrawItem<'a> {
     panel: Option<PanelBox>,
 }
 
+/// The fill fraction to draw: extrapolated live from `since`/`eta` when both are
+/// set, otherwise the stored `progress`. With `eta` the bar advances as
+/// `(now - since) / eta` (clamped just under full), so a long task's bar moves
+/// smoothly on the overlay's own once-a-second redraws instead of stepping only
+/// when the writer repolls. It tops out near 1.0 on overrun and is cleared when
+/// the writer removes the bar.
+fn live_progress(b: &BossBar, now_unix: i64) -> f32 {
+    match (b.since, b.eta) {
+        (Some(since), Some(eta)) if eta > 0 => {
+            let elapsed = (now_unix - since).max(0) as f32;
+            (elapsed / eta as f32).clamp(0.02, 0.97)
+        }
+        _ => b.progress.clamp(0.0, 1.0),
+    }
+}
+
 /// Append one draw item's quads (bar layers, title, optional panel) to `quads`.
 fn build_item(gpu: &Gpu, tex: &BarTextures, scale: u32, now_unix: i64, item: &DrawItem<'_>, quads: &mut Vec<Quad>) {
     let b = item.bar;
     let bx = item.geom;
     let alpha = item.alpha;
+    // Effective fill: live-extrapolated from since/eta when present (see
+    // `live_progress`), else the stored value. Used in place of `b.progress`.
+    let progress = live_progress(b, now_unix);
     // Bars sample real sprites, so the tint is white with the bar's opacity; only
     // the alpha channel matters for them.
     let tint = [1.0, 1.0, 1.0, alpha];
@@ -212,28 +231,28 @@ fn build_item(gpu: &Gpu, tex: &BarTextures, scale: u32, now_unix: i64, item: &Dr
 
     // Color background, then color progress cropped to the fill.
     quads.push(Quad::new(tex.get(TexId::ColorBg(b.color)), bx.left, bx.track_y, bx.bar_w, bx.bar_h, tint));
-    if b.progress > 0.0 {
+    if progress > 0.0 {
         quads.push(Quad::sub(
             tex.get(TexId::ColorFill(b.color)),
             bx.left,
             bx.track_y,
-            bx.bar_w * b.progress,
+            bx.bar_w * progress,
             bx.bar_h,
-            [0.0, 0.0, b.progress, 1.0],
+            [0.0, 0.0, progress, 1.0],
             tint,
         ));
     }
     // Optional notch overlay on top, same draw order.
     if let Some(n) = b.overlay.notch() {
         quads.push(Quad::new(tex.get(TexId::NotchBg(n)), bx.left, bx.track_y, bx.bar_w, bx.bar_h, tint));
-        if b.progress > 0.0 {
+        if progress > 0.0 {
             quads.push(Quad::sub(
                 tex.get(TexId::NotchFill(n)),
                 bx.left,
                 bx.track_y,
-                bx.bar_w * b.progress,
+                bx.bar_w * progress,
                 bx.bar_h,
-                [0.0, 0.0, b.progress, 1.0],
+                [0.0, 0.0, progress, 1.0],
                 tint,
             ));
         }
@@ -463,9 +482,13 @@ pub fn build_one(
         has_title,
     };
 
-    // Only build the panel when the window was actually grown for it; a collapsed
-    // window (height == top_region_h) has no room and skips it.
-    let panel = if height as f32 > collapsed_h + 0.5 {
+    // Only build the panel when the bar opts into the box (`expandable`) and the
+    // window was actually grown for it; a collapsed window (height ==
+    // top_region_h) has no room and skips it. The expandable check is also the
+    // live gate (via the overlay's window sizing); repeating it here keeps a
+    // non-expandable bar boxless even if something grows its window (e.g. a
+    // snapshot rendered at expanded size).
+    let panel = if bar.expandable && height as f32 > collapsed_h + 0.5 {
         panel_size(gpu, &bar.description, scale).map(|(panel_w, panel_h)| {
             let (border, pad, font_px, line_px, gap) = panel_metrics(scale);
             PanelBox {
@@ -514,9 +537,17 @@ pub fn build_all(
     let scale = scale.max(1);
     let opacity = DEFAULT_OPACITY;
     let (border, pad, font_px, line_px, gap) = panel_metrics(scale);
+    // A non-expandable bar has no box, so it reserves no panel size (and so no
+    // layout gap and no panel quads), matching the live per-window path.
     let sizes: Vec<Option<(f32, f32)>> = bars
         .iter()
-        .map(|b| panel_size(gpu, &b.description, scale))
+        .map(|b| {
+            if b.expandable {
+                panel_size(gpu, &b.description, scale)
+            } else {
+                None
+            }
+        })
         .collect();
     let boxes = layout(scale, bars, width as f32, &sizes, gap);
 
@@ -633,6 +664,8 @@ mod tests {
             overlay: Overlay::None,
             position: 0,
             pos: None,
+            expandable: true,
+            eta: None,
         }
     }
 

@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS bossbars (
   x           REAL,
   y           REAL,
   since       INTEGER,
-  url         TEXT    NOT NULL DEFAULT ''
+  url         TEXT    NOT NULL DEFAULT '',
+  expandable  INTEGER NOT NULL DEFAULT 1,
+  eta         INTEGER
 );";
 
 /// Columns added after the initial schema shipped. `ALTER TABLE ADD COLUMN` is
@@ -45,6 +47,8 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("description", "TEXT NOT NULL DEFAULT ''"),
     ("since", "INTEGER"),
     ("url", "TEXT NOT NULL DEFAULT ''"),
+    ("expandable", "INTEGER NOT NULL DEFAULT 1"),
+    ("eta", "INTEGER"),
 ];
 
 /// Rows inserted only when the DB file is created for the first time, so a
@@ -120,7 +124,7 @@ pub fn set_position(path: &Path, id: i64, pos: glam::DVec2) -> rusqlite::Result<
 
 fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, progress, color, overlay, position, x, y, description, since, url
+        "SELECT id, title, progress, color, overlay, position, x, y, description, since, url, expandable, eta
          FROM bossbars
          WHERE visible != 0
          ORDER BY position ASC, id ASC",
@@ -131,12 +135,17 @@ fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
         // A non-positive stored value reads as "no counter", so a caller can clear
         // the clock with `--since 0` without a NULL.
         let since: Option<i64> = r.get::<_, Option<i64>>(9)?.filter(|s| *s > 0);
+        // Same convention for eta: a non-positive value means "no extrapolation".
+        let eta: Option<i64> = r.get::<_, Option<i64>>(12)?.filter(|s| *s > 0);
         Ok(BossBar {
             id: r.get(0)?,
             title: r.get(1)?,
             description: r.get(8)?,
             since,
             url: r.get(10)?,
+            eta,
+            // Default-1 column; any non-zero value keeps the hover panel enabled.
+            expandable: r.get::<_, i64>(11)? != 0,
             progress: r.get::<_, f64>(2)?.clamp(0.0, 1.0) as f32,
             color: Color::parse(&r.get::<_, String>(3)?),
             overlay: Overlay::parse(&r.get::<_, String>(4)?),
@@ -275,6 +284,46 @@ mod tests {
     }
 
     #[test]
+    fn eta_round_trips_and_nonpositive_reads_as_none() {
+        let path = temp_db("eta");
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            "INSERT INTO bossbars (title, eta) VALUES ('timed', 300), ('zero', 0), ('null', NULL)",
+            [],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
+        assert_eq!(by("timed").eta, Some(300));
+        // 0/NULL mean "no extrapolation", so the overlay uses the static progress.
+        assert_eq!(by("zero").eta, None);
+        assert_eq!(by("null").eta, None);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn expandable_round_trips_and_defaults_true() {
+        let path = temp_db("expandable");
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            "INSERT INTO bossbars (title, expandable) VALUES ('boxed', 1), ('boxless', 0)",
+            [],
+        )
+        .unwrap();
+        // A row that never set the column reads as expandable (default 1).
+        conn.execute("INSERT INTO bossbars (title) VALUES ('default')", [])
+            .unwrap();
+        let bars = read(&conn).unwrap();
+        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
+        assert!(by("boxed").expandable);
+        assert!(!by("boxless").expandable, "expandable=0 reads as no box");
+        assert!(by("default").expandable, "missing value defaults to a box");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
     fn legacy_db_without_description_is_migrated_and_round_trips() {
         // A database created before `description` shipped (no description, x, or
         // y columns) must gain the column on open and read back as empty, then
@@ -304,6 +353,10 @@ mod tests {
         assert_eq!(bars.len(), 1);
         assert_eq!(bars[0].title, "old");
         assert_eq!(bars[0].description, "", "migrated column defaults to empty");
+        assert!(
+            bars[0].expandable,
+            "the migrated expandable column defaults to a box"
+        );
 
         conn.execute(
             "UPDATE bossbars SET description = ?1 WHERE id = ?2",
