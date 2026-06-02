@@ -302,19 +302,19 @@ for repo in "${repos[@]}"; do
     .[] | [ .headSha, .headBranch, .status, .workflowName,
             (.startedAt // ""), (.createdAt // "") ] | @tsv')
 
-  # Branches whose LATEST commit still has in-flight work. Every such branch is
-  # recorded in active_urls (so the prune never removes a still-building branch),
-  # but only the newest $max_bars are DRAWN, so a busy moment cannot flood the
-  # screen and the rest do not flap.
+  # Commits with in-flight work, collapsed to ONE winner ref each. The per-commit
+  # counters (c_running/c_queued/...) are keyed by headSha, and a PR's head commit
+  # is reachable under TWO refs that share that sha: the source branch (e.g.
+  # `feature`) and the PR head ref (`refs/pull/<N>/head`, how some PR-event runs
+  # report headBranch). Keying eligibility on the shared sha makes BOTH refs
+  # eligible off the same in-flight runs, so one PR would draw two bars. So pick a
+  # single winner ref per sha, preferring a non-`refs/pull/*/*` ref (the source
+  # branch) so the bar heals across pushes and clicks through to the branch.
   #
-  # The per-commit counters (c_running/c_queued/...) are keyed by headSha, and a
-  # PR's head commit is reachable under TWO refs that share that sha: the source
-  # branch (e.g. `feature`) and the PR head ref (`refs/pull/<N>/head`, how some
-  # PR-event runs report headBranch). Keying eligibility on the shared sha makes
-  # BOTH refs eligible off the same in-flight runs, so one PR would draw two bars.
-  # Collapse to a single winner ref per sha, preferring a real branch name over a
-  # `refs/pull/<N>/head` ref so the bar heals across pushes and clicks through to
-  # the branch.
+  # Only the winner's url goes into active_urls, so the prune drops the bar of any
+  # other ref sharing the sha (e.g. the superseded `refs/pull/<N>/head`) by
+  # design: one in-flight commit == one bar. Of the winners only the newest
+  # $max_bars are DRAWN; the rest still sit in active_urls so prune keeps them.
   unset sha_winner
   declare -A sha_winner
   for branch in "${!b_latest_sha[@]}"; do
@@ -324,8 +324,8 @@ for repo in "${repos[@]}"; do
     if [ -z "$cur" ]; then
       sha_winner["$sha"]="$branch"
     else
-      # First ref seen for a sha wins, except a real branch always beats a
-      # refs/pull/<N>/head ref already chosen for it.
+      # First ref seen for a sha wins, except any non-refs/pull ref (the source
+      # branch in practice) always beats a refs/pull/<N>/head ref already chosen.
       case "$cur" in
         refs/pull/*/*)
           case "$branch" in
