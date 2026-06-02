@@ -182,11 +182,14 @@ let
   # Report how many .#checks.x86_64-linux derivations a PR would rebuild. For a
   # base and head git revision it evaluates the checks at each through a
   # per-revision git+file flake ref, diffs the attr -> drvPath maps, and prints
-  # a Markdown report. The eval forces the rust checks' import-from-derivation
-  # (lib/rust/cargo-unit.nix builds cargo-units.nix with nix-cargo-unit), which
-  # is x86_64-linux only, so an end-to-end run needs a Linux builder; locally
-  # only the wrapper builds (nu --ide-check). nix-eval-jobs (not one `nix eval`)
-  # keeps memory bounded; see the checks comment above.
+  # a Markdown report (or, with --json, a constrained data object the workflow's
+  # trusted comment job validates and re-renders, so PR-authored code never
+  # controls the published comment body). The eval forces the rust checks'
+  # import-from-derivation (lib/rust/cargo-unit.nix builds cargo-units.nix with
+  # nix-cargo-unit), which is x86_64-linux only, so an end-to-end run needs a
+  # Linux builder; locally only the wrapper builds (nu --ide-check).
+  # nix-eval-jobs (not one `nix eval`) keeps memory bounded; see the checks
+  # comment above.
   blastRadius = ix.writeNushellApplication pkgs {
     name = "blast-radius";
     meta.description = "Report how many .#checks.x86_64-linux derivations a PR would rebuild";
@@ -221,7 +224,7 @@ let
         $tbl | each {|r| if ($r.attr == $name) { $r.drvPath } } | compact | first
       }
 
-      def main [base?: string, head?: string] {
+      def main [base?: string, head?: string, --json] {
         let repo = (^git rev-parse --show-toplevel | str trim)
         let head_rev = (^git rev-parse --verify $"($head | default 'HEAD')^{commit}" | str trim)
         let base_in  = (^git rev-parse --verify $"($base | default 'origin/main')^{commit}" | str trim)
@@ -240,18 +243,29 @@ let
         let na = ($added | length)
         let nr = ($removed | length)
 
-        print "<!-- blast-radius -->"
-        print "### Blast radius"
-        print ""
-        print $"`($nc)` of `($total)` checks would rebuild between base `($base_rev | str substring 0..7)` and head `($head_rev | str substring 0..7)`."
-        if ($na > 0) or ($nr > 0) { print ""; print $"($na) added, ($nr) removed" }
-        if ($nc > 0) {
+        if $json {
+          print ({
+            base: ($base_rev | str substring 0..7)
+            head: ($head_rev | str substring 0..7)
+            total: $total
+            changed: $changed
+            added: $added
+            removed: $removed
+          } | to json)
+        } else {
+          print "<!-- blast-radius -->"
+          print "### Blast radius"
           print ""
-          print "<details><summary>changed checks</summary>"
-          print ""
-          for a in $changed { print $"- ($a)" }
-          print ""
-          print "</details>"
+          print $"`($nc)` of `($total)` checks would rebuild between base `($base_rev | str substring 0..7)` and head `($head_rev | str substring 0..7)`."
+          if ($na > 0) or ($nr > 0) { print ""; print $"($na) added, ($nr) removed" }
+          if ($nc > 0) {
+            print ""
+            print "<details><summary>changed checks</summary>"
+            print ""
+            for a in $changed { print $"- ($a)" }
+            print ""
+            print "</details>"
+          }
         }
       }
     '';

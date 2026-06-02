@@ -54,31 +54,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # --json emits a constrained data object (counts + name lists), not the
+      # final Markdown, so the trusted comment job owns the published body.
       # pipefail makes an eval failure (nonzero `nix run`) fail the step instead
       # of being masked by tee's exit code.
       - name: Report blast radius
         run: |
           set -euo pipefail
-          nix run .#blast-radius -- "${BASE_SHA}" "${HEAD_SHA}" | tee report.md
+          nix run .#blast-radius -- --json "${BASE_SHA}" "${HEAD_SHA}" | tee report.json
 
       - name: Upload report
         if: ${{ success() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: blast-radius-${{ github.run_id }}
-          path: report.md
+          path: report.json
           retention-days: 1
 
   # Trusted half: a fresh GitHub-hosted runner that never executes PR code. It
-  # only downloads report.md and posts the sticky comment, so the write token is
-  # introduced on a runner the PR cannot influence.
+  # downloads the data-only report.json, reconstructs the Markdown from it, and
+  # posts the sticky comment, so the write token is introduced on a runner the
+  # PR cannot influence.
   comment:
     needs: evaluate
     runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
-      pull-requests: write
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       REPOSITORY: ${{ github.repository }}
@@ -90,16 +92,42 @@ jobs:
           name: blast-radius-${{ github.run_id }}
           path: .
 
-      # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker the
-      # tool prints first. Paginate the comment list so the marker is found on
-      # busy PRs (no duplicate comments), then PATCH or POST.
+      # Rebuild the Markdown here from the data file, validating every
+      # interpolated value: short SHAs must be hex, the total must be a number,
+      # and check names must match a conservative charset (Nix attr names do) so
+      # a malicious PR cannot inject mentions, HTML, or spoofed markers into a
+      # comment posted with the write token. The trusted job owns the marker.
+      - name: Render comment
+        run: |
+          set -euo pipefail
+          jq -r '
+            def shortsha: (. // "") | tostring | (if test("^[0-9a-f]{1,40}$") then . else "unknown" end);
+            def safename: tostring | select(test("^[A-Za-z0-9._/+-]+$"));
+            def count: (. // null) | (if type == "number" then tostring else "?" end);
+            "<!-- blast-radius -->",
+            "### Blast radius",
+            "",
+            "`\((.changed // []) | length)` of `\(.total | count)` checks would rebuild between base `\(.base | shortsha)` and head `\(.head | shortsha)`.",
+            (if (((.added // []) | length) > 0) or (((.removed // []) | length) > 0)
+             then "", "\((.added // []) | length) added, \((.removed // []) | length) removed"
+             else empty end),
+            (if ((.changed // []) | length) > 0
+             then "", "<details><summary>changed checks</summary>", "",
+                  ((.changed // [])[] | safename | "- \(.)"),
+                  "", "</details>"
+             else empty end)
+          ' report.json > comment.md
+
+      # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker.
+      # Paginate the comment list so the marker is found on busy PRs (no
+      # duplicate comments), then PATCH or POST.
       - name: Post sticky comment
         run: |
           set -euo pipefail
           id="$(gh api --paginate --slurp "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
                   --jq 'map(.[] | select(.body | startswith("<!-- blast-radius -->"))) | .[0].id // empty')"
           if [ -n "${id}" ]; then
-            gh api -X PATCH "repos/${REPOSITORY}/issues/comments/${id}" -F body=@report.md
+            gh api -X PATCH "repos/${REPOSITORY}/issues/comments/${id}" -F body=@comment.md
           else
-            gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -F body=@report.md
+            gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -F body=@comment.md
           fi
