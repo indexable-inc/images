@@ -45,7 +45,7 @@ let
   # writeShellApplication does, and `bash -n` + shellcheck run in the build so a
   # syntax or shellcheck-class bug fails the derivation instead of surfacing at
   # runtime. The body assumes `set -euo pipefail` + runtimeInputs on PATH. Same
-  # escape hatch as lib/apple-sdk-toolchain.nix's `mkScript`; kept inline so this
+  # escape hatch as lib/darwin/apple-sdk-toolchain.nix's `mkScript`; kept inline so this
   # module is self-contained and copy-pasteable for other people.
   mkBashApp =
     {

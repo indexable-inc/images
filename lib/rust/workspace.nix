@@ -223,7 +223,7 @@ in
 
     `target` is a Rust target triple. `aarch64-apple-darwin` /
     `x86_64-apple-darwin` build through the zig + macOS SDK toolchain (see
-    [`lib/apple-sdk-toolchain.nix`](lib/apple-sdk-toolchain.nix)); other triples
+    [`lib/darwin/apple-sdk-toolchain.nix`](lib/darwin/apple-sdk-toolchain.nix)); other triples
     (e.g. `x86_64-unknown-linux-musl`) build with the ordinary linker and only
     need a toolchain carrying the target `rust-std`. Returns the same shape as
     `units`; select a binary with `ix.cargoUnit.selectBinaryWithTests` or

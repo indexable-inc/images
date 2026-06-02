@@ -157,7 +157,7 @@ let
 
   /**
     Helpers that throw with a fixable error message instead of a deep-eval
-    crash. See [`lib/errors.nix`](lib/errors.nix) for the full surface:
+    crash. See [`lib/util/errors.nix`](lib/util/errors.nix) for the full surface:
     `assertEnum`, `requireArg`, `requireAttr`.
   */
   errors = import ./util/errors.nix { inherit lib; };
@@ -166,7 +166,7 @@ let
     Recursive attrset merge with two collision policies (`strict` throws,
     `rhs` wins) plus an N-ary `strictList`. Single sanctioned replacement
     for hand-rolled deep-merge and the patterns the `no-recursive-update`
-    rule flags. See [`lib/deep-merge.nix`](lib/deep-merge.nix).
+    rule flags. See [`lib/util/deep-merge.nix`](lib/util/deep-merge.nix).
   */
   deepMerge = import ./util/deep-merge.nix { inherit lib; };
 
@@ -200,7 +200,7 @@ let
       `indexbench assert` and fails if a metric exceeds its budget. Allocation
       counts are reproducible, so this path is a real, hermetic CI gate.
 
-    See [`lib/bench.nix`](lib/bench.nix) for the argument shape.
+    See [`lib/util/bench.nix`](lib/util/bench.nix) for the argument shape.
   */
   mkBenchSuite = import ./util/bench.nix {
     inherit lib writeNushellApplication;
@@ -319,14 +319,14 @@ let
   /**
     Pinned macOS SDK used to cross-compile Rust to Darwin from Linux. A
     function `{ pkgs }: derivation`; override it to supply your own SDK.
-    See [`lib/macos-sdk.nix`](lib/macos-sdk.nix).
+    See [`lib/darwin/macos-sdk.nix`](lib/darwin/macos-sdk.nix).
   */
   macosSdk = import ./darwin/macos-sdk.nix;
 
   /**
     zig + macOS SDK cross toolchain. `{ appleSdk, lib, pkgs, target }` returns
     `{ env, runtimeInputs, rustcArgsForPlatform }` consumed by
-    `rustWorkspace.unitsFor`. See [`lib/apple-sdk-toolchain.nix`](lib/apple-sdk-toolchain.nix).
+    `rustWorkspace.unitsFor`. See [`lib/darwin/apple-sdk-toolchain.nix`](lib/darwin/apple-sdk-toolchain.nix).
   */
   appleSdkToolchain = import ./darwin/apple-sdk-toolchain.nix;
 

@@ -71,7 +71,7 @@ let
   # syntax error or a shellcheck-class bug fails the derivation instead of
   # surfacing at runtime. The script body assumes `set -euo pipefail` and the
   # runtimeInputs on PATH, exactly as writeShellApplication would supply. Same
-  # escape hatch as lib/apple-sdk-toolchain.nix's `mkScript`.
+  # escape hatch as lib/darwin/apple-sdk-toolchain.nix's `mkScript`.
   mkBashApp =
     {
       name,

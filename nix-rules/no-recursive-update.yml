@@ -1,13 +1,13 @@
 id: no-recursive-update
 language: nix
 severity: warning
-message: "lib.recursiveUpdate silently replaces at leaf collisions. Use ix.deepMerge.strict (throws on collision) or ix.deepMerge.rhs (rhs wins) from `lib/deep-merge.nix`."
+message: "lib.recursiveUpdate silently replaces at leaf collisions. Use ix.deepMerge.strict (throws on collision) or ix.deepMerge.rhs (rhs wins) from `lib/util/deep-merge.nix`."
 note: |
   WHY: recursiveUpdate recurses into nested attrsets but silently rhs-replaces
   whenever both sides hit a non-attrset leaf at the same path. That hidden
   resolution is a frequent source of subtle bugs because the caller cannot tell
   from the call site whether a collision happened.
-  REPO: Use the named helpers in `lib/deep-merge.nix`:
+  REPO: Use the named helpers in `lib/util/deep-merge.nix`:
     * `ix.deepMerge.strict` throws naming the colliding attr path. Use when
       two inputs are supposed to contribute disjoint subtrees.
     * `ix.deepMerge.rhs` keeps the rhs-wins behavior but is explicit about it.
