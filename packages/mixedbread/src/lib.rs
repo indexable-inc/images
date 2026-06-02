@@ -239,8 +239,10 @@ impl Client {
         format!("{}{path}", self.base_url)
     }
 
-    /// Send a request with bearer auth, retrying on `429`/`5xx` with
-    /// `Retry-After`-aware, jittered backoff.
+    /// Send a request with bearer auth, retrying on `429`/`5xx` (with
+    /// `Retry-After`-aware, jittered backoff) and on transport-level send
+    /// failures (connection reset, HTTP/2 error, timeout) where no response
+    /// arrived. All failures share one [`MAX_RETRIES`] budget per request.
     ///
     /// `build` must produce a fresh [`reqwest::RequestBuilder`] on each call: a
     /// request body (notably multipart) is consumed by `send`, so a retry needs
@@ -255,23 +257,34 @@ impl Client {
     ) -> Result<reqwest::Response> {
         let mut attempt: u32 = 0;
         loop {
-            let resp = build()?
-                .bearer_auth(&self.api_key)
-                .send()
-                .await
-                .context(HttpSnafu)?;
-            let status = resp.status();
-            let retryable =
-                status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
-            if !retryable || attempt >= MAX_RETRIES {
-                return Ok(resp);
-            }
-            // Honor a server `Retry-After`, but never wait less than our
-            // jittered backoff: a `Retry-After: 0`/`1` under load would
-            // otherwise make every concurrent upload retry in lockstep, the
-            // very thundering herd this exists to avoid.
-            let wait = retry_after(&resp)
-                .map_or_else(|| backoff(attempt), |hint| hint.max(backoff(attempt)));
+            let wait = match build()?.bearer_auth(&self.api_key).send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let retryable =
+                        status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
+                    if !retryable || attempt >= MAX_RETRIES {
+                        return Ok(resp);
+                    }
+                    // Honor a server `Retry-After`, but never wait less than our
+                    // jittered backoff: a `Retry-After: 0`/`1` under load would
+                    // otherwise make every concurrent upload retry in lockstep,
+                    // the very thundering herd this exists to avoid.
+                    retry_after(&resp)
+                        .map_or_else(|| backoff(attempt), |hint| hint.max(backoff(attempt)))
+                }
+                // A transport-level failure (connection reset, HTTP/2 error,
+                // timeout) means no response arrived, so the request is safe to
+                // retry. Mixedbread sheds connections under load, so these are
+                // common during a large sync and were previously fatal per
+                // source. The non-idempotency caveat on `POST /v1/files` is the
+                // same as for a 5xx retry (documented at the call site).
+                Err(err) => {
+                    if attempt >= MAX_RETRIES {
+                        return Err(err).context(HttpSnafu);
+                    }
+                    backoff(attempt)
+                }
+            };
             attempt += 1;
             tokio::time::sleep(wait).await;
         }
@@ -822,6 +835,51 @@ mod tests {
         let client = Client::new(base, "test-key").expect("client");
         client.ensure_store("store").await.expect("succeeds after retries");
         // 2 rejected + 1 accepted.
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    /// TCP server that drops the connection without a response for the first
+    /// `fail_times` requests (a transport error, no HTTP status), then answers
+    /// `200`. Returns the base URL and a counter of accepted connections.
+    async fn spawn_flaky_tcp(fail_times: usize) -> (String, Arc<AtomicUsize>) {
+        use tokio::io::AsyncWriteExt as _;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let calls_task = Arc::clone(&calls);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    continue;
+                };
+                let n = calls_task.fetch_add(1, Ordering::SeqCst);
+                if n < fail_times {
+                    // Close immediately: the client sees the connection drop
+                    // before a response, i.e. a transport error.
+                    drop(sock);
+                } else {
+                    let _ = sock
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                        .await;
+                    let _ = sock.shutdown().await;
+                }
+            }
+        });
+        (format!("http://{addr}"), calls)
+    }
+
+    #[tokio::test]
+    async fn retries_transport_errors_then_succeeds() {
+        let (base, calls) = spawn_flaky_tcp(2).await;
+        let client = Client::new(base, "test-key").expect("client");
+        client
+            .ensure_store("store")
+            .await
+            .expect("succeeds after transport retries");
+        // 2 dropped connections + 1 accepted.
         assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
