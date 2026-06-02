@@ -192,7 +192,6 @@ let
     meta.description = "Report how many .#checks.x86_64-linux derivations a PR would rebuild";
     runtimeInputs = [
       pkgs.git
-      pkgs.nix
     ];
     text = ''
       const eval_jobs = "github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7"
@@ -204,6 +203,7 @@ let
             "--flake" $flakeref
             "--workers" "8"
             "--option" "accept-flake-config" "true"
+            "--option" "eval-cache" "false"
           ]
           | lines
           | each {|l| if (($l | str trim) | is-not-empty) { $l | from json } }
