@@ -28,7 +28,7 @@ use overlay_core::winit::event::{
 };
 use overlay_core::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use overlay_core::winit::window::{CursorIcon, Window, WindowId};
-use overlay_core::{anim, window as ocwin, DragClick, Gpu, HoverAnim};
+use overlay_core::{anim, window as ocwin, DragClick, Gpu, HoverAnim, TexHandle};
 
 use crate::bars::BossBar;
 use crate::db;
@@ -104,6 +104,29 @@ struct GpuCore {
     textures: BarTextures,
     format: wgpu::TextureFormat,
     alpha_mode: wgpu::CompositeAlphaMode,
+    /// Icon path -> uploaded texture, memoized so a bar's avatar uploads once
+    /// rather than every reconcile. `None` records a path that did not exist or
+    /// failed to decode, so a broken icon is tried once and then skipped.
+    icon_cache: HashMap<String, Option<TexHandle>>,
+}
+
+impl GpuCore {
+    /// Resolve an icon path to its texture, loading and caching on first use.
+    /// Empty path or a read/decode failure yields `None` (the bar draws without
+    /// an icon). Cached by path, so re-resolving across reconciles is free.
+    fn icon(&mut self, path: &str) -> Option<TexHandle> {
+        if path.is_empty() {
+            return None;
+        }
+        if let Some(cached) = self.icon_cache.get(path) {
+            return *cached;
+        }
+        let handle = std::fs::read(path)
+            .ok()
+            .and_then(|bytes| self.gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX));
+        self.icon_cache.insert(path.to_string(), handle);
+        handle
+    }
 }
 
 /// One bar's window and its surface.
@@ -112,6 +135,10 @@ struct BarWin {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     bar: BossBar,
+    /// Resolved texture for `bar.icon` (the square avatar), re-resolved whenever
+    /// the bar's icon path changes. `None` when the bar has no icon or it failed
+    /// to load.
+    icon_tex: Option<TexHandle>,
     /// Hover target: the pointer is currently over this bar.
     hovered: bool,
     /// Hover amount animated toward `hovered` each frame. Drives the grow +
@@ -203,6 +230,7 @@ impl App {
                 textures,
                 format,
                 alpha_mode,
+                icon_cache: HashMap::new(),
             });
         }
 
@@ -234,7 +262,7 @@ impl App {
         // edge. Measured on the CPU font, so this works before the GPU core exists
         // (the first window is created before its surface).
         let title_w = scene::title_extent_px(&bar, self.scale, now_unix());
-        let (w_px, h_px) = scene::bar_window_px(self.scale, title_w);
+        let (w_px, h_px) = scene::bar_window_px(self.scale, title_w, !bar.icon.is_empty());
         let pos = match bar.pos {
             Some(p) => LogicalPosition::new(p.x, p.y),
             None => self.auto_pos(slot, w_px, h_px),
@@ -247,12 +275,15 @@ impl App {
         let (surface, config) = self.make_surface(&window);
         window.request_redraw();
         let has_description = !bar.description.trim().is_empty();
+        // `make_surface` guarantees the GPU core exists, so the icon can upload now.
+        let icon_tex = self.core.as_mut().and_then(|c| c.icon(&bar.icon));
         let now = Instant::now();
         Some(BarWin {
             window,
             surface,
             config,
             bar,
+            icon_tex,
             hovered: false,
             hover_anim: HoverAnim::default(),
             last: now,
@@ -301,6 +332,11 @@ impl App {
                     win.window.request_redraw();
                 }
                 win.has_description = !b.description.trim().is_empty();
+                // Re-resolve the avatar only when the icon path actually changed,
+                // so a steady bar does not re-touch the cache each reconcile.
+                if win.bar.icon != b.icon {
+                    win.icon_tex = self.core.as_mut().and_then(|c| c.icon(&b.icon));
+                }
                 win.bar = b.clone();
                 // Honor a position set in the DB by something other than our own
                 // drag (e.g. the CLI), but do not fight a live drag: while the
@@ -376,6 +412,7 @@ impl App {
         let mut quads = scene::build_one(
             &core.gpu,
             &core.textures,
+            win.icon_tex,
             self.scale,
             win.config.width,
             win.config.height,
@@ -502,7 +539,7 @@ impl App {
             scene::expanded_window_px(&core.gpu, &win.bar, self.scale, now)
         } else {
             let title_w = scene::title_extent_px(&win.bar, self.scale, now);
-            scene::bar_window_px(self.scale, title_w)
+            scene::bar_window_px(self.scale, title_w, !win.bar.icon.is_empty())
         };
         let (prev_w, _) = win.last_size;
         if win.last_size == (w_px, h_px) {

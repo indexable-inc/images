@@ -132,6 +132,12 @@ pub struct BossBar {
     /// the title), set once the bar is dragged. `None` keeps the bar in the
     /// auto-stacked top-center column. Persisted to the `x`/`y` DB columns.
     pub pos: Option<glam::DVec2>,
+    /// Filesystem path to a small image (PNG/JPEG) drawn as a square icon to the
+    /// left of the title, e.g. the GitHub avatar of whoever opened a PR. Empty
+    /// means no icon. The overlay loads and caches it by path; a path that does
+    /// not exist or fails to decode is simply skipped (the bar still draws).
+    /// Persisted to the `icon` DB column.
+    pub icon: String,
 }
 
 #[cfg(test)]

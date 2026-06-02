@@ -158,6 +158,60 @@ EOF
   printf '%s' "$avg"
 }
 
+# GitHub avatars are cached on disk and reused across polls so a steady bar does
+# not re-download a face every ~20s. One PNG per login under avatars/, refreshed
+# only when older than this many seconds.
+avatar_dir="$state_dir/avatars"
+mkdir -p "$avatar_dir"
+avatar_ttl=604800 # 7 days
+
+# Resolve a GitHub login to a local avatar PNG path, downloading (and caching) it
+# on first use. Prints the path on success, nothing on failure (an empty --icon
+# clears the bar's icon, so a missing avatar just draws the bar without a face).
+# `https://github.com/<login>.png` redirects to the user's avatar at the asked
+# size; curl follows it (-L). Logins are [A-Za-z0-9-], safe as a filename.
+avatar_for_login() {
+  local login="$1" f
+  [ -n "$login" ] || return 0
+  case "$login" in *[!A-Za-z0-9-]*) return 0 ;; esac # paranoia: never a path
+  f="$avatar_dir/$login.png"
+  if [ ! -s "$f" ] || [ "$((now - $(date -r "$f" +%s 2>/dev/null || echo 0)))" -ge "$avatar_ttl" ]; then
+    # Download to a temp then move, so a torn/failed download never leaves a
+    # half-written PNG the overlay would fail to decode. -f: no body on HTTP error.
+    if curl -fsSL "https://github.com/$login.png?size=128" -o "$f.tmp" 2>/dev/null; then
+      mv -f "$f.tmp" "$f"
+    else
+      rm -f "$f.tmp"
+      [ -s "$f" ] || return 0 # no fresh copy and no usable old one
+    fi
+  fi
+  printf '%s' "$f"
+}
+
+# Squeeze a PR/commit title into one clean ASCII line for the bitmap font, which
+# has no glyphs outside printable ASCII: drop non-ASCII (emoji, accents), collapse
+# runs of whitespace, trim, and clip to a width that fits a boss bar without
+# wrapping. Keeps the human-readable head of a long title with an ellipsis.
+clean_title() {
+  perl -CS -pe 's/[^\x20-\x7E]//g; s/\s+/ /g; s/^ //; s/ $//;' <<<"${1:-}" \
+    | { read -r line || true; if [ "${#line}" -gt 56 ]; then printf '%s...' "${line:0:53}"; else printf '%s' "$line"; fi; }
+}
+
+# Login of the author of a commit, cached per sha for the poll (a main-branch bar
+# has no PR, so its face comes from whoever pushed the commit). Empty on failure.
+declare -A sha_login_cache
+commit_login() {
+  local repo="$1" sha="$2" login
+  local key="$repo@$sha"
+  if [ -n "${sha_login_cache[$key]+x}" ]; then
+    printf '%s' "${sha_login_cache[$key]}"
+    return
+  fi
+  login="$(gh api "repos/$repo/commits/$sha" --jq '.author.login // ""' 2>/dev/null || printf '')"
+  sha_login_cache["$key"]="$login"
+  printf '%s' "$login"
+}
+
 # Branch urls with in-flight CI this poll (newline-separated), used to prune bars
 # for branches whose latest commit has finished. Identity is the branch, so a
 # branch's checks (across pushes) share ONE bar.
@@ -179,6 +233,26 @@ for repo in "${repos[@]}"; do
   # assoc array, so a prior repo's entries would otherwise leak into this one.
   unset c_total c_done c_running c_queued c_minstart c_partmilli c_created c_maxavg b_latest_sha b_latest_created
   declare -A c_total c_done c_running c_queued c_minstart c_partmilli c_created c_maxavg b_latest_sha b_latest_created
+
+  # Open PRs for this repo, so a CI bar can show the PR title + author face
+  # instead of an opaque ref. Keyed both by head branch name (for branch runs)
+  # and by "#<number>" (for the `refs/pull/<N>/head` refs that PR-event runs
+  # report as their branch). One list call per repo; failure leaves the maps
+  # empty and the bars fall back to the branch label with no face.
+  unset pr_title pr_login
+  declare -A pr_title pr_login
+  while IFS=$'\t' read -r prnum prhead prlogin prtitle; do
+    [ -n "$prnum" ] || continue
+    pr_title["#$prnum"]="$prtitle"
+    pr_login["#$prnum"]="$prlogin"
+    if [ -n "$prhead" ]; then
+      pr_title["$prhead"]="$prtitle"
+      pr_login["$prhead"]="$prlogin"
+    fi
+  done < <(gh pr list --repo "$repo" --state open --limit 200 \
+    --json number,title,headRefName,author 2>/dev/null \
+    | jq -r '.[] | [(.number|tostring), .headRefName, (.author.login // ""), .title] | @tsv' \
+    2>/dev/null || true)
   while IFS=$'\t' read -r sha branch status wf started created; do
     [ -n "$sha" ] || continue
     c_total["$sha"]=$((${c_total["$sha"]:-0} + 1))
@@ -265,8 +339,32 @@ https://github.com/$repo/commits/$branch"
     eta=${c_maxavg[$sha]:-0}
     [ "$eta" -gt 0 ] 2>/dev/null || eta="$default_avg"
 
-    # ASCII-only title (bitmap font): repo + branch, nothing else.
-    bar_title="$short: $branch"
+    # Human-readable title + author face. A `refs/pull/<N>/head` ref (how PR-event
+    # runs report their branch) maps to PR #N; a plain branch maps to an open PR
+    # by head name. With a PR we show its title and the author's avatar; without
+    # one (e.g. a push to main) we keep the "<repo>: <branch>" label and use the
+    # commit author's face. Titles are squeezed to one clean ASCII line for the
+    # bitmap font.
+    pr_key=""
+    case "$branch" in
+      refs/pull/*/*)
+        num="${branch#refs/pull/}"
+        num="${num%%/*}"
+        [ -n "$num" ] && pr_key="#$num"
+        ;;
+      *) pr_key="$branch" ;;
+    esac
+    title="${pr_title[$pr_key]:-}"
+    login="${pr_login[$pr_key]:-}"
+    if [ -n "$title" ]; then
+      bar_title="$(clean_title "$title")"
+    else
+      # No PR: fall back to the readable branch label and the commit author's face.
+      bar_title="$short: $branch"
+      [ -n "$sha" ] && login="$(commit_login "$repo" "$sha")"
+    fi
+    [ -n "$bar_title" ] || bar_title="$short: $branch"
+    icon="$(avatar_for_login "$login")"
 
     # Always pass --eta, and --since once the commit's CI has started, so the
     # overlay extrapolates the fill live; both update if a newer commit lands on
@@ -278,9 +376,9 @@ https://github.com/$repo/commits/$branch"
     # empty `"${a[@]}"`; the Nix wrapper's bash 5 does not).
     id="$(bar_id_for_url "$url")"
     if [ -z "$id" ]; then
-      bossbar add "$bar_title" --color "$color" --overlay progress --progress "$prog" --position -1 --eta "$eta" ${since_args[@]+"${since_args[@]}"} --url "$url" --box 0 2>/dev/null || true
+      bossbar add "$bar_title" --color "$color" --overlay progress --progress "$prog" --position -1 --eta "$eta" ${since_args[@]+"${since_args[@]}"} --url "$url" --icon "$icon" --box 0 2>/dev/null || true
     else
-      bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --eta "$eta" ${since_args[@]+"${since_args[@]}"} --box 0 2>/dev/null || true
+      bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --eta "$eta" ${since_args[@]+"${since_args[@]}"} --icon "$icon" --box 0 2>/dev/null || true
     fi
   done <<EOF
 $selected

@@ -40,6 +40,39 @@ const MAX_SCALE: f32 = HOVER_SCALE * (1.0 + BREATHE_AMP);
 /// White tint: a sprite shows its texture unchanged.
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
+/// Gap (source px) between a bar's square icon and its title text. The icon is
+/// drawn as a square the height of the title row, so `[icon][gap]title` reads as
+/// one centered unit above the bar.
+const ICON_GAP: f32 = 2.0;
+
+/// How tall the title row grows when a bar has an icon, as a multiple of the
+/// glyph height. The square avatar fills the row, so a value > 1 makes the face
+/// large enough to recognize while the text stays centered beside it. The bar
+/// track and the rest of the layout shift down to keep the avatar from
+/// overlapping the bar.
+const ICON_SCALE: f32 = 2.0;
+
+/// Glyph height (source px) of one title row. The avatar is a square of the row
+/// height; with an icon the row is [`ICON_SCALE`] glyphs tall, else one glyph.
+const GLYPH_PX: f32 = 8.0;
+
+/// Title-row height in physical px: `ICON_SCALE` glyphs when the bar carries an
+/// icon (room for the square avatar), one glyph otherwise. `glyph_px` is the
+/// glyph height at the current scale (`GLYPH_PX * s`). Shared by the live and
+/// snapshot layout paths and the window-sizing helpers so geometry stays in sync.
+fn title_row_h(glyph_px: f32, has_icon: bool) -> f32 {
+    if has_icon {
+        glyph_px * ICON_SCALE
+    } else {
+        glyph_px
+    }
+}
+
+/// Largest dimension (px) an icon texture is downscaled to on upload. The icon
+/// draws at roughly the title-row height (tens of px), so a small cap keeps the
+/// nearest-sampled avatar legible without holding a full-size photo on the GPU.
+pub const ICON_MAX_PX: u32 = 96;
+
 /// Description pop-down panel, in native (unscaled) pixels. Everything is
 /// multiplied by the integer sprite `scale`, so the panel stays pixel-crisp and
 /// proportional to the bars at any display scale.
@@ -179,6 +212,9 @@ struct DrawItem<'a> {
     geom: BarBox,
     alpha: f32,
     panel: Option<PanelBox>,
+    /// Loaded texture for the bar's square icon, if it has one and it decoded.
+    /// Drawn left of the title; `None` draws the title alone, as before.
+    icon: Option<TexHandle>,
 }
 
 /// The fill fraction to draw: extrapolated live from `since`/`eta` when both are
@@ -219,14 +255,30 @@ fn build_item(gpu: &Gpu, tex: &BarTextures, scale: u32, now_unix: i64, item: &Dr
         // means a scale of `title_px / 8`.
         let glyph_scale = bx.title_px / 8.0;
         let text_w = gpu.measure(&shown, glyph_scale);
-        // Center the title within the bar width.
-        let tx = bx.left + (bx.bar_w - text_w) * 0.5;
+        // A square avatar (when present and loaded) leads the title: lay them out
+        // as one `[icon][gap]title` unit centered within the bar width, so the
+        // title stays visually centered with the face beside it. The avatar fills
+        // the title row, which is taller (see `title_row_h`) when the bar has an
+        // icon; the text is vertically centered in that row beside the face. The
+        // row height tracks `b.icon` (what the geometry reserved) so the layout is
+        // stable even if the image failed to decode and no avatar is drawn.
+        let has_icon = !b.icon.is_empty();
+        let row_h = title_row_h(bx.title_px, has_icon);
+        let text_y = bx.title_top + (row_h - bx.title_px) * 0.5;
+        let icon_side = if item.icon.is_some() { row_h } else { 0.0 };
+        let icon_gap = if item.icon.is_some() { ICON_GAP * glyph_scale } else { 0.0 };
+        let unit_w = icon_side + icon_gap + text_w;
+        let unit_left = bx.left + (bx.bar_w - unit_w) * 0.5;
+        if let Some(icon) = item.icon {
+            quads.push(Quad::new(icon, unit_left, bx.title_top, icon_side, icon_side, tint));
+        }
+        let tx = unit_left + icon_side + icon_gap;
         let shadow = with_alpha(SHADOW, alpha);
         let fg = with_alpha(WHITE, alpha);
         // The shadow offset is a fixed (unscaled) pixel, matching the old
         // glyphon path which offset by `self.scale`, not the grown glyph scale.
-        let _ = gpu.text(&shown, tx + shadow_off, bx.title_top + shadow_off, glyph_scale, shadow, quads);
-        let _ = gpu.text(&shown, tx, bx.title_top, glyph_scale, fg, quads);
+        let _ = gpu.text(&shown, tx + shadow_off, text_y + shadow_off, glyph_scale, shadow, quads);
+        let _ = gpu.text(&shown, tx, text_y, glyph_scale, fg, quads);
     }
 
     // Color background, then color progress cropped to the fill.
@@ -379,7 +431,17 @@ pub fn title_extent_px(bar: &BossBar, scale: u32, now_unix: i64) -> f32 {
     // The grown title row is `8 * scale * MAX_SCALE` px tall, so each glyph samples
     // at `scale * MAX_SCALE` source-px (the `title_px / 8` of `build_one`, maxed).
     let glyph_scale = scale.max(1) as f32 * MAX_SCALE;
-    overlay_core::bitmap_font::shared().measure(&shown, glyph_scale)
+    let text_w = overlay_core::bitmap_font::shared().measure(&shown, glyph_scale);
+    // Reserve room for the square avatar (a row-height square, so `ICON_SCALE`
+    // glyphs wide) plus its gap, so the window holds `[icon][gap]title` without
+    // the title being clipped. Over-reserves harmlessly if the icon later fails
+    // to load.
+    let icon_w = if bar.icon.is_empty() {
+        0.0
+    } else {
+        (GLYPH_PX * ICON_SCALE + ICON_GAP) * glyph_scale
+    };
+    text_w + icon_w
 }
 
 /// Physical-pixel size of the window that holds one bar at `scale` (base scale
@@ -388,12 +450,18 @@ pub fn title_extent_px(bar: &BossBar, scale: u32, now_unix: i64) -> f32 {
 /// [`title_extent_px`]); the window widens to hold a title longer than the bar,
 /// and a nonzero `title_w` adds the title row. Plus a one-pixel-scaled shadow
 /// margin on the right and bottom.
-pub fn bar_window_px(scale: u32, title_w: f32) -> (u32, u32) {
+pub fn bar_window_px(scale: u32, title_w: f32, has_icon: bool) -> (u32, u32) {
     let s = scale.max(1) as f32 * MAX_SCALE;
     let bar_w = BAR_W as f32 * s;
     let bar_h = BAR_H as f32 * s;
     let has_title = title_w > 0.0;
-    let title = if has_title { 8.0 * s + 1.0 * s } else { 0.0 };
+    // The title row grows for the square avatar when the bar has an icon; reserve
+    // that height plus the one-px title gap so the taller row is never clipped.
+    let title = if has_title {
+        title_row_h(GLYPH_PX * s, has_icon) + 1.0 * s
+    } else {
+        0.0
+    };
     let shadow = scale.max(1) as f32;
     // Hold whichever is wider, the bar sprite or the title text; both trail the
     // one-pixel shadow down-right, so the shadow margin covers the right edge too.
@@ -406,7 +474,7 @@ pub fn bar_window_px(scale: u32, title_w: f32) -> (u32, u32) {
 /// size when the bar has no description. The overlay grows the window to this on
 /// hover so the panel has room to unfold.
 pub fn expanded_window_px(gpu: &Gpu, bar: &BossBar, scale: u32, now_unix: i64) -> (u32, u32) {
-    let (cw, ch) = bar_window_px(scale, title_extent_px(bar, scale, now_unix));
+    let (cw, ch) = bar_window_px(scale, title_extent_px(bar, scale, now_unix), !bar.icon.is_empty());
     match panel_size(gpu, &bar.description, scale) {
         Some((panel_w, panel_h)) => {
             let gap = panel::GAP * scale.max(1) as f32;
@@ -430,9 +498,11 @@ pub fn expanded_window_px(gpu: &Gpu, bar: &BossBar, scale: u32, now_unix: i64) -
 /// overlay enlarges it on hover, see [`expanded_window_px`]), a description panel
 /// unfolds beneath the bar, revealing with `hover`.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn build_one(
     gpu: &Gpu,
     tex: &BarTextures,
+    icon: Option<TexHandle>,
     scale: u32,
     width: u32,
     height: u32,
@@ -452,8 +522,15 @@ pub fn build_one(
     let s = scale as f32 * scale_mul;
     let shadow = scale as f32;
     let has_title = !bar.title.is_empty();
-    let title_px = 8.0 * s;
-    let title_h = if has_title { title_px } else { 0.0 };
+    let has_icon = !bar.icon.is_empty();
+    let title_px = GLYPH_PX * s;
+    // The row grows to fit a square avatar when the bar has an icon; the title
+    // text is vertically centered within it (see `build_item`).
+    let title_h = if has_title {
+        title_row_h(title_px, has_icon)
+    } else {
+        0.0
+    };
     let title_gap = if has_title { 1.0 * s } else { 0.0 };
     let bar_w = BAR_W as f32 * s;
     let bar_h = BAR_H as f32 * s;
@@ -462,7 +539,7 @@ pub fn build_one(
     // plus its grow/breathe headroom. Any extra window height below that is the
     // panel's drop area, so the bar stays put as the panel unfolds. Only the
     // height is read here, so the title width need not be exact.
-    let collapsed_h = bar_window_px(scale, title_extent_px(bar, scale, now_unix)).1 as f32;
+    let collapsed_h = bar_window_px(scale, title_extent_px(bar, scale, now_unix), has_icon).1 as f32;
     let top_region_h = collapsed_h.min(height as f32);
 
     // Center the content (plus its shadow offset) in the top region so growth on
@@ -514,6 +591,7 @@ pub fn build_one(
         geom,
         alpha,
         panel,
+        icon,
     };
     let mut quads = Vec::new();
     build_item(gpu, tex, scale, now_unix, &item, &mut quads);
@@ -528,6 +606,7 @@ pub fn build_one(
 pub fn build_all(
     gpu: &Gpu,
     tex: &BarTextures,
+    icons: &[Option<TexHandle>],
     scale: u32,
     width: u32,
     now_unix: i64,
@@ -552,7 +631,12 @@ pub fn build_all(
     let boxes = layout(scale, bars, width as f32, &sizes, gap);
 
     let mut quads = Vec::new();
-    for ((bar, geom), size) in bars.iter().zip(boxes).zip(&sizes) {
+    for (((bar, geom), size), icon) in bars
+        .iter()
+        .zip(boxes)
+        .zip(&sizes)
+        .zip(icons.iter().copied().chain(std::iter::repeat(None)))
+    {
         let panel = size.map(|(panel_w, panel_h)| PanelBox {
             x: ((width as f32 - panel_w) * 0.5).max(0.0),
             y: geom.track_y + geom.bar_h + gap,
@@ -571,6 +655,7 @@ pub fn build_all(
             geom,
             alpha: if Some(bar.id) == highlight { 1.0 } else { opacity },
             panel,
+            icon,
         };
         build_item(gpu, tex, scale, now_unix, &item, &mut quads);
     }
@@ -601,7 +686,13 @@ fn layout(
     let mut y = top_pad;
     for (b, panel) in bars.iter().zip(panels) {
         let has_title = !b.title.is_empty();
-        let title_h = if has_title { title_px } else { 0.0 };
+        // Same icon-aware taller row as the live path, so the snapshot reserves
+        // room for the avatar and matches what the overlay draws.
+        let title_h = if has_title {
+            title_row_h(title_px, !b.icon.is_empty())
+        } else {
+            0.0
+        };
         let track_y = y + title_h + if has_title { title_gap } else { 0.0 };
         boxes.push(BarBox {
             left: center_x,
@@ -666,6 +757,7 @@ mod tests {
             pos: None,
             expandable: true,
             eta: None,
+            icon: String::new(),
         }
     }
 
@@ -683,7 +775,7 @@ mod tests {
 
         for scale in [1u32, 2, 3, 4] {
             let text_w = title_extent_px(&bar, scale, now);
-            let (width, _h) = bar_window_px(scale, text_w);
+            let (width, _h) = bar_window_px(scale, text_w, false);
             let width = width as f32;
 
             // The title overflows the bar, so the window must be widened for it.
@@ -693,7 +785,7 @@ mod tests {
                 text_w > bar_w,
                 "test title should exceed the bar at scale {scale}: {text_w} vs {bar_w}",
             );
-            let bar_only = bar_window_px(scale, 0.0).0 as f32;
+            let bar_only = bar_window_px(scale, 0.0, false).0 as f32;
             assert!(width > bar_only, "window must grow past bar-only at scale {scale}");
 
             // Reproduce build_one's widest layout (hover = breathe = 1 → MAX_SCALE).
@@ -722,7 +814,7 @@ mod tests {
         let bar = bar_with_title("US East: Health lifecycle image", Some(0));
         let now = 6815; // 1:53:35
         let scale = 3;
-        let (width, height) = bar_window_px(scale, title_extent_px(&bar, scale, now));
+        let (width, height) = bar_window_px(scale, title_extent_px(&bar, scale, now), false);
         let dir = std::env::temp_dir();
         for (tag, hover, breathe) in [("rest", 0.0f32, 0.0f32), ("grown", 1.0, 1.0)] {
             let out = dir.join(format!("bossbar_title_{tag}_{width}x{height}.png"));
@@ -731,7 +823,7 @@ mod tests {
                 height,
                 |gpu| {
                     let tex = register(gpu);
-                    build_one(gpu, &tex, scale, width, height, now, &bar, hover, breathe)
+                    build_one(gpu, &tex, None, scale, width, height, now, &bar, hover, breathe)
                 },
                 &out,
             )
@@ -749,6 +841,6 @@ mod tests {
         assert_eq!(title_extent_px(&bar, scale, 1234), 0.0);
         let s_max = scale as f32 * MAX_SCALE;
         let expected_w = (BAR_W as f32 * s_max + scale as f32).ceil() as u32;
-        assert_eq!(bar_window_px(scale, 0.0).0, expected_w);
+        assert_eq!(bar_window_px(scale, 0.0, false).0, expected_w);
     }
 }

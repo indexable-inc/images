@@ -27,7 +27,7 @@ use layershellev::{
 use overlay_core::glam::DVec2;
 use overlay_core::wgpu;
 use overlay_core::winit::dpi::PhysicalPosition;
-use overlay_core::{DragClick, Gpu, HoverAnim, anim, window as ocwin};
+use overlay_core::{DragClick, Gpu, HoverAnim, TexHandle, anim, window as ocwin};
 
 use crate::bars::BossBar;
 use crate::db;
@@ -64,6 +64,26 @@ struct GpuCore {
     textures: BarTextures,
     format: wgpu::TextureFormat,
     alpha_mode: wgpu::CompositeAlphaMode,
+    /// Icon path -> uploaded texture, memoized so a bar's avatar uploads once.
+    /// `None` records a path that failed to load, so it is tried once then skipped.
+    icon_cache: HashMap<String, Option<TexHandle>>,
+}
+
+impl GpuCore {
+    /// Resolve an icon path to its texture, loading and caching on first use.
+    fn icon(&mut self, path: &str) -> Option<TexHandle> {
+        if path.is_empty() {
+            return None;
+        }
+        if let Some(cached) = self.icon_cache.get(path) {
+            return *cached;
+        }
+        let handle = std::fs::read(path)
+            .ok()
+            .and_then(|bytes| self.gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX));
+        self.icon_cache.insert(path.to_string(), handle);
+        handle
+    }
 }
 
 struct BarWin {
@@ -75,6 +95,8 @@ struct BarWin {
     hover_anim: HoverAnim,
     last: Instant,
     gesture: DragClick,
+    /// Resolved texture for `bar.icon`; re-resolved when the icon path changes.
+    icon_tex: Option<TexHandle>,
     self_set: Pos,
     press_cursor: Option<PhysicalPosition<f64>>,
     press_pos: Option<Pos>,
@@ -307,7 +329,7 @@ impl App {
         let scale_factor = 1.0;
         let scale = self.scale(scale_factor);
         let title_w = scene::title_extent_px(&bar, scale, now_unix());
-        let size = scene::bar_window_px(scale, title_w);
+        let size = scene::bar_window_px(scale, title_w, !bar.icon.is_empty());
         let pinned = bar.pos.is_some();
         let pos = bar
             .pos
@@ -316,6 +338,10 @@ impl App {
         let shell_id = ShellId::unique();
         let now = Instant::now();
         let has_description = !bar.description.trim().is_empty();
+        // The GPU core is created lazily on the first layer surface, so it may not
+        // exist yet here; `icon` returns None in that case and `reconcile`
+        // resolves the avatar once the core is up.
+        let icon_tex = self.core.as_mut().and_then(|c| c.icon(&bar.icon));
         self.wins.insert(
             bar.id,
             BarWin {
@@ -323,6 +349,7 @@ impl App {
                 surface: None,
                 config: None,
                 bar: bar.clone(),
+                icon_tex,
                 hovered: false,
                 hover_anim: HoverAnim::default(),
                 last: now,
@@ -404,6 +431,14 @@ impl App {
                 .and_then(|win| Self::output_logical_width(ev, win.shell_id));
             if let Some(win) = self.wins.get_mut(&bar.id) {
                 win.has_description = !bar.description.trim().is_empty();
+                // Resolve the avatar when the icon path changed, or when it was not
+                // yet resolved (e.g. the GPU core came up after this bar was first
+                // created). Disjoint field borrows (`wins` vs `core`) are fine.
+                let need_icon =
+                    win.bar.icon != bar.icon || (win.icon_tex.is_none() && !bar.icon.is_empty());
+                if need_icon {
+                    win.icon_tex = self.core.as_mut().and_then(|c| c.icon(&bar.icon));
+                }
                 let local_position_active = win.local_position_active(now);
                 let local_pinned = win.bar.pos.is_some();
                 let local_pos = win.self_set;
@@ -521,6 +556,7 @@ impl App {
                 textures,
                 format,
                 alpha_mode,
+                icon_cache: HashMap::new(),
             });
         }
 
@@ -546,12 +582,12 @@ impl App {
                 Some(core) => scene::expanded_window_px(&core.gpu, &win.bar, win.scale, now),
                 None => {
                     let title_w = scene::title_extent_px(&win.bar, win.scale, now);
-                    scene::bar_window_px(win.scale, title_w)
+                    scene::bar_window_px(win.scale, title_w, !win.bar.icon.is_empty())
                 }
             }
         } else {
             let title_w = scene::title_extent_px(&win.bar, win.scale, now);
-            scene::bar_window_px(win.scale, title_w)
+            scene::bar_window_px(win.scale, title_w, !win.bar.icon.is_empty())
         };
 
         if win.last_size == size {
@@ -640,7 +676,7 @@ impl App {
             // If this frame just eased a leaving hover to rest, the size-settle
             // pass above kept the expanded surface. Queue one more pass to shrink it.
             let title_w = scene::title_extent_px(&win.bar, win.scale, unix_now);
-            let collapsed_size = scene::bar_window_px(win.scale, title_w);
+            let collapsed_size = scene::bar_window_px(win.scale, title_w, !win.bar.icon.is_empty());
             (
                 hover,
                 !win.wants_expanded() && win.last_size != collapsed_size,
@@ -678,6 +714,7 @@ impl App {
         let quads = scene::build_one(
             &core.gpu,
             &core.textures,
+            win.icon_tex,
             win.scale,
             config.width,
             config.height,
