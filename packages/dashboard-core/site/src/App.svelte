@@ -1,12 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { store, connect } from '$lib/stream.svelte';
+  import { ui, startClock } from '$lib/ui.svelte';
   import { refreshRatio, bumpTheme } from '$lib/metrics.svelte';
   import { onThemeChange } from '$lib/ansi';
   import Board from '$components/Board.svelte';
+  import FocusView from '$components/FocusView.svelte';
+  import Timeline from '$components/Timeline.svelte';
 
   onMount(() => {
     refreshRatio();
+    startClock();
     connect();
     // Remeasure once Berkeley Mono (if present) loads, and repaint on a theme
     // flip so chrome and terminal palette stay in sync.
@@ -22,4 +26,9 @@
   <span class="stat">{store.status}</span>
 </div>
 
-<Board />
+<div class="stage">
+  <Board />
+  {#if ui.focusKey}<FocusView />{/if}
+</div>
+
+<Timeline />

@@ -1,14 +1,17 @@
 // One pane record as it arrives in the Loro doc, keyed by `scope<0x1f>id`.
 //
-// The hub stores common scalars (`kind`, `title`, `subtitle`) plus one `body`
-// text — a terminal screen, an HTML document, or a data view's JSON — and, for
-// terminals, the geometry and cursor/exit scalars. A renderer reads only the
-// fields its kind defines; the rest stay undefined.
+// The hub stores common scalars (`kind`, `created_at`, `title`, `subtitle`) plus
+// one Loro text per large field the view declares — a terminal/html/data `body`,
+// or an exec's `source`/`stdout`/`stderr`/`result` — and the view's own scalars.
+// A renderer reads only the fields its kind defines; the rest stay undefined.
 export interface PaneRecord {
   kind?: string;
   title?: string;
   subtitle?: string;
-  // The one large mutable field, interpreted by `kind`.
+  // Milliseconds since the epoch, stamped once when the pane first appears. Every
+  // pane has it; the card renders it as a human age.
+  created_at?: number;
+  // The one large mutable field for terminal/html/data, interpreted by `kind`.
   body?: string;
   // terminal-only geometry, cursor, and exit state
   rows?: number;
@@ -19,6 +22,14 @@ export interface PaneRecord {
   cursor_col?: number;
   cursor_visible?: boolean;
   cursor_shape?: string;
+  // exec-only: the source behind the run, its captured streams, and its status
+  source?: string;
+  stdout?: string;
+  stderr?: string;
+  result?: string;
+  running?: boolean;
+  ok?: boolean;
+  lang?: string;
   // data-only: the name of the frontend renderer to dispatch to
   renderer?: string;
 }

@@ -23,3 +23,5 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 serde_json.workspace = true
+loro.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }

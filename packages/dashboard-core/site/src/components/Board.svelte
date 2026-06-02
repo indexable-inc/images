@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { store, SCOPE_SEP } from '$lib/stream.svelte';
+  import { store, timeline, SCOPE_SEP } from '$lib/stream.svelte';
   import {
     loadPositions,
     savePositions,
@@ -55,17 +55,27 @@
   // not re-trigger this effect; it only depends on the pane set.
   $effect(() => {
     const present = new Set(Object.keys(store.panes));
+    // Scrubbing and replay make panes come and go as the timeline moves; pruning
+    // then would discard a card's arranged position the moment it leaves the
+    // replayed instant and re-place it on return. Only prune while following the
+    // *live* tail, where a vanished pane is genuinely gone. A loaded recording
+    // reaching its end also sets `following`, so gate on the live source too,
+    // else jumping to END would delete layout for panes absent from the final
+    // frame (including the user's live layout).
+    const pruneStale = timeline.source === 'live' && timeline.following;
     untrack(() => {
       let changed = false;
       // Prune layout for panes that have left. The MCP spawns many short-lived
       // panes, so without this the maps (and localStorage) grow without bound
       // and `autoPlace` pushes every new pane further off-screen as stale keys
       // accumulate.
-      for (const k of Object.keys(positions)) {
-        if (!present.has(k)) {
-          delete positions[k];
-          delete zOrder[k];
-          changed = true;
+      if (pruneStale) {
+        for (const k of Object.keys(positions)) {
+          if (!present.has(k)) {
+            delete positions[k];
+            delete zOrder[k];
+            changed = true;
+          }
         }
       }
       // Give any newly-seen pane a starting slot, indexed by the live count.

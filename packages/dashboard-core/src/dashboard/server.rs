@@ -1,19 +1,24 @@
-//! The HTTP surface: one page plus an SSE endpoint, served from a [`Hub`].
+//! The HTTP surface: one page, an SSE endpoint, and the recordings routes,
+//! served from a [`Hub`] (and an optional [`RecordingStore`]).
 //!
 //! [`serve_hub`] binds the listener, starts the server task, and hands back a
 //! [`Dashboard`] handle plus a shutdown receiver the caller threads into its own
 //! frame-source tasks (the in-process poller, or the aggregator's socket
 //! readers). One owner for the router means the in-process dashboard and the
-//! standalone aggregator render through exactly the same page and stream.
+//! standalone aggregator render through exactly the same page and stream. When a
+//! store is supplied, `/recordings` lists saved sessions and `/recording/<id>`
+//! serves one snapshot for replay; without one, those routes report no
+//! recordings, so the in-process dashboard works unchanged.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Path, State};
+use axum::http::{StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Json};
 use axum::routing::get;
 use futures::{Stream, StreamExt as _};
 use tokio::net::TcpListener;
@@ -23,10 +28,19 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use super::hub::Hub;
+use super::recordings::RecordingStore;
 use crate::{Error, Result};
 
 /// The single page the dashboard serves; it connects back over `/events`.
 const DASHBOARD_HTML: &str = include_str!("dashboard.html");
+
+/// Shared router state: the live document and, optionally, the on-disk
+/// recordings. Cloning is cheap: both fields are `Arc`s.
+#[derive(Clone)]
+struct AppState {
+    hub: Arc<Hub>,
+    recordings: Option<Arc<RecordingStore>>,
+}
 
 /// A running dashboard server. Dropping it, or calling [`Dashboard::stop`],
 /// shuts the HTTP server and every attached frame-source task down.
@@ -97,6 +111,10 @@ impl Drop for Dashboard {
 /// against the returned receiver and attaches them with
 /// [`Dashboard::push_task`], so one shutdown signal stops the whole dashboard.
 ///
+/// `recordings` enables the replay routes: pass the aggregator's
+/// [`RecordingStore`] to serve saved sessions, or `None` (the in-process
+/// dashboard) to leave the routes reporting an empty list.
+///
 /// # Errors
 ///
 /// Returns [`Error::Dashboard`] when `addr` cannot be bound or its resolved
@@ -104,6 +122,7 @@ impl Drop for Dashboard {
 pub async fn serve_hub(
     hub: Arc<Hub>,
     addr: SocketAddr,
+    recordings: Option<Arc<RecordingStore>>,
     runtime: &tokio::runtime::Handle,
 ) -> Result<(Dashboard, watch::Receiver<bool>)> {
     let listener = TcpListener::bind(addr)
@@ -121,7 +140,9 @@ pub async fn serve_hub(
         .route("/", get(index))
         .route("/index.html", get(index))
         .route("/events", get(events))
-        .with_state(hub);
+        .route("/recordings", get(list_recordings))
+        .route("/recording/{id}", get(get_recording))
+        .with_state(AppState { hub, recordings });
 
     let http = {
         let mut rx = shutdown.subscribe();
@@ -145,7 +166,28 @@ async fn index() -> Html<&'static str> {
     Html(DASHBOARD_HTML)
 }
 
-async fn events(State(hub): State<Arc<Hub>>) -> impl IntoResponse {
+/// List saved recordings as JSON, newest first. Without a store (the in-process
+/// dashboard) the list is empty, so the frontend simply offers no recordings.
+async fn list_recordings(State(state): State<AppState>) -> impl IntoResponse {
+    let recordings = state.recordings.map(|store| store.list()).unwrap_or_default();
+    Json(recordings)
+}
+
+/// Serve one recording's snapshot bytes for the frontend to import into a
+/// detached document and replay. The id is validated by the store, so a bad or
+/// traversing id is a 404 rather than a path escape.
+async fn get_recording(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    state.recordings.and_then(|store| store.load(&id)).map_or_else(
+        || (StatusCode::NOT_FOUND, "no such recording").into_response(),
+        |bytes| ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
+    )
+}
+
+async fn events(State(state): State<AppState>) -> impl IntoResponse {
+    let hub = state.hub;
     // Loro imports are idempotent, so an overlapping snapshot/update is harmless.
     let (snapshot, rx) = hub.subscribe();
 

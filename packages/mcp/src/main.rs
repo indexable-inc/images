@@ -33,6 +33,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
+mod exec_board;
+
 const DEFAULT_SESSION_ID: &str = "default";
 const WORKER_SOURCE: &str = include_str!("python_worker.py");
 
@@ -137,6 +139,9 @@ enum CliCommand {
 struct McpServer {
     sessions: Arc<Mutex<SessionManager>>,
     tool_router: ToolRouter<Self>,
+    // The process-global dashboard producer, when one bound. Every HTTP session's
+    // server shares it, so one socket carries every session's exec panes.
+    board: Option<&'static exec_board::ExecBoard>,
 }
 
 impl McpServer {
@@ -144,6 +149,7 @@ impl McpServer {
         Self {
             sessions: Arc::new(Mutex::new(SessionManager::default())),
             tool_router: Self::tool_router(),
+            board: exec_board::global(),
         }
     }
 }
@@ -387,6 +393,10 @@ impl McpServer {
     /// Per-session call that returns rich content: the formatted text plus an
     /// image block per captured figure, so a `plt.plot`, PIL image, or
     /// `display()`ed object comes back as an actual image.
+    ///
+    /// Each call is also mirrored to the dashboard as an `exec` pane: a running
+    /// card when the call starts, replaced with its captured output when it
+    /// returns, so every execution is visible and replayable.
     async fn call_content(
         &self,
         session_id: Option<String>,
@@ -395,7 +405,21 @@ impl McpServer {
         timeout: Duration,
         cancel: CancellationToken,
     ) -> CallToolResult {
-        match self.run_on_session(session_id, op, payload, timeout, cancel).await {
+        let exec_id = self.board.map(|board| {
+            let session = session_id.as_deref().unwrap_or(DEFAULT_SESSION_ID);
+            board.start(session, "python", op, exec_source(op, &payload))
+        });
+
+        let outcome = self.run_on_session(session_id, op, payload, timeout, cancel).await;
+
+        if let (Some(board), Some(id)) = (self.board, &exec_id) {
+            match &outcome {
+                Ok(response) => board.finish_from_response(id, response),
+                Err(error) => board.finish_error(id, &format!("{error:#}")),
+            }
+        }
+
+        match outcome {
             Ok(response) => worker_response_content(&response),
             Err(error) => CallToolResult::success(vec![Content::text(format!("stderr:\n{error:#}"))]),
         }
@@ -975,6 +999,20 @@ fn worker_response_content(response: &Value) -> CallToolResult {
     CallToolResult::success(content)
 }
 
+/// The source to show on an execution's dashboard pane: the expression for an
+/// `eval`, the statements for an `exec`. Falls back to the op name so a pane
+/// always has something behind it.
+fn exec_source(op: &str, payload: &Value) -> String {
+    let key = match op {
+        "eval" => "expression",
+        _ => "source",
+    };
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .map_or_else(|| op.to_owned(), str::to_owned)
+}
+
 fn format_worker_response(response: &Value) -> String {
     let mut sections = Vec::new();
     if let Some(stdout) = response.get("stdout").and_then(Value::as_str)
@@ -1163,6 +1201,36 @@ mod tests {
         )?;
         assert_eq!(got, "result:\n123");
 
+        Ok(())
+    }
+
+    #[test]
+    fn subprocess_output_is_captured_at_fd_level() -> Result<()> {
+        // The dashboard must show a spawned process's output, not just Python
+        // `print`. The worker redirects fds 1 and 2, so a `subprocess.run`
+        // writing straight to stdout/stderr is captured in the response (and the
+        // JSON-RPC channel, on a separate fd, stays intact).
+        let mut session = python_session("subprocess-capture")?;
+        let out = session.request(
+            "exec",
+            json!({
+                "source": "import subprocess, sys\n\
+                           subprocess.run([\"echo\", \"hi-stdout\"])\n\
+                           subprocess.run([\"sh\", \"-c\", \"echo hi-stderr 1>&2\"])\n"
+            }),
+            Duration::from_secs(30),
+        )?;
+        assert!(out.contains("hi-stdout"), "subprocess stdout must be captured: {out}");
+        assert!(out.contains("hi-stderr"), "subprocess stderr must be captured: {out}");
+
+        // The session is still usable afterwards: the RPC protocol survived the
+        // subprocess writing to the worker's real stdout.
+        let after = session.request(
+            "eval",
+            json!({ "expression": "6 * 7" }),
+            Duration::from_secs(30),
+        )?;
+        assert_eq!(after, "result:\n42");
         Ok(())
     }
 

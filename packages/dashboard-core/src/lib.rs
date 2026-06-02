@@ -30,9 +30,10 @@ mod error;
 mod pane;
 mod publish;
 
-pub use dashboard::{Dashboard, Hub, serve_hub};
+pub use dashboard::{Dashboard, Hub, RecordingInfo, RecordingStore, serve_hub};
 pub use error::{Error, Result};
 pub use pane::{
-    DataView, HtmlView, Pane, ProducerSnapshot, TerminalView, View, discovery_dir, socket_path,
+    DataView, ExecView, HtmlView, Pane, ProducerSnapshot, TerminalView, View, discovery_dir,
+    socket_path,
 };
 pub use publish::{PaneSink, Publisher};

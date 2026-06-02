@@ -22,7 +22,8 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use dashboard_core::{
-    Hub, Pane, ProducerSnapshot, Publisher, TerminalView, discovery_dir, serve_hub, socket_path,
+    ExecView, Hub, Pane, ProducerSnapshot, Publisher, RecordingStore, TerminalView, discovery_dir,
+    serve_hub, socket_path,
 };
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::net::UnixStream;
@@ -51,6 +52,18 @@ struct Cli {
     #[arg(long, default_value_t = 500)]
     rescan_ms: u64,
 
+    /// How often to persist the live board as a replayable recording, in
+    /// milliseconds. `0` disables on-disk recording (replay still works for the
+    /// current browser session from the live stream).
+    #[arg(long, default_value_t = 5000)]
+    record_ms: u64,
+
+    /// Directory recordings are written to. Defaults to the ix recordings
+    /// directory (`$IX_DASH_RECORDINGS`, `$XDG_STATE_HOME/ix-dash/recordings`,
+    /// or `~/.local/state/ix-dash/recordings`).
+    #[arg(long)]
+    record_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -77,19 +90,46 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = format!("{}:{}", cli.host, cli.port).parse()?;
 
     let hub = Hub::new();
+    let handle = tokio::runtime::Handle::current();
+
+    // Persist the live board so a session survives a restart and can be shared.
+    // A store failure (e.g. an unwritable directory) is not fatal: the dashboard
+    // still serves live, and replay works from the browser's own history.
+    let recordings = match recording_store(cli) {
+        Ok(store) => Some(Arc::new(store)),
+        Err(error) => {
+            eprintln!("dashboard: recordings disabled ({error})");
+            None
+        }
+    };
+
     // The process runtime outlives the dashboard, so the server and discovery
     // loop spawned on it run for the lifetime of the binary.
     let (mut dashboard, _stop_rx) =
-        serve_hub(hub.clone(), addr, &tokio::runtime::Handle::current()).await?;
+        serve_hub(hub.clone(), addr, recordings.clone(), &handle).await?;
     println!(
         "dashboard: serving {}  (watching {})",
         dashboard.url(),
         dir.display()
     );
 
+    // Held until shutdown so a final snapshot captures the last interval of
+    // changes, which the periodic recorder task would otherwise lose when it is
+    // aborted on stop.
+    let recording_session = recordings
+        .as_ref()
+        .filter(|_| cli.record_ms > 0)
+        .map(|store| {
+            let (id, recorder) =
+                store.spawn_recorder(hub.clone(), Duration::from_millis(cli.record_ms), &handle);
+            println!("dashboard: recording to {} ({id})", store.dir().display());
+            dashboard.push_task(recorder);
+            (store.clone(), id)
+        });
+
     let connected = Arc::new(Mutex::new(HashSet::new()));
     let discovery = tokio::spawn(discover(
-        hub,
+        hub.clone(),
         dir,
         connected,
         Duration::from_millis(cli.rescan_ms),
@@ -99,6 +139,12 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     tokio::signal::ctrl_c().await?;
     println!("\ndashboard: shutting down");
     dashboard.stop().await;
+    // The periodic recorder task was aborted by `stop`; write one last snapshot
+    // now that the document is final, so the recording does not lose the last
+    // interval of changes before exit.
+    if let Some((store, id)) = recording_session {
+        let _ = store.save(&id, &hub.export_snapshot());
+    }
     Ok(())
 }
 
@@ -178,16 +224,25 @@ fn is_socket(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_socket())
 }
 
-/// Run a demo producer: publish one terminal, one html, and one data pane, each
-/// ticking once a second, until interrupted. Exercises the whole pipeline
-/// (publisher socket, aggregator fold, every renderer) with no other process.
+/// Open the recordings store at the configured directory, or the default one.
+fn recording_store(cli: &Cli) -> Result<RecordingStore, Box<dyn std::error::Error>> {
+    let store = match cli.record_dir.clone() {
+        Some(dir) => RecordingStore::new(dir)?,
+        None => RecordingStore::open_default()?,
+    };
+    Ok(store)
+}
+
+/// Run a demo producer: publish one pane of every kind, each ticking once a
+/// second, until interrupted. Exercises the whole pipeline (publisher socket,
+/// aggregator fold, every renderer) with no other process.
 async fn run_demo(dir: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
     let path = dir.map_or_else(socket_path, |d| {
         d.join(format!("{}-demo.sock", std::process::id()))
     });
     let mut publisher = Publisher::bind(path.clone(), &tokio::runtime::Handle::current())?;
     println!(
-        "dashboard demo: publishing 3 panes on {} (run `dashboard` in another shell)",
+        "dashboard demo: publishing 4 panes on {} (run `dashboard` in another shell)",
         path.display()
     );
 
@@ -207,7 +262,7 @@ async fn run_demo(dir: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-/// The demo's three panes at a given tick.
+/// The demo's panes at a given tick: one of every kind.
 fn demo_panes(tick: u64) -> Vec<Pane> {
     let bar = "#".repeat(usize::try_from((tick % 20) + 1).unwrap_or(20));
     let terminal = Pane::terminal(
@@ -247,5 +302,20 @@ fn demo_panes(tick: u64) -> Vec<Pane> {
             "nested": {"a": 1, "b": [1, 2, 3]},
         }),
     );
-    vec![terminal, html, data]
+    // An exec pane: alternate running and finished so the demo shows both states
+    // (the running spinner and a captured stdout/stderr result).
+    let running = tick.is_multiple_of(2);
+    let exec = Pane::exec(
+        "demo-exec",
+        ExecView {
+            source: format!("import subprocess\nsubprocess.run(['echo', 'tick {tick}'])"),
+            lang: "python".to_owned(),
+            stdout: if running { String::new() } else { format!("tick {tick}\n") },
+            stderr: String::new(),
+            result: String::new(),
+            running,
+            ok: if running { None } else { Some(true) },
+        },
+    );
+    vec![terminal, html, exec, data]
 }
