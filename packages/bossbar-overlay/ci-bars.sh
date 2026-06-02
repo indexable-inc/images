@@ -185,6 +185,8 @@ for repo in "${repos[@]}"; do
     cc="$(iso_to_epoch "${created:-}")"
     [ "${cc:-0}" -gt "${c_created[$sha]:-0}" ] 2>/dev/null && c_created["$sha"]="$cc"
     # Track the newest commit per branch (the one whose CI we actually show).
+    # Strict `-gt` keeps the first-seen on equal/0 createdAt; gh lists runs
+    # newest-first, so first-seen is the newest even when timestamps tie.
     if [ "${cc:-0}" -gt "${b_latest_created[$branch]:-0}" ] 2>/dev/null; then
       b_latest_created["$branch"]="$cc"
       b_latest_sha["$branch"]="$sha"
@@ -271,11 +273,14 @@ https://github.com/$repo/commits/$branch"
     # the branch (the bar heals in place via the stable branch url).
     since_args=()
     [ "${minstart:-0}" -gt 0 ] 2>/dev/null && since_args=(--since "$minstart")
+    # Expand with the `+` guard so an empty array is not an "unbound variable"
+    # under `set -u` (matters only if run under an old bash that errors on an
+    # empty `"${a[@]}"`; the Nix wrapper's bash 5 does not).
     id="$(bar_id_for_url "$url")"
     if [ -z "$id" ]; then
-      bossbar add "$bar_title" --color "$color" --overlay progress --progress "$prog" --position -1 --eta "$eta" "${since_args[@]}" --url "$url" --box 0 2>/dev/null || true
+      bossbar add "$bar_title" --color "$color" --overlay progress --progress "$prog" --position -1 --eta "$eta" ${since_args[@]+"${since_args[@]}"} --url "$url" --box 0 2>/dev/null || true
     else
-      bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --eta "$eta" "${since_args[@]}" --box 0 2>/dev/null || true
+      bossbar set "$id" --title "$bar_title" --color "$color" --progress "$prog" --eta "$eta" ${since_args[@]+"${since_args[@]}"} --box 0 2>/dev/null || true
     fi
   done <<EOF
 $selected

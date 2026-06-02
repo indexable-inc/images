@@ -129,12 +129,24 @@ parse_fields() {
     case "$flag" in
       --title)       assign="title = '$(sq "$val")'" ;;
       --description) assign="description = '$(sq "$val")'" ;;
-      --since)       assign="since = $val" ;;
-      --eta)         assign="eta = $val" ;;
+      # Numeric flags are inlined into SQL, so validate them rather than trust the
+      # caller: an integer for the counters, a decimal for the fill fraction.
+      --since)
+        [[ "$val" =~ ^-?[0-9]+$ ]] || die "--since must be an integer"
+        assign="since = $val" ;;
+      --eta)
+        [[ "$val" =~ ^-?[0-9]+$ ]] || die "--eta must be an integer"
+        assign="eta = $val" ;;
       --url)         assign="url = '$(sq "$val")'" ;;
-      --progress)    assign="progress = $val" ;;
-      --position)    assign="position = $val" ;;
-      --visible)     assign="visible = $val" ;;
+      --progress)
+        [[ "$val" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || die "--progress must be a number"
+        assign="progress = $val" ;;
+      --position)
+        [[ "$val" =~ ^-?[0-9]+$ ]] || die "--position must be an integer"
+        assign="position = $val" ;;
+      --visible)
+        case "$val" in 0 | 1) ;; *) die "--visible must be 0 or 1" ;; esac
+        assign="visible = $val" ;;
       --box)
         case "$val" in 0|1) ;; *) die "--box must be 0 or 1" ;; esac
         assign="expandable = $val" ;;
