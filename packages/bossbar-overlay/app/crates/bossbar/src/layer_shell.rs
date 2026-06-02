@@ -4,10 +4,10 @@
 //! compositors such as Hyprland are free to center new floating windows and ignore
 //! winit's requested top-left. Layer-shell is the compositor-owned protocol for
 //! panels and overlays, so each boss bar is represented as a small top-layer
-//! surface anchored to the top of the output. Auto-stacked bars use a top-only
-//! anchor, letting the compositor keep them horizontally centered; when a bar is
-//! dragged, the xdg-output size gives us the centered left edge before switching
-//! it to top-left anchoring with persisted margins.
+//! surface. Auto-stacked bars start with a top-only compositor-centered anchor,
+//! then switch to a top-left anchor once xdg-output gives us a centered left
+//! margin; when a bar is dragged, that same logical position becomes the
+//! persisted margin.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -108,6 +108,7 @@ struct BarWin {
     last_size: (u32, u32),
     scale_factor: f64,
     scale: f32,
+    positioned: bool,
     scroll_dirty: bool,
     scroll_last: Option<Instant>,
     last_move: Instant,
@@ -152,9 +153,9 @@ fn open_url(url: &str) {
     }
 }
 
-fn shell_margin(pos: Pos, pinned: bool) -> (i32, i32, i32, i32) {
+fn shell_margin(pos: Pos, positioned: bool) -> (i32, i32, i32, i32) {
     let top = pos.y.max(0.0).round() as i32;
-    let left = if pinned {
+    let left = if positioned {
         pos.x.max(0.0).round() as i32
     } else {
         0
@@ -162,12 +163,16 @@ fn shell_margin(pos: Pos, pinned: bool) -> (i32, i32, i32, i32) {
     (top, 0, 0, left)
 }
 
-fn shell_anchor(pinned: bool) -> Anchor {
-    if pinned {
+fn shell_anchor(positioned: bool) -> Anchor {
+    if positioned {
         Anchor::Top | Anchor::Left
     } else {
         Anchor::Top
     }
+}
+
+fn carry_auto_position_without_output(was_positioned: bool, was_pinned: bool) -> bool {
+    was_positioned && !was_pinned
 }
 
 fn axis_drag_delta(horizontal: AxisScroll, vertical: AxisScroll, scale_factor: f64) -> (f64, f64) {
@@ -259,20 +264,22 @@ impl App {
     }
 
     fn auto_pos(
-        slot: usize,
+        y: f64,
         w_px: u32,
-        h_px: u32,
         scale_factor: f64,
         output_width: Option<f64>,
     ) -> Pos {
-        let hl = h_px as f64 / scale_factor.max(1.0);
-        // Auto surfaces are compositor-centered by using only a top anchor. Before
-        // the first configure we may not have xdg-output details yet, so the
-        // fallback x is temporary and is replaced before a drag/scroll pins the bar.
+        // Before the first configure we may not have xdg-output details yet, so
+        // the fallback x is temporary and is replaced as soon as refresh gives us
+        // the chosen output.
         let x = output_width
             .map(|output_width| Self::centered_x(w_px, scale_factor, output_width))
             .unwrap_or(0.0);
-        Pos::new(x, AUTO_TOP + slot as f64 * (hl + AUTO_GAP))
+        Pos::new(x, y)
+    }
+
+    fn next_auto_y(y: f64, h_px: u32, scale_factor: f64) -> f64 {
+        y + h_px as f64 / scale_factor.max(1.0) + AUTO_GAP
     }
 
     fn sync_auto_x(&mut self, ev: &WindowState<i64>, shell_id: ShellId, bar_id: i64) -> bool {
@@ -285,8 +292,21 @@ impl App {
         let Some(output_width) = Self::output_logical_width(ev, shell_id) else {
             return false;
         };
+        let mut geometry = None;
         if let Some(win) = self.wins.get_mut(&bar_id) {
-            win.self_set.x = Self::centered_x(win.last_size.0, win.scale_factor, output_width);
+            let centered = Self::centered_x(win.last_size.0, win.scale_factor, output_width);
+            let was_positioned = win.positioned;
+            let moved = (win.self_set.x - centered).abs() >= 0.5;
+            if moved {
+                win.self_set.x = centered;
+            }
+            win.positioned = true;
+            if !was_positioned || moved {
+                geometry = Some((win.last_size, win.scale_factor, win.self_set));
+            }
+        }
+        if let Some((size, scale_factor, pos)) = geometry {
+            Self::apply_geometry(ev, shell_id, size, scale_factor, pos, true);
         }
         true
     }
@@ -295,15 +315,15 @@ impl App {
         size_px: (u32, u32),
         scale_factor: f64,
         pos: Pos,
-        pinned: bool,
+        positioned: bool,
         layer: Layer,
     ) -> NewLayerShellSettings {
         NewLayerShellSettings {
             size: Some(Self::logical_size(size_px, scale_factor)),
             layer,
-            anchor: shell_anchor(pinned),
+            anchor: shell_anchor(positioned),
             exclusive_zone: None,
-            margin: Some(shell_margin(pos, pinned)),
+            margin: Some(shell_margin(pos, positioned)),
             keyboard_interactivity: KeyboardInteractivity::None,
             output_option: OutputOption::None,
             events_transparent: false,
@@ -318,27 +338,27 @@ impl App {
         size_px: (u32, u32),
         scale_factor: f64,
         pos: Pos,
-        pinned: bool,
+        positioned: bool,
     ) {
         if let Some(unit) = ev.get_unit_with_id(shell_id) {
             unit.set_anchor_with_size(
-                shell_anchor(pinned),
+                shell_anchor(positioned),
                 Self::logical_size(size_px, scale_factor),
             );
-            unit.set_margin(shell_margin(pos, pinned));
+            unit.set_margin(shell_margin(pos, positioned));
         }
     }
 
-    fn create_win(&mut self, ev: &mut WindowState<i64>, bar: BossBar, slot: usize, layer: Layer) {
+    fn create_win(&mut self, ev: &mut WindowState<i64>, bar: BossBar, auto_y: f64, layer: Layer) {
         let scale_factor = 1.0;
         let scale = self.scale(scale_factor);
         let title_w = scene::title_extent_px(&bar, scale, now_unix());
         let size = scene::bar_window_px(scale, title_w, !bar.icon.is_empty());
-        let pinned = bar.pos.is_some();
+        let positioned = bar.pos.is_some();
         let pos = bar
             .pos
             .map(|p| Pos::new(p.x, p.y))
-            .unwrap_or_else(|| Self::auto_pos(slot, size.0, size.1, scale_factor, None));
+            .unwrap_or_else(|| Self::auto_pos(auto_y, size.0, scale_factor, None));
         let shell_id = ShellId::unique();
         let now = Instant::now();
         let has_description = !bar.description.trim().is_empty();
@@ -365,6 +385,7 @@ impl App {
                 last_size: size,
                 scale_factor,
                 scale,
+                positioned,
                 scroll_dirty: false,
                 scroll_last: None,
                 last_move: now - SETTLE,
@@ -372,7 +393,7 @@ impl App {
             },
         );
         ev.append_return_data(ReturnData::NewLayerShell((
-            Self::layer_settings(size, scale_factor, pos, pinned, layer),
+            Self::layer_settings(size, scale_factor, pos, positioned, layer),
             shell_id,
             Some(bar.id),
         )));
@@ -419,16 +440,10 @@ impl App {
         }
 
         let now = Instant::now();
-        let mut slot = 0usize;
+        let unix_now = now_unix();
+        let mut auto_y = AUTO_TOP;
         for bar in bars {
-            let this_slot = if bar.pos.is_none() {
-                let s = slot;
-                slot += 1;
-                s
-            } else {
-                0
-            };
-
+            let auto = bar.pos.is_none();
             let output_width = self
                 .wins
                 .get(&bar.id)
@@ -447,39 +462,53 @@ impl App {
                 let local_pinned = win.bar.pos.is_some();
                 let local_pos = win.self_set;
                 let db_pos = bar.pos.map(|p| Pos::new(p.x, p.y));
+                let title_w = scene::title_extent_px(&bar, win.scale, unix_now);
+                let auto_size = scene::bar_window_px(win.scale, title_w, !bar.icon.is_empty());
+                let carry_auto_position =
+                    carry_auto_position_without_output(win.positioned, local_pinned);
+                let positioned = local_position_active && local_pinned
+                    || db_pos.is_some()
+                    || carry_auto_position
+                    || output_width.is_some();
                 win.bar = bar;
-                let (pos, pinned) = if local_position_active && local_pinned {
+                let pos = if local_position_active && local_pinned {
                     win.bar.pos = Some(DVec2::new(local_pos.x, local_pos.y));
-                    (local_pos, true)
+                    local_pos
+                } else if db_pos.is_none() && output_width.is_none() && carry_auto_position {
+                    Pos::new(local_pos.x, auto_y)
                 } else {
-                    let pos = db_pos.unwrap_or_else(|| {
-                        Self::auto_pos(
-                            this_slot,
-                            win.last_size.0,
-                            win.last_size.1,
-                            win.scale_factor,
-                            output_width,
-                        )
-                    });
-                    (pos, db_pos.is_some())
+                    db_pos.unwrap_or_else(|| {
+                        Self::auto_pos(auto_y, auto_size.0, win.scale_factor, output_width)
+                    })
                 };
                 win.self_set = pos;
+                win.positioned = positioned;
                 Self::apply_geometry(
                     ev,
                     win.shell_id,
                     win.last_size,
                     win.scale_factor,
                     pos,
-                    pinned,
+                    positioned,
                 );
                 ev.request_refresh(win.shell_id, RefreshRequest::NextFrame);
+                if auto {
+                    auto_y = Self::next_auto_y(auto_y, auto_size.1, win.scale_factor);
+                }
             } else {
+                let scale_factor = 1.0;
+                let scale = self.scale(scale_factor);
+                let title_w = scene::title_extent_px(&bar, scale, unix_now);
+                let auto_size = scene::bar_window_px(scale, title_w, !bar.icon.is_empty());
                 let layer = if self.active_panel_bar().is_some() {
                     Layer::Top
                 } else {
                     Layer::Overlay
                 };
-                self.create_win(ev, bar, this_slot, layer);
+                self.create_win(ev, bar, auto_y, layer);
+                if auto {
+                    auto_y = Self::next_auto_y(auto_y, auto_size.1, scale_factor);
+                }
             }
         }
         self.sync_layers(ev);
@@ -600,16 +629,21 @@ impl App {
 
         win.last_size = size;
         let pinned = win.bar.pos.is_some();
-        if !pinned && let Some(output_width) = Self::output_logical_width(ev, win.shell_id) {
+        let mut positioned = pinned || win.positioned;
+        if !pinned
+            && let Some(output_width) = Self::output_logical_width(ev, win.shell_id)
+        {
             win.self_set.x = Self::centered_x(size.0, win.scale_factor, output_width);
+            positioned = true;
         }
+        win.positioned = positioned;
         Self::apply_geometry(
             ev,
             win.shell_id,
             size,
             win.scale_factor,
             win.self_set,
-            pinned,
+            positioned,
         );
         true
     }
@@ -757,6 +791,7 @@ impl App {
         };
         win.self_set = pos;
         win.bar.pos = Some(DVec2::new(pos.x, pos.y));
+        win.positioned = true;
         win.last_move = Instant::now();
         Self::apply_geometry(ev, win.shell_id, win.last_size, win.scale_factor, pos, true);
         ev.request_refresh(win.shell_id, RefreshRequest::NextFrame);
@@ -848,13 +883,22 @@ impl App {
                     win.scale_factor = (*scale_float).max(1.0);
                     win.scale = scale;
                     let pinned = win.bar.pos.is_some();
+                    let mut positioned = pinned || win.positioned;
+                    if !pinned
+                        && let Some(output_width) = Self::output_logical_width(ev, win.shell_id)
+                    {
+                        win.self_set.x =
+                            Self::centered_x(win.last_size.0, win.scale_factor, output_width);
+                        positioned = true;
+                    }
+                    win.positioned = positioned;
                     Self::apply_geometry(
                         ev,
                         win.shell_id,
                         win.last_size,
                         win.scale_factor,
                         win.self_set,
-                        pinned,
+                        positioned,
                     );
                     ev.request_refresh(win.shell_id, RefreshRequest::NextFrame);
                 }
@@ -1032,6 +1076,43 @@ impl App {
             },
             _ => ReturnData::None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn centered_x_uses_logical_surface_width() {
+        assert_eq!(App::centered_x(400, 2.0, 800.0), 300.0);
+        assert_eq!(App::centered_x(400, 1.0, 800.0), 200.0);
+    }
+
+    #[test]
+    fn fallback_anchor_stays_compositor_centered_until_positioned() {
+        assert_eq!(shell_anchor(false), Anchor::Top);
+        assert_eq!(shell_anchor(true), Anchor::Top | Anchor::Left);
+        assert_eq!(shell_margin(Pos::new(42.4, 7.6), false), (8, 0, 0, 0));
+        assert_eq!(shell_margin(Pos::new(42.4, 7.6), true), (8, 0, 0, 42));
+    }
+
+    #[test]
+    fn cleared_pinned_bar_does_not_carry_stale_left_margin() {
+        assert!(carry_auto_position_without_output(true, false));
+        assert!(!carry_auto_position_without_output(true, true));
+        assert!(!carry_auto_position_without_output(false, false));
+    }
+
+    #[test]
+    fn auto_stack_advances_by_previous_bar_height() {
+        let first = AUTO_TOP;
+        let second = App::next_auto_y(first, 30, 1.0);
+        let third = App::next_auto_y(second, 12, 2.0);
+
+        assert_eq!(App::auto_pos(first, 100, 1.0, Some(500.0)), Pos::new(200.0, first));
+        assert_eq!(second, AUTO_TOP + 30.0 + AUTO_GAP);
+        assert_eq!(third, second + 6.0 + AUTO_GAP);
     }
 }
 
