@@ -14,3 +14,9 @@ reqwest = { workspace = true, features = ["json", "rustls-tls", "multipart"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 snafu.workspace = true
+# `time` only: backoff sleeps between retries. The consumer owns the runtime.
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
