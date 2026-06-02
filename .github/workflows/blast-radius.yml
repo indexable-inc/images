@@ -101,14 +101,20 @@ jobs:
       - name: Validate report schema
         run: |
           set -euo pipefail
-          jq -e '
-            (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
-            (.head    | type == "string" and test("^[0-9a-f]{7,40}$")) and
-            (.total   | type == "number") and
-            (.changed | type == "array") and
-            (.added   | type == "array") and
-            (.removed | type == "array") and
-            ((.changed + .added + .removed) | all(type == "string"))
+          # Slurp (-s) so the artifact must be exactly one object: `jq -e`
+          # otherwise exits on the last value, letting `{}` followed by a valid
+          # report pass while the render then emits a null first section.
+          jq -e -s '
+            length == 1 and
+            (.[0] |
+              (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
+              (.head    | type == "string" and test("^[0-9a-f]{7,40}$")) and
+              (.total   | type == "number") and
+              (.changed | type == "array") and
+              (.added   | type == "array") and
+              (.removed | type == "array") and
+              ((.changed + .added + .removed) | all(type == "string"))
+            )
           ' report.json > /dev/null \
             || { echo "::error::malformed blast-radius report.json"; exit 1; }
 
@@ -124,7 +130,7 @@ jobs:
             "<!-- blast-radius -->",
             "### Blast radius",
             "",
-            "`\(.changed | length)` of `\(.total)` checks would rebuild between base `\(.base)` and head `\(.head)`.",
+            "`\((.changed | length) + (.added | length))` of `\(.total)` checks would rebuild between base `\(.base)` and head `\(.head)`.",
             (if ((.added | length) > 0) or ((.removed | length) > 0)
              then "", "\(.added | length) added, \(.removed | length) removed"
              else empty end),

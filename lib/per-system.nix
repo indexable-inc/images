@@ -201,13 +201,19 @@ let
 
       def eval-checks [repo: string, rev: string] {
         let flakeref = $"git+file://($repo)?rev=($rev)&allRefs=1#checks.x86_64-linux"
+        # nix-eval-jobs sits at the head of the pipeline, and Nushell only
+        # propagates the last command's status, so a startup/lock/fetch failure
+        # would otherwise be swallowed and leave us parsing empty rows. Wrap it
+        # like the `check` wrapper so a nonzero exit aborts here.
         let rows = (
-          ^nix run $eval_jobs -- ...[
-            "--flake" $flakeref
-            "--workers" "8"
-            "--option" "accept-flake-config" "true"
-            "--option" "eval-cache" "false"
-          ]
+          do --capture-errors {
+            ^nix run $eval_jobs -- ...[
+              "--flake" $flakeref
+              "--workers" "8"
+              "--option" "accept-flake-config" "true"
+              "--option" "eval-cache" "false"
+            ]
+          }
           | lines
           | each {|l| if (($l | str trim) | is-not-empty) { $l | from json } }
           | compact
@@ -256,7 +262,7 @@ let
           print "<!-- blast-radius -->"
           print "### Blast radius"
           print ""
-          print $"`($nc)` of `($total)` checks would rebuild between base `($base_rev | str substring 0..7)` and head `($head_rev | str substring 0..7)`."
+          print $"`($nc + $na)` of `($total)` checks would rebuild between base `($base_rev | str substring 0..7)` and head `($head_rev | str substring 0..7)`."
           if ($na > 0) or ($nr > 0) { print ""; print $"($na) added, ($nr) removed" }
           if ($nc > 0) {
             print ""
