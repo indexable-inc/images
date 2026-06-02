@@ -490,10 +490,12 @@ impl App {
             return;
         };
         let (dx, dy) = overlay_core::scroll_drag_delta(delta, win.window.scale_factor());
-        // Move the window live on every event, momentum tail included, so it feels
-        // like scrolling. `self_set` tracks where the window sits and is set after
-        // create; measure the scroll from there, and pin the bar (`bar.pos`) so the
-        // size-settle pass stops re-centering it, exactly as a drag does.
+        // Move the window live on each event. `ocwin::suppress_scroll_momentum`
+        // drops the macOS momentum coast upstream, so this only sees the physical
+        // finger drag (and the bar stops on lift). `self_set` tracks where the
+        // window sits and is set after create; measure the scroll from there, and
+        // pin the bar (`bar.pos`) so the size-settle pass stops re-centering it,
+        // exactly as a drag does.
         if (dx != 0.0 || dy != 0.0) && let Some(cur) = win.self_set {
             let np = LogicalPosition::new(cur.x + dx, cur.y + dy);
             win.self_set = Some(np);
@@ -503,11 +505,11 @@ impl App {
             win.last_move = Instant::now();
             win.bar.pos = Some(DVec2::new(np.x, np.y));
         }
-        // Persist only when the gesture settles, not per frame: a trackpad flick
-        // emits a long momentum tail of `MouseWheel` events, and writing on each
-        // would open a SQLite connection per frame on the UI thread. The touch and
-        // momentum ends both carry `TouchPhase::Ended`; a discrete wheel notch
-        // (`LineDelta`) has no Ended phase but is low-frequency, so save it directly.
+        // Persist only when the gesture settles, not per frame: a scroll emits a
+        // burst of `MouseWheel` events, and writing on each would open a SQLite
+        // connection per frame on the UI thread. The finger lift carries
+        // `TouchPhase::Ended`; a discrete wheel notch (`LineDelta`) has no Ended
+        // phase but is low-frequency, so save it directly.
         let settle = phase == TouchPhase::Ended || matches!(delta, MouseScrollDelta::LineDelta(..));
         if settle
             && let Some(pos) = win.self_set
@@ -589,6 +591,9 @@ impl ApplicationHandler<Vec<BossBar>> for App {
         if self.ready {
             return;
         }
+        // A two-finger scroll-drag tracks the fingers and stops on lift; drop the
+        // macOS momentum coast so a flick does not fling the bar past the gesture.
+        ocwin::suppress_scroll_momentum();
         let monitor = event_loop
             .primary_monitor()
             .or_else(|| event_loop.available_monitors().next());

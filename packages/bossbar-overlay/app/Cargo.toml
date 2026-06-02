@@ -44,6 +44,9 @@ layershellev = "0.18.1"
 # features/version are a subset of what winit 0.30 already enables, so this pulls
 # in no extra crate.
 objc2 = "0.5"
+# `RcBlock` for the `NSEvent` scroll-momentum monitor's handler block (matches
+# objc2 0.5's block ABI; enables the `block2` feature on objc2-app-kit below).
+block2 = "0.5"
 # NSString for menu labels, NSThread for `MainThreadMarker`, NSObjCRuntime for
 # `NSObjectProtocol`, NSGeometry for `NSRect`/`NSPoint`/`NSSize` (declared here
 # rather than relying on winit's feature unification).
@@ -54,6 +57,9 @@ objc2-foundation = { version = "0.2.2", features = [
   "NSThread",
 ] }
 objc2-app-kit = { version = "0.2.2", features = [
+  # `block2` exposes `NSEvent::addLocalMonitorForEventsMatchingMask_handler`,
+  # used to filter out the macOS scroll-momentum tail before winit sees it.
+  "block2",
   "NSEvent",
   "NSMenu",
   "NSMenuItem",

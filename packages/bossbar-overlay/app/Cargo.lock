@@ -1406,6 +1406,7 @@ dependencies = [
 name = "overlay-core"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "bytemuck",
  "glam",
  "image",
