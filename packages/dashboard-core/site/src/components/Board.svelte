@@ -58,15 +58,18 @@
     // Scrubbing and replay make panes come and go as the timeline moves; pruning
     // then would discard a card's arranged position the moment it leaves the
     // replayed instant and re-place it on return. Only prune while following the
-    // live tail, where a vanished pane is genuinely gone.
-    const following = timeline.following;
+    // *live* tail, where a vanished pane is genuinely gone. A loaded recording
+    // reaching its end also sets `following`, so gate on the live source too,
+    // else jumping to END would delete layout for panes absent from the final
+    // frame (including the user's live layout).
+    const pruneStale = timeline.source === 'live' && timeline.following;
     untrack(() => {
       let changed = false;
       // Prune layout for panes that have left. The MCP spawns many short-lived
       // panes, so without this the maps (and localStorage) grow without bound
       // and `autoPlace` pushes every new pane further off-screen as stale keys
       // accumulate.
-      if (following) {
+      if (pruneStale) {
         for (const k of Object.keys(positions)) {
           if (!present.has(k)) {
             delete positions[k];

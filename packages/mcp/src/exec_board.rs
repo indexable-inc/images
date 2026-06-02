@@ -12,6 +12,11 @@
 //! panes are disabled and the Python tools keep working unchanged. A bind
 //! failure is logged to stderr so the loss is observable.
 
+#![allow(
+    clippy::significant_drop_tightening,
+    reason = "lock the pane set, reconcile it under the guard, then drop the guard before publishing: the same guard-then-extract pattern dashboard-core allows for its shared locks"
+)]
+
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -91,9 +96,18 @@ impl ExecBoard {
         {
             let mut panes = self.panes.lock();
             panes.push(pane);
-            let overflow = panes.len().saturating_sub(MAX_PANES);
-            if overflow > 0 {
-                panes.drain(0..overflow);
+            // Trim to the cap, but never drop a still-running execution: `finish`
+            // only updates a pane that is still present, so pruning a running one
+            // would lose its captured output. Drop the oldest finished panes
+            // first; in-flight panes are bounded by concurrent calls, so keeping
+            // them cannot grow the set without bound.
+            while panes.len() > MAX_PANES {
+                match panes.iter().position(|pane| !is_running(pane)) {
+                    Some(oldest_finished) => {
+                        panes.remove(oldest_finished);
+                    }
+                    None => break,
+                }
             }
         }
         self.publish();
@@ -144,5 +158,14 @@ impl ExecBoard {
     fn publish(&self) {
         let panes = self.panes.lock().clone();
         self.sink.publish(&panes);
+    }
+}
+
+/// Whether an exec pane's call is still in flight.
+const fn is_running(pane: &Pane) -> bool {
+    if let View::Exec(view) = &pane.view {
+        view.running
+    } else {
+        false
     }
 }

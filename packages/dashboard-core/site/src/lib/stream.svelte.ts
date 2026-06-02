@@ -294,6 +294,9 @@ export async function loadRecording(id: string): Promise<void> {
 export function leaveRecording(): void {
   if (timeline.source === 'live') return;
   stopClock();
+  // Drop any `#rec=`/`#t=` deep link first: `connect()` re-runs `applyHash`,
+  // which would otherwise reload the very recording we are leaving.
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
   es = null; // connect() guards on a live handle; ensure it reconnects.
   connect();
   goLive();
