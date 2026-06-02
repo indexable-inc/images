@@ -132,12 +132,25 @@ async fn main() -> anyhow::Result<()> {
         }
         None => None,
     };
-    let parquet = cli.bucket.as_ref().map(|bucket| sink_parquet::Config {
-        bucket: bucket.clone(),
-        endpoint: cli.endpoint.clone(),
-        region: cli.region.clone(),
-        prefix: cli.prefix.clone(),
-    });
+    let parquet = match cli.bucket.as_ref() {
+        // Host-scope every parquet key. Many fleet hosts index the same account
+        // (notably `root`, present on every host) into one shared bucket, and
+        // the sink does a full-file overwrite per source; without `host` in the
+        // key, host B clobbers host A's `user=root/source=shell/data.parquet`
+        // and the per-host manifest skip-gate makes them ping-pong every tick.
+        // `host`/`user`/`source` are all hive partitions, matching the old
+        // history-ship layout (`host=<host>/user=<user>/...`).
+        Some(bucket) => {
+            let host = resolve_host(&cli).context("resolving host for the parquet archive prefix")?;
+            Some(sink_parquet::Config {
+                bucket: bucket.clone(),
+                endpoint: cli.endpoint.clone(),
+                region: cli.region.clone(),
+                prefix: archive_prefix(&cli.prefix, &host),
+            })
+        }
+        None => None,
+    };
     if store.is_none() && parquet.is_none() {
         anyhow::bail!("nothing to do: pass --mixedbread-store and/or --bucket");
     }
@@ -359,6 +372,15 @@ fn parse_user(spec: &str) -> anyhow::Result<User> {
     Ok(User { name: name.to_owned(), home: PathBuf::from(home) })
 }
 
+/// Host-scope the parquet archive prefix: `<base>/host=<host>`. Every fleet host
+/// writes the same shared accounts (notably `root`) into one bucket with a
+/// full-file overwrite per source, so without a `host` segment they clobber each
+/// other and ping-pong on the per-host manifest skip-gate. `host` is the
+/// outermost hive partition, matching the old history-ship layout.
+fn archive_prefix(base: &str, host: &str) -> String {
+    format!("{base}/host={host}")
+}
+
 /// A per-user parquet config: partition each user's rows under `user=<name>` so
 /// concurrently indexed users never overwrite the one shared per-source file.
 fn user_parquet(config: &sink_parquet::Config, name: &str) -> sink_parquet::Config {
@@ -490,7 +512,7 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use super::{parse_user, safe_path_under};
+    use super::{archive_prefix, parse_user, safe_path_under, user_parquet};
 
     #[test]
     fn safe_path_accepts_real_nested_dir() {
@@ -550,5 +572,24 @@ mod tests {
         let user = parse_user("alice-1.2_3:/home/alice").expect("valid spec");
         assert_eq!(user.name, "alice-1.2_3");
         assert_eq!(user.home, PathBuf::from("/home/alice"));
+    }
+
+    #[test]
+    fn parquet_key_is_host_scoped() {
+        // Regression: two hosts indexing the same account (e.g. `root`) into one
+        // shared bucket must land on distinct keys, or the full-file overwrite
+        // makes them clobber each other every tick.
+        let base = "corpus";
+        let cfg = |host: &str| sink_parquet::Config {
+            bucket: "ix-history".to_owned(),
+            endpoint: None,
+            region: "auto".to_owned(),
+            prefix: archive_prefix(base, host),
+        };
+        let a = user_parquet(&cfg("hil-compute-1"), "root").prefix;
+        let b = user_parquet(&cfg("hil-compute-2"), "root").prefix;
+        assert_eq!(a, "corpus/host=hil-compute-1/user=root");
+        assert_eq!(b, "corpus/host=hil-compute-2/user=root");
+        assert_ne!(a, b, "same account on different hosts must not share a key");
     }
 }
