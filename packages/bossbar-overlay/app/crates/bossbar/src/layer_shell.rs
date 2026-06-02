@@ -107,7 +107,7 @@ struct BarWin {
     has_description: bool,
     last_size: (u32, u32),
     scale_factor: f64,
-    scale: u32,
+    scale: f32,
     scroll_dirty: bool,
     scroll_last: Option<Instant>,
     last_move: Instant,
@@ -132,7 +132,7 @@ impl BarWin {
 
 struct App {
     db: PathBuf,
-    base_scale: u32,
+    base_scale: f32,
     instance: wgpu::Instance,
     core: Option<GpuCore>,
     wins: HashMap<i64, BarWin>,
@@ -201,10 +201,10 @@ fn axis_stopped(horizontal: AxisScroll, vertical: AxisScroll) -> bool {
 }
 
 impl App {
-    fn new(db: PathBuf, base_scale: u32) -> Self {
+    fn new(db: PathBuf, base_scale: f32) -> Self {
         Self {
             db,
-            base_scale: base_scale.max(1),
+            base_scale: base_scale.max(1.0),
             instance: wgpu::Instance::default(),
             core: None,
             wins: HashMap::new(),
@@ -212,10 +212,10 @@ impl App {
         }
     }
 
-    fn scale(&self, scale_factor: f64) -> u32 {
-        ((self.base_scale as f64) * scale_factor.max(1.0))
-            .round()
-            .max(1.0) as u32
+    // Fractional scale is preserved (no integer rounding) so a non-integer
+    // `base_scale` like 1.25 grows the bars by exactly that fraction.
+    fn scale(&self, scale_factor: f64) -> f32 {
+        ((self.base_scale as f64) * scale_factor.max(1.0)).max(1.0) as f32
     }
 
     fn logical_size(size_px: (u32, u32), scale_factor: f64) -> (u32, u32) {
@@ -1035,7 +1035,7 @@ impl App {
     }
 }
 
-pub fn run(db: PathBuf, base_scale: u32) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(db: PathBuf, base_scale: f32) -> Result<(), Box<dyn std::error::Error>> {
     let ev = WindowState::<i64>::new("bossbar-overlay")
         .with_background()
         .with_use_display_handle(true)

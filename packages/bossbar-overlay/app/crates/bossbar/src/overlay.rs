@@ -193,8 +193,9 @@ impl BarWin {
 pub struct App {
     db: PathBuf,
     /// Logical pixel scale; multiplied by the monitor scale factor so the bars
-    /// look the same physical size on HiDPI and standard displays.
-    base_scale: u32,
+    /// look the same physical size on HiDPI and standard displays. Fractional
+    /// values are honored (e.g. 1.25 for 25% larger bars).
+    base_scale: f32,
     proxy: EventLoopProxy<Vec<BossBar>>,
     instance: wgpu::Instance,
     core: Option<GpuCore>,
@@ -203,8 +204,9 @@ pub struct App {
     /// Monitor logical size, for centering auto-stacked bars.
     mon_logical: (f64, f64),
     scale_factor: f64,
-    /// Physical sprite scale, `round(base_scale * scale_factor)`.
-    scale: u32,
+    /// Physical sprite scale, `base_scale * scale_factor`. Kept fractional so a
+    /// non-integer `base_scale` produces exactly the requested size.
+    scale: f32,
     /// App start, the zero point for the continuous breathing phase.
     start: Instant,
     ready: bool,
@@ -595,7 +597,10 @@ impl ApplicationHandler<Vec<BossBar>> for App {
             None => (1920, 1080, 1.0),
         };
         self.scale_factor = scale_factor;
-        self.scale = ((self.base_scale as f64) * scale_factor).round().max(1.0) as u32;
+        // No integer rounding: a fractional `base_scale` (e.g. 1.25) must reach
+        // the renderer intact so the bars grow by exactly the requested fraction
+        // rather than snapping to the nearest whole sprite scale.
+        self.scale = ((self.base_scale as f64) * scale_factor).max(1.0) as f32;
         self.mon_logical = (mon_w as f64 / scale_factor, mon_h as f64 / scale_factor);
         self.ready = true;
 
@@ -767,7 +772,7 @@ impl ApplicationHandler<Vec<BossBar>> for App {
 }
 
 /// Run the overlay event loop. Blocks until the last window closes.
-pub fn run(db: PathBuf, base_scale: u32) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(db: PathBuf, base_scale: f32) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     if std::env::var_os("WAYLAND_DISPLAY").is_some()
         && std::env::var_os("BOSSBAR_WINIT").is_none()
@@ -784,14 +789,14 @@ pub fn run(db: PathBuf, base_scale: u32) -> Result<(), Box<dyn std::error::Error
     let proxy = event_loop.create_proxy();
     let mut app = App {
         db,
-        base_scale: base_scale.max(1),
+        base_scale: base_scale.max(1.0),
         proxy,
         instance: wgpu::Instance::default(),
         core: None,
         wins: HashMap::new(),
         mon_logical: (1920.0, 1080.0),
         scale_factor: 1.0,
-        scale: base_scale.max(1),
+        scale: base_scale.max(1.0),
         start: Instant::now(),
         ready: false,
     };

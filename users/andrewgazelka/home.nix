@@ -258,12 +258,13 @@ in
         description = "Run the always-on-top Minecraft boss bar overlay GUI the watcher draws onto.";
       };
       scale = lib.mkOption {
-        type = lib.types.ints.positive;
-        default = 1;
+        type = lib.types.numbers.positive;
+        default = 1.25;
         description = ''
-          Integer pixel scale for the boss bar sprites (and, proportionally,
-          their title text and pop-down panels). The overlay binary defaults to
-          2; 1 renders everything at half that size.
+          Pixel scale for the boss bar sprites (and, proportionally, their title
+          text and pop-down panels), multiplied by the monitor scale factor.
+          Fractional values are honored, so 1.25 renders the bars 25% larger than
+          1.0. The overlay binary's own default is 2.
         '';
       };
     };

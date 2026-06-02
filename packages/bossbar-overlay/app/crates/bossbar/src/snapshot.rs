@@ -12,13 +12,13 @@ use crate::scene;
 
 /// Render `bars` at `scale` into a `width`x`height` transparent PNG at `out`.
 pub fn run(
-    scale: u32,
+    scale: f32,
     width: u32,
     height: u32,
     bars: &[BossBar],
     out: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let scale = scale.max(1);
+    let scale = scale.max(1.0);
     let now_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

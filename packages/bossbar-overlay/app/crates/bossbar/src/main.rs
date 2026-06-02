@@ -22,12 +22,13 @@ mod snapshot;
 use std::path::PathBuf;
 
 /// Default logical pixel scale of the 182x5 sprites; overridable with
-/// `BOSSBAR_SCALE` or `--scale`.
-const DEFAULT_SCALE: u32 = 2;
+/// `BOSSBAR_SCALE` or `--scale`. Fractional values are honored, so `1.25` makes
+/// the bars 25% larger than `1.0`.
+const DEFAULT_SCALE: f32 = 2.0;
 
 struct Args {
     snapshot: Option<PathBuf>,
-    scale: u32,
+    scale: f32,
     width: u32,
     height: u32,
 }
@@ -55,7 +56,7 @@ fn parse_args() -> Result<Args, String> {
                     .next()
                     .ok_or("--scale needs a number")?
                     .parse()
-                    .map_err(|_| "--scale must be an integer")?;
+                    .map_err(|_| "--scale must be a number")?;
             }
             "--size" => {
                 let v = it.next().ok_or("--size needs WxH")?;
@@ -90,7 +91,7 @@ fn main() {
 
     if let Some(out) = args.snapshot {
         let bars = db::read_once(&db).unwrap_or_default();
-        match snapshot::run(args.scale.max(1), args.width, args.height, &bars, &out) {
+        match snapshot::run(args.scale.max(1.0), args.width, args.height, &bars, &out) {
             Ok(()) => println!("bossbar-overlay: wrote {}", out.display()),
             Err(e) => {
                 eprintln!("bossbar-overlay: snapshot failed: {e}");
