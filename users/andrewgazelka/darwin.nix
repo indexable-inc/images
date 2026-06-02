@@ -63,11 +63,28 @@
     # `mas` (Mac App Store CLI) is the brew that drives `masApps` below.
     brews = [ "mas" ];
 
+    # Every Mac App Store app installed on the workstation must be listed here:
+    # onActivation.cleanup = "zap" uninstalls any MAS app not declared, so an
+    # omission deletes the app on the next switch (it lost Final Cut/Logic/Xcode
+    # once before this list was completed). IDs come from `mas list`.
     masApps = {
       "Things 3" = 904280696;
       "Super Easy Timer" = 1353137878;
       "Flighty – Live Flight Tracker" = 1358823008;
       "Apple Configurator 2" = 1037126344;
+      "Final Cut Pro" = 424389933;
+      "Logic Pro" = 634148309;
+      "GarageBand" = 682658836;
+      "iMovie" = 408981434;
+      "Xcode" = 497799835;
+      "TestFlight" = 899247664;
+      "Apple Developer" = 640199958;
+      "Fantastical" = 975937182;
+      "WireGuard" = 1451685025;
+      "Pages" = 409201541;
+      "Numbers" = 409203825;
+      "Keynote" = 409183694;
+      "Portal" = 1436994560;
     };
   };
 }
