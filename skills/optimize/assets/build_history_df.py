@@ -334,6 +334,77 @@ def build_frames(days: int = 45, full: bool = False):
     )
 
 
+def thinking_traces(session: str | None = None, *, days: int = 45, full: bool = False,
+                    model: str | None = None, with_text: bool = True,
+                    projects: str = PROJECTS):
+    """One row per thinking block as a polars frame: session, ts, model, idx,
+    text_len, sig_len, and (when with_text) the summarized reasoning `text` itself.
+
+    Kept OUT of build_frames on purpose: build_frames only TALLIES thinking
+    (n_think / n_think_text / think_chars) so raw reasoning never bloats the
+    aggregate frames. Reach here when you actually want to READ the reasoning,
+    and SCOPE it — pass `session=` for one transcript (recommended) or a tight
+    `days` window — because the text column is exactly the context cost the rest
+    of the library avoids. Pass with_text=False for a lengths-only frame.
+
+    Persistence is model- and harness-dependent (see the model loop profile's
+    frac_visible_think): Opus 4.7/4.8 store only an encrypted `signature`
+    (text_len=0, display=omitted) UNLESS the harness passes
+    `--thinking-display summarized` (the index claude-code wrapper does by
+    default, PR #576), in which case summarized `text` is present; Haiku 4.5
+    always stores text. Either way it is the API's SUMMARY, never raw CoT.
+    """
+    import polars as pl
+    files = glob.glob(os.path.join(projects, "*", "*.jsonl"))
+    if session:
+        files = [f for f in files if os.path.basename(f)[:-6] == session]
+    elif not full:
+        cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+        files = [f for f in files if os.path.getmtime(f) >= cutoff]
+    rows = []
+    for f in files:
+        sess = os.path.basename(f)[:-6]
+        try:
+            lines = open(f, encoding="utf-8").read().splitlines()
+        except Exception:
+            continue
+        for l in lines:
+            # Cheap prefilter: a thinking block's line always contains the
+            # substring; skip the json.loads on the ~majority of lines without one.
+            if '"thinking"' not in l:
+                continue
+            try:
+                r = json.loads(l)
+                if r.get("type") != "assistant":
+                    continue
+                m = r.get("message") if isinstance(r.get("message"), dict) else {}
+                if not isinstance(m.get("content"), list):
+                    continue
+                mdl = m.get("model")
+                if model and mdl != model:
+                    continue
+                ts = parse_ts(r.get("timestamp", ""))
+                idx = 0
+                for b in m["content"]:
+                    if not (isinstance(b, dict) and b.get("type") == "thinking"):
+                        continue
+                    txt = b.get("thinking") if isinstance(b.get("thinking"), str) else ""
+                    sig = b.get("signature") if isinstance(b.get("signature"), str) else ""
+                    row = dict(session=sess, ts=ts, model=mdl, idx=idx,
+                               text_len=len(txt), sig_len=len(sig))
+                    if with_text:
+                        row["text"] = txt
+                    rows.append(row)
+                    idx += 1
+            except Exception:
+                continue
+    schema = {"session": pl.String, "ts": pl.Datetime("us", "UTC"), "model": pl.String,
+              "idx": pl.Int64, "text_len": pl.Int64, "sig_len": pl.Int64}
+    if with_text:
+        schema["text"] = pl.String
+    return pl.DataFrame(rows, schema=schema).sort(["session", "ts", "idx"])
+
+
 def summary_line(F):
     df = F["df"]
     dbg = F.get("debug")
