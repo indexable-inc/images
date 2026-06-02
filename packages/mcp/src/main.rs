@@ -85,6 +85,11 @@ const HTTP_MCP_PATH: &str = "/mcp";
 // `python_*` tool description.
 const SERVER_INSTRUCTIONS: &str = include_str!("server_instructions.txt");
 
+/// Sink for interim stdout streamed from a running cell: each chunk is handed to
+/// this callback as it arrives, before the final response. `call_content` points
+/// it at the dashboard pane; other callers stream nowhere and pass `None`.
+type PartialSink = Box<dyn FnMut(&str) + Send>;
+
 /// A token that is never cancelled, for internal round-trips (startup ping,
 /// reset, close, and every CLI call) that are not tied to a client request.
 fn uncancellable() -> CancellationToken {
@@ -372,6 +377,7 @@ impl McpServer {
         payload: Value,
         timeout: Duration,
         cancel: CancellationToken,
+        on_partial: Option<PartialSink>,
     ) -> Result<Value> {
         let sessions = self.sessions.clone();
         tokio::task::spawn_blocking(move || -> Result<Value> {
@@ -384,7 +390,15 @@ impl McpServer {
             let mut session = session
                 .lock()
                 .map_err(|error| anyhow!("Python session lock failed: {error}"))?;
-            session.request_raw(op, payload, timeout, &cancel)
+            // A `None` handler means this call does not stream (control ops,
+            // search); a no-op stands in so `request_raw` always has a sink.
+            let mut handler = on_partial;
+            let mut noop = |_: &str| {};
+            let partial: &mut dyn FnMut(&str) = match handler.as_mut() {
+                Some(boxed) => boxed.as_mut(),
+                None => &mut noop,
+            };
+            session.request_raw(op, payload, timeout, &cancel, partial)
         })
         .await
         .context("Python worker task panicked")?
@@ -410,7 +424,16 @@ impl McpServer {
             board.start(session, "python", op, exec_source(op, &payload))
         });
 
-        let outcome = self.run_on_session(session_id, op, payload, timeout, cancel).await;
+        // While the call runs, stream each stdout chunk into its dashboard pane
+        // so output is visible live, not only when the call returns.
+        let on_partial: Option<PartialSink> = match (self.board, exec_id.clone()) {
+            (Some(board), Some(id)) => Some(Box::new(move |chunk: &str| board.append(&id, chunk))),
+            _ => None,
+        };
+
+        let outcome = self
+            .run_on_session(session_id, op, payload, timeout, cancel, on_partial)
+            .await;
 
         if let (Some(board), Some(id)) = (self.board, &exec_id) {
             match &outcome {
@@ -434,7 +457,7 @@ impl McpServer {
         timeout: Duration,
         cancel: CancellationToken,
     ) -> String {
-        match self.run_on_session(session_id, op, payload, timeout, cancel).await {
+        match self.run_on_session(session_id, op, payload, timeout, cancel, None).await {
             Ok(response) => format_worker_response(&response),
             Err(error) => format!("stderr:\n{error:#}"),
         }
@@ -687,8 +710,9 @@ impl PythonSession {
         payload: Value,
         timeout: Duration,
         cancel: &CancellationToken,
+        on_partial: &mut dyn FnMut(&str),
     ) -> Result<Value> {
-        match self.conn.roundtrip(op, payload, timeout, cancel) {
+        match self.conn.roundtrip(op, payload, timeout, cancel, on_partial) {
             Ok(value) => Ok(value),
             Err(error) => {
                 let error = error.context(format!("Python session {}", self.id));
@@ -710,6 +734,7 @@ impl PythonSession {
             payload,
             timeout,
             &uncancellable(),
+            &mut |_: &str| {},
         )?))
     }
 
@@ -736,7 +761,7 @@ impl PythonSession {
     /// for the connection's Drop to kill.
     fn close_worker(&mut self) {
         if self.conn.child.try_wait().ok().flatten().is_none() {
-            let _ = self.conn.roundtrip("close", json!({}), CONTROL_TIMEOUT, &uncancellable());
+            let _ = self.conn.roundtrip("close", json!({}), CONTROL_TIMEOUT, &uncancellable(), &mut |_: &str| {});
             let _ = self.conn.child.wait();
         }
     }
@@ -822,7 +847,7 @@ impl WorkerConn {
             next_id: 0,
         };
         // Confirm the worker's read loop is live before handing the session out.
-        conn.roundtrip("ping", json!({}), CONTROL_TIMEOUT, &uncancellable())
+        conn.roundtrip("ping", json!({}), CONTROL_TIMEOUT, &uncancellable(), &mut |_: &str| {})
             .context("Python worker did not become ready")?;
         Ok(conn)
     }
@@ -833,6 +858,7 @@ impl WorkerConn {
         mut payload: Value,
         timeout: Duration,
         cancel: &CancellationToken,
+        on_partial: &mut dyn FnMut(&str),
     ) -> Result<Value> {
         let request_id = self.next_id;
         self.next_id += 1;
@@ -867,7 +893,21 @@ impl WorkerConn {
                 Ok(line) => {
                     let response: Value = serde_json::from_str(&line)
                         .context("failed to decode Python worker response")?;
-                    if response.get("id").and_then(Value::as_u64) != Some(request_id) {
+                    let id_matches = response.get("id").and_then(Value::as_u64) == Some(request_id);
+                    // A `partial` message streams interim stdout for this call and
+                    // never terminates the wait; only the final response (no
+                    // `partial` flag) returns. A partial for another id is ignored
+                    // defensively (calls on one session are serial, so it should
+                    // not happen).
+                    if response.get("partial").and_then(Value::as_bool) == Some(true) {
+                        if id_matches
+                            && let Some(chunk) = response.get("stdout").and_then(Value::as_str)
+                        {
+                            on_partial(chunk);
+                        }
+                        continue;
+                    }
+                    if !id_matches {
                         bail!("Python worker returned a response for the wrong request");
                     }
                     return Ok(response);
@@ -1261,6 +1301,7 @@ mod tests {
             json!({ "source": "while True:\n    pass" }),
             Duration::from_millis(500),
             &uncancellable(),
+            &mut |_: &str| {},
         );
         assert!(timed_out.is_err(), "a never-returning cell must report an error");
         assert!(
@@ -1294,6 +1335,7 @@ mod tests {
             json!({ "source": "while True:\n    pass" }),
             Duration::from_mins(1),
             &cancel,
+            &mut |_: &str| {},
         );
         assert!(cancelled.is_err(), "a cancelled call must report an error");
         assert!(

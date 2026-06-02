@@ -3,11 +3,13 @@ from __future__ import annotations
 import ast
 import asyncio
 import base64
+import codecs
 import io
 import json
 import os
 import sys
 import tempfile
+import threading
 import traceback
 from collections.abc import Callable
 from typing import Any
@@ -27,6 +29,14 @@ MAX_OUTPUT_CHARS = 100_000
 # over the character cap and let `_truncate` mark the clip.
 MAX_CAPTURE_BYTES = 4 * MAX_OUTPUT_CHARS
 
+# How often the streaming watcher polls the capture file for new output while a
+# cell is still running, in seconds. Fast enough to feel live on the dashboard,
+# slow enough that a chatty loop does not flood the RPC channel with tiny
+# partials. The watcher exists so a long-running or never-returning cell (e.g. a
+# `while True` loop) shows output as it is produced; the final response, sent
+# when the cell returns, still carries the complete captured output.
+STREAM_INTERVAL_SECS = 0.2
+
 # Compile every snippet with this flag so `await` is legal at the top level.
 # Without it, `await x` outside a function raises SyntaxError. CPython's own
 # `python -m asyncio` REPL drives top-level await the same way: compile with the
@@ -38,6 +48,12 @@ _AWAIT_FLAG = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
 # is line-attributed only when the writing frame belongs to the user's code, not a
 # library it called.
 _USER_FILES = frozenset({"<ix-mcp eval>", "<ix-mcp exec>"})
+
+# Sends one JSON message to the Rust server. The same callback delivers both the
+# interim `partial` chunks (from the streaming watcher) and the final response,
+# all serialized under one lock so concurrent writes never interleave on the
+# wire. See `main`.
+Emit = Callable[[dict[str, object]], None]
 
 
 class _LineTee:
@@ -92,6 +108,47 @@ def _coalesce_trace(trace: list[tuple[int, str]]) -> list[dict[str, object]]:
     return out
 
 
+def _stream_capture(fd: int, stop: threading.Event, emit: Emit, request_id: object) -> None:
+    """Tail the stdout capture file while a cell runs, emitting each new chunk as
+    a `partial` message so the dashboard renders output live.
+
+    Reads with ``os.pread`` at an explicit offset: ``fd`` is the same open file
+    description that ``capture`` has ``dup2``'d onto fd 1, and a positional read
+    never moves the shared write offset, so tailing cannot disturb the canonical
+    capture. Decoding is incremental so a multi-byte character split across two
+    polls is not mangled. Streaming stops at ``MAX_OUTPUT_CHARS`` — the same cap
+    the final response uses — so a runaway producer cannot flood the channel.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    offset = 0
+    streamed = 0
+
+    def drain() -> None:
+        nonlocal offset, streamed
+        try:
+            size = os.fstat(fd).st_size
+        except OSError:
+            return
+        while offset < size and streamed < MAX_OUTPUT_CHARS:
+            chunk = os.pread(fd, min(size - offset, 65536), offset)
+            if not chunk:
+                break
+            offset += len(chunk)
+            text = decoder.decode(chunk)
+            if not text:
+                continue
+            if streamed + len(text) > MAX_OUTPUT_CHARS:
+                text = text[: MAX_OUTPUT_CHARS - streamed]
+            streamed += len(text)
+            emit({"id": request_id, "partial": True, "stdout": text})
+
+    # Poll until the cell finishes (`stop` is set), then drain once more so the
+    # tail written between the last poll and completion is not lost.
+    while not stop.wait(STREAM_INTERVAL_SECS):
+        drain()
+    drain()
+
+
 class PythonSession:
     def __init__(self) -> None:
         self.globals: dict[str, object] = {}
@@ -125,22 +182,26 @@ class PythonSession:
         images.extend(_matplotlib_pngs())
         return images[:MAX_IMAGES]
 
-    def evaluate(self, expression: str) -> dict[str, object]:
+    def evaluate(
+        self, expression: str, emit: Emit | None = None, request_id: object = None
+    ) -> dict[str, object]:
         def run() -> str:
             code = compile(expression, "<ix-mcp eval>", "eval", flags=_AWAIT_FLAG)
             result = self._drive(eval(code, self.globals))
             self._last_result = result
             return repr(result)
 
-        return self.capture(run)
+        return self.capture(run, emit, request_id)
 
-    def execute(self, source: str) -> dict[str, object]:
+    def execute(
+        self, source: str, emit: Emit | None = None, request_id: object = None
+    ) -> dict[str, object]:
         def run() -> str:
             code = compile(source, "<ix-mcp exec>", "exec", flags=_AWAIT_FLAG)
             self._drive(eval(code, self.globals))
             return ""
 
-        return self.capture(run)
+        return self.capture(run, emit, request_id)
 
     def _drive(self, value: object) -> object:
         # Code compiled with the await flag returns a coroutine only when it
@@ -163,7 +224,9 @@ class PythonSession:
         if not self.loop.is_closed():
             self.loop.close()
 
-    def capture(self, run: Callable[[], str]) -> dict[str, object]:
+    def capture(
+        self, run: Callable[[], str], emit: Emit | None = None, request_id: object = None
+    ) -> dict[str, object]:
         # Capture at the file-descriptor level, not just `sys.stdout`: redirect
         # fds 1 and 2 to temp files so a subprocess the cell spawns
         # (`subprocess.run(["echo", "hi"])`) is captured in order alongside
@@ -187,12 +250,34 @@ class PythonSession:
         saved_out = os.dup(1)
         saved_err = os.dup(2)
         saved_stdout = sys.stdout
+        # Stream stdout to the caller while the cell runs, so a long-running or
+        # never-returning cell is visible live instead of only on completion. The
+        # watcher tails `out_file` (which fd 1 is redirected to) and emits chunks.
+        stop = threading.Event()
+        watcher: threading.Thread | None = None
         try:
             os.dup2(out_file.fileno(), 1)
             os.dup2(err_file.fileno(), 2)
             # Tee for line attribution; writes still pass through to fd 1, so the
             # canonical capture below (and subprocess output) is unaffected.
             sys.stdout = _LineTee(saved_stdout, trace)
+            if emit is not None:
+                # Flush each printed line to the capture file promptly so the
+                # watcher can tail it. fd 1 is not a tty here, so the TextIOWrapper
+                # is block-buffered by default and a `print` per second would sit
+                # in the buffer, never reaching disk until the cell ends. Line
+                # buffering makes each newline flush through to `out_file`.
+                # (Subprocess output goes straight to fd 1, so it already streams.)
+                try:
+                    saved_stdout.reconfigure(line_buffering=True)
+                except (ValueError, OSError):
+                    pass
+                watcher = threading.Thread(
+                    target=_stream_capture,
+                    args=(out_file.fileno(), stop, emit, request_id),
+                    daemon=True,
+                )
+                watcher.start()
             try:
                 value = run()
             except Exception:
@@ -200,8 +285,13 @@ class PythonSession:
                 value = ""
                 traceback.print_exc()
             finally:
+                # Flush user output to the capture file before stopping the
+                # watcher, so its final drain sees everything the cell wrote.
                 sys.stdout.flush()
                 sys.stderr.flush()
+                stop.set()
+                if watcher is not None:
+                    watcher.join(timeout=1.0)
                 sys.stdout = saved_stdout
         finally:
             os.dup2(saved_out, 1)
@@ -319,16 +409,26 @@ def main() -> None:
         os.dup2(devnull_in.fileno(), sys.stdin.fileno())
         os.dup2(devnull_out.fileno(), sys.stdout.fileno())
 
+    # One lock guards every write to the RPC channel: the streaming watcher
+    # (running on its own thread during a cell) and the main loop's final
+    # response both go through `emit`, so their JSON lines never interleave.
+    write_lock = threading.Lock()
+
+    def emit(payload: dict[str, object]) -> None:
+        line = json.dumps(payload)
+        with write_lock:
+            rpc_out.write(line + "\n")
+            rpc_out.flush()
+
     session = PythonSession()
     for line in rpc_in:
-        response = handle_request(session, line)
-        rpc_out.write(json.dumps(response) + "\n")
-        rpc_out.flush()
+        response = handle_request(session, line, emit)
+        emit(response)
         if response.get("close", False):
             return
 
 
-def handle_request(session: PythonSession, line: str) -> dict[str, object]:
+def handle_request(session: PythonSession, line: str, emit: Emit) -> dict[str, object]:
     try:
         request = json.loads(line)
         if not isinstance(request, dict):
@@ -339,9 +439,9 @@ def handle_request(session: PythonSession, line: str) -> dict[str, object]:
             case "ping":
                 response: dict[str, object] = {"ok": True, "stdout": "", "stderr": "", "result": "session ready"}
             case "eval":
-                response = session.evaluate(_string_field(request, "expression"))
+                response = session.evaluate(_string_field(request, "expression"), emit, request_id)
             case "exec":
-                response = session.execute(_string_field(request, "source"))
+                response = session.execute(_string_field(request, "source"), emit, request_id)
             case "reset":
                 response = session.reset()
             case "close":

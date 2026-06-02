@@ -30,6 +30,13 @@ use serde_json::Value;
 /// bound; older cards scroll off the live board but survive in the recording.
 const MAX_PANES: usize = 100;
 
+/// Cap on a live pane's streamed stdout. An unbounded producer (a `while True`
+/// loop) would otherwise grow every republished snapshot without bound, so the
+/// in-flight preview keeps only the most recent bytes. The final worker response
+/// carries the authoritative, separately-capped text (see `python_worker.py`),
+/// so this trim only affects the live view, never what the model receives.
+const STREAM_STDOUT_CAP: usize = 100_000;
+
 /// The process-global exec board, bound on first use. `None` once a bind was
 /// attempted and failed, so the failure is logged once rather than per call.
 static BOARD: OnceLock<Option<ExecBoard>> = OnceLock::new();
@@ -115,6 +122,36 @@ impl ExecBoard {
         id
     }
 
+    /// Stream a stdout chunk into a still-running pane and republish, so the
+    /// dashboard shows output as it is produced instead of only at completion.
+    /// A chunk for a pane that has already finished (a late partial racing the
+    /// final response) is dropped, and so is one for an unknown id.
+    pub fn append(&self, id: &str, stdout_chunk: &str) {
+        {
+            let mut panes = self.panes.lock();
+            let Some(View::Exec(view)) =
+                panes.iter_mut().find(|pane| pane.id == id).map(|pane| &mut pane.view)
+            else {
+                return;
+            };
+            if !view.running {
+                return;
+            }
+            view.stdout.push_str(stdout_chunk);
+            if view.stdout.len() > STREAM_STDOUT_CAP {
+                // Keep the most recent `STREAM_STDOUT_CAP` bytes, advancing the
+                // cut to the next char boundary so the removal never splits a
+                // multi-byte sequence and leaves invalid UTF-8.
+                let mut cut = view.stdout.len() - STREAM_STDOUT_CAP;
+                while !view.stdout.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                view.stdout.replace_range(..cut, "");
+            }
+        }
+        self.publish();
+    }
+
     /// Record a finished call from the worker response: fill in the captured
     /// output and flip the pane out of its running state.
     pub fn finish_from_response(&self, id: &str, response: &Value) {
@@ -140,9 +177,21 @@ impl ExecBoard {
     }
 
     /// Record a transport failure (timeout, cancel, worker death): the call
-    /// produced no worker response, so surface the error as the pane's stderr.
+    /// produced no worker response. Preserve any stdout already streamed into the
+    /// pane (e.g. a long-running loop that ran to the timeout) and surface the
+    /// error as the pane's stderr, so the live output is not erased on failure.
     pub fn finish_error(&self, id: &str, error: &str) {
-        self.finish(id, String::new(), error.to_owned(), String::new(), false, Vec::new());
+        {
+            let mut panes = self.panes.lock();
+            if let Some(View::Exec(view)) =
+                panes.iter_mut().find(|pane| pane.id == id).map(|pane| &mut pane.view)
+            {
+                error.clone_into(&mut view.stderr);
+                view.running = false;
+                view.ok = Some(false);
+            }
+        }
+        self.publish();
     }
 
     fn finish(
