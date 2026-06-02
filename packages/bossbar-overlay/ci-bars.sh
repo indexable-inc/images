@@ -306,14 +306,42 @@ for repo in "${repos[@]}"; do
   # recorded in active_urls (so the prune never removes a still-building branch),
   # but only the newest $max_bars are DRAWN, so a busy moment cannot flood the
   # screen and the rest do not flap.
-  eligible=()
+  #
+  # The per-commit counters (c_running/c_queued/...) are keyed by headSha, and a
+  # PR's head commit is reachable under TWO refs that share that sha: the source
+  # branch (e.g. `feature`) and the PR head ref (`refs/pull/<N>/head`, how some
+  # PR-event runs report headBranch). Keying eligibility on the shared sha makes
+  # BOTH refs eligible off the same in-flight runs, so one PR would draw two bars.
+  # Collapse to a single winner ref per sha, preferring a real branch name over a
+  # `refs/pull/<N>/head` ref so the bar heals across pushes and clicks through to
+  # the branch.
+  unset sha_winner
+  declare -A sha_winner
   for branch in "${!b_latest_sha[@]}"; do
     sha="${b_latest_sha[$branch]}"
-    if [ $((${c_running[$sha]:-0} + ${c_queued[$sha]:-0})) -gt 0 ]; then
-      eligible+=("${c_created[$sha]:-0}	$branch")
-      active_urls="$active_urls
-https://github.com/$repo/commits/$branch"
+    [ $((${c_running[$sha]:-0} + ${c_queued[$sha]:-0})) -gt 0 ] || continue
+    cur="${sha_winner[$sha]:-}"
+    if [ -z "$cur" ]; then
+      sha_winner["$sha"]="$branch"
+    else
+      # First ref seen for a sha wins, except a real branch always beats a
+      # refs/pull/<N>/head ref already chosen for it.
+      case "$cur" in
+        refs/pull/*/*)
+          case "$branch" in
+            refs/pull/*/*) : ;; # two PR refs for one sha: keep the first
+            *) sha_winner["$sha"]="$branch" ;;
+          esac
+          ;;
+      esac
     fi
+  done
+  eligible=()
+  for sha in "${!sha_winner[@]}"; do
+    branch="${sha_winner[$sha]}"
+    eligible+=("${c_created[$sha]:-0}	$branch")
+    active_urls="$active_urls
+https://github.com/$repo/commits/$branch"
   done
   selected=""
   [ "${#eligible[@]}" -gt 0 ] && selected="$(printf '%s\n' "${eligible[@]}" | sort -rn -k1 | head -n "$max_bars" | cut -f2-)"
