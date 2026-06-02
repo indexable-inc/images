@@ -210,11 +210,21 @@ class PythonSession:
         docs = [doc for obj in candidates if (doc := _object_html_doc(obj)) is not None]
         return docs[:MAX_HTML]
 
+    # polars repr knobs this session bounds by default; also the keys it checks to
+    # see whether the user already configured the repr (then it leaves it alone).
+    _POLARS_REPR_KEYS = ("POLARS_FMT_MAX_ROWS", "POLARS_FMT_MAX_COLS", "POLARS_FMT_STR_LEN")
+
     def _apply_polars_compact(self) -> None:
         """Bound polars' text repr once polars is in use, so an existing
         `print(df)` / `o.report()` stays compact in the model's captured stdout.
-        The dashboard still gets the full table as HTML. Applied once per session
-        so a later explicit `pl.Config` in user code wins."""
+        The dashboard still gets the full table as HTML.
+
+        Applied at most once per session, and only when the user has not already
+        set any of these repr knobs themselves: `pl.Config` is process-global, so
+        re-applying would silently undo a `pl.Config.set_tbl_rows(...)` the user
+        ran in an earlier cell. Checked at each cell's start (polars is usually not
+        imported at session reset), but the once-flag and the user-set check make
+        it a default the user's own config always wins over."""
         if self._polars_compact_applied:
             return
         pl = sys.modules.get("polars")
@@ -222,11 +232,17 @@ class PythonSession:
             return
         self._polars_compact_applied = True
         try:
+            # `state(if_set=True)` lists only the knobs explicitly set; if the user
+            # already touched any repr knob, respect their whole repr config.
+            already_set = pl.Config.state(if_set=True)
+            if any(key in already_set for key in self._POLARS_REPR_KEYS):
+                return
             pl.Config.set_tbl_rows(20)
             pl.Config.set_tbl_cols(20)
             pl.Config.set_fmt_str_lengths(50)
         except Exception:
-            # A polars build without one of these setters must not break capture.
+            # A polars build without `state`/one of these setters must not break
+            # capture; fall back to leaving the repr untouched.
             pass
 
     def evaluate(
