@@ -53,11 +53,28 @@ impl AtuinHistory {
     /// Open the atuin history db at `path` read-only and read every
     /// non-deleted command.
     ///
+    /// Opened as `immutable=1` via a `SQLite` URI, not just
+    /// `SQLITE_OPEN_READ_ONLY`: atuin runs in WAL mode, and a plain read-only
+    /// open still tries to touch the `-wal`/`-shm` sidecars and a lock file. When
+    /// a live shell holds the db or the home dir is not writable by this process
+    /// (the privileged fleet run reads other accounts' homes), that fails with
+    /// `SQLITE_CANTOPEN` (code 14). `immutable=1` tells `SQLite` the file cannot
+    /// change underneath it, so it skips all sidecar and locking I/O and reads
+    /// the main db file directly. The trade-off is a possibly-stale view if a
+    /// writer is mid-commit, which is fine for a periodic indexer (the next run
+    /// catches up).
+    ///
     /// # Errors
     /// Returns an error if the database cannot be opened or queried.
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .context(OpenDbSnafu { path: path.to_path_buf() })?;
+        // URI form so `immutable=1` applies; the path is the trusted db path the
+        // caller resolved (no untrusted query-string injection).
+        let uri = format!("file:{}?immutable=1", path.display());
+        let conn = Connection::open_with_flags(
+            &uri,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+        )
+        .context(OpenDbSnafu { path: path.to_path_buf() })?;
         let entries = read_entries(&conn)?;
         Ok(Self { entries })
     }

@@ -55,8 +55,9 @@ impl ClaudeHistoryExport {
     /// per-machine; [`open`](Self::open) resolves them automatically.
     ///
     /// # Errors
-    /// Returns an error if a directory cannot be listed, a transcript cannot be
-    /// read, or a line is not valid JSON.
+    /// Returns an error if a directory cannot be listed. A transcript that
+    /// cannot be read is logged and skipped, not fatal: one unreadable file must
+    /// not drop every other transcript for this account.
     pub fn open_with(dir: &Path, host: &str, user: &str) -> Result<Self> {
         let mut files = Vec::new();
         collect_transcripts(dir, &mut files)?;
@@ -64,7 +65,10 @@ impl ClaudeHistoryExport {
         let mut messages = Vec::new();
         for file in files {
             let origin = origin_for(&file, host, user);
-            messages.extend(transcript::parse(&file, &origin)?);
+            match transcript::parse(&file, &origin) {
+                Ok(parsed) => messages.extend(parsed),
+                Err(error) => eprintln!("[claude] skipping transcript {}: {error}", file.display()),
+            }
         }
         Ok(Self { messages })
     }

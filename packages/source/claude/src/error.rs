@@ -28,17 +28,6 @@ pub enum Error {
         source: std::io::Error,
     },
 
-    /// A transcript line was not valid JSON.
-    #[snafu(display("transcript {} line {line} is not valid JSON", path.display()))]
-    ParseLine {
-        /// File containing the malformed line.
-        path: PathBuf,
-        /// 1-based line number of the offending line.
-        line: usize,
-        /// Underlying serde error.
-        source: serde_json::Error,
-    },
-
     /// The host name could not be resolved for record tagging.
     #[snafu(display("failed to resolve host name"))]
     HostName {
