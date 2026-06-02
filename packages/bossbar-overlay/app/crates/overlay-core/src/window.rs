@@ -121,6 +121,72 @@ pub fn cursor_global() -> Option<(f64, f64)> {
     None
 }
 
+/// Stop the macOS scroll-**momentum** tail from reaching the overlays, so a
+/// two-finger scroll-drag moves a window 1:1 with the fingers and then *stops on
+/// lift* instead of coasting on past the gesture.
+///
+/// Why this exists: winit already hands us the system's accelerated
+/// `scrollingDelta` (so [`crate::scroll_drag_delta`] moves the window on the
+/// native acceleration curve, no custom math), but it *collapses* the trackpad's
+/// touch phase and the OS momentum phase into one `MouseWheel` stream. Every
+/// momentum-coast event arrives as a plain `TouchPhase::Moved`, indistinguishable
+/// from a finger drag, so the overlay would keep flinging the window for the whole
+/// coast. A window has no business coasting like scrolled content.
+///
+/// `-[NSEvent momentumPhase]` is the documented, canonical way to tell the coast
+/// from a real scroll: it is non-`None` exactly for the momentum stream and
+/// `None` during the user's physical scroll (and for a notched mouse wheel). See
+/// Apple's "Handling Trackpad Events". winit does not expose it, so we install an
+/// app-wide *local* `NSEvent` monitor (no Accessibility permission needed; it only
+/// sees this app's own events) that returns `nil` for any scroll event with a
+/// momentum phase, dropping it before winit's view ever queues a `MouseWheel`.
+/// Physical-scroll and mouse-wheel events pass through untouched.
+///
+/// Call once after the event loop is running (e.g. from `resumed`), on the main
+/// thread. The monitor is intentionally leaked: it lives for the whole process,
+/// and there is no teardown point that would want it removed.
+#[cfg(target_os = "macos")]
+pub fn suppress_scroll_momentum() {
+    use block2::RcBlock;
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::{NSEvent, NSEventMask};
+    use std::ptr::NonNull;
+
+    // Return the event to let it through, or null to swallow it. A scroll event
+    // whose `momentumPhase` is set (raw bits != 0) is part of the inertial coast;
+    // everything else (the physical two-finger scroll, a notched mouse wheel) is
+    // passed through so winit handles it as usual.
+    let handler = RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: AppKit hands the monitor a live, autoreleased `NSEvent` for the
+        // duration of the callback; we only read from it. `momentumPhase` is valid
+        // for scroll-wheel events, which is all this monitor's mask selects.
+        let ev = unsafe { event.as_ref() };
+        if unsafe { ev.momentumPhase() }.0 != 0 {
+            std::ptr::null_mut()
+        } else {
+            event.as_ptr()
+        }
+    });
+
+    // SAFETY: a standard AppKit call on the main thread; the handler block is
+    // `'static` (captures nothing) and matches the documented signature.
+    let monitor: Option<Retained<AnyObject>> = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::ScrollWheel, &handler)
+    };
+    // Keep the monitor installed for the life of the process. Dropping the
+    // returned token would tear the monitor down again.
+    if let Some(monitor) = monitor {
+        std::mem::forget(monitor);
+    }
+}
+
+/// Non-macOS: X11/Wayland deliver no momentum-coast scroll stream to suppress
+/// (kinetic scrolling, where present, is the compositor's, not extra events to a
+/// client), so this is a no-op.
+#[cfg(not(target_os = "macos"))]
+pub fn suppress_scroll_momentum() {}
+
 /// Attributes for a floating overlay window: transparent, borderless,
 /// non-resizable, always on top, sized to `(w_px, h_px)` physical pixels and
 /// placed at `pos` (logical points) when given.

@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS bossbars (
   since       INTEGER,
   url         TEXT    NOT NULL DEFAULT '',
   expandable  INTEGER NOT NULL DEFAULT 1,
-  eta         INTEGER
+  eta         INTEGER,
+  icon        TEXT    NOT NULL DEFAULT ''
 );";
 
 /// Columns added after the initial schema shipped. `ALTER TABLE ADD COLUMN` is
@@ -49,6 +50,7 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("url", "TEXT NOT NULL DEFAULT ''"),
     ("expandable", "INTEGER NOT NULL DEFAULT 1"),
     ("eta", "INTEGER"),
+    ("icon", "TEXT NOT NULL DEFAULT ''"),
 ];
 
 /// Rows inserted only when the DB file is created for the first time, so a
@@ -124,7 +126,7 @@ pub fn set_position(path: &Path, id: i64, pos: glam::DVec2) -> rusqlite::Result<
 
 fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, progress, color, overlay, position, x, y, description, since, url, expandable, eta
+        "SELECT id, title, progress, color, overlay, position, x, y, description, since, url, expandable, eta, icon
          FROM bossbars
          WHERE visible != 0
          ORDER BY position ASC, id ASC",
@@ -153,6 +155,7 @@ fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
             // Both coordinates must be present to pin a bar; a half-written row
             // falls back to auto-stacking rather than placing it at an edge.
             pos: x.zip(y).map(|(x, y)| glam::DVec2::new(x, y)),
+            icon: r.get(13)?,
         })
     })?;
     rows.collect()

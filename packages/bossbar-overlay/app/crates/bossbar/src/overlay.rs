@@ -28,7 +28,7 @@ use overlay_core::winit::event::{
 };
 use overlay_core::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use overlay_core::winit::window::{CursorIcon, Window, WindowId};
-use overlay_core::{anim, window as ocwin, DragClick, Gpu, HoverAnim};
+use overlay_core::{anim, window as ocwin, DragClick, Gpu, HoverAnim, TexHandle};
 
 use crate::bars::BossBar;
 use crate::db;
@@ -104,6 +104,34 @@ struct GpuCore {
     textures: BarTextures,
     format: wgpu::TextureFormat,
     alpha_mode: wgpu::CompositeAlphaMode,
+    /// Icon path -> uploaded texture, memoized so a bar's avatar uploads once
+    /// rather than every reconcile. `None` records a path that did not exist or
+    /// failed to decode, so a broken icon is tried once and then skipped.
+    icon_cache: HashMap<String, Option<TexHandle>>,
+}
+
+impl GpuCore {
+    /// Resolve an icon path to its texture, loading and caching on first use.
+    /// Empty path or a read/decode failure yields `None` (the bar draws without
+    /// an icon). Cached by path, so re-resolving across reconciles is free.
+    fn icon(&mut self, path: &str) -> Option<TexHandle> {
+        if path.is_empty() {
+            return None;
+        }
+        if let Some(cached) = self.icon_cache.get(path) {
+            return *cached;
+        }
+        // A read failure is transient (the writer may not have created the file
+        // yet), so do NOT cache it: returning None unmemoized lets a later
+        // reconcile pick the avatar up once it exists. A decode result (success or
+        // a genuinely undecodable file) is cached, since re-reading won't change it.
+        let Ok(bytes) = std::fs::read(path) else {
+            return None;
+        };
+        let handle = self.gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX);
+        self.icon_cache.insert(path.to_string(), handle);
+        handle
+    }
 }
 
 /// One bar's window and its surface.
@@ -112,6 +140,10 @@ struct BarWin {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     bar: BossBar,
+    /// Resolved texture for `bar.icon` (the square avatar), re-resolved whenever
+    /// the bar's icon path changes. `None` when the bar has no icon or it failed
+    /// to load.
+    icon_tex: Option<TexHandle>,
     /// Hover target: the pointer is currently over this bar.
     hovered: bool,
     /// Hover amount animated toward `hovered` each frame. Drives the grow +
@@ -161,8 +193,9 @@ impl BarWin {
 pub struct App {
     db: PathBuf,
     /// Logical pixel scale; multiplied by the monitor scale factor so the bars
-    /// look the same physical size on HiDPI and standard displays.
-    base_scale: u32,
+    /// look the same physical size on HiDPI and standard displays. Fractional
+    /// values are honored (e.g. 1.25 for 25% larger bars).
+    base_scale: f32,
     proxy: EventLoopProxy<Vec<BossBar>>,
     instance: wgpu::Instance,
     core: Option<GpuCore>,
@@ -171,8 +204,9 @@ pub struct App {
     /// Monitor logical size, for centering auto-stacked bars.
     mon_logical: (f64, f64),
     scale_factor: f64,
-    /// Physical sprite scale, `round(base_scale * scale_factor)`.
-    scale: u32,
+    /// Physical sprite scale, `base_scale * scale_factor`. Kept fractional so a
+    /// non-integer `base_scale` produces exactly the requested size.
+    scale: f32,
     /// App start, the zero point for the continuous breathing phase.
     start: Instant,
     ready: bool,
@@ -203,6 +237,7 @@ impl App {
                 textures,
                 format,
                 alpha_mode,
+                icon_cache: HashMap::new(),
             });
         }
 
@@ -234,7 +269,7 @@ impl App {
         // edge. Measured on the CPU font, so this works before the GPU core exists
         // (the first window is created before its surface).
         let title_w = scene::title_extent_px(&bar, self.scale, now_unix());
-        let (w_px, h_px) = scene::bar_window_px(self.scale, title_w);
+        let (w_px, h_px) = scene::bar_window_px(self.scale, title_w, !bar.icon.is_empty());
         let pos = match bar.pos {
             Some(p) => LogicalPosition::new(p.x, p.y),
             None => self.auto_pos(slot, w_px, h_px),
@@ -247,12 +282,15 @@ impl App {
         let (surface, config) = self.make_surface(&window);
         window.request_redraw();
         let has_description = !bar.description.trim().is_empty();
+        // `make_surface` guarantees the GPU core exists, so the icon can upload now.
+        let icon_tex = self.core.as_mut().and_then(|c| c.icon(&bar.icon));
         let now = Instant::now();
         Some(BarWin {
             window,
             surface,
             config,
             bar,
+            icon_tex,
             hovered: false,
             hover_anim: HoverAnim::default(),
             last: now,
@@ -301,6 +339,11 @@ impl App {
                     win.window.request_redraw();
                 }
                 win.has_description = !b.description.trim().is_empty();
+                // Re-resolve the avatar only when the icon path actually changed,
+                // so a steady bar does not re-touch the cache each reconcile.
+                if win.bar.icon != b.icon {
+                    win.icon_tex = self.core.as_mut().and_then(|c| c.icon(&b.icon));
+                }
                 win.bar = b.clone();
                 // Honor a position set in the DB by something other than our own
                 // drag (e.g. the CLI), but do not fight a live drag: while the
@@ -376,6 +419,7 @@ impl App {
         let mut quads = scene::build_one(
             &core.gpu,
             &core.textures,
+            win.icon_tex,
             self.scale,
             win.config.width,
             win.config.height,
@@ -446,10 +490,12 @@ impl App {
             return;
         };
         let (dx, dy) = overlay_core::scroll_drag_delta(delta, win.window.scale_factor());
-        // Move the window live on every event, momentum tail included, so it feels
-        // like scrolling. `self_set` tracks where the window sits and is set after
-        // create; measure the scroll from there, and pin the bar (`bar.pos`) so the
-        // size-settle pass stops re-centering it, exactly as a drag does.
+        // Move the window live on each event. `ocwin::suppress_scroll_momentum`
+        // drops the macOS momentum coast upstream, so this only sees the physical
+        // finger drag (and the bar stops on lift). `self_set` tracks where the
+        // window sits and is set after create; measure the scroll from there, and
+        // pin the bar (`bar.pos`) so the size-settle pass stops re-centering it,
+        // exactly as a drag does.
         if (dx != 0.0 || dy != 0.0) && let Some(cur) = win.self_set {
             let np = LogicalPosition::new(cur.x + dx, cur.y + dy);
             win.self_set = Some(np);
@@ -459,11 +505,11 @@ impl App {
             win.last_move = Instant::now();
             win.bar.pos = Some(DVec2::new(np.x, np.y));
         }
-        // Persist only when the gesture settles, not per frame: a trackpad flick
-        // emits a long momentum tail of `MouseWheel` events, and writing on each
-        // would open a SQLite connection per frame on the UI thread. The touch and
-        // momentum ends both carry `TouchPhase::Ended`; a discrete wheel notch
-        // (`LineDelta`) has no Ended phase but is low-frequency, so save it directly.
+        // Persist only when the gesture settles, not per frame: a scroll emits a
+        // burst of `MouseWheel` events, and writing on each would open a SQLite
+        // connection per frame on the UI thread. The finger lift carries
+        // `TouchPhase::Ended`; a discrete wheel notch (`LineDelta`) has no Ended
+        // phase but is low-frequency, so save it directly.
         let settle = phase == TouchPhase::Ended || matches!(delta, MouseScrollDelta::LineDelta(..));
         if settle
             && let Some(pos) = win.self_set
@@ -502,7 +548,7 @@ impl App {
             scene::expanded_window_px(&core.gpu, &win.bar, self.scale, now)
         } else {
             let title_w = scene::title_extent_px(&win.bar, self.scale, now);
-            scene::bar_window_px(self.scale, title_w)
+            scene::bar_window_px(self.scale, title_w, !win.bar.icon.is_empty())
         };
         let (prev_w, _) = win.last_size;
         if win.last_size == (w_px, h_px) {
@@ -545,6 +591,9 @@ impl ApplicationHandler<Vec<BossBar>> for App {
         if self.ready {
             return;
         }
+        // A two-finger scroll-drag tracks the fingers and stops on lift; drop the
+        // macOS momentum coast so a flick does not fling the bar past the gesture.
+        ocwin::suppress_scroll_momentum();
         let monitor = event_loop
             .primary_monitor()
             .or_else(|| event_loop.available_monitors().next());
@@ -553,7 +602,10 @@ impl ApplicationHandler<Vec<BossBar>> for App {
             None => (1920, 1080, 1.0),
         };
         self.scale_factor = scale_factor;
-        self.scale = ((self.base_scale as f64) * scale_factor).round().max(1.0) as u32;
+        // No integer rounding: a fractional `base_scale` (e.g. 1.25) must reach
+        // the renderer intact so the bars grow by exactly the requested fraction
+        // rather than snapping to the nearest whole sprite scale.
+        self.scale = ((self.base_scale as f64) * scale_factor).max(1.0) as f32;
         self.mon_logical = (mon_w as f64 / scale_factor, mon_h as f64 / scale_factor);
         self.ready = true;
 
@@ -725,7 +777,7 @@ impl ApplicationHandler<Vec<BossBar>> for App {
 }
 
 /// Run the overlay event loop. Blocks until the last window closes.
-pub fn run(db: PathBuf, base_scale: u32) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(db: PathBuf, base_scale: f32) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "linux")]
     if std::env::var_os("WAYLAND_DISPLAY").is_some()
         && std::env::var_os("BOSSBAR_WINIT").is_none()
@@ -742,14 +794,14 @@ pub fn run(db: PathBuf, base_scale: u32) -> Result<(), Box<dyn std::error::Error
     let proxy = event_loop.create_proxy();
     let mut app = App {
         db,
-        base_scale: base_scale.max(1),
+        base_scale: base_scale.max(1.0),
         proxy,
         instance: wgpu::Instance::default(),
         core: None,
         wins: HashMap::new(),
         mon_logical: (1920.0, 1080.0),
         scale_factor: 1.0,
-        scale: base_scale.max(1),
+        scale: base_scale.max(1.0),
         start: Instant::now(),
         ready: false,
     };

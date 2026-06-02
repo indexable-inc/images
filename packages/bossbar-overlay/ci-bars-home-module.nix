@@ -78,6 +78,7 @@ let
       pkgs.jq
       pkgs.sqlite
       pkgs.coreutils
+      pkgs.curl # download GitHub avatars for the bar faces
       pkgs.perl # the intrinsic flock(2) non-overlap guard (no flock(1) on macOS)
       cfg.package
     ];

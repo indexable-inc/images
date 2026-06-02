@@ -236,8 +236,10 @@ impl App {
 
     /// Move the orb to follow a two-finger trackpad scroll, persisting like a drag.
     /// A scroll has no button for `Window::drag_window` to own, so we move the
-    /// window ourselves and persist only when the gesture settles (so a flick's
-    /// momentum tail does not open a SQLite connection per frame). See
+    /// window ourselves and persist only when the gesture settles (so the
+    /// finger-drag burst does not open a SQLite connection per frame). The macOS
+    /// momentum coast is dropped upstream by `ocwin::suppress_scroll_momentum`, so
+    /// the orb tracks the fingers and stops on lift. See
     /// [`overlay_core::scroll_drag_delta`].
     fn scroll_move(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
         let Some(win) = self.win.as_mut() else {
@@ -268,6 +270,9 @@ impl ApplicationHandler<Orb> for App {
         if self.ready {
             return;
         }
+        // A two-finger scroll-drag tracks the fingers and stops on lift; drop the
+        // macOS momentum coast so a flick does not fling the orb past the gesture.
+        ocwin::suppress_scroll_momentum();
         let monitor = event_loop
             .primary_monitor()
             .or_else(|| event_loop.available_monitors().next());

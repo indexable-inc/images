@@ -12,13 +12,13 @@ use crate::scene;
 
 /// Render `bars` at `scale` into a `width`x`height` transparent PNG at `out`.
 pub fn run(
-    scale: u32,
+    scale: f32,
     width: u32,
     height: u32,
     bars: &[BossBar],
     out: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let scale = scale.max(1);
+    let scale = scale.max(1.0);
     let now_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -28,7 +28,20 @@ pub fn run(
         height,
         |gpu| {
             let tex = scene::register(gpu);
-            scene::build_all(gpu, &tex, scale, width, now_unix, bars, None)
+            // Resolve each bar's icon to a texture (or None when absent/unreadable)
+            // so the snapshot draws avatars exactly as the live overlay does.
+            let icons: Vec<Option<overlay_core::TexHandle>> = bars
+                .iter()
+                .map(|b| {
+                    if b.icon.is_empty() {
+                        return None;
+                    }
+                    std::fs::read(&b.icon)
+                        .ok()
+                        .and_then(|bytes| gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX))
+                })
+                .collect();
+            scene::build_all(gpu, &tex, &icons, scale, width, now_unix, bars, None)
         },
         out,
     )

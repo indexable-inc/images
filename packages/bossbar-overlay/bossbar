@@ -36,7 +36,8 @@ ensure_db() {
     since       INTEGER,
     url         TEXT    NOT NULL DEFAULT '',
     expandable  INTEGER NOT NULL DEFAULT 1,
-    eta         INTEGER
+    eta         INTEGER,
+    icon        TEXT    NOT NULL DEFAULT ''
   );"
   # Columns that shipped after the first schema; add each to a pre-existing table
   # so its flag works on a DB created by an older bossbar. SQLite has no
@@ -51,6 +52,7 @@ ensure_db() {
   add_col url "TEXT NOT NULL DEFAULT ''"
   add_col expandable "INTEGER NOT NULL DEFAULT 1"
   add_col eta "INTEGER"
+  add_col icon "TEXT NOT NULL DEFAULT ''"
 }
 
 die() {
@@ -83,10 +85,11 @@ bossbar - control the Minecraft boss bar overlay (SQLite-backed)
 
 Usage:
   bossbar add <title> [--description D] [--since EPOCH] [--eta SECS] [--url U]
-                      [--progress P] [--color C] [--overlay O] [--position N] [--box 0|1]
+                      [--icon PATH] [--progress P] [--color C] [--overlay O]
+                      [--position N] [--box 0|1]
   bossbar set <id|title> [--title T] [--description D] [--since EPOCH] [--eta SECS]
-                         [--url U] [--progress P] [--color C] [--overlay O]
-                         [--position N] [--visible 0|1] [--box 0|1]
+                         [--url U] [--icon PATH] [--progress P] [--color C]
+                         [--overlay O] [--position N] [--visible 0|1] [--box 0|1]
   bossbar rm <id|title>
   bossbar list
   bossbar clear
@@ -101,6 +104,8 @@ Usage:
            and ticking each second. 0 clears it (back to the static --progress)
   U        URL (or any URI/path the system opener accepts) opened when the bar
            is clicked without dragging; pass '' to clear it
+  PATH     path to a small image (PNG/JPEG) drawn as a square icon left of the
+           title, e.g. a GitHub avatar; pass '' to clear it
   P        fill fraction 0.0 .. 1.0
   C        pink | blue | red | green | yellow | purple | white
   O        progress | notched_6 | notched_10 | notched_12 | notched_20
@@ -138,6 +143,7 @@ parse_fields() {
         [[ "$val" =~ ^-?[0-9]+$ ]] || die "--eta must be an integer"
         assign="eta = $val" ;;
       --url)         assign="url = '$(sq "$val")'" ;;
+      --icon)        assign="icon = '$(sq "$val")'" ;;
       --progress)
         [[ "$val" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || die "--progress must be a number"
         assign="progress = $val" ;;
