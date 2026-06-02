@@ -137,12 +137,14 @@ jobs:
 
       # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker.
       # Paginate the comment list so the marker is found on busy PRs (no
-      # duplicate comments), then PATCH or POST.
+      # duplicate comments), and restrict the match to comments this token can
+      # actually PATCH: a user comment that happens to start with the marker
+      # would otherwise be selected and every PATCH would 403 forever.
       - name: Post sticky comment
         run: |
           set -euo pipefail
           id="$(gh api --paginate --slurp "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-                  --jq 'map(.[] | select(.body | startswith("<!-- blast-radius -->"))) | .[0].id // empty')"
+                  --jq 'map(.[] | select((.user.login == "github-actions[bot]" or .user.login == "github-actions") and ((.body // "") | startswith("<!-- blast-radius -->")))) | .[0].id // empty')"
           if [ -n "${id}" ]; then
             gh api -X PATCH "repos/${REPOSITORY}/issues/comments/${id}" -F body=@comment.md
           else
