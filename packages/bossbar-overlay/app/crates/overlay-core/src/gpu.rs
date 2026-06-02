@@ -281,13 +281,16 @@ impl Gpu {
         self.register_rgba(&img, w, h)
     }
 
-    /// Decode arbitrary image bytes (PNG/JPEG/...), downscale so the longest side
-    /// is at most `max_px`, and register the result. Unlike [`Self::register_png`]
-    /// this is fallible: it returns `None` when the bytes do not decode, so a
-    /// caller drawing user-supplied art (e.g. an avatar fetched off the network)
-    /// can skip a broken image instead of panicking. The downscale uses a quality
-    /// filter once at upload time so the nearest-sampled draw of a photo stays
-    /// legible at small sizes.
+    /// Decode image bytes (PNG/JPEG/...), downscale so the longest side is at most
+    /// `max_px`, and register the result. Unlike [`Self::register_png`] this is
+    /// fallible: it returns `None` when the bytes do not decode, so a caller can
+    /// skip a broken image (e.g. an avatar that arrived corrupt) instead of
+    /// panicking. The downscale uses a quality filter once at upload time so the
+    /// nearest-sampled draw of a photo stays legible at small sizes.
+    ///
+    /// Note: `max_px` bounds the *uploaded* texture, not decode work — the image
+    /// is fully decoded into RAM before the resize. Pass bytes from a trusted
+    /// source (or pre-validate dimensions) rather than arbitrary untrusted input.
     pub fn register_image_scaled(&mut self, bytes: &[u8], max_px: u32) -> Option<TexHandle> {
         let img = image::load_from_memory(bytes).ok()?;
         let img = if img.width().max(img.height()) > max_px {

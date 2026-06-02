@@ -78,9 +78,13 @@ impl GpuCore {
         if let Some(cached) = self.icon_cache.get(path) {
             return *cached;
         }
-        let handle = std::fs::read(path)
-            .ok()
-            .and_then(|bytes| self.gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX));
+        // Read failure is transient (writer may not have created the file yet) so
+        // is not cached; a decode result is cached. This is what lets the
+        // `reconcile` retry below actually pick up an avatar that appeared late.
+        let Ok(bytes) = std::fs::read(path) else {
+            return None;
+        };
+        let handle = self.gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX);
         self.icon_cache.insert(path.to_string(), handle);
         handle
     }

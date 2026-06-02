@@ -498,7 +498,6 @@ pub fn expanded_window_px(gpu: &Gpu, bar: &BossBar, scale: u32, now_unix: i64) -
 /// overlay enlarges it on hover, see [`expanded_window_px`]), a description panel
 /// unfolds beneath the bar, revealing with `hover`.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub fn build_one(
     gpu: &Gpu,
     tex: &BarTextures,

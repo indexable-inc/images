@@ -121,9 +121,14 @@ impl GpuCore {
         if let Some(cached) = self.icon_cache.get(path) {
             return *cached;
         }
-        let handle = std::fs::read(path)
-            .ok()
-            .and_then(|bytes| self.gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX));
+        // A read failure is transient (the writer may not have created the file
+        // yet), so do NOT cache it: returning None unmemoized lets a later
+        // reconcile pick the avatar up once it exists. A decode result (success or
+        // a genuinely undecodable file) is cached, since re-reading won't change it.
+        let Ok(bytes) = std::fs::read(path) else {
+            return None;
+        };
+        let handle = self.gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX);
         self.icon_cache.insert(path.to_string(), handle);
         handle
     }
