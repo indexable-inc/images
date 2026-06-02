@@ -115,10 +115,17 @@ CREATE TABLE IF NOT EXISTS wf_avg(
 SQL
 
 get_avg() {
-  local repo="$1" wf="$2" cached upd rows st en se ee d total count avg
-  cached="$(sqlite3 "$db" "SELECT avg_secs FROM wf_avg WHERE repo='$(sq "$repo")' AND wf='$(sq "$wf")';" 2>/dev/null || printf '')"
-  upd="$(sqlite3 "$db" "SELECT updated_at FROM wf_avg WHERE repo='$(sq "$repo")' AND wf='$(sq "$wf")';" 2>/dev/null || printf '0')"
-  upd="${upd:-0}"
+  local repo="$1" wf="$2" row cached upd rows st en se ee d total count avg
+  # One read for both cached value and its age (tab-separated), not two.
+  row="$(sqlite3 -noheader -separator "	" "$db" \
+    "SELECT avg_secs, updated_at FROM wf_avg WHERE repo='$(sq "$repo")' AND wf='$(sq "$wf")';" 2>/dev/null || printf '')"
+  if [ -n "$row" ]; then
+    cached="${row%%	*}"
+    upd="${row#*	}"
+  else
+    cached=""
+    upd=0
+  fi
   if [ -n "$cached" ] && [ "$((now - upd))" -lt "$avg_ttl" ]; then
     printf '%s' "$cached"
     return
@@ -148,15 +155,18 @@ EOF
   printf '%s' "$avg"
 }
 
-# Commit urls drawn this poll (newline-separated), used to prune finished bars.
-# Identity is the commit, so all of a commit's checks share ONE bar.
+# Commit urls with in-flight checks this poll (newline-separated), used to prune
+# bars for commits whose CI has finished. Identity is the commit, so all of a
+# commit's checks share ONE bar.
 active_urls=""
 
 for repo in "${repos[@]}"; do
   short="${repo##*/}"
-  # One list call per repo per poll: every recent run, all branches, all
-  # workflows, grouped below by head commit (headSha).
-  runs="$(gh run list --repo "$repo" --limit 100 \
+  # One list call per repo per poll: recent runs across all branches and
+  # workflows, grouped below by head commit (headSha). The window must hold all
+  # of an in-flight commit's checks (completed + running) for its done/total to be
+  # right; an in-flight commit's runs are recent, so 200 is comfortably enough.
+  runs="$(gh run list --repo "$repo" --limit 200 \
     --json workflowName,headBranch,headSha,status,conclusion,startedAt,createdAt,url \
     2>/dev/null)" || continue
   [ -n "$runs" ] || continue
@@ -203,13 +213,18 @@ for repo in "${repos[@]}"; do
     .[] | [ .headSha, .headBranch, .status, .workflowName,
             (.startedAt // ""), (.createdAt // "") ] | @tsv')
 
-  # Select commits that still have in-flight work (running or queued), newest
-  # first, capped to $max_bars so a busy moment cannot flood the screen. Commits
-  # whose checks have all finished get no bar and are pruned below.
+  # Commits that still have in-flight work (running or queued). EVERY such commit
+  # is recorded in active_urls (so the prune below never removes a still-building
+  # commit), but we only DRAW the newest $max_bars of them, so a busy moment
+  # cannot flood the screen. A commit past the cap simply keeps whatever bar it
+  # had (or none) without flapping; it gets drawn once it re-enters the top N, and
+  # pruned only once its checks all finish (it leaves active_urls).
   eligible=()
   for sha in "${!c_total[@]}"; do
     if [ $((${c_running[$sha]:-0} + ${c_queued[$sha]:-0})) -gt 0 ]; then
       eligible+=("${c_created[$sha]:-0}	$sha")
+      active_urls="$active_urls
+https://github.com/$repo/commit/$sha"
     fi
   done
   selected=""
@@ -223,8 +238,6 @@ for repo in "${repos[@]}"; do
     branch="${c_branch[$sha]:-?}"
     sha7="${sha:0:7}"
     url="https://github.com/$repo/commit/$sha"
-    active_urls="$active_urls
-$url"
 
     # Fill = (finished checks + summed partial of running ones) / total checks.
     progmilli=$(((done_n * 1000 + ${c_partmilli[$sha]:-0}) / total))
