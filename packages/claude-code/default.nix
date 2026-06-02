@@ -229,9 +229,30 @@ stdenv.mkDerivation {
     # `claude -p` stdout (verified). Those logs prune on the cleanupPeriodDays
     # sweep, so we also ship a long retention via --settings (see
     # `settingsDefaults` above).
+    #
+    # Opt back into summarized thinking (`--thinking-display summarized`). The
+    # API behavior here DIFFERS BY MODEL: `thinking.display` defaulted to
+    # "summarized" on Opus 4.6 / Sonnet 4.6 and earlier, but Anthropic silently
+    # flipped it to "omitted" on Opus 4.7 and Opus 4.8 (faster time-to-first-
+    # token). With "omitted" the API returns thinking blocks whose `thinking`
+    # field is empty (only the encrypted `signature` rides along), so on the
+    # latest Opus the live UI shows nothing and the transcript persists no
+    # reasoning. The harness never requests "summarized" itself, and
+    # `showThinkingSummaries` does NOT fix it (it only drives the ctrl+o
+    # renderer + a beta header, wired to nothing that sets the request's
+    # display) -- see anthropics/claude-code#49268 (root cause) and #63358
+    # (Opus 4.8). The hidden `--thinking-display summarized` flag is the only
+    # lever that works, and it is verified to restore readable Opus-4.8 thinking
+    # on 2.1.159. We want the reasoning for steering and for the optimize
+    # analysis, so we trade the TTFT win for visible thinking fleet-wide. Safe
+    # for Haiku (it already defaults to "summarized"); unlike CLAUDE_CODE_EXTRA_
+    # BODY this does not force `type:adaptive`, which Haiku rejects. Via
+    # `--add-flags` (prepended) so an explicit `--thinking-display omitted` on
+    # the CLI still wins for anyone who wants the latency back.
     makeBinaryWrapper "$helper" $out/bin/${binName} \
       --inherit-argv0 \
       --add-flags --debug \
+      --add-flags "--thinking-display summarized" \
       --append-flags "--settings ${settingsDefaultsFile}" \
       --set DISABLE_AUTOUPDATER 1 \
       --set DISABLE_INSTALLATION_CHECKS 1 \
