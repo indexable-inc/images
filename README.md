@@ -81,3 +81,6 @@ Bug reports and enhancement requests go to [GitHub Issues](https://github.com/in
 ## Contributor Notes
 
 See [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) when you're ready to dig in.
+
+<!-- blast-radius CI test: docs-only edit, expected blast radius 0. -->
+
