@@ -177,6 +177,11 @@ cmd="${1:-}"
 case "$cmd" in
   add)
     [ "$#" -ge 1 ] || die "add needs a <title>"
+    # Reject an empty/whitespace title, not just a missing arg: `add ""` would
+    # otherwise INSERT DEFAULT VALUES and leave a title-less, url-less bar that
+    # no prune reaps (ci-bars only prunes github.com bars, downtime matches by
+    # title), so a stray empty add accumulates phantom purple bars forever.
+    [ -n "${1//[[:space:]]/}" ] || die "add needs a non-empty <title>"
     title="$1"; shift
     ensure_db
     set_clause="title = '$(sq "$title")'"
