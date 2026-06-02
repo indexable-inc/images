@@ -273,11 +273,13 @@ impl Client {
                         .map_or_else(|| backoff(attempt), |hint| hint.max(backoff(attempt)))
                 }
                 // A transport-level failure (connection reset, HTTP/2 error,
-                // timeout) means no response arrived, so the request is safe to
+                // timeout): the send errored before a usable response, so we
                 // retry. Mixedbread sheds connections under load, so these are
                 // common during a large sync and were previously fatal per
-                // source. The non-idempotency caveat on `POST /v1/files` is the
-                // same as for a 5xx retry (documented at the call site).
+                // source. Note the send *may* have reached the server (it can
+                // error after the body was transmitted), so retrying the
+                // non-idempotent `POST /v1/files` can orphan a file object —
+                // the same caveat as the 5xx path, documented at the call site.
                 Err(err) => {
                     if attempt >= MAX_RETRIES {
                         return Err(err).context(HttpSnafu);
@@ -873,6 +875,8 @@ mod tests {
 
     #[tokio::test]
     async fn retries_transport_errors_then_succeeds() {
+        // Pays real backoff (~1s): transport errors carry no `Retry-After`, so
+        // don't raise `fail_times` expecting it to stay instant.
         let (base, calls) = spawn_flaky_tcp(2).await;
         let client = Client::new(base, "test-key").expect("client");
         client
