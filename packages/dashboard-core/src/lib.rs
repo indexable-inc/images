@@ -37,3 +37,6 @@ pub use pane::{
     discovery_dir, socket_path,
 };
 pub use publish::{PaneSink, Publisher};
+
+// blast-radius demo: harmless touch to a core crate (dashboard-core is used by
+// tui, dashboard, and macos-vm) to produce a real rebuild fan-out. DO NOT MERGE.
