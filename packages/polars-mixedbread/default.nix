@@ -108,11 +108,25 @@ let
         python3 ${./tests/test_pushdown.py} ${./python/polars_mixedbread/_pushdown.py}
         mkdir -p "$out"
       '';
+
+  # Same idea for the `min_results` over-fetch loop: pure logic (driven by an
+  # injected fetch), so its termination cases are checked offline.
+  overfetchTest =
+    pkgs.runCommand "polars-mixedbread-overfetch-test"
+      {
+        strictDeps = true;
+        nativeBuildInputs = [ (pkgs.python3.withPackages (ps: [ ps.polars ])) ];
+      }
+      ''
+        python3 ${./tests/test_overfetch.py} ${./python/polars_mixedbread/_overfetch.py}
+        mkdir -p "$out"
+      '';
 in
 wheel.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
     tests = (old.passthru.tests or { }) // {
       pushdown = pushdownTest;
+      overfetch = overfetchTest;
     };
   };
 })

@@ -60,6 +60,20 @@ For a final row cap use Polars' own `.head(n)` / `.limit(n)` (applied last).
 `top_k` only controls how deep the search goes; raise it when a client-side
 filter is discarding too much of the window.
 
+For an output *floor* instead, pass `min_results=N`: when a client-side filter
+trims the window below N rows, the source re-searches with a growing `top_k`
+(doubling) until at least N rows survive or the store is exhausted. `max_top_k`
+is a hard ceiling on search depth (a `min_results` above it is capped there;
+raise `max_top_k` to go deeper). Combine with `.head(N)` for exactly N rows out
+of an arbitrarily selective filter:
+
+```python
+# at least 20 high-score code rows, however deep the search has to go:
+scan_mixedbread("auth", store="index", min_results=20).filter(
+    (pl.col("source") == "code") & (pl.col("score") > 0.8)
+).head(20)
+```
+
 ## Columns
 
 `text` (str), `score` (f64), `filename` (str), `start_line` (u32), `num_lines`

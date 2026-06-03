@@ -50,8 +50,11 @@ final row count:
   can leave fewer than ``top_k`` rows.
 
 For a final row cap use Polars' own ``.head(n)`` / ``.limit(n)`` (applied last);
-``top_k`` only controls how deep the search goes. Raise ``top_k`` when a
-client-side filter is throwing away too much of the window.
+``top_k`` only controls how deep the search goes. For an output *floor* instead,
+pass ``min_results=N``: when a client-side filter trims the window below N, the
+source re-searches with a growing ``top_k`` until at least N rows survive (or the
+store is exhausted). Combine ``min_results=N`` with ``.head(N)`` for exactly N
+rows out of an arbitrarily selective filter.
 
 Columns: ``text`` (str), ``score`` (f64), ``filename`` (str), ``start_line``
 (u32), ``num_lines`` (u32), ``metadata`` (str, the raw JSON), plus one typed
@@ -78,6 +81,7 @@ from typing import Iterator
 import polars as pl
 from polars.io.plugins import register_io_source
 
+from ._overfetch import DEFAULT_MAX_TOP_K, grow_until, initial_k
 from ._polars_mixedbread import __version__, search_mixedbread
 from ._pushdown import pushdown
 
@@ -108,6 +112,8 @@ def scan_mixedbread(
     *,
     store: str | list[str] = "index",
     top_k: int = 10,
+    min_results: int | None = None,
+    max_top_k: int = DEFAULT_MAX_TOP_K,
     base_url: str | None = None,
     rerank: bool = True,
     agentic: bool = False,
@@ -122,6 +128,14 @@ def scan_mixedbread(
     ``"index"``). ``metadata_columns`` maps metadata keys to dtypes to surface as
     typed columns (default: the ``index`` keys).
     ``rerank``/``agentic``/``score_threshold`` tune retrieval.
+
+    ``min_results`` turns ``top_k`` into a floor on the *output*: when a
+    client-side filter trims the window below N rows, the source re-searches with
+    a growing ``top_k`` until at least N rows survive the filter or the store is
+    exhausted. ``max_top_k`` is a hard ceiling on search depth (a ``min_results``
+    above it is capped there; raise ``max_top_k`` to go deeper). Leave
+    ``min_results`` ``None`` (default) for a single fetch. Combine with
+    ``.head(N)`` for exactly N rows.
 
     Filter with ordinary Polars expressions; string equality on a metadata
     column is pushed to Mixedbread and everything else runs in Polars. See the
@@ -140,28 +154,36 @@ def scan_mixedbread(
         batch_size: int | None,  # noqa: ARG001 - single-shot source ignores the hint
     ) -> Iterator[pl.DataFrame]:
         pushed = None if predicate is None else pushdown(predicate, pushable)
-        columns = search_mixedbread(
-            stores,
-            query,
-            top_k=top_k,
-            base_url=base_url,
-            rerank=rerank,
-            agentic=agentic,
-            score_threshold=score_threshold,
-            filters=None if pushed is None else json.dumps(pushed),
-        )
-        df = pl.DataFrame(columns, schema=_INTRINSIC)
-        # Flatten the declared metadata keys out of the JSON column into typed
-        # columns. A missing key reads back null; a non-string dtype is cast
-        # leniently so a bad value is null rather than an error.
-        if meta_cols:
-            df = df.with_columns(
-                _metadata_column(name, dtype) for name, dtype in meta_cols.items()
+
+        def fetch(k: int) -> tuple[pl.DataFrame, int]:
+            columns = search_mixedbread(
+                stores,
+                query,
+                top_k=k,
+                base_url=base_url,
+                rerank=rerank,
+                agentic=agentic,
+                score_threshold=score_threshold,
+                filters=None if pushed is None else json.dumps(pushed),
             )
-        # The source owns predicate application: Polars does not re-apply it, so
-        # this is what makes a partial (or empty) pushdown correct.
-        if predicate is not None:
-            df = df.filter(predicate)
+            n_raw = len(columns["score"])
+            df = pl.DataFrame(columns, schema=_INTRINSIC)
+            # Flatten the declared metadata keys out of the JSON column into typed
+            # columns. A missing key reads back null; a non-string dtype is cast
+            # leniently so a bad value is null rather than an error.
+            if meta_cols:
+                df = df.with_columns(
+                    _metadata_column(name, dtype) for name, dtype in meta_cols.items()
+                )
+            # The source owns predicate application: Polars does not re-apply it,
+            # so this is what makes a partial (or empty) pushdown correct, and it
+            # is the filter `min_results` grows the window against.
+            if predicate is not None:
+                df = df.filter(predicate)
+            return df, n_raw
+
+        start_k = initial_k(top_k, min_results, max_top_k)
+        df = grow_until(min_results, start_k, max_top_k, fetch)
         if with_columns is not None:
             df = df.select(with_columns)
         if n_rows is not None:

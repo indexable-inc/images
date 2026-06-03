@@ -22,7 +22,7 @@ DIST = "polars_mixedbread"
 DIST_NAME = "polars-mixedbread"
 SO_NAME = "_polars_mixedbread.abi3.so"
 # Files copied verbatim from the Python source tree into the wheel.
-SOURCE_FILES = ["__init__.py", "_pushdown.py", "_polars_mixedbread.pyi", "py.typed"]
+SOURCE_FILES = ["__init__.py", "_pushdown.py", "_overfetch.py", "_polars_mixedbread.pyi", "py.typed"]
 
 
 def sha256_b64(data: bytes) -> str:
