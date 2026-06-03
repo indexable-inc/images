@@ -396,11 +396,13 @@ body {
 .entry.selected > .entry-row { background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.09)); }
 .entry.selected > .entry-row .entry-title { color: var(--ink); }
 
+/* Only failure (red) and the transient running pulse (amber) get a dot. Success
+   and idle panes show nothing — the rail threads them, so a green column of "fine"
+   doesn't compete with the few states that actually want the eye. */
 .entry-dot {
   grid-column: 1; align-self: center; justify-self: center; z-index: 1;
-  width: 9px; height: 9px; border-radius: 50%; background: var(--ink-faint);
+  width: 9px; height: 9px; border-radius: 50%; background: transparent;
 }
-.entry-dot.live { background: var(--live); }
 .entry-dot.err { background: var(--dead); }
 .entry-dot.run { background: light-dark(#d68a00, #e5c07b); animation: led-pulse 1.1s ease-in-out infinite; }
 

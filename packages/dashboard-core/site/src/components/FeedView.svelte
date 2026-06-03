@@ -8,7 +8,8 @@
   import InlineTrace from './InlineTrace.svelte';
   import type { Pane } from '$lib/types';
 
-  // The feed: a chronological timeline of panes, newest first. Each block puts the
+  // The feed: a chronological timeline of panes, oldest first (newest at the
+  // bottom, so it reads as a live log growing downward). Each block puts the
   // input on the left and its execution/output on the right — for an exec that is
   // source | output. The output is the larger, fuller column; the code is the
   // supporting one. Each block leads with the pane title, which for an exec is the
@@ -87,7 +88,9 @@
     showCode[key] = !showCode[key];
   }
 
-  // Panes newest-first. created_at is the stamp; ties break by key for stability.
+  // Panes oldest-first, so the newest run lands at the bottom and the list reads
+  // as a live log that grows downward. created_at is the stamp; ties break by key
+  // for stability.
   const items = $derived(
     Object.keys(store.panes)
       .map((key) => {
@@ -97,7 +100,7 @@
       })
       .sort(
         (a, b) =>
-          (b.pane.created_at ?? 0) - (a.pane.created_at ?? 0) || (a.key < b.key ? -1 : 1),
+          (a.pane.created_at ?? 0) - (b.pane.created_at ?? 0) || (a.key < b.key ? -1 : 1),
       ),
   );
 
@@ -107,9 +110,19 @@
   let selectedKey: string | null = $state(null);
   const selected = $derived(items.find((it) => it.key === selectedKey) ?? null);
   $effect(() => {
-    // Keep the selection valid as panes come and go; default to the first row.
-    if (items.length === 0) selectedKey = null;
-    else if (!items.some((it) => it.key === selectedKey)) selectedKey = items[0].key;
+    // Keep the selection valid as panes come and go; default to the newest row
+    // (now the last, since the list grows downward) and scroll it into view.
+    if (items.length === 0) {
+      selectedKey = null;
+    } else if (!items.some((it) => it.key === selectedKey)) {
+      selectedKey = items[items.length - 1].key;
+      const key = selectedKey;
+      queueMicrotask(() =>
+        document
+          .querySelector(`li.entry[data-key="${CSS.escape(key)}"]`)
+          ?.scrollIntoView({ block: 'nearest' }),
+      );
+    }
   });
   function move(delta: number): void {
     if (!items.length) return;
