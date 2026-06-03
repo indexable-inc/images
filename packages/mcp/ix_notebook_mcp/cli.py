@@ -210,12 +210,16 @@ def _serve(args: argparse.Namespace) -> int:
     # co-edit browser opens dark, Islands-colored, and in Berkeley Mono with no
     # per-user setup. Isolated under the runtime dir, not the user's ~/.jupyter.
     lab_config_dir, has_custom_css = _prepare_lab_config(cfg.jupyter_port)
-    # The custom-CSS handler serves from `{config_dir}/custom`, and config_dir is
-    # derived from JUPYTER_CONFIG_DIR. Setting it via the env var reliably moves
-    # static_custom_path; the equivalent `--ServerApp.config_dir` flag does not
-    # (static_custom_path resolves before that config applies, so the link 404s).
-    if has_custom_css:
-        os.environ["JUPYTER_CONFIG_DIR"] = str(lab_config_dir)
+    # Run with this as the Jupyter config dir. This is deliberate isolation: the
+    # co-edit server defines everything it needs through the flags below, so it
+    # should not inherit (or be broken by) the user's ~/.jupyter server config,
+    # and it keeps behavior reproducible across machines. It is also the only way
+    # to relocate where custom CSS is served from ({config_dir}/custom): the
+    # `static_custom_path` is derived from config_dir and is not itself settable,
+    # and `--ServerApp.config_dir` is applied too late to move it. Set
+    # unconditionally so the config surface does not change based on whether the
+    # generated CSS happens to be present.
+    os.environ["JUPYTER_CONFIG_DIR"] = str(lab_config_dir)
 
     from jupyter_server.serverapp import ServerApp
 
@@ -228,10 +232,13 @@ def _serve(args: argparse.Namespace) -> int:
             f"--IdentityProvider.token={cfg.token}",
             "--ServerApp.log_level=WARN",
             # app_settings_dir holds overrides.json (default dark theme + editor
-            # settings); custom CSS is served from {config_dir}/custom, with
-            # config_dir set via JUPYTER_CONFIG_DIR above.
+            # settings); custom CSS is served from {config_dir}/custom.
             f"--LabApp.app_settings_dir={lab_config_dir / 'lab-settings'}",
-            *(["--LabApp.custom_css=True"] if has_custom_css else []),
+            *(
+                ["--LabApp.custom_css=True"]
+                if has_custom_css
+                else []
+            ),
             # In-process extensions: ours (MCP + YDoc bridge) and jupyter_server_ydoc
             # (the server side of real-time collaboration). The browser
             # collaboration UI loads from the installed jupyter-collaboration lab

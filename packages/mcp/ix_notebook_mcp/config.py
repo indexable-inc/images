@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -90,9 +91,27 @@ def config() -> Config:
 
 
 def runtime_dir() -> Path:
-    """A writable directory for the lab-url handoff file, so ``ix-mcp lab`` (a
-    separate process) can find a running server's URL."""
+    """A private writable directory for the lab-url handoff file and the
+    materialized JupyterLab config (custom CSS + settings) served to the
+    authenticated browser.
+
+    Hardened against an untrusted base: when neither ``XDG_RUNTIME_DIR`` nor
+    ``TMPDIR`` is set (e.g. a headless service) the base is the world-writable
+    sticky ``/tmp``, where another local user could pre-create ``ix-mcp`` and drop
+    files we would then serve into the session (CWE-377). So create it ``0700`` and
+    fail closed if a pre-existing one is a symlink, not ours, or group/other
+    accessible, rather than silently reusing it.
+    """
     base = os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("TMPDIR") or "/tmp"
     path = Path(base) / "ix-mcp"
-    path.mkdir(parents=True, exist_ok=True)
+    # mode is masked by umask on create and ignored when the dir already exists,
+    # so perms are re-asserted (and ownership checked) below regardless.
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"runtime dir {path} is not a real directory")
+    if info.st_uid != os.getuid():
+        raise RuntimeError(f"runtime dir {path} is not owned by the current user")
+    if info.st_mode & 0o077:
+        path.chmod(0o700)
     return path
