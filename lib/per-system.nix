@@ -145,6 +145,15 @@ let
       const eval_jobs = "github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7"
 
       def main [] {
+        # ca-derivations: the rust workspace units default to
+        # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating
+        # `.#checks.x86_64-linux` resolves floating content-addressed drvs. The
+        # evaluator (nix-eval-jobs, which nix-fast-build wraps) needs the
+        # `ca-derivations` experimental feature, or it aborts with
+        # "experimental Nix feature 'ca-derivations' is disabled". The flake's
+        # nixConfig.extra-experimental-features carries it via
+        # accept-flake-config; `--option extra-experimental-features` here pins
+        # it for the build pool too so the gate is self-contained.
         ^nix run $fast_build -- ...[
           "--flake" ".#checks.x86_64-linux"
           "--eval-max-memory-size" "6144"
@@ -153,6 +162,7 @@ let
           "--no-nom"
           "--no-link"
           "--option" "accept-flake-config" "true"
+          "--option" "extra-experimental-features" "ca-derivations"
         ]
 
         let tmp = (mktemp --directory --tmpdir "ix-check.XXXXXX")
@@ -164,6 +174,9 @@ let
             "--gc-roots-dir" ($tmp | path join "flake-schema-eval-gc")
             "--option" "accept-flake-config" "true"
             "--option" "eval-cache" "false"
+            # See the ca-derivations note above: the package set also resolves
+            # content-addressed rust units, so this eval needs the feature too.
+            "--option" "extra-experimental-features" "ca-derivations"
           ]
         } | tee { save --raw --force $report }
 

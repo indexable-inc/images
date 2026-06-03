@@ -9,6 +9,14 @@
     extra-trusted-public-keys = [
       "indexable-inc.cachix.org-1:HQ5mjdOyhgNjLVhjv0qgVMJ5YiO1zEEVMAtF9mTcpiI="
     ];
+    # The rust workspace units default to `contentAddressed = true`
+    # (lib/rust/cargo-unit.nix), so evaluating `.#checks` / `.#packages`
+    # resolves floating content-addressed derivations. Without this feature the
+    # evaluator aborts with "experimental Nix feature 'ca-derivations' is
+    # disabled". Declared here so any eval against this flake (CI's
+    # `accept-flake-config` runs, a local `nix flake check`, `nix build
+    # .#checks.<sys>.<name>`) picks it up from one source of truth.
+    extra-experimental-features = [ "ca-derivations" ];
   };
 
   inputs = {

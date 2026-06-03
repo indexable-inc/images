@@ -36,8 +36,15 @@ env:
   # build single-threaded. The closure is wide, so parallelism comes from
   # building many derivations at once, not threads inside one build.
   # https://nix.dev/manual/nix/2.28/advanced-topics/cores-vs-jobs
+  # `ca-derivations`: the rust workspace units default to
+  # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating the
+  # check / package sets resolves floating content-addressed derivations.
+  # Without the feature the evaluator aborts with "experimental Nix feature
+  # 'ca-derivations' is disabled". The flake's nixConfig also declares it (via
+  # accept-flake-config), but pinning it in the job env covers any sub-eval that
+  # does not inherit the flake config.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes
+    experimental-features = nix-command flakes ca-derivations
     accept-flake-config = true
     extra-system-features = gccarch-znver5
     max-jobs = auto
