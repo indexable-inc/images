@@ -105,6 +105,7 @@ jobs:
           # otherwise exits on the last value, letting `{}` followed by a valid
           # report pass while the render then emits a null first section.
           jq -e -s '
+            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +():-]+$");
             length == 1 and
             (.[0] |
               (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
@@ -113,7 +114,11 @@ jobs:
               (.changed | type == "array") and
               (.added   | type == "array") and
               (.removed | type == "array") and
-              ((.changed + .added + .removed) | all(type == "string" and test("^[A-Za-z0-9_./ +():-]+$")))
+              ((.changed + .added + .removed) | all(name_ok)) and
+              (.categories | type == "array") and
+              (.categories | all((.name | name_ok) and (.count | type == "number"))) and
+              (.causes | type == "array") and
+              (.causes | all((.name | name_ok) and (.checks | type == "array") and (.checks | all(name_ok))))
             )
           ' report.json > /dev/null \
             || { echo "::error::malformed blast-radius report.json"; exit 1; }
@@ -127,12 +132,29 @@ jobs:
           set -euo pipefail
           jq -r '
             def safename: select(test("^[A-Za-z0-9_./ +():-]+$"));
-            "<!-- blast-radius -->",
+            # Unique checks across all causes, so the flowchart shares one node
+            # per check (keeps the graph under the Mermaid node budget).
+            ([ .causes[].checks[] ] | unique) as $checks
+            | "<!-- blast-radius -->",
             "### Blast radius",
             "",
             "`\((.changed | length) + (.added | length))` of `\(.total)` checks would rebuild between base `\(.base)` and head `\(.head)`.",
             (if ((.added | length) > 0) or ((.removed | length) > 0)
              then "", "\(.added | length) added, \(.removed | length) removed"
+             else empty end),
+            # v1: proportions of what rebuilt, by check family.
+            (if (.categories | length) > 0
+             then "", "```mermaid", "pie showData title Rebuilt checks by category",
+                  (.categories[] | "  \"\(.name | safename)\" : \(.count)"),
+                  "```"
+             else empty end),
+            # v2: which changed inputs fan out to which checks (top causes).
+            (if (.causes | length) > 0
+             then "", "```mermaid", "flowchart LR",
+                  (.causes | to_entries[] | "  c\(.key)[\"\(.value.name | safename)\"]"),
+                  (.causes | to_entries[] as $c | $c.value.checks[] as $k
+                   | "  c\($c.key) --> k\($checks | index($k))[\"\($k | safename)\"]"),
+                  "```"
              else empty end),
             (if (.changed | length) > 0
              then "", "<details><summary>changed checks</summary>", "",
