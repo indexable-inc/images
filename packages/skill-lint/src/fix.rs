@@ -53,31 +53,15 @@ pub fn fix_skill(path: &Path, contents: &str) -> FixOutcome {
 }
 
 /// Parse the frontmatter block; returns the mapping (for key lookups) and
-/// whether it was a mapping. `None` means no usable frontmatter.
+/// whether it was a mapping. `None` means no usable frontmatter. Reuses the
+/// linter's splitter so fix and lint agree on what frontmatter is.
 fn parse_frontmatter(contents: &str) -> Option<(serde_norway::Mapping, bool)> {
-    let yaml = frontmatter_block(contents)?;
-    let value: serde_norway::Value = serde_norway::from_str(yaml).ok()?;
+    let frontmatter = crate::lint::split_frontmatter(contents)?;
+    let value: serde_norway::Value = serde_norway::from_str(frontmatter.yaml).ok()?;
     match value {
         serde_norway::Value::Mapping(mapping) => Some((mapping, true)),
         _ => Some((serde_norway::Mapping::new(), false)),
     }
-}
-
-/// Borrow the YAML text between leading `---` delimiters, if present.
-fn frontmatter_block(contents: &str) -> Option<&str> {
-    let mut lines = contents.lines();
-    if lines.next()?.trim_end() != "---" {
-        return None;
-    }
-    let after_open = contents.split_once('\n')?.1;
-    let mut offset = 0usize;
-    for line in after_open.lines() {
-        if line.trim_end() == "---" {
-            return Some(&after_open[..offset]);
-        }
-        offset += line.len() + 1;
-    }
-    None
 }
 
 /// Insert a `name:` line as the first frontmatter field (right after the

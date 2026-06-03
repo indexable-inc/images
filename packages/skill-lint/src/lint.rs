@@ -81,37 +81,45 @@ impl Diagnostic {
     }
 }
 
-/// Result of splitting leading frontmatter from the body.
-struct Frontmatter<'a> {
+/// Result of splitting leading frontmatter from the body. Shared with the fix
+/// path so both agree on exactly what counts as frontmatter.
+pub struct Frontmatter<'a> {
     /// YAML text between the delimiters.
-    yaml: &'a str,
+    pub yaml: &'a str,
     /// 1-based line where the YAML block starts (the line after the opening
     /// `---`). Used to offset parser line numbers back to file lines.
-    yaml_start_line: usize,
+    pub yaml_start_line: usize,
 }
 
 /// Split a leading `---` … `---` frontmatter block. Returns `None` when the
 /// file does not begin with a frontmatter delimiter or has no closing one.
-fn split_frontmatter(contents: &str) -> Option<Frontmatter<'_>> {
+///
+/// The YAML is sliced from the original string by tracking each line's byte
+/// span via `split_inclusive`, so the slice stays exact (no reconstruction of
+/// the terminator width that could drift on `\r\n`).
+pub fn split_frontmatter(contents: &str) -> Option<Frontmatter<'_>> {
     let mut lines = contents.lines();
     // A leading delimiter must be the very first line (bare `---`).
     if lines.next()?.trim_end() != "---" {
         return None;
     }
 
-    // Find the closing delimiter and the byte span of the YAML block.
-    let after_open = contents.split_once('\n')?.1;
+    // Byte offset just past the opening `---` line and its newline.
+    let yaml_begin = contents.find('\n')? + 1;
+    let rest = &contents[yaml_begin..];
+
+    // `split_inclusive` keeps each line's terminator, so the running offset is
+    // always an exact byte position into `rest`.
     let mut offset = 0usize;
-    for line in after_open.lines() {
-        if line.trim_end() == "---" {
+    for chunk in rest.split_inclusive('\n') {
+        if chunk.trim_end() == "---" {
             return Some(Frontmatter {
-                yaml: &after_open[..offset],
+                yaml: &rest[..offset],
                 // File line 1 = opening `---`; YAML block begins on file line 2.
                 yaml_start_line: 2,
             });
         }
-        // Advance past this line plus its newline so the slice stays correct.
-        offset += line.len() + 1;
+        offset += chunk.len();
     }
     None
 }
