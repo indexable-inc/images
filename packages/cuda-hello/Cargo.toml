@@ -22,3 +22,10 @@ cuda-device = { git = "https://github.com/NVlabs/cuda-oxide", rev = "d22af5f2973
 cuda-host = { git = "https://github.com/NVlabs/cuda-oxide", rev = "d22af5f29738fce099ae38262faa7ab59828865f" }
 # Host-side CUDA runtime: context, stream, device buffers, launch config.
 cuda-core = { git = "https://github.com/NVlabs/cuda-oxide", rev = "d22af5f29738fce099ae38262faa7ab59828865f" }
+
+[package.metadata.cargo-machete]
+# `cuda-host` is referenced only by the code the `#[cuda_module]` / `#[kernel]`
+# macros generate (the typed module's `CudaKernel` launch machinery), which
+# cargo-machete's source scan cannot see. Without it the workspace machete check
+# reports a false positive.
+ignored = ["cuda-host"]

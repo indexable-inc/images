@@ -23,6 +23,3 @@ serde_json.workspace = true
 # `serve` is an HTTP listener; `render` fans out concurrent fetches. A
 # multi-thread runtime keeps both simple.
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "macros"] }
-
-[dev-dependencies]
-tempfile.workspace = true
