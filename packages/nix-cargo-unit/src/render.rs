@@ -1435,24 +1435,35 @@ fn render_build_script_run(
             .map(|index| format!("units.{}", nix_attr(&prepared.names[*index]))),
     );
     attrs.expr("buildInputs", &format!("[ {} ]", inputs.join(" ")));
+    // Keep `dontStrip` so the default fixup's `patchelf` never runs on these `.o`
+    // relocatables (it errors with "wrong ELF type"); the installPhase below does
+    // a targeted `strip --strip-debug` instead.
     attrs.bool("dontStrip", true);
-    // Build-script outputs stay INPUT-addressed even when content_addressed is
-    // set, because they are frequently NOT bit-reproducible. This derivation
-    // captures the build script's `out-dir`, which for crates like `ring` embeds
-    // the build path into pre-generated perlasm `.o`/`.a` objects, so the output
-    // differs byte-for-byte between builds (briansmith/ring#715).
+    // Content-address build-script outputs too. This is safe ONLY because the
+    // installPhase below strips their debug info, which is what makes them
+    // reproducible — and that's a big win:
     //
-    // A non-reproducible *floating content-addressed* output is a trap: once a
-    // GC deletes it, the next build produces a different output and Nix aborts
-    // with "Trying to register a realisation ... but we already have another one
-    // locally" (NixOS/nix#15649). That surfaces to dependents as
-    // "build of resolved derivation '<crate>' failed" with no underlying builder
-    // error (observed: rcgen-0.14.8, which pulls in ring; the trigger is the
-    // CI host's periodic nix-gc wiping the output between builds).
+    //   * The objects a build script compiles (e.g. ring's / aws-lc-sys's
+    //     perlasm + cc output) bake the absolute build path into DWARF
+    //     `.debug_str` (briansmith/ring#715). Under floating content addressing
+    //     that varying path produced a *different* output every build, so after
+    //     the GC wiped one, the next build's mismatching realisation made Nix
+    //     abort ("Trying to register a realisation ... but we already have
+    //     another one locally", NixOS/nix#15649) — surfacing to dependents as
+    //     "build of resolved derivation '<crate>' failed" (observed: rcgen ->
+    //     ring; trigger: the CI host's periodic nix-gc).
+    //   * `strip --strip-debug` removes `.debug_str` (the ONLY differing section —
+    //     verified with diffoscope; strip then yields byte-identical objects),
+    //     making the output reproducible. Nothing debugs these crypto objects, so
+    //     dropping their debug info costs nothing.
+    //   * Reproducible + content-addressed means Nix *dedups* them: instead of
+    //     dozens of divergent copies (36 observed for ring) the store keeps one
+    //     shared path, which shrinks the store and lets the output substitute
+    //     cleanly across the runner fleet.
     //
-    // Input addressing sidesteps the realisation machinery entirely, and nothing
-    // early-cuts-off on a build-script output anyway, so the crate libraries
-    // (render_unit_derivation) keep CA with no loss of incrementality.
+    // Use `--strip-debug`, never `--strip-all`: the crate links against these
+    // objects' symbols.
+    append_content_addressing(&mut attrs, options.content_addressed);
     attrs.multiline(
         "buildPhase",
         &render_build_script_run_phase(
@@ -1465,7 +1476,19 @@ fn render_build_script_run(
             build_script_run,
         )?,
     );
-    attrs.multiline("installPhase", "true\n");
+    // Strip debug info from the build script's compiled objects so the output is
+    // reproducible (see the content-addressing note above). `--strip-debug` keeps
+    // the symbols the crate links against. Fail loudly if `strip` is missing: a
+    // silent skip would leave the objects non-reproducible and re-introduce the
+    // CA realisation trap (nix#15649), so we'd rather break the build than ship
+    // that. Per-file failures (non-object files) are tolerated.
+    attrs.multiline(
+        "installPhase",
+        "if [ -d \"$out/out-dir\" ]; then\n  \
+         command -v strip >/dev/null 2>&1 || { echo 'nix-cargo-unit: strip not on PATH; build-script-output would be non-reproducible under CA (NixOS/nix#15649)' >&2; exit 1; }\n  \
+         find \"$out/out-dir\" -type f \\( -name '*.o' -o -name '*.a' \\) -exec strip --strip-debug {} + || true\n\
+         fi\n",
+    );
 
     Ok(attrs.render())
 }
