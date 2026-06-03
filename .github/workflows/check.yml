@@ -37,7 +37,7 @@ env:
   # building many derivations at once, not threads inside one build.
   # https://nix.dev/manual/nix/2.28/advanced-topics/cores-vs-jobs
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes
+    experimental-features = nix-command flakes ca-derivations
     accept-flake-config = true
     extra-system-features = gccarch-znver5
     max-jobs = auto

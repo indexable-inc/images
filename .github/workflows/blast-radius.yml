@@ -18,7 +18,7 @@ env:
   # the flake's nixConfig (the indexable-inc Cachix substituter) without a
   # prompt, which the inner nix-eval-jobs run needs to fetch the IFD closure.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes
+    experimental-features = nix-command flakes ca-derivations
     accept-flake-config = true
 
 jobs:
