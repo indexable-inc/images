@@ -13,6 +13,11 @@ def eval-checks [repo: string, rev: string] {
         "--workers" "8"
         "--option" "accept-flake-config" "true"
         "--option" "eval-cache" "false"
+        # The rust units default to contentAddressed = true, so the checks eval
+        # as content-addressed drvs. Pin the feature on directly rather than via
+        # the flake nixConfig: this evals a base `?rev=<sha>` that predates the
+        # nixConfig declaration, so accept-flake-config alone would miss it.
+        "--option" "extra-experimental-features" "ca-derivations"
       ]
     }
     | lines

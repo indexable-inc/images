@@ -17,8 +17,12 @@ env:
   # client-side eval knobs (matching check.yml). `accept-flake-config` consumes
   # the flake's nixConfig (the indexable-inc Cachix substituter) without a
   # prompt, which the inner nix-eval-jobs run needs to fetch the IFD closure.
+  # `ca-derivations`: the rust units default to contentAddressed = true, so the
+  # `.#checks` eval this job forces resolves content-addressed drvs. Without it
+  # nix-eval-jobs aborts ("experimental Nix feature 'ca-derivations' is
+  # disabled"). Mirrors check.yml.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes
+    experimental-features = nix-command flakes ca-derivations
     accept-flake-config = true
 
 jobs:
