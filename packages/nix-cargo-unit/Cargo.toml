@@ -1,24 +1,45 @@
 [package]
 name = "nix-cargo-unit"
-version.workspace = true
-edition.workspace = true
+version = "0.1.0"
+edition = "2024"
 description = "Render Cargo unit graphs as composable Nix derivations"
 license = "MIT"
-publish.workspace = true
+publish = false
 
 [lints]
 workspace = true
 
 [dependencies]
-askama = { workspace = true, default-features = false, features = ["derive", "std"] }
-clap = { workspace = true, features = ["derive"] }
-color-eyre.workspace = true
-object.workspace = true
-serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
-sha2.workspace = true
-toml = { workspace = true, default-features = false, features = ["parse", "serde"] }
-url = { workspace = true, default-features = false }
+askama = { version = "0.16.0", default-features = false, features = ["derive", "std"] }
+clap = { version = "4", features = ["derive"] }
+color-eyre = "0.6"
+object = { version = "0.37", default-features = false, features = ["read", "write", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = { version = "1.1.2", default-features = false, features = ["parse", "serde"] }
+url = { version = "2.5.8", default-features = false }
 
 [dev-dependencies]
-tempfile.workspace = true
+tempfile = "3"
+
+# Standalone workspace: nix-cargo-unit is the bootstrap tool that renders the
+# rest of the repo's unit graph, so it is intentionally excluded from the root
+# Cargo workspace (see root Cargo.toml `exclude`). Owning its own lockfile means
+# the root Cargo.lock churning (a flake-update dep bump elsewhere) never touches
+# this crate's resolved deps, so its Nix build is invalidated only by changes
+# under packages/nix-cargo-unit/ itself.
+[workspace]
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+# Group lints need priority below per-lint overrides so allowlist entries
+# (such as `multiple_crate_versions`) can opt out without disabling the group.
+# Cargo emits `lint_groups_priority` errors otherwise.
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+multiple_crate_versions = "allow"

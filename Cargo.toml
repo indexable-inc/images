@@ -34,7 +34,6 @@ members = [
   "packages/minecraft/sound",
   "packages/minecraft/sync-managed",
   "packages/mixedbread",
-  "packages/nix-cargo-unit",
   "packages/nix-web-monitor/parser",
   "packages/nix-web-monitor/server",
   "packages/oci-image-builder",
@@ -64,6 +63,11 @@ members = [
   "packages/vt/ix-vt",
   "packages/vt/ix-vt-sys",
 ]
+# nix-cargo-unit is the bootstrap tool that renders this workspace's unit graph,
+# so it owns its own Cargo.toml + Cargo.lock (it carries its own `[workspace]`).
+# Excluding it here keeps the root lockfile from pulling it in, so a root-lock
+# bump never recompiles it; its Nix build keys only on its own folder.
+exclude = [ "packages/nix-cargo-unit" ]
 resolver = "3"
 
 [workspace.package]
