@@ -414,6 +414,9 @@ in
             ./nvim/plugins/gitsigns.lua
             ./nvim/plugins/which-key.lua
             ./nvim/plugins/oil.lua
+            # Pure-Lua Claude Code dispatcher (no nixpkgs plugin); shells out to
+            # the `claude` binary the dev images bake in. <leader>aa on a line.
+            ./nvim/plugins/agent.lua
           ];
           packages.ix.start = with pkgs.vimPlugins; [
             nvim-treesitter.withAllGrammars
