@@ -29,6 +29,7 @@ def semantic(
     store: str | None = ...,
     base_url: str | None = ...,
     rerank: bool = ...,
+    reranker: str | None = ...,
     web: bool = ...,
     source: list[str] | None = ...,
     not_source: list[str] | None = ...,

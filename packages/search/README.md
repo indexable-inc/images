@@ -48,7 +48,8 @@ search --source code --repo indexable-inc/index "manifest reconcile"
 ```
 
 Flags mirror `mgrep search` where they overlap: `-c/--content`, `-m/--max-count`,
-`-a/--answer`, `--no-rerank`, `-w/--web`, `--agentic`. The store name comes from
+`-a/--answer`, `--no-rerank`, `--reranker <model>` (defaults to the listwise
+reranker), `-w/--web`, `--agentic`. The store name comes from
 `--store` or `MXBAI_STORE` (default `index`); the API base URL from `--base-url`
 or `MXBAI_BASE_URL`.
 

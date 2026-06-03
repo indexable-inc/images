@@ -10,6 +10,7 @@ def search_mixedbread(
     top_k: int = ...,
     base_url: str | None = ...,
     rerank: bool = ...,
+    reranker: str | None = ...,
     agentic: bool = ...,
     score_threshold: float | None = ...,
     filters: str | None = ...,

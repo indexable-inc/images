@@ -19,7 +19,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use search_core::{
     CodeScope, DEFAULT_STORE, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets, Manifest,
-    MixedbreadStore, SearchOptions, Source, build_filter,
+    MixedbreadStore, Rerank, SearchOptions, Source, build_filter,
 };
 
 /// Run a natural-language semantic search over the shared corpus store.
@@ -34,6 +34,11 @@ use search_core::{
 /// multiple searches gives better results out of the box. Pass `agentic=False`
 /// for a single-shot query when speed beats recall. (The `search` CLI keeps it
 /// off by default for scripted, low-latency use.)
+///
+/// `rerank` toggles the second-stage reranker (on by default). `reranker` names
+/// the model: when unset the listwise reranker is used, which reads the
+/// candidate set as a whole and lifts ranking quality over the pointwise
+/// default.
 #[pyfunction]
 #[pyo3(signature = (
     query,
@@ -41,6 +46,7 @@ use search_core::{
     store = None,
     base_url = None,
     rerank = true,
+    reranker = None,
     web = false,
     source = None,
     not_source = None,
@@ -61,6 +67,7 @@ fn semantic(
     store: Option<String>,
     base_url: Option<String>,
     rerank: bool,
+    reranker: Option<String>,
     web: bool,
     source: Option<Vec<String>>,
     not_source: Option<Vec<String>>,
@@ -73,6 +80,14 @@ fn semantic(
     let store_name = store.unwrap_or_else(|| DEFAULT_STORE.to_owned());
     let base = base_url.unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
     let filter = scope_filter(source, not_source, repo, user, host, project)?;
+    // `rerank=False` disables reranking; otherwise a named model wins, falling
+    // back to the listwise reranker so the interactive MCP surface gets the best
+    // ordering by default.
+    let rerank = match (rerank, reranker) {
+        (false, _) => Rerank::off(),
+        (true, Some(model)) => Rerank::model(model),
+        (true, None) => Rerank::listwise(),
+    };
     let options = SearchOptions { rerank, agentic };
     // Keep every value the borrowed `search_core::semantic` call reads owned in
     // one frame, so the future handed to `future_into_py` stays `'static`.

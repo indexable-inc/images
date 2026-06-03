@@ -49,7 +49,7 @@ impl MixedbreadStore {
     }
 }
 
-const fn to_client_options(options: SearchOptions) -> mixedbread::SearchOptions {
+fn to_client_options(options: SearchOptions) -> mixedbread::SearchOptions {
     mixedbread::SearchOptions {
         rerank: options.rerank,
         agentic: options.agentic,

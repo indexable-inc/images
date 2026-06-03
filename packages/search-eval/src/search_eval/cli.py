@@ -57,6 +57,11 @@ def _build_parser() -> argparse.ArgumentParser:
     retr = sub.add_parser("retrieval", help="Tier A: grade search rankings vs gold")
     _add_common(retr)
     retr.add_argument("--no-rerank", action="store_true", help="disable the second-stage reranker")
+    retr.add_argument(
+        "--reranker",
+        default=None,
+        help="reranking model to compare (default: the search CLI's listwise default)",
+    )
     retr.add_argument("--no-judge", action="store_true", help="skip the LLM relevance judge")
     retr.add_argument("--judge-top-n", type=int, default=3, help="hits to LLM-grade per query")
     retr.add_argument("--dataset", type=Path, default=None, help="override retrieval.jsonl")
@@ -85,6 +90,7 @@ def _search_backend(args: argparse.Namespace) -> SearchBackend:
         store=args.store,
         max_count=args.max_count,
         rerank=not getattr(args, "no_rerank", False),
+        reranker=getattr(args, "reranker", None),
     )
 
 
