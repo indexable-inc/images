@@ -34,14 +34,13 @@ trap 'rm -rf "$work"' EXIT
 # `gh` issue/PR list caps `--limit`; pick a ceiling well above any single repo.
 limit=100000
 
-# jq programs for the per-item comment passes, kept in files so the regex below
+# jq programs for the per-item REST passes, kept in files so the regex below
 # carries no extra shell-quoting layers. Each receives `--arg n` and the merged
 # page array on stdin, and emits a single `{ "<n>": <projected> }` object.
 #
-# Author normalization matches across every comment surface: the REST API
-# suffixes bot logins with `[bot]` (the GraphQL list calls do not), so strip it,
-# and a deleted account has a null `user`, which must stay null rather than
-# abort the `sub`.
+# Author normalization matches across every surface: the REST API suffixes bot
+# logins with `[bot]` (the GraphQL list calls do not), so strip it, and a deleted
+# account has a null `user`, which must stay null rather than abort the `sub`.
 cat > "$work/comments.jq" <<'JQ'
 { ($n): (add | map({
     author: (.user.login | if . then sub("\\[bot\\]$"; "") else null end),
@@ -60,26 +59,37 @@ cat > "$work/threads.jq" <<'JQ'
     } ]
 })) }
 JQ
+# Drop PENDING reviews (a reviewer's own unsubmitted draft, visible only to that
+# token): they have a null `submitted_at`, which the adapter requires as a string.
+cat > "$work/reviews.jq" <<'JQ'
+{ ($n): (add | map(select(.state != "PENDING")) | map({
+    author: (.user.login | if . then sub("\\[bot\\]$"; "") else null end),
+    body,
+    state,
+    submitted_at
+})) }
+JQ
 
 # Fetch a fully-paginated REST collection for every item number, in parallel,
 # and merge the per-item results into one number-keyed object.
 #   $1 repo, $2 file holding a JSON array with `.number`, $3 endpoint
-#   ("issues"|"pulls"), $4 jq program file, $5 output file.
-# `gh api --paginate` walks every page, so no comment is lost on busy items
-# (the GraphQL list calls return only the first page of a nested connection).
+#   ("issues"|"pulls"), $4 collection ("comments"|"reviews"), $5 jq program file,
+#   $6 output file.
+# `gh api --paginate` walks every page, so no item is lost on busy PRs (the
+# GraphQL list calls return only the first page of a nested connection).
 # Each worker writes its own file rather than a shared stdout pipe: concurrent
 # writes larger than PIPE_BUF would interleave and corrupt the JSON stream.
 fetch_per_item() {
-  local repo=$1 numbers=$2 endpoint=$3 prog=$4 out=$5
+  local repo=$1 numbers=$2 endpoint=$3 collection=$4 prog=$5 out=$6
   local dir
   dir=$(mktemp -d "$work/per-item.XXXXXX")
   jq -r '.[].number' "$numbers" \
-    | ITEM_REPO="$repo" ITEM_ENDPOINT="$endpoint" ITEM_DIR="$dir" ITEM_PROG="$prog" \
+    | ITEM_REPO="$repo" ITEM_ENDPOINT="$endpoint" ITEM_COLLECTION="$collection" ITEM_DIR="$dir" ITEM_PROG="$prog" \
       xargs -P "${EXPORT_JOBS:-8}" -I {} bash -c '
         set -euo pipefail
         n=$1
         gh api --paginate --slurp \
-          "repos/${ITEM_REPO%%/*}/${ITEM_REPO##*/}/$ITEM_ENDPOINT/$n/comments" \
+          "repos/${ITEM_REPO%%/*}/${ITEM_REPO##*/}/$ITEM_ENDPOINT/$n/$ITEM_COLLECTION" \
           | jq --arg n "$n" -f "$ITEM_PROG" > "$ITEM_DIR/$n.json"
       ' _ {}
   if compgen -G "$dir/*.json" > /dev/null; then
@@ -94,11 +104,10 @@ emit_repo() {
   local issues_raw="$work/issues.json"
   local prs_raw="$work/prs.json"
 
-  # Issue/PR metadata. Conversation comments are fetched per item below rather
-  # than read from these list calls: gh requests only the first page of a nested
-  # connection and never paginates it, so a busy issue would silently lose
-  # comments past that page. Reviews stay inline; a PR with more reviews than one
-  # page is vanishingly rare and the inline read saves a round trip per PR.
+  # Issue/PR metadata only. Comments, reviews, and review threads are each fetched
+  # per item from the paginated REST endpoints below: gh requests only the first
+  # page of a nested connection on these list calls and never paginates it, so a
+  # busy issue or PR would silently lose comments/reviews past that page.
   gh issue list --repo "$repo" --state all --limit "$limit" \
     --json number,title,body,state,author,labels,assignees,createdAt,updatedAt,closedAt,url \
     | jq --arg repo "$repo" '[ .[] | {
@@ -117,7 +126,7 @@ emit_repo() {
       } ]' > "$issues_raw"
 
   gh pr list --repo "$repo" --state all --limit "$limit" \
-    --json number,title,body,state,author,labels,assignees,reviews,isDraft,baseRefName,headRefName,createdAt,updatedAt,closedAt,mergedAt,url \
+    --json number,title,body,state,author,labels,assignees,isDraft,baseRefName,headRefName,createdAt,updatedAt,closedAt,mergedAt,url \
     | jq --arg repo "$repo" '[ .[] | {
         kind: "pr",
         repo: $repo,
@@ -134,23 +143,26 @@ emit_repo() {
         is_draft: .isDraft,
         base_ref: .baseRefName,
         head_ref: .headRefName,
-        url,
-        reviews: [ .reviews[] | { author: (.author.login // null), body, state, submitted_at: .submittedAt } ]
+        url
       } ]' > "$prs_raw"
 
   # Conversation comments for issues and PRs alike (PRs are issues for this
-  # endpoint), then inline review threads for PRs only.
+  # endpoint), then reviews and inline review threads for PRs only.
   local all_items="$work/all.json"
   jq -s 'add' "$issues_raw" "$prs_raw" > "$all_items"
 
-  fetch_per_item "$repo" "$all_items" issues "$work/comments.jq" "$work/comments.json"
-  fetch_per_item "$repo" "$prs_raw" pulls "$work/threads.jq" "$work/threads.json"
+  fetch_per_item "$repo" "$all_items" issues comments "$work/comments.jq" "$work/comments.json"
+  fetch_per_item "$repo" "$prs_raw" pulls reviews "$work/reviews.jq" "$work/reviews.json"
+  fetch_per_item "$repo" "$prs_raw" pulls comments "$work/threads.jq" "$work/threads.json"
 
-  jq --slurpfile comments "$work/comments.json" --slurpfile threads "$work/threads.json" '
+  jq --slurpfile comments "$work/comments.json" \
+     --slurpfile reviews "$work/reviews.json" \
+     --slurpfile threads "$work/threads.json" '
     [ .[]
       | .comments = ($comments[0][(.number | tostring)] // [])
       | if .kind == "pr"
-        then .review_threads = ($threads[0][(.number | tostring)] // [])
+        then .reviews = ($reviews[0][(.number | tostring)] // [])
+           | .review_threads = ($threads[0][(.number | tostring)] // [])
         else . end
     ]' "$all_items"
 }
