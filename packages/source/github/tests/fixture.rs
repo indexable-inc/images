@@ -92,16 +92,16 @@ fn documents_have_stable_identity_and_envelope() {
     }
 }
 
-/// `external_id` is `github:<owner>/<repo>#<number>` and spans repos.
+/// `external_id` is `github:<owner>/<repo>:<number>` and spans repos.
 #[test]
 fn external_id_namespaces_repo_and_number() {
     let docs = collect_docs();
-    let issue = doc_for(&docs, "github:acme/widgets#1");
+    let issue = doc_for(&docs, "github:acme/widgets:1");
     assert_eq!(meta_str(&issue, "repo"), "acme/widgets");
     assert_eq!(meta(&issue, "number"), &Value::from(1));
 
     // A second repo is represented in the same export.
-    let pr = doc_for(&docs, "github:acme/gadgets#7");
+    let pr = doc_for(&docs, "github:acme/gadgets:7");
     assert_eq!(meta_str(&pr, "repo"), "acme/gadgets");
 }
 
@@ -109,18 +109,18 @@ fn external_id_namespaces_repo_and_number() {
 #[test]
 fn separates_issues_and_pull_requests() {
     let docs = collect_docs();
-    let issue = doc_for(&docs, "github:acme/widgets#1");
+    let issue = doc_for(&docs, "github:acme/widgets:1");
     assert_eq!(meta(&issue, "is_pr"), &Value::Bool(false));
     assert!(
         issue.meta_json.get("is_draft").is_none(),
         "issues carry no is_draft key"
     );
 
-    let pr = doc_for(&docs, "github:acme/gadgets#7");
+    let pr = doc_for(&docs, "github:acme/gadgets:7");
     assert_eq!(meta(&pr, "is_pr"), &Value::Bool(true));
     assert_eq!(meta(&pr, "is_draft"), &Value::Bool(false));
 
-    let draft = doc_for(&docs, "github:acme/gadgets#8");
+    let draft = doc_for(&docs, "github:acme/gadgets:8");
     assert_eq!(meta(&draft, "is_draft"), &Value::Bool(true));
     assert!(body_text(&draft).contains("(draft)"));
 }
@@ -129,7 +129,7 @@ fn separates_issues_and_pull_requests() {
 #[test]
 fn merged_pull_request_is_flagged() {
     let docs = collect_docs();
-    let pr = doc_for(&docs, "github:acme/gadgets#7");
+    let pr = doc_for(&docs, "github:acme/gadgets:7");
     assert_eq!(meta_str(&pr, "state"), "merged");
     let body = body_text(&pr);
     assert!(body.contains("State: merged"));
@@ -141,7 +141,7 @@ fn merged_pull_request_is_flagged() {
 #[test]
 fn comments_are_sorted_ascending() {
     let docs = collect_docs();
-    let issue = doc_for(&docs, "github:acme/widgets#1");
+    let issue = doc_for(&docs, "github:acme/widgets:1");
     let body = body_text(&issue);
 
     assert!(body.contains("Comments (2):"), "comment count line present");
@@ -156,7 +156,7 @@ fn comments_are_sorted_ascending() {
 #[test]
 fn renders_reviews_and_review_threads() {
     let docs = collect_docs();
-    let pr = doc_for(&docs, "github:acme/gadgets#7");
+    let pr = doc_for(&docs, "github:acme/gadgets:7");
     let body = body_text(&pr);
 
     assert!(body.contains("Reviews (1):"));
@@ -175,7 +175,7 @@ fn renders_reviews_and_review_threads() {
 #[test]
 fn empty_body_uses_placeholder() {
     let docs = collect_docs();
-    let issue = doc_for(&docs, "github:acme/widgets#2");
+    let issue = doc_for(&docs, "github:acme/widgets:2");
     let body = body_text(&issue);
     assert!(body.contains("Body:\n(no body)"));
     assert!(body.contains("Closed 2026-01-05T09:00:00Z"));
@@ -189,7 +189,7 @@ fn empty_body_uses_placeholder() {
 #[test]
 fn author_and_assignees_metadata() {
     let docs = collect_docs();
-    let issue = doc_for(&docs, "github:acme/widgets#1");
+    let issue = doc_for(&docs, "github:acme/widgets:1");
     assert_eq!(meta_str(&issue, "author_name"), "alex");
     let assignees = meta(&issue, "assignees").as_array().expect("assignees array");
     assert_eq!(assignees.len(), 1);

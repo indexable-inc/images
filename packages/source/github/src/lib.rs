@@ -16,7 +16,10 @@
 //! keys (`repo`, `number`, `state`, `is_pr`, labels, ...).
 //!
 //! Grain is one document per issue and one per pull request. The `external_id`
-//! is `github:<owner>/<repo>#<number>`, stable across re-exports, so the sink
+//! is `github:<owner>/<repo>:<number>` (a `:` separator, not `#`: the sink's
+//! delete path puts the id in a URL path, where a `#` would be parsed as a
+//! fragment and silently truncate the id, like `git:<repo>:<sha>`), stable
+//! across re-exports, so the sink
 //! reconciles in place: an edited item re-embeds and an unchanged one is skipped
 //! (`sync_documents` keys on `external_id` + `content_hash`). The indexer pass
 //! uploads and updates only; it does not delete items dropped from a later
@@ -262,7 +265,9 @@ impl Item {
     /// Render this item into a [`Document`]: build the body, the flat metadata,
     /// validate the metadata against the store limits, then assemble.
     fn into_document(self) -> Result<Document> {
-        let external_id = format!("github:{}#{}", self.repo, self.number);
+        // `:` not `#`: the sink deletes by putting this id in a URL path, where a
+        // `#` is parsed as a fragment and truncates the id. Mirrors `git:repo:sha`.
+        let external_id = format!("github:{}:{}", self.repo, self.number);
         let body = self.render_body().into_bytes();
         let content_hash = source_meta::hash_body(&body);
         let title = format!("{}#{}: {}", self.repo, self.number, self.title);

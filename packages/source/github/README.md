@@ -23,9 +23,22 @@ This writes:
   element carries its own `repo` and a `kind` (`issue` or `pr`). Pull requests
   nest their `reviews` and inline `review_threads` in place.
 
-Requires `gh` (authenticated) and `jq`. Inline review threads are fetched one
-REST call per PR, run in parallel; set `EXPORT_JOBS` to tune the parallelism
-(default 8).
+Requires `gh` (authenticated) and `jq`.
+
+### Cost and scale
+
+The `gh issue/pr list` calls return only the first page of each nested
+connection (comments, reviews), so the export does not read comments or reviews
+from them. Instead it fetches, fully paginated, per item: conversation comments
+(one call per issue and per PR), and for each PR its reviews and inline review
+threads (two more calls). That is one call per issue and three per PR, run in
+parallel; set `EXPORT_JOBS` to tune the parallelism (default 8).
+
+The tradeoff is completeness over call count: a repo with thousands of PRs makes
+thousands of REST calls and can take a while or brush the GitHub rate limit.
+That is deliberate, so no discussion is silently dropped. A future pass could
+move to a GraphQL query that paginates the nested connections inline if the call
+volume becomes a problem.
 
 ## Index
 
@@ -36,7 +49,9 @@ indexer --mixedbread-store my-store --github-export ./export
 ## Grain and identity
 
 One document per issue and per pull request. The `external_id` is
-`github:<owner>/<repo>#<number>`, stable across re-exports, so the Mixedbread
+`github:<owner>/<repo>:<number>` (a `:` separator, not `#`, so it survives the
+sink's delete path, which carries the id in a URL where `#` would start a
+fragment), stable across re-exports, so the Mixedbread
 sink reconciles in place: an edited item re-embeds and an unchanged one is
 skipped (`sync_documents` keys on `external_id` + `content_hash`).
 
