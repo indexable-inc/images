@@ -498,36 +498,48 @@ let
         exampleFleets = healthCheckExampleFleets;
         exampleNames = lib.attrNames exampleFleets;
       };
+
+  # Capture every discovered image (plus the `base` image, which is defined
+  # alongside packages but is also a real image) in one binding so both the
+  # `packages` set and the per-image `image-<name>` checks share the same
+  # derivations. Re-registering each image OCI archive under `.#checks` is
+  # what lets blast-radius (which only diffs `.#checks.x86_64-linux`) catch
+  # a semantic edit to a shared image lib: such an edit shifts every image
+  # OCI archive drvPath, so every `image-<name>` check drvPath flips and the
+  # report shows the full fanout instead of a docs-only `1 of N`.
+  discoveredImages = ix.discoverImages {
+    root = paths.images;
+    inherit (tests) imageTests;
+  };
+  basePackage =
+    let
+      package = ix.mkImage {
+        modules = [
+          {
+            ix.image = {
+              name = "ix/base";
+              tag = "latest";
+            };
+          }
+        ];
+      };
+    in
+    package
+    // {
+      passthru = (package.passthru or { }) // {
+        tests = (package.passthru.tests or { }) // {
+          eval = tests.imageTests.base;
+        };
+      };
+    };
+  allImages = discoveredImages // {
+    base = basePackage;
+  };
 in
 {
   packages =
-    (ix.discoverImages {
-      root = paths.images;
-      inherit (tests) imageTests;
-    })
+    allImages
     // {
-      base =
-        let
-          package = ix.mkImage {
-            modules = [
-              {
-                ix.image = {
-                  name = "ix/base";
-                  tag = "latest";
-                };
-              }
-            ];
-          };
-        in
-        package
-        // {
-          passthru = (package.passthru or { }) // {
-            tests = (package.passthru.tests or { }) // {
-              eval = tests.imageTests.base;
-            };
-          };
-        };
-
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
       inherit check lint site;
@@ -658,20 +670,37 @@ in
         );
         site-test = siteTests.all;
       };
+      # One check per image OCI archive (`image-<name>`), built by
+      # nix-fast-build in step 1 of `.#check`. Without this, `.#packages`
+      # carries the image derivations but `.#checks` does not, so blast-radius
+      # (lib/per-system.nix `blastRadius`) under-reports any change that
+      # rebuilds every image because the drvPath shift never reaches a check.
+      # The `eval` aggregate at tests/default.nix only closes over per-image
+      # extraScript text, not `config.system.build.toplevel`, so it stays
+      # stable across semantic edits to shared image libs and cannot stand in
+      # for these checks.
+      imageChecks = lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v) allImages;
       # A rust check key is `<prefix>-<testName>`, where `prefix` defaults to
       # `rust-<id>` but a crate may override it in its `package.nix` (e.g.
       # `ix-fleet` uses `ix-fleet`). So the rust keys are not guaranteed to be
       # `rust-`-prefixed, and a stray override colliding with an explicit check
-      # name would otherwise be silently swallowed by the `//` merge. Assert the
-      # two key sets are disjoint so such a collision fails loudly instead.
-      # Forcing `rustChecks`' keys realizes the cargo-unit test manifest (IFD);
-      # that is acceptable because evaluating the `checks` set at all (what CI
-      # and `nix flake check` do) already enumerates those keys.
-      checkNameCollisions = lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks);
+      # name would otherwise be silently swallowed by the `//` merge. Assert
+      # all three key sets are disjoint so such a collision fails loudly
+      # instead. Forcing `rustChecks`' keys realizes the cargo-unit test
+      # manifest (IFD); that is acceptable because evaluating the `checks` set
+      # at all (what CI and `nix flake check` do) already enumerates them.
+      allCheckNames = lib.concatMap lib.attrNames [
+        explicitChecks
+        rustChecks
+        imageChecks
+      ];
+      checkNameCollisions = lib.unique (
+        lib.filter (n: lib.count (m: m == n) allCheckNames > 1) allCheckNames
+      );
     in
     assert lib.assertMsg (checkNameCollisions == [ ])
-      "checks: rust check name(s) collide with explicit checks: ${lib.concatStringsSep ", " checkNameCollisions}";
-    explicitChecks // rustChecks
+      "checks: duplicate names across explicit/rust/image check sets: ${lib.concatStringsSep ", " checkNameCollisions}";
+    explicitChecks // rustChecks // imageChecks
   );
 
   formatter = pkgs.nixfmt;
