@@ -260,7 +260,7 @@ from tui import Tui
 async def main() -> None:
     t = Tui("bash", "-c", "echo hi; exit 7")
     code = await t.wait(timeout=3)     # blocks until exit; raises WaitTimeout on deadline
-    print(code, t.is_alive())          # 7 False
+    print(code, t.is_alive)            # 7 False
     print(t.exit_code)                 # 7 (None while running or if killed by a signal)
 
 asyncio.run(main())

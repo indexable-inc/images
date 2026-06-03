@@ -1,5 +1,8 @@
 pub mod engine;
 
+use std::sync::Arc;
+
+use parking_lot::RwLock as SyncRwLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
@@ -60,6 +63,7 @@ pub async fn pty_actor(
     mut commands: mpsc::Receiver<PtyCommand>,
     engine_tx: std::sync::mpsc::Sender<EngineRequest>,
     exit_tx: watch::Sender<ExitState>,
+    app_cursor_keys: Arc<SyncRwLock<bool>>,
 ) {
     let mut read_buffer = [0u8; 8192];
     let mut pty_active = true;
@@ -73,6 +77,11 @@ pub async fn pty_actor(
                 match cmd {
                     PtyCommand::Write { data, response } => {
                         if pty_active {
+                            // A real terminal emits the cursor keys in
+                            // application form once the program enables DECCKM;
+                            // rewrite them here so callers send one spelling and
+                            // full-screen programs still receive their arrows.
+                            let data = apply_cursor_key_mode(&data, *app_cursor_keys.read());
                             let result = pty.write_all(&data)
                                 .await
                                 .map_err(|e| crate::Error::WriteToTui {
@@ -213,4 +222,72 @@ async fn resize_engine(
         .send(EngineRequest::Resize { rows, cols, reply })
         .map_err(|_| Error::TuiNotFound { id })?;
     response.await.map_err(|_| Error::TuiNotFound { id })?
+}
+
+/// Rewrite normal-mode cursor-key sequences into their application-mode form
+/// when the program has enabled DECCKM.
+///
+/// A real terminal emits the cursor keys as `ESC O A`..`ESC O D` (and Home/End
+/// as `ESC O H`/`ESC O F`) once the program enables DECCKM via terminfo `smkx`,
+/// which ncurses, vim, and less all do on entry. Sending the normal `ESC [ A`
+/// form instead leaves those programs blind to the arrows. These exact 3-byte
+/// sequences only arise as terminal *input* from a cursor key, so the
+/// substitution is unambiguous. A modified arrow carries parameters
+/// (`ESC [ 1 ; 5 A` for Ctrl+Up), so the byte after `[` is a digit rather than
+/// the final letter and the sequence is left untouched.
+fn apply_cursor_key_mode(data: &[u8], application_mode: bool) -> Vec<u8> {
+    if !application_mode {
+        return data.to_vec();
+    }
+
+    let mut out = Vec::with_capacity(data.len());
+    let mut rest = data;
+    while let Some((&first, tail)) = rest.split_first() {
+        if first == 0x1b
+            && let [b'[', final_byte, remainder @ ..] = tail
+            && matches!(*final_byte, b'A' | b'B' | b'C' | b'D' | b'H' | b'F')
+        {
+            out.extend_from_slice(&[0x1b, b'O', *final_byte]);
+            rest = remainder;
+        } else {
+            out.push(first);
+            rest = tail;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_cursor_key_mode;
+
+    #[test]
+    fn normal_mode_passes_cursor_keys_through() {
+        assert_eq!(apply_cursor_key_mode(b"\x1b[B", false), b"\x1b[B".to_vec());
+    }
+
+    #[test]
+    fn application_mode_rewrites_cursor_and_home_end_keys() {
+        assert_eq!(apply_cursor_key_mode(b"\x1b[A", true), b"\x1bOA".to_vec());
+        assert_eq!(apply_cursor_key_mode(b"\x1b[B", true), b"\x1bOB".to_vec());
+        assert_eq!(apply_cursor_key_mode(b"\x1b[C", true), b"\x1bOC".to_vec());
+        assert_eq!(apply_cursor_key_mode(b"\x1b[D", true), b"\x1bOD".to_vec());
+        assert_eq!(apply_cursor_key_mode(b"\x1b[H", true), b"\x1bOH".to_vec());
+        assert_eq!(apply_cursor_key_mode(b"\x1b[F", true), b"\x1bOF".to_vec());
+    }
+
+    #[test]
+    fn application_mode_leaves_text_and_modified_keys_untouched() {
+        assert_eq!(apply_cursor_key_mode(b"hello", true), b"hello".to_vec());
+        // Modified arrow (Ctrl+Up = ESC [ 1 ; 5 A) keeps its CSI form.
+        assert_eq!(
+            apply_cursor_key_mode(b"\x1b[1;5A", true),
+            b"\x1b[1;5A".to_vec()
+        );
+        // A cursor key surrounded by text is still rewritten in place.
+        assert_eq!(
+            apply_cursor_key_mode(b"a\x1b[Bb", true),
+            b"a\x1bOBb".to_vec()
+        );
+    }
 }

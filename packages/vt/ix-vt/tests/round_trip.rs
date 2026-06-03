@@ -74,3 +74,30 @@ fn resize_changes_viewport_dimensions() {
     assert_eq!((after.rows, after.cols), (12, 40), "viewport tracks resize");
     assert_eq!(after.viewport.len(), 12, "row count matches new height");
 }
+
+#[test]
+fn decckm_tracks_application_cursor_keys() {
+    let mut term = Terminal::new(24, 80, 0).expect("create terminal");
+    assert!(
+        !term
+            .application_cursor_keys()
+            .expect("query DECCKM at start"),
+        "cursor keys default to normal mode"
+    );
+
+    // ESC[?1h sets DECCKM (what ncurses/vim emit via `smkx` on entry).
+    term.vt_write(b"\x1b[?1h");
+    assert!(
+        term.application_cursor_keys().expect("query DECCKM after set"),
+        "ESC[?1h enables application cursor keys"
+    );
+
+    // ESC[?1l resets it (the `rmkx` on exit).
+    term.vt_write(b"\x1b[?1l");
+    assert!(
+        !term
+            .application_cursor_keys()
+            .expect("query DECCKM after reset"),
+        "ESC[?1l restores normal cursor keys"
+    );
+}

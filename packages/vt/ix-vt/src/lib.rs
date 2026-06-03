@@ -290,6 +290,12 @@ pub struct Terminal {
 // another thread owns it on a pinned thread behind a channel API rather than
 // moving the handle. Do not add an `unsafe impl Send`/`Sync`.
 
+/// DECCKM (DEC private mode 1, "cursor keys") in libghostty's packed mode
+/// encoding. The C header defines it as `ghostty_mode_new(1, ansi=false)`, i.e.
+/// `(value & 0x7FFF) | ((ansi as u16) << 15)`, which for value 1 / DEC-private
+/// is simply `1`. See `ghostty/vt/modes.h` (`GHOSTTY_MODE_DECCKM`).
+const DECCKM: sys::GhosttyMode = 1;
+
 impl Terminal {
     /// Create a terminal sized `rows` by `cols` with `scrollback` lines of
     /// history.
@@ -412,6 +418,26 @@ impl Terminal {
         let bar: sys::GhosttyTerminalScrollbar =
             unsafe { self.get(sys::GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_SCROLLBAR) }?;
         Ok(bar.total.saturating_sub(bar.len))
+    }
+
+    /// Whether the program has enabled DECCKM (DEC private mode 1, "cursor
+    /// keys"). When set, the program (via terminfo `smkx`, as ncurses, vim, and
+    /// less do on entry) expects the cursor keys in application form
+    /// (`ESC O A`..`ESC O D`) instead of normal form (`ESC [ A`..`ESC [ D`), so
+    /// an input driver must emit the matching form or the program never sees the
+    /// arrow keys at all.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidValue`] if ghostty rejects the mode query.
+    pub fn application_cursor_keys(&self) -> Result<bool> {
+        self.mode_enabled(DECCKM)
+    }
+
+    /// Read a DEC/ANSI mode's current state via `ghostty_terminal_mode_get`.
+    fn mode_enabled(&self, mode: sys::GhosttyMode) -> Result<bool> {
+        let mut out = false;
+        check(unsafe { sys::ghostty_terminal_mode_get(self.raw, mode, &raw mut out) })?;
+        Ok(out)
     }
 }
 

@@ -358,6 +358,28 @@ class Snapshot:
     def __str__(self) -> str:
         return self.text
 
+    def __repr__(self) -> str:
+        """Plain-text display for terminals, logs, and a notebook's `text/plain`.
+
+        The dataclass default repr would expand every `StyledCell`, which for a
+        full screen is tens of kilobytes of noise: an agent reading the cell
+        output wants the screen, not the grid. Render the viewport inside a
+        width-exact frame so columns, trailing space, and the real size are
+        unambiguous, and summarize the styling instead of expanding it. The
+        colored view is still available via `_repr_html_` / `to_html`.
+        """
+        rows, cols = self.size.rows, self.size.cols
+        top = "┌" + "─" * cols + "┐"
+        bottom = "└" + "─" * cols + "┘"
+        body = "\n".join(f"│{line[:cols]:<{cols}}│" for line in self.viewport)
+        notes = [f"{rows}x{cols}"]
+        if self.scrollback:
+            notes.append(f"+{len(self.scrollback)} scrollback")
+        if self.styled:
+            notes.append("styled")
+        header = f"Snapshot {', '.join(notes)}"
+        return f"{header}\n{top}\n{body}\n{bottom}" if body else f"{header}\n{top}\n{bottom}"
+
     def to_html(self, theme: Theme | None = None) -> str:
         """Render the viewport to a colored monospace HTML block.
 
@@ -553,6 +575,7 @@ class Tui:
     def scrollback_limit(self) -> int:
         return self._raw.scrollback_limit
 
+    @property
     def is_alive(self) -> bool:
         """Whether the child process is still running."""
         return self._raw.is_alive()

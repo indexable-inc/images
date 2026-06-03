@@ -65,13 +65,25 @@ pub fn spawn(
     cols: u16,
     scrollback: usize,
     cursor_shape: Arc<SyncRwLock<CursorShape>>,
+    app_cursor_keys: Arc<SyncRwLock<bool>>,
 ) -> Result<Sender<EngineRequest>> {
     let (tx, rx) = std::sync::mpsc::channel::<EngineRequest>();
     let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<()>>(1);
 
     std::thread::Builder::new()
         .name("ix-vt-engine".to_owned())
-        .spawn(move || engine_loop(id, rows, cols, scrollback, &cursor_shape, &rx, &init_tx))
+        .spawn(move || {
+            engine_loop(
+                id,
+                rows,
+                cols,
+                scrollback,
+                &cursor_shape,
+                &app_cursor_keys,
+                &rx,
+                &init_tx,
+            );
+        })
         .map_err(|e| vt_engine_error_io(id, &e))?;
 
     // Propagate the terminal-creation result before handing back the channel, so
@@ -102,6 +114,7 @@ fn engine_loop(
     cols: u16,
     scrollback: usize,
     cursor_shape: &Arc<SyncRwLock<CursorShape>>,
+    app_cursor_keys: &Arc<SyncRwLock<bool>>,
     rx: &Receiver<EngineRequest>,
     init_tx: &SyncSender<Result<()>>,
 ) {
@@ -116,7 +129,18 @@ fn engine_loop(
 
     while let Ok(request) = rx.recv() {
         match request {
-            EngineRequest::Process(bytes) => terminal.vt_write(&bytes),
+            EngineRequest::Process(bytes) => {
+                terminal.vt_write(&bytes);
+                // Refresh the cached cursor-key mode so the actor picks the
+                // right arrow-key form on the next write. The mode is set by
+                // the program's own output (terminfo `smkx`/`rmkx`), so reading
+                // it here, right after feeding that output, keeps it current. A
+                // failed query leaves the last known value: the mode did not
+                // change, we just could not re-read it.
+                if let Ok(app) = terminal.application_cursor_keys() {
+                    *app_cursor_keys.write() = app;
+                }
+            }
             EngineRequest::Resize { rows, cols, reply } => {
                 let result = terminal.resize(rows, cols).map_err(|e| vt_engine_error(id, e));
                 let _ = reply.send(result);
