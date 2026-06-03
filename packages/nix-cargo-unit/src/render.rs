@@ -788,6 +788,12 @@ fn render_unit_derivation(
         &render_driver_build_phase(graph, options, prepared, index, driver)?,
     );
     attrs.multiline("installPhase", &install_phase);
+    if driver == Driver::Rustc {
+        attrs.multiline(
+            "postFixup",
+            &render_split_debuginfo_sidecar_post_fixup(&graph.units[index]),
+        );
+    }
 
     Ok(attrs.render())
 }
@@ -1342,7 +1348,12 @@ chmod 755 $out/bin/{}
         format!(
             "\
 mkdir -p $out/lib $out/nix-support
-cp -R build/* $out/lib/
+for build_artifact in build/*; do
+  case \"$build_artifact\" in
+    *.dwo|*.dwp) continue ;;
+  esac
+  cp -R \"$build_artifact\" \"$out/lib/\"
+done
 extern_path=\"\"
 for artifact in \\
   \"$out/lib/lib{lib_name}-{hash}.rlib\" \\
@@ -1360,6 +1371,22 @@ done
 "
         )
     }
+}
+
+fn render_split_debuginfo_sidecar_post_fixup(unit: &Unit) -> String {
+    let output_dir = if unit.is_bin() || unit.is_test() {
+        "$out/bin"
+    } else {
+        "$out/lib"
+    };
+    format!(
+        "\
+for split_debuginfo_sidecar in build/*.dwo build/*.dwp; do
+  [ -e \"$split_debuginfo_sidecar\" ] || continue
+  cp \"$split_debuginfo_sidecar\" \"{output_dir}/\"
+done
+"
+    )
 }
 
 fn render_build_script_run(
@@ -3099,6 +3126,81 @@ mod tests {
         assert!(rendered.contains("extraClippyLintArgs"));
         assert!(rendered.contains("clippy = clippyPolicyAggregate;"));
         assert!(rendered.contains("clippyPolicyAggregate ="));
+    }
+
+    #[test]
+    fn installs_split_debuginfo_sidecars_after_fixup() {
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": {
+                    "name": "release",
+                    "opt_level": "3",
+                    "split_debuginfo": "packed"
+                  },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["bin"],
+                    "crate_types": ["bin"],
+                    "name": "hello-cli",
+                    "src_path": "/workspace/src/main.rs",
+                    "edition": "2024"
+                  },
+                  "profile": {
+                    "name": "release",
+                    "opt_level": "3",
+                    "split_debuginfo": "packed"
+                  },
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0, 1]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: Some("rustc-test".to_string()),
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        assert!(rendered.contains("rustc_args+=( 'split-debuginfo=packed' )"));
+        assert_eq!(
+            rendered
+                .matches("for split_debuginfo_sidecar in build/*.dwo build/*.dwp; do")
+                .count(),
+            2
+        );
+        assert!(rendered.contains("cp \"$split_debuginfo_sidecar\" \"$out/bin/\""));
+        assert!(rendered.contains("cp \"$split_debuginfo_sidecar\" \"$out/lib/\""));
+        assert!(rendered.contains("case \"$build_artifact\" in\n    *.dwo|*.dwp) continue ;;"));
+        assert!(!rendered.contains("cp -R build/* $out/lib/"));
     }
 
     #[test]

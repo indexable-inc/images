@@ -67,3 +67,25 @@ fn reingest_is_stable() {
     };
     assert_eq!(ids(&first), ids(&second));
 }
+
+#[test]
+fn corrupt_line_is_skipped_not_fatal() {
+    // A transcript with a truncated/corrupt line (e.g. a session still writing)
+    // must not drop the valid messages around it, and must not error the whole
+    // account's open. Regression for one bad line aborting all of a user's
+    // claude history.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let proj = dir.path().join("demo");
+    std::fs::create_dir_all(&proj).expect("mkdir");
+    let good = r#"{"type":"user","uuid":"u1","sessionId":"s","message":{"role":"user","content":"hello world"}}"#;
+    std::fs::write(
+        proj.join("s.jsonl"),
+        format!("{good}\n{{ this is not valid json\n\0\u{fffd}garbage\n"),
+    )
+    .expect("write");
+
+    let export = ClaudeHistoryExport::open_with(dir.path(), "h", "u").expect("open must not fail");
+    let docs: Vec<_> = export.documents().collect::<Result<_, _>>().expect("documents");
+    assert_eq!(docs.len(), 1, "the one valid message survives the corrupt lines");
+    assert!(String::from_utf8_lossy(&docs[0].body).contains("hello world"));
+}

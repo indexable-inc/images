@@ -1,37 +1,29 @@
-//! Error type for the Claude history adapter.
+//! Error type for the Claude Code debug-log adapter.
 
 use std::path::PathBuf;
 
 use snafu::Snafu;
 
-/// All failures surfaced when reading and projecting Claude transcripts.
+/// All failures surfaced when reading and projecting Claude debug logs.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
 pub enum Error {
-    /// A directory under the history root could not be read (a missing directory
-    /// is not an error; a permission or I/O fault is).
-    #[snafu(display("failed to read directory {}", path.display()))]
+    /// The debug directory could not be read.
+    #[snafu(display("failed to read Claude debug dir {}", path.display()))]
     ReadDir {
-        /// Directory that could not be read.
+        /// Directory path.
         path: PathBuf,
         /// Underlying I/O error.
         source: std::io::Error,
     },
 
-    /// A transcript file could not be read.
-    #[snafu(display("failed to read transcript {}", path.display()))]
+    /// A debug log file could not be read.
+    #[snafu(display("failed to read Claude debug log {}", path.display()))]
     ReadFile {
-        /// File that could not be read.
+        /// File path.
         path: PathBuf,
         /// Underlying I/O error.
-        source: std::io::Error,
-    },
-
-    /// The host name could not be resolved for record tagging.
-    #[snafu(display("failed to resolve host name"))]
-    HostName {
-        /// Underlying OS error.
         source: std::io::Error,
     },
 

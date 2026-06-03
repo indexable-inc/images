@@ -2822,6 +2822,7 @@ dependencies = [
  "source-atuin",
  "source-claude",
  "source-codex",
+ "source-debug",
  "source-git",
  "source-linear",
  "source-meta",
@@ -5878,6 +5879,16 @@ dependencies = [
  "serde_json",
  "snafu 0.9.1",
  "source-meta",
+]
+
+[[package]]
+name = "source-debug"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
+ "tempfile",
 ]
 
 [[package]]

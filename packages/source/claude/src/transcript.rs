@@ -5,8 +5,9 @@
 //! `permission-mode`, `attachment`, ...). Every field is therefore optional,
 //! which is the one place `#[serde(default)]` is the right tool: this is an
 //! external, evolving schema, not internal config. A line with no embeddable
-//! message is skipped; a line that is not valid JSON is a typed error, because a
-//! corrupt transcript should be visible, not silently truncated.
+//! message is skipped; a line that is not valid JSON is skipped too but logged,
+//! so one truncated or corrupt line (e.g. a session still mid-write) stays
+//! visible without dropping the rest of the transcript.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -15,15 +16,18 @@ use serde::Deserialize;
 use serde_json::Value;
 use snafu::ResultExt as _;
 
-use crate::error::{ParseLineSnafu, ReadFileSnafu, Result};
+use crate::error::{ReadFileSnafu, Result};
 use crate::record::{Message, MessageOrigin};
 
 /// Parse every embeddable message from one transcript file.
 ///
+/// Lines that are not valid JSON are skipped (and logged), not fatal: a
+/// transcript can carry a truncated final line from a session still writing, or
+/// an occasional corrupt line, and that must not drop the rest of the file.
+///
 /// # Errors
 /// Returns [`Error::ReadFile`](crate::Error::ReadFile) if the file cannot be
-/// read, or [`Error::ParseLine`](crate::Error::ParseLine) if any line is not
-/// valid JSON.
+/// read.
 pub fn parse(path: &Path, origin: &MessageOrigin) -> Result<Vec<Message>> {
     let raw = std::fs::read_to_string(path).context(ReadFileSnafu { path: path.to_path_buf() })?;
 
@@ -32,14 +36,28 @@ pub fn parse(path: &Path, origin: &MessageOrigin) -> Result<Vec<Message>> {
     // message). One document then carries the call and its output together, and
     // the standalone tool-result line renders empty and is dropped.
     let mut lines = Vec::new();
+    let mut skipped = 0usize;
+    let mut first_bad = 0usize;
     for (index, line) in raw.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        let parsed: RawLine = serde_json::from_str(trimmed)
-            .with_context(|_| ParseLineSnafu { path: path.to_path_buf(), line: index + 1 })?;
-        lines.push(parsed);
+        if let Ok(parsed) = serde_json::from_str::<RawLine>(trimmed) {
+            lines.push(parsed);
+        } else {
+            skipped += 1;
+            if first_bad == 0 {
+                first_bad = index + 1;
+            }
+        }
+    }
+    if skipped > 0 {
+        // Visible, not silent: one bad line is tolerated, but say so.
+        eprintln!(
+            "[claude] {}: skipped {skipped} unparseable line(s) (first at line {first_bad})",
+            path.display()
+        );
     }
 
     let tools = collect_tool_index(&lines);

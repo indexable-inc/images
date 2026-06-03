@@ -354,6 +354,21 @@ async fn index_user(
         .await;
         record(&label, result, counts);
     }
+
+    // Claude debug logs (`~/.claude/debug/<session>.txt`), present only for
+    // sessions run with `--debug`. The adapter indexes regular files only, so a
+    // planted symlink in the debug dir is skipped rather than followed.
+    if let Some(debug_dir) = safe_path_under(home, &[".claude", "debug"], true) {
+        let label = format!("debug:{name}");
+        let parquet = parquet.map(|config| user_parquet(config, name));
+        let result = async {
+            let adapter = source_debug::DebugLogs::open_with(&debug_dir, host, name)
+                .with_context(|| format!("reading Claude debug logs for {name} at {}", debug_dir.display()))?;
+            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+        }
+        .await;
+        record(&label, result, counts);
+    }
 }
 
 /// Parse a `NAME:HOME` user spec. The name is everything before the first colon;
@@ -479,31 +494,55 @@ fn record(label: &str, result: anyhow::Result<()>, counts: &mut Counts) {
 }
 
 /// Fan one source out to every enabled sink.
+///
+/// The parquet archive runs FIRST and the two sinks are INDEPENDENT: a slow or
+/// failing Mixedbread upload must not gate or skip the durable archive. The
+/// archive write is a fast local-S3 full-file put, while the Mixedbread leg is
+/// network-bound and rate-limited (429 + backoff), so ordering it first lands
+/// the queryable parquet in seconds instead of after a multi-hour upload. Each
+/// sink's error is captured separately and only combined at the end, so one
+/// sink's failure still lets the other run.
 async fn run_source<A: SourceAdapter + Sync>(
     label: &str,
     adapter: &A,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
 ) -> anyhow::Result<()> {
-    if let Some(Mixedbread { store, name }) = mixedbread {
-        let report = sync_documents(adapter, store, name, INDEX_TIMEOUT, |_, _| {})
-            .await
-            .with_context(|| format!("[{label}] Mixedbread sync"))?;
-        eprintln!(
-            "[{label}] mixedbread: uploaded {}, skipped {} of {}",
-            report.uploaded, report.skipped, report.total
-        );
-    }
+    let mut errors: Vec<anyhow::Error> = Vec::new();
+
     if let Some(config) = parquet {
-        let report =
-            sink_parquet::sync(adapter, config).await.with_context(|| format!("[{label}] parquet sync"))?;
-        if report.skipped {
-            eprintln!("[{label}] parquet: skipped (unchanged)");
-        } else {
-            eprintln!("[{label}] parquet: wrote {} rows", report.rows);
+        match sink_parquet::sync(adapter, config).await {
+            Ok(report) if report.skipped => eprintln!("[{label}] parquet: skipped (unchanged)"),
+            Ok(report) => eprintln!("[{label}] parquet: wrote {} rows", report.rows),
+            Err(error) => {
+                errors.push(anyhow::Error::new(error).context(format!("[{label}] parquet sync")));
+            }
         }
     }
-    Ok(())
+
+    if let Some(Mixedbread { store, name }) = mixedbread {
+        match sync_documents(adapter, store, name, INDEX_TIMEOUT, |_, _| {}).await {
+            Ok(report) => eprintln!(
+                "[{label}] mixedbread: uploaded {}, skipped {} of {}",
+                report.uploaded, report.skipped, report.total
+            ),
+            Err(error) => {
+                errors.push(anyhow::Error::new(error).context(format!("[{label}] Mixedbread sync")));
+            }
+        }
+    }
+
+    // Surface every sink failure; a single combined error keeps the per-source
+    // failure accounting in `record` intact while not hiding the second sink.
+    match errors.len() {
+        0 => Ok(()),
+        1 => Err(errors.into_iter().next().expect("len checked")),
+        _ => {
+            let combined =
+                errors.iter().map(|error| format!("{error:#}")).collect::<Vec<_>>().join("; ");
+            Err(anyhow::anyhow!("[{label}] multiple sinks failed: {combined}"))
+        }
+    }
 }
 
 #[cfg(test)]
