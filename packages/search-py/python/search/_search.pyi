@@ -36,6 +36,7 @@ def semantic(
     user: list[str] | None = ...,
     host: list[str] | None = ...,
     project: list[str] | None = ...,
+    agentic: bool = ...,
 ) -> Awaitable[list[Hit]]: ...
 def grep(
     pattern: str,
