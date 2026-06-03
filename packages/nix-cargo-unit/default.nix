@@ -3,6 +3,9 @@
   pkgs,
 }:
 
+let
+  inherit (pkgs) lib;
+in
 # nix-cargo-unit bootstraps the unit graph, so it cannot consume ix.cargoUnit
 # and is built as a plain Rust package. It is a standalone Cargo workspace
 # (its own Cargo.toml + Cargo.lock, excluded from the root workspace), so the
@@ -12,6 +15,8 @@
 # the pname.
 ix.buildRustPackage pkgs {
   pname = "nix-cargo-unit";
-  version = "0.1.0";
+  # Single source of truth: read the version from the crate manifest rather
+  # than re-pinning it here, so the two cannot drift.
+  version = (lib.importTOML ./Cargo.toml).package.version;
   srcRoot = ./.;
 }

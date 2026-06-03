@@ -93,7 +93,6 @@ anstream = "1"
 anstyle = "1"
 anyhow = "1"
 arrow = "58"
-askama = { version = "0.16.0", default-features = false }
 ast-merge-ast = { path = "packages/ast-merge/ast" }
 ast-merge-diff = { path = "packages/ast-merge/diff" }
 ast-merge-git = { path = "packages/ast-merge/git" }
@@ -143,11 +142,6 @@ ndarray = "0.16"
 nix = "0.30"
 nix-web-monitor-parser = { path = "packages/nix-web-monitor/parser" }
 numpy = "0.28"
-object = { version = "0.37", default-features = false, features = [
-  "read",
-  "write",
-  "std",
-] }
 object_store = { version = "0.13", features = ["aws"] }
 parking_lot = "0.12"
 parquet = { version = "58", features = ["arrow"] }
