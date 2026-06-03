@@ -87,12 +87,17 @@ emit_repo() {
       } ]' > "$prs_raw"
 
   # Inline review threads: one REST call per PR. The REST endpoint has no
-  # "all PRs" variant, so fetch per PR, but run the calls in parallel (a repo
-  # can have hundreds of PRs and a sequential loop is the export's bottleneck).
-  # Each call emits a `{ "<number>": [threads] }` object; jq merges them.
-  local threads_file="$work/threads.json"
+  # "all PRs" variant, so fetch per PR, in parallel (a repo can have hundreds of
+  # PRs and a sequential loop is the export's bottleneck). `gh api --paginate`
+  # merges every page of a PR's comments into one array, so no page is lost.
+  # Each worker writes its own file rather than a shared stdout pipe: concurrent
+  # writes larger than PIPE_BUF would interleave and corrupt the JSON stream.
+  # The per-PR files are then merged sequentially into one number-keyed object.
+  local threads_dir="$work/threads.d"
+  mkdir -p "$threads_dir"
   jq -r '.[].number' "$prs_raw" \
-    | THREAD_REPO="$repo" xargs -P "${EXPORT_JOBS:-8}" -I {} bash -c '
+    | THREAD_REPO="$repo" THREADS_DIR="$threads_dir" \
+      xargs -P "${EXPORT_JOBS:-8}" -I {} bash -c '
         set -euo pipefail
         repo=$THREAD_REPO; n=$1
         gh api --paginate "repos/${repo%%/*}/${repo##*/}/pulls/$n/comments" \
@@ -100,9 +105,15 @@ emit_repo() {
               path: .[0].path,
               line: (.[0].line // .[0].original_line),
               comments: [ .[] | { author: (.user.login | sub(\"\\\\[bot\\\\]\$\"; \"\")), body, created_at } ]
-            })) }"
-      ' _ {} \
-    | jq -s "add // {}" > "$threads_file"
+            })) }" > "$THREADS_DIR/$n.json"
+      ' _ {}
+
+  local threads_file="$work/threads.json"
+  if compgen -G "$threads_dir/*.json" > /dev/null; then
+    jq -s "add // {}" "$threads_dir"/*.json > "$threads_file"
+  else
+    echo '{}' > "$threads_file"
+  fi
 
   jq --slurpfile threads "$threads_file" \
     '[ .[] | .review_threads = ($threads[0][(.number | tostring)] // []) ]' "$prs_raw" \
