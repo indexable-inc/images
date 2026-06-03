@@ -38,6 +38,19 @@ let
   filelogEnabled = agentEnabled && cfg.agent.filelog.paths != [ ];
   journaldEnabled = agentEnabled && cfg.agent.journal.enable;
   hostMetricsEnabled = agentEnabled && cfg.agent.hostMetrics.enable;
+  # Mixedbread is an additive logs exporter: the bridge ingests the logs pipeline
+  # over OTLP/HTTP and indexes each record for semantic search. It rides whatever
+  # base exporter the collector already has (the `exporterNames` assertion still
+  # requires clickhouse or forward), so logs land in both ClickHouse and Mixedbread.
+  mixedbreadEnabled = collectorEnabled && cfg.collector.mixedbread.enable;
+  mixedbreadBridge = ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
+    binary = "otlp-mixedbread";
+    meta.mainProgram = "otlp-mixedbread";
+  };
+  # The bridge serves OTLP/HTTP on loopback only; the co-located collector exports
+  # to it, and it is never reachable off-host.
+  mixedbreadListen = "127.0.0.1:${toString cfg.collector.mixedbread.port}";
+  mixedbreadEndpoint = "http://${mixedbreadListen}/v1/logs";
   listenAddress = cfg.collector.listenAddress;
   listenGrpcEndpoint = "${listenAddress}:${toString cfg.collector.grpcPort}";
   listenHttpEndpoint = "${listenAddress}:${toString cfg.collector.httpPort}";
@@ -268,6 +281,63 @@ in
           description = "Use cleartext OTLP/gRPC for east-west collector forwarding.";
         };
       };
+
+      mixedbread = {
+        enable = mkEnableOption "indexing the collected logs into a Mixedbread store for semantic search (runs the otlp-mixedbread bridge and adds it as a logs-pipeline exporter). Additive: also keep a base exporter (the stack/clickhouse or forward)";
+
+        package = mkOption {
+          type = types.package;
+          default = mixedbreadBridge;
+          defaultText = lib.literalExpression "index.packages.\${system}.otlp-mixedbread";
+          description = "The `otlp-mixedbread` bridge package to run.";
+        };
+
+        store = mkOption {
+          type = types.str;
+          default = "index";
+          description = "Mixedbread store to index log records into.";
+        };
+
+        baseUrl = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          description = "Mixedbread API base URL override. Null uses the SDK default.";
+        };
+
+        sourceTag = mkOption {
+          type = types.str;
+          default = "log";
+          description = "The `source` tag stamped on every indexed log document (its corpus name).";
+        };
+
+        port = mkOption {
+          type = types.port;
+          default = 4319;
+          description = "Loopback port the bridge serves its OTLP/HTTP logs receiver on. The collector exports to it; it is never opened off-host.";
+        };
+
+        minSeverityNumber = mkOption {
+          type = types.ints.between 0 24;
+          default = 0;
+          description = "Drop records below this OTLP severity number (1..=24, higher is more severe; 13 = WARN). 0 keeps everything. A floor in addition to any collector-side filtering.";
+        };
+
+        environmentFile = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          example = "/run/secrets/otlp-mixedbread.env";
+          description = "EnvironmentFile for the bridge, supplying `MXBAI_API_KEY`. Keep the key out of the Nix store: reference a runtime secrets file (on the fleet, wired by the secret store) rather than inlining it.";
+        };
+
+        environment = mkOption {
+          type = types.attrsOf types.str;
+          default = { };
+          example = {
+            RUST_LOG = "info";
+          };
+          description = "Extra non-secret environment for the bridge. Rendered into the unit in the world-readable store, so never inline secrets here.";
+        };
+      };
     };
 
     agent = {
@@ -492,6 +562,15 @@ in
                 endpoint = forwardEndpoint;
                 tls.insecure = cfg.collector.forward.insecure;
               };
+            }
+            // lib.optionalAttrs mixedbreadEnabled {
+              # JSON encoding (not protobuf) and no compression: the bridge speaks
+              # OTLP/JSON and shares the host, so this keeps it dependency-light.
+              "otlphttp/mixedbread" = {
+                logs_endpoint = mixedbreadEndpoint;
+                encoding = "json";
+                compression = "none";
+              };
             };
 
           extensions.health_check.endpoint = "127.0.0.1:${toString cfg.collector.healthPort}";
@@ -528,7 +607,9 @@ in
                   "resource"
                   "batch"
                 ];
-                exporters = exporterNames;
+                # Logs fan out to the base exporter(s) AND, when enabled, the
+                # Mixedbread bridge for semantic search.
+                exporters = exporterNames ++ lib.optional mixedbreadEnabled "otlphttp/mixedbread";
               };
             };
           };
@@ -564,6 +645,57 @@ in
           "--show-error"
           "http://127.0.0.1:${toString cfg.collector.healthPort}/"
         ];
+      };
+    })
+
+    (mkIf mixedbreadEnabled {
+      assertions = [
+        {
+          assertion = cfg.collector.mixedbread.environmentFile != null;
+          message = "services.ix-observability.collector.mixedbread needs environmentFile supplying MXBAI_API_KEY (keep the key out of the Nix store).";
+        }
+      ];
+
+      systemd.services.otlp-mixedbread = {
+        description = "Index collected logs into Mixedbread (OTLP/HTTP bridge)";
+        after = [ "network-online.target" ];
+        wants = [ "network-online.target" ];
+        # Start before the collector so its first log batch has somewhere to land;
+        # the collector's retry queue covers any residual startup gap.
+        before = [ "opentelemetry-collector.service" ];
+        wantedBy = [ "multi-user.target" ];
+        environment = cfg.collector.mixedbread.environment;
+        serviceConfig = ix.systemdHardening // {
+          ExecStart = lib.escapeShellArgs (
+            [
+              (lib.getExe cfg.collector.mixedbread.package)
+              "--store"
+              cfg.collector.mixedbread.store
+              "--listen"
+              mixedbreadListen
+              "--source-tag"
+              cfg.collector.mixedbread.sourceTag
+              "--min-severity-number"
+              (toString cfg.collector.mixedbread.minSeverityNumber)
+            ]
+            ++ lib.optionals (cfg.collector.mixedbread.baseUrl != null) [
+              "--base-url"
+              cfg.collector.mixedbread.baseUrl
+            ]
+          );
+          # Supplies MXBAI_API_KEY (asserted non-null above); kept out of the store.
+          EnvironmentFile = cfg.collector.mixedbread.environmentFile;
+          Restart = "on-failure";
+          RestartSec = "5s";
+          DynamicUser = true;
+        };
+      };
+
+      ix.networking.portClaims.otlp-mixedbread = {
+        protocol = "tcp";
+        port = cfg.collector.mixedbread.port;
+        address = "127.0.0.1";
+        description = "otlp-mixedbread bridge OTLP/HTTP logs receiver (loopback)";
       };
     })
 

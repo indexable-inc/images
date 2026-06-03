@@ -77,6 +77,23 @@ pub const OUTPUT_TOKENS: &str = "output_tokens";
 /// Process exit status of a recorded shell command.
 pub const EXIT_STATUS: &str = "exit_status";
 
+// Logs (systemd journal via the OTel collector, plus any OTLP log source).
+// `host` and `timestamp` above are reused.
+/// systemd unit that emitted the entry (`_SYSTEMD_UNIT` or the user unit).
+pub const UNIT: &str = "unit";
+/// syslog priority 0..=7 (0 = emerg, 7 = debug), an integer for range filters.
+pub const PRIORITY: &str = "priority";
+/// OTLP severity text (`ERROR`, `WARN`, ...), the cross-source severity axis.
+pub const SEVERITY: &str = "severity";
+/// OTLP `service.name` resource attribute, when present.
+pub const SERVICE_NAME: &str = "service_name";
+/// Free-form program identifier (`SYSLOG_IDENTIFIER`, falling back to `_COMM`).
+pub const SYSLOG_IDENTIFIER: &str = "syslog_identifier";
+/// Boot id the entry was recorded under (`_BOOT_ID`).
+pub const BOOT_ID: &str = "boot_id";
+/// PID of the process that logged the entry (`_PID`).
+pub const PID: &str = "pid";
+
 // Linear.
 /// Linear issue identifier, e.g. `ENG-1885`.
 pub const IDENTIFIER: &str = "identifier";

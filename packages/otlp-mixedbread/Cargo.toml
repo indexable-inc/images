@@ -1,0 +1,29 @@
+[package]
+name = "otlp-mixedbread"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "OTLP/HTTP logs receiver that maps each LogRecord into a Mixedbread document for semantic search"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "otlp-mixedbread"
+path = "src/main.rs"
+
+[dependencies]
+source-meta.workspace = true
+search-core.workspace = true
+mixedbread.workspace = true
+axum.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "signal"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
