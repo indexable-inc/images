@@ -29,7 +29,6 @@ members = [
   "packages/ix-dev-diagnose",
   "packages/kitty",
   "packages/macos-vm",
-  "packages/mcp",
   "packages/minecraft/nbt",
   "packages/minecraft/sound",
   "packages/minecraft/sync-managed",
@@ -37,6 +36,7 @@ members = [
   "packages/nix-web-monitor/parser",
   "packages/nix-web-monitor/server",
   "packages/oci-image-builder",
+  "packages/polars-mixedbread",
   "packages/progress-style",
   "packages/reel",
   "packages/repo-walker",
@@ -48,6 +48,7 @@ members = [
   "packages/search-core",
   "packages/source/meta",
   "packages/search-py",
+  "packages/skill-lint",
   "packages/source/slack",
   "packages/sink/mixedbread",
   "packages/sink/parquet",
@@ -161,18 +162,17 @@ reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
   "multipart",
 ] }
-rmcp = "1.7"
 rmp-serde = "1"
 rodio = { version = "0.19", default-features = false, features = ["vorbis"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 rustc-hash = "2.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
-schemars = "1"
 search-core = { path = "packages/search-core" }
 source-meta = { path = "packages/source/meta" }
 serde = "1"
 serde_json = "1"
+serde_norway = "0.9"
 sha2 = "0.10"
 similar = "2"
 source-slack = { path = "packages/source/slack" }

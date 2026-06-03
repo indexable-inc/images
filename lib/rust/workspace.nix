@@ -154,7 +154,6 @@ let
         ];
         packageTestInputs = {
           tui = [ workspacePkgs.vim ];
-          ix-mcp = [ workspacePkgs.python3 ];
           # tap's integration tests drive the `tap` binary on a PTY and run `bash`
           # as the session child; the daemon resolves `bash` from PATH at runtime.
           tap = [ workspacePkgs.bash ];

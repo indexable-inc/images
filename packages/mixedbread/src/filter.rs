@@ -8,18 +8,23 @@
 //! `/v1/stores/question-answering`, and the file-list endpoint, so one type
 //! serves them all.
 //!
-//! This type is serialize-only: the client sends filters but never parses them
-//! back. [`Filter`] is `#[serde(untagged)]` because a leaf and a group have
-//! disjoint key sets, so a serializer always emits the right shape.
+//! The client only ever sends filters, but the type is also `Deserialize` so a
+//! caller that hands the API a filter as JSON (e.g. the `polars-mixedbread`
+//! binding, which forwards a Python-built filter) parses it into this typed DSL
+//! rather than passing an unchecked blob. [`Filter`] is `#[serde(untagged)]`
+//! because a leaf and a group have disjoint key sets: a serializer always emits
+//! the right shape, and on the way back [`Condition`] is tried first while
+//! [`Group`] denies unknown fields, so a leaf deserializes as a condition and a
+//! mistyped one errors instead of silently collapsing to an empty group.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A comparison operator on a metadata key.
 ///
 /// Serializes to the exact lowercase tokens the API expects (`eq`, `not_eq`,
 /// `gt`, ...). The variant set matches the SDK's `SearchFilterCondition`
 /// operator union, which is the source of truth (the prose docs omit a few).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operator {
     /// Equal.
@@ -49,7 +54,8 @@ pub enum Operator {
 }
 
 /// A single leaf condition: a metadata `key` compared to `value` by `operator`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Condition {
     /// Metadata key, dot-notated for nested fields (e.g. `generated_metadata.language`).
     pub key: String,
@@ -61,7 +67,8 @@ pub struct Condition {
 
 /// A logical group combining nested filters. Exactly one combinator is set in
 /// practice; all are optional so the wire shape carries only what is used.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Group {
     /// All nested filters must match (AND).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,7 +82,7 @@ pub struct Group {
 }
 
 /// A metadata filter: either a leaf [`Condition`] or a nested [`Group`].
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Filter {
     /// A leaf comparison.
@@ -211,5 +218,35 @@ mod tests {
             value,
             serde_json::json!({ "none": [ { "key": "source", "operator": "eq", "value": "slack" } ] })
         );
+    }
+
+    #[test]
+    fn deserializes_nested_filter_back_to_the_same_wire_shape() {
+        // A caller (e.g. the polars-mixedbread binding) hands us a filter as JSON.
+        // It must round-trip: parse into the typed DSL, then re-serialize to the
+        // identical wire body the API expects. The untagged `Filter` resolves a
+        // leaf to `Condition` (tried first) and a combinator to `Group`.
+        let wire = serde_json::json!({
+            "all": [
+                { "key": "source", "operator": "eq", "value": "code" },
+                { "any": [
+                    { "key": "language", "operator": "in", "value": ["rust", "python"] },
+                    { "key": "priority", "operator": "gte", "value": 3 }
+                ] }
+            ]
+        });
+        let parsed: Filter = serde_json::from_value(wire.clone()).expect("deserialize");
+        assert!(matches!(parsed, Filter::Group(_)));
+        assert_eq!(serde_json::to_value(&parsed).expect("serialize"), wire);
+    }
+
+    #[test]
+    fn a_mistyped_condition_errors_rather_than_collapsing_to_an_empty_group() {
+        // `deny_unknown_fields` on `Group` is what makes this fail: without it the
+        // untagged enum would fall through to `Group`, ignore the stray keys, and
+        // silently send an empty (match-everything) filter. A bad operator must
+        // surface as an error instead.
+        let bad = serde_json::json!({ "key": "source", "operator": "nope", "value": "code" });
+        assert!(serde_json::from_value::<Filter>(bad).is_err());
     }
 }
