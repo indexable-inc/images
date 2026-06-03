@@ -5,7 +5,7 @@ title: "Dashboard shows every Python run and replays the whole session"
 tags: [interesting, ui, dashboard, agents]
 links:
   - label: dashboard page
-    href: https://github.com/indexable-inc/index/blob/main/packages/dashboard-core/src/dashboard/dashboard.html
+    href: https://github.com/indexable-inc/index/blob/main/packages/dashboard-core/site/src/components/FeedView.svelte
   - label: exec resource type
     href: https://github.com/indexable-inc/index/blob/main/packages/dashboard-core/src/pane.rs
   - label: recordings store
