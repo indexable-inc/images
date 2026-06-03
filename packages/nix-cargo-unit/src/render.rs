@@ -1423,7 +1423,23 @@ fn render_build_script_run(
     );
     attrs.expr("buildInputs", &format!("[ {} ]", inputs.join(" ")));
     attrs.bool("dontStrip", true);
-    append_content_addressing(&mut attrs, options.content_addressed);
+    // Build-script outputs stay INPUT-addressed even when content_addressed is
+    // set, because they are frequently NOT bit-reproducible. This derivation
+    // captures the build script's `out-dir`, which for crates like `ring` embeds
+    // the build path into pre-generated perlasm `.o`/`.a` objects, so the output
+    // differs byte-for-byte between builds (briansmith/ring#715).
+    //
+    // A non-reproducible *floating content-addressed* output is a trap: once a
+    // GC deletes it, the next build produces a different output and Nix aborts
+    // with "Trying to register a realisation ... but we already have another one
+    // locally" (NixOS/nix#15649). That surfaces to dependents as
+    // "build of resolved derivation '<crate>' failed" with no underlying builder
+    // error (observed: rcgen-0.14.8, which pulls in ring; the trigger is the
+    // CI host's periodic nix-gc wiping the output between builds).
+    //
+    // Input addressing sidesteps the realisation machinery entirely, and nothing
+    // early-cuts-off on a build-script output anyway, so the crate libraries
+    // (render_unit_derivation) keep CA with no loss of incrementality.
     attrs.multiline(
         "buildPhase",
         &render_build_script_run_phase(
