@@ -1,4 +1,4 @@
-id: no-deprecated-iflist-empty
+id: prefer-lib-optional
 language: nix
 severity: warning
 message: "`if cond then [ x ] else [ ]` is `lib.optional cond x`. `if cond then xs else [ ]` is `lib.optionals cond xs`."
