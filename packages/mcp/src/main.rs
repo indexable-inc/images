@@ -195,7 +195,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Evaluate a Python expression in a persistent session. Top-level await works (e.g. `await client.get(url)`); the session keeps one event loop, so async clients and pools created in one call stay usable in later calls. Times out after 60s by default; pass `timeout_secs` to allow longer. On timeout or a client cancel the call returns an error and the worker is restarted, so a hung cell can't wedge the session (session state is lost on restart)."
+        description = "Evaluate a Python expression in a persistent session. Pass a one-line `intent` describing what the call is for; it titles the run's dashboard card. Top-level await works (e.g. `await client.get(url)`); the session keeps one event loop, so async clients and pools created in one call stay usable in later calls. Times out after 60s by default; pass `timeout_secs` to allow longer. On timeout or a client cancel the call returns an error and the worker is restarted, so a hung cell can't wedge the session (session state is lost on restart)."
     )]
     async fn python_eval(
         &self,
@@ -206,6 +206,7 @@ impl McpServer {
         self.call_content(
             request.session_id,
             "eval",
+            &request.intent,
             json!({ "expression": request.expression }),
             timeout,
             cancel,
@@ -214,7 +215,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Execute Python statements in a persistent session. Top-level await works (e.g. `await pool.fetch(sql)`); the session keeps one event loop, so async resources created in one call stay usable in later calls. Times out after 60s by default; pass `timeout_secs` to allow longer. On timeout or a client cancel the call returns an error and the worker is restarted, so a hung cell can't wedge the session (session state is lost on restart)."
+        description = "Execute Python statements in a persistent session. Pass a one-line `intent` describing what the call is for; it titles the run's dashboard card. Top-level await works (e.g. `await pool.fetch(sql)`); the session keeps one event loop, so async resources created in one call stay usable in later calls. Times out after 60s by default; pass `timeout_secs` to allow longer. On timeout or a client cancel the call returns an error and the worker is restarted, so a hung cell can't wedge the session (session state is lost on restart)."
     )]
     async fn python_exec(
         &self,
@@ -225,6 +226,7 @@ impl McpServer {
         self.call_content(
             request.session_id,
             "exec",
+            &request.intent,
             json!({ "source": request.source }),
             timeout,
             cancel,
@@ -415,13 +417,14 @@ impl McpServer {
         &self,
         session_id: Option<String>,
         op: &'static str,
+        intent: &str,
         payload: Value,
         timeout: Duration,
         cancel: CancellationToken,
     ) -> CallToolResult {
         let exec_id = self.board.map(|board| {
             let session = session_id.as_deref().unwrap_or(DEFAULT_SESSION_ID);
-            board.start(session, "python", op, exec_source(op, &payload))
+            board.start(session, "python", op, intent, exec_source(op, &payload))
         });
 
         // While the call runs, stream each stdout chunk into its dashboard pane
@@ -486,6 +489,10 @@ struct SessionRequest {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct EvalRequest {
+    /// One short, human-readable line stating what this call is for (e.g. "count
+    /// rows in the orders parquet"). Shown as the run's dashboard card title so
+    /// the board reads as a list of intents, not raw code. Required.
+    intent: String,
     expression: String,
     session_id: Option<String>,
     /// Seconds to wait before abandoning the call and restarting the worker.
@@ -496,6 +503,10 @@ struct EvalRequest {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ExecRequest {
+    /// One short, human-readable line stating what this call is for (e.g. "load
+    /// the CSV and build the join index"). Shown as the run's dashboard card
+    /// title so the board reads as a list of intents, not raw code. Required.
+    intent: String,
     source: String,
     session_id: Option<String>,
     /// Seconds to wait before abandoning the call and restarting the worker.

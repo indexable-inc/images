@@ -83,8 +83,18 @@ impl ExecBoard {
     }
 
     /// Record the start of a call: add a running pane and publish. Returns the
-    /// pane id to pass back to [`finish`](Self::finish).
-    pub fn start(&self, session: &str, lang: &str, op_label: &str, source: String) -> String {
+    /// pane id to pass back to [`finish`](Self::finish). `intent` is the
+    /// caller's one-line description of the run; it titles the card so the board
+    /// reads as intents rather than code. A blank intent falls back to the
+    /// source-derived title `Pane::exec` computes.
+    pub fn start(
+        &self,
+        session: &str,
+        lang: &str,
+        op_label: &str,
+        intent: &str,
+        source: String,
+    ) -> String {
         let n = self.seq.fetch_add(1, Ordering::Relaxed);
         let id = format!("{session}/{n}");
         let mut pane = Pane::exec(
@@ -100,6 +110,10 @@ impl ExecBoard {
                 trace: Vec::new(),
             },
         );
+        let intent = intent.trim();
+        if !intent.is_empty() {
+            pane.title = intent.to_owned();
+        }
         pane.subtitle = format!("{op_label} · {session}");
         {
             let mut panes = self.panes.lock();
