@@ -245,7 +245,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Read-only semantic search over the shared `index` corpus via the bundled `search` module: code plus Claude/Codex/shell history across the fleet. Does NOT index — the separate `indexer` populates the store, so a query never uploads your local checkout. Scope server-side with `source` (code, claude_history, codex, shell, slack, linear, web), `user`, `repo` (e.g. indexable-inc/index), `host`, `project`; with no selector the whole corpus is searched. Returns matching chunks as JSON. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
+        description = "Read-only semantic search over the shared `index` corpus via the bundled `search` module: code plus Claude/Codex/shell history across the fleet. Does NOT index — the separate `indexer` populates the store, so a query never uploads your local checkout. Scope server-side with `source` (code, claude_history, codex, shell, slack, linear, github, web), `user`, `repo` (e.g. indexable-inc/index), `host`, `project`; with no selector the whole corpus is searched. Returns matching chunks as JSON. Needs a Mixedbread credential (MXBAI_API_KEY or a prior `mgrep login`)."
     )]
     async fn search_semantic(
         &self,
@@ -524,7 +524,7 @@ struct SemanticSearchRequest {
     /// Maximum number of results to return (default 10).
     top_k: Option<usize>,
     /// Restrict to these sources: `code`, `claude_history`, `codex`, `shell`,
-    /// `slack`, `linear`, `web`. Omit to search every source.
+    /// `slack`, `linear`, `github`, `web`. Omit to search every source.
     source: Option<Vec<String>>,
     /// Restrict to records authored by these users. Omit for every user.
     user: Option<Vec<String>>,
@@ -552,7 +552,7 @@ struct GrepSearchRequest {
     /// Match the pattern case-sensitively (default false).
     case_sensitive: Option<bool>,
     /// Restrict to these sources: `code`, `claude_history`, `codex`, `shell`,
-    /// `slack`, `linear`, `web`. Omit to search every source.
+    /// `slack`, `linear`, `github`, `web`. Omit to search every source.
     source: Option<Vec<String>>,
     /// Restrict to records authored by these users. Omit for every user.
     user: Option<Vec<String>>,

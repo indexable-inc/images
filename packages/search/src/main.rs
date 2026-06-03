@@ -49,7 +49,7 @@ enum Command {
 #[derive(Debug, Args)]
 struct ScopeArgs {
     /// Restrict to these sources (repeatable): code, `claude_history`, codex,
-    /// shell, slack, linear, web.
+    /// shell, slack, linear, github, web.
     #[arg(long = "source", value_name = "SOURCE")]
     sources: Vec<String>,
 

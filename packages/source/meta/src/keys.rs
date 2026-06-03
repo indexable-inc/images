@@ -90,3 +90,11 @@ pub const ASSIGNEE_EMAIL: &str = "assignee_email";
 pub const LABELS: &str = "labels";
 /// Whether the issue is archived.
 pub const IS_ARCHIVED: &str = "is_archived";
+
+// GitHub. `repo`, `author_name`, `labels`, and `timestamp` above are reused.
+/// GitHub issue or pull-request number (per repo).
+pub const NUMBER: &str = "number";
+/// GitHub item state (`open`/`closed`/`merged`).
+pub const STATE: &str = "state";
+/// Whether the GitHub item is a pull request (vs an issue).
+pub const IS_PR: &str = "is_pr";
