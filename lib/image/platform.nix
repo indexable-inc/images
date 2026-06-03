@@ -227,6 +227,8 @@ in
 
     nixpkgs.hostPlatform.system = "x86_64-linux";
 
+    environment.etc."ix-blast-radius-marker".text = "diagnostic\n";
+
     # YourKit is the only unfree we currently allow into images, and only
     # because `ix.languages.java.yourkit` is an opt-in profiler agent that
     # an operator turns on for performance work. The predicate keeps every
