@@ -1,0 +1,28 @@
+[package]
+name = "claude-stories"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Instagram-style 'stories' for Claude Code: a status-line row of teammates' avatars and what they're working on, served peer-to-peer over a Tailscale tailnet"
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+color-eyre.workspace = true
+# Story content is derived from the local repo (name, branch, last commit
+# subject, author identity). `default-features = false` + `vendored-libgit2`
+# drops the https/ssh transports and builds the bundled libgit2 with `cc`, so the
+# build needs no system libgit2 or cmake. Matches git-log-pretty.
+git2 = { workspace = true, default-features = false, features = ["vendored-libgit2"] }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# `serve` is an HTTP listener; `render` fans out concurrent fetches. A
+# multi-thread runtime keeps both simple.
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "macros"] }
+
+[dev-dependencies]
+tempfile.workspace = true
