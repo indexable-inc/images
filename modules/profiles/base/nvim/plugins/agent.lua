@@ -21,7 +21,6 @@ do
   local ns = vim.api.nvim_create_namespace("claude_agent")
 
   local STATUS = { todo = "TODO", done = "DONE", fail = "FAIL" }
-  local STATUS_RE = "^%s*[TODOFAILDONE]+%s+"
 
   local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 
@@ -45,7 +44,16 @@ do
   }
 
   local function strip_status(line)
-    return (line:gsub(STATUS_RE, ""))
+    -- Match an exact leading TODO/DONE/FAIL token, preserving indentation. A bare
+    -- char class like [TODOFAILDONE]+ also eats unrelated all-caps words (ADD,
+    -- NOTE, ...), corrupting the dispatched task, so check each literal tag.
+    for _, tag in ipairs({ STATUS.todo, STATUS.done, STATUS.fail }) do
+      local out, n = line:gsub("^(%s*)" .. tag .. "%s+", "%1")
+      if n > 0 then
+        return out
+      end
+    end
+    return line
   end
 
   local function task_dir(buf)
@@ -150,6 +158,10 @@ do
     rec.elapsed = 0
     rec.poll = vim.uv.new_timer()
     rec.poll:start(config.poll_ms, config.poll_ms, vim.schedule_wrap(function()
+      if not vim.api.nvim_buf_is_valid(rec.buf) then
+        finish(rec, "fail")
+        return
+      end
       rec.elapsed = rec.elapsed + config.poll_ms
       if rec.elapsed >= config.poll_timeout_ms then
         finish(rec, "todo", "⏱ poll timed out · " .. (rec.id or "?"))
@@ -360,6 +372,18 @@ do
       end)
     end)
   end
+
+  vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
+    callback = function(ev)
+      for mark, rec in pairs(tasks) do
+        if rec.buf == ev.buf then
+          stop_timer(rec, "spinner")
+          stop_timer(rec, "poll")
+          tasks[mark] = nil
+        end
+      end
+    end,
+  })
 
   vim.keymap.set("n", "<leader>aa", dispatch, { desc = "Agent: dispatch current line" })
   vim.keymap.set("x", "<leader>aa", dispatch, { desc = "Agent: dispatch selection" })
