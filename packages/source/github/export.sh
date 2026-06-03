@@ -100,8 +100,8 @@ emit_repo() {
       xargs -P "${EXPORT_JOBS:-8}" -I {} bash -c '
         set -euo pipefail
         repo=$THREAD_REPO; n=$1
-        gh api --paginate "repos/${repo%%/*}/${repo##*/}/pulls/$n/comments" \
-          | jq --arg n "$n" "{ (\$n): (group_by(.in_reply_to_id // .id) | map({
+        gh api --paginate --slurp "repos/${repo%%/*}/${repo##*/}/pulls/$n/comments" \
+          | jq --arg n "$n" "{ (\$n): (add | group_by(.in_reply_to_id // .id) | map({
               path: .[0].path,
               line: (.[0].line // .[0].original_line),
               comments: [ .[] | { author: (.user.login | sub(\"\\\\[bot\\\\]\$\"; \"\")), body, created_at } ]
