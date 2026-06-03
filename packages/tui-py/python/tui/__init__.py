@@ -162,15 +162,27 @@ class Theme:
         ignored. Unspecified palette slots keep the bundled `DARK_THEME` color.
         """
         text = source
-        expanded = os.path.expanduser(source)
-        if "\n" not in source and os.path.exists(expanded):
-            with open(expanded, encoding="utf-8") as fh:
-                text = fh.read()
+        if "\n" not in source:
+            expanded = os.path.expanduser(source)
+            if os.path.exists(expanded):
+                with open(expanded, encoding="utf-8") as fh:
+                    text = fh.read()
+            elif "/" in source or source.startswith("~"):
+                # Looks like a path but is not there: a typo'd path would
+                # otherwise parse as (key-less) theme text and silently return
+                # the defaults, so fail loudly instead.
+                msg = f"ghostty theme file not found: {source}"
+                raise FileNotFoundError(msg)
 
         fg, bg = DARK_THEME.fg, DARK_THEME.bg
         ansi = list(DARK_THEME.ansi)
         for raw in text.splitlines():
-            line = raw.split("#", 1)[0].strip()
+            line = raw.strip()
+            # Whole-line comments start with `#`. A `#` inside a value is a hex
+            # color (ghostty writes `background = #1e1e1e`), so do not treat it
+            # as a comment delimiter; `_hex_to_rgb` strips a leading `#`.
+            if not line or line.startswith("#"):
+                continue
             key, sep, val = line.partition("=")
             if not sep:
                 continue
@@ -282,10 +294,6 @@ def _styled_grid_to_html(grid: tuple[tuple[StyledCell, ...], ...], theme: Theme)
         run_css: str | None = None
         run: list[str] = []
         for cell in row:
-            # A wide character's trailing continuation cell carries "": skip it
-            # so a double-width glyph occupies its two monospace columns once.
-            if cell.char == "":
-                continue
             css = _cell_css(cell, theme)
             if css != run_css:
                 if run:
