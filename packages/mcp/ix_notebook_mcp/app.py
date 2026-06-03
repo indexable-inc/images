@@ -14,6 +14,9 @@ from jupyter_ydoc import YNotebook
 from .config import Config
 from .outputs import output_from_message
 
+# Cap on the kernel readiness handshake, independent of the cell's own timeout.
+_READY_TIMEOUT = 30.0
+
 
 class NotebookApp:
     def __init__(self, config: Config, serverapp: object) -> None:
@@ -93,7 +96,10 @@ class NotebookApp:
         client = kernel.client()
         client.start_channels()
         try:
-            await client.wait_for_ready(timeout=timeout)
+            # The kernel is already started (the session created it), so readiness
+            # is a quick handshake; cap it well under `timeout` so a wedged kernel
+            # cannot cost up to 2x the budget (ready wait + execute wait).
+            await client.wait_for_ready(timeout=min(timeout, _READY_TIMEOUT))
             outputs: list[dict] = []
             execution_count: int | None = None
 
