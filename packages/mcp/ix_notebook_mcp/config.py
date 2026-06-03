@@ -27,6 +27,12 @@ class Config:
     jupyter_port: int = 0
     token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
 
+    # The host string put into the lab URL a human opens. Distinct from `host`
+    # (the bind address): when Jupyter binds a wildcard like 0.0.0.0, that is
+    # not a usable URL host, so the CLI resolves a reachable name (tailnet, fqdn)
+    # and stores it here. Defaults to the loopback bind so behaviour is unchanged.
+    advertised_host: str = "127.0.0.1"
+
     # "stdio" (the default; what an MCP client launches) or "http".
     transport: str = "stdio"
 
@@ -43,7 +49,7 @@ class Config:
 
     def lab_url(self) -> str:
         """The URL a human opens to co-edit, including the auth token."""
-        return f"http://{self.host}:{self.jupyter_port}/lab?token={self.token}"
+        return f"http://{self.advertised_host}:{self.jupyter_port}/lab?token={self.token}"
 
     def resolve(self, rel_path: str) -> Path:
         """Resolve a workspace-relative path to an absolute one, refusing escapes.

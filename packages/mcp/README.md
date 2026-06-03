@@ -16,6 +16,20 @@ nix run .#mcp -- eval '1 + 2'     # one-shot expression on a throwaway kernel
 When `serve` starts it prints a JupyterLab URL (with an auth token) to stderr;
 open it, or run `ix-mcp lab`, to co-edit the notebook the agent is working in.
 
+## Remote access
+
+Two env vars control how a remote VM hands back a reachable URL:
+
+- `IX_MCP_HOST` (default `127.0.0.1`): the address Jupyter binds. Set it to
+  `0.0.0.0` to listen on every interface so the lab is reachable off-box.
+- `IX_MCP_PUBLIC_HOST`: the host put into the lab URL. Set it to force a specific
+  name (e.g. `myvm.tail368802.ts.net`).
+
+If you bind a wildcard (`0.0.0.0`/`::`) without setting `IX_MCP_PUBLIC_HOST`, the
+URL host is auto-resolved to a reachable name: the Tailscale MagicDNS name first,
+then the FQDN, then `127.0.0.1` as a fallback. The default loopback bind keeps
+the URL on `127.0.0.1` and the server unexposed.
+
 ## How it works
 
 `ix-mcp serve` launches a Jupyter Server in the same process as the MCP server,

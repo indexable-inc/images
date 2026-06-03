@@ -11,9 +11,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
+import shutil
 import socket
+import subprocess
 import sys
 import webbrowser
 from pathlib import Path
@@ -21,6 +24,10 @@ from pathlib import Path
 from .config import Config, runtime_dir, set_config
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+# A bound socket on these binds to every interface, so the address itself is not
+# a host anyone can dial; the lab URL must advertise a concrete reachable name.
+_WILDCARD_HOSTS = {"0.0.0.0", "::"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,14 +62,75 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _free_port() -> int:
+    # Just reserves a free port number; the kernel gives port 0 an unused port.
+    # The interface here is irrelevant: a number free on loopback is free for the
+    # eventual bind too, so this stays 127.0.0.1 regardless of the final bind.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
 
 
+def _tailscale_dns_name() -> str | None:
+    """This node's MagicDNS name (e.g. ``host.tail<id>.ts.net``), or None.
+
+    Best-effort: locating the binary and parsing `tailscale status --json` can
+    fail many ways (no tailscale, not logged in, malformed output); every such
+    case yields None rather than raising, so the caller can fall through.
+    """
+    tailscale = (
+        shutil.which("tailscale")
+        # macOS ships the CLI as a GUI-app shim outside PATH; Linux pkgs land here.
+        or next((p for p in ("/usr/local/bin/tailscale", "/usr/bin/tailscale") if os.path.exists(p)), None)
+    )
+    if not tailscale:
+        return None
+    try:
+        out = subprocess.run(
+            [tailscale, "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        ).stdout
+        name = json.loads(out).get("Self", {}).get("DNSName", "")
+    except Exception:
+        return None
+    name = name.rstrip(".")
+    return name or None
+
+
+def _advertised_host(bind_host: str) -> str:
+    """The host to put in the lab URL given the Jupyter bind address.
+
+    An explicit ``IX_MCP_PUBLIC_HOST`` always wins. Otherwise a concrete bind
+    host is already dialable and used as-is; only a wildcard bind needs a
+    reachable name resolved for it.
+    """
+    public = os.environ.get("IX_MCP_PUBLIC_HOST")
+    if public:
+        return public
+    if bind_host not in _WILDCARD_HOSTS:
+        return bind_host
+    # Wildcard bind: substitute a reachable name, best to worst. 127.0.0.1 last so
+    # the URL is at least well-formed even if nothing better resolves.
+    dns = _tailscale_dns_name()
+    if dns:
+        return dns
+    fqdn = socket.getfqdn()
+    if "." in fqdn and fqdn != "localhost":
+        return fqdn
+    return "127.0.0.1"
+
+
 def _serve(args: argparse.Namespace) -> int:
     workdir = (Path(args.workdir).resolve() if args.workdir else Path.cwd())
     workdir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve both host knobs once here (Config is pure data): the bind address
+    # Jupyter listens on, and the host advertised in the lab URL. Default bind is
+    # loopback so the server is never exposed unless asked.
+    bind_host = os.environ.get("IX_MCP_HOST", "127.0.0.1")
+    advertised_host = _advertised_host(bind_host)
 
     http = getattr(args, "http", None)
     stdin_fd = stdout_fd = None
@@ -88,6 +156,8 @@ def _serve(args: argparse.Namespace) -> int:
     # so reading serverapp.port there would still see the unbound value).
     cfg = Config(
         workdir=workdir,
+        host=bind_host,
+        advertised_host=advertised_host,
         jupyter_port=_free_port(),
         transport=transport,
         mcp_http_host=mcp_http_host,
