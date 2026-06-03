@@ -135,6 +135,10 @@ fn find_skills(path: &Path) -> Result<Vec<PathBuf>> {
     // `WalkBuilder` respects .gitignore, global ignores, and skips hidden dirs
     // by default. Directories without a SKILL.md (submodule containers, source
     // trees) are simply walked past since we only collect matching files.
+    // Deliberate scope: we lint only tracked, non-hidden SKILL.md files
+    // (gitignore-respecting). All of index's skills live under tracked,
+    // non-hidden `skills/`, so an ignored/hidden SKILL.md is intentionally
+    // skipped, not an oversight.
     for entry in WalkBuilder::new(path).build() {
         let entry = entry.context("walking the skills tree")?;
         if entry.file_name() == SKILL_FILE_NAME && entry.path().is_file() {

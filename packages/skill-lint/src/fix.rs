@@ -74,8 +74,16 @@ fn insert_name(contents: &str, dir: &str) -> String {
 }
 
 /// Strip trailing whitespace from every line, drop trailing blank lines, and
-/// ensure the file ends with exactly one newline.
+/// ensure the file ends with exactly one newline. Preserves the file's existing
+/// dominant line ending so a CRLF-authored file is not silently rewritten to LF
+/// (a content-preservation violation); `str::lines()` drops `\r`, so we rejoin
+/// with the detected newline instead of a hardcoded `\n`.
 fn normalize_whitespace(contents: &str) -> String {
+    let newline = if contents.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
     let mut lines: Vec<&str> = contents.lines().map(str::trim_end).collect();
     // Collapse a run of trailing blank lines so EOF carries a single newline.
     while lines.last().is_some_and(|line| line.is_empty()) {
@@ -84,8 +92,8 @@ fn normalize_whitespace(contents: &str) -> String {
     if lines.is_empty() {
         return String::new();
     }
-    let mut out = lines.join("\n");
-    out.push('\n');
+    let mut out = lines.join(newline);
+    out.push_str(newline);
     out
 }
 
@@ -140,5 +148,69 @@ mod tests {
         let contents = "---\nname: example\ndescription: A description.\n---\nBody.\n";
         let outcome = fix_skill(&skill_path(), contents);
         assert!(outcome.contents.is_none(), "no change expected");
+    }
+
+    /// A clean CRLF-authored file must come back untouched: `str::lines()` strips
+    /// `\r`, so before the CRLF-preserving fix this silently rewrote the file to
+    /// LF. This is the regression test for that content-mutation bug.
+    #[test]
+    fn clean_crlf_file_is_left_unchanged() {
+        let contents = "---\r\nname: example\r\ndescription: A description.\r\n---\r\nBody.\r\n";
+        let outcome = fix_skill(&skill_path(), contents);
+        assert!(
+            outcome.contents.is_none(),
+            "clean CRLF file must not be rewritten, got {:?}",
+            outcome.contents
+        );
+        assert!(outcome.changes.is_empty());
+    }
+
+    /// A CRLF file that genuinely needs a fix keeps its CRLF endings rather than
+    /// being downgraded to LF.
+    #[test]
+    fn crlf_file_needing_fix_keeps_crlf() {
+        let contents =
+            "---\r\nname: example\r\ndescription: A description.\r\n---\r\nBody.   \r\n\r\n\r\n";
+        let outcome = fix_skill(&skill_path(), contents);
+        let fixed = outcome.contents.expect("fix should rewrite the file");
+        assert!(fixed.contains("\r\n"), "must keep CRLF, got {fixed:?}");
+        assert!(fixed.ends_with("Body.\r\n"), "fixed:\n{fixed:?}");
+        assert!(!fixed.contains("Body.   "), "fixed:\n{fixed:?}");
+    }
+
+    /// `fix` is idempotent: applying it to its own output yields no further
+    /// change across the full range of inputs it touches.
+    #[test]
+    fn fix_is_idempotent() {
+        let inputs = [
+            // clean LF
+            "---\nname: example\ndescription: A description.\n---\nBody.\n",
+            // missing name
+            "---\ndescription: A description.\n---\nBody.\n",
+            // trailing whitespace
+            "---\nname: example\ndescription: A description.\n---\nBody.   \n",
+            // no trailing newline
+            "---\nname: example\ndescription: A description.\n---\nBody.",
+            // clean CRLF
+            "---\r\nname: example\r\ndescription: A description.\r\n---\r\nBody.\r\n",
+            // CRLF needing a fix
+            "---\r\nname: example\r\ndescription: A description.\r\n---\r\nBody.   \r\n\r\n",
+        ];
+        for input in inputs {
+            let once = fix_skill(&skill_path(), input);
+            // Whatever the first pass produced, treat that as the current content.
+            let after_first = once.contents.clone().unwrap_or_else(|| input.to_owned());
+            let twice = fix_skill(&skill_path(), &after_first);
+            assert!(
+                twice.contents.is_none(),
+                "second fix must be a no-op for input {input:?}; got {:?}",
+                twice.contents
+            );
+            assert!(
+                twice.changes.is_empty(),
+                "second fix must report no changes for input {input:?}; got {:?}",
+                twice.changes
+            );
+        }
     }
 }
