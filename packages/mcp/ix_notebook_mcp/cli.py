@@ -64,6 +64,39 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def _prepare_lab_config(jupyter_port: int) -> tuple[Path, bool]:
+    """Materialize a writable JupyterLab config dir from the shipped assets so a
+    fresh browser opens dark, Islands-colored, and in Berkeley Mono with no
+    per-user setup.
+
+    Returns ``(config_dir, has_custom_css)``. JupyterLab reads its custom CSS from
+    ``{config_dir}/custom/custom.css`` and its default-settings overrides from
+    the app settings dir; we point both at this per-server dir under the runtime
+    dir, isolated from the user's ``~/.jupyter``. The assets are *copied* (not
+    symlinked): Tornado's static handler refuses to follow a symlink that escapes
+    its root into the Nix store, so a symlinked ``custom.css`` would 403.
+    """
+    assets = Path(__file__).resolve().parent / "jupyter"
+    base = runtime_dir() / f"lab-{jupyter_port}"
+    custom = base / "custom"
+    settings = base / "lab-settings"
+    custom.mkdir(parents=True, exist_ok=True)
+    settings.mkdir(parents=True, exist_ok=True)
+
+    overrides = assets / "overrides.json"
+    if overrides.exists():
+        shutil.copyfile(overrides, settings / "overrides.json")
+
+    # islands.css is generated at build time (packages/mcp/default.nix); when
+    # running straight from a source checkout it is absent, so custom CSS is
+    # simply skipped rather than serving a 404 link.
+    css = assets / "islands.css"
+    has_css = css.exists()
+    if has_css:
+        shutil.copyfile(css, custom / "custom.css")
+    return base, has_css
+
+
 def _free_port() -> int:
     # Just reserves a free port number; the kernel gives port 0 an unused port.
     # The interface here is irrelevant: a number free on loopback is free for the
@@ -173,6 +206,17 @@ def _serve(args: argparse.Namespace) -> int:
     )
     set_config(cfg)
 
+    # A writable lab config dir (custom CSS + default-settings overrides) so the
+    # co-edit browser opens dark, Islands-colored, and in Berkeley Mono with no
+    # per-user setup. Isolated under the runtime dir, not the user's ~/.jupyter.
+    lab_config_dir, has_custom_css = _prepare_lab_config(cfg.jupyter_port)
+    # The custom-CSS handler serves from `{config_dir}/custom`, and config_dir is
+    # derived from JUPYTER_CONFIG_DIR. Setting it via the env var reliably moves
+    # static_custom_path; the equivalent `--ServerApp.config_dir` flag does not
+    # (static_custom_path resolves before that config applies, so the link 404s).
+    if has_custom_css:
+        os.environ["JUPYTER_CONFIG_DIR"] = str(lab_config_dir)
+
     from jupyter_server.serverapp import ServerApp
 
     ServerApp.launch_instance(
@@ -183,6 +227,11 @@ def _serve(args: argparse.Namespace) -> int:
             "--ServerApp.open_browser=False",
             f"--IdentityProvider.token={cfg.token}",
             "--ServerApp.log_level=WARN",
+            # app_settings_dir holds overrides.json (default dark theme + editor
+            # settings); custom CSS is served from {config_dir}/custom, with
+            # config_dir set via JUPYTER_CONFIG_DIR above.
+            f"--LabApp.app_settings_dir={lab_config_dir / 'lab-settings'}",
+            *(["--LabApp.custom_css=True"] if has_custom_css else []),
             # In-process extensions: ours (MCP + YDoc bridge) and jupyter_server_ydoc
             # (the server side of real-time collaboration). The browser
             # collaboration UI loads from the installed jupyter-collaboration lab

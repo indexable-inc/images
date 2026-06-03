@@ -90,11 +90,97 @@ let
       ''
   );
 
+  # JupyterLab custom CSS, generated from the shared JetBrains Islands palette
+  # (`ix.islandsTheme`, the same JSON the search `-c` highlighter and the Neovim
+  # colorscheme read) so there is one source of truth for color. It maps the
+  # palette slots onto JupyterLab's `--jp-*` UI variables and its
+  # `--jp-mirror-editor-*-color` CodeMirror syntax variables, and switches the
+  # code font to Berkeley Mono. Both theme variants are emitted and gated on the
+  # body's `data-jp-theme-light` attribute, so syntax color tracks whichever
+  # theme is active; dark is the shipped default (see jupyter/overrides.json).
+  # The variant selector (body + attribute + class) outranks the theme's own
+  # `:root` declarations on specificity, so these win without `!important`.
+  islandsVars = t: ''
+    --jp-layout-color0: ${t.bg};
+    --jp-layout-color1: ${t.bg};
+    --jp-layout-color2: ${t.line_hl};
+    --jp-layout-color3: ${t.ui_subtle_bg};
+    --jp-layout-color4: ${t.ui_input_bg};
+    --jp-border-color0: ${t.ui_subtle_bg};
+    --jp-border-color1: ${t.indent_guide};
+    --jp-border-color2: ${t.line_hl};
+    --jp-border-color3: ${t.bg};
+    --jp-ui-font-color0: ${t.fg};
+    --jp-ui-font-color1: ${t.fg};
+    --jp-ui-font-color2: ${t.ui_dim};
+    --jp-ui-font-color3: ${t.whitespace};
+    --jp-content-font-color0: ${t.fg};
+    --jp-content-font-color1: ${t.fg};
+    --jp-content-font-color2: ${t.ui_dim};
+    --jp-content-font-color3: ${t.comment};
+    --jp-brand-color0: ${t.ui_border};
+    --jp-brand-color1: ${t.ui_border};
+    --jp-brand-color2: ${t.info};
+    --jp-brand-color3: ${t.info};
+    --jp-accent-color1: ${t.func};
+    --jp-cell-editor-background: ${t.bg};
+    --jp-cell-editor-border-color: ${t.indent_guide};
+    --jp-editor-selected-background: ${t.selection};
+    --jp-editor-selected-focused-background: ${t.selection};
+    --jp-editor-cursor-color: ${t.cursor};
+    --jp-error-color1: ${t.error};
+    --jp-warn-color1: ${t.warning};
+    --jp-success-color1: ${t.git_add};
+    --jp-info-color1: ${t.info};
+    --jp-mirror-editor-keyword-color: ${t.keyword};
+    --jp-mirror-editor-atom-color: ${t.constant};
+    --jp-mirror-editor-number-color: ${t.number};
+    --jp-mirror-editor-def-color: ${t.func};
+    --jp-mirror-editor-variable-color: ${t.variable};
+    --jp-mirror-editor-variable-2-color: ${t.variable};
+    --jp-mirror-editor-variable-3-color: ${t.type};
+    --jp-mirror-editor-punctuation-color: ${t.punctuation};
+    --jp-mirror-editor-property-color: ${t.property};
+    --jp-mirror-editor-operator-color: ${t.operator};
+    --jp-mirror-editor-comment-color: ${t.comment};
+    --jp-mirror-editor-string-color: ${t.string};
+    --jp-mirror-editor-string-2-color: ${t.string};
+    --jp-mirror-editor-meta-color: ${t.decorator};
+    --jp-mirror-editor-qualifier-color: ${t.property};
+    --jp-mirror-editor-builtin-color: ${t.func};
+    --jp-mirror-editor-bracket-color: ${t.punctuation};
+    --jp-mirror-editor-tag-color: ${t.tag};
+    --jp-mirror-editor-attribute-color: ${t.attribute};
+    --jp-mirror-editor-header-color: ${t.heading};
+    --jp-mirror-editor-quote-color: ${t.string};
+    --jp-mirror-editor-link-color: ${t.link};
+    --jp-mirror-editor-error-color: ${t.error};
+    --jp-mirror-editor-hr-color: ${t.line_nr};
+  '';
+  islandsCss = pkgs.writeText "ix-mcp-islands.css" ''
+    /* GENERATED from packages/code-highlight/src/islands-theme.json by
+       packages/mcp/default.nix. Do not edit by hand; edit the palette JSON.
+       JetBrains Islands -> JupyterLab UI + Python syntax, plus Berkeley Mono. */
+    .jp-ThemedContainer {
+      --jp-code-font-family: 'Berkeley Mono', 'JetBrains Mono', ui-monospace,
+        SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+      --jp-code-font-size: 13px;
+      --jp-code-line-height: 1.55;
+    }
+    body[data-jp-theme-light="false"].jp-ThemedContainer {
+      ${islandsVars ix.islandsTheme.dark}}
+    body[data-jp-theme-light="true"].jp-ThemedContainer {
+      ${islandsVars ix.islandsTheme.light}}
+  '';
+
   # The notebook-first MCP server itself, a pure-Python package installed into
   # the pinned interpreter so the `ix-mcp` entrypoint, the Jupyter Server
   # extension, and the kernels all share one environment (that co-location is
   # what makes real-time co-editing work). No build step: it is plain Python that
   # imports the Jupyter stack and bundled modules already in this interpreter.
+  # The generated Islands CSS is dropped next to the package's static jupyter/
+  # assets (overrides.json), where the CLI materializes them into a writable lab
+  # config dir at serve time.
   ixNotebookMcpSource = builtins.path {
     name = "ix-notebook-mcp-source";
     path = ./ix_notebook_mcp;
@@ -109,6 +195,10 @@ let
         site="$out/${pkgs.python3.sitePackages}/ix_notebook_mcp"
         mkdir -p "$site"
         cp -r ${ixNotebookMcpSource}/. "$site/"
+        # Source comes from the store read-only; make the tree writable so the
+        # generated CSS can be dropped alongside the static jupyter/ assets.
+        chmod -R u+w "$site"
+        install -Dm444 ${islandsCss} "$site/jupyter/islands.css"
       ''
   );
 
