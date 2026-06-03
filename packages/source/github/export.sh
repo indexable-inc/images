@@ -11,9 +11,10 @@
 #
 # Requires: gh (authenticated), jq.
 #
-# Constraint: garbage collection in the indexer is scoped to the whole `github`
-# source, so each export must cover the FULL set of repos you want indexed.
-# Dropping a repo from a later export deletes that repo's records from the store.
+# Note: the indexer pass uploads and updates only; it does not delete items that
+# disappear from a later export. A closed or removed issue/PR (or a repo dropped
+# from the repo list) keeps its last-exported version searchable until a separate
+# garbage-collection pass runs against the `github` source.
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then

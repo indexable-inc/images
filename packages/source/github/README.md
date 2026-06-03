@@ -37,15 +37,16 @@ indexer --mixedbread-store my-store --github-export ./export
 
 One document per issue and per pull request. The `external_id` is
 `github:<owner>/<repo>#<number>`, stable across re-exports, so the Mixedbread
-sink reconciles in place: an edited item re-embeds, an unchanged one is skipped,
-and a removed one is garbage-collected.
+sink reconciles in place: an edited item re-embeds and an unchanged one is
+skipped (`sync_documents` keys on `external_id` + `content_hash`).
 
 ## Known limitations
 
-- Garbage collection is scoped to the whole `github` source, not per repo. An
-  export must cover the full set of repos you want indexed; dropping a repo from
-  a later export deletes that repo's records from the store. Keep the repo list
-  stable, or run separate stores per repo set.
+- The indexer pass uploads and updates; it does not delete. An item that is
+  closed, deleted, or dropped from a later export keeps its last-exported
+  version in the store until a separate garbage-collection pass runs against the
+  `github` source. Re-exporting on a schedule keeps content fresh but does not
+  prune removed items on its own.
 - First pass is export-driven (like the Linear adapter). There is no live API
   ingestion, and Discussions and gists are out of scope.
 - Inline review threads come from the REST `pulls/{n}/comments` endpoint, which

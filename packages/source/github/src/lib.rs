@@ -17,10 +17,11 @@
 //!
 //! Grain is one document per issue and one per pull request. The `external_id`
 //! is `github:<owner>/<repo>#<number>`, stable across re-exports, so the sink
-//! reconciles in place: an edited item re-embeds, an unchanged one is skipped,
-//! and a removed one is garbage-collected. Because GC is scoped to the whole
-//! `github` source, an export must cover the full set of repos it wants indexed;
-//! dropping a repo from a later export deletes that repo's records.
+//! reconciles in place: an edited item re-embeds and an unchanged one is skipped
+//! (`sync_documents` keys on `external_id` + `content_hash`). The indexer pass
+//! uploads and updates only; it does not delete items dropped from a later
+//! export, so a closed or removed item keeps its last-exported version
+//! searchable until a separate garbage-collection pass runs.
 //!
 //! The crate is pure: it reads two files in [`GithubExport::open`] and otherwise
 //! does no I/O. It depends only on [`source_meta`], serde, snafu, and chrono.
