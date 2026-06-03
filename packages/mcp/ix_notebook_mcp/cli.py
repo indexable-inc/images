@@ -32,10 +32,13 @@ _WILDCARD_HOSTS = {"0.0.0.0", "::"}
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ix-mcp", description="Notebook-first MCP server")
-    parser.add_argument("--workdir", help="Directory notebooks live in (default: cwd)")
     sub = parser.add_subparsers(dest="command")
 
     serve = sub.add_parser("serve", help="Run the MCP server")
+    # --workdir lives on `serve` (not the top-level parser) so the natural
+    # `ix-mcp serve --workdir DIR` works; a top-level option would have to precede
+    # the subcommand, which is a surprising ordering.
+    serve.add_argument("--workdir", help="Directory notebooks live in (default: cwd)")
     serve.add_argument(
         "--http",
         nargs="?",
@@ -123,7 +126,10 @@ def _advertised_host(bind_host: str) -> str:
 
 
 def _serve(args: argparse.Namespace) -> int:
-    workdir = (Path(args.workdir).resolve() if args.workdir else Path.cwd())
+    # `getattr`: a bare `ix-mcp` (no subcommand) defaults to serve but never ran
+    # the serve subparser, so `args` has no `workdir` attribute then.
+    wd = getattr(args, "workdir", None)
+    workdir = Path(wd).resolve() if wd else Path.cwd()
     workdir.mkdir(parents=True, exist_ok=True)
 
     # Resolve both host knobs once here (Config is pure data): the bind address
