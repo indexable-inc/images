@@ -3,6 +3,7 @@
   paths,
   packageRegistry,
   cargoUnitFor,
+  buildSvelteSite,
   ghostty,
   writeNushellApplication,
   # Cross-compilation leaves, threaded in so `unitsFor { target }` can build a
@@ -28,6 +29,27 @@ let
         ghosttySource = ghostty;
       };
   ghosttyLibDir = "${libghosttyVt}/lib";
+
+  # The dashboard's single-page UI (Svelte/Vite, one self-contained index.html).
+  # `dashboard-core`'s build script embeds it at compile time via
+  # `IX_DASHBOARD_SITE_HTML` below, so the generated bundle is built by nix
+  # rather than committed to the repo. Only `dashboard-core` reads the env var,
+  # the same shape as `IX_VT_GHOSTTY_LIB_DIR`.
+  dashboardSiteRoot = root + "/packages/dashboard-core/site";
+  dashboardSite = buildSvelteSite workspacePkgs {
+    pname = "dashboard-site";
+    version = "0.1.0";
+    src = lib.fileset.toSource {
+      root = dashboardSiteRoot;
+      fileset = lib.fileset.gitTracked dashboardSiteRoot;
+    };
+    serve.enable = false;
+    devServer = {
+      name = "dashboard-site-dev";
+      checkoutSubdir = "packages/dashboard-core/site";
+    };
+  };
+  dashboardSiteHtml = "${dashboardSite}/share/dashboard-site/index.html";
   rustPackageFiles =
     packagePath:
     lib.fileset.intersection (lib.fileset.gitTracked packagePath) (
@@ -156,6 +178,9 @@ let
           # ix-vt-sys's build script reads this to emit the libghostty-vt link
           # search path. Set workspace-wide; only ix-vt-sys reads it.
           IX_VT_GHOSTTY_LIB_DIR = ghosttyLibDir;
+          # dashboard-core's build script reads this to embed the dashboard page.
+          # Set workspace-wide; only dashboard-core reads it.
+          IX_DASHBOARD_SITE_HTML = dashboardSiteHtml;
         }
         // lib.optionalAttrs (targetIsLinux target) {
           PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
@@ -216,6 +241,7 @@ in
     src
     cargoLock
     units
+    dashboardSite
     ;
 
   /**

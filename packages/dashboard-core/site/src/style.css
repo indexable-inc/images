@@ -362,7 +362,10 @@ body {
    is the supporting one. Click a block's meta row to open it fullscreen. */
 /* Master-detail: a fixed timeline list on the left, a detail panel on the right,
    each scrolling on its own. */
-.feed { flex: 1 1 auto; min-height: 0; display: flex; background: var(--bg); }
+/* min-width:0 lets the split shrink to the viewport so a long, unwrapped output
+   line scrolls inside its own box (.cell has overflow:auto) instead of widening
+   the whole page. Without it the flex row sizes to the longest line's content. */
+.feed { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; background: var(--bg); }
 .feed-empty {
   flex: 1 1 auto; display: grid; place-content: center;
   color: var(--ink-faint); font-family: var(--mono); font-size: 13px;

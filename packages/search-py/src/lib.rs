@@ -28,6 +28,12 @@ use search_core::{
 /// keys `path`, `score`, `start_line`, `num_lines`, `text`, and `source`. The
 /// scope selectors narrow the query server-side; `web` mixes in the hosted
 /// web-search store. No local checkout is read or indexed.
+///
+/// `agentic` defaults to `true`: the MCP `search` surface is interactive and
+/// recall matters more than latency there, so letting the backend plan and run
+/// multiple searches gives better results out of the box. Pass `agentic=False`
+/// for a single-shot query when speed beats recall. (The `search` CLI keeps it
+/// off by default for scripted, low-latency use.)
 #[pyfunction]
 #[pyo3(signature = (
     query,
@@ -42,6 +48,7 @@ use search_core::{
     user = None,
     host = None,
     project = None,
+    agentic = true,
 ))]
 #[allow(
     clippy::too_many_arguments,
@@ -61,14 +68,12 @@ fn semantic(
     user: Option<Vec<String>>,
     host: Option<Vec<String>>,
     project: Option<Vec<String>>,
+    agentic: bool,
 ) -> PyResult<Bound<'_, PyAny>> {
     let store_name = store.unwrap_or_else(|| DEFAULT_STORE.to_owned());
     let base = base_url.unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
     let filter = scope_filter(source, not_source, repo, user, host, project)?;
-    let options = SearchOptions {
-        rerank,
-        agentic: false,
-    };
+    let options = SearchOptions { rerank, agentic };
     // Keep every value the borrowed `search_core::semantic` call reads owned in
     // one frame, so the future handed to `future_into_py` stays `'static`.
     let args = SearchArgs {
