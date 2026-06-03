@@ -56,7 +56,12 @@ let
     # sandboxed fetchers to see a developer SSH agent or GitHub credentials.
     sourceOverrides = args.sourceOverrides or { };
     outputHashes = args.outputHashes or { };
-    contentAddressed = args.contentAddressed or false;
+    # Default ON: workspace units emit floating content-addressed outputs so an
+    # output-invariant rebuild of a low-level crate early-cuts off instead of
+    # cascading through its whole reverse-dependency closure. Consumers may still
+    # pass `contentAddressed = false` to opt out. (ca-derivations must be enabled
+    # in the daemon; ix CI enables it.)
+    contentAddressed = args.contentAddressed or true;
     policy = rust.resolvePolicy (args.policy or { });
   };
 
