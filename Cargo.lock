@@ -4469,6 +4469,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "polars-mixedbread"
+version = "0.1.0"
+dependencies = [
+ "mixedbread",
+ "pyo3",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

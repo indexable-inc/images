@@ -37,6 +37,7 @@ members = [
   "packages/nix-web-monitor/parser",
   "packages/nix-web-monitor/server",
   "packages/oci-image-builder",
+  "packages/polars-mixedbread",
   "packages/progress-style",
   "packages/reel",
   "packages/repo-walker",
