@@ -48,6 +48,7 @@ mod tests {
             "attributes": [
               { "key": "_SYSTEMD_UNIT", "value": { "stringValue": "nginx.service" } },
               { "key": "SYSLOG_IDENTIFIER", "value": { "stringValue": "nginx" } },
+              { "key": "PRIORITY", "value": { "stringValue": "3" } },
               { "key": "_PID", "value": { "intValue": "4242" } }
             ]
           }]
@@ -72,10 +73,29 @@ mod tests {
         assert_eq!(meta[keys::UNIT], "nginx.service");
         assert_eq!(meta[keys::SERVICE_NAME], "nginx");
         assert_eq!(meta[keys::SEVERITY], "ERROR");
+        assert_eq!(meta[keys::PRIORITY], 3);
         assert_eq!(meta[keys::HOST], "node-1");
         assert_eq!(meta[keys::PID], 4242);
         assert_eq!(meta[keys::TIMESTAMP], 1_700_000_000);
         assert!(doc.external_id.starts_with("log:sha256:"));
+    }
+
+    #[test]
+    fn same_second_distinct_nanos_do_not_collide() {
+        // Regression: two identical messages from one unit in the same second
+        // must get distinct ids, or the second silently overwrites the first.
+        let make = |nanos: &str| {
+            format!(
+                r#"{{"resourceLogs":[{{"scopeLogs":[{{"logRecords":[
+                  {{"timeUnixNano":"{nanos}","body":{{"stringValue":"connection refused"}},
+                   "attributes":[{{"key":"_SYSTEMD_UNIT","value":{{"stringValue":"api.service"}}}}]}}
+                ]}}]}}]}}"#
+            )
+        };
+        let a = first_document(&make("1700000000000000001"), "log");
+        let b = first_document(&make("1700000000000000002"), "log");
+        assert_eq!(a.meta_json[keys::TIMESTAMP], b.meta_json[keys::TIMESTAMP], "same whole second");
+        assert_ne!(a.external_id, b.external_id, "distinct nanoseconds must not collide");
     }
 
     #[test]

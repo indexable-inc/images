@@ -8,10 +8,21 @@
 //! A drain task pulls from the channel and uploads with bounded concurrency.
 //!
 //! Dedup is applied at upload time, not enqueue time: an id is recorded as seen
-//! only after a successful upload, so a record that is dropped under backpressure
-//! (and retried by the collector) always re-flows. Because the store is keyed by
-//! `external_id`, a duplicate upload is an idempotent overwrite, so the cache
-//! only ever saves redundant embedding work, it can never cause data loss.
+//! only after a successful upload, so a record dropped under backpressure (queue
+//! full, the handler 503s and the collector retries) always re-flows, and the
+//! dedup cache itself never causes loss. Because the store is keyed by
+//! `external_id`, a re-delivery is an idempotent overwrite, so the cache only
+//! saves redundant embedding work.
+//!
+//! Durability is best-effort, by design. The HTTP handler acks (200) on enqueue,
+//! before upload, so a record whose upload still fails after `max_attempts`
+//! (logged at `error!`) is dropped, and the collector, already told success, does
+//! not retry it. A *sustained* outage instead fills the queue so the handler
+//! 503s and the collector holds the data; the loss window is the narrow case of
+//! per-record failures that exhaust retries while the queue is not saturated.
+//! This is acceptable because Mixedbread is a semantic-search index, not the
+//! system of record: the same logs are durably retained by the collector's other
+//! exporter (e.g. ClickHouse).
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};

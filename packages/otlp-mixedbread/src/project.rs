@@ -25,6 +25,12 @@ struct Fields {
     pid: Option<i64>,
     boot_id: Option<String>,
     severity: Option<String>,
+    priority: Option<u8>,
+    /// Raw `time_unix_nano` string (full nanosecond precision); the identity axis
+    /// for `external_id`. `timestamp` below is the same value floored to seconds
+    /// for the recency metadata, but the id must keep nanoseconds so two records
+    /// in the same second do not collide.
+    time_nanos: Option<String>,
     timestamp: Option<i64>,
 }
 
@@ -54,6 +60,8 @@ pub fn project(resource: Option<&Resource>, record: &LogRecord, source: &str) ->
     let severity = record.severity_text.clone().or_else(|| {
         severity_number(record.severity_number.as_ref()).map(|n| severity_label(n).to_owned())
     });
+    let time_nanos = record.time_unix_nano.clone().or_else(|| record.observed_time_unix_nano.clone());
+    let timestamp = time_nanos.as_deref().and_then(|nanos| nanos.parse::<i64>().ok()).map(|nanos| nanos / NANOS_PER_SEC);
     let fields = Fields {
         body,
         host: attrs.first(&["host.name", "_HOSTNAME", "host"]),
@@ -63,12 +71,9 @@ pub fn project(resource: Option<&Resource>, record: &LogRecord, source: &str) ->
         pid: attrs.first(&["_PID", "process.pid"]).and_then(|value| value.parse().ok()),
         boot_id: attrs.first(&["_BOOT_ID"]),
         severity,
-        timestamp: record
-            .time_unix_nano
-            .as_deref()
-            .or(record.observed_time_unix_nano.as_deref())
-            .and_then(|nanos| nanos.parse::<i64>().ok())
-            .map(|nanos| nanos / NANOS_PER_SEC),
+        priority: attrs.first(&["PRIORITY", "_PRIORITY"]).and_then(|value| value.parse().ok()),
+        time_nanos,
+        timestamp,
     };
 
     document(&fields, source)
@@ -91,6 +96,7 @@ fn document(fields: &Fields, source: &str) -> Option<Document> {
     insert_some(&mut meta, keys::SYSLOG_IDENTIFIER, fields.identifier.clone().map(Value::from));
     insert_some(&mut meta, keys::SERVICE_NAME, fields.service_name.clone().map(Value::from));
     insert_some(&mut meta, keys::SEVERITY, fields.severity.clone().map(Value::from));
+    insert_some(&mut meta, keys::PRIORITY, fields.priority.map(Value::from));
     insert_some(&mut meta, keys::PID, fields.pid.map(Value::from));
     insert_some(&mut meta, keys::BOOT_ID, fields.boot_id.clone().map(Value::from));
     insert_some(&mut meta, keys::TIMESTAMP, fields.timestamp.map(Value::from));
@@ -114,12 +120,21 @@ fn document(fields: &Fields, source: &str) -> Option<Document> {
 }
 
 /// A stable, unique id for the record: `log:<sha256 of identity>`. The identity
-/// is time + host + unit + body, so two deliveries of one record collide (good:
-/// idempotent overwrite) while distinct records do not.
+/// is `time_nanos + host + label + severity + pid + body`, so two deliveries of
+/// one record collide (good: idempotent overwrite) while distinct records do not.
+///
+/// The full nanosecond timestamp (not the seconds-floored `timestamp`) is the
+/// key axis: journald commonly emits many distinct records with identical text
+/// from one unit within the same second (a tight error loop), and a seconds-only
+/// id would overwrite all but the last. `severity`/`pid` add further separation
+/// for the rare same-nanosecond case.
 fn external_id(fields: &Fields, label: &str) -> String {
-    let timestamp = fields.timestamp.unwrap_or(0);
+    let nanos = fields.time_nanos.as_deref().unwrap_or("0");
     let host = fields.host.as_deref().unwrap_or("");
-    let identity = format!("{timestamp}\u{1f}{host}\u{1f}{label}\u{1f}{}", fields.body);
+    let severity = fields.severity.as_deref().unwrap_or("");
+    let pid = fields.pid.map_or_else(String::new, |pid| pid.to_string());
+    let identity =
+        format!("{nanos}\u{1f}{host}\u{1f}{label}\u{1f}{severity}\u{1f}{pid}\u{1f}{}", fields.body);
     format!("log:{}", source_meta::hash_body(identity.as_bytes()))
 }
 
