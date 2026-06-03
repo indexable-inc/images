@@ -13,21 +13,14 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import socket
 import sys
 import webbrowser
 from pathlib import Path
 
-from .runtime import RUNTIME, runtime_dir
+from .config import Config, runtime_dir, set_config
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _free_port() -> int:
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,9 +36,7 @@ def main(argv: list[str] | None = None) -> int:
         metavar="ADDR",
         help="Serve over streamable HTTP at host:port instead of stdio",
     )
-
     sub.add_parser("lab", help="Open the running server's JupyterLab co-edit URL")
-
     ev = sub.add_parser("eval", help="Evaluate one expression on a throwaway kernel")
     ev.add_argument("code")
     ex = sub.add_parser("exec", help="Run statements on a throwaway kernel")
@@ -53,7 +44,6 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     command = args.command or "serve"
-
     if command == "serve":
         return _serve(args)
     if command == "lab":
@@ -64,53 +54,67 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 def _serve(args: argparse.Namespace) -> int:
-    RUNTIME.workdir = Path(args.workdir).resolve() if args.workdir else Path.cwd()
-    RUNTIME.workdir.mkdir(parents=True, exist_ok=True)
+    workdir = (Path(args.workdir).resolve() if args.workdir else Path.cwd())
+    workdir.mkdir(parents=True, exist_ok=True)
 
     http = getattr(args, "http", None)
-    if http is not None:
-        RUNTIME.transport = "http"
-        host, _, port = http.partition(":")
-        RUNTIME.mcp_http_host = host or "127.0.0.1"
-        RUNTIME.mcp_http_port = int(port) if port else 8000
-
-    # Hand the MCP protocol the real stdin/stdout, then point this process's
-    # fd 0/1 somewhere harmless so the Jupyter Server's logging (and any library
-    # `print`) can never corrupt the JSON-RPC stream. stdio mode only; the HTTP
-    # transport does not touch the pipes.
-    if RUNTIME.transport == "stdio":
-        RUNTIME.mcp_stdin_fd = os.dup(0)
-        RUNTIME.mcp_stdout_fd = os.dup(1)
+    stdin_fd = stdout_fd = None
+    if http is None:
+        # Hand the MCP protocol the real stdin/stdout, then point this process's
+        # fd 0/1 somewhere harmless so the Jupyter Server's logging (and any
+        # library `print`) can never corrupt the JSON-RPC stream.
+        stdin_fd = os.dup(0)
+        stdout_fd = os.dup(1)
         os.dup2(2, 1)
         devnull = os.open(os.devnull, os.O_RDONLY)
         os.dup2(devnull, 0)
         os.close(devnull)
+        mcp_http_host, mcp_http_port = "127.0.0.1", 8000
+        transport = "stdio"
+    else:
+        transport = "http"
+        host, _, port = http.partition(":")
+        mcp_http_host, mcp_http_port = host or "127.0.0.1", int(port) if port else 8000
+
+    # Pick the Jupyter port up front so the lab URL is correct the moment a tool
+    # asks for it (the extension's post-start hook runs before the socket binds,
+    # so reading serverapp.port there would still see the unbound value).
+    cfg = Config(
+        workdir=workdir,
+        jupyter_port=_free_port(),
+        transport=transport,
+        mcp_http_host=mcp_http_host,
+        mcp_http_port=mcp_http_port,
+        stdin_fd=stdin_fd,
+        stdout_fd=stdout_fd,
+    )
+    set_config(cfg)
 
     from jupyter_server.serverapp import ServerApp
 
-    # Pick the Jupyter port up front so the lab URL is correct the moment a tool
-    # asks for it. The extension's post-start hook runs during `initialize`,
-    # before the socket binds, so reading `serverapp.port` there would still see
-    # the unbound value; choosing it here avoids that.
-    RUNTIME.port = _free_port()
-
-    argv = [
-        f"--ServerApp.root_dir={RUNTIME.workdir}",
-        f"--ServerApp.ip={RUNTIME.host}",
-        f"--ServerApp.port={RUNTIME.port}",
-        "--ServerApp.open_browser=False",
-        f"--IdentityProvider.token={RUNTIME.token}",
-        "--ServerApp.log_level=WARN",
-        # In-process extensions: ours (MCP + YDoc bridge) and jupyter_server_ydoc
-        # (the server side of real-time collaboration, providing the YDoc rooms).
-        # The browser collaboration UI loads automatically from the installed
-        # jupyter-collaboration lab extension; the metapackage itself has no
-        # server loader, so we enable the concrete server extension here.
-        "--ServerApp.jpserver_extensions=ix_notebook_mcp=True",
-        "--ServerApp.jpserver_extensions=jupyter_server_ydoc=True",
-    ]
-    ServerApp.launch_instance(argv=argv)
+    ServerApp.launch_instance(
+        argv=[
+            f"--ServerApp.root_dir={cfg.workdir}",
+            f"--ServerApp.ip={cfg.host}",
+            f"--ServerApp.port={cfg.jupyter_port}",
+            "--ServerApp.open_browser=False",
+            f"--IdentityProvider.token={cfg.token}",
+            "--ServerApp.log_level=WARN",
+            # In-process extensions: ours (MCP + YDoc bridge) and jupyter_server_ydoc
+            # (the server side of real-time collaboration). The browser
+            # collaboration UI loads from the installed jupyter-collaboration lab
+            # extension; the metapackage itself has no server loader.
+            "--ServerApp.jpserver_extensions=ix_notebook_mcp=True",
+            "--ServerApp.jpserver_extensions=jupyter_server_ydoc=True",
+        ]
+    )
     return 0
 
 
@@ -132,20 +136,19 @@ def _one_shot(code: str) -> int:
     interpreter's kernel."""
     from jupyter_client.manager import start_new_kernel
 
-    collected = {"result": None, "stdout": [], "stderr": []}
+    collected: dict[str, object] = {"result": None, "stdout": [], "stderr": []}
 
     def hook(msg: dict) -> None:
         msg_type = msg["msg_type"]
         content = msg["content"]
         if msg_type == "stream":
-            target = "stdout" if content.get("name") == "stdout" else "stderr"
-            collected[target].append(content.get("text", ""))
+            collected["stdout" if content.get("name") == "stdout" else "stderr"].append(content.get("text", ""))  # type: ignore[union-attr]
         elif msg_type in ("execute_result", "display_data"):
             text = content.get("data", {}).get("text/plain")
             if text:
                 collected["result"] = text
         elif msg_type == "error":
-            collected["stderr"].append("\n".join(content.get("traceback", [])))
+            collected["stderr"].append("\n".join(content.get("traceback", [])))  # type: ignore[union-attr]
 
     km, kc = start_new_kernel(kernel_name="python3")
     try:
@@ -154,10 +157,10 @@ def _one_shot(code: str) -> int:
         kc.stop_channels()
         km.shutdown_kernel(now=True)
 
-    stdout = "".join(collected["stdout"]).rstrip()
+    stdout = "".join(collected["stdout"]).rstrip()  # type: ignore[arg-type]
     if stdout:
         print(f"stdout:\n{stdout}")
-    stderr = _ANSI.sub("", "".join(collected["stderr"]).rstrip())
+    stderr = _ANSI.sub("", "".join(collected["stderr"]).rstrip())  # type: ignore[arg-type]
     if stderr:
         print(f"stderr:\n{stderr}")
     if collected["result"] is not None:

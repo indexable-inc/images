@@ -166,7 +166,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 rustc-hash = "2.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
-schemars = "1"
 search-core = { path = "packages/search-core" }
 source-meta = { path = "packages/source/meta" }
 serde = "1"
