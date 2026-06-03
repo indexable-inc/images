@@ -736,6 +736,19 @@ impl Driver {
 // CA-derivation attributes Nix needs to content-address a unit's output.
 // Opt-in: callers pass `--content-addressed`, otherwise units stay input
 // addressed.
+//
+// Why content-address: it buys "early cutoff" — when a crate is rebuilt but its
+// output is byte-identical, Nix reuses the existing path and dependents are not
+// re-derived. How often that fires is bounded by rustc itself: a crate's rmeta
+// is oversensitive (a comment / private-body / formatting change still changes
+// it, forcing reverse-dependency rebuilds), and link targets (bins/cdylibs)
+// always relink when any transitive rlib changed because rlibs aren't byte-stable
+// under `-C incremental`. Upstream is working to narrow exactly this — see the
+// "Relink, don't Rebuild" rustc project goal
+// (rust-lang/rust-project-goals 2025h2) — after which CA early cutoff will fire
+// on more non-interface changes. (Build-script outputs are deliberately excluded
+// from CA in render_build_script_run_derivation: see the note there re ring's
+// non-reproducible debug-info paths, briansmith/ring#715 + NixOS/nix#15649.)
 fn append_content_addressing(attrs: &mut Attrs, content_addressed: bool) {
     if !content_addressed {
         return;
