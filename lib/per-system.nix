@@ -642,6 +642,31 @@ in
           ${lib.getExe lint}
           mkdir -p "$out"
         '';
+        # Exercises the blast-radius PR comment: the validate/render jq embedded
+        # in its workflow (extracted from the YAML so the test can't drift from
+        # what the trusted comment job runs) plus the report-building logic in
+        # tools/blast-radius.nu. See tools/blast-radius-test.sh for the cases.
+        blast-radius-test =
+          pkgs.runCommand "blast-radius-test"
+            {
+              nativeBuildInputs = [
+                pkgs.bash
+                pkgs.coreutils
+                pkgs.diffutils
+                pkgs.jq
+                pkgs.yq-go
+                pkgs.nushell
+              ];
+            }
+            ''
+              cp -R ${lintSource} source
+              chmod -R u+w source
+              cd source
+              export HOME="$TMPDIR/home"
+              mkdir -p "$HOME"
+              bash tools/blast-radius-test.sh
+              mkdir -p "$out"
+            '';
         # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
         # which a successful build alone does not assert. `file` reads the Mach-O
         # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
