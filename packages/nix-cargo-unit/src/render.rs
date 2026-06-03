@@ -323,7 +323,7 @@ fn render_unit_entries(
             entries,
             "    {} = mkUnit {};\n\n",
             prepared.unit_attr(*run_index),
-            render_build_script_run(graph, options, prepared, *run_index, build_script_run)?
+            render_build_script_run(graph, prepared, *run_index, build_script_run)?
         )?;
     }
 
@@ -746,9 +746,10 @@ impl Driver {
 // under `-C incremental`. Upstream is working to narrow exactly this — see the
 // "Relink, don't Rebuild" rustc project goal
 // (rust-lang/rust-project-goals 2025h2) — after which CA early cutoff will fire
-// on more non-interface changes. (Build-script outputs are deliberately excluded
-// from CA in render_build_script_run_derivation: see the note there re ring's
-// non-reproducible debug-info paths, briansmith/ring#715 + NixOS/nix#15649.)
+// on more non-interface changes. (Build-script outputs are deliberately kept
+// input-addressed in render_build_script_run_derivation: their OUT_DIR can hold
+// arbitrary non-reproducible content, which floating CA cannot tolerate without
+// wedging the store — see the note there, briansmith/ring#715 + NixOS/nix#15649.)
 fn append_content_addressing(attrs: &mut Attrs, content_addressed: bool) {
     if !content_addressed {
         return;
@@ -1404,7 +1405,6 @@ done
 
 fn render_build_script_run(
     graph: &UnitGraph,
-    options: &RenderOptions,
     prepared: &PreparedGraph,
     run_index: usize,
     build_script_run: &BuildScriptRun,
@@ -1439,31 +1439,33 @@ fn render_build_script_run(
     // relocatables (it errors with "wrong ELF type"); the installPhase below does
     // a targeted `strip --strip-debug` instead.
     attrs.bool("dontStrip", true);
-    // Content-address build-script outputs too. This is safe ONLY because the
-    // installPhase below strips their debug info, which is what makes them
-    // reproducible — and that's a big win:
+    // Keep build-script outputs INPUT-ADDRESSED (do NOT content-address them),
+    // even though crate rlibs are CA. A build script may persist *arbitrary*
+    // files in OUT_DIR — compiled `.o`/`.a`, but also generated Rust sources, C
+    // headers, bindings, and codegen metadata — and we cannot prove all of it is
+    // byte-reproducible. Under floating content addressing any non-reproducible
+    // byte makes the output hash vary between builds; after a GC drops one copy,
+    // the next build's mismatching realisation makes Nix abort ("Trying to
+    // register a realisation ... but we already have another one locally",
+    // NixOS/nix#15649) and wedges the store until manual surgery — observed as
+    // "build of resolved derivation '<crate>' failed" (rcgen -> ring), triggered
+    // by the CI host's periodic nix-gc.
     //
-    //   * The objects a build script compiles (e.g. ring's / aws-lc-sys's
-    //     perlasm + cc output) bake the absolute build path into DWARF
-    //     `.debug_str` (briansmith/ring#715). Under floating content addressing
-    //     that varying path produced a *different* output every build, so after
-    //     the GC wiped one, the next build's mismatching realisation made Nix
-    //     abort ("Trying to register a realisation ... but we already have
-    //     another one locally", NixOS/nix#15649) — surfacing to dependents as
-    //     "build of resolved derivation '<crate>' failed" (observed: rcgen ->
-    //     ring; trigger: the CI host's periodic nix-gc).
-    //   * `strip --strip-debug` removes `.debug_str` (the ONLY differing section —
-    //     verified with diffoscope; strip then yields byte-identical objects),
-    //     making the output reproducible. Nothing debugs these crypto objects, so
-    //     dropping their debug info costs nothing.
-    //   * Reproducible + content-addressed means Nix *dedups* them: instead of
-    //     dozens of divergent copies (36 observed for ring) the store keeps one
-    //     shared path, which shrinks the store and lets the output substitute
-    //     cleanly across the runner fleet.
+    // Input addressing sidesteps this entirely: the path derives from inputs, so
+    // there is exactly one path per derivation (dedup by construction), with no
+    // realisation and no reproducibility requirement. The early cutoff CA would
+    // buy here is marginal anyway — a build-script output only changes when its
+    // build.rs inputs change — so input addressing is strictly the safer trade.
+    // (Crate rlibs stay CA via render_unit_derivation: rustc output is
+    // deterministic, which is where early cutoff actually pays off.)
     //
-    // Use `--strip-debug`, never `--strip-all`: the crate links against these
-    // objects' symbols.
-    append_content_addressing(&mut attrs, options.content_addressed);
+    // We still strip debug info below as a best-effort *size* win: C-toolchain
+    // crates (ring, aws-lc-sys, lmdb) bake the absolute build path into DWARF
+    // `.debug_str` (briansmith/ring#715), bloating `.o`/`.a` with data nothing
+    // debugs. Because the output is input-addressed, stripping is no longer
+    // load-bearing for correctness, so it is best-effort: a strip failure or a
+    // missing `strip` only costs store space. Use `--strip-debug`, never
+    // `--strip-all` — the crate links against these objects' symbols.
     attrs.multiline(
         "buildPhase",
         &render_build_script_run_phase(
@@ -1476,16 +1478,13 @@ fn render_build_script_run(
             build_script_run,
         )?,
     );
-    // Strip debug info from the build script's compiled objects so the output is
-    // reproducible (see the content-addressing note above). `--strip-debug` keeps
-    // the symbols the crate links against. Fail loudly if `strip` is missing: a
-    // silent skip would leave the objects non-reproducible and re-introduce the
-    // CA realisation trap (nix#15649), so we'd rather break the build than ship
-    // that. Per-file failures (non-object files) are tolerated.
+    // Best-effort: strip debug info from the build script's compiled `.o`/`.a` to
+    // shrink the (input-addressed) output. Skip cleanly if `strip` is absent and
+    // tolerate per-file failures — this is size-only, never correctness (see the
+    // input-addressing note above), so it must never fail the build.
     attrs.multiline(
         "installPhase",
-        "if [ -d \"$out/out-dir\" ]; then\n  \
-         command -v strip >/dev/null 2>&1 || { echo 'nix-cargo-unit: strip not on PATH; build-script-output would be non-reproducible under CA (NixOS/nix#15649)' >&2; exit 1; }\n  \
+        "if [ -d \"$out/out-dir\" ] && command -v strip >/dev/null 2>&1; then\n  \
          find \"$out/out-dir\" -type f \\( -name '*.o' -o -name '*.a' \\) -exec strip --strip-debug {} + || true\n\
          fi\n",
     );
