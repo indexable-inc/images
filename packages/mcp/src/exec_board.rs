@@ -121,7 +121,7 @@ impl ExecBoard {
         );
         let intent = intent.trim();
         if !intent.is_empty() {
-            pane.title = intent.to_owned();
+            intent.clone_into(&mut pane.title);
         }
         pane.subtitle = format!("{op_label} · {session}");
         {

@@ -8,7 +8,7 @@
 //! `include_str!` it at compile time.
 //!
 //! Compile-time embedding is deliberate: `dashboard-core` is linked into
-//! non-wrappable artifacts (the `tui-py` PyO3 `.so` the MCP loads), which can't
+//! non-wrappable artifacts (the `tui-py` `PyO3` `.so` the MCP loads), which can't
 //! carry a runtime `--site-dir` like a standalone binary would. Embedding keeps
 //! every consumer self-contained with no runtime asset dependency, while nix,
 //! not git, owns the generated page.
