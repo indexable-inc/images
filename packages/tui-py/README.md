@@ -50,8 +50,10 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`await tui.snapshot()` returns a frozen `Snapshot` (viewport, scrollback, size).
-It supports `str(snap)`, `"needle" in snap`, and `.text` / `.full_text`.
+`await tui.snapshot()` returns a frozen `Snapshot` (viewport, scrollback, size,
+and per-cell `styled`). It supports `str(snap)`, `"needle" in snap`, and
+`.text` / `.full_text`. In Jupyter, evaluating a snapshot renders the screen in
+color (see [Jupyter notebooks](#jupyter-notebooks)).
 
 The terminal opens at 80x24 with 10,000 lines of scrollback. Override per
 instance with keyword args on the (synchronous) constructor:
@@ -171,6 +173,51 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+### Jupyter notebooks
+
+A notebook cell already runs inside an event loop, so drive a terminal across
+cells without `async with`: construct the handle once, `await` its methods cell
+by cell, and `await t.close()` when done.
+
+```python
+from tui import Tui
+
+t = Tui("htop", rows=30, cols=110)   # cell 1: spawn
+```
+
+```python
+await t.snapshot()                   # cell 2: renders the screen in color
+```
+
+Evaluating `await t.snapshot()` as a cell's last expression shows a colored
+monospace render of the viewport (`Snapshot._repr_html_`). It captures per-cell
+styling by default; pass `styled=False` when you only want text. A `Snapshot`
+returned by `wait_for` is text-only (the poll loop skips the styling read), so
+take a fresh `await t.snapshot()` if you want color after a wait.
+
+#### Theming
+
+The render resolves colors through a `Theme` (default `fg`/`bg` plus the 16 ANSI
+palette entries; the 16-255 cube and grayscale are not themeable). The bundled
+`DARK_THEME` and `LIGHT_THEME` cover the common cases, and `DEFAULT_THEME`
+(initially `DARK_THEME`) is what `_repr_html_` uses. Point it at your own
+terminal by parsing a [ghostty](https://ghostty.org/) theme file:
+
+```python
+import tui
+tui.DEFAULT_THEME = tui.Theme.from_ghostty("~/.config/ghostty/themes/custom-dark")
+await t.snapshot()                    # now rendered in your ghostty colors
+```
+
+`from_ghostty` accepts a path or the theme text directly and reads its
+`background`, `foreground`, and `palette = N=RRGGBB` lines. For a one-off render
+without changing the default, call `snap.to_html(theme=...)`.
+
+A practical gotcha when spawning through `nix run`: the cold build counts against
+`wait_for`'s timeout, so the first run of an uncached binary can time out before
+it ever draws. Warm the binary once, or give the first `wait_for` a generous
+timeout.
 
 ### Handle timeouts
 
@@ -295,7 +342,9 @@ all. Pass `path=` to `publish()` to choose the socket path.
 | Name           | Purpose                                                |
 | -------------- | ------------------------------------------------------ |
 | `Tui`          | One spawned process. Construct it and you have a PTY.  |
-| `Snapshot`     | Frozen viewport + scrollback + size.                   |
+| `Snapshot`     | Frozen viewport + scrollback + size + per-cell styling. Renders to color HTML in Jupyter. |
+| `Theme`        | Render colors: `fg`/`bg` + 16 ANSI. `Theme.from_ghostty(...)`. |
+| `DARK_THEME` / `LIGHT_THEME` / `DEFAULT_THEME` | Bundled themes; reassign `DEFAULT_THEME` to restyle. |
 | `Size`         | `(rows, cols)` dataclass.                              |
 | `Key`          | ANSI keystroke constants + `Key.ctrl`/`Key.alt`.       |
 | `StyledCell`   | One cell: `char`, `fg`/`bg`, and VT100 attributes.     |

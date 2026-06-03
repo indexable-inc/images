@@ -14,6 +14,12 @@ construction and the cached accessors: `id`, `command`, `args`, `size`,
 `is_alive`, `exit_code`. Everything else (`send`, `enter`, `read`, `viewport`,
 `text`, `snapshot`, `wait_for`, `resize`, `kill`, `close`) is a coroutine.
 
+In a Jupyter notebook the cell already runs in an event loop, so drive a
+terminal across cells without `async with`: construct `t = Tui(...)`, `await`
+its methods cell by cell, and `await t.close()` when done. Evaluating
+`await t.snapshot()` as the last expression in a cell renders the screen in
+color via `Snapshot._repr_html_`.
+
 Every spawned terminal auto-shows in the web dashboard. The first `Tui(...)`
 binds a process-global producer, so running `nix run .#tui-dashboard` (it
 watches `socket_dir()`) renders this process's terminals with no explicit
@@ -33,11 +39,13 @@ The public surface:
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
+from html import escape as _html_escape
 from types import TracebackType
 from typing import Self, TypeAlias
 
@@ -57,6 +65,10 @@ from ._tui import (
 )
 
 __all__ = [
+    "DARK_THEME",
+    "DEFAULT_THEME",
+    "LIGHT_THEME",
+    "RGB",
     "Color",
     "Dashboard",
     "Key",
@@ -65,6 +77,7 @@ __all__ = [
     "Size",
     "Snapshot",
     "StyledCell",
+    "Theme",
     "Tui",
     "WaitTimeout",
     "__version__",
@@ -85,6 +98,213 @@ __all__ = [
 Color: TypeAlias = int | tuple[int, int, int] | None
 
 
+# --------------------------------------------------------------------------- #
+# HTML rendering (Jupyter `_repr_html_`)
+# --------------------------------------------------------------------------- #
+
+
+#: A concrete 24-bit color as `(r, g, b)`, each component `0..=255`.
+RGB: TypeAlias = tuple[int, int, int]
+
+
+def _hex_to_rgb(value: str) -> RGB:
+    """Parse a `RRGGBB` or `#RRGGBB` hex color into `(r, g, b)`."""
+    h = value.strip().lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _build_xterm_cube() -> tuple[RGB, ...]:
+    """Palette entries 16-255: the 6x6x6 color cube + 24-step grayscale ramp.
+
+    These are the parts of the xterm 256-color palette that terminals do *not*
+    theme (only indices 0-15 and the default fg/bg are themeable). Returned
+    indexed from 0, so palette index `n` maps to `_XTERM_CUBE[n - 16]`.
+    """
+    cube_levels = (0, 95, 135, 175, 215, 255)
+    out: list[RGB] = []
+    for i in range(216):
+        out.append((cube_levels[i // 36], cube_levels[(i // 6) % 6], cube_levels[i % 6]))
+    for i in range(24):
+        gray = 8 + i * 10
+        out.append((gray, gray, gray))
+    return tuple(out)
+
+
+_XTERM_CUBE = _build_xterm_cube()
+
+
+@dataclass(frozen=True, slots=True)
+class Theme:
+    """Colors for rendering a viewport to HTML.
+
+    A terminal theme is the default `fg`/`bg` plus the 16 ANSI palette entries
+    (`ansi`, indices 0-15). Extended palette colors (16-255) use the standard
+    xterm cube and grayscale ramp, which terminals do not theme. `Color` values
+    resolve against this: `None` -> `fg`/`bg`, an `int` in `0..16` -> `ansi`, a
+    larger `int` -> the xterm cube, an `(r, g, b)` tuple -> itself.
+
+    Build one from a ghostty theme file with `Theme.from_ghostty(...)`, or use
+    the bundled `DARK_THEME` / `LIGHT_THEME`.
+    """
+
+    fg: RGB
+    bg: RGB
+    ansi: tuple[RGB, ...]  # exactly 16 entries (palette indices 0-15)
+    name: str = "custom"
+
+    @classmethod
+    def from_ghostty(cls, source: str, *, name: str | None = None) -> Self:
+        """Build a `Theme` from a ghostty theme (a file path or its text).
+
+        Reads the `background = RRGGBB`, `foreground = RRGGBB`, and
+        `palette = N=RRGGBB` lines that ghostty theme files under
+        `ghostty/themes/` use; everything else (cursor, selection, comments) is
+        ignored. Unspecified palette slots keep the bundled `DARK_THEME` color.
+        """
+        text = source
+        expanded = os.path.expanduser(source)
+        if "\n" not in source and os.path.exists(expanded):
+            with open(expanded, encoding="utf-8") as fh:
+                text = fh.read()
+
+        fg, bg = DARK_THEME.fg, DARK_THEME.bg
+        ansi = list(DARK_THEME.ansi)
+        for raw in text.splitlines():
+            line = raw.split("#", 1)[0].strip()
+            key, sep, val = line.partition("=")
+            if not sep:
+                continue
+            key, val = key.strip(), val.strip()
+            if key == "background":
+                bg = _hex_to_rgb(val)
+            elif key == "foreground":
+                fg = _hex_to_rgb(val)
+            elif key == "palette":
+                idx, eq, hexval = val.partition("=")
+                if eq and idx.strip().isdigit():
+                    slot = int(idx.strip())
+                    if 0 <= slot < 16:
+                        ansi[slot] = _hex_to_rgb(hexval)
+        return cls(fg=fg, bg=bg, ansi=tuple(ansi), name=name or "ghostty")
+
+    def resolve(self, color: Color, default: RGB) -> RGB:
+        """Resolve a `Color` to concrete `(r, g, b)` under this theme."""
+        if color is None:
+            return default
+        if isinstance(color, int):
+            if 0 <= color < 16:
+                return self.ansi[color]
+            if 16 <= color < 256:
+                return _XTERM_CUBE[color - 16]
+            return default
+        return (color[0], color[1], color[2])
+
+
+#: Bundled dark theme (Catppuccin-Mocha-leaning: `#1e1e1e` bg, `#d4d4d4` fg).
+DARK_THEME = Theme(
+    fg=(0xD4, 0xD4, 0xD4),
+    bg=(0x1E, 0x1E, 0x1E),
+    ansi=(
+        (0x00, 0x00, 0x00), (0xF3, 0x8B, 0xA8), (0xA6, 0xE3, 0xA1), (0xF9, 0xE2, 0xAF),
+        (0x89, 0xB4, 0xFA), (0xCB, 0xA6, 0xF7), (0x94, 0xE2, 0xD5), (0xE0, 0xD8, 0xC0),
+        (0x58, 0x5B, 0x70), (0xF3, 0x8B, 0xA8), (0xA6, 0xE3, 0xA1), (0xF9, 0xE2, 0xAF),
+        (0x89, 0xB4, 0xFA), (0xCB, 0xA6, 0xF7), (0x94, 0xE2, 0xD5), (0xFA, 0xF0, 0xC8),
+    ),
+    name="dark",
+)
+
+#: Bundled light theme (`#f9f9f9` bg, `#2a2c33` fg).
+LIGHT_THEME = Theme(
+    fg=(0x2A, 0x2C, 0x33),
+    bg=(0xF9, 0xF9, 0xF9),
+    ansi=(
+        (0x00, 0x00, 0x00), (0xDB, 0x3F, 0x39), (0x42, 0x93, 0x3E), (0x85, 0x55, 0x04),
+        (0x32, 0x5E, 0xEE), (0x93, 0x00, 0x93), (0x0E, 0x70, 0xAE), (0x8F, 0x90, 0x96),
+        (0x2A, 0x2C, 0x33), (0xDB, 0x3F, 0x39), (0x42, 0x93, 0x3E), (0x85, 0x55, 0x04),
+        (0x32, 0x5E, 0xEE), (0x93, 0x00, 0x93), (0x0E, 0x70, 0xAE), (0xFF, 0xFF, 0xFF),
+    ),
+    name="light",
+)
+
+#: The theme `Snapshot._repr_html_` uses when none is passed. Reassign
+#: `tui.DEFAULT_THEME` (e.g. to `Theme.from_ghostty(...)`) to restyle every
+#: snapshot rendered afterward.
+DEFAULT_THEME = DARK_THEME
+
+# Berkeley Mono first (matches a common terminal font), then portable fallbacks.
+_HTML_FONT = (
+    "'Berkeley Mono','SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace"
+)
+
+
+def _cell_css(cell: StyledCell, theme: Theme) -> str:
+    """CSS declarations for one `StyledCell`, honoring inverse + attributes."""
+    fg = theme.resolve(cell.fg, theme.fg)
+    bg = theme.resolve(cell.bg, theme.bg)
+    if cell.inverse:
+        fg, bg = bg, fg
+    css = [f"color:rgb({fg[0]},{fg[1]},{fg[2]})", f"background:rgb({bg[0]},{bg[1]},{bg[2]})"]
+    if cell.bold:
+        css.append("font-weight:700")
+    if cell.italic:
+        css.append("font-style:italic")
+    if cell.underline:
+        css.append("text-decoration:underline")
+    return ";".join(css)
+
+
+def _box_css(theme: Theme) -> str:
+    """The container `<pre>` style: a flat, square terminal box in `theme`.
+
+    No rounding or glow: it should read as a real screen, not UI chrome.
+    """
+    fg, bg = theme.fg, theme.bg
+    return (
+        "display:inline-block;"
+        f"background:rgb({bg[0]},{bg[1]},{bg[2]});"
+        f"color:rgb({fg[0]},{fg[1]},{fg[2]});"
+        f"font-family:{_HTML_FONT};"
+        "font-size:13px;line-height:1.2;padding:8px 10px;"
+        "border:1px solid rgba(127,127,127,0.25);"
+        "white-space:pre;overflow:auto"
+    )
+
+
+def _styled_grid_to_html(grid: tuple[tuple[StyledCell, ...], ...], theme: Theme) -> str:
+    """Render a styled viewport as a colored monospace HTML block.
+
+    Consecutive cells with identical styling collapse into one `<span>` so a
+    full screen stays a few hundred spans, not one per cell.
+    """
+    lines: list[str] = []
+    for row in grid:
+        spans: list[str] = []
+        run_css: str | None = None
+        run: list[str] = []
+        for cell in row:
+            # A wide character's trailing continuation cell carries "": skip it
+            # so a double-width glyph occupies its two monospace columns once.
+            if cell.char == "":
+                continue
+            css = _cell_css(cell, theme)
+            if css != run_css:
+                if run:
+                    spans.append(f'<span style="{run_css}">{_html_escape("".join(run))}</span>')
+                run_css = css
+                run = []
+            run.append(cell.char)
+        if run:
+            spans.append(f'<span style="{run_css}">{_html_escape("".join(run))}</span>')
+        lines.append("".join(spans))
+    return f'<pre style="{_box_css(theme)}">{chr(10).join(lines)}</pre>'
+
+
+def _plain_lines_to_html(lines: tuple[str, ...], theme: Theme) -> str:
+    """Render plain viewport lines as a monospace block (no color captured)."""
+    body = _html_escape("\n".join(lines))
+    return f'<pre style="{_box_css(theme)}">{body}</pre>'
+
+
 @dataclass(frozen=True, slots=True)
 class Size:
     """Terminal dimensions, in cells."""
@@ -99,11 +319,20 @@ class Size:
 
 @dataclass(frozen=True, slots=True)
 class Snapshot:
-    """An immutable view of a Tui at a single point in time."""
+    """An immutable view of a Tui at a single point in time.
+
+    In Jupyter, evaluating a snapshot as the last expression in a cell renders
+    the viewport as a colored monospace block (`_repr_html_`). When `styled` is
+    captured (the default for `Tui.snapshot()`), the render carries the real
+    VT100 colors and attributes; otherwise it falls back to plain text.
+    """
 
     viewport: tuple[str, ...]
     scrollback: tuple[str, ...]
     size: Size
+    #: Per-cell styling for the viewport, `[row][col]`. Empty when the snapshot
+    #: was taken with `styled=False` (e.g. the cheap polls inside `wait_for`).
+    styled: tuple[tuple[StyledCell, ...], ...] = ()
 
     @property
     def text(self) -> str:
@@ -120,6 +349,21 @@ class Snapshot:
 
     def __str__(self) -> str:
         return self.text
+
+    def to_html(self, theme: Theme | None = None) -> str:
+        """Render the viewport to a colored monospace HTML block.
+
+        Uses `theme` if given, else the module-level `DEFAULT_THEME`. Falls back
+        to a plain (uncolored) render when the snapshot carries no styling.
+        """
+        active = theme if theme is not None else DEFAULT_THEME
+        if self.styled:
+            return _styled_grid_to_html(self.styled, active)
+        return _plain_lines_to_html(self.viewport, active)
+
+    def _repr_html_(self) -> str:
+        """Jupyter rich display: a colored render using `DEFAULT_THEME`."""
+        return self.to_html()
 
 
 # --------------------------------------------------------------------------- #
@@ -353,13 +597,23 @@ class Tui:
         """Current viewport joined with newlines."""
         return "\n".join(await self._raw.read_viewport_async())
 
-    async def snapshot(self) -> Snapshot:
-        """Immutable point-in-time view of viewport + scrollback."""
+    async def snapshot(self, *, styled: bool = True) -> Snapshot:
+        """Immutable point-in-time view of viewport + scrollback.
+
+        With `styled=True` (the default) the snapshot also captures per-cell
+        styling, so evaluating it in a Jupyter cell renders the screen in color.
+        Pass `styled=False` to skip that second read when you only need text
+        (this is what the `wait_for` poll loop does).
+        """
         scrollback, viewport = await self._raw.read_full_async()
+        cells: tuple[tuple[StyledCell, ...], ...] = ()
+        if styled:
+            cells = tuple(tuple(row) for row in await self._raw.read_styled_cells_async())
         return Snapshot(
             viewport=tuple(viewport),
             scrollback=tuple(scrollback),
             size=self.size,
+            styled=cells,
         )
 
     async def chars(self) -> NDArray[np.uint32]:
@@ -383,13 +637,17 @@ class Tui:
 
         `pattern` may be a substring, a compiled `re.Pattern`, or a callable
         that takes a `Snapshot` and returns a bool. Returns the first matching
-        snapshot. Raises `WaitTimeout` on expiry.
+        snapshot (text-only; call `await t.snapshot()` for a colored render).
+        Raises `WaitTimeout` on expiry.
         """
         check = _build_predicate(pattern)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while True:
-            snap = await self.snapshot()
+            # The predicate only inspects text, so skip the per-cell styling
+            # read on every poll. The returned snapshot is therefore text-only;
+            # call `await t.snapshot()` afterward if you want a colored render.
+            snap = await self.snapshot(styled=False)
             if check(snap):
                 return snap
             if loop.time() >= deadline:
