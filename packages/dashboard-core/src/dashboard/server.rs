@@ -32,7 +32,12 @@ use super::recordings::RecordingStore;
 use crate::{Error, Result};
 
 /// The single page the dashboard serves; it connects back over `/events`.
-const DASHBOARD_HTML: &str = include_str!("dashboard.html");
+///
+/// The page is the Vite build of `site/`, embedded at compile time. `build.rs`
+/// writes it into `OUT_DIR` from the nix-built `IX_DASHBOARD_SITE_HTML`, so the
+/// generated bundle never lives in the repo. See `build.rs` for why this is a
+/// compile-time embed rather than a runtime asset dir.
+const DASHBOARD_HTML: &str = include_str!(concat!(env!("OUT_DIR"), "/dashboard.html"));
 
 /// Shared router state: the live document and, optionally, the on-disk
 /// recordings. Cloning is cheap: both fields are `Arc`s.

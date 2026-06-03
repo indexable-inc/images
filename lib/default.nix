@@ -307,6 +307,7 @@ let
       paths
       packageRegistry
       cargoUnitFor
+      buildSvelteSite
       ghostty
       writeNushellApplication
       macosSdk
