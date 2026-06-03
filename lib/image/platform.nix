@@ -1,4 +1,5 @@
 # Baseline platform applied to every image.
+# blast-radius test: no-op comment edit to measure cross-image fanout.
 {
   config,
   lib,
