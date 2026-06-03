@@ -517,7 +517,9 @@ class Tui:
             snap = await tui.wait_for("3", timeout=2.0)
 
     The terminal opens at `rows` x `cols` (default 80x24) with `scrollback_lines`
-    of history (default 10,000). A single process-wide tokio runtime drives every
+    of history (default 10,000). Pass the shape as `size=(rows, cols)` (the same
+    spelling the `.size` accessor returns) or as granular `rows=`/`cols=`, but not
+    both. A single process-wide tokio runtime drives every
     spawned PTY; each I/O method returns a native asyncio coroutine bridged
     through pyo3-async-runtimes, with no thread-pool hop. Construction and the
     shape accessors (`id`, `command`, `args`, `size`, `is_alive`, `exit_code`)
@@ -539,10 +541,20 @@ class Tui:
         self,
         command: str,
         *args: str,
+        size: tuple[int, int] | Size | None = None,
         rows: int | None = None,
         cols: int | None = None,
         scrollback_lines: int | None = None,
     ) -> None:
+        # `size=(rows, cols)` mirrors the `.size` accessor (a `Size` is also a
+        # (rows, cols) iterable), so the shape can be read and set with the same
+        # spelling; `rows=`/`cols=` stay as the granular form. Accept one or the
+        # other, not both, so a conflicting pair is an error rather than a silent
+        # winner.
+        if size is not None:
+            if rows is not None or cols is not None:
+                raise TypeError("pass either size=(rows, cols) or rows=/cols=, not both")
+            rows, cols = size
         _ensure_autopublish()
         self._raw = _RawTuiInstance(command, list(args), rows, cols, scrollback_lines)
 
