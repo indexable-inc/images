@@ -29,7 +29,6 @@ members = [
   "packages/ix-dev-diagnose",
   "packages/kitty",
   "packages/macos-vm",
-  "packages/mcp",
   "packages/minecraft/nbt",
   "packages/minecraft/sound",
   "packages/minecraft/sync-managed",
@@ -161,7 +160,6 @@ reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
   "multipart",
 ] }
-rmcp = "1.7"
 rmp-serde = "1"
 rodio = { version = "0.19", default-features = false, features = ["vorbis"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
