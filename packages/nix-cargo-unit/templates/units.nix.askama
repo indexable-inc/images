@@ -177,6 +177,16 @@ let
   packageTestAttrs = packageName: {
     nativeBuildInputs = packageTestInputs.${packageName} or [];
     env = packageTestEnv.${packageName} or {};
+    # A per-test leaf just runs an already-compiled test binary and produces an
+    # empty marker `$out` that nothing consumes. Substituting it is a net loss:
+    # each leaf costs a narinfo round-trip against every configured substituter
+    # (thousands of leaves x N caches per CI run) only to fetch an empty
+    # directory, when re-running the test on the local store is cheaper. Skip
+    # substitution so no cache is ever queried for these paths, and build them
+    # locally. They stay tiny and input-addressed, so once the run root is gone
+    # they GC trivially and never need to be kept as a useful cached artifact.
+    allowSubstitutes = false;
+    preferLocalBuild = true;
   };
   packageTestEnvArgs =
     packageName:
