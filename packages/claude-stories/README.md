@@ -79,6 +79,10 @@ claude-stories serve
 - **Off-tailnet needs explicit peers.** Without Tailscale, discovery has nothing
   to enumerate, so set `CLAUDE_STORIES_PEERS`. A hosted rendezvous transport is a
   natural future addition for the public case.
+- **`serve` binds `0.0.0.0` and is unauthenticated.** It serves low-sensitivity
+  data (your latest commit subject) and relies entirely on your tailnet ACLs, so
+  the same port is reachable from any other network the host is on. Firewall it
+  to the Tailscale interface, or pass `--bind` your tailnet IP, on shared networks.
 - **Your story is the last repo you published from**, not a live view of whatever
   directory each Claude session is in. Re-run `publish` (the hook does this) to
   update it.

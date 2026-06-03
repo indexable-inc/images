@@ -1,7 +1,7 @@
 //! Instagram-style "stories" for Claude Code.
 //!
 //! - `publish` derives your current story from the local repo and writes it to a
-//!   state file (wire it to a SessionStart hook).
+//!   state file (wire it to a `SessionStart` hook).
 //! - `serve` exposes that file over HTTP so tailnet peers can read it.
 //! - `render` is the status-line command: it discovers peers, fetches their
 //!   stories concurrently, and prints the avatar row.
@@ -71,10 +71,10 @@ async fn main() -> Result<()> {
 }
 
 fn cwd_or(path: Option<PathBuf>) -> Result<PathBuf> {
-    match path {
-        Some(p) => Ok(p),
-        None => std::env::current_dir().wrap_err("reading current directory"),
-    }
+    path.map_or_else(
+        || std::env::current_dir().wrap_err("reading current directory"),
+        Ok,
+    )
 }
 
 fn publish(path: Option<PathBuf>) -> Result<()> {
@@ -115,7 +115,7 @@ async fn serve(bind: &str, port: u16) -> Result<()> {
 }
 
 async fn render(port: u16) -> Result<()> {
-    let endpoints = Discovery::from_env()?.endpoints(port)?;
+    let endpoints = Discovery::from_env().endpoints(port)?;
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(1500))
@@ -133,10 +133,10 @@ async fn render(port: u16) -> Result<()> {
     while let Some(joined) = set.join_next().await {
         // A peer that is offline, slow, or has no story is simply absent from
         // the row; that is the expected steady state, not an error.
-        if let Ok(Some(s)) = joined {
-            if s.is_fresh(now) {
-                stories.push(s);
-            }
+        if let Ok(Some(s)) = joined
+            && s.is_fresh(now)
+        {
+            stories.push(s);
         }
     }
 

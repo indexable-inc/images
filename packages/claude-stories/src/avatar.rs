@@ -25,7 +25,8 @@ const DIM: &str = "\x1b[2m";
 // cannot lose information. Same idiom as git-log-pretty's palette.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn lerp(a: u8, b: u8, t: f32) -> u8 {
-    (f32::from(a) + (f32::from(b) - f32::from(a)) * t)
+    (f32::from(b) - f32::from(a))
+        .mul_add(t, f32::from(a))
         .round()
         .clamp(0.0, 255.0) as u8
 }
@@ -36,7 +37,8 @@ fn lerp(a: u8, b: u8, t: f32) -> u8 {
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    clippy::many_single_char_names
 )]
 fn grad(t: f32) -> Rgb {
     let t = t.clamp(0.0, 1.0);
@@ -69,12 +71,20 @@ fn initials(name: &str) -> String {
     if two.is_empty() { "??".to_owned() } else { two }
 }
 
-/// Wrap `text` in an OSC 8 hyperlink when a target is present.
+/// A peer-supplied URL is safe to emit as a hyperlink only if it is plain
+/// http(s) and carries no control characters. Stories come from untrusted peer
+/// JSON, so an unguarded `url` would let any tailnet host inject terminal escape
+/// sequences into the victim's status line via the OSC 8 payload.
+fn is_safe_url(u: &str) -> bool {
+    (u.starts_with("https://") || u.starts_with("http://")) && !u.chars().any(char::is_control)
+}
+
+/// Wrap `text` in an OSC 8 hyperlink when a safe target is present.
 fn link(text: &str, url: Option<&str>) -> String {
-    match url {
-        Some(u) => format!("\x1b]8;;{u}\x1b\\{text}\x1b]8;;\x1b\\"),
-        None => text.to_owned(),
-    }
+    url.filter(|u| is_safe_url(u)).map_or_else(
+        || text.to_owned(),
+        |u| format!("\x1b]8;;{u}\x1b\\{text}\x1b]8;;\x1b\\"),
+    )
 }
 
 /// A single ringed avatar: ◖INITIALS◗ in gradient colors.
@@ -95,7 +105,7 @@ fn add_bubble() -> String {
 /// Render the full status-line row from the peer stories (already filtered to
 /// the fresh ones). Newest first.
 pub fn row(mut stories: Vec<Story>) -> String {
-    stories.sort_by(|a, b| b.ts.cmp(&a.ts));
+    stories.sort_by_key(|s| std::cmp::Reverse(s.ts));
     let label = format!("{}{BOLD}📸 STORIES{RESET}", fg(grad(0.5)));
     let mut parts = vec![label, add_bubble()];
     parts.extend(stories.iter().map(avatar));
@@ -118,6 +128,16 @@ mod tests {
     fn gradient_endpoints_are_stable() {
         assert_eq!(grad(0.0), GRADIENT[0]);
         assert_eq!(grad(1.0), GRADIENT[GRADIENT.len() - 1]);
+    }
+
+    #[test]
+    fn unsafe_peer_urls_are_not_linked() {
+        // A control char (here ESC) or a non-http scheme must never reach the
+        // OSC 8 payload, or a peer could inject escapes into the status line.
+        assert!(!link("X", Some("https://x\x1b]8;;evil")).contains("evil"));
+        assert!(!link("X", Some("javascript:alert(1)")).contains("alert"));
+        assert_eq!(link("X", None), "X");
+        assert!(link("X", Some("https://github.com/a")).contains("github.com/a"));
     }
 
     #[test]

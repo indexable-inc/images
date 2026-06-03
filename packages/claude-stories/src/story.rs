@@ -30,9 +30,15 @@ pub struct Story {
 }
 
 impl Story {
+    /// Whether the story is within the visibility window. `ts` comes from
+    /// untrusted peer JSON, so the subtraction is checked (a `ts` of `i64::MIN`
+    /// would otherwise overflow) and future-dated stories are rejected.
     #[must_use]
     pub const fn is_fresh(&self, now: i64) -> bool {
-        now - self.ts < TTL_SECS
+        match now.checked_sub(self.ts) {
+            Some(age) => age >= 0 && age < TTL_SECS,
+            None => false,
+        }
     }
 }
 
@@ -137,5 +143,31 @@ pub fn read_state() -> Result<Option<Story>> {
         Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e).wrap_err_with(|| format!("reading {}", path.display())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(ts: i64) -> Story {
+        Story {
+            name: "x".into(),
+            repo: "r".into(),
+            branch: "b".into(),
+            subject: "s".into(),
+            ts,
+            url: None,
+        }
+    }
+
+    #[test]
+    fn freshness_bounds() {
+        let now = 1_000_000_i64;
+        assert!(at(now).is_fresh(now));
+        assert!(at(now - TTL_SECS + 1).is_fresh(now));
+        assert!(!at(now - TTL_SECS).is_fresh(now)); // exactly at TTL: expired
+        assert!(!at(now + 100).is_fresh(now)); // future-dated peer rejected
+        assert!(!at(i64::MIN).is_fresh(now)); // must not overflow/panic
     }
 }

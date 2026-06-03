@@ -5683,18 +5683,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "skill-lint"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "ignore",
- "serde",
- "serde_json",
- "serde_norway",
-]
-
-[[package]]
 name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5756,6 +5744,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05e40b6cf54d988dc1a2223531b969c9a9e30906ad90ef64890c27b4bfbb46ea"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "skill-lint"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ignore",
+ "serde",
+ "serde_json",
+ "serde_norway",
 ]
 
 [[package]]

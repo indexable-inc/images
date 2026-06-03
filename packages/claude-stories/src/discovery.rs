@@ -17,10 +17,12 @@ pub enum Discovery {
 }
 
 impl Discovery {
-    /// Choose a transport from the environment. Returns a typed error rather
-    /// than silently defaulting to an empty peer set, so a misconfigured host
-    /// shows "tailscale not found" instead of an empty row.
-    pub fn from_env() -> Result<Self> {
+    /// Choose a transport from the environment: an explicit
+    /// `CLAUDE_STORIES_PEERS` list if set, otherwise the tailnet. Any failure to
+    /// actually reach peers surfaces later, as a typed error from
+    /// [`Self::endpoints`].
+    #[must_use]
+    pub fn from_env() -> Self {
         if let Some(list) = std::env::var_os("CLAUDE_STORIES_PEERS") {
             let peers: Vec<String> = list
                 .to_string_lossy()
@@ -29,9 +31,9 @@ impl Discovery {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned)
                 .collect();
-            return Ok(Self::Peers(peers));
+            return Self::Peers(peers);
         }
-        Ok(Self::Tailnet)
+        Self::Tailnet
     }
 
     /// Build the `/story` endpoint URLs to fetch, one per peer.
@@ -88,7 +90,11 @@ fn tailnet_endpoints(port: u16) -> Result<Vec<String>> {
             continue;
         }
         // Prefer the IPv4 (100.x) address; it is the most broadly reachable.
-        if let Some(ip) = peer.ips.iter().find(|ip| ip.contains('.')) {
+        if let Some(ip) = peer
+            .ips
+            .iter()
+            .find(|ip| ip.parse::<std::net::Ipv4Addr>().is_ok())
+        {
             endpoints.push(format!("http://{ip}:{port}/story"));
         }
     }
