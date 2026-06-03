@@ -24,7 +24,12 @@ def eval-checks [repo: string, rev: string] {
     for e in $errors { print --stderr $"eval error @($rev): ($e)" }
     error make { msg: $"checks failed to evaluate at ($rev)" }
   }
-  $rows | select attr drvPath
+  # nix-eval-jobs quotes any path segment that needs quoting in Nix source
+  # (dots, leading digits, etc.), so attrs like `image-minecraft_1.21.11-fabric`
+  # arrive as `"image-minecraft_1.21.11-fabric"`. Strip the surrounding quotes
+  # so the diff, the rendered comment, and the workflow's safename regex all
+  # see the bare attribute name.
+  $rows | each {|r| { attr: ($r.attr | str trim --char '"'), drvPath: $r.drvPath } }
 }
 
 def drv-for [tbl, name] {
