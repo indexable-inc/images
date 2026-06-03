@@ -796,7 +796,19 @@ fn render_unit_derivation(
         &render_build_inputs(graph, prepared, index, unit_build_script_run(graph, index)),
     );
     attrs.bool("dontStrip", true);
-    append_content_addressing(&mut attrs, options.content_addressed);
+    // Content-address libraries and binaries -- that is where CA's "early
+    // cutoff" pays off: a byte-identical rebuild lets dependents skip rebuilding.
+    // Tests and benchmarks are leaf derivations that nothing consumes, so CA
+    // buys them no early cutoff; it only adds floating-realisation fragility. A
+    // stale or GC'd test realisation on a shared store resurfaces as a silent
+    // "build of resolved derivation '<...>-cargo-unit-test-manifest' failed: N
+    // dependencies failed" with no builder error (NixOS/nix#15649) -- exactly
+    // the failures seen on the shared CI store. Keep tests and benches
+    // input-addressed; they still benefit from upstream CA on their inputs.
+    let unit = &graph.units[index];
+    let content_addressed =
+        options.content_addressed && !unit.is_test() && !unit.is_benchmark();
+    append_content_addressing(&mut attrs, content_addressed);
     attrs.multiline(
         "buildPhase",
         &render_driver_build_phase(graph, options, prepared, index, driver)?,
@@ -4705,6 +4717,56 @@ version = "4.6.1"
 
         assert!(rendered.contains("__contentAddressed = true"));
         assert!(rendered.contains("outputHashMode = \"recursive\""));
+    }
+
+    #[test]
+    fn tests_stay_input_addressed_even_with_content_addressing() {
+        // Tests are leaf derivations nothing consumes, so they get no CA early
+        // cutoff, only floating-realisation fragility. They must stay
+        // input-addressed even when content_addressed is on (libraries remain
+        // CA -- see content_addressed_is_explicitly_opt_in).
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "hello 0.1.0 (path+file:///workspace)",
+                  "target": {
+                    "kind": ["test"],
+                    "crate_types": ["bin"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024",
+                    "test": true
+                  },
+                  "profile": { "name": "test", "opt_level": "0" },
+                  "mode": "test",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: true,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !rendered.contains("__contentAddressed = true"),
+            "test units must be input-addressed even with content_addressed = true"
+        );
     }
 
     #[test]

@@ -1,0 +1,28 @@
+# PyO3 binding for a Mixedbread-backed Polars source. This crate is deliberately
+# thin: it reuses the workspace `mixedbread` client (HTTP, retry, auth, and the
+# filter DSL) and hands results back to Python as plain columnar data. Polars
+# itself stays entirely on the Python side (`polars_mixedbread/__init__.py`),
+# where the runtime Polars lives, so there is no Rust<->Python Polars version
+# coupling and no `pyo3-polars` Arrow-FFI lockstep to maintain.
+[package]
+name = "polars-mixedbread"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "PyO3 binding behind scan_mixedbread: run a Mixedbread store search and return columnar rows to Polars"
+
+[lib]
+name = "polars_mixedbread"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+mixedbread.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
+serde_json.workspace = true
+# `rt` + `net` + `time` is the minimum for a current-thread runtime with the IO
+# and timer drivers reqwest (in `mixedbread`) needs: the search call is async but
+# a Polars IO-source callback is synchronous, so we block on it here.
+tokio = { workspace = true, features = ["rt", "net", "time"] }
