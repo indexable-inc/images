@@ -290,4 +290,22 @@ mod tests {
             b"a\x1bOBb".to_vec()
         );
     }
+
+    #[test]
+    fn application_mode_preserves_sequence_truncated_at_end() {
+        // A buffer that ends mid-sequence has no final byte to match, so the
+        // partial bytes are emitted verbatim rather than dropped or panicking.
+        assert_eq!(apply_cursor_key_mode(b"\x1b", true), b"\x1b".to_vec());
+        assert_eq!(apply_cursor_key_mode(b"\x1b[", true), b"\x1b[".to_vec());
+        assert_eq!(apply_cursor_key_mode(b"x\x1b[", true), b"x\x1b[".to_vec());
+    }
+
+    #[test]
+    fn rewrite_is_per_call_not_across_writes() {
+        // Each write is rewritten independently: an arrow split across two
+        // calls is not reassembled, so neither half is altered. Callers that
+        // need a cursor key send it as one chunk.
+        assert_eq!(apply_cursor_key_mode(b"\x1b[", true), b"\x1b[".to_vec());
+        assert_eq!(apply_cursor_key_mode(b"B", true), b"B".to_vec());
+    }
 }

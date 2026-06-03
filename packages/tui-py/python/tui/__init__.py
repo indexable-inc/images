@@ -367,6 +367,10 @@ class Snapshot:
         width-exact frame so columns, trailing space, and the real size are
         unambiguous, and summarize the styling instead of expanding it. The
         colored view is still available via `_repr_html_` / `to_html`.
+
+        Width is counted in code points, not display columns, so a line with
+        wide (CJK/emoji) glyphs can push the right border out; this is a
+        cosmetic frame artifact in the plain-text view only.
         """
         rows, cols = self.size.rows, self.size.cols
         top = "┌" + "─" * cols + "┐"
@@ -588,7 +592,13 @@ class Tui:
     # -- writing ------------------------------------------------------------
 
     async def write(self, data: str) -> None:
-        """Send `data` to the PTY exactly."""
+        """Send `data` to the PTY.
+
+        Like a real terminal, while the program has DECCKM (application cursor
+        keys) enabled a bare cursor sequence (`ESC [ A`..`D`, `ESC [ H`/`F`) is
+        rewritten to its `ESC O ...` form so arrows reach full-screen programs;
+        every other byte passes through unchanged.
+        """
         await self._raw.write_async(data)
 
     async def send(self, *parts: str) -> None:

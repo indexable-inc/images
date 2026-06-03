@@ -95,7 +95,14 @@ impl TuiInstance {
         Ok(())
     }
 
-    /// Send `data` to the PTY exactly as given.
+    /// Send `data` to the PTY.
+    ///
+    /// One transformation is applied, matching what a real terminal does: while
+    /// the program has DECCKM (application cursor keys) enabled, a bare cursor
+    /// CSI (`ESC [ A`..`D`, `ESC [ H`/`ESC [ F`) is rewritten to its SS3 form
+    /// (`ESC O ...`), so arrows reach full-screen programs regardless of whether
+    /// the caller used [`write`](Self::write) or a key helper. All other bytes,
+    /// including modified arrows that carry parameters, pass through unchanged.
     pub fn write(&self, data: &str) -> Result<()> {
         self.runtime.block_on(reader::write(
             self.id,

@@ -72,3 +72,6 @@ packages/dashboard-core/src/dashboard/dashboard.html
 # ix-mcp / jupyter-collaboration writes this YDoc store into the server cwd at runtime
 .jupyter_ystore.db
 *.ystore.db
+
+# Stray command logs (e.g. a `cmd 2>err.log` that got swept up by `git add -A`)
+*.log
