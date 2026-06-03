@@ -50,7 +50,7 @@ let
       def "main statix" [] { statix check --ignore '.claude/worktrees' . }
       def "main deadnix" [] { deadnix --fail --no-lambda-pattern-names . }
       def "main ast-grep" [] { ast-grep scan --error . }
-      # Rule self-test: every fixture under nix-rules-tests must flag its
+      # Rule self-test: every fixture under ast-grep/nix/tests must flag its
       # invalid cases and ignore its valid ones. Catches rules whose pattern
       # silently stops matching (e.g. a bare `attr = val` that parses as an
       # expression, not a binding). --skip-snapshot-tests keeps it to match
