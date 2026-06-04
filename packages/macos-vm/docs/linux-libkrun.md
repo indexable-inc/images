@@ -27,6 +27,6 @@ libkrun needs `com.apple.security.hypervisor` on the running process (distinct f
 
 ## Known limitations
 
-- **GUI capture stays on Virtualization.framework.** The off-screen framebuffer capture and synthetic-input paths (`boot-linux-gui`, `drive-linux`) still use VZ's `VZVirtualMachineView` IOSurface, which libkrun has no direct equivalent for yet. Migrating them to libkrun's virtio-gpu is follow-up work; until then those two commands keep their VZ implementation.
+- **GUI capture still uses Virtualization.framework (not migrated yet).** The off-screen framebuffer capture and synthetic-input paths (`boot-linux-gui`, `drive-linux`) currently use VZ's `VZVirtualMachineView` IOSurface. This is a not-yet-done migration, not a libkrun limitation: libkrun-efi exports a display + input API for exactly this. `krun_add_display` + `krun_set_display_backend` register a host backend whose `configure_scanout`/`alloc_frame`/`present_frame` callbacks hand the host the guest's rendered scanout (the host allocates the frame buffer, so it owns the pixels, cleaner than reading VZ's IOSurface), and `krun_add_input_device` injects synthetic `krun_input_event`s. See libkrun's `examples/gui_vm`. Moving these paths to libkrun would also make the Linux GUI GPU-accelerated (Venus) instead of software (VZ's lavapipe).
 - **aarch64-darwin only.** libkrun-efi is packaged only for Apple Silicon.
 - **A guest is an EFI disk, not a kernel + initramfs.** The previous VZ `boot-linux` accepted a raw kernel + initramfs; libkrun-efi boots an EFI disk instead.
