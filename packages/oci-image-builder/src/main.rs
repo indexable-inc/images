@@ -73,6 +73,7 @@ struct Config {
     store_dir: String,
 }
 
+#[derive(Clone)]
 struct Layer {
     checksum: String,
     size: u64,
@@ -119,6 +120,16 @@ enum LayerSource {
     Base { archive: PathBuf, member: String },
     /// Copy the prebuilt customisation layer tar from its derivation output.
     Customisation { dir: PathBuf },
+}
+
+/// The cached description of a pulled base image: its layer descriptions plus
+/// the base container config to overlay under the final image config. Produced
+/// by `base-desc` from the immutable, digest-pinned base archive, so it is built
+/// once and reused across every image and rebuild that shares that base.
+#[derive(Serialize, Deserialize)]
+struct BaseDesc {
+    layers: Vec<LayerDesc>,
+    config: Value,
 }
 
 /// The result of streaming bytes through a hasher: the total byte count written
@@ -168,12 +179,231 @@ enum Whiteout {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let args = parse_args(env::args())?;
-    match args.mode {
-        Mode::Build => run_build(&args.input, &args.output, args.efficiency_policy),
-        Mode::Describe => run_describe(&args.input, &args.output, args.efficiency_policy),
-        Mode::Materialize => run_materialize(&args.input, &args.output),
+    let cli: Vec<String> = env::args().collect();
+
+    // Per-layer sharding lives outside the `Mode` enum: `layer-desc` describes a
+    // single store layer (the unit the Nix build puts in its own derivation) and
+    // `assemble-desc` stitches the precomputed store-layer descriptions into a
+    // full `image.json` without re-tarring them. Both take their own argument
+    // shape, so they are dispatched before the legacy positional parser.
+    match cli.get(1).map(String::as_str) {
+        Some("layer-desc") => return run_layer_desc(&cli[2..]),
+        Some("base-desc") => return run_base_desc(&cli[2..]),
+        Some("assemble-desc") => return run_assemble_desc(&cli[2..]),
+        _ => {}
     }
+
+    let parsed = parse_args(cli)?;
+    match parsed.mode {
+        Mode::Build => run_build(&parsed.input, &parsed.output, parsed.efficiency_policy),
+        Mode::Describe => run_describe(&parsed.input, &parsed.output, parsed.efficiency_policy),
+        Mode::Materialize => {
+            run_materialize(&parsed.input, &parsed.output, parsed.efficiency_policy)
+        }
+    }
+}
+
+/// Normalize an mtime that may arrive as RFC3339 (the `conf.json` shape) or as
+/// bare unix seconds, to the seconds string `write_tar_layer` expects.
+fn mtime_seconds(value: &str) -> String {
+    parse_time(value).map_or_else(|_| value.to_owned(), |time| time.timestamp().to_string())
+}
+
+/// Describe one store layer: tar the given store paths, hash the bytes, and
+/// write a single-layer JSON recording `{digest, diff_id, size}` plus the paths
+/// that regenerate it. The Nix build runs one of these per layer, so editing one
+/// store path re-tars only its layer and the rest are derivation cache hits. The
+/// digest matches what a one-shot `describe` records for the same inputs, which
+/// is what lets `assemble-desc` splice these in without re-tarring.
+fn run_layer_desc(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut uid: Option<String> = None;
+    let mut gid: Option<String> = None;
+    let mut mtime: Option<String> = None;
+    let mut positional: Vec<String> = Vec::new();
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--uid" => uid = Some(iter.next().ok_or("missing value for --uid")?.clone()),
+            "--gid" => gid = Some(iter.next().ok_or("missing value for --gid")?.clone()),
+            "--mtime" => mtime = Some(iter.next().ok_or("missing value for --mtime")?.clone()),
+            _ if arg.starts_with('-') => return Err(format!("unknown argument: {arg}").into()),
+            _ => positional.push(arg.clone()),
+        }
+    }
+
+    let uid: u64 = uid.ok_or("layer-desc: missing --uid")?.parse()?;
+    let gid: u64 = gid.ok_or("layer-desc: missing --gid")?.parse()?;
+    let mtime = mtime_seconds(&mtime.ok_or("layer-desc: missing --mtime")?);
+
+    if positional.is_empty() {
+        return Err("usage: oci-image-builder layer-desc --uid <n> --gid <n> --mtime <secs> <out.json> <store-path>...".into());
+    }
+    let out_path = PathBuf::from(positional.remove(0));
+    let paths = positional;
+
+    let work = tempdir()?;
+    let paths_file = work.path().join("paths");
+    fs::write(&paths_file, paths.join("\n"))?;
+    let tar_tmp = work.path().join("layer.tar");
+    let HashedBytes { size, checksum } = write_tar_layer(&tar_tmp, &paths_file, uid, gid, &mtime)?;
+
+    let desc = LayerDesc {
+        digest: format!("sha256:{checksum}"),
+        diff_id: format!("sha256:{checksum}"),
+        size,
+        source: LayerSource::Store { paths },
+    };
+    fs::write(out_path, serde_json::to_vec_pretty(&desc)?)?;
+    Ok(())
+}
+
+/// Assemble a full `image.json` from a layer plan plus the precomputed
+/// store-layer descriptions, without re-tarring the store layers. Base layers
+/// (pulled, immutable) and the customisation layer are hashed here because they
+/// are cheap and not the churn; the store layers carry the closure and arrive
+/// straight from their per-layer derivation outputs, in plan order. The output
+/// is byte-identical to a one-shot `describe`.
+fn run_base_desc(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.len() != 2 {
+        return Err("usage: oci-image-builder base-desc <base-archive.tar> <out base.json>".into());
+    }
+    let archive = PathBuf::from(&args[0]);
+    let out_path = PathBuf::from(&args[1]);
+
+    // Hash the base layers in a scratch dir that is dropped on return; only the
+    // digests and the base config are kept. The base archive is pinned by digest
+    // and immutable, so this derivation never reruns on a closure change.
+    let work = image_work()?;
+    let base = load_base_image(&archive, &work.layers_dir, &work.blobs_dir)?;
+    let layers = base
+        .layers
+        .iter()
+        .map(|layer| LayerDesc {
+            digest: format!("sha256:{}", layer.checksum),
+            diff_id: format!("sha256:{}", layer.checksum),
+            size: layer.size,
+            source: LayerSource::Base {
+                archive: archive.clone(),
+                member: layer.paths.first().cloned().unwrap_or_default(),
+            },
+        })
+        .collect();
+
+    let base_desc = BaseDesc {
+        layers,
+        config: base.config,
+    };
+    eprintln!("Describing {} base layer(s)...", base_desc.layers.len());
+    fs::write(out_path, serde_json::to_vec_pretty(&base_desc)?)?;
+    Ok(())
+}
+
+/// Stitch a full `image.json` from precomputed parts: the cached base
+/// description, one description per store layer, and the customisation layer.
+/// Nothing is re-tarred here. The store layers carry the closure and the churn,
+/// and arrive from their per-layer derivation outputs; the base is read from its
+/// own cached derivation. With every input cached this is pure JSON assembly, so
+/// a one-layer change costs one layer re-tar plus this near-instant stitch.
+fn run_assemble_desc(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut base_file: Option<PathBuf> = None;
+    let mut positional: Vec<PathBuf> = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--base" => {
+                base_file = Some(PathBuf::from(
+                    iter.next().ok_or("missing value for --base")?,
+                ));
+            }
+            _ if arg.starts_with('-') => return Err(format!("unknown argument: {arg}").into()),
+            _ => positional.push(PathBuf::from(arg)),
+        }
+    }
+    if positional.len() < 2 {
+        return Err("usage: oci-image-builder assemble-desc --base <base.json> <conf.json> <out image.json> <store-layer.json>...".into());
+    }
+    let conf_path = &positional[0];
+    let out_path = &positional[1];
+    let store_layer_files = &positional[2..];
+
+    let conf: Config = serde_json::from_reader(File::open(conf_path)?)?;
+    let created = parse_time(&conf.created)?.to_rfc3339_opts(SecondsFormat::Secs, false);
+    let mtime = parse_time(&conf.mtime)?.timestamp().to_string();
+
+    if store_layer_files.len() != conf.store_layers.len() {
+        return Err(format!(
+            "assemble-desc: got {} store-layer descriptions but the plan has {} store layers",
+            store_layer_files.len(),
+            conf.store_layers.len()
+        )
+        .into());
+    }
+
+    // Base layers (bottom of the stack) from the cached base description, or the
+    // empty set for a pure Nix closure with no `fromImage`.
+    let base: BaseDesc = match base_file {
+        Some(path) => serde_json::from_reader(File::open(path)?)?,
+        None => BaseDesc {
+            layers: Vec::new(),
+            config: Value::Null,
+        },
+    };
+    let mut layers = base.layers;
+
+    // Store layers in plan order. Verify each description really describes the
+    // planned paths rather than trusting the argument order.
+    for (file, plan_paths) in store_layer_files.iter().zip(&conf.store_layers) {
+        let desc: LayerDesc = serde_json::from_reader(File::open(file)?)?;
+        match &desc.source {
+            LayerSource::Store { paths } if paths == plan_paths => {}
+            LayerSource::Store { .. } => {
+                return Err(format!(
+                    "assemble-desc: store-layer {} paths do not match the plan",
+                    file.display()
+                )
+                .into());
+            }
+            _ => {
+                return Err(
+                    format!("assemble-desc: {} is not a store layer", file.display()).into(),
+                );
+            }
+        }
+        layers.push(desc);
+    }
+
+    // Customisation layer on top. It is a prebuilt derivation output carrying its
+    // own checksum, so describing it reads a file rather than tarring anything.
+    let cust = make_customisation_layer(0, &conf.customisation_layer, &image_work()?.blobs_dir)?;
+    layers.push(LayerDesc {
+        digest: format!("sha256:{}", cust.checksum),
+        diff_id: format!("sha256:{}", cust.checksum),
+        size: cust.size,
+        source: LayerSource::Customisation {
+            dir: PathBuf::from(&conf.customisation_layer),
+        },
+    });
+
+    let description = Description {
+        schema_version: 1,
+        architecture: conf.architecture,
+        created,
+        mtime,
+        uid: conf.uid,
+        gid: conf.gid,
+        store_dir: conf.store_dir,
+        config: merge_config(&conf.settings, &base.config),
+        layers,
+    };
+
+    eprintln!(
+        "Assembling image description from {} store layers...",
+        store_layer_files.len()
+    );
+    fs::write(out_path, serde_json::to_vec_pretty(&description)?)?;
+    eprintln!("Done.");
+    Ok(())
 }
 
 /// Layers and config assembled from a layer plan, plus the count of base layers
@@ -362,7 +592,11 @@ fn run_describe(
 /// reproduced from its `source` and verified against the recorded digest, so a
 /// description that no longer reproduces its bytes fails the build instead of
 /// shipping a wrong image.
-fn run_materialize(json_path: &Path, out_path: &Path) -> Result<(), Box<dyn Error>> {
+fn run_materialize(
+    json_path: &Path,
+    out_path: &Path,
+    efficiency_policy: Option<EfficiencyPolicy>,
+) -> Result<(), Box<dyn Error>> {
     let description: Description = serde_json::from_reader(File::open(json_path)?)?;
     let uid: u64 = description.uid.parse()?;
     let gid: u64 = description.gid.parse()?;
@@ -382,6 +616,21 @@ fn run_materialize(json_path: &Path, out_path: &Path) -> Result<(), Box<dyn Erro
             &work.blobs_dir,
         )?;
         layers.push(layer);
+    }
+
+    // The describe path shards layers across derivations and cannot run the
+    // cross-layer efficiency analysis, so enforce the policy here, where the
+    // regenerated bytes already exist at no extra tar cost. Base layers are
+    // pulled and immutable, so only the store layers we generate are policed.
+    if let Some(policy) = efficiency_policy {
+        let store_layers: Vec<Layer> = layers
+            .iter()
+            .zip(&description.layers)
+            .filter(|(_, desc)| matches!(desc.source, LayerSource::Store { .. }))
+            .map(|(layer, _)| layer.clone())
+            .collect();
+        let efficiency = analyze_layer_efficiency(&store_layers)?;
+        report_layer_efficiency(&efficiency, policy)?;
     }
 
     eprintln!("Adding manifests...");
@@ -1770,7 +2019,7 @@ mod tests {
         let image_json = work.path().join("image.json");
         run_describe(&conf, &image_json, None)?;
         let materialized = work.path().join("materialized.tar");
-        run_materialize(&image_json, &materialized)?;
+        run_materialize(&image_json, &materialized, None)?;
 
         let build_digests = oci_layer_digests(&built)?;
         let materialize_digests = oci_layer_digests(&materialized)?;
@@ -1784,6 +2033,105 @@ mod tests {
             .map(|layer| layer.digest.clone())
             .collect();
         assert_eq!(described, build_digests);
+        Ok(())
+    }
+
+    /// Sharding describe across `layer-desc` (one per store layer) and stitching
+    /// with `assemble-desc` must produce the exact same `image.json` bytes as a
+    /// one-shot `describe`. That byte-identity is what lets the Nix build cache
+    /// each layer in its own derivation without changing the materialized image.
+    #[test]
+    fn assemble_desc_matches_describe() -> Result<(), Box<dyn Error>> {
+        let work = tempdir()?;
+
+        let store_dir = work.path().join("store");
+        let pkg_a = store_dir.join("pkg-a");
+        let pkg_b = store_dir.join("pkg-b");
+        fs::create_dir_all(&pkg_a)?;
+        fs::create_dir_all(&pkg_b)?;
+        fs::write(pkg_a.join("file"), b"hello")?;
+        fs::write(pkg_b.join("file"), b"world")?;
+
+        let cust = work.path().join("cust");
+        make_customisation_dir(&cust)?;
+        let base = work.path().join("base.tar");
+        single_layer_base(&base)?;
+
+        let plan = serde_json::json!({
+            "architecture": "amd64",
+            "config": { "Cmd": ["/bin/sh"] },
+            "from_image": base.to_string_lossy(),
+            "store_layers": [[pkg_a.to_string_lossy()], [pkg_b.to_string_lossy()]],
+            "customisation_layer": cust.to_string_lossy(),
+            "created": "1970-01-01T00:00:01Z",
+            "mtime": "1970-01-01T00:00:01Z",
+            "uid": "0",
+            "gid": "0",
+            "store_dir": store_dir.to_string_lossy(),
+        });
+        let conf = work.path().join("conf.json");
+        fs::write(&conf, serde_json::to_vec(&plan)?)?;
+
+        // One-shot describe, the baseline.
+        let one_shot = work.path().join("one-shot.json");
+        run_describe(&conf, &one_shot, None)?;
+
+        // Per-layer: one `layer-desc` per store layer, then `assemble-desc`.
+        let layer_a = work.path().join("layer-a.json");
+        let layer_b = work.path().join("layer-b.json");
+        run_layer_desc(&[
+            "--uid".into(),
+            "0".into(),
+            "--gid".into(),
+            "0".into(),
+            "--mtime".into(),
+            "1970-01-01T00:00:01Z".into(),
+            layer_a.to_string_lossy().into_owned(),
+            pkg_a.to_string_lossy().into_owned(),
+        ])?;
+        run_layer_desc(&[
+            "--uid".into(),
+            "0".into(),
+            "--gid".into(),
+            "0".into(),
+            "--mtime".into(),
+            "1970-01-01T00:00:01Z".into(),
+            layer_b.to_string_lossy().into_owned(),
+            pkg_b.to_string_lossy().into_owned(),
+        ])?;
+
+        // Cache the base description (built once from the immutable base archive).
+        let base_desc = work.path().join("base.json");
+        run_base_desc(&[
+            base.to_string_lossy().into_owned(),
+            base_desc.to_string_lossy().into_owned(),
+        ])?;
+
+        let sharded = work.path().join("sharded.json");
+        run_assemble_desc(&[
+            "--base".into(),
+            base_desc.to_string_lossy().into_owned(),
+            conf.to_string_lossy().into_owned(),
+            sharded.to_string_lossy().into_owned(),
+            layer_a.to_string_lossy().into_owned(),
+            layer_b.to_string_lossy().into_owned(),
+        ])?;
+
+        assert_eq!(
+            fs::read(&one_shot)?,
+            fs::read(&sharded)?,
+            "sharded image.json must be byte-identical to one-shot describe"
+        );
+
+        // And the sharded description still materializes to the same image.
+        let mat_one = work.path().join("one.tar");
+        let mat_sharded = work.path().join("sharded.tar");
+        run_materialize(&one_shot, &mat_one, None)?;
+        run_materialize(&sharded, &mat_sharded, None)?;
+        assert_eq!(
+            oci_layer_digests(&mat_one)?,
+            oci_layer_digests(&mat_sharded)?
+        );
         Ok(())
     }
 
@@ -1812,7 +2160,7 @@ mod tests {
         let json = work.path().join("image.json");
         fs::write(&json, serde_json::to_vec(&description)?)?;
 
-        let result = run_materialize(&json, &work.path().join("out.tar"));
+        let result = run_materialize(&json, &work.path().join("out.tar"), None);
 
         assert!(
             result
