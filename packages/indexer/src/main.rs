@@ -53,7 +53,7 @@ struct Cli {
     #[arg(long, env = "INDEXER_PREFIX", default_value = "corpus")]
     prefix: String,
 
-    /// OpenTelemetry Collector OTLP/HTTP endpoint (e.g. `http://127.0.0.1:4318`);
+    /// `OpenTelemetry` Collector OTLP/HTTP endpoint (e.g. `http://127.0.0.1:4318`);
     /// enables the OTLP sink, which emits every non-code source's records to the
     /// collector as log records (RFC 0004 ingestion bus). Code is not emitted.
     #[arg(long, env = "INDEXER_OTLP_ENDPOINT")]

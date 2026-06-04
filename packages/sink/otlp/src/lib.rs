@@ -1,11 +1,11 @@
 //! OTLP/HTTP logs sink for the multi-source search corpus.
 //!
-//! Each source's [`Document`]s are emitted to an OpenTelemetry Collector as OTLP
-//! log records (`POST {endpoint}/v1/logs`, JSON encoding). This is the emitter
-//! half of the ingestion bus (RFC 0004): the collector receives one record per
-//! document and fans it out to its own exporters (ClickHouse for Grafana, S3 for
-//! the durable archive), so a new corpus consumer is a new collector exporter
-//! rather than a new sink compiled into every producer.
+//! Each source's [`Document`]s are emitted to an `OpenTelemetry` Collector as
+//! OTLP log records (`POST {endpoint}/v1/logs`, JSON encoding). This is the
+//! emitter half of the ingestion bus (RFC 0004): the collector receives one
+//! record per document and fans it out to its own exporters (`ClickHouse` for
+//! Grafana, S3 for the durable archive), so a new corpus consumer is a new
+//! collector exporter rather than a new sink compiled into every producer.
 //!
 //! The document's flat metadata is projected onto the log record so no
 //! information is lost crossing the bus: the body becomes the record body, the
@@ -230,10 +230,9 @@ impl KeyValue {
         let any = match value {
             serde_json::Value::String(string) => AnyValue::String(string.clone()),
             serde_json::Value::Bool(boolean) => AnyValue::Bool(*boolean),
-            serde_json::Value::Number(number) => match number.as_i64() {
-                Some(int) => AnyValue::Int(int.to_string()),
-                None => AnyValue::String(number.to_string()),
-            },
+            serde_json::Value::Number(number) => number
+                .as_i64()
+                .map_or_else(|| AnyValue::String(number.to_string()), |int| AnyValue::Int(int.to_string())),
             other => AnyValue::String(other.to_string()),
         };
         Self { key: key.to_owned(), value: any }
@@ -268,6 +267,12 @@ mod tests {
 
     use super::{Config, sync};
 
+    /// A throwaway receiver: its `endpoint` plus the bodies it captured.
+    struct Receiver {
+        endpoint: String,
+        captured: Arc<Mutex<Vec<serde_json::Value>>>,
+    }
+
     struct TestSource {
         docs: Vec<Document>,
     }
@@ -301,7 +306,7 @@ mod tests {
     }
 
     /// Stand up a throwaway OTLP/HTTP receiver, capturing every posted body.
-    async fn spawn_receiver() -> (String, Arc<Mutex<Vec<serde_json::Value>>>) {
+    async fn spawn_receiver() -> Receiver {
         let captured: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
         let app = Router::new()
             .route(
@@ -320,19 +325,19 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(listener, app).await.expect("serve");
         });
-        (format!("http://{addr}"), captured)
+        Receiver { endpoint: format!("http://{addr}"), captured }
     }
 
     #[tokio::test]
     async fn emits_one_record_per_document() {
-        let (endpoint, captured) = spawn_receiver().await;
+        let receiver = spawn_receiver().await;
         let adapter = TestSource { docs: vec![doc("a", "ls"), doc("b", "cd /tmp")] };
 
-        let report = sync(&adapter, &Config { endpoint }).await.expect("sync");
+        let report = sync(&adapter, &Config { endpoint: receiver.endpoint }).await.expect("sync");
         assert_eq!(report.records, 2);
         assert!(!report.skipped);
 
-        let bodies = captured.lock().expect("lock");
+        let bodies = receiver.captured.lock().expect("lock");
         let records = bodies[0]["resourceLogs"][0]["scopeLogs"][0]["logRecords"]
             .as_array()
             .expect("logRecords array");
@@ -349,11 +354,11 @@ mod tests {
 
     #[tokio::test]
     async fn empty_source_emits_nothing() {
-        let (endpoint, captured) = spawn_receiver().await;
+        let receiver = spawn_receiver().await;
         let adapter = TestSource { docs: vec![] };
-        let report = sync(&adapter, &Config { endpoint }).await.expect("sync");
+        let report = sync(&adapter, &Config { endpoint: receiver.endpoint }).await.expect("sync");
         assert!(report.skipped);
         assert_eq!(report.records, 0);
-        assert!(captured.lock().expect("lock").is_empty());
+        assert!(receiver.captured.lock().expect("lock").is_empty());
     }
 }
