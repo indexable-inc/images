@@ -7,9 +7,14 @@
 #
 # The base is pulled by digest (`dockerTools.pullImage`), so the build stays
 # reproducible and pulls no floating tag at build time. `streamLayeredImage`
-# plans the layers and `oci-image-builder` finalizes the OCI archive, the same
-# tool the NixOS path uses, now with `fromImage` support. ix still receives a
-# standard OCI archive, so nothing downstream of `ix image push` changes.
+# plans the layers, then the build runs in two stages around a content-addressed
+# description (see #679): `oci-image-builder describe` emits a tiny `image.json`
+# recording each layer's digest and how to regenerate it, and `materialize`
+# regenerates the OCI tar from that description, verifying every layer against
+# its recorded digest. The description is the durable artifact; the tar is
+# reproduced on demand, so ix still receives a standard OCI archive and nothing
+# downstream of `ix image push` changes. The description is exposed on the
+# result's `passthru.description`.
 {
   lib,
   pkgs,
@@ -82,13 +87,34 @@ in
           ]
         else
           [ "--skip-efficiency-check" ];
+
+      # The cheap, durable artifact: a content-addressed `image.json` that
+      # records every layer's digest and how to regenerate it, with no layer
+      # bytes written. The efficiency policy is enforced here, at describe time.
+      description =
+        pkgs.runCommand "${name}-image.json"
+          {
+            nativeBuildInputs = [ pkgs.oci-image-builder ];
+            passthru = { inherit stream baseImage; };
+          }
+          ''
+            oci-image-builder describe ${
+              lib.escapeShellArgs (efficiencyArgs ++ [ "${stream.passthru.conf}" ])
+            } "$out"
+          '';
     in
+    # The OCI tar, regenerated from the description on demand. Kept as the
+    # default output so `ix image push` is unchanged; the description is the
+    # input, so the build graph is describe -> materialize. The description is
+    # reachable via `passthru` for callers that want the small artifact directly.
     pkgs.runCommand "${name}-oci.tar"
       {
         nativeBuildInputs = [ pkgs.oci-image-builder ];
-        passthru = { inherit stream baseImage; };
+        passthru = {
+          inherit stream baseImage description;
+        };
       }
       ''
-        oci-image-builder ${lib.escapeShellArgs (efficiencyArgs ++ [ "${stream.passthru.conf}" ])} "$out"
+        oci-image-builder materialize ${description} "$out"
       '';
 }

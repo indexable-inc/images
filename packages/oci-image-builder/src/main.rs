@@ -1,5 +1,5 @@
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet, btree_map::Entry};
@@ -17,9 +17,26 @@ const DEFAULT_MAX_WASTED_PERCENT: f64 = 0.20;
 const DEFAULT_EFFICIENCY_TOP_PATHS: usize = 10;
 
 struct Args {
-    conf_path: PathBuf,
-    out_path: PathBuf,
+    mode: Mode,
+    input: PathBuf,
+    output: PathBuf,
     efficiency_policy: Option<EfficiencyPolicy>,
+}
+
+/// What the builder does with its input.
+///
+/// - `Build`: a layer plan (`conf.json`) to a finished OCI tar. The legacy
+///   one-shot, kept so the NixOS image path is unchanged.
+/// - `Describe`: a layer plan to an `image.json` description, writing no layer
+///   blobs. The durable, content-addressed artifact.
+/// - `Materialize`: an `image.json` back to a finished OCI tar, regenerating
+///   each layer's bytes deterministically and verifying them against the
+///   description's digests.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Build,
+    Describe,
+    Materialize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -61,6 +78,47 @@ struct Layer {
     size: u64,
     paths: Vec<String>,
     tar_path: PathBuf,
+}
+
+/// The content-addressed description of an image: everything needed to
+/// regenerate the exact OCI archive without storing any layer bytes. This is
+/// the artifact `describe` emits and `materialize` consumes. Layer bytes are
+/// reproduced on demand from `source`; only digests and sizes are recorded.
+#[derive(Serialize, Deserialize)]
+struct Description {
+    schema_version: u32,
+    architecture: String,
+    created: String,
+    mtime: String,
+    uid: String,
+    gid: String,
+    store_dir: String,
+    config: Value,
+    layers: Vec<LayerDesc>,
+}
+
+/// One layer in a `Description`: its identity (`digest`/`diff_id`/`size`) plus
+/// the `source` that regenerates its bytes byte-for-byte. For uncompressed tar
+/// layers the blob digest equals the diff id.
+#[derive(Serialize, Deserialize)]
+struct LayerDesc {
+    digest: String,
+    diff_id: String,
+    size: u64,
+    #[serde(flatten)]
+    source: LayerSource,
+}
+
+/// How a layer's bytes are regenerated at materialize time.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum LayerSource {
+    /// Re-tar a set of Nix store paths (deterministic from the paths).
+    Store { paths: Vec<String> },
+    /// Copy a layer member out of a base docker-archive.
+    Base { archive: PathBuf, member: String },
+    /// Copy the prebuilt customisation layer tar from its derivation output.
+    Customisation { dir: PathBuf },
 }
 
 /// The result of streaming bytes through a hasher: the total byte count written
@@ -111,68 +169,312 @@ enum Whiteout {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = parse_args(env::args())?;
+    match args.mode {
+        Mode::Build => run_build(&args.input, &args.output, args.efficiency_policy),
+        Mode::Describe => run_describe(&args.input, &args.output, args.efficiency_policy),
+        Mode::Materialize => run_materialize(&args.input, &args.output),
+    }
+}
 
-    let conf: Config = serde_json::from_reader(File::open(&args.conf_path)?)?;
+/// Layers and config assembled from a layer plan, plus the count of base layers
+/// at the bottom (excluded from efficiency analysis) and the `source` for each
+/// layer so the same set can be serialized into a `Description`.
+struct Assembled {
+    layers: Vec<Layer>,
+    sources: Vec<LayerSource>,
+    settings: Value,
+    base_layer_count: usize,
+}
 
-    let created = parse_time(&conf.created)?.to_rfc3339_opts(SecondsFormat::Secs, false);
-    let mtime = parse_time(&conf.mtime)?.timestamp().to_string();
-    let work = tempdir()?;
-    let image_dir = work.path().join("image");
+/// Create the OCI image scaffold (`oci-layout`, `blobs/sha256`, a scratch layer
+/// dir) under a fresh temp tree, returning it so the caller can populate it.
+struct ImageWork {
+    _root: tempfile::TempDir,
+    image_dir: PathBuf,
+    blobs_dir: PathBuf,
+    layers_dir: PathBuf,
+}
+
+fn image_work() -> Result<ImageWork, Box<dyn Error>> {
+    let root = tempdir()?;
+    let image_dir = root.path().join("image");
     let blobs_dir = image_dir.join("blobs/sha256");
-    let layers_dir = work.path().join("layers");
+    let layers_dir = root.path().join("layers");
     fs::create_dir_all(&blobs_dir)?;
     fs::create_dir_all(&layers_dir)?;
     fs::write(
         image_dir.join("oci-layout"),
         r#"{"imageLayoutVersion":"1.0.0"}"#,
     )?;
+    Ok(ImageWork {
+        _root: root,
+        image_dir,
+        blobs_dir,
+        layers_dir,
+    })
+}
 
-    // A non-Nix base (`fromImage`) contributes its layers at the bottom of the
-    // stack and its environment to the final config. With no base, the image is
-    // a pure Nix closure as before.
-    let base = load_base(&conf, &layers_dir, &blobs_dir)?;
-
+/// Build every layer from a layer plan into content-addressed blobs, recording
+/// how each layer regenerates. A non-Nix base (`fromImage`) contributes its
+/// layers at the bottom of the stack and its environment to the final config;
+/// with no base the image is a pure Nix closure.
+fn assemble(
+    conf: &Config,
+    mtime: &str,
+    layers_dir: &Path,
+    blobs_dir: &Path,
+) -> Result<Assembled, Box<dyn Error>> {
+    let base = load_base(conf, layers_dir, blobs_dir)?;
     let base_layer_count = base.layers.len();
+    let from_image = conf.from_image.as_str().map(PathBuf::from);
+
+    let mut sources: Vec<LayerSource> = Vec::new();
+    for layer in &base.layers {
+        let archive = from_image
+            .clone()
+            .ok_or("oci-image-builder: base layer present without a from_image path")?;
+        sources.push(LayerSource::Base {
+            archive,
+            member: layer.paths.first().cloned().unwrap_or_default(),
+        });
+    }
+
     let mut layers = base.layers;
     for (index, paths) in conf.store_layers.iter().enumerate() {
         layers.push(make_store_layer(
             base_layer_count + index + 1,
             paths,
-            &conf,
-            &mtime,
-            &layers_dir,
-            &blobs_dir,
+            conf,
+            mtime,
+            layers_dir,
+            blobs_dir,
         )?);
+        sources.push(LayerSource::Store {
+            paths: paths.clone(),
+        });
     }
 
     layers.push(make_customisation_layer(
         base_layer_count + conf.store_layers.len() + 1,
         &conf.customisation_layer,
-        &blobs_dir,
+        blobs_dir,
     )?);
+    sources.push(LayerSource::Customisation {
+        dir: PathBuf::from(&conf.customisation_layer),
+    });
 
-    if let Some(policy) = args.efficiency_policy {
-        // Only police the layers we generate. Base layers are pulled and
-        // immutable, so their internal duplication is not ours to fix and
-        // would otherwise fail every image built on a fat base.
-        let efficiency = analyze_layer_efficiency(&layers[base_layer_count..])?;
+    Ok(Assembled {
+        layers,
+        sources,
+        settings: merge_config(&conf.settings, &base.config),
+        base_layer_count,
+    })
+}
+
+/// Only police the layers we generate. Base layers are pulled and immutable, so
+/// their internal duplication is not ours to fix and would otherwise fail every
+/// image built on a fat base.
+fn check_efficiency(
+    assembled: &Assembled,
+    policy: Option<EfficiencyPolicy>,
+) -> Result<(), Box<dyn Error>> {
+    if let Some(policy) = policy {
+        let efficiency = analyze_layer_efficiency(&assembled.layers[assembled.base_layer_count..])?;
         report_layer_efficiency(&efficiency, policy)?;
+    }
+    Ok(())
+}
+
+/// Legacy one-shot: layer plan straight to a finished OCI tar.
+fn run_build(
+    conf_path: &Path,
+    out_path: &Path,
+    efficiency_policy: Option<EfficiencyPolicy>,
+) -> Result<(), Box<dyn Error>> {
+    let conf: Config = serde_json::from_reader(File::open(conf_path)?)?;
+    let created = parse_time(&conf.created)?.to_rfc3339_opts(SecondsFormat::Secs, false);
+    let mtime = parse_time(&conf.mtime)?.timestamp().to_string();
+
+    let work = image_work()?;
+    let assembled = assemble(&conf, &mtime, &work.layers_dir, &work.blobs_dir)?;
+    check_efficiency(&assembled, efficiency_policy)?;
+
+    eprintln!("Adding manifests...");
+    write_metadata(
+        &conf.architecture,
+        &assembled.settings,
+        &created,
+        &assembled.layers,
+        &work.image_dir,
+        &mtime,
+        out_path,
+    )?;
+    eprintln!("Done.");
+    Ok(())
+}
+
+/// Emit a content-addressed `image.json` and discard the layer bytes. The
+/// blobs are hashed (and the efficiency policy enforced) in a scratch dir that
+/// is dropped on return, so nothing multi-gigabyte lands in the store.
+fn run_describe(
+    conf_path: &Path,
+    out_path: &Path,
+    efficiency_policy: Option<EfficiencyPolicy>,
+) -> Result<(), Box<dyn Error>> {
+    let conf: Config = serde_json::from_reader(File::open(conf_path)?)?;
+    let created = parse_time(&conf.created)?.to_rfc3339_opts(SecondsFormat::Secs, false);
+    let mtime = parse_time(&conf.mtime)?.timestamp().to_string();
+
+    let work = image_work()?;
+    let assembled = assemble(&conf, &mtime, &work.layers_dir, &work.blobs_dir)?;
+    check_efficiency(&assembled, efficiency_policy)?;
+
+    let layers = assembled
+        .layers
+        .iter()
+        .zip(assembled.sources)
+        .map(|(layer, source)| LayerDesc {
+            digest: format!("sha256:{}", layer.checksum),
+            diff_id: format!("sha256:{}", layer.checksum),
+            size: layer.size,
+            source,
+        })
+        .collect();
+    let description = Description {
+        schema_version: 1,
+        architecture: conf.architecture,
+        created,
+        mtime,
+        uid: conf.uid,
+        gid: conf.gid,
+        store_dir: conf.store_dir,
+        config: assembled.settings,
+        layers,
+    };
+
+    eprintln!("Writing image description...");
+    fs::write(out_path, serde_json::to_vec_pretty(&description)?)?;
+    eprintln!("Done.");
+    Ok(())
+}
+
+/// Regenerate the OCI tar from an `image.json`. Each layer's bytes are
+/// reproduced from its `source` and verified against the recorded digest, so a
+/// description that no longer reproduces its bytes fails the build instead of
+/// shipping a wrong image.
+fn run_materialize(json_path: &Path, out_path: &Path) -> Result<(), Box<dyn Error>> {
+    let description: Description = serde_json::from_reader(File::open(json_path)?)?;
+    let uid: u64 = description.uid.parse()?;
+    let gid: u64 = description.gid.parse()?;
+
+    let work = image_work()?;
+    let mut layers = Vec::with_capacity(description.layers.len());
+    for (index, desc) in description.layers.iter().enumerate() {
+        let expected = desc.digest.strip_prefix("sha256:").unwrap_or(&desc.digest);
+        eprintln!("Materializing layer {} ({expected})", index + 1);
+        let layer = regenerate_layer(
+            desc,
+            expected,
+            &description.mtime,
+            uid,
+            gid,
+            &work.layers_dir,
+            &work.blobs_dir,
+        )?;
+        layers.push(layer);
     }
 
     eprintln!("Adding manifests...");
-    let settings = merge_config(&conf.settings, &base.config);
     write_metadata(
-        &conf,
-        &settings,
-        &created,
+        &description.architecture,
+        &description.config,
+        &description.created,
         &layers,
-        &image_dir,
-        &mtime,
-        &args.out_path,
+        &work.image_dir,
+        &description.mtime,
+        out_path,
     )?;
     eprintln!("Done.");
-
     Ok(())
+}
+
+/// Reproduce one layer's bytes from its `source`, write the blob, and check the
+/// resulting digest matches the description.
+fn regenerate_layer(
+    desc: &LayerDesc,
+    expected: &str,
+    mtime: &str,
+    uid: u64,
+    gid: u64,
+    layers_dir: &Path,
+    blobs_dir: &Path,
+) -> Result<Layer, Box<dyn Error>> {
+    let layer = match &desc.source {
+        LayerSource::Store { paths } => {
+            let paths_file = layers_dir.join(format!("{expected}.paths"));
+            fs::write(&paths_file, paths.join("\n"))?;
+            let tmp = layers_dir.join(format!("{expected}.tar"));
+            let HashedBytes { size, checksum } =
+                write_tar_layer(&tmp, &paths_file, uid, gid, mtime)?;
+            let tar_path = blobs_dir.join(&checksum);
+            fs::rename(&tmp, &tar_path)?;
+            Layer {
+                checksum,
+                size,
+                paths: paths.clone(),
+                tar_path,
+            }
+        }
+        LayerSource::Base { archive, member } => {
+            regenerate_base_member(archive, member, layers_dir, blobs_dir)?
+        }
+        LayerSource::Customisation { dir } => {
+            make_customisation_layer(0, &dir.to_string_lossy(), blobs_dir)?
+        }
+    };
+
+    if layer.checksum != expected {
+        return Err(format!(
+            "oci-image-builder: materialized layer digest mismatch: \
+             description {expected}, regenerated {}",
+            layer.checksum
+        )
+        .into());
+    }
+    Ok(layer)
+}
+
+/// Copy a single layer member out of a base docker-archive into a blob.
+fn regenerate_base_member(
+    archive: &Path,
+    member: &str,
+    layers_dir: &Path,
+    blobs_dir: &Path,
+) -> Result<Layer, Box<dyn Error>> {
+    for entry in tar::Archive::new(File::open(archive)?).entries()? {
+        let mut entry = entry?;
+        let name = entry.path()?.to_string_lossy().into_owned();
+        if name != member {
+            continue;
+        }
+        let tmp = layers_dir.join(format!("base-{}", sha256_bytes(member.as_bytes())));
+        let mut writer = HashingWriter::new(File::create(&tmp)?);
+        io::copy(&mut entry, &mut writer)?;
+        let HashedBytes { size, checksum } = writer.finalize();
+        let tar_path = blobs_dir.join(&checksum);
+        fs::rename(&tmp, &tar_path)?;
+        return Ok(Layer {
+            checksum,
+            size,
+            paths: vec![member.to_owned()],
+            tar_path,
+        });
+    }
+    Err(format!(
+        "oci-image-builder: base member {member} not found in {}",
+        archive.display()
+    )
+    .into())
 }
 
 /// A non-Nix base image resolved into content-addressed layers plus the base
@@ -419,7 +721,16 @@ where
     let program = args
         .first()
         .map_or_else(|| "oci-image-builder".to_owned(), String::to_owned);
-    let mut iter = args.into_iter().skip(1);
+
+    // An optional leading subcommand selects the mode; without one the tool runs
+    // the legacy plan-to-tar build so the NixOS image path is unchanged.
+    let (mode, skip) = match args.get(1).map(String::as_str) {
+        Some("describe") => (Mode::Describe, 2),
+        Some("materialize") => (Mode::Materialize, 2),
+        _ => (Mode::Build, 1),
+    };
+
+    let mut iter = args.into_iter().skip(skip);
     let mut efficiency_policy = EfficiencyPolicy::default();
     let mut efficiency_enabled = true;
     let mut positional = Vec::new();
@@ -457,14 +768,15 @@ where
 
     if positional.len() != 2 {
         return Err(format!(
-            "usage: {program} [--skip-efficiency-check] [--min-efficiency <ratio>] [--max-wasted-bytes <bytes>] [--max-wasted-percent <ratio>] [--efficiency-top-paths <count>] <conf.json> <out.tar>"
+            "usage: {program} [describe|materialize] [--skip-efficiency-check] [--min-efficiency <ratio>] [--max-wasted-bytes <bytes>] [--max-wasted-percent <ratio>] [--efficiency-top-paths <count>] <input> <output>"
         )
         .into());
     }
 
     Ok(Args {
-        conf_path: positional.remove(0),
-        out_path: positional.remove(0),
+        mode,
+        input: positional.remove(0),
+        output: positional.remove(0),
         efficiency_policy: efficiency_enabled.then_some(efficiency_policy),
     })
 }
@@ -542,7 +854,9 @@ fn make_store_layer(
     fs::write(&paths_file, paths.join("\n"))?;
 
     let layer_tmp = layers_dir.join(format!("{number}.layer.tar"));
-    let HashedBytes { size, checksum } = write_tar_layer(&layer_tmp, &paths_file, conf, mtime)?;
+    let uid: u64 = conf.uid.parse()?;
+    let gid: u64 = conf.gid.parse()?;
+    let HashedBytes { size, checksum } = write_tar_layer(&layer_tmp, &paths_file, uid, gid, mtime)?;
     let tar_path = blobs_dir.join(&checksum);
     fs::rename(&layer_tmp, &tar_path)?;
 
@@ -829,7 +1143,7 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 fn write_metadata(
-    conf: &Config,
+    architecture: &str,
     settings: &Value,
     created: &str,
     layers: &[Layer],
@@ -852,7 +1166,7 @@ fn write_metadata(
         .collect();
     let image_config = serde_json::json!({
         "created": created,
-        "architecture": conf.architecture,
+        "architecture": architecture,
         "os": "linux",
         "config": settings,
         "rootfs": {
@@ -939,12 +1253,11 @@ fn write_metadata(
 fn write_tar_layer(
     layer_path: &Path,
     paths_file: &Path,
-    conf: &Config,
+    uid: u64,
+    gid: u64,
     mtime: &str,
 ) -> Result<HashedBytes, Box<dyn Error>> {
     let mtime_secs: u64 = mtime.parse()?;
-    let uid: u64 = conf.uid.parse()?;
-    let gid: u64 = conf.gid.parse()?;
 
     let mut paths: Vec<PathBuf> = vec![PathBuf::from("/nix"), PathBuf::from("/nix/store")];
     let paths_text = fs::read_to_string(paths_file)?;
@@ -1358,5 +1671,154 @@ mod tests {
     fn merge_config_without_base_is_identity() {
         let settings = serde_json::json!({ "Env": ["A=1"] });
         assert_eq!(merge_config(&settings, &Value::Null), settings);
+    }
+
+    /// Read a member out of a tar archive by exact name.
+    fn read_member(tar_path: &Path, name: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+        for entry in tar::Archive::new(File::open(tar_path)?).entries()? {
+            let mut entry = entry?;
+            if entry.path()?.to_string_lossy() == name {
+                let mut buf = Vec::new();
+                entry.read_to_end(&mut buf)?;
+                return Ok(buf);
+            }
+        }
+        Err(format!("member {name} not found in {}", tar_path.display()).into())
+    }
+
+    /// The ordered layer digests from an OCI archive's manifest.
+    fn oci_layer_digests(tar_path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+        let index: Value = serde_json::from_slice(&read_member(tar_path, "index.json")?)?;
+        let manifest_digest = index["manifests"][0]["digest"].as_str().unwrap();
+        let blob = format!(
+            "blobs/sha256/{}",
+            manifest_digest.strip_prefix("sha256:").unwrap()
+        );
+        let manifest: Value = serde_json::from_slice(&read_member(tar_path, &blob)?)?;
+        Ok(manifest["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|layer| layer["digest"].as_str().unwrap().to_owned())
+            .collect())
+    }
+
+    fn make_customisation_dir(dir: &Path) -> Result<(), Box<dyn Error>> {
+        fs::create_dir_all(dir)?;
+        let tar = layer_tar(&[("app/run", b"hi")]);
+        fs::write(dir.join("layer.tar"), &tar)?;
+        fs::write(dir.join("checksum"), sha256_bytes(&tar))?;
+        Ok(())
+    }
+
+    fn single_layer_base(path: &Path) -> Result<(), Box<dyn Error>> {
+        let layer = layer_tar(&[("usr/bin/a", b"aaa")]);
+        let sha = sha256_bytes(&layer);
+        let config = serde_json::json!({
+            "rootfs": { "type": "layers", "diff_ids": [format!("sha256:{sha}")] },
+            "config": {},
+        });
+        let config_bytes = serde_json::to_vec(&config)?;
+        let config_name = format!("{}.json", sha256_bytes(&config_bytes));
+        let manifest = serde_json::json!([{ "Config": config_name, "Layers": ["a.tar"] }]);
+        write_docker_archive(
+            path,
+            &[
+                ("manifest.json", serde_json::to_vec(&manifest)?),
+                (config_name.as_str(), config_bytes),
+                ("a.tar", layer),
+            ],
+        )
+    }
+
+    /// The core invariant: `describe` then `materialize` reproduces exactly the
+    /// layers a one-shot `build` produces, across all three source kinds (a
+    /// pulled base layer, a Nix store layer, the customisation layer).
+    #[test]
+    fn describe_then_materialize_matches_build() -> Result<(), Box<dyn Error>> {
+        let work = tempdir()?;
+
+        let store_dir = work.path().join("store");
+        let pkg = store_dir.join("pkg");
+        fs::create_dir_all(&pkg)?;
+        fs::write(pkg.join("file"), b"hello")?;
+
+        let cust = work.path().join("cust");
+        make_customisation_dir(&cust)?;
+
+        let base = work.path().join("base.tar");
+        single_layer_base(&base)?;
+
+        let plan = serde_json::json!({
+            "architecture": "amd64",
+            "config": { "Cmd": ["/bin/sh"] },
+            "from_image": base.to_string_lossy(),
+            "store_layers": [[pkg.to_string_lossy()]],
+            "customisation_layer": cust.to_string_lossy(),
+            "created": "1970-01-01T00:00:01Z",
+            "mtime": "1970-01-01T00:00:01Z",
+            "uid": "0",
+            "gid": "0",
+            "store_dir": store_dir.to_string_lossy(),
+        });
+        let conf = work.path().join("conf.json");
+        fs::write(&conf, serde_json::to_vec(&plan)?)?;
+
+        let built = work.path().join("build.tar");
+        run_build(&conf, &built, None)?;
+
+        let image_json = work.path().join("image.json");
+        run_describe(&conf, &image_json, None)?;
+        let materialized = work.path().join("materialized.tar");
+        run_materialize(&image_json, &materialized)?;
+
+        let build_digests = oci_layer_digests(&built)?;
+        let materialize_digests = oci_layer_digests(&materialized)?;
+        assert_eq!(build_digests.len(), 3, "base + store + customisation");
+        assert_eq!(build_digests, materialize_digests);
+
+        let description: Description = serde_json::from_slice(&fs::read(&image_json)?)?;
+        let described: Vec<String> = description
+            .layers
+            .iter()
+            .map(|layer| layer.digest.clone())
+            .collect();
+        assert_eq!(described, build_digests);
+        Ok(())
+    }
+
+    #[test]
+    fn materialize_rejects_tampered_digest() -> Result<(), Box<dyn Error>> {
+        let work = tempdir()?;
+        let cust = work.path().join("cust");
+        make_customisation_dir(&cust)?;
+
+        let description = Description {
+            schema_version: 1,
+            architecture: "amd64".to_owned(),
+            created: "1970-01-01T00:00:01Z".to_owned(),
+            mtime: "1".to_owned(),
+            uid: "0".to_owned(),
+            gid: "0".to_owned(),
+            store_dir: "/nix/store".to_owned(),
+            config: serde_json::json!({}),
+            layers: vec![LayerDesc {
+                digest: "sha256:deadbeef".to_owned(),
+                diff_id: "sha256:deadbeef".to_owned(),
+                size: 0,
+                source: LayerSource::Customisation { dir: cust },
+            }],
+        };
+        let json = work.path().join("image.json");
+        fs::write(&json, serde_json::to_vec(&description)?)?;
+
+        let result = run_materialize(&json, &work.path().join("out.tar"));
+
+        assert!(
+            result
+                .err()
+                .is_some_and(|error| error.to_string().contains("digest mismatch"))
+        );
+        Ok(())
     }
 }

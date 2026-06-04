@@ -526,6 +526,14 @@ let
       }
     )
   ) (ix.discoverTree { root = paths.examples + "/_non-nix-oci"; });
+
+  # The content-addressed `image.json` for each non-Nix example, surfaced as its
+  # own package so the small artifact is buildable directly (`nix build
+  # .#non-nix-ubuntu-description`) and cached independently of the materialized
+  # tar it regenerates. See #679.
+  nonNixExampleDescriptions = lib.mapAttrs' (
+    name: image: lib.nameValuePair "${name}-description" image.passthru.description
+  ) nonNixExampleImages;
 in
 {
   packages =
@@ -570,6 +578,7 @@ in
     // repoFlakePackages
     // examplePackages
     // nonNixExampleImages
+    // nonNixExampleDescriptions
     // crossPackages
     // healthChecks.lifecyclePackages;
 
