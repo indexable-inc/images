@@ -171,6 +171,12 @@
         # Declarative-but-writable JSON config files (last-applied 3-way merge),
         # for config an app rewrites at runtime. See lib/mutable-json.nix.
         mutable-json = ix.mutableJson.homeModule;
+        # Reusable workstation module (macOS): declare Raycast Focus session
+        # defaults (title, filter mode, duration) and have them written to the
+        # com.raycast.macos defaults domain at switch time. Import it and set
+        # `programs.raycast.focus = { enable = true; ... }`. See
+        # modules/home/raycast.nix.
+        raycast = ./modules/home/raycast.nix;
         # Personal-but-shareable workstation module for github:andrewgazelka: the
         # ix.dev downtime watcher + boss bar overlay + the shared say-detached
         # sound helper, all as portable services. Closed over the per-system
