@@ -22,7 +22,9 @@
 //! re-exec (see `main.rs`), which would otherwise break a relative firmware
 //! lookup.
 
+#[cfg(have_libkrun)]
 use std::ffi::CString;
+#[cfg(have_libkrun)]
 use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -34,6 +36,12 @@ use crate::imp::Error;
 // `i32`: >= 0 success, negative is `-errno`. `#[link(name = "krun")]` resolves
 // to `libkrun-efi.dylib` through the symlink chain the nix package provides; the
 // search path and rpath come from the workspace build (see lib/rust/workspace.nix).
+//
+// The whole libkrun surface is gated on the `have_libkrun` cfg, which the build
+// script sets only when building natively on aarch64-darwin (where libkrun-efi
+// is available). A Linux->darwin cross build compiles the crate without it (see
+// the stub `boot_linux` at the bottom of this file).
+#[cfg(have_libkrun)]
 #[link(name = "krun")]
 unsafe extern "C" {
     fn krun_set_log_level(level: u32) -> i32;
@@ -52,16 +60,21 @@ unsafe extern "C" {
     fn krun_start_enter(ctx_id: u32) -> i32;
 }
 
+#[cfg(have_libkrun)]
 const KRUN_DISK_FORMAT_RAW: u32 = 0;
 // virtio-gpu Venus, no virgl: the flag set krunkit uses on macOS for a
 // MoltenVK-backed Vulkan device (libkrun.h VIRGLRENDERER_VENUS | _NO_VIRGL).
+#[cfg(have_libkrun)]
 const VIRGLRENDERER_VENUS: u32 = 1 << 6;
+#[cfg(have_libkrun)]
 const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
 // GPU shared-memory (vRAM) window. 1 GiB matches krunkit's default.
+#[cfg(have_libkrun)]
 const GPU_SHM_BYTES: u64 = 1 << 30;
 
 /// The OVMF/EDK2 firmware the EFI guest boots, embedded at build time so the
 /// binary is self-contained (survives the self-sign re-exec).
+#[cfg(have_libkrun)]
 const FIRMWARE: &[u8] = include_bytes!(env!("KRUN_EFI_FIRMWARE"));
 
 /// Parameters for booting a Linux guest under libkrun. Named fields (like
@@ -84,6 +97,7 @@ pub struct BootLinux {
     pub timeout: Duration,
 }
 
+#[cfg(have_libkrun)]
 fn cstr(s: &str) -> Result<CString, Error> {
     CString::new(s).map_err(|_| Error::Bundle {
         message: format!("path {s:?} contains a NUL byte"),
@@ -92,6 +106,7 @@ fn cstr(s: &str) -> Result<CString, Error> {
 
 /// Write the embedded firmware to a per-user cache file (once) and return its
 /// path, since `krun_set_firmware` takes a path, not bytes.
+#[cfg(have_libkrun)]
 fn firmware_path() -> Result<PathBuf, Error> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -131,6 +146,7 @@ fn firmware_path() -> Result<PathBuf, Error> {
     Ok(path)
 }
 
+#[cfg(have_libkrun)]
 fn check(op: &str, code: i32) -> Result<(), Error> {
     if code >= 0 {
         Ok(())
@@ -142,9 +158,22 @@ fn check(op: &str, code: i32) -> Result<(), Error> {
     }
 }
 
+/// Stub for builds without the libkrun backend (Linux->darwin cross builds,
+/// where libkrun-efi is unavailable). Returns a typed error rather than silently
+/// doing nothing, so a caller learns the backend was not compiled in.
+#[cfg(not(have_libkrun))]
+pub fn boot_linux(_boot: BootLinux) -> Result<(), Error> {
+    Err(Error::Libkrun {
+        op: "boot-linux: libkrun backend not built in (needs a native aarch64-darwin build)"
+            .to_owned(),
+        code: 0,
+    })
+}
+
 /// Boot a Linux guest under libkrun and run it until it powers off or the
 /// timeout elapses. Does not return on success: `krun_start_enter` takes over
 /// the process and `exit()`s with the guest's exit code when the VM stops.
+#[cfg(have_libkrun)]
 pub fn boot_linux(boot: BootLinux) -> Result<(), Error> {
     if !boot.disk.exists() {
         return Err(Error::Disk {

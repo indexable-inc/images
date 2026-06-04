@@ -85,21 +85,22 @@ let
     target:
     if target == null then workspacePkgs.stdenv.hostPlatform.isLinux else lib.hasInfix "-linux-" target;
 
-  # `macos-vm` links libkrun-efi for its Linux-guest backend, which nixpkgs only
-  # provides on aarch64-darwin. Gate the libkrun plumbing on that target so other
-  # platforms (Linux, x86_64-darwin) never force the package and the Linux stub
-  # graph stays clean, the same target-scoped shape as the ALSA gating above.
-  targetIsAarch64Darwin =
-    target:
-    if target == null then
-      workspacePkgs.stdenv.hostPlatform.isDarwin && workspacePkgs.stdenv.hostPlatform.isAarch64
-    else
-      target == "aarch64-apple-darwin";
+  # `macos-vm` links libkrun-efi for its Linux-guest backend. nixpkgs only
+  # provides libkrun-efi when the *build host* is aarch64-darwin (it is not
+  # cross-buildable from Linux), so gate on the build host, NOT the target: a
+  # Linux->darwin cross build (the `cross-darwin-smoke` check) must never force
+  # `workspacePkgs.libkrun-efi`, which would refuse to evaluate on the Linux host.
+  # When this is false, `macos-vm`'s build script omits the firmware env, so the
+  # crate compiles without the libkrun backend (see its `build.rs`/`linuxkrun.rs`).
+  buildHostIsAarch64Darwin =
+    workspacePkgs.stdenv.hostPlatform.isDarwin && workspacePkgs.stdenv.hostPlatform.isAarch64;
 
   # libkrun-efi lib dir and the OVMF firmware blob it embeds (the latter lives in
   # the libkrun source tree). `macos-vm`'s build script embeds the firmware via
   # `KRUN_EFI_FIRMWARE` and links `-lkrun`; the search path/rpath are injected
   # below because a build script's link-search does not reach the final unit link.
+  # Only referenced under `buildHostIsAarch64Darwin`, so non-darwin hosts never
+  # force the (host-only) package.
   libkrunEfiLibDir = "${workspacePkgs.libkrun-efi}/lib";
   krunEfiFirmware = "${workspacePkgs.libkrun-efi.src}/edk2/KRUN_EFI.silent.fd";
 
@@ -202,10 +203,10 @@ let
         // lib.optionalAttrs (targetIsLinux target) {
           PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
         }
-        // lib.optionalAttrs (targetIsAarch64Darwin target) {
+        // lib.optionalAttrs buildHostIsAarch64Darwin {
           # macos-vm's build script forwards this to a compile-time env so
-          # linuxkrun.rs can `include_bytes!` the OVMF firmware. Only macos-vm
-          # reads it.
+          # linuxkrun.rs can `include_bytes!` the OVMF firmware, and uses its
+          # presence to enable the libkrun backend. Only macos-vm reads it.
           KRUN_EFI_FIRMWARE = krunEfiFirmware;
         }
         // lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
@@ -228,7 +229,7 @@ let
           "-L"
           "native=${workspacePkgs.alsa-lib}/lib"
         ]
-        ++ lib.optionals (targetIsAarch64Darwin target) [
+        ++ lib.optionals buildHostIsAarch64Darwin [
           # macos-vm links `-lkrun` (libkrun-efi). Its build script emits the
           # `-l`, but the search path and rpath must be added here because a build
           # script's link-search does not reach the final unit link (same shape as
