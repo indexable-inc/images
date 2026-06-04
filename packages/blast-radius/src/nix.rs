@@ -25,13 +25,23 @@ pub struct Check {
     pub drv_path: String,
 }
 
+/// An attr that failed to evaluate, with the nix-eval-jobs error. Carried (not
+/// just the name) so a fail-closed bail on a head regression can print WHY it
+/// failed: per-attr eval failures exit nix-eval-jobs 0, so the error text is
+/// otherwise never surfaced in CI logs.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EvalFailure {
+    pub attr: String,
+    pub error: String,
+}
+
 /// The result of evaluating `.#checks.x86_64-linux` at one rev: the buildable
 /// checks, plus the attrs that failed to evaluate there (no derivation, so not a
 /// rebuild target). The caller diffs `failures` across base and head to tell a
 /// pre-existing catalog failure (tolerated) from one this change introduced.
 pub struct EvalResult {
     pub checks: Vec<Check>,
-    pub failures: Vec<String>,
+    pub failures: Vec<EvalFailure>,
 }
 
 /// One line of `nix-eval-jobs` output.
@@ -137,7 +147,7 @@ pub fn eval_checks(repo: &str, rev: &str) -> Result<EvalResult> {
     // Eval failures are returned, not skipped here: the caller distinguishes a
     // failure present at base (a pre-existing catalog issue, tolerated) from one
     // new at head (a regression this change introduced, which must fail closed).
-    eval_failures.sort();
+    eval_failures.sort_by(|left, right| left.attr.cmp(&right.attr));
     Ok(EvalResult {
         checks,
         failures: eval_failures,
@@ -149,7 +159,7 @@ pub fn eval_checks(repo: &str, rev: &str) -> Result<EvalResult> {
 /// unexpected shape (neither drvPath nor error).
 struct Partitioned {
     checks: Vec<Check>,
-    eval_failures: Vec<String>,
+    eval_failures: Vec<EvalFailure>,
     unexpected: Vec<String>,
 }
 
@@ -171,7 +181,7 @@ fn partition_eval_rows(stdout: &str) -> Result<Partitioned> {
         let attr = row.attr.trim_matches('"').to_owned();
         match (row.drv_path, row.error) {
             (Some(drv_path), _) => out.checks.push(Check { attr, drv_path }),
-            (None, Some(_)) => out.eval_failures.push(attr),
+            (None, Some(error)) => out.eval_failures.push(EvalFailure { attr, error }),
             (None, None) => out.unexpected.push(attr),
         }
     }
@@ -241,7 +251,7 @@ pub fn drv_for(checks: &[Check], attr: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{drv_name, partition_eval_rows};
+    use super::{EvalFailure, drv_name, partition_eval_rows};
 
     #[test]
     fn drv_name_strips_hash_and_suffix() {
@@ -276,7 +286,13 @@ mod tests {
         assert_eq!(partitioned.checks.len(), 1);
         assert_eq!(partitioned.checks[0].attr, "rust-test-foo");
         assert_eq!(partitioned.checks[0].drv_path, "/nix/store/aaa-foo.drv");
-        assert_eq!(partitioned.eval_failures, vec!["unfree-allowlist".to_owned()]);
+        assert_eq!(
+            partitioned.eval_failures,
+            vec![EvalFailure {
+                attr: "unfree-allowlist".to_owned(),
+                error: "unfree allowlist mismatch".to_owned(),
+            }]
+        );
         assert_eq!(partitioned.unexpected, vec!["weird.attr".to_owned()]);
     }
 }

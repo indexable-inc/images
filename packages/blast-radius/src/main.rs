@@ -60,25 +60,41 @@ fn short(rev: &str) -> String {
 /// is violated and are not in its required gate); those have no derivation, so
 /// they are excluded from the diff and only reported.
 fn guard_eval_failures(base: &nix::EvalResult, head: &nix::EvalResult) -> Result<()> {
-    let base_failures: BTreeSet<&str> = base.failures.iter().map(String::as_str).collect();
-    let new_failures: Vec<&str> = head
+    // Tolerate by attribute NAME, not by error text: some eval errors embed
+    // rev-varying store paths (e.g. an `*-no-nix-dependencies` check names the
+    // offending `.drv`), so comparing payloads would read the same pre-existing
+    // failure as new and false-bail on every run. An attr unevaluable at both
+    // base and head has no derivation at either, so it is out of rebuild scope
+    // regardless of WHY it fails.
+    let base_attrs: BTreeSet<&str> = base.failures.iter().map(|f| f.attr.as_str()).collect();
+    let new_failures: Vec<&nix::EvalFailure> = head
         .failures
         .iter()
-        .map(String::as_str)
-        .filter(|attr| !base_failures.contains(attr))
+        .filter(|f| !base_attrs.contains(f.attr.as_str()))
         .collect();
     if !new_failures.is_empty() {
+        // Surface the full error text: per-attr eval failures exit nix-eval-jobs
+        // 0, so this bail is the only place the cause reaches the CI log.
+        let detail = new_failures
+            .iter()
+            .map(|f| format!("  {}: {}", f.attr, f.error))
+            .collect::<Vec<_>>()
+            .join("\n");
         bail!(
-            "{} check(s) newly fail to evaluate at head (this change broke them): {}",
-            new_failures.len(),
-            new_failures.join(", ")
+            "{} check(s) newly fail to evaluate at head (this change broke them):\n{detail}",
+            new_failures.len()
         );
     }
     if !base.failures.is_empty() {
+        let names = base
+            .failures
+            .iter()
+            .map(|f| f.attr.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         eprintln!(
-            "blast-radius: {} check(s) fail to evaluate at base and head; excluded from the diff: {}",
-            base.failures.len(),
-            base.failures.join(", ")
+            "blast-radius: {} check(s) fail to evaluate at base and head; excluded from the diff: {names}",
+            base.failures.len()
         );
     }
     Ok(())
