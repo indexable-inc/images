@@ -1,0 +1,14 @@
+id: prefer-or-default-over-has-attr-guard
+valid:
+  - 'clippy.deniedLints or [ ]'
+  - 'lib.optional (clippy ? denyWarnings) clippy.denyWarnings'
+  - '!(clippy.denyWarnings or true)'
+  - 's.k or false'
+  - '(s.k or null) == "foo"'
+  - '(s ? k) && other.unrelated'
+invalid:
+  - '(clippy ? denyWarnings) && !clippy.denyWarnings'
+  - '(s ? k) && s.k'
+  - '(args ? cargoHash) && (args.cargoHash == "abc")'
+  - '(args ? cargoHash) && (args.cargoHash != null)'
+  - 'if s ? k then s.k else fallback'

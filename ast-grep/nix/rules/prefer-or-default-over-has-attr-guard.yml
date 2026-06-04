@@ -1,0 +1,24 @@
+id: prefer-or-default-over-has-attr-guard
+language: nix
+severity: warning
+message: "`(s ? k) && <expr using s.k>` guards a lookup with an existence check. Push the default into the lookup with `s.k or DEFAULT`."
+note: |
+  WHY: `(s ? k) && expr_using_s.k` encodes the absence default as an outer
+  guard, splitting one decision into two places. `expr (s.k or DEFAULT)`
+  collapses them into one, where DEFAULT is chosen so the expression
+  evaluates to false on absence.
+
+  Common rewrites:
+    (s ? k) && s.k             →  s.k or false
+    (s ? k) && !s.k            →  !(s.k or true)
+    (s ? k) && s.k == v        →  (s.k or null) == v
+    if s ? k then s.k else v   →  s.k or v
+  REPO: Prefer `or` defaults at the value site instead of guarding the lookup
+  with `?`.
+rule:
+  any:
+    - pattern: ($S ? $K) && $S.$K
+    - pattern: ($S ? $K) && !$S.$K
+    - pattern: ($S ? $K) && ($S.$K == $V)
+    - pattern: ($S ? $K) && ($S.$K != $V)
+    - pattern: if $S ? $K then $S.$K else $V
