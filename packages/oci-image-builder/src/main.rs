@@ -160,7 +160,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     eprintln!("Adding manifests...");
-    let settings = merge_env(&conf.settings, &base.env);
+    let settings = merge_config(&conf.settings, &base.config);
     write_metadata(
         &conf,
         &settings,
@@ -176,19 +176,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// A non-Nix base image resolved into content-addressed layers plus the base
-/// config environment to overlay under the final image config.
+/// container config to overlay under the final image config.
 #[derive(Default)]
 struct BaseImage {
     layers: Vec<Layer>,
-    env: Vec<String>,
+    config: Value,
 }
 
 /// The parts of a base docker-archive needed to assemble its layers: the layer
-/// member names in stack order, their declared `diff_ids`, and the config `Env`.
+/// member names in stack order, their declared `diff_ids`, and the base
+/// container config (`Entrypoint`, `Cmd`, `Env`, `WorkingDir`, `User`, ...).
 struct BaseManifest {
     layer_names: Vec<String>,
     diff_ids: Vec<String>,
-    env: Vec<String>,
+    config: Value,
 }
 
 /// Resolve the `fromImage` field: a string path to a base docker-archive, or
@@ -250,7 +251,7 @@ fn load_base_image(
 
     Ok(BaseImage {
         layers,
-        env: manifest.env,
+        config: manifest.config,
     })
 }
 
@@ -305,7 +306,7 @@ fn read_base_manifest(from_image: &Path) -> Result<BaseManifest, Box<dyn Error>>
     Ok(BaseManifest {
         layer_names,
         diff_ids: string_array(config.pointer("/rootfs/diff_ids")),
-        env: string_array(config.pointer("/config/Env")),
+        config: config.pointer("/config").cloned().unwrap_or(Value::Null),
     })
 }
 
@@ -361,18 +362,40 @@ fn string_array(value: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Overlay the base image `Env` under the final config `Env`: base entries come
-/// first, the final image's entries win on key collision, and each variable
-/// keeps the position of its first appearance. Mirrors nixpkgs'
-/// `stream_layered_image.py` so a base image with `fromImage` behaves the same
-/// whether built here or upstream.
-fn merge_env(settings: &Value, base_env: &[String]) -> Value {
-    if base_env.is_empty() {
+/// Overlay the base image config under the final config: every key the base
+/// sets (`Entrypoint`, `Cmd`, `WorkingDir`, `User`, `ExposedPorts`, ...) is kept
+/// unless the final config overrides it, so a base that carries an entrypoint or
+/// working directory does not silently lose it. `Env` is concat-merged (base
+/// first, the final image winning per variable, first-seen order preserved)
+/// rather than replaced, mirroring nixpkgs' `stream_layered_image.py`.
+fn merge_config(settings: &Value, base_config: &Value) -> Value {
+    let Some(base) = base_config.as_object() else {
         return settings.clone();
+    };
+
+    let mut merged = base.clone();
+    if let Some(object) = settings.as_object() {
+        for (key, value) in object {
+            merged.insert(key.clone(), value.clone());
+        }
     }
 
-    let final_env = string_array(settings.pointer("/Env"));
+    let env = merge_env_lists(
+        &string_array(base_config.pointer("/Env")),
+        &string_array(settings.pointer("/Env")),
+    );
+    if env.is_empty() {
+        merged.remove("Env");
+    } else {
+        merged.insert("Env".to_owned(), Value::Array(env));
+    }
 
+    Value::Object(merged)
+}
+
+/// Concat-merge two `Env` lists: base entries first, the final list winning on
+/// key collision, each variable keeping the position of its first appearance.
+fn merge_env_lists(base_env: &[String], final_env: &[String]) -> Vec<Value> {
     let mut order: Vec<String> = Vec::new();
     let mut latest: HashMap<String, String> = HashMap::new();
     for entry in base_env.iter().chain(final_env.iter()) {
@@ -382,19 +405,10 @@ fn merge_env(settings: &Value, base_env: &[String]) -> Value {
         }
         latest.insert(key.to_owned(), entry.clone());
     }
-    let merged: Vec<Value> = order
+    order
         .into_iter()
         .map(|key| Value::String(latest.remove(&key).unwrap_or_default()))
-        .collect();
-
-    let mut settings = settings.clone();
-    if !settings.is_object() {
-        settings = Value::Object(serde_json::Map::new());
-    }
-    if let Some(object) = settings.as_object_mut() {
-        object.insert("Env".to_owned(), Value::Array(merged));
-    }
-    settings
+        .collect()
 }
 
 fn parse_args<I>(args: I) -> Result<Args, Box<dyn Error>>
@@ -1261,10 +1275,13 @@ mod tests {
         assert_eq!(base.layers[1].checksum, sha_b);
         assert!(blobs_dir.join(&sha_a).exists());
         assert!(blobs_dir.join(&sha_b).exists());
-        assert_eq!(
-            base.env,
-            vec!["PATH=/usr/bin".to_owned(), "FOO=base".to_owned()]
-        );
+        let env: Vec<&str> = base.config["Env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        assert_eq!(env, ["PATH=/usr/bin", "FOO=base"]);
         Ok(())
     }
 
@@ -1308,14 +1325,19 @@ mod tests {
     }
 
     #[test]
-    fn merge_env_overlays_base_under_final() {
+    fn merge_config_overlays_base_under_final() {
         let settings = serde_json::json!({
             "Entrypoint": ["/init"],
             "Env": ["FOO=final", "BAR=final"],
         });
-        let base = ["PATH=/usr/bin".to_owned(), "FOO=base".to_owned()];
+        let base = serde_json::json!({
+            "Entrypoint": ["/base-entry"],
+            "Cmd": ["serve"],
+            "WorkingDir": "/srv",
+            "Env": ["PATH=/usr/bin", "FOO=base"],
+        });
 
-        let merged = merge_env(&settings, &base);
+        let merged = merge_config(&settings, &base);
 
         let env: Vec<&str> = merged["Env"]
             .as_array()
@@ -1325,12 +1347,16 @@ mod tests {
             .collect();
         // base order first (PATH, FOO), then final-only (BAR); FOO wins from final.
         assert_eq!(env, ["PATH=/usr/bin", "FOO=final", "BAR=final"]);
+        // The final config overrides Entrypoint but inherits Cmd and WorkingDir
+        // from the base instead of dropping them.
         assert_eq!(merged["Entrypoint"][0], "/init");
+        assert_eq!(merged["Cmd"][0], "serve");
+        assert_eq!(merged["WorkingDir"], "/srv");
     }
 
     #[test]
-    fn merge_env_without_base_is_identity() {
+    fn merge_config_without_base_is_identity() {
         let settings = serde_json::json!({ "Env": ["A=1"] });
-        assert_eq!(merge_env(&settings, &[]), settings);
+        assert_eq!(merge_config(&settings, &Value::Null), settings);
     }
 }
