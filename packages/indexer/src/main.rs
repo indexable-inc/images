@@ -138,6 +138,7 @@ struct Mixedbread<'a> {
 }
 
 /// Per-run tally of how many sources were indexed versus failed.
+#[derive(Clone, Copy)]
 struct Counts {
     indexed: usize,
     failures: usize,
