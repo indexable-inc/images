@@ -39,9 +39,15 @@ done
 if diff -u "$fixtures/good.expected.md" "$tmp/comment.md"; then note "render good: ok"; else note "render good: FAIL (output drift)"; fail=1; fi
 
 # Report-building logic with a stubbed nix-store (head vs base refs differ only
-# in the ix-rust-workspace hash, so it is the changed root cause).
-cat > "$tmp/nix-store" <<'STUB'
-#!/usr/bin/env bash
+# in the ix-rust-workspace hash, so it is the changed root cause). The shebang
+# points at the bash already running this script (`command -v bash`) instead of
+# `/usr/bin/env bash`: this test runs inside the nix build sandbox, which has no
+# `/usr/bin/env`, so a hard-coded env shebang silently fails to exec, the stub
+# produces no refs, and `causes-for` returns [] (passes on a dev box, fails in
+# CI). Resolving bash from PATH execs in both places.
+{
+  printf '#!%s\n' "$(command -v bash)"
+  cat <<'STUB'
 drv="${!#}"
 case "$drv" in
   *head-rust-*) echo /nix/store/h1111111111111111111111111111111-ix-rust-workspace.drv
@@ -50,6 +56,7 @@ case "$drv" in
                 echo /nix/store/g2222222222222222222222222222222-glibc.drv ;;
 esac
 STUB
+} > "$tmp/nix-store"
 chmod +x "$tmp/nix-store"
 # Run via `-c "source ..."`, not `nu logic-test.nu`: executing a file auto-runs
 # any `main` in scope, and the test sources blast-radius.nu (which defines one),
