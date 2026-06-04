@@ -304,12 +304,15 @@ Podman Desktop, Lima, and colima reached (they use libkrun/krunkit on macOS).
 Details (the EFI-variant constraint, the embedded OVMF firmware, linking, and the
 `com.apple.security.hypervisor` entitlement) are in
 [`docs/linux-libkrun.md`](docs/linux-libkrun.md). The off-screen **GUI** capture
-paths (`boot-linux-gui`, `drive-linux`) still use VZ for now, but only as a
-not-yet-migrated implementation, not a libkrun limitation: libkrun-efi exports a
-full display + input API (`krun_add_display` + `krun_set_display_backend`, where
-the host owns the frame buffer, and `krun_add_input_device`; see libkrun's
-`examples/gui_vm`), so those paths can move to libkrun and gain GPU-accelerated
-rendering. Tracked below.
+paths (`boot-linux-gui`, `drive-linux`) stay on VZ: libkrun-efi exposes a display
+backend API (`krun_add_display` + `krun_set_display_backend`), but it does not
+actually capture a frame on macOS with the current libkrun + nixpkgs venus-only
+`virglrenderer` build. Its scanout readback is a virgl **GL** `glReadPixels`, and
+this build has no macOS GL backend (venus does not bypass it: `SET_SCANOUT_BLOB`
+is unimplemented). Capturing a guest framebuffer via libkrun on macOS needs the
+upstream Metal-texture scanout work (virglrenderer `create_handle_for_scanout` +
+libkrun `SET_SCANOUT_BLOB`), so VZ remains the only working Linux-GUI capture path
+here. See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 
 ## Build notes
 
@@ -352,8 +355,10 @@ rendering. Tracked below.
 7. ~~Linux guests on libkrun (GPU via Venus/MoltenVK).~~ Done: `boot-linux
    --disk [--gpu]` boots a raw EFI disk under libkrun and streams its console;
    see [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
-8. Move the off-screen GUI capture paths (`boot-linux-gui`, `drive-linux`) from
-   VZ to libkrun's virtio-gpu via `krun_set_display_backend` (host-owned frame
-   buffer) + `krun_add_input_device` (see libkrun's `examples/gui_vm`), so the
-   Linux GUI is GPU-accelerated (Venus) instead of software (VZ lavapipe). This is
-   a not-yet-done migration, not a libkrun limitation.
+8. Linux-GUI off-screen capture on libkrun is **blocked upstream**, not just
+   unimplemented here: libkrun's only scanout-readback path is a virgl GL
+   `glReadPixels`, which has no macOS GL backend in the venus-only build, and
+   `SET_SCANOUT_BLOB` is unimplemented, so neither a venus guest nor a flag makes
+   `present_frame` fire. It needs the Metal-texture scanout work (virglrenderer
+   `create_handle_for_scanout` + libkrun `SET_SCANOUT_BLOB`; UTM venus-on-macOS,
+   Dec 2025). Until then GUI capture stays on VZ.
