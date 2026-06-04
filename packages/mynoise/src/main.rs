@@ -15,14 +15,19 @@ mod resolve;
 
 use std::path::PathBuf;
 
-use anyhow::{Context as _, Result, bail};
-use clap::Parser;
+use anyhow::{Context as _, Result};
+use clap::{ArgGroup, Parser};
 
 use crate::audio::Band;
 
 /// Play a myNoise.net generator by mixing its band loops locally.
 #[derive(Parser)]
 #[command(version, about)]
+// Bare `mynoise` prints help instead of erroring; otherwise clap requires
+// exactly one of a generator name or `--list`, so it owns the "no target"
+// usage error (clean exit 2, no anyhow backtrace).
+#[command(arg_required_else_help = true)]
+#[command(group(ArgGroup::new("target").required(true).args(["name", "list"])))]
 struct Cli {
     /// Generator to play: a bare data code (`RAIN`, `OSMOSIS`) or a generator
     /// page slug (`rainNoiseGenerator`). Omit together with `--list`.
@@ -73,9 +78,11 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let Some(name) = cli.name.as_deref() else {
-        bail!("provide a generator name (or use --list); see --help");
-    };
+    // The required `target` group guarantees a name here when `--list` is unset.
+    let name = cli
+        .name
+        .as_deref()
+        .expect("clap requires a name unless --list");
 
     let cache_dir = cli
         .cache_dir
@@ -88,16 +95,27 @@ fn main() -> Result<()> {
         Ok::<_, anyhow::Error>((code, files))
     })?;
 
-    let master = f32::from(cli.volume) / 100.0;
+    // Resolve the per-band gains (explicit value, else the default) in band order.
+    let gains: Vec<f32> = files
+        .iter()
+        .enumerate()
+        .map(|(i, _)| f32::from(cli.gains.get(i).copied().unwrap_or(cli.default_gain)) / 100.0)
+        .collect();
+
+    // The bands are decorrelated noise, so their power (not their amplitude) adds;
+    // dividing the master by sqrt(active band count) keeps a full mix from
+    // overshooting full scale and clipping in rodio's mixer, while holding
+    // roughly constant perceived loudness as the band count changes.
+    let active = gains.iter().filter(|g| **g > 0.0).count().max(1);
+    #[allow(clippy::cast_precision_loss)]
+    let master = f32::from(cli.volume) / 100.0 / (active as f32).sqrt();
+
     let bands: Vec<Band> = files
         .into_iter()
-        .enumerate()
-        .map(|(i, path)| {
-            let gain = cli.gains.get(i).copied().unwrap_or(cli.default_gain);
-            Band {
-                path,
-                amplitude: f32::from(gain) / 100.0 * master,
-            }
+        .zip(gains)
+        .map(|(path, gain)| Band {
+            path,
+            amplitude: gain * master,
         })
         .collect();
 
