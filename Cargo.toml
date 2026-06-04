@@ -50,6 +50,7 @@ members = [
   "packages/search",
   "packages/search-core",
   "packages/source/meta",
+  "packages/source/otlp",
   "packages/search-py",
   "packages/skill-lint",
   "packages/source/slack",
@@ -184,6 +185,7 @@ serde_norway = "0.9"
 sha2 = "0.10"
 similar = "2"
 source-slack = { path = "packages/source/slack" }
+source-otlp = { path = "packages/source/otlp" }
 sink-mixedbread = { path = "packages/sink/mixedbread" }
 sink-otlp = { path = "packages/sink/otlp" }
 sink-parquet = { path = "packages/sink/parquet" }

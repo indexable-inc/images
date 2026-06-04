@@ -5822,6 +5822,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "source-otlp"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "object_store",
+ "serde",
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
+ "tokio",
+]
+
+[[package]]
 name = "source-slack"
 version = "0.1.0"
 dependencies = [
