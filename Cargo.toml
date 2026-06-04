@@ -30,7 +30,6 @@ members = [
   "packages/indexbench",
   "packages/ix-dev-diagnose",
   "packages/kitty",
-  "packages/macos-vm",
   "packages/minecraft/nbt",
   "packages/minecraft/sound",
   "packages/minecraft/sync-managed",
@@ -67,6 +66,7 @@ members = [
   "packages/tui",
   "packages/tui-node",
   "packages/tui-py",
+  "packages/vmkit",
   "packages/vt/ix-vt",
   "packages/vt/ix-vt-sys",
 ]

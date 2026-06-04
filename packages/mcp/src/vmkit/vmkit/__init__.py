@@ -1,22 +1,22 @@
 """Native macOS VM control for the ix-mcp interpreter.
 
 Bundled into the pinned interpreter the same way ``tui``, ``search`` and
-``screen`` are, so every session can ``import macvm`` with no setup. Where
-``screen`` captures the host desktop, ``macvm`` boots a guest VM and captures
+``screen`` are, so every session can ``import vmkit`` with no setup. Where
+``screen`` captures the host desktop, ``vmkit`` boots a guest VM and captures
 *its* display, fully off-screen: nothing appears on the host desktop and the
 host cursor is never touched. This is the way to verify on-screen rendering (a
 GUI app, a boot screen) inside an isolated VM without taking over the machine.
 
-    import macvm
-    print(macvm.info())                       # is virtualization available?
-    img = macvm.screenshot("/path/to/guest")  # boot the guest, return a PIL.Image
+    import vmkit
+    print(vmkit.info())                       # is virtualization available?
+    img = vmkit.screenshot("/path/to/guest")  # boot the guest, return a PIL.Image
     img                                        # auto-rendered inline by python_eval/exec
 
 A guest is a *bundle* directory (``disk.img``, ``aux.img``,
 ``hardware-model.bin``, ``machine-id.bin``) created once with
 :func:`install`::
 
-    macvm.install("/path/to/UniversalMac_26.5_Restore.ipsw", "/path/to/guest")
+    vmkit.install("/path/to/UniversalMac_26.5_Restore.ipsw", "/path/to/guest")
 
 To *drive* a guest (synthetic keyboard/mouse plus on-demand screenshots), open a
 :class:`Driver` as a context manager. It spawns the binary's ``drive-macos``
@@ -24,7 +24,7 @@ mode and talks to it in lockstep: every command returns the binary's one-line
 acknowledgement, so a controller can capture a frame, locate a control in it
 (with any host-side image tooling), click it, and capture again::
 
-    with macvm.Driver("/path/to/guest") as d:
+    with vmkit.Driver("/path/to/guest") as d:
         d.click(0.5, 0.5)          # left-click at the centre of the display
         d.type_("hello")           # type printable ASCII
         d.key("return")            # press a named key
@@ -42,36 +42,36 @@ the macOS automount tag, mounting at ``/Volumes/My Shared Files``. This is how a
 GUI app on the host is run inside the guest: share its directory in and launch
 it from the share.
 
-Each guest is an independent ``macos-vm`` process, so :class:`Driver` instances
+Each guest is an independent ``vmkit`` process, so :class:`Driver` instances
 and :func:`screenshot` calls are independent and safe to run in parallel; fan
 out across several guests with :func:`screenshot_many` or by opening multiple
 :class:`Driver` instances from separate threads.
 
-The work is done by the ``macos-vm`` binary (a thin Rust binding over Apple's
+The work is done by the ``vmkit`` binary (a thin Rust binding over Apple's
 Virtualization.framework). It holds the ``com.apple.security.virtualization``
 entitlement by self-signing into a per-user cache on first use, so no manual
 ``codesign`` is needed. The capture reads the guest framebuffer IOSurface
 directly, so it needs no Screen-Recording permission.
 
 This module is macOS-only: it raises on a non-Darwin platform, and the
-``macos-vm`` binary is only bundled into the interpreter on Darwin.
+``vmkit`` binary is only bundled into the interpreter on Darwin.
 
 End-to-end example (one-time install, then provision and run an app). This needs
 a live guest plus Apple's Virtualization.framework and the entitlement, so it is
 **not** runnable in CI; run it on a Darwin host with a bundle on disk::
 
-    import macvm
+    import vmkit
 
     # 1. Install once from a local IPSW (~15-20 min), then provision the stopped
     #    guest past Setup Assistant to an auto-login desktop (offline disk edit).
-    macvm.install("/path/UniversalMac_26.5_Restore.ipsw", "/path/guest")
-    macvm.provision("/path/guest", user="ix", autologin=True)
+    vmkit.install("/path/UniversalMac_26.5_Restore.ipsw", "/path/guest")
+    vmkit.provision("/path/guest", user="ix", autologin=True)
 
     # 2. Stage a nix-built GUI app so its /nix/store dylibs resolve on the guest,
     #    then run it in the guest and capture a frame of the running app.
-    staged = macvm.stage_binary("/path/result/bin/bossbar-overlay",
+    staged = vmkit.stage_binary("/path/result/bin/bossbar-overlay",
                                 "/path/app/bossbar-overlay")
-    img = macvm.run_app("/path/guest", "/path/app",
+    img = vmkit.run_app("/path/guest", "/path/app",
                         "'/Volumes/My Shared Files/bossbar-overlay'")
     img   # PIL.Image of the guest desktop with the app running, rendered inline
 
@@ -97,7 +97,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Driver",
-    "MacVmError",
+    "VmkitError",
     "boot_linux",
     "boot_linux_gui",
     "drive",
@@ -116,17 +116,17 @@ __all__ = [
 ]
 
 
-class MacVmError(RuntimeError):
-    """A macos-vm invocation failed, or the platform/binary is unavailable."""
+class VmkitError(RuntimeError):
+    """A vmkit invocation failed, or the platform/binary is unavailable."""
 
 
 def _binary() -> str:
     if sys.platform != "darwin":
-        raise MacVmError("macvm is macOS-only")
-    path = os.environ.get("IX_MACVM_BIN")
+        raise VmkitError("vmkit is macOS-only")
+    path = os.environ.get("IX_VMKIT_BIN")
     if not path:
-        raise MacVmError(
-            "IX_MACVM_BIN is not set; the macos-vm binary is bundled into ix-mcp "
+        raise VmkitError(
+            "IX_VMKIT_BIN is not set; the vmkit binary is bundled into ix-mcp "
             "on Darwin only"
         )
     return path
@@ -153,7 +153,7 @@ def info() -> str:
 def install(ipsw: str | os.PathLike, bundle: str | os.PathLike, disk_gib: int = 64, timeout: float = 2400) -> None:
     """Install macOS into a fresh ``bundle`` directory from a local ``ipsw``.
 
-    Takes ~15-20 minutes. Raises :class:`MacVmError` on failure.
+    Takes ~15-20 minutes. Raises :class:`VmkitError` on failure.
     """
     try:
         result = subprocess.run(
@@ -164,9 +164,9 @@ def install(ipsw: str | os.PathLike, bundle: str | os.PathLike, disk_gib: int = 
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise MacVmError(f"install-macos timed out after {timeout}s") from exc
+        raise VmkitError(f"install-macos timed out after {timeout}s") from exc
     if result.returncode != 0:
-        raise MacVmError(f"install-macos failed: {result.stderr.strip()}")
+        raise VmkitError(f"install-macos failed: {result.stderr.strip()}")
 
 
 def stage_binary(
@@ -182,7 +182,7 @@ def stage_binary(
     its ``/usr/lib`` system equivalent (libiconv, libc++, libresolv, …) or, when
     there is none, copies the dylib next to the output and rewrites it to an
     ``@loader_path`` reference, then ad-hoc re-signs the result. It verifies no
-    ``/nix/store`` path remains and raises :class:`MacVmError` otherwise.
+    ``/nix/store`` path remains and raises :class:`VmkitError` otherwise.
 
     Returns the staged binary's path, which is a *file*, not a directory. With
     ``out`` omitted it is written under a fresh temp directory using the same
@@ -197,7 +197,7 @@ def stage_binary(
         # bundled dylibs beside it) is the return value and must outlive this
         # call, so the directory is left for the caller/OS to reap rather than
         # deleted on return.
-        tmp = tempfile.mkdtemp(prefix="ix-macvm-stage-")
+        tmp = tempfile.mkdtemp(prefix="ix-vmkit-stage-")
         out_path = pathlib.Path(tmp) / src.name
     else:
         out_path = pathlib.Path(out)
@@ -210,9 +210,9 @@ def stage_binary(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise MacVmError(f"stage-binary timed out after {timeout}s") from exc
+        raise VmkitError(f"stage-binary timed out after {timeout}s") from exc
     if result.returncode != 0:
-        raise MacVmError(f"stage-binary failed: {result.stderr.strip()}")
+        raise VmkitError(f"stage-binary failed: {result.stderr.strip()}")
     # The binary prints the staged path on stdout; fall back to the requested
     # path if (unexpectedly) absent.
     staged = result.stdout.strip()
@@ -243,10 +243,10 @@ def provision(
 
     The credential is also recorded in ``<bundle>/login.json`` (mode 0600) so a
     later session can drive the guest with :func:`login` without rediscovering
-    it. Raises :class:`MacVmError` on failure, including if the image already
+    it. Raises :class:`VmkitError` on failure, including if the image already
     appears in use, or if ``autologin`` is set without a password."""
     if autologin and not password:
-        raise MacVmError(
+        raise VmkitError(
             "autologin needs the account's real password (a blank password does "
             "not auto-log in); pass password=..."
         )
@@ -275,9 +275,9 @@ def provision(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise MacVmError(f"provision timed out after {timeout}s") from exc
+        raise VmkitError(f"provision timed out after {timeout}s") from exc
     if result.returncode != 0:
-        raise MacVmError(f"provision failed: {result.stderr.strip()}")
+        raise VmkitError(f"provision failed: {result.stderr.strip()}")
     # Record the credential beside the bundle whenever one was provided, so a
     # later session's login()/run_app can recover it without spelunking (not only
     # on the autologin path: a caller may record the password for login() use).
@@ -339,7 +339,7 @@ def login(
     field at fraction ``field``, types the password, presses Return, waits
     ``settle`` for the desktop, and verifies the screen changed. ``password``
     falls back to ``<bundle>/login.json`` (written by :func:`provision`). Raises
-    :class:`MacVmError` if no password is available or the screen did not change
+    :class:`VmkitError` if no password is available or the screen did not change
     (wrong password, or the guest was not at the login window).
 
     This types the password, so only call it when the guest is actually at the
@@ -349,14 +349,14 @@ def login(
         creds = _bundle_login(driver._bundle)
         password = creds.get("password") if creds else None
     if not password:
-        raise MacVmError(
+        raise VmkitError(
             "no password for login (pass password=, or provision the bundle so "
             "login.json records it)"
         )
     if "\n" in password or "\r" in password:
         # `type_` sends one stdin line; a newline would split it and desync every
         # subsequent ack.
-        raise MacVmError("login password must not contain a newline")
+        raise VmkitError("login password must not contain a newline")
     before = driver.shot()
     driver.click(*field)
     driver.type_(password)
@@ -365,7 +365,7 @@ def login(
         driver.wait(settle)
     after = driver.shot()
     if not _frames_differ(before, after, 0.02):
-        raise MacVmError(
+        raise VmkitError(
             "login did not change the screen (wrong password, or the guest was "
             "not at the login window)"
         )
@@ -381,14 +381,14 @@ def screenshot(
     of its display after ``seconds`` (the last frame captured).
 
     ``shares`` is a list of ``"TAG=HOSTDIR"`` virtio-fs specs (see the
-    module docstring). Raises :class:`MacVmError` if the binary fails, times out,
+    module docstring). Raises :class:`VmkitError` if the binary fails, times out,
     or produces no frame.
     """
     from PIL import Image
 
     bin_path = _binary()
     deadline = timeout if timeout is not None else seconds + 120
-    with tempfile.TemporaryDirectory(prefix="ix-macvm-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="ix-vmkit-") as tmp:
         prefix = pathlib.Path(tmp) / "shot"
         try:
             result = subprocess.run(
@@ -399,10 +399,10 @@ def screenshot(
                 timeout=deadline,
             )
         except subprocess.TimeoutExpired as exc:
-            raise MacVmError(f"boot-macos timed out after {deadline}s") from exc
+            raise VmkitError(f"boot-macos timed out after {deadline}s") from exc
         shots = sorted(pathlib.Path(tmp).glob("shot.*.png"))
         if not shots:
-            raise MacVmError(
+            raise VmkitError(
                 f"boot-macos produced no screenshot (rc={result.returncode}): {result.stderr.strip()}"
             )
         # Load and detach from the temp file before it is removed.
@@ -419,12 +419,12 @@ def screenshot_many(
 ) -> dict[str, "Image.Image"]:
     """Boot several guests off-screen *concurrently* and return one frame each.
 
-    Each bundle runs in its own ``macos-vm`` process, so the boots are fully
+    Each bundle runs in its own ``vmkit`` process, so the boots are fully
     independent and fan out across a thread pool. Returns a dict keyed by the
     string form of each input path to its last-frame ``PIL.Image``. ``shares``
     (if given) is applied to every guest.
 
-    Raises :class:`MacVmError` (or the underlying error) if any guest fails; the
+    Raises :class:`VmkitError` (or the underlying error) if any guest fails; the
     first failure encountered is re-raised after every process has been
     resolved, so none is left orphaned. Tune parallelism with ``max_workers``
     (defaults to one worker per bundle).
@@ -461,14 +461,14 @@ def _resolve_disk(disk: str | os.PathLike) -> str:
     The ``vz-linux-guest`` package output (and a ``nix build`` ``result``) is a
     *directory* containing ``nixos.img`` (make-disk-image's shape), so a directory
     is resolved to the single ``*.img``/``*.raw`` inside it. A file path is
-    returned as-is. Raises :class:`MacVmError` if a directory holds zero or
+    returned as-is. Raises :class:`VmkitError` if a directory holds zero or
     several images.
     """
     path = pathlib.Path(os.fspath(disk))
     if path.is_dir():
         imgs = sorted([*path.glob("*.img"), *path.glob("*.raw")])
         if len(imgs) != 1:
-            raise MacVmError(
+            raise VmkitError(
                 f"disk {path} is a directory with {len(imgs)} disk images; "
                 "pass the .img/.raw file (e.g. <result>/nixos.img)"
             )
@@ -516,12 +516,12 @@ def boot_linux(
     directory (its image is found automatically) or an image file; libkrun opens
     the boot disk read-write, so a read-only image (e.g. a `/nix/store` build) is
     copied to a writable temp first. The headless, serial-only analogue of
-    :func:`boot_linux_gui`. See the ``macos-vm`` package's ``docs/linux-libkrun.md``.
-    Raises :class:`MacVmError` if the binary fails or does not stop within the
+    :func:`boot_linux_gui`. See the ``vmkit`` package's ``docs/linux-libkrun.md``.
+    Raises :class:`VmkitError` if the binary fails or does not stop within the
     deadline.
     """
     deadline = timeout if timeout is not None else seconds + 60
-    with tempfile.TemporaryDirectory(prefix="ix-macvm-linux-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="ix-vmkit-linux-") as tmp:
         work_disk = _writable_disk(disk, tmp)
         argv = [
             _binary(),
@@ -542,9 +542,9 @@ def boot_linux(
                 argv, capture_output=True, text=True, check=False, timeout=deadline
             )
         except subprocess.TimeoutExpired as exc:
-            raise MacVmError(f"boot-linux timed out after {deadline}s") from exc
+            raise VmkitError(f"boot-linux timed out after {deadline}s") from exc
     if result.returncode != 0:
-        raise MacVmError(
+        raise VmkitError(
             f"boot-linux failed (rc={result.returncode}): {result.stderr.strip()}"
         )
     # The guest serial console streams to stdout; boot/log lines go to stderr.
@@ -567,7 +567,7 @@ def boot_linux_gui(
     ``vz-linux-guest`` package output directory (its ``nixos.img`` is found
     automatically) or a ``.img``/``.raw`` file; a read-only image (e.g. a
     `/nix/store` build) is copied to a writable temp file first. Raises
-    :class:`MacVmError` on failure or no frame.
+    :class:`VmkitError` on failure or no frame.
     """
     from PIL import Image
 
@@ -575,7 +575,7 @@ def boot_linux_gui(
     # NixOS boot + compositor start is slower than a macOS-bundle boot, so give a
     # wider default deadline.
     deadline = timeout if timeout is not None else seconds + 180
-    with tempfile.TemporaryDirectory(prefix="ix-macvm-linux-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="ix-vmkit-linux-") as tmp:
         work_disk = _writable_disk(disk, tmp)
         prefix = pathlib.Path(tmp) / "shot"
         argv = [
@@ -595,10 +595,10 @@ def boot_linux_gui(
                 argv, capture_output=True, text=True, check=False, timeout=deadline
             )
         except subprocess.TimeoutExpired as exc:
-            raise MacVmError(f"boot-linux-gui timed out after {deadline}s") from exc
+            raise VmkitError(f"boot-linux-gui timed out after {deadline}s") from exc
         shots = sorted(pathlib.Path(tmp).glob("shot.*.png"))
         if not shots:
-            raise MacVmError(
+            raise VmkitError(
                 f"boot-linux-gui produced no screenshot (rc={result.returncode}): {result.stderr.strip()}"
             )
         with Image.open(shots[-1]) as img:
@@ -609,11 +609,11 @@ class Driver:
     """Drive a booted macOS guest in lockstep over the binary's ``drive-macos``
     mode.
 
-    Spawns one ``macos-vm`` process that boots the guest off-screen and reads
+    Spawns one ``vmkit`` process that boots the guest off-screen and reads
     newline commands from stdin, acking each on stdout. Use it as a context
     manager so the guest is always stopped on exit::
 
-        with macvm.Driver("/path/to/guest", shares=["auto=/host/app"]) as d:
+        with vmkit.Driver("/path/to/guest", shares=["auto=/host/app"]) as d:
             d.click(0.5, 0.5)
             d.type_("ls")
             d.key("return")
@@ -621,7 +621,7 @@ class Driver:
 
     Every method returns the binary's one-line acknowledgement; :meth:`shot`
     returns a ``PIL.Image`` instead. An ``err ...`` ack, or the process dying,
-    raises :class:`MacVmError`. Each :class:`Driver` is its own process, so
+    raises :class:`VmkitError`. Each :class:`Driver` is its own process, so
     independent instances drive different guests in parallel.
     """
 
@@ -647,11 +647,11 @@ class Driver:
         arrives, since a slow guest boot can delay the first one.
         """
         if (bundle is None) == (disk is None):
-            raise MacVmError("Driver needs exactly one of bundle (macOS) or disk (Linux)")
+            raise VmkitError("Driver needs exactly one of bundle (macOS) or disk (Linux)")
         # virtio-fs shares are a macOS-guest feature here; the Linux GUI config
         # wires no sharing device, so reject rather than silently drop them.
         if disk is not None and shares:
-            raise MacVmError("shares are macOS-only; the Linux GUI Driver wires no virtio-fs")
+            raise VmkitError("shares are macOS-only; the Linux GUI Driver wires no virtio-fs")
         self._bundle = str(bundle) if bundle is not None else None
         # Resolve a directory (the vz-linux-guest package output) to its image.
         self._disk = _resolve_disk(disk) if disk is not None else None
@@ -669,7 +669,7 @@ class Driver:
             # /nix/store build) would fail to attach and the process would exit
             # with only a "no ack" symptom. Fail clearly up front instead.
             if not os.access(self._disk, os.W_OK):
-                raise MacVmError(
+                raise VmkitError(
                     f"Linux Driver disk must be writable (copy the image out of the store first): {self._disk}"
                 )
             argv = [bin_path, "drive-linux", "--disk", self._disk]
@@ -731,27 +731,27 @@ class Driver:
     def send(self, command: str) -> str:
         """Write one ``command`` line, flush, and return its one-line ack.
 
-        Raises :class:`MacVmError` on an ``err ...`` ack, or if the driver
+        Raises :class:`VmkitError` on an ``err ...`` ack, or if the driver
         process has died or closed its output.
         """
         proc = self._proc
         if proc is None or proc.stdin is None or proc.stdout is None:
-            raise MacVmError("driver is not running (use it as a context manager)")
+            raise VmkitError("driver is not running (use it as a context manager)")
         if proc.poll() is not None:
-            raise MacVmError(f"driver process exited with code {proc.returncode}")
+            raise VmkitError(f"driver process exited with code {proc.returncode}")
         line = command.rstrip("\n")
         try:
             proc.stdin.write(line + "\n")
             proc.stdin.flush()
         except (BrokenPipeError, OSError) as exc:
-            raise MacVmError(f"driver process closed its input: {exc}") from exc
+            raise VmkitError(f"driver process closed its input: {exc}") from exc
         # stderr is discarded, so the next stdout line is this command's ack;
         # skip a stray blank line all the same.
         while True:
             ack = proc.stdout.readline()
             if ack == "":
                 rc = proc.poll()
-                raise MacVmError(
+                raise VmkitError(
                     f"driver process gave no ack for {command!r} "
                     f"(process exited with code {rc})"
                 )
@@ -759,7 +759,7 @@ class Driver:
             if ack != "":
                 break
         if ack.startswith("err"):
-            raise MacVmError(f"command {command!r} failed: {ack}")
+            raise VmkitError(f"command {command!r} failed: {ack}")
         return ack
 
     def key(self, name: str, count: int = 1) -> str:
@@ -801,7 +801,7 @@ class Driver:
         """Return the last pointer fraction this driver set with
         :meth:`click`/:meth:`move` (top-left, ``0..1``). The pointer is absolute,
         so this is the driver's own record, not a guest read-back. Raises
-        :class:`MacVmError` if no pointer command has run yet."""
+        :class:`VmkitError` if no pointer command has run yet."""
         ack = self.send("cursor")  # 'ok cursor FX FY'
         parts = ack.split()
         return (float(parts[2]), float(parts[3]))
@@ -815,7 +815,7 @@ class Driver:
             parts = ack.split()
             w, h = int(parts[2]), int(parts[3])
             if w <= 0 or h <= 0:
-                raise MacVmError(f"guest reported a non-positive framebuffer size ({w}x{h})")
+                raise VmkitError(f"guest reported a non-positive framebuffer size ({w}x{h})")
             self._size = (w, h)
         return self._size
 
@@ -873,7 +873,7 @@ class Driver:
         """Screenshot the guest framebuffer and return a ``PIL.Image``.
 
         With ``path``, the PNG is also written there. With no ``path``, it goes
-        to a temp file that is loaded and removed. Raises :class:`MacVmError` if
+        to a temp file that is loaded and removed. Raises :class:`VmkitError` if
         the capture fails.
         """
         from PIL import Image
@@ -883,7 +883,7 @@ class Driver:
             self.send(f"shot {out}")
             with Image.open(out) as img:
                 return img.convert("RGB")
-        with tempfile.TemporaryDirectory(prefix="ix-macvm-shot-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="ix-vmkit-shot-") as tmp:
             out = pathlib.Path(tmp) / "shot.png"
             self.send(f"shot {out}")
             # Load and detach before the temp dir is removed.
@@ -902,7 +902,7 @@ def drive(
     A one-shot convenience for a fixed script: it boots the guest, runs
     ``commands`` in order, and stops the guest on the way out. ``shares`` and
     ``timeout`` are as on :class:`Driver`. Use :class:`Driver` directly when the
-    next command depends on a captured frame. Raises :class:`MacVmError` on any
+    next command depends on a captured frame. Raises :class:`VmkitError` on any
     failing command.
     """
     with Driver(bundle, shares=shares, timeout=timeout) as d:
@@ -963,14 +963,14 @@ def run_app(
     The guest must reach a logged-in desktop. A bundle provisioned with
     ``autologin`` does this on its own; for a bundle that stops at the login
     window, pass ``login_password`` (or persist it via :func:`provision`) and
-    this logs in first via :func:`login`. Raises :class:`MacVmError` on failure,
+    this logs in first via :func:`login`. Raises :class:`VmkitError` on failure,
     including if ``command`` contains a newline.
     """
     # A newline in `command` would split the driver's `type` line into two stdin
     # commands, desyncing every subsequent ack. Reject it up front rather than
     # fail confusingly mid-run; run multiple commands with separate calls or `;`.
     if "\n" in command or "\r" in command:
-        raise MacVmError("run_app command must not contain a newline")
+        raise VmkitError("run_app command must not contain a newline")
 
     if shares_tag == "auto":
         share_spec = f"auto={app_dir}"
@@ -1032,12 +1032,12 @@ def run_binary(
     launch command (already shell-safe for the binary path; quote your own args).
     ``name`` overrides the in-guest binary name (default: the host basename).
     Extra keyword arguments pass through to :func:`run_app` (``seconds``,
-    ``boot_seconds``, ``timeout``). Raises :class:`MacVmError` on failure."""
+    ``boot_seconds``, ``timeout``). Raises :class:`VmkitError` on failure."""
     src = pathlib.Path(os.fspath(host_binary))
     app_name = name or src.name
     # The shared directory must outlive staging but not the call: the guest only
     # needs it while the Driver session in run_app is alive, so clean it after.
-    staged_dir = tempfile.mkdtemp(prefix="ix-macvm-app-")
+    staged_dir = tempfile.mkdtemp(prefix="ix-vmkit-app-")
     try:
         stage_binary(str(src), str(pathlib.Path(staged_dir) / app_name))
         launch = _shell_quote(f"./{app_name}")
@@ -1068,16 +1068,16 @@ def run_oci(
 
     - ``gui=False`` (default): boot the disk headlessly under libkrun and return
       the guest serial console as ``str``. Pass ``gpu=True`` for a virtio-gpu
-      (Venus) device. See the ``macos-vm`` package's ``docs/linux-libkrun.md``.
+      (Venus) device. See the ``vmkit`` package's ``docs/linux-libkrun.md``.
     - ``gui=True``: boot the disk under Virtualization.framework (e.g. the
       ``vz-linux-guest`` image) and return a ``PIL.Image`` of the framebuffer.
 
     Extra keyword arguments pass through to the underlying boot function. Raises
-    :class:`MacVmError` on an arch mismatch."""
+    :class:`VmkitError` on an arch mismatch."""
     import platform
 
     if require_aarch64 and not platform.machine().lower().startswith(("arm64", "aarch64")):
-        raise MacVmError(
+        raise VmkitError(
             f"run_oci needs an aarch64 host (this is {platform.machine()})"
         )
     extra = dict(kwargs)

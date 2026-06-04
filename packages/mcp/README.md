@@ -79,7 +79,7 @@ The kernel runs on the same pinned interpreter as the server (see
 [`default.nix`](./default.nix)), so notebook cells can `import` the bundled
 modules with no install step: `tui` (PTY driver), `search` (semantic/grep over
 the `index` corpus), numpy, polars, duckdb, httpx, matplotlib, playwright, the
-Google API client, and on macOS `screen` and `macvm`. A per-notebook kernel is
+Google API client, and on macOS `screen` and `vmkit`. A per-notebook kernel is
 shared with the human, so state set by an agent cell is visible in the browser.
 
 <p align="center">

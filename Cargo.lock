@@ -3433,7 +3433,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "macos-vm"
+name = "vmkit"
 version = "0.1.0"
 dependencies = [
  "base64",

@@ -95,7 +95,7 @@ pub(crate) fn drive_view(
     // queue, where it is valid.
     let view_ptr = Retained::into_raw(view) as usize;
     eprintln!(
-        "macos-vm: driving guest; stdin commands: \
+        "vmkit: driving guest; stdin commands: \
          key/down/up/type/click/move/scroll/cursor/size/cursor-show/wait/shot/quit"
     );
     // Stream the guest screen to the local dashboard so the session shows up on
@@ -118,7 +118,7 @@ const SCREEN_MAX_WIDTH: usize = 900;
 /// Set this to disable publishing the guest screen to the dashboard (e.g. a
 /// lockstep automated driver that does not want the extra main-queue sampling).
 /// Any value disables it.
-const NO_DASHBOARD_ENV: &str = "IX_MACVM_NO_DASHBOARD";
+const NO_DASHBOARD_ENV: &str = "IX_VMKIT_NO_DASHBOARD";
 
 /// Publish the guest framebuffer to the local dashboard as a live image pane, so
 /// a `drive` session appears on the canvas automatically alongside terminals and
@@ -146,19 +146,19 @@ fn spawn_screen_publisher(view_ptr: usize, label: &'static str) {
         {
             Ok(runtime) => runtime,
             Err(error) => {
-                eprintln!("macos-vm: dashboard screen disabled (runtime: {error})");
+                eprintln!("vmkit: dashboard screen disabled (runtime: {error})");
                 return;
             }
         };
         let publisher = match Publisher::bind(socket_path(), runtime.handle()) {
             Ok(publisher) => publisher,
             Err(error) => {
-                eprintln!("macos-vm: dashboard screen disabled ({error})");
+                eprintln!("vmkit: dashboard screen disabled ({error})");
                 return;
             }
         };
         eprintln!(
-            "macos-vm: publishing guest screen to dashboard ({})",
+            "vmkit: publishing guest screen to dashboard ({})",
             publisher.path().display()
         );
         let sink = publisher.sink();
@@ -177,7 +177,7 @@ fn spawn_screen_publisher(view_ptr: usize, label: &'static str) {
                 Err(Error::NoFramebuffer) => continue,
                 Err(error) => {
                     if !warned_read {
-                        eprintln!("macos-vm: dashboard screen capture: {error}");
+                        eprintln!("vmkit: dashboard screen capture: {error}");
                         warned_read = true;
                     }
                     continue;
@@ -196,7 +196,7 @@ fn spawn_screen_publisher(view_ptr: usize, label: &'static str) {
                 Ok(png) => png,
                 Err(error) => {
                     if !warned_encode {
-                        eprintln!("macos-vm: dashboard screen encode: {error}");
+                        eprintln!("vmkit: dashboard screen encode: {error}");
                         warned_encode = true;
                     }
                     continue;

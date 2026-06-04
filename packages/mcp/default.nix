@@ -258,28 +258,28 @@ let
   );
 
   # Native macOS VM control, bundled like `screen` so every session can
-  # `import macvm` on Darwin. Pure Python: it spawns the `macos-vm` binary (a
+  # `import vmkit` on Darwin. Pure Python: it spawns the `vmkit` binary (a
   # Rust binding over Virtualization.framework) and returns guest screenshots as
   # PIL images. macOS-only; on a non-Darwin platform the module raises.
-  macvmPythonSource = builtins.path {
-    name = "ix-mcp-macvm-python-source";
-    path = ./src/macvm;
+  vmkitPythonSource = builtins.path {
+    name = "ix-mcp-vmkit-python-source";
+    path = ./src/vmkit;
   };
-  macvmModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-macvm-python-module"
+  vmkitModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-vmkit-python-module"
       {
         strictDeps = true;
         meta.description = "Native macOS VM control bundled into the ix-mcp interpreter";
       }
       ''
-        site="$out/${pkgs.python3.sitePackages}/macvm"
+        site="$out/${pkgs.python3.sitePackages}/vmkit"
         mkdir -p "$site"
-        cp -r ${macvmPythonSource}/macvm/. "$site/"
+        cp -r ${vmkitPythonSource}/vmkit/. "$site/"
       ''
   );
-  # The macos-vm binary `macvm` spawns. Darwin-only; referenced lazily so a Linux
+  # The vmkit binary `vmkit` spawns. Darwin-only; referenced lazily so a Linux
   # mcp build never forces it.
-  macosVmBin = ix.rustWorkspace.units.binaries."macos-vm";
+  vmkitBin = ix.rustWorkspace.units.binaries."vmkit";
 
   # The `screen` helper is macOS-only, so its dependencies join the interpreter
   # only on Darwin. `pyobjc-framework-Quartz` is the maintained CoreGraphics
@@ -290,7 +290,7 @@ let
     lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
       ps.pyobjc-framework-Quartz
       screenModule
-      macvmModule
+      vmkitModule
     ];
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
@@ -413,7 +413,7 @@ let
         makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
           --add-flags "-m ix_notebook_mcp" \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
-          ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_MACVM_BIN ${lib.escapeShellArg "${macosVmBin}/bin/macos-vm"}"}
+          ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
       '';
 
   # Import a module in the pinned interpreter and assert a marker line. Used by
@@ -622,10 +622,10 @@ let
         mkdir -p "$out"
       '';
 
-  # macOS-only modules (`screen`, `macvm`) are only bundled on Darwin; their
+  # macOS-only modules (`screen`, `vmkit`) are only bundled on Darwin; their
   # import tests only exist there.
   screenBundled = importTest "screen" "import screen; print('screen-ok', callable(screen.capture), callable(screen.click), callable(screen.accessibility_trusted))";
-  macvmBundled = importTest "macvm" "import macvm; print('macvm-ok', callable(macvm.boot_linux), callable(macvm.drive), callable(macvm.screenshot))";
+  vmkitBundled = importTest "vmkit" "import vmkit; print('vmkit-ok', callable(vmkit.boot_linux), callable(vmkit.drive), callable(vmkit.screenshot))";
 in
 package.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
@@ -643,7 +643,7 @@ package.overrideAttrs (old: {
         ;
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
-      inherit screenBundled macvmBundled;
+      inherit screenBundled vmkitBundled;
     };
   };
 })

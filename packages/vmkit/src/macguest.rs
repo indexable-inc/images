@@ -124,11 +124,11 @@ pub(crate) fn start_vm_offscreen(
 
     let completion = RcBlock::new(|error: *mut NSError| {
         if error.is_null() {
-            eprintln!("macos-vm: guest started");
+            eprintln!("vmkit: guest started");
         } else {
             let error = unsafe { &*error };
             eprintln!(
-                "macos-vm: guest failed to start: {}",
+                "vmkit: guest failed to start: {}",
                 ns_error_message(error)
             );
             std::process::exit(1);
@@ -198,12 +198,12 @@ pub(crate) fn schedule_captures(
                 let view: &VZVirtualMachineView =
                     unsafe { &*(view_ptr as *const VZVirtualMachineView) };
                 match capture(view, &p, None) {
-                    Ok(bytes) => eprintln!("macos-vm: wrote {bytes} bytes -> {}", p.display()),
-                    Err(error) => eprintln!("macos-vm: capture: {error}"),
+                    Ok(bytes) => eprintln!("vmkit: wrote {bytes} bytes -> {}", p.display()),
+                    Err(error) => eprintln!("vmkit: capture: {error}"),
                 }
             });
         }
-        eprintln!("macos-vm: done");
+        eprintln!("vmkit: done");
         std::process::exit(0);
     });
 }
@@ -458,26 +458,26 @@ pub fn install_macos(ipsw: PathBuf, bundle: PathBuf, disk_gib: u64) -> Result<()
     })?;
     let ipsw_url = file_url(&ipsw);
 
-    eprintln!("macos-vm: loading restore image {} ...", ipsw.display());
+    eprintln!("vmkit: loading restore image {} ...", ipsw.display());
     // load completion fires on an arbitrary thread; extract the (Send) hardware
     // model bytes there, then build the VM + installer on the main queue.
     let load_done = RcBlock::new(
         move |image: *mut VZMacOSRestoreImage, error: *mut NSError| {
             if !error.is_null() {
                 eprintln!(
-                    "macos-vm: load restore image: {}",
+                    "vmkit: load restore image: {}",
                     ns_error_message(unsafe { &*error })
                 );
                 std::process::exit(1);
             }
             let image = unsafe { &*image };
             let Some(req) = (unsafe { image.mostFeaturefulSupportedConfiguration() }) else {
-                eprintln!("macos-vm: restore image has no configuration supported by this host");
+                eprintln!("vmkit: restore image has no configuration supported by this host");
                 std::process::exit(1);
             };
             let hw = unsafe { req.hardwareModel() };
             if !unsafe { hw.isSupported() } {
-                eprintln!("macos-vm: hardware model not supported by this host");
+                eprintln!("vmkit: hardware model not supported by this host");
                 std::process::exit(1);
             }
             let hw_data = unsafe { hw.dataRepresentation() }.to_vec();
@@ -485,7 +485,7 @@ pub fn install_macos(ipsw: PathBuf, bundle: PathBuf, disk_gib: u64) -> Result<()
             let ipsw = ipsw.clone();
             DispatchQueue::main().exec_async(move || {
                 if let Err(error) = start_install(&bundle, &ipsw, &hw_data, disk_gib) {
-                    eprintln!("macos-vm: {error}");
+                    eprintln!("vmkit: {error}");
                     std::process::exit(1);
                 }
             });
@@ -568,17 +568,17 @@ fn start_install(bundle: &Path, ipsw: &Path, hw_data: &[u8], disk_gib: u64) -> R
         )
     };
     eprintln!(
-        "macos-vm: installing macOS into {} (this takes ~15-20 min) ...",
+        "vmkit: installing macOS into {} (this takes ~15-20 min) ...",
         bundle.display()
     );
 
     let done = RcBlock::new(|error: *mut NSError| {
         if error.is_null() {
-            println!("macos-vm: install complete");
+            println!("vmkit: install complete");
             std::process::exit(0);
         }
         eprintln!(
-            "macos-vm: install failed: {}",
+            "vmkit: install failed: {}",
             ns_error_message(unsafe { &*error })
         );
         std::process::exit(1);

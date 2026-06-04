@@ -1,4 +1,4 @@
-# macos-vm
+# vmkit
 
 Own a virtual machine's lifecycle from Rust, with one backend per guest OS:
 
@@ -18,9 +18,9 @@ without the app ever appearing on the operator's real desktop or grabbing the
 operator's cursor.
 
 ```sh
-nix run .#macos-vm -- info
+nix run .#vmkit -- info
 # Boot a Linux guest (raw EFI disk) under libkrun, with a GPU:
-nix run .#macos-vm -- boot-linux --disk ./linux.raw --gpu
+nix run .#vmkit -- boot-linux --disk ./linux.raw --gpu
 ```
 
 ## Status
@@ -73,11 +73,11 @@ What works today:
   dylib references so it runs on a vanilla guest (see
   [Staging a binary guest-portable](#staging-a-binary-guest-portable)).
 - **Automatic self-signing**: a VM command on the read-only Nix store binary
-  re-execs an ad-hoc-signed copy from `$XDG_CACHE_HOME/ix/macos-vm` carrying the
-  `com.apple.security.virtualization` entitlement, so `nix run .#macos-vm` and
+  re-execs an ad-hoc-signed copy from `$XDG_CACHE_HOME/ix/vmkit` carrying the
+  `com.apple.security.virtualization` entitlement, so `nix run .#vmkit` and
   ix-mcp spawning work with no manual `codesign` step.
 
-The `macvm` Python module bundled into ix-mcp exposes the full surface:
+The `vmkit` Python module bundled into ix-mcp exposes the full surface:
 `info`, `install`, `provision`, `stage_binary`, `screenshot`,
 `screenshot_many`, `drive`, `Driver`, and the one-call `run_app` (share a host
 app in, launch it, return a frame of the guest display). For Linux guests it
@@ -150,7 +150,7 @@ desktop publishes one frame and then nothing. The raw frame is copied off the
 `IOSurface` on the main queue and converted, scaled, and compared off it, to keep
 guest rendering and lockstep input responsive. The capture is best-effort: if the
 socket cannot be bound the driver logs one line and keeps running. Set
-`IX_MACVM_NO_DASHBOARD` (to any value) to turn it off, e.g. a lockstep automated
+`IX_VMKIT_NO_DASHBOARD` (to any value) to turn it off, e.g. a lockstep automated
 driver that does not want the extra framebuffer sampling.
 
 Known limit: the dashboard keeps pane history in a CRDT, so a screen that changes
@@ -174,11 +174,11 @@ past them offline. `provision` performs the proven host-side disk edit, with the
 guest stopped, so the next boot lands on a logged-in desktop:
 
 ```sh
-nix run .#macos-vm -- install-macos --ipsw ./UniversalMac_26.5_Restore.ipsw --bundle ./guest
+nix run .#vmkit -- install-macos --ipsw ./UniversalMac_26.5_Restore.ipsw --bundle ./guest
 # --autologin reads the password from stdin (keeps it out of the process table);
 # omit --password-stdin for an empty password.
-printf '%s' "$PASSWORD" | nix run .#macos-vm -- provision --bundle ./guest --user ix --autologin --password-stdin
-nix run .#macos-vm -- drive-macos --bundle ./guest   # lands on the desktop, no Setup Assistant
+printf '%s' "$PASSWORD" | nix run .#vmkit -- provision --bundle ./guest --user ix --autologin --password-stdin
+nix run .#vmkit -- drive-macos --bundle ./guest   # lands on the desktop, no Setup Assistant
 ```
 
 It attaches the bundle's `disk.img` read-write with no auto-mount, finds the
@@ -212,7 +212,7 @@ vanilla guest does not have, so it fails to start when shared in. `stage-binary`
 copies the binary and makes the copy depend only on libraries the guest has:
 
 ```sh
-nix run .#macos-vm -- stage-binary ./result/bin/myapp ./staged/myapp
+nix run .#vmkit -- stage-binary ./result/bin/myapp ./staged/myapp
 otool -L ./staged/myapp    # zero /nix/store entries
 ```
 
@@ -243,8 +243,8 @@ the architecture:
 - The ix-mcp Python interpreter is an unsigned, immutable Nix store binary. It
   cannot gain the entitlement, and re-signing a store path is not an option. So
   the interpreter must not drive Virtualization.framework in-process.
-- Instead, `macos-vm` is a separate signed binary that owns the VM. Callers
-  (the CLI, and later the `macvm` Python module) spawn it and talk to it over a
+- Instead, `vmkit` is a separate signed binary that owns the VM. Callers
+  (the CLI, and later the `vmkit` Python module) spawn it and talk to it over a
   control channel. The entitlement lives only on this process.
 
 This is the same split [`go-microvm`](https://github.com/stacklok/go-microvm)
@@ -255,9 +255,9 @@ runner that the rest of the program drives.
 
 Ad-hoc signing is enough; no paid Developer ID is required. This is automatic:
 a VM command checks for a sentinel env var, and if unset copies the (read-only)
-Nix store binary into `$XDG_CACHE_HOME/ix/macos-vm` (keyed by the store path),
+Nix store binary into `$XDG_CACHE_HOME/ix/vmkit` (keyed by the store path),
 ad-hoc-signs it with `src/virtualization.entitlements`
-(`com.apple.security.virtualization`), and re-execs it. So `nix run .#macos-vm`
+(`com.apple.security.virtualization`), and re-execs it. So `nix run .#vmkit`
 and ix-mcp spawning work with no manual `codesign`. The equivalent manual step
 is `codesign --force --sign - --entitlements src/virtualization.entitlements <bin>`.
 
@@ -347,7 +347,7 @@ here. See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
    `run_app` cover launching a nix-built app. Vision OCR for locating controls
    from a frame is still open.
 5. vsock control channel + long-lived `serve` mode for IPC.
-6. ~~`macvm` Python module bundled into ix-mcp (like `tui`/`screen`).~~ Done: the
+6. ~~`vmkit` Python module bundled into ix-mcp (like `tui`/`screen`).~~ Done: the
    module exposes `info`, `install`, `provision`, `stage_binary`, `screenshot`,
    `screenshot_many`, `drive`, `Driver`, and `run_app`, returning PIL images that
    render inline, plus the Linux helpers `boot_linux` (headless serial console),

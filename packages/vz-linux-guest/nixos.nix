@@ -1,4 +1,4 @@
-# NixOS aarch64 guest for the macos-vm `boot-linux-gui` path: boots straight into
+# NixOS aarch64 guest for the vmkit `boot-linux-gui` path: boots straight into
 # a Wayland compositor on the virtio-gpu and runs `bossbar-overlay`, so the host
 # can screenshot a real Linux GUI render off the VZ framebuffer.
 #

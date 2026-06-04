@@ -1,6 +1,6 @@
 # Linux guests run on libkrun, not Virtualization.framework
 
-`macos-vm` is generic over the guest OS, with one backend per guest:
+`vmkit` is generic over the guest OS, with one backend per guest:
 
 - **macOS guests** run on Apple's [Virtualization.framework](https://developer.apple.com/documentation/virtualization) (`src/macguest.rs`, `src/drive.rs`). This is the path that boots an installed macOS, drives it off-screen, and screenshots its framebuffer.
 - **Linux guests** run on [libkrun](https://github.com/containers/libkrun) (`src/linuxkrun.rs`), which talks to Hypervisor.framework directly.
@@ -9,7 +9,7 @@ The split is deliberate. Virtualization.framework gives a Linux guest **no GPU**
 
 ## What the Linux backend does
 
-`macos-vm boot-linux --disk <raw-efi-disk> [--gpu]` boots a raw EFI-bootable disk image (a NixOS `raw-efi` image, a Fedora CoreOS raw, etc.) and streams its serial console until the guest powers off or the timeout elapses. `--gpu` adds the Venus virtio-gpu device.
+`vmkit boot-linux --disk <raw-efi-disk> [--gpu]` boots a raw EFI-bootable disk image (a NixOS `raw-efi` image, a Fedora CoreOS raw, etc.) and streams its serial console until the guest powers off or the timeout elapses. `--gpu` adds the Venus virtio-gpu device.
 
 The call sequence (`src/linuxkrun.rs`): `krun_create_ctx` → `krun_set_vm_config` → `krun_set_firmware` → `krun_add_disk2` → (optional) `krun_set_gpu_options2` → (optional) `krun_set_console_output` → `krun_start_enter`. `krun_start_enter` does not return on success: libkrun takes over the process and `exit()`s with the guest's exit code when the VM stops, so the console has streamed by then.
 
@@ -23,7 +23,7 @@ nixpkgs only provides libkrun on Darwin as **libkrun-efi** (classic libkrun's `l
 
 The crate links `-lkrun` (which resolves to `libkrun-efi.dylib` through the nix package's symlink chain). The build script emits the `-l`; the search path and rpath are injected by the workspace build (`lib/rust/workspace.nix`), because a build script's link-search does not reach the final unit link in the cargo-unit graph.
 
-libkrun needs `com.apple.security.hypervisor` on the running process (distinct from Virtualization.framework's `com.apple.security.virtualization`). The one `macos-vm` binary carries both, plus `com.apple.security.cs.disable-library-validation` so it can load the ad-hoc-signed libkrun dylib from the Nix store. The self-signer (`src/main.rs`) applies these on first run.
+libkrun needs `com.apple.security.hypervisor` on the running process (distinct from Virtualization.framework's `com.apple.security.virtualization`). The one `vmkit` binary carries both, plus `com.apple.security.cs.disable-library-validation` so it can load the ad-hoc-signed libkrun dylib from the Nix store. The self-signer (`src/main.rs`) applies these on first run.
 
 ## Known limitations
 
