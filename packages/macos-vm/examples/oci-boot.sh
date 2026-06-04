@@ -121,8 +121,10 @@ cp "$WORK/root/bin/busybox" "$IR/bin/busybox"
 for lib in ld-linux-aarch64.so.1 libc.so.6 libm.so.6 libresolv.so.2; do
   [[ -e "$WORK/root/lib/$lib" ]] && cp "$WORK/root/lib/$lib" "$IR/lib/"
 done
-# Extract the two kernel modules from the Alpine initramfs.
-( cd "$WORK" && mkdir -p aird && cd aird && zcat ../initramfs-virt | cpio -idm 2>/dev/null )
+# Extract the two kernel modules from the Alpine initramfs. Use `gzip -dc`, not
+# `zcat`: macOS ships BSD `zcat`, which appends `.Z` and decodes compress(1), so
+# `zcat initramfs-virt` looks for `initramfs-virt.Z` and fails on a gzip file.
+( cd "$WORK" && mkdir -p aird && cd aird && gzip -dc ../initramfs-virt | cpio -idm 2>/dev/null )
 # The kernel-version directory name is unknown, so glob it (one match expected).
 kmods=( "$WORK"/aird/lib/modules/*/kernel )
 KMOD="${kmods[0]}"
