@@ -51,21 +51,15 @@ fn short(rev: &str) -> String {
     rev.chars().take(7).collect()
 }
 
-fn main() -> Result<()> {
-    color_eyre::install()?;
-    let cli = Cli::parse();
-    let revs = git::resolve(cli.base.as_deref(), cli.head.as_deref())?;
-
-    let base = nix::eval_checks(&revs.repo, &revs.base)?;
-    let head = nix::eval_checks(&revs.repo, &revs.head)?;
-
-    // An attr that fails to evaluate has no derivation, so it cannot be a rebuild
-    // target. Tolerate failures already present at base (a `.#checks` catalog is
-    // not guaranteed eval-clean: ix carries eval-assertion checks that throw when
-    // their invariant is violated and are not in its required gate). But FAIL
-    // CLOSED on any failure new at head -- a check this change broke, or a broken
-    // check it added -- so blast-radius never renders a successful-looking report
-    // that hides an eval regression it introduced.
+/// Fail closed if any check fails to evaluate at head that did not already fail
+/// at base. A failure new at head is a regression this change introduced (a
+/// check it broke, or a broken check it added), so the run aborts rather than
+/// render a successful-looking report that hides it. Failures present at base
+/// too are a pre-existing catalog issue (a `.#checks` set is not guaranteed
+/// eval-clean: ix carries eval-assertion checks that throw when their invariant
+/// is violated and are not in its required gate); those have no derivation, so
+/// they are excluded from the diff and only reported.
+fn guard_eval_failures(base: &nix::EvalResult, head: &nix::EvalResult) -> Result<()> {
     let base_failures: BTreeSet<&str> = base.failures.iter().map(String::as_str).collect();
     let new_failures: Vec<&str> = head
         .failures
@@ -87,7 +81,17 @@ fn main() -> Result<()> {
             base.failures.join(", ")
         );
     }
+    Ok(())
+}
 
+fn main() -> Result<()> {
+    color_eyre::install()?;
+    let cli = Cli::parse();
+    let revs = git::resolve(cli.base.as_deref(), cli.head.as_deref())?;
+
+    let base = nix::eval_checks(&revs.repo, &revs.base)?;
+    let head = nix::eval_checks(&revs.repo, &revs.head)?;
+    guard_eval_failures(&base, &head)?;
     let base = base.checks;
     let head = head.checks;
 
