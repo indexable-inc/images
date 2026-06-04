@@ -2,8 +2,13 @@ name: Update flake.lock
 
 on:
   workflow_dispatch:
+  # Reusable: ix (and any other indexable-inc repo) calls this same job via
+  # `uses: indexable-inc/index/.github/workflows/update-flake-lock.yml@main`
+  # so the flake-bump mechanics live in one place. The caller supplies the
+  # schedule and the contents/PR permissions.
+  workflow_call:
   schedule:
-    - cron: "17 10 * * 1"
+    - cron: "17 * * * *"
 
 permissions:
   contents: read
