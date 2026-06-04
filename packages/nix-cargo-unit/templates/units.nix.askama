@@ -27,8 +27,8 @@
   extraClippyLintArgs ? [],
   # Cargo policy can disable per-unit clippy. The rendered template always
   # contains the clippyUnits definitions (they're cheap text), but this gate
-  # decides whether `policyChecks.clippy` is published and therefore whether
-  # downstream consumers pick the clippy derivations up.
+  # decides whether `clippyByPackage` is populated and therefore whether
+  # downstream consumers pick the per-crate clippy gates up.
   clippyEnabled ? true,
   # When true, `tests.<binary>.cases` also includes #[ignore]'d tests.
   # Off by default to match `cargo test`. Toggling this only affects
@@ -148,6 +148,28 @@ let
 
   clippyUnits = rec {
 {{ clippy_unit_entries }}  };
+
+  clippyUnitNamesByPackage = {{ clippy_unit_names_by_package }};
+
+  # Per-crate clippy gate: join only this package's own clippy units so editing
+  # one crate rebuilds only its clippy check, not a single whole-workspace
+  # aggregate that fans out to every crate. Empty when clippy is disabled (e.g.
+  # the cross-compile graph), matching the old aggregate's enable gate.
+  clippyByPackage =
+    if clippyEnabled then
+      pkgs.lib.mapAttrs
+        (packageName: names:
+          pkgs.symlinkJoin {
+            name = "${packageName}-clippy";
+            paths = map (unitName: clippyUnits.${unitName}) names;
+          })
+        clippyUnitNamesByPackage
+    else
+      { };
+
+  # Per-crate unused-crate-dependency gate, each referencing only its own
+  # package's units (see render_unused_crate_dependencies_by_package).
+  unusedCrateDependenciesByPackage = {{ unused_crate_dependencies_by_package }};
 
   panicObjectUnits = rec {
 {{ panic_object_unit_entries }}  };
@@ -739,17 +761,12 @@ let
   # lives at `clippyUnits` for callers that want individual units; the policy
   # surface wraps every clippy unit into one symlinkJoin so the gate is one
   # store path that depends on every per-unit clippy build.
-  clippyPolicyAggregate =
-    pkgs.symlinkJoin {
-      name = "cargo-unit-clippy";
-      paths = pkgs.lib.attrValues clippyUnits;
-    };
+  # Workspace-level policy checks (panic-freedom, cargoAudit). Clippy and
+  # unused-crate-dependencies are per-crate (clippyByPackage /
+  # unusedCrateDependenciesByPackage), not aggregated here.
   policyChecks =
     {
 {{ policy_check_entries }}    }
-    // pkgs.lib.optionalAttrs (clippyEnabled && clippyUnits != {}) {
-      clippy = clippyPolicyAggregate;
-    }
     // extraPolicyChecks;
   withPolicyChecks = package:
     if policyChecks == {} then package else pkgs.symlinkJoin {
@@ -765,10 +782,12 @@ in
 {
   inherit
     clippyUnits
+    clippyByPackage
     doctestTargetNamesByPackage
     policyChecks
     sourceAudit
     testTargetNamesByPackage
+    unusedCrateDependenciesByPackage
     units
     ;
   testPlan = mkTestPlan "cargo-unit-test-plan";

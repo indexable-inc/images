@@ -267,8 +267,10 @@ struct UnitsNixTemplate {
     source_audit_entries: String,
     unit_entries: String,
     clippy_unit_entries: String,
+    clippy_unit_names_by_package: String,
     panic_object_unit_entries: String,
     policy_check_entries: String,
+    unused_crate_dependencies_by_package: String,
     roots: String,
     checked_roots: String,
     package_entries: String,
@@ -292,8 +294,12 @@ pub fn render_units_nix(graph: &UnitGraph, options: &RenderOptions) -> Result<St
         source_audit_entries: render_source_audit_entries(&prepared),
         unit_entries: render_unit_entries(graph, options, &prepared)?,
         clippy_unit_entries: render_clippy_unit_entries(graph, options, &prepared)?,
+        clippy_unit_names_by_package: render_clippy_unit_names_by_package(graph, options, &prepared),
         panic_object_unit_entries: render_panic_object_unit_entries(graph, options, &prepared)?,
         policy_check_entries: render_policy_check_entries(graph, options, &prepared)?,
+        unused_crate_dependencies_by_package: render_unused_crate_dependencies_by_package(
+            graph, options, &prepared,
+        ),
         roots: render_roots(graph, &prepared),
         checked_roots: render_checked_roots(graph, &prepared),
         package_entries: render_root_entries(graph, &prepared, |_| true),
@@ -401,14 +407,11 @@ fn render_policy_check_entries(
     options: &RenderOptions,
     prepared: &PreparedGraph,
 ) -> Result<String> {
+    // Unused-crate-dependency checks are emitted per package
+    // (`unusedCrateDependenciesByPackage`), not as one workspace aggregate, so a
+    // single crate edit rebuilds only its own check. `_options` stays for the
+    // panic-freedom gate below.
     let mut entries = String::new();
-    if options.deny_unused_crate_dependencies {
-        writeln!(
-            entries,
-            "    unusedCrateDependencies = {};",
-            render_unused_crate_dependencies_check(graph, options, prepared)
-        )?;
-    }
     if options.deny_panics
         && let Some(check) = render_panic_freedom_check(graph, prepared)
     {
@@ -1640,25 +1643,37 @@ struct DependencyPolicyKey {
     extern_crate_name: String,
 }
 
-fn render_unused_crate_dependencies_check(
+// The shell helper every per-package unused-crate-dependency check shares: a
+// dependency is unused only when *every* unit of the package that declares it
+// reports it unused, so a dependency exercised by one target but not another is
+// not flagged.
+const UNUSED_CRATE_DEPENDENCIES_HELPER: &str = "      failures=0\n      check_unused() {\n        package=\"$1\"\n        dependency=\"$2\"\n        shift 2\n        unit_count=\"$#\"\n        unused_count=0\n\n        for unit in \"$@\"; do\n          report=\"$unit/nix-support/unused-crate-dependencies\"\n          if [ -f \"$report\" ] && grep -Fxq \"$dependency\" \"$report\"; then\n            unused_count=$((unused_count + 1))\n          fi\n        done\n\n        if [ \"$unused_count\" -eq \"$unit_count\" ]; then\n          printf 'unused dependency in %s: %s\\n' \"$package\" \"$dependency\" >&2\n          failures=1\n        fi\n      }\n\n";
+
+// Per-package unused-crate-dependency checks. Each package's check references
+// only that package's own units, so editing one crate rebuilds only its own
+// check rather than a single whole-workspace aggregate that fans out to every
+// crate. Returns a Nix attrset keyed by cargo package name.
+fn render_unused_crate_dependencies_by_package(
     graph: &UnitGraph,
     options: &RenderOptions,
     prepared: &PreparedGraph,
 ) -> String {
-    let mut dependency_units: BTreeMap<DependencyPolicyKey, BTreeSet<usize>> = BTreeMap::new();
+    // package name -> (dependency -> units of that package declaring it)
+    let mut by_package: BTreeMap<String, BTreeMap<DependencyPolicyKey, BTreeSet<usize>>> =
+        BTreeMap::new();
 
     for (index, unit) in graph.units.iter().enumerate() {
         if unit.is_run_custom_build() || !collects_unused_crate_dependencies(unit, options) {
             continue;
         }
-
         for dependency in &unit.dependencies {
             let dep_unit = &graph.units[dependency.index];
             if dep_unit.is_run_custom_build() || dep_unit.is_bin() {
                 continue;
             }
-
-            dependency_units
+            by_package
+                .entry(unit.package_name().to_string())
+                .or_default()
                 .entry(DependencyPolicyKey {
                     pkg_id: unit.pkg_id.clone(),
                     package_name: unit.package_name().to_string(),
@@ -1670,54 +1685,72 @@ fn render_unused_crate_dependencies_check(
         }
     }
 
-    let mut script = String::new();
-    script.push_str(
-        "pkgs.runCommand \"cargo-unit-unused-crate-dependencies\" { nativeBuildInputs = [ pkgs.gnugrep ]; } ''\n",
-    );
-    script.push_str("      failures=0\n");
-    script.push_str("      check_unused() {\n");
-    script.push_str("        package=\"$1\"\n");
-    script.push_str("        dependency=\"$2\"\n");
-    script.push_str("        shift 2\n");
-    script.push_str("        unit_count=\"$#\"\n");
-    script.push_str("        unused_count=0\n\n");
-    script.push_str("        for unit in \"$@\"; do\n");
-    script.push_str("          report=\"$unit/nix-support/unused-crate-dependencies\"\n");
-    script.push_str(
-        "          if [ -f \"$report\" ] && grep -Fxq \"$dependency\" \"$report\"; then\n",
-    );
-    script.push_str("            unused_count=$((unused_count + 1))\n");
-    script.push_str("          fi\n");
-    script.push_str("        done\n\n");
-    script.push_str("        if [ \"$unused_count\" -eq \"$unit_count\" ]; then\n");
-    script.push_str(
-        "          printf 'unused dependency in %s: %s\\n' \"$package\" \"$dependency\" >&2\n",
-    );
-    script.push_str("          failures=1\n");
-    script.push_str("        fi\n");
-    script.push_str("      }\n\n");
-
-    for (dependency, unit_indexes) in dependency_units {
-        let unit_refs = unit_indexes
-            .iter()
-            .map(|index| format!("\"${{units.{}}}\"", nix_attr(&prepared.names[*index])))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let package = format!("{} {}", dependency.package_name, dependency.package_version);
-        let _ = writeln!(
-            script,
-            "      check_unused {} {} {unit_refs}",
-            shell::quote(&package),
-            shell::quote(&dependency.extern_crate_name),
-        );
+    if by_package.is_empty() {
+        return "{ }".to_string();
     }
 
-    script.push_str("\n      if [ \"$failures\" -ne 0 ]; then\n");
-    script.push_str("        exit 1\n");
-    script.push_str("      fi\n");
-    script.push_str("      mkdir -p \"$out\"\n");
-    script.push_str("    ''");
-    script
+    let mut out = String::from("{\n");
+    for (package_name, dependency_units) in by_package {
+        let mut script = String::new();
+        let _ = writeln!(
+            script,
+            "pkgs.runCommand {} {{ nativeBuildInputs = [ pkgs.gnugrep ]; }} ''",
+            nix_attr(&format!("{package_name}-unused-crate-dependencies"))
+        );
+        script.push_str(UNUSED_CRATE_DEPENDENCIES_HELPER);
+        for (dependency, unit_indexes) in dependency_units {
+            let unit_refs = unit_indexes
+                .iter()
+                .map(|index| format!("\"${{units.{}}}\"", nix_attr(&prepared.names[*index])))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let package = format!("{} {}", dependency.package_name, dependency.package_version);
+            let _ = writeln!(
+                script,
+                "      check_unused {} {} {unit_refs}",
+                shell::quote(&package),
+                shell::quote(&dependency.extern_crate_name),
+            );
+        }
+        script.push_str("\n      if [ \"$failures\" -ne 0 ]; then\n        exit 1\n      fi\n      mkdir -p \"$out\"\n    ''");
+        let _ = writeln!(out, "      {} = {script};", nix_attr(&package_name));
+    }
+    out.push_str("    }");
+    out
+}
+
+// Maps each cargo package name to the attr names of its per-unit clippy
+// derivations, so the template can join just that package's clippy units into
+// one per-crate gate instead of one whole-workspace aggregate.
+fn render_clippy_unit_names_by_package(
+    graph: &UnitGraph,
+    _options: &RenderOptions,
+    prepared: &PreparedGraph,
+) -> String {
+    let mut by_package: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (index, unit) in graph.units.iter().enumerate() {
+        if !is_clippy_unit_candidate(unit) {
+            continue;
+        }
+        by_package
+            .entry(unit.package_name().to_string())
+            .or_default()
+            .push(prepared.names[index].clone());
+    }
+    if by_package.is_empty() {
+        return "{ }".to_string();
+    }
+    let mut out = String::from("{\n");
+    for (package_name, names) in by_package {
+        let _ = writeln!(
+            out,
+            "      {} = {};",
+            nix_attr(&package_name),
+            nix_string_list(&names)
+        );
+    }
+    out.push_str("    }");
+    out
 }
 
 fn cargo_package_exports(unit: &Unit) -> Result<String> {
@@ -3182,13 +3215,13 @@ mod tests {
         assert!(rendered.contains("--json=unused-externs-silent"));
         assert!(rendered.contains("withPolicyChecks"));
         // Per-unit clippy: the same local unit gets a sibling clippy-driver
-        // derivation in `clippyUnits`, threaded through `policyChecks.clippy`.
+        // derivation in `clippyUnits`, grouped per crate by `clippyByPackage`.
         assert!(rendered.contains("clippyUnits = rec"));
         assert!(rendered.contains("mkClippyUnit"));
         assert!(rendered.contains("env \"''${rustc_env[@]}\" clippy-driver"));
         assert!(rendered.contains("extraClippyLintArgs"));
-        assert!(rendered.contains("clippy = clippyPolicyAggregate;"));
-        assert!(rendered.contains("clippyPolicyAggregate ="));
+        assert!(rendered.contains("clippyByPackage ="));
+        assert!(rendered.contains("clippyUnitNamesByPackage ="));
     }
 
     #[test]
@@ -3456,10 +3489,10 @@ mod tests {
         .unwrap();
 
         // `clippyUnits = rec { };` rendered empty proves no per-unit clippy
-        // derivations were emitted. The `clippy = clippyUnits;` text and
-        // the template's `mkClippyUnit` helper are template-literal and
-        // always present; the driver invocation only appears inside a
-        // rendered clippy unit's build phase, so it's the load-bearing tell.
+        // derivations were emitted. The template's `mkClippyUnit` helper is
+        // template-literal and always present; the driver invocation only
+        // appears inside a rendered clippy unit's build phase, so it's the
+        // load-bearing tell.
         assert!(rendered.contains("clippyUnits = rec {\n  };"));
         assert!(!rendered.contains("env \"''${rustc_env[@]}\" clippy-driver"));
         assert!(!rendered.contains("mkClippyUnit {\n      pname ="));

@@ -432,8 +432,15 @@ let
           package.passthru.tests or { }
         )
       ) moduleRustPackages;
+      # cargoAudit scans the single workspace Cargo.lock against the advisory DB,
+      # so it is one lockfile-scoped check (it rebuilds only on a Cargo.lock
+      # change, never on a source edit) rather than a per-crate gate. Expose it
+      # once instead of aliasing the same derivation onto every crate.
+      workspaceAuditTests = lib.optionalAttrs (rustWorkspace.units.policyChecks ? cargoAudit) {
+        rust-cargoAudit = rustWorkspace.units.policyChecks.cargoAudit;
+      };
     in
-    repoRustPackageTests // moduleRustPackageTests;
+    repoRustPackageTests // moduleRustPackageTests // workspaceAuditTests;
 
   lintSource = fs.toSource {
     inherit (paths) root;

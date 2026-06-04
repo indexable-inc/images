@@ -565,7 +565,19 @@ let
             lib.nameValuePair "${prefix}${targetName}-${lib.replaceStrings [ "::" ] [ "-" ] case}" drv
           ) (target.cases or { })
         ) (lib.getAttrs (builtins.filter (name: targets ? ${name}) targetNames) targets);
-      policyChecks = workspace.policyChecks or { };
+      # Per-crate policy gates. Each crate gets its own clippy and
+      # unused-crate-dependency check (referencing only its own units) instead of
+      # the workspace-wide aggregates, so editing one crate rebuilds only its own
+      # checks. cargoAudit is lockfile-scoped (one Cargo.lock) and is exposed once
+      # at the workspace level rather than aliased onto every crate.
+      policyChecks =
+        lib.optionalAttrs (
+          (workspace.policy.clippy.enable or false) && (workspace.clippyByPackage or { }) ? ${packageName}
+        ) { clippy = workspace.clippyByPackage.${packageName}; }
+        // lib.optionalAttrs (
+          (workspace.policy.denyUnusedCrateDependencies or false)
+          && (workspace.unusedCrateDependenciesByPackage or { }) ? ${packageName}
+        ) { unusedCrateDependencies = workspace.unusedCrateDependenciesByPackage.${packageName}; };
       testCases =
         flattenCaseTargets "" selectedTestTargets (workspace.tests or { })
         // flattenCaseTargets "doctest-" selectedDoctestTargets (workspace.doctests or { });
