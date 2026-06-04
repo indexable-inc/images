@@ -1,8 +1,29 @@
 ---
 name: nix-style
 disclosure: progressive
-description: "Mechanical Nix style enforced by ast-grep and lint: no with/rec/mkForce, idioms, derivation hygiene, typed options, fetchers, licenses. Use when writing Nix or fixing a lint failure."
+description: "Nix code style, general and mechanical: a design and idiom checklist for new code, plus the rules enforced by ast-grep and lint (no with/rec/mkForce, derivation hygiene, typed options, fetchers, licenses). Use when writing or reviewing Nix, or fixing a lint failure."
 ---
+
+## So you're about to add a new Nix thing
+
+### STOP!
+
+Check these first:
+- Is your code **idiomatic**?
+- Is your code **elegant**?
+- Are you writing imperative code rather than using FP as your guiding philosophy? Common code smells like `imap0`, `lib.range`, `elemAt` usually signal a missing `map`, `genList`, etc.
+- Are you **reimplementing** code that is already in builtins or nixpkgs.lib? Could you write simpler code if you used existing functions?
+- Are you **repeating yourself**? Are you writing the same construct over and over? It may be time to add an abstraction if you're writing the same line 3+ times, or a 3+ line block at least twice.
+- Are you **layering** properly? Your function hierarchy should mirror the conceptual hierarchy and the domain. Helper functions should make sense as a self-contained unit; fracturing an overly large tree is not a valid way of making it easier to understand.
+- Does your code **make sense**? What would it be like for an experienced Nix dev to see it for the first time? Would they have any complaints? If so, address them.
+- Are you adding **special cases** or exceptions? That means something is wrong at a deeper level. Refine the overarching structure instead.
+- Who are the **consumers** of your code? If your function is only ever used in the same file or within the repo, *do not worry about keeping its API compatible;* refactor the caller along with it.
+
+### Maxims
+
+- Reify latent structure
+- Don't over-abstract
+- Parse rather than validate
 
 ## Nix style (ast-grep enforced)
 
@@ -120,4 +141,3 @@ common hard rules are:
 - Keep image targets at `x86_64-linux`.
 - Use structured config options for new modules instead of stringly config
   fragments.
-
