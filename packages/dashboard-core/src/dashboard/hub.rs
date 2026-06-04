@@ -445,7 +445,7 @@ fn loro_err(source: impl std::fmt::Display) -> Error {
 
 /// A new subscriber's starting point: the current full snapshot taken under the
 /// hub lock, plus the live update stream whose first item lines up with it.
-pub(crate) struct Subscription {
+pub struct Subscription {
     /// The full document snapshot at subscribe time, for the client to import
     /// before applying any update.
     pub(crate) snapshot: Vec<u8>,
