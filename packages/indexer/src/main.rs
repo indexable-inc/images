@@ -53,6 +53,12 @@ struct Cli {
     #[arg(long, env = "INDEXER_PREFIX", default_value = "corpus")]
     prefix: String,
 
+    /// OpenTelemetry Collector OTLP/HTTP endpoint (e.g. `http://127.0.0.1:4318`);
+    /// enables the OTLP sink, which emits every non-code source's records to the
+    /// collector as log records (RFC 0004 ingestion bus). Code is not emitted.
+    #[arg(long, env = "INDEXER_OTLP_ENDPOINT")]
+    otlp_endpoint: Option<String>,
+
     /// Index local agent/shell history (claude, codex, atuin) at their default
     /// paths, in addition to any explicit `--*` overrides below.
     #[arg(long)]
@@ -155,8 +161,9 @@ async fn main() -> anyhow::Result<()> {
         }
         None => None,
     };
-    if store.is_none() && parquet.is_none() {
-        anyhow::bail!("nothing to do: pass --mixedbread-store and/or --bucket");
+    let otlp = cli.otlp_endpoint.clone().map(|endpoint| sink_otlp::Config { endpoint });
+    if store.is_none() && parquet.is_none() && otlp.is_none() {
+        anyhow::bail!("nothing to do: pass --mixedbread-store, --bucket, and/or --otlp-endpoint");
     }
     if !any_source_selected(&cli) {
         anyhow::bail!(
@@ -166,7 +173,7 @@ async fn main() -> anyhow::Result<()> {
     let mixedbread =
         store.as_ref().zip(cli.mixedbread_store.as_deref()).map(|(store, name)| Mixedbread { store, name });
 
-    let counts = run_sources(&cli, mixedbread, parquet.as_ref()).await;
+    let counts = run_sources(&cli, mixedbread, parquet.as_ref(), otlp.as_ref()).await;
 
     if counts.failures > 0 {
         anyhow::bail!(
@@ -200,6 +207,7 @@ async fn run_sources(
     cli: &Cli,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
+    otlp: Option<&sink_otlp::Config>,
 ) -> Counts {
     let home = dirs::home_dir();
     let default = |suffix: &str| home.as_ref().map(|h| h.join(suffix));
@@ -212,7 +220,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open(&dir)
                 .with_context(|| format!("parsing Claude transcripts at {}", dir.display()))?;
-            run_source("claude", &adapter, mixedbread, parquet).await
+            run_source("claude", &adapter, mixedbread, parquet, otlp).await
         }
         .await;
         record("claude", result, &mut counts);
@@ -221,7 +229,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_codex::CodexHistory::open(&file)
                 .with_context(|| format!("parsing Codex history at {}", file.display()))?;
-            run_source("codex", &adapter, mixedbread, parquet).await
+            run_source("codex", &adapter, mixedbread, parquet, otlp).await
         }
         .await;
         record("codex", result, &mut counts);
@@ -230,7 +238,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_atuin::AtuinHistory::open(&db)
                 .with_context(|| format!("reading atuin history at {}", db.display()))?;
-            run_source("shell", &adapter, mixedbread, parquet).await
+            run_source("shell", &adapter, mixedbread, parquet, otlp).await
         }
         .await;
         record("shell", result, &mut counts);
@@ -239,7 +247,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_slack::SlackExport::open(dir)
                 .with_context(|| format!("reading Slack export at {}", dir.display()))?;
-            run_source("slack", &adapter, mixedbread, parquet).await
+            run_source("slack", &adapter, mixedbread, parquet, otlp).await
         }
         .await;
         record("slack", result, &mut counts);
@@ -248,7 +256,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_linear::LinearExport::open(dir)
                 .with_context(|| format!("reading Linear export at {}", dir.display()))?;
-            run_source("linear", &adapter, mixedbread, parquet).await
+            run_source("linear", &adapter, mixedbread, parquet, otlp).await
         }
         .await;
         record("linear", result, &mut counts);
@@ -257,7 +265,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_github::GithubExport::open(dir)
                 .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
-            run_source("github", &adapter, mixedbread, parquet).await
+            run_source("github", &adapter, mixedbread, parquet, otlp).await
         }
         .await;
         record("github", result, &mut counts);
@@ -267,7 +275,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_git::GitLog::open(repo)
                 .with_context(|| format!("reading git history at {}", repo.display()))?;
-            run_source("git", &adapter, mixedbread, parquet).await
+            run_source("git", &adapter, mixedbread, parquet, otlp).await
         }
         .await;
         record(&label, result, &mut counts);
@@ -278,7 +286,7 @@ async fn run_sources(
         record(&label, result, &mut counts);
     }
     if !cli.users.is_empty() {
-        run_users(cli, mixedbread, parquet, &mut counts).await;
+        run_users(cli, mixedbread, parquet, otlp, &mut counts).await;
     }
     counts
 }
@@ -289,6 +297,7 @@ async fn run_users(
     cli: &Cli,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
+    otlp: Option<&sink_otlp::Config>,
     counts: &mut Counts,
 ) {
     let host = match resolve_host(cli) {
@@ -304,7 +313,7 @@ async fn run_users(
     };
     for spec in &cli.users {
         match parse_user(spec) {
-            Ok(user) => index_user(&user, &host, mixedbread, parquet, counts).await,
+            Ok(user) => index_user(&user, &host, mixedbread, parquet, otlp, counts).await,
             Err(error) => {
                 eprintln!("[users] bad --user spec: {error:#}");
                 counts.failures += 1;
@@ -327,6 +336,7 @@ async fn index_user(
     host: &str,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
+    otlp: Option<&sink_otlp::Config>,
     counts: &mut Counts,
 ) {
     let name = user.name.as_str();
@@ -337,7 +347,7 @@ async fn index_user(
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name)
                 .with_context(|| format!("parsing Claude transcripts for {name} at {}", claude_dir.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+            run_source(&label, &adapter, mixedbread, parquet.as_ref(), otlp).await
         }
         .await;
         record(&label, result, counts);
@@ -349,7 +359,7 @@ async fn index_user(
         let result = async {
             let adapter = source_codex::CodexHistory::open_with(&codex_file, host, name)
                 .with_context(|| format!("parsing Codex history for {name} at {}", codex_file.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+            run_source(&label, &adapter, mixedbread, parquet.as_ref(), otlp).await
         }
         .await;
         record(&label, result, counts);
@@ -363,7 +373,7 @@ async fn index_user(
         let result = async {
             let adapter = source_atuin::AtuinHistory::open(&atuin_db)
                 .with_context(|| format!("reading atuin history for {name} at {}", atuin_db.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+            run_source(&label, &adapter, mixedbread, parquet.as_ref(), otlp).await
         }
         .await;
         record(&label, result, counts);
@@ -378,7 +388,7 @@ async fn index_user(
         let result = async {
             let adapter = source_debug::DebugLogs::open_with(&debug_dir, host, name)
                 .with_context(|| format!("reading Claude debug logs for {name} at {}", debug_dir.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+            run_source(&label, &adapter, mixedbread, parquet.as_ref(), otlp).await
         }
         .await;
         record(&label, result, counts);
@@ -521,6 +531,7 @@ async fn run_source<A: SourceAdapter + Sync>(
     adapter: &A,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
+    otlp: Option<&sink_otlp::Config>,
 ) -> anyhow::Result<()> {
     let mut errors: Vec<anyhow::Error> = Vec::new();
 
@@ -542,6 +553,16 @@ async fn run_source<A: SourceAdapter + Sync>(
             ),
             Err(error) => {
                 errors.push(anyhow::Error::new(error).context(format!("[{label}] Mixedbread sync")));
+            }
+        }
+    }
+
+    if let Some(config) = otlp {
+        match sink_otlp::sync(adapter, config).await {
+            Ok(report) if report.skipped => eprintln!("[{label}] otlp: skipped (empty)"),
+            Ok(report) => eprintln!("[{label}] otlp: emitted {} records", report.records),
+            Err(error) => {
+                errors.push(anyhow::Error::new(error).context(format!("[{label}] OTLP emit")));
             }
         }
     }

@@ -55,6 +55,7 @@ members = [
   "packages/source/slack",
   "packages/sink/mixedbread",
   "packages/sink/parquet",
+  "packages/sink/otlp",
   "packages/indexer",
   "packages/tap",
   "packages/tap/protocol",
@@ -184,6 +185,7 @@ sha2 = "0.10"
 similar = "2"
 source-slack = { path = "packages/source/slack" }
 sink-mixedbread = { path = "packages/sink/mixedbread" }
+sink-otlp = { path = "packages/sink/otlp" }
 sink-parquet = { path = "packages/sink/parquet" }
 snafu = "0.9"
 strip-ansi-escapes = "0.2"

@@ -25,6 +25,7 @@ source-github.workspace = true
 search-core.workspace = true
 sink-mixedbread.workspace = true
 sink-parquet.workspace = true
+sink-otlp.workspace = true
 mixedbread.workspace = true
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
