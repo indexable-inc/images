@@ -60,12 +60,11 @@ fn base_paths_by_name(base: &Graph) -> BTreeMap<&str, BTreeSet<&str>> {
 /// only when a base derivation of the same name carries that identical path;
 /// anything else (new path, unknown node) counts as changed.
 fn is_changed(head: &Graph, base_by_name: &BTreeMap<&str, BTreeSet<&str>>, path: &str) -> bool {
-    match head.get(path) {
-        Some(node) => !base_by_name
+    head.get(path).is_none_or(|node| {
+        !base_by_name
             .get(node.name.as_str())
-            .is_some_and(|paths| paths.contains(path)),
-        None => true,
-    }
+            .is_some_and(|paths| paths.contains(path))
+    })
 }
 
 /// Walk the changed sub-DAG reachable from `start` and collect the names of the
