@@ -616,6 +616,14 @@ async fn run_source<A: SourceAdapter + Sync>(
     parquet: Option<&sink_parquet::Config>,
     otlp: Option<&sink_otlp::Config>,
 ) -> anyhow::Result<()> {
+    // A selected source with no sink is a misconfiguration, not a no-op. History
+    // sources route only to the OTLP bus, so a missing `--otlp-endpoint` would
+    // otherwise drop them silently while still counting as a success.
+    anyhow::ensure!(
+        mixedbread.is_some() || parquet.is_some() || otlp.is_some(),
+        "[{label}] no sink configured: pass --otlp-endpoint for history sources (or --mixedbread-store/--bucket for exports)"
+    );
+
     let mut errors: Vec<anyhow::Error> = Vec::new();
 
     if let Some(config) = parquet {
@@ -669,7 +677,7 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use super::{parse_user, safe_path_under};
+    use super::{archive_prefix, parse_user, safe_path_under};
 
     #[test]
     fn safe_path_accepts_real_nested_dir() {
@@ -729,5 +737,13 @@ mod tests {
         let user = parse_user("alice-1.2_3:/home/alice").expect("valid spec");
         assert_eq!(user.name, "alice-1.2_3");
         assert_eq!(user.home, PathBuf::from("/home/alice"));
+    }
+
+    #[test]
+    fn archive_prefix_is_host_scoped() {
+        // Bulk exports still host-scope their parquet keys, so two hosts writing
+        // the same bucket never clobber each other.
+        assert_eq!(archive_prefix("corpus", "hil-compute-1"), "corpus/host=hil-compute-1");
+        assert_ne!(archive_prefix("corpus", "a"), archive_prefix("corpus", "b"));
     }
 }

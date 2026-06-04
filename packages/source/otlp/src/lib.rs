@@ -10,9 +10,17 @@
 //! into Mixedbread. It pairs with `sink-otlp`: the attribute names it reads back
 //! are the ones that sink writes.
 //!
-//! A log record is only turned into a document when it carries the
-//! `external_id` and `content_hash` attributes a corpus record always has; any
-//! other log on the bus (a stray app log) is skipped rather than mis-ingested.
+//! A log record is only turned into a document when it carries the `external_id`
+//! attribute a corpus record always has; any other log on the bus (a stray app
+//! log) is skipped rather than mis-ingested. The document's `content_hash` is
+//! recomputed from the reconstructed body, not read from an attribute, so it
+//! always describes the bytes that get embedded.
+//!
+//! Known limitation: this lists the whole prefix and materializes every record
+//! each run, and the emitter is append-only, so the archive and the in-memory
+//! set grow with runs. Before this carries real volume it needs an incremental
+//! cursor (only read partitions newer than the last consumed) plus a retention
+//! policy on the bucket. Tracked as follow-up; fine for the initial wiring.
 
 #![forbid(unsafe_code)]
 
@@ -146,13 +154,19 @@ fn document_from_record(record: LogRecord) -> Option<Document> {
     for attribute in record.attributes {
         meta.insert(attribute.key, attribute.value.into_json());
     }
+    // `external_id` is the corpus identity; a record without it is a stray log.
     let external_id = meta.get(EXTERNAL_ID)?.as_str()?.to_owned();
-    let content_hash = meta.get(keys::CONTENT_HASH)?.as_str()?.to_owned();
+    let body = record.body.string_value().into_bytes();
+    // Recompute the hash from the reconstructed body so it always describes the
+    // bytes that get embedded (source_meta invariant #1), rather than trusting a
+    // possibly-stale `content_hash` attribute. Keep meta_json consistent with it.
+    let content_hash = source_meta::hash_body(&body);
+    meta.insert(keys::CONTENT_HASH.to_owned(), serde_json::Value::String(content_hash.clone()));
     Some(Document {
         file_name: external_id.clone(),
         external_id,
         mime: "text/plain",
-        body: record.body.string_value().into_bytes(),
+        body,
         meta_json: serde_json::Value::Object(meta),
         content_hash,
     })
@@ -286,7 +300,9 @@ mod tests {
         assert_eq!(docs.len(), 1);
         let doc = &docs[0];
         assert_eq!(doc.external_id, "atuin:1");
-        assert_eq!(doc.content_hash, "abc123");
+        // content_hash is recomputed from the reconstructed body, not the stale
+        // "abc123" attribute, so it describes the bytes that get embedded.
+        assert_eq!(doc.content_hash, source_meta::hash_body(b"ls -la"));
         assert_eq!(doc.body, b"ls -la");
         assert_eq!(doc.mime, "text/plain");
         // String attribute round-trips as a string; int64 attribute as a number.
