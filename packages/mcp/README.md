@@ -77,6 +77,11 @@ DataTables library loads from a CDN (itables `connected=True`), the mode that
 works from a startup script; a frame larger than 256KB is downsampled to a slice
 with a banner so a single cell cannot embed megabytes into the notebook.
 
+The agent reads that `text/plain` repr, so the kernel also widens polars'
+defaults (up to 40 rows and columns, 80-char strings) so a frame is not
+truncated to ~8 columns in the agent's view. The MCP layer still caps a single
+text output at 50k chars, so the wider repr cannot flood the agent's context.
+
 ## Bad fit if
 
 - You need a fully offline, server-less notebook: `serve` always runs a Jupyter

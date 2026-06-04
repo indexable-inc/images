@@ -477,7 +477,7 @@ let
     from jupyter_client.manager import start_new_kernel
 
     km, kc = start_new_kernel(kernel_name="python3")
-    found = {"html": False, "plain": False}
+    found = {"html": False, "plain": ""}
 
     def hook(msg):
         if msg["msg_type"] in ("execute_result", "display_data"):
@@ -485,12 +485,14 @@ let
             html = data.get("text/html", "")
             if html and ("dt_for_itables" in html or "itables" in html):
                 found["html"] = True
-            if data.get("text/plain"):
-                found["plain"] = True
+            found["plain"] += data.get("text/plain", "")
 
     try:
+        # A 12-column frame: more than polars' ~8-column default, so the text/plain
+        # repr only shows the last column (c11) if 01-ix-polars.py widened the
+        # config. Exercises both startup scripts at once.
         kc.execute_interactive(
-            "import polars as pl; pl.DataFrame({'a': [1, 2], 'b': [3, 4]})",
+            "import polars as pl; pl.DataFrame({f'c{i}': [i] for i in range(12)})",
             timeout=120, output_hook=hook, store_history=True,
         )
     finally:
@@ -499,6 +501,7 @@ let
 
     assert found["html"], "DataFrame did not render as an interactive itables table (startup did not run?)"
     assert found["plain"], "DataFrame lost its text/plain repr (the agent path would break)"
+    assert "c11" in found["plain"], "polars repr was not widened (01-ix-polars.py did not run?)"
     print("tables-ok")
   '';
   tablesSmoke =
