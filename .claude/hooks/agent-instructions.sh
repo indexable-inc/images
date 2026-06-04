@@ -53,7 +53,10 @@ if [ -n "$skills_store" ]; then
   esac
   rm -rf "$dest"
   mkdir -p "$dest"
-  cp -RL "$skills_store"/. "$dest"/
+  for skill in "$skills_store"/*; do
+    [ -e "$skill" ] || continue
+    cp -RH "$skill" "$dest"/
+  done
   chmod -R u+w "$dest"
 fi
 
