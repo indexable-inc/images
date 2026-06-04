@@ -287,6 +287,12 @@ let
       # the polars/duckdb paths return frames natively. A session that needs
       # explicit Arrow tables (`pl.to_arrow()`) can `pip install pyarrow`.
       ps.duckdb
+      # itables: every kernel's IPython startup (ix_notebook_mcp/ipython/) calls
+      # init_notebook_mode(all_interactive=True), so a pandas/polars DataFrame
+      # renders as an interactive DataTable (sort, search, paginate, scroll) in
+      # the human's JupyterLab view with no per-session call. It keeps the
+      # text/plain repr too, so the agent path and non-JS viewers are unchanged.
+      ps.itables
       # httpx: an HTTP client for the shared async loop (the session already speaks
       # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
       # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
@@ -462,6 +468,66 @@ let
         mkdir -p "$out"
       '';
 
+  # Boots a real kernel with the shipped IPython startup in place and proves a
+  # polars DataFrame comes back as an interactive itables table (the human's
+  # JupyterLab upgrade) while keeping its text/plain repr (the agent path). Reads
+  # the startup script from the built module, so it also guards that the asset
+  # actually ships. Loopback only, like evalSmoke, so the sandbox allows it.
+  tablesTestPy = pkgs.writeText "ix-mcp-tables-test.py" ''
+    from jupyter_client.manager import start_new_kernel
+
+    km, kc = start_new_kernel(kernel_name="python3")
+    found = {"html": False, "plain": False}
+
+    def hook(msg):
+        if msg["msg_type"] in ("execute_result", "display_data"):
+            data = msg["content"].get("data", {})
+            html = data.get("text/html", "")
+            if html and ("dt_for_itables" in html or "itables" in html):
+                found["html"] = True
+            if data.get("text/plain"):
+                found["plain"] = True
+
+    try:
+        kc.execute_interactive(
+            "import polars as pl; pl.DataFrame({'a': [1, 2], 'b': [3, 4]})",
+            timeout=120, output_hook=hook, store_history=True,
+        )
+    finally:
+        kc.stop_channels()
+        km.shutdown_kernel(now=True)
+
+    assert found["html"], "DataFrame did not render as an interactive itables table (startup did not run?)"
+    assert found["plain"], "DataFrame lost its text/plain repr (the agent path would break)"
+    print("tables-ok")
+  '';
+  tablesSmoke =
+    pkgs.runCommand "ix-mcp-tables-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        export IPYTHONDIR=$TMPDIR/ipython
+        mkdir -p "$IPYTHONDIR/profile_default/startup"
+        cp ${ixNotebookMcpModule}/${pkgs.python3.sitePackages}/ix_notebook_mcp/ipython/*.py \
+          "$IPYTHONDIR/profile_default/startup/"
+
+        ${lib.getExe mcpPython} ${tablesTestPy} >stdout 2>stderr || {
+          echo "ix-mcp tables smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'tables-ok' stdout || {
+          echo "ix-mcp tables smoke did not confirm interactive tables:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # macOS-only modules (`screen`, `macvm`) are only bundled on Darwin; their
   # import tests only exist there.
   screenBundled = importTest "screen" "import screen; print('screen-ok', callable(screen.capture), callable(screen.click), callable(screen.accessibility_trusted))";
@@ -478,6 +544,7 @@ package.overrideAttrs (old: {
         jupyterBundled
         serverTools
         evalSmoke
+        tablesSmoke
         ;
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {

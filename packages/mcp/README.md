@@ -67,6 +67,16 @@ the `index` corpus), numpy, polars, duckdb, httpx, matplotlib, playwright, the
 Google API client, and on macOS `screen` and `macvm`. A per-notebook kernel is
 shared with the human, so state set by an agent cell is visible in the browser.
 
+DataFrames render as interactive tables out of the box: every kernel loads
+[itables](https://mwouts.github.io/itables/) at startup with
+`init_notebook_mode(all_interactive=True)`, so displaying a pandas or polars
+frame gives the human a sortable, searchable, paginated DataTable in JupyterLab
+instead of a static table. The `text/plain` repr is kept alongside it, so the
+agent (which reads text, not HTML) and any non-JS viewer are unchanged. The
+DataTables library loads from a CDN (itables `connected=True`), the mode that
+works from a startup script; a frame larger than 256KB is downsampled to a slice
+with a banner so a single cell cannot embed megabytes into the notebook.
+
 ## Bad fit if
 
 - You need a fully offline, server-less notebook: `serve` always runs a Jupyter

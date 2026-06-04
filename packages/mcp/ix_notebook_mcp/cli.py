@@ -97,6 +97,28 @@ def _prepare_lab_config(jupyter_port: int) -> tuple[Path, bool]:
     return base, has_css
 
 
+def _prepare_ipython_startup(jupyter_port: int) -> Path:
+    """Materialize a private ``IPYTHONDIR`` whose startup folder holds the shipped
+    ``ipython/`` scripts, and return it.
+
+    IPython runs every ``*.py`` under ``{IPYTHONDIR}/profile_default/startup/``
+    before a kernel's first cell. Kernels inherit this process's environment, so
+    pointing ``IPYTHONDIR`` here (in :func:`_serve`, before the server launches)
+    is what makes 00-ix-itables.py run in each kernel and turn DataFrames into
+    interactive tables. Per-port and under the 0700 runtime dir so concurrent
+    servers do not share an IPython history db, and isolated from the user's
+    ``~/.ipython`` for the same reason the lab config is isolated from
+    ``~/.jupyter``: reproducible behavior that the user's profile cannot break.
+    """
+    assets = Path(__file__).resolve().parent / "ipython"
+    base = runtime_dir() / f"ipython-{jupyter_port}"
+    startup = base / "profile_default" / "startup"
+    startup.mkdir(parents=True, exist_ok=True)
+    for script in sorted(assets.glob("*.py")):
+        shutil.copyfile(script, startup / script.name)
+    return base
+
+
 def _free_port() -> int:
     # Just reserves a free port number; the kernel gives port 0 an unused port.
     # The interface here is irrelevant: a number free on loopback is free for the
@@ -220,6 +242,11 @@ def _serve(args: argparse.Namespace) -> int:
     # unconditionally so the config surface does not change based on whether the
     # generated CSS happens to be present.
     os.environ["JUPYTER_CONFIG_DIR"] = str(lab_config_dir)
+
+    # Point IPython at a private profile whose startup scripts run in every
+    # kernel (kernels inherit this env). 00-ix-itables.py turns DataFrames into
+    # interactive tables; see _prepare_ipython_startup.
+    os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(cfg.jupyter_port))
 
     from jupyter_server.serverapp import ServerApp
 
