@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
   schedule:
     # Claude Code ships several builds a week: Anthropic promotes them from the
-    # `next` tag to `latest` a few days apart, so check daily rather than the
-    # weekly cadence the flake.lock / loader jobs use. The updater tracks the
-    # `latest` pointer, and the PR step reuses one branch, so a daily run just
-    # advances the open PR instead of stacking new ones.
-    - cron: "37 9 * * *"
+    # `next` tag to `latest` a few days apart. Check hourly so the open PR
+    # advances within the hour a new `latest` lands. The updater tracks the
+    # `latest` pointer and reuses one branch, and a no-op run is a Cachix hit,
+    # so the hourly cadence stays cheap and never stacks new PRs.
+    - cron: "37 * * * *"
 
 permissions:
   contents: read
