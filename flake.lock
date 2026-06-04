@@ -266,11 +266,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1780248344,
-        "narHash": "sha256-dkpHwTbpQcxG9mOctMuSN4jRX2S/06aPGLMlJdqnebU=",
+        "lastModified": 1780588535,
+        "narHash": "sha256-EOfJBxgmjZVqtPSI3dG1I7UJ0JOZ/fj3KQ4XHTT+k+4=",
         "owner": "indexable-inc",
         "repo": "symphony",
-        "rev": "8b210247d64388e06f9e2e84a81a426999a9dd8c",
+        "rev": "a896b6ab23b9a6331f77cebc9cd5597d7fb73702",
         "type": "github"
       },
       "original": {
