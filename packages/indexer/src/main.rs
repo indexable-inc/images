@@ -1,12 +1,22 @@
 //! `indexer`: sync every configured corpus source into Mixedbread (semantic
-//! search) and a self-hosted S3/R2 parquet archive (polars/duckdb-queryable).
+//! search), with per-host history flowing through the RFC 0004 ingestion bus.
 //!
-//! Each source is an adapter implementing [`source_meta::SourceAdapter`]; the
-//! indexer fans every selected source out to both sinks, reusing the
-//! `search-core` Mixedbread reconcile (skip-if-unchanged) and the generic
-//! [`sink_parquet`] sink. Pass `--mixedbread-store` and/or `--bucket` to enable a
-//! sink, and one or more source flags to choose what to ingest.
+//! Each source is an adapter implementing [`source_meta::SourceAdapter`]. The
+//! routing differs by corpus shape:
+//!
+//! - Per-host history (claude, codex, shell, debug) is emitted to an
+//!   `OpenTelemetry` Collector as OTLP log records (`--otlp-endpoint`); the
+//!   collector fans out to `ClickHouse` and a durable S3 archive, and a separate
+//!   consume run reconciles that archive back into Mixedbread.
+//! - Bulk exports (slack, linear, github, git) go direct to Mixedbread and the
+//!   S3/R2 parquet archive, reusing the `search-core` reconcile and
+//!   [`sink_parquet`].
+//! - Code repos go direct to Mixedbread only.
+//!
+//! Consume mode (`--from-otlp-prefix`) reads the collector's S3 archive and
+//! reconciles it into Mixedbread, the consumer half of the bus.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -19,7 +29,7 @@ use sink_mixedbread::sync_documents;
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 /// Cap on new files uploaded per code sync (a runaway guard).
 const MAX_FILES: usize = 10_000;
-use source_meta::SourceAdapter;
+use source_meta::{Document, Source, SourceAdapter, keys};
 
 /// How long to wait for Mixedbread to finish embedding new documents.
 const INDEX_TIMEOUT: Duration = Duration::from_mins(2);
@@ -53,11 +63,20 @@ struct Cli {
     #[arg(long, env = "INDEXER_PREFIX", default_value = "corpus")]
     prefix: String,
 
-    /// `OpenTelemetry` Collector OTLP/HTTP endpoint (e.g. `http://127.0.0.1:4318`);
-    /// enables the OTLP sink, which emits every non-code source's records to the
-    /// collector as log records (RFC 0004 ingestion bus). Code is not emitted.
+    /// `OpenTelemetry` Collector OTLP/HTTP endpoint (e.g. `http://127.0.0.1:4318`).
+    /// Per-host history (claude, codex, shell, debug) is emitted here as OTLP log
+    /// records (RFC 0004 ingestion bus) instead of being written to Mixedbread and
+    /// the parquet archive directly; the collector fans out to those sinks. Code
+    /// and the bulk exports stay on their direct Mixedbread path.
     #[arg(long, env = "INDEXER_OTLP_ENDPOINT")]
     otlp_endpoint: Option<String>,
+
+    /// Consume mode: read the collector's OTLP/JSON archive at this prefix under
+    /// `--bucket` and reconcile it into Mixedbread (the other half of the RFC 0004
+    /// bus). When set, the indexer consumes the archive rather than scanning local
+    /// sources; pair with `--mixedbread-store` and `--bucket`.
+    #[arg(long, env = "INDEXER_FROM_OTLP_PREFIX")]
+    from_otlp_prefix: Option<String>,
 
     /// Index local agent/shell history (claude, codex, atuin) at their default
     /// paths, in addition to any explicit `--*` overrides below.
@@ -142,6 +161,25 @@ async fn main() -> anyhow::Result<()> {
         }
         None => None,
     };
+    let mixedbread =
+        store.as_ref().zip(cli.mixedbread_store.as_deref()).map(|(store, name)| Mixedbread { store, name });
+
+    // Consume mode (RFC 0004 bus): read the collector's OTLP/JSON archive into
+    // Mixedbread and return, rather than scanning local sources. Emit (per host)
+    // and consume (central) run as separate invocations of this binary.
+    if let Some(prefix) = cli.from_otlp_prefix.clone() {
+        let mixedbread =
+            mixedbread.context("--from-otlp-prefix requires --mixedbread-store (the reconcile target)")?;
+        let bucket = cli.bucket.clone().context("--from-otlp-prefix requires --bucket")?;
+        let config = source_otlp::Config {
+            bucket,
+            endpoint: cli.endpoint.clone(),
+            region: cli.region.clone(),
+            prefix,
+        };
+        return finish(run_consume(&config, mixedbread).await);
+    }
+
     let parquet = match cli.bucket.as_ref() {
         // Host-scope every parquet key. Many fleet hosts index the same account
         // (notably `root`, present on every host) into one shared bucket, and
@@ -170,11 +208,13 @@ async fn main() -> anyhow::Result<()> {
             "no sources selected: pass --local, --user NAME:HOME, --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--github-export/--git-repo, or --code-repo"
         );
     }
-    let mixedbread =
-        store.as_ref().zip(cli.mixedbread_store.as_deref()).map(|(store, name)| Mixedbread { store, name });
 
-    let counts = run_sources(&cli, mixedbread, parquet.as_ref(), otlp.as_ref()).await;
+    finish(run_sources(&cli, mixedbread, parquet.as_ref(), otlp.as_ref()).await)
+}
 
+/// Turn the per-run counts into the process result: success only when no source
+/// failed, so a partial failure is a non-zero exit the timer/operator can see.
+fn finish(counts: Counts) -> anyhow::Result<()> {
     if counts.failures > 0 {
         anyhow::bail!(
             "{} of {} source(s) failed; {} succeeded",
@@ -220,7 +260,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open(&dir)
                 .with_context(|| format!("parsing Claude transcripts at {}", dir.display()))?;
-            run_source("claude", &adapter, mixedbread, parquet, otlp).await
+            run_source("claude", &adapter, None, None, otlp).await
         }
         .await;
         record("claude", result, &mut counts);
@@ -229,7 +269,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_codex::CodexHistory::open(&file)
                 .with_context(|| format!("parsing Codex history at {}", file.display()))?;
-            run_source("codex", &adapter, mixedbread, parquet, otlp).await
+            run_source("codex", &adapter, None, None, otlp).await
         }
         .await;
         record("codex", result, &mut counts);
@@ -238,7 +278,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_atuin::AtuinHistory::open(&db)
                 .with_context(|| format!("reading atuin history at {}", db.display()))?;
-            run_source("shell", &adapter, mixedbread, parquet, otlp).await
+            run_source("shell", &adapter, None, None, otlp).await
         }
         .await;
         record("shell", result, &mut counts);
@@ -247,7 +287,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_slack::SlackExport::open(dir)
                 .with_context(|| format!("reading Slack export at {}", dir.display()))?;
-            run_source("slack", &adapter, mixedbread, parquet, otlp).await
+            run_source("slack", &adapter, mixedbread, parquet, None).await
         }
         .await;
         record("slack", result, &mut counts);
@@ -256,7 +296,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_linear::LinearExport::open(dir)
                 .with_context(|| format!("reading Linear export at {}", dir.display()))?;
-            run_source("linear", &adapter, mixedbread, parquet, otlp).await
+            run_source("linear", &adapter, mixedbread, parquet, None).await
         }
         .await;
         record("linear", result, &mut counts);
@@ -265,7 +305,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_github::GithubExport::open(dir)
                 .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
-            run_source("github", &adapter, mixedbread, parquet, otlp).await
+            run_source("github", &adapter, mixedbread, parquet, None).await
         }
         .await;
         record("github", result, &mut counts);
@@ -275,7 +315,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_git::GitLog::open(repo)
                 .with_context(|| format!("reading git history at {}", repo.display()))?;
-            run_source("git", &adapter, mixedbread, parquet, otlp).await
+            run_source("git", &adapter, mixedbread, parquet, None).await
         }
         .await;
         record(&label, result, &mut counts);
@@ -286,20 +326,14 @@ async fn run_sources(
         record(&label, result, &mut counts);
     }
     if !cli.users.is_empty() {
-        run_users(cli, mixedbread, parquet, otlp, &mut counts).await;
+        run_users(cli, otlp, &mut counts).await;
     }
     counts
 }
 
 /// Run the `--user NAME:HOME` multi-user phase, accumulating into the shared
 /// counters. Split out of [`run_sources`] to keep each function focused.
-async fn run_users(
-    cli: &Cli,
-    mixedbread: Option<Mixedbread<'_>>,
-    parquet: Option<&sink_parquet::Config>,
-    otlp: Option<&sink_otlp::Config>,
-    counts: &mut Counts,
-) {
+async fn run_users(cli: &Cli, otlp: Option<&sink_otlp::Config>, counts: &mut Counts) {
     let host = match resolve_host(cli) {
         Ok(host) => host,
         Err(error) => {
@@ -313,13 +347,76 @@ async fn run_users(
     };
     for spec in &cli.users {
         match parse_user(spec) {
-            Ok(user) => index_user(&user, &host, mixedbread, parquet, otlp, counts).await,
+            Ok(user) => index_user(&user, &host, otlp, counts).await,
             Err(error) => {
                 eprintln!("[users] bad --user spec: {error:#}");
                 counts.failures += 1;
             }
         }
     }
+}
+
+/// An in-memory source: documents already tagged with one `source`, used by
+/// [`run_consume`] to reuse the per-source Mixedbread reconcile (which scopes its
+/// skip-if-unchanged listing by `source`).
+struct VecSource {
+    source: Source,
+    documents: Vec<Document>,
+}
+
+impl SourceAdapter for VecSource {
+    type Error = std::convert::Infallible;
+    fn source(&self) -> Source {
+        self.source.clone()
+    }
+    fn documents(&self) -> impl Iterator<Item = Result<Document, Self::Error>> + Send {
+        self.documents.clone().into_iter().map(Ok)
+    }
+}
+
+/// Consume mode: read the collector's OTLP archive, group the records by their
+/// `source`, and reconcile each group into Mixedbread. Grouping keeps each
+/// Mixedbread reconcile scoped to one source, exactly as the direct per-source
+/// ingestion did, so a consumed record dedups against its own source and never
+/// touches another's.
+async fn run_consume(config: &source_otlp::Config, mixedbread: Mixedbread<'_>) -> Counts {
+    let mut counts = Counts { indexed: 0, failures: 0 };
+    let documents = match source_otlp::read_documents(config).await {
+        Ok(documents) => documents,
+        Err(error) => {
+            eprintln!("[consume] failed to read the OTLP archive: {error:#}");
+            counts.failures += 1;
+            return counts;
+        }
+    };
+
+    let mut by_source: BTreeMap<String, Vec<Document>> = BTreeMap::new();
+    for document in documents {
+        let source = document
+            .meta_json
+            .get(keys::SOURCE)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        by_source.entry(source).or_default().push(document);
+    }
+
+    let Mixedbread { store, name } = mixedbread;
+    for (source, documents) in by_source {
+        let label = format!("consume:{source}");
+        let adapter = VecSource { source: Source::new(source), documents };
+        let result = sync_documents(&adapter, store, name, INDEX_TIMEOUT, |_, _| {})
+            .await
+            .map(|report| {
+                eprintln!(
+                    "[{label}] mixedbread: uploaded {}, skipped {} of {}",
+                    report.uploaded, report.skipped, report.total
+                );
+            })
+            .with_context(|| format!("[{label}] Mixedbread reconcile"));
+        record(&label, result, &mut counts);
+    }
+    counts
 }
 
 /// Index one user's local agent and shell history (claude, codex, atuin),
@@ -334,8 +431,6 @@ async fn run_users(
 async fn index_user(
     user: &User,
     host: &str,
-    mixedbread: Option<Mixedbread<'_>>,
-    parquet: Option<&sink_parquet::Config>,
     otlp: Option<&sink_otlp::Config>,
     counts: &mut Counts,
 ) {
@@ -343,11 +438,10 @@ async fn index_user(
     let home = user.home.as_path();
     if let Some(claude_dir) = safe_path_under(home, &[".claude", "projects"], true) {
         let label = format!("claude:{name}");
-        let parquet = parquet.map(|config| user_parquet(config, name));
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name)
                 .with_context(|| format!("parsing Claude transcripts for {name} at {}", claude_dir.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref(), otlp).await
+            run_source(&label, &adapter, None, None, otlp).await
         }
         .await;
         record(&label, result, counts);
@@ -355,11 +449,10 @@ async fn index_user(
 
     if let Some(codex_file) = safe_path_under(home, &[".codex", "history.jsonl"], false) {
         let label = format!("codex:{name}");
-        let parquet = parquet.map(|config| user_parquet(config, name));
         let result = async {
             let adapter = source_codex::CodexHistory::open_with(&codex_file, host, name)
                 .with_context(|| format!("parsing Codex history for {name} at {}", codex_file.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref(), otlp).await
+            run_source(&label, &adapter, None, None, otlp).await
         }
         .await;
         record(&label, result, counts);
@@ -369,11 +462,10 @@ async fn index_user(
     // regardless of who runs the process.
     if let Some(atuin_db) = safe_path_under(home, &[".local", "share", "atuin", "history.db"], false) {
         let label = format!("shell:{name}");
-        let parquet = parquet.map(|config| user_parquet(config, name));
         let result = async {
             let adapter = source_atuin::AtuinHistory::open(&atuin_db)
                 .with_context(|| format!("reading atuin history for {name} at {}", atuin_db.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref(), otlp).await
+            run_source(&label, &adapter, None, None, otlp).await
         }
         .await;
         record(&label, result, counts);
@@ -384,11 +476,10 @@ async fn index_user(
     // planted symlink in the debug dir is skipped rather than followed.
     if let Some(debug_dir) = safe_path_under(home, &[".claude", "debug"], true) {
         let label = format!("debug:{name}");
-        let parquet = parquet.map(|config| user_parquet(config, name));
         let result = async {
             let adapter = source_debug::DebugLogs::open_with(&debug_dir, host, name)
                 .with_context(|| format!("reading Claude debug logs for {name} at {}", debug_dir.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref(), otlp).await
+            run_source(&label, &adapter, None, None, otlp).await
         }
         .await;
         record(&label, result, counts);
@@ -418,15 +509,6 @@ fn parse_user(spec: &str) -> anyhow::Result<User> {
 /// outermost hive partition, matching the old history-ship layout.
 fn archive_prefix(base: &str, host: &str) -> String {
     format!("{base}/host={host}")
-}
-
-/// A per-user parquet config: partition each user's rows under `user=<name>` so
-/// concurrently indexed users never overwrite the one shared per-source file.
-fn user_parquet(config: &sink_parquet::Config, name: &str) -> sink_parquet::Config {
-    sink_parquet::Config {
-        prefix: format!("{}/user={name}", config.prefix),
-        ..config.clone()
-    }
 }
 
 /// Resolve a user-controlled subpath under a trusted `home`, refusing to follow
@@ -586,7 +668,7 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use super::{archive_prefix, parse_user, safe_path_under, user_parquet};
+    use super::{parse_user, safe_path_under};
 
     #[test]
     fn safe_path_accepts_real_nested_dir() {
@@ -646,24 +728,5 @@ mod tests {
         let user = parse_user("alice-1.2_3:/home/alice").expect("valid spec");
         assert_eq!(user.name, "alice-1.2_3");
         assert_eq!(user.home, PathBuf::from("/home/alice"));
-    }
-
-    #[test]
-    fn parquet_key_is_host_scoped() {
-        // Regression: two hosts indexing the same account (e.g. `root`) into one
-        // shared bucket must land on distinct keys, or the full-file overwrite
-        // makes them clobber each other every tick.
-        let base = "corpus";
-        let cfg = |host: &str| sink_parquet::Config {
-            bucket: "ix-history".to_owned(),
-            endpoint: None,
-            region: "auto".to_owned(),
-            prefix: archive_prefix(base, host),
-        };
-        let a = user_parquet(&cfg("hil-compute-1"), "root").prefix;
-        let b = user_parquet(&cfg("hil-compute-2"), "root").prefix;
-        assert_eq!(a, "corpus/host=hil-compute-1/user=root");
-        assert_eq!(b, "corpus/host=hil-compute-2/user=root");
-        assert_ne!(a, b, "same account on different hosts must not share a key");
     }
 }
