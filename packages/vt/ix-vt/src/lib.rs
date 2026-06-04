@@ -607,7 +607,10 @@ fn read_row(cells: &RowCells, cols: u16) -> Result<Vec<Cell>> {
         })?;
         let style = unsafe { Style::from_raw(&style_raw) };
 
-        let (ch, combining) = read_graphemes(cells)?;
+        let Grapheme {
+            base: ch,
+            combining,
+        } = read_graphemes(cells)?;
 
         // Resolved colors return GHOSTTY_INVALID_VALUE when the cell has no
         // explicit color; that is the documented "use your default" signal, not
@@ -626,14 +629,23 @@ fn read_row(cells: &RowCells, cols: u16) -> Result<Vec<Cell>> {
     Ok(row)
 }
 
+/// A cell's grapheme: its base codepoint plus any trailing combining marks.
+struct Grapheme {
+    base: Option<char>,
+    combining: Vec<char>,
+}
+
 /// Read the base codepoint plus any combining marks of the selected cell.
-fn read_graphemes(cells: &RowCells) -> Result<(Option<char>, Vec<char>)> {
+fn read_graphemes(cells: &RowCells) -> Result<Grapheme> {
     use sys::GhosttyRenderStateRowCellsData as CellData;
 
     let len: u32 =
         unsafe { cells.get(CellData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN) }?;
     if len == 0 {
-        return Ok((None, Vec::new()));
+        return Ok(Grapheme {
+            base: None,
+            combining: Vec::new(),
+        });
     }
 
     let mut buf = vec![0u32; len as usize];
@@ -648,7 +660,7 @@ fn read_graphemes(cells: &RowCells) -> Result<(Option<char>, Vec<char>)> {
     let mut codepoints = buf.into_iter().map(char::from_u32);
     let base = codepoints.next().flatten();
     let combining = codepoints.flatten().collect();
-    Ok((base, combining))
+    Ok(Grapheme { base, combining })
 }
 
 /// Read a resolved cell color, mapping the "no explicit color" signal to `None`.

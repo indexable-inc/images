@@ -56,6 +56,16 @@ pub struct RecordingStore {
     dir: PathBuf,
 }
 
+/// The result of starting a periodic recorder: the new recording's id and the
+/// background task that keeps it current. The caller holds the task to tie its
+/// lifetime to the dashboard.
+pub struct Recorder {
+    /// The id of the recording being written (its filename stem).
+    pub id: String,
+    /// The spawned task that refreshes the snapshot on each interval.
+    pub task: JoinHandle<()>,
+}
+
 impl RecordingStore {
     /// Open (creating if needed) a store rooted at `dir`.
     ///
@@ -149,7 +159,7 @@ impl RecordingStore {
         hub: Arc<Hub>,
         interval: Duration,
         runtime: &tokio::runtime::Handle,
-    ) -> (String, JoinHandle<()>) {
+    ) -> Recorder {
         self.prune(KEEP_RECORDINGS.saturating_sub(1));
         let id = format!("{PREFIX}{}", now_ms());
         // Persist once up front so a session shorter than `interval` still
@@ -170,7 +180,7 @@ impl RecordingStore {
                 }
             }
         });
-        (id, task)
+        Recorder { id, task }
     }
 
     /// Resolve a safe on-disk path for a recording id, or `None` when the id is

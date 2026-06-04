@@ -28,8 +28,11 @@ pub async fn collect_panes(manager: &crate::TuiManager) -> Vec<Pane> {
         };
         // Cursor and exit are best-effort: a failed cursor read defaults to the
         // top-left, never dropping the whole pane.
-        let (cursor_row, cursor_col, cursor_visible) =
-            instance.read_cursor_async().await.unwrap_or((0, 0, true));
+        let cursor = instance.read_cursor_async().await.unwrap_or(crate::CursorPos {
+            row: 0,
+            col: 0,
+            visible: true,
+        });
         let rows: Vec<Vec<crate::StyledCell>> =
             cells.rows().into_iter().map(|row| row.to_vec()).collect();
 
@@ -42,9 +45,9 @@ pub async fn collect_panes(manager: &crate::TuiManager) -> Vec<Pane> {
                 cols: instance.cols(),
                 alive: instance.is_alive(),
                 screen: sgr::encode(&rows),
-                cursor_row,
-                cursor_col,
-                cursor_visible,
+                cursor_row: cursor.row,
+                cursor_col: cursor.col,
+                cursor_visible: cursor.visible,
                 cursor_shape: instance.cursor_shape().as_str().to_owned(),
                 exit_code: match instance.exit_state() {
                     crate::ExitState::Exited(code) => code,

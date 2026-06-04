@@ -756,6 +756,12 @@ mod tests {
 
     use super::{BACKOFF_BASE, BACKOFF_CAP, Chunk, Client, Error, MAX_RETRIES, RawChunk, backoff};
 
+    /// A spawned test server: its base URL and a shared counter of requests it received.
+    struct MockServer {
+        base_url: String,
+        calls: Arc<AtomicUsize>,
+    }
+
     #[test]
     fn raw_chunk_projects_generated_metadata() {
         let json = serde_json::json!({
@@ -804,7 +810,7 @@ mod tests {
     /// Mock server that answers `429` (with `Retry-After: 0` so retries are
     /// instant) for the first `fail_times` requests, then `200`. Returns the
     /// base URL and a shared counter of total requests received.
-    async fn spawn_mock(fail_times: usize) -> (String, Arc<AtomicUsize>) {
+    async fn spawn_mock(fail_times: usize) -> MockServer {
         let calls = Arc::new(AtomicUsize::new(0));
         let app = Router::new().fallback({
             let calls = Arc::clone(&calls);
@@ -828,13 +834,13 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(listener, app).await.expect("serve");
         });
-        (format!("http://{addr}"), calls)
+        MockServer { base_url: format!("http://{addr}"), calls }
     }
 
     #[tokio::test]
     async fn retries_429_then_succeeds() {
-        let (base, calls) = spawn_mock(2).await;
-        let client = Client::new(base, "test-key").expect("client");
+        let MockServer { base_url, calls } = spawn_mock(2).await;
+        let client = Client::new(base_url, "test-key").expect("client");
         client.ensure_store("store").await.expect("succeeds after retries");
         // 2 rejected + 1 accepted.
         assert_eq!(calls.load(Ordering::SeqCst), 3);
@@ -843,7 +849,7 @@ mod tests {
     /// TCP server that drops the connection without a response for the first
     /// `fail_times` requests (a transport error, no HTTP status), then answers
     /// `200`. Returns the base URL and a counter of accepted connections.
-    async fn spawn_flaky_tcp(fail_times: usize) -> (String, Arc<AtomicUsize>) {
+    async fn spawn_flaky_tcp(fail_times: usize) -> MockServer {
         use tokio::io::AsyncWriteExt as _;
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -870,15 +876,15 @@ mod tests {
                 }
             }
         });
-        (format!("http://{addr}"), calls)
+        MockServer { base_url: format!("http://{addr}"), calls }
     }
 
     #[tokio::test]
     async fn retries_transport_errors_then_succeeds() {
         // Pays real backoff (~1s): transport errors carry no `Retry-After`, so
         // don't raise `fail_times` expecting it to stay instant.
-        let (base, calls) = spawn_flaky_tcp(2).await;
-        let client = Client::new(base, "test-key").expect("client");
+        let MockServer { base_url, calls } = spawn_flaky_tcp(2).await;
+        let client = Client::new(base_url, "test-key").expect("client");
         client
             .ensure_store("store")
             .await
@@ -889,8 +895,8 @@ mod tests {
 
     #[tokio::test]
     async fn gives_up_after_max_retries() {
-        let (base, calls) = spawn_mock(usize::MAX).await;
-        let client = Client::new(base, "test-key").expect("client");
+        let MockServer { base_url, calls } = spawn_mock(usize::MAX).await;
+        let client = Client::new(base_url, "test-key").expect("client");
         let err = client.ensure_store("store").await.expect_err("never succeeds");
         assert!(matches!(err, Error::Api { status: 429, .. }), "got {err:?}");
         // The initial attempt plus MAX_RETRIES retries.

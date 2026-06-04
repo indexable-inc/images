@@ -138,7 +138,7 @@ struct AssertArgs {
     /// Fails when the measured metric exceeds the budget, or when the command
     /// never reports the named metric.
     #[arg(long = "max", value_name = "METRIC=VALUE", value_parser = parse_budget)]
-    max: Vec<(String, f64)>,
+    max: Vec<Budget>,
     /// How many times to run the command. Defaults to 1 so a deterministic
     /// metric (an allocation count) stays deterministic; raise it only to budget
     /// a distribution's median.
@@ -268,14 +268,26 @@ fn ensure_cmd_names(args: &RunArgs) -> Result<()> {
     Ok(())
 }
 
+/// An upper-bound budget for one metric, parsed from a `METRIC=VALUE` argument.
+#[derive(Debug, Clone)]
+struct Budget {
+    /// The metric name to gate.
+    metric: String,
+    /// The inclusive upper bound the metric must not exceed.
+    limit: f64,
+}
+
 /// Parse a `METRIC=VALUE` budget for `assert --max`.
-fn parse_budget(raw: &str) -> std::result::Result<(String, f64), String> {
+fn parse_budget(raw: &str) -> std::result::Result<Budget, String> {
     let (name, value) = raw.split_once('=').ok_or_else(|| format!("`{raw}` is not METRIC=VALUE"))?;
     if name.is_empty() {
         return Err(format!("`{raw}` has an empty metric name"));
     }
     let parsed: f64 = value.parse().map_err(|err| format!("budget `{value}`: {err}"))?;
-    Ok((name.to_owned(), parsed))
+    Ok(Budget {
+        metric: name.to_owned(),
+        limit: parsed,
+    })
 }
 
 /// Run a command and gate each measured metric against its declared upper-bound
@@ -298,7 +310,7 @@ fn assert_budgets(args: &AssertArgs) -> Result<ExitCode> {
     let metrics = indexbench::macro_harness::run_command(&program, &cmd_args, args.runs)?;
 
     let mut all_within = true;
-    for (name, budget) in &args.max {
+    for Budget { metric: name, limit: budget } in &args.max {
         if let Some(metric) = metrics.iter().find(|metric| &metric.name == name) {
             let within = metric.value <= *budget;
             all_within &= within;

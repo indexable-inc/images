@@ -76,7 +76,7 @@ pub fn discover_channel_dirs(root: &Path) -> Result<Vec<ChannelDir>, Error> {
         if NON_CHANNEL_DIRS.contains(&raw.as_str()) {
             continue;
         }
-        let (id_from_prefix, display_name) = split_id_prefix(&raw);
+        let SplitName { id: id_from_prefix, name: display_name } = split_id_prefix(&raw);
         dirs.push(ChannelDir {
             id_from_prefix,
             display_name,
@@ -88,15 +88,24 @@ pub fn discover_channel_dirs(root: &Path) -> Result<Vec<ChannelDir>, Error> {
     Ok(dirs)
 }
 
+/// A directory name split into an optional `C0...` id prefix and a display name.
+#[derive(Debug, Clone)]
+struct SplitName {
+    /// The channel id parsed from the prefix, if present.
+    id: Option<String>,
+    /// The directory name with any leading `C0...` token removed.
+    name: String,
+}
+
 /// Split a `C0...` id prefix from a directory name.
 ///
 /// Recognizes `C0XYZ--name`, `C0XYZ-name`, and a bare `C0XYZ`. A name with no
-/// id prefix returns `(None, name)`. The id token is a `C` followed by
-/// uppercase alphanumerics.
+/// id prefix returns `id: None` and the whole name. The id token is a `C`
+/// followed by uppercase alphanumerics.
 #[must_use]
-fn split_id_prefix(raw: &str) -> (Option<String>, String) {
+fn split_id_prefix(raw: &str) -> SplitName {
     if !raw.starts_with('C') {
-        return (None, raw.to_owned());
+        return SplitName { id: None, name: raw.to_owned() };
     }
     let id_len = raw
         .char_indices()
@@ -106,15 +115,15 @@ fn split_id_prefix(raw: &str) -> (Option<String>, String) {
         .unwrap_or(0);
     // A real id is more than just "C"; require at least a few chars.
     if id_len < 4 {
-        return (None, raw.to_owned());
+        return SplitName { id: None, name: raw.to_owned() };
     }
     let (id, rest) = raw.split_at(id_len);
     let name = rest.trim_start_matches('-');
     if name.is_empty() {
         // Directory was just the id; use the id as the display name.
-        (Some(id.to_owned()), id.to_owned())
+        SplitName { id: Some(id.to_owned()), name: id.to_owned() }
     } else {
-        (Some(id.to_owned()), name.to_owned())
+        SplitName { id: Some(id.to_owned()), name: name.to_owned() }
     }
 }
 
@@ -199,32 +208,32 @@ pub fn read_channel_messages(dir: &Path) -> Result<Vec<Message>, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_external_name, split_id_prefix};
+    use super::{SplitName, is_external_name, split_id_prefix};
 
     #[test]
     fn splits_double_dash_id_prefix() {
-        let (id, name) = split_id_prefix("C0AGC8VFVQV--alerts");
+        let SplitName { id, name } = split_id_prefix("C0AGC8VFVQV--alerts");
         assert_eq!(id.as_deref(), Some("C0AGC8VFVQV"));
         assert_eq!(name, "alerts");
     }
 
     #[test]
     fn splits_single_dash_id_prefix() {
-        let (id, name) = split_id_prefix("C0AQELZ5H3N-ext-nu");
+        let SplitName { id, name } = split_id_prefix("C0AQELZ5H3N-ext-nu");
         assert_eq!(id.as_deref(), Some("C0AQELZ5H3N"));
         assert_eq!(name, "ext-nu");
     }
 
     #[test]
     fn leaves_plain_name_alone() {
-        let (id, name) = split_id_prefix("p-billing");
+        let SplitName { id, name } = split_id_prefix("p-billing");
         assert_eq!(id, None);
         assert_eq!(name, "p-billing");
     }
 
     #[test]
     fn bare_id_directory_uses_id_as_name() {
-        let (id, name) = split_id_prefix("C0AHW2W3V7W");
+        let SplitName { id, name } = split_id_prefix("C0AHW2W3V7W");
         assert_eq!(id.as_deref(), Some("C0AHW2W3V7W"));
         assert_eq!(name, "C0AHW2W3V7W");
     }

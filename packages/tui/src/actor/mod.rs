@@ -40,7 +40,7 @@ pub enum PtyCommand {
         response: oneshot::Sender<Result<ndarray::Array2<crate::types::StyledCell>>>,
     },
     ReadCursor {
-        response: oneshot::Sender<Result<(u16, u16, bool)>>,
+        response: oneshot::Sender<Result<crate::types::CursorPos>>,
     },
 }
 

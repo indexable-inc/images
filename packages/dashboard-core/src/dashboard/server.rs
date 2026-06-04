@@ -47,6 +47,17 @@ struct AppState {
     recordings: Option<Arc<RecordingStore>>,
 }
 
+/// What [`serve_hub`] hands back: the running dashboard plus the shutdown
+/// receiver the caller threads into its own frame-source tasks so one signal
+/// stops the whole dashboard.
+pub struct ServedDashboard {
+    /// The running dashboard handle.
+    pub dashboard: Dashboard,
+    /// Fires `true` when the dashboard is stopping; the caller's frame-source
+    /// tasks watch it to wind down with the server.
+    pub shutdown: watch::Receiver<bool>,
+}
+
 /// A running dashboard server. Dropping it, or calling [`Dashboard::stop`],
 /// shuts the HTTP server and every attached frame-source task down.
 pub struct Dashboard {
@@ -129,7 +140,7 @@ pub async fn serve_hub(
     addr: SocketAddr,
     recordings: Option<Arc<RecordingStore>>,
     runtime: &tokio::runtime::Handle,
-) -> Result<(Dashboard, watch::Receiver<bool>)> {
+) -> Result<ServedDashboard> {
     let listener = TcpListener::bind(addr)
         .await
         .map_err(|source| Error::Dashboard {
@@ -164,7 +175,10 @@ pub async fn serve_hub(
         shutdown: Some(shutdown),
         tasks: vec![http],
     };
-    Ok((dashboard, stop_rx))
+    Ok(ServedDashboard {
+        dashboard,
+        shutdown: stop_rx,
+    })
 }
 
 async fn index() -> Html<&'static str> {
@@ -194,8 +208,9 @@ async fn get_recording(
 async fn events(State(state): State<AppState>) -> impl IntoResponse {
     let hub = state.hub;
     // Loro imports are idempotent, so an overlapping snapshot/update is harmless.
-    let (snapshot, rx) = hub.subscribe();
+    let subscription = hub.subscribe();
 
+    let snapshot = subscription.snapshot;
     let first = futures::stream::once(async move {
         Ok::<_, Infallible>(
             Event::default()
@@ -204,7 +219,7 @@ async fn events(State(state): State<AppState>) -> impl IntoResponse {
         )
     });
 
-    let tail = BroadcastStream::new(rx).map(move |item| {
+    let tail = BroadcastStream::new(subscription.updates).map(move |item| {
         let event = match item {
             Ok(encoded) => Event::default().event("update").data(encoded.as_ref()),
             Err(BroadcastStreamRecvError::Lagged(_)) => {

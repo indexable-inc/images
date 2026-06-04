@@ -94,8 +94,8 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     clippy::too_many_lines,
     reason = "flat one-arm-per-language dispatch table; splitting it would hide the grammar-to-query mapping"
 )]
-fn grammar_query(language: Language) -> Option<(tree_sitter::Language, String)> {
-    let pair = match language {
+fn grammar_query(language: Language) -> Option<GrammarQuery> {
+    let (ts_language, highlights) = match language {
         Language::Rust => (
             tree_sitter_rust::LANGUAGE.into(),
             tree_sitter_rust::HIGHLIGHTS_QUERY.to_owned(),
@@ -222,7 +222,15 @@ fn grammar_query(language: Language) -> Option<(tree_sitter::Language, String)> 
         // grammar here.
         _ => return None,
     };
-    Some(pair)
+    Some(GrammarQuery { ts_language, highlights })
+}
+
+/// A tree-sitter grammar paired with its highlights query source.
+struct GrammarQuery {
+    /// The tree-sitter language (grammar) to parse with.
+    ts_language: tree_sitter::Language,
+    /// The combined highlights query source for that grammar.
+    highlights: String,
 }
 
 /// Builds a [`HighlightConfiguration`] for a language, or `None` when the
@@ -232,7 +240,7 @@ fn grammar_query(language: Language) -> Option<(tree_sitter::Language, String)> 
 /// language per file and resolves no injections, so the queries would do nothing
 /// and only add per-grammar constant-name fragility.
 fn build_config(language: Language) -> Option<HighlightConfiguration> {
-    let (ts_language, highlights) = grammar_query(language)?;
+    let GrammarQuery { ts_language, highlights } = grammar_query(language)?;
     let mut config = HighlightConfiguration::new(ts_language, language.name(), &highlights, "", "")
         .inspect_err(|error| {
             // A query that fails to compile is a grammar-version skew bug, not a
@@ -323,8 +331,8 @@ fn parse_hex(hex: &str) -> Option<RgbColor> {
 /// colorscheme so the terminal and the editor color the same constructs alike;
 /// the colors themselves live only in `islands-theme.json`. Returns `None` for
 /// captures the theme leaves at the terminal default.
-fn slot_for_name(name: &str) -> Option<(&'static str, bool)> {
-    Some(match name {
+fn slot_for_name(name: &str) -> Option<SlotStyle> {
+    let (slot, italic) = match name {
         "keyword" | "constant.builtin" | "type.builtin" | "function.macro" | "label" => {
             ("keyword", false)
         }
@@ -346,7 +354,17 @@ fn slot_for_name(name: &str) -> Option<(&'static str, bool)> {
         "comment.documentation" => ("doc_comment", true),
         "constant" => ("constant", true),
         _ => return None,
-    })
+    };
+    Some(SlotStyle { slot, italic })
+}
+
+/// A palette slot name and whether captures mapped to it render italic.
+#[derive(Debug, Clone, Copy)]
+struct SlotStyle {
+    /// The islands palette slot key (a field in `islands-theme.json`).
+    slot: &'static str,
+    /// Whether the capture renders italic.
+    italic: bool,
 }
 
 /// Resolves the [`Style`] for a capture name in a theme variant, falling back
@@ -355,7 +373,7 @@ fn slot_for_name(name: &str) -> Option<(&'static str, bool)> {
 fn style_for(name: &str, theme: Theme) -> Style {
     let mut current = name;
     loop {
-        if let Some((slot, italic)) = slot_for_name(current) {
+        if let Some(SlotStyle { slot, italic }) = slot_for_name(current) {
             let style = slot_color(theme, slot)
                 .map_or_else(Style::new, |rgb| Style::new().fg_color(Some(Color::Rgb(rgb))));
             return if italic { style.italic() } else { style };
@@ -744,7 +762,7 @@ mod tests {
         // both palettes, or a capture would silently render uncolored. Guards
         // against a typo in the Rust map or a missing key in the JSON.
         for &name in HIGHLIGHT_NAMES {
-            if let Some((slot, _)) = slot_for_name(name) {
+            if let Some(SlotStyle { slot, .. }) = slot_for_name(name) {
                 assert!(
                     slot_color(Theme::Dark, slot).is_some(),
                     "dark palette missing slot {slot:?} for capture {name:?}"

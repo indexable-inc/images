@@ -63,6 +63,13 @@ struct Layer {
     tar_path: PathBuf,
 }
 
+/// The result of streaming bytes through a hasher: the total byte count written
+/// and the lowercase-hex sha256 digest of those bytes.
+struct HashedBytes {
+    size: u64,
+    checksum: String,
+}
+
 #[derive(Debug, PartialEq)]
 struct LayerEfficiency {
     entries: usize,
@@ -287,7 +294,7 @@ fn make_store_layer(
     fs::write(&paths_file, paths.join("\n"))?;
 
     let layer_tmp = layers_dir.join(format!("{number}.layer.tar"));
-    let (checksum, size) = write_tar_layer(&layer_tmp, &paths_file, conf, mtime)?;
+    let HashedBytes { size, checksum } = write_tar_layer(&layer_tmp, &paths_file, conf, mtime)?;
     let tar_path = blobs_dir.join(&checksum);
     fs::rename(&layer_tmp, &tar_path)?;
 
@@ -685,7 +692,7 @@ fn write_tar_layer(
     paths_file: &Path,
     conf: &Config,
     mtime: &str,
-) -> Result<(String, u64), Box<dyn Error>> {
+) -> Result<HashedBytes, Box<dyn Error>> {
     let mtime_secs: u64 = mtime.parse()?;
     let uid: u64 = conf.uid.parse()?;
     let gid: u64 = conf.gid.parse()?;
@@ -718,8 +725,7 @@ fn write_tar_layer(
     }
 
     let writer = builder.into_inner()?;
-    let (size, hash) = writer.finalize();
-    Ok((hash, size))
+    Ok(writer.finalize())
 }
 
 fn collect_paths_recursive(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), Box<dyn Error>> {
@@ -802,9 +808,12 @@ impl<W: Write> HashingWriter<W> {
         }
     }
 
-    fn finalize(self) -> (u64, String) {
-        let hash = format!("{:x}", self.hasher.finalize());
-        (self.size, hash)
+    fn finalize(self) -> HashedBytes {
+        let checksum = format!("{:x}", self.hasher.finalize());
+        HashedBytes {
+            size: self.size,
+            checksum,
+        }
     }
 }
 

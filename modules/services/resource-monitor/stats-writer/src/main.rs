@@ -249,7 +249,7 @@ fn iso_timestamp(time: SystemTime) -> Result<String, Box<dyn Error>> {
     let unix = time.duration_since(UNIX_EPOCH)?.as_secs() as i64;
     let days = unix.div_euclid(86_400);
     let seconds = unix.rem_euclid(86_400);
-    let (year, month, day) = civil_from_days(days);
+    let CivilDate { year, month, day } = civil_from_days(days);
     let hour = seconds / 3600;
     let minute = (seconds % 3600) / 60;
     let second = seconds % 60;
@@ -259,7 +259,14 @@ fn iso_timestamp(time: SystemTime) -> Result<String, Box<dyn Error>> {
     ))
 }
 
-const fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+/// A proleptic-Gregorian calendar date decomposed into year, month, and day.
+struct CivilDate {
+    year: i64,
+    month: u32,
+    day: u32,
+}
+
+const fn civil_from_days(days_since_epoch: i64) -> CivilDate {
     let z = days_since_epoch + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let day_of_era = z - era * 146_097;
@@ -272,5 +279,9 @@ const fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };
     let year = year + (month <= 2) as i64;
 
-    (year, month as u32, day as u32)
+    CivilDate {
+        year,
+        month: month as u32,
+        day: day as u32,
+    }
 }

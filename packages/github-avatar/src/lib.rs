@@ -98,12 +98,21 @@ pub fn is_valid_login(login: &str) -> bool {
         && login.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-/// Parse `owner` and `repo` from a GitHub remote URL (https or ssh forms).
+/// An `owner/repo` pair identifying a GitHub repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoSlug {
+    /// The repository owner (user or org).
+    pub owner: String,
+    /// The repository name.
+    pub repo: String,
+}
+
+/// Parse the [`RepoSlug`] from a GitHub remote URL (https or ssh forms).
 ///
 /// Returns `None` for non-GitHub remotes, so callers can skip the commit-author
 /// lookup entirely off GitHub.
 #[must_use]
-pub fn parse_remote(url: &str) -> Option<(String, String)> {
+pub fn parse_remote(url: &str) -> Option<RepoSlug> {
     let url = url.trim();
     let url = url.strip_suffix(".git").unwrap_or(url);
     let rest = url
@@ -112,7 +121,8 @@ pub fn parse_remote(url: &str) -> Option<(String, String)> {
         .or_else(|| url.strip_prefix("ssh://git@github.com/"))
         .or_else(|| url.strip_prefix("git@github.com:"))?;
     let (owner, repo) = rest.split_once('/')?;
-    (!owner.is_empty() && !repo.is_empty()).then(|| (owner.to_string(), repo.to_string()))
+    (!owner.is_empty() && !repo.is_empty())
+        .then(|| RepoSlug { owner: owner.to_string(), repo: repo.to_string() })
 }
 
 /// Authenticated response for `GET /repos/{owner}/{repo}/commits/{sha}`; only
@@ -229,7 +239,7 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use super::{User, is_valid_login, parse_noreply, parse_remote};
+    use super::{RepoSlug, User, is_valid_login, parse_noreply, parse_remote};
 
     #[test]
     fn noreply_with_and_without_id() {
@@ -264,7 +274,7 @@ mod tests {
 
     #[test]
     fn remote_https_and_ssh() {
-        let want = Some(("indexable-inc".to_string(), "index".to_string()));
+        let want = Some(RepoSlug { owner: "indexable-inc".to_string(), repo: "index".to_string() });
         assert_eq!(parse_remote("https://github.com/indexable-inc/index.git"), want);
         assert_eq!(parse_remote("https://github.com/indexable-inc/index"), want);
         assert_eq!(parse_remote("git@github.com:indexable-inc/index.git"), want);

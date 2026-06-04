@@ -91,6 +91,10 @@ pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
 multiple_crate_versions = "allow"
+# Restriction lint (off even in `all`): forbid anonymous tuple return types so a
+# multi-value return is a named struct the reader understands at the call site,
+# not a positional `(i32, i32)`. Provided by the indexable-inc/clippy fork.
+anonymous_tuple_return_type = "deny"
 
 [workspace.dependencies]
 anstream = "1"

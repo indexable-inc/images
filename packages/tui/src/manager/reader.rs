@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::actor::PtyCommand;
-use crate::types::{FullOutput, StyledCell};
+use crate::types::{CursorPos, FullOutput, StyledCell};
 use crate::{Error, Result};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -105,7 +105,7 @@ pub(super) async fn read_styled_cells(
 pub(super) async fn read_cursor(
     id: Uuid,
     command_tx: &mpsc::Sender<PtyCommand>,
-) -> Result<(u16, u16, bool)> {
+) -> Result<CursorPos> {
     request(id, command_tx, |response| PtyCommand::ReadCursor {
         response,
     })

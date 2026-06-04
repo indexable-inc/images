@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::Error;
 use crate::error::Result;
-use crate::types::{CursorShape, StyledCell};
+use crate::types::{CursorPos, CursorShape, StyledCell};
 
 /// A request to the VT engine thread.
 ///
@@ -288,12 +288,16 @@ pub fn snapshot_to_styled_cells(
     })
 }
 
-/// The cursor's `(row, col, visible)` in viewport cell coordinates.
+/// The cursor's position and visibility in viewport cell coordinates.
 ///
 /// The snapshot stores the cursor position as `(col, row)`, so it is swapped
 /// here. A cursor scrolled out of the viewport reports `(0, 0)`.
-pub fn snapshot_to_cursor(snapshot: &ix_vt::Snapshot) -> (u16, u16, bool) {
+pub fn snapshot_to_cursor(snapshot: &ix_vt::Snapshot) -> CursorPos {
     let cursor = snapshot.cursor;
     let (row, col) = cursor.viewport.map_or((0, 0), |(x, y)| (y, x));
-    (row, col, cursor.visible)
+    CursorPos {
+        row,
+        col,
+        visible: cursor.visible,
+    }
 }

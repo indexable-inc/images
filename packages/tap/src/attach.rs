@@ -13,12 +13,13 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
 use tap_protocol::{Request, Response};
+use tap_pty::WinSize;
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader, Lines, Stdout};
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::signal::unix::{SignalKind, signal};
 
-use crate::client::{self, resolve_socket};
+use crate::client::{self, ResolvedSocket, resolve_socket};
 use crate::config;
 use crate::editor;
 use crate::input::{InputProcessor, InputResult, KeybindAction};
@@ -54,8 +55,11 @@ enum Event {
 // ever runs on the main thread via the runtime's block_on, never spawned.
 #[allow(clippy::future_not_send, reason = "owns the tty; runs only on the main thread")]
 pub async fn run(session: Option<String>) -> Result<()> {
-    let (label, socket) = resolve_socket(session)?;
-    let (mut my_rows, mut my_cols) = term::current_winsize();
+    let ResolvedSocket { label, socket } = resolve_socket(session)?;
+    let WinSize {
+        rows: mut my_rows,
+        cols: mut my_cols,
+    } = term::current_winsize();
     // Held for the whole session; restores the terminal on every exit path.
     let raw = RawGuard::enter();
     let mut stdout = tokio::io::stdout();
@@ -114,7 +118,7 @@ pub async fn run(session: Option<String>) -> Result<()> {
                 },
             },
             _ = winch.recv() => {
-                let (rows, cols) = term::current_winsize();
+                let WinSize { rows, cols } = term::current_winsize();
                 my_rows = rows;
                 my_cols = cols;
                 send_request(&mut writer, &Request::Resize { rows, cols }).await?;

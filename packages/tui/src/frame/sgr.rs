@@ -72,15 +72,26 @@ fn trim_default_tail(row: &[StyledCell]) -> &[StyledCell] {
 }
 
 /// The style-only view of a cell, used to decide when a new escape is needed.
-const fn cell_style(cell: &StyledCell) -> (Color, Color, bool, bool, bool, bool) {
-    (
-        cell.fg,
-        cell.bg,
-        cell.bold,
-        cell.italic,
-        cell.underline,
-        cell.inverse,
-    )
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CellStyle {
+    fg: Color,
+    bg: Color,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    inverse: bool,
+}
+
+/// The style-only view of a cell, used to decide when a new escape is needed.
+const fn cell_style(cell: &StyledCell) -> CellStyle {
+    CellStyle {
+        fg: cell.fg,
+        bg: cell.bg,
+        bold: cell.bold,
+        italic: cell.italic,
+        underline: cell.underline,
+        inverse: cell.inverse,
+    }
 }
 
 /// Push a full SGR escape that sets exactly `cell`'s style. Always emits a reset
