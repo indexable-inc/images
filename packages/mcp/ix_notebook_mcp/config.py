@@ -11,9 +11,8 @@ The object is frozen so nothing mutates configuration after launch.
 from __future__ import annotations
 
 import os
-import secrets
 import stat
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -22,11 +21,15 @@ class Config:
     # Directory notebooks live in and the Jupyter Server is rooted at.
     workdir: Path
 
-    # The Jupyter Server bind address + auth token (the token gates both the
-    # browser UI and the collaboration websocket, and appears in the lab URL).
+    # The Jupyter Server bind address. The server runs with auth disabled (no
+    # token, no password): the lab URL opens straight into the live notebook so a
+    # human can co-edit without copying a token out of band. Access is instead
+    # gated by reachability: the default bind is loopback, and the fleet only
+    # exposes it over Tailscale, where the tailnet is the trust boundary. Note a
+    # reachable Jupyter Server is arbitrary code execution for whoever can dial
+    # it, so never bind it to a public interface.
     host: str = "127.0.0.1"
     jupyter_port: int = 0
-    token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
 
     # The host string put into the lab URL a human opens. Distinct from `host`
     # (the bind address): when Jupyter binds a wildcard like 0.0.0.0, that is
@@ -49,8 +52,8 @@ class Config:
     stdout_fd: int | None = None
 
     def lab_url(self) -> str:
-        """The URL a human opens to co-edit, including the auth token."""
-        return f"http://{self.advertised_host}:{self.jupyter_port}/lab?token={self.token}"
+        """The URL a human opens to co-edit (auth is disabled, so no token)."""
+        return f"http://{self.advertised_host}:{self.jupyter_port}/lab"
 
     def resolve(self, rel_path: str) -> Path:
         """Resolve a workspace-relative path to an absolute one, refusing escapes.

@@ -229,7 +229,13 @@ def _serve(args: argparse.Namespace) -> int:
             f"--ServerApp.ip={cfg.host}",
             f"--ServerApp.port={cfg.jupyter_port}",
             "--ServerApp.open_browser=False",
-            f"--IdentityProvider.token={cfg.token}",
+            # Empty token + empty password disables Jupyter auth entirely
+            # (jupyter_server 2.x: auth_enabled becomes False, and
+            # allow_unauthenticated_access defaults True), so the lab URL opens
+            # straight in with no token to copy. Access is gated by reachability
+            # instead: loopback by default, Tailscale-only when exposed. See the
+            # Config bind-address comment for the security rationale.
+            "--IdentityProvider.token=",
             "--ServerApp.log_level=WARN",
             # app_settings_dir holds overrides.json (default dark theme + editor
             # settings); custom CSS is served from {config_dir}/custom.

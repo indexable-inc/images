@@ -8,7 +8,7 @@ outputs that anyone can reopen.
 
 The pieces:
   - :mod:`ix_notebook_mcp.runtime` holds the process-global config (workspace
-    dir, auth token, the real stdout the MCP protocol owns).
+    dir, bind address, the real stdout the MCP protocol owns).
   - :mod:`ix_notebook_mcp.notebook` reaches the live ``YNotebook`` for a path and
     edits cells inside it (the co-edit boundary).
   - :mod:`ix_notebook_mcp.kernel` runs code on the notebook's own kernel and

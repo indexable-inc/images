@@ -16,8 +16,12 @@ nix run .#mcp -- lab              # open the running server's JupyterLab URL
 nix run .#mcp -- eval '1 + 2'     # one-shot expression on a throwaway kernel
 ```
 
-When `serve` starts it prints a JupyterLab URL (with an auth token) to stderr;
-open it, or run `ix-mcp lab`, to co-edit the notebook the agent is working in.
+When `serve` starts it prints a JupyterLab URL to stderr; open it, or run
+`ix-mcp lab`, to co-edit the notebook the agent is working in. Jupyter auth is
+disabled (no token, no password), so the URL opens straight in. Access is gated
+by reachability instead: the default bind is loopback, and the fleet only
+exposes the server over Tailscale. Never bind it to a public interface, since a
+reachable Jupyter Server is arbitrary code execution for whoever can dial it.
 
 ## Remote access
 
