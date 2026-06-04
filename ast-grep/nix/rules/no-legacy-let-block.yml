@@ -1,4 +1,4 @@
-id: no-let-with-rec-in-attrset
+id: no-legacy-let-block
 language: nix
 severity: error
 message: "`let { ... }` is the undocumented legacy let form that defines an attrset bound to the local `body` attribute. Use `let ... in` or a normal attrset."

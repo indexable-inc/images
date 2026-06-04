@@ -1,12 +1,12 @@
 id: no-throw-without-message
 language: nix
 severity: warning
-message: "`throw` without a message string is a placeholder. Always pass a message that names the failing invariant."
+message: "`throw \"\"` is an empty placeholder message. Pass a message that names the failing invariant."
 note: |
-  WHY: Bare `throw "..."` is fine when the message is concrete. `throw` with a
-  variable that holds an opaque value (or nothing at all) produces an
-  uninformative trace that names a file and a column but not the actual problem.
-  Match the spirit of `no-bare-assert`: name the invariant.
+  WHY: An empty `throw ""` produces a trace that names a file and a column but
+  not the actual problem. Match the spirit of `no-bare-assert`: name the
+  invariant. This rule catches only the empty-string literal; a `throw` whose
+  message is a variable holding an opaque value is not statically detectable.
   REPO: Write `throw "ix.<area>: <what failed> (<value>)"` so the trace points at
   the owner.
 rule:

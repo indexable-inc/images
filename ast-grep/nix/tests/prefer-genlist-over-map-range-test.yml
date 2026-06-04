@@ -7,3 +7,4 @@ valid:
 invalid:
   - 'map toString (lib.range 0 (n - 1))'
   - 'map f (lib.range 0 (length xs - 1))'
+  - 'map toString (range 0 (n - 1))'

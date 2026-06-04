@@ -14,4 +14,10 @@ note: |
   REPO: Switch to the format generator. If the call site is part of a build that
   cannot evaluate `pkgs.formats` (rare), document the reason inline.
 rule:
-  pattern: pkgs.writeText $NAME (builtins.toJSON $VAL)
+  # Match both the `pkgs.`-qualified and bare `writeText` spelling, and the
+  # `builtins.toJSON` / inherited `toJSON` spelling.
+  any:
+    - pattern: pkgs.writeText $NAME (builtins.toJSON $VAL)
+    - pattern: pkgs.writeText $NAME (toJSON $VAL)
+    - pattern: writeText $NAME (builtins.toJSON $VAL)
+    - pattern: writeText $NAME (toJSON $VAL)

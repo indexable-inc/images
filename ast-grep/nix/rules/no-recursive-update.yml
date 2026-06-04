@@ -18,4 +18,8 @@ note: |
   Single-owner attrset construction or `lib.mkMerge` is still preferred where
   the merge is incidental rather than load-bearing.
 rule:
-  pattern: lib.recursiveUpdate $A $B
+  # Match both `lib.recursiveUpdate` and the bare name brought in via
+  # `inherit (lib) recursiveUpdate`.
+  any:
+    - pattern: lib.recursiveUpdate $A $B
+    - pattern: recursiveUpdate $A $B

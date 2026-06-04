@@ -1,0 +1,26 @@
+id: prefer-lib-import-format
+language: nix
+severity: warning
+message: "Use `lib.importJSON path` / `lib.importTOML path` instead of `fromJSON (readFile path)` / `fromTOML (readFile path)`."
+note: |
+  WHY: `lib.importJSON` and `lib.importTOML` are the documented one-liners with
+  the same eval-time semantics as the `fromX (readFile path)` compound. They
+  read better at the call site and make the intent (parse a data file at eval
+  time) explicit. The compound form is a frequent typo target: `readFile` on a
+  non-string path silently coerces, and a parse error blames `fromJSON` /
+  `fromTOML` instead of the file.
+  NIXPKGS: both live in `nixpkgs/lib/trivial.nix`.
+  REPO: Replace `builtins.fromJSON (builtins.readFile X)` with `lib.importJSON X`
+  and `builtins.fromTOML (builtins.readFile X)` with `lib.importTOML X`. Matches
+  the qualified `builtins.` spelling and the bare names brought in via
+  `inherit (builtins) ...`.
+rule:
+  any:
+    - pattern: builtins.fromJSON (builtins.readFile $PATH)
+    - pattern: builtins.fromJSON (readFile $PATH)
+    - pattern: fromJSON (builtins.readFile $PATH)
+    - pattern: fromJSON (readFile $PATH)
+    - pattern: builtins.fromTOML (builtins.readFile $PATH)
+    - pattern: builtins.fromTOML (readFile $PATH)
+    - pattern: fromTOML (builtins.readFile $PATH)
+    - pattern: fromTOML (readFile $PATH)

@@ -1,5 +1,0 @@
-id: no-old-npm-depssha256
-valid:
-  - '{ npmDepsHash = "sha256-AAAA"; }'
-invalid:
-  - '{ npmDepsSha256 = "sha256-AAAA"; }'

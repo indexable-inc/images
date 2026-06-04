@@ -1,4 +1,4 @@
-id: no-double-paren-attr
+id: no-double-paren
 language: nix
 severity: warning
 message: "`(($X))` is double-grouped. Drop one layer of parens."

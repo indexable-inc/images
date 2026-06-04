@@ -12,6 +12,11 @@ note: |
   closest legacy comparable and has the same downside.
   REPO: Use `lib.fileset.toSource { root = ./.; fileset = lib.fileset.unions [ ... ]; }`.
 rule:
+  # Match the `lib.`-qualified spellings and the bare names brought in via
+  # `inherit (lib) cleanSource;` / `inherit (lib.sources) cleanSourceWith;`.
   any:
     - pattern: lib.cleanSource $X
+    - pattern: cleanSource $X
     - pattern: lib.sources.cleanSourceWith $X
+    - pattern: lib.cleanSourceWith $X
+    - pattern: cleanSourceWith $X

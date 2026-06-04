@@ -1,0 +1,33 @@
+id: prefer-sri-hash
+language: nix
+severity: error
+message: "Legacy `sha256`-flavored hash attr. Use the SRI `hash` slot: `hash` in fetchers, `cargoHash` / `vendorHash` / `npmDepsHash` in the language builders (or the typed `cargoLock` block for Rust)."
+note: |
+  WHY: One concept, several call sites. The `sha256`-suffixed attrs are the
+  pre-SRI spelling of a fixed-output hash:
+    * `sha256 = ...` in a fetcher — legacy; the modern `hash = "sha256-...="`
+      slot is self-describing (algorithm embedded), base64, and forward
+      compatible. nixpkgs#310373 tracks the migration.
+    * `cargoSha256` (rustPlatform.buildRustPackage), `vendorSha256`
+      (buildGoModule), `npmDepsSha256` (buildNpmPackage) — these were *removed*
+      from nixpkgs (PR #259603 and the SRI migration). Setting one now is a
+      silent no-op that ships a derivation with an unset hash and no vendoring.
+  NIXPKGS: nixpkgs reviewers routinely request `hash` over `sha256`; CI linting
+  is planned (nixpkgs#410468).
+  REPO: Use the SRI `hash` value at every site:
+    * fetchers: `hash = "sha256-...=";`
+    * Rust: `cargoHash = "sha256-...=";` or the typed
+      `cargoLock = { lockFile = ...; outputHashes = { ... }; }` block.
+    * Go: `vendorHash = "sha256-...=";` (or `null` for vendored modules).
+    * npm: `npmDepsHash = "sha256-...=";`
+  A hex digest that must round-trip verbatim (e.g. a Cargo.lock checksum fed
+  back into `.cargo-checksum.json`) is the one legitimate exception; keep it on
+  `sha256` and suppress this rule with a comment naming the reason.
+rule:
+  # Match the binding by attrpath. The bare `sha256 = $_` / `cargoSha256 = $_`
+  # forms never parsed as standalone expressions, so walk the binding node and
+  # match its attrpath: `sha256` itself or any `*Sha256` builder slot.
+  kind: binding
+  has:
+    field: attrpath
+    regex: '^(sha256|[a-zA-Z][a-zA-Z0-9]*Sha256)$'

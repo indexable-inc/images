@@ -133,8 +133,14 @@ common hard rules are:
 ### Hashes / licenses / fetchers
 
 - Keep raw fetched data artifact URLs out of `flake.nix`.
-- Use `pkgs.*` fetchers instead of `builtins.fetch*`. Prefer SRI in the
-  `hash` slot (`hash = "sha256-...="`); never `sha256 = ...` in fetchers.
+- Use `pkgs.*` fetchers instead of `builtins.fetch*`. Put the hash in the SRI
+  `hash` slot (`hash = "sha256-...="`), never a legacy `sha256 = ...` attr. The
+  fetcher `sha256` ban and the removed `cargoSha256` / `vendorSha256` /
+  `npmDepsSha256` builder attrs are one rule (`prefer-sri-hash`, error). The
+  only exception is a hex digest that must round-trip verbatim (e.g. a
+  Cargo.lock checksum fed back into `.cargo-checksum.json`, which cargo verifies
+  as hex): keep it on `sha256` and add a `# ast-grep-ignore: prefer-sri-hash`
+  comment naming the reason.
 - Commit real hashes, never fake hash helpers or placeholders.
 - `meta.license` should reference `lib.licenses.<id>`, never a raw SPDX
   string. The bare `gpl2` / `gpl3` / `lgpl2` / `lgpl3` / `agpl3` aliases are
