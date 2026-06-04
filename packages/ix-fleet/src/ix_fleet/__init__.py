@@ -1,4 +1,30 @@
 #!/usr/bin/env python3
+#
+# This orchestrator drives the `ix` CLI as a PATH binary rather than the
+# `ix_sdk` Python SDK. That is deliberate, not legacy: the operations it needs
+# have no SDK equivalent today.
+#
+#   - `ix image push`            no SDK method (the SDK builds *from* an OCI
+#                                reference via build_snapshot_from_oci; it does
+#                                not push a local image tarball to a registry).
+#   - `ix group create` / `add`  no SDK method for east-west groups.
+#   - `ix switch --source ...`   the SDK's switch_system takes only
+#     `--source-workdir`         name/target/build_on; it has no --source,
+#     `--build-vm`               --source-workdir, --build-vm, or
+#     `--override-input`         --override-input, which the remote-source
+#                                switch path (the primary one) requires.
+#   - `ix ls --output json`      the SDK's Client.branches() returns BranchInfo
+#                                objects with a fixed, different field set, so
+#                                the IX_NODE_<KEY> env exposed to host health
+#                                checks (derived from every key of the CLI JSON
+#                                rows) would silently change names and values.
+#
+# Idempotency here also keys off CLI stderr text ("already exists", "not
+# found"), and the package treats `ix` as a swappable binary (the nix test
+# shims a fake `ix`). Mixing in SDK calls for only `start`/`rm`/`snapshot`
+# would split that seam and break the exact-argv unit tests for no behavior
+# gain. Revisit if/when the SDK grows image-push, groups, and a source-based
+# switch.
 from __future__ import annotations
 
 import argparse
