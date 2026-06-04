@@ -2,11 +2,23 @@ name: Update flake.lock
 
 on:
   workflow_dispatch:
+    inputs:
+      flake-inputs:
+        description: "Space-separated flake inputs to update; empty updates all."
+        type: string
+        default: ""
   # Reusable: ix (and any other indexable-inc repo) calls this same job via
   # `uses: indexable-inc/index/.github/workflows/update-flake-lock.yml@main`
   # so the flake-bump mechanics live in one place. The caller supplies the
-  # schedule and the contents/PR permissions.
+  # schedule and the contents/PR permissions. A caller whose flake has private
+  # inputs the GitHub-hosted runner cannot fetch passes `flake-inputs` to
+  # update only the public ones (e.g. ix scopes to `index`).
   workflow_call:
+    inputs:
+      flake-inputs:
+        description: "Space-separated flake inputs to update; empty updates all."
+        type: string
+        default: ""
   schedule:
     - cron: "17 * * * *"
 
@@ -34,3 +46,6 @@ jobs:
           branch: update-flake-lock
           commit-msg: "flake.lock: update"
           pr-title: "Update Nix flake inputs"
+          # Empty for schedule/dispatch on index (all inputs public); a caller
+          # scopes this to avoid fetching private inputs it can't auth for.
+          inputs: ${{ inputs.flake-inputs }}
