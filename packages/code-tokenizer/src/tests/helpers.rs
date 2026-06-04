@@ -11,21 +11,33 @@ pub fn tokenize(text: &str) -> Vec<String> {
     tokens
 }
 
-/// `(text, position, offset_from, offset_to)` for every emitted token, so
-/// tests can pin the byte spans that index queries and result highlighting
-/// rely on, not just the lowered token text.
-pub fn tokenize_full(text: &str) -> Vec<(String, usize, usize, usize)> {
+/// One emitted token's text and byte span, so tests can pin the offsets that
+/// index queries and result highlighting rely on, not just the lowered text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenSpan {
+    /// The lowered token text.
+    pub text: String,
+    /// The token's ordinal position in the stream.
+    pub position: usize,
+    /// Byte offset where the token starts in the source.
+    pub offset_from: usize,
+    /// Byte offset just past the token's end in the source.
+    pub offset_to: usize,
+}
+
+/// Collect a [`TokenSpan`] for every emitted token.
+pub fn tokenize_full(text: &str) -> Vec<TokenSpan> {
     let mut tokenizer = CodeTokenizer;
     let mut stream = tokenizer.token_stream(text);
     let mut tokens = Vec::new();
     while stream.advance() {
         let token = stream.token();
-        tokens.push((
-            token.text.clone(),
-            token.position,
-            token.offset_from,
-            token.offset_to,
-        ));
+        tokens.push(TokenSpan {
+            text: token.text.clone(),
+            position: token.position,
+            offset_from: token.offset_from,
+            offset_to: token.offset_to,
+        });
     }
     tokens
 }

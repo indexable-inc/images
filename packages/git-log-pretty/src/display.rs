@@ -65,9 +65,17 @@ fn format_summary(summary: &str, theme: Theme) -> String {
     )
 }
 
+/// A commit's two rendered pieces: the header line and the changed-file tree.
+struct CommitBlock {
+    /// The `shorthash summary • when` header line.
+    header: String,
+    /// The indented changed-file tree, possibly empty.
+    tree: String,
+}
+
 /// Build a commit's two rendered pieces: the `shorthash summary • when` header
 /// line and the (possibly empty) indented changed-file tree.
-fn commit_block(ahead: &git::AheadCommit<'_>, theme: Theme) -> color_eyre::eyre::Result<(String, String)> {
+fn commit_block(ahead: &git::AheadCommit<'_>, theme: Theme) -> color_eyre::eyre::Result<CommitBlock> {
     let commit = &ahead.commit;
     let short = commit.id().to_string().chars().take(7).collect::<String>();
     let summary = commit.summary().unwrap_or("<no message>").trim();
@@ -84,7 +92,7 @@ fn commit_block(ahead: &git::AheadCommit<'_>, theme: Theme) -> color_eyre::eyre:
         when = palette::paint(dim, &when),
     );
     let icons = tree::render(&ahead.changed_files, theme);
-    Ok((header, icons))
+    Ok(CommitBlock { header, tree: icons })
 }
 
 /// Write the plain header / tree / blank-line form (no avatar).
@@ -104,7 +112,7 @@ pub fn print_commit(
     ahead: &git::AheadCommit<'_>,
     theme: Theme,
 ) -> color_eyre::eyre::Result<()> {
-    let (header, icons) = commit_block(ahead, theme)?;
+    let CommitBlock { header, tree: icons } = commit_block(ahead, theme)?;
     write_plain(out, &header, &icons)
 }
 
@@ -133,7 +141,7 @@ pub fn print_commit_with_avatar(
     avatar: Option<&Avatar>,
     rows: u32,
 ) -> color_eyre::eyre::Result<()> {
-    let (header, icons) = commit_block(ahead, theme)?;
+    let CommitBlock { header, tree: icons } = commit_block(ahead, theme)?;
 
     let Some(avatar) = avatar.filter(|_| rows > 0) else {
         return write_plain(out, &header, &icons);

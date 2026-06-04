@@ -9,23 +9,27 @@
 use std::os::fd::BorrowedFd;
 
 use nix::sys::termios::{SetArg, Termios};
+use tap_pty::WinSize;
 
 const STDIN_FD: std::os::fd::RawFd = nix::libc::STDIN_FILENO;
 
-/// Current controlling-terminal size as `(rows, cols)`.
+/// Current controlling-terminal size.
 ///
 /// Falls back to 80×24 when stdin is not a terminal or the ioctl fails, so a
 /// session started without a tty still has a sane geometry.
 #[must_use]
-pub fn current_winsize() -> (u16, u16) {
+pub fn current_winsize() -> WinSize {
     // SAFETY: `ws` is fully written by a successful TIOCGWINSZ; on failure we
     // discard it and use the fallback.
     let mut ws: nix::libc::winsize = unsafe { std::mem::zeroed() };
     let ret = unsafe { nix::libc::ioctl(STDIN_FD, nix::libc::TIOCGWINSZ, &raw mut ws) };
     if ret != 0 || ws.ws_row == 0 || ws.ws_col == 0 {
-        return (24, 80);
+        return WinSize { rows: 24, cols: 80 };
     }
-    (ws.ws_row, ws.ws_col)
+    WinSize {
+        rows: ws.ws_row,
+        cols: ws.ws_col,
+    }
 }
 
 /// Raw-mode guard for stdin. Restores the original termios on drop.

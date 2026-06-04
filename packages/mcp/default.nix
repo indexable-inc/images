@@ -5,10 +5,6 @@
 }:
 
 let
-  unwrapped = ix.cargoUnit.selectBinaryWithTests ix.rustWorkspace.units {
-    binary = "ix-mcp";
-  };
-
   # The PTY-driving `tui` package, baked into the pinned interpreter so every
   # session can `import tui` with no setup. The PyO3 cdylib comes from the same
   # shared workspace graph the binary is selected from, dropped next to the
@@ -91,6 +87,118 @@ let
           exit 1
         fi
         install -m555 "$cdylib" "$site/_search.abi3.so"
+      ''
+  );
+
+  # JupyterLab custom CSS, generated from the shared JetBrains Islands palette
+  # (`ix.islandsTheme`, the same JSON the search `-c` highlighter and the Neovim
+  # colorscheme read) so there is one source of truth for color. It maps the
+  # palette slots onto JupyterLab's `--jp-*` UI variables and its
+  # `--jp-mirror-editor-*-color` CodeMirror syntax variables, and switches the
+  # code font to Berkeley Mono. Both theme variants are emitted and gated on the
+  # body's `data-jp-theme-light` attribute, so syntax color tracks whichever
+  # theme is active; dark is the shipped default (see jupyter/overrides.json).
+  # The variant selector (body + attribute + class) outranks the theme's own
+  # `:root` declarations on specificity, so these win without `!important`.
+  islandsVars = t: ''
+    --jp-layout-color0: ${t.bg};
+    --jp-layout-color1: ${t.bg};
+    --jp-layout-color2: ${t.line_hl};
+    --jp-layout-color3: ${t.ui_subtle_bg};
+    --jp-layout-color4: ${t.ui_input_bg};
+    --jp-border-color0: ${t.ui_subtle_bg};
+    --jp-border-color1: ${t.indent_guide};
+    --jp-border-color2: ${t.line_hl};
+    --jp-border-color3: ${t.bg};
+    --jp-ui-font-color0: ${t.fg};
+    --jp-ui-font-color1: ${t.fg};
+    --jp-ui-font-color2: ${t.ui_dim};
+    --jp-ui-font-color3: ${t.whitespace};
+    --jp-content-font-color0: ${t.fg};
+    --jp-content-font-color1: ${t.fg};
+    --jp-content-font-color2: ${t.ui_dim};
+    --jp-content-font-color3: ${t.comment};
+    --jp-brand-color0: ${t.ui_border};
+    --jp-brand-color1: ${t.ui_border};
+    --jp-brand-color2: ${t.info};
+    --jp-brand-color3: ${t.info};
+    --jp-accent-color1: ${t.func};
+    --jp-cell-editor-background: ${t.bg};
+    --jp-cell-editor-border-color: ${t.indent_guide};
+    --jp-editor-selected-background: ${t.selection};
+    --jp-editor-selected-focused-background: ${t.selection};
+    --jp-editor-cursor-color: ${t.cursor};
+    --jp-error-color1: ${t.error};
+    --jp-warn-color1: ${t.warning};
+    --jp-success-color1: ${t.git_add};
+    --jp-info-color1: ${t.info};
+    --jp-mirror-editor-keyword-color: ${t.keyword};
+    --jp-mirror-editor-atom-color: ${t.constant};
+    --jp-mirror-editor-number-color: ${t.number};
+    --jp-mirror-editor-def-color: ${t.func};
+    --jp-mirror-editor-variable-color: ${t.variable};
+    --jp-mirror-editor-variable-2-color: ${t.variable};
+    --jp-mirror-editor-variable-3-color: ${t.type};
+    --jp-mirror-editor-punctuation-color: ${t.punctuation};
+    --jp-mirror-editor-property-color: ${t.property};
+    --jp-mirror-editor-operator-color: ${t.operator};
+    --jp-mirror-editor-comment-color: ${t.comment};
+    --jp-mirror-editor-string-color: ${t.string};
+    --jp-mirror-editor-string-2-color: ${t.string};
+    --jp-mirror-editor-meta-color: ${t.decorator};
+    --jp-mirror-editor-qualifier-color: ${t.property};
+    --jp-mirror-editor-builtin-color: ${t.func};
+    --jp-mirror-editor-bracket-color: ${t.punctuation};
+    --jp-mirror-editor-tag-color: ${t.tag};
+    --jp-mirror-editor-attribute-color: ${t.attribute};
+    --jp-mirror-editor-header-color: ${t.heading};
+    --jp-mirror-editor-quote-color: ${t.string};
+    --jp-mirror-editor-link-color: ${t.link};
+    --jp-mirror-editor-error-color: ${t.error};
+    --jp-mirror-editor-hr-color: ${t.line_nr};
+  '';
+  islandsCss = pkgs.writeText "ix-mcp-islands.css" ''
+    /* GENERATED from packages/code-highlight/src/islands-theme.json by
+       packages/mcp/default.nix. Do not edit by hand; edit the palette JSON.
+       JetBrains Islands -> JupyterLab UI + Python syntax, plus Berkeley Mono. */
+    .jp-ThemedContainer {
+      --jp-code-font-family: 'Berkeley Mono', 'JetBrains Mono', ui-monospace,
+        SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+      --jp-code-font-size: 13px;
+      --jp-code-line-height: 1.55;
+    }
+    body[data-jp-theme-light="false"].jp-ThemedContainer {
+      ${islandsVars ix.islandsTheme.dark}}
+    body[data-jp-theme-light="true"].jp-ThemedContainer {
+      ${islandsVars ix.islandsTheme.light}}
+  '';
+
+  # The notebook-first MCP server itself, a pure-Python package installed into
+  # the pinned interpreter so the `ix-mcp` entrypoint, the Jupyter Server
+  # extension, and the kernels all share one environment (that co-location is
+  # what makes real-time co-editing work). No build step: it is plain Python that
+  # imports the Jupyter stack and bundled modules already in this interpreter.
+  # The generated Islands CSS is dropped next to the package's static jupyter/
+  # assets (overrides.json), where the CLI materializes them into a writable lab
+  # config dir at serve time.
+  ixNotebookMcpSource = builtins.path {
+    name = "ix-notebook-mcp-source";
+    path = ./ix_notebook_mcp;
+  };
+  ixNotebookMcpModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-notebook-mcp-module"
+      {
+        strictDeps = true;
+        meta.description = "The ix notebook-first MCP server package";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/ix_notebook_mcp"
+        mkdir -p "$site"
+        cp -r ${ixNotebookMcpSource}/. "$site/"
+        # Source comes from the store read-only; make the tree writable so the
+        # generated CSS can be dropped alongside the static jupyter/ assets.
+        chmod -R u+w "$site"
+        install -Dm444 ${islandsCss} "$site/jupyter/islands.css"
       ''
   );
 
@@ -179,6 +287,12 @@ let
       # the polars/duckdb paths return frames natively. A session that needs
       # explicit Arrow tables (`pl.to_arrow()`) can `pip install pyarrow`.
       ps.duckdb
+      # itables: every kernel's IPython startup (ix_notebook_mcp/ipython/) calls
+      # init_notebook_mode(all_interactive=True), so a pandas/polars DataFrame
+      # renders as an interactive DataTable (sort, search, paginate, scroll) in
+      # the human's JupyterLab view with no per-session call. It keeps the
+      # text/plain repr too, so the agent path and non-JS viewers are unchanged.
+      ps.itables
       # httpx: an HTTP client for the shared async loop (the session already speaks
       # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
       # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
@@ -207,8 +321,39 @@ let
       # nixpkgs; keep them sourced from the same `playwright-driver` to stay in
       # sync. https://playwright.dev/python/docs/library
       ps.playwright
+      # Jupyter stack: the notebook-first MCP server drives a real Jupyter
+      # Server with real-time collaboration, and code runs on a real ipykernel
+      # on THIS interpreter, so every bundled module (tui, search, the data
+      # libraries) is importable inside notebook cells with no install step.
+      #   - ipykernel + jupyter-client: the kernel and the client protocol.
+      #   - jupyter-server + jupyterlab + notebook: the server a human opens to
+      #     co-edit, and the kernel/session manager the MCP tools drive.
+      #   - nbformat/nbclient/nbconvert: build and serialize .ipynb outputs.
+      #   - jupyter-collaboration (+ -ui, -docprovider, -server-ydoc, -ydoc) and
+      #     pycrdt(-websocket): the Yjs/CRDT layer that lets the agent and a
+      #     human edit and execute ONE live notebook at the same time. MCP writes
+      #     go through this layer (not direct file writes) so the browser never
+      #     desyncs.
+      #   - mcp: the Python MCP SDK that serves the tool surface over stdio/HTTP.
+      ps.ipykernel
+      ps.jupyter-client
+      ps.jupyter-server
+      ps.jupyterlab
+      ps.notebook
+      ps.nbformat
+      ps.nbclient
+      ps.nbconvert
+      ps.jupyter-collaboration
+      ps.jupyter-collaboration-ui
+      ps.jupyter-docprovider
+      ps.jupyter-server-ydoc
+      ps.jupyter-ydoc
+      ps.pycrdt
+      ps.pycrdt-websocket
+      ps.mcp
       tuiModule
       searchModule
+      ixNotebookMcpModule
     ]
     ++ darwinExtraPackages ps
   );
@@ -218,90 +363,90 @@ let
   # wrapper below so launched browsers resolve without a network download.
   playwrightBrowsers = pkgs.playwright-driver.browsers;
 
+  # `ix-mcp` is just the pinned interpreter invoked on the bundled package's CLI.
+  # Everything (the entrypoint, the Jupyter Server extension it launches, and the
+  # notebook kernels) runs in this one interpreter, so the bundled modules and
+  # the Jupyter stack are all importable with no install step.
   package =
     pkgs.runCommand "ix-mcp"
       {
         nativeBuildInputs = [ pkgs.makeWrapper ];
         strictDeps = true;
-        meta = (unwrapped.meta or { }) // {
+        meta = {
+          description = "Notebook-first MCP server: an agent and a human co-edit one live Jupyter notebook";
           mainProgram = "ix-mcp";
         };
       }
       ''
         mkdir -p $out/bin
-        makeWrapper ${unwrapped}/bin/ix-mcp $out/bin/ix-mcp \
-          --set IX_MCP_PYTHON ${lib.escapeShellArg (lib.getExe mcpPython)} \
+        makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
+          --add-flags "-m ix_notebook_mcp" \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_MACVM_BIN ${lib.escapeShellArg "${macosVmBin}/bin/macos-vm"}"}
       '';
-  replDefault =
-    pkgs.runCommand "ix-mcp-repl-default"
+
+  # Import a module in the pinned interpreter and assert a marker line. Used by
+  # the bundled-module tests: the thing each guards is that the module is
+  # importable in the very interpreter the kernels run on, which is a plain
+  # interpreter import (no kernel, no network), so the build sandbox can prove it.
+  importTest =
+    name: code:
+    pkgs.runCommand "ix-mcp-${name}"
       {
-        nativeBuildInputs = [ package ];
+        nativeBuildInputs = [ mcpPython ];
         strictDeps = true;
       }
       ''
-                export HOME=$TMPDIR/home
-                mkdir -p "$HOME"
-
-        	        printf 'print("ix-mcp-repl-ok")\nraise SystemExit(0)\n' | ix-mcp repl >stdout 2>stderr
-        	        grep -q '^ix-mcp-repl-ok$' stdout
-        	        if find "$TMPDIR" -maxdepth 1 -type d -name 'ix-mcp-python-repl-*' | grep -q .; then
-        	          echo "default REPL temp directory leaked" >&2
-        	          exit 1
-        	        fi
-
-        	        mkdir -p "$out"
-        	      '';
-  sessionVenv =
-    pkgs.runCommand "ix-mcp-session-venv"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-
-        # A session must activate its venv for child processes so an in-session
-        # `pip` resolves the per-session venv rather than the host. Without
-        # activation, `shutil.which("pip")` misses the venv bin on PATH and
-        # returns the host pip or None.
-        ix-mcp eval '__import__("shutil").which("pip")' >stdout 2>stderr
-        if ! grep -q '/[.]venv/bin/pip' stdout; then
-          echo "in-session pip did not resolve to the venv:" >&2
-          cat stdout >&2
-          exit 1
-        fi
-
-        mkdir -p "$out"
-      '';
-  tuiBundled =
-    pkgs.runCommand "ix-mcp-tui-bundled"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-
-        # `tui` ships in the pinned interpreter, so a bare session imports it
-        # with no install step. Importing loads the PyO3 cdylib, which exercises
-        # the link (the macOS dynamic_lookup path in particular); spawning a real
-        # PTY needs device nodes the build sandbox lacks, so leave that to
-        # runtime.
-        ix-mcp exec 'import tui; print("tui-ok", tui.__version__)' >stdout 2>stderr
-        if ! grep -q '^tui-ok ' stdout; then
-          echo "tui was not importable in a default session:" >&2
+        ${lib.getExe mcpPython} -c ${lib.escapeShellArg code} >stdout 2>stderr || {
+          echo "import test ${name} failed:" >&2
           cat stdout stderr >&2
           exit 1
-        fi
-
+        }
+        grep -q '^${name}-ok' stdout || {
+          echo "import test ${name} did not print its ok marker:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
         mkdir -p "$out"
       '';
-  searchBundled =
-    pkgs.runCommand "ix-mcp-search-bundled"
+
+  tuiBundled = importTest "tui" "import tui; print('tui-ok', tui.__version__)";
+  searchBundled = importTest "search" "import search; print('search-ok', search.__version__)";
+  dataLibsBundled = importTest "data-libs" (
+    "import psycopg, sqlalchemy, duckdb, httpx; "
+    + "from sqlalchemy import create_engine; create_engine('postgresql+psycopg://u@h/db'); "
+    + "print('data-libs-ok')"
+  );
+  gmailLibsBundled = importTest "gmail-libs" (
+    "from googleapiclient.discovery import build; from google.oauth2.credentials import Credentials; "
+    + "import google_auth_oauthlib, google_auth_httplib2; "
+    + "build('gmail', 'v1', credentials=Credentials(token='x'), static_discovery=True); "
+    + "print('gmail-libs-ok')"
+  );
+  jupyterBundled = importTest "jupyter" (
+    "import ipykernel, jupyter_server, jupyterlab, nbformat, jupyter_collaboration, "
+    + "jupyter_server_ydoc, jupyter_ydoc, pycrdt, mcp; "
+    + "print('jupyter-ok')"
+  );
+
+  # The server package imports and registers its full tool surface. Exercises the
+  # FastMCP registration (schemas from type hints) without starting a kernel or
+  # the Jupyter Server, so it is sandbox-safe.
+  serverTools = importTest "server" (
+    "import asyncio; from ix_notebook_mcp.tools import mcp; "
+    + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
+    + "expected = {'notebook_use','notebook_read','cell_add','cell_run','cell_overwrite','cell_delete','run_code','kernel_restart','search_semantic','search_grep'}; "
+    + "missing = expected - set(names); "
+    + "assert not missing, ('missing tools: %r' % (missing,)); "
+    + "print('server-ok', len(names))"
+  );
+
+  # End-to-end through the wrapper: run a real ipykernel and prove the historical
+  # `ix-mcp eval` contract (`result:\n<repr>`) still holds. This is the one test
+  # that boots a kernel (over loopback, which the sandbox allows), so it guards
+  # the whole interpreter -> kernelspec -> execution path.
+  evalSmoke =
+    pkgs.runCommand "ix-mcp-eval-smoke"
       {
         nativeBuildInputs = [ package ];
         strictDeps = true;
@@ -310,168 +455,103 @@ let
         export HOME=$TMPDIR/home
         mkdir -p "$HOME"
 
-        # `search` ships in the pinned interpreter, so a bare session
-        # imports it with no install step. Importing loads the PyO3 cdylib, which
-        # exercises the link (the macOS dynamic_lookup path in particular).
-        # Running a real search needs network and a credential the build sandbox
-        # lacks, so leave that to runtime.
-        ix-mcp exec 'import search; print("search-ok", search.__version__)' >stdout 2>stderr
-        if ! grep -q '^search-ok ' stdout; then
-          echo "search was not importable in a default session:" >&2
+        ix-mcp eval '1 + 2' >stdout 2>stderr || {
+          echo "ix-mcp eval failed:" >&2
           cat stdout stderr >&2
           exit 1
-        fi
-
+        }
+        grep -qx 'result:' stdout && grep -qx '3' stdout || {
+          echo "ix-mcp eval did not return the expected result:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
         mkdir -p "$out"
       '';
-  # macOS-only: `screen` ships in the pinned interpreter there, so a bare
-  # session imports it with no install step. Importing exercises the pyobjc
-  # `Quartz` link and the ctypes load of ApplicationServices for the TCC probe.
-  # A real capture or synthetic input needs a display and Accessibility grant
-  # the build sandbox lacks, so leave those to runtime; the import plus the
-  # callable surface is what this guards.
-  screenBundled =
-    pkgs.runCommand "ix-mcp-screen-bundled"
+
+  # Boots a real kernel with the shipped IPython startup in place and proves a
+  # polars DataFrame comes back as an interactive itables table (the human's
+  # JupyterLab upgrade) while keeping its text/plain repr (the agent path). Reads
+  # the startup script from the built module, so it also guards that the asset
+  # actually ships. Loopback only, like evalSmoke, so the sandbox allows it.
+  tablesTestPy = pkgs.writeText "ix-mcp-tables-test.py" ''
+    from jupyter_client.manager import start_new_kernel
+
+    km, kc = start_new_kernel(kernel_name="python3")
+    found = {"html": False, "plain": ""}
+
+    def hook(msg):
+        if msg["msg_type"] in ("execute_result", "display_data"):
+            data = msg["content"].get("data", {})
+            html = data.get("text/html", "")
+            if html and ("dt_for_itables" in html or "itables" in html):
+                found["html"] = True
+            found["plain"] += data.get("text/plain", "")
+
+    try:
+        # A 12-column frame: more than polars' ~8-column default, so the text/plain
+        # repr only shows the last column (c11) if 01-ix-polars.py widened the
+        # config. Exercises both startup scripts at once.
+        kc.execute_interactive(
+            "import polars as pl; pl.DataFrame({f'c{i}': [i] for i in range(12)})",
+            timeout=120, output_hook=hook, store_history=True,
+        )
+    finally:
+        kc.stop_channels()
+        km.shutdown_kernel(now=True)
+
+    assert found["html"], "DataFrame did not render as an interactive itables table (startup did not run?)"
+    assert found["plain"], "DataFrame lost its text/plain repr (the agent path would break)"
+    assert "c11" in found["plain"], "polars repr was not widened (01-ix-polars.py did not run?)"
+    print("tables-ok")
+  '';
+  tablesSmoke =
+    pkgs.runCommand "ix-mcp-tables-smoke"
       {
-        nativeBuildInputs = [ package ];
+        nativeBuildInputs = [ mcpPython ];
         strictDeps = true;
       }
       ''
         export HOME=$TMPDIR/home
         mkdir -p "$HOME"
+        export IPYTHONDIR=$TMPDIR/ipython
+        mkdir -p "$IPYTHONDIR/profile_default/startup"
+        cp ${ixNotebookMcpModule}/${pkgs.python3.sitePackages}/ix_notebook_mcp/ipython/*.py \
+          "$IPYTHONDIR/profile_default/startup/"
 
-        ix-mcp exec 'import screen; print("screen-ok", callable(screen.capture), callable(screen.click), callable(screen.accessibility_trusted))' >stdout 2>stderr
-        if ! grep -q '^screen-ok True True True$' stdout; then
-          echo "screen was not importable in a default session:" >&2
+        ${lib.getExe mcpPython} ${tablesTestPy} >stdout 2>stderr || {
+          echo "ix-mcp tables smoke failed:" >&2
           cat stdout stderr >&2
           exit 1
-        fi
-
-        mkdir -p "$out"
-      '';
-  # macOS-only: `macvm` ships in the pinned interpreter there. Importing checks
-  # the module loads and its callable surface; a real boot needs Apple's
-  # Virtualization.framework + a guest bundle the build sandbox lacks, so leave
-  # that to runtime.
-  macvmBundled =
-    pkgs.runCommand "ix-mcp-macvm-bundled"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-
-        ix-mcp exec 'import macvm; print("macvm-ok", *(callable(getattr(macvm, n)) for n in ("info", "install", "provision", "stage_binary", "boot_linux", "boot_linux_gui", "drive_linux", "screenshot", "screenshot_many", "drive", "Driver", "run_app", "run_binary", "run_oci", "login", "grid")))' >stdout 2>stderr
-        if ! grep -q '^macvm-ok True True True True True True True True True True True True True True True True$' stdout; then
-          echo "macvm was not importable in a default session:" >&2
+        }
+        grep -qx 'tables-ok' stdout || {
+          echo "ix-mcp tables smoke did not confirm interactive tables:" >&2
           cat stdout stderr >&2
           exit 1
-        fi
-
+        }
         mkdir -p "$out"
       '';
-  dataLibsBundled =
-    pkgs.runCommand "ix-mcp-data-libs-bundled"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
 
-        # The data/HTTP libraries ship in the pinned interpreter, so a bare
-        # session imports them with no install step. This guards against a future
-        # nixpkgs bump dropping or breaking one of them: importing exercises the
-        # native links (psycopg's libpq C extension, duckdb's extension module),
-        # and resolving the `postgresql+psycopg` dialect proves SQLAlchemy can
-        # actually reach psycopg. A live query needs a server the build sandbox
-        # lacks, so leave that to runtime.
-        ix-mcp exec 'import psycopg, sqlalchemy, duckdb, httpx; from sqlalchemy import create_engine; create_engine("postgresql+psycopg://u@h/db"); print("data-libs-ok")' >stdout 2>stderr
-        if ! grep -q '^data-libs-ok$' stdout; then
-          echo "a bundled data/HTTP library was not importable in a default session:" >&2
-          cat stdout stderr >&2
-          exit 1
-        fi
-
-        mkdir -p "$out"
-      '';
-  gmailLibsBundled =
-    pkgs.runCommand "ix-mcp-gmail-libs-bundled"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-
-        # The official Google client ships in the pinned interpreter, so a bare
-        # session imports it with no install step. Importing exercises the package
-        # links; building a `gmail` service handle through `discovery.build` proves
-        # the bundled discovery document is present (v2 caches it rather than
-        # fetching it), so this resolves with no network. A dummy OAuth credential
-        # is passed so `build` does not fall back to Application Default Credentials
-        # (which the build sandbox lacks); real calls bring a real token at runtime.
-        ix-mcp exec 'from googleapiclient.discovery import build; from google.oauth2.credentials import Credentials; import google_auth_oauthlib, google_auth_httplib2; build("gmail", "v1", credentials=Credentials(token="x"), static_discovery=True); print("gmail-libs-ok")' >stdout 2>stderr
-        if ! grep -q '^gmail-libs-ok$' stdout; then
-          echo "a bundled Google API library was not importable in a default session:" >&2
-          cat stdout stderr >&2
-          exit 1
-        fi
-
-        mkdir -p "$out"
-      '';
-  sessionSubprocessStdin =
-    pkgs.runCommand "ix-mcp-session-subprocess-stdin"
-      {
-        nativeBuildInputs = [ package ];
-        strictDeps = true;
-      }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-
-        # A child spawned inside a session inherits fd 0. The worker speaks
-        # JSON-RPC over its own stdin, so an inherited fd 0 pointing at that pipe
-        # lets a stdin-reading child (a path-less `cat`/`rg`) steal the protocol
-        # channel and hang the session forever. The worker detaches fd 0 to
-        # /dev/null, so `cat` with no path reads EOF and returns at once. The
-        # timeout turns a regression into a failure instead of a hung build.
-        timeout 60 ix-mcp exec 'import subprocess; print("cat-rc", subprocess.run(["cat"], capture_output=True, text=True).returncode)' >stdout 2>stderr
-        if ! grep -q '^cat-rc 0$' stdout; then
-          echo "session subprocess inherited the RPC stdin (hang regression):" >&2
-          cat stdout stderr >&2
-          exit 1
-        fi
-
-        mkdir -p "$out"
-      '';
+  # macOS-only modules (`screen`, `macvm`) are only bundled on Darwin; their
+  # import tests only exist there.
+  screenBundled = importTest "screen" "import screen; print('screen-ok', callable(screen.capture), callable(screen.click), callable(screen.accessibility_trusted))";
+  macvmBundled = importTest "macvm" "import macvm; print('macvm-ok', callable(macvm.boot_linux), callable(macvm.drive), callable(macvm.screenshot))";
 in
 package.overrideAttrs (old: {
-  passthru =
-    (old.passthru or { })
-    // unwrapped.passthru
-    // {
-      inherit unwrapped;
-      tests =
-        (unwrapped.passthru.tests or { })
-        // {
-          inherit
-            replDefault
-            sessionVenv
-            tuiBundled
-            searchBundled
-            dataLibsBundled
-            gmailLibsBundled
-            sessionSubprocessStdin
-            ;
-        }
-        # `screen` is only bundled on Darwin, so its import test only exists there.
-        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
-          inherit screenBundled macvmBundled;
-        };
+  passthru = (old.passthru or { }) // {
+    tests = {
+      inherit
+        tuiBundled
+        searchBundled
+        dataLibsBundled
+        gmailLibsBundled
+        jupyterBundled
+        serverTools
+        evalSmoke
+        tablesSmoke
+        ;
+    }
+    // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+      inherit screenBundled macvmBundled;
     };
+  };
 })

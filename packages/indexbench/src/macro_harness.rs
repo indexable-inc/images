@@ -156,7 +156,7 @@ fn run_once(program: &str, args: &[String]) -> crate::Result<RunSample> {
     }
     let stderr_buf = stderr_reader.join().unwrap_or_default();
 
-    let (raw_status, max_rss) = wait4(child.id() as i32, program)?;
+    let Reaped { raw_status, max_rss } = wait4(child.id() as i32, program)?;
     let wall_clock_ns = start.elapsed().as_nanos() as f64;
     let max_rss_bytes = maxrss_to_bytes(max_rss);
 
@@ -176,8 +176,16 @@ fn run_once(program: &str, args: &[String]) -> crate::Result<RunSample> {
     })
 }
 
-/// Reap `pid` with `wait4`, returning `(raw_wait_status, ru_maxrss_kib)`.
-fn wait4(pid: i32, program: &str) -> crate::Result<(i32, i64)> {
+/// What `wait4` reaped from a child: its raw wait status and peak RSS.
+struct Reaped {
+    /// Raw `wait` status, to be classified by [`check_exit_status`].
+    raw_status: i32,
+    /// `ru_maxrss` as reported by the platform (kibibytes on Linux, bytes on macOS).
+    max_rss: i64,
+}
+
+/// Reap `pid` with `wait4`.
+fn wait4(pid: i32, program: &str) -> crate::Result<Reaped> {
     // SAFETY: `rusage` is plain C data with no invalid bit patterns, so a zeroed
     // value is a valid initial state for `wait4` to fill.
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
@@ -195,7 +203,10 @@ fn wait4(pid: i32, program: &str) -> crate::Result<(i32, i64)> {
         .fail();
     }
 
-    Ok((status, usage.ru_maxrss))
+    Ok(Reaped {
+        raw_status: status,
+        max_rss: usage.ru_maxrss,
+    })
 }
 
 /// Convert `wait4`'s `ru_maxrss` to bytes.

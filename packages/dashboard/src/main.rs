@@ -105,8 +105,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // The process runtime outlives the dashboard, so the server and discovery
     // loop spawned on it run for the lifetime of the binary.
-    let (mut dashboard, _stop_rx) =
-        serve_hub(hub.clone(), addr, recordings.clone(), &handle).await?;
+    let served = serve_hub(hub.clone(), addr, recordings.clone(), &handle).await?;
+    let mut dashboard = served.dashboard;
+    // Held until shutdown so the server keeps running for the binary's lifetime.
+    let _stop_rx = served.shutdown;
     println!(
         "dashboard: serving {}  (watching {})",
         dashboard.url(),
@@ -120,11 +122,15 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .filter(|_| cli.record_ms > 0)
         .map(|store| {
-            let (id, recorder) =
+            let recorder =
                 store.spawn_recorder(hub.clone(), Duration::from_millis(cli.record_ms), &handle);
-            println!("dashboard: recording to {} ({id})", store.dir().display());
-            dashboard.push_task(recorder);
-            (store.clone(), id)
+            println!(
+                "dashboard: recording to {} ({})",
+                store.dir().display(),
+                recorder.id
+            );
+            dashboard.push_task(recorder.task);
+            (store.clone(), recorder.id)
         });
 
     let connected = Arc::new(Mutex::new(HashSet::new()));

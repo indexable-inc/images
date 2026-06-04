@@ -56,10 +56,14 @@ pub fn record(cols: u16, rows: u16, fps: u32) -> Result<Vec<Frame>> {
 /// Capture one frame: the styled grid plus the cursor.
 fn capture(term: &TuiInstance, frames: &mut Vec<Frame>) -> Result<()> {
     let cells = term.read_styled_cells().wrap_err("read styled cells")?;
-    let (row, col, visible) = term.read_cursor().wrap_err("read cursor")?;
+    let cursor = term.read_cursor().wrap_err("read cursor")?;
     frames.push(Frame::Terminal {
         cells,
-        cursor: Cursor { row, col, visible },
+        cursor: Cursor {
+            row: cursor.row,
+            col: cursor.col,
+            visible: cursor.visible,
+        },
     });
     Ok(())
 }

@@ -6,11 +6,17 @@ use std::process::Command;
 use git2::{Repository, Signature};
 use tempfile::TempDir;
 
-/// Initialize a repo whose first commit sits on `main`, returning the open repo,
-/// the temp dir (kept alive for the test), the test signature, and the `main`
-/// commit oid. `git init`'s default branch name varies, so HEAD is forced to
-/// `refs/heads/main` before the first commit lands.
-fn init_on_main() -> (Repository, TempDir, git2::Oid) {
+/// A repo whose first commit sits on `main`: the open repo, its temp dir (kept
+/// alive for the test), and the initial `main` commit oid.
+struct MainRepo {
+    repo: Repository,
+    dir: TempDir,
+    main_oid: git2::Oid,
+}
+
+/// Initialize a [`MainRepo`]. `git init`'s default branch name varies, so HEAD is
+/// forced to `refs/heads/main` before the first commit lands.
+fn init_on_main() -> MainRepo {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = Repository::init(dir.path()).expect("init repo");
     repo.set_head("refs/heads/main").expect("point HEAD at main");
@@ -19,13 +25,21 @@ fn init_on_main() -> (Repository, TempDir, git2::Oid) {
     std::fs::write(dir.path().join("README.md"), "hello\n").unwrap();
     let main_oid = commit(&repo, &sig, &["README.md"], "chore: initial commit", &[]);
 
-    (repo, dir, main_oid)
+    MainRepo {
+        repo,
+        dir,
+        main_oid,
+    }
 }
 
 /// Build a repo with one commit on `main` and a feature commit checked out on a
 /// branch that is one commit ahead.
 fn repo_ahead_of_main() -> TempDir {
-    let (repo, dir, main_oid) = init_on_main();
+    let MainRepo {
+        repo,
+        dir,
+        main_oid,
+    } = init_on_main();
     let sig = signature();
 
     let main_commit = repo.find_commit(main_oid).unwrap();
@@ -111,7 +125,7 @@ fn no_pager_flag_is_accepted_and_renders_log() {
 fn log_shows_recent_history_on_main() {
     // On `main` there is nothing to be ahead of, so the default view lists
     // main's own recent commits rather than reporting "caught up".
-    let (_repo, dir, _main_oid) = init_on_main();
+    let MainRepo { dir, .. } = init_on_main();
 
     let output = run(dir.path(), &[]);
     assert!(output.status.success(), "stderr: {}", plain(&output.stderr));
@@ -125,7 +139,11 @@ fn log_shows_recent_history_on_main() {
 fn log_reports_caught_up_off_main_when_level_with_main() {
     // A non-main branch sitting exactly at main has no ahead commits, so the
     // caught-up message still applies there.
-    let (repo, dir, main_oid) = init_on_main();
+    let MainRepo {
+        repo,
+        dir,
+        main_oid,
+    } = init_on_main();
     let main_commit = repo.find_commit(main_oid).unwrap();
     repo.branch("feature", &main_commit, false).expect("create feature");
     repo.set_head("refs/heads/feature").expect("checkout feature");
@@ -139,7 +157,11 @@ fn log_reports_caught_up_off_main_when_level_with_main() {
 fn diff_uses_merge_base_after_main_advances() {
     // main advances past the branch point. The branch only touched src/lib.rs,
     // so the `main...HEAD` diff must not include main-only files.
-    let (repo, dir, main_oid) = init_on_main();
+    let MainRepo {
+        repo,
+        dir,
+        main_oid,
+    } = init_on_main();
     let sig = signature();
 
     let main_commit = repo.find_commit(main_oid).unwrap();

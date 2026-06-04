@@ -145,6 +145,15 @@ let
       const eval_jobs = "github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7"
 
       def main [] {
+        # ca-derivations: the rust workspace units default to
+        # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating
+        # `.#checks.x86_64-linux` resolves floating content-addressed drvs. The
+        # evaluator (nix-eval-jobs, which nix-fast-build wraps) needs the
+        # `ca-derivations` experimental feature, or it aborts with
+        # "experimental Nix feature 'ca-derivations' is disabled". The flake's
+        # nixConfig.extra-experimental-features carries it via
+        # accept-flake-config; `--option extra-experimental-features` here pins
+        # it for the build pool too so the gate is self-contained.
         ^nix run $fast_build -- ...[
           "--flake" ".#checks.x86_64-linux"
           "--eval-max-memory-size" "6144"
@@ -153,6 +162,7 @@ let
           "--no-nom"
           "--no-link"
           "--option" "accept-flake-config" "true"
+          "--option" "extra-experimental-features" "ca-derivations"
         ]
 
         let tmp = (mktemp --directory --tmpdir "ix-check.XXXXXX")
@@ -164,6 +174,9 @@ let
             "--gc-roots-dir" ($tmp | path join "flake-schema-eval-gc")
             "--option" "accept-flake-config" "true"
             "--option" "eval-cache" "false"
+            # See the ca-derivations note above: the package set also resolves
+            # content-addressed rust units, so this eval needs the feature too.
+            "--option" "extra-experimental-features" "ca-derivations"
           ]
         } | tee { save --raw --force $report }
 
@@ -177,24 +190,6 @@ let
         rm --recursive --force $tmp
       }
     '';
-  };
-
-  # Report how many .#checks.x86_64-linux derivations a PR would rebuild. For a
-  # base and head git revision it evaluates the checks at each through a
-  # per-revision git+file flake ref, diffs the attr -> drvPath maps, and prints
-  # a Markdown report (or, with --json, a constrained data object the workflow's
-  # trusted comment job validates and re-renders, so PR-authored code never
-  # controls the published comment body). The eval forces the rust checks'
-  # import-from-derivation (lib/rust/cargo-unit.nix builds cargo-units.nix with
-  # nix-cargo-unit), which is x86_64-linux only, so an end-to-end run needs a
-  # Linux builder; locally only the wrapper builds (nu --ide-check).
-  # nix-eval-jobs (not one `nix eval`) keeps memory bounded; see the checks
-  # comment above.
-  blastRadius = ix.writeNushellApplication pkgs {
-    name = "blast-radius";
-    meta.description = "Report how many .#checks.x86_64-linux derivations a PR would rebuild";
-    runtimeInputs = [ pkgs.git ];
-    text = builtins.readFile paths.tools.blastRadius;
   };
 
   updateMods = ix.writePythonApplication pkgs {
@@ -437,8 +432,15 @@ let
           package.passthru.tests or { }
         )
       ) moduleRustPackages;
+      # cargoAudit scans the single workspace Cargo.lock against the advisory DB,
+      # so it is one lockfile-scoped check (it rebuilds only on a Cargo.lock
+      # change, never on a source edit) rather than a per-crate gate. Expose it
+      # once instead of aliasing the same derivation onto every crate.
+      workspaceAuditTests = lib.optionalAttrs (rustWorkspace.units.policyChecks ? cargoAudit) {
+        rust-cargoAudit = rustWorkspace.units.policyChecks.cargoAudit;
+      };
     in
-    repoRustPackageTests // moduleRustPackageTests;
+    repoRustPackageTests // moduleRustPackageTests // workspaceAuditTests;
 
   lintSource = fs.toSource {
     inherit (paths) root;
@@ -508,6 +510,30 @@ let
     root = paths.images;
     inherit (tests) imageTests;
   };
+
+  # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
+  # `examples/_non-nix-oci` so fleet discovery skips the subtree (leading
+  # underscore), and are surfaced here as `non-nix-<name>` packages plus
+  # `image-non-nix-<name>` checks, the same validation path discovered images
+  # use. Each is imported with the example `{ index }` contract.
+  nonNixExampleImages = lib.mapAttrs' (
+    name: entry:
+    lib.nameValuePair "non-nix-${name}" (
+      import entry.path {
+        index = {
+          lib = ix;
+        };
+      }
+    )
+  ) (ix.discoverTree { root = paths.examples + "/_non-nix-oci"; });
+
+  # The content-addressed `image.json` for each non-Nix example, surfaced as its
+  # own package so the small artifact is buildable directly (`nix build
+  # .#non-nix-ubuntu-description`) and cached independently of the materialized
+  # tar it regenerates. See #679.
+  nonNixExampleDescriptions = lib.mapAttrs' (
+    name: image: lib.nameValuePair "${name}-description" image.passthru.description
+  ) nonNixExampleImages;
 in
 {
   packages =
@@ -537,7 +563,6 @@ in
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
       inherit check lint site;
-      blast-radius = blastRadius;
       site-dev = site.passthru.devServer;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
@@ -552,6 +577,8 @@ in
     }
     // repoFlakePackages
     // examplePackages
+    // nonNixExampleImages
+    // nonNixExampleDescriptions
     // crossPackages
     // healthChecks.lifecyclePackages;
 
@@ -642,6 +669,31 @@ in
           ${lib.getExe lint}
           mkdir -p "$out"
         '';
+        # Exercises the trusted half of the blast-radius PR comment: the
+        # validate/render jq embedded in its workflow, extracted from the YAML so
+        # the test can't drift from what the trusted comment job runs. The
+        # report-building logic lives in the `blast-radius` Rust crate and is
+        # covered by its own unit tests. See tools/blast-radius-test.sh.
+        blast-radius-test =
+          pkgs.runCommand "blast-radius-test"
+            {
+              nativeBuildInputs = [
+                pkgs.bash
+                pkgs.coreutils
+                pkgs.diffutils
+                pkgs.jq
+                pkgs.yq-go
+              ];
+            }
+            ''
+              cp -R ${lintSource} source
+              chmod -R u+w source
+              cd source
+              export HOME="$TMPDIR/home"
+              mkdir -p "$HOME"
+              bash tools/blast-radius-test.sh
+              mkdir -p "$out"
+            '';
         # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
         # which a successful build alone does not assert. `file` reads the Mach-O
         # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
@@ -671,7 +723,9 @@ in
       # check. The `eval` aggregate at tests/default.nix:3890 only closes
       # over per-image `extraScript` text, not `config.system.build.toplevel`,
       # so it stays stable across semantic edits to shared image libs.
-      imageChecks = lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v) discoveredImages;
+      imageChecks = lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v) (
+        discoveredImages // nonNixExampleImages
+      );
       # Rust crate prefixes can be overridden in `package.nix` and image
       # names are user-chosen, so a stray collision with an explicit check
       # would otherwise be silently swallowed by the `//` merge. Two pairwise

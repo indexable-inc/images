@@ -154,7 +154,6 @@ let
         ];
         packageTestInputs = {
           tui = [ workspacePkgs.vim ];
-          ix-mcp = [ workspacePkgs.python3 ];
           # tap's integration tests drive the `tap` binary on a PTY and run `bash`
           # as the session child; the daemon resolves `bash` from PATH at runtime.
           tap = [ workspacePkgs.bash ];
@@ -221,7 +220,11 @@ let
             {
               denyUnusedCrateDependencies = true;
               cargoAudit.enable = true;
-              cargoMachete.enable = true;
+              # cargo-machete is redundant with the per-crate
+              # unused_crate_dependencies (rustc) gate, which is compile-based and
+              # more precise than machete's heuristic scan, and machete only ran
+              # as one whole-workspace pass. Rely on the per-crate check instead.
+              cargoMachete.enable = false;
               clippy.enable = true;
             };
       }

@@ -25,7 +25,7 @@ whole corpus is searched.
 Each awaitable is a native asyncio coroutine bridged from Rust via
 pyo3-async-runtimes, so ``await`` it on your own event loop. Each hit is a dict
 with keys ``path``, ``score``, ``start_line``, ``num_lines``, ``text``, and
-``source`` (e.g. ``code``, ``claude_history``, ``slack``, ``linear``, ``web``).
+``source`` (e.g. ``code``, ``claude_history``, ``slack``, ``linear``, ``github``, ``web``).
 Authentication mirrors the ``search`` CLI: ``MXBAI_API_KEY``, or the token
 written by ``mgrep login``.
 """

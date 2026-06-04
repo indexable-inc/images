@@ -2878,8 +2878,8 @@ let
         message = "exported JVM profile should evaluate with plain nixpkgs and no repo overlay";
       }
       {
-        assertion = cargoUnitWorkspace.policyChecks ? unusedCrateDependencies;
-        message = "cargo-unit workspaces should expose an unused dependency policy check by default";
+        assertion = cargoUnitWorkspace.unusedCrateDependenciesByPackage != { };
+        message = "cargo-unit workspaces should expose per-crate unused dependency policy checks by default";
       }
       {
         assertion = lib.hasInfix "--ordered-shutdown" processComposeApplication.passthru.tests.dryRun.buildCommand;
@@ -3041,20 +3041,21 @@ let
         message = "cargo-unit workspaces should expose a cargo-audit policy check by default";
       }
       {
-        assertion = cargoUnitWorkspace.policyChecks ? clippy;
-        message = "cargo-unit workspaces should expose a clippy policy check derivation";
+        # Clippy is a per-crate gate (clippyByPackage), not one workspace
+        # aggregate, so editing one crate rebuilds only its clippy check.
+        assertion = cargoUnitWorkspace.clippyByPackage != { };
+        message = "cargo-unit workspaces should expose per-crate clippy gates";
       }
       {
         assertion = !(cargoUnitWorkspace.policyChecks ? cargoClippy);
         message = "cargo-unit buildWorkspace should suppress the legacy workspace-level cargoClippy when per-unit clippy is on";
       }
       {
-        # `policyChecks.clippy` is one aggregate derivation so
-        # `withPolicyChecks` and `selectBinaryWithTests` can string-coerce it
-        # like every other policy check. The aggregate transitively depends on
-        # every per-unit clippy derivation.
-        assertion = lib.isDerivation cargoUnitWorkspace.policyChecks.clippy;
-        message = "cargo-unit policyChecks.clippy should be a single aggregate derivation";
+        # Each package's clippy gate is one derivation (a symlinkJoin over only
+        # that package's per-unit clippy derivations) that callers can
+        # string-coerce like any other check.
+        assertion = builtins.all lib.isDerivation (builtins.attrValues cargoUnitWorkspace.clippyByPackage);
+        message = "cargo-unit clippyByPackage entries should each be a single derivation";
       }
       {
         # The per-unit fan-out lives at `clippyUnits` for callers that want
@@ -3204,16 +3205,28 @@ let
         message = "cargo-unit source audit should record full dependency source identity";
       }
       {
-        assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? cargoMachete;
-        message = "repo Rust packages should expose cargo-machete policy checks by default";
+        # cargo-machete is dropped in favor of the per-crate
+        # unused_crate_dependencies (rustc) gate (lib/rust/workspace.nix).
+        assertion = !(repoPackages.minecraft-nbt.passthru.policyChecks ? cargoMachete);
+        message = "repo Rust packages should not expose cargo-machete (dropped for the per-crate unused-deps gate)";
+      }
+      {
+        # cargoAudit is lockfile-scoped and exposed once at the workspace level
+        # (per-system rust-cargoAudit), not aliased onto every crate.
+        assertion = !(repoPackages.minecraft-nbt.passthru.policyChecks ? cargoAudit);
+        message = "repo Rust packages should not alias the workspace cargoAudit per crate";
       }
       {
         # Repo packages route through `cargoUnit.buildWorkspace` via
-        # `ix.rustWorkspace.units`, so they pick up the aggregate per-unit
-        # clippy policy check rather than the legacy workspace-level
-        # `cargoClippy` single derivation.
+        # `ix.rustWorkspace.units`, so they pick up their own per-crate clippy
+        # gate (clippyByPackage) rather than a workspace-wide aggregate or the
+        # legacy `cargoClippy` single derivation.
         assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? clippy;
-        message = "repo Rust packages should expose per-unit clippy policy checks by default";
+        message = "repo Rust packages should expose a per-crate clippy policy check";
+      }
+      {
+        assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? unusedCrateDependencies;
+        message = "repo Rust packages with dependencies should expose a per-crate unused-crate-dependencies check";
       }
       {
         assertion = !(repoPackages.minecraft-nbt.passthru.policyChecks ? cargoClippy);
@@ -3241,8 +3254,8 @@ let
         message = "repo package set should expose the ix CLI package by default";
       }
       {
-        assertion = repoPackages.minecraft-nbt.passthru.tests ? cargoMachete;
-        message = "repo Rust policy checks should be exposed as flake-checkable tests";
+        assertion = repoPackages.minecraft-nbt.passthru.tests ? unusedCrateDependencies;
+        message = "repo Rust per-crate policy checks should be exposed as flake-checkable tests";
       }
       {
         assertion = !(repoPackages.dag-runner.passthru ? unchecked);

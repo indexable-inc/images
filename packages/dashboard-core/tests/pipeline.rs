@@ -130,10 +130,10 @@ fn http_serves_page_and_lists_recordings() {
 
     let hub = Hub::new();
     let addr = "127.0.0.1:0".parse().unwrap();
-    let (dashboard, _stop) = runtime
+    let served = runtime
         .block_on(serve_hub(hub, addr, Some(store), runtime.handle()))
         .expect("serve");
-    let addr = dashboard.addr();
+    let addr = served.dashboard.addr();
 
     assert!(http_get(addr, "/").contains("ix"), "index page must render");
     let recordings = http_get(addr, "/recordings");

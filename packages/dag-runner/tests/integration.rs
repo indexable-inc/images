@@ -2,7 +2,14 @@ use std::process::Command;
 
 use serde_json::Value;
 
-fn run_binary(spec: &str) -> (std::process::Output, tempfile::TempDir) {
+/// The process output of one `dag-runner` invocation. Holds the temp dir so it
+/// outlives the run; the dir is deleted when this is dropped.
+struct RunResult {
+    output: std::process::Output,
+    _dir: tempfile::TempDir,
+}
+
+fn run_binary(spec: &str) -> RunResult {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("spec.json");
     std::fs::write(&path, spec).unwrap();
@@ -13,7 +20,7 @@ fn run_binary(spec: &str) -> (std::process::Output, tempfile::TempDir) {
         .arg(&path)
         .output()
         .expect("spawn dag-runner");
-    (output, dir)
+    RunResult { output, _dir: dir }
 }
 
 fn parse_events(stdout: &[u8]) -> Vec<Value> {
@@ -31,7 +38,7 @@ fn all_succeed_produces_zero_exit_and_finished_events() {
         "a":{"command":["true"]},
         "b":{"command":["true"],"depends_on":["a"]}
     }}"#;
-    let (output, _dir) = run_binary(spec);
+    let RunResult { output, _dir } = run_binary(spec);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -65,7 +72,7 @@ fn failed_dep_skips_downstream_with_exit_one() {
         "a":{"command":["false"]},
         "b":{"command":["true"],"depends_on":["a"]}
     }}"#;
-    let (output, _dir) = run_binary(spec);
+    let RunResult { output, _dir } = run_binary(spec);
     // `false` exits 1; skipped also contributes 1 → worst is 1.
     assert_eq!(output.status.code(), Some(1));
     let events = parse_events(&output.stdout);
@@ -85,7 +92,7 @@ fn skipped_node_reports_zero_json_duration_after_slow_failed_dep() {
         "a":{"command":["sh","-c","sleep 0.2; false"]},
         "b":{"command":["true"],"depends_on":["a"]}
     }}"#;
-    let (output, _dir) = run_binary(spec);
+    let RunResult { output, _dir } = run_binary(spec);
     assert_eq!(output.status.code(), Some(1));
     let events = parse_events(&output.stdout);
     let b = events
@@ -102,7 +109,7 @@ fn worst_failure_drives_exit_code() {
         "a":{"command":["sh","-c","exit 3"]},
         "b":{"command":["sh","-c","exit 9"]}
     }}"#;
-    let (output, _dir) = run_binary(spec);
+    let RunResult { output, _dir } = run_binary(spec);
     assert_eq!(output.status.code(), Some(9));
 }
 
@@ -111,7 +118,7 @@ fn env_overlay_is_visible_to_child() {
     let spec = r#"{"nodes":{
         "a":{"command":["sh","-c","test \"$DAG_RUNNER_TEST\" = wired"],"env":{"DAG_RUNNER_TEST":"wired"}}
     }}"#;
-    let (output, _dir) = run_binary(spec);
+    let RunResult { output, _dir } = run_binary(spec);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -170,7 +177,7 @@ fn env_value_with_equals_is_preserved() {
     let spec = r#"{"nodes":{
         "a":{"command":["sh","-c","test \"$DAG_RUNNER_TEST\" = 'a=b=c'"],"env":{"DAG_RUNNER_TEST":"a=b=c"}}
     }}"#;
-    let (output, _dir) = run_binary(spec);
+    let RunResult { output, _dir } = run_binary(spec);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -209,7 +216,7 @@ fn node_completes_before_timeout_succeeds() {
     let spec = r#"{"nodes":{
         "a":{"command":["true"],"timeout_secs":30}
     }}"#;
-    let (output, _dir) = run_binary(spec);
+    let RunResult { output, _dir } = run_binary(spec);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -223,7 +230,7 @@ fn cycle_is_rejected_before_running() {
         "a":{"command":["true"],"depends_on":["b"]},
         "b":{"command":["true"],"depends_on":["a"]}
     }}"#;
-    let (output, _dir) = run_binary(spec);
+    let RunResult { output, _dir } = run_binary(spec);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -271,7 +278,7 @@ fn missing_dependency_is_rejected_before_running() {
     let spec = r#"{"nodes":{
         "a":{"command":["true"],"depends_on":["ghost"]}
     }}"#;
-    let (output, _dir) = run_binary(spec);
+    let RunResult { output, _dir } = run_binary(spec);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -285,7 +292,7 @@ fn empty_command_is_rejected_before_running() {
     let spec = r#"{"nodes":{
         "a":{"command":[]}
     }}"#;
-    let (output, _dir) = run_binary(spec);
+    let RunResult { output, _dir } = run_binary(spec);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

@@ -49,6 +49,14 @@ fn parses_messages_and_tags_them() {
     assert!(body.contains("[tool_use Read]"));
 }
 
+/// A document's stable identity for the reingest comparison: its external id
+/// paired with the content hash that drives the reconcile.
+#[derive(Debug, PartialEq, Eq)]
+struct DocId {
+    external_id: String,
+    content_hash: String,
+}
+
 #[test]
 fn reingest_is_stable() {
     // Same input twice yields identical ids and hashes, so a re-ingest of an
@@ -56,12 +64,15 @@ fn reingest_is_stable() {
     let first = ClaudeHistoryExport::open_with(&fixtures(), "h", "u").expect("open");
     let second = ClaudeHistoryExport::open_with(&fixtures(), "h", "u").expect("open");
 
-    let ids = |export: &ClaudeHistoryExport| -> Vec<(String, String)> {
+    let ids = |export: &ClaudeHistoryExport| -> Vec<DocId> {
         export
             .documents()
             .map(|doc| {
                 let doc = doc.expect("document");
-                (doc.external_id, doc.content_hash)
+                DocId {
+                    external_id: doc.external_id,
+                    content_hash: doc.content_hash,
+                }
             })
             .collect()
     };

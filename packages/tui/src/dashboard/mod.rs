@@ -58,11 +58,13 @@ pub async fn serve(
     let hub = Hub::new();
     // The in-process dashboard streams a live manager; persisted recordings are
     // the standalone aggregator's job, so it serves the replay routes empty.
-    let (mut dashboard, mut stop_rx) = serve_hub(hub.clone(), addr, None, &runtime)
+    let served = serve_hub(hub.clone(), addr, None, &runtime)
         .await
         .map_err(|source| Error::Dashboard {
             message: source.to_string(),
         })?;
+    let mut dashboard = served.dashboard;
+    let mut stop_rx = served.shutdown;
 
     let manager = manager.clone();
     let poller = runtime.spawn(async move {

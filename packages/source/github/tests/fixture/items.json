@@ -1,0 +1,94 @@
+[
+  {
+    "kind": "issue",
+    "repo": "acme/widgets",
+    "number": 1,
+    "title": "Widget falls over under load",
+    "body": "The widget tips when more than ten requests arrive at once.",
+    "state": "open",
+    "author": "alex",
+    "labels": ["bug"],
+    "assignees": ["alex"],
+    "created_at": "2026-01-01T08:00:00Z",
+    "updated_at": "2026-01-03T09:00:00Z",
+    "closed_at": null,
+    "url": "https://github.com/acme/widgets/issues/1",
+    "comments": [
+      { "author": "robin", "body": "Second comment in time", "created_at": "2026-01-02T12:00:00Z" },
+      { "author": null, "body": "First comment in time", "created_at": "2026-01-01T10:00:00Z" }
+    ]
+  },
+  {
+    "kind": "issue",
+    "repo": "acme/widgets",
+    "number": 2,
+    "title": "Document the widget API",
+    "body": "",
+    "state": "closed",
+    "author": null,
+    "labels": [],
+    "assignees": [],
+    "created_at": "2026-01-04T08:00:00Z",
+    "updated_at": "2026-01-05T09:00:00Z",
+    "closed_at": "2026-01-05T09:00:00Z",
+    "url": "https://github.com/acme/widgets/issues/2",
+    "comments": []
+  },
+  {
+    "kind": "pr",
+    "repo": "acme/gadgets",
+    "number": 7,
+    "title": "Add gadget retry loop",
+    "body": "Retries the gadget call up to three times.",
+    "state": "merged",
+    "author": "robin",
+    "labels": ["enhancement"],
+    "assignees": ["robin"],
+    "created_at": "2026-01-06T08:00:00Z",
+    "updated_at": "2026-01-08T09:00:00Z",
+    "closed_at": "2026-01-08T09:00:00Z",
+    "merged_at": "2026-01-08T09:00:00Z",
+    "is_draft": false,
+    "base_ref": "main",
+    "head_ref": "feat/retry",
+    "url": "https://github.com/acme/gadgets/pull/7",
+    "comments": [
+      { "author": "alex", "body": "Nice, thanks for the fix.", "created_at": "2026-01-07T11:00:00Z" }
+    ],
+    "reviews": [
+      { "author": "alex", "body": "Looks good to me.", "state": "APPROVED", "submitted_at": "2026-01-08T08:30:00Z" }
+    ],
+    "review_threads": [
+      {
+        "path": "src/lib.rs",
+        "line": 10,
+        "comments": [
+          { "author": "alex", "body": "Cap the backoff here.", "created_at": "2026-01-07T09:00:00Z" },
+          { "author": null, "body": "Good catch, fixed.", "created_at": "2026-01-07T09:30:00Z" }
+        ]
+      }
+    ]
+  },
+  {
+    "kind": "pr",
+    "repo": "acme/gadgets",
+    "number": 8,
+    "title": "WIP: gadget telemetry",
+    "body": null,
+    "state": "open",
+    "author": null,
+    "labels": [],
+    "assignees": [],
+    "created_at": "2026-01-09T08:00:00Z",
+    "updated_at": "2026-01-09T09:00:00Z",
+    "closed_at": null,
+    "merged_at": null,
+    "is_draft": true,
+    "base_ref": "main",
+    "head_ref": "feat/telemetry",
+    "url": "https://github.com/acme/gadgets/pull/8",
+    "comments": [],
+    "reviews": [],
+    "review_threads": []
+  }
+]

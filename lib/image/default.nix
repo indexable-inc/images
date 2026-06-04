@@ -93,11 +93,28 @@ let
     };
 
   mkFleet = mkFleetFor system;
+
+  # Non-NixOS OCI images are built standalone (no `nixosSystem`), so they need a
+  # plain package set carrying the ix overlay for `oci-image-builder`. Reusing
+  # the same overlays the image evaluation applies keeps both builders on one
+  # toolchain.
+  hostPkgs = import nixpkgs {
+    inherit system overlays;
+  };
+
+  inherit
+    (import ./non-nix-oci.nix {
+      inherit lib;
+      pkgs = hostPkgs;
+    })
+    mkNonNixImage
+    ;
 in
 {
   inherit
     evalImageConfig
     mkImage
+    mkNonNixImage
     bootstrapImage
     mkFleetFor
     mkFleet

@@ -78,6 +78,10 @@ struct Cli {
     #[arg(long)]
     linear_export: Option<PathBuf>,
 
+    /// GitHub export directory (produced by `source-github`'s `export.sh`).
+    #[arg(long)]
+    github_export: Option<PathBuf>,
+
     /// Git repository to index commit history from (repeatable).
     #[arg(long = "git-repo")]
     git_repos: Vec<PathBuf>,
@@ -156,7 +160,7 @@ async fn main() -> anyhow::Result<()> {
     }
     if !any_source_selected(&cli) {
         anyhow::bail!(
-            "no sources selected: pass --local, --user NAME:HOME, --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--git-repo, or --code-repo"
+            "no sources selected: pass --local, --user NAME:HOME, --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--github-export/--git-repo, or --code-repo"
         );
     }
     let mixedbread =
@@ -184,6 +188,7 @@ const fn any_source_selected(cli: &Cli) -> bool {
         || cli.atuin_db.is_some()
         || cli.slack_export.is_some()
         || cli.linear_export.is_some()
+        || cli.github_export.is_some()
         || !cli.git_repos.is_empty()
         || !cli.code_repos.is_empty()
         || !cli.users.is_empty()
@@ -247,6 +252,15 @@ async fn run_sources(
         }
         .await;
         record("linear", result, &mut counts);
+    }
+    if let Some(dir) = &cli.github_export {
+        let result = async {
+            let adapter = source_github::GithubExport::open(dir)
+                .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
+            run_source("github", &adapter, mixedbread, parquet).await
+        }
+        .await;
+        record("github", result, &mut counts);
     }
     for repo in &cli.git_repos {
         let label = format!("git:{}", repo.display());

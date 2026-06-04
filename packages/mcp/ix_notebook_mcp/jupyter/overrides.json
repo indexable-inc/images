@@ -1,0 +1,12 @@
+{
+  "@jupyterlab/apputils-extension:themes": {
+    "theme": "JupyterLab Dark"
+  },
+  "@jupyterlab/codemirror-extension:plugin": {
+    "defaultConfig": {
+      "highlightActiveLine": true,
+      "highlightWhitespace": false,
+      "highlightTrailingWhitespace": true
+    }
+  }
+}

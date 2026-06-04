@@ -398,6 +398,7 @@ let
     })
     evalImageConfig
     mkImage
+    mkNonNixImage
     mkFleetFor
     mkFleet
     ;
@@ -438,6 +439,7 @@ let
       mkFleet
       mkFleetFor
       mkImage
+      mkNonNixImage
       nixosModules
       overlay
       overlays

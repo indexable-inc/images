@@ -125,7 +125,7 @@ fn read_entries(conn: &Connection) -> Result<Vec<Entry>> {
         .query_map([], |row| {
             let timestamp_ns: Option<i64> = row.get(1)?;
             let hostname: Option<String> = row.get(6)?;
-            let (host, user) = split_host_user(hostname.as_deref());
+            let HostUser { host, user } = split_host_user(hostname.as_deref());
             Ok(Entry {
                 id: row.get(0)?,
                 command: row.get(3)?,
@@ -150,15 +150,24 @@ fn read_entries(conn: &Connection) -> Result<Vec<Entry>> {
     Ok(entries)
 }
 
+/// Host and optional user parsed from an atuin `hostname` column.
+#[derive(Debug, Clone)]
+struct HostUser {
+    /// The host portion (the whole value when no `:` is present).
+    host: String,
+    /// The user portion after the first `:`, if any and non-empty.
+    user: Option<String>,
+}
+
 /// atuin records `hostname` as `"<host>:<user>"`. Split on the first colon; fall
 /// back to the whole value as the host with no user.
-fn split_host_user(hostname: Option<&str>) -> (String, Option<String>) {
+fn split_host_user(hostname: Option<&str>) -> HostUser {
     let Some(value) = hostname else {
-        return ("unknown".to_owned(), None);
+        return HostUser { host: "unknown".to_owned(), user: None };
     };
     value.split_once(':').map_or_else(
-        || (value.to_owned(), None),
-        |(host, user)| (host.to_owned(), non_empty(Some(user.to_owned()))),
+        || HostUser { host: value.to_owned(), user: None },
+        |(host, user)| HostUser { host: host.to_owned(), user: non_empty(Some(user.to_owned())) },
     )
 }
 

@@ -290,6 +290,12 @@ pub struct Terminal {
 // another thread owns it on a pinned thread behind a channel API rather than
 // moving the handle. Do not add an `unsafe impl Send`/`Sync`.
 
+/// DECCKM (DEC private mode 1, "cursor keys") in libghostty's packed mode
+/// encoding. The C header defines it as `ghostty_mode_new(1, ansi=false)`, i.e.
+/// `(value & 0x7FFF) | ((ansi as u16) << 15)`, which for value 1 / DEC-private
+/// is simply `1`. See `ghostty/vt/modes.h` (`GHOSTTY_MODE_DECCKM`).
+const DECCKM: sys::GhosttyMode = 1;
+
 impl Terminal {
     /// Create a terminal sized `rows` by `cols` with `scrollback` lines of
     /// history.
@@ -412,6 +418,26 @@ impl Terminal {
         let bar: sys::GhosttyTerminalScrollbar =
             unsafe { self.get(sys::GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_SCROLLBAR) }?;
         Ok(bar.total.saturating_sub(bar.len))
+    }
+
+    /// Whether the program has enabled DECCKM (DEC private mode 1, "cursor
+    /// keys"). When set, the program (via terminfo `smkx`, as ncurses, vim, and
+    /// less do on entry) expects the cursor keys in application form
+    /// (`ESC O A`..`ESC O D`) instead of normal form (`ESC [ A`..`ESC [ D`), so
+    /// an input driver must emit the matching form or the program never sees the
+    /// arrow keys at all.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidValue`] if ghostty rejects the mode query.
+    pub fn application_cursor_keys(&self) -> Result<bool> {
+        self.mode_enabled(DECCKM)
+    }
+
+    /// Read a DEC/ANSI mode's current state via `ghostty_terminal_mode_get`.
+    fn mode_enabled(&self, mode: sys::GhosttyMode) -> Result<bool> {
+        let mut out = false;
+        check(unsafe { sys::ghostty_terminal_mode_get(self.raw, mode, &raw mut out) })?;
+        Ok(out)
     }
 }
 
@@ -581,7 +607,10 @@ fn read_row(cells: &RowCells, cols: u16) -> Result<Vec<Cell>> {
         })?;
         let style = unsafe { Style::from_raw(&style_raw) };
 
-        let (ch, combining) = read_graphemes(cells)?;
+        let Grapheme {
+            base: ch,
+            combining,
+        } = read_graphemes(cells)?;
 
         // Resolved colors return GHOSTTY_INVALID_VALUE when the cell has no
         // explicit color; that is the documented "use your default" signal, not
@@ -600,14 +629,23 @@ fn read_row(cells: &RowCells, cols: u16) -> Result<Vec<Cell>> {
     Ok(row)
 }
 
+/// A cell's grapheme: its base codepoint plus any trailing combining marks.
+struct Grapheme {
+    base: Option<char>,
+    combining: Vec<char>,
+}
+
 /// Read the base codepoint plus any combining marks of the selected cell.
-fn read_graphemes(cells: &RowCells) -> Result<(Option<char>, Vec<char>)> {
+fn read_graphemes(cells: &RowCells) -> Result<Grapheme> {
     use sys::GhosttyRenderStateRowCellsData as CellData;
 
     let len: u32 =
         unsafe { cells.get(CellData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN) }?;
     if len == 0 {
-        return Ok((None, Vec::new()));
+        return Ok(Grapheme {
+            base: None,
+            combining: Vec::new(),
+        });
     }
 
     let mut buf = vec![0u32; len as usize];
@@ -622,7 +660,7 @@ fn read_graphemes(cells: &RowCells) -> Result<(Option<char>, Vec<char>)> {
     let mut codepoints = buf.into_iter().map(char::from_u32);
     let base = codepoints.next().flatten();
     let combining = codepoints.flatten().collect();
-    Ok((base, combining))
+    Ok(Grapheme { base, combining })
 }
 
 /// Read a resolved cell color, mapping the "no explicit color" signal to `None`.

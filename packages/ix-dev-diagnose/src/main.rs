@@ -368,7 +368,10 @@ fn run(args: &Args) -> Result<Report> {
     let port = url.port_or_known_default().unwrap_or(443);
     let path_and_query = path_and_query(&url);
     let trust_roots = build_root_verifiers()?;
-    let (addresses, dns_error) = resolve_addresses(&host, port, args.family);
+    let AddressResolution {
+        addresses,
+        error: dns_error,
+    } = resolve_addresses(&host, port, args.family);
     let address_reports = addresses.iter().copied().map(AddressReport::from).collect();
 
     let target = TargetReport {
@@ -451,11 +454,13 @@ fn build_root_verifiers() -> Result<RootVerifiers> {
     })
 }
 
-fn resolve_addresses(
-    host: &str,
-    port: u16,
-    family: AddressFamily,
-) -> (Vec<SocketAddr>, Option<String>) {
+/// Outcome of resolving a host to socket addresses, with any DNS error captured.
+struct AddressResolution {
+    addresses: Vec<SocketAddr>,
+    error: Option<String>,
+}
+
+fn resolve_addresses(host: &str, port: u16, family: AddressFamily) -> AddressResolution {
     match (host, port).to_socket_addrs() {
         Ok(addrs) => {
             let addresses = addrs
@@ -463,9 +468,15 @@ fn resolve_addresses(
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>();
-            (addresses, None)
+            AddressResolution {
+                addresses,
+                error: None,
+            }
         }
-        Err(error) => (Vec::new(), Some(error.to_string())),
+        Err(error) => AddressResolution {
+            addresses: Vec::new(),
+            error: Some(error.to_string()),
+        },
     }
 }
 
@@ -710,7 +721,11 @@ fn parse_http_response(
     read_limit_reached: bool,
     elapsed_ms: u64,
 ) -> HttpReport {
-    let Some((header_start, header_end)) = final_header_block(response) else {
+    let Some(HeaderBlock {
+        start: header_start,
+        end: header_end,
+    }) = final_header_block(response)
+    else {
         return HttpReport::Failed {
             elapsed_ms,
             error: "response did not contain complete HTTP headers".to_owned(),
@@ -722,7 +737,11 @@ fn parse_http_response(
     let body_start = header_end + 4;
     let body = response.get(body_start..).unwrap_or_default();
     let body_sample = &body[..body.len().min(max_body_bytes)];
-    let (status_code, reason, headers) = parse_headers(header_bytes);
+    let ParsedHeaders {
+        status_code,
+        reason,
+        headers,
+    } = parse_headers(header_bytes);
 
     HttpReport::Completed {
         elapsed_ms,
@@ -740,10 +759,27 @@ fn parse_http_response(
     }
 }
 
-fn parse_headers(header_bytes: &[u8]) -> (Option<u16>, Option<String>, Vec<HttpHeader>) {
+/// Status code and reason phrase parsed from an HTTP status line.
+#[derive(Default)]
+struct StatusLine {
+    status_code: Option<u16>,
+    reason: Option<String>,
+}
+
+/// HTTP response head: the status line fields plus the parsed header list.
+struct ParsedHeaders {
+    status_code: Option<u16>,
+    reason: Option<String>,
+    headers: Vec<HttpHeader>,
+}
+
+fn parse_headers(header_bytes: &[u8]) -> ParsedHeaders {
     let header_text = String::from_utf8_lossy(header_bytes);
     let mut lines = header_text.split("\r\n");
-    let (status_code, reason) = lines.next().map_or((None, None), parse_status_line);
+    let StatusLine {
+        status_code,
+        reason,
+    } = lines.next().map(parse_status_line).unwrap_or_default();
     let headers = lines
         .filter_map(|line| {
             let (name, value) = line.split_once(':')?;
@@ -754,29 +790,46 @@ fn parse_headers(header_bytes: &[u8]) -> (Option<u16>, Option<String>, Vec<HttpH
         })
         .collect();
 
-    (status_code, reason, headers)
+    ParsedHeaders {
+        status_code,
+        reason,
+        headers,
+    }
 }
 
-fn parse_status_line(line: &str) -> (Option<u16>, Option<String>) {
+fn parse_status_line(line: &str) -> StatusLine {
     let mut parts = line.splitn(3, ' ');
     let _version = parts.next();
     let status_code = parts.next().and_then(|code| code.parse().ok());
     let reason = parts.next().map(str::to_owned);
-    (status_code, reason)
+    StatusLine {
+        status_code,
+        reason,
+    }
 }
 
-fn final_header_block(response: &[u8]) -> Option<(usize, usize)> {
+/// Byte offsets bounding the final HTTP header block within a response buffer.
+#[derive(Clone, Copy)]
+struct HeaderBlock {
+    start: usize,
+    end: usize,
+}
+
+fn final_header_block(response: &[u8]) -> Option<HeaderBlock> {
     let mut header_start = 0;
     loop {
         let header_end = header_start + find_header_end(&response[header_start..])?;
         let header_bytes = &response[header_start..header_end];
-        let (status_code, _reason, _headers) = parse_headers(header_bytes);
+        let ParsedHeaders { status_code, .. } = parse_headers(header_bytes);
         if matches!(status_code, Some(100..=199)) {
             header_start = header_end + 4;
             continue;
         }
 
-        return Some((header_start, header_end));
+        return Some(HeaderBlock {
+            start: header_start,
+            end: header_end,
+        });
     }
 }
 
@@ -792,11 +845,19 @@ fn eof_completes_response(response: &[u8]) -> bool {
 }
 
 fn response_framing(response: &[u8]) -> ResponseFraming {
-    let Some((header_start, header_end)) = final_header_block(response) else {
+    let Some(HeaderBlock {
+        start: header_start,
+        end: header_end,
+    }) = final_header_block(response)
+    else {
         return ResponseFraming::Incomplete;
     };
     let header_bytes = &response[header_start..header_end];
-    let (status_code, _reason, headers) = parse_headers(header_bytes);
+    let ParsedHeaders {
+        status_code,
+        headers,
+        ..
+    } = parse_headers(header_bytes);
     if matches!(status_code, Some(204 | 205 | 304)) {
         return ResponseFraming::Complete;
     }

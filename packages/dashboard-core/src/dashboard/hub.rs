@@ -73,22 +73,32 @@ enum Scalar {
     Absent,
 }
 
+/// One scalar meta field a view contributes: the meta key and the value to
+/// reconcile under it.
+struct ScalarField {
+    /// The meta key this scalar is written under. Fixed per view kind.
+    name: &'static str,
+    /// The value to reconcile, including [`Scalar::Absent`] to clear the key.
+    value: Scalar,
+}
+
 /// The scalar meta fields a view contributes, besides the common `kind`,
 /// `created_at`, `title`, and `subtitle` that every pane carries.
 ///
 /// The keys a view returns are fixed for its kind, so a slot created for one
 /// kind always sees the same set on every later tick.
-fn view_scalars(view: &View) -> Vec<(&'static str, Scalar)> {
+fn view_scalars(view: &View) -> Vec<ScalarField> {
+    let field = |name, value| ScalarField { name, value };
     match view {
         View::Terminal(t) => vec![
-            ("rows", Scalar::Int(i64::from(t.rows))),
-            ("cols", Scalar::Int(i64::from(t.cols))),
-            ("alive", Scalar::Bool(t.alive)),
-            ("cursor_row", Scalar::Int(i64::from(t.cursor_row))),
-            ("cursor_col", Scalar::Int(i64::from(t.cursor_col))),
-            ("cursor_visible", Scalar::Bool(t.cursor_visible)),
-            ("cursor_shape", Scalar::Str(t.cursor_shape.clone())),
-            (
+            field("rows", Scalar::Int(i64::from(t.rows))),
+            field("cols", Scalar::Int(i64::from(t.cols))),
+            field("alive", Scalar::Bool(t.alive)),
+            field("cursor_row", Scalar::Int(i64::from(t.cursor_row))),
+            field("cursor_col", Scalar::Int(i64::from(t.cursor_col))),
+            field("cursor_visible", Scalar::Bool(t.cursor_visible)),
+            field("cursor_shape", Scalar::Str(t.cursor_shape.clone())),
+            field(
                 "exit_code",
                 t.exit_code
                     .map_or(Scalar::Absent, |code| Scalar::Int(i64::from(code))),
@@ -96,40 +106,50 @@ fn view_scalars(view: &View) -> Vec<(&'static str, Scalar)> {
         ],
         View::Html(_) => Vec::new(),
         View::Exec(e) => vec![
-            ("lang", Scalar::Str(e.lang.clone())),
-            ("running", Scalar::Bool(e.running)),
-            ("ok", e.ok.map_or(Scalar::Absent, Scalar::Bool)),
-            (
+            field("lang", Scalar::Str(e.lang.clone())),
+            field("running", Scalar::Bool(e.running)),
+            field("ok", e.ok.map_or(Scalar::Absent, Scalar::Bool)),
+            field(
                 "duration_ms",
                 e.duration_ms.map_or(Scalar::Absent, |ms| {
                     Scalar::Int(i64::try_from(ms).unwrap_or(i64::MAX))
                 }),
             ),
         ],
-        View::Data(d) => vec![("renderer", Scalar::Str(d.renderer.clone()))],
+        View::Data(d) => vec![field("renderer", Scalar::Str(d.renderer.clone()))],
     }
+}
+
+/// One large mutable text field a view contributes: the container key and the
+/// text to reconcile into it.
+struct TextField {
+    /// The text container key this field is stored under. Fixed per view kind.
+    name: &'static str,
+    /// The full text to reconcile into the container.
+    value: String,
 }
 
 /// The large mutable text fields a view contributes, each stored in its own Loro
 /// text container so it diffs and replays independently. The terminal's command
 /// and args are not here: they ride in the pane's title and subtitle, which
 /// every pane already has.
-fn view_texts(view: &View) -> Vec<(&'static str, String)> {
+fn view_texts(view: &View) -> Vec<TextField> {
+    let field = |name, value| TextField { name, value };
     match view {
-        View::Terminal(t) => vec![("body", t.screen.clone())],
-        View::Html(h) => vec![("body", h.html.clone())],
+        View::Terminal(t) => vec![field("body", t.screen.clone())],
+        View::Html(h) => vec![field("body", h.html.clone())],
         View::Exec(e) => vec![
-            ("source", e.source.clone()),
-            ("stdout", e.stdout.clone()),
-            ("stderr", e.stderr.clone()),
-            ("result", e.result.clone()),
+            field("source", e.source.clone()),
+            field("stdout", e.stdout.clone()),
+            field("stderr", e.stderr.clone()),
+            field("result", e.result.clone()),
             // Inline-trace output→line map, canonicalized to JSON text (like the
             // data view's body) so it diffs and replays; the frontend parses it.
-            ("trace", serde_json::to_string(&e.trace).unwrap_or_default()),
+            field("trace", serde_json::to_string(&e.trace).unwrap_or_default()),
         ],
         // A data view's JSON is canonicalized to text so it diffs and replays
         // like any other body; the frontend parses it back.
-        View::Data(d) => vec![("body", serde_json::to_string(&d.data).unwrap_or_default())],
+        View::Data(d) => vec![field("body", serde_json::to_string(&d.data).unwrap_or_default())],
     }
 }
 
@@ -285,14 +305,14 @@ impl DocState {
         // shows each resource's age with no producer opt-in.
         meta.insert("created_at", now_ms()).map_err(loro_err)?;
         let mut texts = Vec::new();
-        for (text_key, _) in view_texts(&pane.view) {
+        for field in view_texts(&pane.view) {
             let text = meta
-                .insert_container(text_key, LoroText::new())
+                .insert_container(field.name, LoroText::new())
                 .map_err(loro_err)?;
             // A fresh container is empty, so a cached empty value matches it and
             // the first update writes only a non-empty initial body.
             texts.push(TextSlot {
-                key: text_key,
+                key: field.name,
                 text,
                 value: String::new(),
             });
@@ -329,21 +349,21 @@ impl DocState {
                 .map_err(loro_err)?;
             slot.subtitle.clone_from(&pane.subtitle);
         }
-        for (field, scalar) in view_scalars(&pane.view) {
-            if slot.scalars.get(field) != Some(&scalar) {
-                write_scalar(&slot.meta, field, &scalar)?;
-                slot.scalars.insert(field, scalar);
+        for field in view_scalars(&pane.view) {
+            if slot.scalars.get(field.name) != Some(&field.value) {
+                write_scalar(&slot.meta, field.name, &field.value)?;
+                slot.scalars.insert(field.name, field.value);
             }
         }
-        for (field, next) in view_texts(&pane.view) {
+        for field in view_texts(&pane.view) {
             // Match by key rather than position: the key set is fixed per kind,
             // so the lookup always hits, and matching keeps the two projections
             // from silently drifting if one is reordered.
-            if let Some(text_slot) = slot.texts.iter_mut().find(|slot| slot.key == field)
-                && text_slot.value != next
+            if let Some(text_slot) = slot.texts.iter_mut().find(|slot| slot.key == field.name)
+                && text_slot.value != field.value
             {
-                set_text(&text_slot.text, &next)?;
-                text_slot.value = next;
+                set_text(&text_slot.text, &field.value)?;
+                text_slot.value = field.value;
             }
         }
         Ok(())
@@ -423,6 +443,16 @@ fn loro_err(source: impl std::fmt::Display) -> Error {
     }
 }
 
+/// A new subscriber's starting point: the current full snapshot taken under the
+/// hub lock, plus the live update stream whose first item lines up with it.
+pub struct Subscription {
+    /// The full document snapshot at subscribe time, for the client to import
+    /// before applying any update.
+    pub(crate) snapshot: Vec<u8>,
+    /// The base64 CRDT update stream, consistent with `snapshot`.
+    pub(crate) updates: broadcast::Receiver<Arc<str>>,
+}
+
 /// Owns the shared document and fans CRDT updates out to SSE subscribers.
 ///
 /// One hub backs any number of frame sources. The in-process dashboard drives it
@@ -468,10 +498,13 @@ impl Hub {
     /// Subscribe to the base64 CRDT update stream and read the current full
     /// snapshot, both under one lock so the snapshot version lines up with the
     /// first update the subscriber will receive.
-    pub(crate) fn subscribe(&self) -> (Vec<u8>, broadcast::Receiver<Arc<str>>) {
+    pub(crate) fn subscribe(&self) -> Subscription {
         let state = self.state.lock();
-        let rx = self.updates.subscribe();
-        (state.snapshot().unwrap_or_default(), rx)
+        let updates = self.updates.subscribe();
+        Subscription {
+            snapshot: state.snapshot().unwrap_or_default(),
+            updates,
+        }
     }
 
     /// A base64 full snapshot, for a client the broadcast stream outran.

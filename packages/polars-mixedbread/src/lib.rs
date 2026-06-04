@@ -45,7 +45,8 @@ use pyo3::types::{PyDict, PyList};
 ))]
 #[allow(
     clippy::too_many_arguments,
-    reason = "thin PyO3 binding mirrors scan_mixedbread's search + options surface"
+    clippy::needless_pass_by_value,
+    reason = "thin PyO3 binding mirrors scan_mixedbread's search + options surface; PyO3 extracts each argument into an owned value, so the by-value `stores`/`query`/`filters` signature is the binding boundary, not a copy we could elide"
 )]
 fn search_mixedbread(
     py: Python<'_>,
