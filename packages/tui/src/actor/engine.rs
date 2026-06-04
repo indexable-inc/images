@@ -74,10 +74,12 @@ pub fn spawn(
         .name("ix-vt-engine".to_owned())
         .spawn(move || {
             engine_loop(
-                id,
-                rows,
-                cols,
-                scrollback,
+                EngineConfig {
+                    id,
+                    rows,
+                    cols,
+                    scrollback,
+                },
                 &cursor_shape,
                 &app_cursor_keys,
                 &rx,
@@ -106,18 +108,31 @@ fn vt_engine_error_io(id: Uuid, source: &std::io::Error) -> Error {
     }
 }
 
-/// The engine thread body: create the terminal, report init, then serve
-/// requests until the channel closes.
-fn engine_loop(
+/// Terminal-construction parameters threaded from [`spawn`] into the engine
+/// thread. Grouped so `engine_loop` stays under clippy's argument-count limit
+/// and so the values that only describe the terminal travel as one unit.
+struct EngineConfig {
     id: Uuid,
     rows: u16,
     cols: u16,
     scrollback: usize,
+}
+
+/// The engine thread body: create the terminal, report init, then serve
+/// requests until the channel closes.
+fn engine_loop(
+    config: EngineConfig,
     cursor_shape: &Arc<SyncRwLock<CursorShape>>,
     app_cursor_keys: &Arc<SyncRwLock<bool>>,
     rx: &Receiver<EngineRequest>,
     init_tx: &SyncSender<Result<()>>,
 ) {
+    let EngineConfig {
+        id,
+        rows,
+        cols,
+        scrollback,
+    } = config;
     let mut terminal = match ix_vt::Terminal::new(rows, cols, scrollback) {
         Ok(terminal) => terminal,
         Err(e) => {
