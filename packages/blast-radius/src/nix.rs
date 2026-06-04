@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::process::Command;
 
-use color_eyre::eyre::{Context, OptionExt, Result, bail};
+use color_eyre::eyre::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::causes::{DrvNode, Graph};
@@ -34,6 +34,13 @@ struct EvalRow {
     drv_path: Option<String>,
     #[serde(default)]
     error: Option<String>,
+}
+
+/// The `.drv` basename of a store path (the segment after the last `/`). This is
+/// the key `nix derivation show` uses for derivations and their inputs, and it is
+/// input-addressed, so an identical basename means an identical derivation.
+pub fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 /// Strip a store path to its derivation name: drop the `/nix/store/<hash>-`
@@ -122,17 +129,32 @@ pub fn eval_checks(repo: &str, rev: &str) -> Result<Vec<Check>> {
     Ok(checks)
 }
 
-/// One derivation as `nix derivation show` reports it.
+/// `nix derivation show` output: a `{ version, derivations }` envelope (schema 4+)
+/// whose `derivations` map is keyed by `.drv` basename.
+#[derive(Deserialize)]
+struct ShowOutput {
+    derivations: BTreeMap<String, ShowDrv>,
+}
+
+/// One derivation as `nix derivation show` reports it. Input derivations live
+/// under `inputs.drvs` keyed by basename (older schemas used a top-level
+/// `inputDrvs`; this targets the current schema the pinned Nix emits).
 #[derive(Deserialize)]
 struct ShowDrv {
     #[serde(default)]
     name: Option<String>,
-    #[serde(default, rename = "inputDrvs")]
-    input_drvs: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    inputs: ShowInputs,
+}
+
+#[derive(Deserialize, Default)]
+struct ShowInputs {
+    #[serde(default)]
+    drvs: BTreeMap<String, serde_json::Value>,
 }
 
 /// Load the recursive derivation graph rooted at `drv_paths`, keyed by `.drv`
-/// store path. Used to walk down to the changed frontier.
+/// basename. Used to walk down to the changed frontier.
 pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
     if drv_paths.is_empty() {
         return Ok(Graph::new());
@@ -147,14 +169,15 @@ pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
     args.extend(drv_paths.iter().cloned());
     let stdout = run(Command::new("nix").args(&args)).context("nix derivation show --recursive")?;
 
-    let raw: BTreeMap<String, ShowDrv> =
+    let output: ShowOutput =
         serde_json::from_str(&stdout).context("parse nix derivation show output")?;
-    Ok(raw
+    Ok(output
+        .derivations
         .into_iter()
-        .map(|(path, drv)| {
-            let name = drv.name.unwrap_or_else(|| drv_name(&path));
-            let inputs = drv.input_drvs.into_keys().collect();
-            (path, DrvNode { name, inputs })
+        .map(|(name_key, drv)| {
+            let name = drv.name.unwrap_or_else(|| drv_name(&name_key));
+            let inputs = drv.inputs.drvs.into_keys().collect();
+            (name_key, DrvNode { name, inputs })
         })
         .collect())
 }
@@ -165,19 +188,6 @@ pub fn drv_for(checks: &[Check], attr: &str) -> Option<String> {
         .iter()
         .find(|check| check.attr == attr)
         .map(|check| check.drv_path.clone())
-}
-
-/// Resolve the head derivation path for each changed check, skipping any the
-/// eval did not surface (should not happen, but never panic on missing data).
-pub fn changed_check_drvs(head: &[Check], changed: &[String]) -> Result<BTreeMap<String, String>> {
-    changed
-        .iter()
-        .map(|attr| {
-            let drv = drv_for(head, attr)
-                .ok_or_eyre(format!("changed check {attr} missing from head eval"))?;
-            Ok((attr.clone(), drv))
-        })
-        .collect()
 }
 
 #[cfg(test)]

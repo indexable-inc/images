@@ -88,15 +88,25 @@ fn main() -> Result<()> {
     let causes = if changed.is_empty() {
         Vec::new()
     } else {
-        let changed_drvs = nix::changed_check_drvs(&head, &changed)?;
-        let head_paths: Vec<String> = changed_drvs.values().cloned().collect();
+        // Full `.drv` paths feed `nix derivation show`; the resulting graphs are
+        // keyed by basename, so attribute a check to its head drv's basename.
+        let head_paths: Vec<String> = changed
+            .iter()
+            .filter_map(|attr| nix::drv_for(&head, attr))
+            .collect();
         let base_paths: Vec<String> = changed
             .iter()
             .filter_map(|attr| nix::drv_for(&base, attr))
             .collect();
         let head_graph = nix::derivation_graph(&head_paths)?;
         let base_graph = nix::derivation_graph(&base_paths)?;
-        root_causes(&base_graph, &head_graph, &changed_drvs, CAPS)
+        let changed_basenames: BTreeMap<String, String> = changed
+            .iter()
+            .filter_map(|attr| {
+                nix::drv_for(&head, attr).map(|path| (attr.clone(), nix::basename(&path).to_owned()))
+            })
+            .collect();
+        root_causes(&base_graph, &head_graph, &changed_basenames, CAPS)
     };
 
     let report = Report {
