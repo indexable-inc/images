@@ -468,6 +468,66 @@ let
         mkdir -p "$out"
       '';
 
+  # Locks the bind-address default: with a working `tailscale status --json`
+  # in PATH, `_tailscale_ip()` returns the first IPv4 from `Self.TailscaleIPs`
+  # so the Jupyter Server is reachable from any tailnet peer; with no tailscale
+  # binary, it returns None so the CLI falls through to loopback. The mock
+  # binary lives in TMP/path so we control PATH exactly without touching the
+  # real tailscale state. The mock is shell, not a subprocess of an actual
+  # tailscale, so this test runs in the Nix sandbox.
+  bindDefaultTest = pkgs.writeText "ix-mcp-bind-default-test.py" ''
+    from unittest.mock import patch
+    from ix_notebook_mcp import cli
+
+    status = {
+        "Self": {
+            "TailscaleIPs": ["100.64.0.7", "fd7a::1"],
+            "DNSName": "node.tail-x.ts.net.",
+        }
+    }
+
+    # Happy path: tailscale is up. The helper picks the first IPv4 and strips
+    # the trailing dot from the DNS name.
+    with patch.object(cli, "_tailscale_status", return_value=status):
+        assert cli._tailscale_ip() == "100.64.0.7", f"got {cli._tailscale_ip()!r}"
+        assert cli._tailscale_dns_name() == "node.tail-x.ts.net", f"got {cli._tailscale_dns_name()!r}"
+
+    # No tailscale: the helpers return None so the CLI falls back to loopback.
+    # Stubbing the inner _tailscale_status is more robust than juggling PATH or
+    # the absolute fallback paths the real helper probes (which exist on hydra
+    # outside the sandbox, so a PATH-only test would still find them).
+    with patch.object(cli, "_tailscale_status", return_value=None):
+        assert cli._tailscale_ip() is None, "expected None when tailscale is unavailable"
+        assert cli._tailscale_dns_name() is None, "expected None when tailscale is unavailable"
+
+    # IPv6-only or empty IP list: still None (the bind expects IPv4).
+    with patch.object(cli, "_tailscale_status", return_value={"Self": {"TailscaleIPs": ["fd7a::1"]}}):
+        assert cli._tailscale_ip() is None, "IPv6-only TailscaleIPs should yield None"
+
+    print("bind-default-ok")
+  '';
+  bindDefaultSmoke =
+    pkgs.runCommand "ix-mcp-bind-default-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${mcpPython}/bin/python3 ${bindDefaultTest} >stdout 2>stderr || {
+          echo "ix-mcp bind-default smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'bind-default-ok' stdout || {
+          echo "ix-mcp bind-default smoke did not confirm helper behaviour:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # Boots a real kernel with the shipped IPython startup in place and proves a
   # polars DataFrame comes back as an interactive itables table (the human's
   # JupyterLab upgrade) while keeping its text/plain repr (the agent path). Reads
@@ -548,6 +608,7 @@ package.overrideAttrs (old: {
         serverTools
         evalSmoke
         tablesSmoke
+        bindDefaultSmoke
         ;
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {

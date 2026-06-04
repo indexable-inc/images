@@ -27,15 +27,20 @@ reachable Jupyter Server is arbitrary code execution for whoever can dial it.
 
 Two env vars control how a remote VM hands back a reachable URL:
 
-- `IX_MCP_HOST` (default `127.0.0.1`): the address Jupyter binds. Set it to
-  `0.0.0.0` to listen on every interface so the lab is reachable off-box.
+- `IX_MCP_HOST`: the address Jupyter binds. The default is this node's
+  Tailscale IPv4 (`100.x.y.z`) when Tailscale is up, so a phone or laptop on
+  the same tailnet can open the lab URL without ssh. Falls back to `127.0.0.1`
+  when Tailscale is not up. Set it to `0.0.0.0` to listen on every interface
+  (do this only behind a host firewall), or to a specific address to override
+  the auto-detected Tailscale IP.
 - `IX_MCP_PUBLIC_HOST`: the host put into the lab URL. Set it to force a specific
   name (e.g. `myvm.tail368802.ts.net`).
 
+The default Tailscale-IP bind keeps the trust boundary at the tailnet: only
+tailnet peers can dial `100.x.y.z`, so the local Wi-Fi cannot reach the server.
 If you bind a wildcard (`0.0.0.0`/`::`) without setting `IX_MCP_PUBLIC_HOST`, the
 URL host is auto-resolved to a reachable name: the Tailscale MagicDNS name first,
-then the FQDN, then `127.0.0.1` as a fallback. The default loopback bind keeps
-the URL on `127.0.0.1` and the server unexposed.
+then the FQDN, then `127.0.0.1` as a fallback.
 
 ## How it works
 

@@ -24,10 +24,14 @@ class Config:
     # The Jupyter Server bind address. The server runs with auth disabled (no
     # token, no password): the lab URL opens straight into the live notebook so a
     # human can co-edit without copying a token out of band. Access is instead
-    # gated by reachability: the default bind is loopback, and the fleet only
-    # exposes it over Tailscale, where the tailnet is the trust boundary. Note a
-    # reachable Jupyter Server is arbitrary code execution for whoever can dial
-    # it, so never bind it to a public interface.
+    # gated by reachability: the CLI default is this node's Tailscale IPv4 when
+    # Tailscale is up (so the tailnet is the trust boundary and a phone or
+    # laptop on the tailnet can open the lab URL without ssh), and loopback
+    # otherwise. The dataclass default stays loopback so an in-process Config()
+    # in a test cannot accidentally bind to a tailnet address; the CLI overrides
+    # this when it builds the real Config. Note a reachable Jupyter Server is
+    # arbitrary code execution for whoever can dial it, so never bind it to a
+    # non-tailnet public interface without an explicit IX_MCP_HOST override.
     host: str = "127.0.0.1"
     jupyter_port: int = 0
 

@@ -128,12 +128,12 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _tailscale_dns_name() -> str | None:
-    """This node's MagicDNS name (e.g. ``host.tail<id>.ts.net``), or None.
+def _tailscale_status() -> dict | None:
+    """Parsed ``tailscale status --json`` for this node, or None.
 
-    Best-effort: locating the binary and parsing `tailscale status --json` can
-    fail many ways (no tailscale, not logged in, malformed output); every such
-    case yields None rather than raising, so the caller can fall through.
+    Best-effort: locating the binary and parsing the output can fail many ways
+    (no tailscale, not logged in, malformed output); every such case yields
+    None rather than raising, so the callers can fall through.
     """
     tailscale = (
         shutil.which("tailscale")
@@ -150,11 +150,35 @@ def _tailscale_dns_name() -> str | None:
             timeout=2,
             check=True,
         ).stdout
-        name = json.loads(out).get("Self", {}).get("DNSName", "")
+        return json.loads(out)
     except Exception:
         return None
-    name = name.rstrip(".")
+
+
+def _tailscale_dns_name() -> str | None:
+    """This node's MagicDNS name (e.g. ``host.tail<id>.ts.net``), or None."""
+    status = _tailscale_status()
+    if not status:
+        return None
+    name = status.get("Self", {}).get("DNSName", "").rstrip(".")
     return name or None
+
+
+def _tailscale_ip() -> str | None:
+    """This node's first Tailscale IPv4 address (e.g. ``100.x.y.z``), or None.
+
+    Used as the default Jupyter bind so the lab URL is reachable from any
+    tailnet peer (phone, laptop) without re-exposing the server to the local
+    Wi-Fi: only tailnet members can dial 100.x.y.z. Falls through to loopback
+    when Tailscale is not up.
+    """
+    status = _tailscale_status()
+    if not status:
+        return None
+    for ip in status.get("Self", {}).get("TailscaleIPs", []) or []:
+        if isinstance(ip, str) and "." in ip and ":" not in ip:
+            return ip
+    return None
 
 
 def _advertised_host(bind_host: str) -> str:
@@ -188,9 +212,14 @@ def _serve(args: argparse.Namespace) -> int:
     workdir.mkdir(parents=True, exist_ok=True)
 
     # Resolve both host knobs once here (Config is pure data): the bind address
-    # Jupyter listens on, and the host advertised in the lab URL. Default bind is
-    # loopback so the server is never exposed unless asked.
-    bind_host = os.environ.get("IX_MCP_HOST", "127.0.0.1")
+    # Jupyter listens on, and the host advertised in the lab URL. The default
+    # bind is this node's Tailscale IPv4 when Tailscale is up, falling back to
+    # loopback otherwise. The Tailscale IP is reachable only from tailnet peers,
+    # so the trust boundary stays "tailnet only" (the local Wi-Fi cannot dial it)
+    # while a phone or laptop on the tailnet can open the lab URL without ssh.
+    # IX_MCP_HOST still wins for an explicit override (e.g. 0.0.0.0 on a fleet
+    # node that is firewalled).
+    bind_host = os.environ.get("IX_MCP_HOST") or _tailscale_ip() or "127.0.0.1"
     advertised_host = _advertised_host(bind_host)
 
     http = getattr(args, "http", None)
