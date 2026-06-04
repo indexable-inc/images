@@ -12,7 +12,5 @@ rule:
   kind: assert_expression
   not:
     has:
-      any:
-        - pattern: lib.assertMsg $$$ARGS
-        - pattern: pkgs.lib.assertMsg $$$ARGS
+      pattern: lib.assertMsg $$$ARGS
       stopBy: end
