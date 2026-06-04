@@ -111,6 +111,9 @@ fn vt_engine_error_io(id: Uuid, source: &std::io::Error) -> Error {
 /// Terminal-construction parameters threaded from [`spawn`] into the engine
 /// thread. Grouped so `engine_loop` stays under clippy's argument-count limit
 /// and so the values that only describe the terminal travel as one unit.
+/// `Copy` because every field is `Copy`: passing the struct by value otherwise
+/// trips `clippy::needless_pass_by_value`.
+#[derive(Clone, Copy)]
 struct EngineConfig {
     id: Uuid,
     rows: u16,
