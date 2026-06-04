@@ -271,8 +271,7 @@ in
       };
 
       archive = {
-        enable =
-          mkEnableOption "an S3 archive of the logs pipeline (RFC 0004 ingestion bus), written as OTLP/JSON via the awss3 exporter and read back by source-otlp";
+        enable = mkEnableOption "an S3 archive of the logs pipeline (RFC 0004 ingestion bus), written as OTLP/JSON via the awss3 exporter and read back by source-otlp";
 
         bucket = mkOption {
           type = types.str;
