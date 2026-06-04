@@ -54,11 +54,20 @@ fn is_changed(base: &Graph, basename: &str) -> bool {
 }
 
 /// Walk the changed sub-DAG reachable from `start` and collect the names of the
-/// frontier derivations: changed nodes whose own inputs are all unchanged.
+/// frontier derivations: changed nodes whose own derivation inputs are all
+/// unchanged.
 ///
 /// Unchanged nodes are pruned (their whole subtree is identical to the base by
 /// definition), and descent stops at each frontier node (nothing changed lives
 /// below it), so the traversal is bounded by the change, not the full closure.
+///
+/// Only `.drv` inputs are followed, not bare source inputs (`inputs.srcs`). A
+/// changed source is part of the consuming derivation's input-addressed hash, so
+/// that derivation's basename already moves and becomes the frontier: a crate
+/// source edit lands on the crate's unit derivation (e.g. `mynoise-0.1.0`), the
+/// readable cause, rather than a raw `cargo-unit-source-*` path. A check that
+/// embeds a source directly with no wrapping derivation (e.g. a `runCommand`
+/// over a filtered tree) is its own frontier, which is the right attribution.
 fn collect_frontier(
     base: &Graph,
     head: &Graph,

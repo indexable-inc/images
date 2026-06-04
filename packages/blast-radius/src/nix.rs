@@ -119,8 +119,11 @@ pub fn eval_checks(repo: &str, rev: &str) -> Result<Vec<Check>> {
         let attr = row.attr.trim_matches('"').to_owned();
         match (row.drv_path, row.error) {
             (Some(drv_path), _) => checks.push(Check { attr, drv_path }),
+            // A row with neither a drvPath nor an error is an unexpected shape;
+            // dropping it would silently under-report the blast radius (the very
+            // thing this evaluator is meant to avoid), so treat it as an error.
             (None, Some(error)) => errors.push(format!("{attr}: {error}")),
-            (None, None) => {}
+            (None, None) => errors.push(format!("{attr}: eval row had neither drvPath nor error")),
         }
     }
     if !errors.is_empty() {
