@@ -82,3 +82,18 @@ jobs:
       # check fails to build or the flake stops evaluating.
       - name: Build all flake checks
         run: nix run .#check
+
+      # The `check` app writes nix-fast-build per-attr durations to
+      # check-results.json in the workspace (see lib/per-system.nix). Upload it
+      # so the blast-radius workflow can fetch the most recent successful base
+      # run and annotate the rebuilt-checks list with wall-clock seconds. The
+      # artifact is data-only, and the upload runs even on a failing build so a
+      # partial-timings snapshot still beats no timings at all.
+      - name: Upload check-results.json
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: check-timings-${{ github.run_id }}
+          path: check-results.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -122,7 +122,13 @@ jobs:
               (.categories | type == "array") and
               (.categories | all((.name | name_ok) and (.count | type == "number"))) and
               (.causes | type == "array") and
-              (.causes | all((.name | name_ok) and (.checks | type == "array") and (.checks | all(name_ok))))
+              (.causes | all((.name | name_ok) and (.checks | type == "array") and (.checks | all(name_ok)))) and
+              # `timings` is optional (omitted when empty by the Rust crate via
+              # skip_serializing_if). When present it must be a string -> number
+              # map; the same `name_ok` charset gates the keys so a malicious
+              # report cannot inject mention/HTML through a check label.
+              ((.timings // {}) | type == "object") and
+              ((.timings // {}) | to_entries | all((.key | name_ok) and (.value | type == "number")))
             )
           ' report.json > /dev/null \
             || { echo "::error::malformed blast-radius report.json"; exit 1; }
@@ -136,9 +142,22 @@ jobs:
           set -euo pipefail
           jq -r '
             def safename: select(test("^[A-Za-z0-9_./ +():-]+$"));
+            # Mirror packages/blast-radius/src/report.rs::format_seconds: bucket
+            # by magnitude, round to integer. Empty string for a missing entry
+            # so a bare label renders when an attr was a substituter hit or new
+            # on this PR.
+            def round_int: (. + 0.5) | floor;
+            def fmt_time:
+              if . == null then ""
+              elif . < 1 then " (<1s)"
+              elif . < 60 then " (\(round_int)s)"
+              elif . < 3600 then " (\(. / 60 | round_int)m)"
+              else " (\(. / 3600 | round_int)h)"
+              end;
             # Unique checks across all causes, so the flowchart shares one node
             # per check (keeps the graph under the Mermaid node budget).
             ([ .causes[].checks[] ] | unique) as $checks
+            | (.timings // {}) as $t
             | "<!-- blast-radius -->",
             "### Blast radius",
             "",
@@ -162,18 +181,18 @@ jobs:
              then "", "```mermaid", "flowchart LR",
                   (.causes | to_entries[]
                    | if (.value.checks | length) == 1
-                     then "  c\(.key)[\"\(.value.checks[0] | safename)\"]"
+                     then "  c\(.key)[\"\(.value.checks[0] | safename)\($t[.value.checks[0]] | fmt_time)\"]"
                      else "  c\(.key)[\"\(.value.name | safename)\"]"
                      end),
                   (.causes | to_entries[] as $c
                    | select(($c.value.checks | length) > 1)
                    | $c.value.checks[] as $k
-                   | "  c\($c.key) --> k\($checks | index($k))[\"\($k | safename)\"]"),
+                   | "  c\($c.key) --> k\($checks | index($k))[\"\($k | safename)\($t[$k] | fmt_time)\"]"),
                   "```"
              else empty end),
             (if (.changed | length) > 0
              then "", "<details><summary>changed checks</summary>", "",
-                  (.changed[] | safename | "- \(.)"),
+                  (.changed[] | safename as $n | "- \($n)\($t[$n] | fmt_time)"),
                   "", "</details>"
              else empty end)
           ' report.json > comment.md

@@ -45,6 +45,30 @@ pub struct Report {
     pub removed: Vec<String>,
     pub categories: Vec<Category>,
     pub causes: Vec<CauseJson>,
+    /// Per-attribute wall-clock seconds from the prior successful Check run on
+    /// the base branch (see [`crate::timings`]). Empty when no prior run was
+    /// available; missing attrs are checks that were a substituter hit (never
+    /// rebuilt) or are new on this PR.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub timings: BTreeMap<String, f64>,
+}
+
+/// Format `seconds` as a short, scannable suffix: `<1s` under a second,
+/// `12s` under a minute, `5m` under an hour, `2h` beyond. Rounding goes
+/// through `f64::round` (round half-away-from-zero) so the output matches
+/// the jq renderer in `.github/workflows/blast-radius.yml`, whose
+/// `(x + 0.5) | floor` is round half-up and agrees for non-negative values.
+/// `{:.0}` alone would use Rust's round-half-to-even and silently diverge.
+pub fn format_seconds(seconds: f64) -> String {
+    if seconds < 1.0 {
+        "<1s".to_owned()
+    } else if seconds < 60.0 {
+        format!("{:.0}s", seconds.round())
+    } else if seconds < 3600.0 {
+        format!("{:.0}m", (seconds / 60.0).round())
+    } else {
+        format!("{:.0}h", (seconds / 3600.0).round())
+    }
 }
 
 /// Count `changed + added` checks by category, most-rebuilt family first.
@@ -73,6 +97,17 @@ impl Report {
     /// Render the sticky-comment Markdown, mirroring the trusted workflow
     /// renderer: one shared flowchart node per check, capped to the drawn causes.
     pub fn to_markdown(&self) -> String {
+        // Suffix any check label with ` (12s)` when the base-branch timings
+        // include it. A missing attr is a substituter hit or a new check on
+        // this PR (no base timing) and renders bare. Shared by the cause
+        // flowchart and the changed-checks list so both stay consistent.
+        let label_for = |attr: &str| {
+            self.timings.get(attr).map_or_else(
+                || attr.to_owned(),
+                |seconds| format!("{attr} ({})", format_seconds(*seconds)),
+            )
+        };
+
         let mut out = String::new();
         out.push_str("<!-- blast-radius -->\n### Blast radius\n\n");
         let rebuilt = self.changed.len() + self.added.len();
@@ -120,9 +155,9 @@ impl Report {
             // multi-check causes still fan out cause -> check.
             for (index, cause) in self.causes.iter().enumerate() {
                 let label = if cause.checks.len() == 1 {
-                    &cause.checks[0]
+                    label_for(&cause.checks[0])
                 } else {
-                    &cause.name
+                    cause.name.clone()
                 };
                 let _ = writeln!(out, "  c{index}[\"{label}\"]");
             }
@@ -132,7 +167,8 @@ impl Report {
                 }
                 for check in &cause.checks {
                     let node = checks.iter().position(|name| name == check).unwrap_or(0);
-                    let _ = writeln!(out, "  c{index} --> k{node}[\"{check}\"]");
+                    let label = label_for(check);
+                    let _ = writeln!(out, "  c{index} --> k{node}[\"{label}\"]");
                 }
             }
             out.push_str("```\n");
@@ -141,7 +177,7 @@ impl Report {
         if !self.changed.is_empty() {
             out.push_str("\n<details><summary>changed checks</summary>\n\n");
             for name in &self.changed {
-                let _ = writeln!(out, "- {name}");
+                let _ = writeln!(out, "- {}", label_for(name));
             }
             out.push_str("\n</details>\n");
         }
@@ -154,12 +190,8 @@ impl Report {
 mod tests {
     use super::*;
 
-    // Locks in the single-check collapse and keeps it in sync with the
-    // workflow's jq renderer (validated against the same shape by
-    // tools/blast-radius-test.sh against tools/blast-radius-fixtures/).
-    #[test]
-    fn single_check_cause_collapses_to_one_node() {
-        let report = Report {
+    fn sample_report(timings: BTreeMap<String, f64>) -> Report {
+        Report {
             base: "aaaaaaa".into(),
             head: "bbbbbbb".into(),
             total: 120,
@@ -191,8 +223,16 @@ mod tests {
                     checks: vec!["lint".into()],
                 },
             ],
-        };
-        let md = report.to_markdown();
+            timings,
+        }
+    }
+
+    // Locks in the single-check collapse and keeps it in sync with the
+    // workflow's jq renderer (validated against the same shape by
+    // tools/blast-radius-test.sh against tools/blast-radius-fixtures/).
+    #[test]
+    fn single_check_cause_collapses_to_one_node() {
+        let md = sample_report(BTreeMap::new()).to_markdown();
         // Multi-check cause keeps its drv label and draws arrows.
         assert!(md.contains("c0[\"ix-rust-workspace\"]"));
         assert!(md.contains("c0 --> k"));
@@ -204,5 +244,40 @@ mod tests {
         assert!(!md.contains("c2 -->"));
         assert!(!md.contains("image-base-layer"));
         assert!(!md.contains("ix-images-lint"));
+    }
+
+    // When a base-branch Check artifact is fed in, every known attr is
+    // suffixed with `(<duration>)` in the cause flowchart and the
+    // changed-checks list; unknown attrs render bare.
+    #[test]
+    fn timings_annotate_checks_when_present() {
+        let timings: BTreeMap<String, f64> = [
+            ("mcp-serverTools".to_owned(), 42.0),
+            ("rust-test-search_core".to_owned(), 130.0),
+            ("image-base".to_owned(), 0.6),
+            // `lint` deliberately omitted: cache hit or new check, no suffix.
+        ]
+        .into();
+        let md = sample_report(timings).to_markdown();
+        // Multi-check cause: per-check arrows carry the suffix. Check nodes
+        // are k<index> into the sorted+deduped unique check list, so
+        // mcp-serverTools is k2 and rust-test-search_core is k3.
+        assert!(md.contains("k2[\"mcp-serverTools (42s)\"]"));
+        assert!(md.contains("k3[\"rust-test-search_core (2m)\"]"));
+        // Single-check cause: collapsed node carries the suffix.
+        assert!(md.contains("c1[\"image-base (<1s)\"]"));
+        // Known timing missing: bare label, no parens.
+        assert!(md.contains("c2[\"lint\"]"));
+        // Changed-checks list mirrors the same annotation.
+        assert!(md.contains("- mcp-serverTools (42s)\n"));
+        assert!(md.contains("- lint\n"));
+    }
+
+    #[test]
+    fn format_seconds_buckets() {
+        assert_eq!(format_seconds(0.4), "<1s");
+        assert_eq!(format_seconds(12.4), "12s");
+        assert_eq!(format_seconds(89.9), "1m");
+        assert_eq!(format_seconds(7200.0), "2h");
     }
 }

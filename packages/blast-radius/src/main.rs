@@ -10,8 +10,10 @@ mod causes;
 mod git;
 mod nix;
 mod report;
+mod timings;
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use clap::Parser;
 use color_eyre::eyre::Result;
@@ -38,6 +40,11 @@ struct Cli {
     /// Emit the machine-readable report.json instead of Markdown.
     #[arg(long)]
     json: bool,
+    /// nix-fast-build `check-results.json` from a prior successful Check run
+    /// (typically the base branch). Used to annotate the rebuilt-checks list
+    /// with per-attr wall-clock seconds. Missing attrs are omitted, not zeroed.
+    #[arg(long, value_name = "PATH")]
+    timings: Option<PathBuf>,
 }
 
 fn short(rev: &str) -> String {
@@ -109,6 +116,11 @@ fn main() -> Result<()> {
         root_causes(&base_graph, &head_graph, &changed_basenames, CAPS)
     };
 
+    let timings = match cli.timings.as_deref() {
+        Some(path) => timings::load(path)?,
+        None => BTreeMap::new(),
+    };
+
     let report = Report {
         base: short(&revs.base),
         head: short(&revs.head),
@@ -118,6 +130,7 @@ fn main() -> Result<()> {
         changed,
         added,
         removed,
+        timings,
     };
 
     if cli.json {

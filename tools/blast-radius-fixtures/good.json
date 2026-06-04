@@ -4,4 +4,5 @@
  "categories":[{"name":"rust","count":2},{"name":"mcp","count":2},{"name":"image","count":1},{"name":"lint","count":1}],
  "causes":[{"name":"ix-rust-workspace","checks":["mcp-serverTools","rust-test-search_core"]},
            {"name":"image-base-layer","checks":["image-base"]},
-           {"name":"ix-images-lint","checks":["lint"]}]}
+           {"name":"ix-images-lint","checks":["lint"]}],
+ "timings":{"mcp-serverTools":42.0,"rust-test-search_core":130.0,"image-base":0.6}}

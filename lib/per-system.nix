@@ -154,6 +154,11 @@ let
         # nixConfig.extra-experimental-features carries it via
         # accept-flake-config; `--option extra-experimental-features` here pins
         # it for the build pool too so the gate is self-contained.
+        # --result-format json --result-file emits one record per attr per phase
+        # ({attr, type: EVAL|BUILD, duration, success, error, outputs}) into the
+        # cwd. blast-radius consumes this on a later PR via `--timings` to
+        # annotate the rebuilt-checks list with wall-clock seconds. The path is
+        # relative to the runner cwd; check.yml uploads it as an artifact.
         ^nix run $fast_build -- ...[
           "--flake" ".#checks.x86_64-linux"
           "--eval-max-memory-size" "6144"
@@ -161,6 +166,8 @@ let
           "--skip-cached"
           "--no-nom"
           "--no-link"
+          "--result-format" "json"
+          "--result-file" "check-results.json"
           "--option" "accept-flake-config" "true"
           "--option" "extra-experimental-features" "ca-derivations"
         ]
