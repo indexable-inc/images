@@ -41,7 +41,7 @@ const DISPLAY_WIDTH: isize = 1920;
 const DISPLAY_HEIGHT: isize = 1080;
 
 /// Parameters for booting a Linux GUI guest and screenshotting it. A named
-/// struct (like [`crate::imp`]'s `LinuxBoot`) so callers and the future IPC
+/// struct (like [`crate::linuxkrun::BootLinux`]) so callers and the future IPC
 /// layer name each field; every field is `Send`.
 pub struct LinuxGuiBoot {
     /// Raw EFI-bootable disk image (e.g. a NixOS `raw-efi` image).

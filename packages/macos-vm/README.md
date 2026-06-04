@@ -1,19 +1,26 @@
 # macos-vm
 
-Drive Apple's [Virtualization.framework](https://developer.apple.com/documentation/virtualization)
-from Rust. This crate is a thin binding over
-[`objc2-virtualization`](https://docs.rs/objc2-virtualization) plus a small CLI
-that owns a virtual machine's lifecycle, so other parts of the system can start
-and control a VM without holding the virtualization entitlement themselves.
+Own a virtual machine's lifecycle from Rust, with one backend per guest OS:
 
-The motivating use case: run a GUI app (for example the `bossbar-overlay`) inside
-a VM and inspect it remotely, so an agent can verify on-screen rendering without
-the app ever appearing on the operator's real desktop or grabbing the operator's
-cursor.
+- **macOS guests** run on Apple's [Virtualization.framework](https://developer.apple.com/documentation/virtualization)
+  (via [`objc2-virtualization`](https://docs.rs/objc2-virtualization)): boot an
+  installed macOS, drive it off-screen, screenshot its framebuffer.
+- **Linux guests** run on [libkrun](https://github.com/containers/libkrun)
+  (Hypervisor.framework): the only backend that gives a Linux guest GPU
+  acceleration on Apple Silicon. See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
+
+A small CLI fronts both, so other parts of the system can start and control a VM
+without holding the entitlements themselves.
+
+The motivating macOS use case: run a GUI app (for example the `bossbar-overlay`)
+inside a VM and inspect it remotely, so an agent can verify on-screen rendering
+without the app ever appearing on the operator's real desktop or grabbing the
+operator's cursor.
 
 ```sh
 nix run .#macos-vm -- info
-nix run .#macos-vm -- boot-linux --kernel ./Image --initramfs ./initramfs
+# Boot a Linux guest (raw EFI disk) under libkrun, with a GPU:
+nix run .#macos-vm -- boot-linux --disk ./linux.raw --gpu
 ```
 
 ## Status
@@ -30,8 +37,11 @@ serial console streamed to stdout.
 What works today:
 
 - `info` reports `VZVirtualMachine.isSupported`.
-- `boot-linux` boots a Linux guest and streams its console, then stops on a
-  timeout.
+- `boot-linux` boots a Linux guest from a raw EFI disk **via libkrun**
+  (Hypervisor.framework, not VZ) and streams its serial console, then stops on a
+  timeout. `--gpu` adds a virtio-gpu Venus device (`/dev/dri/renderD128`, Vulkan
+  via MoltenVK), which VZ cannot give a Linux guest. See
+  [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 - `boot-linux-gui` boots an aarch64 **Linux GUI** guest from a raw EFI disk with
   a virtio-gpu display + USB keyboard/mouse, fully off-screen, and screenshots
   the guest framebuffer to PNGs (same IOSurface capture as `boot-macos`). The
@@ -71,10 +81,10 @@ The `macvm` Python module bundled into ix-mcp exposes the full surface:
 `info`, `install`, `provision`, `stage_binary`, `screenshot`,
 `screenshot_many`, `drive`, `Driver`, and the one-call `run_app` (share a host
 app in, launch it, return a frame of the guest display). For Linux guests it
-adds `boot_linux` (boot a raw kernel `Image` + initramfs headlessly, attach OCI
-rootfs disks via `disks=[...]`, return the serial console as a string),
-`boot_linux_gui` (boot a raw EFI disk off-screen, return a `PIL.Image` of the
-render), `drive_linux`, and `Driver(disk=...)`.
+adds `boot_linux` (boot a raw EFI disk headlessly under libkrun, `gpu=True` for a
+virtio-gpu device, return the serial console as a string), `boot_linux_gui` (boot
+a raw EFI disk off-screen under VZ, return a `PIL.Image` of the render),
+`drive_linux`, and `Driver(disk=...)`.
 
 What is designed but not yet built (see [Roadmap](#roadmap)):
 
@@ -276,38 +286,26 @@ drive the guest, neither of which touches the host cursor or desktop:
    screenshot; it needs validation that VZ renders an off-screen view (tracked
    in the roadmap).
 
-For a Linux guest the same applies, except Virtualization.framework gives Linux
-guests no 3D acceleration: `wgpu` would fall back to software (lavapipe). For
-GPU-accelerated Linux rendering on macOS you need a different VMM (see OCI
-below), not Virtualization.framework.
+For a Linux GUI guest the off-screen-capture path above still uses VZ, but VZ
+gives Linux guests no 3D acceleration: `wgpu` falls back to software (lavapipe).
+GPU-accelerated Linux rendering is exactly why the **headless** Linux path uses
+libkrun instead (next section).
 
-## OCI images
+## Linux guests: libkrun
 
-Two honest options:
+Linux guests boot on [libkrun](https://github.com/containers/libkrun), not
+Virtualization.framework, because libkrun is the only backend that gives a Linux
+guest a real GPU on Apple Silicon: its macOS variant (`libkrun-efi`) ships a
+Venus virtio-gpu device backed by MoltenVK, so the guest gets Vulkan and a
+`/dev/dri/renderD128` node. `boot-linux --disk <raw-efi-disk> --gpu` boots an
+EFI-bootable disk and streams its serial console. This is the same conclusion
+Podman Desktop, Lima, and colima reached (they use libkrun/krunkit on macOS).
 
-- **Virtualization.framework + a disk built from an OCI image.** Flatten the
-  image into a raw/ext4 disk (the repo's `oci-image-builder` can do the
-  flattening) and boot it with `VZLinuxBootLoader` or `VZEFIBootLoader`. Pure
-  Virtualization.framework, no extra dependency, but you manage kernel/initrd and
-  get no GPU acceleration in the Linux guest.
-- **[libkrun](https://github.com/containers/libkrun) / krunkit.** Purpose-built
-  to boot an OCI image as a microVM (the image is the rootfs over virtio-fs,
-  boot in milliseconds), and `libkrun-efi` adds a Venus virtio-gpu so Linux
-  guests get real Vulkan via MoltenVK. It uses Hypervisor.framework and needs
-  the `com.apple.security.hypervisor` entitlement.
-
-Recommended default: use Virtualization.framework for the macOS-guest visual
-test (the actual goal here), and reach for libkrun/krunkit for OCI microVMs
-rather than reimplementing OCI-on-Virtualization.framework. libkrun already owns
-that surface, including the GPU path, and the maintenance cost of rebuilding it
-is not justified yet. If a single backend ever becomes a hard requirement, that
-decision should be made deliberately, not by accretion.
-
-The first option above is proven minimally: `boot-linux --disk` attaches a
-flattened OCI rootfs as a virtio-blk disk, and `examples/oci-boot.sh` boots a
-busybox OCI image to userspace over the serial console. See
-[`docs/oci-guest.md`](docs/oci-guest.md) for the build-vs-delegate decision, the
-proof, and its gaps (squashfs not ext4, externally fetched kernel).
+Details (the EFI-variant constraint, the embedded OVMF firmware, linking, and the
+`com.apple.security.hypervisor` entitlement) are in
+[`docs/linux-libkrun.md`](docs/linux-libkrun.md). The off-screen **GUI** capture
+paths (`boot-linux-gui`, `drive-linux`) still use VZ, since libkrun has no
+off-screen framebuffer-capture equivalent yet; migrating them is tracked below.
 
 ## Build notes
 
@@ -321,10 +319,11 @@ proof, and its gaps (squashfs not ext4, externally fetched kernel).
 
 ## Bad fit if
 
-- You need GPU-accelerated **Linux** rendering on macOS: Virtualization.framework
-  does not accelerate Linux guests; use libkrun-efi/krunkit instead.
-- You cannot code-sign: without the virtualization entitlement, configuration
-  validation fails by design.
+- You need an off-screen **GUI** capture of a GPU-accelerated Linux desktop: the
+  headless Linux path has a GPU (libkrun), but the off-screen framebuffer-capture
+  paths (`boot-linux-gui`, `drive-linux`) are still VZ, which has no Linux GPU.
+- You cannot code-sign: without the virtualization/hypervisor entitlements,
+  VM creation fails by design.
 - You are off Apple Silicon: only `aarch64-darwin` is wired up.
 
 ## Roadmap
@@ -346,7 +345,9 @@ proof, and its gaps (squashfs not ext4, externally fetched kernel).
    `screenshot_many`, `drive`, `Driver`, and `run_app`, returning PIL images that
    render inline, plus the Linux helpers `boot_linux` (headless serial console),
    `boot_linux_gui`, and `drive_linux`.
-7. ~~OCI-disk boot for Linux guests; document the libkrun handoff for
-   microVMs.~~ Done minimally: `boot-linux --disk` + `examples/oci-boot.sh` boot
-   a flattened OCI rootfs as a virtio-blk disk; build-vs-delegate decision and
-   gaps in [`docs/oci-guest.md`](docs/oci-guest.md).
+7. ~~Linux guests on libkrun (GPU via Venus/MoltenVK).~~ Done: `boot-linux
+   --disk [--gpu]` boots a raw EFI disk under libkrun and streams its console;
+   see [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
+8. Move the off-screen GUI capture paths (`boot-linux-gui`, `drive-linux`) from
+   VZ to libkrun's virtio-gpu, so GPU-accelerated Linux GUIs can be captured
+   off-screen too. They stay on VZ until libkrun has an off-screen-capture path.

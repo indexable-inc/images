@@ -2,7 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <!-- Virtualization.framework, for the macOS-guest paths (macguest/drive). -->
   <key>com.apple.security.virtualization</key>
+  <true/>
+  <!-- Hypervisor.framework, for the libkrun Linux-guest path (linuxkrun). One
+       binary drives both backends, so it carries both entitlements. -->
+  <key>com.apple.security.hypervisor</key>
+  <true/>
+  <!-- The binary links the ad-hoc-signed libkrun-efi dylib from the Nix store;
+       library validation would reject a differently-signed dylib. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
   <true/>
 </dict>
 </plist>

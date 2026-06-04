@@ -497,53 +497,52 @@ def _writable_disk(disk: str | os.PathLike, staging_dir: str) -> str:
 
 
 def boot_linux(
-    kernel: str | os.PathLike,
-    initramfs: str | os.PathLike,
-    disks: Sequence[str | os.PathLike] | None = None,
+    disk: str | os.PathLike,
+    gpu: bool = False,
     cpus: int = 2,
     memory_mib: int = 1024,
-    cmdline: str = "console=hvc0",
     seconds: int = 20,
     timeout: float | None = None,
 ) -> str:
-    """Boot an aarch64 Linux guest headlessly from a raw kernel ``Image`` and
-    ``initramfs``, attaching each path in ``disks`` as a virtio-blk device
-    (``/dev/vda``, ``/dev/vdb``, ... in order), and return the guest serial
-    console captured until it stops or ``seconds`` elapses.
+    """Boot an aarch64 Linux guest headlessly from a raw EFI-bootable ``disk``
+    via libkrun (Hypervisor.framework), returning the guest serial console
+    captured until it powers off or ``seconds`` elapses.
 
-    The headless, serial-only analogue of :func:`boot_linux_gui` (which renders a
-    framebuffer): no display is captured, only ``console=hvc0`` output. This is
-    how a flattened OCI rootfs is booted and inspected: pass the rootfs image in
-    ``disks`` and a matching ``root=`` (or an initramfs that mounts it) in
-    ``cmdline``. See the ``macos-vm`` package's ``examples/oci-boot.sh`` and
-    ``docs/oci-guest.md``. Raises :class:`MacVmError` if the binary fails or does
-    not stop within the deadline.
+    Linux guests run on libkrun, not Virtualization.framework: libkrun is the
+    only backend that gives a Linux guest GPU acceleration on Apple Silicon, a
+    virtio-gpu Venus device (``gpu=True`` adds ``/dev/dri/renderD128``). The disk
+    is a raw EFI image (a NixOS ``raw-efi`` image, a Fedora CoreOS raw, ...);
+    libkrun's embedded OVMF firmware boots it. ``disk`` may be a package output
+    directory (its image is found automatically) or an image file; libkrun opens
+    the boot disk read-write, so a read-only image (e.g. a `/nix/store` build) is
+    copied to a writable temp first. The headless, serial-only analogue of
+    :func:`boot_linux_gui`. See the ``macos-vm`` package's ``docs/linux-libkrun.md``.
+    Raises :class:`MacVmError` if the binary fails or does not stop within the
+    deadline.
     """
     deadline = timeout if timeout is not None else seconds + 60
-    argv = [
-        _binary(),
-        "boot-linux",
-        "--kernel",
-        str(kernel),
-        "--initramfs",
-        str(initramfs),
-        "--cpus",
-        str(cpus),
-        "--memory-mib",
-        str(memory_mib),
-        "--cmdline",
-        cmdline,
-        "--timeout-secs",
-        str(seconds),
-    ]
-    for disk in disks or []:
-        argv += ["--disk", str(disk)]
-    try:
-        result = subprocess.run(
-            argv, capture_output=True, text=True, check=False, timeout=deadline
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise MacVmError(f"boot-linux timed out after {deadline}s") from exc
+    with tempfile.TemporaryDirectory(prefix="ix-macvm-linux-") as tmp:
+        work_disk = _writable_disk(disk, tmp)
+        argv = [
+            _binary(),
+            "boot-linux",
+            "--disk",
+            work_disk,
+            "--cpus",
+            str(cpus),
+            "--memory-mib",
+            str(memory_mib),
+            "--timeout-secs",
+            str(seconds),
+        ]
+        if gpu:
+            argv.append("--gpu")
+        try:
+            result = subprocess.run(
+                argv, capture_output=True, text=True, check=False, timeout=deadline
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise MacVmError(f"boot-linux timed out after {deadline}s") from exc
     if result.returncode != 0:
         raise MacVmError(
             f"boot-linux failed (rc={result.returncode}): {result.stderr.strip()}"
@@ -1055,52 +1054,38 @@ def run_binary(
 def run_oci(
     disk: str | os.PathLike,
     *,
-    kernel: str | os.PathLike | None = None,
-    initramfs: str | os.PathLike | None = None,
-    cmdline: str = "console=hvc0",
     gui: bool = False,
     seconds: int | None = None,
     require_aarch64: bool = True,
     **kwargs: object,
 ) -> "str | Image.Image":
-    """Boot a flattened OCI / Linux guest in the VZ Linux VM, the generic entry
-    point over :func:`boot_linux` (headless) and :func:`boot_linux_gui` (GUI).
+    """Boot a raw EFI-bootable Linux ``disk`` as a guest: the generic entry over
+    :func:`boot_linux` (headless, libkrun) and :func:`boot_linux_gui` (GUI, VZ).
 
-    VZ runs *same-architecture* Linux guests only, so this host (aarch64) boots
-    aarch64 images; ``require_aarch64`` guards that with a typed error rather than
-    a confusing boot failure (set it false only if you know what you are doing).
+    Both back ends run *aarch64* guests on this aarch64 host; ``require_aarch64``
+    guards that with a typed error rather than a confusing boot failure (set it
+    false only if you know what you are doing).
 
-    - ``gui=False`` (default): headless boot of a flattened rootfs ``disk`` as
-      ``/dev/vda``. Needs ``kernel`` and ``initramfs`` (an initramfs that mounts
-      the rootfs, e.g. the artifacts built by the ``macos-vm`` package's
-      ``examples/oci-boot.sh``). Returns the guest serial console as ``str``.
-    - ``gui=True``: boot an EFI GUI ``disk`` (e.g. the ``vz-linux-guest`` image)
-      and return a ``PIL.Image`` of the framebuffer.
+    - ``gui=False`` (default): boot the disk headlessly under libkrun and return
+      the guest serial console as ``str``. Pass ``gpu=True`` for a virtio-gpu
+      (Venus) device. See the ``macos-vm`` package's ``docs/linux-libkrun.md``.
+    - ``gui=True``: boot the disk under Virtualization.framework (e.g. the
+      ``vz-linux-guest`` image) and return a ``PIL.Image`` of the framebuffer.
 
-    Turning an OCI *reference* into the rootfs (plus kernel/initramfs) is the
-    flatten step the package deliberately leaves to ``oci-boot.sh`` / a future
-    ``.#vm-run`` (see ``docs/oci-guest.md``); this owns the boot. Extra keyword
-    arguments pass through to the underlying boot function. Raises
-    :class:`MacVmError` on an arch mismatch or a missing kernel/initramfs."""
+    Extra keyword arguments pass through to the underlying boot function. Raises
+    :class:`MacVmError` on an arch mismatch."""
     import platform
 
     if require_aarch64 and not platform.machine().lower().startswith(("arm64", "aarch64")):
         raise MacVmError(
-            f"run_oci needs an aarch64 host (this is {platform.machine()}); VZ runs "
-            "same-architecture Linux guests"
+            f"run_oci needs an aarch64 host (this is {platform.machine()})"
         )
     extra = dict(kwargs)
     if seconds is not None:
         extra["seconds"] = seconds
     if gui:
         return boot_linux_gui(disk, **extra)  # type: ignore[arg-type]
-    if kernel is None or initramfs is None:
-        raise MacVmError(
-            "headless run_oci needs kernel= and initramfs= (an initramfs that "
-            "mounts the rootfs as /dev/vda); see the macos-vm package's "
-            "examples/oci-boot.sh"
-        )
-    return boot_linux(kernel, initramfs, disks=[disk], cmdline=cmdline, **extra)  # type: ignore[arg-type]
+    return boot_linux(disk, **extra)  # type: ignore[arg-type]
 
 
 def _shell_quote(path: str) -> str:

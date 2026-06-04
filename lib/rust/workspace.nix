@@ -85,6 +85,24 @@ let
     target:
     if target == null then workspacePkgs.stdenv.hostPlatform.isLinux else lib.hasInfix "-linux-" target;
 
+  # `macos-vm` links libkrun-efi for its Linux-guest backend, which nixpkgs only
+  # provides on aarch64-darwin. Gate the libkrun plumbing on that target so other
+  # platforms (Linux, x86_64-darwin) never force the package and the Linux stub
+  # graph stays clean, the same target-scoped shape as the ALSA gating above.
+  targetIsAarch64Darwin =
+    target:
+    if target == null then
+      workspacePkgs.stdenv.hostPlatform.isDarwin && workspacePkgs.stdenv.hostPlatform.isAarch64
+    else
+      target == "aarch64-apple-darwin";
+
+  # libkrun-efi lib dir and the OVMF firmware blob it embeds (the latter lives in
+  # the libkrun source tree). `macos-vm`'s build script embeds the firmware via
+  # `KRUN_EFI_FIRMWARE` and links `-lkrun`; the search path/rpath are injected
+  # below because a build script's link-search does not reach the final unit link.
+  libkrunEfiLibDir = "${workspacePkgs.libkrun-efi}/lib";
+  krunEfiFirmware = "${workspacePkgs.libkrun-efi.src}/edk2/KRUN_EFI.silent.fd";
+
   # The Apple cross toolchain (zig cc + macOS SDK), or null for host/musl/Linux
   # targets that build with the ordinary linker.
   appleToolchainFor =
@@ -184,6 +202,12 @@ let
         // lib.optionalAttrs (targetIsLinux target) {
           PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
         }
+        // lib.optionalAttrs (targetIsAarch64Darwin target) {
+          # macos-vm's build script forwards this to a compile-time env so
+          # linuxkrun.rs can `include_bytes!` the OVMF firmware. Only macos-vm
+          # reads it.
+          KRUN_EFI_FIRMWARE = krunEfiFirmware;
+        }
         // lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
         extraRustcArgs = [
           # The libghostty-vt search path for the final per-unit link. A build
@@ -203,6 +227,17 @@ let
         ++ lib.optionals (targetIsLinux target) [
           "-L"
           "native=${workspacePkgs.alsa-lib}/lib"
+        ]
+        ++ lib.optionals (targetIsAarch64Darwin target) [
+          # macos-vm links `-lkrun` (libkrun-efi). Its build script emits the
+          # `-l`, but the search path and rpath must be added here because a build
+          # script's link-search does not reach the final unit link (same shape as
+          # the alsa-lib and libghostty-vt paths above). Harmless for crates that
+          # never reference libkrun, which keep no load command for it.
+          "-L"
+          "native=${libkrunEfiLibDir}"
+          "-C"
+          "link-arg=-Wl,-rpath,${libkrunEfiLibDir}"
         ];
         # The native graph runs every policy check once across the whole
         # workspace (selected package outputs expose these as explicit tests).
