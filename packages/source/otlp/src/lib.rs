@@ -19,7 +19,7 @@
 use futures::stream::StreamExt as _;
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path as ObjectPath;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt as _};
 use serde::Deserialize;
 use source_meta::{Document, keys};
 use snafu::{ResultExt as _, Snafu};
@@ -152,7 +152,7 @@ fn document_from_record(record: LogRecord) -> Option<Document> {
         file_name: external_id.clone(),
         external_id,
         mime: "text/plain",
-        body: record.body.string_value.into_bytes(),
+        body: record.body.string_value().into_bytes(),
         meta_json: serde_json::Value::Object(meta),
         content_hash,
     })
@@ -203,30 +203,30 @@ struct KeyValue {
 #[derive(Debug, Default, Deserialize)]
 struct AnyValue {
     #[serde(rename = "stringValue")]
-    string_value_opt: Option<String>,
+    string: Option<String>,
     #[serde(rename = "intValue")]
-    int_value: Option<String>,
+    int: Option<String>,
     #[serde(rename = "boolValue")]
-    bool_value: Option<bool>,
+    boolean: Option<bool>,
 }
 
 impl AnyValue {
     /// The string body of a record (empty when the value was not a string).
     fn string_value(self) -> String {
-        self.string_value_opt.unwrap_or_default()
+        self.string.unwrap_or_default()
     }
 
     /// Map back to a JSON value: OTLP encodes int64 as a string, so an `intValue`
     /// becomes a JSON number when it parses and a string otherwise; a `boolValue`
     /// becomes a bool; anything else becomes its string form.
     fn into_json(self) -> serde_json::Value {
-        if let Some(string) = self.string_value_opt {
+        if let Some(string) = self.string {
             return serde_json::Value::String(string);
         }
-        if let Some(boolean) = self.bool_value {
+        if let Some(boolean) = self.boolean {
             return serde_json::Value::Bool(boolean);
         }
-        if let Some(int) = self.int_value {
+        if let Some(int) = self.int {
             return int.parse::<i64>().map_or(serde_json::Value::String(int), serde_json::Value::from);
         }
         serde_json::Value::String(String::new())
@@ -237,7 +237,7 @@ impl AnyValue {
 mod tests {
     #![expect(clippy::expect_used, reason = "tests assert observable parse outcomes")]
 
-    use object_store::ObjectStore;
+    use object_store::ObjectStoreExt as _;
     use object_store::memory::InMemory;
     use object_store::path::Path as ObjectPath;
     use serde_json::json;
