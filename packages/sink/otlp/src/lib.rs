@@ -337,7 +337,9 @@ mod tests {
         assert_eq!(report.records, 2);
         assert!(!report.skipped);
 
-        let bodies = receiver.captured.lock().expect("lock");
+        // Clone out so the mutex guard drops here, not across the asserts
+        // (clippy::significant_drop_tightening).
+        let bodies = receiver.captured.lock().expect("lock").clone();
         let records = bodies[0]["resourceLogs"][0]["scopeLogs"][0]["logRecords"]
             .as_array()
             .expect("logRecords array");
