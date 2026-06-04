@@ -12,11 +12,11 @@ mod nix;
 mod report;
 mod timings;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use clap::Parser;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, bail};
 
 use causes::{Caps, root_causes};
 use report::{Report, categories};
@@ -58,6 +58,38 @@ fn main() -> Result<()> {
 
     let base = nix::eval_checks(&revs.repo, &revs.base)?;
     let head = nix::eval_checks(&revs.repo, &revs.head)?;
+
+    // An attr that fails to evaluate has no derivation, so it cannot be a rebuild
+    // target. Tolerate failures already present at base (a `.#checks` catalog is
+    // not guaranteed eval-clean: ix carries eval-assertion checks that throw when
+    // their invariant is violated and are not in its required gate). But FAIL
+    // CLOSED on any failure new at head -- a check this change broke, or a broken
+    // check it added -- so blast-radius never renders a successful-looking report
+    // that hides an eval regression it introduced.
+    let base_failures: BTreeSet<&str> = base.failures.iter().map(String::as_str).collect();
+    let new_failures: Vec<&str> = head
+        .failures
+        .iter()
+        .map(String::as_str)
+        .filter(|attr| !base_failures.contains(attr))
+        .collect();
+    if !new_failures.is_empty() {
+        bail!(
+            "{} check(s) newly fail to evaluate at head (this change broke them): {}",
+            new_failures.len(),
+            new_failures.join(", ")
+        );
+    }
+    if !base.failures.is_empty() {
+        eprintln!(
+            "blast-radius: {} check(s) fail to evaluate at base and head; excluded from the diff: {}",
+            base.failures.len(),
+            base.failures.join(", ")
+        );
+    }
+
+    let base = base.checks;
+    let head = head.checks;
 
     let base_map: BTreeMap<&str, &str> = base
         .iter()

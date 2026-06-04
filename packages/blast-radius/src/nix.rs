@@ -25,6 +25,15 @@ pub struct Check {
     pub drv_path: String,
 }
 
+/// The result of evaluating `.#checks.x86_64-linux` at one rev: the buildable
+/// checks, plus the attrs that failed to evaluate there (no derivation, so not a
+/// rebuild target). The caller diffs `failures` across base and head to tell a
+/// pre-existing catalog failure (tolerated) from one this change introduced.
+pub struct EvalResult {
+    pub checks: Vec<Check>,
+    pub failures: Vec<String>,
+}
+
 /// One line of `nix-eval-jobs` output.
 #[derive(Deserialize)]
 struct EvalRow {
@@ -83,7 +92,7 @@ fn run(command: &mut Command) -> Result<String> {
 /// `nix-eval-jobs` sits at the head of the pipeline; a startup/lock/fetch
 /// failure surfaces here rather than yielding an empty set that silently
 /// under-reports the blast radius.
-pub fn eval_checks(repo: &str, rev: &str) -> Result<Vec<Check>> {
+pub fn eval_checks(repo: &str, rev: &str) -> Result<EvalResult> {
     let flakeref = format!("git+file://{repo}?rev={rev}&allRefs=1#checks.x86_64-linux");
     let stdout = run(Command::new("nix").args([
         "run",
@@ -125,24 +134,14 @@ pub fn eval_checks(repo: &str, rev: &str) -> Result<Vec<Check>> {
         );
     }
 
-    // A per-attr eval failure has no derivation at this rev, so it cannot be a
-    // rebuild target: exclude it from the diff rather than failing the whole
-    // report. A repo's `.#checks` catalog is not guaranteed to be eval-clean --
-    // ix carries eval-assertion checks (unfree-allowlist, *-invariants, ...)
-    // that throw when their invariant is violated and are not in its required
-    // gate, so a strict bail would make the report unusable there. The skip is
-    // summarized to stderr (never silent), which is the under-reporting the old
-    // hard bail guarded against.
-    if !eval_failures.is_empty() {
-        eval_failures.sort();
-        eprintln!(
-            "blast-radius: excluded {} check(s) that failed to evaluate at {rev} (no derivation, not a rebuild target): {}",
-            eval_failures.len(),
-            eval_failures.join(", ")
-        );
-    }
-
-    Ok(checks)
+    // Eval failures are returned, not skipped here: the caller distinguishes a
+    // failure present at base (a pre-existing catalog issue, tolerated) from one
+    // new at head (a regression this change introduced, which must fail closed).
+    eval_failures.sort();
+    Ok(EvalResult {
+        checks,
+        failures: eval_failures,
+    })
 }
 
 /// The outcome of classifying one `nix-eval-jobs` run: the buildable checks, the
