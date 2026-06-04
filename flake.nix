@@ -112,7 +112,6 @@
           fabric = ./images/games/minecraft/loaders/fabric;
         };
         tools = {
-          blastRadius = ./tools/blast-radius.nu;
           ixShellSyncIgnored = ./tools/ix-shell-sync-ignored.py;
           mcSource = ./tools/mc-source.nu;
           updateSounds = ./tools/update-sounds.nu;

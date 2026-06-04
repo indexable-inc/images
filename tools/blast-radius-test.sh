@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Tests the blast-radius PR comment end to end:
-#   * the security-critical validate + render jq embedded in
-#     .github/workflows/blast-radius.yml (extracted from the workflow so the test
-#     can never drift from what the trusted comment job actually runs), and
-#   * the report-building logic in tools/blast-radius.nu (categories + the
-#     cause/fan-out reference diff), with a stubbed `nix-store`.
-# Needs jq, yq (yq-go), and nu on PATH.
+# Tests the security-critical validate + render jq embedded in
+# .github/workflows/blast-radius.yml (extracted from the workflow so the test can
+# never drift from what the trusted comment job actually runs). The report-
+# building logic itself lives in the `blast-radius` Rust crate and is covered by
+# its own unit tests (packages/blast-radius/src/causes.rs).
+# Needs jq and yq (yq-go) on PATH.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,31 +36,6 @@ done
 # Render: the good report produces the golden comment (pie + flowchart + list).
 ( cd "$tmp" && cp "$fixtures/good.json" report.json && bash render.sh )
 if diff -u "$fixtures/good.expected.md" "$tmp/comment.md"; then note "render good: ok"; else note "render good: FAIL (output drift)"; fail=1; fi
-
-# Report-building logic with a stubbed nix-store (head vs base refs differ only
-# in the ix-rust-workspace hash, so it is the changed root cause). The shebang
-# points at the bash already running this script (`command -v bash`) instead of
-# `/usr/bin/env bash`: this test runs inside the nix build sandbox, which has no
-# `/usr/bin/env`, so a hard-coded env shebang silently fails to exec, the stub
-# produces no refs, and `causes-for` returns [] (passes on a dev box, fails in
-# CI). Resolving bash from PATH execs in both places.
-{
-  printf '#!%s\n' "$(command -v bash)"
-  cat <<'STUB'
-drv="${!#}"
-case "$drv" in
-  *head-rust-*) echo /nix/store/h1111111111111111111111111111111-ix-rust-workspace.drv
-                echo /nix/store/g2222222222222222222222222222222-glibc.drv ;;
-  *base-rust-*) echo /nix/store/b0000000000000000000000000000000-ix-rust-workspace.drv
-                echo /nix/store/g2222222222222222222222222222222-glibc.drv ;;
-esac
-STUB
-} > "$tmp/nix-store"
-chmod +x "$tmp/nix-store"
-# Run via `-c "source ..."`, not `nu logic-test.nu`: executing a file auto-runs
-# any `main` in scope, and the test sources blast-radius.nu (which defines one),
-# so a plain file run would fire the real report build. `-c` does not auto-run.
-if PATH="$tmp:$PATH" nu --no-config-file -c "source '$fixtures/logic-test.nu'"; then note "logic-test: ok"; else note "logic-test: FAIL"; fail=1; fi
 
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi
 echo "blast-radius-test: all passed"

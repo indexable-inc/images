@@ -2,6 +2,7 @@
 members = [
   "modules/services/resource-monitor/stats-writer",
   "packages/agents-md",
+  "packages/blast-radius",
   "packages/claude-stories",
   "packages/ast-merge/ast",
   "packages/ast-merge/cli",

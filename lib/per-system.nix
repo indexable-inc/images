@@ -192,24 +192,6 @@ let
     '';
   };
 
-  # Report how many .#checks.x86_64-linux derivations a PR would rebuild. For a
-  # base and head git revision it evaluates the checks at each through a
-  # per-revision git+file flake ref, diffs the attr -> drvPath maps, and prints
-  # a Markdown report (or, with --json, a constrained data object the workflow's
-  # trusted comment job validates and re-renders, so PR-authored code never
-  # controls the published comment body). The eval forces the rust checks'
-  # import-from-derivation (lib/rust/cargo-unit.nix builds cargo-units.nix with
-  # nix-cargo-unit), which is x86_64-linux only, so an end-to-end run needs a
-  # Linux builder; locally only the wrapper builds (nu --ide-check).
-  # nix-eval-jobs (not one `nix eval`) keeps memory bounded; see the checks
-  # comment above.
-  blastRadius = ix.writeNushellApplication pkgs {
-    name = "blast-radius";
-    meta.description = "Report how many .#checks.x86_64-linux derivations a PR would rebuild";
-    runtimeInputs = [ pkgs.git ];
-    text = builtins.readFile paths.tools.blastRadius;
-  };
-
   updateMods = ix.writePythonApplication pkgs {
     name = "update-mods";
     src = paths.tools.updateMods;
@@ -550,7 +532,6 @@ in
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
       inherit check lint site;
-      blast-radius = blastRadius;
       site-dev = site.passthru.devServer;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
@@ -655,10 +636,11 @@ in
           ${lib.getExe lint}
           mkdir -p "$out"
         '';
-        # Exercises the blast-radius PR comment: the validate/render jq embedded
-        # in its workflow (extracted from the YAML so the test can't drift from
-        # what the trusted comment job runs) plus the report-building logic in
-        # tools/blast-radius.nu. See tools/blast-radius-test.sh for the cases.
+        # Exercises the trusted half of the blast-radius PR comment: the
+        # validate/render jq embedded in its workflow, extracted from the YAML so
+        # the test can't drift from what the trusted comment job runs. The
+        # report-building logic lives in the `blast-radius` Rust crate and is
+        # covered by its own unit tests. See tools/blast-radius-test.sh.
         blast-radius-test =
           pkgs.runCommand "blast-radius-test"
             {
@@ -668,7 +650,6 @@ in
                 pkgs.diffutils
                 pkgs.jq
                 pkgs.yq-go
-                pkgs.nushell
               ];
             }
             ''
