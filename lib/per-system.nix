@@ -503,6 +503,22 @@ let
     root = paths.images;
     inherit (tests) imageTests;
   };
+
+  # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
+  # `examples/_non-nix-oci` so fleet discovery skips the subtree (leading
+  # underscore), and are surfaced here as `non-nix-<name>` packages plus
+  # `image-non-nix-<name>` checks, the same validation path discovered images
+  # use. Each is imported with the example `{ index }` contract.
+  nonNixExampleImages = lib.mapAttrs' (
+    name: entry:
+    lib.nameValuePair "non-nix-${name}" (
+      import entry.path {
+        index = {
+          lib = ix;
+        };
+      }
+    )
+  ) (ix.discoverTree { root = paths.examples + "/_non-nix-oci"; });
 in
 {
   packages =
@@ -546,6 +562,7 @@ in
     }
     // repoFlakePackages
     // examplePackages
+    // nonNixExampleImages
     // crossPackages
     // healthChecks.lifecyclePackages;
 
@@ -690,7 +707,9 @@ in
       # check. The `eval` aggregate at tests/default.nix:3890 only closes
       # over per-image `extraScript` text, not `config.system.build.toplevel`,
       # so it stays stable across semantic edits to shared image libs.
-      imageChecks = lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v) discoveredImages;
+      imageChecks = lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v) (
+        discoveredImages // nonNixExampleImages
+      );
       # Rust crate prefixes can be overridden in `package.nix` and image
       # names are user-chosen, so a stray collision with an explicit check
       # would otherwise be silently swallowed by the `//` merge. Two pairwise
