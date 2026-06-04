@@ -34,6 +34,7 @@ members = [
   "packages/minecraft/sound",
   "packages/minecraft/sync-managed",
   "packages/mixedbread",
+  "packages/mynoise",
   "packages/nix-web-monitor/parser",
   "packages/nix-web-monitor/server",
   "packages/oci-image-builder",

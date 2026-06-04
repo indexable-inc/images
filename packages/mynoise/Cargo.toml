@@ -1,0 +1,23 @@
+[package]
+name = "mynoise"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Play myNoise.net generators by streaming and mixing their band loops locally"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+dirs.workspace = true
+# Async GET over HTTPS to fetch band loops and scrape the generator index.
+# Inherits the workspace `default-features = false` + rustls, so no system
+# OpenSSL. A small current-thread runtime drives the download phase only.
+reqwest.workspace = true
+# OGG/Vorbis decode + mixing. The workspace already wires ALSA's pkg-config and
+# `-lasound` link path for every unit (see lib/rust/workspace.nix), so this
+# crate needs no extra Nix plumbing on Linux.
+rodio.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "time"] }
