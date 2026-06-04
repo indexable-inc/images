@@ -152,11 +152,22 @@ jobs:
                   (.categories[] | "  \"\(.name | safename)\" : \(.count)"),
                   "```"
              else empty end),
-            # v2: which changed inputs fan out to which checks (top causes).
+            # v2: which changed inputs fan out to which checks (top causes). A
+            # single-check cause is the same node twice (the cause drv is that
+            # check own per-unit derivation), so render it as one node labeled
+            # with the check name and skip the arrow; multi-check causes still
+            # fan out cause -> check. Mirror the local renderer in
+            # packages/blast-radius/src/report.rs.
             (if (.causes | length) > 0
              then "", "```mermaid", "flowchart LR",
-                  (.causes | to_entries[] | "  c\(.key)[\"\(.value.name | safename)\"]"),
-                  (.causes | to_entries[] as $c | $c.value.checks[] as $k
+                  (.causes | to_entries[]
+                   | if (.value.checks | length) == 1
+                     then "  c\(.key)[\"\(.value.checks[0] | safename)\"]"
+                     else "  c\(.key)[\"\(.value.name | safename)\"]"
+                     end),
+                  (.causes | to_entries[] as $c
+                   | select(($c.value.checks | length) > 1)
+                   | $c.value.checks[] as $k
                    | "  c\($c.key) --> k\($checks | index($k))[\"\($k | safename)\"]"),
                   "```"
              else empty end),

@@ -1,6 +1,7 @@
 {"base":"aaaaaaa","head":"bbbbbbb","total":120,
- "changed":["mcp-serverTools","rust-test-search_core","image-base"],
+ "changed":["mcp-serverTools","rust-test-search_core","image-base","lint"],
  "added":["mcp-evalSmoke"],"removed":[],
- "categories":[{"name":"rust","count":2},{"name":"mcp","count":2},{"name":"image","count":1}],
+ "categories":[{"name":"rust","count":2},{"name":"mcp","count":2},{"name":"image","count":1},{"name":"lint","count":1}],
  "causes":[{"name":"ix-rust-workspace","checks":["mcp-serverTools","rust-test-search_core"]},
-           {"name":"image-base-layer","checks":["image-base"]}]}
+           {"name":"image-base-layer","checks":["image-base"]},
+           {"name":"ix-images-lint","checks":["lint"]}]}

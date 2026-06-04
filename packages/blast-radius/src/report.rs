@@ -113,10 +113,23 @@ impl Report {
             checks.dedup();
 
             out.push_str("\n```mermaid\nflowchart LR\n");
+            // A single-check cause is the same node twice (the cause drv is the
+            // check's own per-unit derivation, e.g. lint/lint or
+            // oci-image-builder-clippy-0.1.0/rust-oci-image-builder-clippy). Draw
+            // those as one node labeled with the check name and skip the arrow;
+            // multi-check causes still fan out cause -> check.
             for (index, cause) in self.causes.iter().enumerate() {
-                let _ = writeln!(out, "  c{index}[\"{}\"]", cause.name);
+                let label = if cause.checks.len() == 1 {
+                    &cause.checks[0]
+                } else {
+                    &cause.name
+                };
+                let _ = writeln!(out, "  c{index}[\"{label}\"]");
             }
             for (index, cause) in self.causes.iter().enumerate() {
+                if cause.checks.len() == 1 {
+                    continue;
+                }
                 for check in &cause.checks {
                     let node = checks.iter().position(|name| name == check).unwrap_or(0);
                     let _ = writeln!(out, "  c{index} --> k{node}[\"{check}\"]");
@@ -134,5 +147,62 @@ impl Report {
         }
 
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Locks in the single-check collapse and keeps it in sync with the
+    // workflow's jq renderer (validated against the same shape by
+    // tools/blast-radius-test.sh against tools/blast-radius-fixtures/).
+    #[test]
+    fn single_check_cause_collapses_to_one_node() {
+        let report = Report {
+            base: "aaaaaaa".into(),
+            head: "bbbbbbb".into(),
+            total: 120,
+            changed: vec![
+                "mcp-serverTools".into(),
+                "rust-test-search_core".into(),
+                "image-base".into(),
+                "lint".into(),
+            ],
+            added: vec!["mcp-evalSmoke".into()],
+            removed: vec![],
+            categories: vec![
+                Category { name: "rust".into(), count: 2 },
+                Category { name: "mcp".into(), count: 2 },
+                Category { name: "image".into(), count: 1 },
+                Category { name: "lint".into(), count: 1 },
+            ],
+            causes: vec![
+                CauseJson {
+                    name: "ix-rust-workspace".into(),
+                    checks: vec!["mcp-serverTools".into(), "rust-test-search_core".into()],
+                },
+                CauseJson {
+                    name: "image-base-layer".into(),
+                    checks: vec!["image-base".into()],
+                },
+                CauseJson {
+                    name: "ix-images-lint".into(),
+                    checks: vec!["lint".into()],
+                },
+            ],
+        };
+        let md = report.to_markdown();
+        // Multi-check cause keeps its drv label and draws arrows.
+        assert!(md.contains("c0[\"ix-rust-workspace\"]"));
+        assert!(md.contains("c0 --> k"));
+        // Single-check causes drop the drv label and use the check name, with
+        // no outgoing arrow.
+        assert!(md.contains("c1[\"image-base\"]"));
+        assert!(md.contains("c2[\"lint\"]"));
+        assert!(!md.contains("c1 -->"));
+        assert!(!md.contains("c2 -->"));
+        assert!(!md.contains("image-base-layer"));
+        assert!(!md.contains("ix-images-lint"));
     }
 }
