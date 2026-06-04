@@ -1,0 +1,11 @@
+{
+	"name": "@ix/sdk-examples-sandbox",
+	"private": true,
+	"type": "module",
+	"dependencies": {
+		"@indexable/sdk": "*"
+	},
+	"devDependencies": {
+		"@types/node": "^22.13.4"
+	}
+}
