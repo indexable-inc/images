@@ -1,0 +1,26 @@
+id: prefer-imap0-over-genlist-identity
+language: nix
+severity: warning
+message: "`lib.genList lib.id n` just materializes the index list `[ 0 1 … n-1 ]`. Iterate the data with `lib.imap0`, or use `lib.range 0 (n - 1)` if you only need the integers."
+note: |
+  WHY: `genList` with the identity function produces nothing but `[ 0 1 … n-1 ]`.
+  That index list almost always exists to index into a parallel list of the same
+  length (via `elemAt` or a dynamic attr), which is the `imap0` smell:
+  `lib.imap0 (i: x: ...) xs` hands you both the index and the element with no
+  intermediate list and no `elemAt`. If you genuinely need the integers as data,
+  `lib.range 0 (n - 1)` says so directly.
+  REPO: Replace `map (i: f (elemAt xs i)) (lib.genList lib.id (length xs))` with
+  `lib.imap0 (i: x: f x) xs`.
+rule:
+  # `lib.id`, bare `id` (inherit (lib) id), and the inline identity lambda, across
+  # the `lib.` / bare / `builtins.` spellings of genList.
+  any:
+    - pattern: lib.genList lib.id $N
+    - pattern: genList lib.id $N
+    - pattern: builtins.genList lib.id $N
+    - pattern: lib.genList id $N
+    - pattern: genList id $N
+    - pattern: builtins.genList id $N
+    - pattern: 'lib.genList ($I: $I) $N'
+    - pattern: 'genList ($I: $I) $N'
+    - pattern: 'builtins.genList ($I: $I) $N'

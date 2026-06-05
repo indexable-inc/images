@@ -1,0 +1,14 @@
+id: prefer-imap0-over-genlist-identity
+valid:
+  - 'lib.genList toString n'
+  - 'lib.genList (i: i + 1) n'
+  - 'lib.genList (index: cfg.nodes.${toString index}) count'
+  - 'lib.imap0 (i: x: x) xs'
+  - 'lib.range 0 (n - 1)'
+invalid:
+  - 'lib.genList lib.id (length xs)'
+  - 'genList lib.id n'
+  - 'builtins.genList lib.id count'
+  - 'lib.genList id count'
+  - 'lib.genList (i: i) n'
+  - 'genList (x: x) count'
