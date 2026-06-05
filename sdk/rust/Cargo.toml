@@ -1,3 +1,8 @@
+# Opt in to the unstable `profile-rustflags` feature: `[profile.public-rlib]`
+# below sets `rustflags`, which Cargo gates behind this. ix's root Cargo.toml
+# does the same. The repo toolchain is nightly, so this is available.
+cargo-features = ["profile-rustflags"]
+
 # Public Rust SDK workspace for index.
 #
 # The public crate `ix-sdk` compiles and links against the PRIVATE `ix-sdk-wire`
