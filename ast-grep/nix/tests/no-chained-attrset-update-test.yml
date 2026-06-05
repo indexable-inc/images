@@ -1,0 +1,11 @@
+id: no-chained-attrset-update
+valid:
+  # Single update with a literal is fine.
+  - 'a: base // { x = 1; }'
+  # A conditional / non-literal operand earns the extra `//`.
+  - 'a: base // { x = 1; } // lib.optionalAttrs cond { y = 2; }'
+  - 'a: base // lib.optionalAttrs cond { x = 1; } // { y = 2; }'
+  - 'a: base // overrides // { y = 2; }'
+invalid:
+  - 'a: base // { x = 1; } // { y = 2; }'
+  - 'a: (p or { }) // { a = 1; } // { b = 2; c = 3; }'

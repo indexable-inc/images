@@ -1,0 +1,16 @@
+id: no-chained-attrset-update
+language: nix
+severity: warning
+message: "`A // { ... } // { ... }` builds one attrset in two steps. Merge the adjacent literals into a single `// { ... }`."
+note: |
+  WHY: Two adjacent attrset-literal updates allocate a throwaway intermediate and
+  scatter related keys across two literals; the second `//` does no work a single
+  combined update would not. Build the attrset in one place.
+  NIXPKGS: not enforced upstream; this is the repo's "one attrset, one place"
+  stance, alongside no-update-empty-set and no-recursive-update.
+  REPO: Merge the literals: `A // { x = ...; y = ...; }`. A `//` is fine when an
+  operand is conditional or otherwise non-literal (e.g.
+  `A // lib.optionalAttrs cond { ... }` or `A // someAttrs`); this rule only
+  fires when two operands in a row are plain `{ ... }` literals.
+rule:
+  pattern: "$A // { $$$X } // { $$$Y }"

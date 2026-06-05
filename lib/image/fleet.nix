@@ -28,16 +28,22 @@
   nodePrefix ? "",
 }:
 let
-  asList = value: if builtins.isList value then value else [ value ];
+  inherit (builtins)
+    attrNames
+    elem
+    filter
+    hasAttr
+    head
+    isAttrs
+    isInt
+    listToAttrs
+    tail
+    unsafeDiscardStringContext
+    ;
 
-  moduleList =
-    spec:
-    if spec ? modules then
-      asList spec.modules
-    else if spec ? module then
-      asList spec.module
-    else
-      [ ];
+  inherit (lib) toList;
+
+  moduleList = spec: toList (spec.modules or spec.module or [ ]);
 
   deploymentDefaults = {
     bootstrapImage = "registry.ix.dev/${bootstrapImage.name}:${bootstrapImage.tag}";
@@ -67,8 +73,7 @@ let
     "replicas"
   ];
 
-  isWrappedNode =
-    value: builtins.isAttrs value && lib.any (key: builtins.hasAttr key value) wrappedNodeKeys;
+  isWrappedNode = value: isAttrs value && lib.any (key: value ? "${key}") wrappedNodeKeys;
 
   prefixExternalName = name: nodePrefix + name;
   prefixWrappedNode =
@@ -78,10 +83,10 @@ let
     else
       spec
       // lib.optionalAttrs (spec ? dependsOn) {
-        dependsOn = map prefixExternalName (asList spec.dependsOn);
+        dependsOn = map prefixExternalName (toList spec.dependsOn);
       }
       // lib.optionalAttrs (spec ? groups) {
-        groups = map prefixExternalName (asList spec.groups);
+        groups = map prefixExternalName (toList spec.groups);
       };
   prefixedNodes =
     if nodePrefix == "" then
@@ -102,22 +107,22 @@ let
       ++ [
         (spec.deployment or { })
       ];
-      groups = asList (spec.groups or [ ]);
+      groups = toList (spec.groups or [ ]);
     in
     {
       inherit name;
-      modules = asList defaults ++ moduleList spec;
-      tags = lib.unique (asList (spec.tags or [ ]));
+      modules = toList defaults ++ moduleList spec;
+      tags = lib.unique (toList (spec.tags or [ ]));
       groups = lib.unique groups;
       deployment = mergeDeployments deploymentParts;
-      dependsOn = asList (spec.dependsOn or [ ]);
+      dependsOn = toList (spec.dependsOn or [ ]);
       replicas = spec.replicas or 1;
     };
 
   expandReplicas =
     name: spec:
     assert lib.assertMsg (
-      builtins.isInt spec.replicas && spec.replicas > 0
+      isInt spec.replicas && spec.replicas > 0
     ) "fleet node '${name}': replicas must be a positive integer";
     if spec.replicas == 1 then
       {
@@ -126,7 +131,7 @@ let
         };
       }
     else
-      builtins.listToAttrs (
+      listToAttrs (
         lib.genList (index: {
           name = "${name}-${toString index}";
           value = spec // {
@@ -139,9 +144,9 @@ let
 
   rawNodeSpecs = lib.mapAttrs normalizeNode prefixedNodes;
   nodeSpecs = lib.mergeAttrsList (lib.mapAttrsToList expandReplicas rawNodeSpecs);
-  knownDependency = dep: builtins.hasAttr dep rawNodeSpecs || builtins.hasAttr dep nodeSpecs;
+  knownDependency = dep: hasAttr dep rawNodeSpecs || hasAttr dep nodeSpecs;
   unknownDependencies = lib.filterAttrs (_: deps: deps != [ ]) (
-    lib.mapAttrs (_name: spec: lib.filter (dep: !(knownDependency dep)) spec.dependsOn) rawNodeSpecs
+    lib.mapAttrs (_name: spec: filter (dep: !(knownDependency dep)) spec.dependsOn) rawNodeSpecs
   );
   renderUnknownDependencies = name: deps: "${name}: ${lib.concatStringsSep ", " deps}";
   checkedKnownNodeSpecs =
@@ -152,7 +157,7 @@ let
     nodeSpecs;
   expandDependency =
     dep:
-    if builtins.hasAttr dep rawNodeSpecs then
+    if hasAttr dep rawNodeSpecs then
       if rawNodeSpecs.${dep}.replicas == 1 then
         [ dep ]
       else
@@ -169,10 +174,10 @@ let
         remaining:
         if remaining == [ ] then
           [ target ]
-        else if builtins.head remaining == target then
+        else if head remaining == target then
           remaining ++ [ target ]
         else
-          go (builtins.tail remaining);
+          go (tail remaining);
     in
     go path;
   detectDependencyCycle =
@@ -180,20 +185,18 @@ let
     let
       visit =
         path: name:
-        if builtins.elem name path then
+        if elem name path then
           cycleFromPath name path
         else
           let
-            cycles = lib.filter (cycle: cycle != [ ]) (
+            cycles = filter (cycle: cycle != [ ]) (
               map (dep: visit (path ++ [ name ]) dep) dependencies.${name}
             );
           in
-          if cycles == [ ] then [ ] else builtins.head cycles;
-      cycles = lib.filter (cycle: cycle != [ ]) (
-        map (name: visit [ ] name) (builtins.attrNames dependencies)
-      );
+          if cycles == [ ] then [ ] else head cycles;
+      cycles = filter (cycle: cycle != [ ]) (map (name: visit [ ] name) (attrNames dependencies));
     in
-    if cycles == [ ] then [ ] else builtins.head cycles;
+    if cycles == [ ] then [ ] else head cycles;
   dependencyCycle = detectDependencyCycle expandedDependencies;
   checkedNodeSpecs =
     assert lib.assertMsg (dependencyCycle == [ ]) ''
@@ -242,7 +245,7 @@ let
         requiresIpv4
         timeoutSec
         ;
-      command = map builtins.unsafeDiscardStringContext check.command;
+      command = map unsafeDiscardStringContext check.command;
     }) config.ix.healthChecks;
 
   nodePlan = lib.mapAttrs (
@@ -258,7 +261,7 @@ let
       # ix switch expects a system out-path for local copy and a .drv for remote
       # build. Picking the wrong shape uploads the build-time closure and tries
       # to run `<drv>/bin/switch-to-configuration`, which deadlocks.
-      switchTarget = deploy.switch.target or builtins.unsafeDiscardStringContext (
+      switchTarget = deploy.switch.target or unsafeDiscardStringContext (
         if switchBuildOn == "local" then
           "${config.system.build.toplevel}"
         else
@@ -273,7 +276,7 @@ let
         ;
       inherit (spec) baseName;
       replicaIndex = spec.replicaIndex or null;
-      system = builtins.unsafeDiscardStringContext "${config.system.build.toplevel}";
+      system = unsafeDiscardStringContext "${config.system.build.toplevel}";
       switch = {
         target = switchTarget;
         buildOn = switchBuildOn;
@@ -288,8 +291,8 @@ let
           imageTag
           ;
         destination = replacementDestination;
-        source = builtins.unsafeDiscardStringContext "${config.ix.build.ociImage}";
-        sourceDrv = builtins.unsafeDiscardStringContext config.ix.build.ociImage.drvPath;
+        source = unsafeDiscardStringContext "${config.ix.build.ociImage}";
+        sourceDrv = unsafeDiscardStringContext config.ix.build.ociImage.drvPath;
       };
       inherit (deploy) region;
       inherit (deploy) ipv4;
@@ -305,7 +308,7 @@ let
   ) checkedNodeSpecs;
 
   planValue = {
-    order = builtins.attrNames checkedNodeSpecs;
+    order = attrNames checkedNodeSpecs;
     nodes = nodePlan;
     secrets = secretSet.plan;
   };

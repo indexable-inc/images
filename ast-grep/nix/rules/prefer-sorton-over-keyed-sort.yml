@@ -1,0 +1,33 @@
+id: prefer-sorton-over-keyed-sort
+language: nix
+severity: warning
+message: "`sort (a: b: (f a) < (f b))` is a keyed comparator. Use `lib.sortOn f xs`, which evaluates the key once per element."
+note: |
+  WHY: A comparator that applies the same transform to both sides and compares
+  with `<` is sorting by a key. `lib.sort` re-runs that transform on both
+  operands of every comparison (O(n log n) key evaluations); `lib.sortOn f`
+  computes the key once per element (Schwartzian transform) and reads as "sort
+  by f" at the call site.
+  REPO: Replace the keyed comparator with `lib.sortOn`:
+    * field key:   `lib.sort (a: b: a.priority < b.priority) xs`
+                 → `lib.sortOn (x: x.priority) xs`
+    * function key: `lib.sort (a: b: f a < f b) xs`
+                 → `lib.sortOn f xs`
+  Only the ascending `<` form maps to `sortOn`; a descending `>` comparator is
+  not flagged.
+rule:
+  # Three sort spellings (`lib.sort`, `builtins.sort`, the bare name from
+  # `inherit (lib) sort` / `inherit (builtins) sort`) crossed with the comparator
+  # shapes: a shared field access, and a shared function applied with or without
+  # parens. Reused metavars force the same param, key field, or key function on
+  # both sides, so `a.x < b.y` and `f a < g b` do not match.
+  any:
+    - pattern: "lib.sort ($A: $B: $A.$F < $B.$F) $XS"
+    - pattern: "builtins.sort ($A: $B: $A.$F < $B.$F) $XS"
+    - pattern: "sort ($A: $B: $A.$F < $B.$F) $XS"
+    - pattern: "lib.sort ($A: $B: $G $A < $G $B) $XS"
+    - pattern: "builtins.sort ($A: $B: $G $A < $G $B) $XS"
+    - pattern: "sort ($A: $B: $G $A < $G $B) $XS"
+    - pattern: "lib.sort ($A: $B: ($G $A) < ($G $B)) $XS"
+    - pattern: "builtins.sort ($A: $B: ($G $A) < ($G $B)) $XS"
+    - pattern: "sort ($A: $B: ($G $A) < ($G $B)) $XS"

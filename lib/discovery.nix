@@ -79,8 +79,8 @@ let
     if duplicateMessages != [ ] then
       throw (lib.concatStringsSep "\n" duplicateMessages)
     else
-      lib.listToAttrs (
-        map (entry: lib.nameValuePair entry.metadata.name { inherit (entry) path metadata; }) discovered
+      lib.genAttrs' discovered (
+        entry: lib.nameValuePair entry.metadata.name { inherit (entry) path metadata; }
       );
 
   # One image directory -> { <name> = pkg; <name>_<ver> = pkg; ... }.
@@ -140,13 +140,11 @@ let
           { metadata, ... }:
           let
             inherit (metadata) name segments sidecar;
-            versionNames =
-              if sidecar == null then
-                [ ]
-              else
-                map (version: "${name}_${version}") (
-                  builtins.attrNames (builtins.removeAttrs sidecar [ "default" ])
-                );
+            versionNames = lib.optionals (sidecar != null) (
+              map (version: "${name}_${version}") (
+                builtins.attrNames (builtins.removeAttrs sidecar [ "default" ])
+              )
+            );
           in
           assert lib.assertMsg (
             builtins.length segments == 2

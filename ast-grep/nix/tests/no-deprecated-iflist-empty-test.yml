@@ -1,0 +1,16 @@
+id: no-deprecated-iflist-empty
+valid:
+  - 'lib.optional cond x'
+  - 'lib.optionals cond [ a b ]'
+  - 'lib.optionals (!cond) xs'
+  - 'if cond then xs else ys'
+  - 'if cond then [ a ] else [ b ]'
+  - 'if s ? k then s.k else fallback'
+  - 'if s ? k then s.k else [ ]'
+invalid:
+  - 'if cond then [ x ] else [ ]'
+  - 'if cond then [ a b ] else [ ]'
+  - 'if cond then xs else [ ]'
+  - 'if cond then [ ] else [ x ]'
+  - 'if cond then [ ] else [ a b ]'
+  - 'if callerHasTargetSelector && !clippyCargoArgsSet then [ ] else args.policy.clippy.cargoArgs'

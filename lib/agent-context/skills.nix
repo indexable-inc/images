@@ -10,12 +10,7 @@ let
     lib.attrNames (lib.filterAttrs (_: type: type == "directory") entries)
   );
 
-  sources = lib.listToAttrs (
-    map (name: {
-      inherit name;
-      value = paths.skills + "/${name}";
-    }) skillNames
-  );
+  sources = lib.genAttrs skillNames (name: paths.skills + "/${name}");
 
   allSkills = skillNames;
 

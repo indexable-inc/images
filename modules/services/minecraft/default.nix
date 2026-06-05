@@ -579,14 +579,12 @@ let
       }) (regionDirectoriesFor world)
     ) annotatedWorldNames
   );
-  datapackXattrs = lib.listToAttrs (
-    map (world: {
-      name = "${dataDir}/${world}/datapacks";
-      value = mkCreatedXattrDefaults "minecraft.datapacks" {
-        "user.ix.minecraft.world" = world;
-      };
-    }) datapackWorldNames
-  );
+  datapackXattrs = lib.genAttrs' datapackWorldNames (world: {
+    name = "${dataDir}/${world}/datapacks";
+    value = mkCreatedXattrDefaults "minecraft.datapacks" {
+      "user.ix.minecraft.world" = world;
+    };
+  });
 
   mkManaged =
     label: source:

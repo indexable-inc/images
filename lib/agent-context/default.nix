@@ -126,12 +126,10 @@ in
     Parsed sections keyed by frontmatter `name`. Each value is
     `{ name, disclosure, description, fileName, body }`.
   */
-  sections = lib.listToAttrs (
-    map (section: {
-      inherit (section) name;
-      value = section;
-    }) checkedSections
-  );
+  sections = lib.genAttrs' checkedSections (section: {
+    inherit (section) name;
+    value = section;
+  });
 
   /**
     Sections in each tier, in file order.
@@ -165,12 +163,10 @@ in
   */
   mkProgressiveSkills =
     { pkgs }:
-    lib.listToAttrs (
-      map (section: {
-        inherit (section) name;
-        value = pkgs.writeTextDir "SKILL.md" (skillText section);
-      }) progressiveSections
-    );
+    lib.genAttrs' progressiveSections (section: {
+      inherit (section) name;
+      value = pkgs.writeTextDir "SKILL.md" (skillText section);
+    });
 
   /**
     Wrap the `agents-md` Rust CLI so contributors can write or diff the
@@ -184,12 +180,10 @@ in
   mkApp =
     { pkgs, binary }:
     let
-      generatedDocuments = lib.listToAttrs (
-        map (document: {
-          name = document.target;
-          value = pkgs.writeText document.fileName document.text;
-        }) documents
-      );
+      generatedDocuments = lib.genAttrs' documents (document: {
+        name = document.target;
+        value = pkgs.writeText document.fileName document.text;
+      });
       documentsConfig = (pkgs.formats.json { }).generate "agent-context-documents.json" (
         map (document: {
           inherit (document) target;

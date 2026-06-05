@@ -31,10 +31,8 @@ let
     else
       lib.callPackageWith autoArgs entry.path { };
 in
-lib.listToAttrs (
-  map (entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)) (
-    packageRegistry.overlayEntriesFor packageSystem
-  )
+lib.genAttrs' (packageRegistry.overlayEntriesFor packageSystem) (
+  entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)
 )
 // {
   symphony-room-server = symphony.packages."${packageSystem}".room-server;

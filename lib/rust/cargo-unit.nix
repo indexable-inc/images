@@ -5,172 +5,25 @@
   rust,
 }:
 let
+  inherit (builtins)
+    attrNames
+    elem
+    elemAt
+    filter
+    hasAttr
+    length
+    removeAttrs
+    replaceStrings
+    toString
+    ;
+
+  inherit (lib) escapeShellArg;
+
   # The toolchain id baked into every unit hash for the default toolchain.
   # Exposed so callers of `mkPrebuiltLibraryUnit` can record and assert the id a
   # prebuilt rlib was compiled with without reconstructing it by hand. The id
   # rule itself lives at the toolchain owner (`rust.toolchainId`).
   defaultToolchainId = rust.toolchainId rust.defaultRustToolchain;
-
-  profileArgs =
-    profile:
-    if profile == "release" then
-      [ "--release" ]
-    else if profile == "dev" then
-      [ ]
-    else
-      [
-        "--profile"
-        profile
-      ];
-
-  # The shared "vendored cargo" context (src, cargoLock, toolchain, policy,
-  # vendorDir, vendorSources, ...) is resolved by `rust.normalizeArgs`: build.nix
-  # and cargoUnit are two consumers of one normalizer, so the lockfile, toolchain,
-  # policy, and vendor resolution live there once. `buildWorkspace` normalizes its
-  # raw args exactly once and hands the result, plus the unit-graph knobs
-  # (`profile`, `target`, `contentAddressed`, `cargoTargets`), to the two IFD
-  # stages; the stages no longer re-normalize. The remaining knobs
-  # (`extraUnits`/`extraLibraries`, the `test*` forwarding) have a single reader
-  # and are read from raw args at that use site.
-  #
-  # The one cross-stage value is the list of cargo invocations: the graph builder
-  # and the target-set naming both need it, so `buildWorkspace` resolves it once
-  # with this helper, which also enforces the non-empty invariant.
-  cargoTargetsFor =
-    rawArgs: cargoArgs:
-    let
-      cargoTargets = rawArgs.cargoTargets or [ cargoArgs ];
-    in
-    if cargoTargets == [ ] then
-      throw "cargoUnit.buildWorkspace requires at least one cargoTargets entry"
-    else
-      cargoTargets;
-
-  workspaceRootFor =
-    args:
-    args.workspaceRoot or (throw ''
-      cargoUnit.buildWorkspace requires workspaceRoot = ./path/to/workspace.
-      Use workspaceRoot for the real checkout root that package-shaped sources can be carved from.
-      Fetched or patched sources pass workspaceRoot = src.
-    '');
-
-  renderCargoArgs =
-    { profile, target }:
-    cargoTarget:
-    lib.escapeShellArgs (
-      [
-        "build"
-        "--unit-graph"
-        "-Z"
-        "unstable-options"
-      ]
-      ++ profileArgs profile
-      ++ lib.optionals (target != null) [
-        "--target"
-        target
-      ]
-      ++ cargoTarget
-      ++ [
-        "--frozen"
-        "--offline"
-      ]
-    );
-
-  # First IFD stage for `buildWorkspace`: emit Cargo's `--unit-graph` JSON for
-  # the vendored workspace, one cargo invocation per `cargoTargets` entry merged
-  # into one graph. Takes the already-normalized `args` plus the unit-graph knobs
-  # (`cargoTargets`, `profile`, `target`) resolved by its one caller, so the
-  # shared context is normalized once rather than re-derived here.
-  generateUnitGraph =
-    {
-      args,
-      cargoTargets,
-      profile,
-      target,
-    }:
-    let
-      renderTarget = renderCargoArgs { inherit profile target; };
-      unitGraphFile = targetIndex: "$TMPDIR/unit-graph-${builtins.toString targetIndex}.json";
-    in
-    pkgs.runCommand "cargo-unit-graph.json"
-      (
-        {
-          nativeBuildInputs = [
-            args.rustToolchain
-            pkgs.cacert
-            nixCargoUnit
-          ]
-          ++ args.nativeBuildInputs;
-          SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
-          # Cargo still gates `--unit-graph` behind `-Z unstable-options`.
-          # This helper keeps the input graph generation local to the IFD
-          # planner derivation instead of requiring a flake-wide Rust overlay.
-          RUSTC_BOOTSTRAP = "1";
-        }
-        // args.env
-      )
-      ''
-        ${rust.vendorConfigScript {
-          inherit (args) vendorDir cargoExtraConfig cargoLock;
-        }}
-
-        cd ${args.src}
-
-        pids=
-        ${lib.concatStringsSep "\n" (
-          lib.imap0 (targetIndex: targetArgs: ''
-            (
-              export CARGO_TARGET_DIR="$TMPDIR/cargo-target-${builtins.toString targetIndex}"
-              cargo ${renderTarget targetArgs} > "${unitGraphFile targetIndex}"
-            ) &
-            pids="$pids $!"
-          '') cargoTargets
-        )}
-
-        for pid in $pids; do
-          wait "$pid"
-        done
-
-        nix-cargo-unit merge ${
-          lib.concatStringsSep " " (lib.imap0 (targetIndex: _: unitGraphFile targetIndex) cargoTargets)
-        } > "$out"
-      '';
-
-  # Second IFD stage for `buildWorkspace`: render `units.nix` from the unit graph
-  # `generateUnitGraph` produced. Separate derivation so the graph and the render
-  # are independently inspectable (both are surfaced on the workspace output).
-  # Takes the normalized `args`, the graph as an explicit input, and the
-  # `contentAddressed` knob from its one caller.
-  generateUnitsNix =
-    {
-      args,
-      unitGraphJson,
-      contentAddressed,
-    }:
-    let
-      toolchainId = rust.toolchainId args.rustToolchain;
-      cargoLockForRender = rust.cargoLockFile args.cargoLock;
-      renderFlags = [
-        "render"
-        "--workspace-root"
-        (builtins.toString args.src)
-        "--vendor-root"
-        (builtins.toString args.vendorDir)
-        "--toolchain-id"
-        toolchainId
-      ]
-      ++ lib.optional contentAddressed "--content-addressed"
-      ++ lib.optional args.policy.denyUnusedCrateDependencies "--deny-unused-crate-dependencies"
-      ++ lib.optional args.policy.denyPanics "--deny-panics";
-    in
-    pkgs.runCommand "cargo-units.nix"
-      {
-        nativeBuildInputs = [ nixCargoUnit ];
-        inherit cargoLockForRender;
-      }
-      ''
-        nix-cargo-unit ${lib.escapeShellArgs renderFlags} --cargo-lock "$cargoLockForRender" < ${unitGraphJson} > "$out"
-      '';
 
   /**
     Build a Rust workspace as one Nix derivation per Cargo rustc unit.
@@ -217,47 +70,176 @@ let
     `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
     `policyChecks`, plus the intermediate `unitGraphJson`, `unitsNix`, and `vendorDir`
     derivations for inspection.
+
+    `rust.normalizeArgs` resolves the shared "vendored cargo" context (src,
+    cargoLock, toolchain, policy, vendorDir, vendorSources) once; the two IFD
+    stages and the unit import below all read from that single result. The
+    remaining knobs (`profile`, `target`, `contentAddressed`, `cargoTargets`,
+    `extraUnits`/`extraLibraries`, the `test*` forwarding) each have a single
+    reader and are read from raw args at that use site.
   */
   buildWorkspace =
     rawArgs:
     let
       args = rust.normalizeArgs rawArgs;
       inherit (args) vendorDir vendorSources;
-      workspaceRoot = workspaceRootFor rawArgs;
-      cargoTargets = cargoTargetsFor rawArgs args.cargoArgs;
-      cargoTargetNames = rawArgs.cargoTargetNames or null;
+
+      workspaceRoot =
+        rawArgs.workspaceRoot or (throw ''
+          cargoUnit.buildWorkspace requires workspaceRoot = ./path/to/workspace.
+          Use workspaceRoot for the real checkout root that package-shaped sources can be carved from.
+          Fetched or patched sources pass workspaceRoot = src.
+        '');
+
+      # The list of cargo invocations to plan: the graph builder and the
+      # target-set naming both consume it, and it must be non-empty.
+      cargoTargets =
+        let
+          targets = rawArgs.cargoTargets or [ args.cargoArgs ];
+        in
+        if targets == [ ] then
+          throw "cargoUnit.buildWorkspace requires at least one cargoTargets entry"
+        else
+          targets;
+
       extraUnits = rawArgs.extraUnits or { };
       extraLibraries = rawArgs.extraLibraries or { };
-      unitGraphJson = generateUnitGraph {
-        inherit args cargoTargets;
-        profile = rawArgs.profile or "release";
-        target = rawArgs.target or null;
-      };
-      unitsNix = generateUnitsNix {
-        inherit args unitGraphJson;
-        contentAddressed = rawArgs.contentAddressed or true;
-      };
+
+      # First IFD stage: emit Cargo's `--unit-graph` JSON for the vendored
+      # workspace, one cargo invocation per `cargoTargets` entry merged into one
+      # graph. Separate derivation from the render so both are independently
+      # inspectable on the workspace output.
+      unitGraphJson =
+        let
+          profile = rawArgs.profile or "release";
+          target = rawArgs.target or null;
+          renderTarget =
+            cargoTarget:
+            let
+              profileArgs =
+                {
+                  release = [ "--release" ];
+                  dev = [ ];
+                }
+                ."${profile}" or [
+                  "--profile"
+                  profile
+                ];
+            in
+            lib.escapeShellArgs (
+              [
+                "build"
+                "--unit-graph"
+                "-Z"
+                "unstable-options"
+              ]
+              ++ profileArgs
+              ++ lib.optionals (target != null) [
+                "--target"
+                target
+              ]
+              ++ cargoTarget
+              ++ [
+                "--frozen"
+                "--offline"
+              ]
+            );
+          unitGraphFile = targetIndex: "$TMPDIR/unit-graph-${toString targetIndex}.json";
+
+          configScript = rust.vendorConfigScript {
+            inherit (args) vendorDir cargoExtraConfig cargoLock;
+          };
+        in
+        pkgs.runCommand "cargo-unit-graph.json"
+          (
+            {
+              nativeBuildInputs = [
+                args.rustToolchain
+                pkgs.cacert
+                nixCargoUnit
+              ]
+              ++ args.nativeBuildInputs;
+              SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+              # Cargo still gates `--unit-graph` behind `-Z unstable-options`.
+              # This keeps the input graph generation local to the IFD planner
+              # derivation instead of requiring a flake-wide Rust overlay.
+              RUSTC_BOOTSTRAP = "1";
+            }
+            // args.env
+          )
+          ''
+            ${configScript}
+
+            cd ${args.src}
+
+            pids=
+            ${lib.concatStringsSep "\n" (
+              lib.imap0 (targetIndex: targetArgs: ''
+                (
+                  export CARGO_TARGET_DIR="$TMPDIR/cargo-target-${toString targetIndex}"
+                  cargo ${renderTarget targetArgs} > "${unitGraphFile targetIndex}"
+                ) &
+                pids="$pids $!"
+              '') cargoTargets
+            )}
+
+            for pid in $pids; do
+              wait "$pid"
+            done
+
+            nix-cargo-unit merge ${
+              lib.concatStringsSep " " (lib.imap0 (targetIndex: _: unitGraphFile targetIndex) cargoTargets)
+            } > "$out"
+          '';
+
+      # Second IFD stage: render `units.nix` from the unit graph above.
+      unitsNix =
+        let
+          toolchainId = rust.toolchainId args.rustToolchain;
+          contentAddressed = rawArgs.contentAddressed or true;
+
+          extraFlags =
+            lib.optional contentAddressed "--content-addressed"
+            ++ lib.optional args.policy.denyUnusedCrateDependencies "--deny-unused-crate-dependencies"
+            ++ lib.optional args.policy.denyPanics "--deny-panics";
+        in
+        pkgs.runCommand "cargo-units.nix"
+          {
+            nativeBuildInputs = [ nixCargoUnit ];
+            cargoLockForRender = rust.cargoLockFile args.cargoLock;
+          }
+          ''
+            nix-cargo-unit render \
+              --workspace-root ${escapeShellArg args.src} \
+              --vendor-root ${escapeShellArg args.vendorDir} \
+              --toolchain-id ${escapeShellArg toolchainId} \
+              ${lib.escapeShellArgs extraFlags} \
+              --cargo-lock "$cargoLockForRender" \
+              < ${unitGraphJson} \
+              > "$out"
+          '';
+
       perUnitClippyEnabled = args.policy.clippy.enable;
       # Per-unit clippy runs `clippy-driver` directly on each non-external
       # unit. Suppress the legacy workspace-level `cargoClippy` derivation in
       # that mode so the same lints don't run twice and so a single source
       # edit doesn't invalidate every other crate's clippy.
-      extraPolicyChecksFromRust = rust.policyChecksFor (
-        rawArgs
-        // {
-          inherit vendorDir;
-          # A workspace has no single crate name; name the workspace-level checks
-          # explicitly rather than relying on a fallback (`crateName` requires it).
-          pname = rawArgs.pname or "cargo-unit-workspace";
-          policy =
-            args.policy
-            // lib.optionalAttrs perUnitClippyEnabled {
+      extraPolicyChecksFromRust = rust.policyChecksFor {
+        # A workspace has no single crate name; name the workspace-level checks
+        # explicitly rather than relying on a fallback (`crateName` requires it).
+        pname = rawArgs.pname or "cargo-unit-workspace";
+        # `args` already carries the resolved vendorDir/policy; only the clippy
+        # flag differs, since per-unit clippy replaces the workspace-level check.
+        args =
+          args
+          // lib.optionalAttrs perUnitClippyEnabled {
+            policy = args.policy // {
               clippy = args.policy.clippy // {
                 enable = false;
               };
             };
-        }
-      );
+          };
+      };
       # Import the rendered units.nix with a given prebuilt-injection seam. The
       # generated (pre-seam) set is obtained by importing with empty seam args,
       # so the injection guards below can compare against the real generated keys
@@ -265,6 +247,18 @@ let
       # differs). See mkPrebuiltLibraryUnit.
       importUnits =
         seam:
+        let
+          # The renderer passes `null` for host units (build scripts, proc-macros)
+          # that have no `--target`; resolve that to the host triple before handing
+          # it to the policy hook, which deliberately rejects a non-triple platform.
+          extraRustcArgsForPlatform =
+            platform:
+            let
+              resolvedPlatform = if platform == null then pkgs.stdenv.hostPlatform.config else platform;
+            in
+            rust.rustcArgsForPolicyForPlatform args.policy resolvedPlatform
+            ++ (rawArgs.extraRustcArgsForPlatform or (_platform: [ ])) platform;
+        in
         import unitsNix (
           {
             inherit pkgs vendorDir vendorSources;
@@ -285,10 +279,7 @@ let
             testArgsByPackage = rawArgs.testArgsByPackage or { };
             packageTestInputs = rawArgs.packageTestInputs or { };
             packageTestEnv = rawArgs.packageTestEnv or { };
-            extraRustcArgsForPlatform =
-              platform:
-              rust.rustcArgsForPolicyForPlatform args.policy platform
-              ++ (rawArgs.extraRustcArgsForPlatform or (_platform: [ ])) platform;
+            inherit extraRustcArgsForPlatform;
             # Manifest-derived flags come first so per-call `policy.clippy`
             # entries land later in argv and can override them. Cargo's
             # `[lints.clippy]` resolution is the load-bearing source for most
@@ -308,8 +299,8 @@ let
         extraUnits = { };
         extraLibraries = { };
       };
-      generatedUnitKeys = builtins.attrNames generatedView.units;
-      generatedLibraryKeys = builtins.attrNames generatedView.libraries;
+      generatedUnitKeys = attrNames generatedView.units;
+      generatedLibraryKeys = attrNames generatedView.libraries;
 
       # The workspace's ACTUAL toolchain id (cargo-unit.nix toolchainId at render
       # time), which is what every from-source unit hash was computed with. A
@@ -326,7 +317,7 @@ let
       injectionKeyProblems =
         label: injected: validKeys:
         let
-          unknown = builtins.filter (key: !(builtins.elem key validKeys)) (builtins.attrNames injected);
+          unknown = filter (key: !(elem key validKeys)) (attrNames injected);
         in
         lib.optional (unknown != [ ]) ''
           ${label} key(s) not present in the generated graph: ${lib.concatStringsSep ", " unknown}
@@ -368,16 +359,22 @@ let
         );
         importUnits { inherit extraUnits extraLibraries; };
       targetSetNames =
-        if cargoTargetNames == null then
-          lib.genList builtins.toString (builtins.length cargoTargets)
-        else if builtins.length cargoTargetNames == builtins.length cargoTargets then
-          cargoTargetNames
+        let
+          targetCount = length cargoTargets;
+        in
+        if rawArgs ? cargoTargetNames then
+          let
+            names = rawArgs.cargoTargetNames;
+          in
+          assert lib.assertMsg (
+            length names == targetCount
+          ) "cargoUnit.buildWorkspace requires cargoTargetNames to match cargoTargets length";
+          names
         else
-          throw "cargoUnit.buildWorkspace requires cargoTargetNames to match cargoTargets length";
+          lib.genList toString targetCount;
       namedTargetSets = lib.listToAttrs (
         lib.imap1 (
-          targetIndex: targetName:
-          lib.nameValuePair targetName (builtins.elemAt units.targetSets (targetIndex - 1))
+          targetIndex: targetName: lib.nameValuePair targetName (elemAt units.targetSets (targetIndex - 1))
         ) targetSetNames
       );
     in
@@ -398,21 +395,21 @@ let
       ...
     }@args:
     let
-      workspace = buildWorkspace (builtins.removeAttrs args [ "binary" ]);
+      workspace = buildWorkspace (removeAttrs args [ "binary" ]);
     in
     workspace.binaries.${binary}
       or (throw "buildBinary: no binary `${binary}` in workspace; available: ${
-        lib.concatStringsSep ", " (builtins.attrNames (workspace.binaries or { }))
+        lib.concatStringsSep ", " (attrNames (workspace.binaries or { }))
       }");
 
   /**
     Pick a binary out of a pre-built `buildWorkspace` plus its test
     derivations, ready for `passthru.tests` consumption.
 
-    `testTargets` and `doctestTargets` default to every generated target owned
-    by `packageName`. Each discovered test case becomes its own derivation by
-    default; `<target>-all` remains available for callers that need the full
-    harness as a single compatibility check.
+    Test and doctest targets are every generated target owned by `packageName`.
+    Each discovered test case becomes its own derivation by default;
+    `<target>-all` remains available for callers that need the full harness as a
+    single compatibility check.
 
     Use this when the caller has one shared workspace (`ix.rustWorkspace.units`)
     so all repo-owned crates ride the same unit graph. Use `buildBinary` when
@@ -423,8 +420,6 @@ let
     {
       binary,
       packageName ? binary,
-      testTargets ? null,
-      doctestTargets ? null,
       includeTestCases ? true,
       meta ? { },
       passthru ? { },
@@ -433,12 +428,10 @@ let
       rootDrv =
         workspace.binaries.${binary}
           or (throw "selectBinaryWithTests: no binary `${binary}` in workspace; available: ${
-            lib.concatStringsSep ", " (builtins.attrNames (workspace.binaries or { }))
+            lib.concatStringsSep ", " (attrNames (workspace.binaries or { }))
           }");
       inherit
         packageName
-        testTargets
-        doctestTargets
         includeTestCases
         meta
         passthru
@@ -460,8 +453,6 @@ let
     {
       library,
       packageName,
-      testTargets ? null,
-      doctestTargets ? null,
       includeTestCases ? true,
       meta ? { },
       passthru ? { },
@@ -470,12 +461,10 @@ let
       rootDrv =
         workspace.libraries.${library}
           or (throw "selectLibraryWithTests: no library `${library}` in workspace; available: ${
-            lib.concatStringsSep ", " (builtins.attrNames (workspace.libraries or { }))
+            lib.concatStringsSep ", " (attrNames (workspace.libraries or { }))
           }");
       inherit
         packageName
-        testTargets
-        doctestTargets
         includeTestCases
         meta
         passthru
@@ -492,8 +481,6 @@ let
       rootDrv,
       packageName,
       defaultTestTargets,
-      testTargets ? null,
-      doctestTargets ? null,
       includeTestCases ? true,
       meta ? { },
       passthru ? { },
@@ -502,24 +489,16 @@ let
       uncheckedRoot = rootDrv.passthru.unchecked or rootDrv;
       namesForPackage =
         attrName: fallback:
-        if builtins.hasAttr attrName workspace && builtins.hasAttr packageName workspace.${attrName} then
+        if hasAttr attrName workspace && hasAttr packageName workspace.${attrName} then
           workspace.${attrName}.${packageName}
         else
           fallback;
-      selectedTestTargets =
-        if testTargets == null then
-          namesForPackage "testTargetNamesByPackage" defaultTestTargets
-        else
-          testTargets;
-      selectedDoctestTargets =
-        if doctestTargets == null then
-          namesForPackage "doctestTargetNamesByPackage" [ ]
-        else
-          doctestTargets;
+      selectedTestTargets = namesForPackage "testTargetNamesByPackage" defaultTestTargets;
+      selectedDoctestTargets = namesForPackage "doctestTargetNamesByPackage" [ ];
       flattenAllTargets =
         prefix: targetNames: targets:
         lib.mapAttrs' (targetName: target: lib.nameValuePair "${prefix}${targetName}-all" target.all) (
-          lib.getAttrs (builtins.filter (name: targets ? ${name}) targetNames) targets
+          lib.getAttrs (filter (name: targets ? ${name}) targetNames) targets
         );
       flattenCaseTargets =
         prefix: targetNames: targets:
@@ -529,16 +508,15 @@ let
             case: drv:
             lib.nameValuePair "${prefix}${targetName}-${lib.replaceStrings [ "::" ] [ "-" ] case}" drv
           ) (target.cases or { })
-        ) (lib.getAttrs (builtins.filter (name: targets ? ${name}) targetNames) targets);
+        ) (lib.getAttrs (filter (name: targets ? ${name}) targetNames) targets);
       # Per-crate policy gates. Each crate gets its own clippy and
       # unused-crate-dependency check (referencing only its own units) instead of
       # the workspace-wide aggregates, so editing one crate rebuilds only its own
       # checks. cargoAudit is lockfile-scoped (one Cargo.lock) and is exposed once
       # at the workspace level rather than aliased onto every crate.
-      # `buildWorkspace` always sets `policy` via `resolvePolicy`, so the policy
-      # flags are present. The per-package maps come from the nix-cargo-unit
-      # renderer and are genuinely absent when it emitted none, so those stay
-      # guarded.
+      # `buildWorkspace` always sets `policy`, so the policy flags are present.
+      # The per-package maps come from the nix-cargo-unit renderer and are
+      # genuinely absent when it emitted none, so those stay guarded.
       policyChecks =
         lib.optionalAttrs (
           workspace.policy.clippy.enable && (workspace.clippyByPackage or { }) ? ${packageName}
@@ -583,13 +561,13 @@ let
       ...
     }@args:
     let
-      workspace = buildWorkspace (builtins.removeAttrs args [ "binaries" ]);
+      workspace = buildWorkspace (removeAttrs args [ "binaries" ]);
     in
     lib.genAttrs binaries (
       binary:
       workspace.binaries.${binary}
         or (throw "buildBinaries: no binary `${binary}` in workspace; available: ${
-          lib.concatStringsSep ", " (builtins.attrNames (workspace.binaries or { }))
+          lib.concatStringsSep ", " (attrNames (workspace.binaries or { }))
         }")
     );
 
@@ -674,7 +652,7 @@ let
       # The renderer underscores the Cargo target name for on-disk artifacts
       # (`render.rs:1376`). Mirror that exactly so the rlib filename and the
       # `extern-path` contents match what a from-source unit would produce.
-      libName = builtins.replaceStrings [ "-" ] [ "_" ] name;
+      libName = replaceStrings [ "-" ] [ "_" ] name;
     in
     assert lib.assertMsg (toolchainId == expectedToolchainId) ''
       cargoUnit.mkPrebuiltLibraryUnit: toolchainId mismatch for `${name}`.
@@ -685,12 +663,12 @@ let
     # M2: this builder is rlib-only (the filename and extern-path hardcode
     # `.rlib`). Reject an artifact that is clearly not an rlib/rmeta so a
     # cdylib/staticlib/proc-macro mistake fails loud at eval, not at link.
-    assert lib.assertMsg (lib.hasSuffix ".rlib" (builtins.toString rlib)) ''
-      cargoUnit.mkPrebuiltLibraryUnit: `rlib` for `${name}` must be a .rlib path; got ${builtins.toString rlib}.
+    assert lib.assertMsg (lib.hasSuffix ".rlib" (toString rlib)) ''
+      cargoUnit.mkPrebuiltLibraryUnit: `rlib` for `${name}` must be a .rlib path; got ${toString rlib}.
       Only plain rlib libraries are supported (not cdylib/staticlib/proc-macro).
     '';
-    assert lib.assertMsg (lib.hasSuffix ".rmeta" (builtins.toString rmeta)) ''
-      cargoUnit.mkPrebuiltLibraryUnit: `rmeta` for `${name}` must be a .rmeta path; got ${builtins.toString rmeta}.
+    assert lib.assertMsg (lib.hasSuffix ".rmeta" (toString rmeta)) ''
+      cargoUnit.mkPrebuiltLibraryUnit: `rmeta` for `${name}` must be a .rmeta path; got ${toString rmeta}.
     '';
     pkgs.runCommand "cargo-unit-prebuilt-${name}-${version}-${hash}"
       {
@@ -709,13 +687,12 @@ let
       }
       ''
         mkdir -p "$out/lib" "$out/nix-support"
-        cp ${lib.escapeShellArg (builtins.toString rlib)} "$out/lib/lib${libName}-${hash}.rlib"
-        cp ${lib.escapeShellArg (builtins.toString rmeta)} "$out/lib/lib${libName}-${hash}.rmeta"
+        cp ${lib.escapeShellArg (toString rlib)} "$out/lib/lib${libName}-${hash}.rlib"
+        cp ${lib.escapeShellArg (toString rmeta)} "$out/lib/lib${libName}-${hash}.rmeta"
         # Same artifact priority as render.rs:1387-1398 (.rlib wins over .rmeta).
         printf '%s\n' "$out/lib/lib${libName}-${hash}.rlib" > "$out/nix-support/extern-path"
         ${lib.concatMapStringsSep "\n" (
-          dep:
-          ''printf '%s\n' ${lib.escapeShellArg (builtins.toString dep)} >> "$out/nix-support/dependency-units"''
+          dep: ''printf '%s\n' ${lib.escapeShellArg (toString dep)} >> "$out/nix-support/dependency-units"''
         ) depUnits}
       '';
 in

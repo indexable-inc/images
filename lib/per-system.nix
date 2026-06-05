@@ -370,27 +370,23 @@ let
         let
           units = crossWorkspace.unitsFor { inherit target; };
         in
-        lib.listToAttrs (
-          map (
-            binary:
-            lib.nameValuePair "${binary}-${target}" (
-              units.binaries.${binary} or (throw "cross: workspace has no binary `${binary}` for ${target}")
-            )
-          ) crossBinaries
+        lib.genAttrs' crossBinaries (
+          binary:
+          lib.nameValuePair "${binary}-${target}" (
+            units.binaries.${binary} or (throw "cross: workspace has no binary `${binary}` for ${target}")
+          )
         )
       ) crossTargets
     )
   );
 
-  repoFlakePackages = lib.listToAttrs (
-    map (
-      entry:
-      lib.nameValuePair entry.flake.attrName (
-        lib.attrByPath entry.packageSet.attrPath
-          (throw "packages/${entry.relativePath}/package.nix: flake output `${entry.flake.attrName}` needs packageSet.attrPath")
-          repoPackages
-      )
-    ) (packageRegistry.flakeEntriesFor system)
+  repoFlakePackages = lib.genAttrs' (packageRegistry.flakeEntriesFor system) (
+    entry:
+    lib.nameValuePair entry.flake.attrName (
+      lib.attrByPath entry.packageSet.attrPath
+        (throw "packages/${entry.relativePath}/package.nix: flake output `${entry.flake.attrName}` needs packageSet.attrPath")
+        repoPackages
+    )
   );
 
   rustPackageTestSets =
@@ -504,16 +500,14 @@ let
     in
     lib.concatMapAttrs (
       name: fleet:
-      lib.listToAttrs (
-        map (sub: {
-          name = "${name}-${sub}";
-          value = fleet.${sub}.overrideAttrs (old: {
-            meta = (old.meta or { }) // {
-              description = "Run `ix fleet ${sub}` against the ${name} example fleet";
-            };
-          });
-        }) fleetSubs
-      )
+      lib.genAttrs' fleetSubs (sub: {
+        name = "${name}-${sub}";
+        value = fleet.${sub}.overrideAttrs (old: {
+          meta = (old.meta or { }) // {
+            description = "Run `ix fleet ${sub}` against the ${name} example fleet";
+          };
+        });
+      })
     ) exampleFleets;
 
   healthChecks =
@@ -799,6 +793,13 @@ in
   # tango is already a workspace dependency (built per-crate by cargo-unit); the
   # shell adds the out-of-process profilers a bench author reaches for.
   devShells = {
+    default = pkgs.mkShellNoCC {
+      packages = [
+        pkgs.ast-grep
+        pkgs.nixfmt
+      ];
+    };
+
     bench = pkgs.mkShellNoCC {
       packages = [
         indexbench

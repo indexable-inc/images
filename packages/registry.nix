@@ -137,7 +137,7 @@ let
   duplicateIds = lib.filter (id: builtins.length (lib.filter (candidate: candidate == id) ids) > 1) (
     lib.unique ids
   );
-  byId = lib.listToAttrs (map (entry: lib.nameValuePair entry.id entry) entries);
+  byId = lib.genAttrs' entries (entry: lib.nameValuePair entry.id entry);
 
   enabledForSystem =
     system: value:

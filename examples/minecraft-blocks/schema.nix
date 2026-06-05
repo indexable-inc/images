@@ -124,7 +124,7 @@ let
   # scale keeps the default; this is an example sized to show the mechanism.
   indexGranularity = 256;
 
-  mortonFields = lib.sort (a: b: a.mortonAxis < b.mortonAxis) (lib.filter (f: f ? mortonAxis) fields);
+  mortonFields = lib.sortOn (f: f.mortonAxis) (lib.filter (f: f ? mortonAxis) fields);
   axisCount = builtins.length mortonFields;
 
   # `mortonEncode((1,1,...), shifted_x, shifted_y, shifted_z)`. The mask tuple
