@@ -19,32 +19,27 @@ fn main() {
     println!("cargo:rerun-if-env-changed=KRUN_EFI_FIRMWARE");
     println!("cargo:rerun-if-env-changed=VMKIT_LINK_LIBKRUN");
 
-    // `CARGO_CFG_TARGET_OS` is the target, set by cargo for the build script.
+    // `CARGO_CFG_TARGET_OS` is the target, set by cargo for the build script. The
+    // link search path and rpath for `-lkrun` are added by the workspace build
+    // (lib/rust/workspace.nix), because a build script's `rustc-link-search` does
+    // not reach the final unit link in the repo's cargo-unit graph; the `-l` does.
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    match target_os.as_str() {
-        "macos" => {
-            // libkrun-efi: needs the embedded OVMF firmware. The link search path
-            // and rpath are added by the workspace build (lib/rust/workspace.nix),
-            // because a build script's `rustc-link-search` does not reach the final
-            // unit link in the repo's cargo-unit graph; the `-l` directive does.
-            if let Ok(firmware) = std::env::var("KRUN_EFI_FIRMWARE") {
-                println!("cargo:rustc-cfg=have_libkrun");
-                // `-lkrun` resolves to `libkrun-efi.dylib` via the nix package.
-                println!("cargo:rustc-link-lib=dylib=krun");
-                // Forward the firmware path to a compile-time env so `linuxkrun.rs`
-                // can `include_bytes!` it (self-contained across the self-sign
-                // re-exec).
-                println!("cargo:rustc-env=KRUN_EFI_FIRMWARE={firmware}");
-            }
-        }
-        "linux" => {
-            // classic libkrun (KVM): no firmware. `-lkrun` resolves to `libkrun.so`;
-            // the search path/rpath come from the workspace build.
-            if std::env::var_os("VMKIT_LINK_LIBKRUN").is_some() {
-                println!("cargo:rustc-cfg=have_libkrun");
-                println!("cargo:rustc-link-lib=dylib=krun");
-            }
-        }
-        _ => {}
+
+    // macOS: libkrun-efi, which needs the embedded OVMF firmware. `-lkrun`
+    // resolves to `libkrun-efi.dylib`. Forward the firmware path to a compile-time
+    // env so `linuxkrun.rs` can `include_bytes!` it (self-contained across the
+    // self-sign re-exec).
+    if target_os == "macos"
+        && let Ok(firmware) = std::env::var("KRUN_EFI_FIRMWARE")
+    {
+        println!("cargo:rustc-cfg=have_libkrun");
+        println!("cargo:rustc-link-lib=dylib=krun");
+        println!("cargo:rustc-env=KRUN_EFI_FIRMWARE={firmware}");
+    }
+
+    // Linux: classic libkrun (KVM), no firmware. `-lkrun` resolves to `libkrun.so`.
+    if target_os == "linux" && std::env::var_os("VMKIT_LINK_LIBKRUN").is_some() {
+        println!("cargo:rustc-cfg=have_libkrun");
+        println!("cargo:rustc-link-lib=dylib=krun");
     }
 }

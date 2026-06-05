@@ -53,6 +53,10 @@ pub enum Error {
          or a Linux host without access to /dev/kvm)"
     ))]
     Libkrun { op: String, code: i32 },
+    // Only the stub `boot_linux` constructs this; gate it to the same cfg so a
+    // `have_libkrun` build (where the stub is absent) does not carry an unused
+    // variant (a binary crate lints unused enum variants as dead code).
+    #[cfg(not(have_libkrun))]
     #[snafu(display(
         "boot-linux: the libkrun backend was not built into this binary \
          (it links libkrun only on a native aarch64-darwin or Linux build)"
