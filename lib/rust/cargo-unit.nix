@@ -337,9 +337,11 @@ let
     changes (profile, policy, rustToolchain, env, extraRustcArgs). Top-level
     `binaries`/`libraries` dedupe by Cargo target name and the first
     `cargoTargets` entry wins, so when one crate roots under several entries,
-    select through `targetSets.<set>` instead. The exception to per-root
-    laziness is `tests.<target>.cases`, whose shared manifest IFD builds every
-    test binary in the graph.
+    select through `targetSets.<set>` instead. Per-case discovery is the
+    exception to per-root laziness: `tests.<target>.cases` uses a shared
+    manifest IFD that builds every test binary in the graph, and
+    `doctests.<target>.cases` uses a shared doctest manifest covering every
+    doctest target.
     Include `--benches` or `--bench <name>` to expose `[[bench]]` roots under
     `benchmarks` and `benchmarkPlan`. Tango benches can compare previous and
     next artifacts with `next.compareTangoBenchmarks { baseline = previous; }`,
