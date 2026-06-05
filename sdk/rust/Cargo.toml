@@ -19,6 +19,26 @@ members = [
 ]
 resolver = "3"
 
+# `public-rlib` inherits `release`, and the cargo-unit hash folds in
+# debug-assertions and overflow-checks, which `public-rlib` does NOT override.
+# ix's `[profile.release]` turns BOTH on, so this workspace's release base must
+# match or the inherited values (false by default) would diverge the hash. Only
+# the two hash-relevant inherited fields are mirrored; every other release field
+# ix sets (incremental, debug, split-debuginfo) is explicitly overridden by
+# `public-rlib` below, and trim-paths is not a cargo-unit hash input.
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+# Third-party crates (snafu, strum, and the rest of the closure) get assertions
+# off, mirroring ix's `[profile.release.package."*"]`. Without this, the closure
+# crates would inherit the member-level `debug-assertions = true` above and their
+# unit hashes would diverge from ix's (snafu/strum carry da=false there), which
+# in turn would diverge the dependent `ix-sdk-wire` hash.
+[profile.release.package."*"]
+debug-assertions = false
+overflow-checks = false
+
 # Profile under which the R2-hosted `ix-sdk-wire` rlib was compiled in the ix
 # repo. The cargo-unit hash folds in the profile, so the public SDK workspace
 # MUST build under this exact profile for the stub's generated unit key to equal
