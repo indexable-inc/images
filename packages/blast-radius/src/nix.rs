@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::process::Command;
 
 use color_eyre::eyre::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::causes::{DrvNode, Graph};
 
@@ -20,9 +20,6 @@ const EVAL_JOBS: &str =
     "github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7";
 
 /// One evaluated check: its attribute name and the derivation it builds.
-/// `Serialize`/`Deserialize` so a base eval can be cached on disk by SHA (see
-/// `cache`); `PartialEq`/`Eq` back the cache round-trip test.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Check {
     pub attr: String,
     pub drv_path: String,
@@ -32,7 +29,7 @@ pub struct Check {
 /// just the name) so a fail-closed bail on a head regression can print WHY it
 /// failed: per-attr eval failures exit nix-eval-jobs 0, so the error text is
 /// otherwise never surfaced in CI logs.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct EvalFailure {
     pub attr: String,
     pub error: String,
@@ -42,7 +39,6 @@ pub struct EvalFailure {
 /// checks, plus the attrs that failed to evaluate there (no derivation, so not a
 /// rebuild target). The caller diffs `failures` across base and head to tell a
 /// pre-existing catalog failure (tolerated) from one this change introduced.
-#[derive(Debug, PartialEq, Eq)]
 pub struct EvalResult {
     pub checks: Vec<Check>,
     pub failures: Vec<EvalFailure>,
@@ -124,13 +120,10 @@ pub fn eval_checks(repo: &str, rev: &str) -> Result<EvalResult> {
         "--option",
         "extra-experimental-features",
         "ca-derivations",
-        // The eval cache is left ON. It is keyed by the locked flake fingerprint,
-        // and the flakeref above pins an immutable `?rev=<sha>` whose evaluation
-        // is deterministic, so a cache entry for that rev can never be "stale":
-        // it is exactly what a fresh eval would produce. Disabling it only forced
-        // a full from-cold re-eval of the whole catalog every run. The runner's
-        // `$HOME/.cache/nix` persists across jobs, so reruns of the same rev (and
-        // the per-attr re-instantiation in `derivation_graph_for_attrs`) hit it.
+        // A stale eval cache would mask a real rebuild; force a fresh eval.
+        "--option",
+        "eval-cache",
+        "false",
     ]))
     .with_context(|| format!("evaluate checks at {rev}"))?;
 
@@ -219,13 +212,10 @@ struct ShowInputs {
     drvs: BTreeMap<String, serde_json::Value>,
 }
 
-/// Run `nix derivation show --recursive` over the given installables (either
-/// `.drv` store paths or flakeref attrs) and parse the graph keyed by `.drv`
-/// basename. `flakes` and `accept-flake-config` are enabled so a flakeref
-/// installable (the cache-hit path) evaluates; they are harmless for store-path
-/// installables.
-fn derivation_show(installables: &[String]) -> Result<Graph> {
-    if installables.is_empty() {
+/// Load the recursive derivation graph rooted at `drv_paths`, keyed by `.drv`
+/// basename. Used to walk down to the changed frontier.
+pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
+    if drv_paths.is_empty() {
         return Ok(Graph::new());
     }
     let mut args = vec![
@@ -233,12 +223,9 @@ fn derivation_show(installables: &[String]) -> Result<Graph> {
         "show".to_owned(),
         "--recursive".to_owned(),
         "--extra-experimental-features".to_owned(),
-        "nix-command flakes ca-derivations".to_owned(),
-        "--option".to_owned(),
-        "accept-flake-config".to_owned(),
-        "true".to_owned(),
+        "nix-command ca-derivations".to_owned(),
     ];
-    args.extend(installables.iter().cloned());
+    args.extend(drv_paths.iter().cloned());
     let stdout = run(Command::new("nix").args(&args)).context("nix derivation show --recursive")?;
 
     let output: ShowOutput =
@@ -254,52 +241,6 @@ fn derivation_show(installables: &[String]) -> Result<Graph> {
         .collect())
 }
 
-/// Load the recursive derivation graph rooted at `drv_paths` (store paths),
-/// keyed by `.drv` basename. Used to walk down to the changed frontier when the
-/// roots' `.drv`s are already in the store (a freshly evaluated rev).
-pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
-    derivation_show(drv_paths)
-}
-
-/// Like `derivation_graph`, but addresses checks by attribute at `rev` rather
-/// than by `.drv` path. Used when the base eval was served from cache: the base
-/// eval was skipped, so the changed checks' base `.drv`s are not guaranteed to be
-/// in the store. `nix derivation show` on a flakeref attr re-instantiates just
-/// those few attrs and prints their graph, so only the changed frontier is
-/// re-evaluated, not the whole catalog.
-pub fn derivation_graph_for_attrs(repo: &str, rev: &str, attrs: &[String]) -> Result<Graph> {
-    let installables: Vec<String> = attrs
-        .iter()
-        .map(|attr| {
-            format!(
-                "git+file://{repo}?rev={rev}&allRefs=1#checks.x86_64-linux.{}",
-                attr_fragment_segment(attr)
-            )
-        })
-        .collect();
-    derivation_show(&installables)
-}
-
-/// Render `attr` as a flake-fragment attr-path segment, quoting only when the
-/// name is not a bare segment (starts with a digit, or holds a char outside
-/// `[A-Za-z0-9_-]` such as a `.`). Bare segments are left unquoted on purpose: a
-/// quoted fragment trips a flakeref-parsing regression in some post-2.30 nix
-/// nightlies (NixOS/nix#13772), and real check names (`rust-test-*`,
-/// `eval-nixos-*`, `image-*`) are always bare, so the quoted form is reserved for
-/// the rare attr that genuinely needs it.
-fn attr_fragment_segment(attr: &str) -> String {
-    let bare = !attr.is_empty()
-        && !attr.starts_with(|c: char| c.is_ascii_digit())
-        && attr
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if bare {
-        attr.to_owned()
-    } else {
-        format!("\"{attr}\"")
-    }
-}
-
 /// Look up the derivation path for an attribute name in an evaluated set.
 pub fn drv_for(checks: &[Check], attr: &str) -> Option<String> {
     checks
@@ -310,22 +251,7 @@ pub fn drv_for(checks: &[Check], attr: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EvalFailure, attr_fragment_segment, drv_name, partition_eval_rows};
-
-    // Real check names are bare (no quoting), so the cache-hit cause path never
-    // emits a quoted flake fragment for them; only a name that truly needs it
-    // (a dot, or a leading digit) is quoted.
-    #[test]
-    fn attr_fragment_quotes_only_when_needed() {
-        assert_eq!(attr_fragment_segment("rust-test-foo"), "rust-test-foo");
-        assert_eq!(
-            attr_fragment_segment("eval-nixos-hil-compute-2"),
-            "eval-nixos-hil-compute-2"
-        );
-        assert_eq!(attr_fragment_segment("image_bar"), "image_bar");
-        assert_eq!(attr_fragment_segment("weird.attr"), "\"weird.attr\"");
-        assert_eq!(attr_fragment_segment("3leading"), "\"3leading\"");
-    }
+    use super::{EvalFailure, drv_name, partition_eval_rows};
 
     #[test]
     fn drv_name_strips_hash_and_suffix() {
