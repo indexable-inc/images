@@ -151,6 +151,10 @@ pub async fn read_documents(config: &Config) -> Result<Vec<Document>> {
 /// Lists `<prefix>` and, for each object whose key ends in `/data.parquet`,
 /// fetches the bytes and parses them. The `_manifest.json` sidecar and any other
 /// object under the prefix are skipped.
+///
+/// # Errors
+/// Returns an error if the store cannot be listed, an object cannot be read, or a
+/// data file cannot be parsed as the corpus parquet schema.
 pub async fn read_from_store(store: &dyn ObjectStore, prefix: &str) -> Result<Vec<Document>> {
     let mut documents = Vec::new();
     let mut listing = store.list(Some(&ObjectPath::from(prefix)));
