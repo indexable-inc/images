@@ -270,9 +270,34 @@ pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
 pub fn derivation_graph_for_attrs(repo: &str, rev: &str, attrs: &[String]) -> Result<Graph> {
     let installables: Vec<String> = attrs
         .iter()
-        .map(|attr| format!("git+file://{repo}?rev={rev}&allRefs=1#checks.x86_64-linux.\"{attr}\""))
+        .map(|attr| {
+            format!(
+                "git+file://{repo}?rev={rev}&allRefs=1#checks.x86_64-linux.{}",
+                attr_fragment_segment(attr)
+            )
+        })
         .collect();
     derivation_show(&installables)
+}
+
+/// Render `attr` as a flake-fragment attr-path segment, quoting only when the
+/// name is not a bare segment (starts with a digit, or holds a char outside
+/// `[A-Za-z0-9_-]` such as a `.`). Bare segments are left unquoted on purpose: a
+/// quoted fragment trips a flakeref-parsing regression in some post-2.30 nix
+/// nightlies (NixOS/nix#13772), and real check names (`rust-test-*`,
+/// `eval-nixos-*`, `image-*`) are always bare, so the quoted form is reserved for
+/// the rare attr that genuinely needs it.
+fn attr_fragment_segment(attr: &str) -> String {
+    let bare = !attr.is_empty()
+        && !attr.starts_with(|c: char| c.is_ascii_digit())
+        && attr
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if bare {
+        attr.to_owned()
+    } else {
+        format!("\"{attr}\"")
+    }
 }
 
 /// Look up the derivation path for an attribute name in an evaluated set.
@@ -285,7 +310,22 @@ pub fn drv_for(checks: &[Check], attr: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EvalFailure, drv_name, partition_eval_rows};
+    use super::{EvalFailure, attr_fragment_segment, drv_name, partition_eval_rows};
+
+    // Real check names are bare (no quoting), so the cache-hit cause path never
+    // emits a quoted flake fragment for them; only a name that truly needs it
+    // (a dot, or a leading digit) is quoted.
+    #[test]
+    fn attr_fragment_quotes_only_when_needed() {
+        assert_eq!(attr_fragment_segment("rust-test-foo"), "rust-test-foo");
+        assert_eq!(
+            attr_fragment_segment("eval-nixos-hil-compute-2"),
+            "eval-nixos-hil-compute-2"
+        );
+        assert_eq!(attr_fragment_segment("image_bar"), "image_bar");
+        assert_eq!(attr_fragment_segment("weird.attr"), "\"weird.attr\"");
+        assert_eq!(attr_fragment_segment("3leading"), "\"3leading\"");
+    }
 
     #[test]
     fn drv_name_strips_hash_and_suffix() {
