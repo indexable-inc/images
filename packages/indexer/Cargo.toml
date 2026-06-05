@@ -36,4 +36,5 @@ dirs.workspace = true
 nix = { workspace = true, features = ["hostname"] }
 
 [dev-dependencies]
+rusqlite = { workspace = true, features = ["bundled"] }
 tempfile.workspace = true

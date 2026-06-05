@@ -49,6 +49,38 @@ fn skips_deleted_and_empty_commands() {
 }
 
 #[test]
+fn uninitialized_db_is_a_typed_skip() {
+    // atuin creates the db file before its first-run migration adds the
+    // `history` table, so a freshly-seen account can have a db with no tables.
+    // Opening it must yield the typed `UninitializedDb` skip (so the fleet
+    // indexer treats it as a soft, non-fatal skip), not a generic query error.
+    let path = std::env::temp_dir().join("source-atuin-test-uninit.db");
+    let _ = std::fs::remove_file(&path);
+    // Create an empty db (a connection with no schema), matching atuin's
+    // pre-migration state.
+    Connection::open(&path).expect("create empty db");
+
+    let error = AtuinHistory::open(&path).expect_err("uninitialized db must error");
+    assert!(error.is_uninitialized(), "expected UninitializedDb, got {error:?}");
+    assert!(
+        error.to_string().contains("uninitialized"),
+        "skip message should explain the db is uninitialized: {error}"
+    );
+}
+
+#[test]
+fn corrupt_db_is_not_a_skip() {
+    // A genuine failure (a file that is not a valid sqlite db) must remain a
+    // hard error so real-error reporting is preserved; only the uninitialized
+    // case is downgraded to a skip.
+    let path = std::env::temp_dir().join("source-atuin-test-corrupt.db");
+    std::fs::write(&path, b"this is not a sqlite database").expect("write garbage");
+
+    let error = AtuinHistory::open(&path).expect_err("corrupt db must error");
+    assert!(!error.is_uninitialized(), "a corrupt db must not be treated as a soft skip: {error:?}");
+}
+
+#[test]
 fn documents_carry_shell_source_and_tags() {
     let history = open_fixture("tags");
     assert_eq!(history.source(), Source::new("shell"));

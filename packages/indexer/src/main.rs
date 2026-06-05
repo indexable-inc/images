@@ -137,10 +137,17 @@ struct Mixedbread<'a> {
     name: &'a str,
 }
 
-/// Per-run tally of how many sources were indexed versus failed.
+/// Per-run tally of how many sources were indexed, soft-skipped, or failed.
+///
+/// `skipped` counts sources that were deliberately and visibly passed over for a
+/// benign reason (e.g. an atuin db file that exists but has no `history` table
+/// because that account never ran atuin). A soft skip is logged but never gates
+/// the run's exit code — only `failures` does — so one uninitialized per-user
+/// history db cannot degrade the whole indexing unit.
 #[derive(Clone, Copy)]
 struct Counts {
     indexed: usize,
+    skipped: usize,
     failures: usize,
 }
 
@@ -215,13 +222,21 @@ async fn main() -> anyhow::Result<()> {
 
 /// Turn the per-run counts into the process result: success only when no source
 /// failed, so a partial failure is a non-zero exit the timer/operator can see.
+///
+/// Soft skips (e.g. an uninitialized atuin db, counted in `skipped`) never gate
+/// the exit code — only genuine `failures` do — so one account whose history db
+/// has no `history` table cannot degrade the whole indexing unit.
 fn finish(counts: Counts) -> anyhow::Result<()> {
+    if counts.skipped > 0 {
+        eprintln!("[indexer] {} source(s) soft-skipped (uninitialized/empty)", counts.skipped);
+    }
     if counts.failures > 0 {
         anyhow::bail!(
-            "{} of {} source(s) failed; {} succeeded",
+            "{} of {} source(s) failed; {} succeeded, {} skipped",
             counts.failures,
             counts.indexed + counts.failures,
-            counts.indexed
+            counts.indexed,
+            counts.skipped
         );
     }
     Ok(())
@@ -256,7 +271,7 @@ async fn run_sources(
     let codex = cli.codex_file.clone().or_else(|| cli.local.then(|| default(".codex/history.jsonl")).flatten());
     let atuin = cli.atuin_db.clone().or_else(|| cli.local.then(|| default(".local/share/atuin/history.db")).flatten());
 
-    let mut counts = Counts { indexed: 0, failures: 0 };
+    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
     if let Some(dir) = claude {
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open(&dir)
@@ -276,13 +291,15 @@ async fn run_sources(
         record("codex", result, &mut counts);
     }
     if let Some(db) = atuin {
-        let result = async {
-            let adapter = source_atuin::AtuinHistory::open(&db)
-                .with_context(|| format!("reading atuin history at {}", db.display()))?;
-            run_source("shell", &adapter, None, None, otlp).await
+        match open_atuin("shell", &db, &mut counts) {
+            Ok(Atuin::Ready(adapter)) => {
+                let result = run_source("shell", &adapter, None, None, otlp).await;
+                record("shell", result, &mut counts);
+            }
+            // An uninitialized db is already logged and tallied as a soft skip.
+            Ok(Atuin::Skipped) => {}
+            Err(error) => record("shell", Err(error), &mut counts),
         }
-        .await;
-        record("shell", result, &mut counts);
     }
     if let Some(dir) = &cli.slack_export {
         let result = async {
@@ -381,7 +398,7 @@ impl SourceAdapter for VecSource {
 /// ingestion did, so a consumed record dedups against its own source and never
 /// touches another's.
 async fn run_consume(config: &source_otlp::Config, mixedbread: Mixedbread<'_>) -> Counts {
-    let mut counts = Counts { indexed: 0, failures: 0 };
+    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
     let documents = match source_otlp::read_documents(config).await {
         Ok(documents) => documents,
         Err(error) => {
@@ -460,16 +477,19 @@ async fn index_user(
     }
 
     // atuin records its own `host`/`user` in each row, so it self-tags per user
-    // regardless of who runs the process.
+    // regardless of who runs the process. An account whose db file exists but
+    // was never initialized by atuin (no `history` table) is a soft skip, so one
+    // such account cannot fail the whole fleet run (ENG-2141).
     if let Some(atuin_db) = safe_path_under(home, &[".local", "share", "atuin", "history.db"], false) {
         let label = format!("shell:{name}");
-        let result = async {
-            let adapter = source_atuin::AtuinHistory::open(&atuin_db)
-                .with_context(|| format!("reading atuin history for {name} at {}", atuin_db.display()))?;
-            run_source(&label, &adapter, None, None, otlp).await
+        match open_atuin(&label, &atuin_db, counts) {
+            Ok(Atuin::Ready(adapter)) => {
+                let result = run_source(&label, &adapter, None, None, otlp).await;
+                record(&label, result, counts);
+            }
+            Ok(Atuin::Skipped) => {}
+            Err(error) => record(&label, Err(error), counts),
         }
-        .await;
-        record(&label, result, counts);
     }
 
     // Claude debug logs (`~/.claude/debug/<session>.txt`), present only for
@@ -600,6 +620,37 @@ fn record(label: &str, result: anyhow::Result<()>, counts: &mut Counts) {
     }
 }
 
+/// The outcome of opening one atuin db: a parsed source to index, or a logged,
+/// non-fatal skip already tallied into [`Counts::skipped`].
+enum Atuin {
+    /// The db opened and its `history` table was read.
+    Ready(source_atuin::AtuinHistory),
+    /// The db was uninitialized (no `history` table) and is being skipped.
+    Skipped,
+}
+
+/// Open one atuin history db, folding the "uninitialized db" case into a logged
+/// soft skip rather than a hard error.
+///
+/// The fleet run reads every account's history; an account that has an atuin db
+/// file but never ran atuin has a db with no `history` table. That is a benign,
+/// expected state — not a read failure — so it is recorded in
+/// [`Counts::skipped`] and never gates the unit's exit code. Any other open
+/// failure (a corrupt db, a permissions error) is still returned for the caller
+/// to record as a genuine failure, preserving real-error reporting.
+fn open_atuin(label: &str, db: &Path, counts: &mut Counts) -> anyhow::Result<Atuin> {
+    match source_atuin::AtuinHistory::open(db) {
+        Ok(history) => Ok(Atuin::Ready(history)),
+        Err(error) if error.is_uninitialized() => {
+            eprintln!("[{label}] skipped: {error} ({db})", db = db.display());
+            counts.skipped += 1;
+            Ok(Atuin::Skipped)
+        }
+        Err(error) => Err(anyhow::Error::new(error)
+            .context(format!("reading atuin history at {}", db.display()))),
+    }
+}
+
 /// Fan one source out to every enabled sink.
 ///
 /// The parquet archive runs FIRST and the two sinks are INDEPENDENT: a slow or
@@ -677,7 +728,47 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use super::{archive_prefix, parse_user, safe_path_under};
+    use super::{Atuin, Counts, archive_prefix, finish, open_atuin, parse_user, safe_path_under};
+
+    /// Create a valid sqlite db with no `history` table at `path`, mirroring
+    /// atuin's pre-first-run state (the file exists before migrations add tables).
+    fn make_uninitialized_db(path: &std::path::Path) {
+        rusqlite::Connection::open(path).expect("create empty sqlite db");
+    }
+
+    #[test]
+    fn uninitialized_atuin_db_is_soft_skipped_and_run_succeeds() {
+        // ENG-2141: one account whose atuin db exists but has no `history` table
+        // (atuin never ran there) must be a logged soft skip, not a failure, so
+        // the whole indexing unit still succeeds.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = temp.path().join("history.db");
+        make_uninitialized_db(&db);
+
+        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        let outcome = open_atuin("shell:tester", &db, &mut counts).expect("uninitialized db is not an error");
+
+        assert!(matches!(outcome, Atuin::Skipped), "uninitialized db must be skipped");
+        assert_eq!(counts.skipped, 1, "the skip must be tallied");
+        assert_eq!(counts.failures, 0, "an uninitialized db must not count as a failure");
+        // The run as a whole still succeeds: no failures means a zero exit.
+        assert!(finish(counts).is_ok(), "a soft-skipped source must not fail the run");
+    }
+
+    #[test]
+    fn missing_atuin_db_is_a_real_error() {
+        // A genuinely missing file (nothing to open) is a hard error so real
+        // failures are still surfaced; only the uninitialized-db case is a skip.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = temp.path().join("does-not-exist.db");
+
+        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        assert!(
+            open_atuin("shell:tester", &db, &mut counts).is_err(),
+            "a missing db file must remain a real error, not a soft skip"
+        );
+        assert_eq!(counts.skipped, 0, "a real error must not be tallied as a skip");
+    }
 
     #[test]
     fn safe_path_accepts_real_nested_dir() {

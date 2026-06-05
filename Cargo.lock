@@ -2787,6 +2787,7 @@ dependencies = [
  "dirs",
  "mixedbread",
  "nix 0.30.1",
+ "rusqlite",
  "search-core",
  "serde_json",
  "sink-mixedbread",

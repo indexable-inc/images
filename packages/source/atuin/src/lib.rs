@@ -27,7 +27,7 @@ use snafu::ResultExt as _;
 
 pub use crate::error::Error;
 pub use crate::record::Entry;
-use crate::error::{OpenDbSnafu, QuerySnafu, Result};
+use crate::error::{OpenDbSnafu, QuerySnafu, Result, UninitializedDbSnafu};
 
 /// The `source` tag every atuin command document carries. atuin records
 /// commands from every shell (nushell, zsh, bash), so one `shell` corpus covers
@@ -66,6 +66,12 @@ impl AtuinHistory {
     ///
     /// # Errors
     /// Returns an error if the database cannot be opened or queried.
+    ///
+    /// An existing db file that atuin has not yet initialized (no `history`
+    /// table — atuin creates the file before its first-run migration, or a row
+    /// has never been written) yields [`Error::UninitializedDb`] rather than a
+    /// generic query failure, so a fleet caller can skip it as a soft,
+    /// non-fatal source instead of failing the whole run.
     pub fn open(path: &Path) -> Result<Self> {
         // URI form so `immutable=1` applies; the path is the trusted db path the
         // caller resolved (no untrusted query-string injection).
@@ -75,6 +81,12 @@ impl AtuinHistory {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
         )
         .context(OpenDbSnafu { path: path.to_path_buf() })?;
+        // Distinguish an uninitialized db (file present, no `history` table) from
+        // a genuine query failure. `sqlite_master` always exists, so this probe
+        // never itself trips the "no such table" path we are guarding against.
+        if !history_table_exists(&conn)? {
+            return UninitializedDbSnafu { path: path.to_path_buf() }.fail();
+        }
         let entries = read_entries(&conn)?;
         Ok(Self { entries })
     }
@@ -111,6 +123,21 @@ impl SourceAdapter for AtuinHistory {
         // independent of `&self` (mirrors the claude/codex/slack adapters).
         self.entries.clone().into_iter().map(Entry::into_document)
     }
+}
+
+/// Whether the atuin `history` table exists. atuin creates the db file before
+/// its first migration runs, so a freshly-seen account can have a db with only
+/// the sqlite header and no tables. Querying `sqlite_master` (always present)
+/// for the table lets the caller treat that as a soft skip.
+fn history_table_exists(conn: &Connection) -> Result<bool> {
+    let count: i64 = conn
+        .query_row(
+            "select count(*) from sqlite_master where type = 'table' and name = 'history'",
+            [],
+            |row| row.get(0),
+        )
+        .context(QuerySnafu)?;
+    Ok(count > 0)
 }
 
 /// Read every non-deleted, non-empty command from the atuin `history` table.
