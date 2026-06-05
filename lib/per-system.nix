@@ -226,8 +226,9 @@ let
   agentContextClaudeMd = pkgs.writeText "CLAUDE.md" ix.agentContext.alwaysDoc;
   agentContextCodexMd = pkgs.writeText "AGENTS.md" ix.agentContext.alwaysDoc;
 
-  # One link farm holding every handwritten skill plus one generated skill per
-  # `disclosure: progressive` section, ready to symlink into `.claude/skills`.
+  # One symlink-free directory holding every handwritten skill plus one
+  # generated skill per `disclosure: progressive` section, ready to copy into
+  # `.claude/skills`.
   agentContextProgressiveSkills = ix.agentContext.mkProgressiveSkills { inherit pkgs; };
   agentContextSkillCollisions = lib.intersectLists ix.skills.allSkills (
     lib.attrNames agentContextProgressiveSkills
@@ -583,7 +584,8 @@ let
           # Instruction files are not committed; they are rendered live by the
           # SessionStart hook. This gate forces the rendered always-on documents
           # (which evaluates the always-on char cap assertion) and the combined
-          # skills link farm (which evaluates the name-collision assertion) to build.
+          # skills directory (which evaluates the name-collision assertion and
+          # the no-symlink materialization check) to build.
           agent-context = pkgs.runCommand "agent-context-check" { } ''
             test -s ${agentContextClaudeMd}
             test -s ${agentContextCodexMd}

@@ -2251,6 +2251,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "google-calendar"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "chrono",
+ "dirs",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu 0.9.1",
+ "tempfile",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "google-calendar-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "google-calendar",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"

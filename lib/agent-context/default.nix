@@ -158,7 +158,7 @@ in
     Returns an attrset from skill name to a derivation whose output is a
     directory containing `SKILL.md`. Pass it as `extraSkills` to
     `skills.mkSkillsDir` to merge generated section-skills with the handwritten
-    ones under a single `.claude/skills` link farm.
+    ones under a single `.claude/skills` directory.
 
     Arguments:
     - `pkgs`: the package set used to write the skill files.

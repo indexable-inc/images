@@ -27,6 +27,8 @@ members = [
   "packages/file-search",
   "packages/git-log-pretty",
   "packages/github-avatar",
+  "packages/google/calendar",
+  "packages/google/calendar/cli",
   "packages/indexbench",
   "packages/ix-dev-diagnose",
   "packages/kitty",
@@ -131,6 +133,7 @@ clone-scanner = { path = "packages/clone-detect/scanner" }
 code-highlight = { path = "packages/code-highlight" }
 code-tokenizer = { path = "packages/code-tokenizer" }
 github-avatar = { path = "packages/github-avatar" }
+google-calendar = { path = "packages/google/calendar" }
 indexbench = { path = "packages/indexbench" }
 kitty = { path = "packages/kitty" }
 color-eyre = "0.6"
