@@ -9,6 +9,11 @@ on:
   pull_request:
     branches:
       - main
+  # Required status for the merge queue: GitHub fires `merge_group` against a
+  # temporary `gh-readonly-queue/main/...` ref, and the `main` ruleset demands a
+  # `flake-check` status on it. Without this trigger the check never runs in the
+  # queue, so every enqueued PR stalls in AWAITING_CHECKS until it times out.
+  merge_group:
 
 permissions:
   contents: read
