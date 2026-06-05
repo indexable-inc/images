@@ -113,15 +113,20 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let revs = git::resolve(cli.base.as_deref(), cli.head.as_deref())?;
 
+    // Pick one catalog output for both revisions so their attr names line up
+    // (see nix::catalog_attr): `ciChecks` when both revs expose it, else flat
+    // `checks`. Resolved before the eval scope so base and head never mix keying.
+    let catalog = nix::catalog_attr(&revs.repo, &revs.base, &revs.head);
+
     // base and head evals are independent, so run them concurrently. Each is a
-    // full `.#checks.x86_64-linux` evaluation (~11 min on ix's ~4300 checks),
+    // full `#{catalog}.x86_64-linux` evaluation (~11 min on ix's ~4300 checks),
     // mostly blocked on the per-unit cargo IFD builds, so overlapping them
     // roughly halves the wall clock versus back-to-back. The eval cache stays
     // off (see eval_checks): with it on, two concurrent nix-eval-jobs contend on
     // the per-commit eval-cache SQLite and fail with "database is busy".
     let Evals { base, head } = std::thread::scope(|scope| -> Result<Evals> {
-        let head_eval = scope.spawn(|| nix::eval_checks(&revs.repo, &revs.head));
-        let base = nix::eval_checks(&revs.repo, &revs.base)?;
+        let head_eval = scope.spawn(|| nix::eval_checks(&revs.repo, &revs.head, catalog));
+        let base = nix::eval_checks(&revs.repo, &revs.base, catalog)?;
         let head = match head_eval.join() {
             Ok(result) => result?,
             Err(_) => bail!("head check evaluation thread panicked"),

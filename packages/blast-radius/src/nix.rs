@@ -97,19 +97,12 @@ fn run(command: &mut Command) -> Result<String> {
     String::from_utf8(output.stdout).context("command stdout was not UTF-8")
 }
 
-/// The catalog output to evaluate at `rev`, preferring the sharded `ciChecks`
-/// and falling back to the flat `checks` on revisions that predate it.
-///
-/// blast-radius diffs head against the merge base, and that base is whatever was
-/// on `main` at fork time, which can be a commit from before `ciChecks` existed.
-/// Evaluating `#ciChecks.x86_64-linux` on such a rev fails outright, so probe the
-/// flake output set cheaply (forces the `{ <system> = ...; }` spine, not the
-/// catalog) and pick the attribute that is actually present. This is a migration
-/// shim: once no base older than the `ciChecks` introduction is ever evaluated,
-/// drop the probe and target `ciChecks` directly (ENG-2201).
-fn catalog_attr(repo: &str, rev: &str) -> &'static str {
+/// Does `rev` expose the sharded `ciChecks` flake output? Probes cheaply: the
+/// `--apply builtins.isAttrs` forces only the `{ <system> = ...; }` output spine,
+/// not the catalog under it.
+fn has_ci_checks(repo: &str, rev: &str) -> bool {
     let flakeref = format!("git+file://{repo}?rev={rev}&allRefs=1#ciChecks");
-    let has_ci_checks = Command::new("nix")
+    Command::new("nix")
         .args([
             "eval",
             &flakeref,
@@ -120,26 +113,45 @@ fn catalog_attr(repo: &str, rev: &str) -> &'static str {
             "true",
         ])
         .output()
-        .is_ok_and(|out| out.status.success());
-    if has_ci_checks { "ciChecks" } else { "checks" }
+        .is_ok_and(|out| out.status.success())
 }
 
-/// Evaluate every check derivation at `rev` of the local repo.
+/// The catalog output to diff, chosen ONCE for both revisions so base and head
+/// are keyed identically.
 ///
-/// Targets `.#ciChecks` when present (see [`catalog_attr`]): `ciChecks` keys each
-/// crate's per-#[test] checks under a `recurseForDerivations` group, so
-/// `nix-eval-jobs` enumerates cheap per-package names at the root and forces each
-/// crate's manifest IFD in its own worker job. The flat `.#checks` would force
-/// every crate's manifest in the single worker assigned the root attrpath,
-/// ballooning it to tens of GiB and getting it earlyoom-killed on the shared CI
-/// host (ENG-2201). Both outputs hold the same leaf derivations, so the
-/// per-#[test] diff is identical whichever is evaluated.
+/// Prefer the sharded `ciChecks` (see [`eval_checks`]), but blast-radius diffs
+/// head against the merge base, and that base can be a commit from before
+/// `ciChecks` existed. If either revision lacks it, fall back to the flat
+/// `checks` for BOTH. Choosing per revision would key the same derivation as
+/// `rust-foo-package` at a flat base and `rust-foo.package` at a sharded head;
+/// the diff keys by attr name, so every unchanged derivation would read as
+/// removed+added and skip root-cause analysis. Migration shim: once no evaluated
+/// base predates `ciChecks`, drop the probe and target `ciChecks` directly
+/// (ENG-2201).
+pub fn catalog_attr(repo: &str, base: &str, head: &str) -> &'static str {
+    if has_ci_checks(repo, base) && has_ci_checks(repo, head) {
+        "ciChecks"
+    } else {
+        "checks"
+    }
+}
+
+/// Evaluate every check derivation at `rev` of the local repo, reading the
+/// catalog from flake output `attr` (`ciChecks` or `checks`; see
+/// [`catalog_attr`]).
+///
+/// `ciChecks` keys each crate's per-#[test] checks under a `recurseForDerivations`
+/// group, so `nix-eval-jobs` enumerates cheap per-package names at the root and
+/// forces each crate's manifest IFD in its own worker job. The flat `checks`
+/// would force every crate's manifest in the single worker assigned the root
+/// attrpath, ballooning it to tens of GiB and getting it earlyoom-killed on the
+/// shared CI host (ENG-2201). Both outputs hold the same leaf derivations, so the
+/// per-#[test] diff is identical as long as base and head use the same `attr`.
 ///
 /// `nix-eval-jobs` sits at the head of the pipeline; a startup/lock/fetch
 /// failure surfaces here rather than yielding an empty set that silently
 /// under-reports the blast radius.
-pub fn eval_checks(repo: &str, rev: &str) -> Result<EvalResult> {
-    let attr = catalog_attr(repo, rev);
+pub fn eval_checks(repo: &str, rev: &str, attr: &str) -> Result<EvalResult> {
     let flakeref = format!("git+file://{repo}?rev={rev}&allRefs=1#{attr}.x86_64-linux");
     let stdout = run(Command::new("nix").args([
         "run",
