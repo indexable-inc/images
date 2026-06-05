@@ -6,9 +6,8 @@
 # into the `claude-md` / `codex-md` flake packages, and the `disclosure:
 # progressive` fragments become on-demand skills in the `skills` flake package
 # alongside the handwritten skills/. This hook builds those packages, prints the
-# always-on core as `additionalContext`, and materializes `.claude/skills`
-# (Claude Code) / `.agents/skills` (Codex) as a real tree copied from the
-# generated skill link farm.
+# always-on core as `additionalContext`, and copies the skills package into
+# `.claude/skills` (Claude Code) / `.agents/skills` (Codex).
 #
 # Output is the SessionStart hook JSON envelope. Codex requires a JSON object
 # with hookSpecificOutput.additionalContext (its parser rejects plain stdout);
@@ -40,11 +39,14 @@ fi
 
 doc=$(nix build --no-link --print-out-paths "$root#$package")
 
-# Materialize the link farm onto disk; Claude Code's `/`-autocomplete
-# discovery filters symlinks (anthropics/claude-code#36659), so the tree
-# must be real files even though the skill *loader* follows symlinks fine.
+# Copy the skills package onto disk. The package is symlink-free by build-time
+# assertion (see lib/agent-context/skills.nix), but the destination directory
+# itself must also be real rather than a symlink to the store: Claude Code's
+# `/`-autocomplete discovery filters symlinks (anthropics/claude-code#36659)
+# even though the skill *loader* follows them fine. chmod because cp preserves
+# the store's read-only mode and the next session's rm -rf must succeed.
 # Best-effort: a skills-build failure must not abort the session, so guard
-# the build and skip the materialization if it produces no path.
+# the build and skip the copy if it produces no path.
 skills_store=$(nix build --no-link --print-out-paths "$root#skills" 2>/dev/null || true)
 if [ -n "$skills_store" ]; then
   case "$package" in
@@ -53,10 +55,7 @@ if [ -n "$skills_store" ]; then
   esac
   rm -rf "$dest"
   mkdir -p "$dest"
-  for skill in "$skills_store"/*; do
-    [ -e "$skill" ] || continue
-    cp -RH "$skill" "$dest"/
-  done
+  cp -R "$skills_store"/. "$dest"/
   chmod -R u+w "$dest"
 fi
 
