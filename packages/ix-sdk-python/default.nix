@@ -17,13 +17,18 @@ let
   # routine SDK bump is: re-publish the wheel to R2 and edit this catalog. Each
   # URL path embeds the wheel's nix-store hash so distinct builds never collide.
   #
-  # Only x86_64-linux is published today; the darwin SDK wheel build path does
-  # not yet exist in indexable-inc/ix (its sdks are linux-only), so a darwin
-  # entry is added once that lands.
+  # Published for x86_64-linux (health-checks runner) and aarch64-darwin
+  # (operators run ix-fleet on their Macs). The darwin wheel repoints its one
+  # nix-store dylib (libiconv) at /usr/lib so it loads off-nix; see ix's
+  # workspace-sdks.nix. Other systems fall through to the loud placeholder below.
   catalog = {
     x86_64-linux = {
       url = "https://pub-c52bf5a1e3db4628aaf57fe94cb5de10.r2.dev/wheel/ix-sdk/i8isn1mld0vilr6prxd283kkq2pk8q02/ix_sdk-0.1.0-cp313-abi3-manylinux_2_34_x86_64.whl";
       hash = "sha256-SiLtLWRzUT+++6+M0WlPqMB/0Dca7iJRU075uajw7Rg=";
+    };
+    aarch64-darwin = {
+      url = "https://pub-c52bf5a1e3db4628aaf57fe94cb5de10.r2.dev/wheel/ix-sdk/jmj8q0gsq5lnvv8aap6j7zh874bpzqjh/ix_sdk-0.1.0-cp313-abi3-macosx_11_0_arm64.whl";
+      hash = "sha256-KdfnAh0LgHcbApMUsK0x7tPrNe+ol6LIumUqfURyZn8=";
     };
   };
 
@@ -49,7 +54,7 @@ if entry == null then
       meta.description = "ix_sdk Python bindings (no prebuilt wheel for ${system})";
     }
     ''
-      echo "ix-sdk-python: no prebuilt ix_sdk wheel published for ${system} (only x86_64-linux so far)." >&2
+      echo "ix-sdk-python: no prebuilt ix_sdk wheel published for ${system} (have x86_64-linux + aarch64-darwin)." >&2
       echo "Build + publish the wheel for this platform to the R2 bucket ix-sdk-artifacts and add it to packages/ix-sdk-python/default.nix." >&2
       exit 1
     ''
