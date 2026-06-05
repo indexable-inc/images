@@ -361,6 +361,11 @@ here. See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 - You need an off-screen **GUI** capture of a GPU-accelerated Linux desktop: the
   headless Linux path has a GPU (libkrun), but the off-screen framebuffer-capture
   paths (`boot-linux-gui`, `drive-linux`) are still VZ, which has no Linux GPU.
+- You need Rosetta (x86_64-on-arm64 translation) inside a Linux guest: Rosetta
+  for Linux guests is a Virtualization.framework API, so the libkrun (GPU) path
+  can never have it, and the VZ Linux paths here do not wire it today. One guest
+  gets a GPU or Rosetta, never both. See
+  [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 - You cannot code-sign on macOS: without the virtualization/hypervisor
   entitlements, VM creation fails by design. (A Linux host needs no signing.)
 - You want the macOS-guest paths (`install-macos`, `boot-macos`, `drive-macos`,
