@@ -1933,6 +1933,41 @@ let
       lib = ix;
     };
   };
+
+  minecraftBlocksExample =
+    let
+      fleet = import ../examples/minecraft-blocks {
+        index = {
+          lib = ix;
+        };
+      };
+      # The buildable artifacts (plugin jar, integration check) built directly
+      # so the integration check can be pulled into the `eval` aggregate via
+      # `helperScript`.
+      packages = import ../examples/minecraft-blocks/packages.nix { inherit ix pkgs; };
+      schema = import ../examples/minecraft-blocks/schema.nix { inherit lib; };
+    in
+    {
+      inherit fleet packages schema;
+      log = {
+        config = fleet.nodes.log;
+        plan = fleet.planValue.nodes.log;
+        kafka = fleet.nodes.log.services.apache-kafka;
+      };
+      view = {
+        config = fleet.nodes.view;
+        plan = fleet.planValue.nodes.view;
+        obs = fleet.nodes.view.services.ix-observability;
+        initUnit = fleet.nodes.view.systemd.services.mc-blocks-view-init;
+      };
+      producer = {
+        config = fleet.nodes.producer;
+        plan = fleet.planValue.nodes.producer;
+        minecraft = fleet.nodes.producer.services.minecraft;
+        agent = fleet.nodes.producer.services.ix-observability;
+        shipUnit = fleet.nodes.producer.systemd.services.mc-blocks-ship;
+      };
+    };
   invalidSecretNameEval = builtins.tryEval (
     builtins.deepSeq
       (ix.secrets.normalize {
@@ -2417,6 +2452,144 @@ let
       {
         assertion = observabilityStackExample.observability.queryTool != null;
         message = "observability-stack should install the ix-observe query helper for agents";
+      }
+    ];
+
+    minecraft-blocks = [
+      {
+        # LOG: a single-node Kafka broker in KRaft mode (both roles), with the
+        # one durable topic. This is the source of truth, not the transport.
+        assertion =
+          minecraftBlocksExample.log.kafka.enable
+          && minecraftBlocksExample.log.kafka.formatLogDirs
+          &&
+            minecraftBlocksExample.log.kafka.settings."process.roles" == [
+              "broker"
+              "controller"
+            ];
+        message = "minecraft-blocks log node should run a KRaft Kafka broker as the durable log";
+      }
+      {
+        # Only the broker port is exposed, and it is claimed.
+        assertion =
+          let
+            claims = minecraftBlocksExample.log.config.ix.networking.portClaims;
+          in
+          claims.kafka.port == 9092
+          && builtins.elem 9092 minecraftBlocksExample.log.config.networking.firewall.allowedTCPPorts;
+        message = "minecraft-blocks log node should expose and claim the Kafka broker port";
+      }
+      {
+        # VIEW: reuses the shared observability ClickHouse (one server), with
+        # the collector and Grafana, not a second ClickHouse.
+        assertion =
+          minecraftBlocksExample.view.obs.enable
+          && minecraftBlocksExample.view.obs.stack.enable
+          && minecraftBlocksExample.view.config.services.clickhouse.enable
+          && minecraftBlocksExample.view.config.services.opentelemetry-collector.enable;
+        message = "minecraft-blocks view node should run the shared observability ClickHouse plus collector";
+      }
+      {
+        # The view-init oneshot creates the minecraft DB, table, Kafka queue,
+        # and MV after ClickHouse is up.
+        assertion =
+          let
+            unit = minecraftBlocksExample.view.initUnit;
+          in
+          unit.serviceConfig.Type == "oneshot" && builtins.elem "clickhouse.service" unit.requires;
+        message = "minecraft-blocks view node should initialize the spatial view once ClickHouse is up";
+      }
+      {
+        # The view health check confirms all three minecraft objects exist
+        # (table, Kafka queue, materialized view).
+        assertion =
+          let
+            check = minecraftBlocksExample.view.plan.healthChecks.mc-blocks-view;
+          in
+          check.from == "guest" && check.attempts == 60;
+        message = "minecraft-blocks view node should health-check the spatial view, queue, and MV";
+      }
+      {
+        # PRODUCER: a Paper server with the custom block-events plugin shipped
+        # via `src` (a built jar), not a catalog slug.
+        assertion =
+          minecraftBlocksExample.producer.minecraft.enable
+          && minecraftBlocksExample.producer.minecraft.paper.enable
+          && minecraftBlocksExample.producer.minecraft.plugins.block-events.enable
+          && minecraftBlocksExample.producer.minecraft.plugins.block-events.src != null
+          && minecraftBlocksExample.producer.minecraft.plugins.block-events.pluginName == "BlockEvents";
+        message = "minecraft-blocks producer should run Paper with the custom block-events plugin";
+      }
+      {
+        # Both legs are real on the producer: the domain-fact transport ships to
+        # Kafka, and the OTel agent forwards server telemetry to the collector.
+        # Telemetry is collected from the journal (the minecraft service stdout),
+        # not by tailing the server's private, DynamicUser-unreadable log file.
+        assertion =
+          let
+            ship = minecraftBlocksExample.producer.shipUnit;
+            agent = minecraftBlocksExample.producer.agent;
+          in
+          ship.serviceConfig.Restart == "always"
+          && agent.stack.enable == false
+          && agent.agent.enable
+          && agent.agent.journal.enable
+          && agent.agent.filelog.paths == [ ]
+          && agent.resourceAttributes."ix.app" == "minecraft-blocks";
+        message = "minecraft-blocks producer should run both the Kafka transport and the journal-based telemetry agent";
+      }
+      {
+        # The schema is the single source of truth: the Morton ORDER BY, the
+        # signed-coordinate offset, and the per-axis minmax skip indexes (which
+        # are what actually prune the bounding-box query) all come from it.
+        assertion =
+          let
+            inherit (minecraftBlocksExample) schema;
+          in
+          schema.coordOffset == 1048576
+          && lib.hasInfix "mortonEncode" schema.createTableSql
+          && lib.hasInfix "toUInt32(x + 1048576)" schema.mortonExpr
+          && builtins.length schema.mortonFields == 3
+          && lib.hasInfix "INDEX idx_x x TYPE minmax" schema.createTableSql
+          && lib.hasInfix "INDEX idx_z z TYPE minmax" schema.createTableSql
+          && lib.hasInfix "index_granularity = ${toString schema.indexGranularity}" schema.createTableSql;
+        message = "minecraft-blocks schema should drive a Z-order ORDER BY plus per-axis minmax skip indexes over offset-shifted signed coordinates";
+      }
+      {
+        # Replay must be idempotent: the table is a ReplacingMergeTree keyed on
+        # the placement identity (the ORDER BY tuple), so an at-least-once
+        # transport re-sending a record collapses it back to one row. The dedup
+        # key is the same ORDER BY tuple the spatial query relies on, so this
+        # engine choice never changes the query path, it only folds duplicates.
+        assertion =
+          let
+            inherit (minecraftBlocksExample) schema;
+          in
+          lib.hasInfix "ReplacingMergeTree" schema.createTableSql
+          && !lib.hasInfix "ENGINE = MergeTree" schema.createTableSql
+          && lib.hasInfix "ORDER BY (world, ${schema.mortonExpr}, timestamp)" schema.createTableSql;
+        message = "minecraft-blocks view should be a ReplacingMergeTree keyed on the placement identity so replay is idempotent";
+      }
+      {
+        # One bounding box: box.json drives the generator's in-box region, the
+        # Nix schema's derived predicate, and the integration check, so the
+        # asserted in-box count cannot drift from a fixture edit. The derived SQL
+        # predicate must be half-open per axis and bound to the box's world.
+        assertion =
+          let
+            inherit (minecraftBlocksExample) schema;
+            inherit (schema) box;
+          in
+          box.world == "overworld"
+          &&
+            box.x == [
+              0
+              16
+            ]
+          && lib.hasInfix "world = 'overworld'" schema.boxPredicate
+          && lib.hasInfix "x >= 0 AND x < 16" schema.boxPredicate
+          && lib.hasInfix "z >= 0 AND z < 16" schema.boxPredicate;
+        message = "minecraft-blocks bounding box should come from one box.json definition shared by the schema predicate and the fixture generator";
       }
     ];
 
@@ -3941,6 +4114,42 @@ let
 
   helperScript = ''
     test -e ${nomadSecretRefsExample.buildCheck}
+
+    # minecraft-blocks integration: committed fixtures -> ClickHouse local
+    # spatial table -> bounding-box query. The derivation loads the fixture JSON
+    # Lines into a ReplacingMergeTree table built from the one schema (Morton
+    # ORDER BY, per-axis minmax skip indexes, small granule, signed-coordinate
+    # offset), loads them TWICE to simulate the at-least-once restart re-send,
+    # then asserts with FINAL that the replay was idempotent (the in-box count
+    # and the total did not double), that the skip indexes prune (fewer granules
+    # than the primary index alone), and the Morton round-trip. Realising it here
+    # pulls the whole check into the `eval` aggregate. It also proves the Paper
+    # plugin jar builds against the real API.
+    test -f ${minecraftBlocksExample.packages.loadFixtures}/result
+    grep -q 'in_box=512' ${minecraftBlocksExample.packages.loadFixtures}/result
+    # The double-loaded total stays at the single-load row count: replay folded
+    # the duplicates back to one row each, so the view is idempotent.
+    grep -q 'idempotent_total=2977' ${minecraftBlocksExample.packages.loadFixtures}/result
+    grep -qE 'pk_granules=[0-9]+ skip_granules=[0-9]+' ${minecraftBlocksExample.packages.loadFixtures}/result
+    test -s ${minecraftBlocksExample.packages.loadFixtures}/events.jsonl
+    test "$(wc -l < ${../examples/minecraft-blocks/fixtures.jsonl})" = "2977"
+    grep -q '"block_type":"minecraft:stone"' ${../examples/minecraft-blocks/fixtures.jsonl}
+    # The query tool reads with FINAL so counts are exact under the idempotent
+    # ReplacingMergeTree (merge-time dedup forced at read), not only after a
+    # background merge. Grep the rendered helper for the FINAL table reference.
+    grep -q 'FROM block_events FINAL' ${
+      minecraftBlocksExample.packages.mkQueryTool {
+        host = "127.0.0.1";
+        port = 9000;
+      }
+    }/bin/mc-blocks
+    # The jar must contain only the plugin's own classes plus plugin.yml; no
+    # leaked Paper/Bukkit API classes from the compile-time classpath.
+    test -s ${minecraftBlocksExample.packages.plugin}
+    ${lib.getExe' pkgs.unzip "unzip"} -l ${minecraftBlocksExample.packages.plugin} > mc-blocks-plugin-jar.list
+    grep -q 'dev/ix/example/blockevents/BlockEventsPlugin.class' mc-blocks-plugin-jar.list
+    grep -q 'plugin.yml' mc-blocks-plugin-jar.list
+    ! grep -qE 'org/bukkit/|net/kyori/|com/google/' mc-blocks-plugin-jar.list
 
     ${lib.getExe pythonAppClosureProbe} > python-app-closure-probe.out
     grep -q 'python app source is in the runtime closure' python-app-closure-probe.out
