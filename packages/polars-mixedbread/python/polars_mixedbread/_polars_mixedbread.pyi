@@ -10,10 +10,10 @@ def search_mixedbread(
     top_k: int = ...,
     base_url: str | None = ...,
     rerank: bool = ...,
-    reranker: str | None = ...,
     agentic: bool = ...,
     score_threshold: float | None = ...,
     filters: str | None = ...,
+    reranker: str | None = ...,
 ) -> dict[str, list[Any]]:
     """Run a Mixedbread store search, returning a dict of the six source columns.
 
