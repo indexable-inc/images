@@ -48,7 +48,8 @@ search --source code --repo indexable-inc/index "manifest reconcile"
 ```
 
 Flags mirror `mgrep search` where they overlap: `-c/--content`, `-m/--max-count`,
-`-a/--answer`, `--no-rerank`, `-w/--web`, `--agentic`. The store name comes from
+`-a/--answer`, `--no-rerank`, `--reranker <model>` (defaults to the listwise
+reranker), `-w/--web`, `--agentic`. The store name comes from
 `--store` or `MXBAI_STORE` (default `index`); the API base URL from `--base-url`
 or `MXBAI_BASE_URL`.
 
@@ -58,7 +59,7 @@ With no selector the whole corpus is searched; each selector narrows it
 server-side (no local read). Repeatable, comma-joined values are accepted.
 
 - `--source` / `--not-source`: include / exclude source tags (`code`,
-  `claude_history`, `codex`, `shell`, `slack`, `linear`, `web`).
+  `claude_history`, `codex`, `shell`, `slack`, `linear`, `github`, `web`).
 - `--repo`: restrict code to a repository slug, e.g. `indexable-inc/index`.
 - `--user` / `--mine`: restrict records to these authors (or the current `$USER`).
 - `--host`: restrict records to these machines.

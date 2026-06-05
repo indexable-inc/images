@@ -35,6 +35,7 @@ Keyword arguments mirror the `search` CLI:
 - `store`: store name (default `index`).
 - `base_url`: Mixedbread API base URL (default the client's built-in).
 - `rerank` (default `True`): apply the second-stage reranker.
+- `reranker` (default the listwise model): reranking model name; ignored when `rerank=False`.
 - `web` (default `False`): mix in web results.
 - scope: `source`, `not_source`, `repo`, `user`, `host`, `project` (see below).
 
@@ -54,7 +55,7 @@ All optional; with none set the whole corpus is searched. List selectors accept
 repeated values and comma-joined strings (`source=["code", "slack,linear"]`):
 
 - `source` / `not_source`: include / exclude these source tags (`code`,
-  `claude_history`, `codex`, `shell`, `slack`, `linear`, `web`).
+  `claude_history`, `codex`, `shell`, `slack`, `linear`, `github`, `web`).
 - `repo`: restrict code to a repository slug, e.g. `indexable-inc/index`.
 - `user`, `host`, `project`: restrict records to these authors, machines, or
   project slugs.

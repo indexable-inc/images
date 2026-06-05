@@ -30,7 +30,9 @@ mod error;
 mod pane;
 mod publish;
 
-pub use dashboard::{Dashboard, Hub, RecordingInfo, RecordingStore, serve_hub};
+pub use dashboard::{
+    Dashboard, Hub, Recorder, RecordingInfo, RecordingStore, ServedDashboard, serve_hub,
+};
 pub use error::{Error, Result};
 pub use pane::{
     DataView, ExecTraceLine, ExecView, HtmlView, Pane, ProducerSnapshot, TerminalView, View,

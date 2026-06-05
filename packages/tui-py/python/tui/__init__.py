@@ -358,6 +358,32 @@ class Snapshot:
     def __str__(self) -> str:
         return self.text
 
+    def __repr__(self) -> str:
+        """Plain-text display for terminals, logs, and a notebook's `text/plain`.
+
+        The dataclass default repr would expand every `StyledCell`, which for a
+        full screen is tens of kilobytes of noise: an agent reading the cell
+        output wants the screen, not the grid. Render the viewport inside a
+        width-exact frame so columns, trailing space, and the real size are
+        unambiguous, and summarize the styling instead of expanding it. The
+        colored view is still available via `_repr_html_` / `to_html`.
+
+        Width is counted in code points, not display columns, so a line with
+        wide (CJK/emoji) glyphs can push the right border out; this is a
+        cosmetic frame artifact in the plain-text view only.
+        """
+        rows, cols = self.size.rows, self.size.cols
+        top = "┌" + "─" * cols + "┐"
+        bottom = "└" + "─" * cols + "┘"
+        body = "\n".join(f"│{line[:cols]:<{cols}}│" for line in self.viewport)
+        notes = [f"{rows}x{cols}"]
+        if self.scrollback:
+            notes.append(f"+{len(self.scrollback)} scrollback")
+        if self.styled:
+            notes.append("styled")
+        header = f"Snapshot {', '.join(notes)}"
+        return f"{header}\n{top}\n{body}\n{bottom}" if body else f"{header}\n{top}\n{bottom}"
+
     def to_html(self, theme: Theme | None = None) -> str:
         """Render the viewport to a colored monospace HTML block.
 
@@ -491,7 +517,9 @@ class Tui:
             snap = await tui.wait_for("3", timeout=2.0)
 
     The terminal opens at `rows` x `cols` (default 80x24) with `scrollback_lines`
-    of history (default 10,000). A single process-wide tokio runtime drives every
+    of history (default 10,000). Pass the shape as `size=(rows, cols)` (the same
+    spelling the `.size` accessor returns) or as granular `rows=`/`cols=`, but not
+    both. A single process-wide tokio runtime drives every
     spawned PTY; each I/O method returns a native asyncio coroutine bridged
     through pyo3-async-runtimes, with no thread-pool hop. Construction and the
     shape accessors (`id`, `command`, `args`, `size`, `is_alive`, `exit_code`)
@@ -513,10 +541,20 @@ class Tui:
         self,
         command: str,
         *args: str,
+        size: tuple[int, int] | Size | None = None,
         rows: int | None = None,
         cols: int | None = None,
         scrollback_lines: int | None = None,
     ) -> None:
+        # `size=(rows, cols)` mirrors the `.size` accessor (a `Size` is also a
+        # (rows, cols) iterable), so the shape can be read and set with the same
+        # spelling; `rows=`/`cols=` stay as the granular form. Accept one or the
+        # other, not both, so a conflicting pair is an error rather than a silent
+        # winner.
+        if size is not None:
+            if rows is not None or cols is not None:
+                raise TypeError("pass either size=(rows, cols) or rows=/cols=, not both")
+            rows, cols = size
         _ensure_autopublish()
         self._raw = _RawTuiInstance(command, list(args), rows, cols, scrollback_lines)
 
@@ -553,6 +591,7 @@ class Tui:
     def scrollback_limit(self) -> int:
         return self._raw.scrollback_limit
 
+    @property
     def is_alive(self) -> bool:
         """Whether the child process is still running."""
         return self._raw.is_alive()
@@ -565,7 +604,13 @@ class Tui:
     # -- writing ------------------------------------------------------------
 
     async def write(self, data: str) -> None:
-        """Send `data` to the PTY exactly."""
+        """Send `data` to the PTY.
+
+        Like a real terminal, while the program has DECCKM (application cursor
+        keys) enabled a bare cursor sequence (`ESC [ A`..`D`, `ESC [ H`/`F`) is
+        rewritten to its `ESC O ...` form so arrows reach full-screen programs;
+        every other byte passes through unchanged.
+        """
         await self._raw.write_async(data)
 
     async def send(self, *parts: str) -> None:

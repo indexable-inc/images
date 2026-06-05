@@ -725,6 +725,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "blast-radius"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "color-eyre",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2241,6 +2251,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "google-calendar"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "chrono",
+ "dirs",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu 0.9.1",
+ "tempfile",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "google-calendar-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "google-calendar",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2777,7 +2818,9 @@ dependencies = [
  "dirs",
  "mixedbread",
  "nix 0.30.1",
+ "rusqlite",
  "search-core",
+ "serde_json",
  "sink-mixedbread",
  "sink-parquet",
  "source-atuin",
@@ -2785,8 +2828,10 @@ dependencies = [
  "source-codex",
  "source-debug",
  "source-git",
+ "source-github",
  "source-linear",
  "source-meta",
+ "source-parquet",
  "source-slack",
  "tempfile",
  "tokio",
@@ -3419,28 +3464,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "macos-vm"
-version = "0.1.0"
-dependencies = [
- "base64",
- "block2",
- "clap",
- "dashboard-core",
- "dispatch2",
- "image",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "objc2-io-surface",
- "objc2-quartz-core",
- "objc2-virtualization",
- "serde",
- "serde_json",
- "snafu 0.8.9",
- "tokio",
-]
-
-[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3609,6 +3632,18 @@ name = "murmurhash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
+
+[[package]]
+name = "mynoise"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs",
+ "reqwest",
+ "rodio",
+ "tokio",
+]
 
 [[package]]
 name = "napi"
@@ -5753,6 +5788,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "source-github"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
+]
+
+[[package]]
 name = "source-linear"
 version = "0.1.0"
 dependencies = [
@@ -5771,6 +5817,20 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "snafu 0.9.1",
+]
+
+[[package]]
+name = "source-parquet"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "futures",
+ "object_store",
+ "parquet",
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
+ "tokio",
 ]
 
 [[package]]
@@ -7028,6 +7088,28 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vmkit"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "block2",
+ "clap",
+ "dashboard-core",
+ "dispatch2",
+ "image",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-io-surface",
+ "objc2-quartz-core",
+ "objc2-virtualization",
+ "serde",
+ "serde_json",
+ "snafu 0.8.9",
+ "tokio",
+]
 
 [[package]]
 name = "vt100"

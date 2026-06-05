@@ -17,7 +17,9 @@ pub struct FixOutcome {
 pub fn fix_skill(path: &Path, contents: &str) -> FixOutcome {
     // Refuse to touch a file with missing or unparseable frontmatter; surface
     // it through the linter instead so we never corrupt a broken document.
-    let Some((yaml, yaml_is_mapping)) = parse_frontmatter(contents) else {
+    let Some(Frontmatter { mapping: yaml, is_mapping: yaml_is_mapping }) =
+        parse_frontmatter(contents)
+    else {
         return FixOutcome {
             contents: None,
             changes: Vec::new(),
@@ -52,15 +54,24 @@ pub fn fix_skill(path: &Path, contents: &str) -> FixOutcome {
     }
 }
 
-/// Parse the frontmatter block; returns the mapping (for key lookups) and
-/// whether it was a mapping. `None` means no usable frontmatter. Reuses the
+/// Parsed frontmatter: the mapping (for key lookups) and whether the document's
+/// frontmatter was actually a YAML mapping.
+struct Frontmatter {
+    mapping: serde_norway::Mapping,
+    is_mapping: bool,
+}
+
+/// Parse the frontmatter block. `None` means no usable frontmatter. Reuses the
 /// linter's splitter so fix and lint agree on what frontmatter is.
-fn parse_frontmatter(contents: &str) -> Option<(serde_norway::Mapping, bool)> {
+fn parse_frontmatter(contents: &str) -> Option<Frontmatter> {
     let frontmatter = crate::lint::split_frontmatter(contents)?;
     let value: serde_norway::Value = serde_norway::from_str(frontmatter.yaml).ok()?;
     match value {
-        serde_norway::Value::Mapping(mapping) => Some((mapping, true)),
-        _ => Some((serde_norway::Mapping::new(), false)),
+        serde_norway::Value::Mapping(mapping) => Some(Frontmatter { mapping, is_mapping: true }),
+        _ => Some(Frontmatter {
+            mapping: serde_norway::Mapping::new(),
+            is_mapping: false,
+        }),
     }
 }
 

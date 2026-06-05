@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Tests the blast-radius PR comment end to end:
-#   * the security-critical validate + render jq embedded in
-#     .github/workflows/blast-radius.yml (extracted from the workflow so the test
-#     can never drift from what the trusted comment job actually runs), and
-#   * the report-building logic in tools/blast-radius.nu (categories + the
-#     cause/fan-out reference diff), with a stubbed `nix-store`.
-# Needs jq, yq (yq-go), and nu on PATH.
+# Tests the security-critical validate + render jq embedded in
+# .github/workflows/blast-radius.yml (extracted from the workflow so the test can
+# never drift from what the trusted comment job actually runs). The report-
+# building logic itself lives in the `blast-radius` Rust crate and is covered by
+# its own unit tests (packages/blast-radius/src/causes.rs).
+# Needs jq and yq (yq-go) on PATH.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,10 +22,13 @@ yq '.jobs.comment.steps[] | select(.name == "Render comment").run' "$workflow" >
 
 validate() { ( cd "$tmp" && cp "$1" report.json && bash validate.sh ); }
 
-# Schema validation: the good report passes; hostile names and old (missing
-# categories/causes) reports are rejected fail-closed.
+# Schema validation: the good report passes; hostile and old (missing
+# categories/causes/phaseTimings) reports are rejected fail-closed. The two
+# `bad-phase-*` fixtures pin the kebab-case key constraint and the number-
+# typed value constraint that keep an attacker from smuggling shapes into
+# the artifact.
 if validate "$fixtures/good.json" >/dev/null 2>&1; then note "validate good: ok"; else note "validate good: FAIL"; fail=1; fi
-for bad in bad-name bad-check missing; do
+for bad in bad-name bad-check missing bad-phase-key bad-phase-value; do
   if validate "$fixtures/$bad.json" >/dev/null 2>&1; then
     note "validate $bad: FAIL (accepted hostile/old report)"; fail=1
   else
@@ -35,26 +37,62 @@ for bad in bad-name bad-check missing; do
 done
 
 # Render: the good report produces the golden comment (pie + flowchart + list).
+# `phaseTimings` is observability-only and never renders, so the golden
+# comment from a report carrying phaseTimings has no trace of those keys;
+# any drift here means the renderer leaked them.
 ( cd "$tmp" && cp "$fixtures/good.json" report.json && bash render.sh )
 if diff -u "$fixtures/good.expected.md" "$tmp/comment.md"; then note "render good: ok"; else note "render good: FAIL (output drift)"; fail=1; fi
 
-# Report-building logic with a stubbed nix-store (head vs base refs differ only
-# in the ix-rust-workspace hash, so it is the changed root cause).
-cat > "$tmp/nix-store" <<'STUB'
-#!/usr/bin/env bash
-drv="${!#}"
-case "$drv" in
-  *head-rust-*) echo /nix/store/h1111111111111111111111111111111-ix-rust-workspace.drv
-                echo /nix/store/g2222222222222222222222222222222-glibc.drv ;;
-  *base-rust-*) echo /nix/store/b0000000000000000000000000000000-ix-rust-workspace.drv
-                echo /nix/store/g2222222222222222222222222222222-glibc.drv ;;
-esac
-STUB
-chmod +x "$tmp/nix-store"
-# Run via `-c "source ..."`, not `nu logic-test.nu`: executing a file auto-runs
-# any `main` in scope, and the test sources blast-radius.nu (which defines one),
-# so a plain file run would fire the real report build. `-c` does not auto-run.
-if PATH="$tmp:$PATH" nu --no-config-file -c "source '$fixtures/logic-test.nu'"; then note "logic-test: ok"; else note "logic-test: FAIL"; fail=1; fi
+# Overflow guard: a PR touching a shared input rebuilds thousands of checks, and
+# an uncapped changed-checks list overflows GitHub's 65536-char comment limit
+# (HTTP 422), so no comment posts. Synthesize a large report and assert the body
+# stays bounded with an "...and N more" note. Behavior assertion, not a re-spell
+# of the cap constant.
+big="$tmp/big.json"
+jq '.changed = [range(0; 4000) | "rust-test-crate-\(.)-unit-tests"]' "$fixtures/good.json" > "$big"
+( cd "$tmp" && cp "$big" report.json && bash render.sh )
+big_bytes="$(wc -c < "$tmp/comment.md")"
+if [ "$big_bytes" -lt 65536 ]; then
+  note "render overflow: body bounded (${big_bytes} B < 65536)"
+else
+  note "render overflow: FAIL (${big_bytes} B >= 65536)"; fail=1
+fi
+if grep -qE '^- \.\.\.and 3800 more ' "$tmp/comment.md"; then
+  note "render overflow: cap note ok"
+else
+  note "render overflow: FAIL (missing/incorrect cap note)"; fail=1
+fi
+if grep -q '<summary>changed checks (4000)</summary>' "$tmp/comment.md"; then
+  note "render overflow: total count ok"
+else
+  note "render overflow: FAIL (summary missing true total)"; fail=1
+fi
+
+# Backstop guard: the changed-checks cap does NOT bound the mermaid sections,
+# which the render sizes from the (PR-controlled) report's causes. A schema-valid
+# but pathological report with huge causes must still render under the limit via
+# the byte-budget backstop, and the leading marker (the post job keys the sticky
+# comment on it) must survive the tail truncation.
+huge="$tmp/huge.json"
+jq '
+  .changed = [] |
+  .causes = [range(0; 400) | {
+    name: "ix-rust-workspace-\(.)",
+    checks: [range(0; 5) | "rust-test-crate-\(.)-pads-the-body-out-to-exceed-the-limit-\(.)"]
+  }]
+' "$fixtures/good.json" > "$huge"
+( cd "$tmp" && cp "$huge" report.json && bash render.sh )
+huge_bytes="$(wc -c < "$tmp/comment.md")"
+if [ "$huge_bytes" -lt 65536 ]; then
+  note "render backstop: body bounded (${huge_bytes} B < 65536)"
+else
+  note "render backstop: FAIL (${huge_bytes} B >= 65536; backstop did not fire)"; fail=1
+fi
+if head -c 64 "$tmp/comment.md" | grep -q '^<!-- blast-radius -->'; then
+  note "render backstop: marker survived truncation ok"
+else
+  note "render backstop: FAIL (marker lost; sticky-comment keying breaks)"; fail=1
+fi
 
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi
 echo "blast-radius-test: all passed"

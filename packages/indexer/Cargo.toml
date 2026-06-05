@@ -21,15 +21,19 @@ source-git.workspace = true
 source-atuin.workspace = true
 source-slack.workspace = true
 source-linear.workspace = true
+source-github.workspace = true
+source-parquet.workspace = true
 search-core.workspace = true
 sink-mixedbread.workspace = true
 sink-parquet.workspace = true
 mixedbread.workspace = true
 anyhow.workspace = true
+serde_json.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 dirs.workspace = true
 nix = { workspace = true, features = ["hostname"] }
 
 [dev-dependencies]
+rusqlite = { workspace = true, features = ["bundled"] }
 tempfile.workspace = true

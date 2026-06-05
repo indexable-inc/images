@@ -27,7 +27,7 @@ use snafu::ResultExt as _;
 
 pub use crate::error::Error;
 pub use crate::record::Entry;
-use crate::error::{OpenDbSnafu, QuerySnafu, Result};
+use crate::error::{OpenDbSnafu, QuerySnafu, Result, UninitializedDbSnafu};
 
 /// The `source` tag every atuin command document carries. atuin records
 /// commands from every shell (nushell, zsh, bash), so one `shell` corpus covers
@@ -66,6 +66,12 @@ impl AtuinHistory {
     ///
     /// # Errors
     /// Returns an error if the database cannot be opened or queried.
+    ///
+    /// An existing db file that atuin has not yet initialized (no `history`
+    /// table — atuin creates the file before its first-run migration, or a row
+    /// has never been written) yields [`Error::UninitializedDb`] rather than a
+    /// generic query failure, so a fleet caller can skip it as a soft,
+    /// non-fatal source instead of failing the whole run.
     pub fn open(path: &Path) -> Result<Self> {
         // URI form so `immutable=1` applies; the path is the trusted db path the
         // caller resolved (no untrusted query-string injection).
@@ -75,6 +81,12 @@ impl AtuinHistory {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
         )
         .context(OpenDbSnafu { path: path.to_path_buf() })?;
+        // Distinguish an uninitialized db (file present, no `history` table) from
+        // a genuine query failure. `sqlite_master` always exists, so this probe
+        // never itself trips the "no such table" path we are guarding against.
+        if !history_table_exists(&conn)? {
+            return UninitializedDbSnafu { path: path.to_path_buf() }.fail();
+        }
         let entries = read_entries(&conn)?;
         Ok(Self { entries })
     }
@@ -113,6 +125,21 @@ impl SourceAdapter for AtuinHistory {
     }
 }
 
+/// Whether the atuin `history` table exists. atuin creates the db file before
+/// its first migration runs, so a freshly-seen account can have a db with only
+/// the sqlite header and no tables. Querying `sqlite_master` (always present)
+/// for the table lets the caller treat that as a soft skip.
+fn history_table_exists(conn: &Connection) -> Result<bool> {
+    let count: i64 = conn
+        .query_row(
+            "select count(*) from sqlite_master where type = 'table' and name = 'history'",
+            [],
+            |row| row.get(0),
+        )
+        .context(QuerySnafu)?;
+    Ok(count > 0)
+}
+
 /// Read every non-deleted, non-empty command from the atuin `history` table.
 fn read_entries(conn: &Connection) -> Result<Vec<Entry>> {
     let mut stmt = conn
@@ -125,7 +152,7 @@ fn read_entries(conn: &Connection) -> Result<Vec<Entry>> {
         .query_map([], |row| {
             let timestamp_ns: Option<i64> = row.get(1)?;
             let hostname: Option<String> = row.get(6)?;
-            let (host, user) = split_host_user(hostname.as_deref());
+            let HostUser { host, user } = split_host_user(hostname.as_deref());
             Ok(Entry {
                 id: row.get(0)?,
                 command: row.get(3)?,
@@ -150,15 +177,24 @@ fn read_entries(conn: &Connection) -> Result<Vec<Entry>> {
     Ok(entries)
 }
 
+/// Host and optional user parsed from an atuin `hostname` column.
+#[derive(Debug, Clone)]
+struct HostUser {
+    /// The host portion (the whole value when no `:` is present).
+    host: String,
+    /// The user portion after the first `:`, if any and non-empty.
+    user: Option<String>,
+}
+
 /// atuin records `hostname` as `"<host>:<user>"`. Split on the first colon; fall
 /// back to the whole value as the host with no user.
-fn split_host_user(hostname: Option<&str>) -> (String, Option<String>) {
+fn split_host_user(hostname: Option<&str>) -> HostUser {
     let Some(value) = hostname else {
-        return ("unknown".to_owned(), None);
+        return HostUser { host: "unknown".to_owned(), user: None };
     };
     value.split_once(':').map_or_else(
-        || (value.to_owned(), None),
-        |(host, user)| (host.to_owned(), non_empty(Some(user.to_owned()))),
+        || HostUser { host: value.to_owned(), user: None },
+        |(host, user)| HostUser { host: host.to_owned(), user: non_empty(Some(user.to_owned())) },
     )
 }
 

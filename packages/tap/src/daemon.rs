@@ -22,7 +22,7 @@ use parking_lot::Mutex;
 
 use crate::index;
 use tap_protocol::{Request, Response, Session};
-use tap_pty::{Attachment, PtySession, SessionConfig};
+use tap_pty::{Attachment, CursorPosition, PtySession, SessionConfig, WinSize};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, Lines};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{UnixListener, UnixStream};
@@ -54,8 +54,28 @@ struct ClientReg {
 
 struct Inner {
     next_id: u64,
-    session_size: (u16, u16),
+    session_size: WinSize,
     clients: HashMap<u64, ClientReg>,
+}
+
+/// The result of attaching an interactive client: its registry id, the
+/// negotiated session size, and the live output attachment.
+struct AttachResult {
+    /// The new client's registry id.
+    id: u64,
+    /// The negotiated session size after this client joined.
+    size: WinSize,
+    /// The live output stream plus resync snapshot.
+    attachment: Attachment,
+}
+
+/// The result of registering a read-only observer: its registry id and the live
+/// output attachment.
+struct ObserverResult {
+    /// The new observer's registry id.
+    id: u64,
+    /// The live output stream plus resync snapshot.
+    attachment: Attachment,
 }
 
 /// Shared daemon state: the PTY session plus the client registry.
@@ -65,7 +85,7 @@ struct DaemonState {
 }
 
 impl DaemonState {
-    fn new(session: PtySession, size: (u16, u16)) -> Self {
+    fn new(session: PtySession, size: WinSize) -> Self {
         Self {
             session,
             inner: Mutex::new(Inner {
@@ -76,7 +96,7 @@ impl DaemonState {
         }
     }
 
-    fn session_size(&self) -> (u16, u16) {
+    fn session_size(&self) -> WinSize {
         self.inner.lock().session_size
     }
 
@@ -86,7 +106,7 @@ impl DaemonState {
         rows: u16,
         cols: u16,
         control: mpsc::UnboundedSender<ResizeNotice>,
-    ) -> (u64, (u16, u16), Attachment) {
+    ) -> AttachResult {
         let mut inner = self.inner.lock();
         let id = inner.next_id;
         inner.next_id += 1;
@@ -105,11 +125,15 @@ impl DaemonState {
         let size = inner.session_size;
         let attachment = self.session.subscribe();
         drop(inner);
-        (id, size, attachment)
+        AttachResult {
+            id,
+            size,
+            attachment,
+        }
     }
 
     /// Register a read-only observer that does not affect size negotiation.
-    fn add_observer(&self, control: mpsc::UnboundedSender<ResizeNotice>) -> (u64, Attachment) {
+    fn add_observer(&self, control: mpsc::UnboundedSender<ResizeNotice>) -> ObserverResult {
         let mut inner = self.inner.lock();
         let id = inner.next_id;
         inner.next_id += 1;
@@ -124,7 +148,7 @@ impl DaemonState {
         );
         let attachment = self.session.subscribe();
         drop(inner);
-        (id, attachment)
+        ObserverResult { id, attachment }
     }
 
     /// Record a client's new terminal size, renegotiate, and repaint it.
@@ -137,7 +161,10 @@ impl DaemonState {
         self.recompute(&mut inner, None);
         // Always hand the requester a fresh snapshot so it repaints on its own
         // resize (and after the editor keybind, which fakes a resize to refresh).
-        let (s_rows, s_cols) = inner.session_size;
+        let WinSize {
+            rows: s_rows,
+            cols: s_cols,
+        } = inner.session_size;
         let snapshot = self.session.snapshot();
         if let Some(client) = inner.clients.get(&id) {
             let _ = client.control.send(ResizeNotice {
@@ -171,7 +198,7 @@ impl DaemonState {
         }
         let rows = sizes.iter().map(|s| s.0).min().unwrap_or(DEFAULT_ROWS).max(1);
         let cols = sizes.iter().map(|s| s.1).min().unwrap_or(DEFAULT_COLS).max(1);
-        let new = (rows, cols);
+        let new = WinSize { rows, cols };
         if new == inner.session_size {
             return;
         }
@@ -234,7 +261,13 @@ pub async fn run(id: String, socket: PathBuf, command: Vec<String>) -> Result<()
     let listener =
         UnixListener::bind(&socket).with_context(|| format!("binding socket {}", socket.display()))?;
 
-    let state = Arc::new(DaemonState::new(session, (DEFAULT_ROWS, DEFAULT_COLS)));
+    let state = Arc::new(DaemonState::new(
+        session,
+        WinSize {
+            rows: DEFAULT_ROWS,
+            cols: DEFAULT_COLS,
+        },
+    ));
     let mut exit = state.session.exit_watch();
 
     loop {
@@ -284,11 +317,11 @@ async fn handle_conn(stream: UnixStream, state: Arc<DaemonState>) -> Result<()> 
                 send_line(&mut write_half, &Response::Scrollback { content }).await?;
             }
             Request::GetCursor => {
-                let (row, col) = state.session.cursor();
+                let CursorPosition { row, col } = state.session.cursor();
                 send_line(&mut write_half, &Response::Cursor { row, col }).await?;
             }
             Request::GetSize => {
-                let (rows, cols) = state.session_size();
+                let WinSize { rows, cols } = state.session_size();
                 send_line(&mut write_half, &Response::Size { rows, cols }).await?;
             }
             Request::Inject { data } => {
@@ -317,7 +350,14 @@ async fn handle_attach(
     cols: u16,
 ) -> Result<()> {
     let (control_tx, mut control_rx) = mpsc::unbounded_channel();
-    let (id, (s_rows, s_cols), attachment) = state.attach(rows, cols, control_tx);
+    let AttachResult {
+        id,
+        size: WinSize {
+            rows: s_rows,
+            cols: s_cols,
+        },
+        attachment,
+    } = state.attach(rows, cols, control_tx);
     send_line(
         &mut write_half,
         &Response::Attached {
@@ -358,7 +398,7 @@ async fn handle_attach(
                     Err(RecvError::Lagged(_)) => {
                         // Fell behind: resync from a fresh snapshot instead of
                         // replaying a torn byte stream.
-                        let (r, c) = lag_state.session_size();
+                        let WinSize { rows: r, cols: c } = lag_state.session_size();
                         let snapshot = lag_state.session.snapshot();
                         let resized = Response::Resized { rows: r, cols: c, snapshot };
                         if send_line(&mut write_half, &resized).await.is_err() {
@@ -403,7 +443,7 @@ async fn handle_attach(
 /// Drive a read-only observer: an initial paint, then the live output stream.
 async fn handle_subscribe(state: Arc<DaemonState>, mut write_half: OwnedWriteHalf) -> Result<()> {
     let (control_tx, _control_rx) = mpsc::unbounded_channel();
-    let (id, attachment) = state.add_observer(control_tx);
+    let ObserverResult { id, attachment } = state.add_observer(control_tx);
     send_line(&mut write_half, &Response::Subscribed).await?;
     send_line(
         &mut write_half,

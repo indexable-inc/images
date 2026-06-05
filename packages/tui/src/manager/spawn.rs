@@ -77,6 +77,13 @@ pub(super) fn spawn_tui(
 
         let mut cmd = pty_process::Command::new(&command);
         cmd.args(&args);
+        // A PTY-backed emulator is only as useful as the TERM the child thinks
+        // it is driving. With no TERM the child inherits the host's, so curses
+        // and terminfo capabilities (e.g. `curs_set`) silently fail or differ
+        // by machine. ix-vt implements an xterm-256color superset, so advertise
+        // that plus truecolor for a consistent, capable default.
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
 
         let child = cmd
             .spawn(&pty_slave)
@@ -91,13 +98,24 @@ pub(super) fn spawn_tui(
     // cursor shape on every render. The cache is read by the frame builder, so
     // it is shared like `size` rather than channelled.
     let cursor_shape = Arc::new(parking_lot::RwLock::new(CursorShape::default()));
-    let engine_tx = engine::spawn(id, rows, cols, scrollback_lines, Arc::clone(&cursor_shape))?;
+    // Whether the child has enabled DECCKM (application cursor keys). The engine
+    // refreshes it as it processes output; the actor reads it to pick the arrow
+    // form on write. Shared like `cursor_shape` rather than channelled.
+    let app_cursor_keys = Arc::new(parking_lot::RwLock::new(false));
+    let engine_tx = engine::spawn(
+        id,
+        rows,
+        cols,
+        scrollback_lines,
+        Arc::clone(&cursor_shape),
+        Arc::clone(&app_cursor_keys),
+    )?;
 
     // The actor owns the child: it reaps it (so short-lived commands leave no
     // zombie), publishes the exit code through `exit_tx`, and can signal it on
     // a kill request. It forwards bytes and reads to the engine thread.
     runtime.spawn(async move {
-        pty_actor(id, pty, child, command_rx, engine_tx, exit_tx).await;
+        pty_actor(id, pty, child, command_rx, engine_tx, exit_tx, app_cursor_keys).await;
     });
 
     let instance = TuiInstance {

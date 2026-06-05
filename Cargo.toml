@@ -2,6 +2,7 @@
 members = [
   "modules/services/resource-monitor/stats-writer",
   "packages/agents-md",
+  "packages/blast-radius",
   "packages/claude-stories",
   "packages/ast-merge/ast",
   "packages/ast-merge/cli",
@@ -26,14 +27,16 @@ members = [
   "packages/file-search",
   "packages/git-log-pretty",
   "packages/github-avatar",
+  "packages/google/calendar",
+  "packages/google/calendar/cli",
   "packages/indexbench",
   "packages/ix-dev-diagnose",
   "packages/kitty",
-  "packages/macos-vm",
   "packages/minecraft/nbt",
   "packages/minecraft/sound",
   "packages/minecraft/sync-managed",
   "packages/mixedbread",
+  "packages/mynoise",
   "packages/nix-web-monitor/parser",
   "packages/nix-web-monitor/server",
   "packages/oci-image-builder",
@@ -44,9 +47,11 @@ members = [
   "packages/screencast",
   "packages/screencast-ingest",
   "packages/source/linear",
+  "packages/source/github",
   "packages/search",
   "packages/search-core",
   "packages/source/meta",
+  "packages/source/parquet",
   "packages/search-py",
   "packages/skill-lint",
   "packages/source/slack",
@@ -62,6 +67,7 @@ members = [
   "packages/tui",
   "packages/tui-node",
   "packages/tui-py",
+  "packages/vmkit",
   "packages/vt/ix-vt",
   "packages/vt/ix-vt-sys",
 ]
@@ -89,6 +95,16 @@ pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
 multiple_crate_versions = "allow"
+# Restriction lint (off even in `all`): forbid anonymous tuple return types so a
+# multi-value return is a named struct the reader understands at the call site,
+# not a positional `(i32, i32)`. Provided by the indexable-inc/clippy fork.
+anonymous_tuple_return_type = "deny"
+# Restriction lint (off even in `all`): forbid silently defaulting a fallible
+# integer conversion (`u8::try_from(x).unwrap_or(..)` / `.unwrap_or_default()` /
+# `.unwrap_or_else(..)`), which clamps or zeroes an out-of-range value and hides
+# the overflow. Propagate the `TryFromIntError` instead. Provided by the
+# indexable-inc/clippy fork.
+fallible_int_fallback = "deny"
 
 [workspace.dependencies]
 anstream = "1"
@@ -117,6 +133,7 @@ clone-scanner = { path = "packages/clone-detect/scanner" }
 code-highlight = { path = "packages/code-highlight" }
 code-tokenizer = { path = "packages/code-tokenizer" }
 github-avatar = { path = "packages/github-avatar" }
+google-calendar = { path = "packages/google/calendar" }
 indexbench = { path = "packages/indexbench" }
 kitty = { path = "packages/kitty" }
 color-eyre = "0.6"
@@ -135,6 +152,7 @@ insta = { version = "1.42", features = ["json"] }
 lazy-regex = "3.4"
 libc = "0.2"
 source-linear = { path = "packages/source/linear" }
+source-github = { path = "packages/source/github" }
 mixedbread = { path = "packages/mixedbread" }
 loro = "1.12"
 napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt"] }
@@ -175,6 +193,7 @@ serde_norway = "0.9"
 sha2 = "0.10"
 similar = "2"
 source-slack = { path = "packages/source/slack" }
+source-parquet = { path = "packages/source/parquet" }
 sink-mixedbread = { path = "packages/sink/mixedbread" }
 sink-parquet = { path = "packages/sink/parquet" }
 snafu = "0.9"

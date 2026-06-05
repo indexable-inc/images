@@ -116,6 +116,7 @@ def scan_mixedbread(
     max_top_k: int = DEFAULT_MAX_TOP_K,
     base_url: str | None = None,
     rerank: bool = True,
+    reranker: str | None = None,
     agentic: bool = False,
     score_threshold: float | None = None,
     metadata_columns: dict[str, pl.DataType] | None = None,
@@ -127,7 +128,9 @@ def scan_mixedbread(
     docstring). ``store`` is one store name or a list of them (default
     ``"index"``). ``metadata_columns`` maps metadata keys to dtypes to surface as
     typed columns (default: the ``index`` keys).
-    ``rerank``/``agentic``/``score_threshold`` tune retrieval.
+    ``rerank``/``agentic``/``score_threshold`` tune retrieval. ``reranker`` names
+    the reranking model (default: the listwise reranker); ignored when ``rerank``
+    is ``False``.
 
     ``min_results`` turns ``top_k`` into a floor on the *output*: when a
     client-side filter trims the window below N rows, the source re-searches with
@@ -162,6 +165,7 @@ def scan_mixedbread(
                 top_k=k,
                 base_url=base_url,
                 rerank=rerank,
+                reranker=reranker,
                 agentic=agentic,
                 score_threshold=score_threshold,
                 filters=None if pushed is None else json.dumps(pushed),

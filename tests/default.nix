@@ -12,6 +12,9 @@ let
   fs = lib.fileset;
   repoPackages = ix.packageSetFor pkgs;
   portableServicesTest = import ./portable-services.nix { inherit lib pkgs ix; };
+  # Public Rust SDK: links the prebuilt, R2-hosted ix-sdk-wire rlib with no
+  # ix-sdk-wire source (ENG-2151 / ENG-2154). `proof` is the end-to-end check.
+  sdkRust = import ../sdk/rust { inherit lib pkgs ix; };
   packageRegistry = import ../packages/registry.nix {
     inherit lib;
     root = ../packages;
@@ -623,6 +626,20 @@ let
     ];
   };
 
+  # Same workspace narrowed to the build graph only. Root derivations are
+  # per-unit, so this must yield byte-identical roots to lazily selecting from
+  # the multi-target workspace above; the helpers assertion pins that equality,
+  # which also proves a selected root's closure contains nothing from the
+  # dropped target sets. Consumers should select roots lazily instead of
+  # spinning up subset workspaces like this one (#716).
+  cargoUnitSubsetWorkspace = ix.cargoUnit.buildWorkspace {
+    src = cargoUnitFixture;
+    workspaceRoot = ./fixtures/cargo-unit-hello;
+    packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
+    packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
+    cargoTargets = [ [ "--workspace" ] ];
+  };
+
   cargoUnitCoverageRustToolchain = ix.languages.rust.toolchain pkgs {
     channel = "nightly";
     version = rustPinnedNightlyDate;
@@ -687,6 +704,166 @@ let
       clippy.enable = false;
     };
   };
+
+  # Self-test for the prebuilt-library injection seam (mkPrebuiltLibraryUnit +
+  # extraUnits / extraLibraries). The shape: build a leaf library crate normally
+  # (the consumer's own source, `answer() = 42`), then inject a prebuilt unit
+  # built from a metadata-identical VARIANT of that library (`answer() = 99`)
+  # under the same source-independent unit key, and assert the downstream
+  # consumer prints 99. Using a distinguishable variant is what makes the proof
+  # real: a same-source rlib is byte-identical, so a runtime check could not tell
+  # prebuilt from source; 99-vs-42 can only come from the injected prebuilt.
+  cargoUnitPrebuiltFixture = fs.toSource {
+    root = ./fixtures/cargo-unit-prebuilt;
+    fileset = fs.unions [
+      ./fixtures/cargo-unit-prebuilt/Cargo.lock
+      ./fixtures/cargo-unit-prebuilt/Cargo.toml
+      ./fixtures/cargo-unit-prebuilt/crates
+    ];
+  };
+
+  # A metadata-identical variant of the fixture whose library returns 99 instead
+  # of 42. Same package name/version/edition/deps, so cargo-unit computes the
+  # same unit key; only the function body (source bytes, which the key ignores)
+  # differs. This stands in for "a prebuilt artifact compiled elsewhere".
+  cargoUnitPrebuiltVariantSource = pkgs.runCommand "cargo-unit-prebuilt-variant-source" { } ''
+    cp -R ${cargoUnitPrebuiltFixture}/. "$out"
+    chmod -R u+w "$out"
+    sed -i 's/^    42$/    99/' "$out/crates/prebuilt-lib/src/lib.rs"
+    grep -q '99' "$out/crates/prebuilt-lib/src/lib.rs"
+  '';
+
+  cargoUnitPrebuiltPolicy = {
+    denyUnusedCrateDependencies = false;
+    cargoAudit.enable = false;
+    cargoMachete.enable = false;
+    clippy.enable = false;
+  };
+
+  # Shared args for the prebuilt-seam fixture workspaces.
+  cargoUnitPrebuiltCommon = {
+    workspaceRoot = ./fixtures/cargo-unit-prebuilt;
+    cargoArgs = [ "--workspace" ];
+    policy = cargoUnitPrebuiltPolicy;
+  };
+
+  # (a) The variant workspace, standing in for an out-of-tree prebuilt SDK
+  # build. Its lib rlib (answer = 99) is what we inject.
+  cargoUnitPrebuiltVariant = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-variant";
+      src = cargoUnitPrebuiltVariantSource;
+      workspaceRoot = cargoUnitPrebuiltVariantSource;
+    }
+  );
+
+  # The single `prebuilt_lib-0.1.0-<hash>` unit from the variant graph, found by
+  # key prefix (mirrors `cargoUnitScopeUnit`). Its attr name IS the unit key.
+  cargoUnitPrebuiltLibMatches = lib.filterAttrs (
+    name: _: lib.hasPrefix "prebuilt_lib-0.1.0-" name
+  ) cargoUnitPrebuiltVariant.units;
+  cargoUnitPrebuiltLibKey =
+    let
+      names = builtins.attrNames cargoUnitPrebuiltLibMatches;
+    in
+    assert lib.assertMsg (
+      builtins.length names == 1
+    ) "expected exactly one prebuilt_lib unit, found ${lib.concatStringsSep ", " names}";
+    builtins.head names;
+  # The hash component of "<name>-<version>-<hash>". The library crate name has
+  # no dashes, and the version is the fixed literal above, so stripping the known
+  # prefix leaves the hash.
+  cargoUnitPrebuiltLibHash = lib.removePrefix "prebuilt_lib-0.1.0-" cargoUnitPrebuiltLibKey;
+  cargoUnitPrebuiltVariantLibUnit = cargoUnitPrebuiltLibMatches.${cargoUnitPrebuiltLibKey};
+
+  # (b) Wrap the variant's rlib+rmeta as a prebuilt unit. The rlib/rmeta paths
+  # are reconstructed from the known underscored name + hash, exactly as the
+  # renderer wrote them (render.rs:1376-1392). The toolchain id matches the
+  # default toolchain the variant compiled with, so the eval-time assertion in
+  # `mkPrebuiltLibraryUnit` passes.
+  cargoUnitPrebuiltLibUnit = ix.cargoUnit.mkPrebuiltLibraryUnit {
+    # The Cargo library TARGET name, which is what the renderer uses for both
+    # the unit key and the rlib filename (render.rs:1376, prepare_graph names).
+    # The package is `prebuilt-lib`; its lib target is `prebuilt_lib`.
+    name = "prebuilt_lib";
+    version = "0.1.0";
+    hash = cargoUnitPrebuiltLibHash;
+    rlib = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
+    rmeta = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
+    toolchainId = ix.cargoUnit.defaultToolchainId;
+  };
+
+  # Negative arm: a wrong toolchain id must fail at eval (not at link time).
+  # `tryEval` should report `success = false`.
+  cargoUnitPrebuiltToolchainMismatchEval = builtins.tryEval (
+    builtins.seq
+      (ix.cargoUnit.mkPrebuiltLibraryUnit {
+        name = "prebuilt_lib";
+        version = "0.1.0";
+        hash = cargoUnitPrebuiltLibHash;
+        rlib = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
+        rmeta = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
+        toolchainId = "definitely-not-the-toolchain";
+      }).drvPath
+      true
+  );
+
+  # (c) Build the consumer workspace from its OWN source (lib answer = 42), but
+  # inject the variant prebuilt unit (answer = 99) over the from-source lib unit.
+  # The consumer links the injected prebuilt rlib; if it prints 99 it used the
+  # prebuilt, if 42 it fell back to its own source. `extraLibraries` also
+  # surfaces the prebuilt through `libraries`.
+  cargoUnitPrebuiltInjected = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-injected";
+      src = cargoUnitPrebuiltFixture;
+      extraUnits = {
+        ${cargoUnitPrebuiltLibKey} = cargoUnitPrebuiltLibUnit;
+      };
+      extraLibraries = {
+        prebuilt_lib = cargoUnitPrebuiltLibUnit;
+      };
+    }
+  );
+
+  cargoUnitPrebuiltConsumer = cargoUnitPrebuiltInjected.binaries.prebuilt-consumer;
+
+  # The consumer workspace's OWN from-source lib unit key (no injection). Used to
+  # prove the variant (different source) hashes to the same key, which is the
+  # source-independence the whole swap relies on.
+  cargoUnitPrebuiltPlain = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-plain";
+      src = cargoUnitPrebuiltFixture;
+    }
+  );
+  cargoUnitPrebuiltPlainLibKey = builtins.head (
+    builtins.filter (lib.hasPrefix "prebuilt_lib-0.1.0-") (
+      builtins.attrNames cargoUnitPrebuiltPlain.units
+    )
+  );
+
+  # M1 / C1 negative arm: a mis-keyed injection (a key absent from the generated
+  # graph) must now fail loud, not silently build from source. `tryEval` over the
+  # workspace's unit-set attribute names should report `success = false`.
+  cargoUnitPrebuiltMiskeyEval = builtins.tryEval (
+    builtins.seq (builtins.attrNames
+      (ix.cargoUnit.buildWorkspace (
+        cargoUnitPrebuiltCommon
+        // {
+          pname = "cargo-unit-prebuilt-miskey";
+          src = cargoUnitPrebuiltFixture;
+          # Deliberately wrong key: not present in the generated unit set.
+          extraUnits = {
+            "prebuilt_lib-0.1.0-deadbeefdeadbeef" = cargoUnitPrebuiltLibUnit;
+          };
+        }
+      )).units
+    ) true
+  );
 
   goUnitFixture = fs.toSource {
     root = ./fixtures/go-unit-hello;
@@ -1756,6 +1933,41 @@ let
       lib = ix;
     };
   };
+
+  minecraftBlocksExample =
+    let
+      fleet = import ../examples/minecraft-blocks {
+        index = {
+          lib = ix;
+        };
+      };
+      # The buildable artifacts (plugin jar, integration check) built directly
+      # so the integration check can be pulled into the `eval` aggregate via
+      # `helperScript`.
+      packages = import ../examples/minecraft-blocks/packages.nix { inherit ix pkgs; };
+      schema = import ../examples/minecraft-blocks/schema.nix { inherit lib; };
+    in
+    {
+      inherit fleet packages schema;
+      log = {
+        config = fleet.nodes.log;
+        plan = fleet.planValue.nodes.log;
+        kafka = fleet.nodes.log.services.apache-kafka;
+      };
+      view = {
+        config = fleet.nodes.view;
+        plan = fleet.planValue.nodes.view;
+        obs = fleet.nodes.view.services.ix-observability;
+        initUnit = fleet.nodes.view.systemd.services.mc-blocks-view-init;
+      };
+      producer = {
+        config = fleet.nodes.producer;
+        plan = fleet.planValue.nodes.producer;
+        minecraft = fleet.nodes.producer.services.minecraft;
+        agent = fleet.nodes.producer.services.ix-observability;
+        shipUnit = fleet.nodes.producer.systemd.services.mc-blocks-ship;
+      };
+    };
   invalidSecretNameEval = builtins.tryEval (
     builtins.deepSeq
       (ix.secrets.normalize {
@@ -2189,9 +2401,11 @@ let
           &&
             observabilityStackExample.observability.collector.exporters.clickhouse.traces_table_name
             == "otel_traces"
-          &&
-            observabilityStackExample.observability.collector.service.pipelines.logs.exporters
-            == [ "clickhouse" ];
+          # The corpus moved off the OTel bus to its own Parquet log (#736), so the
+          # logs pipeline is telemetry-only again: ClickHouse (plus forward on an
+          # agent). Assert ClickHouse is an exporter rather than pinning the exact
+          # list, which breaks on every legitimate addition to the pipeline.
+          && builtins.elem "clickhouse" observabilityStackExample.observability.collector.service.pipelines.logs.exporters;
         message = "observability-stack collector should receive OTLP and export logs/traces/metrics to ClickHouse";
       }
       {
@@ -2238,6 +2452,144 @@ let
       {
         assertion = observabilityStackExample.observability.queryTool != null;
         message = "observability-stack should install the ix-observe query helper for agents";
+      }
+    ];
+
+    minecraft-blocks = [
+      {
+        # LOG: a single-node Kafka broker in KRaft mode (both roles), with the
+        # one durable topic. This is the source of truth, not the transport.
+        assertion =
+          minecraftBlocksExample.log.kafka.enable
+          && minecraftBlocksExample.log.kafka.formatLogDirs
+          &&
+            minecraftBlocksExample.log.kafka.settings."process.roles" == [
+              "broker"
+              "controller"
+            ];
+        message = "minecraft-blocks log node should run a KRaft Kafka broker as the durable log";
+      }
+      {
+        # Only the broker port is exposed, and it is claimed.
+        assertion =
+          let
+            claims = minecraftBlocksExample.log.config.ix.networking.portClaims;
+          in
+          claims.kafka.port == 9092
+          && builtins.elem 9092 minecraftBlocksExample.log.config.networking.firewall.allowedTCPPorts;
+        message = "minecraft-blocks log node should expose and claim the Kafka broker port";
+      }
+      {
+        # VIEW: reuses the shared observability ClickHouse (one server), with
+        # the collector and Grafana, not a second ClickHouse.
+        assertion =
+          minecraftBlocksExample.view.obs.enable
+          && minecraftBlocksExample.view.obs.stack.enable
+          && minecraftBlocksExample.view.config.services.clickhouse.enable
+          && minecraftBlocksExample.view.config.services.opentelemetry-collector.enable;
+        message = "minecraft-blocks view node should run the shared observability ClickHouse plus collector";
+      }
+      {
+        # The view-init oneshot creates the minecraft DB, table, Kafka queue,
+        # and MV after ClickHouse is up.
+        assertion =
+          let
+            unit = minecraftBlocksExample.view.initUnit;
+          in
+          unit.serviceConfig.Type == "oneshot" && builtins.elem "clickhouse.service" unit.requires;
+        message = "minecraft-blocks view node should initialize the spatial view once ClickHouse is up";
+      }
+      {
+        # The view health check confirms all three minecraft objects exist
+        # (table, Kafka queue, materialized view).
+        assertion =
+          let
+            check = minecraftBlocksExample.view.plan.healthChecks.mc-blocks-view;
+          in
+          check.from == "guest" && check.attempts == 60;
+        message = "minecraft-blocks view node should health-check the spatial view, queue, and MV";
+      }
+      {
+        # PRODUCER: a Paper server with the custom block-events plugin shipped
+        # via `src` (a built jar), not a catalog slug.
+        assertion =
+          minecraftBlocksExample.producer.minecraft.enable
+          && minecraftBlocksExample.producer.minecraft.paper.enable
+          && minecraftBlocksExample.producer.minecraft.plugins.block-events.enable
+          && minecraftBlocksExample.producer.minecraft.plugins.block-events.src != null
+          && minecraftBlocksExample.producer.minecraft.plugins.block-events.pluginName == "BlockEvents";
+        message = "minecraft-blocks producer should run Paper with the custom block-events plugin";
+      }
+      {
+        # Both legs are real on the producer: the domain-fact transport ships to
+        # Kafka, and the OTel agent forwards server telemetry to the collector.
+        # Telemetry is collected from the journal (the minecraft service stdout),
+        # not by tailing the server's private, DynamicUser-unreadable log file.
+        assertion =
+          let
+            ship = minecraftBlocksExample.producer.shipUnit;
+            agent = minecraftBlocksExample.producer.agent;
+          in
+          ship.serviceConfig.Restart == "always"
+          && agent.stack.enable == false
+          && agent.agent.enable
+          && agent.agent.journal.enable
+          && agent.agent.filelog.paths == [ ]
+          && agent.resourceAttributes."ix.app" == "minecraft-blocks";
+        message = "minecraft-blocks producer should run both the Kafka transport and the journal-based telemetry agent";
+      }
+      {
+        # The schema is the single source of truth: the Morton ORDER BY, the
+        # signed-coordinate offset, and the per-axis minmax skip indexes (which
+        # are what actually prune the bounding-box query) all come from it.
+        assertion =
+          let
+            inherit (minecraftBlocksExample) schema;
+          in
+          schema.coordOffset == 1048576
+          && lib.hasInfix "mortonEncode" schema.createTableSql
+          && lib.hasInfix "toUInt32(x + 1048576)" schema.mortonExpr
+          && builtins.length schema.mortonFields == 3
+          && lib.hasInfix "INDEX idx_x x TYPE minmax" schema.createTableSql
+          && lib.hasInfix "INDEX idx_z z TYPE minmax" schema.createTableSql
+          && lib.hasInfix "index_granularity = ${toString schema.indexGranularity}" schema.createTableSql;
+        message = "minecraft-blocks schema should drive a Z-order ORDER BY plus per-axis minmax skip indexes over offset-shifted signed coordinates";
+      }
+      {
+        # Replay must be idempotent: the table is a ReplacingMergeTree keyed on
+        # the placement identity (the ORDER BY tuple), so an at-least-once
+        # transport re-sending a record collapses it back to one row. The dedup
+        # key is the same ORDER BY tuple the spatial query relies on, so this
+        # engine choice never changes the query path, it only folds duplicates.
+        assertion =
+          let
+            inherit (minecraftBlocksExample) schema;
+          in
+          lib.hasInfix "ReplacingMergeTree" schema.createTableSql
+          && !lib.hasInfix "ENGINE = MergeTree" schema.createTableSql
+          && lib.hasInfix "ORDER BY (world, ${schema.mortonExpr}, timestamp)" schema.createTableSql;
+        message = "minecraft-blocks view should be a ReplacingMergeTree keyed on the placement identity so replay is idempotent";
+      }
+      {
+        # One bounding box: box.json drives the generator's in-box region, the
+        # Nix schema's derived predicate, and the integration check, so the
+        # asserted in-box count cannot drift from a fixture edit. The derived SQL
+        # predicate must be half-open per axis and bound to the box's world.
+        assertion =
+          let
+            inherit (minecraftBlocksExample) schema;
+            inherit (schema) box;
+          in
+          box.world == "overworld"
+          &&
+            box.x == [
+              0
+              16
+            ]
+          && lib.hasInfix "world = 'overworld'" schema.boxPredicate
+          && lib.hasInfix "x >= 0 AND x < 16" schema.boxPredicate
+          && lib.hasInfix "z >= 0 AND z < 16" schema.boxPredicate;
+        message = "minecraft-blocks bounding box should come from one box.json definition shared by the schema predicate and the fixture generator";
       }
     ];
 
@@ -2878,8 +3230,8 @@ let
         message = "exported JVM profile should evaluate with plain nixpkgs and no repo overlay";
       }
       {
-        assertion = cargoUnitWorkspace.policyChecks ? unusedCrateDependencies;
-        message = "cargo-unit workspaces should expose an unused dependency policy check by default";
+        assertion = cargoUnitWorkspace.unusedCrateDependenciesByPackage != { };
+        message = "cargo-unit workspaces should expose per-crate unused dependency policy checks by default";
       }
       {
         assertion = lib.hasInfix "--ordered-shutdown" processComposeApplication.passthru.tests.dryRun.buildCommand;
@@ -3041,20 +3393,21 @@ let
         message = "cargo-unit workspaces should expose a cargo-audit policy check by default";
       }
       {
-        assertion = cargoUnitWorkspace.policyChecks ? clippy;
-        message = "cargo-unit workspaces should expose a clippy policy check derivation";
+        # Clippy is a per-crate gate (clippyByPackage), not one workspace
+        # aggregate, so editing one crate rebuilds only its clippy check.
+        assertion = cargoUnitWorkspace.clippyByPackage != { };
+        message = "cargo-unit workspaces should expose per-crate clippy gates";
       }
       {
         assertion = !(cargoUnitWorkspace.policyChecks ? cargoClippy);
         message = "cargo-unit buildWorkspace should suppress the legacy workspace-level cargoClippy when per-unit clippy is on";
       }
       {
-        # `policyChecks.clippy` is one aggregate derivation so
-        # `withPolicyChecks` and `selectBinaryWithTests` can string-coerce it
-        # like every other policy check. The aggregate transitively depends on
-        # every per-unit clippy derivation.
-        assertion = lib.isDerivation cargoUnitWorkspace.policyChecks.clippy;
-        message = "cargo-unit policyChecks.clippy should be a single aggregate derivation";
+        # Each package's clippy gate is one derivation (a symlinkJoin over only
+        # that package's per-unit clippy derivations) that callers can
+        # string-coerce like any other check.
+        assertion = builtins.all lib.isDerivation (builtins.attrValues cargoUnitWorkspace.clippyByPackage);
+        message = "cargo-unit clippyByPackage entries should each be a single derivation";
       }
       {
         # The per-unit fan-out lives at `clippyUnits` for callers that want
@@ -3161,6 +3514,12 @@ let
         message = "cargo-unit should expose named target-set outputs without losing aggregate outputs";
       }
       {
+        assertion =
+          cargoUnitSubsetWorkspace.binaries.cargo-unit-hello.drvPath
+          == cargoUnitWorkspace.targetSets.build.binaries.cargo-unit-hello.drvPath;
+        message = "narrowing cargoTargets must yield identical root derivations; select roots lazily from the multi-target workspace instead of a subset buildWorkspace";
+      }
+      {
         assertion = cargoUnitPolicyDisabledWorkspace.policyChecks == { };
         message = "cargo-unit policy checks should be disableable for generated workspaces";
       }
@@ -3204,16 +3563,28 @@ let
         message = "cargo-unit source audit should record full dependency source identity";
       }
       {
-        assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? cargoMachete;
-        message = "repo Rust packages should expose cargo-machete policy checks by default";
+        # cargo-machete is dropped in favor of the per-crate
+        # unused_crate_dependencies (rustc) gate (lib/rust/workspace.nix).
+        assertion = !(repoPackages.minecraft-nbt.passthru.policyChecks ? cargoMachete);
+        message = "repo Rust packages should not expose cargo-machete (dropped for the per-crate unused-deps gate)";
+      }
+      {
+        # cargoAudit is lockfile-scoped and exposed once at the workspace level
+        # (per-system rust-cargoAudit), not aliased onto every crate.
+        assertion = !(repoPackages.minecraft-nbt.passthru.policyChecks ? cargoAudit);
+        message = "repo Rust packages should not alias the workspace cargoAudit per crate";
       }
       {
         # Repo packages route through `cargoUnit.buildWorkspace` via
-        # `ix.rustWorkspace.units`, so they pick up the aggregate per-unit
-        # clippy policy check rather than the legacy workspace-level
-        # `cargoClippy` single derivation.
+        # `ix.rustWorkspace.units`, so they pick up their own per-crate clippy
+        # gate (clippyByPackage) rather than a workspace-wide aggregate or the
+        # legacy `cargoClippy` single derivation.
         assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? clippy;
-        message = "repo Rust packages should expose per-unit clippy policy checks by default";
+        message = "repo Rust packages should expose a per-crate clippy policy check";
+      }
+      {
+        assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? unusedCrateDependencies;
+        message = "repo Rust packages with dependencies should expose a per-crate unused-crate-dependencies check";
       }
       {
         assertion = !(repoPackages.minecraft-nbt.passthru.policyChecks ? cargoClippy);
@@ -3237,12 +3608,8 @@ let
         message = "repo Rust package builds should be exposed as flake-checkable tests";
       }
       {
-        assertion = repoPackages ? ix;
-        message = "repo package set should expose the ix CLI package by default";
-      }
-      {
-        assertion = repoPackages.minecraft-nbt.passthru.tests ? cargoMachete;
-        message = "repo Rust policy checks should be exposed as flake-checkable tests";
+        assertion = repoPackages.minecraft-nbt.passthru.tests ? unusedCrateDependencies;
+        message = "repo Rust per-crate policy checks should be exposed as flake-checkable tests";
       }
       {
         assertion = !(repoPackages.dag-runner.passthru ? unchecked);
@@ -3748,6 +4115,42 @@ let
   helperScript = ''
     test -e ${nomadSecretRefsExample.buildCheck}
 
+    # minecraft-blocks integration: committed fixtures -> ClickHouse local
+    # spatial table -> bounding-box query. The derivation loads the fixture JSON
+    # Lines into a ReplacingMergeTree table built from the one schema (Morton
+    # ORDER BY, per-axis minmax skip indexes, small granule, signed-coordinate
+    # offset), loads them TWICE to simulate the at-least-once restart re-send,
+    # then asserts with FINAL that the replay was idempotent (the in-box count
+    # and the total did not double), that the skip indexes prune (fewer granules
+    # than the primary index alone), and the Morton round-trip. Realising it here
+    # pulls the whole check into the `eval` aggregate. It also proves the Paper
+    # plugin jar builds against the real API.
+    test -f ${minecraftBlocksExample.packages.loadFixtures}/result
+    grep -q 'in_box=512' ${minecraftBlocksExample.packages.loadFixtures}/result
+    # The double-loaded total stays at the single-load row count: replay folded
+    # the duplicates back to one row each, so the view is idempotent.
+    grep -q 'idempotent_total=2977' ${minecraftBlocksExample.packages.loadFixtures}/result
+    grep -qE 'pk_granules=[0-9]+ skip_granules=[0-9]+' ${minecraftBlocksExample.packages.loadFixtures}/result
+    test -s ${minecraftBlocksExample.packages.loadFixtures}/events.jsonl
+    test "$(wc -l < ${../examples/minecraft-blocks/fixtures.jsonl})" = "2977"
+    grep -q '"block_type":"minecraft:stone"' ${../examples/minecraft-blocks/fixtures.jsonl}
+    # The query tool reads with FINAL so counts are exact under the idempotent
+    # ReplacingMergeTree (merge-time dedup forced at read), not only after a
+    # background merge. Grep the rendered helper for the FINAL table reference.
+    grep -q 'FROM block_events FINAL' ${
+      minecraftBlocksExample.packages.mkQueryTool {
+        host = "127.0.0.1";
+        port = 9000;
+      }
+    }/bin/mc-blocks
+    # The jar must contain only the plugin's own classes plus plugin.yml; no
+    # leaked Paper/Bukkit API classes from the compile-time classpath.
+    test -s ${minecraftBlocksExample.packages.plugin}
+    ${lib.getExe' pkgs.unzip "unzip"} -l ${minecraftBlocksExample.packages.plugin} > mc-blocks-plugin-jar.list
+    grep -q 'dev/ix/example/blockevents/BlockEventsPlugin.class' mc-blocks-plugin-jar.list
+    grep -q 'plugin.yml' mc-blocks-plugin-jar.list
+    ! grep -qE 'org/bukkit/|net/kyori/|com/google/' mc-blocks-plugin-jar.list
+
     ${lib.getExe pythonAppClosureProbe} > python-app-closure-probe.out
     grep -q 'python app source is in the runtime closure' python-app-closure-probe.out
     test -e ${processComposeApplication.passthru.tests.dryRun}
@@ -3850,6 +4253,78 @@ let
     test -d ${cargoUnitRealWorkspaces.regex.testRoots}
   '';
 
+  # --- Prebuilt library injection seam -------------------------------------
+  # Proves mkPrebuiltLibraryUnit + extraUnits/extraLibraries: a leaf library is
+  # built from source, its rlib+rmeta and source-independent hash are captured,
+  # and those artifacts are re-injected as a prebuilt unit that a downstream
+  # consumer links with no library source in its own graph.
+  cargoUnitPrebuiltAssertions = [
+    {
+      # Source-independence: the variant lib (answer = 99) hashes to the SAME
+      # unit key as the consumer's own from-source lib (answer = 42). This is the
+      # property that lets a metadata-faithful prebuilt stand in for source.
+      assertion = cargoUnitPrebuiltLibKey == cargoUnitPrebuiltPlainLibKey;
+      message = "a metadata-identical variant should produce the same unit key as the from-source lib";
+    }
+    {
+      # The injected prebuilt unit is a genuinely different derivation from the
+      # variant's from-source compile unit.
+      assertion = cargoUnitPrebuiltLibUnit.drvPath != cargoUnitPrebuiltVariantLibUnit.drvPath;
+      message = "mkPrebuiltLibraryUnit should produce a distinct prebuilt derivation, not the from-source unit";
+    }
+    {
+      # `extraUnits` merges over the generated `units` set under the unit key, so
+      # the downstream consumer's `units.<key>` reference resolves to it.
+      assertion =
+        cargoUnitPrebuiltInjected.units.${cargoUnitPrebuiltLibKey}.drvPath
+        == cargoUnitPrebuiltLibUnit.drvPath;
+      message = "extraUnits should override the generated units entry with the injected prebuilt unit";
+    }
+    {
+      # `extraLibraries` surfaces the injected unit through `libraries`.
+      assertion =
+        cargoUnitPrebuiltInjected.libraries.prebuilt_lib.drvPath == cargoUnitPrebuiltLibUnit.drvPath;
+      message = "extraLibraries should override the libraries entry with the injected prebuilt unit";
+    }
+    {
+      assertion = cargoUnitPrebuiltLibUnit.passthru.unitKey == cargoUnitPrebuiltLibKey;
+      message = "mkPrebuiltLibraryUnit should expose the unit key it was injected under";
+    }
+    {
+      # A toolchain id mismatch must be caught at eval, not at link time.
+      assertion = !cargoUnitPrebuiltToolchainMismatchEval.success;
+      message = "mkPrebuiltLibraryUnit should reject a toolchain id mismatch during eval";
+    }
+    {
+      # C1: a mis-keyed injection (key absent from the generated graph) must fail
+      # loud during eval rather than silently building from source.
+      assertion = !cargoUnitPrebuiltMiskeyEval.success;
+      message = "buildWorkspace should reject an extraUnits key absent from the generated graph";
+    }
+  ];
+
+  cargoUnitPrebuiltScript = ''
+    # The injected unit's $out matches the unit contract: extern-path holds the
+    # absolute path to the rlib (render.rs:1386-1398).
+    test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib
+    test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta
+    test -f ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
+    grep -q '\.rlib$' ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
+
+    # M1 (definitive source-less proof): the consumer's OWN source returns 42,
+    # but it links the injected prebuilt rlib built from the variant (99). The
+    # binary printing 99, not 42, can ONLY mean it linked the prebuilt artifact
+    # and not its own from-source lib. A same-source rlib would be byte-identical
+    # and could not distinguish the two; the distinct value makes the proof real.
+    ${cargoUnitPrebuiltConsumer}/bin/prebuilt-consumer > cargo-unit-prebuilt.out
+    cat cargo-unit-prebuilt.out
+    grep -q 'prebuilt-lib:99 (answer=99)' cargo-unit-prebuilt.out
+    if grep -q 'answer=42' cargo-unit-prebuilt.out; then
+      echo "error: consumer used its own from-source lib (42), not the injected prebuilt (99)" >&2
+      exit 1
+    fi
+  '';
+
   # --- Test derivation builder ----------------------------------------------
 
   mkTest =
@@ -3879,10 +4354,22 @@ let
   cargoUnitRealWorkspacesTest =
     mkTest "cargo-unit-real-workspaces" cargoUnitRealWorkspaceAssertions
       cargoUnitRealWorkspaceScript;
+
+  cargoUnitPrebuiltTest =
+    mkTest "cargo-unit-prebuilt-library" cargoUnitPrebuiltAssertions
+      cargoUnitPrebuiltScript;
 in
 {
-  inherit imageTests groups cargoUnitRealWorkspaceAssertions;
+  inherit
+    imageTests
+    groups
+    cargoUnitRealWorkspaceAssertions
+    cargoUnitPrebuiltAssertions
+    ;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
+  cargoUnitPrebuiltLibrary = cargoUnitPrebuiltTest;
+  # End-to-end: public ix-sdk links the R2-hosted prebuilt ix-sdk-wire rlib.
+  sdkRustPrebuilt = sdkRust.proof;
   portableServices = portableServicesTest;
 
   # Aggregate. Pulls every per-image test into one derivation so
@@ -3893,6 +4380,7 @@ in
       fleetTest
       helperTest
       portableServicesTest
+      cargoUnitPrebuiltTest
     ]
   );
 }

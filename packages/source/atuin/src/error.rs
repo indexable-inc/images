@@ -18,6 +18,16 @@ pub enum Error {
         source: rusqlite::Error,
     },
 
+    /// The db file exists but has no `history` table: atuin has not run (or not
+    /// finished its first-run migration) for this account, so there is nothing
+    /// to index. Distinct from [`Error::Query`] so a caller can treat it as a
+    /// soft, non-fatal skip rather than a genuine read failure.
+    #[snafu(display("atuin history db {} is uninitialized (no history table)", path.display()))]
+    UninitializedDb {
+        /// Database path.
+        path: PathBuf,
+    },
+
     /// The history table could not be queried.
     #[snafu(display("failed to query atuin history"))]
     Query {
@@ -33,6 +43,17 @@ pub enum Error {
         /// Underlying limit error.
         source: source_meta::MetadataError,
     },
+}
+
+impl Error {
+    /// Whether this error is the benign "db exists but atuin never initialized
+    /// it" case ([`Error::UninitializedDb`]). The fleet indexer reads many
+    /// accounts' history; an account that has an atuin db file but no `history`
+    /// table yet (atuin has not run there) is a soft skip, not a run failure.
+    #[must_use]
+    pub const fn is_uninitialized(&self) -> bool {
+        matches!(self, Self::UninitializedDb { .. })
+    }
 }
 
 /// Result alias defaulting to this crate's [`Error`].

@@ -33,6 +33,7 @@ class SearchBackend:
     store: str | None = None
     max_count: int = 10
     rerank: bool = True
+    reranker: str | None = None
     timeout_seconds: float = 180.0
 
     def _base_args(self, no_sync: bool) -> list[str]:
@@ -41,6 +42,8 @@ class SearchBackend:
             args += ["--source", source]
         if not self.rerank:
             args.append("--no-rerank")
+        elif self.reranker:
+            args += ["--reranker", self.reranker]
         if no_sync:
             args.append("--no-sync")
         if self.store:

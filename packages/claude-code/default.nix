@@ -281,11 +281,10 @@ stdenv.mkDerivation {
   meta = {
     description = "Claude Code, Anthropic's agentic coding tool in the terminal";
     homepage = "https://www.anthropic.com/claude-code";
-    # License omitted rather than `licenses.unfree` to match the proprietary
-    # `packages/ix` vendor binary: the per-system flake package set evaluates
-    # nixpkgs without `allowUnfree`, so tagging it unfree would block
-    # `nix run .#claude-code`. Distribution terms are Anthropic's commercial
-    # Claude Code license.
+    # License omitted rather than `licenses.unfree`: the per-system flake
+    # package set evaluates nixpkgs without `allowUnfree`, so tagging this
+    # vendored binary unfree would block `nix run .#claude-code`. Distribution
+    # terms are Anthropic's commercial Claude Code license.
     mainProgram = binName;
     platforms = builtins.attrNames manifest.platforms;
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];

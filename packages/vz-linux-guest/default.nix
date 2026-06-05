@@ -1,4 +1,4 @@
-# Build a raw EFI-bootable aarch64 NixOS disk image for the macos-vm
+# Build a raw EFI-bootable aarch64 NixOS disk image for the vmkit
 # `boot-linux-gui` path. The image boots into a Wayland compositor running
 # `bossbar-overlay` on software graphics (see ./nixos.nix).
 #

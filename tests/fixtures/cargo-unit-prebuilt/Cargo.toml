@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "crates/prebuilt-lib",
+  "crates/prebuilt-consumer",
+]
+resolver = "3"

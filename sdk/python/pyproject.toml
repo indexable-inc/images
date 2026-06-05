@@ -1,0 +1,29 @@
+# Public Python SDK for ix.
+#
+# Proprietary, source-available: governed by the Indexable SDK License shipped
+# alongside this file (sdk/python/LICENSE, a copy of sdk/LICENSE), which
+# supersedes the repo-root MIT for everything under sdk/. The project metadata
+# below points at that LICENSE and carries the Proprietary classifier so PyPI
+# and packaging tooling surface the real terms, never a permissive identifier.
+[project]
+name = "ix-sdk"
+version = "0.1.0"
+description = "Public Python SDK for ix; wraps the precompiled, proprietary ix-sdk native extension"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+classifiers = [
+  "License :: Other/Proprietary License",
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+]
+
+[tool.setuptools.packages.find]
+include = ["ix_sdk*"]
+
+[tool.setuptools.package-data]
+ix_sdk = ["py.typed", "*.pyi"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

@@ -238,7 +238,7 @@ mod tests {
 
     fn opts() -> SearchOptions {
         SearchOptions {
-            rerank: true,
+            rerank: mixedbread::Rerank::server_default(),
             agentic: false,
         }
     }

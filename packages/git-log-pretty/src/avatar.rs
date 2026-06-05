@@ -34,7 +34,7 @@ pub struct Avatar {
 pub struct Resolver {
     client: Client,
     /// `owner/repo` parsed from the `origin` remote, if it is a GitHub remote.
-    origin: Option<(String, String)>,
+    origin: Option<github_avatar::RepoSlug>,
     /// Explicit `email -> login` overrides from `git config githubLogin.map`.
     identities: HashMap<String, String>,
     size_px: u32,
@@ -119,7 +119,7 @@ impl Resolver {
     }
 
     async fn resolve_via_commit(&self, sha: &str) -> Option<String> {
-        let (owner, repo) = self.origin.as_ref()?;
+        let github_avatar::RepoSlug { owner, repo } = self.origin.as_ref()?;
         self.client
             .resolve_commit(owner, repo, sha)
             .await

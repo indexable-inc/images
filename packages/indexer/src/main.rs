@@ -1,12 +1,23 @@
 //! `indexer`: sync every configured corpus source into Mixedbread (semantic
-//! search) and a self-hosted S3/R2 parquet archive (polars/duckdb-queryable).
+//! search) and a durable Parquet corpus log, the log-as-source-of-truth with the
+//! Mixedbread index as a materialized view (issue #736).
 //!
-//! Each source is an adapter implementing [`source_meta::SourceAdapter`]; the
-//! indexer fans every selected source out to both sinks, reusing the
-//! `search-core` Mixedbread reconcile (skip-if-unchanged) and the generic
-//! [`sink_parquet`] sink. Pass `--mixedbread-store` and/or `--bucket` to enable a
-//! sink, and one or more source flags to choose what to ingest.
+//! Each source is an adapter implementing [`source_meta::SourceAdapter`]. The
+//! routing differs by corpus shape:
+//!
+//! - Per-host history (claude, codex, shell, debug) and the bulk exports (slack,
+//!   linear, github, git) go to Mixedbread directly and/or the S3/R2 Parquet log
+//!   (`--bucket`), reusing the `search-core` reconcile and [`sink_parquet`]. The
+//!   Parquet log is the append-only source of truth: a separate consume run can
+//!   rebuild the Mixedbread index from it.
+//! - Code repos go direct to Mixedbread only.
+//!
+//! Consume mode reconciles the durable corpus log back into Mixedbread rather
+//! than scanning local sources: `--from-parquet-prefix` reads the per-source
+//! `data.parquet` files `sink-parquet` wrote (the consumer half of that log) and
+//! replays every record into Mixedbread.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -19,7 +30,7 @@ use sink_mixedbread::sync_documents;
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 /// Cap on new files uploaded per code sync (a runaway guard).
 const MAX_FILES: usize = 10_000;
-use source_meta::SourceAdapter;
+use source_meta::{Document, Source, SourceAdapter, keys};
 
 /// How long to wait for Mixedbread to finish embedding new documents.
 const INDEX_TIMEOUT: Duration = Duration::from_mins(2);
@@ -53,6 +64,14 @@ struct Cli {
     #[arg(long, env = "INDEXER_PREFIX", default_value = "corpus")]
     prefix: String,
 
+    /// Rebuild the Mixedbread index from the Parquet corpus log at this prefix;
+    /// pair with --mixedbread-store and --bucket. Reads the per-source
+    /// `data.parquet` files `sink-parquet` wrote (the other half of the parquet
+    /// corpus log) and reconciles every record back into Mixedbread, rather than
+    /// scanning local sources.
+    #[arg(long, env = "INDEXER_FROM_PARQUET_PREFIX")]
+    from_parquet_prefix: Option<String>,
+
     /// Index local agent/shell history (claude, codex, atuin) at their default
     /// paths, in addition to any explicit `--*` overrides below.
     #[arg(long)]
@@ -77,6 +96,10 @@ struct Cli {
     /// Linear export directory.
     #[arg(long)]
     linear_export: Option<PathBuf>,
+
+    /// GitHub export directory (produced by `source-github`'s `export.sh`).
+    #[arg(long)]
+    github_export: Option<PathBuf>,
 
     /// Git repository to index commit history from (repeatable).
     #[arg(long = "git-repo")]
@@ -108,9 +131,17 @@ struct Mixedbread<'a> {
     name: &'a str,
 }
 
-/// Per-run tally of how many sources were indexed versus failed.
+/// Per-run tally of how many sources were indexed, soft-skipped, or failed.
+///
+/// `skipped` counts sources that were deliberately and visibly passed over for a
+/// benign reason (e.g. an atuin db file that exists but has no `history` table
+/// because that account never ran atuin). A soft skip is logged but never gates
+/// the run's exit code — only `failures` does — so one uninitialized per-user
+/// history db cannot degrade the whole indexing unit.
+#[derive(Clone, Copy)]
 struct Counts {
     indexed: usize,
+    skipped: usize,
     failures: usize,
 }
 
@@ -132,6 +163,28 @@ async fn main() -> anyhow::Result<()> {
         }
         None => None,
     };
+    let mixedbread =
+        store.as_ref().zip(cli.mixedbread_store.as_deref()).map(|(store, name)| Mixedbread { store, name });
+
+    // Consume mode (parquet corpus log): read the per-source `data.parquet` files
+    // `sink-parquet` wrote at this prefix under `--bucket` and reconcile them back
+    // into Mixedbread. Uses the SAME bucket/endpoint/region the parquet sink uses,
+    // so it reads exactly what was written. Emit (scan local sources, write the
+    // log) and consume (replay the log into Mixedbread) run as separate
+    // invocations of this binary; consume reconciles the log rather than scanning.
+    if let Some(prefix) = cli.from_parquet_prefix.clone() {
+        let mixedbread = mixedbread
+            .context("--from-parquet-prefix requires --mixedbread-store (the reconcile target)")?;
+        let bucket = cli.bucket.clone().context("--from-parquet-prefix requires --bucket")?;
+        let config = source_parquet::Config {
+            bucket,
+            endpoint: cli.endpoint.clone(),
+            region: cli.region.clone(),
+            prefix,
+        };
+        return finish(consume_parquet(&config, mixedbread).await);
+    }
+
     let parquet = match cli.bucket.as_ref() {
         // Host-scope every parquet key. Many fleet hosts index the same account
         // (notably `root`, present on every host) into one shared bucket, and
@@ -156,20 +209,30 @@ async fn main() -> anyhow::Result<()> {
     }
     if !any_source_selected(&cli) {
         anyhow::bail!(
-            "no sources selected: pass --local, --user NAME:HOME, --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--git-repo, or --code-repo"
+            "no sources selected: pass --local, --user NAME:HOME, --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--github-export/--git-repo, or --code-repo"
         );
     }
-    let mixedbread =
-        store.as_ref().zip(cli.mixedbread_store.as_deref()).map(|(store, name)| Mixedbread { store, name });
 
-    let counts = run_sources(&cli, mixedbread, parquet.as_ref()).await;
+    finish(run_sources(&cli, mixedbread, parquet.as_ref()).await)
+}
 
+/// Turn the per-run counts into the process result: success only when no source
+/// failed, so a partial failure is a non-zero exit the timer/operator can see.
+///
+/// Soft skips (e.g. an uninitialized atuin db, counted in `skipped`) never gate
+/// the exit code — only genuine `failures` do — so one account whose history db
+/// has no `history` table cannot degrade the whole indexing unit.
+fn finish(counts: Counts) -> anyhow::Result<()> {
+    if counts.skipped > 0 {
+        eprintln!("[indexer] {} source(s) soft-skipped (uninitialized/empty)", counts.skipped);
+    }
     if counts.failures > 0 {
         anyhow::bail!(
-            "{} of {} source(s) failed; {} succeeded",
+            "{} of {} source(s) failed; {} succeeded, {} skipped",
             counts.failures,
-            counts.indexed + counts.failures,
-            counts.indexed
+            counts.indexed + counts.failures + counts.skipped,
+            counts.indexed,
+            counts.skipped
         );
     }
     Ok(())
@@ -184,6 +247,7 @@ const fn any_source_selected(cli: &Cli) -> bool {
         || cli.atuin_db.is_some()
         || cli.slack_export.is_some()
         || cli.linear_export.is_some()
+        || cli.github_export.is_some()
         || !cli.git_repos.is_empty()
         || !cli.code_repos.is_empty()
         || !cli.users.is_empty()
@@ -202,7 +266,7 @@ async fn run_sources(
     let codex = cli.codex_file.clone().or_else(|| cli.local.then(|| default(".codex/history.jsonl")).flatten());
     let atuin = cli.atuin_db.clone().or_else(|| cli.local.then(|| default(".local/share/atuin/history.db")).flatten());
 
-    let mut counts = Counts { indexed: 0, failures: 0 };
+    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
     if let Some(dir) = claude {
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open(&dir)
@@ -222,13 +286,15 @@ async fn run_sources(
         record("codex", result, &mut counts);
     }
     if let Some(db) = atuin {
-        let result = async {
-            let adapter = source_atuin::AtuinHistory::open(&db)
-                .with_context(|| format!("reading atuin history at {}", db.display()))?;
-            run_source("shell", &adapter, mixedbread, parquet).await
+        match open_atuin("shell", &db, mixedbread, parquet, &mut counts) {
+            Ok(Atuin::Ready(adapter)) => {
+                let result = run_source("shell", &adapter, mixedbread, parquet).await;
+                record("shell", result, &mut counts);
+            }
+            // An uninitialized db is already logged and tallied as a soft skip.
+            Ok(Atuin::Skipped) => {}
+            Err(error) => record("shell", Err(error), &mut counts),
         }
-        .await;
-        record("shell", result, &mut counts);
     }
     if let Some(dir) = &cli.slack_export {
         let result = async {
@@ -247,6 +313,15 @@ async fn run_sources(
         }
         .await;
         record("linear", result, &mut counts);
+    }
+    if let Some(dir) = &cli.github_export {
+        let result = async {
+            let adapter = source_github::GithubExport::open(dir)
+                .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
+            run_source("github", &adapter, mixedbread, parquet).await
+        }
+        .await;
+        record("github", result, &mut counts);
     }
     for repo in &cli.git_repos {
         let label = format!("git:{}", repo.display());
@@ -299,6 +374,74 @@ async fn run_users(
     }
 }
 
+/// An in-memory source: documents already tagged with one `source`, used by
+/// [`run_consume`] to reuse the per-source Mixedbread reconcile (which scopes its
+/// skip-if-unchanged listing by `source`).
+struct VecSource {
+    source: Source,
+    documents: Vec<Document>,
+}
+
+impl SourceAdapter for VecSource {
+    type Error = std::convert::Infallible;
+    fn source(&self) -> Source {
+        self.source.clone()
+    }
+    fn documents(&self) -> impl Iterator<Item = Result<Document, Self::Error>> + Send {
+        self.documents.clone().into_iter().map(Ok)
+    }
+}
+
+/// Consume the parquet corpus log: read the per-source `data.parquet` files into
+/// documents, then reconcile them into Mixedbread via [`run_consume`].
+async fn consume_parquet(config: &source_parquet::Config, mixedbread: Mixedbread<'_>) -> Counts {
+    let documents = match source_parquet::read_documents(config).await {
+        Ok(documents) => documents,
+        Err(error) => {
+            eprintln!("[consume] failed to read the parquet corpus log: {error:#}");
+            return Counts { indexed: 0, skipped: 0, failures: 1 };
+        }
+    };
+    run_consume(documents, mixedbread).await
+}
+
+/// Reconcile already-read documents into Mixedbread, grouped by their `source`.
+///
+/// Grouping keeps each Mixedbread reconcile scoped to one source, exactly as the
+/// direct per-source ingestion did, so a consumed record dedups against its own
+/// source and never touches another's. The parquet consume path reads its
+/// documents first, then shares this reconcile.
+async fn run_consume(documents: Vec<Document>, mixedbread: Mixedbread<'_>) -> Counts {
+    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+    let mut by_source: BTreeMap<String, Vec<Document>> = BTreeMap::new();
+    for document in documents {
+        let source = document
+            .meta_json
+            .get(keys::SOURCE)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        by_source.entry(source).or_default().push(document);
+    }
+
+    let Mixedbread { store, name } = mixedbread;
+    for (source, documents) in by_source {
+        let label = format!("consume:{source}");
+        let adapter = VecSource { source: Source::new(source), documents };
+        let result = sync_documents(&adapter, store, name, INDEX_TIMEOUT, |_, _| {})
+            .await
+            .map(|report| {
+                eprintln!(
+                    "[{label}] mixedbread: uploaded {}, skipped {} of {}",
+                    report.uploaded, report.skipped, report.total
+                );
+            })
+            .with_context(|| format!("[{label}] Mixedbread reconcile"));
+        record(&label, result, &mut counts);
+    }
+    counts
+}
+
 /// Index one user's local agent and shell history (claude, codex, atuin),
 /// reading under `home` and tagging records with `name` and `host`.
 ///
@@ -317,13 +460,19 @@ async fn index_user(
 ) {
     let name = user.name.as_str();
     let home = user.home.as_path();
+    // User-scope the parquet log so several accounts on one host do not clobber
+    // each other's `source=<source>/data.parquet` (the sink overwrites that file
+    // in full per run, and every account produces the same `source=claude` etc.).
+    // The Mixedbread sink needs no such scoping: its `external_id`s already carry
+    // the per-message uuid, so records never collide across users there.
+    let user_parquet = parquet.map(|config| user_scoped_parquet(config, name));
+    let parquet = user_parquet.as_ref();
     if let Some(claude_dir) = safe_path_under(home, &[".claude", "projects"], true) {
         let label = format!("claude:{name}");
-        let parquet = parquet.map(|config| user_parquet(config, name));
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name)
                 .with_context(|| format!("parsing Claude transcripts for {name} at {}", claude_dir.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+            run_source(&label, &adapter, mixedbread, parquet).await
         }
         .await;
         record(&label, result, counts);
@@ -331,28 +480,29 @@ async fn index_user(
 
     if let Some(codex_file) = safe_path_under(home, &[".codex", "history.jsonl"], false) {
         let label = format!("codex:{name}");
-        let parquet = parquet.map(|config| user_parquet(config, name));
         let result = async {
             let adapter = source_codex::CodexHistory::open_with(&codex_file, host, name)
                 .with_context(|| format!("parsing Codex history for {name} at {}", codex_file.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+            run_source(&label, &adapter, mixedbread, parquet).await
         }
         .await;
         record(&label, result, counts);
     }
 
     // atuin records its own `host`/`user` in each row, so it self-tags per user
-    // regardless of who runs the process.
+    // regardless of who runs the process. An account whose db file exists but
+    // was never initialized by atuin (no `history` table) is a soft skip, so one
+    // such account cannot fail the whole fleet run (ENG-2141).
     if let Some(atuin_db) = safe_path_under(home, &[".local", "share", "atuin", "history.db"], false) {
         let label = format!("shell:{name}");
-        let parquet = parquet.map(|config| user_parquet(config, name));
-        let result = async {
-            let adapter = source_atuin::AtuinHistory::open(&atuin_db)
-                .with_context(|| format!("reading atuin history for {name} at {}", atuin_db.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+        match open_atuin(&label, &atuin_db, mixedbread, parquet, counts) {
+            Ok(Atuin::Ready(adapter)) => {
+                let result = run_source(&label, &adapter, mixedbread, parquet).await;
+                record(&label, result, counts);
+            }
+            Ok(Atuin::Skipped) => {}
+            Err(error) => record(&label, Err(error), counts),
         }
-        .await;
-        record(&label, result, counts);
     }
 
     // Claude debug logs (`~/.claude/debug/<session>.txt`), present only for
@@ -360,11 +510,10 @@ async fn index_user(
     // planted symlink in the debug dir is skipped rather than followed.
     if let Some(debug_dir) = safe_path_under(home, &[".claude", "debug"], true) {
         let label = format!("debug:{name}");
-        let parquet = parquet.map(|config| user_parquet(config, name));
         let result = async {
             let adapter = source_debug::DebugLogs::open_with(&debug_dir, host, name)
                 .with_context(|| format!("reading Claude debug logs for {name} at {}", debug_dir.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet.as_ref()).await
+            run_source(&label, &adapter, mixedbread, parquet).await
         }
         .await;
         record(&label, result, counts);
@@ -396,12 +545,20 @@ fn archive_prefix(base: &str, host: &str) -> String {
     format!("{base}/host={host}")
 }
 
-/// A per-user parquet config: partition each user's rows under `user=<name>` so
-/// concurrently indexed users never overwrite the one shared per-source file.
-fn user_parquet(config: &sink_parquet::Config, name: &str) -> sink_parquet::Config {
+/// User-scope a parquet config for the multi-user `--user` path:
+/// `<host-prefix>/user=<name>`. `sink-parquet` writes one full-file-overwrite
+/// `source=<source>/data.parquet` per (prefix, source), and several accounts on
+/// one host produce the same `source=claude` (etc.), so without a `user` segment
+/// each account would clobber the last in the durable log. `name` is validated by
+/// [`parse_user`] to a safe charset (no `/`/`=`), so it cannot escape the
+/// partition. `user` is the inner hive partition under `host`, matching the old
+/// history-ship `host=<host>/user=<user>/...` layout.
+fn user_scoped_parquet(config: &sink_parquet::Config, name: &str) -> sink_parquet::Config {
     sink_parquet::Config {
+        bucket: config.bucket.clone(),
+        endpoint: config.endpoint.clone(),
+        region: config.region.clone(),
         prefix: format!("{}/user={name}", config.prefix),
-        ..config.clone()
     }
 }
 
@@ -493,6 +650,52 @@ fn record(label: &str, result: anyhow::Result<()>, counts: &mut Counts) {
     }
 }
 
+/// The outcome of opening one atuin db: a parsed source to index, or a logged,
+/// non-fatal skip already tallied into [`Counts::skipped`].
+enum Atuin {
+    /// The db opened and its `history` table was read.
+    Ready(source_atuin::AtuinHistory),
+    /// The db was uninitialized (no `history` table) and is being skipped.
+    Skipped,
+}
+
+/// Open one atuin history db, folding the "uninitialized db" case into a logged
+/// soft skip rather than a hard error.
+///
+/// The fleet run reads every account's history; an account that has an atuin db
+/// file but never ran atuin has a db with no `history` table. That is a benign,
+/// expected state — not a read failure — so it is recorded in
+/// [`Counts::skipped`] and never gates the unit's exit code. Any other open
+/// failure (a corrupt db, a permissions error) is still returned for the caller
+/// to record as a genuine failure, preserving real-error reporting.
+fn open_atuin(
+    label: &str,
+    db: &Path,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&sink_parquet::Config>,
+    counts: &mut Counts,
+) -> anyhow::Result<Atuin> {
+    match source_atuin::AtuinHistory::open(db) {
+        Ok(history) => Ok(Atuin::Ready(history)),
+        Err(error) if error.is_uninitialized() => {
+            // A run that selects a source but configures no sink is a
+            // misconfiguration. run_source rejects it for a readable db; enforce
+            // the same here BEFORE downgrading to a soft skip, so an uninitialized
+            // db cannot let a sink-less run exit 0 when the identical config fails
+            // once the `history` table exists.
+            anyhow::ensure!(
+                mixedbread.is_some() || parquet.is_some(),
+                "[{label}] no sink configured: pass --mixedbread-store and/or --bucket"
+            );
+            eprintln!("[{label}] skipped: {error} ({db})", db = db.display());
+            counts.skipped += 1;
+            Ok(Atuin::Skipped)
+        }
+        Err(error) => Err(anyhow::Error::new(error)
+            .context(format!("reading atuin history at {}", db.display()))),
+    }
+}
+
 /// Fan one source out to every enabled sink.
 ///
 /// The parquet archive runs FIRST and the two sinks are INDEPENDENT: a slow or
@@ -508,6 +711,14 @@ async fn run_source<A: SourceAdapter + Sync>(
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
 ) -> anyhow::Result<()> {
+    // A selected source with no sink is a misconfiguration, not a no-op: a missing
+    // `--mixedbread-store`/`--bucket` would otherwise drop the source silently
+    // while still counting as a success.
+    anyhow::ensure!(
+        mixedbread.is_some() || parquet.is_some(),
+        "[{label}] no sink configured: pass --mixedbread-store and/or --bucket"
+    );
+
     let mut errors: Vec<anyhow::Error> = Vec::new();
 
     if let Some(config) = parquet {
@@ -551,7 +762,83 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use super::{archive_prefix, parse_user, safe_path_under, user_parquet};
+    use super::{
+        Atuin, Counts, archive_prefix, finish, open_atuin, parse_user, safe_path_under,
+        user_scoped_parquet,
+    };
+
+    /// Create a valid sqlite db with no `history` table at `path`, mirroring
+    /// atuin's pre-first-run state (the file exists before migrations add tables).
+    fn make_uninitialized_db(path: &std::path::Path) {
+        rusqlite::Connection::open(path).expect("create empty sqlite db");
+    }
+
+    /// A throwaway parquet sink config so `open_atuin`'s sink validation passes;
+    /// the bucket is never written to in these tests (they assert open/skip
+    /// behavior). `open_atuin`'s validation only checks that a sink is present.
+    fn parquet_sink() -> sink_parquet::Config {
+        sink_parquet::Config {
+            bucket: "test-bucket".to_string(),
+            endpoint: None,
+            region: "auto".to_string(),
+            prefix: "corpus".to_string(),
+        }
+    }
+
+    #[test]
+    fn uninitialized_atuin_db_is_soft_skipped_and_run_succeeds() {
+        // ENG-2141: one account whose atuin db exists but has no `history` table
+        // (atuin never ran there) must be a logged soft skip, not a failure, so
+        // the whole indexing unit still succeeds.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = temp.path().join("history.db");
+        make_uninitialized_db(&db);
+
+        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        let sink = parquet_sink();
+        let outcome = open_atuin("shell:tester", &db, None, Some(&sink), &mut counts)
+            .expect("uninitialized db is not an error");
+
+        assert!(matches!(outcome, Atuin::Skipped), "uninitialized db must be skipped");
+        assert_eq!(counts.skipped, 1, "the skip must be tallied");
+        assert_eq!(counts.failures, 0, "an uninitialized db must not count as a failure");
+        // The run as a whole still succeeds: no failures means a zero exit.
+        assert!(finish(counts).is_ok(), "a soft-skipped source must not fail the run");
+    }
+
+    #[test]
+    fn missing_atuin_db_is_a_real_error() {
+        // A genuinely missing file (nothing to open) is a hard error so real
+        // failures are still surfaced; only the uninitialized-db case is a skip.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = temp.path().join("does-not-exist.db");
+
+        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        let sink = parquet_sink();
+        assert!(
+            open_atuin("shell:tester", &db, None, Some(&sink), &mut counts).is_err(),
+            "a missing db file must remain a real error, not a soft skip"
+        );
+        assert_eq!(counts.skipped, 0, "a real error must not be tallied as a skip");
+    }
+
+    #[test]
+    fn uninitialized_atuin_db_without_sink_is_an_error() {
+        // The soft skip must not bypass sink validation: an uninitialized db with
+        // no sink is the same misconfiguration run_source rejects once the db has a
+        // `history` table, so it must fail consistently rather than exit 0 (the
+        // per-user fleet path shares open_atuin, so it is covered too).
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = temp.path().join("history.db");
+        make_uninitialized_db(&db);
+
+        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        assert!(
+            open_atuin("shell:tester", &db, None, None, &mut counts).is_err(),
+            "an uninitialized db with no sink must error, not silently skip"
+        );
+        assert_eq!(counts.skipped, 0, "a misconfiguration must not be tallied as a skip");
+    }
 
     #[test]
     fn safe_path_accepts_real_nested_dir() {
@@ -614,21 +901,31 @@ mod tests {
     }
 
     #[test]
-    fn parquet_key_is_host_scoped() {
-        // Regression: two hosts indexing the same account (e.g. `root`) into one
-        // shared bucket must land on distinct keys, or the full-file overwrite
-        // makes them clobber each other every tick.
-        let base = "corpus";
-        let cfg = |host: &str| sink_parquet::Config {
-            bucket: "ix-history".to_owned(),
-            endpoint: None,
-            region: "auto".to_owned(),
-            prefix: archive_prefix(base, host),
+    fn archive_prefix_is_host_scoped() {
+        // Bulk exports still host-scope their parquet keys, so two hosts writing
+        // the same bucket never clobber each other.
+        assert_eq!(archive_prefix("corpus", "hil-compute-1"), "corpus/host=hil-compute-1");
+        assert_ne!(archive_prefix("corpus", "a"), archive_prefix("corpus", "b"));
+    }
+
+    #[test]
+    fn user_scoped_parquet_adds_user_partition() {
+        // Several accounts on one host produce the same `source=claude`, so the
+        // per-user parquet log must add a `user=` segment under the host prefix or
+        // they clobber each other in the full-file-overwrite sink.
+        let base = sink_parquet::Config {
+            bucket: "corpus-bucket".to_string(),
+            endpoint: Some("http://127.0.0.1:9010".to_string()),
+            region: "auto".to_string(),
+            prefix: archive_prefix("corpus", "hil-compute-1"),
         };
-        let a = user_parquet(&cfg("hil-compute-1"), "root").prefix;
-        let b = user_parquet(&cfg("hil-compute-2"), "root").prefix;
-        assert_eq!(a, "corpus/host=hil-compute-1/user=root");
-        assert_eq!(b, "corpus/host=hil-compute-2/user=root");
-        assert_ne!(a, b, "same account on different hosts must not share a key");
+        let alice = user_scoped_parquet(&base, "alice");
+        let bob = user_scoped_parquet(&base, "bob");
+        assert_eq!(alice.prefix, "corpus/host=hil-compute-1/user=alice");
+        assert_ne!(alice.prefix, bob.prefix, "two users must not share a parquet prefix");
+        // Bucket/endpoint/region carry through unchanged; only the prefix scopes.
+        assert_eq!(alice.bucket, base.bucket);
+        assert_eq!(alice.endpoint, base.endpoint);
+        assert_eq!(alice.region, base.region);
     }
 }

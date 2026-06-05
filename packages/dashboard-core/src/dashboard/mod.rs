@@ -26,8 +26,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 pub use hub::Hub;
-pub use recordings::{RecordingInfo, RecordingStore};
-pub use server::{Dashboard, serve_hub};
+pub use recordings::{Recorder, RecordingInfo, RecordingStore};
+pub use server::{Dashboard, ServedDashboard, serve_hub};
 
 /// Base64 for the SSE wire. One spelling shared by the snapshot and update
 /// encoders in [`server`].

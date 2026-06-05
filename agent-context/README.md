@@ -4,9 +4,11 @@ This directory owns the agent instructions and skills delivered to a coding
 agent at session start. There are no committed `AGENTS.md` / `CLAUDE.md` files:
 the content is rendered live by the `agent-instructions.sh` SessionStart hook
 (`.claude/hooks/`), which builds the flake packages below and prints the
-always-on core as `additionalContext` while repointing `.claude/skills` at the
-generated skill link farm. Editing a fragment changes what the next session
-sees, with nothing to regenerate or commit.
+always-on core as `additionalContext` while copying the generated skills
+package into `.claude/skills` (the package is built symlink-free and copied
+rather than symlinked because Claude Code's `/`-autocomplete discovery filters
+symlinks). Editing a fragment changes what the next session sees, with nothing
+to regenerate or commit.
 
 ## Disclosure tiers
 

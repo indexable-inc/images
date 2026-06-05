@@ -22,10 +22,11 @@ use snafu::{OptionExt as _, ResultExt as _};
 use crate::error::{InvalidMetadataSnafu, InvalidPatternSnafu, Result};
 
 /// Knobs forwarded to the backend's search call.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SearchOptions {
-    /// Apply the second-stage reranker for better ordering.
-    pub rerank: bool,
+    /// Second-stage reranker selection: a toggle or a pinned model
+    /// (defaults to [`mixedbread::DEFAULT_RERANK_MODEL`] at the CLI/binding edge).
+    pub rerank: mixedbread::Rerank,
     /// Let the backend plan and run several searches itself.
     pub agentic: bool,
 }

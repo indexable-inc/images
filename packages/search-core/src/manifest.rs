@@ -159,12 +159,19 @@ impl Manifest {
     }
 }
 
+// A duration past `u64::MAX` ms (~584M years) cannot occur in practice; saturate
+// explicitly rather than silently defaulting if it ever did. The `min` bounds
+// the value to `u64::MAX`, so the cast cannot truncate.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "min clamps to u64::MAX before the cast"
+)]
 fn mtime_ms(metadata: &std::fs::Metadata) -> u64 {
     metadata
         .modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .map_or(0, |d| d.as_millis().min(u128::from(u64::MAX)) as u64)
 }
 
 fn relative_path(root: &Path, path: &Path) -> String {

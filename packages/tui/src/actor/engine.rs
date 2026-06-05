@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::Error;
 use crate::error::Result;
-use crate::types::{CursorShape, StyledCell};
+use crate::types::{CursorPos, CursorShape, StyledCell};
 
 /// A request to the VT engine thread.
 ///
@@ -65,13 +65,27 @@ pub fn spawn(
     cols: u16,
     scrollback: usize,
     cursor_shape: Arc<SyncRwLock<CursorShape>>,
+    app_cursor_keys: Arc<SyncRwLock<bool>>,
 ) -> Result<Sender<EngineRequest>> {
     let (tx, rx) = std::sync::mpsc::channel::<EngineRequest>();
     let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<()>>(1);
 
     std::thread::Builder::new()
         .name("ix-vt-engine".to_owned())
-        .spawn(move || engine_loop(id, rows, cols, scrollback, &cursor_shape, &rx, &init_tx))
+        .spawn(move || {
+            engine_loop(
+                EngineConfig {
+                    id,
+                    rows,
+                    cols,
+                    scrollback,
+                },
+                &cursor_shape,
+                &app_cursor_keys,
+                &rx,
+                &init_tx,
+            );
+        })
         .map_err(|e| vt_engine_error_io(id, &e))?;
 
     // Propagate the terminal-creation result before handing back the channel, so
@@ -94,17 +108,34 @@ fn vt_engine_error_io(id: Uuid, source: &std::io::Error) -> Error {
     }
 }
 
-/// The engine thread body: create the terminal, report init, then serve
-/// requests until the channel closes.
-fn engine_loop(
+/// Terminal-construction parameters threaded from [`spawn`] into the engine
+/// thread. Grouped so `engine_loop` stays under clippy's argument-count limit
+/// and so the values that only describe the terminal travel as one unit.
+/// `Copy` because every field is `Copy`: passing the struct by value otherwise
+/// trips `clippy::needless_pass_by_value`.
+#[derive(Clone, Copy)]
+struct EngineConfig {
     id: Uuid,
     rows: u16,
     cols: u16,
     scrollback: usize,
+}
+
+/// The engine thread body: create the terminal, report init, then serve
+/// requests until the channel closes.
+fn engine_loop(
+    config: EngineConfig,
     cursor_shape: &Arc<SyncRwLock<CursorShape>>,
+    app_cursor_keys: &Arc<SyncRwLock<bool>>,
     rx: &Receiver<EngineRequest>,
     init_tx: &SyncSender<Result<()>>,
 ) {
+    let EngineConfig {
+        id,
+        rows,
+        cols,
+        scrollback,
+    } = config;
     let mut terminal = match ix_vt::Terminal::new(rows, cols, scrollback) {
         Ok(terminal) => terminal,
         Err(e) => {
@@ -116,7 +147,18 @@ fn engine_loop(
 
     while let Ok(request) = rx.recv() {
         match request {
-            EngineRequest::Process(bytes) => terminal.vt_write(&bytes),
+            EngineRequest::Process(bytes) => {
+                terminal.vt_write(&bytes);
+                // Refresh the cached cursor-key mode so the actor picks the
+                // right arrow-key form on the next write. The mode is set by
+                // the program's own output (terminfo `smkx`/`rmkx`), so reading
+                // it here, right after feeding that output, keeps it current. A
+                // failed query leaves the last known value: the mode did not
+                // change, we just could not re-read it.
+                if let Ok(app) = terminal.application_cursor_keys() {
+                    *app_cursor_keys.write() = app;
+                }
+            }
             EngineRequest::Resize { rows, cols, reply } => {
                 let result = terminal.resize(rows, cols).map_err(|e| vt_engine_error(id, e));
                 let _ = reply.send(result);
@@ -246,12 +288,16 @@ pub fn snapshot_to_styled_cells(
     })
 }
 
-/// The cursor's `(row, col, visible)` in viewport cell coordinates.
+/// The cursor's position and visibility in viewport cell coordinates.
 ///
 /// The snapshot stores the cursor position as `(col, row)`, so it is swapped
 /// here. A cursor scrolled out of the viewport reports `(0, 0)`.
-pub fn snapshot_to_cursor(snapshot: &ix_vt::Snapshot) -> (u16, u16, bool) {
+pub fn snapshot_to_cursor(snapshot: &ix_vt::Snapshot) -> CursorPos {
     let cursor = snapshot.cursor;
     let (row, col) = cursor.viewport.map_or((0, 0), |(x, y)| (y, x));
-    (row, col, cursor.visible)
+    CursorPos {
+        row,
+        col,
+        visible: cursor.visible,
+    }
 }

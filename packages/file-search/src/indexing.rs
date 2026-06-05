@@ -24,9 +24,18 @@ pub fn directory_term(path: &Path) -> String {
     s
 }
 
-pub fn chunk_content(content: &str) -> Vec<(usize, String)> {
+/// One chunk of a file's content: its starting byte offset and the chunk text.
+pub struct ContentChunk {
+    pub offset: usize,
+    pub text: String,
+}
+
+pub fn chunk_content(content: &str) -> Vec<ContentChunk> {
     if content.len() <= CHUNK_SIZE {
-        return vec![(0, content.to_string())];
+        return vec![ContentChunk {
+            offset: 0,
+            text: content.to_string(),
+        }];
     }
 
     // Materialize char boundaries once so each chunk's end + next-start lookup
@@ -53,7 +62,10 @@ pub fn chunk_content(content: &str) -> Vec<(usize, String)> {
     while offset < content.len() {
         let end = aligned(offset + CHUNK_SIZE);
         let chunk = content.get(offset..end).unwrap_or("");
-        chunks.push((offset, chunk.to_string()));
+        chunks.push(ContentChunk {
+            offset,
+            text: chunk.to_string(),
+        });
 
         if end >= content.len() {
             break;
@@ -183,12 +195,12 @@ fn index_file(writer: &IndexWriter, schema: &IndexSchema, file_path: &Path) -> R
     // `schema.path` would silently no-op because that field is stemmed.
     writer.delete_term(Term::from_field_text(schema.path_exact, &path_str));
 
-    for (offset, chunk) in chunk_content(&content) {
+    for ContentChunk { offset, text } in chunk_content(&content) {
         writer
             .add_document(doc!(
                 schema.path => path_str.clone(),
                 schema.path_exact => path_str.clone(),
-                schema.content => chunk,
+                schema.content => text,
                 schema.filename => filename,
                 schema.chunk_offset => offset as u64,
                 schema.directory => directory_value.clone(),

@@ -154,26 +154,45 @@ fn content_type(file: &str) -> &'static str {
     }
 }
 
+/// An HTTP error response: a status code and a client-safe message. Returned as
+/// the `Err` of handlers and helpers so the `(StatusCode, String)` axum response
+/// tuple is built from a named, self-documenting shape rather than a bare pair.
+struct HttpError {
+    status: StatusCode,
+    message: String,
+}
+
+impl IntoResponse for HttpError {
+    fn into_response(self) -> Response {
+        (self.status, self.message).into_response()
+    }
+}
+
+/// A validated on-disk location for an ingest file: the session directory and
+/// the full path to the file within it.
+struct ResolvedPath {
+    dir: PathBuf,
+    path: PathBuf,
+}
+
 /// Resolve `{user}/{session}/{file}` to an on-disk path, rejecting any segment
 /// that is not a safe plain name. Returns the validated directory and full path.
-fn resolve(
-    root: &FsPath,
-    user: &str,
-    session: &str,
-    file: &str,
-) -> Result<(PathBuf, PathBuf), (StatusCode, String)> {
+fn resolve(root: &FsPath, user: &str, session: &str, file: &str) -> Result<ResolvedPath, HttpError> {
     if !(safe_component(user) && safe_component(session) && safe_component(file)) {
-        return Err((StatusCode::BAD_REQUEST, "invalid path component".to_owned()));
+        return Err(HttpError {
+            status: StatusCode::BAD_REQUEST,
+            message: "invalid path component".to_owned(),
+        });
     }
     let dir = root.join(user).join(session);
     let path = dir.join(file);
-    Ok((dir, path))
+    Ok(ResolvedPath { dir, path })
 }
 
 /// Enforce the bearer token on a mutating request when one is configured. The
 /// token compare is constant-time so a timing side channel cannot recover it
 /// byte by byte (the length is allowed to leak, which is conventional).
-fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
+fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), HttpError> {
     let Some(expected) = &state.0.token else {
         return Ok(());
     };
@@ -184,7 +203,10 @@ fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), (StatusCode, 
     if presented.is_some_and(|p| ct_eq(p.as_bytes(), expected.as_bytes())) {
         Ok(())
     } else {
-        Err((StatusCode::UNAUTHORIZED, "missing or invalid bearer token".to_owned()))
+        Err(HttpError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "missing or invalid bearer token".to_owned(),
+        })
     }
 }
 
@@ -209,16 +231,20 @@ async fn upload(
     Path((user, session, file)): Path<(String, String, String)>,
     headers: HeaderMap,
     body: Body,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, HttpError> {
     check_auth(&state, &headers)?;
-    let (dir, path) = resolve(&state.0.root, &user, &session, &file)?;
+    let ResolvedPath { dir, path } = resolve(&state.0.root, &user, &session, &file)?;
     if !matches!(file.rsplit('.').next(), Some("m3u8" | "m4s" | "mp4" | "ts")) {
-        return Err((StatusCode::BAD_REQUEST, "unsupported file type".to_owned()));
+        return Err(HttpError {
+            status: StatusCode::BAD_REQUEST,
+            message: "unsupported file type".to_owned(),
+        });
     }
 
-    let bytes = to_bytes(body, MAX_UPLOAD)
-        .await
-        .map_err(|_| (StatusCode::PAYLOAD_TOO_LARGE, "upload too large".to_owned()))?;
+    let bytes = to_bytes(body, MAX_UPLOAD).await.map_err(|_| HttpError {
+        status: StatusCode::PAYLOAD_TOO_LARGE,
+        message: "upload too large".to_owned(),
+    })?;
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| internal(&format!("create dir: {e}")))?;
@@ -237,8 +263,8 @@ async fn serve(
     State(state): State<AppState>,
     Path((user, session, file)): Path<(String, String, String)>,
 ) -> Response {
-    let (_, path) = match resolve(&state.0.root, &user, &session, &file) {
-        Ok(p) => p,
+    let path = match resolve(&state.0.root, &user, &session, &file) {
+        Ok(resolved) => resolved.path,
         Err(e) => return e.into_response(),
     };
     tokio::fs::read(&path).await.map_or_else(
@@ -256,9 +282,9 @@ async fn remove(
     State(state): State<AppState>,
     Path((user, session, file)): Path<(String, String, String)>,
     headers: HeaderMap,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, HttpError> {
     check_auth(&state, &headers)?;
-    let (_, path) = resolve(&state.0.root, &user, &session, &file)?;
+    let path = resolve(&state.0.root, &user, &session, &file)?.path;
     match tokio::fs::remove_file(&path).await {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StatusCode::NO_CONTENT),
@@ -268,9 +294,12 @@ async fn remove(
 
 /// Log the detailed cause and return a generic 500, so an OS error string
 /// (which can include absolute server paths) never reaches the client.
-fn internal(detail: &str) -> (StatusCode, String) {
+fn internal(detail: &str) -> HttpError {
     warn!("{detail}");
-    (StatusCode::INTERNAL_SERVER_ERROR, "internal error".to_owned())
+    HttpError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: "internal error".to_owned(),
+    }
 }
 
 /// One stream's summary, derived entirely from its directory on disk.

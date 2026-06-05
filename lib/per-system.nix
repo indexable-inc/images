@@ -50,7 +50,7 @@ let
       def "main statix" [] { statix check --ignore '.claude/worktrees' . }
       def "main deadnix" [] { deadnix --fail --no-lambda-pattern-names . }
       def "main ast-grep" [] { ast-grep scan --error . }
-      # Rule self-test: every fixture under nix-rules-tests must flag its
+      # Rule self-test: every fixture under ast-grep/nix/tests must flag its
       # invalid cases and ignore its valid ones. Catches rules whose pattern
       # silently stops matching (e.g. a bare `attr = val` that parses as an
       # expression, not a binding). --skip-snapshot-tests keeps it to match
@@ -108,7 +108,7 @@ let
   # nix is already present); pinning a client nix here could mismatch the host
   # Nix 2.34.x daemon.
   #
-  # Step 1 (nix-fast-build) builds every `checks.x86_64-linux` derivation: it
+  # Step 1 (nix-fast-build) builds every `ciChecks.x86_64-linux` derivation: it
   # evaluates with nix-eval-jobs (parallel) and streams each drv into a build
   # pool as it resolves. --skip-cached drops paths already in a substituter (a
   # warm run does almost no work), --no-nom keeps plain logs, --no-link leaves no
@@ -139,7 +139,7 @@ let
   # host Nix 2.34.x.
   check = ix.writeNushellApplication pkgs {
     name = "check";
-    meta.description = "Run the full CI gate: build .#checks.x86_64-linux and eval-validate .#packages.x86_64-linux";
+    meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux";
     text = ''
       const fast_build = "github:Mic92/nix-fast-build/7f185e0ec37b65b4730f892e0de9a831b0610f3a"
       const eval_jobs = "github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7"
@@ -147,20 +147,27 @@ let
       def main [] {
         # ca-derivations: the rust workspace units default to
         # `contentAddressed = true` (lib/rust/cargo-unit.nix), so evaluating
-        # `.#checks.x86_64-linux` resolves floating content-addressed drvs. The
+        # `.#ciChecks.x86_64-linux` resolves floating content-addressed drvs. The
         # evaluator (nix-eval-jobs, which nix-fast-build wraps) needs the
         # `ca-derivations` experimental feature, or it aborts with
         # "experimental Nix feature 'ca-derivations' is disabled". The flake's
         # nixConfig.extra-experimental-features carries it via
         # accept-flake-config; `--option extra-experimental-features` here pins
         # it for the build pool too so the gate is self-contained.
+        # --result-format json --result-file emits one record per attr per phase
+        # ({attr, type: EVAL|BUILD, duration, success, error, outputs}) into the
+        # cwd. blast-radius consumes this on a later PR via `--timings` to
+        # annotate the rebuilt-checks list with wall-clock seconds. The path is
+        # relative to the runner cwd; check.yml uploads it as an artifact.
         ^nix run $fast_build -- ...[
-          "--flake" ".#checks.x86_64-linux"
+          "--flake" ".#ciChecks.x86_64-linux"
           "--eval-max-memory-size" "6144"
           "--eval-workers" "16"
           "--skip-cached"
           "--no-nom"
           "--no-link"
+          "--result-format" "json"
+          "--result-file" "check-results.json"
           "--option" "accept-flake-config" "true"
           "--option" "extra-experimental-features" "ca-derivations"
         ]
@@ -192,24 +199,6 @@ let
     '';
   };
 
-  # Report how many .#checks.x86_64-linux derivations a PR would rebuild. For a
-  # base and head git revision it evaluates the checks at each through a
-  # per-revision git+file flake ref, diffs the attr -> drvPath maps, and prints
-  # a Markdown report (or, with --json, a constrained data object the workflow's
-  # trusted comment job validates and re-renders, so PR-authored code never
-  # controls the published comment body). The eval forces the rust checks'
-  # import-from-derivation (lib/rust/cargo-unit.nix builds cargo-units.nix with
-  # nix-cargo-unit), which is x86_64-linux only, so an end-to-end run needs a
-  # Linux builder; locally only the wrapper builds (nu --ide-check).
-  # nix-eval-jobs (not one `nix eval`) keeps memory bounded; see the checks
-  # comment above.
-  blastRadius = ix.writeNushellApplication pkgs {
-    name = "blast-radius";
-    meta.description = "Report how many .#checks.x86_64-linux derivations a PR would rebuild";
-    runtimeInputs = [ pkgs.git ];
-    text = builtins.readFile paths.tools.blastRadius;
-  };
-
   updateMods = ix.writePythonApplication pkgs {
     name = "update-mods";
     src = paths.tools.updateMods;
@@ -220,13 +209,6 @@ let
     name = "update-loaders";
     src = paths.tools.updateLoaders;
     meta.description = "Refresh Minecraft loader (Paper / Velocity / Fabric) catalogs from upstream";
-  };
-
-  updateIxCli = ix.writePythonApplication pkgs {
-    name = "update-ix-cli";
-    src = paths.tools.updateIxCli;
-    runtimeInputs = [ pkgs.nix ];
-    meta.description = "Re-prefetch the ix.dev CLI binaries and bump packages/ix/default.nix hashes";
   };
 
   ixShellSyncIgnored = ix.writePythonApplication pkgs {
@@ -244,8 +226,9 @@ let
   agentContextClaudeMd = pkgs.writeText "CLAUDE.md" ix.agentContext.alwaysDoc;
   agentContextCodexMd = pkgs.writeText "AGENTS.md" ix.agentContext.alwaysDoc;
 
-  # One link farm holding every handwritten skill plus one generated skill per
-  # `disclosure: progressive` section, ready to symlink into `.claude/skills`.
+  # One symlink-free directory holding every handwritten skill plus one
+  # generated skill per `disclosure: progressive` section, ready to copy into
+  # `.claude/skills`.
   agentContextProgressiveSkills = ix.agentContext.mkProgressiveSkills { inherit pkgs; };
   agentContextSkillCollisions = lib.intersectLists ix.skills.allSkills (
     lib.attrNames agentContextProgressiveSkills
@@ -410,7 +393,7 @@ let
     ) (packageRegistry.flakeEntriesFor system)
   );
 
-  rustPackageTests =
+  rustPackageTestSets =
     let
       cargoUnit = ix.cargoUnitFor pkgs;
       rustWorkspace = ix.rustWorkspaceFor pkgs;
@@ -431,27 +414,60 @@ let
             library = lib.replaceStrings [ "-" ] [ "_" ] entry.id;
             packageName = entry.id;
           }).passthru.tests or { };
-      repoRustPackageTests = lib.mergeAttrsList (
-        map (
-          entry:
-          lib.mapAttrs' (testName: test: lib.nameValuePair "${entry.passthruTests.prefix}-${testName}" test) (
-            packageTestsFor entry
-          )
-        ) (packageRegistry.passthruTestEntriesFor system)
-      );
+      # Two keyings of the same leaf test derivations:
+      #
+      #  * `flat` keys each per-#[test] check as its own top-level name
+      #    (`<prefix>-<target>-tests-<case>`). This is what the public `checks`
+      #    output needs: the flake schema requires every `checks.<system>.<name>`
+      #    to be a derivation, so a nested attrset there fails `nix flake check`.
+      #
+      #  * `sharded` nests each package's checks under one `recurseForDerivations`
+      #    attr (`<prefix>.<target>-tests-<case>`). This is what the memory-bounded
+      #    CI evaluator (nix-fast-build / nix-eval-jobs / blast-radius) consumes
+      #    through the separate `ciChecks` output.
+      #
+      # Why the sharded shape exists: nix-eval-jobs hands the root attrpath to one
+      # worker and forces its child names to recurse. With the flat set, that one
+      # worker forces every crate's per-#[test] manifest IFD at once and balloons
+      # to tens of GiB, which earlyoom kills on the shared CI host. The nested
+      # shape makes the root return cheap per-package names and forces each
+      # crate's manifests inside its own worker job, which restarts at the memory
+      # cap between packages (ENG-2201). The nested value must stay a thunk:
+      # filtering empties (e.g. `tests != {}`) would force every manifest during
+      # enumeration and reintroduce the balloon, so empty groups are left in.
+      flatPackageChecks = prefix: tests: lib.mapAttrs' (n: t: lib.nameValuePair "${prefix}-${n}" t) tests;
+      shardedPackageChecks = prefix: tests: {
+        ${prefix} = tests // {
+          recurseForDerivations = true;
+        };
+      };
+      repoEntries = packageRegistry.passthruTestEntriesFor system;
       moduleRustPackages = {
         resource-monitor-stats-writer = cargoUnit.selectBinaryWithTests rustWorkspace.units {
           binary = "resource-monitor-stats-writer";
         };
       };
-      moduleRustPackageTests = lib.concatMapAttrs (
-        packageName: package:
-        lib.mapAttrs' (testName: test: lib.nameValuePair "rust-${packageName}-${testName}" test) (
-          package.passthru.tests or { }
+      # cargoAudit scans the single workspace Cargo.lock against the advisory DB,
+      # so it is one lockfile-scoped check (it rebuilds only on a Cargo.lock
+      # change, never on a source edit) rather than a per-crate gate. Expose it
+      # once instead of aliasing the same derivation onto every crate.
+      workspaceAuditTests = lib.optionalAttrs (rustWorkspace.units.policyChecks ? cargoAudit) {
+        rust-cargoAudit = rustWorkspace.units.policyChecks.cargoAudit;
+      };
+      collectRust =
+        group:
+        lib.mergeAttrsList (
+          map (entry: group entry.passthruTests.prefix (packageTestsFor entry)) repoEntries
+          ++ lib.mapAttrsToList (
+            packageName: package: group "rust-${packageName}" (package.passthru.tests or { })
+          ) moduleRustPackages
         )
-      ) moduleRustPackages;
+        // workspaceAuditTests;
     in
-    repoRustPackageTests // moduleRustPackageTests;
+    {
+      flat = collectRust flatPackageChecks;
+      sharded = collectRust shardedPackageChecks;
+    };
 
   lintSource = fs.toSource {
     inherit (paths) root;
@@ -513,7 +529,7 @@ let
       };
 
   # Shared between `packages` and the `image-<name>` checks so blast-radius
-  # (which only diffs `.#checks.x86_64-linux`) catches image fanouts via the
+  # (which only diffs `.#ciChecks.x86_64-linux`) catches image fanouts via the
   # check drvPath shift. The `base` image is omitted: its config is just
   # `ix.image.name`/`tag`, and any base-profile change already fans out into
   # every discovered image.
@@ -521,6 +537,191 @@ let
     root = paths.images;
     inherit (tests) imageTests;
   };
+
+  # Non-NixOS OCI example images (ubuntu, debian, ...). They live under
+  # `examples/_non-nix-oci` so fleet discovery skips the subtree (leading
+  # underscore), and are surfaced here as `non-nix-<name>` packages plus
+  # `image-non-nix-<name>` checks, the same validation path discovered images
+  # use. Each is imported with the example `{ index }` contract.
+  nonNixExampleImages = lib.mapAttrs' (
+    name: entry:
+    lib.nameValuePair "non-nix-${name}" (
+      import entry.path {
+        index = {
+          lib = ix;
+        };
+      }
+    )
+  ) (ix.discoverTree { root = paths.examples + "/_non-nix-oci"; });
+
+  # The content-addressed `image.json` for each non-Nix example, surfaced as its
+  # own package so the small artifact is buildable directly (`nix build
+  # .#non-nix-ubuntu-description`) and cached independently of the materialized
+  # tar it regenerates. See #679.
+  nonNixExampleDescriptions = lib.mapAttrs' (
+    name: image: lib.nameValuePair "${name}-description" image.passthru.description
+  ) nonNixExampleImages;
+
+  # Build the check catalog from a rust-package keying. `checks` (flat: one
+  # derivation per `checks.<system>.<name>`, required by the flake schema and
+  # `nix flake check`) and `ciChecks` (sharded: one `recurseForDerivations` group
+  # per package, what the memory-bounded CI evaluator consumes) share the same
+  # explicit and image checks; only the rust keying differs (ENG-2201). The
+  # collision guard runs per keying, so producing `ciChecks` only forces the
+  # cheap per-package names, never the flat per-#[test] spine.
+  catalogFor =
+    rustPackageSet:
+    lib.optionalAttrs (system == ix.system) (
+      let
+        rustChecks = {
+          cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
+          cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
+          sdk-rust-prebuilt = tests.sdkRustPrebuilt;
+        }
+        // rustPackageSet;
+        explicitChecks = {
+          inherit (tests) eval;
+          # Instruction files are not committed; they are rendered live by the
+          # SessionStart hook. This gate forces the rendered always-on documents
+          # (which evaluates the always-on char cap assertion) and the combined
+          # skills directory (which evaluates the name-collision assertion and
+          # the no-symlink materialization check) to build.
+          agent-context = pkgs.runCommand "agent-context-check" { } ''
+            test -s ${agentContextClaudeMd}
+            test -s ${agentContextCodexMd}
+            test -d ${agentContextSkills}
+            mkdir -p "$out"
+          '';
+          # Pins the last-applied 3-way merge behind homeModules.mutable-json:
+          # first-install, preserve an app-written key, enforce a key the app
+          # changed, prune a key Nix stopped declaring, and keep a sibling key
+          # while a declared array is replaced atomically.
+          mutable-json-merge =
+            pkgs.runCommand "mutable-json-merge-check" { nativeBuildInputs = [ pkgs.jaq ]; }
+              ''
+                prog=${ix.mutableJson.mergeProgram}
+                run() { jaq -ncS --argjson last "$1" --argjson live "$2" --argjson new "$3" -f "$prog"; }
+                check() {
+                  expected=$(printf '%s' "$2" | jaq -cS .)
+                  if [ "$expected" != "$3" ]; then
+                    echo "FAIL $1: expected $expected got $3" >&2
+                    exit 1
+                  fi
+                  echo "ok $1"
+                }
+                check first-install '{"permissions":{"defaultMode":"bypass"}}' \
+                  "$(run '{}' '{}' '{"permissions":{"defaultMode":"bypass"}}')"
+                check preserve-app-key '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' \
+                  "$(run '{"permissions":{"defaultMode":"bypass"}}' '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' '{"permissions":{"defaultMode":"bypass"}}')"
+                check enforce-changed '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' \
+                  "$(run '{"permissions":{"defaultMode":"bypass"}}' '{"permissions":{"defaultMode":"off"},"theme":"dark"}' '{"permissions":{"defaultMode":"bypass"}}')"
+                check prune-dropped '{"a":1,"c":3}' \
+                  "$(run '{"a":1,"b":2}' '{"a":1,"b":2,"c":3}' '{"a":1}')"
+                check nested-atomic-array '{"p":{"allow":["x"]},"t":1}' \
+                  "$(run '{"p":{"allow":["x"]}}' '{"p":{"allow":["x","y"]},"t":1}' '{"p":{"allow":["x"]}}')"
+                # Divergent live shape at a path we stop declaring must not abort:
+                # the app replaced object `permissions` with a scalar, Nix dropped it.
+                check divergent-live-shape '{"permissions":"all"}' \
+                  "$(run '{"permissions":{"defaultMode":"x"}}' '{"permissions":"all"}' '{}')"
+                mkdir -p "$out"
+              '';
+          # Offline schema gate for the loader manifests. `deepSeq` forces
+          # every Paper / Velocity / Fabric per-version lock through
+          # `readLoaderManifest` in `lib/artifacts.nix`, so malformed JSON or a
+          # missing key fires here before any image starts evaluating. The
+          # forced surface is the parsed-and-validated manifest data, not the
+          # wrapped `fetchurl` derivations, to keep this check pure eval.
+          loader-manifests =
+            let
+              forced = builtins.deepSeq ix.artifacts.minecraft.loaderManifests "ok";
+            in
+            pkgs.runCommand "loader-manifests-check" { } ''
+              printf '%s\n' '${forced}' > "$out"
+            '';
+          run-records-session = repoPackages.run.passthru.tests.recordsSession;
+          # Deterministic alloc-count gate for indexbench: runs the counting-
+          # allocator demo bench once through `indexbench assert` and fails if its
+          # allocation count exceeds the declared budget. Reproducible, unlike
+          # timing/RSS, so it earns a flake check; the timing/RSS perf job lives
+          # under `apps.bench` instead.
+          indexbench-self-demo-alloc = indexbenchSelfDemo.check;
+          lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
+            cp -R ${lintSource} source
+            chmod -R u+w source
+            cd source
+            ${lib.getExe lint}
+            mkdir -p "$out"
+          '';
+          # Exercises the trusted half of the blast-radius PR comment: the
+          # validate/render jq embedded in its workflow, extracted from the YAML so
+          # the test can't drift from what the trusted comment job runs. The
+          # report-building logic lives in the `blast-radius` Rust crate and is
+          # covered by its own unit tests. See tools/blast-radius-test.sh.
+          blast-radius-test =
+            pkgs.runCommand "blast-radius-test"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.coreutils
+                  pkgs.diffutils
+                  pkgs.jq
+                  pkgs.yq-go
+                ];
+              }
+              ''
+                cp -R ${lintSource} source
+                chmod -R u+w source
+                cd source
+                export HOME="$TMPDIR/home"
+                mkdir -p "$HOME"
+                bash tools/blast-radius-test.sh
+                mkdir -p "$out"
+              '';
+          # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
+          # which a successful build alone does not assert. `file` reads the Mach-O
+          # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
+          # rather than silently shipping a wrong-arch binary.
+          cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" { nativeBuildInputs = [ pkgs.file ]; } ''
+            bin=${crossPackages."dag-runner-aarch64-apple-darwin"}/bin/dag-runner
+            info=$(file -b "$bin")
+            echo "$info"
+            case "$info" in
+              *Mach-O*arm64*) ;;
+              *)
+                echo "expected Mach-O arm64, got: $info" >&2
+                exit 1
+                ;;
+            esac
+            mkdir -p "$out"
+          '';
+          site-case-tests = pkgs.linkFarm "site-case-tests" (
+            lib.mapAttrsToList (name: path: { inherit name path; }) siteTests.cases
+          );
+          site-test = siteTests.all;
+        };
+        # One check per image OCI archive, built by nix-fast-build in step 1 of
+        # `.#check`. Without this, `.#packages` carries the image derivations
+        # but `.#checks` does not, so blast-radius under-reports any change
+        # that rebuilds every image because the drvPath shift never reaches a
+        # check. The `eval` aggregate at tests/default.nix:3890 only closes
+        # over per-image `extraScript` text, not `config.system.build.toplevel`,
+        # so it stays stable across semantic edits to shared image libs.
+        imageChecks = lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v) (
+          discoveredImages // nonNixExampleImages
+        );
+        # Rust crate prefixes can be overridden in `package.nix` and image
+        # names are user-chosen, so a stray collision with an explicit check
+        # would otherwise be silently swallowed by the `//` merge. Two pairwise
+        # intersections cover all three pairs because every offending name is
+        # in at least two sets.
+        checkNameCollisions =
+          lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks)
+          ++ lib.intersectLists (lib.attrNames imageChecks) (lib.attrNames (explicitChecks // rustChecks));
+      in
+      assert lib.assertMsg (checkNameCollisions == [ ])
+        "checks: duplicate names across explicit/rust/image sets: ${lib.concatStringsSep ", " checkNameCollisions}";
+      explicitChecks // rustChecks // imageChecks
+    );
 in
 {
   packages =
@@ -550,12 +751,10 @@ in
       health-checks = healthChecks.dag;
       health-checks-zellij = healthChecks.zellij;
       inherit check lint site;
-      blast-radius = blastRadius;
       site-dev = site.passthru.devServer;
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
       update-loaders = updateLoaders;
-      update-ix-cli = updateIxCli;
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
       update-sounds = updateSounds;
@@ -565,164 +764,22 @@ in
     }
     // repoFlakePackages
     // examplePackages
+    // nonNixExampleImages
+    // nonNixExampleDescriptions
     // crossPackages
     // healthChecks.lifecyclePackages;
 
-  checks = lib.optionalAttrs (system == ix.system) (
-    let
-      # Each per-crate rust test unit is its own top-level check (spread into
-      # the `checks` set below) rather than being collapsed into one aggregate
-      # linkFarm. That lets nix-eval-jobs (the evaluator CI's nix-fast-build
-      # wraps) assign each crate's test to a separate worker, so no single
-      # worker holds the whole workspace test graph in its heap. The old
-      # `rust-package-tests` linkFarm did the opposite: it forced one worker to
-      # evaluate every crate at once, and that single multi-GiB eval is what
-      # flaked the flake-check job (per-worker SIGKILL at the memory cap, and
-      # host-OOM with many workers).
-      rustChecks = {
-        cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
-      }
-      // rustPackageTests;
-      explicitChecks = {
-        inherit (tests) eval;
-        # Instruction files are not committed; they are rendered live by the
-        # SessionStart hook. This gate forces the rendered always-on documents
-        # (which evaluates the always-on char cap assertion) and the combined
-        # skills link farm (which evaluates the name-collision assertion) to build.
-        agent-context = pkgs.runCommand "agent-context-check" { } ''
-          test -s ${agentContextClaudeMd}
-          test -s ${agentContextCodexMd}
-          test -d ${agentContextSkills}
-          mkdir -p "$out"
-        '';
-        # Pins the last-applied 3-way merge behind homeModules.mutable-json:
-        # first-install, preserve an app-written key, enforce a key the app
-        # changed, prune a key Nix stopped declaring, and keep a sibling key
-        # while a declared array is replaced atomically.
-        mutable-json-merge =
-          pkgs.runCommand "mutable-json-merge-check" { nativeBuildInputs = [ pkgs.jaq ]; }
-            ''
-              prog=${ix.mutableJson.mergeProgram}
-              run() { jaq -ncS --argjson last "$1" --argjson live "$2" --argjson new "$3" -f "$prog"; }
-              check() {
-                expected=$(printf '%s' "$2" | jaq -cS .)
-                if [ "$expected" != "$3" ]; then
-                  echo "FAIL $1: expected $expected got $3" >&2
-                  exit 1
-                fi
-                echo "ok $1"
-              }
-              check first-install '{"permissions":{"defaultMode":"bypass"}}' \
-                "$(run '{}' '{}' '{"permissions":{"defaultMode":"bypass"}}')"
-              check preserve-app-key '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' \
-                "$(run '{"permissions":{"defaultMode":"bypass"}}' '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' '{"permissions":{"defaultMode":"bypass"}}')"
-              check enforce-changed '{"permissions":{"defaultMode":"bypass"},"theme":"dark"}' \
-                "$(run '{"permissions":{"defaultMode":"bypass"}}' '{"permissions":{"defaultMode":"off"},"theme":"dark"}' '{"permissions":{"defaultMode":"bypass"}}')"
-              check prune-dropped '{"a":1,"c":3}' \
-                "$(run '{"a":1,"b":2}' '{"a":1,"b":2,"c":3}' '{"a":1}')"
-              check nested-atomic-array '{"p":{"allow":["x"]},"t":1}' \
-                "$(run '{"p":{"allow":["x"]}}' '{"p":{"allow":["x","y"]},"t":1}' '{"p":{"allow":["x"]}}')"
-              # Divergent live shape at a path we stop declaring must not abort:
-              # the app replaced object `permissions` with a scalar, Nix dropped it.
-              check divergent-live-shape '{"permissions":"all"}' \
-                "$(run '{"permissions":{"defaultMode":"x"}}' '{"permissions":"all"}' '{}')"
-              mkdir -p "$out"
-            '';
-        # Offline schema gate for the loader manifests. `deepSeq` forces
-        # every Paper / Velocity / Fabric per-version lock through
-        # `readLoaderManifest` in `lib/artifacts.nix`, so malformed JSON or a
-        # missing key fires here before any image starts evaluating. The
-        # forced surface is the parsed-and-validated manifest data, not the
-        # wrapped `fetchurl` derivations, to keep this check pure eval.
-        loader-manifests =
-          let
-            forced = builtins.deepSeq ix.artifacts.minecraft.loaderManifests "ok";
-          in
-          pkgs.runCommand "loader-manifests-check" { } ''
-            printf '%s\n' '${forced}' > "$out"
-          '';
-        run-records-session = repoPackages.run.passthru.tests.recordsSession;
-        # Deterministic alloc-count gate for indexbench: runs the counting-
-        # allocator demo bench once through `indexbench assert` and fails if its
-        # allocation count exceeds the declared budget. Reproducible, unlike
-        # timing/RSS, so it earns a flake check; the timing/RSS perf job lives
-        # under `apps.bench` instead.
-        indexbench-self-demo-alloc = indexbenchSelfDemo.check;
-        lint = pkgs.runCommand "ix-images-lint" { nativeBuildInputs = [ pkgs.coreutils ]; } ''
-          cp -R ${lintSource} source
-          chmod -R u+w source
-          cd source
-          ${lib.getExe lint}
-          mkdir -p "$out"
-        '';
-        # Exercises the blast-radius PR comment: the validate/render jq embedded
-        # in its workflow (extracted from the YAML so the test can't drift from
-        # what the trusted comment job runs) plus the report-building logic in
-        # tools/blast-radius.nu. See tools/blast-radius-test.sh for the cases.
-        blast-radius-test =
-          pkgs.runCommand "blast-radius-test"
-            {
-              nativeBuildInputs = [
-                pkgs.bash
-                pkgs.coreutils
-                pkgs.diffutils
-                pkgs.jq
-                pkgs.yq-go
-                pkgs.nushell
-              ];
-            }
-            ''
-              cp -R ${lintSource} source
-              chmod -R u+w source
-              cd source
-              export HOME="$TMPDIR/home"
-              mkdir -p "$HOME"
-              bash tools/blast-radius-test.sh
-              mkdir -p "$out"
-            '';
-        # Proves the Linux→macOS cross toolchain actually emits a Darwin object,
-        # which a successful build alone does not assert. `file` reads the Mach-O
-        # header; a regression in the zig/SDK wiring fails here on x86_64-linux CI
-        # rather than silently shipping a wrong-arch binary.
-        cross-darwin-smoke = pkgs.runCommand "cross-darwin-smoke" { nativeBuildInputs = [ pkgs.file ]; } ''
-          bin=${crossPackages."dag-runner-aarch64-apple-darwin"}/bin/dag-runner
-          info=$(file -b "$bin")
-          echo "$info"
-          case "$info" in
-            *Mach-O*arm64*) ;;
-            *)
-              echo "expected Mach-O arm64, got: $info" >&2
-              exit 1
-              ;;
-          esac
-          mkdir -p "$out"
-        '';
-        site-case-tests = pkgs.linkFarm "site-case-tests" (
-          lib.mapAttrsToList (name: path: { inherit name path; }) siteTests.cases
-        );
-        site-test = siteTests.all;
-      };
-      # One check per image OCI archive, built by nix-fast-build in step 1 of
-      # `.#check`. Without this, `.#packages` carries the image derivations
-      # but `.#checks` does not, so blast-radius under-reports any change
-      # that rebuilds every image because the drvPath shift never reaches a
-      # check. The `eval` aggregate at tests/default.nix:3890 only closes
-      # over per-image `extraScript` text, not `config.system.build.toplevel`,
-      # so it stays stable across semantic edits to shared image libs.
-      imageChecks = lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v) discoveredImages;
-      # Rust crate prefixes can be overridden in `package.nix` and image
-      # names are user-chosen, so a stray collision with an explicit check
-      # would otherwise be silently swallowed by the `//` merge. Two pairwise
-      # intersections cover all three pairs because every offending name is
-      # in at least two sets.
-      checkNameCollisions =
-        lib.intersectLists (lib.attrNames explicitChecks) (lib.attrNames rustChecks)
-        ++ lib.intersectLists (lib.attrNames imageChecks) (lib.attrNames (explicitChecks // rustChecks));
-    in
-    assert lib.assertMsg (checkNameCollisions == [ ])
-      "checks: duplicate names across explicit/rust/image sets: ${lib.concatStringsSep ", " checkNameCollisions}";
-    explicitChecks // rustChecks // imageChecks
-  );
+  # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
+  # and `nix flake check` require. The `.#check` gate and blast-radius consume
+  # the sharded `ciChecks` instead, so this output is not what CI enumerates.
+  checks = catalogFor rustPackageTestSets.flat;
+  # Sharded keying for the memory-bounded CI evaluator (nix-fast-build /
+  # nix-eval-jobs / blast-radius): each package's per-#[test] checks sit under one
+  # `recurseForDerivations` group, so the evaluator lists cheap per-package names
+  # at the root and forces each crate's manifest IFD in its own worker job
+  # (ENG-2201). Not a `checks.<system>.<name>` output, because a non-derivation
+  # there fails the flake schema.
+  ciChecks = catalogFor rustPackageTestSets.sharded;
 
   formatter = pkgs.nixfmt;
 

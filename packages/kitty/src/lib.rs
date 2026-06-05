@@ -289,18 +289,27 @@ mod tests {
     };
     use base64::Engine;
 
-    fn single_command(sequence: &str) -> (&str, &str) {
+    /// The control and payload halves of one APC graphics command.
+    struct Command<'a> {
+        /// The `key=value;...` control fields before the `;`.
+        control: &'a str,
+        /// The base64 image payload after the `;`.
+        payload: &'a str,
+    }
+
+    fn single_command(sequence: &str) -> Command<'_> {
         let body = sequence
             .strip_prefix(APC_START)
             .and_then(|rest| rest.strip_suffix(ST))
             .expect("framed as one APC command");
-        body.split_once(';').expect("control;payload")
+        let (control, payload) = body.split_once(';').expect("control;payload");
+        Command { control, payload }
     }
 
     #[test]
     fn png_single_chunk_has_control_and_payload() {
         let sequence = transmit(&Image::Png(b"hello"), None, &Placement::default());
-        let (control, payload) = single_command(&sequence);
+        let Command { control, payload } = single_command(&sequence);
         assert!(control.contains("a=T"));
         assert!(control.contains("f=100"));
         assert!(control.contains("q=2"));
@@ -324,7 +333,7 @@ mod tests {
                 move_cursor: false,
             },
         );
-        let (control, _) = single_command(&sequence);
+        let Command { control, .. } = single_command(&sequence);
         for key in ["f=32", "s=2", "v=2", "i=7", "c=4", "r=2", "C=1"] {
             assert!(control.contains(key), "missing {key} in {control}");
         }
@@ -351,7 +360,7 @@ mod tests {
     #[test]
     fn virtual_transmit_marks_unicode_placement() {
         let sequence = transmit_virtual(&Image::Png(b"hello"), 42, 4, 2);
-        let (control, payload) = single_command(&sequence);
+        let Command { control, payload } = single_command(&sequence);
         // U=1 makes the placement virtual; q=2 silences acknowledgements.
         for key in ["a=T", "U=1", "f=100", "i=42", "c=4", "r=2", "q=2", "m=0"] {
             assert!(control.contains(key), "missing {key} in {control}");

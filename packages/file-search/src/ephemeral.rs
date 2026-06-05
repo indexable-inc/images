@@ -36,7 +36,7 @@ impl EphemeralSearch {
     /// Returns an error if the index, writer, or reader cannot be created,
     /// or if a document cannot be added or committed.
     pub fn from_texts(texts: impl IntoIterator<Item = String>) -> Result<Self> {
-        let (schema, id_field, content_field) = build_schema();
+        let EphemeralSchema { schema, id_field, content_field } = build_schema();
 
         let index = Index::builder()
             .schema(schema)
@@ -98,11 +98,14 @@ impl EphemeralSearch {
                 .get_first(self.id_field)
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            // The id was assigned by `enumerate()`, which yields `usize`,
-            // so the round-trip back to `usize` only loses information on
-            // 32-bit targets when an index has more than 2^32 - 1 docs;
-            // that's not reachable here.
-            let id = usize::try_from(raw_id).unwrap_or(usize::MAX);
+            // The id was assigned by `enumerate()`, which yields `usize`, so on
+            // the 64-bit targets we support this widening cast is lossless (a
+            // `u64` index id always fits in a 64-bit `usize`).
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "id originated as usize on the 64-bit targets we support"
+            )]
+            let id = raw_id as usize;
 
             results.push(RankResult { id, score });
         }
@@ -111,7 +114,14 @@ impl EphemeralSearch {
     }
 }
 
-fn build_schema() -> (Schema, Field, Field) {
+/// The ephemeral index schema together with handles to its two fields.
+struct EphemeralSchema {
+    schema: Schema,
+    id_field: Field,
+    content_field: Field,
+}
+
+fn build_schema() -> EphemeralSchema {
     let text_indexing = TextFieldIndexing::default()
         .set_tokenizer(code_tokenizer::CODE_STEMMED_TOKENIZER)
         .set_index_option(IndexRecordOption::WithFreqsAndPositions);
@@ -123,5 +133,9 @@ fn build_schema() -> (Schema, Field, Field) {
     let mut builder = Schema::builder();
     let id_field = builder.add_u64_field("id", STORED);
     let content_field = builder.add_text_field("content", text_options);
-    (builder.build(), id_field, content_field)
+    EphemeralSchema {
+        schema: builder.build(),
+        id_field,
+        content_field,
+    }
 }

@@ -64,6 +64,61 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def _prepare_lab_config(jupyter_port: int) -> tuple[Path, bool]:
+    """Materialize a writable JupyterLab config dir from the shipped assets so a
+    fresh browser opens dark, Islands-colored, and in Berkeley Mono with no
+    per-user setup.
+
+    Returns ``(config_dir, has_custom_css)``. JupyterLab reads its custom CSS from
+    ``{config_dir}/custom/custom.css`` and its default-settings overrides from
+    the app settings dir; we point both at this per-server dir under the runtime
+    dir, isolated from the user's ``~/.jupyter``. The assets are *copied* (not
+    symlinked): Tornado's static handler refuses to follow a symlink that escapes
+    its root into the Nix store, so a symlinked ``custom.css`` would 403.
+    """
+    assets = Path(__file__).resolve().parent / "jupyter"
+    base = runtime_dir() / f"lab-{jupyter_port}"
+    custom = base / "custom"
+    settings = base / "lab-settings"
+    custom.mkdir(parents=True, exist_ok=True)
+    settings.mkdir(parents=True, exist_ok=True)
+
+    overrides = assets / "overrides.json"
+    if overrides.exists():
+        shutil.copyfile(overrides, settings / "overrides.json")
+
+    # islands.css is generated at build time (packages/mcp/default.nix); when
+    # running straight from a source checkout it is absent, so custom CSS is
+    # simply skipped rather than serving a 404 link.
+    css = assets / "islands.css"
+    has_css = css.exists()
+    if has_css:
+        shutil.copyfile(css, custom / "custom.css")
+    return base, has_css
+
+
+def _prepare_ipython_startup(jupyter_port: int) -> Path:
+    """Materialize a private ``IPYTHONDIR`` whose startup folder holds the shipped
+    ``ipython/`` scripts, and return it.
+
+    IPython runs every ``*.py`` under ``{IPYTHONDIR}/profile_default/startup/``
+    before a kernel's first cell. Kernels inherit this process's environment, so
+    pointing ``IPYTHONDIR`` here (in :func:`_serve`, before the server launches)
+    is what makes 00-ix-itables.py run in each kernel and turn DataFrames into
+    interactive tables. Per-port and under the 0700 runtime dir so concurrent
+    servers do not share an IPython history db, and isolated from the user's
+    ``~/.ipython`` for the same reason the lab config is isolated from
+    ``~/.jupyter``: reproducible behavior that the user's profile cannot break.
+    """
+    assets = Path(__file__).resolve().parent / "ipython"
+    base = runtime_dir() / f"ipython-{jupyter_port}"
+    startup = base / "profile_default" / "startup"
+    startup.mkdir(parents=True, exist_ok=True)
+    for script in sorted(assets.glob("*.py")):
+        shutil.copyfile(script, startup / script.name)
+    return base
+
+
 def _free_port() -> int:
     # Just reserves a free port number; the kernel gives port 0 an unused port.
     # The interface here is irrelevant: a number free on loopback is free for the
@@ -73,12 +128,12 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _tailscale_dns_name() -> str | None:
-    """This node's MagicDNS name (e.g. ``host.tail<id>.ts.net``), or None.
+def _tailscale_status() -> dict | None:
+    """Parsed ``tailscale status --json`` for this node, or None.
 
-    Best-effort: locating the binary and parsing `tailscale status --json` can
-    fail many ways (no tailscale, not logged in, malformed output); every such
-    case yields None rather than raising, so the caller can fall through.
+    Best-effort: locating the binary and parsing the output can fail many ways
+    (no tailscale, not logged in, malformed output); every such case yields
+    None rather than raising, so the callers can fall through.
     """
     tailscale = (
         shutil.which("tailscale")
@@ -95,11 +150,35 @@ def _tailscale_dns_name() -> str | None:
             timeout=2,
             check=True,
         ).stdout
-        name = json.loads(out).get("Self", {}).get("DNSName", "")
+        return json.loads(out)
     except Exception:
         return None
-    name = name.rstrip(".")
+
+
+def _tailscale_dns_name() -> str | None:
+    """This node's MagicDNS name (e.g. ``host.tail<id>.ts.net``), or None."""
+    status = _tailscale_status()
+    if not status:
+        return None
+    name = status.get("Self", {}).get("DNSName", "").rstrip(".")
     return name or None
+
+
+def _tailscale_ip() -> str | None:
+    """This node's first Tailscale IPv4 address (e.g. ``100.x.y.z``), or None.
+
+    Used as the default Jupyter bind so the lab URL is reachable from any
+    tailnet peer (phone, laptop) without re-exposing the server to the local
+    Wi-Fi: only tailnet members can dial 100.x.y.z. Falls through to loopback
+    when Tailscale is not up.
+    """
+    status = _tailscale_status()
+    if not status:
+        return None
+    for ip in status.get("Self", {}).get("TailscaleIPs", []) or []:
+        if isinstance(ip, str) and "." in ip and ":" not in ip:
+            return ip
+    return None
 
 
 def _advertised_host(bind_host: str) -> str:
@@ -133,9 +212,14 @@ def _serve(args: argparse.Namespace) -> int:
     workdir.mkdir(parents=True, exist_ok=True)
 
     # Resolve both host knobs once here (Config is pure data): the bind address
-    # Jupyter listens on, and the host advertised in the lab URL. Default bind is
-    # loopback so the server is never exposed unless asked.
-    bind_host = os.environ.get("IX_MCP_HOST", "127.0.0.1")
+    # Jupyter listens on, and the host advertised in the lab URL. The default
+    # bind is this node's Tailscale IPv4 when Tailscale is up, falling back to
+    # loopback otherwise. The Tailscale IP is reachable only from tailnet peers,
+    # so the trust boundary stays "tailnet only" (the local Wi-Fi cannot dial it)
+    # while a phone or laptop on the tailnet can open the lab URL without ssh.
+    # IX_MCP_HOST still wins for an explicit override (e.g. 0.0.0.0 on a fleet
+    # node that is firewalled).
+    bind_host = os.environ.get("IX_MCP_HOST") or _tailscale_ip() or "127.0.0.1"
     advertised_host = _advertised_host(bind_host)
 
     http = getattr(args, "http", None)
@@ -173,6 +257,26 @@ def _serve(args: argparse.Namespace) -> int:
     )
     set_config(cfg)
 
+    # A writable lab config dir (custom CSS + default-settings overrides) so the
+    # co-edit browser opens dark, Islands-colored, and in Berkeley Mono with no
+    # per-user setup. Isolated under the runtime dir, not the user's ~/.jupyter.
+    lab_config_dir, has_custom_css = _prepare_lab_config(cfg.jupyter_port)
+    # Run with this as the Jupyter config dir. This is deliberate isolation: the
+    # co-edit server defines everything it needs through the flags below, so it
+    # should not inherit (or be broken by) the user's ~/.jupyter server config,
+    # and it keeps behavior reproducible across machines. It is also the only way
+    # to relocate where custom CSS is served from ({config_dir}/custom): the
+    # `static_custom_path` is derived from config_dir and is not itself settable,
+    # and `--ServerApp.config_dir` is applied too late to move it. Set
+    # unconditionally so the config surface does not change based on whether the
+    # generated CSS happens to be present.
+    os.environ["JUPYTER_CONFIG_DIR"] = str(lab_config_dir)
+
+    # Point IPython at a private profile whose startup scripts run in every
+    # kernel (kernels inherit this env). 00-ix-itables.py turns DataFrames into
+    # interactive tables; see _prepare_ipython_startup.
+    os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(cfg.jupyter_port))
+
     from jupyter_server.serverapp import ServerApp
 
     ServerApp.launch_instance(
@@ -181,8 +285,22 @@ def _serve(args: argparse.Namespace) -> int:
             f"--ServerApp.ip={cfg.host}",
             f"--ServerApp.port={cfg.jupyter_port}",
             "--ServerApp.open_browser=False",
-            f"--IdentityProvider.token={cfg.token}",
+            # Empty token + empty password disables Jupyter auth entirely
+            # (jupyter_server 2.x: auth_enabled becomes False, and
+            # allow_unauthenticated_access defaults True), so the lab URL opens
+            # straight in with no token to copy. Access is gated by reachability
+            # instead: loopback by default, Tailscale-only when exposed. See the
+            # Config bind-address comment for the security rationale.
+            "--IdentityProvider.token=",
             "--ServerApp.log_level=WARN",
+            # app_settings_dir holds overrides.json (default dark theme + editor
+            # settings); custom CSS is served from {config_dir}/custom.
+            f"--LabApp.app_settings_dir={lab_config_dir / 'lab-settings'}",
+            *(
+                ["--LabApp.custom_css=True"]
+                if has_custom_css
+                else []
+            ),
             # In-process extensions: ours (MCP + YDoc bridge) and jupyter_server_ydoc
             # (the server side of real-time collaboration). The browser
             # collaboration UI loads from the installed jupyter-collaboration lab

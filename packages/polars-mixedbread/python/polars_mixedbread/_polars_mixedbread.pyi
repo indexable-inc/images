@@ -13,6 +13,7 @@ def search_mixedbread(
     agentic: bool = ...,
     score_threshold: float | None = ...,
     filters: str | None = ...,
+    reranker: str | None = ...,
 ) -> dict[str, list[Any]]:
     """Run a Mixedbread store search, returning a dict of the six source columns.
 

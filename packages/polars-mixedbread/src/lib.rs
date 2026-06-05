@@ -14,7 +14,7 @@
 //! no `pyo3-polars` Arrow-FFI lockstep to keep in sync (unlike `polars-sftp`,
 //! which decodes files in Rust and so must pin both).
 
-use mixedbread::{Client, SearchOptions, filter::Filter};
+use mixedbread::{Client, Rerank, SearchOptions, filter::Filter};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -42,10 +42,14 @@ use pyo3::types::{PyDict, PyList};
     agentic = false,
     score_threshold = None,
     filters = None,
+    // Trailing optional so existing positional callers keep their slots; a name
+    // pins a reranking model, unset uses the listwise default.
+    reranker = None,
 ))]
 #[allow(
     clippy::too_many_arguments,
-    reason = "thin PyO3 binding mirrors scan_mixedbread's search + options surface"
+    clippy::needless_pass_by_value,
+    reason = "thin PyO3 binding mirrors scan_mixedbread's search + options surface; PyO3 extracts each argument into an owned value, so the by-value `stores`/`query`/`filters` signature is the binding boundary, not a copy we could elide"
 )]
 fn search_mixedbread(
     py: Python<'_>,
@@ -57,6 +61,7 @@ fn search_mixedbread(
     agentic: bool,
     score_threshold: Option<f32>,
     filters: Option<String>,
+    reranker: Option<String>,
 ) -> PyResult<Py<PyDict>> {
     if stores.is_empty() {
         return Err(PyValueError::new_err(
@@ -72,6 +77,13 @@ fn search_mixedbread(
         .map_err(|error| {
             PyValueError::new_err(format!("polars-mixedbread: invalid filters JSON: {error}"))
         })?;
+    // `rerank=False` disables reranking; otherwise a named model wins, defaulting
+    // to the listwise reranker for the best ordering.
+    let rerank = match (rerank, reranker) {
+        (false, _) => Rerank::off(),
+        (true, Some(model)) => Rerank::model(model),
+        (true, None) => Rerank::listwise(),
+    };
     let options = SearchOptions {
         rerank,
         agentic,
