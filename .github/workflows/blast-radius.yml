@@ -17,8 +17,12 @@ env:
   # client-side eval knobs (matching check.yml). `accept-flake-config` consumes
   # the flake's nixConfig (the indexable-inc Cachix substituter) without a
   # prompt, which the inner nix-eval-jobs run needs to fetch the IFD closure.
+  # `ca-derivations`: the rust units default to contentAddressed = true, so the
+  # `.#checks` eval this job forces resolves content-addressed drvs. Without it
+  # nix-eval-jobs aborts ("experimental Nix feature 'ca-derivations' is
+  # disabled"). Mirrors check.yml.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes
+    experimental-features = nix-command flakes ca-derivations
     accept-flake-config = true
 
 jobs:
@@ -105,6 +109,7 @@ jobs:
           # otherwise exits on the last value, letting `{}` followed by a valid
           # report pass while the render then emits a null first section.
           jq -e -s '
+            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +():-]+$");
             length == 1 and
             (.[0] |
               (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
@@ -113,7 +118,17 @@ jobs:
               (.changed | type == "array") and
               (.added   | type == "array") and
               (.removed | type == "array") and
-              ((.changed + .added + .removed) | all(type == "string" and test("^[A-Za-z0-9_./ +():-]+$")))
+              ((.changed + .added + .removed) | all(name_ok)) and
+              (.categories | type == "array") and
+              (.categories | all((.name | name_ok) and (.count | type == "number"))) and
+              (.causes | type == "array") and
+              (.causes | all((.name | name_ok) and (.checks | type == "array") and (.checks | all(name_ok)))) and
+              # `timings` is optional (omitted when empty by the Rust crate via
+              # skip_serializing_if). When present it must be a string -> number
+              # map; the same `name_ok` charset gates the keys so a malicious
+              # report cannot inject mention/HTML through a check label.
+              ((.timings // {}) | type == "object") and
+              ((.timings // {}) | to_entries | all((.key | name_ok) and (.value | type == "number")))
             )
           ' report.json > /dev/null \
             || { echo "::error::malformed blast-radius report.json"; exit 1; }
@@ -127,16 +142,57 @@ jobs:
           set -euo pipefail
           jq -r '
             def safename: select(test("^[A-Za-z0-9_./ +():-]+$"));
-            "<!-- blast-radius -->",
+            # Mirror packages/blast-radius/src/report.rs::format_seconds: bucket
+            # by magnitude, round to integer. Empty string for a missing entry
+            # so a bare label renders when an attr was a substituter hit or new
+            # on this PR.
+            def round_int: (. + 0.5) | floor;
+            def fmt_time:
+              if . == null then ""
+              elif . < 1 then " (<1s)"
+              elif . < 60 then " (\(round_int)s)"
+              elif . < 3600 then " (\(. / 60 | round_int)m)"
+              else " (\(. / 3600 | round_int)h)"
+              end;
+            # Unique checks across all causes, so the flowchart shares one node
+            # per check (keeps the graph under the Mermaid node budget).
+            ([ .causes[].checks[] ] | unique) as $checks
+            | (.timings // {}) as $t
+            | "<!-- blast-radius -->",
             "### Blast radius",
             "",
             "`\((.changed | length) + (.added | length))` of `\(.total)` checks would rebuild between base `\(.base)` and head `\(.head)`.",
             (if ((.added | length) > 0) or ((.removed | length) > 0)
              then "", "\(.added | length) added, \(.removed | length) removed"
              else empty end),
+            # v1: proportions of what rebuilt, by check family.
+            (if (.categories | length) > 0
+             then "", "```mermaid", "pie showData title Rebuilt checks by category",
+                  (.categories[] | "  \"\(.name | safename)\" : \(.count)"),
+                  "```"
+             else empty end),
+            # v2: which changed inputs fan out to which checks (top causes). A
+            # single-check cause is the same node twice (the cause drv is that
+            # check own per-unit derivation), so render it as one node labeled
+            # with the check name and skip the arrow; multi-check causes still
+            # fan out cause -> check. Mirror the local renderer in
+            # packages/blast-radius/src/report.rs.
+            (if (.causes | length) > 0
+             then "", "```mermaid", "flowchart LR",
+                  (.causes | to_entries[]
+                   | if (.value.checks | length) == 1
+                     then "  c\(.key)[\"\(.value.checks[0] | safename)\($t[.value.checks[0]] | fmt_time)\"]"
+                     else "  c\(.key)[\"\(.value.name | safename)\"]"
+                     end),
+                  (.causes | to_entries[] as $c
+                   | select(($c.value.checks | length) > 1)
+                   | $c.value.checks[] as $k
+                   | "  c\($c.key) --> k\($checks | index($k))[\"\($k | safename)\($t[$k] | fmt_time)\"]"),
+                  "```"
+             else empty end),
             (if (.changed | length) > 0
              then "", "<details><summary>changed checks</summary>", "",
-                  (.changed[] | safename | "- \(.)"),
+                  (.changed[] | safename as $n | "- \($n)\($t[$n] | fmt_time)"),
                   "", "</details>"
              else empty end)
           ' report.json > comment.md

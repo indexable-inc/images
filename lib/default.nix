@@ -9,7 +9,6 @@
   symphony,
   clippy-fork,
   ghostty,
-  cliArtifacts ? { },
 }:
 let
   inherit (nixpkgs) lib;
@@ -284,7 +283,6 @@ let
       cargoUnitFor
       goUnitFor
       rustWorkspaceFor
-      cliArtifacts
       clippy-fork
       ghostty
       ;
@@ -398,6 +396,7 @@ let
     })
     evalImageConfig
     mkImage
+    mkNonNixImage
     mkFleetFor
     mkFleet
     ;
@@ -438,6 +437,7 @@ let
       mkFleet
       mkFleetFor
       mkImage
+      mkNonNixImage
       nixosModules
       overlay
       overlays

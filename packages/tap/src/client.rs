@@ -100,21 +100,32 @@ async fn spawn_daemon(id: &str, argv: &[String]) -> Result<PathBuf> {
     bail!("session daemon did not come up in time")
 }
 
-/// Resolve a session selector to its `(id, socket)`, defaulting to the most
+/// A resolved session: its id (`label`) and the path to its Unix socket.
+pub struct ResolvedSocket {
+    /// Human-readable session id.
+    pub label: String,
+    /// Path to the session's Unix socket.
+    pub socket: PathBuf,
+}
+
+/// Resolve a session selector to its id and socket, defaulting to the most
 /// recently started live session.
 ///
 /// # Errors
 ///
 /// Returns an error if the named session is missing or there are no sessions.
-pub fn resolve_socket(session: Option<String>) -> Result<(String, PathBuf)> {
+pub fn resolve_socket(session: Option<String>) -> Result<ResolvedSocket> {
     let Some(id) = session else {
         let latest =
             index::latest_live().ok_or_else(|| anyhow!("no active sessions; start one with `tap`"))?;
-        return Ok((latest.id, latest.socket));
+        return Ok(ResolvedSocket {
+            label: latest.id,
+            socket: latest.socket,
+        });
     };
     let socket = tap_protocol::socket_path(&id);
     if socket.exists() {
-        Ok((id, socket))
+        Ok(ResolvedSocket { label: id, socket })
     } else {
         bail!("session '{id}' not found; run `tap list`")
     }
@@ -145,7 +156,7 @@ pub fn list() {
 ///
 /// Returns an error if the session cannot be reached.
 pub async fn scrollback(session: Option<String>, lines: Option<usize>) -> Result<()> {
-    let (_id, socket) = resolve_socket(session)?;
+    let ResolvedSocket { socket, .. } = resolve_socket(session)?;
     match request_once(&socket, &Request::GetScrollback { lines }).await? {
         Response::Scrollback { content } => {
             print!("{content}");
@@ -162,7 +173,7 @@ pub async fn scrollback(session: Option<String>, lines: Option<usize>) -> Result
 ///
 /// Returns an error if the session cannot be reached.
 pub async fn cursor(session: Option<String>) -> Result<()> {
-    let (_id, socket) = resolve_socket(session)?;
+    let ResolvedSocket { socket, .. } = resolve_socket(session)?;
     match request_once(&socket, &Request::GetCursor).await? {
         Response::Cursor { row, col } => {
             println!("row {row}, col {col}");
@@ -179,7 +190,7 @@ pub async fn cursor(session: Option<String>) -> Result<()> {
 ///
 /// Returns an error if the session cannot be reached.
 pub async fn size(session: Option<String>) -> Result<()> {
-    let (_id, socket) = resolve_socket(session)?;
+    let ResolvedSocket { socket, .. } = resolve_socket(session)?;
     match request_once(&socket, &Request::GetSize).await? {
         Response::Size { rows, cols } => {
             println!("{rows}x{cols}");
@@ -196,7 +207,7 @@ pub async fn size(session: Option<String>) -> Result<()> {
 ///
 /// Returns an error if the session cannot be reached or rejects the write.
 pub async fn inject(session: Option<String>, text: String) -> Result<()> {
-    let (_id, socket) = resolve_socket(session)?;
+    let ResolvedSocket { socket, .. } = resolve_socket(session)?;
     match request_once(&socket, &Request::Inject { data: text }).await? {
         Response::Ok => {
             println!("injected");
@@ -213,7 +224,7 @@ pub async fn inject(session: Option<String>, text: String) -> Result<()> {
 ///
 /// Returns an error if the session cannot be reached or rejects the request.
 pub async fn kill(session: Option<String>) -> Result<()> {
-    let (id, socket) = resolve_socket(session)?;
+    let ResolvedSocket { label: id, socket } = resolve_socket(session)?;
     match request_once(&socket, &Request::Kill).await? {
         Response::Ok => {
             println!("killed session {id}");
@@ -230,7 +241,7 @@ pub async fn kill(session: Option<String>) -> Result<()> {
 ///
 /// Returns an error if the session cannot be reached.
 pub async fn subscribe(session: Option<String>) -> Result<()> {
-    let (_id, socket) = resolve_socket(session)?;
+    let ResolvedSocket { socket, .. } = resolve_socket(session)?;
     let stream = UnixStream::connect(&socket)
         .await
         .with_context(|| format!("connecting to {}", socket.display()))?;

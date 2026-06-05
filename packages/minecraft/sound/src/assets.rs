@@ -385,8 +385,14 @@ mod tests {
     /// otherwise share an address and collide under `{:p}`.
     static TEST_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
+    /// A `Bundled` backend over a temp dir, paired with that dir's path for cleanup.
+    struct BundledFixture {
+        assets: MinecraftAssets,
+        root: PathBuf,
+    }
+
     /// Build a `Bundled` backend over a fresh temp dir holding `.ogg` files.
-    fn bundled_with(names: &[&str]) -> (MinecraftAssets, PathBuf) {
+    fn bundled_with(names: &[&str]) -> BundledFixture {
         let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
         let unique = format!("mcsound-test-{}-{seq}", std::process::id());
         let root = env::temp_dir().join(unique);
@@ -398,12 +404,15 @@ mod tests {
             }
             fs::write(&path, b"ogg").expect("write file");
         }
-        (MinecraftAssets::Bundled { root: root.clone() }, root)
+        BundledFixture {
+            assets: MinecraftAssets::Bundled { root: root.clone() },
+            root,
+        }
     }
 
     #[test]
     fn unknown_name_is_an_error() {
-        let (assets, root) = bundled_with(&["mob/zombie/death", "block/stone/break"]);
+        let BundledFixture { assets, root } = bundled_with(&["mob/zombie/death", "block/stone/break"]);
         let err = assets
             .resolve_sound("this/does/not/exist")
             .expect_err("unknown sound must error");
@@ -420,7 +429,7 @@ mod tests {
 
     #[test]
     fn known_name_resolves() {
-        let (assets, root) = bundled_with(&["mob/zombie/death"]);
+        let BundledFixture { assets, root } = bundled_with(&["mob/zombie/death"]);
         let path = assets
             .resolve_sound("mob/zombie/death")
             .expect("known sound resolves");
@@ -430,7 +439,7 @@ mod tests {
 
     #[test]
     fn close_typo_is_suggested() {
-        let (assets, root) = bundled_with(&["mob/zombie/death"]);
+        let BundledFixture { assets, root } = bundled_with(&["mob/zombie/death"]);
         let err = assets
             .resolve_sound("mob/zombie/deaht")
             .expect_err("typo must error");

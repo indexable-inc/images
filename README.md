@@ -40,9 +40,7 @@ A few things already here:
 - Ready-to-run [OCI images](images/) and reusable [NixOS modules](modules/), the
   layer [ix](https://ix.dev) publishes on top of its closed-source VM primitives.
 - The **ix platform docs** ([`skills/ix`](skills/ix/)) as a Claude Code skill:
-  VMs, forks, snapshots, SDKs, pricing, reliability. The real CLI is one
-  `nix run .#ix` away, so an agent can check the docs against the live tool
-  instead of trusting the prose.
+  VMs, forks, snapshots, SDKs, pricing, reliability.
 
 To explore, you could point Claude at this repo and ask whether anything here is
 useful for you.

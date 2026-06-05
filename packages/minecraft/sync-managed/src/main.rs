@@ -118,10 +118,23 @@ fn collect_managed_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> Re
     Ok(())
 }
 
-fn manifest_entry(line: &str) -> (&str, Option<&str>) {
+/// A parsed manifest line: the relative path and an optional absolute source target.
+#[derive(Debug, PartialEq, Eq)]
+struct ManifestEntry<'a> {
+    rel: &'a str,
+    target: Option<&'a str>,
+}
+
+fn manifest_entry(line: &str) -> ManifestEntry<'_> {
     match line.rsplit_once(' ') {
-        Some((rel, target)) if Path::new(target).is_absolute() => (rel, Some(target)),
-        _ => (line, None),
+        Some((rel, target)) if Path::new(target).is_absolute() => ManifestEntry {
+            rel,
+            target: Some(target),
+        },
+        _ => ManifestEntry {
+            rel: line,
+            target: None,
+        },
     }
 }
 
@@ -153,7 +166,7 @@ fn sync_tree(
     }
 
     for (i, line) in read_manifest_lines(manifest)?.into_iter().enumerate() {
-        let (rel, _) = manifest_entry(&line);
+        let ManifestEntry { rel, .. } = manifest_entry(&line);
         if rel.is_empty() || preserve_removed.contains(rel) {
             continue;
         }
@@ -215,7 +228,7 @@ fn sync_tree(
 
 fn managed_target_for(manifest: &Path, rel: &str) -> Result<Option<String>> {
     for line in read_manifest_lines(manifest)? {
-        let (entry_rel, target) = manifest_entry(&line);
+        let ManifestEntry { rel: entry_rel, target } = manifest_entry(&line);
         if entry_rel == rel
             && let Some(target) = target
         {
@@ -341,7 +354,7 @@ fn plan_dropin_reloads(config: &Config, plan: &mut BTreeSet<ReloadEntry>) -> Res
     }
 
     for line in read_manifest_lines(&dropin_manifest)? {
-        let (rel, _) = manifest_entry(&line);
+        let ManifestEntry { rel, .. } = manifest_entry(&line);
         if !is_jar_path(rel) || rel == "PlugManX.jar" {
             continue;
         }
@@ -392,7 +405,7 @@ fn plan_server_file_reloads(config: &Config, plan: &mut BTreeSet<ReloadEntry>) -
     }
 
     for line in read_manifest_lines(&server_manifest)? {
-        let (rel, _) = manifest_entry(&line);
+        let ManifestEntry { rel, .. } = manifest_entry(&line);
         let Some(plugin) = plugin_name_from_config_path(rel) else {
             continue;
         };
@@ -785,15 +798,24 @@ mod tests {
     fn manifest_entry_keeps_legacy_paths_with_spaces() {
         assert_eq!(
             manifest_entry("plugins/Foo Bar.yml /nix/store/source"),
-            ("plugins/Foo Bar.yml", Some("/nix/store/source"))
+            ManifestEntry {
+                rel: "plugins/Foo Bar.yml",
+                target: Some("/nix/store/source"),
+            }
         );
         assert_eq!(
             manifest_entry("plugins/Foo;Bar.yml"),
-            ("plugins/Foo;Bar.yml", None)
+            ManifestEntry {
+                rel: "plugins/Foo;Bar.yml",
+                target: None,
+            }
         );
         assert_eq!(
             manifest_entry("plugins/Foo Bar.yml"),
-            ("plugins/Foo Bar.yml", None)
+            ManifestEntry {
+                rel: "plugins/Foo Bar.yml",
+                target: None,
+            }
         );
     }
 

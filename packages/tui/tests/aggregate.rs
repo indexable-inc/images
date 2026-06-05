@@ -17,11 +17,20 @@ use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::net::UnixStream;
 use tui::{ProducerSnapshot, SpawnConfig, TerminalView, TuiManager, View, publish};
 
-/// The first terminal pane in a snapshot, as `(id, view)`. The producer wraps
-/// every terminal as a `Pane` whose body is a `View::Terminal`.
-fn first_terminal(snapshot: &ProducerSnapshot) -> Option<(String, TerminalView)> {
+/// The first terminal pane in a snapshot: its pane id and terminal view.
+struct FirstTerminal {
+    id: String,
+    view: TerminalView,
+}
+
+/// The first terminal pane in a snapshot. The producer wraps every terminal as
+/// a `Pane` whose body is a `View::Terminal`.
+fn first_terminal(snapshot: &ProducerSnapshot) -> Option<FirstTerminal> {
     snapshot.panes.first().and_then(|pane| match &pane.view {
-        View::Terminal(view) => Some((pane.id.clone(), view.clone())),
+        View::Terminal(view) => Some(FirstTerminal {
+            id: pane.id.clone(),
+            view: view.clone(),
+        }),
         _ => None,
     })
 }
@@ -67,10 +76,10 @@ fn producer_streams_live_terminal_over_socket() {
                     "producer id should carry this pid: {}",
                     snapshot.producer
                 );
-                if let Some((id, view)) = first_terminal(&snapshot) {
-                    assert_eq!(view.command, "cat");
-                    if view.screen.contains("AGG-MARKER") {
-                        return id;
+                if let Some(terminal) = first_terminal(&snapshot) {
+                    assert_eq!(terminal.view.command, "cat");
+                    if terminal.view.screen.contains("AGG-MARKER") {
+                        return terminal.id;
                     }
                 }
             }
@@ -127,11 +136,11 @@ fn producer_carries_sgr_and_cursor_shape() {
                 }
                 let snapshot: ProducerSnapshot =
                     serde_json::from_str(&line).expect("parse snapshot");
-                if let Some((_, view)) = first_terminal(&snapshot)
-                    && view.cursor_shape == "bar"
-                    && view.screen.contains("hi")
+                if let Some(terminal) = first_terminal(&snapshot)
+                    && terminal.view.cursor_shape == "bar"
+                    && terminal.view.screen.contains("hi")
                 {
-                    return view;
+                    return terminal.view;
                 }
             }
         })

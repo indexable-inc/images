@@ -9,6 +9,14 @@
     extra-trusted-public-keys = [
       "indexable-inc.cachix.org-1:HQ5mjdOyhgNjLVhjv0qgVMJ5YiO1zEEVMAtF9mTcpiI="
     ];
+    # The rust workspace units default to `contentAddressed = true`
+    # (lib/rust/cargo-unit.nix), so evaluating `.#checks` / `.#packages`
+    # resolves floating content-addressed derivations. Without this feature the
+    # evaluator aborts with "experimental Nix feature 'ca-derivations' is
+    # disabled". Declared here so any eval against this flake (CI's
+    # `accept-flake-config` runs, a local `nix flake check`, `nix build
+    # .#checks.<sys>.<name>`) picks it up from one source of truth.
+    extra-experimental-features = [ "ca-derivations" ];
   };
 
   inputs = {
@@ -104,11 +112,9 @@
           fabric = ./images/games/minecraft/loaders/fabric;
         };
         tools = {
-          blastRadius = ./tools/blast-radius.nu;
           ixShellSyncIgnored = ./tools/ix-shell-sync-ignored.py;
           mcSource = ./tools/mc-source.nu;
           updateSounds = ./tools/update-sounds.nu;
-          updateIxCli = ./tools/update-ix-cli.py;
           updateLoaders = ./tools/update-loaders.py;
           updateMods = ./tools/update-mods.py;
         };
@@ -164,6 +170,12 @@
         # Declarative-but-writable JSON config files (last-applied 3-way merge),
         # for config an app rewrites at runtime. See lib/mutable-json.nix.
         mutable-json = ix.mutableJson.homeModule;
+        # Reusable workstation module (macOS): declare Raycast Focus session
+        # defaults (title, filter mode, duration) and have them written to the
+        # com.raycast.macos defaults domain at switch time. Import it and set
+        # `programs.raycast.focus = { enable = true; ... }`. See
+        # modules/home/raycast.nix.
+        raycast = ./modules/home/raycast.nix;
         # Personal-but-shareable workstation module for github:andrewgazelka: the
         # ix.dev downtime watcher + boss bar overlay + the shared say-detached
         # sound helper, all as portable services. Closed over the per-system

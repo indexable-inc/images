@@ -54,7 +54,7 @@ All optional; with none set the whole corpus is searched. List selectors accept
 repeated values and comma-joined strings (`source=["code", "slack,linear"]`):
 
 - `source` / `not_source`: include / exclude these source tags (`code`,
-  `claude_history`, `codex`, `shell`, `slack`, `linear`, `web`).
+  `claude_history`, `codex`, `shell`, `slack`, `linear`, `github`, `web`).
 - `repo`: restrict code to a repository slug, e.g. `indexable-inc/index`.
 - `user`, `host`, `project`: restrict records to these authors, machines, or
   project slugs.

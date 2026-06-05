@@ -12,6 +12,9 @@ let
   fs = lib.fileset;
   repoPackages = ix.packageSetFor pkgs;
   portableServicesTest = import ./portable-services.nix { inherit lib pkgs ix; };
+  # Public Rust SDK: links the prebuilt, R2-hosted ix-sdk-wire rlib with no
+  # ix-sdk-wire source (ENG-2151 / ENG-2154). `proof` is the end-to-end check.
+  sdkRust = import ../sdk/rust { inherit lib pkgs ix; };
   packageRegistry = import ../packages/registry.nix {
     inherit lib;
     root = ../packages;
@@ -687,6 +690,166 @@ let
       clippy.enable = false;
     };
   };
+
+  # Self-test for the prebuilt-library injection seam (mkPrebuiltLibraryUnit +
+  # extraUnits / extraLibraries). The shape: build a leaf library crate normally
+  # (the consumer's own source, `answer() = 42`), then inject a prebuilt unit
+  # built from a metadata-identical VARIANT of that library (`answer() = 99`)
+  # under the same source-independent unit key, and assert the downstream
+  # consumer prints 99. Using a distinguishable variant is what makes the proof
+  # real: a same-source rlib is byte-identical, so a runtime check could not tell
+  # prebuilt from source; 99-vs-42 can only come from the injected prebuilt.
+  cargoUnitPrebuiltFixture = fs.toSource {
+    root = ./fixtures/cargo-unit-prebuilt;
+    fileset = fs.unions [
+      ./fixtures/cargo-unit-prebuilt/Cargo.lock
+      ./fixtures/cargo-unit-prebuilt/Cargo.toml
+      ./fixtures/cargo-unit-prebuilt/crates
+    ];
+  };
+
+  # A metadata-identical variant of the fixture whose library returns 99 instead
+  # of 42. Same package name/version/edition/deps, so cargo-unit computes the
+  # same unit key; only the function body (source bytes, which the key ignores)
+  # differs. This stands in for "a prebuilt artifact compiled elsewhere".
+  cargoUnitPrebuiltVariantSource = pkgs.runCommand "cargo-unit-prebuilt-variant-source" { } ''
+    cp -R ${cargoUnitPrebuiltFixture}/. "$out"
+    chmod -R u+w "$out"
+    sed -i 's/^    42$/    99/' "$out/crates/prebuilt-lib/src/lib.rs"
+    grep -q '99' "$out/crates/prebuilt-lib/src/lib.rs"
+  '';
+
+  cargoUnitPrebuiltPolicy = {
+    denyUnusedCrateDependencies = false;
+    cargoAudit.enable = false;
+    cargoMachete.enable = false;
+    clippy.enable = false;
+  };
+
+  # Shared args for the prebuilt-seam fixture workspaces.
+  cargoUnitPrebuiltCommon = {
+    workspaceRoot = ./fixtures/cargo-unit-prebuilt;
+    cargoArgs = [ "--workspace" ];
+    policy = cargoUnitPrebuiltPolicy;
+  };
+
+  # (a) The variant workspace, standing in for an out-of-tree prebuilt SDK
+  # build. Its lib rlib (answer = 99) is what we inject.
+  cargoUnitPrebuiltVariant = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-variant";
+      src = cargoUnitPrebuiltVariantSource;
+      workspaceRoot = cargoUnitPrebuiltVariantSource;
+    }
+  );
+
+  # The single `prebuilt_lib-0.1.0-<hash>` unit from the variant graph, found by
+  # key prefix (mirrors `cargoUnitScopeUnit`). Its attr name IS the unit key.
+  cargoUnitPrebuiltLibMatches = lib.filterAttrs (
+    name: _: lib.hasPrefix "prebuilt_lib-0.1.0-" name
+  ) cargoUnitPrebuiltVariant.units;
+  cargoUnitPrebuiltLibKey =
+    let
+      names = builtins.attrNames cargoUnitPrebuiltLibMatches;
+    in
+    assert lib.assertMsg (
+      builtins.length names == 1
+    ) "expected exactly one prebuilt_lib unit, found ${lib.concatStringsSep ", " names}";
+    builtins.head names;
+  # The hash component of "<name>-<version>-<hash>". The library crate name has
+  # no dashes, and the version is the fixed literal above, so stripping the known
+  # prefix leaves the hash.
+  cargoUnitPrebuiltLibHash = lib.removePrefix "prebuilt_lib-0.1.0-" cargoUnitPrebuiltLibKey;
+  cargoUnitPrebuiltVariantLibUnit = cargoUnitPrebuiltLibMatches.${cargoUnitPrebuiltLibKey};
+
+  # (b) Wrap the variant's rlib+rmeta as a prebuilt unit. The rlib/rmeta paths
+  # are reconstructed from the known underscored name + hash, exactly as the
+  # renderer wrote them (render.rs:1376-1392). The toolchain id matches the
+  # default toolchain the variant compiled with, so the eval-time assertion in
+  # `mkPrebuiltLibraryUnit` passes.
+  cargoUnitPrebuiltLibUnit = ix.cargoUnit.mkPrebuiltLibraryUnit {
+    # The Cargo library TARGET name, which is what the renderer uses for both
+    # the unit key and the rlib filename (render.rs:1376, prepare_graph names).
+    # The package is `prebuilt-lib`; its lib target is `prebuilt_lib`.
+    name = "prebuilt_lib";
+    version = "0.1.0";
+    hash = cargoUnitPrebuiltLibHash;
+    rlib = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
+    rmeta = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
+    toolchainId = ix.cargoUnit.defaultToolchainId;
+  };
+
+  # Negative arm: a wrong toolchain id must fail at eval (not at link time).
+  # `tryEval` should report `success = false`.
+  cargoUnitPrebuiltToolchainMismatchEval = builtins.tryEval (
+    builtins.seq
+      (ix.cargoUnit.mkPrebuiltLibraryUnit {
+        name = "prebuilt_lib";
+        version = "0.1.0";
+        hash = cargoUnitPrebuiltLibHash;
+        rlib = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
+        rmeta = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
+        toolchainId = "definitely-not-the-toolchain";
+      }).drvPath
+      true
+  );
+
+  # (c) Build the consumer workspace from its OWN source (lib answer = 42), but
+  # inject the variant prebuilt unit (answer = 99) over the from-source lib unit.
+  # The consumer links the injected prebuilt rlib; if it prints 99 it used the
+  # prebuilt, if 42 it fell back to its own source. `extraLibraries` also
+  # surfaces the prebuilt through `libraries`.
+  cargoUnitPrebuiltInjected = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-injected";
+      src = cargoUnitPrebuiltFixture;
+      extraUnits = {
+        ${cargoUnitPrebuiltLibKey} = cargoUnitPrebuiltLibUnit;
+      };
+      extraLibraries = {
+        prebuilt_lib = cargoUnitPrebuiltLibUnit;
+      };
+    }
+  );
+
+  cargoUnitPrebuiltConsumer = cargoUnitPrebuiltInjected.binaries.prebuilt-consumer;
+
+  # The consumer workspace's OWN from-source lib unit key (no injection). Used to
+  # prove the variant (different source) hashes to the same key, which is the
+  # source-independence the whole swap relies on.
+  cargoUnitPrebuiltPlain = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-plain";
+      src = cargoUnitPrebuiltFixture;
+    }
+  );
+  cargoUnitPrebuiltPlainLibKey = builtins.head (
+    builtins.filter (lib.hasPrefix "prebuilt_lib-0.1.0-") (
+      builtins.attrNames cargoUnitPrebuiltPlain.units
+    )
+  );
+
+  # M1 / C1 negative arm: a mis-keyed injection (a key absent from the generated
+  # graph) must now fail loud, not silently build from source. `tryEval` over the
+  # workspace's unit-set attribute names should report `success = false`.
+  cargoUnitPrebuiltMiskeyEval = builtins.tryEval (
+    builtins.seq (builtins.attrNames
+      (ix.cargoUnit.buildWorkspace (
+        cargoUnitPrebuiltCommon
+        // {
+          pname = "cargo-unit-prebuilt-miskey";
+          src = cargoUnitPrebuiltFixture;
+          # Deliberately wrong key: not present in the generated unit set.
+          extraUnits = {
+            "prebuilt_lib-0.1.0-deadbeefdeadbeef" = cargoUnitPrebuiltLibUnit;
+          };
+        }
+      )).units
+    ) true
+  );
 
   goUnitFixture = fs.toSource {
     root = ./fixtures/go-unit-hello;
@@ -2189,9 +2352,11 @@ let
           &&
             observabilityStackExample.observability.collector.exporters.clickhouse.traces_table_name
             == "otel_traces"
-          &&
-            observabilityStackExample.observability.collector.service.pipelines.logs.exporters
-            == [ "clickhouse" ];
+          # RFC-0004 (#705) added the per-host history S3/OTLP sink, so the logs
+          # pipeline now fans out to both clickhouse and awss3. Assert ClickHouse
+          # is still an exporter rather than pinning the exact list, which breaks
+          # on every legitimate addition to the pipeline.
+          && builtins.elem "clickhouse" observabilityStackExample.observability.collector.service.pipelines.logs.exporters;
         message = "observability-stack collector should receive OTLP and export logs/traces/metrics to ClickHouse";
       }
       {
@@ -2878,8 +3043,8 @@ let
         message = "exported JVM profile should evaluate with plain nixpkgs and no repo overlay";
       }
       {
-        assertion = cargoUnitWorkspace.policyChecks ? unusedCrateDependencies;
-        message = "cargo-unit workspaces should expose an unused dependency policy check by default";
+        assertion = cargoUnitWorkspace.unusedCrateDependenciesByPackage != { };
+        message = "cargo-unit workspaces should expose per-crate unused dependency policy checks by default";
       }
       {
         assertion = lib.hasInfix "--ordered-shutdown" processComposeApplication.passthru.tests.dryRun.buildCommand;
@@ -3041,20 +3206,21 @@ let
         message = "cargo-unit workspaces should expose a cargo-audit policy check by default";
       }
       {
-        assertion = cargoUnitWorkspace.policyChecks ? clippy;
-        message = "cargo-unit workspaces should expose a clippy policy check derivation";
+        # Clippy is a per-crate gate (clippyByPackage), not one workspace
+        # aggregate, so editing one crate rebuilds only its clippy check.
+        assertion = cargoUnitWorkspace.clippyByPackage != { };
+        message = "cargo-unit workspaces should expose per-crate clippy gates";
       }
       {
         assertion = !(cargoUnitWorkspace.policyChecks ? cargoClippy);
         message = "cargo-unit buildWorkspace should suppress the legacy workspace-level cargoClippy when per-unit clippy is on";
       }
       {
-        # `policyChecks.clippy` is one aggregate derivation so
-        # `withPolicyChecks` and `selectBinaryWithTests` can string-coerce it
-        # like every other policy check. The aggregate transitively depends on
-        # every per-unit clippy derivation.
-        assertion = lib.isDerivation cargoUnitWorkspace.policyChecks.clippy;
-        message = "cargo-unit policyChecks.clippy should be a single aggregate derivation";
+        # Each package's clippy gate is one derivation (a symlinkJoin over only
+        # that package's per-unit clippy derivations) that callers can
+        # string-coerce like any other check.
+        assertion = builtins.all lib.isDerivation (builtins.attrValues cargoUnitWorkspace.clippyByPackage);
+        message = "cargo-unit clippyByPackage entries should each be a single derivation";
       }
       {
         # The per-unit fan-out lives at `clippyUnits` for callers that want
@@ -3204,16 +3370,28 @@ let
         message = "cargo-unit source audit should record full dependency source identity";
       }
       {
-        assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? cargoMachete;
-        message = "repo Rust packages should expose cargo-machete policy checks by default";
+        # cargo-machete is dropped in favor of the per-crate
+        # unused_crate_dependencies (rustc) gate (lib/rust/workspace.nix).
+        assertion = !(repoPackages.minecraft-nbt.passthru.policyChecks ? cargoMachete);
+        message = "repo Rust packages should not expose cargo-machete (dropped for the per-crate unused-deps gate)";
+      }
+      {
+        # cargoAudit is lockfile-scoped and exposed once at the workspace level
+        # (per-system rust-cargoAudit), not aliased onto every crate.
+        assertion = !(repoPackages.minecraft-nbt.passthru.policyChecks ? cargoAudit);
+        message = "repo Rust packages should not alias the workspace cargoAudit per crate";
       }
       {
         # Repo packages route through `cargoUnit.buildWorkspace` via
-        # `ix.rustWorkspace.units`, so they pick up the aggregate per-unit
-        # clippy policy check rather than the legacy workspace-level
-        # `cargoClippy` single derivation.
+        # `ix.rustWorkspace.units`, so they pick up their own per-crate clippy
+        # gate (clippyByPackage) rather than a workspace-wide aggregate or the
+        # legacy `cargoClippy` single derivation.
         assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? clippy;
-        message = "repo Rust packages should expose per-unit clippy policy checks by default";
+        message = "repo Rust packages should expose a per-crate clippy policy check";
+      }
+      {
+        assertion = repoPackages.minecraft-nbt.passthru.policyChecks ? unusedCrateDependencies;
+        message = "repo Rust packages with dependencies should expose a per-crate unused-crate-dependencies check";
       }
       {
         assertion = !(repoPackages.minecraft-nbt.passthru.policyChecks ? cargoClippy);
@@ -3237,12 +3415,8 @@ let
         message = "repo Rust package builds should be exposed as flake-checkable tests";
       }
       {
-        assertion = repoPackages ? ix;
-        message = "repo package set should expose the ix CLI package by default";
-      }
-      {
-        assertion = repoPackages.minecraft-nbt.passthru.tests ? cargoMachete;
-        message = "repo Rust policy checks should be exposed as flake-checkable tests";
+        assertion = repoPackages.minecraft-nbt.passthru.tests ? unusedCrateDependencies;
+        message = "repo Rust per-crate policy checks should be exposed as flake-checkable tests";
       }
       {
         assertion = !(repoPackages.dag-runner.passthru ? unchecked);
@@ -3850,6 +4024,78 @@ let
     test -d ${cargoUnitRealWorkspaces.regex.testRoots}
   '';
 
+  # --- Prebuilt library injection seam -------------------------------------
+  # Proves mkPrebuiltLibraryUnit + extraUnits/extraLibraries: a leaf library is
+  # built from source, its rlib+rmeta and source-independent hash are captured,
+  # and those artifacts are re-injected as a prebuilt unit that a downstream
+  # consumer links with no library source in its own graph.
+  cargoUnitPrebuiltAssertions = [
+    {
+      # Source-independence: the variant lib (answer = 99) hashes to the SAME
+      # unit key as the consumer's own from-source lib (answer = 42). This is the
+      # property that lets a metadata-faithful prebuilt stand in for source.
+      assertion = cargoUnitPrebuiltLibKey == cargoUnitPrebuiltPlainLibKey;
+      message = "a metadata-identical variant should produce the same unit key as the from-source lib";
+    }
+    {
+      # The injected prebuilt unit is a genuinely different derivation from the
+      # variant's from-source compile unit.
+      assertion = cargoUnitPrebuiltLibUnit.drvPath != cargoUnitPrebuiltVariantLibUnit.drvPath;
+      message = "mkPrebuiltLibraryUnit should produce a distinct prebuilt derivation, not the from-source unit";
+    }
+    {
+      # `extraUnits` merges over the generated `units` set under the unit key, so
+      # the downstream consumer's `units.<key>` reference resolves to it.
+      assertion =
+        cargoUnitPrebuiltInjected.units.${cargoUnitPrebuiltLibKey}.drvPath
+        == cargoUnitPrebuiltLibUnit.drvPath;
+      message = "extraUnits should override the generated units entry with the injected prebuilt unit";
+    }
+    {
+      # `extraLibraries` surfaces the injected unit through `libraries`.
+      assertion =
+        cargoUnitPrebuiltInjected.libraries.prebuilt_lib.drvPath == cargoUnitPrebuiltLibUnit.drvPath;
+      message = "extraLibraries should override the libraries entry with the injected prebuilt unit";
+    }
+    {
+      assertion = cargoUnitPrebuiltLibUnit.passthru.unitKey == cargoUnitPrebuiltLibKey;
+      message = "mkPrebuiltLibraryUnit should expose the unit key it was injected under";
+    }
+    {
+      # A toolchain id mismatch must be caught at eval, not at link time.
+      assertion = !cargoUnitPrebuiltToolchainMismatchEval.success;
+      message = "mkPrebuiltLibraryUnit should reject a toolchain id mismatch during eval";
+    }
+    {
+      # C1: a mis-keyed injection (key absent from the generated graph) must fail
+      # loud during eval rather than silently building from source.
+      assertion = !cargoUnitPrebuiltMiskeyEval.success;
+      message = "buildWorkspace should reject an extraUnits key absent from the generated graph";
+    }
+  ];
+
+  cargoUnitPrebuiltScript = ''
+    # The injected unit's $out matches the unit contract: extern-path holds the
+    # absolute path to the rlib (render.rs:1386-1398).
+    test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib
+    test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta
+    test -f ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
+    grep -q '\.rlib$' ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
+
+    # M1 (definitive source-less proof): the consumer's OWN source returns 42,
+    # but it links the injected prebuilt rlib built from the variant (99). The
+    # binary printing 99, not 42, can ONLY mean it linked the prebuilt artifact
+    # and not its own from-source lib. A same-source rlib would be byte-identical
+    # and could not distinguish the two; the distinct value makes the proof real.
+    ${cargoUnitPrebuiltConsumer}/bin/prebuilt-consumer > cargo-unit-prebuilt.out
+    cat cargo-unit-prebuilt.out
+    grep -q 'prebuilt-lib:99 (answer=99)' cargo-unit-prebuilt.out
+    if grep -q 'answer=42' cargo-unit-prebuilt.out; then
+      echo "error: consumer used its own from-source lib (42), not the injected prebuilt (99)" >&2
+      exit 1
+    fi
+  '';
+
   # --- Test derivation builder ----------------------------------------------
 
   mkTest =
@@ -3879,10 +4125,22 @@ let
   cargoUnitRealWorkspacesTest =
     mkTest "cargo-unit-real-workspaces" cargoUnitRealWorkspaceAssertions
       cargoUnitRealWorkspaceScript;
+
+  cargoUnitPrebuiltTest =
+    mkTest "cargo-unit-prebuilt-library" cargoUnitPrebuiltAssertions
+      cargoUnitPrebuiltScript;
 in
 {
-  inherit imageTests groups cargoUnitRealWorkspaceAssertions;
+  inherit
+    imageTests
+    groups
+    cargoUnitRealWorkspaceAssertions
+    cargoUnitPrebuiltAssertions
+    ;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
+  cargoUnitPrebuiltLibrary = cargoUnitPrebuiltTest;
+  # End-to-end: public ix-sdk links the R2-hosted prebuilt ix-sdk-wire rlib.
+  sdkRustPrebuilt = sdkRust.proof;
   portableServices = portableServicesTest;
 
   # Aggregate. Pulls every per-image test into one derivation so
@@ -3893,6 +4151,7 @@ in
       fleetTest
       helperTest
       portableServicesTest
+      cargoUnitPrebuiltTest
     ]
   );
 }

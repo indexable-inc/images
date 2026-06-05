@@ -56,14 +56,26 @@ pub struct Position {
     pub col: Option<usize>,
 }
 
-/// Build `(args_before_file, file_argument)` for opening `file_path` at `pos`.
+/// The argument vector for invoking an editor at a position: the flags that
+/// precede the file, plus the file argument itself (which may carry the position).
+pub struct EditorArgs {
+    /// Arguments placed before the file argument (e.g. `+42`, `-g`).
+    pub pos_args: Vec<String>,
+    /// The file argument, possibly suffixed with `:line:col`.
+    pub file_arg: String,
+}
+
+/// Build the argument vector for opening `file_path` at `pos`.
 #[must_use]
-pub fn build_args(editor_cmd: &str, file_path: &Path, pos: Option<Position>) -> (Vec<String>, String) {
+pub fn build_args(editor_cmd: &str, file_path: &Path, pos: Option<Position>) -> EditorArgs {
     let file = file_path.display().to_string();
     let Some(pos) = pos else {
-        return (vec![], file);
+        return EditorArgs {
+            pos_args: vec![],
+            file_arg: file,
+        };
     };
-    match EditorKind::detect(editor_cmd) {
+    let (pos_args, file_arg) = match EditorKind::detect(editor_cmd) {
         EditorKind::Vim => (vec![format!("+{}", pos.line)], file),
         EditorKind::VsCode => {
             let col = pos.col.unwrap_or(1);
@@ -83,7 +95,8 @@ pub fn build_args(editor_cmd: &str, file_path: &Path, pos: Option<Position>) -> 
         }
         EditorKind::Helix => (vec![], format!("{file}:{}", pos.line)),
         EditorKind::Unknown => (vec![], file),
-    }
+    };
+    EditorArgs { pos_args, file_arg }
 }
 
 /// Open `content` in `editor_cmd`, restoring raw mode afterward.
@@ -108,7 +121,7 @@ pub fn open(content: &str, editor_cmd: &str, raw: &RawGuard, pos: Option<Positio
     let (program, leading) = parts
         .split_first()
         .context("empty editor command; set $EDITOR or configure tap")?;
-    let (pos_args, file_arg) = build_args(program, temp.path(), pos);
+    let EditorArgs { pos_args, file_arg } = build_args(program, temp.path(), pos);
 
     // Hand the tty to the editor in cooked mode, then take it back.
     raw.suspend();
@@ -140,16 +153,17 @@ mod tests {
 
     #[test]
     fn builds_position_args_per_editor() {
-        let (args, file) = build_args("vim", Path::new("/t.txt"), Some(Position { line: 42, col: None }));
-        assert_eq!(args, vec!["+42"]);
-        assert_eq!(file, "/t.txt");
+        let EditorArgs { pos_args, file_arg } =
+            build_args("vim", Path::new("/t.txt"), Some(Position { line: 42, col: None }));
+        assert_eq!(pos_args, vec!["+42"]);
+        assert_eq!(file_arg, "/t.txt");
 
-        let (args, file) = build_args(
+        let EditorArgs { pos_args, file_arg } = build_args(
             "cursor",
             Path::new("/t.txt"),
             Some(Position { line: 42, col: Some(10) }),
         );
-        assert_eq!(args, vec!["-g"]);
-        assert_eq!(file, "/t.txt:42:10");
+        assert_eq!(pos_args, vec!["-g"]);
+        assert_eq!(file_arg, "/t.txt:42:10");
     }
 }

@@ -27,14 +27,24 @@
   extraClippyLintArgs ? [],
   # Cargo policy can disable per-unit clippy. The rendered template always
   # contains the clippyUnits definitions (they're cheap text), but this gate
-  # decides whether `policyChecks.clippy` is published and therefore whether
-  # downstream consumers pick the clippy derivations up.
+  # decides whether `clippyByPackage` is populated and therefore whether
+  # downstream consumers pick the per-crate clippy gates up.
   clippyEnabled ? true,
   # When true, `tests.<binary>.cases` also includes #[ignore]'d tests.
   # Off by default to match `cargo test`. Toggling this only affects
   # what shows up under `cases`; `all` always runs the harness without
   # --include-ignored.
   includeIgnored ? false,
+  # Additive seam for injecting prebuilt units (rlib+rmeta) that were not built
+  # from source in this graph. `extraUnits` is keyed by the unit key
+  # (`"<name>-<version>-<hash>"`) and merged over the generated `units` set, so a
+  # downstream unit's `units.<key>` reference resolves to the injection; an
+  # injection whose key matches a from-source unit overrides it. `extraLibraries`
+  # is keyed by the crate's underscored library name and merged over the returned
+  # `libraries` set. Both default to `{}`, in which case the merge is a no-op and
+  # the output is byte-identical to a graph rendered without the seam.
+  extraUnits ? {},
+  extraLibraries ? {},
 }:
 
 let
@@ -143,11 +153,37 @@ let
     env = (attrs.env or {}) // extraEnv;
   });
 
-  units = rec {
-{{ unit_entries }}  };
+  # `extraUnits` is merged over the generated set (not inside the `rec`) so a
+  # downstream entry's `units.<key>` reference, which resolves to this let
+  # binding, sees an injected prebuilt unit and an injection can override a
+  # from-source unit of the same key. Empty default keeps this a no-op.
+  units = (rec {
+{{ unit_entries }}  }) // extraUnits;
 
   clippyUnits = rec {
 {{ clippy_unit_entries }}  };
+
+  clippyUnitNamesByPackage = {{ clippy_unit_names_by_package }};
+
+  # Per-crate clippy gate: join only this package's own clippy units so editing
+  # one crate rebuilds only its clippy check, not a single whole-workspace
+  # aggregate that fans out to every crate. Empty when clippy is disabled (e.g.
+  # the cross-compile graph), matching the old aggregate's enable gate.
+  clippyByPackage =
+    if clippyEnabled then
+      pkgs.lib.mapAttrs
+        (packageName: names:
+          pkgs.symlinkJoin {
+            name = "${packageName}-clippy";
+            paths = map (unitName: clippyUnits.${unitName}) names;
+          })
+        clippyUnitNamesByPackage
+    else
+      { };
+
+  # Per-crate unused-crate-dependency gate, each referencing only its own
+  # package's units (see render_unused_crate_dependencies_by_package).
+  unusedCrateDependenciesByPackage = {{ unused_crate_dependencies_by_package }};
 
   panicObjectUnits = rec {
 {{ panic_object_unit_entries }}  };
@@ -177,6 +213,16 @@ let
   packageTestAttrs = packageName: {
     nativeBuildInputs = packageTestInputs.${packageName} or [];
     env = packageTestEnv.${packageName} or {};
+    # A per-test leaf just runs an already-compiled test binary and produces an
+    # empty marker `$out` that nothing consumes. Substituting it is a net loss:
+    # each leaf costs a narinfo round-trip against every configured substituter
+    # (thousands of leaves x N caches per CI run) only to fetch an empty
+    # directory, when re-running the test on the local store is cheaper. Skip
+    # substitution so no cache is ever queried for these paths, and build them
+    # locally. They stay tiny and input-addressed, so once the run root is gone
+    # they GC trivially and never need to be kept as a useful cached artifact.
+    allowSubstitutes = false;
+    preferLocalBuild = true;
   };
   packageTestEnvArgs =
     packageName:
@@ -729,17 +775,12 @@ let
   # lives at `clippyUnits` for callers that want individual units; the policy
   # surface wraps every clippy unit into one symlinkJoin so the gate is one
   # store path that depends on every per-unit clippy build.
-  clippyPolicyAggregate =
-    pkgs.symlinkJoin {
-      name = "cargo-unit-clippy";
-      paths = pkgs.lib.attrValues clippyUnits;
-    };
+  # Workspace-level policy checks (panic-freedom, cargoAudit). Clippy and
+  # unused-crate-dependencies are per-crate (clippyByPackage /
+  # unusedCrateDependenciesByPackage), not aggregated here.
   policyChecks =
     {
 {{ policy_check_entries }}    }
-    // pkgs.lib.optionalAttrs (clippyEnabled && clippyUnits != {}) {
-      clippy = clippyPolicyAggregate;
-    }
     // extraPolicyChecks;
   withPolicyChecks = package:
     if policyChecks == {} then package else pkgs.symlinkJoin {
@@ -755,10 +796,12 @@ in
 {
   inherit
     clippyUnits
+    clippyByPackage
     doctestTargetNamesByPackage
     policyChecks
     sourceAudit
     testTargetNamesByPackage
+    unusedCrateDependenciesByPackage
     units
     ;
   testPlan = mkTestPlan "cargo-unit-test-plan";
@@ -772,7 +815,7 @@ in
   binaries = {
 {{ binary_entries }}  };
   libraries = {
-{{ library_entries }}  };
+{{ library_entries }}  } // extraLibraries;
   benchmarks = {
 {{ benchmark_entries }}  };
   tests = {

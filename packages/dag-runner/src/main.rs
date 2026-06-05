@@ -384,7 +384,8 @@ async fn run(
 
             report_started(&name_owned, started, mode, pb.as_ref());
             let node_started = Instant::now();
-            let (outcome, stdout, stderr) = run_command(&node, pb.as_ref(), cancel_for_task).await;
+            let CommandOutput { outcome, stdout, stderr } =
+                run_command(&node, pb.as_ref(), cancel_for_task).await;
             let duration = node_started.elapsed();
             report_finished(&name_owned, &outcome, duration, started, mode, pb.as_ref());
 
@@ -426,19 +427,26 @@ fn make_spinner(multi: &MultiProgress, name: &str) -> ProgressBar {
     pb
 }
 
+/// The result of running one node's command: its outcome and captured output.
+struct CommandOutput {
+    outcome: Outcome,
+    stdout: String,
+    stderr: String,
+}
+
 async fn run_command(
     node: &NodeSpec,
     pb: Option<&ProgressBar>,
     mut cancel_rx: tokio::sync::watch::Receiver<bool>,
-) -> (Outcome, String, String) {
+) -> CommandOutput {
     // If cancellation already fired (a later-spawning node sees the bit
     // before it ever reaches its select!), skip the work entirely.
     if *cancel_rx.borrow() {
-        return (
-            Outcome::Failed(130),
-            String::new(),
-            "dag-runner: cancelled\n".into(),
-        );
+        return CommandOutput {
+            outcome: Outcome::Failed(130),
+            stdout: String::new(),
+            stderr: "dag-runner: cancelled\n".into(),
+        };
     }
 
     let mut cmd = Command::new(&node.command[0]);
@@ -453,11 +461,11 @@ async fn run_command(
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            return (
-                Outcome::Failed(127),
-                String::new(),
-                format!("failed to spawn: {e}\n"),
-            );
+            return CommandOutput {
+                outcome: Outcome::Failed(127),
+                stdout: String::new(),
+                stderr: format!("failed to spawn: {e}\n"),
+            };
         }
     };
 
@@ -512,7 +520,7 @@ async fn run_command(
     let stdout = stdout_task.await.unwrap_or_default();
     let mut stderr = stderr_task.await.unwrap_or_default();
     stderr.push_str(&extra_stderr);
-    (outcome, stdout, stderr)
+    CommandOutput { outcome, stdout, stderr }
 }
 
 enum Completion {

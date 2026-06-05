@@ -917,7 +917,10 @@ fn parse_result(raw: &Value) -> Result<ResultAction, ParseError> {
     let fields = fields(raw);
     let result = match result_type {
         result_code::FILE_LINKED => {
-            let (linked, total) = two_numbers(&fields)?;
+            let NumberPair {
+                first: linked,
+                second: total,
+            } = two_numbers(&fields)?;
             ActivityResult::FileLinked { linked, total }
         }
         result_code::BUILD_LOG_LINE => ActivityResult::BuildLogLine {
@@ -930,7 +933,10 @@ fn parse_result(raw: &Value) -> Result<ResultAction, ParseError> {
             progress: parse_progress(&fields)?,
         },
         result_code::SET_EXPECTED => {
-            let (activity_type_code, expected) = two_numbers(&fields)?;
+            let NumberPair {
+                first: activity_type_code,
+                second: expected,
+            } = two_numbers(&fields)?;
             let activity_type_code =
                 u64::try_from(activity_type_code).map_err(|_| ParseError::NegativeActivityType)?;
             ActivityResult::SetExpected {
@@ -982,9 +988,18 @@ fn one_text(fields: &[FieldValue]) -> Result<String, ParseError> {
     }
 }
 
-fn two_numbers(fields: &[FieldValue]) -> Result<(i64, i64), ParseError> {
+/// The two numeric fields extracted from an activity record, in field order.
+struct NumberPair {
+    first: i64,
+    second: i64,
+}
+
+fn two_numbers(fields: &[FieldValue]) -> Result<NumberPair, ParseError> {
     match fields {
-        [FieldValue::Number(first), FieldValue::Number(second)] => Ok((*first, *second)),
+        [FieldValue::Number(first), FieldValue::Number(second)] => Ok(NumberPair {
+            first: *first,
+            second: *second,
+        }),
         _ => Err(ParseError::TwoNumericFields),
     }
 }

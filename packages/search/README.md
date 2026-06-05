@@ -58,7 +58,7 @@ With no selector the whole corpus is searched; each selector narrows it
 server-side (no local read). Repeatable, comma-joined values are accepted.
 
 - `--source` / `--not-source`: include / exclude source tags (`code`,
-  `claude_history`, `codex`, `shell`, `slack`, `linear`, `web`).
+  `claude_history`, `codex`, `shell`, `slack`, `linear`, `github`, `web`).
 - `--repo`: restrict code to a repository slug, e.g. `indexable-inc/index`.
 - `--user` / `--mine`: restrict records to these authors (or the current `$USER`).
 - `--host`: restrict records to these machines.

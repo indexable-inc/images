@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use crate::actor::PtyCommand;
-use crate::types::{CursorShape, ExitState, FullOutput, SpawnConfig, StyledCell};
+use crate::types::{CursorPos, CursorShape, ExitState, FullOutput, SpawnConfig, StyledCell};
 use crate::{Error, Result};
 
 /// A handle to one spawned PTY-backed process.
@@ -65,14 +65,14 @@ impl TuiInstance {
         *self.cursor_shape.read()
     }
 
-    /// The cursor's `(row, col, visible)` in viewport cell coordinates.
-    pub fn read_cursor(&self) -> Result<(u16, u16, bool)> {
+    /// The cursor's position and visibility in viewport cell coordinates.
+    pub fn read_cursor(&self) -> Result<CursorPos> {
         self.runtime
             .block_on(reader::read_cursor(self.id, &self.command_tx))
     }
 
     /// [`TuiInstance::read_cursor`] as a future.
-    pub async fn read_cursor_async(&self) -> Result<(u16, u16, bool)> {
+    pub async fn read_cursor_async(&self) -> Result<CursorPos> {
         reader::read_cursor(self.id, &self.command_tx).await
     }
 
@@ -95,7 +95,14 @@ impl TuiInstance {
         Ok(())
     }
 
-    /// Send `data` to the PTY exactly as given.
+    /// Send `data` to the PTY.
+    ///
+    /// One transformation is applied, matching what a real terminal does: while
+    /// the program has DECCKM (application cursor keys) enabled, a bare cursor
+    /// CSI (`ESC [ A`..`D`, `ESC [ H`/`ESC [ F`) is rewritten to its SS3 form
+    /// (`ESC O ...`), so arrows reach full-screen programs regardless of whether
+    /// the caller used [`write`](Self::write) or a key helper. All other bytes,
+    /// including modified arrows that carry parameters, pass through unchanged.
     pub fn write(&self, data: &str) -> Result<()> {
         self.runtime.block_on(reader::write(
             self.id,

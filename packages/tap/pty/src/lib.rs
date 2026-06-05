@@ -83,6 +83,24 @@ pub struct SessionConfig {
     pub scrollback_lines: usize,
 }
 
+/// Terminal dimensions in rows and columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WinSize {
+    /// Number of rows.
+    pub rows: u16,
+    /// Number of columns.
+    pub cols: u16,
+}
+
+/// A 0-indexed cursor position on the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorPosition {
+    /// 0-indexed row.
+    pub row: u16,
+    /// 0-indexed column.
+    pub col: u16,
+}
+
 /// A live attachment: a resync `snapshot` plus the raw output stream.
 ///
 /// The snapshot reproduces the screen at the moment of attach; `output` carries
@@ -239,16 +257,18 @@ impl PtySession {
         }
     }
 
-    /// Cursor position as `(row, col)`, both 0-indexed.
+    /// Cursor position, both row and column 0-indexed.
     #[must_use]
-    pub fn cursor(&self) -> (u16, u16) {
-        self.emulator.lock().screen().cursor_position()
+    pub fn cursor(&self) -> CursorPosition {
+        let (row, col) = self.emulator.lock().screen().cursor_position();
+        CursorPosition { row, col }
     }
 
-    /// Current emulator size as `(rows, cols)`.
+    /// Current emulator size.
     #[must_use]
-    pub fn size(&self) -> (u16, u16) {
-        self.emulator.lock().screen().size()
+    pub fn size(&self) -> WinSize {
+        let (rows, cols) = self.emulator.lock().screen().size();
+        WinSize { rows, cols }
     }
 
     /// Whether the child has switched to the alternate screen (full-screen TUI).

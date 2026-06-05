@@ -105,8 +105,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // The process runtime outlives the dashboard, so the server and discovery
     // loop spawned on it run for the lifetime of the binary.
-    let (mut dashboard, _stop_rx) =
-        serve_hub(hub.clone(), addr, recordings.clone(), &handle).await?;
+    let served = serve_hub(hub.clone(), addr, recordings.clone(), &handle).await?;
+    let mut dashboard = served.dashboard;
+    // Held until shutdown so the server keeps running for the binary's lifetime.
+    let _stop_rx = served.shutdown;
     println!(
         "dashboard: serving {}  (watching {})",
         dashboard.url(),
@@ -120,11 +122,15 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .filter(|_| cli.record_ms > 0)
         .map(|store| {
-            let (id, recorder) =
+            let recorder =
                 store.spawn_recorder(hub.clone(), Duration::from_millis(cli.record_ms), &handle);
-            println!("dashboard: recording to {} ({id})", store.dir().display());
-            dashboard.push_task(recorder);
-            (store.clone(), id)
+            println!(
+                "dashboard: recording to {} ({})",
+                store.dir().display(),
+                recorder.id
+            );
+            dashboard.push_task(recorder.task);
+            (store.clone(), recorder.id)
         });
 
     let connected = Arc::new(Mutex::new(HashSet::new()));
@@ -264,7 +270,8 @@ async fn run_demo(dir: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>
 
 /// The demo's panes at a given tick: one of every kind.
 fn demo_panes(tick: u64) -> Vec<Pane> {
-    let bar = "#".repeat(usize::try_from((tick % 20) + 1).unwrap_or(20));
+    // `(tick % 20) + 1` is in `1..=20`, so it always fits in `usize`.
+    let bar = "#".repeat((tick % 20) as usize + 1);
     let terminal = Pane::terminal(
         "demo-term",
         TerminalView {
@@ -298,7 +305,8 @@ fn demo_panes(tick: u64) -> Vec<Pane> {
         serde_json::json!({
             "tick": tick,
             "status": if tick.is_multiple_of(2) { "even" } else { "odd" },
-            "load": (f64::from(u32::try_from(tick % 100).unwrap_or(0)) / 100.0),
+            // `tick % 100` is in `0..=99`, so the `as u32` is lossless.
+            "load": (f64::from((tick % 100) as u32) / 100.0),
             "nested": {"a": 1, "b": [1, 2, 3]},
         }),
     );

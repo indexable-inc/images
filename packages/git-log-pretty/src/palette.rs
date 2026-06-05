@@ -43,7 +43,9 @@ pub fn paint(style: Style, text: &str) -> String {
 pub fn hashed_chip_background(label: &str, theme: Theme) -> RgbColor {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     label.hash(&mut hasher);
-    let hue = f32::from(u16::try_from(hasher.finish() % 360).unwrap_or(0));
+    // `% 360` bounds the value to `0..360`, well within `u16`, so the cast is
+    // lossless.
+    let hue = f32::from((hasher.finish() % 360) as u16);
 
     let (saturation, value) = match theme {
         Theme::Dark => (0.6, 0.5),

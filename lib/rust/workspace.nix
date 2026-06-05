@@ -85,6 +85,41 @@ let
     target:
     if target == null then workspacePkgs.stdenv.hostPlatform.isLinux else lib.hasInfix "-linux-" target;
 
+  # `vmkit` links libkrun for its Linux-guest backend, a different libkrun per
+  # host. nixpkgs only provides `libkrun-efi` when the *build host* is
+  # aarch64-darwin (it is not cross-buildable from Linux), and classic `libkrun`
+  # only on a Linux host, so gate on the build host, NOT the target: a
+  # Linux->darwin cross build (the `cross-darwin-smoke` check) must never force
+  # `workspacePkgs.libkrun-efi`, which would refuse to evaluate on the Linux host.
+  # When neither gate holds, `vmkit`'s build script omits the link env, so the
+  # crate compiles without the libkrun backend (see its `build.rs`/`linuxkrun.rs`).
+  buildHostIsAarch64Darwin =
+    workspacePkgs.stdenv.hostPlatform.isDarwin && workspacePkgs.stdenv.hostPlatform.isAarch64;
+  buildHostIsLinux = workspacePkgs.stdenv.hostPlatform.isLinux;
+
+  # macOS host: libkrun-efi lib dir + the OVMF firmware blob it embeds (the latter
+  # lives in the libkrun source tree). `vmkit`'s build script embeds the firmware
+  # via `KRUN_EFI_FIRMWARE` and links `-lkrun`; the search path/rpath are injected
+  # below because a build script's link-search does not reach the final unit link.
+  # Only referenced under `buildHostIsAarch64Darwin`, so non-darwin hosts never
+  # force the (host-only) package.
+  libkrunEfiLibDir = "${workspacePkgs.libkrun-efi}/lib";
+  krunEfiFirmware = "${workspacePkgs.libkrun-efi.src}/edk2/KRUN_EFI.silent.fd";
+
+  # Linux host: classic KVM libkrun (no firmware). It boots a rootfs over virtiofs
+  # under its bundled libkrunfw kernel, so the core path needs no block/net
+  # feature; GPU, block, and net are enabled for parity with the macOS path and so
+  # `--gpu` (and future disk boots) work. nixpkgs installs the shared lib into
+  # `lib64` and force-links `-lkrunfw` with an rpath, so libkrun.so resolves
+  # libkrunfw itself at runtime: only libkrun's own lib dir must reach our binary's
+  # rpath. Only referenced under `buildHostIsLinux`, so darwin hosts never force it.
+  libkrunLinux = workspacePkgs.libkrun.override {
+    withBlk = true;
+    withNet = true;
+    withGpu = true;
+  };
+  libkrunLinuxLibDir = "${libkrunLinux}/lib64";
+
   # The Apple cross toolchain (zig cc + macOS SDK), or null for host/musl/Linux
   # targets that build with the ordinary linker.
   appleToolchainFor =
@@ -154,7 +189,6 @@ let
         ];
         packageTestInputs = {
           tui = [ workspacePkgs.vim ];
-          ix-mcp = [ workspacePkgs.python3 ];
           # tap's integration tests drive the `tap` binary on a PTY and run `bash`
           # as the session child; the daemon resolves `bash` from PATH at runtime.
           tap = [ workspacePkgs.bash ];
@@ -185,6 +219,19 @@ let
         // lib.optionalAttrs (targetIsLinux target) {
           PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
         }
+        // lib.optionalAttrs buildHostIsAarch64Darwin {
+          # vmkit's build script forwards this to a compile-time env so
+          # linuxkrun.rs can `include_bytes!` the OVMF firmware, and uses its
+          # presence to enable the libkrun-efi backend. Only vmkit reads it.
+          KRUN_EFI_FIRMWARE = krunEfiFirmware;
+        }
+        // lib.optionalAttrs (buildHostIsLinux && !isCross) {
+          # On a Linux host, signal vmkit's build script to link classic libkrun
+          # (KVM). No firmware: the bundled libkrunfw kernel boots the rootfs. Only
+          # vmkit reads it. Skipped for cross graphs, whose link search below is the
+          # host's libkrun (wrong arch for a cross target).
+          VMKIT_LINK_LIBKRUN = "1";
+        }
         // lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
         extraRustcArgs = [
           # The libghostty-vt search path for the final per-unit link. A build
@@ -204,6 +251,25 @@ let
         ++ lib.optionals (targetIsLinux target) [
           "-L"
           "native=${workspacePkgs.alsa-lib}/lib"
+        ]
+        ++ lib.optionals buildHostIsAarch64Darwin [
+          # vmkit links `-lkrun` (libkrun-efi). Its build script emits the `-l`, but
+          # the search path and rpath must be added here because a build script's
+          # link-search does not reach the final unit link (same shape as the
+          # alsa-lib and libghostty-vt paths above). Harmless for crates that never
+          # reference libkrun, which keep no load command for it.
+          "-L"
+          "native=${libkrunEfiLibDir}"
+          "-C"
+          "link-arg=-Wl,-rpath,${libkrunEfiLibDir}"
+        ]
+        ++ lib.optionals (buildHostIsLinux && !isCross) [
+          # vmkit links `-lkrun` (classic libkrun) on a Linux host. Same rationale
+          # as the libkrun-efi branch above; nixpkgs installs libkrun into `lib64`.
+          "-L"
+          "native=${libkrunLinuxLibDir}"
+          "-C"
+          "link-arg=-Wl,-rpath,${libkrunLinuxLibDir}"
         ];
         # The native graph runs every policy check once across the whole
         # workspace (selected package outputs expose these as explicit tests).
@@ -221,7 +287,11 @@ let
             {
               denyUnusedCrateDependencies = true;
               cargoAudit.enable = true;
-              cargoMachete.enable = true;
+              # cargo-machete is redundant with the per-crate
+              # unused_crate_dependencies (rustc) gate, which is compile-based and
+              # more precise than machete's heuristic scan, and machete only ran
+              # as one whole-workspace pass. Rely on the per-crate check instead.
+              cargoMachete.enable = false;
               clippy.enable = true;
             };
       }

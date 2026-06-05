@@ -129,6 +129,17 @@ impl Default for SpawnConfig {
     }
 }
 
+/// The cursor's position and visibility in viewport cell coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorPos {
+    /// Zero-based row within the viewport.
+    pub row: u16,
+    /// Zero-based column within the viewport.
+    pub col: u16,
+    /// Whether the cursor is currently shown.
+    pub visible: bool,
+}
+
 /// A point-in-time read of a terminal: scrollback history plus the viewport.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FullOutput {
