@@ -603,6 +603,7 @@ in
       rustChecks = {
         cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
         cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
+        sdk-rust-prebuilt = tests.sdkRustPrebuilt;
       }
       // rustPackageTests;
       explicitChecks = {

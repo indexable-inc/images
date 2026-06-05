@@ -1,0 +1,26 @@
+[package]
+name = "ix-sdk"
+version = "0.1.0"
+edition = "2024"
+license = "LicenseRef-Proprietary"
+description = "Public Rust SDK for ix; links the prebuilt ix-sdk-wire rlib fetched from R2"
+publish = false
+
+[lib]
+
+[[bin]]
+# A tiny binary that exercises the prebuilt link at runtime, so the nix check
+# can prove the consumer not only typechecks against the prebuilt rmeta but
+# actually links and runs the prebuilt rlib.
+name = "ix-sdk-wire-probe"
+path = "src/bin/probe.rs"
+
+[dependencies]
+# The dependency edge Cargo resolves against the metadata stub
+# (`../../vendor/ix-sdk-wire`). At nix build time the cargo-unit seam injects the
+# prebuilt rlib+rmeta (from R2) over this unit, so the SDK links the prebuilt
+# artifact with no `ix-sdk-wire` source in its closure.
+ix-sdk-wire = { path = "../../vendor/ix-sdk-wire" }
+
+[lints]
+workspace = true
