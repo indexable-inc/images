@@ -33,6 +33,13 @@ let
 
   defaultRustToolchain = rustToolchain;
 
+  # A toolchain's id is the basename of its store path. It is baked into every
+  # unit hash by the renderer, so cargoUnit derives it for the default toolchain,
+  # the render call, the workspace-side injection cross-check, and the prebuilt
+  # builder's assertion. One definition here, at the toolchain owner, keeps those
+  # four readings from drifting.
+  toolchainId = toolchain: builtins.baseNameOf (builtins.toString toolchain);
+
   defaultPolicy = {
     denyUnusedCrateDependencies = true;
     # Opt-in: scans each unit's objects for functions that can reach a panic.
@@ -826,10 +833,8 @@ in
     nativeBuildInputsForPolicy
     normalizeArgs
     policyChecksFor
-    resolvePolicy
-    resolveVendorSources
-    resolveVendorDir
     rustcArgsForPolicyForPlatform
+    toolchainId
     vendorConfigScript
     ;
 }

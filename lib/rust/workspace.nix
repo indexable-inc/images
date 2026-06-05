@@ -120,6 +120,19 @@ let
   };
   libkrunLinuxLibDir = "${libkrunLinux}/lib64";
 
+  # A build script's `rustc-link-search` does not reach the final per-unit link
+  # in this graph, so a linked native lib's directory is added to the link search
+  # here directly, plus an rpath entry so the resulting binary resolves the shared
+  # object at runtime without `LD_LIBRARY_PATH` (the `-L` alone only covers link
+  # time). Harmless for crates that never reference the lib: they keep no
+  # DT_NEEDED/load command for it.
+  linkSearchWithRpath = dir: [
+    "-L"
+    "native=${dir}"
+    "-C"
+    "link-arg=-Wl,-rpath,${dir}"
+  ];
+
   # The Apple cross toolchain (zig cc + macOS SDK), or null for host/musl/Linux
   # targets that build with the ordinary linker.
   appleToolchainFor =
@@ -233,44 +246,22 @@ let
           VMKIT_LINK_LIBKRUN = "1";
         }
         // lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
-        extraRustcArgs = [
-          # The libghostty-vt search path for the final per-unit link. A build
-          # script's `rustc-link-search` does not reach the final binary link in
-          # this graph, so the directory is added directly here (same shape as the
-          # alsa-lib path below).
-          "-L"
-          "native=${ghosttyLibDir}"
-          # Embed an rpath to the libghostty-vt store path so the linked binaries
-          # (the ix-vt test binaries cargo-unit executes, and any future consumer)
-          # resolve `libghostty-vt.so` at runtime without `LD_LIBRARY_PATH`. The
-          # `-L` above only covers link time. Harmless for crates that never load it
-          # because the binary keeps no `DT_NEEDED` entry for the lib.
-          "-C"
-          "link-arg=-Wl,-rpath,${ghosttyLibDir}"
-        ]
-        ++ lib.optionals (targetIsLinux target) [
-          "-L"
-          "native=${workspacePkgs.alsa-lib}/lib"
-        ]
-        ++ lib.optionals buildHostIsAarch64Darwin [
-          # vmkit links `-lkrun` (libkrun-efi). Its build script emits the `-l`, but
-          # the search path and rpath must be added here because a build script's
-          # link-search does not reach the final unit link (same shape as the
-          # alsa-lib and libghostty-vt paths above). Harmless for crates that never
-          # reference libkrun, which keep no load command for it.
-          "-L"
-          "native=${libkrunEfiLibDir}"
-          "-C"
-          "link-arg=-Wl,-rpath,${libkrunEfiLibDir}"
-        ]
-        ++ lib.optionals (buildHostIsLinux && !isCross) [
-          # vmkit links `-lkrun` (classic libkrun) on a Linux host. Same rationale
-          # as the libkrun-efi branch above; nixpkgs installs libkrun into `lib64`.
-          "-L"
-          "native=${libkrunLinuxLibDir}"
-          "-C"
-          "link-arg=-Wl,-rpath,${libkrunLinuxLibDir}"
-        ];
+        # ix-vt-sys links libghostty-vt and the ix-vt test binaries dlopen it, so
+        # its lib dir needs both a link search and a runtime rpath.
+        extraRustcArgs =
+          linkSearchWithRpath ghosttyLibDir
+          ++ lib.optionals (targetIsLinux target) [
+            # `alsa-sys`'s build script emits `-lasound`; only the search path is
+            # added here (libasound resolves at runtime via the system loader, so
+            # no rpath like the libghostty-vt / libkrun dirs below).
+            "-L"
+            "native=${workspacePkgs.alsa-lib}/lib"
+          ]
+          # vmkit links `-lkrun`: libkrun-efi on an aarch64-darwin host, classic
+          # libkrun (installed under `lib64`) on a Linux host. Its build script
+          # emits the `-l`; the search path and rpath are added here.
+          ++ lib.optionals buildHostIsAarch64Darwin (linkSearchWithRpath libkrunEfiLibDir)
+          ++ lib.optionals (buildHostIsLinux && !isCross) (linkSearchWithRpath libkrunLinuxLibDir);
         # The native graph runs every policy check once across the whole
         # workspace (selected package outputs expose these as explicit tests).
         # A cross graph is a pure build artifact, so it skips policy to avoid

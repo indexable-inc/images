@@ -5,12 +5,11 @@
   rust,
 }:
 let
-  # The toolchain id baked into every unit hash for the default toolchain
-  # (`generateUnitsNix` computes the same `baseNameOf (toString rustToolchain)`,
-  # lib/rust/cargo-unit.nix). Exposed so callers of `mkPrebuiltLibraryUnit` can
-  # record and assert the id a prebuilt rlib was compiled with without
-  # reconstructing it by hand.
-  defaultToolchainId = builtins.baseNameOf (builtins.toString rust.defaultRustToolchain);
+  # The toolchain id baked into every unit hash for the default toolchain.
+  # Exposed so callers of `mkPrebuiltLibraryUnit` can record and assert the id a
+  # prebuilt rlib was compiled with without reconstructing it by hand. The id
+  # rule itself lives at the toolchain owner (`rust.toolchainId`).
+  defaultToolchainId = rust.toolchainId rust.defaultRustToolchain;
 
   profileArgs =
     profile:
@@ -27,14 +26,16 @@ let
   # The shared "vendored cargo" context (src, cargoLock, toolchain, policy,
   # vendorDir, vendorSources, ...) is resolved by `rust.normalizeArgs`: build.nix
   # and cargoUnit are two consumers of one normalizer, so the lockfile, toolchain,
-  # policy, and vendor resolution live there once. The knobs specific to a unit
-  # graph (`profile`, `target`, `contentAddressed`, `extraUnits`/`extraLibraries`,
-  # the `test*` forwarding) each have a single reader and are resolved inline at
-  # that use site.
+  # policy, and vendor resolution live there once. `buildWorkspace` normalizes its
+  # raw args exactly once and hands the result, plus the unit-graph knobs
+  # (`profile`, `target`, `contentAddressed`, `cargoTargets`), to the two IFD
+  # stages; the stages no longer re-normalize. The remaining knobs
+  # (`extraUnits`/`extraLibraries`, the `test*` forwarding) have a single reader
+  # and are read from raw args at that use site.
   #
   # The one cross-stage value is the list of cargo invocations: the graph builder
-  # and the target-set naming both need it, so it gets a helper that also enforces
-  # the non-empty invariant.
+  # and the target-set naming both need it, so `buildWorkspace` resolves it once
+  # with this helper, which also enforces the non-empty invariant.
   cargoTargetsFor =
     rawArgs: cargoArgs:
     let
@@ -75,23 +76,21 @@ let
       ]
     );
 
-  /**
-    Generate Cargo's `--unit-graph` JSON for a vendored Rust workspace.
-
-    This is the first IFD stage used by `buildWorkspace`: Cargo resolves the
-    exact rustc units from the caller's locked workspace, with registry and git
-    crates supplied by `rustPlatform.importCargoLock`.
-  */
+  # First IFD stage for `buildWorkspace`: emit Cargo's `--unit-graph` JSON for
+  # the vendored workspace, one cargo invocation per `cargoTargets` entry merged
+  # into one graph. Takes the already-normalized `args` plus the unit-graph knobs
+  # (`cargoTargets`, `profile`, `target`) resolved by its one caller, so the
+  # shared context is normalized once rather than re-derived here.
   generateUnitGraph =
-    rawArgs:
+    {
+      args,
+      cargoTargets,
+      profile,
+      target,
+    }:
     let
-      args = rust.normalizeArgs rawArgs;
-      inherit (args) vendorDir;
-      cargoTargets = cargoTargetsFor rawArgs args.cargoArgs;
-      renderTarget = renderCargoArgs {
-        profile = rawArgs.profile or "release";
-        target = rawArgs.target or null;
-      };
+      renderTarget = renderCargoArgs { inherit profile target; };
+      unitGraphFile = targetIndex: "$TMPDIR/unit-graph-${builtins.toString targetIndex}.json";
     in
     pkgs.runCommand "cargo-unit-graph.json"
       (
@@ -112,62 +111,51 @@ let
       )
       ''
         ${rust.vendorConfigScript {
-          inherit vendorDir;
-          inherit (args) cargoExtraConfig cargoLock;
+          inherit (args) vendorDir cargoExtraConfig cargoLock;
         }}
 
         cd ${args.src}
 
         pids=
-        ${lib.concatMapStringsSep "\n" (
-          targetIndex:
-          let
-            targetArgs = builtins.elemAt cargoTargets targetIndex;
-          in
-          ''
+        ${lib.concatStringsSep "\n" (
+          lib.imap0 (targetIndex: targetArgs: ''
             (
               export CARGO_TARGET_DIR="$TMPDIR/cargo-target-${builtins.toString targetIndex}"
-              cargo ${renderTarget targetArgs} > "$TMPDIR/unit-graph-${builtins.toString targetIndex}.json"
+              cargo ${renderTarget targetArgs} > "${unitGraphFile targetIndex}"
             ) &
             pids="$pids $!"
-          ''
-        ) (lib.range 0 ((builtins.length cargoTargets) - 1))}
+          '') cargoTargets
+        )}
 
         for pid in $pids; do
           wait "$pid"
         done
 
         nix-cargo-unit merge ${
-          lib.concatMapStringsSep " " (
-            targetIndex: "$TMPDIR/unit-graph-${builtins.toString targetIndex}.json"
-          ) (lib.range 0 ((builtins.length cargoTargets) - 1))
+          lib.concatStringsSep " " (lib.imap0 (targetIndex: _: unitGraphFile targetIndex) cargoTargets)
         } > "$out"
       '';
 
-  /**
-    Render `units.nix` from a Cargo unit graph.
-
-    The result is imported by `buildWorkspace`, so this derivation is the
-    second IFD stage. It is separated from `generateUnitGraph` so callers can
-    inspect either artifact when debugging graph or renderer behavior.
-  */
+  # Second IFD stage for `buildWorkspace`: render `units.nix` from the unit graph
+  # `generateUnitGraph` produced. Separate derivation so the graph and the render
+  # are independently inspectable (both are surfaced on the workspace output).
+  # Takes the normalized `args`, the graph as an explicit input, and the
+  # `contentAddressed` knob from its one caller.
   generateUnitsNix =
-    rawArgs:
+    {
+      args,
+      unitGraphJson,
+      contentAddressed,
+    }:
     let
-      args = rust.normalizeArgs rawArgs;
-      inherit (args) vendorDir;
-      unitGraphJson =
-        rawArgs.unitGraphJson
-          or (throw "cargoUnit.generateUnitsNix requires unitGraphJson from generateUnitGraph.");
-      contentAddressed = rawArgs.contentAddressed or true;
-      toolchainId = builtins.baseNameOf (builtins.toString args.rustToolchain);
+      toolchainId = rust.toolchainId args.rustToolchain;
       cargoLockForRender = rust.cargoLockFile args.cargoLock;
       renderFlags = [
         "render"
         "--workspace-root"
         (builtins.toString args.src)
         "--vendor-root"
-        (builtins.toString vendorDir)
+        (builtins.toString args.vendorDir)
         "--toolchain-id"
         toolchainId
       ]
@@ -183,20 +171,6 @@ let
       ''
         nix-cargo-unit ${lib.escapeShellArgs renderFlags} --cargo-lock "$cargoLockForRender" < ${unitGraphJson} > "$out"
       '';
-
-  /**
-    Audit a workspace `Cargo.lock` with `cargo-audit` as a pure Nix check.
-
-    The advisory database is a pinned RustSec checkout by default, and
-    `cargo-audit` runs with `--no-fetch --stale` so evaluation and builds do
-    not depend on a user Cargo home or network access.
-  */
-  auditCargoLock =
-    rawArgs:
-    rust.cargoAuditCheck {
-      args = rust.normalizeArgs rawArgs;
-      pname = rawArgs.pname or "cargo-unit";
-    };
 
   /**
     Build a Rust workspace as one Nix derivation per Cargo rustc unit.
@@ -254,13 +228,15 @@ let
       cargoTargetNames = rawArgs.cargoTargetNames or null;
       extraUnits = rawArgs.extraUnits or { };
       extraLibraries = rawArgs.extraLibraries or { };
-      unitGraphJson = generateUnitGraph (rawArgs // { inherit vendorDir; });
-      unitsNix = generateUnitsNix (
-        rawArgs
-        // {
-          inherit unitGraphJson vendorDir;
-        }
-      );
+      unitGraphJson = generateUnitGraph {
+        inherit args cargoTargets;
+        profile = rawArgs.profile or "release";
+        target = rawArgs.target or null;
+      };
+      unitsNix = generateUnitsNix {
+        inherit args unitGraphJson;
+        contentAddressed = rawArgs.contentAddressed or true;
+      };
       perUnitClippyEnabled = args.policy.clippy.enable;
       # Per-unit clippy runs `clippy-driver` directly on each non-external
       # unit. Suppress the legacy workspace-level `cargoClippy` derivation in
@@ -341,7 +317,7 @@ let
       # hash (hence its key) would not match. `mkPrebuiltLibraryUnit` asserts
       # against its own `rustToolchain` arg; this is the workspace-side
       # cross-check against the toolchain the graph really used.
-      workspaceToolchainId = builtins.baseNameOf (builtins.toString args.rustToolchain);
+      workspaceToolchainId = rust.toolchainId args.rustToolchain;
 
       # C1: a prebuilt injection must OVERRIDE a unit/library the graph already
       # references. A key that is absent silently builds from source, defeating
@@ -694,7 +670,7 @@ let
       depUnits ? [ ],
     }:
     let
-      expectedToolchainId = builtins.baseNameOf (builtins.toString rustToolchain);
+      expectedToolchainId = rust.toolchainId rustToolchain;
       # The renderer underscores the Cargo target name for on-disk artifacts
       # (`render.rs:1376`). Mirror that exactly so the rlib filename and the
       # `extern-path` contents match what a from-source unit would produce.
@@ -750,10 +726,7 @@ in
     buildWorkspace
     selectBinaryWithTests
     selectLibraryWithTests
-    auditCargoLock
     defaultToolchainId
-    generateUnitGraph
-    generateUnitsNix
     mkPrebuiltLibraryUnit
     ;
 }
