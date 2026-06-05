@@ -40,7 +40,10 @@ input (no host cursor), shares a host directory in over virtio-fs, launches a
 wgpu GUI app (the `bossbar-overlay`) from that share, and screenshots the running
 overlay by reading the guest framebuffer. Nothing appears on the host desktop and
 the host cursor is never touched. A Linux guest also boots to userspace with its
-serial console streamed to stdout.
+serial console streamed to stdout. On a Linux host, `boot-linux --root` boots a
+Linux guest under classic KVM libkrun (bundled kernel + rootfs + exec), verified
+end to end on x86_64-linux with `/dev/kvm` (a busybox rootfs runs `uname`/`ls`
+and the VM powers off cleanly).
 
 What works today:
 
@@ -55,7 +58,7 @@ What works today:
   - **Linux host**: `--root <rootfs-dir>` boots that directory (shared in over
     virtiofs) under classic libkrun's bundled KVM kernel, running the trailing
     command as the guest init, e.g. `boot-linux --root ./rootfs -- /bin/ls /`.
-    No `/dev/kvm`, no boot.
+    Needs `/dev/kvm`; no EFI disk or firmware involved.
 
   See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 - `boot-linux-gui` boots an aarch64 **Linux GUI** guest from a raw EFI disk with
@@ -88,10 +91,12 @@ What works today:
 - `stage-binary` copies a nix-built macOS binary and rewrites its `/nix/store`
   dylib references so it runs on a vanilla guest (see
   [Staging a binary guest-portable](#staging-a-binary-guest-portable)).
-- **Automatic self-signing**: a VM command on the read-only Nix store binary
-  re-execs an ad-hoc-signed copy from `$XDG_CACHE_HOME/ix/vmkit` carrying the
-  `com.apple.security.virtualization` entitlement, so `nix run .#vmkit` and
-  ix-mcp spawning work with no manual `codesign` step.
+- **Automatic self-signing** (macOS): a VM command on the read-only Nix store
+  binary re-execs an ad-hoc-signed copy from `$XDG_CACHE_HOME/ix/vmkit` carrying
+  the `com.apple.security.virtualization` (VZ) and `com.apple.security.hypervisor`
+  (libkrun) entitlements, so `nix run .#vmkit` and ix-mcp spawning work with no
+  manual `codesign` step. On a Linux host no signing is needed (libkrun talks to
+  `/dev/kvm` directly).
 
 The `vmkit` Python module bundled into ix-mcp exposes the full surface:
 `info`, `install`, `provision`, `stage_binary`, `screenshot`,
@@ -250,11 +255,13 @@ the library loads.
 `run_app` (Python) wires this together: stage an app into a directory, `--share`
 it in, and launch it in the guest in one call.
 
-## Why a standalone signed binary
+## Why a standalone signed binary (macOS)
 
-Creating a VM requires the `com.apple.security.virtualization` entitlement on the
-**running process**, and the binary must be code-signed to carry it. That shapes
-the architecture:
+On macOS, creating a VM requires an entitlement on the **running process**, and
+the binary must be code-signed to carry it: `com.apple.security.virtualization`
+for the VZ (macOS-guest) paths and `com.apple.security.hypervisor` for the libkrun
+(Linux-guest) path. That shapes the architecture (a Linux host needs none of this,
+so the split below is macOS-only):
 
 - The ix-mcp Python interpreter is an unsigned, immutable Nix store binary. It
   cannot gain the entitlement, and re-signing a store path is not an option. So
@@ -272,10 +279,11 @@ runner that the rest of the program drives.
 Ad-hoc signing is enough; no paid Developer ID is required. This is automatic:
 a VM command checks for a sentinel env var, and if unset copies the (read-only)
 Nix store binary into `$XDG_CACHE_HOME/ix/vmkit` (keyed by the store path),
-ad-hoc-signs it with `src/virtualization.entitlements`
-(`com.apple.security.virtualization`), and re-execs it. So `nix run .#vmkit`
-and ix-mcp spawning work with no manual `codesign`. The equivalent manual step
-is `codesign --force --sign - --entitlements src/virtualization.entitlements <bin>`.
+ad-hoc-signs it with `src/virtualization.entitlements` (which carries both
+`com.apple.security.virtualization` and `com.apple.security.hypervisor`), and
+re-execs it. So `nix run .#vmkit` and ix-mcp spawning work with no manual
+`codesign`. The equivalent manual step is `codesign --force --sign -
+--entitlements src/virtualization.entitlements <bin>`.
 
 ## Visual testing without taking over the host
 
@@ -310,12 +318,18 @@ libkrun instead (next section).
 ## Linux guests: libkrun
 
 Linux guests boot on [libkrun](https://github.com/containers/libkrun), not
-Virtualization.framework, because libkrun is the only backend that gives a Linux
-guest a real GPU on Apple Silicon: its macOS variant (`libkrun-efi`) ships a
-Venus virtio-gpu device backed by MoltenVK, so the guest gets Vulkan and a
-`/dev/dri/renderD128` node. `boot-linux --disk <raw-efi-disk> --gpu` boots an
-EFI-bootable disk and streams its serial console. This is the same conclusion
-Podman Desktop, Lima, and colima reached (they use libkrun/krunkit on macOS).
+Virtualization.framework, with a different libkrun per host:
+
+- **macOS host**: libkrun is the only backend that gives a Linux guest a real GPU
+  on Apple Silicon. Its EFI variant (`libkrun-efi`) ships a Venus virtio-gpu
+  device backed by MoltenVK, so the guest gets Vulkan and a `/dev/dri/renderD128`
+  node. `boot-linux --disk <raw-efi-disk> --gpu` boots an EFI-bootable disk and
+  streams its serial console. This is the same conclusion Podman Desktop, Lima,
+  and colima reached (they use libkrun/krunkit on macOS).
+- **Linux host**: classic KVM libkrun. `boot-linux --root <dir> -- <cmd>` shares a
+  rootfs directory in over virtiofs, boots it under libkrun's bundled kernel, and
+  runs `<cmd>` as the guest init, the same model `podman --runtime krun` uses. No
+  firmware, no EFI disk, no code-signing; it needs `/dev/kvm`.
 
 Details (the EFI-variant constraint, the embedded OVMF firmware, linking, and the
 `com.apple.security.hypervisor` entitlement) are in
@@ -332,10 +346,12 @@ here. See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 
 ## Build notes
 
-- This is the first workspace crate that links an Apple framework. The objc2
-  dependencies are gated to `cfg(target_os = "macos")` so the Linux CI workspace
-  graph never pulls them; on Linux the binary compiles as a typed "macOS only"
-  stub. The package output is advertised only on `aarch64-darwin`.
+- The objc2 (Virtualization.framework) dependencies are gated to
+  `cfg(target_os = "macos")`, so a Linux build never pulls them and compiles only
+  the libkrun + CLI code. libkrun is linked per host: `libkrun-efi` on
+  aarch64-darwin, classic `libkrun` on Linux (the `have_libkrun` cfg and link
+  search come from `build.rs` and `lib/rust/workspace.nix`). The package output is
+  advertised on `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux`.
 - All Virtualization.framework calls happen on the process main thread (the
   queue VZ binds the VM to by default); `dispatch_main` drains that queue so
   completion handlers fire, mirroring Apple's sample app.
@@ -345,9 +361,11 @@ here. See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 - You need an off-screen **GUI** capture of a GPU-accelerated Linux desktop: the
   headless Linux path has a GPU (libkrun), but the off-screen framebuffer-capture
   paths (`boot-linux-gui`, `drive-linux`) are still VZ, which has no Linux GPU.
-- You cannot code-sign: without the virtualization/hypervisor entitlements,
-  VM creation fails by design.
-- You are off Apple Silicon: only `aarch64-darwin` is wired up.
+- You cannot code-sign on macOS: without the virtualization/hypervisor
+  entitlements, VM creation fails by design. (A Linux host needs no signing.)
+- You want the macOS-guest paths (`install-macos`, `boot-macos`, `drive-macos`,
+  GUI capture) off Apple Silicon: those are `aarch64-darwin` only. Linux-guest
+  boot via libkrun runs on `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux`.
 
 ## Roadmap
 
@@ -368,9 +386,10 @@ here. See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
    `screenshot_many`, `drive`, `Driver`, and `run_app`, returning PIL images that
    render inline, plus the Linux helpers `boot_linux` (headless serial console),
    `boot_linux_gui`, and `drive_linux`.
-7. ~~Linux guests on libkrun (GPU via Venus/MoltenVK).~~ Done: `boot-linux
-   --disk [--gpu]` boots a raw EFI disk under libkrun and streams its console;
-   see [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
+7. ~~Linux guests on libkrun.~~ Done on both hosts: a macOS host boots a raw EFI
+   disk under libkrun-efi (`boot-linux --disk [--gpu]`, GPU via Venus/MoltenVK); a
+   Linux host boots a rootfs under classic KVM libkrun
+   (`boot-linux --root -- <cmd>`). See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 8. Linux-GUI off-screen capture on libkrun is **blocked upstream**, not just
    unimplemented here: libkrun's only scanout-readback path is a virgl GL
    `glReadPixels`, which has no macOS GL backend in the venus-only build, and
