@@ -172,12 +172,7 @@ let
     runtimeInputs = [
       pkgs.gh
       pkgs.jq
-      # ci-triage drives `claude -p --allowedTools Bash`; the package's default
-      # index-MCP-only lockdown bare-denies Bash (deny wins over --allowedTools,
-      # and --setting-sources "" does not drop the wrapper's --settings layer),
-      # which would strip its only tool. This agent has no index MCP and works
-      # through the shell, so opt it out of the lockdown.
-      (pkgs.claude-code.override { restrictToIndexMcp = false; })
+      pkgs.claude-code
       pkgs.coreutils
     ];
     text = builtins.readFile ./scripts/ci-triage.sh;
