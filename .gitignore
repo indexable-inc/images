@@ -53,6 +53,7 @@ __pycache__/
 
 # Claude Code per-machine overrides
 .claude/settings.local.json
+CLAUDE.local.md
 
 # Agent instruction files are rendered live by the SessionStart hook
 # (.claude/hooks/agent-instructions.sh) from agent-context/sections, not
