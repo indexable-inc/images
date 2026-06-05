@@ -105,8 +105,23 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let revs = git::resolve(cli.base.as_deref(), cli.head.as_deref())?;
 
-    let base = nix::eval_checks(&revs.repo, &revs.base)?;
-    let head = nix::eval_checks(&revs.repo, &revs.head)?;
+    // The base and head evals are independent (read-only against the git and
+    // nix stores), and each is a separate 8-worker nix-eval-jobs run, so
+    // overlapping them stays inside the 16-worker envelope the check gate
+    // already runs on this host (lib/per-system.nix) and halves the dominant
+    // cost of a report: the two full-catalog evals were ~95s each, back to
+    // back, on a warm store.
+    let (base, head) = std::thread::scope(|scope| {
+        let base = scope.spawn(|| nix::eval_checks(&revs.repo, &revs.base));
+        let head = nix::eval_checks(&revs.repo, &revs.head);
+        let base = base
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        (base, head)
+    });
+    // Base error first: it matches the old sequential precedence when both fail.
+    let base = base?;
+    let head = head?;
     guard_eval_failures(&base, &head)?;
     let base = base.checks;
     let head = head.checks;
