@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RFC 0004: cargo-drv — dynamic-derivation backend for the Rust workspace build · ix images</title>
+<title>RFC 0005: cargo-drv — dynamic-derivation backend for the Rust workspace build · ix images</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -76,11 +76,11 @@
 </head>
 <body>
 
-<h1>RFC 0004: cargo-drv &mdash; dynamic-derivation backend for the Rust workspace build</h1>
+<h1>RFC 0005: cargo-drv &mdash; dynamic-derivation backend for the Rust workspace build</h1>
 <p class="subtitle"><a href="index.html">&#8617; RFC index</a></p>
 
 <dl class="frontmatter">
-  <dt>Number</dt><dd>0004</dd>
+  <dt>Number</dt><dd>0005</dd>
   <dt>Title</dt><dd>cargo-drv &mdash; dynamic-derivation backend for the Rust workspace build</dd>
   <dt>Status</dt><dd>Draft</dd>
   <dt>Authors</dt><dd>wyattgill</dd>
@@ -110,28 +110,32 @@
 <p>The name signals the architectural shift &mdash; the unit-graph attrset (<em>units</em>) was the eval-time abstraction; the realisation-time abstraction is the <code>.drv</code> &mdash; and lets reviewers immediately distinguish call sites built against the old shape from call sites built against the new one during the transition window. The phonetic echo of "dyn-drv" is intentional.</p>
 
 <h3>Single dynamic outer derivation</h3>
-<p>The current pipeline collapses to one outer derivation. Sketch:</p>
-<pre><code>cargoDrv.buildWorkspace = args: derivation {
-  name = "${args.pname}-units";
-  system = pkgs.stdenv.hostPlatform.system;
-  __structuredAttrs = true;
-  outputs = [ "out" ];
+<p>Dynamic derivations are followed through explicit derivation references, not by scanning an output directory: a derivation whose output is itself a <code>.drv</code> file can be consumed with <code>builtins.outputOf</code>, which tells the scheduler "build that emitted derivation's output." So the emitter does not produce a flat directory of inert <code>.drv</code> files; it registers each per-unit <code>.drv</code> in the store (via <code>nix derivation add</code> under the fleet's already-enabled <code>recursive-nix</code>, <code>nix/modules/base/nix-settings.nix:31</code>), then writes one <strong>aggregate</strong> <code>.drv</code> whose <code>inputDrvs</code> reference every per-unit child, and makes that aggregate file the outer derivation's <code>$out</code>. Sketch:</p>
+<pre><code>cargoDrv.buildWorkspace = args:
+  let
+    emitter = derivation {
+      name = "${args.pname}-units.drv";
+      system = pkgs.stdenv.hostPlatform.system;
+      __structuredAttrs = true;
+      outputs = [ "out" ];
 
-  # New: this derivation's *output* is a directory of .drv files,
-  # which Nix then realises as if they had been emitted at eval time.
-  outputHashMode = "recursive";
-  outputHashAlgo = "sha256";
-
-  builder = "${cargoDrvBin}/bin/cargo-drv";
-  args = [ "emit"
-           "--workspace" args.workspaceRoot
-           "--cargo-lock" args.cargoLock
-           "--unit-graph-args" (lib.escapeShellArgs args.cargoArgs)
-           "--vendor"   (resolveVendorDir args)
-           "--policy"   (rust.resolvePolicy args.policy)
-           "--out"      "$out" ];
-};</code></pre>
-<p>The builder is the Rust binary itself, invoked with no further Nix orchestration. Inside, it does what <code>render.rs</code> does today &mdash; runs <code>cargo build --unit-graph</code>, parses the JSON, walks the dependency graph, computes each unit's rustc invocation &mdash; and then, instead of templating <code>.nix</code> source, writes one canonical <code>.drv</code> file per unit into <code>$out</code>. Nix realises that output, sees the emitted <code>.drv</code> files, and schedules them as ordinary derivations under the daemon's <code>dynamic-derivations</code> path.</p>
+      # $out is a single .drv file: the aggregate derivation whose
+      # inputDrvs are the per-unit .drvs the builder registered.
+      builder = "${cargoDrvBin}/bin/cargo-drv";
+      args = [ "emit"
+               "--workspace" args.workspaceRoot
+               "--cargo-lock" args.cargoLock
+               "--unit-graph-args" (lib.escapeShellArgs args.cargoArgs)
+               "--vendor"   (resolveVendorDir args)
+               "--policy"   (rust.resolvePolicy args.policy)
+               "--out"      "$out" ];
+    };
+  in
+  # The eval-time handle: "the output of the derivation that emitter's
+  # output describes." This is the reference path the scheduler follows
+  # into the per-unit graph.
+  builtins.outputOf emitter.outPath "out";</code></pre>
+<p>The builder is the Rust binary itself, invoked with no further Nix orchestration. Inside, it does what <code>render.rs</code> does today &mdash; runs <code>cargo build --unit-graph</code>, parses the JSON, walks the dependency graph, computes each unit's rustc invocation &mdash; and then, instead of templating <code>.nix</code> source, serialises one canonical <code>.drv</code> per unit, registers it, and emits the aggregate. The scheduler follows the <code>outputOf</code> reference into the aggregate, sees the per-unit <code>inputDrvs</code>, and realises them as ordinary derivations under the daemon's <code>dynamic-derivations</code> path. Callers that need a single named unit (a test binary, a clippy check) get a per-unit <code>outputOf</code> handle from <code>passthru.units</code> rather than the aggregate.</p>
 
 <h3>What the emitter retains</h3>
 <p>The valuable code in <code>render.rs</code> &mdash; roughly 70% of the file by my read of the audit in this conversation's exploration &mdash; survives unchanged in spirit:</p>
@@ -157,7 +161,7 @@
 
 <h3>Migration</h3>
 <p>One PR against this repo (<code>index</code>) lands the rename and the backend swap. A second PR against ix bumps <code>flake.lock</code> to the new <code>index</code> revision and flips call sites from <code>indexLib.cargoUnitFor</code> to <code>indexLib.cargoDrvFor</code>. Both PRs are revertable: reverting the ix-side flake bump puts the old builder back in place without further coordination.</p>
-<p>CI daemon configuration needs one change: <code>modules/services/ci-runner/default.nix:102-105</code> currently sets <code>extra-experimental-features = [ "nix-command" "flakes" ]</code>; the new builder requires <code>"ca-derivations"</code> and <code>"dynamic-derivations"</code> on the list. The <code>cas-default-blocked</code> update at <code>site/src/lib/updates/cas-default-blocked.svx</code> documents the cost of repo-wide CA at the nixpkgs level; this RFC does not change that posture &mdash; the floating CA outputs are confined to workspace Rust units, not the stdenv closure.</p>
+<p>Feature configuration needs four changes, not one. The CI runner daemon at <code>modules/services/ci-runner/default.nix:102-105</code> currently sets <code>extra-experimental-features = [ "nix-command" "flakes" ]</code>; the new builder requires <code>"ca-derivations"</code> and <code>"dynamic-derivations"</code> on the list. But this repo also hard-codes the eval-side feature set to <code>ca-derivations</code> alone in three places, and each must grow <code>dynamic-derivations</code> in the same PR or <code>nix flake check</code> and the repo check command fail even on a fixed runner: the flake's <code>nixConfig.extra-experimental-features</code> (<code>flake.nix:19</code>), the check wrapper's pinned <code>--option extra-experimental-features</code> for both nix-fast-build and nix-eval-jobs (<code>lib/per-system.nix:172, 186</code>), and blast-radius's hard-coded eval options (<code>packages/blast-radius/src/nix.rs:102, 169</code>). The <code>cas-default-blocked</code> update at <code>site/src/lib/updates/cas-default-blocked.svx</code> documents the cost of repo-wide CA at the nixpkgs level; this RFC does not change that posture &mdash; the floating CA outputs are confined to workspace Rust units, not the stdenv closure.</p>
 <p>No on-disk format changes for the user-visible store. Existing <code>rust-test-&lt;crate&gt;-&lt;test&gt;</code> derivation names are preserved by the emitter so cache substitution from the leader's atticd continues to hit for unchanged crates.</p>
 
 <h3>Debug surface</h3>
