@@ -216,7 +216,7 @@ async fn run_auth() -> anyhow::Result<()> {
         }
     };
 
-    let token = pending.exchange(&code).await?;
+    let token = pending.exchange(code).await?;
     store.save(&token)?;
     println!("Token saved to {}", store.path().display());
 

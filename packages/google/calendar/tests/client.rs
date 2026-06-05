@@ -474,7 +474,7 @@ async fn consent_flow_runs_end_to_end_with_pkce() {
 
     let code = pending.wait_loopback().await.unwrap();
     browser.await.unwrap();
-    let token = pending.exchange(&code).await.unwrap();
+    let token = pending.exchange(code).await.unwrap();
     assert_eq!(token.refresh_token, "1//new");
     assert_eq!(token.scopes, vec![EVENTS_SCOPE.to_owned()]);
 

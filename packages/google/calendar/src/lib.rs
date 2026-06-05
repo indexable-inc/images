@@ -26,7 +26,7 @@ use serde::Deserialize;
 use snafu::ResultExt as _;
 use url::Url;
 
-use crate::error::{ApiSnafu, BadBaseUrlSnafu, BuildClientSnafu, HttpSnafu};
+use crate::error::{ApiSnafu, BadBaseUrlSnafu, BuildClientSnafu, HttpSnafu, NotABaseUrlSnafu};
 
 /// Default API base URL.
 pub const DEFAULT_BASE_URL: &str = "https://www.googleapis.com/calendar/v3";
@@ -78,17 +78,19 @@ impl Client {
     /// A client against a different base URL (tests).
     ///
     /// # Errors
-    /// Returns an error if the base URL does not parse or the HTTP client
-    /// cannot be built.
+    /// Returns an error if the base URL does not parse, cannot hold path
+    /// segments, or the HTTP client cannot be built.
     pub fn with_base_url(auth: Authenticator, base_url: &str) -> Result<Self> {
-        let base_url = Url::parse(base_url).context(BadBaseUrlSnafu { input: base_url })?;
-        let http = reqwest::Client::builder()
-            .build()
-            .context(BuildClientSnafu)?;
+        let parsed = Url::parse(base_url).context(BadBaseUrlSnafu { input: base_url })?;
+        // Checked here so `events_url` can extend path segments infallibly.
+        snafu::ensure!(
+            !parsed.cannot_be_a_base(),
+            NotABaseUrlSnafu { input: base_url }
+        );
         Ok(Self {
-            http,
+            http: http_client()?,
             auth,
-            base_url,
+            base_url: parsed,
         })
     }
 
@@ -212,16 +214,7 @@ impl Client {
             .send()
             .await
             .context(HttpSnafu)?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return ApiSnafu {
-                status: status.as_u16(),
-                message: api_message(&body),
-            }
-            .fail();
-        }
+        check_status(response).await?;
         Ok(())
     }
 
@@ -233,7 +226,7 @@ impl Client {
         {
             let mut segments = url
                 .path_segments_mut()
-                .expect("an http(s) base URL always has path segments");
+                .expect("with_base_url rejects cannot-be-a-base URLs");
             segments.extend(["calendars", calendar_id, "events"]);
             segments.extend(event_id);
         }
@@ -241,19 +234,35 @@ impl Client {
     }
 }
 
-/// Decode a JSON response, mapping non-success statuses onto [`Error::Api`]
-/// with the message from Google's error envelope.
-async fn decode<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T> {
+/// One HTTP client, built the same way everywhere in the crate (the API
+/// client and the OAuth token client).
+pub(crate) fn http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder().build().context(BuildClientSnafu)
+}
+
+/// Map a non-success status onto [`Error::Api`] with the message from
+/// Google's error envelope; pass a success through. The one owner of API
+/// error mapping, shared by body-decoding calls and bodyless ones (delete).
+async fn check_status(response: reqwest::Response) -> Result<reqwest::Response> {
     let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return ApiSnafu {
-            status: status.as_u16(),
-            message: api_message(&body),
-        }
-        .fail();
+    if status.is_success() {
+        return Ok(response);
     }
-    response.json().await.context(HttpSnafu)
+    let body = response.text().await.unwrap_or_default();
+    ApiSnafu {
+        status: status.as_u16(),
+        message: api_message(&body),
+    }
+    .fail()
+}
+
+/// Decode a checked JSON response.
+async fn decode<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T> {
+    check_status(response)
+        .await?
+        .json()
+        .await
+        .context(HttpSnafu)
 }
 
 /// The human message from a Google error body, or the (truncated) raw body

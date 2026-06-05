@@ -32,6 +32,13 @@ pub enum Error {
         source: url::ParseError,
     },
 
+    /// The base URL override cannot hold path segments (for example `data:`).
+    #[snafu(display("Calendar API base URL {input:?} cannot hold path segments; use http(s)"))]
+    NotABaseUrl {
+        /// The rejected input.
+        input: String,
+    },
+
     /// The OAuth client id environment variable is unset or empty.
     #[snafu(display(
         "{CLIENT_ID_ENV} is not set; export the team Google OAuth client id \

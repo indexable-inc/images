@@ -29,7 +29,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::error::{
-    BuildClientSnafu, ConsentDeniedSnafu, HttpSnafu, ListenSnafu, MissingClientIdSnafu,
+    ConsentDeniedSnafu, Error, HttpSnafu, ListenSnafu, MissingClientIdSnafu,
     MissingClientSecretSnafu, MissingCodeSnafu, MissingRefreshTokenSnafu, NoConfigDirSnafu,
     NoTokenSnafu, ParseTokenSnafu, ReadTokenSnafu, RedirectParseSnafu, Result, StateMismatchSnafu,
     TokenExchangeSnafu, TokenRevokedSnafu, WriteTokenSnafu,
@@ -46,10 +46,11 @@ pub const CLIENT_SECRET_ENV: &str = "GOOGLE_OAUTH_CLIENT_SECRET";
 pub const EVENTS_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events";
 
 /// Google's OAuth consent endpoint.
-pub const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 
-/// Google's OAuth token endpoint (code exchange and refresh).
-pub const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
+/// Google's OAuth token endpoint (code exchange and refresh). Overridable per
+/// instance with `with_token_endpoint` (tests).
+const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
 /// Cap on one loopback HTTP request head; a redirect GET is well under this.
 const MAX_REDIRECT_REQUEST: usize = 8 * 1024;
@@ -202,6 +203,95 @@ struct TokenErrorBody {
     error: String,
 }
 
+/// A non-success answer from the token endpoint, decoded once. Callers map it
+/// onto their own failure: a dead grant reads differently mid-`gcal auth`
+/// (the code expired) than on refresh (the consent itself is gone).
+struct TokenDenied {
+    status: u16,
+    body: String,
+    /// The RFC 6749 §5.2 error code, when the body carried one.
+    error_code: Option<String>,
+}
+
+impl TokenDenied {
+    /// Policy for the refresh path: `invalid_grant` means the refresh token
+    /// itself is dead (revoked, expired, or consent withdrawn), so the fix is
+    /// a new consent, not a retry.
+    fn refresh_error(self) -> Error {
+        if self.error_code.as_deref() == Some("invalid_grant") {
+            TokenRevokedSnafu.build()
+        } else {
+            self.exchange_error()
+        }
+    }
+
+    /// Policy for the code-exchange path: surface the endpoint's answer.
+    fn exchange_error(self) -> Error {
+        TokenExchangeSnafu {
+            status: self.status,
+            body: self.body,
+        }
+        .build()
+    }
+}
+
+/// The outcome of one token-endpoint call.
+enum TokenOutcome {
+    Granted(TokenResponse),
+    Denied(TokenDenied),
+}
+
+/// The token-endpoint half of OAuth: one owner for the client-authenticated
+/// form POST and the grant/denial decoding that the code exchange and the
+/// refresh share.
+struct TokenClient {
+    http: reqwest::Client,
+    secrets: ClientSecrets,
+    endpoint: String,
+}
+
+impl TokenClient {
+    fn new(secrets: ClientSecrets) -> Result<Self> {
+        Ok(Self {
+            http: crate::http_client()?,
+            secrets,
+            endpoint: TOKEN_ENDPOINT.to_owned(),
+        })
+    }
+
+    /// POST `grant_params` plus the client identity, and decode the answer.
+    async fn post(&self, grant_params: &[(&str, &str)]) -> Result<TokenOutcome> {
+        let mut form = vec![
+            ("client_id", self.secrets.client_id.as_str()),
+            ("client_secret", self.secrets.client_secret.as_str()),
+        ];
+        form.extend_from_slice(grant_params);
+
+        let response = self
+            .http
+            .post(&self.endpoint)
+            .form(&form)
+            .send()
+            .await
+            .context(HttpSnafu)?;
+
+        let status = response.status();
+        if status.is_success() {
+            let token = response.json().await.context(HttpSnafu)?;
+            return Ok(TokenOutcome::Granted(token));
+        }
+        let body = response.text().await.unwrap_or_default();
+        let error_code = serde_json::from_str::<TokenErrorBody>(&body)
+            .ok()
+            .map(|denied| denied.error);
+        Ok(TokenOutcome::Denied(TokenDenied {
+            status: status.as_u16(),
+            body,
+            error_code,
+        }))
+    }
+}
+
 /// Mints access tokens from the stored refresh token.
 ///
 /// One access token is fetched lazily per `Authenticator` and reused for its
@@ -209,10 +299,8 @@ struct TokenErrorBody {
 /// live far shorter than the token's hour. A long-lived daemon should hold one
 /// `Authenticator` per operation rather than caching one across hours.
 pub struct Authenticator {
-    secrets: ClientSecrets,
+    token: TokenClient,
     store: TokenStore,
-    http: reqwest::Client,
-    token_endpoint: String,
     access: tokio::sync::OnceCell<String>,
 }
 
@@ -223,14 +311,9 @@ impl Authenticator {
     /// # Errors
     /// Returns an error if the HTTP client cannot be built.
     pub fn new(secrets: ClientSecrets, store: TokenStore) -> Result<Self> {
-        let http = reqwest::Client::builder()
-            .build()
-            .context(BuildClientSnafu)?;
         Ok(Self {
-            secrets,
+            token: TokenClient::new(secrets)?,
             store,
-            http,
-            token_endpoint: TOKEN_ENDPOINT.to_owned(),
             access: tokio::sync::OnceCell::new(),
         })
     }
@@ -238,7 +321,7 @@ impl Authenticator {
     /// Point at a different token endpoint (tests).
     #[must_use]
     pub fn with_token_endpoint(mut self, url: impl Into<String>) -> Self {
-        self.token_endpoint = url.into();
+        self.token.endpoint = url.into();
         self
     }
 
@@ -256,36 +339,18 @@ impl Authenticator {
 
     async fn refresh(&self) -> Result<String> {
         let stored = self.store.load()?;
-        let response = self
-            .http
-            .post(&self.token_endpoint)
-            .form(&[
+        let outcome = self
+            .token
+            .post(&[
                 ("grant_type", "refresh_token"),
                 ("refresh_token", stored.refresh_token.as_str()),
-                ("client_id", self.secrets.client_id.as_str()),
-                ("client_secret", self.secrets.client_secret.as_str()),
             ])
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            // `invalid_grant` means the refresh token itself is dead (revoked,
-            // expired, or consent withdrawn): the fix is a new consent, not a
-            // retry.
-            let revoked = serde_json::from_str::<TokenErrorBody>(&body)
-                .is_ok_and(|err| err.error == "invalid_grant");
-            ensure!(!revoked, TokenRevokedSnafu);
-            return TokenExchangeSnafu {
-                status: status.as_u16(),
-                body,
-            }
-            .fail();
-        }
-
-        let token: TokenResponse = response.json().await.context(HttpSnafu)?;
+        let token = match outcome {
+            TokenOutcome::Granted(token) => token,
+            TokenOutcome::Denied(denied) => return Err(denied.refresh_error()),
+        };
         if let Some(rotated) = token.refresh_token {
             // Google occasionally rotates the refresh token on refresh; the
             // old one stops working, so persist the replacement immediately.
@@ -319,9 +384,7 @@ pub struct PendingConsent {
     redirect_uri: String,
     state: String,
     verifier: String,
-    secrets: ClientSecrets,
-    token_endpoint: String,
-    http: reqwest::Client,
+    token: TokenClient,
 }
 
 /// Start a consent attempt for `scopes`: bind a loopback listener and build
@@ -333,7 +396,7 @@ pub struct PendingConsent {
 /// built.
 ///
 /// # Panics
-/// Never in practice: [`AUTH_ENDPOINT`] is a constant valid URL.
+/// Never in practice: the auth-endpoint constant is a valid URL.
 pub async fn begin_consent(secrets: ClientSecrets, scopes: &[&str]) -> Result<PendingConsent> {
     let listener = TcpListener::bind(("127.0.0.1", 0))
         .await
@@ -359,18 +422,13 @@ pub async fn begin_consent(secrets: ClientSecrets, scopes: &[&str]) -> Result<Pe
         .append_pair("code_challenge", &challenge_for(&verifier))
         .append_pair("code_challenge_method", "S256");
 
-    let http = reqwest::Client::builder()
-        .build()
-        .context(BuildClientSnafu)?;
     Ok(PendingConsent {
         auth_url: auth_url.into(),
         listener,
         redirect_uri,
         state,
         verifier,
-        secrets,
-        token_endpoint: TOKEN_ENDPOINT.to_owned(),
-        http,
+        token: TokenClient::new(secrets)?,
     })
 }
 
@@ -378,7 +436,7 @@ impl PendingConsent {
     /// Point at a different token endpoint (tests).
     #[must_use]
     pub fn with_token_endpoint(mut self, url: impl Into<String>) -> Self {
-        self.token_endpoint = url.into();
+        self.token.endpoint = url.into();
         self
     }
 
@@ -430,38 +488,26 @@ impl PendingConsent {
     }
 
     /// Exchange the authorization code for tokens and return the grant to
-    /// store.
+    /// store. Consumes the attempt: a code is single-use.
     ///
     /// # Errors
     /// Returns an error if the exchange fails or the response carries no
     /// refresh token.
-    pub async fn exchange(self, code: &AuthCode) -> Result<StoredToken> {
-        let response = self
-            .http
-            .post(&self.token_endpoint)
-            .form(&[
+    pub async fn exchange(self, code: AuthCode) -> Result<StoredToken> {
+        let outcome = self
+            .token
+            .post(&[
                 ("code", code.0.as_str()),
-                ("client_id", self.secrets.client_id.as_str()),
-                ("client_secret", self.secrets.client_secret.as_str()),
                 ("redirect_uri", self.redirect_uri.as_str()),
                 ("grant_type", "authorization_code"),
                 ("code_verifier", self.verifier.as_str()),
             ])
-            .send()
-            .await
-            .context(HttpSnafu)?;
+            .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return TokenExchangeSnafu {
-                status: status.as_u16(),
-                body,
-            }
-            .fail();
-        }
-
-        let token: TokenResponse = response.json().await.context(HttpSnafu)?;
+        let token = match outcome {
+            TokenOutcome::Granted(token) => token,
+            TokenOutcome::Denied(denied) => return Err(denied.exchange_error()),
+        };
         let refresh_token = token.refresh_token.context(MissingRefreshTokenSnafu)?;
         let scopes = token
             .scope
