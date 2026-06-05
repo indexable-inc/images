@@ -11,12 +11,19 @@
 # ONE ClickHouse: the `view` node runs the shared `services.ix-observability`
 # stack (ClickHouse + collector + Grafana) and adds the `minecraft` database on
 # that same server, so there is never a second ClickHouse. See README.md.
+let
+  # All three nodes share one east-west group so the view and producer can
+  # resolve and reach the log's Kafka broker and the view's OTel collector. A
+  # node outside the group has no east-west route or DNS name to its siblings.
+  eastWestGroup = "minecraft-blocks";
+in
 index.lib.mkFleet {
   defaults = [ { ix.image.tag = "minecraft-blocks"; } ];
 
   nodes = {
     # The single durable, replayable source of truth.
     log = {
+      groups = [ eastWestGroup ];
       modules = [ ./log.nix ];
     };
 
@@ -25,6 +32,7 @@ index.lib.mkFleet {
     # ClickHouse. Telemetry lands in `otel_*`; block facts land in `minecraft.*`.
     view = {
       dependsOn = [ "log" ];
+      groups = [ eastWestGroup ];
       deployment.l7ProxyPorts = [ 3000 ];
       modules = [ ./view.nix ];
     };
@@ -37,6 +45,7 @@ index.lib.mkFleet {
         "log"
         "view"
       ];
+      groups = [ eastWestGroup ];
       deployment.ipv4 = true;
       modules = [ ./producer.nix ];
     };

@@ -23,10 +23,10 @@ import org.bukkit.plugin.java.JavaPlugin;
  * produces it to the {@code minecraft.block_events} topic, which materializes
  * into the ClickHouse spatial view.
  *
- * <p>The record shape is byte-identical to what the Rust emitter writes, so the
- * downstream loader, table, and queries treat plugin output and emitter output
- * the same. The schema field list lives once in {@code schema.nix}; keep this
- * writer in lockstep with it.
+ * <p>The record shape matches the {@code block_events} schema. That field list
+ * lives once in {@code schema.nix} and generates the ClickHouse table, the Kafka
+ * ingest view, and the topic; this writer is plain Java and is not generated, so
+ * keep it in lockstep with that file.
  */
 public final class BlockEventsPlugin extends JavaPlugin implements Listener {
 
@@ -97,7 +97,7 @@ public final class BlockEventsPlugin extends JavaPlugin implements Listener {
         return block.getType().getKey().toString();
     }
 
-    /** Minimal JSON string escaping, matching the Rust emitter's rules. */
+    /** Minimal JSON string escaping for the record fields. */
     private static String jsonString(String s) {
         StringBuilder out = new StringBuilder(s.length() + 2);
         out.append('"');

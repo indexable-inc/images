@@ -1,11 +1,10 @@
 /**
   One source of truth for the block-place event.
 
-  Every leg of the pipeline derives its field list from this file: the
-  ClickHouse table DDL, the Kafka table-engine view, the topic name, and the
-  documented record shape the Paper plugin and the Rust emitter both write.
-  Editing a field here changes the table, the ingest view, and the assertions
-  together, so the producer, the log, and the view can never drift apart.
+  The ClickHouse table DDL, the Kafka table-engine view, and the topic name are
+  all generated from the field list below, so those three cannot drift. The
+  Paper plugin writes the same record shape by hand (it is plain Java, not
+  generated), so keep that one writer in lockstep with this file.
 
   A block placement is a domain fact. It carries a world, three signed block
   coordinates, the block type, who placed it, and when. It is not server
@@ -139,7 +138,7 @@ in
     kafkaColumnDefs
     ;
 
-  # Column names in storage order. The loader's INSERT and the emitter's record
+  # Column names in storage order. The loader's INSERT and the test fixture
   # both key off this list, so a reordering or rename happens in one place.
   columnNames = map (f: f.name) fields;
 

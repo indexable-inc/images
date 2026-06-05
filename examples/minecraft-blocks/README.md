@@ -30,9 +30,9 @@ ix shell view -- mc-blocks box overworld 0 0 0 16 320 16
 ix shell view -- mc-blocks heatmap overworld
 ```
 
-You do not need a running server to see the pipeline end to end. The Rust
-emitter writes the same records the plugin writes, so the integration check
-drives the whole log-to-view path offline (see [Validation](#validation)).
+You do not need a running server to see the pipeline end to end. A committed
+fixture of block-placement records (the same shape the plugin writes) drives the
+whole log-to-view path offline (see [Validation](#validation)).
 
 ## The three layers
 
@@ -161,27 +161,28 @@ reshaping a view never touches the producer and never risks the source of truth.
 
 ## Shape
 
-- `schema.nix` is the one source of truth for the event: the field list, the
-  topic name, the Morton offset, and the ClickHouse DDL all derive from it, so
-  the plugin, the log, the table, and the queries cannot drift apart.
+- `schema.nix` is the one source of truth for the event: the topic name, the
+  Morton offset, and the ClickHouse DDL all derive from the field list, so the
+  log, the table, and the queries cannot drift. The plugin writes the same shape
+  by hand, so it is the one writer to keep in lockstep with this file.
 - `log.nix` runs the Kafka broker and creates the topic.
 - `view.nix` runs the shared observability ClickHouse and adds the spatial
   view, a Kafka table engine reading the topic, and a materialized view that
   copies consumed rows into the spatial table.
 - `producer.nix` runs Paper with the block-events plugin, ships its records to
   the topic, and forwards the server's telemetry to the collector.
-- `packages.nix` builds the Rust emitter, the plugin jar, and the integration
-  check.
+- `packages.nix` builds the plugin jar and the integration check.
 - `plugin/` is the Paper plugin: one `BlockPlaceEvent` handler that writes one
   JSON Lines record per placement.
-- `emitter/` is the Rust emitter that writes byte-identical records, so the
-  pipeline is testable without a server.
+- `fixtures.jsonl` is a committed set of block-placement records (the shape the
+  plugin writes) that the integration check loads, so the pipeline is testable
+  without a server.
 
 ## Validation
 
-The integration check runs the whole log-to-view path offline. It runs the Rust
-emitter, loads the records into a ClickHouse `local` table built from the same
-schema (same Morton order, same offset), runs the bounding-box query, and
+The integration check runs the whole log-to-view path offline. It loads the
+committed `fixtures.jsonl` records into a ClickHouse `local` table built from the
+same schema (same Morton order, same offset), runs the bounding-box query, and
 asserts the exact in-box count plus the Morton round-trip:
 
 ```sh
@@ -190,4 +191,4 @@ nix build .#checks.x86_64-linux.eval
 
 The eval aggregate also evaluates the fleet's config assertions (the KRaft
 broker, the shared ClickHouse, the spatial view, both producer legs) and builds
-the emitter and the plugin jar.
+the plugin jar.

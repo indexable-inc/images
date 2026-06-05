@@ -73,7 +73,9 @@ in
   services.ix-observability = {
     enable = true;
     environment = "example";
-    clickhouse.openFirewall = true;
+    # The ClickHouse native port stays closed: every client here runs on the
+    # view node itself (the init job, the health check, and `mc-blocks`), and
+    # example mode has no auth, so there is no reason to expose it east-west.
     collector.openFirewall = true;
     grafana = {
       openFirewall = true;

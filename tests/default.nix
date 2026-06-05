@@ -1941,9 +1941,9 @@ let
           lib = ix;
         };
       };
-      # The buildable artifacts (emitter, plugin, integration check) built
-      # directly so the integration check can be pulled into the `eval`
-      # aggregate via `helperScript`.
+      # The buildable artifacts (plugin jar, integration check) built directly
+      # so the integration check can be pulled into the `eval` aggregate via
+      # `helperScript`.
       packages = import ../examples/minecraft-blocks/packages.nix { inherit ix pkgs; };
       schema = import ../examples/minecraft-blocks/schema.nix { inherit lib; };
     in
@@ -4071,19 +4071,18 @@ let
   helperScript = ''
     test -e ${nomadSecretRefsExample.buildCheck}
 
-    # minecraft-blocks integration: emitter -> ClickHouse local spatial table ->
-    # bounding-box query. The derivation runs the Rust emitter, loads its JSON
+    # minecraft-blocks integration: committed fixtures -> ClickHouse local
+    # spatial table -> bounding-box query. The derivation loads the fixture JSON
     # Lines into a MergeTree table built from the one schema (Morton ORDER BY,
     # signed-coordinate offset), runs the bounding-box query, and asserts the
     # exact in-box count plus the Morton round-trip. Realising it here pulls the
-    # whole check into the `eval` aggregate. It also proves the emitter and the
-    # Paper plugin jar build.
+    # whole check into the `eval` aggregate. It also proves the Paper plugin jar
+    # builds.
     test -f ${minecraftBlocksExample.packages.loadFixtures}/result
     grep -q 'in_box=32' ${minecraftBlocksExample.packages.loadFixtures}/result
     test -s ${minecraftBlocksExample.packages.loadFixtures}/events.jsonl
-    ${minecraftBlocksExample.packages.emitter}/bin/block-events-emitter fixtures > mc-blocks-emit.out
-    test "$(wc -l < mc-blocks-emit.out)" = "36"
-    grep -q '"block_type":"minecraft:stone"' mc-blocks-emit.out
+    test "$(wc -l < ${../examples/minecraft-blocks/fixtures.jsonl})" = "36"
+    grep -q '"block_type":"minecraft:stone"' ${../examples/minecraft-blocks/fixtures.jsonl}
     test -s ${minecraftBlocksExample.packages.plugin}
 
     ${lib.getExe pythonAppClosureProbe} > python-app-closure-probe.out
