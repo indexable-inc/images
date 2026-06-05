@@ -163,7 +163,7 @@ impl TokenStore {
     /// fail.
     pub fn save(&self, token: &StoredToken) -> Result<()> {
         use std::io::Write as _;
-        use std::os::unix::fs::OpenOptionsExt as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).context(WriteTokenSnafu {
@@ -178,6 +178,13 @@ impl TokenStore {
             .truncate(true)
             .mode(0o600)
             .open(&self.path)
+            .context(WriteTokenSnafu {
+                path: self.path.clone(),
+            })?;
+        // `mode` above only applies when the file is created; an existing
+        // file (for example from a looser earlier writer) keeps its old mode,
+        // so tighten the open handle unconditionally before the token lands.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
             .context(WriteTokenSnafu {
                 path: self.path.clone(),
             })?;
@@ -625,6 +632,32 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o600, "token file must be user-only");
         assert_eq!(store.load().expect("load"), token);
+    }
+
+    #[test]
+    fn save_tightens_an_existing_looser_file() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = TempDir::new().expect("tempdir");
+        let store = TokenStore::at(dir.path().join("token.json"));
+        // A pre-existing world-readable file: `OpenOptions::mode` alone would
+        // keep 0644 on rewrite, leaking the rotated refresh token.
+        std::fs::write(store.path(), b"{}").expect("seed file");
+        std::fs::set_permissions(store.path(), std::fs::Permissions::from_mode(0o644))
+            .expect("loosen");
+
+        store
+            .save(&StoredToken {
+                refresh_token: "1//rotated".to_owned(),
+                scopes: Vec::new(),
+            })
+            .expect("save over existing file");
+
+        let mode = std::fs::metadata(store.path())
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "rewrite must tighten the mode");
     }
 
     #[test]
