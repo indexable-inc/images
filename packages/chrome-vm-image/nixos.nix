@@ -59,7 +59,14 @@ in
   # We place the bootloader + UKI manually via repart, so disable grub.
   boot = {
     loader.grub.enable = false;
-    kernelParams = [ "console=hvc0" ];
+    # `loglevel=0` keeps kernel printk OFF the console (hvc0): the screenshot
+    # comes back as one long base64 line on this same console, and a stray printk
+    # mid-line (its `[ 1.234] ...` text survives a whitespace strip) would corrupt
+    # the decode. Userspace writes (the markers + base64) are unaffected.
+    kernelParams = [
+      "console=hvc0"
+      "loglevel=0"
+    ];
     initrd.availableKernelModules = [
       "virtio_pci"
       "virtio_blk"
@@ -146,6 +153,9 @@ in
         # (its prefix alphanumerics survive any non-base64 strip). /dev/console
         # is hvc0 (console=hvc0), captured raw by vmkit's --console-file.
         exec >/dev/console 2>&1
+        # Belt-and-suspenders with loglevel=0: drop the console printk level to 1
+        # (emergency only) so no late kernel message can land inside the base64.
+        echo 1 >/proc/sys/kernel/printk || true
         export HOME=/tmp
         mkdir -p /tmp/cr
         echo "===VMKIT-CHROME-DEMO==="
