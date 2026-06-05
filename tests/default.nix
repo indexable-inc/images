@@ -788,6 +788,45 @@ let
 
   cargoUnitPrebuiltConsumer = cargoUnitPrebuiltInjected.binaries.prebuilt-consumer;
 
+  # M1: the build closure of the consumer's derivation. `exportReferencesGraph`
+  # over the consumer `.drv` writes every `.drv`/source path in its build
+  # closure into `$out/closure`, so the self-test can assert the from-source lib
+  # unit's `.drv` is ABSENT (source-less link) and the prebuilt unit's `.drv` is
+  # PRESENT. A runtime grep cannot distinguish prebuilt from source because the
+  # linked rlib bytes are identical; the build closure can.
+  cargoUnitPrebuiltConsumerClosure =
+    pkgs.runCommand "cargo-unit-prebuilt-consumer-closure"
+      {
+        exportReferencesGraph = [
+          "consumer-build-closure"
+          cargoUnitPrebuiltConsumer.drvPath
+        ];
+      }
+      ''
+        cp consumer-build-closure "$out"
+      '';
+
+  # M1 / C1 negative arm: a mis-keyed injection (a key absent from the generated
+  # graph) must now fail loud, not silently build from source. `tryEval` over the
+  # workspace's unit-set attribute names should report `success = false`.
+  cargoUnitPrebuiltMiskeyEval = builtins.tryEval (
+    builtins.seq
+      (builtins.attrNames
+        (ix.cargoUnit.buildWorkspace {
+          pname = "cargo-unit-prebuilt-miskey";
+          src = cargoUnitPrebuiltFixture;
+          workspaceRoot = ./fixtures/cargo-unit-prebuilt;
+          cargoArgs = [ "--workspace" ];
+          policy = cargoUnitPrebuiltPolicy;
+          # Deliberately wrong key: not present in the generated unit set.
+          extraUnits = {
+            "prebuilt_lib-0.1.0-deadbeefdeadbeef" = cargoUnitPrebuiltLibUnit;
+          };
+        }).units
+      )
+      true
+  );
+
   goUnitFixture = fs.toSource {
     root = ./fixtures/go-unit-hello;
     fileset = fs.unions [
@@ -3999,6 +4038,12 @@ let
       assertion = !cargoUnitPrebuiltToolchainMismatchEval.success;
       message = "mkPrebuiltLibraryUnit should reject a toolchain id mismatch during eval";
     }
+    {
+      # C1: a mis-keyed injection (key absent from the generated graph) must fail
+      # loud during eval rather than silently building from source.
+      assertion = !cargoUnitPrebuiltMiskeyEval.success;
+      message = "buildWorkspace should reject an extraUnits key absent from the generated graph";
+    }
   ];
 
   cargoUnitPrebuiltScript = ''
@@ -4016,6 +4061,16 @@ let
     # real code, not an empty or wrong artifact.
     ${cargoUnitPrebuiltConsumer}/bin/prebuilt-consumer > cargo-unit-prebuilt.out
     grep -q 'prebuilt-lib:42 (answer=42)' cargo-unit-prebuilt.out
+
+    # M1: prove source-less linking via the consumer's BUILD CLOSURE, which a
+    # runtime grep cannot (the linked rlib bytes are byte-identical to source).
+    # The injected prebuilt unit's .drv MUST appear; the from-source lib unit's
+    # .drv MUST NOT (it was overridden out of the consumer's inputs).
+    grep -q ${lib.escapeShellArg cargoUnitPrebuiltLibUnit.drvPath} ${cargoUnitPrebuiltConsumerClosure}
+    if grep -q ${lib.escapeShellArg cargoUnitPrebuiltBaselineLibUnit.drvPath} ${cargoUnitPrebuiltConsumerClosure}; then
+      echo "error: from-source lib unit is in the consumer build closure; injection did not displace it" >&2
+      exit 1
+    fi
   '';
 
   # --- Test derivation builder ----------------------------------------------
