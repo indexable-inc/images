@@ -39,7 +39,7 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]'
     # Same self-hosted dispatcher as check.yml: the `ix-ci-run-*` label is
     # claimed by the org dispatcher, which mints an ephemeral runner with a warm
-    # /nix/store. Evaluating .#checks.x86_64-linux forces an x86_64-linux IFD
+    # /nix/store. Evaluating .#ciChecks.x86_64-linux forces an x86_64-linux IFD
     # build (lib/rust/cargo-unit.nix), so this must run on the Linux runner.
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-blast-radius', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 30
