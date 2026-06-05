@@ -2190,8 +2190,10 @@ let
             observabilityStackExample.observability.collector.exporters.clickhouse.traces_table_name
             == "otel_traces"
           &&
-            observabilityStackExample.observability.collector.service.pipelines.logs.exporters
-            == [ "clickhouse" "awss3" ];
+            observabilityStackExample.observability.collector.service.pipelines.logs.exporters == [
+              "clickhouse"
+              "awss3"
+            ];
         message = "observability-stack collector should receive OTLP, export to ClickHouse, and mirror logs to the S3 archive";
       }
       {
