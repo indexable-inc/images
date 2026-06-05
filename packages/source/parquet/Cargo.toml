@@ -1,0 +1,21 @@
+[package]
+name = "source-parquet"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Read the S3/R2 parquet corpus log written by sink-parquet back into search Documents"
+
+[lints]
+workspace = true
+
+[dependencies]
+source-meta.workspace = true
+object_store = { workspace = true, features = ["aws"] }
+futures.workspace = true
+serde_json.workspace = true
+snafu.workspace = true
+parquet = { workspace = true, features = ["arrow"] }
+arrow.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

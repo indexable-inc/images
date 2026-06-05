@@ -2802,6 +2802,7 @@ dependencies = [
  "source-linear",
  "source-meta",
  "source-otlp",
+ "source-parquet",
  "source-slack",
  "tempfile",
  "tokio",
@@ -3431,28 +3432,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "vmkit"
-version = "0.1.0"
-dependencies = [
- "base64",
- "block2",
- "clap",
- "dashboard-core",
- "dispatch2",
- "image",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "objc2-io-surface",
- "objc2-quartz-core",
- "objc2-virtualization",
- "serde",
- "serde_json",
- "snafu 0.8.9",
- "tokio",
 ]
 
 [[package]]
@@ -5838,6 +5817,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "source-parquet"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "futures",
+ "object_store",
+ "parquet",
+ "serde_json",
+ "snafu 0.9.1",
+ "source-meta",
+ "tokio",
+]
+
+[[package]]
 name = "source-slack"
 version = "0.1.0"
 dependencies = [
@@ -7092,6 +7085,28 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vmkit"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "block2",
+ "clap",
+ "dashboard-core",
+ "dispatch2",
+ "image",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "objc2-io-surface",
+ "objc2-quartz-core",
+ "objc2-virtualization",
+ "serde",
+ "serde_json",
+ "snafu 0.8.9",
+ "tokio",
+]
 
 [[package]]
 name = "vt100"

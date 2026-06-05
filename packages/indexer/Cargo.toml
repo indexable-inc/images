@@ -23,6 +23,7 @@ source-slack.workspace = true
 source-linear.workspace = true
 source-github.workspace = true
 source-otlp.workspace = true
+source-parquet.workspace = true
 search-core.workspace = true
 sink-mixedbread.workspace = true
 sink-parquet.workspace = true

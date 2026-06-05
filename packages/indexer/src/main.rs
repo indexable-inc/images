@@ -13,8 +13,10 @@
 //!   [`sink_parquet`].
 //! - Code repos go direct to Mixedbread only.
 //!
-//! Consume mode (`--from-otlp-prefix`) reads the collector's S3 archive and
-//! reconciles it into Mixedbread, the consumer half of the bus.
+//! Consume mode reconciles a durable corpus log back into Mixedbread rather than
+//! scanning local sources: `--from-otlp-prefix` reads the collector's S3 archive
+//! (the consumer half of the bus), and `--from-parquet-prefix` reads the parquet
+//! corpus log `sink-parquet` wrote (the consumer half of that log).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -77,6 +79,14 @@ struct Cli {
     /// sources; pair with `--mixedbread-store` and `--bucket`.
     #[arg(long, env = "INDEXER_FROM_OTLP_PREFIX")]
     from_otlp_prefix: Option<String>,
+
+    /// Rebuild the Mixedbread index from the Parquet corpus log at this prefix;
+    /// pair with --mixedbread-store and --bucket. Reads the per-source
+    /// `data.parquet` files `sink-parquet` wrote (the other half of the parquet
+    /// corpus log) and reconciles every record back into Mixedbread, rather than
+    /// scanning local sources.
+    #[arg(long, env = "INDEXER_FROM_PARQUET_PREFIX")]
+    from_parquet_prefix: Option<String>,
 
     /// Index local agent/shell history (claude, codex, atuin) at their default
     /// paths, in addition to any explicit `--*` overrides below.
@@ -185,7 +195,25 @@ async fn main() -> anyhow::Result<()> {
             region: cli.region.clone(),
             prefix,
         };
-        return finish(run_consume(&config, mixedbread).await);
+        return finish(consume_otlp(&config, mixedbread).await);
+    }
+
+    // Consume mode (parquet corpus log): read the per-source `data.parquet` files
+    // `sink-parquet` wrote at this prefix under `--bucket` and reconcile them back
+    // into Mixedbread. Uses the SAME bucket/endpoint/region the parquet sink uses,
+    // so it reads exactly what was written. Like the OTLP consume path, this
+    // reconciles the log rather than scanning local sources.
+    if let Some(prefix) = cli.from_parquet_prefix.clone() {
+        let mixedbread = mixedbread
+            .context("--from-parquet-prefix requires --mixedbread-store (the reconcile target)")?;
+        let bucket = cli.bucket.clone().context("--from-parquet-prefix requires --bucket")?;
+        let config = source_parquet::Config {
+            bucket,
+            endpoint: cli.endpoint.clone(),
+            region: cli.region.clone(),
+            prefix,
+        };
+        return finish(consume_parquet(&config, mixedbread).await);
     }
 
     let parquet = match cli.bucket.as_ref() {
@@ -392,22 +420,40 @@ impl SourceAdapter for VecSource {
     }
 }
 
-/// Consume mode: read the collector's OTLP archive, group the records by their
-/// `source`, and reconcile each group into Mixedbread. Grouping keeps each
-/// Mixedbread reconcile scoped to one source, exactly as the direct per-source
-/// ingestion did, so a consumed record dedups against its own source and never
-/// touches another's.
-async fn run_consume(config: &source_otlp::Config, mixedbread: Mixedbread<'_>) -> Counts {
-    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+/// Consume the OTLP archive: read the collector's OTLP/JSON objects into
+/// documents, then reconcile them into Mixedbread via [`run_consume`].
+async fn consume_otlp(config: &source_otlp::Config, mixedbread: Mixedbread<'_>) -> Counts {
     let documents = match source_otlp::read_documents(config).await {
         Ok(documents) => documents,
         Err(error) => {
             eprintln!("[consume] failed to read the OTLP archive: {error:#}");
-            counts.failures += 1;
-            return counts;
+            return Counts { indexed: 0, skipped: 0, failures: 1 };
         }
     };
+    run_consume(documents, mixedbread).await
+}
 
+/// Consume the parquet corpus log: read the per-source `data.parquet` files into
+/// documents, then reconcile them into Mixedbread via [`run_consume`].
+async fn consume_parquet(config: &source_parquet::Config, mixedbread: Mixedbread<'_>) -> Counts {
+    let documents = match source_parquet::read_documents(config).await {
+        Ok(documents) => documents,
+        Err(error) => {
+            eprintln!("[consume] failed to read the parquet corpus log: {error:#}");
+            return Counts { indexed: 0, skipped: 0, failures: 1 };
+        }
+    };
+    run_consume(documents, mixedbread).await
+}
+
+/// Reconcile already-read documents into Mixedbread, grouped by their `source`.
+///
+/// Grouping keeps each Mixedbread reconcile scoped to one source, exactly as the
+/// direct per-source ingestion did, so a consumed record dedups against its own
+/// source and never touches another's. Both the OTLP and parquet consume paths
+/// read their documents first, then share this reconcile.
+async fn run_consume(documents: Vec<Document>, mixedbread: Mixedbread<'_>) -> Counts {
+    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
     let mut by_source: BTreeMap<String, Vec<Document>> = BTreeMap::new();
     for document in documents {
         let source = document
