@@ -22,8 +22,8 @@ let
   # entry is added once that lands.
   catalog = {
     x86_64-linux = {
-      url = "https://pub-c52bf5a1e3db4628aaf57fe94cb5de10.r2.dev/wheel/ix-sdk/w3mxsrmhkgvbgfg9nq9d408sa1xqfb7y/ix_sdk-0.1.0-cp313-abi3-manylinux_2_34_x86_64.whl";
-      hash = "sha256-UhhiTB/vy6y2UZAx/z19KxkUKyKscxEJcPeYWVgQp0I=";
+      url = "https://pub-c52bf5a1e3db4628aaf57fe94cb5de10.r2.dev/wheel/ix-sdk/i8isn1mld0vilr6prxd283kkq2pk8q02/ix_sdk-0.1.0-cp313-abi3-manylinux_2_34_x86_64.whl";
+      hash = "sha256-SiLtLWRzUT+++6+M0WlPqMB/0Dca7iJRU075uajw7Rg=";
     };
   };
 
