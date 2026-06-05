@@ -2791,7 +2791,6 @@ dependencies = [
  "search-core",
  "serde_json",
  "sink-mixedbread",
- "sink-otlp",
  "sink-parquet",
  "source-atuin",
  "source-claude",
@@ -2801,7 +2800,6 @@ dependencies = [
  "source-github",
  "source-linear",
  "source-meta",
- "source-otlp",
  "source-parquet",
  "source-slack",
  "tempfile",
@@ -5588,19 +5586,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sink-otlp"
-version = "0.1.0"
-dependencies = [
- "axum",
- "reqwest",
- "serde",
- "serde_json",
- "snafu 0.9.1",
- "source-meta",
- "tokio",
-]
-
-[[package]]
 name = "sink-parquet"
 version = "0.1.0"
 dependencies = [
@@ -5801,19 +5786,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "snafu 0.9.1",
-]
-
-[[package]]
-name = "source-otlp"
-version = "0.1.0"
-dependencies = [
- "futures",
- "object_store",
- "serde",
- "serde_json",
- "snafu 0.9.1",
- "source-meta",
- "tokio",
 ]
 
 [[package]]

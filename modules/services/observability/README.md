@@ -1,14 +1,16 @@
 # ix Observability
 
 `services.ix-observability` is a self-hosted [OpenTelemetry](https://opentelemetry.io/)
-pipeline for an ix fleet. One module, one Collector, two jobs:
+pipeline for an ix fleet. One module, one Collector, one job:
 
-1. **Monitoring**: every service emits traces, metrics, and logs. They land in
-   [ClickHouse](https://clickhouse.com/) and render in [Grafana](https://grafana.com/).
-2. **Ingestion bus** ([RFC 0004](../../../rfcs/0004-otel-ingestion-bus.html)): the
-   search indexer ships its document corpus through the *same* Collector, which
-   archives it to S3 so the search index can read it back. A new corpus consumer
-   is a new Collector exporter, not new code in every producer.
+**Monitoring**: every service emits traces, metrics, and logs. They land in
+[ClickHouse](https://clickhouse.com/) and render in [Grafana](https://grafana.com/).
+
+This is telemetry only. The search corpus used to ride this same Collector (RFC
+0004), but it moved to its own Parquet-log pipeline (issue #736, the
+`source-parquet` + `sink-parquet` crates): an append-only Parquet log on object
+storage as the source of truth, with the Mixedbread index as a materialized view
+replayed from it. OTel is back to what it is good at.
 
 The Collector is the one moving part everything else hangs off. Read the two
 diagrams and the rest follows.
@@ -53,8 +55,8 @@ The generated [`opentelemetry-collector`](default.nix) config has three stages.
   `resource` (stamps `service.namespace=ix`, `deployment.environment`,
   `ix.collector.node`, and your `resourceAttributes` without overwriting
   signal-supplied values), then `batch`.
-- **Exporters** send signals out: `clickhouse` (on the stack), `otlp` (forward
-  east-west to another collector), and `awss3` (the archive, logs only).
+- **Exporters** send signals out: `clickhouse` (on the stack) and `otlp` (forward
+  east-west to another collector).
 
 Three pipelines wire them together:
 
@@ -63,39 +65,14 @@ flowchart TB
   otlp["otlp"] --> P
   hostmetrics["hostmetrics"] --> P
   filelog["filelog / journald"] --> P
-  P["memory_limiter → resource → batch"]
-  P --> traces["traces → clickhouse / otlp"]
-  P --> metrics["metrics → clickhouse / otlp"]
-  P --> logs["logs → clickhouse / otlp + awss3 archive"]
+  P["memory_limiter, resource, batch"]
+  P --> traces["traces to clickhouse / otlp"]
+  P --> metrics["metrics to clickhouse / otlp"]
+  P --> logs["logs to clickhouse / otlp"]
 ```
 
-Only the **logs** pipeline carries the extra `awss3` archive exporter; traces and
-metrics stay on the ClickHouse/forward exporters.
-
-## Ingestion bus (RFC 0004)
-
-The search corpus reuses this exact pipeline. The indexer emits each document as
-an OTLP **log record** (`sink-otlp`); the Collector fans it out to ClickHouse
-(for Grafana) and to an S3 archive as OTLP/JSON; `source-otlp` lists that archive
-and reconstructs the documents into Mixedbread.
-
-```mermaid
-flowchart LR
-  idx["search indexer"] -->|"sink-otlp<br/>OTLP/HTTP POST /v1/logs"| gw["gateway Collector<br/>logs pipeline"]
-  gw -->|clickhouse exporter| ch[("ClickHouse")]
-  gw -->|"awss3 exporter<br/>marshaler=otlp_json"| s3[("S3 archive<br/>ix-history/otlp")]
-  s3 -->|source-otlp| mb[("Mixedbread<br/>search index")]
-```
-
-Why route a corpus through a telemetry collector? Because the fan-out is free:
-adding a consumer (a new store, a new warehouse) is one more exporter on the
-Collector, not a new sink compiled into every producer. The bus is append-only;
-downstream consumers dedup by `content_hash`, and `source-otlp` only turns a log
-record into a document when it carries the `external_id` attribute a corpus
-record always has, so a stray app log on the bus is skipped, not mis-ingested.
-
-The archive is off by default. Turn it on with `collector.archive.enable` (see
-[Configure it](#configure-it)).
+All three pipelines share the same exporters: ClickHouse on the stack, the `otlp`
+forward on an agent.
 
 ## Two roles
 
@@ -116,8 +93,6 @@ on one observability node and `agent` on each app node pointed at it.
 - **ClickHouse** (`otel` database): `otel_logs`, `otel_traces`, and
   `otel_metrics_*`. Native SQL on `9000`, HTTP on `8123`. Retention is the
   `clickhouse.ttl` default of `168h` (7 days).
-- **S3 archive** (when enabled): OTLP/JSON objects under `ix-history/otlp`, in
-  the same `ExportLogsServiceRequest` shape `sink-otlp` emits.
 - **Grafana** on `3000`, with the ClickHouse datasource and the
   [`overview`](_dashboards/overview.nix) dashboard provisioned.
 
@@ -160,18 +135,6 @@ wires exactly this):
     filelog.paths = [ "/var/log/my-service/*.log" ];
   };
   services.ix-observability.resourceAttributes."ix.app" = "my-service";
-}
-```
-
-Turn on the S3 corpus archive (RFC 0004) on the gateway:
-
-```nix
-{
-  services.ix-observability.collector.archive = {
-    enable = true;
-    bucket = "ix-history";
-    endpoint = "http://127.0.0.1:9010"; # null targets AWS S3
-  };
 }
 ```
 

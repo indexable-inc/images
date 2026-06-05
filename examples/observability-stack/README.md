@@ -4,8 +4,8 @@ An ix fleet with a self-hosted OpenTelemetry collector, ClickHouse, and
 Grafana. The app node sends a span through its local collector, writes a log
 line that the collector tails, and checks that both records land in ClickHouse.
 
-For how the pipeline works end to end (monitoring plus the RFC 0004 ingestion
-bus), with diagrams, see the [module README](../../modules/services/observability/README.md).
+For how the telemetry pipeline works end to end, with diagrams, see the
+[module README](../../modules/services/observability/README.md).
 
 ## Run
 

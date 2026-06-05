@@ -1,22 +1,21 @@
 //! `indexer`: sync every configured corpus source into Mixedbread (semantic
-//! search), with per-host history flowing through the RFC 0004 ingestion bus.
+//! search) and a durable Parquet corpus log, the log-as-source-of-truth with the
+//! Mixedbread index as a materialized view (issue #736).
 //!
 //! Each source is an adapter implementing [`source_meta::SourceAdapter`]. The
 //! routing differs by corpus shape:
 //!
-//! - Per-host history (claude, codex, shell, debug) is emitted to an
-//!   `OpenTelemetry` Collector as OTLP log records (`--otlp-endpoint`); the
-//!   collector fans out to `ClickHouse` and a durable S3 archive, and a separate
-//!   consume run reconciles that archive back into Mixedbread.
-//! - Bulk exports (slack, linear, github, git) go direct to Mixedbread and the
-//!   S3/R2 parquet archive, reusing the `search-core` reconcile and
-//!   [`sink_parquet`].
+//! - Per-host history (claude, codex, shell, debug) and the bulk exports (slack,
+//!   linear, github, git) go to Mixedbread directly and/or the S3/R2 Parquet log
+//!   (`--bucket`), reusing the `search-core` reconcile and [`sink_parquet`]. The
+//!   Parquet log is the append-only source of truth: a separate consume run can
+//!   rebuild the Mixedbread index from it.
 //! - Code repos go direct to Mixedbread only.
 //!
-//! Consume mode reconciles a durable corpus log back into Mixedbread rather than
-//! scanning local sources: `--from-otlp-prefix` reads the collector's S3 archive
-//! (the consumer half of the bus), and `--from-parquet-prefix` reads the parquet
-//! corpus log `sink-parquet` wrote (the consumer half of that log).
+//! Consume mode reconciles the durable corpus log back into Mixedbread rather
+//! than scanning local sources: `--from-parquet-prefix` reads the per-source
+//! `data.parquet` files `sink-parquet` wrote (the consumer half of that log) and
+//! replays every record into Mixedbread.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -64,21 +63,6 @@ struct Cli {
     /// Key prefix under the bucket.
     #[arg(long, env = "INDEXER_PREFIX", default_value = "corpus")]
     prefix: String,
-
-    /// `OpenTelemetry` Collector OTLP/HTTP endpoint (e.g. `http://127.0.0.1:4318`).
-    /// Per-host history (claude, codex, shell, debug) is emitted here as OTLP log
-    /// records (RFC 0004 ingestion bus) instead of being written to Mixedbread and
-    /// the parquet archive directly; the collector fans out to those sinks. Code
-    /// and the bulk exports stay on their direct Mixedbread path.
-    #[arg(long, env = "INDEXER_OTLP_ENDPOINT")]
-    otlp_endpoint: Option<String>,
-
-    /// Consume mode: read the collector's OTLP/JSON archive at this prefix under
-    /// `--bucket` and reconcile it into Mixedbread (the other half of the RFC 0004
-    /// bus). When set, the indexer consumes the archive rather than scanning local
-    /// sources; pair with `--mixedbread-store` and `--bucket`.
-    #[arg(long, env = "INDEXER_FROM_OTLP_PREFIX")]
-    from_otlp_prefix: Option<String>,
 
     /// Rebuild the Mixedbread index from the Parquet corpus log at this prefix;
     /// pair with --mixedbread-store and --bucket. Reads the per-source
@@ -182,27 +166,12 @@ async fn main() -> anyhow::Result<()> {
     let mixedbread =
         store.as_ref().zip(cli.mixedbread_store.as_deref()).map(|(store, name)| Mixedbread { store, name });
 
-    // Consume mode (RFC 0004 bus): read the collector's OTLP/JSON archive into
-    // Mixedbread and return, rather than scanning local sources. Emit (per host)
-    // and consume (central) run as separate invocations of this binary.
-    if let Some(prefix) = cli.from_otlp_prefix.clone() {
-        let mixedbread =
-            mixedbread.context("--from-otlp-prefix requires --mixedbread-store (the reconcile target)")?;
-        let bucket = cli.bucket.clone().context("--from-otlp-prefix requires --bucket")?;
-        let config = source_otlp::Config {
-            bucket,
-            endpoint: cli.endpoint.clone(),
-            region: cli.region.clone(),
-            prefix,
-        };
-        return finish(consume_otlp(&config, mixedbread).await);
-    }
-
     // Consume mode (parquet corpus log): read the per-source `data.parquet` files
     // `sink-parquet` wrote at this prefix under `--bucket` and reconcile them back
     // into Mixedbread. Uses the SAME bucket/endpoint/region the parquet sink uses,
-    // so it reads exactly what was written. Like the OTLP consume path, this
-    // reconciles the log rather than scanning local sources.
+    // so it reads exactly what was written. Emit (scan local sources, write the
+    // log) and consume (replay the log into Mixedbread) run as separate
+    // invocations of this binary; consume reconciles the log rather than scanning.
     if let Some(prefix) = cli.from_parquet_prefix.clone() {
         let mixedbread = mixedbread
             .context("--from-parquet-prefix requires --mixedbread-store (the reconcile target)")?;
@@ -235,9 +204,8 @@ async fn main() -> anyhow::Result<()> {
         }
         None => None,
     };
-    let otlp = cli.otlp_endpoint.clone().map(|endpoint| sink_otlp::Config { endpoint });
-    if store.is_none() && parquet.is_none() && otlp.is_none() {
-        anyhow::bail!("nothing to do: pass --mixedbread-store, --bucket, and/or --otlp-endpoint");
+    if store.is_none() && parquet.is_none() {
+        anyhow::bail!("nothing to do: pass --mixedbread-store and/or --bucket");
     }
     if !any_source_selected(&cli) {
         anyhow::bail!(
@@ -245,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    finish(run_sources(&cli, mixedbread, parquet.as_ref(), otlp.as_ref()).await)
+    finish(run_sources(&cli, mixedbread, parquet.as_ref()).await)
 }
 
 /// Turn the per-run counts into the process result: success only when no source
@@ -291,7 +259,6 @@ async fn run_sources(
     cli: &Cli,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
-    otlp: Option<&sink_otlp::Config>,
 ) -> Counts {
     let home = dirs::home_dir();
     let default = |suffix: &str| home.as_ref().map(|h| h.join(suffix));
@@ -304,7 +271,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open(&dir)
                 .with_context(|| format!("parsing Claude transcripts at {}", dir.display()))?;
-            run_source("claude", &adapter, None, None, otlp).await
+            run_source("claude", &adapter, mixedbread, parquet).await
         }
         .await;
         record("claude", result, &mut counts);
@@ -313,15 +280,15 @@ async fn run_sources(
         let result = async {
             let adapter = source_codex::CodexHistory::open(&file)
                 .with_context(|| format!("parsing Codex history at {}", file.display()))?;
-            run_source("codex", &adapter, None, None, otlp).await
+            run_source("codex", &adapter, mixedbread, parquet).await
         }
         .await;
         record("codex", result, &mut counts);
     }
     if let Some(db) = atuin {
-        match open_atuin("shell", &db, otlp, &mut counts) {
+        match open_atuin("shell", &db, mixedbread, parquet, &mut counts) {
             Ok(Atuin::Ready(adapter)) => {
-                let result = run_source("shell", &adapter, None, None, otlp).await;
+                let result = run_source("shell", &adapter, mixedbread, parquet).await;
                 record("shell", result, &mut counts);
             }
             // An uninitialized db is already logged and tallied as a soft skip.
@@ -333,7 +300,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_slack::SlackExport::open(dir)
                 .with_context(|| format!("reading Slack export at {}", dir.display()))?;
-            run_source("slack", &adapter, mixedbread, parquet, None).await
+            run_source("slack", &adapter, mixedbread, parquet).await
         }
         .await;
         record("slack", result, &mut counts);
@@ -342,7 +309,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_linear::LinearExport::open(dir)
                 .with_context(|| format!("reading Linear export at {}", dir.display()))?;
-            run_source("linear", &adapter, mixedbread, parquet, None).await
+            run_source("linear", &adapter, mixedbread, parquet).await
         }
         .await;
         record("linear", result, &mut counts);
@@ -351,7 +318,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_github::GithubExport::open(dir)
                 .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
-            run_source("github", &adapter, mixedbread, parquet, None).await
+            run_source("github", &adapter, mixedbread, parquet).await
         }
         .await;
         record("github", result, &mut counts);
@@ -361,7 +328,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_git::GitLog::open(repo)
                 .with_context(|| format!("reading git history at {}", repo.display()))?;
-            run_source("git", &adapter, mixedbread, parquet, None).await
+            run_source("git", &adapter, mixedbread, parquet).await
         }
         .await;
         record(&label, result, &mut counts);
@@ -372,14 +339,19 @@ async fn run_sources(
         record(&label, result, &mut counts);
     }
     if !cli.users.is_empty() {
-        run_users(cli, otlp, &mut counts).await;
+        run_users(cli, mixedbread, parquet, &mut counts).await;
     }
     counts
 }
 
 /// Run the `--user NAME:HOME` multi-user phase, accumulating into the shared
 /// counters. Split out of [`run_sources`] to keep each function focused.
-async fn run_users(cli: &Cli, otlp: Option<&sink_otlp::Config>, counts: &mut Counts) {
+async fn run_users(
+    cli: &Cli,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&sink_parquet::Config>,
+    counts: &mut Counts,
+) {
     let host = match resolve_host(cli) {
         Ok(host) => host,
         Err(error) => {
@@ -393,7 +365,7 @@ async fn run_users(cli: &Cli, otlp: Option<&sink_otlp::Config>, counts: &mut Cou
     };
     for spec in &cli.users {
         match parse_user(spec) {
-            Ok(user) => index_user(&user, &host, otlp, counts).await,
+            Ok(user) => index_user(&user, &host, mixedbread, parquet, counts).await,
             Err(error) => {
                 eprintln!("[users] bad --user spec: {error:#}");
                 counts.failures += 1;
@@ -420,19 +392,6 @@ impl SourceAdapter for VecSource {
     }
 }
 
-/// Consume the OTLP archive: read the collector's OTLP/JSON objects into
-/// documents, then reconcile them into Mixedbread via [`run_consume`].
-async fn consume_otlp(config: &source_otlp::Config, mixedbread: Mixedbread<'_>) -> Counts {
-    let documents = match source_otlp::read_documents(config).await {
-        Ok(documents) => documents,
-        Err(error) => {
-            eprintln!("[consume] failed to read the OTLP archive: {error:#}");
-            return Counts { indexed: 0, skipped: 0, failures: 1 };
-        }
-    };
-    run_consume(documents, mixedbread).await
-}
-
 /// Consume the parquet corpus log: read the per-source `data.parquet` files into
 /// documents, then reconcile them into Mixedbread via [`run_consume`].
 async fn consume_parquet(config: &source_parquet::Config, mixedbread: Mixedbread<'_>) -> Counts {
@@ -450,8 +409,8 @@ async fn consume_parquet(config: &source_parquet::Config, mixedbread: Mixedbread
 ///
 /// Grouping keeps each Mixedbread reconcile scoped to one source, exactly as the
 /// direct per-source ingestion did, so a consumed record dedups against its own
-/// source and never touches another's. Both the OTLP and parquet consume paths
-/// read their documents first, then share this reconcile.
+/// source and never touches another's. The parquet consume path reads its
+/// documents first, then shares this reconcile.
 async fn run_consume(documents: Vec<Document>, mixedbread: Mixedbread<'_>) -> Counts {
     let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
     let mut by_source: BTreeMap<String, Vec<Document>> = BTreeMap::new();
@@ -495,17 +454,25 @@ async fn run_consume(documents: Vec<Document>, mixedbread: Mixedbread<'_>) -> Co
 async fn index_user(
     user: &User,
     host: &str,
-    otlp: Option<&sink_otlp::Config>,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&sink_parquet::Config>,
     counts: &mut Counts,
 ) {
     let name = user.name.as_str();
     let home = user.home.as_path();
+    // User-scope the parquet log so several accounts on one host do not clobber
+    // each other's `source=<source>/data.parquet` (the sink overwrites that file
+    // in full per run, and every account produces the same `source=claude` etc.).
+    // The Mixedbread sink needs no such scoping: its `external_id`s already carry
+    // the per-message uuid, so records never collide across users there.
+    let user_parquet = parquet.map(|config| user_scoped_parquet(config, name));
+    let parquet = user_parquet.as_ref();
     if let Some(claude_dir) = safe_path_under(home, &[".claude", "projects"], true) {
         let label = format!("claude:{name}");
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name)
                 .with_context(|| format!("parsing Claude transcripts for {name} at {}", claude_dir.display()))?;
-            run_source(&label, &adapter, None, None, otlp).await
+            run_source(&label, &adapter, mixedbread, parquet).await
         }
         .await;
         record(&label, result, counts);
@@ -516,7 +483,7 @@ async fn index_user(
         let result = async {
             let adapter = source_codex::CodexHistory::open_with(&codex_file, host, name)
                 .with_context(|| format!("parsing Codex history for {name} at {}", codex_file.display()))?;
-            run_source(&label, &adapter, None, None, otlp).await
+            run_source(&label, &adapter, mixedbread, parquet).await
         }
         .await;
         record(&label, result, counts);
@@ -528,9 +495,9 @@ async fn index_user(
     // such account cannot fail the whole fleet run (ENG-2141).
     if let Some(atuin_db) = safe_path_under(home, &[".local", "share", "atuin", "history.db"], false) {
         let label = format!("shell:{name}");
-        match open_atuin(&label, &atuin_db, otlp, counts) {
+        match open_atuin(&label, &atuin_db, mixedbread, parquet, counts) {
             Ok(Atuin::Ready(adapter)) => {
-                let result = run_source(&label, &adapter, None, None, otlp).await;
+                let result = run_source(&label, &adapter, mixedbread, parquet).await;
                 record(&label, result, counts);
             }
             Ok(Atuin::Skipped) => {}
@@ -546,7 +513,7 @@ async fn index_user(
         let result = async {
             let adapter = source_debug::DebugLogs::open_with(&debug_dir, host, name)
                 .with_context(|| format!("reading Claude debug logs for {name} at {}", debug_dir.display()))?;
-            run_source(&label, &adapter, None, None, otlp).await
+            run_source(&label, &adapter, mixedbread, parquet).await
         }
         .await;
         record(&label, result, counts);
@@ -576,6 +543,23 @@ fn parse_user(spec: &str) -> anyhow::Result<User> {
 /// outermost hive partition, matching the old history-ship layout.
 fn archive_prefix(base: &str, host: &str) -> String {
     format!("{base}/host={host}")
+}
+
+/// User-scope a parquet config for the multi-user `--user` path:
+/// `<host-prefix>/user=<name>`. `sink-parquet` writes one full-file-overwrite
+/// `source=<source>/data.parquet` per (prefix, source), and several accounts on
+/// one host produce the same `source=claude` (etc.), so without a `user` segment
+/// each account would clobber the last in the durable log. `name` is validated by
+/// [`parse_user`] to a safe charset (no `/`/`=`), so it cannot escape the
+/// partition. `user` is the inner hive partition under `host`, matching the old
+/// history-ship `host=<host>/user=<user>/...` layout.
+fn user_scoped_parquet(config: &sink_parquet::Config, name: &str) -> sink_parquet::Config {
+    sink_parquet::Config {
+        bucket: config.bucket.clone(),
+        endpoint: config.endpoint.clone(),
+        region: config.region.clone(),
+        prefix: format!("{}/user={name}", config.prefix),
+    }
 }
 
 /// Resolve a user-controlled subpath under a trusted `home`, refusing to follow
@@ -687,21 +671,21 @@ enum Atuin {
 fn open_atuin(
     label: &str,
     db: &Path,
-    otlp: Option<&sink_otlp::Config>,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&sink_parquet::Config>,
     counts: &mut Counts,
 ) -> anyhow::Result<Atuin> {
     match source_atuin::AtuinHistory::open(db) {
         Ok(history) => Ok(Atuin::Ready(history)),
         Err(error) if error.is_uninitialized() => {
-            // A history source routes only to the OTLP bus, so a run that selects
-            // one with no --otlp-endpoint is a misconfiguration. run_source
-            // rejects it for a readable db; enforce the same here BEFORE
-            // downgrading to a soft skip, so an uninitialized db cannot let a
-            // sink-less run exit 0 when the identical config fails once the
-            // `history` table exists.
+            // A run that selects a source but configures no sink is a
+            // misconfiguration. run_source rejects it for a readable db; enforce
+            // the same here BEFORE downgrading to a soft skip, so an uninitialized
+            // db cannot let a sink-less run exit 0 when the identical config fails
+            // once the `history` table exists.
             anyhow::ensure!(
-                otlp.is_some(),
-                "[{label}] no sink configured: pass --otlp-endpoint for history sources"
+                mixedbread.is_some() || parquet.is_some(),
+                "[{label}] no sink configured: pass --mixedbread-store and/or --bucket"
             );
             eprintln!("[{label}] skipped: {error} ({db})", db = db.display());
             counts.skipped += 1;
@@ -726,14 +710,13 @@ async fn run_source<A: SourceAdapter + Sync>(
     adapter: &A,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&sink_parquet::Config>,
-    otlp: Option<&sink_otlp::Config>,
 ) -> anyhow::Result<()> {
-    // A selected source with no sink is a misconfiguration, not a no-op. History
-    // sources route only to the OTLP bus, so a missing `--otlp-endpoint` would
-    // otherwise drop them silently while still counting as a success.
+    // A selected source with no sink is a misconfiguration, not a no-op: a missing
+    // `--mixedbread-store`/`--bucket` would otherwise drop the source silently
+    // while still counting as a success.
     anyhow::ensure!(
-        mixedbread.is_some() || parquet.is_some() || otlp.is_some(),
-        "[{label}] no sink configured: pass --otlp-endpoint for history sources (or --mixedbread-store/--bucket for exports)"
+        mixedbread.is_some() || parquet.is_some(),
+        "[{label}] no sink configured: pass --mixedbread-store and/or --bucket"
     );
 
     let mut errors: Vec<anyhow::Error> = Vec::new();
@@ -760,16 +743,6 @@ async fn run_source<A: SourceAdapter + Sync>(
         }
     }
 
-    if let Some(config) = otlp {
-        match sink_otlp::sync(adapter, config).await {
-            Ok(report) if report.skipped => eprintln!("[{label}] otlp: skipped (empty)"),
-            Ok(report) => eprintln!("[{label}] otlp: emitted {} records", report.records),
-            Err(error) => {
-                errors.push(anyhow::Error::new(error).context(format!("[{label}] OTLP emit")));
-            }
-        }
-    }
-
     // Surface every sink failure; a single combined error keeps the per-source
     // failure accounting in `record` intact while not hiding the second sink.
     match errors.len() {
@@ -789,7 +762,10 @@ mod tests {
 
     use std::path::PathBuf;
 
-    use super::{Atuin, Counts, archive_prefix, finish, open_atuin, parse_user, safe_path_under};
+    use super::{
+        Atuin, Counts, archive_prefix, finish, open_atuin, parse_user, safe_path_under,
+        user_scoped_parquet,
+    };
 
     /// Create a valid sqlite db with no `history` table at `path`, mirroring
     /// atuin's pre-first-run state (the file exists before migrations add tables).
@@ -797,11 +773,15 @@ mod tests {
         rusqlite::Connection::open(path).expect("create empty sqlite db");
     }
 
-    /// A throwaway OTLP sink config so `open_atuin`'s sink validation passes; the
-    /// endpoint is never dialed in these tests (they assert open/skip behavior).
-    fn otlp_sink() -> sink_otlp::Config {
-        sink_otlp::Config {
-            endpoint: "http://127.0.0.1:4317".to_string(),
+    /// A throwaway parquet sink config so `open_atuin`'s sink validation passes;
+    /// the bucket is never written to in these tests (they assert open/skip
+    /// behavior). `open_atuin`'s validation only checks that a sink is present.
+    fn parquet_sink() -> sink_parquet::Config {
+        sink_parquet::Config {
+            bucket: "test-bucket".to_string(),
+            endpoint: None,
+            region: "auto".to_string(),
+            prefix: "corpus".to_string(),
         }
     }
 
@@ -815,8 +795,8 @@ mod tests {
         make_uninitialized_db(&db);
 
         let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
-        let sink = otlp_sink();
-        let outcome = open_atuin("shell:tester", &db, Some(&sink), &mut counts)
+        let sink = parquet_sink();
+        let outcome = open_atuin("shell:tester", &db, None, Some(&sink), &mut counts)
             .expect("uninitialized db is not an error");
 
         assert!(matches!(outcome, Atuin::Skipped), "uninitialized db must be skipped");
@@ -834,9 +814,9 @@ mod tests {
         let db = temp.path().join("does-not-exist.db");
 
         let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
-        let sink = otlp_sink();
+        let sink = parquet_sink();
         assert!(
-            open_atuin("shell:tester", &db, Some(&sink), &mut counts).is_err(),
+            open_atuin("shell:tester", &db, None, Some(&sink), &mut counts).is_err(),
             "a missing db file must remain a real error, not a soft skip"
         );
         assert_eq!(counts.skipped, 0, "a real error must not be tallied as a skip");
@@ -845,16 +825,16 @@ mod tests {
     #[test]
     fn uninitialized_atuin_db_without_sink_is_an_error() {
         // The soft skip must not bypass sink validation: an uninitialized db with
-        // no OTLP sink is the same misconfiguration run_source rejects once the db
-        // has a `history` table, so it must fail consistently rather than exit 0
-        // (the per-user fleet path shares open_atuin, so it is covered too).
+        // no sink is the same misconfiguration run_source rejects once the db has a
+        // `history` table, so it must fail consistently rather than exit 0 (the
+        // per-user fleet path shares open_atuin, so it is covered too).
         let temp = tempfile::tempdir().expect("tempdir");
         let db = temp.path().join("history.db");
         make_uninitialized_db(&db);
 
         let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
         assert!(
-            open_atuin("shell:tester", &db, None, &mut counts).is_err(),
+            open_atuin("shell:tester", &db, None, None, &mut counts).is_err(),
             "an uninitialized db with no sink must error, not silently skip"
         );
         assert_eq!(counts.skipped, 0, "a misconfiguration must not be tallied as a skip");
@@ -926,5 +906,26 @@ mod tests {
         // the same bucket never clobber each other.
         assert_eq!(archive_prefix("corpus", "hil-compute-1"), "corpus/host=hil-compute-1");
         assert_ne!(archive_prefix("corpus", "a"), archive_prefix("corpus", "b"));
+    }
+
+    #[test]
+    fn user_scoped_parquet_adds_user_partition() {
+        // Several accounts on one host produce the same `source=claude`, so the
+        // per-user parquet log must add a `user=` segment under the host prefix or
+        // they clobber each other in the full-file-overwrite sink.
+        let base = sink_parquet::Config {
+            bucket: "corpus-bucket".to_string(),
+            endpoint: Some("http://127.0.0.1:9010".to_string()),
+            region: "auto".to_string(),
+            prefix: archive_prefix("corpus", "hil-compute-1"),
+        };
+        let alice = user_scoped_parquet(&base, "alice");
+        let bob = user_scoped_parquet(&base, "bob");
+        assert_eq!(alice.prefix, "corpus/host=hil-compute-1/user=alice");
+        assert_ne!(alice.prefix, bob.prefix, "two users must not share a parquet prefix");
+        // Bucket/endpoint/region carry through unchanged; only the prefix scopes.
+        assert_eq!(alice.bucket, base.bucket);
+        assert_eq!(alice.endpoint, base.endpoint);
+        assert_eq!(alice.region, base.region);
     }
 }

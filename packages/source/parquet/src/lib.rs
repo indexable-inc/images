@@ -6,9 +6,10 @@
 //! `<prefix>/source=<source>/data.parquet`, with a sibling
 //! `<prefix>/source=<source>/_manifest.json`; this crate lists that prefix,
 //! reads each `data.parquet`, and reconstructs the [`Document`]s so the indexer
-//! can rebuild the Mixedbread search index from the log. It mirrors
-//! `source-otlp` (the OTLP-bus consumer): same `Config`, same
-//! `read_documents` / `read_from_store` shape, same `build_store`.
+//! can rebuild the Mixedbread search index from the log. This is the
+//! materialized-view-over-a-log model (issue #736): the Parquet log is the
+//! append-only source of truth, and the Mixedbread index is one view replayed
+//! from it.
 //!
 //! # What is read
 //! The sink's `meta_json` column already holds the FULL metadata object as a
@@ -20,8 +21,8 @@
 //! other object under the prefix are skipped.
 //!
 //! Known limitation: this lists the whole prefix and materializes every row each
-//! run, matching `source-otlp`. An incremental cursor is a future refinement,
-//! not a correctness issue.
+//! run. An incremental cursor (snapshot diffs, or an Iceberg upgrade) is a future
+//! refinement, not a correctness issue.
 
 #![forbid(unsafe_code)]
 
@@ -121,6 +122,18 @@ pub enum Error {
         /// Name of the mis-typed column.
         column: &'static str,
     },
+    /// A required column held a null at some row. The sink writes these columns
+    /// non-nullable, so a null is a malformed log; surface it as a typed error
+    /// rather than reconstructing a document from an arbitrary default.
+    #[snafu(display("parquet object {key} column {column} is null at row {row}"))]
+    NullValue {
+        /// Object key.
+        key: String,
+        /// Name of the column with the null cell.
+        column: &'static str,
+        /// Row index of the null cell.
+        row: usize,
+    },
     /// A row's `meta_json` string did not parse as JSON.
     #[snafu(display("failed to parse meta_json in parquet object {key}"))]
     MetaJson {
@@ -207,8 +220,9 @@ where
 /// Reconstruct one record batch's rows into documents.
 ///
 /// Only the four identity/content columns are read; the rest of the sink schema
-/// is a projection out of `meta_json`, so it is ignored. A missing or mis-typed
-/// required column is a typed error, never a silent default.
+/// is a projection out of `meta_json`, so it is ignored. A missing column, a
+/// mis-typed column, or a null cell in a required column is a typed error, never a
+/// silent default.
 fn documents_from_batch(batch: &RecordBatch, key: &str, out: &mut Vec<Document>) -> Result<()> {
     let external_id = string_column(batch, COL_EXTERNAL_ID, key)?;
     let content_hash = string_column(batch, COL_CONTENT_HASH, key)?;
@@ -217,21 +231,37 @@ fn documents_from_batch(batch: &RecordBatch, key: &str, out: &mut Vec<Document>)
 
     out.reserve(batch.num_rows());
     for row in 0..batch.num_rows() {
-        // All four columns are non-nullable in the sink schema, so `value(row)`
-        // is always a real value (a null would be a malformed log, but the sink
-        // never writes one). `meta_json` is the full metadata object as a string.
-        let meta_str = meta_json.value(row);
+        // All four columns are non-nullable in the sink schema, so a null is a
+        // malformed log; `non_null_str` returns a typed `NullValue` error rather
+        // than letting `value(row)` hand back an arbitrary default. The sink
+        // encodes `body` via `String::from_utf8_lossy`, lossless for the UTF-8
+        // corpus text every parquet-sinked source emits, so the verbatim
+        // `content_hash` still describes the reconstructed bytes. `meta_json` is
+        // the full metadata object as a string.
+        let meta_str = non_null_str(meta_json, row, COL_META_JSON, key)?;
         let meta = serde_json::from_str(meta_str).context(MetaJsonSnafu { key })?;
         out.push(Document {
-            external_id: external_id.value(row).to_owned(),
-            file_name: external_id.value(row).to_owned(),
+            external_id: non_null_str(external_id, row, COL_EXTERNAL_ID, key)?.to_owned(),
+            file_name: non_null_str(external_id, row, COL_EXTERNAL_ID, key)?.to_owned(),
             mime: "text/plain",
-            body: body.value(row).to_owned().into_bytes(),
+            body: non_null_str(body, row, COL_BODY, key)?.to_owned().into_bytes(),
             meta_json: meta,
-            content_hash: content_hash.value(row).to_owned(),
+            content_hash: non_null_str(content_hash, row, COL_CONTENT_HASH, key)?.to_owned(),
         });
     }
     Ok(())
+}
+
+/// Read one row of a required string column, erroring (never defaulting) on a
+/// null cell. The sink writes these columns non-nullable, so a null is a
+/// malformed log, not an expected absence.
+fn non_null_str<'a>(
+    array: &'a StringArray,
+    row: usize,
+    column: &'static str,
+    key: &str,
+) -> Result<&'a str> {
+    array.is_valid(row).then(|| array.value(row)).context(NullValueSnafu { key, column, row })
 }
 
 /// Borrow one column as a `StringArray`, erroring (never defaulting) when the
@@ -260,7 +290,7 @@ mod tests {
     use parquet::arrow::ArrowWriter;
     use serde_json::json;
 
-    use super::read_from_store;
+    use super::{Error, read_from_store};
 
     /// The exact flat schema `sink-parquet` writes (kept in lockstep with its
     /// `schema()`), so this test round-trips the real on-disk shape.
@@ -355,5 +385,67 @@ mod tests {
         let store = InMemory::new();
         let docs = read_from_store(&store, "corpus").await.expect("read");
         assert!(docs.is_empty());
+    }
+
+    /// A schema whose required columns are written nullable, so a row can carry a
+    /// null in a column the sink would write non-nullable. Used to prove the
+    /// `NullValue` guard fires instead of `value(row)` defaulting.
+    fn nullable_schema() -> Schema {
+        let text = |name: &str| Field::new(name, DataType::Utf8, true);
+        Schema::new(vec![
+            text("external_id"),
+            text("source"),
+            text("content_hash"),
+            text("title"),
+            text("url"),
+            text("host"),
+            Field::new("timestamp", DataType::Int64, true),
+            text("body"),
+            text("meta_json"),
+        ])
+    }
+
+    /// One row whose `content_hash` is null. A malformed log: every required
+    /// column is non-nullable in the real sink schema.
+    fn encode_null_content_hash() -> Vec<u8> {
+        let meta = json!({ "source": "test", "external_id": "a" });
+        let columns: Vec<arrow::array::ArrayRef> = vec![
+            Arc::new(StringArray::from(vec![Some("a")])),
+            Arc::new(StringArray::from(vec![Some("test")])),
+            // The null cell under test.
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+            Arc::new(Int64Array::from(vec![None::<i64>])),
+            Arc::new(StringArray::from(vec![Some("alpha")])),
+            Arc::new(StringArray::from(vec![Some(meta.to_string())])),
+        ];
+        let batch =
+            RecordBatch::try_new(Arc::new(nullable_schema()), columns).expect("build record batch");
+        let mut buffer = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut buffer, batch.schema(), None).expect("arrow writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+        buffer
+    }
+
+    #[tokio::test]
+    async fn null_in_required_column_is_a_typed_error() {
+        let store = InMemory::new();
+        store
+            .put(
+                &ObjectPath::from("corpus/source=test/data.parquet"),
+                encode_null_content_hash().into(),
+            )
+            .await
+            .expect("put data");
+
+        let error = read_from_store(&store, "corpus").await.expect_err("a null must error");
+        assert!(
+            matches!(error, Error::NullValue { column: "content_hash", row: 0, .. }),
+            "a null required column must yield a typed NullValue error, got {error:?}"
+        );
     }
 }

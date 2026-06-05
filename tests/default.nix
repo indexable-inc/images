@@ -2366,10 +2366,10 @@ let
           &&
             observabilityStackExample.observability.collector.exporters.clickhouse.traces_table_name
             == "otel_traces"
-          # RFC-0004 (#705) added the per-host history S3/OTLP sink, so the logs
-          # pipeline now fans out to both clickhouse and awss3. Assert ClickHouse
-          # is still an exporter rather than pinning the exact list, which breaks
-          # on every legitimate addition to the pipeline.
+          # The corpus moved off the OTel bus to its own Parquet log (#736), so the
+          # logs pipeline is telemetry-only again: ClickHouse (plus forward on an
+          # agent). Assert ClickHouse is an exporter rather than pinning the exact
+          # list, which breaks on every legitimate addition to the pipeline.
           && builtins.elem "clickhouse" observabilityStackExample.observability.collector.service.pipelines.logs.exporters;
         message = "observability-stack collector should receive OTLP and export logs/traces/metrics to ClickHouse";
       }
