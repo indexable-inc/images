@@ -721,9 +721,13 @@ let
       fails at eval, never at link time.
     - `rustToolchain`: optional; defaults to `rust.defaultRustToolchain`. Only
       used for the toolchain-id assertion.
-    - `depUnits`: optional list of dependency unit derivations. Each contributes
-      a `-L dependency=<dep>/lib` so downstream resolution of this unit's own
-      transitive deps keeps working; defaults to `[ ]` for a leaf library.
+    - `depUnits`: optional list of this prebuilt's own transitive dependency unit
+      derivations, recorded to `$out/nix-support/dependency-units` for provenance.
+      Defaults to `[ ]` (a leaf library, the validated path). NOTE: this is
+      currently informational only and is NOT auto-injected into the consuming
+      graph; a prebuilt with transitive deps still requires those dep units to be
+      present in the consumer's graph (keyed by the same hash) and injected via
+      `extraUnits`. Tracked in ENG-2166.
   */
   mkPrebuiltLibraryUnit =
     {
