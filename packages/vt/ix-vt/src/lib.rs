@@ -169,9 +169,9 @@ impl Style {
             invisible: raw.invisible,
             strikethrough: raw.strikethrough,
             overline: raw.overline,
-            underline: (raw.underline != 0).then(|| {
-                u8::try_from(raw.underline).unwrap_or(u8::MAX)
-            }),
+            // `raw.underline` is libghostty-vt's `GhosttySgrUnderline` enum
+            // (values 0..=5), so it always fits in `u8`; the cast is lossless.
+            underline: (raw.underline != 0).then_some(raw.underline as u8),
             fg_color: unsafe { StyleColor::from_raw(raw.fg_color) },
             bg_color: unsafe { StyleColor::from_raw(raw.bg_color) },
             underline_color: unsafe { StyleColor::from_raw(raw.underline_color) },

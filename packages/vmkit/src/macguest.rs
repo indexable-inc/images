@@ -415,10 +415,18 @@ pub(crate) fn downscale_rgba(
     if width <= max_width {
         return Ok((rgba, src_w, src_h));
     }
-    let dst_w = u32::try_from(max_width).unwrap_or(src_w);
+    // `max_width < width <= u32::MAX` here (we returned early otherwise), so
+    // both conversions fit; propagate rather than silently substitute if that
+    // invariant is ever violated.
+    let dst_w = u32::try_from(max_width).map_err(|_| Error::CaptureEncode {
+        message: "max_width too large".into(),
+    })?;
     // Scale height by the same ratio in u64 to avoid overflow, floored to >= 1.
-    let dst_h =
-        u32::try_from((height as u64 * max_width as u64 / width as u64).max(1)).unwrap_or(src_h);
+    let dst_h = u32::try_from((height as u64 * max_width as u64 / width as u64).max(1)).map_err(
+        |_| Error::CaptureEncode {
+            message: "scaled height too large".into(),
+        },
+    )?;
     let buffer = image::RgbaImage::from_raw(src_w, src_h, rgba).ok_or_else(|| {
         Error::CaptureEncode {
             message: "frame buffer length does not match its dimensions".into(),

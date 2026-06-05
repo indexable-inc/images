@@ -1369,7 +1369,9 @@ fn elapsed_ms(start: Instant) -> u64 {
 }
 
 fn millis(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+    // A duration past `u64::MAX` ms (~584M years) cannot occur in practice;
+    // saturate explicitly rather than silently defaulting if it ever did.
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

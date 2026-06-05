@@ -602,11 +602,13 @@ fn render_snippet(
         && let Some(num) = hit.num_lines
         && let Ok(source) = std::fs::read_to_string(root.join(&hit.label))
     {
+        // `start`/`num` are `u32` line counts; `u32` always fits in `usize` on
+        // the 64-bit Unix targets we support, so the widening `as` is lossless.
         let snippet = code_highlight::highlight_lines(
             &hit.label,
             &source,
-            usize::try_from(start).unwrap_or(0) + 1,
-            usize::try_from(num).unwrap_or(0),
+            start as usize + 1,
+            num as usize,
             theme,
             palette.color,
         );
