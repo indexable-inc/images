@@ -6,6 +6,7 @@
 //! renders the sticky PR comment from it. Run without `--json` locally to see
 //! the same report as Markdown.
 
+mod cache;
 mod causes;
 mod git;
 mod nix;
@@ -45,6 +46,9 @@ struct Cli {
     /// with per-attr wall-clock seconds. Missing attrs are omitted, not zeroed.
     #[arg(long, value_name = "PATH")]
     timings: Option<PathBuf>,
+    /// Skip the base-eval cache: always evaluate base fresh and do not store it.
+    #[arg(long)]
+    no_cache: bool,
 }
 
 fn short(rev: &str) -> String {
@@ -105,8 +109,38 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let revs = git::resolve(cli.base.as_deref(), cli.head.as_deref())?;
 
-    let base = nix::eval_checks(&revs.repo, &revs.base)?;
-    let head = nix::eval_checks(&revs.repo, &revs.head)?;
+    // The base eval is the costly, redundant half: `base` is the merge-base on
+    // main, an immutable commit whose `.#checks` evaluation is deterministic, so
+    // its result is cached by SHA and most PR runs (re-pushes, siblings off the
+    // same main tip) skip it. On a cache miss, base and head evaluate
+    // concurrently rather than back-to-back; the two evals are independent.
+    let cached_base = if cli.no_cache {
+        None
+    } else {
+        cache::load(&revs.base)
+    };
+    let base_was_cached = cached_base.is_some();
+
+    let (base, head) = std::thread::scope(|scope| -> Result<(nix::EvalResult, nix::EvalResult)> {
+        let head_eval = scope.spawn(|| nix::eval_checks(&revs.repo, &revs.head));
+        let base = match cached_base {
+            Some(result) => result,
+            None => nix::eval_checks(&revs.repo, &revs.base)?,
+        };
+        let head = match head_eval.join() {
+            Ok(result) => result?,
+            Err(_) => bail!("head check evaluation thread panicked"),
+        };
+        Ok((base, head))
+    })?;
+
+    // Persist a freshly computed base eval so later runs against this base SHA
+    // skip it. Head is never cached: its `.drv`s stay in the store for the causes
+    // pass below, and a PR head is not a future base.
+    if !base_was_cached && !cli.no_cache {
+        cache::store(&revs.base, &base);
+    }
+
     guard_eval_failures(&base, &head)?;
     let base = base.checks;
     let head = head.checks;
@@ -149,16 +183,26 @@ fn main() -> Result<()> {
     } else {
         // Full `.drv` paths feed `nix derivation show`; the resulting graphs are
         // keyed by basename, so attribute a check to its head drv's basename.
+        // Head was always freshly evaluated, so its changed `.drv`s are in the
+        // store and can be addressed by path.
         let head_paths: Vec<String> = changed
             .iter()
             .filter_map(|attr| nix::drv_for(&head, attr))
             .collect();
-        let base_paths: Vec<String> = changed
-            .iter()
-            .filter_map(|attr| nix::drv_for(&base, attr))
-            .collect();
         let head_graph = nix::derivation_graph(&head_paths)?;
-        let base_graph = nix::derivation_graph(&base_paths)?;
+        // Base may have come from cache (eval skipped), in which case the changed
+        // checks' base `.drv`s are not guaranteed to be in the store; address
+        // them by attr at the base rev so only those few are re-instantiated.
+        // On a fresh base eval the `.drv`s exist, so the path form is used.
+        let base_graph = if base_was_cached {
+            nix::derivation_graph_for_attrs(&revs.repo, &revs.base, &changed)?
+        } else {
+            let base_paths: Vec<String> = changed
+                .iter()
+                .filter_map(|attr| nix::drv_for(&base, attr))
+                .collect();
+            nix::derivation_graph(&base_paths)?
+        };
         let changed_basenames: BTreeMap<String, String> = changed
             .iter()
             .filter_map(|attr| {

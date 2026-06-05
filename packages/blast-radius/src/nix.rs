@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::process::Command;
 
 use color_eyre::eyre::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::causes::{DrvNode, Graph};
 
@@ -20,6 +20,9 @@ const EVAL_JOBS: &str =
     "github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7";
 
 /// One evaluated check: its attribute name and the derivation it builds.
+/// `Serialize`/`Deserialize` so a base eval can be cached on disk by SHA (see
+/// `cache`); `PartialEq`/`Eq` back the cache round-trip test.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Check {
     pub attr: String,
     pub drv_path: String,
@@ -29,7 +32,7 @@ pub struct Check {
 /// just the name) so a fail-closed bail on a head regression can print WHY it
 /// failed: per-attr eval failures exit nix-eval-jobs 0, so the error text is
 /// otherwise never surfaced in CI logs.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvalFailure {
     pub attr: String,
     pub error: String,
@@ -39,6 +42,7 @@ pub struct EvalFailure {
 /// checks, plus the attrs that failed to evaluate there (no derivation, so not a
 /// rebuild target). The caller diffs `failures` across base and head to tell a
 /// pre-existing catalog failure (tolerated) from one this change introduced.
+#[derive(Debug, PartialEq, Eq)]
 pub struct EvalResult {
     pub checks: Vec<Check>,
     pub failures: Vec<EvalFailure>,
@@ -120,10 +124,13 @@ pub fn eval_checks(repo: &str, rev: &str) -> Result<EvalResult> {
         "--option",
         "extra-experimental-features",
         "ca-derivations",
-        // A stale eval cache would mask a real rebuild; force a fresh eval.
-        "--option",
-        "eval-cache",
-        "false",
+        // The eval cache is left ON. It is keyed by the locked flake fingerprint,
+        // and the flakeref above pins an immutable `?rev=<sha>` whose evaluation
+        // is deterministic, so a cache entry for that rev can never be "stale":
+        // it is exactly what a fresh eval would produce. Disabling it only forced
+        // a full from-cold re-eval of the whole catalog every run. The runner's
+        // `$HOME/.cache/nix` persists across jobs, so reruns of the same rev (and
+        // the per-attr re-instantiation in `derivation_graph_for_attrs`) hit it.
     ]))
     .with_context(|| format!("evaluate checks at {rev}"))?;
 
@@ -212,10 +219,13 @@ struct ShowInputs {
     drvs: BTreeMap<String, serde_json::Value>,
 }
 
-/// Load the recursive derivation graph rooted at `drv_paths`, keyed by `.drv`
-/// basename. Used to walk down to the changed frontier.
-pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
-    if drv_paths.is_empty() {
+/// Run `nix derivation show --recursive` over the given installables (either
+/// `.drv` store paths or flakeref attrs) and parse the graph keyed by `.drv`
+/// basename. `flakes` and `accept-flake-config` are enabled so a flakeref
+/// installable (the cache-hit path) evaluates; they are harmless for store-path
+/// installables.
+fn derivation_show(installables: &[String]) -> Result<Graph> {
+    if installables.is_empty() {
         return Ok(Graph::new());
     }
     let mut args = vec![
@@ -223,9 +233,12 @@ pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
         "show".to_owned(),
         "--recursive".to_owned(),
         "--extra-experimental-features".to_owned(),
-        "nix-command ca-derivations".to_owned(),
+        "nix-command flakes ca-derivations".to_owned(),
+        "--option".to_owned(),
+        "accept-flake-config".to_owned(),
+        "true".to_owned(),
     ];
-    args.extend(drv_paths.iter().cloned());
+    args.extend(installables.iter().cloned());
     let stdout = run(Command::new("nix").args(&args)).context("nix derivation show --recursive")?;
 
     let output: ShowOutput =
@@ -239,6 +252,27 @@ pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
             (name_key, DrvNode { name, inputs })
         })
         .collect())
+}
+
+/// Load the recursive derivation graph rooted at `drv_paths` (store paths),
+/// keyed by `.drv` basename. Used to walk down to the changed frontier when the
+/// roots' `.drv`s are already in the store (a freshly evaluated rev).
+pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
+    derivation_show(drv_paths)
+}
+
+/// Like `derivation_graph`, but addresses checks by attribute at `rev` rather
+/// than by `.drv` path. Used when the base eval was served from cache: the base
+/// eval was skipped, so the changed checks' base `.drv`s are not guaranteed to be
+/// in the store. `nix derivation show` on a flakeref attr re-instantiates just
+/// those few attrs and prints their graph, so only the changed frontier is
+/// re-evaluated, not the whole catalog.
+pub fn derivation_graph_for_attrs(repo: &str, rev: &str, attrs: &[String]) -> Result<Graph> {
+    let installables: Vec<String> = attrs
+        .iter()
+        .map(|attr| format!("git+file://{repo}?rev={rev}&allRefs=1#checks.x86_64-linux.\"{attr}\""))
+        .collect();
+    derivation_show(&installables)
 }
 
 /// Look up the derivation path for an attribute name in an evaluated set.
