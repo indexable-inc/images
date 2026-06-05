@@ -42,6 +42,7 @@ import json
 import os
 import sys
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -259,6 +260,38 @@ def _encode(value) -> bytes | None:
     return os.fspath(value).encode("utf-8")
 
 
+def _u32(name: str, value: int) -> int:
+    """Validate an unsigned-32 argument; ctypes would otherwise silently wrap."""
+    if not isinstance(value, int) or value < 0 or value > 0xFFFFFFFF:
+        raise ValueError(f"{name} must be an int in [0, 2**32); got {value!r}")
+    return value
+
+
+def _u64(name: str, value: int) -> int:
+    """Validate an unsigned-64 argument; ctypes would otherwise silently wrap."""
+    if not isinstance(value, int) or value < 0 or value > 0xFFFFFFFFFFFFFFFF:
+        raise ValueError(f"{name} must be an int in [0, 2**64); got {value!r}")
+    return value
+
+
+def _validate_grep_args(
+    limit: int,
+    max_matches_per_file: int,
+    file_offset: int,
+    before_context: int,
+    after_context: int,
+    max_file_size: int,
+    time_budget_ms: int,
+) -> None:
+    _u32("limit", limit)
+    _u32("max_matches_per_file", max_matches_per_file)
+    _u32("file_offset", file_offset)
+    _u32("before_context", before_context)
+    _u32("after_context", after_context)
+    _u64("max_file_size", max_file_size)
+    _u64("time_budget_ms", time_budget_ms)
+
+
 # ── result types ─────────────────────────────────────────────────────────────
 
 
@@ -398,6 +431,7 @@ class FileFinder:
     def wait_for_scan(self, timeout_ms: int = 5000) -> bool:
         """Block until the initial scan finishes; True if it completed in time."""
         self._check_open()
+        _u64("timeout_ms", timeout_ms)
         _, completed = _consume(_lib.fff_wait_for_scan(self._handle, timeout_ms))
         return bool(completed)
 
@@ -438,6 +472,9 @@ class FileFinder:
     ) -> SearchResult:
         """Fuzzy file search, ranked by match score combined with frecency."""
         self._check_open()
+        _u32("limit", limit)
+        _u32("page", page)
+        _u32("max_threads", max_threads)
         handle, _ = _consume(
             _lib.fff_search(
                 self._handle,
@@ -466,6 +503,9 @@ class FileFinder:
     ) -> SearchResult:
         """Literal glob filter (e.g. `*.rs`, `src/**`), ranked by frecency."""
         self._check_open()
+        _u32("limit", limit)
+        _u32("page", page)
+        _u32("max_threads", max_threads)
         handle, _ = _consume(
             _lib.fff_glob(
                 self._handle,
@@ -526,6 +566,15 @@ class FileFinder:
         mode_byte = _GREP_MODES.get(mode)
         if mode_byte is None:
             raise ValueError(f"unknown grep mode {mode!r}; use one of {sorted(_GREP_MODES)}")
+        _validate_grep_args(
+            limit,
+            max_matches_per_file,
+            file_offset,
+            before_context,
+            after_context,
+            max_file_size,
+            time_budget_ms,
+        )
         handle, _ = _consume(
             _lib.fff_live_grep(
                 self._handle,
@@ -571,6 +620,15 @@ class FileFinder:
             raise ValueError("multi_grep requires at least one non-empty pattern")
         if any("\n" in p for p in patterns):
             raise ValueError("multi_grep patterns must not contain newlines")
+        _validate_grep_args(
+            limit,
+            max_matches_per_file,
+            file_offset,
+            before_context,
+            after_context,
+            max_file_size,
+            time_budget_ms,
+        )
         handle, _ = _consume(
             _lib.fff_multi_grep(
                 self._handle,
@@ -636,8 +694,15 @@ class FileFinder:
 
 
 # ── module-level convenience over a cached, watched index per directory ──────
+#
+# One finder per directory, shared by `find` and `grep`. It is content-indexed
+# and watching, so repeated queries against the same tree skip the rescan cost
+# and `grep` always gets the SIMD content index. The cache is a bounded LRU: an
+# evicted finder is closed so its native instance and watcher thread are
+# released rather than leaking for the kernel's lifetime.
 
-_cache: dict[str, FileFinder] = {}
+_CACHE_MAX = 8
+_cache: OrderedDict[str, FileFinder] = OrderedDict()
 _cache_lock = threading.Lock()
 
 
@@ -646,24 +711,28 @@ def finder(path=".", **kwargs) -> FileFinder:
     return FileFinder(path, **kwargs)
 
 
-def _cached(path, *, content_indexing: bool) -> FileFinder:
+def _cached(path) -> FileFinder:
     key = os.path.abspath(os.fspath(path))
     with _cache_lock:
-        ff = _cache.get(key)
-        if ff is None or ff._closed:
-            # A long-lived, watching index: the file watcher keeps it fresh, so
-            # repeated calls against the same tree skip the rescan cost.
-            ff = FileFinder(key, watch=True, content_indexing=content_indexing)
-            ff.wait_for_scan(10_000)
-            _cache[key] = ff
-    return ff
+        existing = _cache.get(key)
+        if existing is not None and not existing._closed:
+            _cache.move_to_end(key)
+            return existing
+        ff = FileFinder(key, watch=True, content_indexing=True)
+        ff.wait_for_scan(10_000)
+        _cache[key] = ff
+        _cache.move_to_end(key)
+        while len(_cache) > _CACHE_MAX:
+            _, evicted = _cache.popitem(last=False)
+            evicted.close()
+        return ff
 
 
 def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
     """Fuzzy file search over `path`, reusing a cached watched index."""
-    return _cached(path, content_indexing=False).search(query, limit=limit)
+    return _cached(path).search(query, limit=limit)
 
 
 def grep(query: str, path=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
     """Content grep over `path`, reusing a cached watched (content-indexed) index."""
-    return _cached(path, content_indexing=True).grep(query, mode=mode, limit=limit)
+    return _cached(path).grep(query, mode=mode, limit=limit)
