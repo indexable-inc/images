@@ -109,6 +109,20 @@ let
     ];
   };
 
+  # ix built the rlib with an explicit `--target <triple>`, which stamps each
+  # LIBRARY unit's `platform` field (folded into the unit hash) with the triple
+  # instead of leaving it null (a host-native build). To generate the same
+  # `ix_sdk_wire` hash, the public SDK workspace must build with the SAME target.
+  # ix's `hostRustTarget` map; this check only runs on x86_64-linux.
+  hostRustTarget =
+    {
+      x86_64-linux = "x86_64-unknown-linux-gnu";
+      aarch64-linux = "aarch64-unknown-linux-gnu";
+      aarch64-darwin = "aarch64-apple-darwin";
+    }
+    .${pkgs.stdenv.hostPlatform.system}
+      or (throw "sdk/rust: unsupported host platform ${pkgs.stdenv.hostPlatform.system}");
+
   # Source string for the snafu git fork, keyed exactly as it appears in
   # `Cargo.lock`. snafu and snafu-derive share this one source, so one entry
   # covers both. Tree SRI taken from ix's nix wiring
@@ -122,6 +136,9 @@ let
   commonArgs = {
     pname = "ix-sdk-rust";
     inherit src outputHashes rustToolchain;
+    # Match the target ix built the rlib with, so library units carry the same
+    # `platform` (hence the same hash) as the R2 artifact.
+    target = hostRustTarget;
     # The real checkout root that package scopes are carved from (mirrors the
     # cargo-unit-prebuilt fixture: plain path for workspaceRoot, filtered
     # `toSource` for src).
