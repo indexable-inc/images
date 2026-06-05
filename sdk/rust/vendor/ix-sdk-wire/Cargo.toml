@@ -31,7 +31,11 @@ publish = false
 [lib]
 
 [dependencies]
-snafu = { git = "https://github.com/shepmaster/snafu.git", rev = "1f8e75f56390c421a198871916100c6316d23d4f" }
+# Bare git URL (no `rev` in the spec), exactly as ix declares it; the rev is
+# pinned in Cargo.lock. A `rev =` here would make cargo resolve the source as
+# `...snafu.git?rev=...` instead of the bare `...snafu.git#<rev>` the vendor
+# config (and ix's lock) key on, breaking offline vendoring.
+snafu = { git = "https://github.com/shepmaster/snafu.git" }
 # strum's VariantArray derive backs the error-code roster; the `derive` feature
 # pulls in strum_macros, matching the real crate's resolved feature set.
 strum = { version = "0.28", features = ["derive"] }
