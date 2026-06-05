@@ -2555,6 +2555,42 @@ let
           && lib.hasInfix "index_granularity = ${toString schema.indexGranularity}" schema.createTableSql;
         message = "minecraft-blocks schema should drive a Z-order ORDER BY plus per-axis minmax skip indexes over offset-shifted signed coordinates";
       }
+      {
+        # Replay must be idempotent: the table is a ReplacingMergeTree keyed on
+        # the placement identity (the ORDER BY tuple), so an at-least-once
+        # transport re-sending a record collapses it back to one row. The dedup
+        # key is the same ORDER BY tuple the spatial query relies on, so this
+        # engine choice never changes the query path, it only folds duplicates.
+        assertion =
+          let
+            inherit (minecraftBlocksExample) schema;
+          in
+          lib.hasInfix "ReplacingMergeTree" schema.createTableSql
+          && !lib.hasInfix "ENGINE = MergeTree" schema.createTableSql
+          && lib.hasInfix "ORDER BY (world, ${schema.mortonExpr}, timestamp)" schema.createTableSql;
+        message = "minecraft-blocks view should be a ReplacingMergeTree keyed on the placement identity so replay is idempotent";
+      }
+      {
+        # One bounding box: box.json drives the generator's in-box region, the
+        # Nix schema's derived predicate, and the integration check, so the
+        # asserted in-box count cannot drift from a fixture edit. The derived SQL
+        # predicate must be half-open per axis and bound to the box's world.
+        assertion =
+          let
+            inherit (minecraftBlocksExample) schema;
+            inherit (schema) box;
+          in
+          box.world == "overworld"
+          &&
+            box.x == [
+              0
+              16
+            ]
+          && lib.hasInfix "world = 'overworld'" schema.boxPredicate
+          && lib.hasInfix "x >= 0 AND x < 16" schema.boxPredicate
+          && lib.hasInfix "z >= 0 AND z < 16" schema.boxPredicate;
+        message = "minecraft-blocks bounding box should come from one box.json definition shared by the schema predicate and the fixture generator";
+      }
     ];
 
     networking = [
@@ -4081,18 +4117,32 @@ let
 
     # minecraft-blocks integration: committed fixtures -> ClickHouse local
     # spatial table -> bounding-box query. The derivation loads the fixture JSON
-    # Lines into a MergeTree table built from the one schema (Morton ORDER BY,
-    # per-axis minmax skip indexes, small granule, signed-coordinate offset),
-    # runs the bounding-box query, and asserts the exact in-box count, that the
-    # skip indexes prune (fewer granules than the primary index alone), and the
-    # Morton round-trip. Realising it here pulls the whole check into the `eval`
-    # aggregate. It also proves the Paper plugin jar builds against the real API.
+    # Lines into a ReplacingMergeTree table built from the one schema (Morton
+    # ORDER BY, per-axis minmax skip indexes, small granule, signed-coordinate
+    # offset), loads them TWICE to simulate the at-least-once restart re-send,
+    # then asserts with FINAL that the replay was idempotent (the in-box count
+    # and the total did not double), that the skip indexes prune (fewer granules
+    # than the primary index alone), and the Morton round-trip. Realising it here
+    # pulls the whole check into the `eval` aggregate. It also proves the Paper
+    # plugin jar builds against the real API.
     test -f ${minecraftBlocksExample.packages.loadFixtures}/result
     grep -q 'in_box=512' ${minecraftBlocksExample.packages.loadFixtures}/result
+    # The double-loaded total stays at the single-load row count: replay folded
+    # the duplicates back to one row each, so the view is idempotent.
+    grep -q 'idempotent_total=2977' ${minecraftBlocksExample.packages.loadFixtures}/result
     grep -qE 'pk_granules=[0-9]+ skip_granules=[0-9]+' ${minecraftBlocksExample.packages.loadFixtures}/result
     test -s ${minecraftBlocksExample.packages.loadFixtures}/events.jsonl
     test "$(wc -l < ${../examples/minecraft-blocks/fixtures.jsonl})" = "2977"
     grep -q '"block_type":"minecraft:stone"' ${../examples/minecraft-blocks/fixtures.jsonl}
+    # The query tool reads with FINAL so counts are exact under the idempotent
+    # ReplacingMergeTree (merge-time dedup forced at read), not only after a
+    # background merge. Grep the rendered helper for the FINAL table reference.
+    grep -q 'FROM block_events FINAL' ${
+      minecraftBlocksExample.packages.mkQueryTool {
+        host = "127.0.0.1";
+        port = 9000;
+      }
+    }/bin/mc-blocks
     # The jar must contain only the plugin's own classes plus plugin.yml; no
     # leaked Paper/Bukkit API classes from the compile-time classpath.
     test -s ${minecraftBlocksExample.packages.plugin}

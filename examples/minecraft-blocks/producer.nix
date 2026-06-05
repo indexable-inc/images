@@ -43,9 +43,13 @@ let
 
   # Transport leg: follow the plugin's append-only file and produce each new
   # line to the topic. `tail -F -n +1` replays the whole file on first start
-  # then streams; the broker dedups nothing, so on a true restart this would
-  # re-send, which is acceptable for a lossy transport feeding a replayable log
-  # (the log, not the transport, is the source of truth).
+  # then streams; on a restart it re-sends from the top. That re-send is
+  # deliberately left in place and is harmless: the transport is at-least-once,
+  # and the ClickHouse view is a ReplacingMergeTree keyed on the placement
+  # identity (schema.nix), so a replayed record collapses back to one row. The
+  # honest pattern is at-least-once transport feeding an idempotent view, which
+  # is effectively-once end to end; the log, not the transport, is the source of
+  # truth, and duplicate delivery never corrupts a count.
   shipToKafka = pkgs.writeShellScript "mc-blocks-ship" ''
     set -eu
     touch ${blockLog}

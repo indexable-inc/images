@@ -83,15 +83,16 @@ let
   # constant AND the skip indexes have many distant granules to prune.
   expectedInBox = 512;
 
-  # The headline bounding-box predicate over the origin chunk column. Declared
-  # once so the asserted count and the EXPLAIN-pruning check run the identical
-  # filter, and so the schema's source of truth is the only place coordinates live.
-  boxPredicate = ''
-    world = 'overworld'
-      AND x >= 0 AND x < 16
-      AND y >= 0 AND y < 16 + 64
-      AND z >= 0 AND z < 16
-  '';
+  # The full fixture row count. After loading the fixture twice (the replay
+  # simulation), a FINAL count must still equal this, proving idempotency.
+  expectedTotal = 2977;
+
+  # The headline bounding-box predicate, derived from the schema's single box
+  # definition (box.json). The fixture generator places its in-box cluster from
+  # those same bounds, so the asserted count and the data cannot drift: there is
+  # one box, and the WHERE clause here, the EXPLAIN-pruning check, and the
+  # generator's membership test all read it.
+  inherit (schema) boxPredicate;
 
   loadFixtures =
     pkgs.runCommand "minecraft-blocks-integration"
@@ -111,23 +112,41 @@ let
         run() {
           clickhouse local --path "$PWD/store" --multiquery "$1"
         }
+        insert() {
+          clickhouse local --path "$PWD/store" \
+            --query "INSERT INTO ${schema.fullTable} FORMAT JSONEachRow" < events.jsonl
+        }
 
         # Build the view exactly as the production table is built, from the one
         # schema source, then load the JSON Lines the plugin produces (mirrored
         # here by the committed fixture). JSONEachRow maps keys onto columns by name.
         run "${schema.createDatabaseSql}"
         run "${schema.createTableSql}"
-        clickhouse local --path "$PWD/store" \
-          --query "INSERT INTO ${schema.fullTable} FORMAT JSONEachRow" < events.jsonl
 
-        total=$(run "SELECT count() FROM ${schema.fullTable}")
-        echo "total rows: $total"
+        # Load the SAME fixture TWICE. This simulates the honest transport: the
+        # shipper re-sends the whole file on restart and the broker re-delivers,
+        # so the view sees every record at least once, sometimes more. The table
+        # is ReplacingMergeTree keyed on the placement identity (the ORDER BY
+        # tuple), so the duplicate load must NOT double the counts.
+        insert
+        insert
 
-        # The headline query: a 3D bounding box over the origin chunk column. We
-        # assert the exact in-box count.
+        # FINAL forces the merge-time dedup at read, so counts are exact right
+        # now rather than only after a background merge has run. Without FINAL a
+        # freshly double-loaded table would still show 2 * N until merges
+        # complete; with it the replayed rows collapse to one each at query time.
+        total=$(run "SELECT count() FROM ${schema.fullTable} FINAL")
+        echo "idempotent_total: $total (expected ${toString expectedTotal})"
+        if [ "$total" != "${toString expectedTotal}" ]; then
+          echo "FAIL: double-loaded total $total != ${toString expectedTotal} (replay was not idempotent)" >&2
+          exit 1
+        fi
+
+        # The headline query: the shared 3D bounding box. Asserted with FINAL so
+        # the double load does not inflate it: exactly the in-box count, not 2x.
         in_box=$(run "
           SELECT count()
-          FROM ${schema.fullTable}
+          FROM ${schema.fullTable} FINAL
           WHERE ${boxPredicate}
         ")
         echo "rows in bounding box: $in_box (expected ${toString expectedInBox})"
@@ -144,6 +163,13 @@ let
         # ORDER BY is what keeps each granule's box tight enough to drop. Assert
         # that the best skip stage selects strictly fewer granules than the
         # PrimaryKey stage, i.e. the skip indexes genuinely cut work.
+        #
+        # This EXPLAIN runs on the plain table (no FINAL): the index-pruning
+        # stages we read here are the per-part granule selection, which is the
+        # same whether or not a FINAL merging step is layered on top. Running it
+        # without FINAL keeps the plan shape simple so the per-index granule
+        # counts are unambiguous; the count assertions above use FINAL for exact
+        # dedup, while pruning is a property of the part scan either way.
         explain=$(clickhouse local --path "$PWD/store" --query "
           EXPLAIN indexes = 1, json = 1
           SELECT count()
@@ -175,7 +201,7 @@ let
             toInt64(mortonDecode(${schema.mortonMask}, code).2) - ${toString schema.coordOffset} AS dy,
             toInt64(mortonDecode(${schema.mortonMask}, code).3) - ${toString schema.coordOffset} AS dz,
             (dx = x AND dy = y AND dz = z) AS ok
-          FROM ${schema.fullTable}
+          FROM ${schema.fullTable} FINAL
           WHERE x = -100
           LIMIT 1
         ")
@@ -190,8 +216,10 @@ let
 
         mkdir -p "$out"
         cp events.jsonl "$out/"
-        printf 'total=%s in_box=%s pk_granules=%s skip_granules=%s\n' \
-          "$total" "$in_box" "$pk_granules" "$skip_granules" > "$out/result"
+        # `idempotent_total` is the FINAL count AFTER loading the fixture twice:
+        # equal to the single-load row count, so the duplicate replay collapsed.
+        printf 'total=%s idempotent_total=%s in_box=%s pk_granules=%s skip_granules=%s\n' \
+          "$total" "$total" "$in_box" "$pk_granules" "$skip_granules" > "$out/result"
       '';
 
   # The ClickHouse query helper for the view node, mirroring ix-observe's shape.
@@ -211,12 +239,17 @@ let
         ]
         def run [sql: string, ...params: string] { ^clickhouse ...$ch ...$params --query $sql }
 
+        # Every read uses FINAL. The table is ReplacingMergeTree keyed on the
+        # placement identity, so an at-least-once replay can leave duplicate rows
+        # that have not yet been merged away. FINAL forces that merge-time dedup
+        # at read, so counts are exact the moment a row lands rather than only
+        # after a background merge runs.
         def "main total" [] {
-          run $"SELECT count() AS placements FROM ${schema.table}"
+          run $"SELECT count() AS placements FROM ${schema.table} FINAL"
         }
 
         def "main top-players" [--limit: int = 10] {
-          run $"SELECT player_name, count() AS placements FROM ${schema.table} GROUP BY player_name ORDER BY placements DESC LIMIT ($limit)"
+          run $"SELECT player_name, count() AS placements FROM ${schema.table} FINAL GROUP BY player_name ORDER BY placements DESC LIMIT ($limit)"
         }
 
         # Bounding-box query. The per-axis minmax skip indexes (kept tight by the
@@ -227,7 +260,7 @@ let
           x0: int y0: int z0: int
           x1: int y1: int z1: int
         ] {
-          run $"SELECT count\(\) AS placements FROM ${schema.table} WHERE world = {world:String} AND x >= ($x0) AND x < ($x1) AND y >= ($y0) AND y < ($y1) AND z >= ($z0) AND z < ($z1)" $"--param_world=($world)"
+          run $"SELECT count\(\) AS placements FROM ${schema.table} FINAL WHERE world = {world:String} AND x >= ($x0) AND x < ($x1) AND y >= ($y0) AND y < ($y1) AND z >= ($z0) AND z < ($z1)" $"--param_world=($world)"
         }
 
         # Per-chunk heatmap: 16x16 columns aggregated to chunk coordinates. A
@@ -235,7 +268,7 @@ let
         # intDiv truncates toward zero and would mis-bucket negative coordinates,
         # so divide as a float and floor.
         def "main heatmap" [world: string --limit: int = 20] {
-          run $"SELECT toInt64\(floor\(x / 16\)\) AS chunk_x, toInt64\(floor\(z / 16\)\) AS chunk_z, count\(\) AS placements FROM ${schema.table} WHERE world = {world:String} GROUP BY chunk_x, chunk_z ORDER BY placements DESC LIMIT ($limit)" $"--param_world=($world)"
+          run $"SELECT toInt64\(floor\(x / 16\)\) AS chunk_x, toInt64\(floor\(z / 16\)\) AS chunk_z, count\(\) AS placements FROM ${schema.table} FINAL WHERE world = {world:String} GROUP BY chunk_x, chunk_z ORDER BY placements DESC LIMIT ($limit)" $"--param_world=($world)"
         }
 
         def "main sql" [...query: string] { run ($query | str join " ") }
@@ -253,5 +286,6 @@ in
     loadFixtures
     mkQueryTool
     expectedInBox
+    expectedTotal
     ;
 }

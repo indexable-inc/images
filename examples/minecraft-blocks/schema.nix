@@ -83,6 +83,40 @@ let
   table = "block_events";
   topic = "minecraft.block_events";
 
+  # The example's canonical bounding box: a single half-open [lo, hi) interval
+  # per axis (plus a world) that is the ONE definition of "the box". The fixture
+  # generator places its dense in-box cluster from these same bounds, the
+  # integration check derives its WHERE predicate from them, and the asserted
+  # in-box count is whatever this box selects from the committed fixture. Keeping
+  # the bounds here (read by both Nix and generate-fixtures.py from box.json)
+  # means the three can never disagree: a fixture edit cannot quietly break the
+  # in-box invariant by landing a row in a y-range one definition counts and
+  # another does not.
+  box = lib.importJSON ./box.json;
+
+  # SQL predicate for `box`, built from the same field names. `axisPredicate`
+  # emits a half-open `col >= lo AND col < hi` per axis so it matches the
+  # generator's `lo <= v < hi` membership exactly. `mkBoxPredicate` takes the
+  # world as a SQL fragment, so a query tool could pass a `{world:String}`
+  # parameter while the integration check inlines the box's literal world via
+  # `boxPredicate`.
+  axisPredicate =
+    axis:
+    "${axis} >= ${toString (builtins.elemAt box.${axis} 0)} AND ${axis} < ${
+      toString (builtins.elemAt box.${axis} 1)
+    }";
+  mkBoxPredicate =
+    world:
+    lib.concatStringsSep "\n  AND " (
+      [ "world = ${world}" ]
+      ++ map axisPredicate [
+        "x"
+        "y"
+        "z"
+      ]
+    );
+  boxPredicate = mkBoxPredicate "'${box.world}'";
+
   # Rows per granule. ClickHouse defaults to 8192, which would pack this demo's
   # few thousand rows into a single granule, leaving the skip indexes nothing to
   # prune. A small granule makes each granule's per-axis minmax box meaningful,
@@ -135,12 +169,24 @@ let
   # indexes then let a raw-coordinate bounding-box query skip granules whose box
   # misses the query box. The skip indexes do the pruning; the Z-order ordering
   # is what makes their per-granule boxes tight enough to prune well.
+  #
+  # ENGINE = ReplacingMergeTree makes replay idempotent. The ORDER BY tuple
+  # (world, mortonEncode(x,y,z), timestamp) uniquely identifies a logical
+  # placement: the same world cell cannot be placed twice at the same
+  # millisecond, so the tuple is the natural key of the fact. ReplacingMergeTree
+  # collapses rows that share the full sorting key down to one, and an exact
+  # replay of a record is byte-identical (same coordinates, same player, same
+  # timestamp), so it collapses to that one row. No version column is needed
+  # because there is no "newer" copy to prefer; the copies are identical. This is
+  # what turns an at-least-once transport plus this view into effectively-once:
+  # the broker may re-deliver and the shipper may re-send the whole file on
+  # restart, yet every duplicate folds back into the single canonical row.
   createTableSql = ''
     CREATE TABLE IF NOT EXISTS ${database}.${table} (
       ${columnDefs},
       ${skipIndexDefs}
     )
-    ENGINE = MergeTree
+    ENGINE = ReplacingMergeTree
     ORDER BY (world, ${mortonExpr}, timestamp)
     SETTINGS index_granularity = ${toString indexGranularity}
   '';
@@ -161,6 +207,9 @@ in
     createDatabaseSql
     createTableSql
     kafkaColumnDefs
+    box
+    boxPredicate
+    mkBoxPredicate
     ;
 
   # Column names in storage order. The loader's INSERT and the test fixture

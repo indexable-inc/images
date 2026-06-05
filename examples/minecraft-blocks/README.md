@@ -30,6 +30,12 @@ ix shell view -- mc-blocks box overworld 0 0 0 16 320 16
 ix shell view -- mc-blocks heatmap overworld
 ```
 
+The `box` arguments above span the full overworld height (`y` 0 to 320) on
+purpose: it is an illustrative query you would actually run, not the integration
+check's box. The integration check uses one canonical box defined in `box.json`
+(see [Validation](#validation)), so the asserted in-box count can never drift
+from the fixture data.
+
 You do not need a running server to see the pipeline end to end. A committed
 fixture of block-placement records (the same shape the plugin writes) drives the
 whole log-to-view path offline (see [Validation](#validation)).
@@ -72,7 +78,8 @@ of truth.
 
 LOG is the one durable, append-only, replayable source of truth. Here it is the
 `minecraft.block_events` Kafka topic. Everything downstream derives from it and
-is rebuildable by replaying it.
+is rebuildable by replaying it, and that replay is idempotent (see [Idempotent
+replay](#idempotent-replay)), so re-running it never corrupts a view.
 
 VIEWS are projections of the log, one per query pattern. Here the view is a
 ClickHouse table tuned for spatial range queries. The same log could feed other
@@ -113,13 +120,17 @@ three coordinates with a Z-order (Morton) curve, and per-axis minmax skip
 indexes turn that ordering into real granule pruning:
 
 ```sql
-ENGINE = MergeTree
+ENGINE = ReplacingMergeTree
 ORDER BY (world, mortonEncode((1, 1, 1), toUInt32(x + 1048576), toUInt32(y + 1048576), toUInt32(z + 1048576)), timestamp)
 -- plus, on the same table:
 INDEX idx_x x TYPE minmax GRANULARITY 1,
 INDEX idx_y y TYPE minmax GRANULARITY 1,
 INDEX idx_z z TYPE minmax GRANULARITY 1
 ```
+
+The engine is `ReplacingMergeTree`, not plain `MergeTree`, and that is what
+makes the replay above idempotent; the [Idempotent replay](#idempotent-replay)
+section explains why the `ORDER BY` tuple is a valid dedup key.
 
 `mortonEncode` interleaves the bits of the three axes into one integer. Points
 that are close in 3D space get close curve values, so they sort next to each
@@ -158,6 +169,38 @@ normal build area. To cover the full plus-or-minus 30 million block range, a
 production table partitions by region first and Morton-encodes within each
 bounded partition, the same idea applied per partition.
 
+## Idempotent replay
+
+"Rebuildable by replaying the log" is only true if replaying the same record
+twice does not change the answer. That property is built into the view here, so
+restart re-sends and view rebuilds do not corrupt counts.
+
+The transport is at-least-once. The shipper re-sends the whole file from the top
+on restart, and the broker can re-deliver, so a record can reach the view more
+than once. Rather than try to make the transport exactly-once (hard and not the
+point), the view is made idempotent, and at-least-once transport into an
+idempotent view is effectively-once end to end.
+
+What makes the view idempotent is the table engine and its key. The
+`block_events` table is a `ReplacingMergeTree` ordered by `(world,
+mortonEncode(x, y, z), timestamp)`. That tuple is the identity of a placement: a
+single world cell cannot be placed twice at the same millisecond, so the tuple
+uniquely identifies the logical fact. `ReplacingMergeTree` collapses rows that
+share the full sorting key down to one, and a replayed record is byte-identical
+to the original (same coordinates, same player, same timestamp), so the
+duplicate folds back into the one canonical row. No version column is needed:
+there is no newer copy to prefer, the copies are identical.
+
+Reads use `FINAL` so counts are exact at query time. Dedup in
+`ReplacingMergeTree` happens during background merges, which may not have run
+yet, so `SELECT count() FROM block_events FINAL` forces the merge-time dedup at
+read and returns the deduplicated count immediately. The `mc-blocks` query tool
+and the integration check both read with `FINAL` for this reason.
+
+The [integration check](#validation) proves the property: it loads the fixture
+twice (simulating the restart re-send) and asserts with `FINAL` that the total
+and the bounding-box count are unchanged, not doubled.
+
 ## Scaling up
 
 The runnable substrate here is Apache Kafka in KRaft mode, the broker this
@@ -180,16 +223,22 @@ reshaping a view never touches the producer and never risks the source of truth.
 
 ### Rebuilding a view from the log
 
-A view is rebuildable in principle, but the ClickHouse Kafka table engine reads
-with a fixed consumer group (`clickhouse-minecraft`), and Kafka stores the
-committed offset per group on the broker, not in the view. So if you rebuild the
-`view` VM, the `block_events` table starts empty while Kafka still holds the old
-committed offset, and the materialized view resumes from there instead of
-replaying from the start. To actually rebuild the view from the whole log, reset
-the group's offsets (`kafka-consumer-groups.sh --reset-offsets --to-earliest`)
-or consume under a fresh group name before recreating the table. A production
-deployment makes the rebuild explicit (a new group per rebuild, or a snapshot to
-restore from); this example keeps the single fixed group for simplicity.
+To rebuild the view, replay the whole log into a fresh table. Because the view
+is idempotent (see [Idempotent replay](#idempotent-replay)), the replay is safe
+even when it overlaps records the table already holds: duplicates collapse back
+into one row, so a rebuild can never double a count.
+
+One mechanical detail to know: the ClickHouse Kafka table engine reads with a
+fixed consumer group (`clickhouse-minecraft`), and Kafka stores the committed
+offset per group on the broker, not in the view. So if you recreate the
+`block_events` table without touching the group, the materialized view resumes
+from the committed offset instead of replaying from the start. To replay the
+whole log, reset the group's offsets (`kafka-consumer-groups.sh --reset-offsets
+--to-earliest`) or consume under a fresh group name before recreating the table.
+This is just about where the read resumes, not about correctness: whatever the
+replay re-delivers, the `ReplacingMergeTree` dedups. A production deployment
+makes the rebuild explicit (a new group per rebuild, or a snapshot to restore
+from); this example keeps the single fixed group for simplicity.
 
 ## Shape
 
@@ -218,15 +267,24 @@ restore from); this example keeps the single fixed group for simplicity.
   without a server. The layout is sized to demonstrate skip-index pruning: a
   dense in-box cluster plus thousands of far-flung placements across many
   granules.
+- `box.json` is the single definition of the example's bounding box, one
+  half-open interval per axis. The Nix schema, the integration-check predicate,
+  and `generate-fixtures.py` all read it, so the in-box region and the query
+  predicate cannot drift: the asserted in-box count is always whatever this one
+  box selects from the fixture.
 
 ## Validation
 
 The integration check runs the whole log-to-view path offline. It loads the
 committed `fixtures.jsonl` records into a ClickHouse `local` table built from the
 same schema (same Morton order, same offset, same skip indexes, same granule),
-then asserts three things:
+loads them a second time to simulate the restart re-send, then asserts four
+things:
 
-- the exact in-box count for the bounding-box query,
+- replay is idempotent: with `FINAL`, the total after the double load equals the
+  single-load row count, not double it (`idempotent_total` in the result file),
+- the exact in-box count for the bounding-box query (also with `FINAL`, so the
+  double load does not inflate it),
 - that the per-axis skip indexes genuinely prune (via `EXPLAIN indexes = 1`, the
   box query selects strictly fewer granules after the skip indexes than the
   primary index alone),

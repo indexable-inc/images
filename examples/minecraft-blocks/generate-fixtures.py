@@ -11,8 +11,8 @@ with no server. Regenerate and commit when the layout below changes::
 The layout is built to demonstrate the Z-order minmax skip indexes, not just to
 hold a row count:
 
-- A dense cluster of ``IN_BOX`` placements inside the origin chunk column
-  (overworld, x in [0,16), y in [64,144), z in [0,16)). With the Morton ORDER BY
+- A dense cluster of in-box placements inside the origin chunk column, filling
+  the box's x/z footprint at the two lowest y layers. With the Morton ORDER BY
   these land together in a few granules, so the bounding-box query reads only
   those granules.
 - Thousands of placements scattered far across the overworld, deliberately far
@@ -22,10 +22,15 @@ hold a row count:
   per-dimension name path and the signed-coordinate Morton round-trip are both
   exercised.
 
-The in-box count is a deterministic constant the check asserts exactly.
+The bounding box is NOT defined here. It lives once in ``box.json`` next to
+``schema.nix``; this generator, the Nix schema, and the integration-check
+predicate all read those same bounds, so the in-box region cannot drift between
+the data and the query. The in-box count is a deterministic constant the check
+asserts exactly; it is whatever the shared box selects from the rows below.
 """
 
 import json
+import pathlib
 import sys
 
 # Three stable players, matching the prose in the README. Index 0..2.
@@ -49,8 +54,12 @@ BLOCKS = [
 # timestamps are stable and ordered.
 BASE_MS = 1767225600000
 
-# The bounding box the README and the check query: the origin chunk column.
-BOX = {"x": (0, 16), "y": (64, 144), "z": (0, 16)}
+# The ONE bounding box, read from box.json next to schema.nix. The Nix schema
+# and the integration-check predicate read the same file, so "the box" has a
+# single definition that the data and the query share. Axes are half-open
+# [lo, hi) intervals; membership is `lo <= v < hi`, matching the SQL the schema
+# derives (`v >= lo AND v < hi`).
+BOX = json.loads((pathlib.Path(__file__).parent / "box.json").read_text())
 
 
 def record(seq, world, x, y, z):
@@ -71,22 +80,28 @@ def main():
     rows = []
     seq = 0
 
-    # 1) Dense in-box cluster: the full 16x16 floor of the origin chunk at two
-    # heights (y=64 and y=65), 512 placements, all inside BOX.
-    for y in (64, 65):
-        for x in range(16):
-            for z in range(16):
-                rows.append(record(seq, "overworld", x, y, z))
+    world = BOX["world"]
+    (x0, x1), (y0, _y1), (z0, z1) = BOX["x"], BOX["y"], BOX["z"]
+
+    # 1) Dense in-box cluster: the full x/z footprint of the box at its two
+    # lowest y layers (y0 and y0+1), so every placement is inside BOX by
+    # construction. The two-layer height keeps the cluster a flat slab the Morton
+    # order packs into a few granules. Count = width(x) * width(z) * 2.
+    for y in (y0, y0 + 1):
+        for x in range(x0, x1):
+            for z in range(z0, z1):
+                rows.append(record(seq, world, x, y, z))
                 seq += 1
 
     # 2) Far-flung overworld placements on a coarse grid well outside the box, so
-    # their granules' per-axis ranges miss the box. 49 * 49 = 2401 rows.
-    far = list(range(-4800, 4801, 200))  # excludes the origin chunk column
+    # their granules' per-axis ranges miss the box. 49 * 49 = 2401 rows minus the
+    # in-box column the loop skips.
+    far = list(range(-4800, 4801, 200))  # excludes the in-box column
     for x in far:
         for z in far:
-            if 0 <= x < 16 and 0 <= z < 16:
+            if x0 <= x < x1 and z0 <= z < z1:
                 continue  # never collide with the in-box column
-            rows.append(record(seq, "overworld", x, 72, z))
+            rows.append(record(seq, world, x, 72, z))
             seq += 1
 
     # 3) Nether placements: a small cluster, to exercise the dimension-name path.
@@ -102,7 +117,7 @@ def main():
     in_box = sum(
         1
         for r in rows
-        if r["world"] == "overworld"
+        if r["world"] == BOX["world"]
         and BOX["x"][0] <= r["x"] < BOX["x"][1]
         and BOX["y"][0] <= r["y"] < BOX["y"][1]
         and BOX["z"][0] <= r["z"] < BOX["z"][1]
