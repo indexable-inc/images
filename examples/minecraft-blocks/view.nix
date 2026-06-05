@@ -119,7 +119,9 @@ in
       "--port"
       (toString clickhousePort)
       "--query"
-      "SELECT count() FROM system.tables WHERE database = '${schema.database}' AND name IN ('${schema.table}', '${schema.table}_queue', '${schema.table}_mv')"
+      # throwIf fails the query (non-zero exit) unless all three objects exist;
+      # a bare count() would exit 0 even at count 0 and false-green the check.
+      "SELECT throwIf(count() != 3, 'minecraft block_events view objects missing') FROM system.tables WHERE database = '${schema.database}' AND name IN ('${schema.table}', '${schema.table}_queue', '${schema.table}_mv')"
     ];
   };
 }

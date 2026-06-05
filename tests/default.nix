@@ -2523,6 +2523,8 @@ let
       {
         # Both legs are real on the producer: the domain-fact transport ships to
         # Kafka, and the OTel agent forwards server telemetry to the collector.
+        # Telemetry is collected from the journal (the minecraft service stdout),
+        # not by tailing the server's private, DynamicUser-unreadable log file.
         assertion =
           let
             ship = minecraftBlocksExample.producer.shipUnit;
@@ -2531,12 +2533,15 @@ let
           ship.serviceConfig.Restart == "always"
           && agent.stack.enable == false
           && agent.agent.enable
+          && agent.agent.journal.enable
+          && agent.agent.filelog.paths == [ ]
           && agent.resourceAttributes."ix.app" == "minecraft-blocks";
-        message = "minecraft-blocks producer should run both the Kafka transport and the telemetry agent";
+        message = "minecraft-blocks producer should run both the Kafka transport and the journal-based telemetry agent";
       }
       {
-        # The schema is the single source of truth: the Morton ORDER BY and the
-        # signed-coordinate offset come from it, and the table DDL uses them.
+        # The schema is the single source of truth: the Morton ORDER BY, the
+        # signed-coordinate offset, and the per-axis minmax skip indexes (which
+        # are what actually prune the bounding-box query) all come from it.
         assertion =
           let
             inherit (minecraftBlocksExample) schema;
@@ -2544,8 +2549,11 @@ let
           schema.coordOffset == 1048576
           && lib.hasInfix "mortonEncode" schema.createTableSql
           && lib.hasInfix "toUInt32(x + 1048576)" schema.mortonExpr
-          && builtins.length schema.mortonFields == 3;
-        message = "minecraft-blocks schema should drive a Z-order ORDER BY over offset-shifted signed coordinates";
+          && builtins.length schema.mortonFields == 3
+          && lib.hasInfix "INDEX idx_x x TYPE minmax" schema.createTableSql
+          && lib.hasInfix "INDEX idx_z z TYPE minmax" schema.createTableSql
+          && lib.hasInfix "index_granularity = ${toString schema.indexGranularity}" schema.createTableSql;
+        message = "minecraft-blocks schema should drive a Z-order ORDER BY plus per-axis minmax skip indexes over offset-shifted signed coordinates";
       }
     ];
 
@@ -4074,16 +4082,24 @@ let
     # minecraft-blocks integration: committed fixtures -> ClickHouse local
     # spatial table -> bounding-box query. The derivation loads the fixture JSON
     # Lines into a MergeTree table built from the one schema (Morton ORDER BY,
-    # signed-coordinate offset), runs the bounding-box query, and asserts the
-    # exact in-box count plus the Morton round-trip. Realising it here pulls the
-    # whole check into the `eval` aggregate. It also proves the Paper plugin jar
-    # builds.
+    # per-axis minmax skip indexes, small granule, signed-coordinate offset),
+    # runs the bounding-box query, and asserts the exact in-box count, that the
+    # skip indexes prune (fewer granules than the primary index alone), and the
+    # Morton round-trip. Realising it here pulls the whole check into the `eval`
+    # aggregate. It also proves the Paper plugin jar builds against the real API.
     test -f ${minecraftBlocksExample.packages.loadFixtures}/result
-    grep -q 'in_box=32' ${minecraftBlocksExample.packages.loadFixtures}/result
+    grep -q 'in_box=512' ${minecraftBlocksExample.packages.loadFixtures}/result
+    grep -qE 'pk_granules=[0-9]+ skip_granules=[0-9]+' ${minecraftBlocksExample.packages.loadFixtures}/result
     test -s ${minecraftBlocksExample.packages.loadFixtures}/events.jsonl
-    test "$(wc -l < ${../examples/minecraft-blocks/fixtures.jsonl})" = "36"
+    test "$(wc -l < ${../examples/minecraft-blocks/fixtures.jsonl})" = "2977"
     grep -q '"block_type":"minecraft:stone"' ${../examples/minecraft-blocks/fixtures.jsonl}
+    # The jar must contain only the plugin's own classes plus plugin.yml; no
+    # leaked Paper/Bukkit API classes from the compile-time classpath.
     test -s ${minecraftBlocksExample.packages.plugin}
+    ${lib.getExe' pkgs.unzip "unzip"} -l ${minecraftBlocksExample.packages.plugin} > mc-blocks-plugin-jar.list
+    grep -q 'dev/ix/example/blockevents/BlockEventsPlugin.class' mc-blocks-plugin-jar.list
+    grep -q 'plugin.yml' mc-blocks-plugin-jar.list
+    ! grep -qE 'org/bukkit/|net/kyori/|com/google/' mc-blocks-plugin-jar.list
 
     ${lib.getExe pythonAppClosureProbe} > python-app-closure-probe.out
     grep -q 'python app source is in the runtime closure' python-app-closure-probe.out

@@ -107,12 +107,20 @@ in
   # SERVER-TELEMETRY leg: forward the server's own signals to the collector.
   # This is deliberately the OTel path, separate from the domain-fact path
   # above, so the diagram's two legs are real in the running fleet.
+  #
+  # Collect the server console from the systemd journal, not by tailing
+  # `/var/lib/minecraft/logs/latest.log`. The minecraft service runs Type=simple
+  # with no StandardOutput override, so its stdout (the full Paper console) lands
+  # in the journal, while the log file lives under the server's private state
+  # directory (UMask 0077) that the DynamicUser collector cannot read. The OTel
+  # journald receiver runs `journalctl`, and the upstream collector unit already
+  # joins the `systemd-journal` group, so this path is actually readable.
   services.ix-observability = {
     stack.enable = false;
     agent = {
       enable = true;
       endpoint = "${observability.host}:${toString observability.otlpGrpcPort}";
-      filelog.paths = [ "/var/lib/minecraft/logs/latest.log" ];
+      journal.enable = true;
     };
     environment = "example";
     resourceAttributes."ix.app" = "minecraft-blocks";

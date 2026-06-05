@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -74,7 +75,7 @@ public final class BlockEventsPlugin extends JavaPlugin implements Listener {
         Player player = event.getPlayer();
         String record =
                 "{"
-                        + "\"world\":" + jsonString(block.getWorld().getName()) + ","
+                        + "\"world\":" + jsonString(dimensionName(block.getWorld())) + ","
                         + "\"x\":" + block.getX() + ","
                         + "\"y\":" + block.getY() + ","
                         + "\"z\":" + block.getZ() + ","
@@ -95,6 +96,26 @@ public final class BlockEventsPlugin extends JavaPlugin implements Listener {
     /** Namespaced block id, e.g. {@code minecraft:stone}. */
     private static String blockType(Block block) {
         return block.getType().getKey().toString();
+    }
+
+    /**
+     * Stable dimension name for the schema, derived from the world's environment
+     * rather than its folder name.
+     *
+     * <p>The query schema keys on stable dimension names ("overworld", "nether",
+     * "the_end"), but a Bukkit {@code World#getName()} is the on-disk folder name
+     * and varies with {@code level-name} (this deployment uses "blocks"). Reading
+     * {@link World#getEnvironment()} instead makes a real placement match the
+     * schema regardless of how the server folders are named. A {@code CUSTOM}
+     * world has no canonical dimension name, so it falls back to its world name.
+     */
+    private static String dimensionName(World world) {
+        return switch (world.getEnvironment()) {
+            case NORMAL -> "overworld";
+            case NETHER -> "nether";
+            case THE_END -> "the_end";
+            default -> world.getName();
+        };
     }
 
     /** Minimal JSON string escaping for the record fields. */

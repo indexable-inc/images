@@ -83,6 +83,13 @@ let
   table = "block_events";
   topic = "minecraft.block_events";
 
+  # Rows per granule. ClickHouse defaults to 8192, which would pack this demo's
+  # few thousand rows into a single granule, leaving the skip indexes nothing to
+  # prune. A small granule makes each granule's per-axis minmax box meaningful,
+  # so a bounding-box query skips the granules that miss the box. A real table at
+  # scale keeps the default; this is an example sized to show the mechanism.
+  indexGranularity = 256;
+
   mortonFields = lib.sort (a: b: a.mortonAxis < b.mortonAxis) (lib.filter (f: f ? mortonAxis) fields);
   axisCount = builtins.length mortonFields;
 
@@ -97,6 +104,18 @@ let
 
   columnDefs = lib.concatMapStringsSep ",\n  " (f: "${f.name} ${f.chType}") fields;
 
+  # minmax skip indexes on each coordinate axis. The Z-order ORDER BY keeps the
+  # rows in each granule spatially compact, so each granule's per-axis [min, max]
+  # is a tight box. ClickHouse cannot turn the bounding-box predicate into a key
+  # range (mortonEncode is not monotonic per axis), but it CAN read these minmax
+  # indexes and skip every granule whose box misses the query box. That is what
+  # actually prunes a raw-coordinate range query; the ORDER BY alone only sorts
+  # the data so the per-granule boxes stay tight. GRANULARITY 1 = one index entry
+  # per granule, the finest skip resolution.
+  skipIndexDefs = lib.concatMapStringsSep ",\n  " (
+    f: "INDEX idx_${f.name} ${f.name} TYPE minmax GRANULARITY 1"
+  ) mortonFields;
+
   # Ingest types for the Kafka engine table. ClickHouse recommends plain types
   # in a Kafka source table and letting the target table (and the implicit cast
   # in the materialized view's SELECT) apply storage encodings like
@@ -110,15 +129,20 @@ let
   kafkaColumnDefs = lib.concatMapStringsSep ",\n  " (f: "${f.name} ${ingestType f.chType}") fields;
 
   # The view table. The sorting key linearizes (x, y, z) with the Z-order curve
-  # so a 3D bounding box maps to a small set of contiguous granule ranges, then
-  # falls back to time within a cell. `world` leads so each world is its own
-  # contiguous run.
+  # so points close in space sort close on disk, keeping each granule spatially
+  # compact; `world` leads so each world is its own contiguous run, and
+  # `timestamp` last orders rows within a curve cell. The per-axis minmax skip
+  # indexes then let a raw-coordinate bounding-box query skip granules whose box
+  # misses the query box. The skip indexes do the pruning; the Z-order ordering
+  # is what makes their per-granule boxes tight enough to prune well.
   createTableSql = ''
     CREATE TABLE IF NOT EXISTS ${database}.${table} (
-      ${columnDefs}
+      ${columnDefs},
+      ${skipIndexDefs}
     )
     ENGINE = MergeTree
     ORDER BY (world, ${mortonExpr}, timestamp)
+    SETTINGS index_granularity = ${toString indexGranularity}
   '';
 
   createDatabaseSql = "CREATE DATABASE IF NOT EXISTS ${database}";
@@ -132,6 +156,7 @@ in
     table
     topic
     coordOffset
+    indexGranularity
     mortonExpr
     createDatabaseSql
     createTableSql

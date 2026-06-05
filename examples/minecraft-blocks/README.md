@@ -109,20 +109,39 @@ many views: you add the view you need and replay the log into it.
 ## The space-filling curve
 
 This is how far the spatial view can go. The view's sorting key linearizes the
-three coordinates with a Z-order (Morton) curve:
+three coordinates with a Z-order (Morton) curve, and per-axis minmax skip
+indexes turn that ordering into real granule pruning:
 
 ```sql
 ENGINE = MergeTree
 ORDER BY (world, mortonEncode((1, 1, 1), toUInt32(x + 1048576), toUInt32(y + 1048576), toUInt32(z + 1048576)), timestamp)
+-- plus, on the same table:
+INDEX idx_x x TYPE minmax GRANULARITY 1,
+INDEX idx_y y TYPE minmax GRANULARITY 1,
+INDEX idx_z z TYPE minmax GRANULARITY 1
 ```
 
 `mortonEncode` interleaves the bits of the three axes into one integer. Points
 that are close in 3D space get close curve values, so they sort next to each
-other on disk. ClickHouse stores rows in this order and indexes them in
-granules, so a 3D bounding-box query (or a radius query) maps to a small set of
-contiguous granule ranges. ClickHouse skips the granules outside those ranges
-instead of scanning the whole table. Sorting by `world` first keeps each world
-a contiguous run; `timestamp` last orders rows within a curve cell.
+other on disk and end up in the same granules (the blocks ClickHouse reads as a
+unit). Sorting by `world` first keeps each world a contiguous run; `timestamp`
+last orders rows within a curve cell.
+
+The ordering alone does not prune a bounding-box query, and this is the subtle
+part. The bounding box filters on raw `x`, `y`, `z`, but the sorting key is
+`mortonEncode(x, y, z)`, which is not monotonic in any single axis. ClickHouse
+therefore cannot turn `x >= 0 AND x < 16` into a range over the sort key; the
+primary index prunes only by `world`.
+
+What does the pruning is the per-axis minmax skip indexes. Each granule stores
+the `[min, max]` of `x`, of `y`, and of `z` for its rows. A box query skips any
+granule whose per-axis range cannot intersect the box. The Z-order ordering is
+what makes this effective: because spatially close rows share a granule, each
+granule's per-axis box stays tight, so distant granules are dropped cleanly.
+Ordering keeps the boxes tight; the skip indexes do the dropping. The
+[integration check](#validation) asserts this with `EXPLAIN indexes = 1`: the box
+query selects strictly fewer granules after the skip indexes than the primary
+index alone.
 
 Two details matter, and both are why the offset constant exists.
 
@@ -159,31 +178,60 @@ the one log:
 Each view is a projection you can rebuild by replaying the log, so adding or
 reshaping a view never touches the producer and never risks the source of truth.
 
+### Rebuilding a view from the log
+
+A view is rebuildable in principle, but the ClickHouse Kafka table engine reads
+with a fixed consumer group (`clickhouse-minecraft`), and Kafka stores the
+committed offset per group on the broker, not in the view. So if you rebuild the
+`view` VM, the `block_events` table starts empty while Kafka still holds the old
+committed offset, and the materialized view resumes from there instead of
+replaying from the start. To actually rebuild the view from the whole log, reset
+the group's offsets (`kafka-consumer-groups.sh --reset-offsets --to-earliest`)
+or consume under a fresh group name before recreating the table. A production
+deployment makes the rebuild explicit (a new group per rebuild, or a snapshot to
+restore from); this example keeps the single fixed group for simplicity.
+
 ## Shape
 
 - `schema.nix` is the one source of truth for the event: the topic name, the
-  Morton offset, and the ClickHouse DDL all derive from the field list, so the
-  log, the table, and the queries cannot drift. The plugin writes the same shape
-  by hand, so it is the one writer to keep in lockstep with this file.
+  Morton offset, the granule size, the skip indexes, and the ClickHouse DDL all
+  derive from the field list, so the log, the table, and the queries cannot
+  drift. The plugin writes the same shape by hand, so it is the one writer to
+  keep in lockstep with this file.
 - `log.nix` runs the Kafka broker and creates the topic.
 - `view.nix` runs the shared observability ClickHouse and adds the spatial
   view, a Kafka table engine reading the topic, and a materialized view that
   copies consumed rows into the spatial table.
 - `producer.nix` runs Paper with the block-events plugin, ships its records to
-  the topic, and forwards the server's telemetry to the collector.
+  the topic, and forwards the server's telemetry (collected from the journal) to
+  the collector.
 - `packages.nix` builds the plugin jar and the integration check.
 - `plugin/` is the Paper plugin: one `BlockPlaceEvent` handler that writes one
-  JSON Lines record per placement.
+  JSON Lines record per placement. It compiles against the real Paper API jar
+  (pinned in `plugin/api-deps.json` to the same build the server runs), so the
+  class kinds and method descriptors match the runtime by construction. It
+  derives a stable dimension name ("overworld" / "nether" / "the_end") from the
+  world's environment, not its on-disk folder name, so a placement matches the
+  schema regardless of the server's `level-name`.
 - `fixtures.jsonl` is a committed set of block-placement records (the shape the
-  plugin writes) that the integration check loads, so the pipeline is testable
-  without a server.
+  plugin writes), produced by `generate-fixtures.py`, so the pipeline is testable
+  without a server. The layout is sized to demonstrate skip-index pruning: a
+  dense in-box cluster plus thousands of far-flung placements across many
+  granules.
 
 ## Validation
 
 The integration check runs the whole log-to-view path offline. It loads the
 committed `fixtures.jsonl` records into a ClickHouse `local` table built from the
-same schema (same Morton order, same offset), runs the bounding-box query, and
-asserts the exact in-box count plus the Morton round-trip:
+same schema (same Morton order, same offset, same skip indexes, same granule),
+then asserts three things:
+
+- the exact in-box count for the bounding-box query,
+- that the per-axis skip indexes genuinely prune (via `EXPLAIN indexes = 1`, the
+  box query selects strictly fewer granules after the skip indexes than the
+  primary index alone),
+- the Morton round-trip recovers the original signed coordinates, including a
+  negative one.
 
 ```sh
 nix build .#checks.x86_64-linux.eval
@@ -191,4 +239,4 @@ nix build .#checks.x86_64-linux.eval
 
 The eval aggregate also evaluates the fleet's config assertions (the KRaft
 broker, the shared ClickHouse, the spatial view, both producer legs) and builds
-the plugin jar.
+the plugin jar against the real Paper API.
