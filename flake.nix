@@ -115,7 +115,6 @@
           ixShellSyncIgnored = ./tools/ix-shell-sync-ignored.py;
           mcSource = ./tools/mc-source.nu;
           updateSounds = ./tools/update-sounds.nu;
-          updateIxCli = ./tools/update-ix-cli.py;
           updateLoaders = ./tools/update-loaders.py;
           updateMods = ./tools/update-mods.py;
         };

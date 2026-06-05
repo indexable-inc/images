@@ -98,11 +98,14 @@ impl EphemeralSearch {
                 .get_first(self.id_field)
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            // The id was assigned by `enumerate()`, which yields `usize`,
-            // so the round-trip back to `usize` only loses information on
-            // 32-bit targets when an index has more than 2^32 - 1 docs;
-            // that's not reachable here.
-            let id = usize::try_from(raw_id).unwrap_or(usize::MAX);
+            // The id was assigned by `enumerate()`, which yields `usize`, so on
+            // the 64-bit targets we support this widening cast is lossless (a
+            // `u64` index id always fits in a 64-bit `usize`).
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "id originated as usize on the 64-bit targets we support"
+            )]
+            let id = raw_id as usize;
 
             results.push(RankResult { id, score });
         }

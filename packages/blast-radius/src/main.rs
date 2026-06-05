@@ -12,11 +12,11 @@ mod nix;
 mod report;
 mod timings;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use clap::Parser;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, bail};
 
 use causes::{Caps, root_causes};
 use report::{Report, categories};
@@ -51,6 +51,55 @@ fn short(rev: &str) -> String {
     rev.chars().take(7).collect()
 }
 
+/// Fail closed if any check fails to evaluate at head that did not already fail
+/// at base. A failure new at head is a regression this change introduced (a
+/// check it broke, or a broken check it added), so the run aborts rather than
+/// render a successful-looking report that hides it. Failures present at base
+/// too are a pre-existing catalog issue (a `.#checks` set is not guaranteed
+/// eval-clean: ix carries eval-assertion checks that throw when their invariant
+/// is violated and are not in its required gate); those have no derivation, so
+/// they are excluded from the diff and only reported.
+fn guard_eval_failures(base: &nix::EvalResult, head: &nix::EvalResult) -> Result<()> {
+    // Tolerate by attribute NAME, not by error text: some eval errors embed
+    // rev-varying store paths (e.g. an `*-no-nix-dependencies` check names the
+    // offending `.drv`), so comparing payloads would read the same pre-existing
+    // failure as new and false-bail on every run. An attr unevaluable at both
+    // base and head has no derivation at either, so it is out of rebuild scope
+    // regardless of WHY it fails.
+    let base_attrs: BTreeSet<&str> = base.failures.iter().map(|f| f.attr.as_str()).collect();
+    let new_failures: Vec<&nix::EvalFailure> = head
+        .failures
+        .iter()
+        .filter(|f| !base_attrs.contains(f.attr.as_str()))
+        .collect();
+    if !new_failures.is_empty() {
+        // Surface the full error text: per-attr eval failures exit nix-eval-jobs
+        // 0, so this bail is the only place the cause reaches the CI log.
+        let detail = new_failures
+            .iter()
+            .map(|f| format!("  {}: {}", f.attr, f.error))
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!(
+            "{} check(s) newly fail to evaluate at head (this change broke them):\n{detail}",
+            new_failures.len()
+        );
+    }
+    if !base.failures.is_empty() {
+        let names = base
+            .failures
+            .iter()
+            .map(|f| f.attr.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "blast-radius: {} check(s) fail to evaluate at base and head; excluded from the diff: {names}",
+            base.failures.len()
+        );
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     color_eyre::install()?;
     let cli = Cli::parse();
@@ -58,6 +107,9 @@ fn main() -> Result<()> {
 
     let base = nix::eval_checks(&revs.repo, &revs.base)?;
     let head = nix::eval_checks(&revs.repo, &revs.head)?;
+    guard_eval_failures(&base, &head)?;
+    let base = base.checks;
+    let head = head.checks;
 
     let base_map: BTreeMap<&str, &str> = base
         .iter()

@@ -1,0 +1,20 @@
+[package]
+name = "source-otlp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Read OTLP/JSON log objects an OpenTelemetry Collector wrote to S3 back into search Documents"
+
+[lints]
+workspace = true
+
+[dependencies]
+source-meta.workspace = true
+object_store = { workspace = true, features = ["aws"] }
+futures.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

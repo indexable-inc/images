@@ -35,6 +35,16 @@
   # what shows up under `cases`; `all` always runs the harness without
   # --include-ignored.
   includeIgnored ? false,
+  # Additive seam for injecting prebuilt units (rlib+rmeta) that were not built
+  # from source in this graph. `extraUnits` is keyed by the unit key
+  # (`"<name>-<version>-<hash>"`) and merged over the generated `units` set, so a
+  # downstream unit's `units.<key>` reference resolves to the injection; an
+  # injection whose key matches a from-source unit overrides it. `extraLibraries`
+  # is keyed by the crate's underscored library name and merged over the returned
+  # `libraries` set. Both default to `{}`, in which case the merge is a no-op and
+  # the output is byte-identical to a graph rendered without the seam.
+  extraUnits ? {},
+  extraLibraries ? {},
 }:
 
 let
@@ -143,8 +153,12 @@ let
     env = (attrs.env or {}) // extraEnv;
   });
 
-  units = rec {
-{{ unit_entries }}  };
+  # `extraUnits` is merged over the generated set (not inside the `rec`) so a
+  # downstream entry's `units.<key>` reference, which resolves to this let
+  # binding, sees an injected prebuilt unit and an injection can override a
+  # from-source unit of the same key. Empty default keeps this a no-op.
+  units = (rec {
+{{ unit_entries }}  }) // extraUnits;
 
   clippyUnits = rec {
 {{ clippy_unit_entries }}  };
@@ -801,7 +815,7 @@ in
   binaries = {
 {{ binary_entries }}  };
   libraries = {
-{{ library_entries }}  };
+{{ library_entries }}  } // extraLibraries;
   benchmarks = {
 {{ benchmark_entries }}  };
   tests = {

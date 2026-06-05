@@ -5,7 +5,6 @@
   cargoUnitFor,
   goUnitFor,
   rustWorkspaceFor,
-  cliArtifacts,
   clippy-fork,
   ghostty,
 }:
@@ -26,7 +25,6 @@ let
     inherit
       pkgs
       packageSystem
-      cliArtifacts
       clippy-fork
       ghostty
       ixForPackages

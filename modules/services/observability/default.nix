@@ -26,6 +26,7 @@ let
   stackEnabled = cfg.stack.enable;
   agentEnabled = cfg.agent.enable;
   collectorEnabled = cfg.collector.enable;
+  archiveEnabled = collectorEnabled && cfg.collector.archive.enable;
   forwardEnabled = cfg.collector.forward.enable || (agentEnabled && !stackEnabled);
   forwardEndpoint =
     if cfg.collector.forward.endpoint != null then
@@ -268,6 +269,35 @@ in
           description = "Use cleartext OTLP/gRPC for east-west collector forwarding.";
         };
       };
+
+      archive = {
+        enable = mkEnableOption "an S3 archive of the logs pipeline (RFC 0004 ingestion bus), written as OTLP/JSON via the awss3 exporter and read back by source-otlp";
+
+        bucket = mkOption {
+          type = types.str;
+          default = "ix-history";
+          description = "Bucket the awss3 exporter writes OTLP/JSON log objects to.";
+        };
+
+        region = mkOption {
+          type = types.str;
+          default = "auto";
+          description = "S3 region (`auto` for non-AWS stores).";
+        };
+
+        endpoint = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "http://127.0.0.1:9010";
+          description = "S3 endpoint for a self-hosted store; null targets AWS S3.";
+        };
+
+        prefix = mkOption {
+          type = types.str;
+          default = "otlp";
+          description = "Key prefix under the bucket; the source-otlp consumer reads it back.";
+        };
+      };
     };
 
     agent = {
@@ -492,6 +522,25 @@ in
                 endpoint = forwardEndpoint;
                 tls.insecure = cfg.collector.forward.insecure;
               };
+            }
+            // lib.optionalAttrs archiveEnabled {
+              # Durable S3 archive of the logs pipeline as OTLP/JSON, the bus
+              # leg the source-otlp consumer reads back. `otlp_json` keeps the
+              # objects in the same `ExportLogsServiceRequest` shape sink-otlp
+              # emits; no compression so the reader parses them directly.
+              awss3 = {
+                s3uploader = {
+                  region = cfg.collector.archive.region;
+                  s3_bucket = cfg.collector.archive.bucket;
+                  s3_prefix = cfg.collector.archive.prefix;
+                }
+                // lib.optionalAttrs (cfg.collector.archive.endpoint != null) {
+                  endpoint = cfg.collector.archive.endpoint;
+                  s3_force_path_style = true;
+                  disable_ssl = lib.hasPrefix "http://" cfg.collector.archive.endpoint;
+                };
+                marshaler = "otlp_json";
+              };
             };
 
           extensions.health_check.endpoint = "127.0.0.1:${toString cfg.collector.healthPort}";
@@ -528,7 +577,9 @@ in
                   "resource"
                   "batch"
                 ];
-                exporters = exporterNames;
+                # The S3 archive is a logs-only exporter (the corpus bus); traces
+                # and metrics stay on the clickhouse/forward exporters.
+                exporters = exporterNames ++ lib.optional archiveEnabled "awss3";
               };
             };
           };

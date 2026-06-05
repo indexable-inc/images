@@ -167,7 +167,8 @@ fn compose_avatar_block(lines: &[&str], avatar_id: u32, rows: u32) -> String {
     let cols = avatar_cols(rows);
     // The image is `cols` wide; one more column separates it from the text.
     let gutter = cols as usize + 1;
-    let count = lines.len().max(usize::try_from(rows).unwrap_or(usize::MAX));
+    // `rows` is a `u32` terminal-row count, lossless to `usize` on 64-bit.
+    let count = lines.len().max(rows as usize);
 
     let mut buf = String::new();
     for index in 0..count {

@@ -107,13 +107,16 @@ impl Db {
             .query_map([root.as_ref()], |row| {
                 let rel_path: String = row.get(0)?;
                 let hash: String = row.get(1)?;
-                let mtime: i64 = row.get(2)?;
-                let size: i64 = row.get(3)?;
+                // Read the INTEGER columns straight into `u64`: rusqlite errors
+                // (rather than silently clamping) if a stored value is negative,
+                // so DB corruption surfaces instead of being zeroed.
+                let mtime_ms: u64 = row.get(2)?;
+                let size: u64 = row.get(3)?;
                 Ok(FileEntry {
                     rel_path,
                     hash: ContentHash::from_raw(hash),
-                    mtime_ms: u64::try_from(mtime).unwrap_or(0),
-                    size: u64::try_from(size).unwrap_or(0),
+                    mtime_ms,
+                    size,
                 })
             })
             .context(DbSnafu)?;
@@ -145,12 +148,15 @@ impl Db {
                 )
                 .context(DbSnafu)?;
             for entry in &manifest.entries {
+                // Bind the `u64` fields directly: rusqlite's `ToSql` errors if a
+                // value exceeds `i64::MAX` rather than silently saturating, so an
+                // impossible mtime/size fails the write instead of corrupting it.
                 stmt.execute(params![
                     root.as_ref(),
                     entry.rel_path,
                     entry.hash.as_str(),
-                    i64::try_from(entry.mtime_ms).unwrap_or(i64::MAX),
-                    i64::try_from(entry.size).unwrap_or(i64::MAX),
+                    entry.mtime_ms,
+                    entry.size,
                 ])
                 .context(DbSnafu)?;
             }

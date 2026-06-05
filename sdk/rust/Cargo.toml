@@ -1,0 +1,86 @@
+# Opt in to the unstable `profile-rustflags` feature: `[profile.public-rlib]`
+# below sets `rustflags`, which Cargo gates behind this. ix's root Cargo.toml
+# does the same. The repo toolchain is nightly, so this is available.
+cargo-features = ["profile-rustflags"]
+
+# Public Rust SDK workspace for index.
+#
+# The public crate `ix-sdk` compiles and links against the PRIVATE `ix-sdk-wire`
+# crate WITHOUT its source: the cargo-unit nix wiring (`default.nix`) fetches the
+# prebuilt `ix-sdk-wire` rlib+rmeta from R2 and injects it over the from-source
+# stub unit (`vendor/ix-sdk-wire`) via `buildWorkspace`'s `extraUnits` seam
+# (added in #724). The stub exists only to give Cargo a dependency edge to
+# resolve and to make cargo-unit compute the same source-independent unit hash
+# the real crate produced. See `vendor/ix-sdk-wire/Cargo.toml`.
+[workspace]
+members = [
+  "crates/ix-sdk",
+  "vendor/ix-sdk-wire",
+]
+resolver = "3"
+
+# `public-rlib` inherits `release`, and the cargo-unit hash folds in
+# debug-assertions and overflow-checks, which `public-rlib` does NOT override.
+# ix's `[profile.release]` turns BOTH on, so this workspace's release base must
+# match or the inherited values (false by default) would diverge the hash. Only
+# the two hash-relevant inherited fields are mirrored; every other release field
+# ix sets (incremental, debug, split-debuginfo) is explicitly overridden by
+# `public-rlib` below, and trim-paths is not a cargo-unit hash input.
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+# Third-party crates (snafu, strum, and the rest of the closure) get assertions
+# off, mirroring ix's `[profile.release.package."*"]`. Without this, the closure
+# crates would inherit the member-level `debug-assertions = true` above and their
+# unit hashes would diverge from ix's (snafu/strum carry da=false there), which
+# in turn would diverge the dependent `ix-sdk-wire` hash.
+[profile.release.package."*"]
+debug-assertions = false
+overflow-checks = false
+
+# Profile under which the R2-hosted `ix-sdk-wire` rlib was compiled in the ix
+# repo. The cargo-unit hash folds in the profile, so the public SDK workspace
+# MUST build under this exact profile for the stub's generated unit key to equal
+# the prebuilt's (`134ac8c636bf38ee`). Byte-faithful to ix's `[profile.public-rlib]`
+# (indexable-inc/ix Cargo.toml): a clean, consumer-linkable rlib (lto off so no
+# LLVM bitcode is embedded; panic unwind to match the consumer) with every
+# no-source-leak guarantee (strip, no debuginfo, no split sidecar, location
+# detail off, and the /nix/store path remap).
+[profile.public-rlib]
+codegen-units = 1
+debug = false
+incremental = false
+inherits = "release"
+lto = "off"
+opt-level = "z"
+panic = "unwind"
+rustflags = ["-Zlocation-detail=none", "--remap-path-prefix=/nix/store=/source"]
+split-debuginfo = "off"
+strip = true
+
+# Rust (rustc) lints, byte-faithful to ix's `[workspace.lints.rust]`. cargo
+# emits the resolved `[lints.rust]` for a workspace member into the unit graph's
+# `lint_rustflags`, and cargo-unit folds those into the unit hash
+# (`model.rs:write_unit_identity`). The stub inherits this table via
+# `[lints] workspace = true`, exactly as the real ix-sdk-wire inherits ix's, so
+# the ix-sdk-wire unit's `lint_rustflags` (hence its hash) matches. External
+# deps (snafu, strum, ...) never inherit workspace lints, so they are unaffected.
+[workspace.lints.rust]
+# Deny categories
+deprecated_safe = { level = "deny", priority = -1 }
+future_incompatible = { level = "deny", priority = -1 }
+keyword_idents = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+# Allow
+ambiguous_glob_reexports = "allow"
+missing_docs = "allow"
+
+# Warn
+# unsafe_code = "warn"
+
+# Deny
+unused-must-use = "deny"               # respecting must_use is important
+unexpected-cfgs = "deny"               # using nonexistent or removed cfg-flags io a serious problem
+unfulfilled-lint-expectations = "deny" # goes along with `allow_attributes = "deny"`

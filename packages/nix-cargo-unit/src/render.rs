@@ -3201,7 +3201,12 @@ mod tests {
         )
         .unwrap();
 
-        assert!(rendered.contains("units = rec"));
+        // The generated `units` / `libraries` sets are merged with the
+        // additive prebuilt-injection seam (extraUnits / extraLibraries). Both
+        // default to `{}`, so an unconfigured graph is behaviorally identical.
+        assert!(rendered.contains("units = (rec"));
+        assert!(rendered.contains("}) // extraUnits;"));
+        assert!(rendered.contains("// extraLibraries;"));
         assert!(rendered.contains("--crate-name"));
         assert!(rendered.contains("sources = {"));
         assert!(rendered.contains("scopedWorkspaceSource \"cargo-unit-source-hello-0.1.0-"));

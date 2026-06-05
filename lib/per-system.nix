@@ -211,13 +211,6 @@ let
     meta.description = "Refresh Minecraft loader (Paper / Velocity / Fabric) catalogs from upstream";
   };
 
-  updateIxCli = ix.writePythonApplication pkgs {
-    name = "update-ix-cli";
-    src = paths.tools.updateIxCli;
-    runtimeInputs = [ pkgs.nix ];
-    meta.description = "Re-prefetch the ix.dev CLI binaries and bump packages/ix/default.nix hashes";
-  };
-
   ixShellSyncIgnored = ix.writePythonApplication pkgs {
     name = "ix-shell-sync-ignored";
     src = paths.tools.ixShellSyncIgnored;
@@ -574,7 +567,6 @@ in
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
       update-loaders = updateLoaders;
-      update-ix-cli = updateIxCli;
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
       update-sounds = updateSounds;
@@ -602,6 +594,8 @@ in
       # host-OOM with many workers).
       rustChecks = {
         cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
+        cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
+        sdk-rust-prebuilt = tests.sdkRustPrebuilt;
       }
       // rustPackageTests;
       explicitChecks = {

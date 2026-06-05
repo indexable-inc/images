@@ -59,7 +59,7 @@ export GH_TOKEN="$(cat /run/secrets/github/token)"
 A tempting shortcut is to mount the operator's whole `~/.config` (or
 `~/.config/gh`) into every VM over a shared folder, so `gh` and `git` pick up
 the host's existing login. It works, and for a single local dev VM driven by
-[`packages/macos-vm`](../../packages/macos-vm) over virtio-fs it can be
+[`packages/vmkit`](../../packages/vmkit) over virtio-fs it can be
 reasonable. As a fleet primitive it has sharp edges:
 
 - It shares far more than a token. `~/.config` holds unrelated app state,

@@ -25,6 +25,25 @@ pub struct Check {
     pub drv_path: String,
 }
 
+/// An attr that failed to evaluate, with the nix-eval-jobs error. Carried (not
+/// just the name) so a fail-closed bail on a head regression can print WHY it
+/// failed: per-attr eval failures exit nix-eval-jobs 0, so the error text is
+/// otherwise never surfaced in CI logs.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EvalFailure {
+    pub attr: String,
+    pub error: String,
+}
+
+/// The result of evaluating `.#checks.x86_64-linux` at one rev: the buildable
+/// checks, plus the attrs that failed to evaluate there (no derivation, so not a
+/// rebuild target). The caller diffs `failures` across base and head to tell a
+/// pre-existing catalog failure (tolerated) from one this change introduced.
+pub struct EvalResult {
+    pub checks: Vec<Check>,
+    pub failures: Vec<EvalFailure>,
+}
+
 /// One line of `nix-eval-jobs` output.
 #[derive(Deserialize)]
 struct EvalRow {
@@ -83,7 +102,7 @@ fn run(command: &mut Command) -> Result<String> {
 /// `nix-eval-jobs` sits at the head of the pipeline; a startup/lock/fetch
 /// failure surfaces here rather than yielding an empty set that silently
 /// under-reports the blast radius.
-pub fn eval_checks(repo: &str, rev: &str) -> Result<Vec<Check>> {
+pub fn eval_checks(repo: &str, rev: &str) -> Result<EvalResult> {
     let flakeref = format!("git+file://{repo}?rev={rev}&allRefs=1#checks.x86_64-linux");
     let stdout = run(Command::new("nix").args([
         "run",
@@ -108,8 +127,51 @@ pub fn eval_checks(repo: &str, rev: &str) -> Result<Vec<Check>> {
     ]))
     .with_context(|| format!("evaluate checks at {rev}"))?;
 
-    let mut checks = Vec::new();
-    let mut errors = Vec::new();
+    let Partitioned {
+        checks,
+        mut eval_failures,
+        unexpected,
+    } = partition_eval_rows(&stdout)?;
+
+    // Neither a drvPath nor an error is a contract violation of nix-eval-jobs
+    // (every row carries one or the other); fail loudly rather than guess at a
+    // shape that could silently under-report the blast radius.
+    if !unexpected.is_empty() {
+        bail!(
+            "checks at {rev} produced {} row(s) with neither drvPath nor error: {}",
+            unexpected.len(),
+            unexpected.join(", ")
+        );
+    }
+
+    // Eval failures are returned, not skipped here: the caller distinguishes a
+    // failure present at base (a pre-existing catalog issue, tolerated) from one
+    // new at head (a regression this change introduced, which must fail closed).
+    eval_failures.sort_by(|left, right| left.attr.cmp(&right.attr));
+    Ok(EvalResult {
+        checks,
+        failures: eval_failures,
+    })
+}
+
+/// The outcome of classifying one `nix-eval-jobs` run: the buildable checks, the
+/// attrs that failed to evaluate (no derivation at this rev), and any rows of an
+/// unexpected shape (neither drvPath nor error).
+struct Partitioned {
+    checks: Vec<Check>,
+    eval_failures: Vec<EvalFailure>,
+    unexpected: Vec<String>,
+}
+
+/// Parse one nix-eval-jobs JSONL stream and sort each row into [`Partitioned`].
+/// Pure (no subprocess) so the success / eval-failure / malformed split is unit
+/// tested without invoking nix.
+fn partition_eval_rows(stdout: &str) -> Result<Partitioned> {
+    let mut out = Partitioned {
+        checks: Vec::new(),
+        eval_failures: Vec::new(),
+        unexpected: Vec::new(),
+    };
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
         let row: EvalRow =
             serde_json::from_str(line).with_context(|| format!("parse eval row: {line}"))?;
@@ -118,18 +180,12 @@ pub fn eval_checks(repo: &str, rev: &str) -> Result<Vec<Check>> {
         // through the diff, the report, and the workflow's safename regex.
         let attr = row.attr.trim_matches('"').to_owned();
         match (row.drv_path, row.error) {
-            (Some(drv_path), _) => checks.push(Check { attr, drv_path }),
-            // A row with neither a drvPath nor an error is an unexpected shape;
-            // dropping it would silently under-report the blast radius (the very
-            // thing this evaluator is meant to avoid), so treat it as an error.
-            (None, Some(error)) => errors.push(format!("{attr}: {error}")),
-            (None, None) => errors.push(format!("{attr}: eval row had neither drvPath nor error")),
+            (Some(drv_path), _) => out.checks.push(Check { attr, drv_path }),
+            (None, Some(error)) => out.eval_failures.push(EvalFailure { attr, error }),
+            (None, None) => out.unexpected.push(attr),
         }
     }
-    if !errors.is_empty() {
-        bail!("checks failed to evaluate at {rev}:\n{}", errors.join("\n"));
-    }
-    Ok(checks)
+    Ok(out)
 }
 
 /// `nix derivation show` output: a `{ version, derivations }` envelope (schema 4+)
@@ -195,7 +251,7 @@ pub fn drv_for(checks: &[Check], attr: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::drv_name;
+    use super::{EvalFailure, drv_name, partition_eval_rows};
 
     #[test]
     fn drv_name_strips_hash_and_suffix() {
@@ -206,5 +262,37 @@ mod tests {
         // No hash prefix: left as-is (minus the suffix).
         assert_eq!(drv_name("plain-name.drv"), "plain-name");
         assert_eq!(drv_name("/nix/store/short.drv"), "short");
+    }
+
+    // A buildable row becomes a check; a per-attr eval failure is excluded (not a
+    // rebuild target) rather than aborting the whole run; a malformed row with
+    // neither field is flagged so the caller can fail loudly. Blank lines are
+    // skipped. nix-eval-jobs quotes attrs that need Nix quoting; the quotes are
+    // stripped.
+    #[test]
+    fn partition_splits_success_eval_failure_and_malformed() {
+        let stdout = concat!(
+            r#"{"attr":"rust-test-foo","drvPath":"/nix/store/aaa-foo.drv"}"#,
+            "\n",
+            r#"{"attr":"unfree-allowlist","error":"unfree allowlist mismatch"}"#,
+            "\n",
+            "\n",
+            r#"{"attr":"\"weird.attr\""}"#,
+            "\n",
+        );
+
+        let partitioned = partition_eval_rows(stdout).expect("well-formed JSONL parses");
+
+        assert_eq!(partitioned.checks.len(), 1);
+        assert_eq!(partitioned.checks[0].attr, "rust-test-foo");
+        assert_eq!(partitioned.checks[0].drv_path, "/nix/store/aaa-foo.drv");
+        assert_eq!(
+            partitioned.eval_failures,
+            vec![EvalFailure {
+                attr: "unfree-allowlist".to_owned(),
+                error: "unfree allowlist mismatch".to_owned(),
+            }]
+        );
+        assert_eq!(partitioned.unexpected, vec!["weird.attr".to_owned()]);
     }
 }

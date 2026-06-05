@@ -1,6 +1,6 @@
 ---
 name: ix
-description: Use when the user is working with or evaluating the ix sandbox platform. Triggers include the `@indexable/sdk` package (TypeScript) or `ix-sdk` (Python), the `ix` CLI (creating, forking, or snapshotting VMs for AI agents), and ix.dev questions about pricing, hardware, networking, or reliability. These docs live in the index monorepo, so the real CLI (`nix run .#ix`), SDKs, and examples are right here: prefer running them over trusting the prose.
+description: Use when the user is working with or evaluating the ix sandbox platform. Triggers include the `@indexable/sdk` package (TypeScript) or `ix-sdk` (Python), the `ix` CLI (creating, forking, or snapshotting VMs for AI agents), and ix.dev questions about pricing, hardware, networking, or reliability. These docs live in the index monorepo alongside the SDKs and examples, so prefer running those over trusting the prose.
 ---
 
 # ix docs
@@ -16,15 +16,15 @@ If you only read one file, read [`references/philosophy.md`](references/philosop
 
 ## Prove it; don't just quote it
 
-These docs are leads, not authority. They drift; the shipped CLI and SDK are the spec. You are inside the [index](https://github.com/indexable-inc/index) monorepo, which packages the real `ix` CLI and the example fleets, so verify claims against the live tools instead of repeating prose at the user.
+These docs are leads, not authority. They drift; the shipped CLI and SDK are the spec. You are inside the [index](https://github.com/indexable-inc/index) monorepo, which carries the SDKs and example fleets, so verify claims against the live tools instead of repeating prose at the user. The `ix` CLI itself ships from ix.dev and the private `indexable-inc/ix` repo, not from this one.
 
 What you can run with no account, right now from this repo:
 
-- `nix run .#ix -- --help` then drill into subcommands (`nix run .#ix -- vm --help`). This is the real precompiled CLI (`packages/ix/`), pinned from ix.dev. When the user asks "what's the command for X", read it off `--help`, don't guess from [`references/cli.md`](references/cli.md).
+- If the `ix` CLI is installed, `ix --help` then drill into subcommands (`ix vm --help`). When the user asks "what's the command for X", read it off `--help`, don't guess from [`references/cli.md`](references/cli.md).
 - `nix flake show` and `nix build .#<image>` to realize an OCI image closure locally (for example `nix build .#minecraft`). Proves the image layer works without an ix account.
 - Browse the `examples/` directory for runnable consumer fleets (`s3-storage`, `ray-cluster`, `nginx-lifecycle`, ...). Build one to ground a claim about how a fleet is wired.
 
-(The `nix run` / `packages/ix/` / `examples/` paths assume you have the index monorepo checked out, which is where these docs live.)
+(The `nix build` / `examples/` paths assume you have the index monorepo checked out, which is where these docs live.)
 
 What you can prove end to end once `IX_TOKEN` is set (create one at https://ix.dev/tokens, or email andrew@ix.dev for a key):
 
@@ -41,7 +41,7 @@ The docs ship next to this file in [`references/`](references/). Read the one th
 
 **Using ix**
 - `references/vms.md`: VM lifecycle, forks, snapshots
-- `references/cli.md`: the `ix` CLI (verify against `nix run .#ix -- --help`)
+- `references/cli.md`: the `ix` CLI (verify against `ix --help`)
 - `references/sdk/python.md`: Python SDK (`ix-sdk`)
 - `references/sdk/typescript.md`: TypeScript SDK (`@indexable/sdk`)
 - `references/browser.md`: browser automation

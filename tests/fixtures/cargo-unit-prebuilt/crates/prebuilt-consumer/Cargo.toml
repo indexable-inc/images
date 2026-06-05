@@ -1,0 +1,12 @@
+[package]
+name = "prebuilt-consumer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "prebuilt-consumer"
+path = "src/main.rs"
+
+[dependencies]
+prebuilt-lib = { path = "../prebuilt-lib" }
