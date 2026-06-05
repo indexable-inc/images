@@ -266,14 +266,22 @@ fn set_payload(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
     let root_c = cstr(&root.to_string_lossy())?;
     let workdir_c = cstr("/")?;
 
-    // exec[0] is the binary; the whole vec is argv (argv[0] = exec[0]).
+    // exec[0] is the binary; libkrun uses `exec_path` as the guest argv[0], so the
+    // `argv` it takes is only the *arguments* after the binary (see libkrun
+    // examples/chroot_vm.c: `krun_set_exec(ctx, guest_argv[0], &guest_argv[1], ..)`).
+    // Passing the full vec would duplicate argv[0] (e.g. `/bin/sh /bin/sh -c ...`,
+    // making sh try to run the binary as a script).
+    let default_exec = [String::from("/bin/sh")];
     let exec: &[String] = if boot.exec.is_empty() {
-        &[String::from("/bin/sh")]
+        &default_exec
     } else {
         &boot.exec
     };
     let exec_path_c = cstr(&exec[0])?;
-    let argv_c: Vec<CString> = exec.iter().map(|a| cstr(a)).collect::<Result<_, _>>()?;
+    let argv_c: Vec<CString> = exec[1..]
+        .iter()
+        .map(|a| cstr(a))
+        .collect::<Result<_, _>>()?;
     // NULL-terminated argv pointer array, kept alive alongside `argv_c`.
     let mut argv_ptrs: Vec<*const c_char> = argv_c.iter().map(|c| c.as_ptr()).collect();
     argv_ptrs.push(std::ptr::null());

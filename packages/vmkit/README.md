@@ -1,16 +1,19 @@
 # vmkit
 
-Own a virtual machine's lifecycle from Rust, with one backend per guest OS:
+Own a virtual machine's lifecycle from Rust, with one hypervisor backend per host
+and guest OS:
 
-- **macOS guests** run on Apple's [Virtualization.framework](https://developer.apple.com/documentation/virtualization)
+- **macOS guests** (macOS host) run on Apple's [Virtualization.framework](https://developer.apple.com/documentation/virtualization)
   (via [`objc2-virtualization`](https://docs.rs/objc2-virtualization)): boot an
   installed macOS, drive it off-screen, screenshot its framebuffer.
-- **Linux guests** run on [libkrun](https://github.com/containers/libkrun)
-  (Hypervisor.framework): the only backend that gives a Linux guest GPU
-  acceleration on Apple Silicon. See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
+- **Linux guests** run on [libkrun](https://github.com/containers/libkrun): on a
+  macOS host the EFI / Hypervisor.framework variant (the only backend that gives a
+  Linux guest GPU acceleration on Apple Silicon), and on a Linux host classic KVM
+  libkrun (the bundled kernel boots a rootfs + exec command, the same model
+  `podman --runtime krun` uses). See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 
-A small CLI fronts both, so other parts of the system can start and control a VM
-without holding the entitlements themselves.
+A small CLI fronts all of these, so other parts of the system can start and
+control a VM without holding the entitlements themselves.
 
 The motivating macOS use case: run a GUI app (for example the `bossbar-overlay`)
 inside a VM and inspect it remotely, so an agent can verify on-screen rendering
@@ -19,8 +22,13 @@ operator's cursor.
 
 ```sh
 nix run .#vmkit -- info
-# Boot a Linux guest (raw EFI disk) under libkrun, with a GPU:
+
+# macOS host: boot a Linux guest from a raw EFI disk under libkrun-efi, with a GPU:
 nix run .#vmkit -- boot-linux --disk ./linux.raw --gpu
+
+# Linux host: boot a Linux guest from a rootfs dir under classic libkrun (KVM),
+# running a command as the guest init:
+nix run .#vmkit -- boot-linux --root ./rootfs -- /bin/busybox sh -c 'uname -a; ls /'
 ```
 
 ## Status
@@ -36,12 +44,20 @@ serial console streamed to stdout.
 
 What works today:
 
-- `info` reports `VZVirtualMachine.isSupported`.
-- `boot-linux` boots a Linux guest from a raw EFI disk **via libkrun**
-  (Hypervisor.framework, not VZ) and streams its serial console, then stops on a
-  timeout. `--gpu` adds a virtio-gpu Venus device (`/dev/dri/renderD128`, Vulkan
-  via MoltenVK), which VZ cannot give a Linux guest. See
-  [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
+- `info` reports whether the host can run a VM (`VZVirtualMachine.isSupported` on
+  macOS, `/dev/kvm` present on Linux).
+- `boot-linux` boots a Linux guest **via libkrun** and streams its serial console,
+  then stops on a timeout. The guest argument differs by host:
+  - **macOS host**: `--disk <raw-efi-disk>` boots the disk under libkrun-efi's
+    embedded OVMF (not VZ). `--gpu` adds a virtio-gpu Venus device
+    (`/dev/dri/renderD128`, Vulkan via MoltenVK), which VZ cannot give a Linux
+    guest.
+  - **Linux host**: `--root <rootfs-dir>` boots that directory (shared in over
+    virtiofs) under classic libkrun's bundled KVM kernel, running the trailing
+    command as the guest init, e.g. `boot-linux --root ./rootfs -- /bin/ls /`.
+    No `/dev/kvm`, no boot.
+
+  See [`docs/linux-libkrun.md`](docs/linux-libkrun.md).
 - `boot-linux-gui` boots an aarch64 **Linux GUI** guest from a raw EFI disk with
   a virtio-gpu display + USB keyboard/mouse, fully off-screen, and screenshots
   the guest framebuffer to PNGs (same IOSurface capture as `boot-macos`). The
