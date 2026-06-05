@@ -12,14 +12,26 @@
   writePythonApplication,
 }:
 let
-  defaultRustToolchain = rustToolchain;
+  inherit (builtins)
+    attrNames
+    attrValues
+    deepSeq
+    elem
+    elemAt
+    filter
+    getAttr
+    groupBy
+    hasAttr
+    isString
+    length
+    listToAttrs
+    match
+    removeAttrs
+    toJSON
+    toString
+    ;
 
-  defaultRustsecAdvisoryDb = pkgs.fetchFromGitHub {
-    owner = "rustsec";
-    repo = "advisory-db";
-    rev = "f2ae5fc8e5d208373b6c838f9676434525327a72";
-    hash = "sha256-iqXYpuCoWoGypnpM5ceXN748QlYeBXDtZx0uI98qFLo=";
-  };
+  defaultRustToolchain = rustToolchain;
 
   defaultPolicy = {
     denyUnusedCrateDependencies = true;
@@ -34,7 +46,12 @@ let
     # lib/rust-workspace.nix disables it on the pure-build cross graph).
     cargoAudit = {
       enable = true;
-      db = defaultRustsecAdvisoryDb;
+      db = pkgs.fetchFromGitHub {
+        owner = "rustsec";
+        repo = "advisory-db";
+        rev = "f2ae5fc8e5d208373b6c838f9676434525327a72";
+        hash = "sha256-iqXYpuCoWoGypnpM5ceXN748QlYeBXDtZx0uI98qFLo=";
+      };
       deny = [ ];
       ignore = [ ];
     };
@@ -58,7 +75,12 @@ let
     };
   };
 
-  cargoLockFile = cargoLock: if builtins.isAttrs cargoLock then cargoLock.lockFile else cargoLock;
+  cargoLockFile = cargoLock: cargoLock.lockFile or cargoLock;
+
+  # Every policy check and build derivation needs a crate name for its
+  # derivation name (and `meta.mainProgram`). Require it explicitly rather than
+  # papering a missing name over with a sentinel that surfaces far downstream.
+  crateName = args: args.pname or args.name or (throw "rust.buildPackage: set `pname` (or `name`).");
 
   resolvePolicy =
     rawPolicy:
@@ -91,10 +113,7 @@ let
           let
             denied = clippy.deniedLints or defaultPolicy.clippy.deniedLints;
           in
-          if (clippy ? denyWarnings) && !clippy.denyWarnings then
-            builtins.filter (lint: lint != "warnings") denied
-          else
-            denied;
+          if !(clippy.denyWarnings or true) then filter (lint: lint != "warnings") denied else denied;
         allowedLints = clippy.allowedLints or defaultPolicy.clippy.allowedLints;
       };
       tests = {
@@ -106,108 +125,55 @@ let
       };
     };
 
-  platformCanUseMold =
-    platform:
-    if platform == null then pkgs.stdenv.hostPlatform.isLinux else lib.hasInfix "-linux-" platform;
-
-  rustcArgsForPolicy = policy: rustcArgsForPolicyForPlatform policy null;
-
   rustcArgsForPolicyForPlatform =
     policy: platform:
-    lib.optionals (policy.linker.useMold && platformCanUseMold platform) [
+    let
+      platformIsLinux =
+        if platform == null then pkgs.stdenv.hostPlatform.isLinux else lib.hasInfix "-linux-" platform;
+    in
+    lib.optionals (policy.linker.useMold && platformIsLinux) [
       "-C"
       "link-arg=-fuse-ld=mold"
     ];
 
-  rustFlagsStringForPolicy = policy: lib.concatStringsSep " " (rustcArgsForPolicy policy);
-
   nativeBuildInputsForPolicy = policy: lib.optional policy.linker.useMold pkgs.mold;
 
-  cargoLockPackages = cargoLock: (lib.importTOML (cargoLockFile cargoLock)).package or [ ];
-
-  dependencyPackages = cargoLock: builtins.filter (pkg: pkg ? source) (cargoLockPackages cargoLock);
+  dependencyPackages =
+    cargoLock: filter (pkg: pkg ? source) ((lib.importTOML (cargoLockFile cargoLock)).package or [ ]);
 
   gitPackages =
-    cargoLock: builtins.filter (pkg: lib.hasPrefix "git+" pkg.source) (dependencyPackages cargoLock);
+    cargoLock: filter (pkg: lib.hasPrefix "git+" pkg.source) (dependencyPackages cargoLock);
 
   packageSourceKey = pkg: "${pkg.source}#${pkg.name}@${pkg.version}";
 
-  duplicateGitNameVersions =
-    cargoLock:
+  # Both registry shapes resolve to the same CDN artifact. `static.crates.io` is
+  # the direct CloudFront URL cargo's sparse protocol uses; the older
+  # `api.crates.io/api/v1/crates/.../download` endpoint just 302s here and, as
+  # of 2026-05, rejects curl's default User-Agent with HTTP 403.
+  registryDownloadUrls =
     let
-      packagesByNameVersion = builtins.groupBy (pkg: "${pkg.name}-${pkg.version}") (
-        gitPackages cargoLock
-      );
-      duplicates = lib.filterAttrs (_: packages: builtins.length packages > 1) packagesByNameVersion;
+      cratesIoDownloadUrl =
+        pkg: "https://static.crates.io/crates/${pkg.name}/${pkg.name}-${pkg.version}.crate";
     in
-    builtins.attrNames duplicates;
+    {
+      "registry+https://github.com/rust-lang/crates.io-index" = cratesIoDownloadUrl;
+      "sparse+https://index.crates.io/" = cratesIoDownloadUrl;
+    };
 
-  checkedGitOutputHashes =
-    cargoLock: outputHashes:
+  parseGitSource =
+    source:
     let
-      expectedSources = builtins.listToAttrs (
-        map (pkg: lib.nameValuePair pkg.source true) (gitPackages cargoLock)
-      );
-      missing = builtins.filter (name: !(builtins.hasAttr name outputHashes)) (
-        builtins.attrNames expectedSources
-      );
-      unused = builtins.filter (name: !(builtins.hasAttr name expectedSources)) (
-        builtins.attrNames outputHashes
-      );
+      parts = match ''git\+([^?]+)(\?(rev|tag|branch)=([^#]*))?#(.*)'' source;
     in
-    assert lib.assertMsg (missing == [ ]) ''
-      outputHashes is missing hashes for git source strings in Cargo.lock: ${lib.concatStringsSep ", " missing}
-      Key each git hash by the exact Cargo.lock source string, for example:
-      outputHashes."git+https://github.com/owner/repo#rev" = "sha256-...";
-    '';
-    assert lib.assertMsg (unused == [ ]) ''
-      outputHashes contains keys that are not git source strings in Cargo.lock: ${lib.concatStringsSep ", " unused}
-      Key each git hash by the exact Cargo.lock source string, for example:
-      outputHashes."git+https://github.com/owner/repo#rev" = "sha256-...";
-    '';
-    outputHashes;
-
-  gitHashForPackage =
-    outputHashes: pkg:
-    outputHashes.${pkg.source} or (throw ''
-      No hash was found while vendoring the git dependency ${pkg.name}-${pkg.version}.
-      Add outputHashes."${pkg.source}".
-    '');
-
-  exportRustFlagsScript =
-    policy:
-    let
-      rustFlags = rustFlagsStringForPolicy policy;
-    in
-    lib.optionalString (rustFlags != "") ''
-      export RUSTFLAGS="''${RUSTFLAGS:+$RUSTFLAGS }${rustFlags}"
-    '';
-
-  cargoTargetSelectors = [
-    "--all-targets"
-    "--lib"
-    "--bin"
-    "--bins"
-    "--example"
-    "--examples"
-    "--test"
-    "--tests"
-    "--bench"
-    "--benches"
-  ];
-
-  hasCargoTargetSelector = cargoArgs: lib.any (arg: builtins.elem arg cargoTargetSelectors) cargoArgs;
-
-  clippyCargoArgs =
-    rawArgs: args:
-    let
-      rawPolicy = rawArgs.policy or { };
-      rawClippy = rawPolicy.clippy or { };
-    in
-    if hasCargoTargetSelector args.cargoArgs && !(rawClippy ? cargoArgs) then
-      [ ]
+    if parts == null then
+      throw "rust: cannot parse git source string `${source}` from Cargo.lock"
     else
-      args.policy.clippy.cargoArgs;
+      {
+        url = elemAt parts 0;
+        refType = elemAt parts 2;
+        ref = elemAt parts 3;
+        sha = elemAt parts 4;
+      };
 
   clippyLintArgs =
     policy:
@@ -219,6 +185,61 @@ let
       "-A"
       lint
     ]) policy.clippy.allowedLints;
+
+  # Cargo only emits `[lints.clippy]` into the unit graph's `lint_rustflags`
+  # when invoked as `cargo clippy`, not `cargo build`. Parse the workspace
+  # manifest and emit the equivalent `-D|-W|-A clippy::<lint>` flags so
+  # per-unit clippy sees the workspace lint policy.
+  clippyLintFlagsFromManifest =
+    manifestPath:
+    let
+      # `clippy::cargo` group lints invoke `cargo` to read workspace metadata.
+      # Per-unit clippy runs in a sandboxed build directory without a discoverable
+      # Cargo.toml (the unit's source closure is package-shaped), so those lints
+      # error out with "could not find Cargo.toml". Skip them here; a future
+      # workspace-level cargo-clippy check is the right home.
+      cargoGroupClippyLints = [
+        "cargo"
+        "cargo_common_metadata"
+        "multiple_crate_versions"
+        "negative_feature_names"
+        "redundant_feature_names"
+        "wildcard_dependencies"
+      ];
+      manifest = lib.importTOML manifestPath;
+      raw = manifest.workspace.lints.clippy or manifest.lints.clippy or { };
+      filtered = removeAttrs raw cargoGroupClippyLints;
+      entryFor =
+        name: value:
+        if isString value then
+          {
+            inherit name;
+            level = value;
+            priority = 0;
+          }
+        else
+          {
+            inherit name;
+            inherit (value) level;
+            priority = value.priority or 0;
+          };
+      entries = lib.mapAttrsToList entryFor filtered;
+      sorted = lib.sort (left: right: left.priority < right.priority) entries;
+      flagFor =
+        level:
+        if level == "deny" || level == "forbid" then
+          "-D"
+        else if level == "warn" then
+          "-W"
+        else if level == "allow" then
+          "-A"
+        else
+          throw "cargoUnit: unknown clippy lint level '${level}' in ${manifestPath}";
+    in
+    lib.concatMap (entry: [
+      (flagFor entry.level)
+      "clippy::${entry.name}"
+    ]) sorted;
 
   resolveVendorDir =
     {
@@ -235,8 +256,13 @@ let
         sources = resolveVendorSources {
           inherit cargoLock outputHashes sourceOverrides;
         };
-        duplicateNameVersions = duplicateGitNameVersions cargoLock;
-        vendorEntries = builtins.filter (entry: entry != null) (
+        duplicateNameVersions =
+          let
+            packagesByNameVersion = groupBy (pkg: "${pkg.name}-${pkg.version}") (gitPackages cargoLock);
+            duplicates = lib.filterAttrs (_: pkgs': length pkgs' > 1) packagesByNameVersion;
+          in
+          attrNames duplicates;
+        vendorEntries = filter (entry: entry != null) (
           map (
             pkg:
             if !(pkg ? source) then
@@ -255,48 +281,6 @@ let
       '';
       pkgs.linkFarm "cargo-vendor-dir" vendorEntries;
 
-  # Both registry shapes resolve to the same CDN artifact. `static.crates.io` is
-  # the direct CloudFront URL cargo's sparse protocol uses; the older
-  # `api.crates.io/api/v1/crates/.../download` endpoint just 302s here and, as
-  # of 2026-05, rejects curl's default User-Agent with HTTP 403.
-  cratesIoDownloadUrl =
-    pkg: "https://static.crates.io/crates/${pkg.name}/${pkg.name}-${pkg.version}.crate";
-  registryDownloadUrls = {
-    "registry+https://github.com/rust-lang/crates.io-index" = cratesIoDownloadUrl;
-    "sparse+https://index.crates.io/" = cratesIoDownloadUrl;
-  };
-
-  parseGitSource =
-    source:
-    let
-      parts = builtins.match ''git\+([^?]+)(\?(rev|tag|branch)=([^#]*))?#(.*)'' source;
-    in
-    if parts == null then
-      null
-    else
-      {
-        url = builtins.elemAt parts 0;
-        refType = builtins.elemAt parts 2;
-        ref = builtins.elemAt parts 3;
-        sha = builtins.elemAt parts 4;
-      };
-
-  # Flatten workspace inheritance in a vendored Cargo.toml before rustc sees it.
-  # Vendored from nixpkgs so a downstream rename of
-  # `pkgs/build-support/rust/replace-workspace-values.py` doesn't surface as a
-  # `readFile` error here; `ix.writePythonApplication` also runs ty on the body
-  # at build time, which the upstream `pkgs.writers.writePython3` path did not.
-  replaceWorkspaceValues = writePythonApplication {
-    name = "replace-workspace-values";
-    src = ./replace-workspace-values.py;
-    python = pkgs.python314.withPackages (
-      ps:
-      builtins.attrValues {
-        inherit (ps) tomli tomli-w;
-      }
-    );
-  };
-
   resolveVendorSources =
     {
       cargoLock,
@@ -309,13 +293,51 @@ let
     else
       let
         packages = dependencyPackages cargoLock;
-        checkedOutputHashes = checkedGitOutputHashes cargoLock outputHashes;
+        checkedOutputHashes =
+          let
+            expectedSources = listToAttrs (
+              map (pkg: lib.nameValuePair pkg.source true) (gitPackages cargoLock)
+            );
+            missing = filter (name: !(hasAttr name outputHashes)) (attrNames expectedSources);
+            unused = filter (name: !(hasAttr name expectedSources)) (attrNames outputHashes);
+          in
+          assert lib.assertMsg (missing == [ ]) ''
+            outputHashes is missing hashes for git source strings in Cargo.lock: ${lib.concatStringsSep ", " missing}
+            Key each git hash by the exact Cargo.lock source string, for example:
+            outputHashes."git+https://github.com/owner/repo#rev" = "sha256-...";
+          '';
+          assert lib.assertMsg (unused == [ ]) ''
+            outputHashes contains keys that are not git source strings in Cargo.lock: ${lib.concatStringsSep ", " unused}
+            Key each git hash by the exact Cargo.lock source string, for example:
+            outputHashes."git+https://github.com/owner/repo#rev" = "sha256-...";
+          '';
+          outputHashes;
+        # Flatten workspace inheritance in a vendored Cargo.toml before rustc sees it.
+        # Vendored from nixpkgs so a downstream rename of
+        # `pkgs/build-support/rust/replace-workspace-values.py` doesn't surface as a
+        # `readFile` error here; `ix.writePythonApplication` also runs ty on the body
+        # at build time, which the upstream `pkgs.writers.writePython3` path did not.
+        replaceWorkspaceValues = writePythonApplication {
+          name = "replace-workspace-values";
+          src = ./replace-workspace-values.py;
+          python = pkgs.python314.withPackages (
+            ps:
+            attrValues {
+              inherit (ps) tomli tomli-w;
+            }
+          );
+        };
         registryPackageSource =
           pkg: source: checksum:
           let
             crateTarball = pkgs.fetchurl {
               name = "crate-${pkg.name}-${pkg.version}.tar.gz";
-              url = (builtins.getAttr source registryDownloadUrls) pkg;
+              url = (getAttr source registryDownloadUrls) pkg;
+              # Cargo verifies `.cargo-checksum.json` against the hex digest from
+              # Cargo.lock, and that file is filled from `crateTarball.outputHash`
+              # below. Switching to `hash = <SRI>` would make `outputHash` an SRI
+              # string and break cargo's check, so the registry tarball stays on
+              # the hex-valued `sha256` attr.
               sha256 = checksum;
             };
           in
@@ -328,11 +350,16 @@ let
           pkg:
           let
             git = parseGitSource pkg.source;
+            gitHash =
+              checkedOutputHashes.${pkg.source} or (throw ''
+                No hash was found while vendoring the git dependency ${pkg.name}-${pkg.version}.
+                Add outputHashes."${pkg.source}".
+              '');
             tree =
               sourceOverrides.${pkg.source} or (pkgs.fetchgit {
                 inherit (git) url;
                 rev = git.sha;
-                sha256 = gitHashForPackage checkedOutputHashes pkg;
+                hash = gitHash;
                 nativeBuildInputs = lib.optional (lib.hasPrefix "ssh://" git.url) pkgs.openssh;
               });
           in
@@ -383,7 +410,7 @@ let
           in
           if source == null then
             null
-          else if builtins.hasAttr source registryDownloadUrls then
+          else if hasAttr source registryDownloadUrls then
             assert lib.assertMsg (checksum != null) ''
               Package ${pkg.name} ${pkg.version} is missing a Cargo.lock checksum.
             '';
@@ -393,8 +420,8 @@ let
           else
             throw "Cannot create a package-shaped vendor source for ${pkg.name}-${pkg.version} from ${source}";
       in
-      builtins.deepSeq checkedOutputHashes (
-        builtins.listToAttrs (builtins.filter (entry: entry != null) (map packageSource packages))
+      deepSeq checkedOutputHashes (
+        listToAttrs (filter (entry: entry != null) (map packageSource packages))
       );
 
   vendorConfigScript =
@@ -411,9 +438,9 @@ let
       gitSourceConfig = lib.concatMapStringsSep "\n" (git: ''
         printf '\n'
         printf '%s\n' ${lib.escapeShellArg ''[source."${git.source}"]''}
-        printf '%s\n' ${lib.escapeShellArg "git = ${builtins.toJSON git.url}"}
+        printf '%s\n' ${lib.escapeShellArg "git = ${toJSON git.url}"}
         ${lib.optionalString (git.refType != null) ''
-          printf '%s\n' ${lib.escapeShellArg "${git.refType} = ${builtins.toJSON git.ref}"}
+          printf '%s\n' ${lib.escapeShellArg "${git.refType} = ${toJSON git.ref}"}
         ''}
         printf '%s\n' 'replace-with = "vendored-sources"'
       '') gitSources;
@@ -447,54 +474,57 @@ let
       cat ${cargoExtraConfigFile} >> "$CARGO_HOME/config.toml"
     '';
 
-  commonArgs =
+  # The "run cargo in the vendored tree" context, resolved once and shared by
+  # every consumer that needs it together: the policy checks below, `buildPackage`
+  # here, and cargoUnit's `generateUnitGraph` / `generateUnitsNix` / workspace
+  # import. Both files are two pieces of one unit, so the lockfile, toolchain,
+  # policy, and vendor resolution live here rather than being re-derived per side.
+  #
+  # Idempotent: every default is `args.x or _`, and the policy / vendor resolvers
+  # short-circuit on already-resolved values, so re-normalizing is a no-op.
+  # Vendor resolution stays lazy, so lockfile-only consumers never force it.
+  #
+  # Per-consumer knobs (`pname`, `rustPlatform`, clippy's cargoArgs override, and
+  # cargoUnit's `profile` / `contentAddressed` / `test*` / ...) are not here: each
+  # has a single reader and is resolved at that use site.
+  normalizeArgs =
     args:
     let
       rustToolchain = args.rustToolchain or defaultRustToolchain;
+      cargoLock = args.cargoLock or (args.src + "/Cargo.lock");
+      outputHashes = args.outputHashes or { };
+      sourceOverrides = args.sourceOverrides or { };
     in
     {
       inherit (args) src;
-      inherit rustToolchain;
-      pname = args.pname or args.name or "rust-package";
-      cargoLock = args.cargoLock or (args.src + "/Cargo.lock");
+      inherit rustToolchain cargoLock;
       cargoArgs = args.cargoArgs or [ "--workspace" ];
-      rustPlatform =
-        args.rustPlatform or (pkgs.makeRustPlatform {
-          cargo = rustToolchain;
-          rustc = rustToolchain;
-        });
       nativeBuildInputs = args.nativeBuildInputs or [ ];
       env = args.env or { };
       cargoExtraConfig = args.cargoExtraConfig or "";
-      vendorDir = args.vendorDir or null;
-      outputHashes = args.outputHashes or { };
       policy = resolvePolicy (args.policy or { });
+      vendorDir = resolveVendorDir {
+        inherit cargoLock outputHashes sourceOverrides;
+        vendorDir = args.vendorDir or null;
+      };
+      vendorSources = resolveVendorSources {
+        inherit cargoLock outputHashes sourceOverrides;
+        vendorSources = args.vendorSources or null;
+      };
     };
 
-  policyCheckArgs =
-    rawArgs:
-    let
-      args = commonArgs rawArgs;
-      vendorDir = resolveVendorDir {
-        inherit (args) cargoLock outputHashes vendorDir;
-      };
-    in
-    args // { inherit vendorDir; };
+  # `resolvePolicy` flattens the policy, after which "did the caller set
+  # clippy.cargoArgs?" is no longer observable. The clippy check needs to know,
+  # so it is read off the raw args here.
+  callerSetClippyCargoArgs = rawArgs: (rawArgs.policy.clippy or { }) ? cargoArgs;
 
   mkdirOut = ''
     mkdir -p "$out"
   '';
 
-  linkPolicyChecks =
-    policyChecks:
-    lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (name: check: "ln -s ${check} \"$out/rust-policy/${name}\"") policyChecks
-    );
-
   cargoAuditCheck =
-    rawArgs:
+    { args, pname }:
     let
-      args = commonArgs rawArgs;
       inherit (args.policy) cargoAudit;
       lockFile = cargoLockFile args.cargoLock;
       auditFlags = [
@@ -502,7 +532,7 @@ let
         "--file"
         "Cargo.lock"
         "--db"
-        (builtins.toString cargoAudit.db)
+        (toString cargoAudit.db)
         "--no-fetch"
         "--stale"
       ]
@@ -515,7 +545,7 @@ let
         advisory
       ]) cargoAudit.ignore;
     in
-    pkgs.runCommand "${args.pname}-cargo-audit"
+    pkgs.runCommand "${pname}-cargo-audit"
       {
         nativeBuildInputs = [ pkgs.cargo-audit ];
         # Stage the lockfile through a derivation input so its store path
@@ -533,9 +563,8 @@ let
       '';
 
   cargoMacheteCheck =
-    rawArgs:
+    { args, pname }:
     let
-      args = policyCheckArgs rawArgs;
       macheteArgs = [
         "--with-metadata"
         "--skip-target-dir"
@@ -543,7 +572,7 @@ let
       ++ args.policy.cargoMachete.extraArgs
       ++ [ "." ];
     in
-    pkgs.runCommand "${args.pname}-cargo-machete"
+    pkgs.runCommand "${pname}-cargo-machete"
       (
         {
           nativeBuildInputs = [
@@ -568,22 +597,47 @@ let
       '';
 
   cargoClippyCheck =
-    rawArgs:
+    {
+      args,
+      pname,
+      clippyCargoArgsSet,
+    }:
     let
-      args = policyCheckArgs rawArgs;
+      # If the caller already picks targets via `cargoArgs` (e.g.
+      # `--all-targets`) and didn't override `clippy.cargoArgs`, drop the
+      # policy default so we don't double up.
+      cargoTargetSelectors = [
+        "--all-targets"
+        "--lib"
+        "--bin"
+        "--bins"
+        "--example"
+        "--examples"
+        "--test"
+        "--tests"
+        "--bench"
+        "--benches"
+      ];
+      callerHasTargetSelector = lib.any (arg: elem arg cargoTargetSelectors) args.cargoArgs;
+      extraClippyCargoArgs =
+        if callerHasTargetSelector && !clippyCargoArgsSet then [ ] else args.policy.clippy.cargoArgs;
       clippyArgs = [
         "clippy"
         "--frozen"
         "--offline"
       ]
       ++ args.cargoArgs
-      ++ clippyCargoArgs rawArgs args
+      ++ extraClippyCargoArgs
       ++ lib.optional (
         args.policy.clippy.deniedLints != [ ] || args.policy.clippy.allowedLints != [ ]
       ) "--"
       ++ clippyLintArgs args.policy;
+      rustFlags = lib.concatStringsSep " " (rustcArgsForPolicyForPlatform args.policy null);
+      exportRustFlags = lib.optionalString (rustFlags != "") ''
+        export RUSTFLAGS="''${RUSTFLAGS:+$RUSTFLAGS }${rustFlags}"
+      '';
     in
-    pkgs.runCommand "${args.pname}-cargo-clippy"
+    pkgs.runCommand "${pname}-cargo-clippy"
       (
         {
           nativeBuildInputs = [
@@ -604,25 +658,32 @@ let
         }}
 
         export CARGO_TARGET_DIR="$TMPDIR/cargo-target"
-        ${exportRustFlagsScript args.policy}
+        ${exportRustFlags}
         cd ${args.src}
         cargo ${lib.escapeShellArgs clippyArgs}
         ${mkdirOut}
       '';
 
+  # Normalize and name once, then gate each check on its policy flag. All three
+  # checks take the shared normalized args plus the pname; clippy also needs to
+  # know whether the caller set `clippy.cargoArgs` (lost after `resolvePolicy`).
   policyChecksFor =
     rawArgs:
     let
-      args = commonArgs rawArgs;
+      args = normalizeArgs rawArgs;
+      pname = crateName rawArgs;
     in
     lib.optionalAttrs args.policy.cargoAudit.enable {
-      cargoAudit = cargoAuditCheck rawArgs;
+      cargoAudit = cargoAuditCheck { inherit args pname; };
     }
     // lib.optionalAttrs args.policy.cargoMachete.enable {
-      cargoMachete = cargoMacheteCheck rawArgs;
+      cargoMachete = cargoMacheteCheck { inherit args pname; };
     }
     // lib.optionalAttrs args.policy.clippy.enable {
-      cargoClippy = cargoClippyCheck rawArgs;
+      cargoClippy = cargoClippyCheck {
+        inherit args pname;
+        clippyCargoArgsSet = callerSetClippyCargoArgs rawArgs;
+      };
     };
 
   withPolicyChecks =
@@ -647,7 +708,9 @@ let
           };
         postBuild = lib.optionalString (policyChecks != { }) ''
           mkdir -p "$out/rust-policy"
-          ${linkPolicyChecks policyChecks}
+          ${lib.concatStringsSep "\n" (
+            lib.mapAttrsToList (name: check: "ln -s ${check} \"$out/rust-policy/${name}\"") policyChecks
+          )}
         '';
       }
       # The policy wrapper is still the same Rust package for eval-time callers
@@ -656,37 +719,39 @@ let
       // lib.optionalAttrs (package ? version) { inherit (package) version; }
     );
 
-  # Shortcut: pass `srcRoot = ./.` for a repo-owned crate whose tracked tree
-  # is the build closure. Expands to the standard `gitTracked` filter, defaults
-  # `meta.mainProgram` to `pname`, and keeps `commonArgs`'s `cargoLock` default
-  # (`src + "/Cargo.lock"`) intact.
-  expandSrcRoot =
-    rawArgs:
-    if rawArgs ? srcRoot then
-      let
-        inherit (rawArgs) srcRoot;
-        pname = rawArgs.pname or rawArgs.name or "rust-package";
-      in
-      (builtins.removeAttrs rawArgs [ "srcRoot" ])
-      // {
-        src = lib.fileset.toSource {
-          root = srcRoot;
-          fileset = lib.fileset.gitTracked srcRoot;
-        };
-        meta = (rawArgs.meta or { }) // {
-          mainProgram = rawArgs.meta.mainProgram or pname;
-        };
-      }
-    else
-      rawArgs;
-
   buildPackage =
     expandedArgs:
     let
-      rawArgs = expandSrcRoot expandedArgs;
-      args = commonArgs rawArgs;
+      # Shortcut: pass `srcRoot = ./.` for a repo-owned crate whose tracked tree
+      # is the build closure. Expands to the standard `gitTracked` filter, defaults
+      # `meta.mainProgram` to `pname`, and keeps `normalizeArgs`'s `cargoLock`
+      # default (`src + "/Cargo.lock"`) intact.
+      rawArgs =
+        if expandedArgs ? srcRoot then
+          let
+            inherit (expandedArgs) srcRoot;
+            pname = crateName expandedArgs;
+          in
+          (removeAttrs expandedArgs [ "srcRoot" ])
+          // {
+            src = lib.fileset.toSource {
+              root = srcRoot;
+              fileset = lib.fileset.gitTracked srcRoot;
+            };
+            meta = (expandedArgs.meta or { }) // {
+              mainProgram = expandedArgs.meta.mainProgram or pname;
+            };
+          }
+        else
+          expandedArgs;
+      args = normalizeArgs rawArgs;
+      rustPlatform =
+        rawArgs.rustPlatform or (pkgs.makeRustPlatform {
+          cargo = args.rustToolchain;
+          rustc = args.rustToolchain;
+        });
       testEnabled = args.policy.tests.enable && (rawArgs.doCheck or true);
-      rustcArgs = rustcArgsForPolicy args.policy;
+      rustcArgs = rustcArgsForPolicyForPlatform args.policy null;
       cargoTestFlags =
         (rawArgs.cargoTestFlags or [ ])
         ++ lib.optional (testEnabled && args.policy.tests.useNextest) "--no-tests=pass";
@@ -698,21 +763,19 @@ let
       # Surface the vendor dir as `cargoDeps` (absolute store path); the
       # cargo-setup hook expects `cargoVendorDir` to be in-source, not a
       # `/nix/store` path. User-supplied `cargoHash`, `cargoDeps`, or
-      # `cargoVendorDir` still wins.
-      bareVendorDir = resolveVendorDir {
-        inherit (args) cargoLock outputHashes vendorDir;
-        sourceOverrides = rawArgs.sourceOverrides or { };
-      };
+      # `cargoVendorDir` still wins. `normalizeArgs` already resolved `vendorDir`
+      # (honoring `sourceOverrides`), so reuse it.
+      #
       # nixpkgs's `cargoSetupPostPatchHook` diffs `$cargoDeps/Cargo.lock`
       # against the lockfile in the source tree. `resolveVendorDir` only
       # emits the per-crate symlinks, so re-attach the lockfile here.
       defaultCargoDeps = pkgs.runCommand "cargo-deps" { } ''
         mkdir -p "$out"
-        cp -RL ${bareVendorDir}/. "$out/"
+        cp -RL ${args.vendorDir}/. "$out/"
         cp ${cargoLockFile args.cargoLock} "$out/Cargo.lock"
       '';
       buildArgs =
-        builtins.removeAttrs rawArgs [
+        removeAttrs rawArgs [
           "cargoArgs"
           "cargoExtraConfig"
           "cargoLock"
@@ -732,12 +795,12 @@ let
         // {
           nativeBuildInputs = (rawArgs.nativeBuildInputs or [ ]) ++ nativeBuildInputsForPolicy args.policy;
           inherit cargoTestFlags;
-          useNextest = rawArgs.useNextest or (testEnabled && args.policy.tests.useNextest);
+          useNextest = testEnabled && args.policy.tests.useNextest;
         }
         // lib.optionalAttrs (rustcArgs != [ ]) {
           RUSTFLAGS = (lib.toList (rawArgs.RUSTFLAGS or [ ])) ++ rustcArgs;
         };
-      uncheckedPackage = args.rustPlatform.buildRustPackage buildArgs;
+      uncheckedPackage = rustPlatform.buildRustPackage buildArgs;
       policyChecks = policyChecksFor rawArgs;
     in
     withPolicyChecks {
@@ -757,8 +820,10 @@ in
     cargoAuditCheck
     cargoLockFile
     clippyLintArgs
+    clippyLintFlagsFromManifest
     defaultRustToolchain
     nativeBuildInputsForPolicy
+    normalizeArgs
     policyChecksFor
     resolvePolicy
     resolveVendorSources

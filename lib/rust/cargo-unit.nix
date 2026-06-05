@@ -24,62 +24,26 @@ let
         profile
       ];
 
-  commonArgs = args: {
-    inherit (args) src;
-    cargoLock = args.cargoLock or (args.src + "/Cargo.lock");
-    cargoArgs = args.cargoArgs or [ "--workspace" ];
-    cargoTargets =
-      let
-        targets = args.cargoTargets or [ (args.cargoArgs or [ "--workspace" ]) ];
-      in
-      if targets == [ ] then
-        throw "cargoUnit.buildWorkspace requires at least one cargoTargets entry"
-      else
-        targets;
-    cargoTargetNames = args.cargoTargetNames or null;
-    profile = args.profile or "release";
-    rustToolchain = args.rustToolchain or rust.defaultRustToolchain;
-    # Optional cross-compile triple (e.g. "aarch64-apple-darwin"). When set,
-    # `--target` is threaded into the unit-graph generation; nix-cargo-unit's
-    # renderer then emits `--target` per unit and reads the matching
-    # `CARGO_TARGET_<T>_LINKER` from `env`. `null` keeps the host-native build.
-    target = args.target or null;
-    # Caller hook composed with the policy (mold) per-platform args. Receives
-    # each unit's platform string and returns extra rustc args. Used to thread
-    # the Apple framework search path for cross Darwin units only.
-    extraRustcArgsForPlatform = args.extraRustcArgsForPlatform or (_platform: [ ]);
-    nativeBuildInputs = args.nativeBuildInputs or [ ];
-    env = args.env or { };
-    testRunPrelude = args.testRunPrelude or "";
-    testArgsByPackage = args.testArgsByPackage or { };
-    packageTestInputs = args.packageTestInputs or { };
-    packageTestEnv = args.packageTestEnv or { };
-    extraRustcArgs = args.extraRustcArgs or [ ];
-    cargoExtraConfig = args.cargoExtraConfig or "";
-    vendorDir = args.vendorDir or null;
-    vendorSources = args.vendorSources or null;
-    # Additive seam for injecting prebuilt units (rlib+rmeta) that were not built
-    # from source. `extraUnits` is keyed by the unit key
-    # (`"<name>-<version>-<hash>"`) and merged over the generated `units` set;
-    # `extraLibraries` is keyed by the underscored library name and merged over
-    # `libraries`. Both default to `{}`, so an unconfigured workspace is
-    # byte-identical to one built before the seam existed. See
-    # `mkPrebuiltLibraryUnit` for the producer.
-    extraUnits = args.extraUnits or { };
-    extraLibraries = args.extraLibraries or { };
-    # Maps exact Cargo.lock source strings to already-fetched source trees.
-    # This keeps private Git dependencies reproducible without requiring
-    # sandboxed fetchers to see a developer SSH agent or GitHub credentials.
-    sourceOverrides = args.sourceOverrides or { };
-    outputHashes = args.outputHashes or { };
-    # Default ON: workspace units emit floating content-addressed outputs so an
-    # output-invariant rebuild of a low-level crate early-cuts off instead of
-    # cascading through its whole reverse-dependency closure. Consumers may still
-    # pass `contentAddressed = false` to opt out. (ca-derivations must be enabled
-    # in the daemon; ix CI enables it.)
-    contentAddressed = args.contentAddressed or true;
-    policy = rust.resolvePolicy (args.policy or { });
-  };
+  # The shared "vendored cargo" context (src, cargoLock, toolchain, policy,
+  # vendorDir, vendorSources, ...) is resolved by `rust.normalizeArgs`: build.nix
+  # and cargoUnit are two consumers of one normalizer, so the lockfile, toolchain,
+  # policy, and vendor resolution live there once. The knobs specific to a unit
+  # graph (`profile`, `target`, `contentAddressed`, `extraUnits`/`extraLibraries`,
+  # the `test*` forwarding) each have a single reader and are resolved inline at
+  # that use site.
+  #
+  # The one cross-stage value is the list of cargo invocations: the graph builder
+  # and the target-set naming both need it, so it gets a helper that also enforces
+  # the non-empty invariant.
+  cargoTargetsFor =
+    rawArgs: cargoArgs:
+    let
+      cargoTargets = rawArgs.cargoTargets or [ cargoArgs ];
+    in
+    if cargoTargets == [ ] then
+      throw "cargoUnit.buildWorkspace requires at least one cargoTargets entry"
+    else
+      cargoTargets;
 
   workspaceRootFor =
     args:
@@ -89,74 +53,9 @@ let
       Fetched or patched sources pass workspaceRoot = src.
     '');
 
-  # Cargo only emits `[lints.clippy]` into the unit graph's `lint_rustflags`
-  # when invoked as `cargo clippy`, not `cargo build`. Our unit graph is built
-  # with `cargo build --unit-graph`, so per-unit clippy never sees the
-  # workspace lint policy unless we resolve it ourselves. Parse the workspace
-  # manifest and emit the equivalent `-D|-W|-A clippy::<lint>` flags.
-  #
-  # Per-package overrides (a package with its own `[lints.clippy]` and
-  # `workspace = false`) are not yet honored; most workspaces in practice use
-  # `[lints] workspace = true` per crate, which inherits the workspace table.
-  #
-  # `clippy::cargo` group lints and the individual members of that group
-  # invoke the `cargo` binary to read workspace metadata. Per-unit clippy
-  # runs in a sandboxed build directory without a discoverable Cargo.toml
-  # (the unit's source closure is package-shaped, not workspace-shaped), so
-  # those lints error out with "could not find Cargo.toml". They only make
-  # sense at workspace scope; skip them here and leave a workspace-level
-  # cargo-clippy check as the future home for that subset.
-  cargoGroupClippyLints = [
-    "cargo"
-    "cargo_common_metadata"
-    "multiple_crate_versions"
-    "negative_feature_names"
-    "redundant_feature_names"
-    "wildcard_dependencies"
-  ];
-  clippyLintFlagsFromManifest =
-    manifestPath:
-    let
-      manifest = lib.importTOML manifestPath;
-      raw = manifest.workspace.lints.clippy or manifest.lints.clippy or { };
-      filtered = builtins.removeAttrs raw cargoGroupClippyLints;
-      entryFor =
-        name: value:
-        if builtins.isString value then
-          {
-            inherit name;
-            level = value;
-            priority = 0;
-          }
-        else
-          {
-            inherit name;
-            inherit (value) level;
-            priority = value.priority or 0;
-          };
-      entries = lib.mapAttrsToList entryFor filtered;
-      # Cargo applies args in ascending-priority order so higher-priority lints
-      # appear later on the command line and win as overrides. Mirror that here
-      # so a per-lint allow can override a group-wide deny.
-      sorted = lib.sort (left: right: left.priority < right.priority) entries;
-      flagFor =
-        level:
-        if level == "deny" || level == "forbid" then
-          "-D"
-        else if level == "warn" then
-          "-W"
-        else if level == "allow" then
-          "-A"
-        else
-          throw "cargoUnit: unknown clippy lint level '${level}' in ${manifestPath}";
-    in
-    lib.concatMap (entry: [
-      (flagFor entry.level)
-      "clippy::${entry.name}"
-    ]) sorted;
-
   renderCargoArgs =
-    args: cargoTarget:
+    { profile, target }:
+    cargoTarget:
     lib.escapeShellArgs (
       [
         "build"
@@ -164,10 +63,10 @@ let
         "-Z"
         "unstable-options"
       ]
-      ++ profileArgs args.profile
-      ++ lib.optionals (args.target != null) [
+      ++ profileArgs profile
+      ++ lib.optionals (target != null) [
         "--target"
-        args.target
+        target
       ]
       ++ cargoTarget
       ++ [
@@ -186,14 +85,12 @@ let
   generateUnitGraph =
     rawArgs:
     let
-      args = commonArgs rawArgs;
-      vendorDir = rust.resolveVendorDir {
-        inherit (args)
-          cargoLock
-          outputHashes
-          sourceOverrides
-          vendorDir
-          ;
+      args = rust.normalizeArgs rawArgs;
+      inherit (args) vendorDir;
+      cargoTargets = cargoTargetsFor rawArgs args.cargoArgs;
+      renderTarget = renderCargoArgs {
+        profile = rawArgs.profile or "release";
+        target = rawArgs.target or null;
       };
     in
     pkgs.runCommand "cargo-unit-graph.json"
@@ -225,16 +122,16 @@ let
         ${lib.concatMapStringsSep "\n" (
           targetIndex:
           let
-            targetArgs = builtins.elemAt args.cargoTargets targetIndex;
+            targetArgs = builtins.elemAt cargoTargets targetIndex;
           in
           ''
             (
               export CARGO_TARGET_DIR="$TMPDIR/cargo-target-${builtins.toString targetIndex}"
-              cargo ${renderCargoArgs args targetArgs} > "$TMPDIR/unit-graph-${builtins.toString targetIndex}.json"
+              cargo ${renderTarget targetArgs} > "$TMPDIR/unit-graph-${builtins.toString targetIndex}.json"
             ) &
             pids="$pids $!"
           ''
-        ) (lib.range 0 ((builtins.length args.cargoTargets) - 1))}
+        ) (lib.range 0 ((builtins.length cargoTargets) - 1))}
 
         for pid in $pids; do
           wait "$pid"
@@ -243,7 +140,7 @@ let
         nix-cargo-unit merge ${
           lib.concatMapStringsSep " " (
             targetIndex: "$TMPDIR/unit-graph-${builtins.toString targetIndex}.json"
-          ) (lib.range 0 ((builtins.length args.cargoTargets) - 1))
+          ) (lib.range 0 ((builtins.length cargoTargets) - 1))
         } > "$out"
       '';
 
@@ -257,16 +154,12 @@ let
   generateUnitsNix =
     rawArgs:
     let
-      args = commonArgs rawArgs;
-      vendorDir = rust.resolveVendorDir {
-        inherit (args)
-          cargoLock
-          outputHashes
-          sourceOverrides
-          vendorDir
-          ;
-      };
-      unitGraphJson = rawArgs.unitGraphJson or (generateUnitGraph rawArgs);
+      args = rust.normalizeArgs rawArgs;
+      inherit (args) vendorDir;
+      unitGraphJson =
+        rawArgs.unitGraphJson
+          or (throw "cargoUnit.generateUnitsNix requires unitGraphJson from generateUnitGraph.");
+      contentAddressed = rawArgs.contentAddressed or true;
       toolchainId = builtins.baseNameOf (builtins.toString args.rustToolchain);
       cargoLockForRender = rust.cargoLockFile args.cargoLock;
       renderFlags = [
@@ -278,7 +171,7 @@ let
         "--toolchain-id"
         toolchainId
       ]
-      ++ lib.optional args.contentAddressed "--content-addressed"
+      ++ lib.optional contentAddressed "--content-addressed"
       ++ lib.optional args.policy.denyUnusedCrateDependencies "--deny-unused-crate-dependencies"
       ++ lib.optional args.policy.denyPanics "--deny-panics";
     in
@@ -300,16 +193,10 @@ let
   */
   auditCargoLock =
     rawArgs:
-    let
-      args = commonArgs rawArgs;
-    in
-    rust.cargoAuditCheck (
-      rawArgs
-      // {
-        pname = rawArgs.pname or "cargo-unit";
-        inherit (args) policy;
-      }
-    );
+    rust.cargoAuditCheck {
+      args = rust.normalizeArgs rawArgs;
+      pname = rawArgs.pname or "cargo-unit";
+    };
 
   /**
     Build a Rust workspace as one Nix derivation per Cargo rustc unit.
@@ -360,24 +247,13 @@ let
   buildWorkspace =
     rawArgs:
     let
-      args = commonArgs rawArgs;
+      args = rust.normalizeArgs rawArgs;
+      inherit (args) vendorDir vendorSources;
       workspaceRoot = workspaceRootFor rawArgs;
-      vendorDir = rust.resolveVendorDir {
-        inherit (args)
-          cargoLock
-          outputHashes
-          sourceOverrides
-          vendorDir
-          ;
-      };
-      vendorSources = rust.resolveVendorSources {
-        inherit (args)
-          cargoLock
-          outputHashes
-          sourceOverrides
-          vendorSources
-          ;
-      };
+      cargoTargets = cargoTargetsFor rawArgs args.cargoArgs;
+      cargoTargetNames = rawArgs.cargoTargetNames or null;
+      extraUnits = rawArgs.extraUnits or { };
+      extraLibraries = rawArgs.extraLibraries or { };
       unitGraphJson = generateUnitGraph (rawArgs // { inherit vendorDir; });
       unitsNix = generateUnitsNix (
         rawArgs
@@ -394,6 +270,9 @@ let
         rawArgs
         // {
           inherit vendorDir;
+          # A workspace has no single crate name; name the workspace-level checks
+          # explicitly rather than relying on a fallback (`crateName` requires it).
+          pname = rawArgs.pname or "cargo-unit-workspace";
           policy =
             args.policy
             // lib.optionalAttrs perUnitClippyEnabled {
@@ -413,11 +292,8 @@ let
         import unitsNix (
           {
             inherit pkgs vendorDir vendorSources;
-            inherit (args)
-              src
-              extraRustcArgs
-              rustToolchain
-              ;
+            inherit (args) src rustToolchain;
+            extraRustcArgs = rawArgs.extraRustcArgs or [ ];
             inherit workspaceRoot;
             # Scanner for the opt-in panic-freedom policy. The rendered check
             # asserts this is non-null when `policy.denyPanics` is set.
@@ -429,22 +305,21 @@ let
             # `clippy-driver` links against.
             extraClippyNativeBuildInputs = lib.optional perUnitClippyEnabled args.policy.clippy.package;
             extraEnv = args.env;
-            inherit (args)
-              testRunPrelude
-              testArgsByPackage
-              packageTestInputs
-              packageTestEnv
-              ;
+            testRunPrelude = rawArgs.testRunPrelude or "";
+            testArgsByPackage = rawArgs.testArgsByPackage or { };
+            packageTestInputs = rawArgs.packageTestInputs or { };
+            packageTestEnv = rawArgs.packageTestEnv or { };
             extraRustcArgsForPlatform =
               platform:
-              rust.rustcArgsForPolicyForPlatform args.policy platform ++ args.extraRustcArgsForPlatform platform;
+              rust.rustcArgsForPolicyForPlatform args.policy platform
+              ++ (rawArgs.extraRustcArgsForPlatform or (_platform: [ ])) platform;
             # Manifest-derived flags come first so per-call `policy.clippy`
             # entries land later in argv and can override them. Cargo's
             # `[lints.clippy]` resolution is the load-bearing source for most
             # workspaces; `policy.clippy.deniedLints` stays as an escape hatch
             # for callers without a Cargo.toml policy.
             extraClippyLintArgs =
-              clippyLintFlagsFromManifest (args.src + "/Cargo.toml") ++ rust.clippyLintArgs args.policy;
+              rust.clippyLintFlagsFromManifest (args.src + "/Cargo.toml") ++ rust.clippyLintArgs args.policy;
             clippyEnabled = perUnitClippyEnabled;
             extraPolicyChecks = extraPolicyChecksFromRust;
           }
@@ -505,22 +380,22 @@ let
       # report every offending key at once (and so the assert keeps its
       # `lib.assertMsg` shape, per the no-bare-assert lint).
       injectionProblems =
-        injectionKeyProblems "extraUnits" args.extraUnits generatedUnitKeys
-        ++ injectionKeyProblems "extraLibraries" args.extraLibraries generatedLibraryKeys
-        ++ injectionToolchainProblems "extraUnits" args.extraUnits
-        ++ injectionToolchainProblems "extraLibraries" args.extraLibraries;
+        injectionKeyProblems "extraUnits" extraUnits generatedUnitKeys
+        ++ injectionKeyProblems "extraLibraries" extraLibraries generatedLibraryKeys
+        ++ injectionToolchainProblems "extraUnits" extraUnits
+        ++ injectionToolchainProblems "extraLibraries" extraLibraries;
 
       units =
         assert lib.assertMsg (injectionProblems == [ ]) (
           "cargoUnit.buildWorkspace: invalid prebuilt-unit injection:\n"
           + lib.concatStringsSep "\n" injectionProblems
         );
-        importUnits { inherit (args) extraUnits extraLibraries; };
+        importUnits { inherit extraUnits extraLibraries; };
       targetSetNames =
-        if args.cargoTargetNames == null then
-          map (index: builtins.toString index) (lib.range 0 ((builtins.length args.cargoTargets) - 1))
-        else if builtins.length args.cargoTargetNames == builtins.length args.cargoTargets then
-          args.cargoTargetNames
+        if cargoTargetNames == null then
+          lib.genList builtins.toString (builtins.length cargoTargets)
+        else if builtins.length cargoTargetNames == builtins.length cargoTargets then
+          cargoTargetNames
         else
           throw "cargoUnit.buildWorkspace requires cargoTargetNames to match cargoTargets length";
       namedTargetSets = lib.listToAttrs (
@@ -549,7 +424,10 @@ let
     let
       workspace = buildWorkspace (builtins.removeAttrs args [ "binary" ]);
     in
-    workspace.binaries.${binary} or workspace.default;
+    workspace.binaries.${binary}
+      or (throw "buildBinary: no binary `${binary}` in workspace; available: ${
+        lib.concatStringsSep ", " (builtins.attrNames (workspace.binaries or { }))
+      }");
 
   /**
     Pick a binary out of a pre-built `buildWorkspace` plus its test
@@ -576,7 +454,11 @@ let
       passthru ? { },
     }:
     selectRootWithTests workspace {
-      rootDrv = workspace.binaries.${binary} or workspace.default;
+      rootDrv =
+        workspace.binaries.${binary}
+          or (throw "selectBinaryWithTests: no binary `${binary}` in workspace; available: ${
+            lib.concatStringsSep ", " (builtins.attrNames (workspace.binaries or { }))
+          }");
       inherit
         packageName
         testTargets
@@ -677,12 +559,16 @@ let
       # the workspace-wide aggregates, so editing one crate rebuilds only its own
       # checks. cargoAudit is lockfile-scoped (one Cargo.lock) and is exposed once
       # at the workspace level rather than aliased onto every crate.
+      # `buildWorkspace` always sets `policy` via `resolvePolicy`, so the policy
+      # flags are present. The per-package maps come from the nix-cargo-unit
+      # renderer and are genuinely absent when it emitted none, so those stay
+      # guarded.
       policyChecks =
         lib.optionalAttrs (
-          (workspace.policy.clippy.enable or false) && (workspace.clippyByPackage or { }) ? ${packageName}
+          workspace.policy.clippy.enable && (workspace.clippyByPackage or { }) ? ${packageName}
         ) { clippy = workspace.clippyByPackage.${packageName}; }
         // lib.optionalAttrs (
-          (workspace.policy.denyUnusedCrateDependencies or false)
+          workspace.policy.denyUnusedCrateDependencies
           && (workspace.unusedCrateDependenciesByPackage or { }) ? ${packageName}
         ) { unusedCrateDependencies = workspace.unusedCrateDependenciesByPackage.${packageName}; };
       testCases =
@@ -723,52 +609,13 @@ let
     let
       workspace = buildWorkspace (builtins.removeAttrs args [ "binaries" ]);
     in
-    lib.genAttrs binaries (binary: workspace.binaries.${binary} or workspace.default);
-
-  /**
-    Materialize a Cargo vendor directory from a `Cargo.lock` without building
-    the workspace unit graph. Callers that aren't going through
-    `buildWorkspace` (e.g. an `overrideAttrs` of a foreign Rust derivation, or
-    a non-workspace tool fetched as a single crate) can reuse the same
-    static.crates.io fetcher and git-source plumbing that `buildWorkspace`
-    uses internally.
-
-    Arguments:
-    - `cargoLock`: path to the `Cargo.lock` to vendor.
-    - `outputHashes`: attrset keyed by the exact `Cargo.lock` git source
-      string (e.g. `"git+https://github.com/owner/repo#rev"`); value is the
-      sha256 of the resolved git tree.
-    - `sourceOverrides`: optional attrset mapping `Cargo.lock` source strings
-      to pre-fetched source trees, used when a private git dependency cannot
-      be fetched from inside the build sandbox.
-    - `vendorDir`: optional pre-built vendor directory that short-circuits
-      resolution. Mirrors `buildWorkspace`'s `vendorDir` arg.
-
-    Returns a `pkgs.linkFarm` of `<name>-<version>` -> source tree, the same
-    shape `buildWorkspace` materializes.
-  */
-  vendorDir =
-    args:
-    rust.resolveVendorDir {
-      inherit (args) cargoLock;
-      outputHashes = args.outputHashes or { };
-      sourceOverrides = args.sourceOverrides or { };
-      vendorDir = args.vendorDir or null;
-    };
-
-  /**
-    Materialize the per-package source attrset used by `vendorDir`. Useful for
-    callers that need to address individual vendored crates rather than the
-    aggregate link farm. See `vendorDir` for the shared argument shape.
-  */
-  vendorSources =
-    args:
-    rust.resolveVendorSources {
-      inherit (args) cargoLock;
-      outputHashes = args.outputHashes or { };
-      sourceOverrides = args.sourceOverrides or { };
-      vendorSources = args.vendorSources or null;
-    };
+    lib.genAttrs binaries (
+      binary:
+      workspace.binaries.${binary}
+        or (throw "buildBinaries: no binary `${binary}` in workspace; available: ${
+          lib.concatStringsSep ", " (builtins.attrNames (workspace.binaries or { }))
+        }")
+    );
 
   /**
     Build a library unit derivation from already-compiled artifacts instead of
@@ -908,7 +755,5 @@ in
     generateUnitGraph
     generateUnitsNix
     mkPrebuiltLibraryUnit
-    vendorDir
-    vendorSources
     ;
 }
