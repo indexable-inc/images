@@ -46,7 +46,6 @@ use search_core::{
     store = None,
     base_url = None,
     rerank = true,
-    reranker = None,
     web = false,
     source = None,
     not_source = None,
@@ -55,6 +54,9 @@ use search_core::{
     host = None,
     project = None,
     agentic = true,
+    // Trailing optional so existing positional callers (…, rerank, web, …) keep
+    // their slots; inserting it mid-signature would rebind their arguments.
+    reranker = None,
 ))]
 #[allow(
     clippy::too_many_arguments,
@@ -67,7 +69,6 @@ fn semantic(
     store: Option<String>,
     base_url: Option<String>,
     rerank: bool,
-    reranker: Option<String>,
     web: bool,
     source: Option<Vec<String>>,
     not_source: Option<Vec<String>>,
@@ -76,6 +77,7 @@ fn semantic(
     host: Option<Vec<String>>,
     project: Option<Vec<String>>,
     agentic: bool,
+    reranker: Option<String>,
 ) -> PyResult<Bound<'_, PyAny>> {
     let store_name = store.unwrap_or_else(|| DEFAULT_STORE.to_owned());
     let base = base_url.unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());

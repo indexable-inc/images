@@ -29,7 +29,6 @@ def semantic(
     store: str | None = ...,
     base_url: str | None = ...,
     rerank: bool = ...,
-    reranker: str | None = ...,
     web: bool = ...,
     source: list[str] | None = ...,
     not_source: list[str] | None = ...,
@@ -38,6 +37,7 @@ def semantic(
     host: list[str] | None = ...,
     project: list[str] | None = ...,
     agentic: bool = ...,
+    reranker: str | None = ...,
 ) -> Awaitable[list[Hit]]: ...
 def grep(
     pattern: str,
