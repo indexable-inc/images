@@ -35,11 +35,12 @@ export GOOGLE_OAUTH_CLIENT_SECRET="$(rbw get <the client-secret entry>)"
 nix run .#gcal -- auth
 ```
 
-`gcal auth` prints a consent URL and waits. With a browser on the same
-machine, the redirect lands on a loopback listener and the flow finishes by
-itself. Over SSH or inside a VM the browser ends on a `http://127.0.0.1:…`
-connection error after consent; copy that full URL out of the address bar,
-paste it into the waiting prompt, and press enter. Both paths use PKCE and a
+`gcal auth` prints a consent URL and waits on a loopback listener; with a
+browser on the same machine the redirect lands there and the flow finishes by
+itself. Over SSH or inside a VM the browser cannot reach this host's
+`127.0.0.1`, so rerun with `gcal auth --paste`: after consent the browser
+shows a connection error on `http://127.0.0.1:…`, and `gcal` reads that full
+URL from stdin (paste it in and press enter). Both paths use PKCE and a
 per-attempt `state`, and end with a verification read against the API.
 
 The offline refresh token lands in `~/.config/gcal/token.json` (mode 0600).

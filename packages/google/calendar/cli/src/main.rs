@@ -12,8 +12,8 @@ use chrono::{
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use google_calendar::{
-    Attendee, AttendeeDraft, AuthCode, Authenticator, Client, ClientSecrets, EVENTS_SCOPE, Event,
-    EventDraft, EventQuery, EventTime, PRIMARY_CALENDAR, SendUpdates, TokenStore, begin_consent,
+    Attendee, AttendeeDraft, Authenticator, Client, ClientSecrets, EVENTS_SCOPE, Event, EventDraft,
+    EventQuery, EventTime, PRIMARY_CALENDAR, SendUpdates, TokenStore, begin_consent,
 };
 
 /// Command-line arguments.
@@ -30,8 +30,9 @@ enum Command {
     ///
     /// Needs the team OAuth client in `GOOGLE_OAUTH_CLIENT_ID` and
     /// `GOOGLE_OAUTH_CLIENT_SECRET`. Prints a consent URL; with a local browser
-    /// the redirect lands automatically, over SSH paste the redirect URL back.
-    Auth,
+    /// the redirect lands automatically, over SSH pass `--paste` and feed the
+    /// redirect URL back on stdin.
+    Auth(AuthArgs),
     /// List events in a window (default: now through 7 days from now).
     List(ListArgs),
     /// Show one event.
@@ -40,6 +41,15 @@ enum Command {
     Create(CreateArgs),
     /// Cancel (delete) an event.
     Cancel(CancelArgs),
+}
+
+#[derive(Args)]
+struct AuthArgs {
+    /// Read the redirect URL from stdin instead of waiting on the loopback
+    /// listener. Use this over SSH or in a VM, where the browser cannot reach
+    /// this machine's `127.0.0.1`.
+    #[arg(long)]
+    paste: bool,
 }
 
 /// Which calendar to operate on.
@@ -173,7 +183,7 @@ impl From<Notify> for SendUpdates {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
-        Command::Auth => run_auth().await,
+        Command::Auth(args) => run_auth(args).await,
         Command::List(args) => run_list(args).await,
         Command::Show(args) => run_show(args).await,
         Command::Create(args) => run_create(args).await,
@@ -187,33 +197,23 @@ fn client() -> anyhow::Result<Client> {
     Ok(Client::new(auth)?)
 }
 
-/// How the authorization code reached us: the loopback redirect, or a
-/// redirect URL pasted into stdin (the SSH/VM path).
-enum Delivered {
-    Loopback(google_calendar::Result<AuthCode>),
-    Pasted(std::io::Result<String>),
-}
-
-async fn run_auth() -> anyhow::Result<()> {
+async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
     let secrets = ClientSecrets::from_env()?;
     let store = TokenStore::new()?;
     let pending = begin_consent(secrets.clone(), &[EVENTS_SCOPE]).await?;
 
     println!("Open this URL in your browser:\n\n  {}\n", pending.auth_url);
-    println!("With a browser on this machine, the redirect lands here automatically.");
-    println!("Over SSH or in a VM, the browser ends on a http://127.0.0.1:… connection");
-    println!("error after consent; paste that full URL here and press enter.");
-
-    let delivered = tokio::select! {
-        redirect = pending.wait_loopback() => Delivered::Loopback(redirect),
-        pasted = read_stdin_line() => Delivered::Pasted(pasted),
-    };
-    let code = match delivered {
-        Delivered::Loopback(redirect) => redirect?,
-        Delivered::Pasted(pasted) => {
-            let pasted = pasted.context("reading the pasted redirect URL from stdin")?;
-            pending.code_from_redirect_url(pasted.trim())?
-        }
+    let code = if args.paste {
+        println!("After consenting, the browser shows a connection error on the");
+        println!("http://127.0.0.1:… redirect; paste that full URL here and press enter.");
+        let pasted = read_stdin_line()
+            .await
+            .context("reading the pasted redirect URL from stdin")?;
+        pending.code_from_redirect_url(pasted.trim())?
+    } else {
+        println!("Waiting for the redirect on this machine's loopback listener.");
+        println!("Over SSH or in a VM, cancel and rerun with --paste.");
+        pending.wait_loopback().await?
     };
 
     let token = pending.exchange(code).await?;
