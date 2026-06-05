@@ -234,7 +234,7 @@ fn finish(counts: Counts) -> anyhow::Result<()> {
         anyhow::bail!(
             "{} of {} source(s) failed; {} succeeded, {} skipped",
             counts.failures,
-            counts.indexed + counts.failures,
+            counts.indexed + counts.failures + counts.skipped,
             counts.indexed,
             counts.skipped
         );
