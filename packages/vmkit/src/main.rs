@@ -73,12 +73,15 @@ enum Command {
         /// (Vulkan via `MoltenVK`). Off by default.
         #[arg(long)]
         gpu: bool,
-        /// Number of virtual CPUs.
+        /// Number of virtual CPUs. Typed to libkrun's `u8` so an out-of-range
+        /// value is rejected at parse time rather than silently clamped (libkrun
+        /// further caps the usable count and reports its own error).
         #[arg(long, default_value_t = 2)]
-        cpus: usize,
-        /// Guest memory in MiB.
+        cpus: u8,
+        /// Guest memory in MiB. Typed to libkrun's `u32` so an out-of-range value
+        /// is rejected at parse time rather than silently clamped.
         #[arg(long, default_value_t = 1024)]
-        memory_mib: u64,
+        memory_mib: u32,
         /// Capture the guest serial console to this file instead of the process's
         /// stdout (useful for a background/lockstep caller).
         #[arg(long)]
@@ -379,10 +382,8 @@ fn dispatch_linux(command: Command) -> Result<(), linuxkrun::Error> {
             root,
             exec,
             gpu,
-            // libkrun caps vCPUs at 16 and RAM well under u32 MiB; clamp the wider
-            // CLI types rather than truncate.
-            cpus: u8::try_from(cpus).unwrap_or(u8::MAX),
-            memory_mib: u32::try_from(memory_mib).unwrap_or(u32::MAX),
+            cpus,
+            memory_mib,
             console_file,
             timeout: Duration::from_secs(timeout_secs),
         }),
@@ -478,10 +479,8 @@ mod imp {
             } => crate::linuxkrun::boot_linux(&crate::linuxkrun::BootLinux {
                 disk,
                 gpu,
-                // libkrun caps vCPUs at 16 and RAM well under u32 MiB; clamp the
-                // wider CLI types rather than truncate.
-                cpus: u8::try_from(cpus).unwrap_or(u8::MAX),
-                memory_mib: u32::try_from(memory_mib).unwrap_or(u32::MAX),
+                cpus,
+                memory_mib,
                 console_file,
                 timeout: Duration::from_secs(timeout_secs),
             })
