@@ -2191,8 +2191,8 @@ let
             == "otel_traces"
           &&
             observabilityStackExample.observability.collector.service.pipelines.logs.exporters
-            == [ "clickhouse" ];
-        message = "observability-stack collector should receive OTLP and export logs/traces/metrics to ClickHouse";
+            == [ "clickhouse" "awss3" ];
+        message = "observability-stack collector should receive OTLP, export to ClickHouse, and mirror logs to the S3 archive";
       }
       {
         assertion =
