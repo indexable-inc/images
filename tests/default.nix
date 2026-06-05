@@ -2352,9 +2352,11 @@ let
           &&
             observabilityStackExample.observability.collector.exporters.clickhouse.traces_table_name
             == "otel_traces"
-          &&
-            observabilityStackExample.observability.collector.service.pipelines.logs.exporters
-            == [ "clickhouse" ];
+          # RFC-0004 (#705) added the per-host history S3/OTLP sink, so the logs
+          # pipeline now fans out to both clickhouse and awss3. Assert ClickHouse
+          # is still an exporter rather than pinning the exact list, which breaks
+          # on every legitimate addition to the pipeline.
+          && builtins.elem "clickhouse" observabilityStackExample.observability.collector.service.pipelines.logs.exporters;
         message = "observability-stack collector should receive OTLP and export logs/traces/metrics to ClickHouse";
       }
       {
