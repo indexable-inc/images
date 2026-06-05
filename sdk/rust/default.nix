@@ -65,11 +65,11 @@ let
   # compiled artifacts produced in the ix repo, not rebuilt here.
   wireRlib = pkgs.fetchurl {
     url = "${r2Base}/libix_sdk_wire-${wireHash}.rlib";
-    hash = "sha256-WxJF0gSJIJhSvF60nPu9F5xdgD7j6TxtKxvyy1DYals=";
+    hash = "sha256-2tb6UoAkABVaEU0uSrrUSUMNk1uh3tA9DD1pwjDzHyE=";
   };
   wireRmeta = pkgs.fetchurl {
     url = "${r2Base}/libix_sdk_wire-${wireHash}.rmeta";
-    hash = "sha256-9P5fn/5lVyhaQvVAMspfCK1AUF02VsdF/rCvngN1O2o=";
+    hash = "sha256-27T6SgFketntMqD/gAplv563tjYZ6K9/nY7SZV70D0Q=";
   };
 
   # Wrap the fetched rlib+rmeta as a cargo-unit library unit. The Cargo lib
