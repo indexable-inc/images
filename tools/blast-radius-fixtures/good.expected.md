@@ -22,7 +22,7 @@ flowchart LR
   c0 --> k3["rust-test-search_core (2m)"]
 ```
 
-<details><summary>changed checks</summary>
+<details><summary>changed checks (4)</summary>
 
 - mcp-serverTools (42s)
 - rust-test-search_core (2m)

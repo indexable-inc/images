@@ -43,9 +43,15 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      # Read-only: lets `gh run download` fetch the base-branch check-timings
+      # artifact from the most recent successful main Check run (best-effort
+      # build-time annotations). No write scope is introduced.
+      actions: read
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.sha }}
+      REPOSITORY: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       # The default pull_request checkout is the merge ref, so its working tree
       # already carries this PR's `.#blast-radius` app, and fetch-depth 0 brings
@@ -58,14 +64,40 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Best-effort: download the most recent successful main Check run's
+      # check-timings artifact (the nix-fast-build --result-file the `check` gate
+      # uploads; see lib/per-system.nix). blast-radius --timings annotates each
+      # rebuilt check with its base-branch BUILD wall-clock. Every failure path
+      # (no run, no artifact, gh error) leaves no check-results.json, so the next
+      # step renders without timings rather than failing the job. This step never
+      # exits nonzero.
+      - name: Fetch base-branch check timings
+        run: |
+          set -uo pipefail
+          run_id="$(gh run list --repo "${REPOSITORY}" --workflow Check --branch main \
+                      --status success --limit 1 --json databaseId \
+                      --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+          if [ -z "${run_id}" ]; then
+            echo "no successful main Check run found; rendering without timings"
+            exit 0
+          fi
+          gh run download "${run_id}" --repo "${REPOSITORY}" \
+            --name "check-timings-${run_id}" --dir . 2>/dev/null \
+            || echo "check-timings-${run_id} unavailable; rendering without timings"
+
       # --json emits a constrained data object (counts + name lists), not the
       # final Markdown, so the trusted comment job owns the published body.
       # pipefail makes an eval failure (nonzero `nix run`) fail the step instead
-      # of being masked by tee's exit code.
+      # of being masked by tee's exit code. Pass --timings only when the base
+      # artifact was fetched above (the flag's input is optional in the tool).
       - name: Report blast radius
         run: |
           set -euo pipefail
-          nix run .#blast-radius -- --json "${BASE_SHA}" "${HEAD_SHA}" | tee report.json
+          if [ -f check-results.json ]; then
+            nix run .#blast-radius -- --json --timings check-results.json "${BASE_SHA}" "${HEAD_SHA}" | tee report.json
+          else
+            nix run .#blast-radius -- --json "${BASE_SHA}" "${HEAD_SHA}" | tee report.json
+          fi
 
       - name: Upload report
         if: ${{ success() }}
@@ -190,12 +222,35 @@ jobs:
                    | "  c\($c.key) --> k\($checks | index($k))[\"\($k | safename)\($t[$k] | fmt_time)\"]"),
                   "```"
              else empty end),
-            (if (.changed | length) > 0
-             then "", "<details><summary>changed checks</summary>", "",
-                  (.changed[] | safename as $n | "- \($n)\($t[$n] | fmt_time)"),
-                  "", "</details>"
-             else empty end)
+            # Cap the changed-checks list so the comment cannot exceed the GitHub
+            # 65536-char body limit (HTTP 422 "Body is too long"). A PR touching
+            # a shared input rebuilds thousands of checks; the header and bounded
+            # mermaid diagrams carry the signal, the summary shows the true total,
+            # and the full list lives in the run artifact and logs. Mirrors
+            # packages/blast-radius/src/report.rs (CHANGED_LIST_CAP). (Keep this
+            # jq apostrophe-free: it is single-quoted in the shell.)
+            (200 as $cap
+             | if (.changed | length) > 0
+               then "", "<details><summary>changed checks (\(.changed | length))</summary>", "",
+                    (.changed[0:$cap][] | safename as $n | "- \($n)\($t[$n] | fmt_time)"),
+                    (if (.changed | length) > $cap
+                     then "- ...and \((.changed | length) - $cap) more (see the Blast radius check logs)"
+                     else empty end),
+                    "", "</details>"
+               else empty end)
           ' report.json > comment.md
+          # Final hard guard against GitHub's 65536-char comment-body limit. The
+          # changed-checks cap covers the common case, but the mermaid sections
+          # are bounded only by the PR-controlled report, so a pathological shape
+          # could still overflow. Truncate on a byte boundary (the marker the
+          # post job keys on is at the TOP, so a tail truncation leaves it
+          # intact) and append a notice.
+          max_bytes=65000
+          if [ "$(wc -c < comment.md)" -gt "${max_bytes}" ]; then
+            head -c "${max_bytes}" comment.md > comment.md.trunc
+            mv comment.md.trunc comment.md
+            printf '\n\n_Comment truncated to fit the GitHub comment size limit._\n' >> comment.md
+          fi
 
       # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker.
       # Paginate the comment list so the marker is found on busy PRs (no

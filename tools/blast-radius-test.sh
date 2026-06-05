@@ -37,5 +37,56 @@ done
 ( cd "$tmp" && cp "$fixtures/good.json" report.json && bash render.sh )
 if diff -u "$fixtures/good.expected.md" "$tmp/comment.md"; then note "render good: ok"; else note "render good: FAIL (output drift)"; fail=1; fi
 
+# Overflow guard: a PR touching a shared input rebuilds thousands of checks, and
+# an uncapped changed-checks list overflows GitHub's 65536-char comment limit
+# (HTTP 422), so no comment posts. Synthesize a large report and assert the body
+# stays bounded with an "...and N more" note. Behavior assertion, not a re-spell
+# of the cap constant.
+big="$tmp/big.json"
+jq '.changed = [range(0; 4000) | "rust-test-crate-\(.)-unit-tests"]' "$fixtures/good.json" > "$big"
+( cd "$tmp" && cp "$big" report.json && bash render.sh )
+big_bytes="$(wc -c < "$tmp/comment.md")"
+if [ "$big_bytes" -lt 65536 ]; then
+  note "render overflow: body bounded (${big_bytes} B < 65536)"
+else
+  note "render overflow: FAIL (${big_bytes} B >= 65536)"; fail=1
+fi
+if grep -qE '^- \.\.\.and 3800 more ' "$tmp/comment.md"; then
+  note "render overflow: cap note ok"
+else
+  note "render overflow: FAIL (missing/incorrect cap note)"; fail=1
+fi
+if grep -q '<summary>changed checks (4000)</summary>' "$tmp/comment.md"; then
+  note "render overflow: total count ok"
+else
+  note "render overflow: FAIL (summary missing true total)"; fail=1
+fi
+
+# Backstop guard: the changed-checks cap does NOT bound the mermaid sections,
+# which the render sizes from the (PR-controlled) report's causes. A schema-valid
+# but pathological report with huge causes must still render under the limit via
+# the byte-budget backstop, and the leading marker (the post job keys the sticky
+# comment on it) must survive the tail truncation.
+huge="$tmp/huge.json"
+jq '
+  .changed = [] |
+  .causes = [range(0; 400) | {
+    name: "ix-rust-workspace-\(.)",
+    checks: [range(0; 5) | "rust-test-crate-\(.)-pads-the-body-out-to-exceed-the-limit-\(.)"]
+  }]
+' "$fixtures/good.json" > "$huge"
+( cd "$tmp" && cp "$huge" report.json && bash render.sh )
+huge_bytes="$(wc -c < "$tmp/comment.md")"
+if [ "$huge_bytes" -lt 65536 ]; then
+  note "render backstop: body bounded (${huge_bytes} B < 65536)"
+else
+  note "render backstop: FAIL (${huge_bytes} B >= 65536; backstop did not fire)"; fail=1
+fi
+if head -c 64 "$tmp/comment.md" | grep -q '^<!-- blast-radius -->'; then
+  note "render backstop: marker survived truncation ok"
+else
+  note "render backstop: FAIL (marker lost; sticky-comment keying breaks)"; fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi
 echo "blast-radius-test: all passed"

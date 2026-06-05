@@ -13,6 +13,15 @@ use serde::Serialize;
 
 use crate::causes::{Cause, category};
 
+/// Maximum number of changed-check bullets to render in the `<details>` list.
+/// A PR touching a shared input rebuilds thousands of checks (on ix, 3817 of
+/// 4315 once), and the uncapped list produced a ~300 KB body that GitHub
+/// rejected with HTTP 422 ("Body is too long", 65536-char limit), so no comment
+/// posted at all. The trusted jq renderer in `.github/workflows/blast-radius.yml`
+/// caps identically; the `<summary>` carries the true total and the full list
+/// lives in the run artifact and logs.
+pub const CHANGED_LIST_CAP: usize = 200;
+
 #[derive(Debug, Serialize)]
 pub struct Category {
     pub name: String,
@@ -175,9 +184,17 @@ impl Report {
         }
 
         if !self.changed.is_empty() {
-            out.push_str("\n<details><summary>changed checks</summary>\n\n");
-            for name in &self.changed {
+            let total = self.changed.len();
+            let _ = writeln!(out, "\n<details><summary>changed checks ({total})</summary>\n");
+            for name in self.changed.iter().take(CHANGED_LIST_CAP) {
                 let _ = writeln!(out, "- {}", label_for(name));
+            }
+            if total > CHANGED_LIST_CAP {
+                let _ = writeln!(
+                    out,
+                    "- ...and {} more (see the Blast radius check logs)",
+                    total - CHANGED_LIST_CAP
+                );
             }
             out.push_str("\n</details>\n");
         }
@@ -271,6 +288,25 @@ mod tests {
         // Changed-checks list mirrors the same annotation.
         assert!(md.contains("- mcp-serverTools (42s)\n"));
         assert!(md.contains("- lint\n"));
+    }
+
+    // A PR that rebuilds thousands of checks must not blow GitHub's 65536-char
+    // comment body limit: the list caps at CHANGED_LIST_CAP with an overflow
+    // note, while the summary still carries the true total. Mirrors the trusted
+    // jq renderer's cap (tools/blast-radius-test.sh asserts the same bound).
+    #[test]
+    fn caps_long_changed_list() {
+        let mut report = sample_report(BTreeMap::new());
+        report.changed = (0..4000).map(|i| format!("rust-test-crate-{i}")).collect();
+        let md = report.to_markdown();
+        assert!(md.contains("<summary>changed checks (4000)</summary>"));
+        let bullets = md
+            .lines()
+            .filter(|line| line.starts_with("- rust-test-crate-"))
+            .count();
+        assert_eq!(bullets, CHANGED_LIST_CAP);
+        assert!(md.contains(&format!("- ...and {} more", 4000 - CHANGED_LIST_CAP)));
+        assert!(md.len() < 65_536);
     }
 
     #[test]
