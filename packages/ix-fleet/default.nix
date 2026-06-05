@@ -41,12 +41,12 @@ let
     };
   };
 
-  # Drives the full `up` workflow under --dry-run: it makes no API calls and
-  # touches no network, so it runs in the sandbox, yet it exercises the rewritten
-  # control flow and (because the module imports ix_sdk at load) proves the
-  # prebuilt SDK wheel is importable from the built venv. The CLI-stubbing test
-  # this replaces no longer fits now that fleet ops go through the SDK, not a
-  # subprocess; live SDK behavior is covered by the example health-checks.
+  # Walks the `up` command's --dry-run control flow (no API calls, no network,
+  # so it runs in the sandbox) and, because the module imports ix_sdk at load,
+  # proves the prebuilt SDK wheel is importable from the built venv. Note this
+  # only covers the dry-run branches: the live SDK calls and the dag-runner
+  # fan-out are not exercised here (the SDK can't be stubbed by a fake CLI like
+  # the old test did); that path is covered by the example health-checks.
   dryRunUp =
     pkgs.runCommand "ix-fleet-dry-run-up"
       {

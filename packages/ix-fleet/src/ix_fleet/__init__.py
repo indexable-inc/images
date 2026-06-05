@@ -374,6 +374,19 @@ async def create_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
     )
 
 
+async def recreate_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
+    """Delete the node if present, then create it on `image`.
+
+    `client.create` (like `ix new --name`) inserts against a UNIQUE (owner,
+    name) constraint and errors if the name is taken, so replacing a node's
+    image is delete-then-create, not an in-place update. In-place updates are
+    `switch`; this is the image-swap path used by `replace`/`up`/failed-node
+    recovery.
+    """
+    await remove_node(node, dry_run=dry_run)
+    await create_node(node, image, dry_run=dry_run)
+
+
 async def ensure_node(node: FleetNode, *, dry_run: bool) -> bool:
     if dry_run:
         step(f"ensure {node.name} exists from {node.bootstrapImage}")
@@ -386,8 +399,7 @@ async def ensure_node(node: FleetNode, *, dry_run: bool) -> bool:
         return True
 
     if existing.status == ix_sdk.BranchStatus.FAILED:
-        await remove_node(node, dry_run=dry_run)
-        await create_node(node, node.bootstrapImage, dry_run=dry_run)
+        await recreate_node(node, node.bootstrapImage, dry_run=dry_run)
         await wait_node_ready(node, dry_run=dry_run)
         return True
 
@@ -422,11 +434,22 @@ async def switch_node(node: FleetNode, *, dry_run: bool) -> None:
     if dry_run:
         step(f"+ switch {node.name} -> {node.switch.target} (build-on={node.switch.buildOn})")
         return
-    await client().switch_system(
-        name=node.name,
-        target=node.switch.target,
-        build_on=node.switch.buildOn,
-    )
+    # The SDK switch RPC has no deadline of its own; bound it like the old CLI
+    # path (which passed timeout=1800) so a hung remote/local switch can't block
+    # the fleet workflow forever.
+    try:
+        await asyncio.wait_for(
+            client().switch_system(
+                name=node.name,
+                target=node.switch.target,
+                build_on=node.switch.buildOn,
+            ),
+            SWITCH_TIMEOUT_SECS,
+        )
+    except asyncio.TimeoutError as error:
+        raise RuntimeError(
+            f"switch of {node.name} timed out after {SWITCH_TIMEOUT_SECS}s"
+        ) from error
 
 
 async def ensure_group(group: str, *, dry_run: bool) -> None:
@@ -612,6 +635,9 @@ def default_source_workdir(cwd: Path, source_root: Path) -> Path:
         return Path(".")
 
 
+# Bound a target-based `switch` (matches the old CLI `timeout=1800`). The
+# source-build switch below uses its own, longer deadline.
+SWITCH_TIMEOUT_SECS = 1800
 MAX_SWITCH_RETRIES = 3
 RETRY_DELAY_SECS = 10
 
@@ -654,39 +680,28 @@ async def switch_node_from_source(
                 raise
 
 
-# `ix new --name X` is create-or-replace by name; `client.create` calls the same
-# create RPC, so replacing an existing node is identical to creating it.
+# Replacing a node's image is delete-then-create (see recreate_node): a new
+# image cannot be applied to an existing VM in place.
 async def replace_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
-    await create_node(node, image, dry_run=dry_run)
+    await recreate_node(node, image, dry_run=dry_run)
 
 
 async def up_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
     if dry_run:
-        if node.recreateOnUp:
-            step(f"recreate {node.name} from uploaded image {image}")
-            await remove_node(node, dry_run=dry_run)
-            await create_node(node, image, dry_run=dry_run)
-        else:
-            step(f"create or replace {node.name} from uploaded image {image}")
-            await replace_node(node, image, dry_run=dry_run)
+        verb = "recreate" if node.recreateOnUp else "create or replace"
+        step(f"{verb} {node.name} from uploaded image {image}")
+        await recreate_node(node, image, dry_run=dry_run)
         return
 
     existing = find_node(await list_nodes(), node.name)
-    if existing is not None and node.recreateOnUp:
-        await remove_node(node, dry_run=dry_run)
-        await create_node(node, image, dry_run=dry_run)
-        return
-
     if existing is None:
         await create_node(node, image, dry_run=dry_run)
         return
 
-    if existing.status == ix_sdk.BranchStatus.FAILED:
-        await remove_node(node, dry_run=dry_run)
-        await create_node(node, image, dry_run=dry_run)
-        return
-
-    await replace_node(node, image, dry_run=dry_run)
+    # Any existing node (recreateOnUp, failed, or a plain image change) needs a
+    # fresh VM on the uploaded image, since `up` swaps the image rather than
+    # updating in place.
+    await recreate_node(node, image, dry_run=dry_run)
 
 
 async def cmd_diff(plan: FleetPlan, args: argparse.Namespace) -> None:
@@ -854,7 +869,7 @@ async def cmd_down(plan: FleetPlan, args: argparse.Namespace) -> None:
     for node in reversed(selected_nodes(plan, args.on)):
         try:
             await remove_node(node, dry_run=args.dry_run)
-        except (ix_sdk.IxError, CliError, OSError) as error:
+        except (ix_sdk.IxError, OSError) as error:
             failures.append(f"{node.name}: {error}")
     if failures:
         raise RuntimeError("failed to remove fleet nodes: " + "; ".join(failures))
