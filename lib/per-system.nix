@@ -413,25 +413,38 @@ let
             library = lib.replaceStrings [ "-" ] [ "_" ] entry.id;
             packageName = entry.id;
           }).passthru.tests or { };
+      # Each package's per-#[test] checks are nested under one attr carrying
+      # `recurseForDerivations` rather than flattened into the top-level `checks`
+      # set. nix-eval-jobs (the evaluator nix-fast-build and blast-radius both
+      # wrap) then lists the cheap per-package names at the root and forces each
+      # package's manifest IFD -- which enumerates that crate's `#[test]` cases --
+      # inside its own worker job, so the worker restarts at the memory cap
+      # between packages. Flattening (the old `mergeAttrsList` over renamed
+      # per-case keys) defeated the per-crate split this comment block promises:
+      # listing the flat per-case names forced every crate's manifest at once in
+      # the single worker assigned the root attrpath, ballooning it to tens of
+      # GiB and getting it earlyoom-killed on the shared CI host (ENG-2201).
+      # The nested set must stay a thunk: listing `checks` (the root job) only
+      # forces the per-package KEYS, never a package's tests. Filtering empties
+      # here (e.g. `tests != {}`) would force every package's manifest during
+      # enumeration and reintroduce the balloon, so empty groups are left in --
+      # nix-eval-jobs recurses them and emits nothing.
+      shardedPackageTests = name: tests: { ${name} = tests // { recurseForDerivations = true; }; };
       repoRustPackageTests = lib.mergeAttrsList (
-        map (
-          entry:
-          lib.mapAttrs' (testName: test: lib.nameValuePair "${entry.passthruTests.prefix}-${testName}" test) (
-            packageTestsFor entry
-          )
-        ) (packageRegistry.passthruTestEntriesFor system)
+        map (entry: shardedPackageTests entry.passthruTests.prefix (packageTestsFor entry)) (
+          packageRegistry.passthruTestEntriesFor system
+        )
       );
       moduleRustPackages = {
         resource-monitor-stats-writer = cargoUnit.selectBinaryWithTests rustWorkspace.units {
           binary = "resource-monitor-stats-writer";
         };
       };
-      moduleRustPackageTests = lib.concatMapAttrs (
-        packageName: package:
-        lib.mapAttrs' (testName: test: lib.nameValuePair "rust-${packageName}-${testName}" test) (
-          package.passthru.tests or { }
-        )
-      ) moduleRustPackages;
+      moduleRustPackageTests = lib.mergeAttrsList (
+        lib.mapAttrsToList (
+          packageName: package: shardedPackageTests "rust-${packageName}" (package.passthru.tests or { })
+        ) moduleRustPackages
+      );
       # cargoAudit scans the single workspace Cargo.lock against the advisory DB,
       # so it is one lockfile-scoped check (it rebuilds only on a Cargo.lock
       # change, never on a source edit) rather than a per-crate gate. Expose it
