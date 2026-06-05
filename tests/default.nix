@@ -709,15 +709,25 @@ let
     clippy.enable = false;
   };
 
-  # (a) From-source baseline build of the whole workspace. This is where the
-  # real rlib+rmeta come from and where the canonical unit hash is computed.
-  cargoUnitPrebuiltBaseline = ix.cargoUnit.buildWorkspace {
-    pname = "cargo-unit-prebuilt-baseline";
+  # Shared args for every prebuilt-seam fixture workspace. `contentAddressed`
+  # is forced off because the M1 closure check uses `exportReferencesGraph`,
+  # which does not yet support CA derivations. The unit hash (hence the unit
+  # key the injection relies on) is independent of this flag (hash.rs /
+  # model.rs:640-683 never feed `content_addressed`), so baseline and injected
+  # still share keys.
+  cargoUnitPrebuiltCommon = {
     src = cargoUnitPrebuiltFixture;
     workspaceRoot = ./fixtures/cargo-unit-prebuilt;
     cargoArgs = [ "--workspace" ];
     policy = cargoUnitPrebuiltPolicy;
+    contentAddressed = false;
   };
+
+  # (a) From-source baseline build of the whole workspace. This is where the
+  # real rlib+rmeta come from and where the canonical unit hash is computed.
+  cargoUnitPrebuiltBaseline = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon // { pname = "cargo-unit-prebuilt-baseline"; }
+  );
 
   # The single `prebuilt_lib-0.1.0-<hash>` unit from the baseline graph, found by
   # key prefix (mirrors `cargoUnitScopeUnit`). Its attr name IS the unit key.
@@ -772,19 +782,18 @@ let
   # (c) Build a fresh workspace that injects the prebuilt unit over the
   # from-source one, so the consumer links the prebuilt rlib. `extraLibraries`
   # also surfaces it through `libraries`.
-  cargoUnitPrebuiltInjected = ix.cargoUnit.buildWorkspace {
-    pname = "cargo-unit-prebuilt-injected";
-    src = cargoUnitPrebuiltFixture;
-    workspaceRoot = ./fixtures/cargo-unit-prebuilt;
-    cargoArgs = [ "--workspace" ];
-    policy = cargoUnitPrebuiltPolicy;
-    extraUnits = {
-      ${cargoUnitPrebuiltLibKey} = cargoUnitPrebuiltLibUnit;
-    };
-    extraLibraries = {
-      prebuilt_lib = cargoUnitPrebuiltLibUnit;
-    };
-  };
+  cargoUnitPrebuiltInjected = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-injected";
+      extraUnits = {
+        ${cargoUnitPrebuiltLibKey} = cargoUnitPrebuiltLibUnit;
+      };
+      extraLibraries = {
+        prebuilt_lib = cargoUnitPrebuiltLibUnit;
+      };
+    }
+  );
 
   cargoUnitPrebuiltConsumer = cargoUnitPrebuiltInjected.binaries.prebuilt-consumer;
 
@@ -812,17 +821,16 @@ let
   cargoUnitPrebuiltMiskeyEval = builtins.tryEval (
     builtins.seq
       (builtins.attrNames
-        (ix.cargoUnit.buildWorkspace {
-          pname = "cargo-unit-prebuilt-miskey";
-          src = cargoUnitPrebuiltFixture;
-          workspaceRoot = ./fixtures/cargo-unit-prebuilt;
-          cargoArgs = [ "--workspace" ];
-          policy = cargoUnitPrebuiltPolicy;
-          # Deliberately wrong key: not present in the generated unit set.
-          extraUnits = {
-            "prebuilt_lib-0.1.0-deadbeefdeadbeef" = cargoUnitPrebuiltLibUnit;
-          };
-        }).units
+        (ix.cargoUnit.buildWorkspace (
+          cargoUnitPrebuiltCommon
+          // {
+            pname = "cargo-unit-prebuilt-miskey";
+            # Deliberately wrong key: not present in the generated unit set.
+            extraUnits = {
+              "prebuilt_lib-0.1.0-deadbeefdeadbeef" = cargoUnitPrebuiltLibUnit;
+            };
+          }
+        )).units
       )
       true
   );
