@@ -97,21 +97,50 @@ fn run(command: &mut Command) -> Result<String> {
     String::from_utf8(output.stdout).context("command stdout was not UTF-8")
 }
 
+/// The catalog output to evaluate at `rev`, preferring the sharded `ciChecks`
+/// and falling back to the flat `checks` on revisions that predate it.
+///
+/// blast-radius diffs head against the merge base, and that base is whatever was
+/// on `main` at fork time, which can be a commit from before `ciChecks` existed.
+/// Evaluating `#ciChecks.x86_64-linux` on such a rev fails outright, so probe the
+/// flake output set cheaply (forces the `{ <system> = ...; }` spine, not the
+/// catalog) and pick the attribute that is actually present. This is a migration
+/// shim: once no base older than the `ciChecks` introduction is ever evaluated,
+/// drop the probe and target `ciChecks` directly (ENG-2201).
+fn catalog_attr(repo: &str, rev: &str) -> &'static str {
+    let flakeref = format!("git+file://{repo}?rev={rev}&allRefs=1#ciChecks");
+    let has_ci_checks = Command::new("nix")
+        .args([
+            "eval",
+            &flakeref,
+            "--apply",
+            "builtins.isAttrs",
+            "--option",
+            "accept-flake-config",
+            "true",
+        ])
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if has_ci_checks { "ciChecks" } else { "checks" }
+}
+
 /// Evaluate every check derivation at `rev` of the local repo.
 ///
-/// Targets `.#ciChecks`, not `.#checks`: `ciChecks` keys each crate's per-#[test]
-/// checks under a `recurseForDerivations` group, so `nix-eval-jobs` enumerates
-/// cheap per-package names at the root and forces each crate's manifest IFD in
-/// its own worker job. The flat `.#checks` would force every crate's manifest in
-/// the single worker assigned the root attrpath, ballooning it to tens of GiB
-/// and getting it earlyoom-killed on the shared CI host (ENG-2201). `ciChecks`
-/// holds the same leaf derivations, so the per-#[test] diff is unchanged.
+/// Targets `.#ciChecks` when present (see [`catalog_attr`]): `ciChecks` keys each
+/// crate's per-#[test] checks under a `recurseForDerivations` group, so
+/// `nix-eval-jobs` enumerates cheap per-package names at the root and forces each
+/// crate's manifest IFD in its own worker job. The flat `.#checks` would force
+/// every crate's manifest in the single worker assigned the root attrpath,
+/// ballooning it to tens of GiB and getting it earlyoom-killed on the shared CI
+/// host (ENG-2201). Both outputs hold the same leaf derivations, so the
+/// per-#[test] diff is identical whichever is evaluated.
 ///
 /// `nix-eval-jobs` sits at the head of the pipeline; a startup/lock/fetch
 /// failure surfaces here rather than yielding an empty set that silently
 /// under-reports the blast radius.
 pub fn eval_checks(repo: &str, rev: &str) -> Result<EvalResult> {
-    let flakeref = format!("git+file://{repo}?rev={rev}&allRefs=1#ciChecks.x86_64-linux");
+    let attr = catalog_attr(repo, rev);
+    let flakeref = format!("git+file://{repo}?rev={rev}&allRefs=1#{attr}.x86_64-linux");
     let stdout = run(Command::new("nix").args([
         "run",
         EVAL_JOBS,
