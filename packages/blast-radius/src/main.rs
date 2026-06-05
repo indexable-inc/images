@@ -28,6 +28,14 @@ const CAPS: Caps = Caps {
     max_checks_per_cause: 5,
 };
 
+/// The two catalog evaluations a report diffs. A named struct rather than a bare
+/// `(EvalResult, EvalResult)` so the concurrent-eval scope below has a
+/// self-documenting return (and satisfies `clippy::anonymous_tuple_return_type`).
+struct Evals {
+    base: nix::EvalResult,
+    head: nix::EvalResult,
+}
+
 #[derive(Parser)]
 #[command(
     about = "Report how many .#checks.x86_64-linux derivations a PR would rebuild, and why"
@@ -111,14 +119,14 @@ fn main() -> Result<()> {
     // roughly halves the wall clock versus back-to-back. The eval cache stays
     // off (see eval_checks): with it on, two concurrent nix-eval-jobs contend on
     // the per-commit eval-cache SQLite and fail with "database is busy".
-    let (base, head) = std::thread::scope(|scope| -> Result<(nix::EvalResult, nix::EvalResult)> {
+    let Evals { base, head } = std::thread::scope(|scope| -> Result<Evals> {
         let head_eval = scope.spawn(|| nix::eval_checks(&revs.repo, &revs.head));
         let base = nix::eval_checks(&revs.repo, &revs.base)?;
         let head = match head_eval.join() {
             Ok(result) => result?,
             Err(_) => bail!("head check evaluation thread panicked"),
         };
-        Ok((base, head))
+        Ok(Evals { base, head })
     })?;
     guard_eval_failures(&base, &head)?;
     let base = base.checks;
