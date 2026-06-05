@@ -164,7 +164,12 @@ jobs:
               # map; the same `name_ok` charset gates the keys so a malicious
               # report cannot inject mention/HTML through a check label.
               ((.timings // {}) | type == "object") and
-              ((.timings // {}) | to_entries | all((.key | name_ok) and (.value | type == "number")))
+              ((.timings // {}) | to_entries | all((.key | name_ok) and (.value | type == "number"))) and
+              # `phaseTimings` is always present (the Rust crate stamps every
+              # phase including `total`). Keys are stable kebab-case so a
+              # hostile report cannot smuggle attacker-controlled keys into
+              # the artifact, even though the renderer never reads them.
+              (.phaseTimings | type == "object" and (to_entries | all((.key | type == "string" and test("^[a-z][a-z0-9-]*$")) and (.value | type == "number"))))
             )
           ' report.json > /dev/null \
             || { echo "::error::malformed blast-radius report.json"; exit 1; }

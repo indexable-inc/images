@@ -60,6 +60,11 @@ pub struct Report {
     /// rebuilt) or are new on this PR.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub timings: BTreeMap<String, f64>,
+    /// Per-phase wall-clock seconds for this report's producer pipeline.
+    /// Keys are stable kebab-case (see `main::record_phase`); values are raw
+    /// seconds with no rounding so a downstream trend stays precise.
+    #[serde(default, rename = "phaseTimings")]
+    pub phase_timings: BTreeMap<String, f64>,
 }
 
 /// Format `seconds` as a short, scannable suffix: `<1s` under a second,
@@ -241,6 +246,7 @@ mod tests {
                 },
             ],
             timings,
+            phase_timings: BTreeMap::new(),
         }
     }
 

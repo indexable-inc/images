@@ -5,4 +5,5 @@
  "causes":[{"name":"ix-rust-workspace","checks":["mcp-serverTools","rust-test-search_core"]},
            {"name":"image-base-layer","checks":["image-base"]},
            {"name":"ix-images-lint","checks":["lint"]}],
- "timings":{"mcp-serverTools":42.0,"rust-test-search_core":130.0,"image-base":0.6}}
+ "timings":{"mcp-serverTools":42.0,"rust-test-search_core":130.0,"image-base":0.6},
+ "phaseTimings":{"catalog-probe":0.4,"eval-base":23.4,"eval-head":25.1,"derivation-show-base":2.1,"derivation-show-head":2.0,"root-causes":0.05,"total":47.3}}

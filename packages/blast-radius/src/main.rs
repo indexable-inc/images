@@ -14,6 +14,7 @@ mod timings;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::time::Instant;
 
 use clap::Parser;
 use color_eyre::eyre::{Result, bail};
@@ -21,20 +22,19 @@ use color_eyre::eyre::{Result, bail};
 use causes::{Caps, root_causes};
 use report::{Report, categories};
 
+/// Phase labels are kebab-case and stable: they appear in CI logs and in
+/// `report.json.phaseTimings`, so renaming them breaks downstream readers.
+fn record_phase(phases: &mut BTreeMap<String, f64>, label: &'static str, secs: f64) {
+    eprintln!("blast-radius: {label}: {secs:.2}s");
+    phases.insert(label.to_owned(), secs);
+}
+
 /// Graph budget for the rendered flowchart: only the highest fan-out causes, and
 /// a few checks each, are drawn. The changed-checks list stays complete.
 const CAPS: Caps = Caps {
     max_causes: 6,
     max_checks_per_cause: 5,
 };
-
-/// The two catalog evaluations a report diffs. A named struct rather than a bare
-/// `(EvalResult, EvalResult)` so the concurrent-eval scope below has a
-/// self-documenting return (and satisfies `clippy::anonymous_tuple_return_type`).
-struct Evals {
-    base: nix::EvalResult,
-    head: nix::EvalResult,
-}
 
 #[derive(Parser)]
 #[command(
@@ -108,31 +108,103 @@ fn guard_eval_failures(base: &nix::EvalResult, head: &nix::EvalResult) -> Result
     Ok(())
 }
 
+/// The two catalog evaluations a report diffs. Named (rather than a bare
+/// tuple) to satisfy the workspace's `clippy::anonymous_tuple_return_type`.
+struct Evals {
+    base: nix::EvalResult,
+    head: nix::EvalResult,
+}
+
+/// Evaluate the catalog at base and head in parallel, timing each thread's
+/// own work so the recorded seconds reflect that worker's compute and not the
+/// parent scope's wall clock. The gap between `eval-base + eval-head` and
+/// `total` is the parallelism dividend.
+///
+/// The eval cache stays off (see [`nix::eval_checks`]): two concurrent
+/// `nix-eval-jobs` contend on the per-commit eval-cache `SQLite`.
+fn concurrent_evals(
+    repo: &str,
+    base: &str,
+    head: &str,
+    catalog: &str,
+    phases: &mut BTreeMap<String, f64>,
+) -> Result<Evals> {
+    let (base, head) = std::thread::scope(|scope| {
+        let head_h = scope.spawn(|| {
+            let t = Instant::now();
+            (nix::eval_checks(repo, head, catalog), t.elapsed().as_secs_f64())
+        });
+        let t = Instant::now();
+        let base = (nix::eval_checks(repo, base, catalog), t.elapsed().as_secs_f64());
+        let head = head_h
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        (base, head)
+    });
+    record_phase(phases, "eval-base", base.1);
+    record_phase(phases, "eval-head", head.1);
+    Ok(Evals {
+        base: base.0?,
+        head: head.0?,
+    })
+}
+
+/// Walk the changed-check frontier into a ranked cause list. Returns an
+/// empty list when nothing changed: the caller only renders causes that fan
+/// out from one of the rebuilt drvs.
+fn compute_causes(
+    base: &[nix::Check],
+    head: &[nix::Check],
+    changed: &[String],
+    phases: &mut BTreeMap<String, f64>,
+) -> Result<Vec<causes::Cause>> {
+    if changed.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Full `.drv` paths feed `nix derivation show`; the resulting graphs are
+    // keyed by basename, so attribute a check to its head drv's basename.
+    let head_paths: Vec<String> = changed
+        .iter()
+        .filter_map(|attr| nix::drv_for(head, attr))
+        .collect();
+    let base_paths: Vec<String> = changed
+        .iter()
+        .filter_map(|attr| nix::drv_for(base, attr))
+        .collect();
+    let t = Instant::now();
+    let head_graph = nix::derivation_graph(&head_paths)?;
+    record_phase(phases, "derivation-show-head", t.elapsed().as_secs_f64());
+    let t = Instant::now();
+    let base_graph = nix::derivation_graph(&base_paths)?;
+    record_phase(phases, "derivation-show-base", t.elapsed().as_secs_f64());
+    let changed_basenames: BTreeMap<String, String> = changed
+        .iter()
+        .filter_map(|attr| {
+            nix::drv_for(head, attr).map(|path| (attr.clone(), nix::basename(&path).to_owned()))
+        })
+        .collect();
+    let t = Instant::now();
+    let causes = root_causes(&base_graph, &head_graph, &changed_basenames, CAPS);
+    record_phase(phases, "root-causes", t.elapsed().as_secs_f64());
+    Ok(causes)
+}
+
 fn main() -> Result<()> {
     color_eyre::install()?;
     let cli = Cli::parse();
+    let wall = Instant::now();
+    let mut phases: BTreeMap<String, f64> = BTreeMap::new();
     let revs = git::resolve(cli.base.as_deref(), cli.head.as_deref())?;
 
     // Pick one catalog output for both revisions so their attr names line up
     // (see nix::catalog_attr): `ciChecks` when both revs expose it, else flat
     // `checks`. Resolved before the eval scope so base and head never mix keying.
+    let t = Instant::now();
     let catalog = nix::catalog_attr(&revs.repo, &revs.base, &revs.head);
+    record_phase(&mut phases, "catalog-probe", t.elapsed().as_secs_f64());
 
-    // base and head evals are independent, so run them concurrently. Each is a
-    // full `#{catalog}.x86_64-linux` evaluation (~11 min on ix's ~4300 checks),
-    // mostly blocked on the per-unit cargo IFD builds, so overlapping them
-    // roughly halves the wall clock versus back-to-back. The eval cache stays
-    // off (see eval_checks): with it on, two concurrent nix-eval-jobs contend on
-    // the per-commit eval-cache SQLite and fail with "database is busy".
-    let Evals { base, head } = std::thread::scope(|scope| -> Result<Evals> {
-        let head_eval = scope.spawn(|| nix::eval_checks(&revs.repo, &revs.head, catalog));
-        let base = nix::eval_checks(&revs.repo, &revs.base, catalog)?;
-        let head = match head_eval.join() {
-            Ok(result) => result?,
-            Err(_) => bail!("head check evaluation thread panicked"),
-        };
-        Ok(Evals { base, head })
-    })?;
+    let Evals { base, head } =
+        concurrent_evals(&revs.repo, &revs.base, &revs.head, catalog, &mut phases)?;
     guard_eval_failures(&base, &head)?;
     let base = base.checks;
     let head = head.checks;
@@ -170,29 +242,7 @@ fn main() -> Result<()> {
     removed.sort();
     let total = head.len();
 
-    let causes = if changed.is_empty() {
-        Vec::new()
-    } else {
-        // Full `.drv` paths feed `nix derivation show`; the resulting graphs are
-        // keyed by basename, so attribute a check to its head drv's basename.
-        let head_paths: Vec<String> = changed
-            .iter()
-            .filter_map(|attr| nix::drv_for(&head, attr))
-            .collect();
-        let base_paths: Vec<String> = changed
-            .iter()
-            .filter_map(|attr| nix::drv_for(&base, attr))
-            .collect();
-        let head_graph = nix::derivation_graph(&head_paths)?;
-        let base_graph = nix::derivation_graph(&base_paths)?;
-        let changed_basenames: BTreeMap<String, String> = changed
-            .iter()
-            .filter_map(|attr| {
-                nix::drv_for(&head, attr).map(|path| (attr.clone(), nix::basename(&path).to_owned()))
-            })
-            .collect();
-        root_causes(&base_graph, &head_graph, &changed_basenames, CAPS)
-    };
+    let causes = compute_causes(&base, &head, &changed, &mut phases)?;
 
     // Best-effort: a present-but-unreadable or corrupt timings file (a partial
     // artifact download, an empty upload) must not fail the report and break the
@@ -209,6 +259,8 @@ fn main() -> Result<()> {
         })
     });
 
+    record_phase(&mut phases, "total", wall.elapsed().as_secs_f64());
+
     let report = Report {
         base: short(&revs.base),
         head: short(&revs.head),
@@ -219,6 +271,7 @@ fn main() -> Result<()> {
         added,
         removed,
         timings,
+        phase_timings: phases,
     };
 
     if cli.json {

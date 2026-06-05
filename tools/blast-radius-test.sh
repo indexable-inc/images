@@ -22,10 +22,13 @@ yq '.jobs.comment.steps[] | select(.name == "Render comment").run' "$workflow" >
 
 validate() { ( cd "$tmp" && cp "$1" report.json && bash validate.sh ); }
 
-# Schema validation: the good report passes; hostile names and old (missing
-# categories/causes) reports are rejected fail-closed.
+# Schema validation: the good report passes; hostile and old (missing
+# categories/causes/phaseTimings) reports are rejected fail-closed. The two
+# `bad-phase-*` fixtures pin the kebab-case key constraint and the number-
+# typed value constraint that keep an attacker from smuggling shapes into
+# the artifact.
 if validate "$fixtures/good.json" >/dev/null 2>&1; then note "validate good: ok"; else note "validate good: FAIL"; fail=1; fi
-for bad in bad-name bad-check missing; do
+for bad in bad-name bad-check missing bad-phase-key bad-phase-value; do
   if validate "$fixtures/$bad.json" >/dev/null 2>&1; then
     note "validate $bad: FAIL (accepted hostile/old report)"; fail=1
   else
@@ -34,6 +37,9 @@ for bad in bad-name bad-check missing; do
 done
 
 # Render: the good report produces the golden comment (pie + flowchart + list).
+# `phaseTimings` is observability-only and never renders, so the golden
+# comment from a report carrying phaseTimings has no trace of those keys;
+# any drift here means the renderer leaked them.
 ( cd "$tmp" && cp "$fixtures/good.json" report.json && bash render.sh )
 if diff -u "$fixtures/good.expected.md" "$tmp/comment.md"; then note "render good: ok"; else note "render good: FAIL (output drift)"; fail=1; fi
 
