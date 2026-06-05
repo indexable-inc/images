@@ -456,46 +456,50 @@ let
       # C1: a prebuilt injection must OVERRIDE a unit/library the graph already
       # references. A key that is absent silently builds from source, defeating
       # the feature with zero signal, so fail loud and name the offending key.
-      assertInjectionKeysExist =
+      # Returns a list of human-readable problem strings (empty when valid).
+      injectionKeyProblems =
         label: injected: validKeys:
         let
           unknown = builtins.filter (key: !(builtins.elem key validKeys)) (builtins.attrNames injected);
         in
-        lib.assertMsg (unknown == [ ]) ''
-          cargoUnit.buildWorkspace: ${label} key(s) not present in the generated graph: ${
-            lib.concatStringsSep ", " unknown
-          }
+        lib.optional (unknown != [ ]) ''
+          ${label} key(s) not present in the generated graph: ${lib.concatStringsSep ", " unknown}
           A prebuilt injection must override a unit the workspace already references; a
           missing key would silently build from source. Available ${label} keys:
-            ${lib.concatStringsSep "\n  " validKeys}
-        '';
+            ${lib.concatStringsSep "\n  " validKeys}'';
 
       # C2: each injected unit must carry the workspace's actual toolchain id.
       # `mkPrebuiltLibraryUnit` records it in passthru; non-prebuilt injections
       # without that passthru are not checked (callers own those).
-      assertInjectionToolchains =
+      injectionToolchainProblems =
         label: injected:
         let
           mismatched = lib.filterAttrs (
             _: unit: (unit.passthru.toolchainId or workspaceToolchainId) != workspaceToolchainId
           ) injected;
-          render =
-            key: unit: "${key} (compiled with ${unit.passthru.toolchainId or "?"})";
+          render = key: unit: "${key} (compiled with ${unit.passthru.toolchainId or "?"})";
         in
-        lib.assertMsg (mismatched == { }) ''
-          cargoUnit.buildWorkspace: ${label} compiled with a toolchain other than this
-          workspace's (${workspaceToolchainId}):
+        lib.optional (mismatched != { }) ''
+          ${label} compiled with a toolchain other than this workspace's (${workspaceToolchainId}):
             ${lib.concatStringsSep "\n  " (lib.mapAttrsToList render mismatched)}
           A prebuilt rlib only links against, and only hashes to the same unit key as,
           the toolchain that produced it. Thread the workspace's rustToolchain into
-          mkPrebuiltLibraryUnit.
-        '';
+          mkPrebuiltLibraryUnit.'';
+
+      # All prebuilt-injection guard problems, gathered so a single assert can
+      # report every offending key at once (and so the assert keeps its
+      # `lib.assertMsg` shape, per the no-bare-assert lint).
+      injectionProblems =
+        injectionKeyProblems "extraUnits" args.extraUnits generatedUnitKeys
+        ++ injectionKeyProblems "extraLibraries" args.extraLibraries generatedLibraryKeys
+        ++ injectionToolchainProblems "extraUnits" args.extraUnits
+        ++ injectionToolchainProblems "extraLibraries" args.extraLibraries;
 
       units =
-        assert assertInjectionKeysExist "extraUnits" args.extraUnits generatedUnitKeys;
-        assert assertInjectionKeysExist "extraLibraries" args.extraLibraries generatedLibraryKeys;
-        assert assertInjectionToolchains "extraUnits" args.extraUnits;
-        assert assertInjectionToolchains "extraLibraries" args.extraLibraries;
+        assert lib.assertMsg (injectionProblems == [ ]) (
+          "cargoUnit.buildWorkspace: invalid prebuilt-unit injection:\n"
+          + lib.concatStringsSep "\n" injectionProblems
+        );
         importUnits { inherit (args) extraUnits extraLibraries; };
       targetSetNames =
         if args.cargoTargetNames == null then
@@ -872,7 +876,8 @@ let
         # Same artifact priority as render.rs:1387-1398 (.rlib wins over .rmeta).
         printf '%s\n' "$out/lib/lib${libName}-${hash}.rlib" > "$out/nix-support/extern-path"
         ${lib.concatMapStringsSep "\n" (
-          dep: ''printf '%s\n' ${lib.escapeShellArg (builtins.toString dep)} >> "$out/nix-support/dependency-units"''
+          dep:
+          ''printf '%s\n' ${lib.escapeShellArg (builtins.toString dep)} >> "$out/nix-support/dependency-units"''
         ) depUnits}
       '';
 in

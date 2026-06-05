@@ -750,8 +750,9 @@ let
     let
       names = builtins.attrNames cargoUnitPrebuiltLibMatches;
     in
-    assert lib.assertMsg (builtins.length names == 1)
-      "expected exactly one prebuilt_lib unit, found ${lib.concatStringsSep ", " names}";
+    assert lib.assertMsg (
+      builtins.length names == 1
+    ) "expected exactly one prebuilt_lib unit, found ${lib.concatStringsSep ", " names}";
     builtins.head names;
   # The hash component of "<name>-<version>-<hash>". The library crate name has
   # no dashes, and the version is the fixed literal above, so stripping the known
@@ -823,28 +824,28 @@ let
     }
   );
   cargoUnitPrebuiltPlainLibKey = builtins.head (
-    builtins.filter (lib.hasPrefix "prebuilt_lib-0.1.0-") (builtins.attrNames cargoUnitPrebuiltPlain.units)
+    builtins.filter (lib.hasPrefix "prebuilt_lib-0.1.0-") (
+      builtins.attrNames cargoUnitPrebuiltPlain.units
+    )
   );
 
   # M1 / C1 negative arm: a mis-keyed injection (a key absent from the generated
   # graph) must now fail loud, not silently build from source. `tryEval` over the
   # workspace's unit-set attribute names should report `success = false`.
   cargoUnitPrebuiltMiskeyEval = builtins.tryEval (
-    builtins.seq
-      (builtins.attrNames
-        (ix.cargoUnit.buildWorkspace (
-          cargoUnitPrebuiltCommon
-          // {
-            pname = "cargo-unit-prebuilt-miskey";
-            src = cargoUnitPrebuiltFixture;
-            # Deliberately wrong key: not present in the generated unit set.
-            extraUnits = {
-              "prebuilt_lib-0.1.0-deadbeefdeadbeef" = cargoUnitPrebuiltLibUnit;
-            };
-          }
-        )).units
-      )
-      true
+    builtins.seq (builtins.attrNames
+      (ix.cargoUnit.buildWorkspace (
+        cargoUnitPrebuiltCommon
+        // {
+          pname = "cargo-unit-prebuilt-miskey";
+          src = cargoUnitPrebuiltFixture;
+          # Deliberately wrong key: not present in the generated unit set.
+          extraUnits = {
+            "prebuilt_lib-0.1.0-deadbeefdeadbeef" = cargoUnitPrebuiltLibUnit;
+          };
+        }
+      )).units
+    ) true
   );
 
   goUnitFixture = fs.toSource {
@@ -4125,10 +4126,16 @@ let
       cargoUnitRealWorkspaceScript;
 
   cargoUnitPrebuiltTest =
-    mkTest "cargo-unit-prebuilt-library" cargoUnitPrebuiltAssertions cargoUnitPrebuiltScript;
+    mkTest "cargo-unit-prebuilt-library" cargoUnitPrebuiltAssertions
+      cargoUnitPrebuiltScript;
 in
 {
-  inherit imageTests groups cargoUnitRealWorkspaceAssertions cargoUnitPrebuiltAssertions;
+  inherit
+    imageTests
+    groups
+    cargoUnitRealWorkspaceAssertions
+    cargoUnitPrebuiltAssertions
+    ;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
   cargoUnitPrebuiltLibrary = cargoUnitPrebuiltTest;
   portableServices = portableServicesTest;
