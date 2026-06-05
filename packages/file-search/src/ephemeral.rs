@@ -101,6 +101,10 @@ impl EphemeralSearch {
             // The id was assigned by `enumerate()`, which yields `usize`, so on
             // the 64-bit targets we support this widening cast is lossless (a
             // `u64` index id always fits in a 64-bit `usize`).
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "id originated as usize on the 64-bit targets we support"
+            )]
             let id = raw_id as usize;
 
             results.push(RankResult { id, score });

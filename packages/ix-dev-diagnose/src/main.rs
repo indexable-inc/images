@@ -1368,9 +1368,14 @@ fn elapsed_ms(start: Instant) -> u64 {
     millis(start.elapsed())
 }
 
+// A duration past `u64::MAX` ms (~584M years) cannot occur in practice; saturate
+// explicitly rather than silently defaulting if it ever did. The `min` bounds
+// the value to `u64::MAX`, so the cast cannot truncate.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "min clamps to u64::MAX before the cast"
+)]
 fn millis(duration: Duration) -> u64 {
-    // A duration past `u64::MAX` ms (~584M years) cannot occur in practice;
-    // saturate explicitly rather than silently defaulting if it ever did.
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
