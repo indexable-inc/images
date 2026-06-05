@@ -327,6 +327,19 @@ let
     Rendering fails when a unit path cannot be tied back to `src` or `vendorDir`.
     Pass `cargoTargets = [ [ "--workspace" ] [ "--workspace" "--tests" ] ]`
     to expose roots from several Cargo executions through one generated graph.
+    Roots are consumed lazily: `binaries.<name>`, `libraries.<name>`, and
+    `targetSets.<set>.*` each reference one rustc unit derivation, so selecting
+    a subset of roots (say the native cdylibs out of a graph that also plans a
+    wasm target) never builds the other entries' units. A second buildWorkspace
+    call that only narrows `cargoTargets` yields byte-identical root
+    derivations (pinned by a tests/default.nix assertion) and adds a unit-graph
+    plus render IFD; create a separate workspace only when unit identity
+    changes (profile, policy, rustToolchain, env, extraRustcArgs). Top-level
+    `binaries`/`libraries` dedupe by Cargo target name and the first
+    `cargoTargets` entry wins, so when one crate roots under several entries,
+    select through `targetSets.<set>` instead. The exception to per-root
+    laziness is `tests.<target>.cases`, whose shared manifest IFD builds every
+    test binary in the graph.
     Include `--benches` or `--bench <name>` to expose `[[bench]]` roots under
     `benchmarks` and `benchmarkPlan`. Tango benches can compare previous and
     next artifacts with `next.compareTangoBenchmarks { baseline = previous; }`,

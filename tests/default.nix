@@ -626,6 +626,20 @@ let
     ];
   };
 
+  # Same workspace narrowed to the build graph only. Root derivations are
+  # per-unit, so this must yield byte-identical roots to lazily selecting from
+  # the multi-target workspace above; the helpers assertion pins that equality,
+  # which also proves a selected root's closure contains nothing from the
+  # dropped target sets. Consumers should select roots lazily instead of
+  # spinning up subset workspaces like this one (#716).
+  cargoUnitSubsetWorkspace = ix.cargoUnit.buildWorkspace {
+    src = cargoUnitFixture;
+    workspaceRoot = ./fixtures/cargo-unit-hello;
+    packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
+    packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
+    cargoTargets = [ [ "--workspace" ] ];
+  };
+
   cargoUnitCoverageRustToolchain = ix.languages.rust.toolchain pkgs {
     channel = "nightly";
     version = rustPinnedNightlyDate;
@@ -3325,6 +3339,12 @@ let
           cargoUnitWorkspace.targetSets.build.binaries.cargo-unit-hello.drvPath
           == cargoUnitWorkspace.binaries.cargo-unit-hello.drvPath;
         message = "cargo-unit should expose named target-set outputs without losing aggregate outputs";
+      }
+      {
+        assertion =
+          cargoUnitSubsetWorkspace.binaries.cargo-unit-hello.drvPath
+          == cargoUnitWorkspace.targetSets.build.binaries.cargo-unit-hello.drvPath;
+        message = "narrowing cargoTargets must yield identical root derivations; select roots lazily from the multi-target workspace instead of a subset buildWorkspace";
       }
       {
         assertion = cargoUnitPolicyDisabledWorkspace.policyChecks == { };
