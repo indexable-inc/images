@@ -689,10 +689,13 @@ let
   };
 
   # Self-test for the prebuilt-library injection seam (mkPrebuiltLibraryUnit +
-  # extraUnits / extraLibraries). The shape is: build a leaf library crate
-  # normally, capture its rlib+rmeta and the source-independent unit hash, then
-  # re-inject those artifacts as a prebuilt unit and build a downstream consumer
-  # that links it with no library source in the consumer's graph.
+  # extraUnits / extraLibraries). The shape: build a leaf library crate normally
+  # (the consumer's own source, `answer() = 42`), then inject a prebuilt unit
+  # built from a metadata-identical VARIANT of that library (`answer() = 99`)
+  # under the same source-independent unit key, and assert the downstream
+  # consumer prints 99. Using a distinguishable variant is what makes the proof
+  # real: a same-source rlib is byte-identical, so a runtime check could not tell
+  # prebuilt from source; 99-vs-42 can only come from the injected prebuilt.
   cargoUnitPrebuiltFixture = fs.toSource {
     root = ./fixtures/cargo-unit-prebuilt;
     fileset = fs.unions [
@@ -702,6 +705,17 @@ let
     ];
   };
 
+  # A metadata-identical variant of the fixture whose library returns 99 instead
+  # of 42. Same package name/version/edition/deps, so cargo-unit computes the
+  # same unit key; only the function body (source bytes, which the key ignores)
+  # differs. This stands in for "a prebuilt artifact compiled elsewhere".
+  cargoUnitPrebuiltVariantSource = pkgs.runCommand "cargo-unit-prebuilt-variant-source" { } ''
+    cp -R ${cargoUnitPrebuiltFixture}/. "$out"
+    chmod -R u+w "$out"
+    sed -i 's/^    42$/    99/' "$out/crates/prebuilt-lib/src/lib.rs"
+    grep -q '99' "$out/crates/prebuilt-lib/src/lib.rs"
+  '';
+
   cargoUnitPrebuiltPolicy = {
     denyUnusedCrateDependencies = false;
     cargoAudit.enable = false;
@@ -709,31 +723,29 @@ let
     clippy.enable = false;
   };
 
-  # Shared args for every prebuilt-seam fixture workspace. `contentAddressed`
-  # is forced off because the M1 closure check uses `exportReferencesGraph`,
-  # which does not yet support CA derivations. The unit hash (hence the unit
-  # key the injection relies on) is independent of this flag (hash.rs /
-  # model.rs:640-683 never feed `content_addressed`), so baseline and injected
-  # still share keys.
+  # Shared args for the prebuilt-seam fixture workspaces.
   cargoUnitPrebuiltCommon = {
-    src = cargoUnitPrebuiltFixture;
     workspaceRoot = ./fixtures/cargo-unit-prebuilt;
     cargoArgs = [ "--workspace" ];
     policy = cargoUnitPrebuiltPolicy;
-    contentAddressed = false;
   };
 
-  # (a) From-source baseline build of the whole workspace. This is where the
-  # real rlib+rmeta come from and where the canonical unit hash is computed.
-  cargoUnitPrebuiltBaseline = ix.cargoUnit.buildWorkspace (
-    cargoUnitPrebuiltCommon // { pname = "cargo-unit-prebuilt-baseline"; }
+  # (a) The variant workspace, standing in for an out-of-tree prebuilt SDK
+  # build. Its lib rlib (answer = 99) is what we inject.
+  cargoUnitPrebuiltVariant = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-variant";
+      src = cargoUnitPrebuiltVariantSource;
+      workspaceRoot = cargoUnitPrebuiltVariantSource;
+    }
   );
 
-  # The single `prebuilt_lib-0.1.0-<hash>` unit from the baseline graph, found by
+  # The single `prebuilt_lib-0.1.0-<hash>` unit from the variant graph, found by
   # key prefix (mirrors `cargoUnitScopeUnit`). Its attr name IS the unit key.
   cargoUnitPrebuiltLibMatches = lib.filterAttrs (
     name: _: lib.hasPrefix "prebuilt_lib-0.1.0-" name
-  ) cargoUnitPrebuiltBaseline.units;
+  ) cargoUnitPrebuiltVariant.units;
   cargoUnitPrebuiltLibKey =
     let
       names = builtins.attrNames cargoUnitPrebuiltLibMatches;
@@ -745,12 +757,12 @@ let
   # no dashes, and the version is the fixed literal above, so stripping the known
   # prefix leaves the hash.
   cargoUnitPrebuiltLibHash = lib.removePrefix "prebuilt_lib-0.1.0-" cargoUnitPrebuiltLibKey;
-  cargoUnitPrebuiltBaselineLibUnit = cargoUnitPrebuiltLibMatches.${cargoUnitPrebuiltLibKey};
+  cargoUnitPrebuiltVariantLibUnit = cargoUnitPrebuiltLibMatches.${cargoUnitPrebuiltLibKey};
 
-  # (b) Re-inject the captured artifacts as a prebuilt unit. The rlib/rmeta paths
+  # (b) Wrap the variant's rlib+rmeta as a prebuilt unit. The rlib/rmeta paths
   # are reconstructed from the known underscored name + hash, exactly as the
   # renderer wrote them (render.rs:1376-1392). The toolchain id matches the
-  # default toolchain the baseline compiled with, so the eval-time assertion in
+  # default toolchain the variant compiled with, so the eval-time assertion in
   # `mkPrebuiltLibraryUnit` passes.
   cargoUnitPrebuiltLibUnit = ix.cargoUnit.mkPrebuiltLibraryUnit {
     # The Cargo library TARGET name, which is what the renderer uses for both
@@ -759,8 +771,8 @@ let
     name = "prebuilt_lib";
     version = "0.1.0";
     hash = cargoUnitPrebuiltLibHash;
-    rlib = "${cargoUnitPrebuiltBaselineLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
-    rmeta = "${cargoUnitPrebuiltBaselineLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
+    rlib = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
+    rmeta = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
     toolchainId = ix.cargoUnit.defaultToolchainId;
   };
 
@@ -772,20 +784,23 @@ let
         name = "prebuilt_lib";
         version = "0.1.0";
         hash = cargoUnitPrebuiltLibHash;
-        rlib = "${cargoUnitPrebuiltBaselineLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
-        rmeta = "${cargoUnitPrebuiltBaselineLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
+        rlib = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
+        rmeta = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
         toolchainId = "definitely-not-the-toolchain";
       }).drvPath
       true
   );
 
-  # (c) Build a fresh workspace that injects the prebuilt unit over the
-  # from-source one, so the consumer links the prebuilt rlib. `extraLibraries`
-  # also surfaces it through `libraries`.
+  # (c) Build the consumer workspace from its OWN source (lib answer = 42), but
+  # inject the variant prebuilt unit (answer = 99) over the from-source lib unit.
+  # The consumer links the injected prebuilt rlib; if it prints 99 it used the
+  # prebuilt, if 42 it fell back to its own source. `extraLibraries` also
+  # surfaces the prebuilt through `libraries`.
   cargoUnitPrebuiltInjected = ix.cargoUnit.buildWorkspace (
     cargoUnitPrebuiltCommon
     // {
       pname = "cargo-unit-prebuilt-injected";
+      src = cargoUnitPrebuiltFixture;
       extraUnits = {
         ${cargoUnitPrebuiltLibKey} = cargoUnitPrebuiltLibUnit;
       };
@@ -797,23 +812,19 @@ let
 
   cargoUnitPrebuiltConsumer = cargoUnitPrebuiltInjected.binaries.prebuilt-consumer;
 
-  # M1: the build closure of the consumer's derivation. `exportReferencesGraph`
-  # over the consumer `.drv` writes every `.drv`/source path in its build
-  # closure into `$out/closure`, so the self-test can assert the from-source lib
-  # unit's `.drv` is ABSENT (source-less link) and the prebuilt unit's `.drv` is
-  # PRESENT. A runtime grep cannot distinguish prebuilt from source because the
-  # linked rlib bytes are identical; the build closure can.
-  cargoUnitPrebuiltConsumerClosure =
-    pkgs.runCommand "cargo-unit-prebuilt-consumer-closure"
-      {
-        exportReferencesGraph = [
-          "consumer-build-closure"
-          cargoUnitPrebuiltConsumer.drvPath
-        ];
-      }
-      ''
-        cp consumer-build-closure "$out"
-      '';
+  # The consumer workspace's OWN from-source lib unit key (no injection). Used to
+  # prove the variant (different source) hashes to the same key, which is the
+  # source-independence the whole swap relies on.
+  cargoUnitPrebuiltPlain = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-plain";
+      src = cargoUnitPrebuiltFixture;
+    }
+  );
+  cargoUnitPrebuiltPlainLibKey = builtins.head (
+    builtins.filter (lib.hasPrefix "prebuilt_lib-0.1.0-") (builtins.attrNames cargoUnitPrebuiltPlain.units)
+  );
 
   # M1 / C1 negative arm: a mis-keyed injection (a key absent from the generated
   # graph) must now fail loud, not silently build from source. `tryEval` over the
@@ -825,6 +836,7 @@ let
           cargoUnitPrebuiltCommon
           // {
             pname = "cargo-unit-prebuilt-miskey";
+            src = cargoUnitPrebuiltFixture;
             # Deliberately wrong key: not present in the generated unit set.
             extraUnits = {
               "prebuilt_lib-0.1.0-deadbeefdeadbeef" = cargoUnitPrebuiltLibUnit;
@@ -4017,10 +4029,16 @@ let
   # consumer links with no library source in its own graph.
   cargoUnitPrebuiltAssertions = [
     {
+      # Source-independence: the variant lib (answer = 99) hashes to the SAME
+      # unit key as the consumer's own from-source lib (answer = 42). This is the
+      # property that lets a metadata-faithful prebuilt stand in for source.
+      assertion = cargoUnitPrebuiltLibKey == cargoUnitPrebuiltPlainLibKey;
+      message = "a metadata-identical variant should produce the same unit key as the from-source lib";
+    }
+    {
       # The injected prebuilt unit is a genuinely different derivation from the
-      # from-source one, so a successful downstream link cannot silently fall
-      # back to building the library from source.
-      assertion = cargoUnitPrebuiltLibUnit.drvPath != cargoUnitPrebuiltBaselineLibUnit.drvPath;
+      # variant's from-source compile unit.
+      assertion = cargoUnitPrebuiltLibUnit.drvPath != cargoUnitPrebuiltVariantLibUnit.drvPath;
       message = "mkPrebuiltLibraryUnit should produce a distinct prebuilt derivation, not the from-source unit";
     }
     {
@@ -4062,21 +4080,16 @@ let
     test -f ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
     grep -q '\.rlib$' ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
 
-    # The consumer links the injected prebuilt rlib (no library source in its
-    # graph) and runs the code inside it. A successful realization here proves
-    # the prebuilt unit is the actual build input: Nix could not realize the
-    # consumer otherwise, and the printed marker proves the rlib carried the
-    # real code, not an empty or wrong artifact.
+    # M1 (definitive source-less proof): the consumer's OWN source returns 42,
+    # but it links the injected prebuilt rlib built from the variant (99). The
+    # binary printing 99, not 42, can ONLY mean it linked the prebuilt artifact
+    # and not its own from-source lib. A same-source rlib would be byte-identical
+    # and could not distinguish the two; the distinct value makes the proof real.
     ${cargoUnitPrebuiltConsumer}/bin/prebuilt-consumer > cargo-unit-prebuilt.out
-    grep -q 'prebuilt-lib:42 (answer=42)' cargo-unit-prebuilt.out
-
-    # M1: prove source-less linking via the consumer's BUILD CLOSURE, which a
-    # runtime grep cannot (the linked rlib bytes are byte-identical to source).
-    # The injected prebuilt unit's .drv MUST appear; the from-source lib unit's
-    # .drv MUST NOT (it was overridden out of the consumer's inputs).
-    grep -q ${lib.escapeShellArg cargoUnitPrebuiltLibUnit.drvPath} ${cargoUnitPrebuiltConsumerClosure}
-    if grep -q ${lib.escapeShellArg cargoUnitPrebuiltBaselineLibUnit.drvPath} ${cargoUnitPrebuiltConsumerClosure}; then
-      echo "error: from-source lib unit is in the consumer build closure; injection did not displace it" >&2
+    cat cargo-unit-prebuilt.out
+    grep -q 'prebuilt-lib:99 (answer=99)' cargo-unit-prebuilt.out
+    if grep -q 'answer=42' cargo-unit-prebuilt.out; then
+      echo "error: consumer used its own from-source lib (42), not the injected prebuilt (99)" >&2
       exit 1
     fi
   '';
