@@ -101,7 +101,9 @@ let
   #     the agent to the index MCP server and strip every built-in tool from
   #     context. Arrays concat across layers and a deny at any scope wins, so a
   #     downstream user/project/local settings file cannot un-deny these; the
-  #     only un-lock is the nix `restrictToIndexMcp = false` override.
+  #     only un-lock is the nix `restrictToIndexMcp = false` override. Caveat: a
+  #     managed `bypassPermissions` (e.g. the dev image) skips the whole
+  #     permission layer, so these deny rules are inert there.
   #   permissions.defaultMode + skipDangerousModePermissionPrompt (only when
   #     `dangerouslySkipPermissions`, the opt-in escape hatch): start in bypass
   #     mode and pre-accept the one-time dangerous-mode warning. Both keys are
@@ -128,6 +130,7 @@ let
     "KillShell"
     "ListMcpResources"
     "NotebookEdit"
+    "PowerShell"
     "Read"
     "ReadMcpResource"
     "Skill"
