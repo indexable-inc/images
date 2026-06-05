@@ -705,7 +705,9 @@ let
     prebuilt rlib with no source present.
 
     Arguments:
-    - `name`: the library unit's Cargo target name. Dashes are mapped to
+    - `name`: the library unit's Cargo target name (the leading component of the
+      unit key), which for a default `lib` target is the underscored crate name
+      (e.g. package `my-lib` has target `my_lib`). Any dashes are mapped to
       underscores for the on-disk artifact names, matching the renderer.
     - `version`: the crate version, used only to build the unit key the caller
       injects under.

@@ -743,7 +743,10 @@ let
   # default toolchain the baseline compiled with, so the eval-time assertion in
   # `mkPrebuiltLibraryUnit` passes.
   cargoUnitPrebuiltLibUnit = ix.cargoUnit.mkPrebuiltLibraryUnit {
-    name = "prebuilt-lib";
+    # The Cargo library TARGET name, which is what the renderer uses for both
+    # the unit key and the rlib filename (render.rs:1376, prepare_graph names).
+    # The package is `prebuilt-lib`; its lib target is `prebuilt_lib`.
+    name = "prebuilt_lib";
     version = "0.1.0";
     hash = cargoUnitPrebuiltLibHash;
     rlib = "${cargoUnitPrebuiltBaselineLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
@@ -756,7 +759,7 @@ let
   cargoUnitPrebuiltToolchainMismatchEval = builtins.tryEval (
     builtins.seq
       (ix.cargoUnit.mkPrebuiltLibraryUnit {
-        name = "prebuilt-lib";
+        name = "prebuilt_lib";
         version = "0.1.0";
         hash = cargoUnitPrebuiltLibHash;
         rlib = "${cargoUnitPrebuiltBaselineLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
