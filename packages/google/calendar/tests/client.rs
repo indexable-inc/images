@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use axum::Router;
 use axum::extract::{Form, Json, Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -75,7 +76,7 @@ impl Default for MockCalendar {
 async fn token(
     State(mock): State<Arc<MockCalendar>>,
     Form(form): Form<HashMap<String, String>>,
-) -> (StatusCode, Json<Value>) {
+) -> impl IntoResponse {
     mock.seen.lock().unwrap().token_forms.push(form);
     let status = StatusCode::from_u16(mock.token_status).unwrap();
     (status, Json(mock.token_body.clone()))
@@ -119,7 +120,7 @@ async fn delete_one(
     State(mock): State<Arc<MockCalendar>>,
     Path((_calendar, event_id)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
-) -> (StatusCode, Json<Value>) {
+) -> impl IntoResponse {
     mock.seen
         .lock()
         .unwrap()
