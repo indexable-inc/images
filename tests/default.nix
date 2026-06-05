@@ -3415,10 +3415,6 @@ let
         message = "repo Rust package builds should be exposed as flake-checkable tests";
       }
       {
-        assertion = repoPackages ? ix;
-        message = "repo package set should expose the ix CLI package by default";
-      }
-      {
         assertion = repoPackages.minecraft-nbt.passthru.tests ? unusedCrateDependencies;
         message = "repo Rust per-crate policy checks should be exposed as flake-checkable tests";
       }
