@@ -688,6 +688,103 @@ let
     };
   };
 
+  # Self-test for the prebuilt-library injection seam (mkPrebuiltLibraryUnit +
+  # extraUnits / extraLibraries). The shape is: build a leaf library crate
+  # normally, capture its rlib+rmeta and the source-independent unit hash, then
+  # re-inject those artifacts as a prebuilt unit and build a downstream consumer
+  # that links it with no library source in the consumer's graph.
+  cargoUnitPrebuiltFixture = fs.toSource {
+    root = ./fixtures/cargo-unit-prebuilt;
+    fileset = fs.unions [
+      ./fixtures/cargo-unit-prebuilt/Cargo.lock
+      ./fixtures/cargo-unit-prebuilt/Cargo.toml
+      ./fixtures/cargo-unit-prebuilt/crates
+    ];
+  };
+
+  cargoUnitPrebuiltPolicy = {
+    denyUnusedCrateDependencies = false;
+    cargoAudit.enable = false;
+    cargoMachete.enable = false;
+    clippy.enable = false;
+  };
+
+  # (a) From-source baseline build of the whole workspace. This is where the
+  # real rlib+rmeta come from and where the canonical unit hash is computed.
+  cargoUnitPrebuiltBaseline = ix.cargoUnit.buildWorkspace {
+    pname = "cargo-unit-prebuilt-baseline";
+    src = cargoUnitPrebuiltFixture;
+    workspaceRoot = ./fixtures/cargo-unit-prebuilt;
+    cargoArgs = [ "--workspace" ];
+    policy = cargoUnitPrebuiltPolicy;
+  };
+
+  # The single `prebuilt_lib-0.1.0-<hash>` unit from the baseline graph, found by
+  # key prefix (mirrors `cargoUnitScopeUnit`). Its attr name IS the unit key.
+  cargoUnitPrebuiltLibMatches = lib.filterAttrs (
+    name: _: lib.hasPrefix "prebuilt_lib-0.1.0-" name
+  ) cargoUnitPrebuiltBaseline.units;
+  cargoUnitPrebuiltLibKey =
+    let
+      names = builtins.attrNames cargoUnitPrebuiltLibMatches;
+    in
+    assert lib.assertMsg (builtins.length names == 1)
+      "expected exactly one prebuilt_lib unit, found ${lib.concatStringsSep ", " names}";
+    builtins.head names;
+  # The hash component of "<name>-<version>-<hash>". The library crate name has
+  # no dashes, and the version is the fixed literal above, so stripping the known
+  # prefix leaves the hash.
+  cargoUnitPrebuiltLibHash = lib.removePrefix "prebuilt_lib-0.1.0-" cargoUnitPrebuiltLibKey;
+  cargoUnitPrebuiltBaselineLibUnit = cargoUnitPrebuiltLibMatches.${cargoUnitPrebuiltLibKey};
+
+  # (b) Re-inject the captured artifacts as a prebuilt unit. The rlib/rmeta paths
+  # are reconstructed from the known underscored name + hash, exactly as the
+  # renderer wrote them (render.rs:1376-1392). The toolchain id matches the
+  # default toolchain the baseline compiled with, so the eval-time assertion in
+  # `mkPrebuiltLibraryUnit` passes.
+  cargoUnitPrebuiltLibUnit = ix.cargoUnit.mkPrebuiltLibraryUnit {
+    name = "prebuilt-lib";
+    version = "0.1.0";
+    hash = cargoUnitPrebuiltLibHash;
+    rlib = "${cargoUnitPrebuiltBaselineLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
+    rmeta = "${cargoUnitPrebuiltBaselineLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
+    toolchainId = ix.cargoUnit.defaultToolchainId;
+  };
+
+  # Negative arm: a wrong toolchain id must fail at eval (not at link time).
+  # `tryEval` should report `success = false`.
+  cargoUnitPrebuiltToolchainMismatchEval = builtins.tryEval (
+    builtins.seq
+      (ix.cargoUnit.mkPrebuiltLibraryUnit {
+        name = "prebuilt-lib";
+        version = "0.1.0";
+        hash = cargoUnitPrebuiltLibHash;
+        rlib = "${cargoUnitPrebuiltBaselineLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
+        rmeta = "${cargoUnitPrebuiltBaselineLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
+        toolchainId = "definitely-not-the-toolchain";
+      }).drvPath
+      true
+  );
+
+  # (c) Build a fresh workspace that injects the prebuilt unit over the
+  # from-source one, so the consumer links the prebuilt rlib. `extraLibraries`
+  # also surfaces it through `libraries`.
+  cargoUnitPrebuiltInjected = ix.cargoUnit.buildWorkspace {
+    pname = "cargo-unit-prebuilt-injected";
+    src = cargoUnitPrebuiltFixture;
+    workspaceRoot = ./fixtures/cargo-unit-prebuilt;
+    cargoArgs = [ "--workspace" ];
+    policy = cargoUnitPrebuiltPolicy;
+    extraUnits = {
+      ${cargoUnitPrebuiltLibKey} = cargoUnitPrebuiltLibUnit;
+    };
+    extraLibraries = {
+      prebuilt_lib = cargoUnitPrebuiltLibUnit;
+    };
+  };
+
+  cargoUnitPrebuiltConsumer = cargoUnitPrebuiltInjected.binaries.prebuilt-consumer;
+
   goUnitFixture = fs.toSource {
     root = ./fixtures/go-unit-hello;
     fileset = fs.unions [
@@ -3863,6 +3960,61 @@ let
     test -d ${cargoUnitRealWorkspaces.regex.testRoots}
   '';
 
+  # --- Prebuilt library injection seam -------------------------------------
+  # Proves mkPrebuiltLibraryUnit + extraUnits/extraLibraries: a leaf library is
+  # built from source, its rlib+rmeta and source-independent hash are captured,
+  # and those artifacts are re-injected as a prebuilt unit that a downstream
+  # consumer links with no library source in its own graph.
+  cargoUnitPrebuiltAssertions = [
+    {
+      # The injected prebuilt unit is a genuinely different derivation from the
+      # from-source one, so a successful downstream link cannot silently fall
+      # back to building the library from source.
+      assertion = cargoUnitPrebuiltLibUnit.drvPath != cargoUnitPrebuiltBaselineLibUnit.drvPath;
+      message = "mkPrebuiltLibraryUnit should produce a distinct prebuilt derivation, not the from-source unit";
+    }
+    {
+      # `extraUnits` merges over the generated `units` set under the unit key, so
+      # the downstream consumer's `units.<key>` reference resolves to it.
+      assertion =
+        cargoUnitPrebuiltInjected.units.${cargoUnitPrebuiltLibKey}.drvPath
+        == cargoUnitPrebuiltLibUnit.drvPath;
+      message = "extraUnits should override the generated units entry with the injected prebuilt unit";
+    }
+    {
+      # `extraLibraries` surfaces the injected unit through `libraries`.
+      assertion =
+        cargoUnitPrebuiltInjected.libraries.prebuilt_lib.drvPath == cargoUnitPrebuiltLibUnit.drvPath;
+      message = "extraLibraries should override the libraries entry with the injected prebuilt unit";
+    }
+    {
+      assertion = cargoUnitPrebuiltLibUnit.passthru.unitKey == cargoUnitPrebuiltLibKey;
+      message = "mkPrebuiltLibraryUnit should expose the unit key it was injected under";
+    }
+    {
+      # A toolchain id mismatch must be caught at eval, not at link time.
+      assertion = !cargoUnitPrebuiltToolchainMismatchEval.success;
+      message = "mkPrebuiltLibraryUnit should reject a toolchain id mismatch during eval";
+    }
+  ];
+
+  cargoUnitPrebuiltScript = ''
+    # The injected unit's $out matches the unit contract: extern-path holds the
+    # absolute path to the rlib (render.rs:1386-1398).
+    test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib
+    test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta
+    test -f ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
+    grep -q '\.rlib$' ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
+
+    # The consumer links the injected prebuilt rlib (no library source in its
+    # graph) and runs the code inside it. A successful realization here proves
+    # the prebuilt unit is the actual build input: Nix could not realize the
+    # consumer otherwise, and the printed marker proves the rlib carried the
+    # real code, not an empty or wrong artifact.
+    ${cargoUnitPrebuiltConsumer}/bin/prebuilt-consumer > cargo-unit-prebuilt.out
+    grep -q 'prebuilt-lib:42 (answer=42)' cargo-unit-prebuilt.out
+  '';
+
   # --- Test derivation builder ----------------------------------------------
 
   mkTest =
@@ -3892,10 +4044,14 @@ let
   cargoUnitRealWorkspacesTest =
     mkTest "cargo-unit-real-workspaces" cargoUnitRealWorkspaceAssertions
       cargoUnitRealWorkspaceScript;
+
+  cargoUnitPrebuiltTest =
+    mkTest "cargo-unit-prebuilt-library" cargoUnitPrebuiltAssertions cargoUnitPrebuiltScript;
 in
 {
-  inherit imageTests groups cargoUnitRealWorkspaceAssertions;
+  inherit imageTests groups cargoUnitRealWorkspaceAssertions cargoUnitPrebuiltAssertions;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
+  cargoUnitPrebuiltLibrary = cargoUnitPrebuiltTest;
   portableServices = portableServicesTest;
 
   # Aggregate. Pulls every per-image test into one derivation so
@@ -3906,6 +4062,7 @@ in
       fleetTest
       helperTest
       portableServicesTest
+      cargoUnitPrebuiltTest
     ]
   );
 }

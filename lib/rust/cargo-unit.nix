@@ -5,6 +5,13 @@
   rust,
 }:
 let
+  # The toolchain id baked into every unit hash for the default toolchain
+  # (`generateUnitsNix` computes the same `baseNameOf (toString rustToolchain)`,
+  # lib/rust/cargo-unit.nix). Exposed so callers of `mkPrebuiltLibraryUnit` can
+  # record and assert the id a prebuilt rlib was compiled with without
+  # reconstructing it by hand.
+  defaultToolchainId = builtins.baseNameOf (builtins.toString rust.defaultRustToolchain);
+
   profileArgs =
     profile:
     if profile == "release" then
@@ -51,6 +58,15 @@ let
     cargoExtraConfig = args.cargoExtraConfig or "";
     vendorDir = args.vendorDir or null;
     vendorSources = args.vendorSources or null;
+    # Additive seam for injecting prebuilt units (rlib+rmeta) that were not built
+    # from source. `extraUnits` is keyed by the unit key
+    # (`"<name>-<version>-<hash>"`) and merged over the generated `units` set;
+    # `extraLibraries` is keyed by the underscored library name and merged over
+    # `libraries`. Both default to `{}`, so an unconfigured workspace is
+    # byte-identical to one built before the seam existed. See
+    # `mkPrebuiltLibraryUnit` for the producer.
+    extraUnits = args.extraUnits or { };
+    extraLibraries = args.extraLibraries or { };
     # Maps exact Cargo.lock source strings to already-fetched source trees.
     # This keeps private Git dependencies reproducible without requiring
     # sandboxed fetchers to see a developer SSH agent or GitHub credentials.
@@ -408,6 +424,10 @@ let
           clippyLintFlagsFromManifest (args.src + "/Cargo.toml") ++ rust.clippyLintArgs args.policy;
         clippyEnabled = perUnitClippyEnabled;
         extraPolicyChecks = extraPolicyChecksFromRust;
+        # Prebuilt-unit injection seam. Empty by default (commonArgs), so the
+        # generated `units` / `libraries` sets are unchanged unless a caller
+        # opts in. See mkPrebuiltLibraryUnit.
+        inherit (args) extraUnits extraLibraries;
       };
       targetSetNames =
         if args.cargoTargetNames == null then
@@ -662,6 +682,96 @@ let
       sourceOverrides = args.sourceOverrides or { };
       vendorSources = args.vendorSources or null;
     };
+
+  /**
+    Build a library unit derivation from already-compiled artifacts instead of
+    from source.
+
+    The result is byte-contract-identical to a library unit the renderer would
+    emit (`packages/nix-cargo-unit/src/render.rs:1375-1402`): `$out` carries
+    `$out/lib/lib<name>-<hash>.rlib`, the matching `.rmeta`, and
+    `$out/nix-support/extern-path` holding the absolute path to the `.rlib`.
+    A downstream unit therefore consumes it exactly like a from-source unit:
+    `-L dependency=$out/lib` and `--extern <crate>=$(cat $out/nix-support/extern-path)`
+    (`render.rs:1015-1047`).
+
+    Pass the produced derivation through `buildWorkspace`'s `extraUnits` (keyed by
+    `"<name>-<version>-<hash>"`) and/or `extraLibraries` (keyed by the crate's
+    underscored library name). Because a unit's `<hash>` hashes package identity,
+    target, edition, crate-types, features, profile, dependency identities, and
+    the toolchain id, but never the source bytes (`model.rs:612-672`,
+    `hash.rs:18-26`), a metadata-faithful stub crate yields the same `<hash>` as
+    the real prebuilt, so injecting this unit links a downstream crate against a
+    prebuilt rlib with no source present.
+
+    Arguments:
+    - `name`: the library unit's Cargo target name. Dashes are mapped to
+      underscores for the on-disk artifact names, matching the renderer.
+    - `version`: the crate version, used only to build the unit key the caller
+      injects under.
+    - `hash`: the source-independent unit hash. Must equal the `<hash>` the
+      renderer computes for the metadata-faithful stub the downstream graph sees,
+      or the downstream `--extern`/`-L` references will not resolve to this unit.
+    - `rlib`: path to the compiled `.rlib` artifact.
+    - `rmeta`: path to the compiled `.rmeta` artifact.
+    - `toolchainId`: the toolchain id the prebuilt was compiled with. Asserted
+      equal to `baseNameOf (toString rustToolchain)` so a toolchain mismatch
+      fails at eval, never at link time.
+    - `rustToolchain`: optional; defaults to `rust.defaultRustToolchain`. Only
+      used for the toolchain-id assertion.
+    - `depUnits`: optional list of dependency unit derivations. Each contributes
+      a `-L dependency=<dep>/lib` so downstream resolution of this unit's own
+      transitive deps keeps working; defaults to `[ ]` for a leaf library.
+  */
+  mkPrebuiltLibraryUnit =
+    {
+      name,
+      version,
+      hash,
+      rlib,
+      rmeta,
+      toolchainId,
+      rustToolchain ? rust.defaultRustToolchain,
+      depUnits ? [ ],
+    }:
+    let
+      expectedToolchainId = builtins.baseNameOf (builtins.toString rustToolchain);
+      # The renderer underscores the Cargo target name for on-disk artifacts
+      # (`render.rs:1376`). Mirror that exactly so the rlib filename and the
+      # `extern-path` contents match what a from-source unit would produce.
+      libName = builtins.replaceStrings [ "-" ] [ "_" ] name;
+    in
+    assert lib.assertMsg (toolchainId == expectedToolchainId) ''
+      cargoUnit.mkPrebuiltLibraryUnit: toolchainId mismatch for `${name}`.
+        prebuilt was compiled with: ${toolchainId}
+        this workspace's toolchain: ${expectedToolchainId}
+      A prebuilt rlib/rmeta only links against the toolchain that produced it.
+    '';
+    pkgs.runCommand "cargo-unit-prebuilt-${name}-${version}-${hash}"
+      {
+        # Surfaced for callers/tests that want to confirm the injected key
+        # without reconstructing the format string.
+        passthru = {
+          unitKey = "${name}-${version}-${hash}";
+          libraryName = libName;
+          inherit
+            name
+            version
+            hash
+            toolchainId
+            ;
+        };
+      }
+      ''
+        mkdir -p "$out/lib" "$out/nix-support"
+        cp ${lib.escapeShellArg (builtins.toString rlib)} "$out/lib/lib${libName}-${hash}.rlib"
+        cp ${lib.escapeShellArg (builtins.toString rmeta)} "$out/lib/lib${libName}-${hash}.rmeta"
+        # Same artifact priority as render.rs:1387-1398 (.rlib wins over .rmeta).
+        printf '%s\n' "$out/lib/lib${libName}-${hash}.rlib" > "$out/nix-support/extern-path"
+        ${lib.concatMapStringsSep "\n" (
+          dep: ''printf '%s\n' ${lib.escapeShellArg (builtins.toString dep)} >> "$out/nix-support/dependency-units"''
+        ) depUnits}
+      '';
 in
 {
   inherit
@@ -671,8 +781,10 @@ in
     selectBinaryWithTests
     selectLibraryWithTests
     auditCargoLock
+    defaultToolchainId
     generateUnitGraph
     generateUnitsNix
+    mkPrebuiltLibraryUnit
     vendorDir
     vendorSources
     ;

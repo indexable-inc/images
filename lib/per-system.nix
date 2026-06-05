@@ -602,6 +602,7 @@ in
       # host-OOM with many workers).
       rustChecks = {
         cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
+        cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
       }
       // rustPackageTests;
       explicitChecks = {
