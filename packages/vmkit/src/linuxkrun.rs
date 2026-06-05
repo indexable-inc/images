@@ -16,7 +16,7 @@
 //!   `podman --runtime krun` / `crun` use. No firmware, no guest-supplied kernel.
 //!
 //! libkrun is also the only path that gives a Linux guest GPU acceleration on
-//! Apple Silicon (virtio-gpu/Venus -> MoltenVK -> Metal); VZ exposes no GPU to
+//! Apple Silicon (virtio-gpu/Venus -> `MoltenVK` -> Metal); VZ exposes no GPU to
 //! Linux guests. See the README and `docs/linux-libkrun.md`.
 //!
 //! Both hosts link `-lkrun` (the nix build resolves it to the right dylib/so and
@@ -140,7 +140,7 @@ pub struct BootLinux {
     #[cfg(target_os = "linux")]
     pub exec: Vec<String>,
     /// Enable a virtio-gpu Venus device (GPU acceleration). On macOS this is the
-    /// only way a Linux guest gets `/dev/dri` (via MoltenVK); on Linux it maps to
+    /// only way a Linux guest gets `/dev/dri` (via `MoltenVK`); on Linux it maps to
     /// the host DRM. Off by default.
     pub gpu: bool,
     pub cpus: u8,
@@ -317,7 +317,7 @@ fn set_payload(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
 /// build, where libkrun-efi is unavailable). Returns a typed error rather than
 /// silently doing nothing, so a caller learns the backend was not compiled in.
 #[cfg(not(have_libkrun))]
-pub fn boot_linux(_boot: BootLinux) -> Result<(), Error> {
+pub fn boot_linux(_boot: &BootLinux) -> Result<(), Error> {
     Err(Error::NotBuilt)
 }
 
@@ -325,7 +325,7 @@ pub fn boot_linux(_boot: BootLinux) -> Result<(), Error> {
 /// elapses. Does not return on success: `krun_start_enter` takes over the process
 /// and `exit()`s with the guest's exit code when the VM stops.
 #[cfg(have_libkrun)]
-pub fn boot_linux(boot: BootLinux) -> Result<(), Error> {
+pub fn boot_linux(boot: &BootLinux) -> Result<(), Error> {
     let console_c = boot
         .console_file
         .as_ref()
@@ -347,15 +347,20 @@ pub fn boot_linux(boot: BootLinux) -> Result<(), Error> {
     unsafe {
         check("krun_set_log_level", krun_set_log_level(2))?; // warn
         let ctx = krun_create_ctx();
-        check("krun_create_ctx", ctx)?;
-        let ctx = ctx as u32;
+        // `krun_create_ctx` returns a non-negative ctx id or `-errno`. `try_from`
+        // both narrows to the u32 the rest of the API takes and rejects an error
+        // return, so no sign-losing `as` cast is needed.
+        let ctx = u32::try_from(ctx).map_err(|_| Error::Libkrun {
+            op: "krun_create_ctx".to_owned(),
+            code: ctx,
+        })?;
         check(
             "krun_set_vm_config",
             krun_set_vm_config(ctx, boot.cpus, boot.memory_mib),
         )?;
         // Host-specific payload (firmware+disk on macOS, rootfs+exec on Linux).
         // The returned CStrings stay alive until after krun_start_enter.
-        let _payload = set_payload(ctx, &boot)?;
+        let _payload = set_payload(ctx, boot)?;
         if boot.gpu {
             check(
                 "krun_set_gpu_options2",

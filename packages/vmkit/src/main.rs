@@ -70,7 +70,7 @@ enum Command {
         exec: Vec<String>,
         /// Enable a virtio-gpu Venus device so the guest gets a real GPU
         /// (`/dev/dri`). On macOS this is the only way a Linux guest gets a GPU
-        /// (Vulkan via MoltenVK). Off by default.
+        /// (Vulkan via `MoltenVK`). Off by default.
         #[arg(long)]
         gpu: bool,
         /// Number of virtual CPUs.
@@ -375,14 +375,14 @@ fn dispatch_linux(command: Command) -> Result<(), linuxkrun::Error> {
             memory_mib,
             console_file,
             timeout_secs,
-        } => linuxkrun::boot_linux(linuxkrun::BootLinux {
+        } => linuxkrun::boot_linux(&linuxkrun::BootLinux {
             root,
             exec,
             gpu,
-            // libkrun caps vCPUs at 16 and RAM well under u32 MiB; the wider CLI
-            // types just narrow here.
-            cpus: cpus.min(u8::MAX as usize) as u8,
-            memory_mib: memory_mib.min(u32::MAX as u64) as u32,
+            // libkrun caps vCPUs at 16 and RAM well under u32 MiB; clamp the wider
+            // CLI types rather than truncate.
+            cpus: u8::try_from(cpus).unwrap_or(u8::MAX),
+            memory_mib: u32::try_from(memory_mib).unwrap_or(u32::MAX),
             console_file,
             timeout: Duration::from_secs(timeout_secs),
         }),
@@ -475,13 +475,13 @@ mod imp {
                 memory_mib,
                 console_file,
                 timeout_secs,
-            } => crate::linuxkrun::boot_linux(crate::linuxkrun::BootLinux {
+            } => crate::linuxkrun::boot_linux(&crate::linuxkrun::BootLinux {
                 disk,
                 gpu,
-                // libkrun caps vCPUs at 16 and RAM well under u32 MiB; the wider
-                // CLI types just narrow here.
-                cpus: cpus.min(u8::MAX as usize) as u8,
-                memory_mib: memory_mib.min(u32::MAX as u64) as u32,
+                // libkrun caps vCPUs at 16 and RAM well under u32 MiB; clamp the
+                // wider CLI types rather than truncate.
+                cpus: u8::try_from(cpus).unwrap_or(u8::MAX),
+                memory_mib: u32::try_from(memory_mib).unwrap_or(u32::MAX),
                 console_file,
                 timeout: Duration::from_secs(timeout_secs),
             })
