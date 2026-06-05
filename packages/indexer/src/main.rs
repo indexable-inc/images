@@ -291,7 +291,7 @@ async fn run_sources(
         record("codex", result, &mut counts);
     }
     if let Some(db) = atuin {
-        match open_atuin("shell", &db, &mut counts) {
+        match open_atuin("shell", &db, otlp, &mut counts) {
             Ok(Atuin::Ready(adapter)) => {
                 let result = run_source("shell", &adapter, None, None, otlp).await;
                 record("shell", result, &mut counts);
@@ -482,7 +482,7 @@ async fn index_user(
     // such account cannot fail the whole fleet run (ENG-2141).
     if let Some(atuin_db) = safe_path_under(home, &[".local", "share", "atuin", "history.db"], false) {
         let label = format!("shell:{name}");
-        match open_atuin(&label, &atuin_db, counts) {
+        match open_atuin(&label, &atuin_db, otlp, counts) {
             Ok(Atuin::Ready(adapter)) => {
                 let result = run_source(&label, &adapter, None, None, otlp).await;
                 record(&label, result, counts);
@@ -638,10 +638,25 @@ enum Atuin {
 /// [`Counts::skipped`] and never gates the unit's exit code. Any other open
 /// failure (a corrupt db, a permissions error) is still returned for the caller
 /// to record as a genuine failure, preserving real-error reporting.
-fn open_atuin(label: &str, db: &Path, counts: &mut Counts) -> anyhow::Result<Atuin> {
+fn open_atuin(
+    label: &str,
+    db: &Path,
+    otlp: Option<&sink_otlp::Config>,
+    counts: &mut Counts,
+) -> anyhow::Result<Atuin> {
     match source_atuin::AtuinHistory::open(db) {
         Ok(history) => Ok(Atuin::Ready(history)),
         Err(error) if error.is_uninitialized() => {
+            // A history source routes only to the OTLP bus, so a run that selects
+            // one with no --otlp-endpoint is a misconfiguration. run_source
+            // rejects it for a readable db; enforce the same here BEFORE
+            // downgrading to a soft skip, so an uninitialized db cannot let a
+            // sink-less run exit 0 when the identical config fails once the
+            // `history` table exists.
+            anyhow::ensure!(
+                otlp.is_some(),
+                "[{label}] no sink configured: pass --otlp-endpoint for history sources"
+            );
             eprintln!("[{label}] skipped: {error} ({db})", db = db.display());
             counts.skipped += 1;
             Ok(Atuin::Skipped)
@@ -736,6 +751,14 @@ mod tests {
         rusqlite::Connection::open(path).expect("create empty sqlite db");
     }
 
+    /// A throwaway OTLP sink config so `open_atuin`'s sink validation passes; the
+    /// endpoint is never dialed in these tests (they assert open/skip behavior).
+    fn otlp_sink() -> sink_otlp::Config {
+        sink_otlp::Config {
+            endpoint: "http://127.0.0.1:4317".to_string(),
+        }
+    }
+
     #[test]
     fn uninitialized_atuin_db_is_soft_skipped_and_run_succeeds() {
         // ENG-2141: one account whose atuin db exists but has no `history` table
@@ -746,7 +769,9 @@ mod tests {
         make_uninitialized_db(&db);
 
         let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
-        let outcome = open_atuin("shell:tester", &db, &mut counts).expect("uninitialized db is not an error");
+        let sink = otlp_sink();
+        let outcome = open_atuin("shell:tester", &db, Some(&sink), &mut counts)
+            .expect("uninitialized db is not an error");
 
         assert!(matches!(outcome, Atuin::Skipped), "uninitialized db must be skipped");
         assert_eq!(counts.skipped, 1, "the skip must be tallied");
@@ -763,11 +788,30 @@ mod tests {
         let db = temp.path().join("does-not-exist.db");
 
         let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        let sink = otlp_sink();
         assert!(
-            open_atuin("shell:tester", &db, &mut counts).is_err(),
+            open_atuin("shell:tester", &db, Some(&sink), &mut counts).is_err(),
             "a missing db file must remain a real error, not a soft skip"
         );
         assert_eq!(counts.skipped, 0, "a real error must not be tallied as a skip");
+    }
+
+    #[test]
+    fn uninitialized_atuin_db_without_sink_is_an_error() {
+        // The soft skip must not bypass sink validation: an uninitialized db with
+        // no OTLP sink is the same misconfiguration run_source rejects once the db
+        // has a `history` table, so it must fail consistently rather than exit 0
+        // (the per-user fleet path shares open_atuin, so it is covered too).
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = temp.path().join("history.db");
+        make_uninitialized_db(&db);
+
+        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        assert!(
+            open_atuin("shell:tester", &db, None, &mut counts).is_err(),
+            "an uninitialized db with no sink must error, not silently skip"
+        );
+        assert_eq!(counts.skipped, 0, "a misconfiguration must not be tallied as a skip");
     }
 
     #[test]
