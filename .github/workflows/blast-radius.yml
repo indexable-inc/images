@@ -26,10 +26,12 @@ env:
     accept-flake-config = true
 
 jobs:
-  # Untrusted half: runs this PR's own `.#blast-radius` flake code. It holds no
-  # write token and no secrets, so PR-authored code cannot reach a privileged
-  # credential or poison a later token-backed step in the same job. The report
-  # leaves this job only as an artifact (plain data) for the comment job.
+  # Untrusted half: runs this PR's own `.#blast-radius` flake code. It holds only
+  # a read-only token (contents + actions: read), and that token is scoped to the
+  # timings-fetch step alone -- never the env of the PR-code "Report blast radius"
+  # step -- so PR-authored code cannot reach a credential or poison a later
+  # token-backed step. The report leaves this job only as an artifact (plain
+  # data) for the comment job.
   evaluate:
     # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml).
     if: >-
@@ -50,14 +52,12 @@ jobs:
     env:
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       HEAD_SHA: ${{ github.sha }}
-      REPOSITORY: ${{ github.repository }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       # The default pull_request checkout is the merge ref, so its working tree
       # already carries this PR's `.#blast-radius` app, and fetch-depth 0 brings
       # both parents (base.sha, head.sha) into the clone so the tool's
-      # `git merge-base` and the `?rev=<sha>` flake refs resolve. No write token
-      # is introduced anywhere in this job.
+      # `git merge-base` and the `?rev=<sha>` flake refs resolve. The only token
+      # in this job is the read-only one on the timings-fetch step below.
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -70,8 +70,12 @@ jobs:
       # rebuilt check with its base-branch BUILD wall-clock. Every failure path
       # (no run, no artifact, gh error) leaves no check-results.json, so the next
       # step renders without timings rather than failing the job. This step never
-      # exits nonzero.
+      # exits nonzero. The read-only token lives here, not at job level, so the
+      # PR-code "Report blast radius" step below never sees a credential.
       - name: Fetch base-branch check timings
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           run_id="$(gh run list --repo "${REPOSITORY}" --workflow Check --branch main \

@@ -169,7 +169,18 @@ fn main() -> Result<()> {
     };
 
     let timings = match cli.timings.as_deref() {
-        Some(path) => timings::load(path)?,
+        // Best-effort: a present-but-unreadable or corrupt timings file (a
+        // partial artifact download, an empty upload) must not fail the report
+        // and break the PR comment. The workflow already decides *whether* to
+        // pass --timings; if it does and the file is bad, warn and continue with
+        // no annotations rather than aborting.
+        Some(path) => timings::load(path).unwrap_or_else(|err| {
+            eprintln!(
+                "blast-radius: ignoring unreadable timings file {}: {err:?}",
+                path.display()
+            );
+            BTreeMap::new()
+        }),
         None => BTreeMap::new(),
     };
 
