@@ -24,7 +24,13 @@
 name = "ix-sdk-wire"
 version = "0.1.0"
 edition = "2024"
-license = "LicenseRef-Proprietary"
+# Proprietary, source-available: governed by sdk/LICENSE (the Indexable SDK
+# License), which supersedes the repo-root MIT for everything under sdk/. The
+# `license`/`license-file` field is NOT folded into the cargo-unit identity hash
+# (only name+version, edition, crate-types, features, profile, lints, deps,
+# toolchain are; see packages/nix-cargo-unit/src/model.rs:write_unit_identity),
+# so this change does not perturb the stub's generated unit key.
+license-file = "../../../LICENSE"
 description = "Self-contained wire types crossing the ix SDK C-ABI boundary (no private ix deps)"
 publish = false
 

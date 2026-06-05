@@ -1,0 +1,17 @@
+Indexable SDK License
+
+Copyright (c) 2026 Indexable Inc. All rights reserved.
+
+This license governs all files in this directory ("sdk/") and its subdirectories, together with any compiled or binary components they fetch, download, link, or bundle (collectively, the "SDK"), including the precompiled ix-sdk libraries distributed by Indexable. For these files this license SUPERSEDES the MIT License at the root of this repository; the root MIT License does not apply to the SDK.
+
+1. License grant. Subject to your compliance with this license and the Indexable Terms of Service, Indexable Inc. grants you a limited, non-exclusive, non-transferable, non-sublicensable, revocable license to install and use the SDK solely to develop and operate your own applications that access Indexable's hosted "ix" service.
+
+2. Restrictions. You may not, and may not permit any third party to: (a) reverse engineer, decompile, disassemble, or otherwise attempt to derive the source code, underlying ideas, or algorithms of any compiled or binary component of the SDK, except to the limited extent applicable law expressly prohibits this restriction; (b) modify, adapt, translate, or create derivative works of the SDK; (c) copy, redistribute, sublicense, sell, rent, lease, or lend the SDK, except as strictly necessary to deploy your own applications that use the ix service; (d) use the SDK, or any information derived from it, to develop, train, or operate any product or service that competes with the ix service; or (e) remove, obscure, or alter any proprietary or attribution notices in the SDK.
+
+3. Ownership. The SDK is licensed, not sold. Indexable Inc. and its licensors retain all right, title, and interest in and to the SDK, including all intellectual property rights therein.
+
+4. Termination. This license terminates automatically upon any breach. On termination you must cease all use of and delete the SDK.
+
+5. No warranty; limitation of liability. THE SDK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. TO THE MAXIMUM EXTENT PERMITTED BY LAW, INDEXABLE INC. DISCLAIMS ALL WARRANTIES AND SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM OR IN CONNECTION WITH THE SDK OR ITS USE.
+
+For licensing inquiries, contact Indexable Inc.

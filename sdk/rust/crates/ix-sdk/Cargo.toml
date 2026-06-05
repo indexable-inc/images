@@ -2,7 +2,11 @@
 name = "ix-sdk"
 version = "0.1.0"
 edition = "2024"
-license = "LicenseRef-Proprietary"
+# Proprietary, source-available: governed by sdk/LICENSE (the Indexable SDK
+# License), which supersedes the repo-root MIT for everything under sdk/. Use a
+# license-file rather than an SPDX `license` so `cargo metadata` and crawlers
+# surface the real proprietary terms, not a permissive identifier.
+license-file = "../../../LICENSE"
 description = "Public Rust SDK for ix; links the prebuilt ix-sdk-wire rlib fetched from R2"
 publish = false
 

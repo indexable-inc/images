@@ -38,3 +38,9 @@ console.log(result.stdout)
 The TypeScript layer is intentionally thin. Core behavior lives in the Rust SDK;
 this package adds TypeScript-native surface area such as `await using`,
 async iterators, overloads, and typed options.
+
+## License
+
+Proprietary and source-available, governed by the bundled `LICENSE` (the
+Indexable SDK License), NOT the repository-root MIT license. See
+[`../LICENSE`](../LICENSE).
