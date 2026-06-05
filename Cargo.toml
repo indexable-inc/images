@@ -98,6 +98,12 @@ multiple_crate_versions = "allow"
 # multi-value return is a named struct the reader understands at the call site,
 # not a positional `(i32, i32)`. Provided by the indexable-inc/clippy fork.
 anonymous_tuple_return_type = "deny"
+# Restriction lint (off even in `all`): forbid silently defaulting a fallible
+# integer conversion (`u8::try_from(x).unwrap_or(..)` / `.unwrap_or_default()` /
+# `.unwrap_or_else(..)`), which clamps or zeroes an out-of-range value and hides
+# the overflow. Propagate the `TryFromIntError` instead. Provided by the
+# indexable-inc/clippy fork.
+fallible_int_fallback = "deny"
 
 [workspace.dependencies]
 anstream = "1"
