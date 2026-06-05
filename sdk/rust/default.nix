@@ -22,6 +22,34 @@
 let
   inherit (ix) cargoUnit;
 
+  # The exact toolchain the R2 `ix-sdk-wire` rlib was compiled with. The
+  # cargo-unit hash folds in the toolchain id (the store-path basename), so the
+  # public SDK workspace MUST build with a toolchain that resolves to id
+  # `a2djkcczjhr55zfcqhhxabxkhzai2hpa-rust-default-1.98.0-nightly-2026-05-27`,
+  # or the generated `ix-sdk-wire` unit hash diverges from the prebuilt's.
+  #
+  # ix builds via `rust-bin.fromRustupToolchainFile rust-toolchain.toml`; the
+  # equivalent is the index rust toolchain helper with ix's exact pin: the same
+  # nightly date, the `default` rust-overlay profile, ix's extra components, and
+  # ix's extra targets (rust-overlay is locked at the SAME rev in both repos:
+  # oxalica/rust-overlay c30ca201). Verified on x86_64-linux that this yields
+  # the `a2dj...` toolchain id above.
+  rustToolchain = ix.languages.rust.toolchain pkgs {
+    channel = "nightly";
+    version = "2026-05-27";
+    profile = "default";
+    components = [
+      "rust-src"
+      "rust-analyzer"
+      "rustc-dev"
+      "llvm-tools"
+    ];
+    targets = [
+      "x86_64-unknown-linux-musl"
+      "wasm32-unknown-unknown"
+    ];
+  };
+
   # The prebuilt artifact's coordinates, captured when ix built `ix-sdk-wire`
   # under the `public-rlib` profile and uploaded it to R2 (ENG-2151). The unit
   # `hash` is the source-independent cargo-unit hash; the public SDK workspace
@@ -56,6 +84,9 @@ let
     rlib = wireRlib;
     rmeta = wireRmeta;
     toolchainId = wireToolchainId;
+    # Non-default toolchain: thread the same one buildWorkspace uses, or the
+    # eval-time assert (and buildWorkspace's C2 cross-check) reject the unit.
+    inherit rustToolchain;
   };
 
   # The unit key buildWorkspace injects under. Must equal the key the renderer
@@ -77,7 +108,7 @@ let
 
   commonArgs = {
     pname = "ix-sdk-rust";
-    inherit src outputHashes;
+    inherit src outputHashes rustToolchain;
     workspaceRoot = src;
     cargoArgs = [ "--workspace" ];
     # Match the profile the R2 rlib was built under; the profile is folded into
