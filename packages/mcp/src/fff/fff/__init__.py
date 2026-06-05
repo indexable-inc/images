@@ -412,7 +412,7 @@ class FileFinder:
         self._check_open()
         handle, _ = _consume(_lib.fff_get_base_path(self._handle))
         try:
-            return _str(ctypes.cast(handle, _CP).value) or ""
+            return _str(ctypes.cast(ctypes.c_void_p(handle), _CP).value) or ""
         finally:
             _lib.fff_free_string(ctypes.c_void_p(handle))
 
@@ -420,7 +420,7 @@ class FileFinder:
         self._check_open()
         handle, _ = _consume(_lib.fff_health_check(self._handle, _encode(test_path)))
         try:
-            raw = ctypes.cast(handle, _CP).value
+            raw = ctypes.cast(ctypes.c_void_p(handle), _CP).value
             return json.loads(raw.decode("utf-8")) if raw else {}
         finally:
             _lib.fff_free_string(ctypes.c_void_p(handle))
