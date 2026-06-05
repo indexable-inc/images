@@ -16,6 +16,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+import ix_sdk
+
 
 def empty_str_list() -> list[str]:
     return []
@@ -192,6 +194,32 @@ def step(message: str) -> None:
     print(message, flush=True)
 
 
+_client: ix_sdk.Client | None = None
+
+
+def client() -> ix_sdk.Client:
+    """Lazily construct the SDK client.
+
+    `ix_sdk.Client()` resolves IX_TOKEN and the base URL from the environment,
+    the same inputs the `ix` CLI used; constructing it lazily keeps `--dry-run`
+    runs (which never touch the API) from requiring a token.
+    """
+    global _client
+    if _client is None:
+        _client = ix_sdk.Client()
+    return _client
+
+
+def status_str(status: ix_sdk.BranchStatus) -> str:
+    """Render a BranchStatus as the lowercase string the `ix ls` JSON used, so
+    host health-check env vars (IX_NODE_STATUS) keep their previous shape."""
+    return {
+        ix_sdk.BranchStatus.RUNNING: "running",
+        ix_sdk.BranchStatus.STOPPED: "stopped",
+        ix_sdk.BranchStatus.FAILED: "failed",
+    }.get(status, str(status))
+
+
 class CliError(RuntimeError):
     def __init__(self, command: list[str], returncode: int, stdout: str, stderr: str) -> None:
         self.command = command
@@ -270,40 +298,36 @@ async def run_cli(
     return stdout
 
 
+BOOTSTRAP_PROBE_SCRIPT = (
+    "set -euo pipefail\n"
+    "export PATH=/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:$PATH\n"
+    "if command -v systemctl >/dev/null 2>&1; then\n"
+    "  systemctl start nix-daemon.socket >/dev/null 2>&1 || true\n"
+    "fi\n"
+    "nix --extra-experimental-features nix-command store info >/dev/null"
+)
+
+
 async def wait_node_ready(node: FleetNode, *, dry_run: bool) -> None:
-    command = [
-        "ix",
-        "shell",
-        node.name,
-        "--",
-        "/run/current-system/sw/bin/bash",
-        "-lc",
-        (
-            "set -euo pipefail\n"
-            "export PATH=/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:$PATH\n"
-            "if command -v systemctl >/dev/null 2>&1; then\n"
-            "  systemctl start nix-daemon.socket >/dev/null 2>&1 || true\n"
-            "fi\n"
-            "nix --extra-experimental-features nix-command store info >/dev/null"
-        ),
-    ]
     if dry_run:
-        step("+ wait until bootstrap is ready: " + " ".join(command))
+        step(f"+ wait until {node.name} bootstrap is ready (guest nix store probe)")
         return
 
     step(f"waiting for {node.name} bootstrap")
+    c = client()
     deadline = asyncio.get_running_loop().time() + 180
     last_error = ""
     while asyncio.get_running_loop().time() < deadline:
-        probe = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout_b, stderr_b = await probe.communicate()
-        if probe.returncode == 0:
-            return
-        last_error = (stderr_b.decode(errors="replace") or stdout_b.decode(errors="replace")).strip()
+        branch = await c.find_by_name(node.name)
+        if branch is None:
+            last_error = f"{node.name} not found"
+        else:
+            # check=False: a not-yet-ready store info is expected while we poll,
+            # so inspect the exit code instead of raising CommandError.
+            result = await branch.bash(BOOTSTRAP_PROBE_SCRIPT, check=False, quiet=True)
+            if result.exit_code == 0:
+                return
+            last_error = (result.stderr or result.stdout).strip()
         await asyncio.sleep(2)
 
     raise RuntimeError(f"{node.name} bootstrap did not become ready: {last_error}")
@@ -325,36 +349,29 @@ async def push_replacement_image(node: FleetNode, *, dry_run: bool) -> str:
     return refs[-1] if refs else image.destination
 
 
-async def list_nodes() -> list[dict[str, typing.Any]]:
-    out = await run_cli(["ix", "ls", "--output", "json"], dry_run=False)
-    rows = json.loads(out)
-    if not isinstance(rows, list):
-        raise TypeError("ix ls --output json must return a list")
-    return [row for row in rows if isinstance(row, dict)]
+async def list_nodes() -> list[ix_sdk.BranchInfo]:
+    return await client().branches()
 
 
-def find_node(rows: list[dict[str, typing.Any]], name: str) -> dict[str, typing.Any] | None:
-    return next((row for row in rows if row.get("name") == name), None)
+def find_node(rows: list[ix_sdk.BranchInfo], name: str) -> ix_sdk.BranchInfo | None:
+    return next((row for row in rows if row.name == name), None)
 
 
 async def create_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
-    command = [
-        "ix",
-        "new",
+    if dry_run:
+        step(
+            f"+ create {node.name} from {image} "
+            f"(region={node.region}, ipv4={node.ipv4}, l7={list(node.l7ProxyPorts)})"
+        )
+        return
+    await client().create(
         image,
-        "--name",
-        node.name,
-        "--region",
-        node.region,
-        "--no-shell",
-    ]
-    for name, value in sorted(node.env.items()):
-        command.extend(["--env", f"{name}={value}"])
-    for port in node.l7ProxyPorts:
-        command.extend(["--l7-proxy-port", str(port)])
-    if node.ipv4:
-        command.append("--ipv4")
-    await run_cli(command, dry_run=dry_run)
+        region=node.region,
+        name=node.name,
+        env=dict(sorted(node.env.items())),
+        l7_proxy_ports=list(node.l7ProxyPorts),
+        ipv4=node.ipv4,
+    )
 
 
 async def ensure_node(node: FleetNode, *, dry_run: bool) -> bool:
@@ -368,48 +385,48 @@ async def ensure_node(node: FleetNode, *, dry_run: bool) -> bool:
         await wait_node_ready(node, dry_run=dry_run)
         return True
 
-    if existing.get("status") == "failed":
-        await run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+    if existing.status == ix_sdk.BranchStatus.FAILED:
+        await remove_node(node, dry_run=dry_run)
         await create_node(node, node.bootstrapImage, dry_run=dry_run)
         await wait_node_ready(node, dry_run=dry_run)
         return True
 
-    if existing.get("status") == "running":
+    if existing.status == ix_sdk.BranchStatus.RUNNING:
         await wait_node_ready(node, dry_run=dry_run)
         return False
 
-    await run_cli(["ix", "start", node.name], dry_run=dry_run)
+    branch = await client().find_by_name(node.name)
+    if branch is not None:
+        await branch.start()
     await wait_node_ready(node, dry_run=dry_run)
     return False
 
 
 async def snapshot_node(node: FleetNode, *, dry_run: bool) -> None:
-    await run_cli(["ix", "snapshot", "create", node.name], dry_run=dry_run)
+    if dry_run:
+        step(f"+ snapshot create {node.name}")
+        return
+    await client().snapshot(name=node.name)
 
 
 async def switch_node(node: FleetNode, *, dry_run: bool) -> None:
     if node.switch.buildOn == "local":
-        # ix switch --build-on local expects the system out-path already in the
-        # local store. Realize the flake installable first so the path is valid.
+        # build-on=local expects the system out-path already in the local store;
+        # the nix build stays a host-side step (it drives the local builder), and
+        # the switch RPC itself goes through the SDK.
         await run_cli(
             ["nix", "build", "--no-link", "--print-out-paths", node.switch.sourceInstallable],
             dry_run=dry_run,
         )
     step(f"switching {node.name} (build-on={node.switch.buildOn})")
-    await run_cli(
-        ["ix", "switch", node.name, node.switch.target, "--build-on", node.switch.buildOn],
-        dry_run=dry_run,
-        timeout=1800,
+    if dry_run:
+        step(f"+ switch {node.name} -> {node.switch.target} (build-on={node.switch.buildOn})")
+        return
+    await client().switch_system(
+        name=node.name,
+        target=node.switch.target,
+        build_on=node.switch.buildOn,
     )
-
-
-def is_existing_group_error(error: CliError) -> bool:
-    return "already exists" in error.output.lower()
-
-
-def is_existing_member_error(error: CliError) -> bool:
-    output = error.output.lower()
-    return "already" in output and ("member" in output or "group" in output)
 
 
 async def ensure_group(group: str, *, dry_run: bool) -> None:
@@ -418,24 +435,21 @@ async def ensure_group(group: str, *, dry_run: bool) -> None:
         return
 
     try:
-        await run_cli(["ix", "group", "create", group], dry_run=dry_run)
-    except CliError as error:
-        if is_existing_group_error(error):
-            step(f"east-west group {group} already exists")
-            return
-        raise
+        await client().create_group(group)
+    except ix_sdk.IxConflictError:
+        step(f"east-west group {group} already exists")
 
 
 async def ensure_node_groups(node: FleetNode, *, dry_run: bool) -> None:
     for group in sorted(node.groups):
         await ensure_group(group, dry_run=dry_run)
+        if dry_run:
+            step(f"+ add {node.name} to east-west group {group}")
+            continue
         try:
-            await run_cli(["ix", "group", "add", group, node.name], dry_run=dry_run)
-        except CliError as error:
-            if is_existing_member_error(error):
-                step(f"{node.name} is already in east-west group {group}")
-                continue
-            raise
+            await client().add_group_member(group, node.name)
+        except ix_sdk.IxConflictError:
+            step(f"{node.name} is already in east-west group {group}")
 
 
 async def bootstrap_node(node: FleetNode, *, dry_run: bool) -> None:
@@ -463,38 +477,30 @@ def dependency_batches(plan: FleetPlan, selectors: list[str]) -> list[list[Fleet
     return batches
 
 
-def is_missing_node_error(error: CliError) -> bool:
-    return "not found" in error.output.lower()
-
-
 async def remove_node(node: FleetNode, *, dry_run: bool) -> None:
     if dry_run:
         step(f"remove {node.name}")
         return
-    try:
-        await run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
-    except CliError as error:
-        if is_missing_node_error(error):
-            step(f"{node.name} is already absent")
-            return
-        raise
+    branch = await client().find_by_name(node.name)
+    if branch is None:
+        step(f"{node.name} is already absent")
+        return
+    await branch.delete()
 
 
-def _stringify_env_value(value: typing.Any) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if value is None:
-        return ""
-    if isinstance(value, (str, int, float)):
-        return str(value)
-    return json.dumps(value)
-
-
-def node_env_vars(node: FleetNode, row: dict[str, typing.Any] | None) -> dict[str, str]:
+def node_env_vars(node: FleetNode, info: ix_sdk.BranchInfo | None) -> dict[str, str]:
     env = {"IX_NODE": node.name}
-    if row is not None:
-        for key, value in row.items():
-            env[f"IX_NODE_{key.upper()}"] = _stringify_env_value(value)
+    if info is not None:
+        env["IX_NODE_NAME"] = info.name
+        env["IX_NODE_IMAGE"] = info.image
+        env["IX_NODE_STATUS"] = status_str(info.status)
+        env["IX_NODE_IPV6"] = info.ipv6
+        if info.ipv4 is not None:
+            env["IX_NODE_IPV4"] = info.ipv4
+        if info.subdomain is not None:
+            env["IX_NODE_SUBDOMAIN"] = info.subdomain
+        if info.region is not None:
+            env["IX_NODE_REGION"] = info.region.slug
     return env
 
 
@@ -509,44 +515,65 @@ async def run_health_check(
     *,
     dry_run: bool,
 ) -> None:
-    command = ["ix", "shell", node.name, "--", *check.command] if check.from_ == "guest" else check.command
-
     if dry_run:
-        step(f"+ health {node.name}/{check_name} ({check.from_}): {shlex.join(command)}")
+        if check.from_ == "guest":
+            step(f"+ health {node.name}/{check_name} (guest): exec {shlex.join(check.command)}")
+        else:
+            step(f"+ health {node.name}/{check_name} (host): {shlex.join(check.command)}")
         return
 
     step(f"checking {node.name}/{check_name} ({check.from_}): {check.description}")
     last_error = ""
     for attempt in range(1, check.attempts + 1):
-        env: dict[str, str] | None = None
-        if check.from_ == "host":
-            row = find_node(await list_nodes(), node.name)
-            host_env = node_env_vars(node, row)
+        if check.from_ == "guest":
+            # Run the check argv inside the VM through the SDK exec channel.
+            branch = await client().find_by_name(node.name)
+            if branch is None:
+                last_error = f"{node.name} not found"
+            else:
+                try:
+                    result = await asyncio.wait_for(
+                        branch.exec(list(check.command), check=False, quiet=True),
+                        check.timeoutSec,
+                    )
+                except asyncio.TimeoutError:
+                    last_error = f"timed out after {check.timeoutSec}s"
+                else:
+                    if result.exit_code == 0:
+                        step(f"healthy {node.name}/{check_name}")
+                        return
+                    last_error = (result.stdout + result.stderr).strip()
+        else:
+            # Host check: run on the operator's machine with IX_NODE_* env so it
+            # can probe the node from outside (public reachability, firewall).
+            info = find_node(await list_nodes(), node.name)
+            host_env = node_env_vars(node, info)
             if check.requiresIpv4 and not host_env.get("IX_NODE_IPV4"):
-                last_error = "ix ls did not report IX_NODE_IPV4 yet"
+                last_error = "node has not reported IX_NODE_IPV4 yet"
                 if attempt < check.attempts:
                     await asyncio.sleep(check.intervalSec)
                 continue
             env = {**os.environ, **host_env}
             command = expand_host_command(check.command, host_env)
-
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), check.timeoutSec)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            last_error = f"timed out after {check.timeoutSec}s"
-        else:
-            if process.returncode == 0:
-                step(f"healthy {node.name}/{check_name}")
-                return
-            last_error = (stdout_b.decode(errors="replace") + stderr_b.decode(errors="replace")).strip()
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), check.timeoutSec)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                last_error = f"timed out after {check.timeoutSec}s"
+            else:
+                if process.returncode == 0:
+                    step(f"healthy {node.name}/{check_name}")
+                    return
+                last_error = (
+                    stdout_b.decode(errors="replace") + stderr_b.decode(errors="replace")
+                ).strip()
 
         if attempt < check.attempts:
             await asyncio.sleep(check.intervalSec)
@@ -627,31 +654,17 @@ async def switch_node_from_source(
                 raise
 
 
+# `ix new --name X` is create-or-replace by name; `client.create` calls the same
+# create RPC, so replacing an existing node is identical to creating it.
 async def replace_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
-    command = [
-        "ix",
-        "new",
-        image,
-        "--name",
-        node.name,
-        "--region",
-        node.region,
-        "--no-shell",
-    ]
-    for name, value in sorted(node.env.items()):
-        command.extend(["--env", f"{name}={value}"])
-    for port in node.l7ProxyPorts:
-        command.extend(["--l7-proxy-port", str(port)])
-    if node.ipv4:
-        command.append("--ipv4")
-    await run_cli(command, dry_run=dry_run)
+    await create_node(node, image, dry_run=dry_run)
 
 
 async def up_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
     if dry_run:
         if node.recreateOnUp:
             step(f"recreate {node.name} from uploaded image {image}")
-            await run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+            await remove_node(node, dry_run=dry_run)
             await create_node(node, image, dry_run=dry_run)
         else:
             step(f"create or replace {node.name} from uploaded image {image}")
@@ -660,7 +673,7 @@ async def up_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
 
     existing = find_node(await list_nodes(), node.name)
     if existing is not None and node.recreateOnUp:
-        await run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+        await remove_node(node, dry_run=dry_run)
         await create_node(node, image, dry_run=dry_run)
         return
 
@@ -668,8 +681,8 @@ async def up_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
         await create_node(node, image, dry_run=dry_run)
         return
 
-    if existing.get("status") == "failed":
-        await run_cli(["ix", "rm", "--force", node.name], dry_run=dry_run)
+    if existing.status == ix_sdk.BranchStatus.FAILED:
+        await remove_node(node, dry_run=dry_run)
         await create_node(node, image, dry_run=dry_run)
         return
 
@@ -841,7 +854,7 @@ async def cmd_down(plan: FleetPlan, args: argparse.Namespace) -> None:
     for node in reversed(selected_nodes(plan, args.on)):
         try:
             await remove_node(node, dry_run=args.dry_run)
-        except (CliError, OSError) as error:
+        except (ix_sdk.IxError, CliError, OSError) as error:
             failures.append(f"{node.name}: {error}")
     if failures:
         raise RuntimeError("failed to remove fleet nodes: " + "; ".join(failures))
