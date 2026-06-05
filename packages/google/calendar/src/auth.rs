@@ -90,12 +90,23 @@ fn non_empty_env(name: &str) -> Option<String> {
 }
 
 /// The persisted grant: the offline refresh token and the scopes it covers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredToken {
     /// The offline refresh token.
     pub refresh_token: String,
     /// Scopes granted with it.
     pub scopes: Vec<String>,
+}
+
+/// Redacts the refresh token: `Debug` output reaches assertion messages and
+/// error context, and the token is the long-lived credential.
+impl std::fmt::Debug for StoredToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredToken")
+            .field("refresh_token", &"<redacted>")
+            .field("scopes", &self.scopes)
+            .finish()
+    }
 }
 
 /// Owner of the token file.
