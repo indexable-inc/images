@@ -94,7 +94,20 @@ let
   # the real generated keys, which is how we debug a hash divergence.
   wireUnitKey = "ix_sdk_wire-${wireVersion}-${wireHash}";
 
-  src = ./.;
+  # One deterministic source derivation shared by graph generation and rendering.
+  # A bare `./.` can realize under two different store paths in the two IFD
+  # stages, which makes the renderer reject the local member as "outside
+  # workspace root". `fs.toSource` pins a single store path for both.
+  fs = lib.fileset;
+  src = fs.toSource {
+    root = ./.;
+    fileset = fs.unions [
+      ./Cargo.toml
+      ./Cargo.lock
+      ./crates
+      ./vendor
+    ];
+  };
 
   # Source string for the snafu git fork, keyed exactly as it appears in
   # `Cargo.lock`. snafu and snafu-derive share this one source, so one entry
@@ -109,7 +122,10 @@ let
   commonArgs = {
     pname = "ix-sdk-rust";
     inherit src outputHashes rustToolchain;
-    workspaceRoot = src;
+    # The real checkout root that package scopes are carved from (mirrors the
+    # cargo-unit-prebuilt fixture: plain path for workspaceRoot, filtered
+    # `toSource` for src).
+    workspaceRoot = ./.;
     cargoArgs = [ "--workspace" ];
     # Match the profile the R2 rlib was built under; the profile is folded into
     # the unit hash, so this must equal ix's `public-rlib`.
