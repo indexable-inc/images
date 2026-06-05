@@ -1,0 +1,17 @@
+[package]
+name = "block-events-emitter"
+version = "0.1.0"
+edition = "2024"
+description = "Emit Minecraft block-place domain facts as JSON Lines, byte-identical to the Paper plugin."
+
+# No dependencies on purpose: the emitter hand-writes the same JSON the plugin
+# writes so the whole pipeline is testable offline, with no vendoring and no
+# crate fetch in the build sandbox.
+[dependencies]
+
+[[bin]]
+name = "block-events-emitter"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2

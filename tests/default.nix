@@ -1933,6 +1933,41 @@ let
       lib = ix;
     };
   };
+
+  minecraftBlocksExample =
+    let
+      fleet = import ../examples/minecraft-blocks {
+        index = {
+          lib = ix;
+        };
+      };
+      # The buildable artifacts (emitter, plugin, integration check) built
+      # directly so the integration check can be pulled into the `eval`
+      # aggregate via `helperScript`.
+      packages = import ../examples/minecraft-blocks/packages.nix { inherit ix pkgs; };
+      schema = import ../examples/minecraft-blocks/schema.nix { inherit lib; };
+    in
+    {
+      inherit fleet packages schema;
+      log = {
+        config = fleet.nodes.log;
+        plan = fleet.planValue.nodes.log;
+        kafka = fleet.nodes.log.services.apache-kafka;
+      };
+      view = {
+        config = fleet.nodes.view;
+        plan = fleet.planValue.nodes.view;
+        obs = fleet.nodes.view.services.ix-observability;
+        initUnit = fleet.nodes.view.systemd.services.mc-blocks-view-init;
+      };
+      producer = {
+        config = fleet.nodes.producer;
+        plan = fleet.planValue.nodes.producer;
+        minecraft = fleet.nodes.producer.services.minecraft;
+        agent = fleet.nodes.producer.services.ix-observability;
+        shipUnit = fleet.nodes.producer.systemd.services.mc-blocks-ship;
+      };
+    };
   invalidSecretNameEval = builtins.tryEval (
     builtins.deepSeq
       (ix.secrets.normalize {
@@ -2417,6 +2452,100 @@ let
       {
         assertion = observabilityStackExample.observability.queryTool != null;
         message = "observability-stack should install the ix-observe query helper for agents";
+      }
+    ];
+
+    minecraft-blocks = [
+      {
+        # LOG: a single-node Kafka broker in KRaft mode (both roles), with the
+        # one durable topic. This is the source of truth, not the transport.
+        assertion =
+          minecraftBlocksExample.log.kafka.enable
+          && minecraftBlocksExample.log.kafka.formatLogDirs
+          &&
+            minecraftBlocksExample.log.kafka.settings."process.roles" == [
+              "broker"
+              "controller"
+            ];
+        message = "minecraft-blocks log node should run a KRaft Kafka broker as the durable log";
+      }
+      {
+        # Only the broker port is exposed, and it is claimed.
+        assertion =
+          let
+            claims = minecraftBlocksExample.log.config.ix.networking.portClaims;
+          in
+          claims.kafka.port == 9092
+          && builtins.elem 9092 minecraftBlocksExample.log.config.networking.firewall.allowedTCPPorts;
+        message = "minecraft-blocks log node should expose and claim the Kafka broker port";
+      }
+      {
+        # VIEW: reuses the shared observability ClickHouse (one server), with
+        # the collector and Grafana, not a second ClickHouse.
+        assertion =
+          minecraftBlocksExample.view.obs.enable
+          && minecraftBlocksExample.view.obs.stack.enable
+          && minecraftBlocksExample.view.config.services.clickhouse.enable
+          && minecraftBlocksExample.view.config.services.opentelemetry-collector.enable;
+        message = "minecraft-blocks view node should run the shared observability ClickHouse plus collector";
+      }
+      {
+        # The view-init oneshot creates the minecraft DB, table, Kafka queue,
+        # and MV after ClickHouse is up.
+        assertion =
+          let
+            unit = minecraftBlocksExample.view.initUnit;
+          in
+          unit.serviceConfig.Type == "oneshot" && builtins.elem "clickhouse.service" unit.requires;
+        message = "minecraft-blocks view node should initialize the spatial view once ClickHouse is up";
+      }
+      {
+        # The view health check confirms all three minecraft objects exist
+        # (table, Kafka queue, materialized view).
+        assertion =
+          let
+            check = minecraftBlocksExample.view.plan.healthChecks.mc-blocks-view;
+          in
+          check.from == "guest" && check.attempts == 60;
+        message = "minecraft-blocks view node should health-check the spatial view, queue, and MV";
+      }
+      {
+        # PRODUCER: a Paper server with the custom block-events plugin shipped
+        # via `src` (a built jar), not a catalog slug.
+        assertion =
+          minecraftBlocksExample.producer.minecraft.enable
+          && minecraftBlocksExample.producer.minecraft.paper.enable
+          && minecraftBlocksExample.producer.minecraft.plugins.block-events.enable
+          && minecraftBlocksExample.producer.minecraft.plugins.block-events.src != null
+          && minecraftBlocksExample.producer.minecraft.plugins.block-events.pluginName == "BlockEvents";
+        message = "minecraft-blocks producer should run Paper with the custom block-events plugin";
+      }
+      {
+        # Both legs are real on the producer: the domain-fact transport ships to
+        # Kafka, and the OTel agent forwards server telemetry to the collector.
+        assertion =
+          let
+            ship = minecraftBlocksExample.producer.shipUnit;
+            agent = minecraftBlocksExample.producer.agent;
+          in
+          ship.serviceConfig.Restart == "always"
+          && agent.stack.enable == false
+          && agent.agent.enable
+          && agent.resourceAttributes."ix.app" == "minecraft-blocks";
+        message = "minecraft-blocks producer should run both the Kafka transport and the telemetry agent";
+      }
+      {
+        # The schema is the single source of truth: the Morton ORDER BY and the
+        # signed-coordinate offset come from it, and the table DDL uses them.
+        assertion =
+          let
+            inherit (minecraftBlocksExample) schema;
+          in
+          schema.coordOffset == 1048576
+          && lib.hasInfix "mortonEncode" schema.createTableSql
+          && lib.hasInfix "toUInt32(x + 1048576)" schema.mortonExpr
+          && builtins.length schema.mortonFields == 3;
+        message = "minecraft-blocks schema should drive a Z-order ORDER BY over offset-shifted signed coordinates";
       }
     ];
 
@@ -3941,6 +4070,21 @@ let
 
   helperScript = ''
     test -e ${nomadSecretRefsExample.buildCheck}
+
+    # minecraft-blocks integration: emitter -> ClickHouse local spatial table ->
+    # bounding-box query. The derivation runs the Rust emitter, loads its JSON
+    # Lines into a MergeTree table built from the one schema (Morton ORDER BY,
+    # signed-coordinate offset), runs the bounding-box query, and asserts the
+    # exact in-box count plus the Morton round-trip. Realising it here pulls the
+    # whole check into the `eval` aggregate. It also proves the emitter and the
+    # Paper plugin jar build.
+    test -f ${minecraftBlocksExample.packages.loadFixtures}/result
+    grep -q 'in_box=32' ${minecraftBlocksExample.packages.loadFixtures}/result
+    test -s ${minecraftBlocksExample.packages.loadFixtures}/events.jsonl
+    ${minecraftBlocksExample.packages.emitter}/bin/block-events-emitter fixtures > mc-blocks-emit.out
+    test "$(wc -l < mc-blocks-emit.out)" = "36"
+    grep -q '"block_type":"minecraft:stone"' mc-blocks-emit.out
+    test -s ${minecraftBlocksExample.packages.plugin}
 
     ${lib.getExe pythonAppClosureProbe} > python-app-closure-probe.out
     grep -q 'python app source is in the runtime closure' python-app-closure-probe.out
