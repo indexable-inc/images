@@ -281,6 +281,11 @@ let
   # mcp build never forces it.
   vmkitBin = ix.rustWorkspace.units.binaries."vmkit";
 
+  # The gcal binary the calendar tools spawn with --json: the CLI surface of
+  # the google-calendar crate (packages/google/calendar), so the MCP binding
+  # carries no calendar logic of its own (RFC 0003).
+  gcalBin = ix.rustWorkspace.units.binaries."gcal";
+
   # The `screen` helper is macOS-only, so its dependencies join the interpreter
   # only on Darwin. `pyobjc-framework-Quartz` is the maintained CoreGraphics
   # binding the helper wraps; Pillow (already transitive via matplotlib) carries
@@ -413,6 +418,7 @@ let
         makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
           --add-flags "-m ix_notebook_mcp" \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
+          --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
       '';
 
@@ -466,7 +472,7 @@ let
   serverTools = importTest "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
-    + "expected = {'notebook_use','notebook_read','cell_add','cell_run','cell_overwrite','cell_delete','run_code','kernel_restart','search_semantic','search_grep'}; "
+    + "expected = {'notebook_use','notebook_read','cell_add','cell_run','cell_overwrite','cell_delete','run_code','kernel_restart','search_semantic','search_grep','calendar_events','calendar_event_create','calendar_event_cancel'}; "
     + "missing = expected - set(names); "
     + "assert not missing, ('missing tools: %r' % (missing,)); "
     + "print('server-ok', len(names))"

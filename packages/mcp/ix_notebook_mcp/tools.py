@@ -9,7 +9,9 @@ change as it happens. Schemas are derived from the type hints by FastMCP.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
@@ -243,6 +245,100 @@ def _scope(
         for key, value in (("source", source), ("user", user), ("repo", repo), ("host", host), ("project", project))
         if value
     }
+
+
+@mcp.tool(
+    description="List Google Calendar events in a window (default: now through 7 days "
+    "from now). Times are RFC 3339, `YYYY-MM-DD HH:MM` (host-local), or `YYYY-MM-DD`. "
+    "Returns the events as a JSON array. Needs a one-time `gcal auth` on this host."
+)
+async def calendar_events(
+    time_min: Annotated[str | None, Field(description="Window start; default now")] = None,
+    time_max: Annotated[str | None, Field(description="Window end; default a week after the start")] = None,
+    query: Annotated[str | None, Field(description="Free-text filter over summary, description, attendees")] = None,
+    max_events: Annotated[int, Field(description="Maximum number of events")] = 20,
+    calendar: Annotated[str, Field(description="Calendar id: an email, or `primary`")] = "primary",
+) -> str:
+    args = ["list", "--json", "--calendar", calendar, "--max", str(max_events)]
+    if time_min:
+        args += ["--from", time_min]
+    if time_max:
+        args += ["--to", time_max]
+    if query:
+        args += ["--query", query]
+    return await _gcal(*args)
+
+
+@mcp.tool(
+    description="Create a Google Calendar event and return it as JSON. Timed events "
+    "take RFC 3339 or host-local `YYYY-MM-DD HH:MM` for start/end; with all_day=True "
+    "they are dates and end is the last day, inclusive. By default Google emails every "
+    "attendee (notify='all'); pass notify='none' to stay silent."
+)
+async def calendar_event_create(
+    summary: Annotated[str, Field(description="Event title")],
+    start: Annotated[str, Field(description="Start time, or a date with all_day")],
+    end: Annotated[str | None, Field(description="End time; required unless all_day")] = None,
+    all_day: Annotated[bool, Field(description="All-day event (start/end are dates)")] = False,
+    description: Annotated[str | None, Field(description="Free-text body")] = None,
+    location: Annotated[str | None, Field(description="Free-text location")] = None,
+    attendees: Annotated[list[str] | None, Field(description="Attendee emails to invite")] = None,
+    notify: Annotated[str, Field(description="Who Google emails: all | external-only | none")] = "all",
+    calendar: Annotated[str, Field(description="Calendar id: an email, or `primary`")] = "primary",
+) -> str:
+    args = [
+        "create", "--json", "--calendar", calendar,
+        "--summary", summary, "--start", start, "--notify", notify,
+    ]
+    if end:
+        args += ["--end", end]
+    if all_day:
+        args.append("--all-day")
+    if description:
+        args += ["--description", description]
+    if location:
+        args += ["--location", location]
+    for attendee in attendees or []:
+        args += ["--attendee", attendee]
+    return await _gcal(*args)
+
+
+@mcp.tool(
+    description="Cancel (delete) a Google Calendar event by id. By default Google "
+    "emails every attendee about the cancellation; pass notify='none' to stay silent."
+)
+async def calendar_event_cancel(
+    event_id: Annotated[str, Field(description="The event id, as returned by calendar_events")],
+    notify: Annotated[str, Field(description="Who Google emails: all | external-only | none")] = "all",
+    calendar: Annotated[str, Field(description="Calendar id: an email, or `primary`")] = "primary",
+) -> str:
+    return await _gcal(
+        "cancel", event_id, "--json", "--calendar", calendar, "--notify", notify
+    )
+
+
+async def _gcal(*args: str) -> str:
+    """Run the bundled ``gcal`` binary and return its stdout.
+
+    The calendar tools stay a thin binding per RFC 0003: the `google-calendar`
+    Rust crate owns the API client, OAuth, and error mapping; ``gcal --json``
+    is the machine contract this layer forwards verbatim. The wrapper sets
+    IX_GCAL_BIN (same shape as IX_VMKIT_BIN for the vmkit helper).
+    """
+    binary = os.environ.get("IX_GCAL_BIN")
+    if not binary:
+        raise RuntimeError("IX_GCAL_BIN is not set; the gcal binary is bundled into ix-mcp")
+    proc = await asyncio.create_subprocess_exec(
+        binary,
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        detail = stderr.decode(errors="replace").strip()
+        raise RuntimeError(detail or f"gcal exited with status {proc.returncode}")
+    return stdout.decode(errors="replace")
 
 
 async def _run(app: NotebookApp, rel: str, ynb: Any, cell_id: str | None, timeout: float) -> Content:

@@ -67,7 +67,9 @@ disk instead of fighting the browser with out-of-band file writes.
 - `tools.py` is the MCP tool surface (`notebook_use`, `cell_add`, `cell_run`,
   `cell_overwrite`, `cell_delete`, `run_code`, `kernel_restart`,
   `notebook_read`, `notebook_list`, plus `search_semantic`/`search_grep` over the
-  shared `index` corpus).
+  shared `index` corpus, and `calendar_events`/`calendar_event_create`/
+  `calendar_event_cancel`, thin bindings that run the bundled
+  [`gcal`](../google/calendar/README.md) binary with `--json`).
 - `extension.py` is the Jupyter Server extension that binds the running server
   into the runtime and starts the MCP transport on its event loop.
 - `serve.py` serves the tools over stdio (handing the protocol the real stdout so
