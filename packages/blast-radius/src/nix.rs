@@ -110,8 +110,14 @@ pub fn eval_checks(repo: &str, rev: &str) -> Result<EvalResult> {
         "--",
         "--flake",
         &flakeref,
+        // 4, not 8: main runs the base and head evals concurrently, so the two
+        // nix-eval-jobs processes are alive at once. 4 workers each keeps the
+        // peak at 8 evaluator heaps -- the same footprint as the old single
+        // 8-worker eval -- so the parallelism does not double memory. Running
+        // 16 evaluators alongside a full flake-check build OOM-killed the
+        // shared runner (both jobs died together mid-eval).
         "--workers",
-        "8",
+        "4",
         "--option",
         "accept-flake-config",
         "true",
