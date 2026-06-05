@@ -230,10 +230,13 @@ fn partition_eval_rows(stdout: &str) -> Result<Partitioned> {
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
         let row: EvalRow =
             serde_json::from_str(line).with_context(|| format!("parse eval row: {line}"))?;
-        // nix-eval-jobs quotes attr segments that need quoting in Nix source
-        // (dots, leading digits); strip them so the bare attribute name flows
-        // through the diff, the report, and the workflow's safename regex.
-        let attr = row.attr.trim_matches('"').to_owned();
+        // nix-eval-jobs quotes any attr-path segment that needs quoting in Nix
+        // source (a dot inside the segment). A sharded `ciChecks` leaf can quote
+        // an interior segment (`rust-foo."doctest-...lib.rs..."`), so unquote
+        // each segment (see normalize_attr), not just the ends, before the bare
+        // name flows through the diff, the report, and the workflow safename
+        // regex.
+        let attr = normalize_attr(&row.attr);
         match (row.drv_path, row.error) {
             (Some(drv_path), _) => out.checks.push(Check { attr, drv_path }),
             (None, Some(error)) => out.eval_failures.push(EvalFailure { attr, error }),
@@ -296,6 +299,40 @@ pub fn derivation_graph(drv_paths: &[String]) -> Result<Graph> {
         .collect())
 }
 
+/// Reverse nix-eval-jobs' attr-path joining to a bare, schema-valid name.
+///
+/// nix-eval-jobs joins a nested attr path with `.`, wrapping any single segment
+/// that contains a `.` in double quotes. The sharded `ciChecks` output nests
+/// each crate's per-#[test] leaves under a `recurseForDerivations` group, so a
+/// doctest case whose name carries a file path (`src/lib.rs - (line 12)`)
+/// surfaces as `rust-foo."doctest-...src/lib.rs - (line 12)"`: the package
+/// segment is bare, the leaf is quoted. nix-fast-build copies this joined string
+/// verbatim into its `--timings` records (it ignores the `attrPath` array), so
+/// the same shape reaches both [`eval_checks`] and [`crate::timings`].
+///
+/// The trusted workflow schema (`blast-radius.yml` safename regex) allows dots,
+/// slashes, spaces, and parens but rejects `"`, and trimming only the ends
+/// leaves the quotes around an interior segment in place. Drop every `"` and
+/// split on dots outside quotes, then rejoin with `.`, so the bare path flows
+/// identically through the diff key, the report, and the schema regardless of
+/// which producer it came from. A flat single-segment name (quoted only because
+/// its own case name holds a `.`) round-trips to the same bare name the old
+/// end-trim produced.
+pub fn normalize_attr(attr: &str) -> String {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in attr.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            '.' if !in_quotes => segments.push(std::mem::take(&mut current)),
+            _ => current.push(ch),
+        }
+    }
+    segments.push(current);
+    segments.join(".")
+}
+
 /// Look up the derivation path for an attribute name in an evaluated set.
 pub fn drv_for(checks: &[Check], attr: &str) -> Option<String> {
     checks
@@ -306,7 +343,7 @@ pub fn drv_for(checks: &[Check], attr: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EvalFailure, drv_name, partition_eval_rows};
+    use super::{EvalFailure, drv_name, normalize_attr, partition_eval_rows};
 
     #[test]
     fn drv_name_strips_hash_and_suffix() {
@@ -322,12 +359,17 @@ mod tests {
     // A buildable row becomes a check; a per-attr eval failure is excluded (not a
     // rebuild target) rather than aborting the whole run; a malformed row with
     // neither field is flagged so the caller can fail loudly. Blank lines are
-    // skipped. nix-eval-jobs quotes attrs that need Nix quoting; the quotes are
-    // stripped.
+    // skipped. nix-eval-jobs quotes attr segments that need Nix quoting; the
+    // quotes are stripped per segment, including a sharded leaf whose interior
+    // segment is quoted.
     #[test]
     fn partition_splits_success_eval_failure_and_malformed() {
         let stdout = concat!(
             r#"{"attr":"rust-test-foo","drvPath":"/nix/store/aaa-foo.drv"}"#,
+            "\n",
+            // A sharded ciChecks doctest leaf: the package segment is bare, the
+            // case segment is quoted because its name carries `lib.rs`.
+            r#"{"attr":"rust-foo.\"doctest-src/lib.rs - (line 12)\"","drvPath":"/nix/store/bbb-doc.drv"}"#,
             "\n",
             r#"{"attr":"unfree-allowlist","error":"unfree allowlist mismatch"}"#,
             "\n",
@@ -338,9 +380,15 @@ mod tests {
 
         let partitioned = partition_eval_rows(stdout).expect("well-formed JSONL parses");
 
-        assert_eq!(partitioned.checks.len(), 1);
+        assert_eq!(partitioned.checks.len(), 2);
         assert_eq!(partitioned.checks[0].attr, "rust-test-foo");
         assert_eq!(partitioned.checks[0].drv_path, "/nix/store/aaa-foo.drv");
+        // The quoted interior segment is unquoted but the dot path separator is
+        // kept, so the bare name passes the workflow safename regex.
+        assert_eq!(
+            partitioned.checks[1].attr,
+            "rust-foo.doctest-src/lib.rs - (line 12)"
+        );
         assert_eq!(
             partitioned.eval_failures,
             vec![EvalFailure {
@@ -349,5 +397,28 @@ mod tests {
             }]
         );
         assert_eq!(partitioned.unexpected, vec!["weird.attr".to_owned()]);
+    }
+
+    // normalize_attr reverses nix-eval-jobs' attr-path join: drop quotes around
+    // each segment, keep dots between segments.
+    #[test]
+    fn normalize_attr_unquotes_each_segment() {
+        // Flat top-level name, no quoting.
+        assert_eq!(normalize_attr("rust-test-foo"), "rust-test-foo");
+        // Flat name quoted whole because its case carries a dot.
+        assert_eq!(
+            normalize_attr(r#""rust-foo-doctest-src/lib.rs - (line 12)""#),
+            "rust-foo-doctest-src/lib.rs - (line 12)"
+        );
+        // Sharded path: bare package segment, quoted leaf segment.
+        assert_eq!(
+            normalize_attr(r#"rust-foo."doctest-src/lib.rs - (line 12)""#),
+            "rust-foo.doctest-src/lib.rs - (line 12)"
+        );
+        // Sharded path with an unquoted leaf (no dot in the case name).
+        assert_eq!(
+            normalize_attr("rust-foo.causes-tests-some_case"),
+            "rust-foo.causes-tests-some_case"
+        );
     }
 }
