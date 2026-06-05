@@ -15,7 +15,7 @@ let
   #
   # The URL + SRI live here next to the consumer rather than in flake.lock, so a
   # routine SDK bump is: re-publish the wheel to R2 and edit this catalog. Each
-  # key embeds the wheel's nix-store hash so distinct builds never collide.
+  # URL path embeds the wheel's nix-store hash so distinct builds never collide.
   #
   # Only x86_64-linux is published today; the darwin SDK wheel build path does
   # not yet exist in indexable-inc/ix (its sdks are linux-only), so a darwin
@@ -28,22 +28,40 @@ let
   };
 
   inherit (pkgs.stdenv.hostPlatform) system;
-  entry = catalog.${system} or null;
+  rawEntry = catalog.${system} or null;
+  # Catch a careless bump (an http:// URL or a non-SRI hash) at eval time, the
+  # same guard lib/util/artifacts.nix applies to its loader catalogs.
+  entry =
+    if rawEntry == null then
+      null
+    else
+      assert lib.assertMsg (
+        lib.hasPrefix "https://" rawEntry.url && lib.hasPrefix "sha256-" rawEntry.hash
+      ) "ix-sdk-python: catalog entry for ${system} needs an https:// url and an sha256- SRI hash";
+      rawEntry;
 in
 if entry == null then
   # Eval-safe placeholder: `packages.<unsupported>.ix-sdk-python` still
   # evaluates (so flake eval and x86_64-linux CI are unaffected), but realizing
   # it fails loudly instead of silently guessing a wheel. Reject the fallback.
-  pkgs.runCommand "ix-sdk-python-unsupported-${system}" { } ''
-    echo "ix-sdk-python: no prebuilt ix_sdk wheel published for ${system} (only x86_64-linux so far)." >&2
-    echo "Build + publish the wheel for this platform to the R2 bucket ix-sdk-artifacts and add it to packages/ix-sdk-python/default.nix." >&2
-    exit 1
-  ''
+  pkgs.runCommand "ix-sdk-python-unsupported-${system}"
+    {
+      meta.description = "ix_sdk Python bindings (no prebuilt wheel for ${system})";
+    }
+    ''
+      echo "ix-sdk-python: no prebuilt ix_sdk wheel published for ${system} (only x86_64-linux so far)." >&2
+      echo "Build + publish the wheel for this platform to the R2 bucket ix-sdk-artifacts and add it to packages/ix-sdk-python/default.nix." >&2
+      exit 1
+    ''
 else
   let
     wheel = pkgs.fetchurl { inherit (entry) url hash; };
 
-    package =
+    # `toPythonModule` stamps `pythonModule = python3` so the package composes
+    # the normal way (`python3.withPackages (ps: [ ix-sdk-python ])`); without
+    # it nixpkgs' `hasPythonModule` filter silently drops the package from any
+    # environment. This is the repo convention (see packages/mcp).
+    package = python3.pkgs.toPythonModule (
       pkgs.runCommand "ix-sdk-python-0.1.0"
         {
           inherit wheel;
@@ -63,13 +81,12 @@ else
           # A wheel is a zip: extract `ix_sdk/` + `ix_sdk-*.dist-info/` straight
           # into site-packages so consumers `import ix_sdk` with no shim.
           python3 -m zipfile -e "$wheel" "$out/${python3.sitePackages}/"
-        '';
+        ''
+    );
 
-    # Defends the load-bearing claim: the prebuilt cdylib actually imports under
-    # index's nixpkgs interpreter, and the surface we depend on is present.
-    importTest = pkgs.runCommand "ix-sdk-python-import" { nativeBuildInputs = [ python3 ]; } ''
-      export PYTHONPATH="${package}/${python3.sitePackages}"
-      python3 - <<'PY'
+    # The surface ix-fleet depends on, asserted once so a bad wheel fails the
+    # check rather than ix-fleet at runtime.
+    assertSurface = ''
       import ix_sdk
       assert ix_sdk.__version__, "missing __version__"
       for name in ("Client", "Group", "GroupMember"):
@@ -77,9 +94,21 @@ else
       for method in ("create_group", "add_group_member", "create", "branches"):
           assert hasattr(ix_sdk.Client, method), f"missing Client.{method}"
       print("ix_sdk", ix_sdk.__version__, "imported; group + lifecycle surface present")
-      PY
-      touch "$out"
     '';
+
+    # Import through a real `withPackages` environment, the way consumers use it,
+    # so the toPythonModule wiring can't silently regress.
+    importTest =
+      pkgs.runCommand "ix-sdk-python-import"
+        {
+          pythonEnv = python3.withPackages (_: [ package ]);
+        }
+        ''
+          "$pythonEnv/bin/python" - <<'PY'
+          ${assertSurface}
+          PY
+          touch "$out"
+        '';
   in
   package.overrideAttrs (old: {
     passthru = (old.passthru or { }) // {
