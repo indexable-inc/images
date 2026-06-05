@@ -90,6 +90,48 @@ let
       ''
   );
 
+  # The `fff` fast file-search package, baked into the interpreter so every
+  # session can `import fff` and run fuzzy file search / SIMD grep over a repo
+  # with no setup. Unlike `tui`/`search`, fff has no PyO3 binding: it ships a
+  # stable C ABI (the `fff-c` cdylib, emitted next to `fff-mcp` by
+  # `packages/fff`), and the pure-Python module loads it via ctypes. The cdylib
+  # is dropped next to the package source so the module loads it by a fixed
+  # path. Cross-platform: `pkgs.fff` builds on Linux and macOS. Store references
+  # in the cdylib are fine: this module never leaves the Nix environment.
+  fffPythonSource = builtins.path {
+    name = "ix-mcp-fff-python-source";
+    path = ./src/fff;
+  };
+  fffModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-fff-python-module"
+      {
+        strictDeps = true;
+        meta.description = "fff fast file-search bound via ctypes, bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/fff"
+        mkdir -p "$site"
+        cp -r ${fffPythonSource}/fff/. "$site/"
+
+        cdylib=""
+        for candidate in \
+          ${pkgs.fff}/lib/libfff_c.so \
+          ${pkgs.fff}/lib/libfff_c.dylib
+        do
+          if [ -f "$candidate" ]; then
+            cdylib="$candidate"
+            break
+          fi
+        done
+        if [ -z "$cdylib" ]; then
+          echo "ix-fff module: no libfff_c cdylib under ${pkgs.fff}/lib" >&2
+          ls -la ${pkgs.fff}/lib >&2 || true
+          exit 1
+        fi
+        install -m555 "$cdylib" "$site/$(basename "$cdylib")"
+      ''
+  );
+
   # JupyterLab custom CSS, generated from the shared JetBrains Islands palette
   # (`ix.islandsTheme`, the same JSON the search `-c` highlighter and the Neovim
   # colorscheme read) so there is one source of truth for color. It maps the
@@ -389,6 +431,7 @@ let
       ps.mcp
       tuiModule
       searchModule
+      fffModule
       ixNotebookMcpModule
     ]
     ++ darwinExtraPackages ps
@@ -449,6 +492,78 @@ let
 
   tuiBundled = importTest "tui" "import tui; print('tui-ok', tui.__version__)";
   searchBundled = importTest "search" "import search; print('search-ok', search.__version__)";
+
+  # End-to-end through the bundled `fff` ctypes module: index a temp tree, wait
+  # for the scan, then prove fuzzy file search and content grep both return the
+  # planted hits. Loads the fff-c cdylib from site-packages, so it also guards
+  # that the library actually shipped next to the module. Pure local FS, no
+  # network or watcher, so the build sandbox runs it.
+  fffTestPy = pkgs.writeText "ix-mcp-fff-test.py" ''
+    import os
+    import tempfile
+    import time
+
+    import fff
+
+    root = tempfile.mkdtemp()
+    os.makedirs(os.path.join(root, "src"))
+    with open(os.path.join(root, "hello_world.txt"), "w") as fh:
+        fh.write("greetings\nfind me on this line\n")
+    with open(os.path.join(root, "src", "main.rs"), "w") as fh:
+        fh.write('fn main() {\n    println!("find me on this line");\n}\n')
+
+    finder = fff.FileFinder(root, watch=False, content_indexing=True, ai_mode=True)
+    try:
+        # The initial scan runs in the background; poll until the planted file
+        # is visible (a few short waits, robust to sandbox scheduling).
+        hit_path = None
+        for _ in range(20):
+            finder.wait_for_scan(2000)
+            result = finder.search("hello")
+            match = next((h for h in result.items if "hello_world" in h.path), None)
+            if match is not None:
+                hit_path = match.path
+                break
+            time.sleep(0.25)
+        assert hit_path is not None, f"fuzzy search did not find hello_world.txt: {result.items!r}"
+
+        grep_result = finder.grep("find me on this line", limit=10)
+        files = {m.path for m in grep_result.matches}
+        assert any("hello_world" in f for f in files), f"grep missed the txt file: {files!r}"
+        assert any("main.rs" in f for f in files), f"grep missed main.rs: {files!r}"
+        defs = finder.grep("fn main", mode="regex", classify_definitions=True)
+        assert defs.matches, "regex grep returned no matches"
+
+        glob_result = finder.glob("**/*.rs")
+        assert any("main.rs" in h.path for h in glob_result.items), (
+            f"glob missed main.rs: {glob_result.items!r}"
+        )
+    finally:
+        finder.close()
+
+    print("fff-ok", fff.__version__)
+  '';
+  fffBundled =
+    pkgs.runCommand "ix-mcp-fff"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${fffTestPy} >stdout 2>stderr || {
+          echo "ix-mcp fff test failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -q '^fff-ok' stdout || {
+          echo "ix-mcp fff test did not print its ok marker:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
   dataLibsBundled = importTest "data-libs" (
     "import psycopg, sqlalchemy, duckdb, httpx; "
     + "from sqlalchemy import create_engine; create_engine('postgresql+psycopg://u@h/db'); "
@@ -639,6 +754,7 @@ package.overrideAttrs (old: {
       inherit
         tuiBundled
         searchBundled
+        fffBundled
         dataLibsBundled
         gmailLibsBundled
         jupyterBundled
