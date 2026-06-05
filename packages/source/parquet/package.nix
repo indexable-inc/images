@@ -1,5 +1,5 @@
 {
-  id = "sink-otlp";
+  id = "source-parquet";
   inRustWorkspace = true;
   passthruTests = true;
 }

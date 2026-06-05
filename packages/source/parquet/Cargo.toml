@@ -1,9 +1,9 @@
 [package]
-name = "source-otlp"
+name = "source-parquet"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Read OTLP/JSON log objects an OpenTelemetry Collector wrote to S3 back into search Documents"
+description = "Read the S3/R2 parquet corpus log written by sink-parquet back into search Documents"
 
 [lints]
 workspace = true
@@ -12,9 +12,10 @@ workspace = true
 source-meta.workspace = true
 object_store = { workspace = true, features = ["aws"] }
 futures.workspace = true
-serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 snafu.workspace = true
+parquet = { workspace = true, features = ["arrow"] }
+arrow.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

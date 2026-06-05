@@ -335,18 +335,22 @@ async def wait_node_ready(node: FleetNode, *, dry_run: bool) -> None:
 
 async def push_replacement_image(node: FleetNode, *, dry_run: bool) -> str:
     image = node.replacementImage
-    source = image.source
-    if not dry_run:
-        out = await run_cli(["nix-store", "--realise", image.sourceDrv], dry_run=False)
-        realised = [line.strip() for line in out.splitlines() if line.strip()]
-        if realised:
-            source = realised[-1]
-        if not Path(source).exists():
-            raise RuntimeError(f"OCI image derivation did not realise to an existing path: {source}")
+    if dry_run:
+        step(f"+ realise {image.sourceDrv} and image push -> {image.destination}")
+        return image.destination
 
-    out = await run_cli(["ix", "image", "push", source, image.destination], dry_run=dry_run)
-    refs = [line.strip() for line in out.splitlines() if line.strip()]
-    return refs[-1] if refs else image.destination
+    # Realising the OCI image is host-side nix work; the push itself goes through
+    # the SDK (sdk-core owns the chunk/dedup/upload pipeline).
+    source = image.source
+    out = await run_cli(["nix-store", "--realise", image.sourceDrv], dry_run=False)
+    realised = [line.strip() for line in out.splitlines() if line.strip()]
+    if realised:
+        source = realised[-1]
+    if not Path(source).exists():
+        raise RuntimeError(f"OCI image derivation did not realise to an existing path: {source}")
+
+    step(f"pushing {image.destination} from {source}")
+    return await client().image_push(source, image.destination, region=node.region)
 
 
 async def list_nodes() -> list[ix_sdk.BranchInfo]:

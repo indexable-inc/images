@@ -35,6 +35,7 @@ Keyword arguments mirror the `search` CLI:
 - `store`: store name (default `index`).
 - `base_url`: Mixedbread API base URL (default the client's built-in).
 - `rerank` (default `True`): apply the second-stage reranker.
+- `reranker` (default the listwise model): reranking model name; ignored when `rerank=False`.
 - `web` (default `False`): mix in web results.
 - scope: `source`, `not_source`, `repo`, `user`, `host`, `project` (see below).
 

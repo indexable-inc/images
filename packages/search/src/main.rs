@@ -14,8 +14,8 @@ use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use indicatif::ProgressBar;
 use search_core::{
-    CodeScope, DEFAULT_STORE, DisplayHit, Filter, FilterSpec, GrepOptions, GrepTargets, Manifest,
-    MixedbreadStore, SearchOptions, Source, build_filter,
+    CodeScope, DEFAULT_RERANK_MODEL, DEFAULT_STORE, DisplayHit, Filter, FilterSpec, GrepOptions,
+    GrepTargets, Manifest, MixedbreadStore, Rerank, SearchOptions, Source, build_filter,
 };
 
 /// Command-line arguments.
@@ -162,6 +162,11 @@ struct SemanticArgs {
     #[arg(long = "no-rerank")]
     no_rerank: bool,
 
+    /// Reranking model to apply. Defaults to Mixedbread's listwise reranker.
+    /// Ignored when `--no-rerank` is set.
+    #[arg(long = "reranker", default_value_t = DEFAULT_RERANK_MODEL.to_owned())]
+    reranker: String,
+
     /// Include web results from the hosted web store.
     #[arg(short = 'w', long)]
     web: bool,
@@ -281,7 +286,11 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
     // the manifest is empty (it only ever held this checkout's hashes).
     let manifest = Manifest::default();
     let options = SearchOptions {
-        rerank: !cli.no_rerank,
+        rerank: if cli.no_rerank {
+            Rerank::off()
+        } else {
+            Rerank::model(cli.reranker)
+        },
         agentic: cli.agentic,
     };
     let top_k = cli.max_count.max(1);

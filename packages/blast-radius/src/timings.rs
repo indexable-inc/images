@@ -42,9 +42,15 @@ fn parse(raw: &str) -> Result<BTreeMap<String, f64>> {
     let mut out = BTreeMap::new();
     for entry in file.results {
         if entry.kind == "BUILD" {
+            // nix-fast-build copies nix-eval-jobs' joined attr verbatim, so a
+            // sharded ciChecks leaf arrives quoted (`rust-foo."doctest-..."`).
+            // Normalize the same way the eval side does (see nix::normalize_attr)
+            // so the timings key matches the rebuilt-check name and never carries
+            // a `"` the workflow safename regex would reject.
+            //
             // Later entries win on the rare retry; nix-fast-build emits a fresh
             // BUILD record per attempt.
-            out.insert(entry.attr, entry.duration);
+            out.insert(crate::nix::normalize_attr(&entry.attr), entry.duration);
         }
     }
     Ok(out)
@@ -70,5 +76,20 @@ mod tests {
         // sufficient and avoids the lint suppression.
         assert!((map["lint"] - 12.5).abs() < 1e-9);
         assert!((map["rust-test-search"] - 87.3).abs() < 1e-9);
+    }
+
+    // A sharded ciChecks doctest leaf reaches nix-fast-build's result file with
+    // its interior segment quoted. The key is normalized to the bare dot path so
+    // it matches the rebuilt-check name and passes the workflow safename regex.
+    #[test]
+    fn unquotes_sharded_attr_keys() {
+        let raw = r#"{
+            "results": [
+                {"attr": "rust-foo.\"doctest-src/lib.rs - (line 12)\"", "type": "BUILD", "duration": 3.0, "success": true, "error": null, "outputs": {"out": "/nix/store/abc"}}
+            ]
+        }"#;
+        let map = parse(raw).unwrap();
+        assert_eq!(map.len(), 1);
+        assert!((map["rust-foo.doctest-src/lib.rs - (line 12)"] - 3.0).abs() < 1e-9);
     }
 }

@@ -17,7 +17,7 @@ use crate::search::{AnswerView, CodeScope, DisplayHit, ask, grep, semantic};
 use crate::sync::{sync, wait_until_indexed};
 
 /// What to query and how, independent of the backend and progress reporting.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Query<'a> {
     /// Absolute checkout root to index and scope results to.
     pub root: &'a Path,
@@ -147,7 +147,7 @@ pub async fn index_and_semantic(
         &manifest,
         query.text,
         query.top_k,
-        query.options,
+        query.options.clone(),
         query.include_web,
         query.filters,
         query.code_scope,
@@ -205,7 +205,7 @@ pub async fn index_and_answer(
         &manifest,
         query.text,
         query.top_k,
-        query.options,
+        query.options.clone(),
         query.include_web,
         query.filters,
         query.code_scope,

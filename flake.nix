@@ -208,6 +208,12 @@
       overlays.default = ix.overlay;
       packages = collect "packages";
       checks = collect "checks";
+      # Sharded keying of the same check derivations for the memory-bounded CI
+      # evaluator (the `.#check` gate and blast-radius); see lib/per-system.nix
+      # (ENG-2201). Kept separate from `checks` because its per-package
+      # `recurseForDerivations` groups are not derivations, which the flake
+      # `checks` schema requires.
+      ciChecks = collect "ciChecks";
       formatter = collect "formatter";
       apps = collect "apps";
       devShells = collect "devShells";

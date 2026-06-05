@@ -77,7 +77,7 @@ jobs:
 
       # Run the full gate through the repo-owned `check` app (lib/per-system.nix),
       # so CI and a local `nix run .#check` execute the same two commands from one
-      # definition: nix-fast-build over `.#checks.x86_64-linux`, then nix-eval-jobs
+      # definition: nix-fast-build over `.#ciChecks.x86_64-linux`, then nix-eval-jobs
       # over `.#packages.x86_64-linux` with the JSON error-line gate. The
       # command-specific rationale (tool choice, the worker/memory tuning, why the
       # eval cache is off, the error-line gate) and the pinned tool revisions live

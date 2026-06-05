@@ -62,6 +62,15 @@
     padding: 0.1rem 0 0.1rem 1rem;
     color: var(--fg-dim);
   }
+  .note {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--link);
+    background: var(--code-bg);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin: 1.5rem 0;
+    font-size: 0.95rem;
+  }
   dl.frontmatter {
     display: grid;
     grid-template-columns: max-content 1fr;
@@ -92,6 +101,17 @@
 </dl>
 
 <p><em>Written with AI assistance (Claude, Opus 4.8).</em></p>
+
+<div class="note">
+  <strong>Superseded (corpus half).</strong> The corpus ingestion path described
+  here moved off the OpenTelemetry bus to a Parquet log plus materialized-view
+  design: an append-only Parquet log on object storage as the source of truth,
+  with the Mixedbread search index rebuilt from it (the <code>source-parquet</code>
+  and <code>sink-parquet</code> crates). See
+  <a href="https://github.com/indexable-inc/index/issues/736">issue #736</a>. The
+  telemetry half of this RFC (traces, metrics, and logs to ClickHouse and Grafana)
+  still stands.
+</div>
 
 <h2>Summary</h2>
 <p>Today the fleet runs two unrelated ingestion worlds: observability (metrics and traces through the OpenTelemetry Collector, logs through Vector) into ClickHouse, and the search corpus (code plus shell, Claude, and Codex history) through the <code>indexer</code> binary into Mixedbread and an S3 parquet archive. This RFC makes the OpenTelemetry Collector the one ingestion bus for everything event-shaped: every host emits shell/agent history and journald to the collector, and the collector fans out to ClickHouse (so Grafana can see history alongside telemetry), to the S3 archive, and onward to Mixedbread for semantic search. The embed path reuses the collector's built-in S3 exporter as a durable buffer that the existing Rust <code>indexer</code> consumes, so no custom collector build and no new gRPC stack are introduced. Code repositories stay on the direct <code>indexer</code> path, because source files are documents, not events. The bespoke history-scanning paths are removed only after the bus path is deployed fleet-wide and backfilled.</p>

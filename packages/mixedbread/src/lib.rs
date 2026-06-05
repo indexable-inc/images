@@ -122,14 +122,66 @@ pub enum Error {
 /// Result alias defaulting to this crate's [`Error`].
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// Default second-stage reranking model: Mixedbread's listwise reranker.
+///
+/// It reads the candidate set as a whole and lifts ranking quality across every
+/// benchmark relative to the prior pointwise default.
+/// See <https://www.mixedbread.com/blog/mxbai-rerank-v3-listwise>.
+pub const DEFAULT_RERANK_MODEL: &str = "mixedbread-ai/mxbai-rerank-v3-listwise";
+
+/// Second-stage reranker selection.
+///
+/// Serialized as the API's `rerank` field, which is `boolean | object`:
+/// [`Rerank::Toggle`] serializes to a bare bool (so the legacy "just turn it
+/// on/off" wire body is byte-for-byte unchanged), while [`Rerank::Model`]
+/// serializes to `{ "model": "..." }` to pin a specific reranking model.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(untagged)]
+pub enum Rerank {
+    /// Toggle the server's default reranker: `false` disables reranking,
+    /// `true` applies the API-chosen default model.
+    Toggle(bool),
+    /// Apply a named reranking model, e.g. [`DEFAULT_RERANK_MODEL`].
+    Model {
+        /// Reranking model name forwarded to the API.
+        model: String,
+    },
+}
+
+impl Rerank {
+    /// Reranking disabled (wire `false`).
+    #[must_use]
+    pub const fn off() -> Self {
+        Self::Toggle(false)
+    }
+
+    /// The API's default reranker (wire `true`).
+    #[must_use]
+    pub const fn server_default() -> Self {
+        Self::Toggle(true)
+    }
+
+    /// Pin a specific reranking model.
+    #[must_use]
+    pub fn model(name: impl Into<String>) -> Self {
+        Self::Model { model: name.into() }
+    }
+
+    /// The listwise reranker ([`DEFAULT_RERANK_MODEL`]).
+    #[must_use]
+    pub fn listwise() -> Self {
+        Self::model(DEFAULT_RERANK_MODEL)
+    }
+}
+
 /// Search tuning forwarded to the API.
 ///
 /// `score_threshold` and `return_metadata` are skipped when unset, so a caller
 /// that only sets `rerank`/`agentic` produces the same wire body as before.
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchOptions {
-    /// Apply the second-stage reranker.
-    pub rerank: bool,
+    /// Apply the second-stage reranker (toggle or a pinned model).
+    pub rerank: Rerank,
     /// Let the API plan and run multiple searches.
     pub agentic: bool,
     /// Drop hits scoring below this threshold (`0.0..=1.0`). Used to keep a
@@ -754,7 +806,28 @@ mod tests {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
 
-    use super::{BACKOFF_BASE, BACKOFF_CAP, Chunk, Client, Error, MAX_RETRIES, RawChunk, backoff};
+    use super::{
+        BACKOFF_BASE, BACKOFF_CAP, Chunk, Client, DEFAULT_RERANK_MODEL, Error, MAX_RETRIES,
+        RawChunk, Rerank, backoff,
+    };
+
+    #[test]
+    fn rerank_serializes_as_bool_or_object() {
+        // The toggle keeps the legacy bare-bool wire body byte-for-byte.
+        assert_eq!(
+            serde_json::to_value(Rerank::off()).expect("serialize"),
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            serde_json::to_value(Rerank::server_default()).expect("serialize"),
+            serde_json::json!(true)
+        );
+        // A pinned model serializes to the `{ "model": ... }` object form.
+        assert_eq!(
+            serde_json::to_value(Rerank::listwise()).expect("serialize"),
+            serde_json::json!({ "model": DEFAULT_RERANK_MODEL })
+        );
+    }
 
     /// A spawned test server: its base URL and a shared counter of requests it received.
     struct MockServer {

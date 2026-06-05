@@ -28,6 +28,14 @@ const CAPS: Caps = Caps {
     max_checks_per_cause: 5,
 };
 
+/// The two catalog evaluations a report diffs. A named struct rather than a bare
+/// `(EvalResult, EvalResult)` so the concurrent-eval scope below has a
+/// self-documenting return (and satisfies `clippy::anonymous_tuple_return_type`).
+struct Evals {
+    base: nix::EvalResult,
+    head: nix::EvalResult,
+}
+
 #[derive(Parser)]
 #[command(
     about = "Report how many .#checks.x86_64-linux derivations a PR would rebuild, and why"
@@ -105,8 +113,26 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let revs = git::resolve(cli.base.as_deref(), cli.head.as_deref())?;
 
-    let base = nix::eval_checks(&revs.repo, &revs.base)?;
-    let head = nix::eval_checks(&revs.repo, &revs.head)?;
+    // Pick one catalog output for both revisions so their attr names line up
+    // (see nix::catalog_attr): `ciChecks` when both revs expose it, else flat
+    // `checks`. Resolved before the eval scope so base and head never mix keying.
+    let catalog = nix::catalog_attr(&revs.repo, &revs.base, &revs.head);
+
+    // base and head evals are independent, so run them concurrently. Each is a
+    // full `#{catalog}.x86_64-linux` evaluation (~11 min on ix's ~4300 checks),
+    // mostly blocked on the per-unit cargo IFD builds, so overlapping them
+    // roughly halves the wall clock versus back-to-back. The eval cache stays
+    // off (see eval_checks): with it on, two concurrent nix-eval-jobs contend on
+    // the per-commit eval-cache SQLite and fail with "database is busy".
+    let Evals { base, head } = std::thread::scope(|scope| -> Result<Evals> {
+        let head_eval = scope.spawn(|| nix::eval_checks(&revs.repo, &revs.head, catalog));
+        let base = nix::eval_checks(&revs.repo, &revs.base, catalog)?;
+        let head = match head_eval.join() {
+            Ok(result) => result?,
+            Err(_) => bail!("head check evaluation thread panicked"),
+        };
+        Ok(Evals { base, head })
+    })?;
     guard_eval_failures(&base, &head)?;
     let base = base.checks;
     let head = head.checks;
@@ -168,10 +194,20 @@ fn main() -> Result<()> {
         root_causes(&base_graph, &head_graph, &changed_basenames, CAPS)
     };
 
-    let timings = match cli.timings.as_deref() {
-        Some(path) => timings::load(path)?,
-        None => BTreeMap::new(),
-    };
+    // Best-effort: a present-but-unreadable or corrupt timings file (a partial
+    // artifact download, an empty upload) must not fail the report and break the
+    // PR comment. The workflow already decides *whether* to pass --timings; if it
+    // does and the file is bad, warn and continue with no annotations rather than
+    // aborting.
+    let timings = cli.timings.as_deref().map_or_else(BTreeMap::new, |path| {
+        timings::load(path).unwrap_or_else(|err| {
+            eprintln!(
+                "blast-radius: ignoring unreadable timings file {}: {err:?}",
+                path.display()
+            );
+            BTreeMap::new()
+        })
+    });
 
     let report = Report {
         base: short(&revs.base),
