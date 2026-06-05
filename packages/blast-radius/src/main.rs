@@ -168,21 +168,20 @@ fn main() -> Result<()> {
         root_causes(&base_graph, &head_graph, &changed_basenames, CAPS)
     };
 
-    let timings = match cli.timings.as_deref() {
-        // Best-effort: a present-but-unreadable or corrupt timings file (a
-        // partial artifact download, an empty upload) must not fail the report
-        // and break the PR comment. The workflow already decides *whether* to
-        // pass --timings; if it does and the file is bad, warn and continue with
-        // no annotations rather than aborting.
-        Some(path) => timings::load(path).unwrap_or_else(|err| {
+    // Best-effort: a present-but-unreadable or corrupt timings file (a partial
+    // artifact download, an empty upload) must not fail the report and break the
+    // PR comment. The workflow already decides *whether* to pass --timings; if it
+    // does and the file is bad, warn and continue with no annotations rather than
+    // aborting.
+    let timings = cli.timings.as_deref().map_or_else(BTreeMap::new, |path| {
+        timings::load(path).unwrap_or_else(|err| {
             eprintln!(
                 "blast-radius: ignoring unreadable timings file {}: {err:?}",
                 path.display()
             );
             BTreeMap::new()
-        }),
-        None => BTreeMap::new(),
-    };
+        })
+    });
 
     let report = Report {
         base: short(&revs.base),
