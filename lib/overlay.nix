@@ -1,7 +1,7 @@
 {
   lib,
   packageRegistry,
-  symphony,
+  symphonyFor,
   buildIxRustTool,
   clippy-fork,
   writePythonApplication,
@@ -35,7 +35,11 @@ lib.genAttrs' (packageRegistry.overlayEntriesFor packageSystem) (
   entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)
 )
 // {
-  symphony-room-server = symphony.packages."${packageSystem}".room-server;
+  # In-tree symphony lives under `packages/symphony`; its room-server is the
+  # only attr currently consumed by repo-owned images (see
+  # `images/dev/symphony-codex/`). `symphonyFor` is a thunk so the rust-overlay
+  # snapshot and the `(packageSetFor final).mcp` resolution stay lazy.
+  symphony-room-server = (symphonyFor final).packages.room-server;
 
   # Default Temurin JRE for repo-owned package sets. The major lives in
   # `lib/languages/jvm-defaults.nix`, shared with `ix.languages.{java,scala}`

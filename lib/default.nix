@@ -6,7 +6,6 @@
   rust-overlay,
   home-manager,
   hermes-agent,
-  symphony,
   clippy-fork,
   ghostty,
 }:
@@ -43,7 +42,7 @@ let
     inherit
       lib
       packageRegistry
-      symphony
+      symphonyFor
       buildIxRustTool
       clippy-fork
       writePythonApplication
@@ -287,6 +286,27 @@ let
       ghostty
       ;
   };
+
+  /**
+    Build symphony's package surface for the caller's `pkgs`.
+
+    Symphony pins a nightly Rust toolchain through `pkgs.rust-bin`, which only
+    exists when `rust-overlay` is in the overlay list. The repo's main pkgs
+    does not pull in `rust-overlay` for unrelated callers, so this helper
+    imports a fresh nixpkgs with `rust-overlay` applied just for symphony's
+    room-server build and threads in the resolved index `mcp` derivation that
+    the codex wrapper spawns as the agent's only MCP server.
+  */
+  symphonyFor =
+    pkgs:
+    import (paths.packagesRoot + "/symphony") {
+      inherit lib;
+      pkgs = import nixpkgs {
+        inherit (pkgs.stdenv.hostPlatform) system;
+        overlays = [ rust-overlay.overlays.default ];
+      };
+      mcp = (packageSetFor pkgs).mcp;
+    };
 
   /**
     Shared Rust workspace source and unit graph for repo-owned crates.
