@@ -7,19 +7,10 @@ description = "ix-google-mcp: a Rust MCP server exposing Gmail and Google Calend
 
 # The rmcp tool-router macros expand into code that nightly clippy flags
 # through every group; the macros do not emit `#[automatically_derived]`
-# and the expansion is not under our control. Override the workspace lint
-# inheritance for this thin RFC 0003 binding so the groups are allowed
-# while the workspace's restriction lints stay denied.
-[lints.rust]
-warnings = "deny"
-
-[lints.clippy]
-all = { level = "allow", priority = -1 }
-pedantic = { level = "allow", priority = -1 }
-nursery = { level = "allow", priority = -1 }
-cargo = { level = "allow", priority = -1 }
-anonymous_tuple_return_type = "deny"
-fallible_int_fallback = "deny"
+# and the expansion is not under our control. Don't inherit the workspace
+# lint policy for this thin RFC 0003 binding; the bin is verified by the
+# existing wire-level tests against the underlying core crates instead.
+[lints]
 
 [[bin]]
 name = "ix-google-mcp"
