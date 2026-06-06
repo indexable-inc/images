@@ -78,7 +78,7 @@ lib.fix (self: {
     Returns `{ packages = [ ... ]; }`, where every package includes `name`,
     `version`, `url`, `integrity`, and `cachePath`.
   */
-  importLock = args: fromJSON (readFile (self.generateLockJson args));
+  importLock = args: lib.importJSON (self.generateLockJson args);
 
   /**
     Build a Bun install cache from `bun.lock` without a caller-provided hash.

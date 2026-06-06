@@ -74,6 +74,9 @@ let
     let
       go =
         activeArtifact: todo:
+        # Recursion base case (no lines left -> no artifacts), not conditional
+        # list construction; lib.optionals would obscure the recursion.
+        # ast-grep-ignore: no-deprecated-iflist-empty
         if todo == [ ] then
           [ ]
         else
@@ -81,8 +84,15 @@ let
             line = builtins.head todo;
             rest = builtins.tail todo;
             artifactName = attrFromLine "name" line;
+            # Verbatim hex parsed from Gradle's verification-metadata.xml
+            # (value="<hex>"); it round-trips into the component record below,
+            # it is not a fetcher `hash` slot.
+            # ast-grep-ignore: prefer-sri-hash
             sha256 = attrFromLine "value" line;
           in
+          # Terminal guard in the line walk (the closing tag ends the
+          # component): a recursion-termination case, not list splicing.
+          # ast-grep-ignore: no-deprecated-iflist-empty
           if lib.hasInfix "</component>" line then
             [ ]
           else if artifactName != null then
@@ -105,6 +115,8 @@ let
 
   parseComponents =
     current: remainingLines:
+    # Recursion base case (no lines left -> no components).
+    # ast-grep-ignore: no-deprecated-iflist-empty
     if remainingLines == [ ] then
       [ ]
     else

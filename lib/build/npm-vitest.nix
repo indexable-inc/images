@@ -151,35 +151,33 @@ let
     in
     "${readable}-${digest}";
 
-  cases = lib.listToAttrs (
-    map (
-      entry:
-      lib.nameValuePair (caseId entry) (
-        pkgs.stdenvNoCC.mkDerivation (
-          baseAttrs
-          // {
-            pname = "${pname}-vitest-${caseId entry}";
-            inherit version;
-            passthru = {
-              testName = entry.name;
-              testFile = relativeTestFile entry;
-              testProject = entry.projectName or null;
-              vitestArgs = caseArgs entry;
-            };
-            buildPhase = ''
-              runHook preBuild
-              ${preTest}
-              ${vitestCli} run ${lib.escapeShellArgs (caseArgs entry)}
-              runHook postBuild
-            '';
-            installPhase = ''
-              mkdir -p "$out"
-              echo passed > "$out/result"
-            '';
-          }
-        )
+  cases = lib.genAttrs' manifestEntries (
+    entry:
+    lib.nameValuePair (caseId entry) (
+      pkgs.stdenvNoCC.mkDerivation (
+        baseAttrs
+        // {
+          pname = "${pname}-vitest-${caseId entry}";
+          inherit version;
+          passthru = {
+            testName = entry.name;
+            testFile = relativeTestFile entry;
+            testProject = entry.projectName or null;
+            vitestArgs = caseArgs entry;
+          };
+          buildPhase = ''
+            runHook preBuild
+            ${preTest}
+            ${vitestCli} run ${lib.escapeShellArgs (caseArgs entry)}
+            runHook postBuild
+          '';
+          installPhase = ''
+            mkdir -p "$out"
+            echo passed > "$out/result"
+          '';
+        }
       )
-    ) manifestEntries
+    )
   );
 in
 {
