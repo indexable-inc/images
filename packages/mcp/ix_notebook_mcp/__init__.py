@@ -1,35 +1,24 @@
-"""ix-mcp: a notebook-first MCP server.
+"""ix-mcp: a single-tool Python execution MCP server.
 
-The agent and a human drive ONE live Jupyter notebook together. Every MCP tool
-call edits a real ``.ipynb`` through the Jupyter real-time-collaboration (Yjs)
-layer, so a person who opens the same notebook in JupyterLab sees the agent's
-cells and outputs appear live, and the work is left behind as a notebook with
-outputs that anyone can reopen.
+One tool, ``python_exec``, runs code on ONE shared, persistent IPython kernel.
+Every execution runs as an asyncio task on that kernel's event loop, so many run
+concurrently and none blocks the others. A call waits up to ``budget`` seconds;
+if the work is still going it keeps running in the background, registered in the
+in-kernel ``jobs`` dict that later ``python_exec`` calls inspect, await, or
+cancel. Each run is logged to a SQLite store that an auto-started dashboard
+renders, so a human can watch every running thing and its output live.
 
 The pieces:
-  - :mod:`ix_notebook_mcp.runtime` holds the process-global config (workspace
-    dir, bind address, the real stdout the MCP protocol owns).
-  - :mod:`ix_notebook_mcp.notebook` reaches the live ``YNotebook`` for a path and
-    edits cells inside it (the co-edit boundary).
-  - :mod:`ix_notebook_mcp.kernel` runs code on the notebook's own kernel and
-    turns kernel messages into notebook outputs.
+  - :mod:`ix_notebook_mcp.runtime` is the in-kernel runtime (``jobs``/``Job``/
+    ``__ix_exec``) loaded by the shipped IPython startup script.
+  - :mod:`ix_notebook_mcp.store` is the append-only SQLite execution log.
+  - :mod:`ix_notebook_mcp.kernel` owns the one kernel and drives executions.
+  - :mod:`ix_notebook_mcp.outputs` renders kernel messages for the agent.
+  - :mod:`ix_notebook_mcp.dashboard` serves the live view of the store.
   - :mod:`ix_notebook_mcp.tools` is the MCP tool surface.
-  - :mod:`ix_notebook_mcp.extension` loads all of the above inside a Jupyter
-    Server so the MCP code shares the process with the YDoc rooms (the only way
-    to co-edit without desyncing the browser).
   - :mod:`ix_notebook_mcp.cli` is the ``ix-mcp`` entrypoint.
 """
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
-
-
-def _jupyter_server_extension_points() -> list[dict]:
-    """Jupyter looks for this on the *package* it is told to load (``ix_notebook_mcp``),
-    so it must live here in ``__init__``, not in :mod:`ix_notebook_mcp.extension`.
-    The import is deferred so the lightweight CLI paths (``eval``/``exec``) do not
-    pull in jupyter_server."""
-    from .extension import IxNotebookMCPExtension
-
-    return [{"module": "ix_notebook_mcp.extension", "app": IxNotebookMCPExtension}]
+__version__ = "0.2.0"

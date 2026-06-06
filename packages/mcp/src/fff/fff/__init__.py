@@ -37,6 +37,7 @@ on Linux and macOS (wherever `packages/fff` builds the cdylib).
 
 from __future__ import annotations
 
+import asyncio
 import ctypes
 import json
 import os
@@ -54,6 +55,8 @@ __all__ = [
     "GrepResult",
     "MatchRange",
     "SearchResult",
+    "afind",
+    "agrep",
     "find",
     "finder",
     "grep",
@@ -657,6 +660,29 @@ class FileFinder:
         finally:
             _lib.fff_free_grep_result(ctypes.c_void_p(handle))
 
+    # -- async wrappers --
+    #
+    # fff's heavy work runs in the Rust core behind a ctypes call, which releases
+    # the GIL for its duration (like numpy). Running a query through
+    # ``asyncio.to_thread`` therefore runs it off the event loop, concurrently
+    # with other async jobs, without blocking them. Same arguments as the sync
+    # methods; ``await ff.grep_async("TODO")``.
+
+    async def search_async(self, *args, **kwargs) -> SearchResult:
+        return await asyncio.to_thread(self.search, *args, **kwargs)
+
+    async def glob_async(self, *args, **kwargs) -> SearchResult:
+        return await asyncio.to_thread(self.glob, *args, **kwargs)
+
+    async def grep_async(self, *args, **kwargs) -> GrepResult:
+        return await asyncio.to_thread(self.grep, *args, **kwargs)
+
+    async def multi_grep_async(self, *args, **kwargs) -> GrepResult:
+        return await asyncio.to_thread(self.multi_grep, *args, **kwargs)
+
+    async def wait_for_scan_async(self, *args, **kwargs) -> bool:
+        return await asyncio.to_thread(self.wait_for_scan, *args, **kwargs)
+
     def _read_grep(self, handle: int | None) -> GrepResult:
         h = ctypes.c_void_p(handle)
         count = _lib.fff_grep_result_get_count(h)
@@ -749,3 +775,13 @@ def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
 def grep(query: str, path=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
     """Content grep over `path`, reusing a cached watched (content-indexed) index."""
     return _cached(path).grep(query, mode=mode, limit=limit)
+
+
+async def afind(query: str, path=".", *, limit: int = 100) -> SearchResult:
+    """Async fuzzy file search: runs off the event loop (non-blocking)."""
+    return await asyncio.to_thread(find, query, path, limit=limit)
+
+
+async def agrep(query: str, path=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
+    """Async content grep: runs off the event loop (non-blocking)."""
+    return await asyncio.to_thread(grep, query, path, mode=mode, limit=limit)

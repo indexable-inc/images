@@ -1,11 +1,8 @@
 """Serve the MCP tool surface over a transport.
 
-stdio is the transport our clients launch, and the delicate one: the Jupyter
-Server shares this process and would log to fd 1, corrupting the JSON-RPC stream.
-The CLI dups the real stdin/stdout to private fds and points fd 0/1 at
-/dev/null and stderr before the server starts, so here we hand the MCP protocol
-those private fds exclusively (the only reason we reach the low-level server: its
-`run` takes explicit streams, which FastMCP's stdio runner does not expose).
+stdio is the transport our clients launch: the CLI dups the real stdin/stdout to
+private fds and points fd 0/1 at /dev/null and stderr before anything else can
+write to them, so here we hand the MCP protocol those private fds exclusively.
 """
 
 from __future__ import annotations
