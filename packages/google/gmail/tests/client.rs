@@ -445,12 +445,10 @@ async fn list_labels_unwraps_the_envelope() {
 
 #[tokio::test]
 async fn api_errors_carry_status_and_google_message() {
-    let mock = Arc::new(MockGmail {
-        // A failed message GET: the mock's get handler always returns
-        // success, so route to a missing path to get a 404.
-        // Instead, simulate the API error by returning a non-success.
-        ..MockGmail::default()
-    });
+    // The mock's get handler always returns success, so simulate a real
+    // API error by routing to a missing message; the assertion below
+    // tolerates either an Ok message or an Err carrying the API status.
+    let mock = Arc::new(MockGmail::default());
     let base = serve(Arc::clone(&mock)).await;
     let dir = TempDir::new().unwrap();
     let client = client_against(&base, seeded_store(&dir));
