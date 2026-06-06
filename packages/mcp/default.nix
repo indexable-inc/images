@@ -226,6 +226,26 @@ let
   # ctypes for the Accessibility (TCC) permission check. macOS-only: the module
   # itself raises on a non-Darwin platform, and `Quartz` is not available off
   # Darwin, so the dependency is gated below.
+  # Pretty, composable views of files and search results (view.ls/tree/grep/find
+  # return polars DataFrames; view.cat/json/diff return highlighted Code). Pure
+  # Python over the bundled fff/polars/pygments; cross-platform, so every session
+  # can `import view`.
+  viewPythonSource = builtins.path {
+    name = "ix-mcp-view-python-source";
+    path = ./src/view;
+  };
+  viewModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-view-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Pretty composable file/search views bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/view"
+        mkdir -p "$site"
+        cp -r ${viewPythonSource}/view/. "$site/"
+      ''
+  );
   screenPythonSource = builtins.path {
     name = "ix-mcp-screen-python-source";
     path = ./src/screen;
@@ -335,6 +355,8 @@ let
       # capturable out of the box: the worker renders any open figure / object
       # with a `_repr_png_` back as an MCP image block.
       ps.matplotlib
+      # pygments: syntax highlighting for `view`'s Code views (cat/json/diff).
+      ps.pygments
       # playwright for browser automation out of the box. The Nix python package
       # is patched to use `playwright-driver` as its node driver, and the wrapper
       # below points PLAYWRIGHT_BROWSERS_PATH at the matching browser bundle, so
@@ -362,6 +384,7 @@ let
       googleAuthModule
       ixGoogleModule
       ixNotebookMcpModule
+      viewModule
     ]
     ++ darwinExtraPackages ps
   );
@@ -897,6 +920,70 @@ let
         mkdir -p "$out"
       '';
 
+  # The view module: tabular helpers return plain polars DataFrames (so they stay
+  # composable), the file helpers return a Code view whose repr is the raw text,
+  # and df_html renders the styled table the kernel installs globally. Pure local
+  # FS over the bundled fff/polars/pygments, so the sandbox runs it.
+  viewTestPy = pkgs.writeText "ix-mcp-view-test.py" ''
+    import polars as pl
+
+    import view
+
+    base = "${./.}"
+
+    lsdf = view.ls(base)
+    assert isinstance(lsdf, pl.DataFrame) and "kind" in lsdf.columns, lsdf.columns
+    # A DataFrame stays a DataFrame through polars ops (composable).
+    assert isinstance(lsdf.filter(pl.col("kind") == "dir"), pl.DataFrame)
+
+    g = view.grep("viewTestPy", base)
+    assert isinstance(g, pl.DataFrame) and set(g.columns) == {"path", "line", "text"}, g.columns
+    assert g.height > 0, "expected a grep hit for the marker"
+
+    f = view.find("default.nix", base)
+    assert isinstance(f, pl.DataFrame) and "path" in f.columns
+
+    tr = view.tree(base, depth=1)
+    assert isinstance(tr, pl.DataFrame) and "depth" in tr.columns
+
+    out = view.df_html(lsdf)
+    assert "<table" in out and "rows" in out and "tabular-nums" in out, out[:120]
+
+    c = view.cat(base + "/default.nix", lines=(1, 3))
+    assert isinstance(c, view.Code)
+    assert repr(c).count("\n") <= 3
+    assert "span" in c._repr_html_().lower()
+
+    j = view.json({"a": [1, 2], "b": None})
+    assert '"a"' in repr(j) and "span" in j._repr_html_().lower()
+
+    d = view.diff("x\ny\n", "x\nz\n")
+    assert "-y" in repr(d) and "+z" in repr(d)
+
+    print("view-ok")
+  '';
+  viewSmoke =
+    pkgs.runCommand "ix-mcp-view-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${viewTestPy} >stdout 2>stderr || {
+          echo "ix-mcp view smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'view-ok' stdout || {
+          echo "ix-mcp view smoke did not confirm the view module:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # macOS-only modules (`screen`, `vmkit`) are only bundled on Darwin; their
   # import tests only exist there.
   screenBundled = importTest "screen" "import screen; print('screen-ok', callable(screen.capture), callable(screen.click), callable(screen.accessibility_trusted))";
@@ -920,6 +1007,7 @@ package.overrideAttrs (old: {
         runtimeSmoke
         richSmoke
         bindDefaultSmoke
+        viewSmoke
         ;
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
