@@ -1,28 +1,21 @@
 //! Typed client for the [Google Calendar v3 events API](https://developers.google.com/workspace/calendar/api/v3/reference/events):
 //! list, get, create, and cancel events.
 //!
-//! This crate owns the domain logic for the calendar capability (#643): the
-//! HTTP client, the wire types, OAuth, and error mapping. The user-facing
-//! surfaces stay thin per RFC 0003: the `gcal` CLI
-//! (`packages/google/calendar/cli`) shapes arguments, and the ix-mcp calendar
-//! tools (`packages/mcp`) run that CLI with `--json`.
-//!
-//! The `auth` module owns the shared Google grant: its consent now covers Gmail
-//! (`gmail.modify`, `gmail.send`) alongside `calendar.events`, and
-//! `gcal print-access-token` hands a current token to the bundled Python
-//! `google_auth` helper so notebook cells can drive Gmail and Calendar through
-//! the official client. When more Google surfaces land, this `auth` module is
-//! the part to graduate into a shared `packages/google/auth` crate (#644).
+//! This crate owns the domain logic for the calendar capability (#643):
+//! the HTTP client, the wire types, and error mapping. OAuth is shared with
+//! the gmail crate through [`google_auth`]. The user-facing surfaces stay
+//! thin per RFC 0003: the `gcal` CLI (`packages/google/calendar/cli`)
+//! shapes arguments, and the calendar tools in the Rust MCP server
+//! (`packages/google/mcp`) call the same client in-process.
 
-pub mod auth;
 mod error;
 mod model;
 
-pub use auth::{
-    AccessToken, AuthCode, Authenticator, ClientSecrets, EVENTS_SCOPE, GMAIL_MODIFY_SCOPE,
-    GMAIL_SEND_SCOPE, PendingConsent, StoredToken, TokenStore, begin_consent,
-};
 pub use error::{Error, Result};
+pub use google_auth::scopes::{ALL_KNOWN as ALL_KNOWN_SCOPES, CALENDAR_EVENTS as EVENTS_SCOPE};
+pub use google_auth::{
+    AuthCode, Authenticator, ClientSecrets, PendingConsent, StoredToken, TokenStore, begin_consent,
+};
 pub use model::{
     Attendee, AttendeeDraft, Event, EventDraft, EventQuery, EventTime, Person, SendUpdates,
 };
@@ -39,8 +32,8 @@ pub const DEFAULT_BASE_URL: &str = "https://www.googleapis.com/calendar/v3";
 /// The calendar most callers mean: the authenticated user's primary calendar.
 pub const PRIMARY_CALENDAR: &str = "primary";
 
-/// Page-size ceiling for `events.list`; the API caps `maxResults` at 250 per
-/// page, so larger queries follow `nextPageToken`.
+/// Page-size ceiling for `events.list`; the API caps `maxResults` at 250
+/// per page, so larger queries follow `nextPageToken`.
 const MAX_PAGE_SIZE: usize = 250;
 
 /// One page of `events.list`.
@@ -93,7 +86,7 @@ impl Client {
             NotABaseUrlSnafu { input: base_url }
         );
         Ok(Self {
-            http: http_client()?,
+            http: reqwest::Client::builder().build().context(BuildClientSnafu)?,
             auth,
             base_url: parsed,
         })
@@ -102,8 +95,8 @@ impl Client {
     /// List events on `calendar_id` matching `query`, oldest first.
     ///
     /// Recurring events are expanded into their instances (`singleEvents`),
-    /// which is also what permits ordering by start time. Pagination follows
-    /// `nextPageToken` until `query.max_events` is reached.
+    /// which is also what permits ordering by start time. Pagination
+    /// follows `nextPageToken` until `query.max_events` is reached.
     ///
     /// # Errors
     /// Returns auth, transport, or API errors.
@@ -138,7 +131,7 @@ impl Client {
             let response = self
                 .http
                 .get(url)
-                .bearer_auth(token)
+                .bearer_auth(&token)
                 .send()
                 .await
                 .context(HttpSnafu)?;
@@ -165,7 +158,7 @@ impl Client {
         let response = self
             .http
             .get(url)
-            .bearer_auth(token)
+            .bearer_auth(&token)
             .send()
             .await
             .context(HttpSnafu)?;
@@ -189,7 +182,7 @@ impl Client {
         let response = self
             .http
             .post(url)
-            .bearer_auth(token)
+            .bearer_auth(&token)
             .json(draft)
             .send()
             .await
@@ -200,8 +193,8 @@ impl Client {
     /// Cancel (delete) an event.
     ///
     /// # Errors
-    /// Returns auth, transport, or API errors; cancelling an already-cancelled
-    /// event surfaces the API's 410.
+    /// Returns auth, transport, or API errors; cancelling an
+    /// already-cancelled event surfaces the API's 410.
     pub async fn cancel_event(
         &self,
         calendar_id: &str,
@@ -215,7 +208,7 @@ impl Client {
         let response = self
             .http
             .delete(url)
-            .bearer_auth(token)
+            .bearer_auth(&token)
             .send()
             .await
             .context(HttpSnafu)?;
@@ -237,12 +230,6 @@ impl Client {
         }
         url
     }
-}
-
-/// One HTTP client, built the same way everywhere in the crate (the API
-/// client and the OAuth token client).
-pub(crate) fn http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder().build().context(BuildClientSnafu)
 }
 
 /// Map a non-success status onto [`Error::Api`] with the message from

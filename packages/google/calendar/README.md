@@ -2,13 +2,17 @@
 
 Google Calendar for agents and shells: one Rust crate owns the
 [Calendar v3 events API](https://developers.google.com/workspace/calendar/api/v3/reference/events)
-(list, get, create, cancel) plus the OAuth flow, and two thin surfaces expose
-it per [RFC 0003](../../../rfcs/0003-mcp-composable-clis.html): the `gcal`
-CLI in [`cli/`](./cli) and the `calendar_*` tools in
-[`packages/mcp`](../../mcp), which run `gcal --json` as a subprocess. Tracks
-[#643](https://github.com/indexable-inc/index/issues/643); the auth module is
-the piece that graduates to a shared `packages/google/auth` crate when Gmail
-([#644](https://github.com/indexable-inc/index/issues/644)) lands.
+(list, get, create, cancel). OAuth lives in the shared
+[`packages/google/auth`](../auth) crate, which the gmail integration also
+uses; three thin surfaces expose this client per
+[RFC 0003](../../../rfcs/0003-mcp-composable-clis.html): the `gcal` CLI
+in [`cli/`](./cli), the `calendar_*` tools in the `ix-google-mcp` Rust
+server in [`packages/google/mcp`](../mcp), and the
+`ix_google.calendar.Client` Python class in
+[`packages/google/py`](../py). Tracks
+[#643](https://github.com/indexable-inc/index/issues/643); the auth
+extraction landed alongside gmail
+([#644](https://github.com/indexable-inc/index/issues/644)).
 
 ## One-time team setup: the OAuth client
 
@@ -43,11 +47,15 @@ shows a connection error on `http://127.0.0.1:…`, and `gcal` reads that full
 URL from stdin (paste it in and press enter). Both paths use PKCE and a
 per-attempt `state`, and end with a verification read against the API.
 
-The offline refresh token lands in `~/.config/gcal/token.json` (mode 0600).
-The requested scope is only `calendar.events`: events on the user's
-calendars, not calendar settings or the calendar list. Revoking the grant at
+The offline refresh token lands in `~/.config/google/token.json` (mode
+0600), shared with the gmail integration: one consent flow grants the
+union of every scope the repo knows about (`calendar.events`,
+`gmail.modify`, `gmail.send`), and running `gmail auth` after `gcal auth`
+(or vice versa) is unnecessary. A workstation still holding the legacy
+`~/.config/gcal/token.json` is adopted forward transparently on first
+use. Revoking the grant at
 [myaccount.google.com/permissions](https://myaccount.google.com/permissions)
-makes the next call fail with "run `gcal auth` again".
+makes the next call fail with "rerun `gmail auth` (or `gcal auth`)".
 
 ## Use it
 
@@ -71,30 +79,31 @@ the Calendar UI does). Pass `--notify none` while experimenting, or
 `--notify external-only`. `--json` on any read/write emits the crate's wire
 types verbatim; that output is the contract the MCP tools return.
 
-From the ix-mcp side the same capability is `calendar_events`,
-`calendar_event_create`, and `calendar_event_cancel`; the token file and env
-credentials must exist on the host running the MCP server.
+From the ix-google-mcp side the same capability is `calendar_events`,
+`calendar_event_get`, `calendar_event_create`, and `calendar_event_cancel`;
+the token file and env credentials must exist on the host running the MCP
+server. From Python: `await ix_google.calendar.Client().events()`.
 
 ## Layout
 
 - [`src/lib.rs`](./src/lib.rs): the `Client` (list/get/create/cancel,
-  pagination, Google error envelope mapping).
+  pagination, Google error envelope mapping). Re-exports the OAuth types
+  from [`google-auth`](../auth).
 - [`src/model.rs`](./src/model.rs): wire types; `--json` and the MCP tools
   emit exactly these.
-- [`src/auth.rs`](./src/auth.rs): consent flow (loopback + pasted-redirect),
-  PKCE, token store, refresh (with rotation).
 - [`cli/`](./cli): the `gcal` binary, argument shaping only.
 - [`tests/client.rs`](./tests/client.rs): wire-level tests against a local
-  mock (pagination, request bodies, PKCE round-trip, revoked-grant mapping).
+  mock (pagination, request bodies, error envelope, auth-error wrapping).
+  OAuth-flow tests live in `google-auth`'s `tests/oauth.rs`.
 
 ## Known limitations
 
 - No recurring-event authoring, free/busy queries, or calendar management;
   `list` does expand recurring events into instances.
-- One grant per Unix user per host (`~/.config/gcal/token.json`). Two people
-  sharing one VM account would share a calendar identity.
+- One grant per Unix user per host (`~/.config/google/token.json`). Two
+  people sharing one VM account would share a calendar identity.
 - Human output renders times in the offset the API returns (the calendar's
   timezone), which on a UTC host can differ from your wall clock.
-- The access token is minted once per process and not cached across runs:
-  each `gcal` invocation costs one extra round-trip to Google's token
-  endpoint (~100 ms).
+- An access token is minted lazily on first use and refreshed under an
+  expiry-aware cache, so a long-lived process (the `ix-google-mcp` server)
+  pays Google's token endpoint once per hour, not once per call.

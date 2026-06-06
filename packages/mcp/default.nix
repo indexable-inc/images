@@ -132,6 +132,49 @@ let
       ''
   );
 
+  # The `ix_google` package: typed PyO3 bindings for the google-gmail and
+  # google-calendar Rust crates, baked into the pinned interpreter as a
+  # complement to the (untyped) `google_auth` helper. Notebook users pick
+  # whichever fits: `import google_auth` gives the official googleapiclient
+  # surface, `import ix_google` gives typed `gmail.Client()` /
+  # `calendar.Client()` over the same shared OAuth grant. Auth bootstrap is
+  # `gmail auth` or `gcal auth` on the host once.
+  ixGooglePythonSource = builtins.path {
+    name = "ix-google-python-source";
+    path = ../google/py/python;
+  };
+  ixGoogleModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-google-python-module"
+      {
+        strictDeps = true;
+        meta.description = "ix_google PyO3 module bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/ix_google"
+        mkdir -p "$site"
+        cp -r ${ixGooglePythonSource}/ix_google/. "$site/"
+
+        cdylib=""
+        for candidate in \
+          ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py.so \
+          ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py-*.so \
+          ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py.dylib \
+          ${ix.rustWorkspace.units.libraries.ix_google_py}/lib/libix_google_py-*.dylib
+        do
+          if [ -f "$candidate" ]; then
+            cdylib="$candidate"
+            break
+          fi
+        done
+        if [ -z "$cdylib" ]; then
+          echo "ix-google module: no cdylib under ${ix.rustWorkspace.units.libraries.ix_google_py}/lib" >&2
+          ls -la ${ix.rustWorkspace.units.libraries.ix_google_py}/lib >&2 || true
+          exit 1
+        fi
+        install -m555 "$cdylib" "$site/_ix_google.abi3.so"
+      ''
+  );
+
   # JupyterLab custom CSS, generated from the shared JetBrains Islands palette
   # (`ix.islandsTheme`, the same JSON the search `-c` highlighter and the Neovim
   # colorscheme read) so there is one source of truth for color. It maps the
@@ -462,6 +505,7 @@ let
       searchModule
       fffModule
       googleAuthModule
+      ixGoogleModule
       ixNotebookMcpModule
     ]
     ++ darwinExtraPackages ps
@@ -630,6 +674,15 @@ let
         raise SystemExit("expected GoogleAuthError when IX_GCAL_BIN is unset")
     print("google-auth-ok")
   '';
+  # Typed PyO3 bindings: the cdylib loads and the two Client classes are
+  # callable. A real call would need GOOGLE_OAUTH_CLIENT_ID/SECRET and a
+  # token file, so the sandbox-safe assertion is the import and the
+  # class-shape check.
+  ixGoogleBundled = importTest "ix-google" (
+    "import ix_google; from ix_google import gmail, calendar; "
+    + "assert callable(gmail.Client) and callable(calendar.Client); "
+    + "print('ix-google-ok', ix_google.__version__)"
+  );
   jupyterBundled = importTest "jupyter" (
     "import ipykernel, jupyter_server, jupyterlab, nbformat, jupyter_collaboration, "
     + "jupyter_server_ydoc, jupyter_ydoc, pycrdt, mcp; "
@@ -814,6 +867,7 @@ package.overrideAttrs (old: {
         gmailLibsBundled
         exaBundled
         googleAuthBundled
+        ixGoogleBundled
         jupyterBundled
         serverTools
         evalSmoke

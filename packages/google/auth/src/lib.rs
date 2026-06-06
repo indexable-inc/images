@@ -1,22 +1,29 @@
-//! OAuth for the Calendar client: the installed-app consent flow and the
-//! refresh-token exchange.
-//!
-//! The shape follows Google's installed-app guidance
-//! (<https://developers.google.com/identity/protocols/oauth2/native-app>):
-//! a team OAuth client (id + secret from the environment, sourced from
-//! rbw/op), a per-person consent in a browser that redirects to a loopback
-//! listener, PKCE (RFC 7636) binding the code to this process, and an offline
-//! refresh token stored in a user-only file. Later calls mint short-lived
-//! access tokens from that refresh token; no third-party broker sits in the
-//! path (#599).
+//! Installed-app OAuth (RFC 6749 + RFC 7636 PKCE) for the Google APIs the
+//! repo wraps: a team OAuth client (id + secret from the environment,
+//! sourced from `rbw`/`op`), a per-person consent in a browser that
+//! redirects to a loopback listener, an offline refresh token stored in a
+//! user-only file, and short-lived access tokens minted on demand from that
+//! refresh token. No third-party broker sits in the path (RFC 0003, #599).
 //!
 //! On a headless host (SSH into a VM) the loopback redirect lands on the
 //! browser's machine instead and fails to connect there; the full redirect
-//! URL in the browser's address bar still carries the code, so the flow also
-//! accepts that URL pasted back (see
+//! URL in the browser's address bar still carries the code, so the flow
+//! also accepts that URL pasted back (see
 //! [`PendingConsent::code_from_redirect_url`]).
+//!
+//! One auth story per integration (RFC 0003): the calendar crate and the
+//! gmail crate share this crate, share the same OAuth client, share one
+//! token file (`~/.config/google/token.json`), and share one consent. The
+//! [`Authenticator`] carries the scopes its caller needs and refuses to mint
+//! an access token if the stored grant is missing any of them.
+
+mod error;
+pub mod scopes;
+
+pub use crate::error::{Error, Result};
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -25,14 +32,16 @@ use sha2::{Digest as _, Sha256};
 use snafu::{OptionExt as _, ResultExt as _, ensure};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::RwLock;
+use tokio::time::Instant;
 use url::Url;
 use uuid::Uuid;
 
 use crate::error::{
-    ConsentDeniedSnafu, Error, HttpSnafu, ListenSnafu, MissingClientIdSnafu,
-    MissingClientSecretSnafu, MissingCodeSnafu, MissingRefreshTokenSnafu, NoConfigDirSnafu,
-    NoTokenSnafu, ParseTokenSnafu, ReadTokenSnafu, RedirectParseSnafu, Result, StateMismatchSnafu,
-    TokenExchangeSnafu, TokenRevokedSnafu, WriteTokenSnafu,
+    ConsentDeniedSnafu, HttpSnafu, ListenSnafu, MissingClientIdSnafu, MissingClientSecretSnafu,
+    MissingCodeSnafu, MissingRefreshTokenSnafu, NoConfigDirSnafu, NoTokenSnafu, ParseTokenSnafu,
+    ReadTokenSnafu, RedirectParseSnafu, ScopeMissingSnafu, StateMismatchSnafu, TokenExchangeSnafu,
+    TokenRevokedSnafu, WriteTokenSnafu,
 };
 
 /// Environment variable holding the OAuth client id.
@@ -41,27 +50,21 @@ pub const CLIENT_ID_ENV: &str = "GOOGLE_OAUTH_CLIENT_ID";
 /// Environment variable holding the OAuth client secret.
 pub const CLIENT_SECRET_ENV: &str = "GOOGLE_OAUTH_CLIENT_SECRET";
 
-/// The events read/write scope: enough for list/get/create/cancel, without
-/// access to calendar settings or the user's calendar list.
-pub const EVENTS_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events";
-
-/// Gmail read/modify scope: read messages, labels, and threads, and change
-/// labels/read-state (archive, trash). Does not cover sending; pair it with
-/// [`GMAIL_SEND_SCOPE`] for that.
-pub const GMAIL_MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
-
-/// Gmail send scope: send mail as the authenticated user.
-pub const GMAIL_SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
-
 /// Google's OAuth consent endpoint.
 const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 
-/// Google's OAuth token endpoint (code exchange and refresh). Overridable per
-/// instance with `with_token_endpoint` (tests).
+/// Google's OAuth token endpoint (code exchange and refresh). Overridable
+/// per instance with `with_token_endpoint` (tests).
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
 /// Cap on one loopback HTTP request head; a redirect GET is well under this.
 const MAX_REDIRECT_REQUEST: usize = 8 * 1024;
+
+/// Refresh the access token this long before its nominal expiry, so a call
+/// that races the clock cannot land an expired bearer at Google. Half a
+/// minute is shorter than every Google service's expected latency, and
+/// shorter than the token's lifetime by two orders of magnitude.
+const ACCESS_TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(60);
 
 /// The team OAuth client identity.
 ///
@@ -121,23 +124,50 @@ impl std::fmt::Debug for StoredToken {
 #[derive(Debug, Clone)]
 pub struct TokenStore {
     path: PathBuf,
+    /// Pre-extraction location that [`TokenStore::load`] adopts forward
+    /// transparently. Set on the default store so a workstation that ran
+    /// `gcal auth` before the auth extraction keeps working; unset on
+    /// explicit-path stores (tests, alternate deployments) unless
+    /// [`TokenStore::with_legacy_path`] is called.
+    legacy_path: Option<PathBuf>,
 }
 
 impl TokenStore {
     /// The store at the default per-user location,
-    /// `<config dir>/gcal/token.json` (`~/.config/gcal/token.json` on Linux).
+    /// `<config dir>/google/token.json` (`~/.config/google/token.json` on
+    /// Linux). One token file covers every Google product the repo wraps:
+    /// calendar and gmail share this grant.
+    ///
+    /// The default store also looks at `<config dir>/gcal/token.json` as a
+    /// migration shim for the pre-extraction calendar layout; see
+    /// [`TokenStore::load`].
     ///
     /// # Errors
     /// Returns an error if the platform exposes no config directory.
     pub fn new() -> Result<Self> {
         let config = dirs::config_dir().context(NoConfigDirSnafu)?;
-        Ok(Self::at(config.join("gcal").join("token.json")))
+        Ok(Self {
+            path: config.join("google").join("token.json"),
+            legacy_path: Some(config.join("gcal").join("token.json")),
+        })
     }
 
-    /// The store at an explicit path (tests, alternate deployments).
+    /// The store at an explicit path (tests, alternate deployments). No
+    /// legacy migration; chain [`Self::with_legacy_path`] to add one.
     #[must_use]
     pub const fn at(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            legacy_path: None,
+        }
+    }
+
+    /// Attach a legacy path that [`Self::load`] adopts forward when the
+    /// canonical path is empty.
+    #[must_use]
+    pub fn with_legacy_path(mut self, path: PathBuf) -> Self {
+        self.legacy_path = Some(path);
+        self
     }
 
     /// Where this store reads and writes.
@@ -148,26 +178,55 @@ impl TokenStore {
 
     /// Load the stored grant.
     ///
+    /// If the canonical path is empty but a configured `legacy_path` carries
+    /// a token, copy it forward into the canonical path and return it. The
+    /// legacy file is left in place; a follow-up change deletes the shim
+    /// once everyone has migrated.
+    ///
     /// # Errors
-    /// Returns [`crate::Error::NoToken`] (run `gcal auth`) if the file does
-    /// not exist, and read/parse errors otherwise.
+    /// Returns [`Error::NoToken`] if neither file exists, and read/parse
+    /// errors otherwise.
     pub fn load(&self) -> Result<StoredToken> {
-        let bytes = match std::fs::read(&self.path) {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return NoTokenSnafu {
-                    path: self.path.clone(),
-                }
-                .fail();
+        match self.read_bytes(&self.path)? {
+            Some(bytes) => self.parse(&self.path, &bytes),
+            None => self.load_or_migrate_legacy(),
+        }
+    }
+
+    fn load_or_migrate_legacy(&self) -> Result<StoredToken> {
+        let Some(legacy) = self.legacy_path.as_deref() else {
+            return NoTokenSnafu {
+                path: self.path.clone(),
             }
-            Err(err) => {
-                return Err(err).context(ReadTokenSnafu {
-                    path: self.path.clone(),
-                });
-            }
+            .fail();
         };
-        serde_json::from_slice(&bytes).context(ParseTokenSnafu {
-            path: self.path.clone(),
+        let Some(bytes) = self.read_bytes(legacy)? else {
+            return NoTokenSnafu {
+                path: self.path.clone(),
+            }
+            .fail();
+        };
+        let token = self.parse(legacy, &bytes)?;
+        // Persist into the canonical location so the next call skips the
+        // legacy probe and so a subsequent `save` (refresh rotation) does
+        // not silently revert to the old path.
+        self.save(&token)?;
+        Ok(token)
+    }
+
+    fn read_bytes(&self, path: &Path) -> Result<Option<Vec<u8>>> {
+        match std::fs::read(path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err).context(ReadTokenSnafu {
+                path: path.to_path_buf(),
+            }),
+        }
+    }
+
+    fn parse(&self, path: &Path, bytes: &[u8]) -> Result<StoredToken> {
+        serde_json::from_slice(bytes).context(ParseTokenSnafu {
+            path: path.to_path_buf(),
         })
     }
 
@@ -201,8 +260,9 @@ impl TokenStore {
                 path: self.path.clone(),
             })?;
         // `mode` above only applies when the file is created; an existing
-        // file (for example from a looser earlier writer) keeps its old mode,
-        // so tighten the open handle unconditionally before the token lands.
+        // file (for example from a looser earlier writer) keeps its old
+        // mode, so tighten the open handle unconditionally before the token
+        // lands.
         file.set_permissions(std::fs::Permissions::from_mode(0o600))
             .context(WriteTokenSnafu {
                 path: self.path.clone(),
@@ -219,15 +279,46 @@ struct TokenResponse {
     access_token: String,
     #[serde(default)]
     refresh_token: Option<String>,
-    /// The granted scopes as the endpoint reports them. Read on the initial
-    /// code exchange to record what was granted; ignored on refresh, where the
-    /// authoritative scopes come from the stored grant (a refresh response often
-    /// omits `scope`).
-    #[serde(default)]
-    scope: Option<String>,
-    /// Access-token lifetime in seconds, when the endpoint reports one.
+    /// Seconds until the access token expires. Optional because the spec
+    /// allows it to be omitted, though Google normally includes it; when
+    /// absent we treat the token as living [`DEFAULT_ACCESS_TOKEN_LIFETIME`]
+    /// so the cache still refreshes eventually.
     #[serde(default)]
     expires_in: Option<u64>,
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+/// Conservative fallback lifetime when Google omits `expires_in`. Google's
+/// access tokens live an hour in practice; this matches that without
+/// trusting it.
+const DEFAULT_ACCESS_TOKEN_LIFETIME: Duration = Duration::from_secs(3600);
+
+/// A freshly minted access token plus the metadata a caller needs to cache
+/// it themselves.
+///
+/// Returned by [`Authenticator::mint_access_token`]: the bearer token, its
+/// reported lifetime, and the scopes the underlying grant covers (read
+/// from the stored grant, since the refresh response often omits `scope`).
+/// The token is the short-lived credential, so `Debug` redacts it.
+#[derive(Clone)]
+pub struct AccessToken {
+    /// The bearer access token.
+    pub token: String,
+    /// Lifetime in seconds, when the token endpoint reported one.
+    pub expires_in: Option<u64>,
+    /// Scopes the grant covers (e.g. calendar.events, gmail.modify).
+    pub scopes: Vec<String>,
+}
+
+impl std::fmt::Debug for AccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccessToken")
+            .field("token", &"<redacted>")
+            .field("expires_in", &self.expires_in)
+            .field("scopes", &self.scopes)
+            .finish()
+    }
 }
 
 /// The token endpoint's error body (RFC 6749 §5.2).
@@ -236,8 +327,8 @@ struct TokenErrorBody {
     error: String,
 }
 
-/// A non-success answer from the token endpoint, decoded once. Callers map it
-/// onto their own failure: a dead grant reads differently mid-`gcal auth`
+/// A non-success answer from the token endpoint, decoded once. Callers map
+/// it onto their own failure: a dead grant reads differently mid-`auth`
 /// (the code expired) than on refresh (the consent itself is gone).
 struct TokenDenied {
     status: u16,
@@ -248,8 +339,8 @@ struct TokenDenied {
 
 impl TokenDenied {
     /// Policy for the refresh path: `invalid_grant` means the refresh token
-    /// itself is dead (revoked, expired, or consent withdrawn), so the fix is
-    /// a new consent, not a retry.
+    /// itself is dead (revoked, expired, or consent withdrawn), so the fix
+    /// is a new consent, not a retry.
     fn refresh_error(self) -> Error {
         if self.error_code.as_deref() == Some("invalid_grant") {
             TokenRevokedSnafu.build()
@@ -286,7 +377,7 @@ struct TokenClient {
 impl TokenClient {
     fn new(secrets: ClientSecrets) -> Result<Self> {
         Ok(Self {
-            http: crate::http_client()?,
+            http: http_client()?,
             secrets,
             endpoint: TOKEN_ENDPOINT.to_owned(),
         })
@@ -325,55 +416,49 @@ impl TokenClient {
     }
 }
 
-/// A freshly minted access token plus the metadata a caller needs to cache it.
-///
-/// Returned by [`Authenticator::mint_access_token`]: the bearer token, its
-/// reported lifetime, and the scopes the underlying grant covers (read from the
-/// stored grant, since the refresh response often omits `scope`). The token is
-/// the short-lived credential, so `Debug` redacts it.
+/// A cached access token alongside the deadline before which it is usable.
 #[derive(Clone)]
-pub struct AccessToken {
-    /// The bearer access token.
-    pub token: String,
-    /// Lifetime in seconds, when the token endpoint reported one.
-    pub expires_in: Option<u64>,
-    /// Scopes the grant covers (e.g. calendar.events, gmail.modify).
-    pub scopes: Vec<String>,
-}
-
-impl std::fmt::Debug for AccessToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AccessToken")
-            .field("token", &"<redacted>")
-            .field("expires_in", &self.expires_in)
-            .field("scopes", &self.scopes)
-            .finish()
-    }
+struct CachedAccessToken {
+    token: String,
+    /// Deadline by which the caller must have used the token. Computed at
+    /// mint time as `now + expires_in - margin` so a long round-trip can
+    /// still finish on a token that the cache is about to retire.
+    deadline: Instant,
 }
 
 /// Mints access tokens from the stored refresh token.
 ///
-/// One access token is fetched lazily per `Authenticator` and reused for its
-/// lifetime; that matches the one-shot CLI and MCP-subprocess consumers, which
-/// live far shorter than the token's hour. A long-lived daemon should hold one
-/// `Authenticator` per operation rather than caching one across hours.
+/// The cache is expiry-aware and tied to the `Authenticator` lifetime: the
+/// CLI mints one access token per invocation and tosses it; a long-lived
+/// process (the MCP server) holds one [`Authenticator`] for the process
+/// lifetime and refreshes transparently as tokens expire.
 pub struct Authenticator {
     token: TokenClient,
     store: TokenStore,
-    access: tokio::sync::OnceCell<String>,
+    required_scopes: Vec<String>,
+    cache: RwLock<Option<CachedAccessToken>>,
 }
 
 impl Authenticator {
-    /// An authenticator over the given identity and token store, against
-    /// Google's token endpoint.
+    /// An authenticator over the given identity and token store, asserting
+    /// the stored grant covers `required_scopes`.
+    ///
+    /// The scope check happens at mint time, not now: this constructor is
+    /// infallible past the HTTP-client build because callers (a CLI, an
+    /// MCP server) want to construct one eagerly without making a syscall.
     ///
     /// # Errors
     /// Returns an error if the HTTP client cannot be built.
-    pub fn new(secrets: ClientSecrets, store: TokenStore) -> Result<Self> {
+    pub fn new(
+        secrets: ClientSecrets,
+        store: TokenStore,
+        required_scopes: &[&str],
+    ) -> Result<Self> {
         Ok(Self {
             token: TokenClient::new(secrets)?,
             store,
-            access: tokio::sync::OnceCell::new(),
+            required_scopes: required_scopes.iter().map(|scope| (*scope).to_owned()).collect(),
+            cache: RwLock::new(None),
         })
     }
 
@@ -384,36 +469,73 @@ impl Authenticator {
         self
     }
 
-    /// A current access token, minting one from the stored refresh token on
-    /// first use.
+    /// A current access token, minting one from the stored refresh token
+    /// on first use or after expiry.
     ///
     /// # Errors
-    /// Returns [`crate::Error::NoToken`] when nothing is stored,
-    /// [`crate::Error::TokenRevoked`] when the grant no longer works, and
+    /// Returns [`Error::NoToken`] when nothing is stored,
+    /// [`Error::ScopeMissing`] when the stored grant does not cover one of
+    /// the scopes this authenticator was built for,
+    /// [`Error::TokenRevoked`] when the grant no longer works, and
     /// transport errors otherwise.
-    pub async fn access_token(&self) -> Result<&str> {
-        let token = self
-            .access
-            .get_or_try_init(|| async { self.refresh().await.map(|minted| minted.token) })
-            .await?;
-        Ok(token)
+    pub async fn access_token(&self) -> Result<String> {
+        if let Some(token) = self.fresh_cached().await {
+            return Ok(token);
+        }
+        self.mint_cached().await
     }
 
-    /// Mint a fresh access token (always a network refresh, never the cache),
-    /// returning the token plus its lifetime and the grant's scopes. This is
-    /// the path the `print-access-token` CLI uses to hand a current token to the
-    /// bundled Python `google_auth` helper for Gmail/Calendar calls.
+    /// Mint a fresh access token (always a network refresh, never the
+    /// cache), returning the token plus its lifetime and the grant's
+    /// scopes. This is the path the `gcal print-access-token` CLI uses to
+    /// hand a current token to the bundled Python `google_auth` helper.
     ///
     /// # Errors
-    /// Same as [`Self::access_token`]: [`crate::Error::NoToken`] when nothing is
-    /// stored, [`crate::Error::TokenRevoked`] when the grant no longer works,
-    /// and transport errors otherwise.
+    /// Same as [`Self::access_token`].
     pub async fn mint_access_token(&self) -> Result<AccessToken> {
-        self.refresh().await
+        let stored = self.store.load()?;
+        self.check_scopes(&stored)?;
+        let (access, _stored_after) = self.refresh_from(stored).await?;
+        Ok(access)
     }
 
-    async fn refresh(&self) -> Result<AccessToken> {
+    async fn fresh_cached(&self) -> Option<String> {
+        let guard = self.cache.read().await;
+        guard
+            .as_ref()
+            .filter(|cached| cached.deadline > Instant::now())
+            .map(|cached| cached.token.clone())
+    }
+
+    async fn mint_cached(&self) -> Result<String> {
+        let mut guard = self.cache.write().await;
+        // Recheck inside the write lock: another task may have refreshed
+        // between our read-lock drop and this write-lock acquire.
+        if let Some(cached) = guard.as_ref()
+            && cached.deadline > Instant::now()
+        {
+            return Ok(cached.token.clone());
+        }
+
         let stored = self.store.load()?;
+        self.check_scopes(&stored)?;
+
+        let (access, _) = self.refresh_from(stored).await?;
+        let lifetime = access
+            .expires_in
+            .map_or(DEFAULT_ACCESS_TOKEN_LIFETIME, Duration::from_secs);
+        let deadline = Instant::now() + lifetime.saturating_sub(ACCESS_TOKEN_REFRESH_MARGIN);
+        *guard = Some(CachedAccessToken {
+            token: access.token.clone(),
+            deadline,
+        });
+        Ok(access.token)
+    }
+
+    /// Exchange `stored.refresh_token` for an access token. Returns the
+    /// minted [`AccessToken`] and the (possibly rotated) stored grant. The
+    /// rotation is persisted to the store as a side effect.
+    async fn refresh_from(&self, stored: StoredToken) -> Result<(AccessToken, StoredToken)> {
         let outcome = self
             .token
             .post(&[
@@ -422,30 +544,54 @@ impl Authenticator {
             ])
             .await?;
 
-        let token = match outcome {
-            TokenOutcome::Granted(token) => token,
+        let response = match outcome {
+            TokenOutcome::Granted(response) => response,
             TokenOutcome::Denied(denied) => return Err(denied.refresh_error()),
         };
+
         let scopes = stored.scopes;
-        if let Some(rotated) = token.refresh_token {
+        let stored_after = if let Some(rotated) = response.refresh_token {
             // Google occasionally rotates the refresh token on refresh; the
             // old one stops working, so persist the replacement immediately.
-            self.store.save(&StoredToken {
+            let updated = StoredToken {
                 refresh_token: rotated,
                 scopes: scopes.clone(),
-            })?;
+            };
+            self.store.save(&updated)?;
+            updated
+        } else {
+            StoredToken {
+                refresh_token: stored.refresh_token,
+                scopes: scopes.clone(),
+            }
+        };
+
+        Ok((
+            AccessToken {
+                token: response.access_token,
+                expires_in: response.expires_in,
+                scopes,
+            },
+            stored_after,
+        ))
+    }
+
+    fn check_scopes(&self, stored: &StoredToken) -> Result<()> {
+        for required in &self.required_scopes {
+            if !stored.scopes.iter().any(|scope| scope == required) {
+                return ScopeMissingSnafu {
+                    missing: required.clone(),
+                }
+                .fail();
+            }
         }
-        Ok(AccessToken {
-            token: token.access_token,
-            expires_in: token.expires_in,
-            scopes,
-        })
+        Ok(())
     }
 }
 
 /// An authorization code captured from the consent redirect. One-shot and
-/// deliberately opaque (redacted `Debug`, no accessor): it only travels into
-/// [`PendingConsent::exchange`].
+/// deliberately opaque (redacted `Debug`, no accessor): it only travels
+/// into [`PendingConsent::exchange`].
 pub struct AuthCode(String);
 
 impl std::fmt::Debug for AuthCode {
@@ -455,8 +601,8 @@ impl std::fmt::Debug for AuthCode {
 }
 
 /// A consent attempt in flight: the URL for the user's browser, and the
-/// loopback listener the redirect lands on. No `Debug`: it carries the client
-/// secret and the PKCE verifier.
+/// loopback listener the redirect lands on. No `Debug`: it carries the
+/// client secret and the PKCE verifier.
 pub struct PendingConsent {
     /// The consent URL to open in a browser.
     pub auth_url: String,
@@ -472,8 +618,8 @@ pub struct PendingConsent {
 /// issued, PKCE S256).
 ///
 /// # Errors
-/// Returns an error if the listener cannot bind or the HTTP client cannot be
-/// built.
+/// Returns an error if the listener cannot bind or the HTTP client cannot
+/// be built.
 ///
 /// # Panics
 /// Never in practice: the auth-endpoint constant is a valid URL.
@@ -520,9 +666,9 @@ impl PendingConsent {
         self
     }
 
-    /// Wait for the browser redirect on the loopback listener and extract the
-    /// authorization code. Non-redirect requests (favicon probes, stray
-    /// connections) get a 404 and the wait continues.
+    /// Wait for the browser redirect on the loopback listener and extract
+    /// the authorization code. Non-redirect requests (favicon probes,
+    /// stray connections) get a 404 and the wait continues.
     ///
     /// # Errors
     /// Returns an error if accepting fails, Google reports a consent error,
@@ -545,7 +691,7 @@ impl PendingConsent {
 
             let code = self.extract_code(&url);
             let page = match &code {
-                Ok(_) => "gcal is authorized. You can close this tab.".to_owned(),
+                Ok(_) => "Authorized. You can close this tab.".to_owned(),
                 Err(err) => format!("Authorization failed: {err}"),
             };
             respond(&mut stream, "200 OK", &page).await;
@@ -671,6 +817,18 @@ fn challenge_for(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
+/// One HTTP client, built the same way for the token endpoint and (re-used
+/// by) the API clients above this crate.
+///
+/// # Errors
+/// Returns an error if reqwest cannot build a client (the platform's TLS
+/// stack is unavailable).
+pub fn http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .build()
+        .context(crate::error::BuildClientSnafu)
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -695,7 +853,7 @@ mod tests {
         let store = TokenStore::at(dir.path().join("nested").join("token.json"));
         let token = StoredToken {
             refresh_token: "1//refresh".to_owned(),
-            scopes: vec![super::EVENTS_SCOPE.to_owned()],
+            scopes: vec![crate::scopes::CALENDAR_EVENTS.to_owned()],
         };
 
         store.save(&token).expect("save");
@@ -713,8 +871,8 @@ mod tests {
 
         let dir = TempDir::new().expect("tempdir");
         let store = TokenStore::at(dir.path().join("token.json"));
-        // A pre-existing world-readable file: `OpenOptions::mode` alone would
-        // keep 0644 on rewrite, leaking the rotated refresh token.
+        // A pre-existing world-readable file: `OpenOptions::mode` alone
+        // would keep 0644 on rewrite, leaking the rotated refresh token.
         std::fs::write(store.path(), b"{}").expect("seed file");
         std::fs::set_permissions(store.path(), std::fs::Permissions::from_mode(0o644))
             .expect("loosen");
@@ -739,9 +897,10 @@ mod tests {
         let store = TokenStore::at(dir.path().join("token.json"));
         let err = store.load().expect_err("no token stored");
         assert!(matches!(err, Error::NoToken { .. }), "got {err:?}");
+        let message = err.to_string();
         assert!(
-            err.to_string().contains("gcal auth"),
-            "message must name the fix: {err}"
+            message.contains("gmail auth") || message.contains("gcal auth"),
+            "message must name the fix: {message}"
         );
     }
 }

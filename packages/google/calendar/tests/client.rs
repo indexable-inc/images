@@ -1,7 +1,9 @@
-//! Wire-level tests against a local mock of the Calendar API and the OAuth
-//! token endpoint. These defend the protocol invariants a refactor could
-//! silently break: pagination, query parameters, request bodies, PKCE, state
-//! validation, error mapping, and refresh-token rotation.
+//! Wire-level tests against a local mock of the Calendar API. These defend
+//! the protocol invariants a refactor could silently break: pagination,
+//! query parameters, request bodies, and error mapping. The OAuth flow is
+//! tested separately in the `google-auth` crate; the only auth concern
+//! here is that the calendar `Error::Auth` variant wraps a `google_auth`
+//! error transparently.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -11,17 +13,13 @@ use axum::extract::{Form, Json, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::DateTime;
 use google_calendar::{
     AttendeeDraft, Authenticator, Client, ClientSecrets, EVENTS_SCOPE, Error, EventDraft,
-    EventQuery, EventTime, SendUpdates, StoredToken, TokenStore, begin_consent,
+    EventQuery, EventTime, SendUpdates, StoredToken, TokenStore,
 };
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
 use tempfile::TempDir;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 /// Canned responses plus a recording of everything the client sent.
 struct MockCalendar {
@@ -36,8 +34,8 @@ struct MockCalendar {
     seen: Mutex<Seen>,
 }
 
-// Clone lets tests snapshot the recording in one statement instead of holding
-// the mutex guard across their assertions.
+// Clone lets tests snapshot the recording in one statement instead of
+// holding the mutex guard across their assertions.
 #[derive(Default, Clone)]
 struct Seen {
     token_forms: Vec<HashMap<String, String>>,
@@ -155,7 +153,8 @@ fn test_secrets() -> ClientSecrets {
     }
 }
 
-/// A store in `dir` seeded with a refresh token, as `gcal auth` leaves it.
+/// A store in `dir` seeded with a refresh token, as `gmail auth` (or
+/// `gcal auth`) leaves it.
 fn seeded_store(dir: &TempDir) -> TokenStore {
     let store = TokenStore::at(dir.path().join("token.json"));
     store
@@ -168,7 +167,7 @@ fn seeded_store(dir: &TempDir) -> TokenStore {
 }
 
 fn client_against(base: &str, store: TokenStore) -> Client {
-    let auth = Authenticator::new(test_secrets(), store)
+    let auth = Authenticator::new(test_secrets(), store, &[EVENTS_SCOPE])
         .unwrap()
         .with_token_endpoint(format!("{base}/token"));
     Client::with_base_url(auth, base).unwrap()
@@ -357,10 +356,14 @@ async fn api_errors_surface_status_and_google_message() {
 }
 
 #[tokio::test]
-async fn a_revoked_refresh_token_names_the_fix() {
+async fn auth_errors_wrap_through_transparently() {
+    // The OAuth flow lives in google-auth and is tested there. This test
+    // proves the calendar Error::Auth wrapping carries the typed inner
+    // variant through, so a caller pattern-matching on the source can act
+    // on it without parsing strings.
     let mock = Arc::new(MockCalendar {
         token_status: 400,
-        token_body: json!({ "error": "invalid_grant", "error_description": "Token has been revoked." }),
+        token_body: json!({ "error": "invalid_grant" }),
         ..MockCalendar::default()
     });
     let base = serve(Arc::clone(&mock)).await;
@@ -374,10 +377,12 @@ async fn a_revoked_refresh_token_names_the_fix() {
         max_events: 1,
     };
     let err = client.list_events("primary", &query).await.unwrap_err();
-    assert!(matches!(err, Error::TokenRevoked), "got {err:?}");
+    let Error::Auth { source } = err else {
+        panic!("expected Error::Auth wrapping google_auth::Error");
+    };
     assert!(
-        err.to_string().contains("gcal auth"),
-        "message must name the fix: {err}"
+        matches!(source, google_auth::Error::TokenRevoked),
+        "got {source:?}"
     );
 }
 
@@ -409,105 +414,4 @@ async fn a_rotated_refresh_token_is_persisted() {
         "1//rotated",
         "a rotated refresh token must replace the stored one immediately",
     );
-}
-
-/// Send one raw HTTP request to the consent flow's loopback listener and
-/// return the raw response.
-async fn send_loopback(redirect_uri: &str, path_and_query: &str) -> String {
-    let url = url::Url::parse(redirect_uri).unwrap();
-    let addr = format!("{}:{}", url.host_str().unwrap(), url.port().unwrap());
-    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    stream
-        .write_all(format!("GET {path_and_query} HTTP/1.1\r\nhost: x\r\n\r\n").as_bytes())
-        .await
-        .unwrap();
-    let mut response = String::new();
-    stream.read_to_string(&mut response).await.unwrap();
-    response
-}
-
-#[tokio::test]
-async fn consent_flow_runs_end_to_end_with_pkce() {
-    let mock = Arc::new(MockCalendar {
-        token_body: json!({
-            "access_token": "at-1",
-            "refresh_token": "1//new",
-            "expires_in": 3600,
-            "scope": EVENTS_SCOPE,
-        }),
-        ..MockCalendar::default()
-    });
-    let base = serve(Arc::clone(&mock)).await;
-
-    let pending = begin_consent(test_secrets(), &[EVENTS_SCOPE])
-        .await
-        .unwrap()
-        .with_token_endpoint(format!("{base}/token"));
-
-    let auth_url = url::Url::parse(&pending.auth_url).unwrap();
-    let params: HashMap<String, String> = auth_url.query_pairs().into_owned().collect();
-    assert_eq!(params["response_type"], "code");
-    assert_eq!(params["access_type"], "offline");
-    assert_eq!(
-        params["prompt"], "consent",
-        "forced consent is what guarantees a refresh token"
-    );
-    assert_eq!(params["code_challenge_method"], "S256");
-    assert_eq!(params["scope"], EVENTS_SCOPE);
-    let redirect_uri = params["redirect_uri"].clone();
-    let state = params["state"].clone();
-    let challenge = params["code_challenge"].clone();
-
-    // A browser-shaped peer: first a stray probe (must not end the wait),
-    // then the real redirect.
-    let browser = tokio::spawn(async move {
-        let probe = send_loopback(&redirect_uri, "/favicon.ico").await;
-        assert!(
-            probe.starts_with("HTTP/1.1 404"),
-            "stray requests get a 404: {probe}"
-        );
-        let redirect = send_loopback(&redirect_uri, &format!("/?code=code-1&state={state}")).await;
-        assert!(
-            redirect.contains("authorized"),
-            "the user sees a completion page: {redirect}"
-        );
-    });
-
-    let code = pending.wait_loopback().await.unwrap();
-    browser.await.unwrap();
-    let token = pending.exchange(code).await.unwrap();
-    assert_eq!(token.refresh_token, "1//new");
-    assert_eq!(token.scopes, vec![EVENTS_SCOPE.to_owned()]);
-
-    let seen = mock.seen.lock().unwrap().clone();
-    let form = &seen.token_forms[0];
-    assert_eq!(form["grant_type"], "authorization_code");
-    assert_eq!(form["code"], "code-1");
-    assert_eq!(form["redirect_uri"], params["redirect_uri"]);
-    let verifier_challenge =
-        URL_SAFE_NO_PAD.encode(Sha256::digest(form["code_verifier"].as_bytes()));
-    assert_eq!(
-        verifier_challenge, challenge,
-        "the verifier sent to the token endpoint must match the challenge in the consent URL",
-    );
-}
-
-#[tokio::test]
-async fn redirects_from_another_attempt_are_rejected() {
-    let pending = begin_consent(test_secrets(), &[EVENTS_SCOPE])
-        .await
-        .unwrap();
-
-    let err = pending
-        .code_from_redirect_url("http://127.0.0.1:1/?code=x&state=someone-elses")
-        .unwrap_err();
-    assert!(matches!(err, Error::StateMismatch), "got {err:?}");
-
-    let err = pending
-        .code_from_redirect_url("http://127.0.0.1:1/?error=access_denied")
-        .unwrap_err();
-    assert!(matches!(err, Error::ConsentDenied { .. }), "got {err:?}");
-
-    let err = pending.code_from_redirect_url("not a url").unwrap_err();
-    assert!(matches!(err, Error::RedirectParse { .. }), "got {err:?}");
 }

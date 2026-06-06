@@ -1,0 +1,24 @@
+[package]
+name = "ix-google-py"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Python bindings (PyO3) for google-gmail and google-calendar: shared with the gmail/gcal CLIs and the ix-google-mcp server through one google-auth grant"
+
+[lib]
+name = "ix_google_py"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["alloc"] }
+google-auth.workspace = true
+google-calendar.workspace = true
+google-gmail.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
+pyo3-async-runtimes.workspace = true
+pythonize.workspace = true
+serde = "1"
+serde_json.workspace = true

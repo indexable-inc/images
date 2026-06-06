@@ -1,0 +1,28 @@
+[package]
+name = "google-mcp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "ix-google-mcp: a Rust MCP server exposing Gmail and Google Calendar tools over stdio, sharing one auth grant per RFC 0003"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ix-google-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+chrono = { workspace = true, features = ["alloc", "clock", "serde"] }
+google-auth.workspace = true
+google-calendar.workspace = true
+google-gmail.workspace = true
+rmcp = { version = "1.7", default-features = false, features = ["server", "macros", "transport-io"] }
+schemars = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

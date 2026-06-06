@@ -12,15 +12,10 @@ use chrono::{
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use google_calendar::{
-    Attendee, AttendeeDraft, Authenticator, Client, ClientSecrets, EVENTS_SCOPE, Event, EventDraft,
-    EventQuery, EventTime, GMAIL_MODIFY_SCOPE, GMAIL_SEND_SCOPE, PRIMARY_CALENDAR, SendUpdates,
-    TokenStore, begin_consent,
+    ALL_KNOWN_SCOPES, Attendee, AttendeeDraft, Authenticator, Client, ClientSecrets, EVENTS_SCOPE,
+    Event, EventDraft, EventQuery, EventTime, PRIMARY_CALENDAR, SendUpdates, TokenStore,
+    begin_consent,
 };
-
-/// Scopes the one-time consent requests: Calendar events plus Gmail
-/// read/modify and send, so the single stored grant authorizes both the
-/// calendar tools and the bundled Python `google_auth` helper.
-const CONSENT_SCOPES: [&str; 3] = [EVENTS_SCOPE, GMAIL_MODIFY_SCOPE, GMAIL_SEND_SCOPE];
 
 /// Command-line arguments.
 #[derive(Parser)]
@@ -37,13 +32,14 @@ enum Command {
     /// Needs the team OAuth client in `GOOGLE_OAUTH_CLIENT_ID` and
     /// `GOOGLE_OAUTH_CLIENT_SECRET`. Prints a consent URL; with a local browser
     /// the redirect lands automatically, over SSH pass `--paste` and feed the
-    /// redirect URL back on stdin. The grant covers Calendar and Gmail.
+    /// redirect URL back on stdin.
     Auth(AuthArgs),
     /// Print a current OAuth access token minted from the stored grant.
     ///
-    /// With `--json`, emits `{access_token, expires_in, scopes}`; this is the
-    /// contract the bundled Python `google_auth` helper consumes to drive the
-    /// Gmail and Calendar APIs. Without it, prints the bare token.
+    /// With `--json`, emits `{access_token, expires_in, scopes}`; this is
+    /// the contract the bundled Python `google_auth` helper consumes to
+    /// drive the Gmail and Calendar APIs. Without it, prints the bare
+    /// token.
     PrintAccessToken(PrintAccessTokenArgs),
     /// List events in a window (default: now through 7 days from now).
     List(ListArgs),
@@ -57,8 +53,8 @@ enum Command {
 
 #[derive(Args)]
 struct PrintAccessTokenArgs {
-    /// Emit `{access_token, expires_in, scopes}` as JSON instead of the bare
-    /// token (what the Python `google_auth` helper reads).
+    /// Emit `{access_token, expires_in, scopes}` as JSON instead of the
+    /// bare token (what the Python `google_auth` helper reads).
     #[arg(long)]
     json: bool,
 }
@@ -212,16 +208,45 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+/// Mint a current access token from the stored grant and print it. The
+/// Authenticator is built with no required scopes: print-access-token
+/// hands the token to a downstream caller that decides which scope set
+/// it needs, and rejecting here would be a false negative.
+async fn run_print_access_token(args: PrintAccessTokenArgs) -> anyhow::Result<()> {
+    let auth = Authenticator::new(ClientSecrets::from_env()?, TokenStore::new()?, &[])?;
+    let minted = auth.mint_access_token().await?;
+    if args.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "access_token": minted.token,
+                "expires_in": minted.expires_in,
+                "scopes": minted.scopes,
+            })
+        );
+    } else {
+        println!("{}", minted.token);
+    }
+    Ok(())
+}
+
 /// A client over the env credentials and the default token store.
 fn client() -> anyhow::Result<Client> {
-    let auth = Authenticator::new(ClientSecrets::from_env()?, TokenStore::new()?)?;
+    let auth = Authenticator::new(
+        ClientSecrets::from_env()?,
+        TokenStore::new()?,
+        &[EVENTS_SCOPE],
+    )?;
     Ok(Client::new(auth)?)
 }
 
 async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
     let secrets = ClientSecrets::from_env()?;
     let store = TokenStore::new()?;
-    let pending = begin_consent(secrets.clone(), &CONSENT_SCOPES).await?;
+    // Consent to every scope the repo knows about so one consent flow
+    // covers calendar + gmail; the per-binary scope check at runtime is
+    // what enforces least privilege.
+    let pending = begin_consent(secrets.clone(), ALL_KNOWN_SCOPES).await?;
 
     println!("Open this URL in your browser:\n\n  {}\n", pending.auth_url);
     let code = if args.paste {
@@ -243,7 +268,7 @@ async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
 
     // Prove the grant end to end with the cheapest real read, so a scope or
     // clock problem surfaces now rather than on the first scripted call.
-    let client = Client::new(Authenticator::new(secrets, store)?)?;
+    let client = Client::new(Authenticator::new(secrets, store, &[EVENTS_SCOPE])?)?;
     let probe = EventQuery {
         time_min: Some(Local::now().fixed_offset()),
         time_max: None,
@@ -252,24 +277,6 @@ async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
     };
     client.list_events(PRIMARY_CALENDAR, &probe).await?;
     println!("Verified: the Calendar API answers with this grant.");
-    Ok(())
-}
-
-async fn run_print_access_token(args: PrintAccessTokenArgs) -> anyhow::Result<()> {
-    let auth = Authenticator::new(ClientSecrets::from_env()?, TokenStore::new()?)?;
-    let minted = auth.mint_access_token().await?;
-    if args.json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "access_token": minted.token,
-                "expires_in": minted.expires_in,
-                "scopes": minted.scopes,
-            })
-        );
-    } else {
-        println!("{}", minted.token);
-    }
     Ok(())
 }
 

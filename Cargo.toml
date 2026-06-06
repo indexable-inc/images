@@ -27,8 +27,13 @@ members = [
   "packages/file-search",
   "packages/git-log-pretty",
   "packages/github-avatar",
+  "packages/google/auth",
   "packages/google/calendar",
   "packages/google/calendar/cli",
+  "packages/google/gmail",
+  "packages/google/gmail/cli",
+  "packages/google/mcp",
+  "packages/google/py",
   "packages/indexbench",
   "packages/ix-dev-diagnose",
   "packages/kitty",
@@ -133,7 +138,9 @@ clone-scanner = { path = "packages/clone-detect/scanner" }
 code-highlight = { path = "packages/code-highlight" }
 code-tokenizer = { path = "packages/code-tokenizer" }
 github-avatar = { path = "packages/github-avatar" }
+google-auth = { path = "packages/google/auth" }
 google-calendar = { path = "packages/google/calendar" }
+google-gmail = { path = "packages/google/gmail" }
 indexbench = { path = "packages/indexbench" }
 kitty = { path = "packages/kitty" }
 color-eyre = "0.6"
@@ -169,6 +176,7 @@ progress-style = { path = "packages/progress-style" }
 pty-process = { version = "0.4", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+pythonize = "0.28"
 quartz_nbt = "0.2.9"
 rayon = "1"
 regex = "1"
