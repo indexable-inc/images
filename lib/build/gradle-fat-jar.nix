@@ -69,75 +69,76 @@ let
     in
     if match == null then null else builtins.head match;
 
-  parseArtifacts =
-    component: remainingLines:
-    let
-      go =
-        activeArtifact: todo:
-        # Recursion base case (no lines left -> no artifacts), not conditional
-        # list construction; lib.optionals would obscure the recursion.
-        # ast-grep-ignore: no-deprecated-iflist-empty
-        if todo == [ ] then
-          [ ]
-        else
-          let
-            line = builtins.head todo;
-            rest = builtins.tail todo;
-            artifactName = attrFromLine "name" line;
-            # Verbatim hex parsed from Gradle's verification-metadata.xml
-            # (value="<hex>"); it round-trips into the component record below,
-            # it is not a fetcher `hash` slot.
-            # ast-grep-ignore: prefer-sri-hash
-            sha256 = attrFromLine "value" line;
-          in
-          # Terminal guard in the line walk (the closing tag ends the
-          # component): a recursion-termination case, not list splicing.
-          # ast-grep-ignore: no-deprecated-iflist-empty
-          if lib.hasInfix "</component>" line then
-            [ ]
-          else if artifactName != null then
-            go artifactName rest
-          else if activeArtifact != null && sha256 != null then
-            [
-              (
-                component
-                // {
-                  inherit sha256;
-                  file = activeArtifact;
-                }
-              )
-            ]
-            ++ go null rest
-          else
-            go activeArtifact rest;
-    in
-    go null remainingLines;
+  # Gradle records each artifact digest as a hex `value="<hex>"`. Convert it to
+  # the self-describing SRI form the fetcher `hash` slot expects, rather than
+  # carrying a legacy `sha256` attr.
+  hexToSri =
+    hex:
+    builtins.convertHash {
+      hash = hex;
+      hashAlgo = "sha256";
+      toHashFormat = "sri";
+    };
 
-  parseComponents =
-    current: remainingLines:
-    # Recursion base case (no lines left -> no components).
-    # ast-grep-ignore: no-deprecated-iflist-empty
-    if remainingLines == [ ] then
-      [ ]
+  # Walk the verification XML line by line, carrying the open component and
+  # artifact in the fold accumulator. Gradle emits one tag per line:
+  #   <component group="…" name="…" version="…">   opens a component
+  #   <artifact name="…">                          opens an artifact in it
+  #   <sha256 value="<hex>"/>                       the artifact's sha256 digest
+  #   </artifact> / </component>                    close and reset state
+  # Only the first `<sha256>` of an artifact is taken; any other digest or
+  # signature line (sha512, sha1, md5, pgp, also-trust) is ignored, so a 128-hex
+  # or 40-hex fingerprint never reaches `hexToSri`. Close tags clear the open
+  # artifact/component so a stray digest line is never reattributed.
+  collect =
+    state: line:
+    if lib.hasInfix "<component " line then
+      state
+      // {
+        component = {
+          group = attrFromLine "group" line;
+          name = attrFromLine "name" line;
+          version = attrFromLine "version" line;
+        };
+        artifact = null;
+      }
+    else if lib.hasInfix "</component>" line then
+      state
+      // {
+        component = null;
+        artifact = null;
+      }
+    else if lib.hasInfix ''<artifact name="'' line then
+      state // { artifact = attrFromLine "name" line; }
+    else if lib.hasInfix "</artifact>" line then
+      state // { artifact = null; }
+    else if
+      lib.hasInfix ''<sha256 value="'' line && state.component != null && state.artifact != null
+    then
+      state
+      // {
+        # First digest wins: clear the artifact so a later digest line under the
+        # same artifact cannot emit a second record for the same file.
+        artifact = null;
+        results = state.results ++ [
+          (
+            state.component
+            // {
+              file = state.artifact;
+              hash = hexToSri (attrFromLine "value" line);
+            }
+          )
+        ];
+      }
     else
-      let
-        line = builtins.head remainingLines;
-        rest = builtins.tail remainingLines;
-        group = attrFromLine "group" line;
-        name = attrFromLine "name" line;
-        artifactVersion = attrFromLine "version" line;
-      in
-      if lib.hasInfix "<component " line then
-        parseComponents {
-          inherit group name;
-          version = artifactVersion;
-        } rest
-      else if current != null && lib.hasInfix ''<artifact name="'' line then
-        parseArtifacts current remainingLines ++ parseComponents null remainingLines
-      else
-        parseComponents current rest;
+      state;
 
-  artifacts = parseComponents null lines;
+  artifacts =
+    (lib.foldl' collect {
+      component = null;
+      artifact = null;
+      results = [ ];
+    } lines).results;
 
   artifactUrl =
     {
@@ -157,7 +158,7 @@ let
     // {
       src = pkgs.fetchurl {
         url = artifactUrl artifact;
-        hash = "sha256:${artifact.sha256}";
+        inherit (artifact) hash;
       };
     }
   ) artifacts;
