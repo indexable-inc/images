@@ -109,9 +109,14 @@ let
 
       # Every injected unit plus everything reachable from one through
       # `passthru.depUnits` (recorded by `mkPrebuiltLibraryUnit`), deduplicated
-      # by derivation. Walking by drvPath rather than unitKey keeps two distinct
-      # derivations that claim the same unit key visible to the conflict guard
-      # below instead of silently dropping one of them.
+      # by derivation. A recorded dep whose unit key the caller explicitly
+      # pinned in `extraUnits` is pruned BEFORE descending: the pinned
+      # derivation (already a closure root) is the selected unit for that key,
+      # and the discarded dep's own subtree must not auto-inject units or
+      # raise conflicts on behalf of an artifact the graph never links.
+      # Walking by drvPath rather than unitKey keeps two distinct derivations
+      # that claim the same unpinned key visible to the conflict guard below
+      # instead of silently dropping one of them.
       injectedUnitClosure = map (item: item.unit) (genericClosure {
         startSet = lib.mapAttrsToList (_: unit: {
           key = unit.drvPath;
@@ -119,10 +124,16 @@ let
         }) explicitExtraUnits;
         operator =
           item:
-          map (dep: {
-            key = dep.drvPath;
-            unit = dep;
-          }) (item.unit.passthru.depUnits or [ ]);
+          map
+            (dep: {
+              key = dep.drvPath;
+              unit = dep;
+            })
+            (
+              filter (dep: !(hasAttr (dep.passthru.unitKey or "") explicitExtraUnits)) (
+                item.unit.passthru.depUnits or [ ]
+              )
+            );
       });
 
       # The closure grouped by recorded unit key. Injected units without a

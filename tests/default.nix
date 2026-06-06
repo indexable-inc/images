@@ -911,9 +911,39 @@ let
     toolchainId = ix.cargoUnit.defaultToolchainId;
   };
 
+  # A well-formed prebuilt whose unit key exists in NO graph. Recorded as a
+  # dep of the overridden leaf below: if the closure traversal ever walks the
+  # discarded leaf's subtree, this key gets auto-injected and the C1 guard
+  # fails eval, so the override arm passing proves the prune.
+  cargoUnitPrebuiltPhantomDep = ix.cargoUnit.mkPrebuiltLibraryUnit {
+    name = "phantom_dep";
+    version = "0.0.1";
+    hash = "0000000000000000";
+    # Never built or linked; any .rlib/.rmeta-suffixed store path satisfies the
+    # shape asserts.
+    rlib = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib";
+    rmeta = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rmeta";
+    toolchainId = ix.cargoUnit.defaultToolchainId;
+  };
+
+  # The variant leaf again, but recording the phantom dep. This is the
+  # derivation the override arm DISCARDS; its subtree must be pruned, not
+  # walked.
+  cargoUnitPrebuiltLibUnitWithPhantomDep = ix.cargoUnit.mkPrebuiltLibraryUnit {
+    name = "prebuilt_lib";
+    version = "0.1.0";
+    inherit (cargoUnitPrebuiltVariantLib) hash;
+    rlib = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib";
+    rmeta = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rmeta";
+    toolchainId = ix.cargoUnit.defaultToolchainId;
+    depUnits = [ cargoUnitPrebuiltPhantomDep ];
+  };
+
   # Explicit override of an auto-injected dep: the caller pins the leaf key to
   # a different derivation than the one the mid prebuilt recorded. Eval-only:
-  # the assertion below checks the graph routes the key to the explicit pin.
+  # the assertion below checks the graph routes the key to the explicit pin,
+  # and the recorded (discarded) leaf carries a phantom dep that would fail C1
+  # if the traversal walked the discarded subtree instead of pruning it.
   # Actually LINKING this combination would fail (the mid rlib references the
   # variant leaf's SVH, not the plain one's), which is exactly why replacing a
   # recorded dep must be an explicit caller choice and never a silent merge.
@@ -923,7 +953,15 @@ let
       pname = "cargo-unit-prebuilt-chain-override";
       src = cargoUnitPrebuiltFixture;
       extraUnits = {
-        ${cargoUnitPrebuiltVariantMid.key} = cargoUnitPrebuiltMidUnit;
+        ${cargoUnitPrebuiltVariantMid.key} = ix.cargoUnit.mkPrebuiltLibraryUnit {
+          name = "prebuilt_mid";
+          version = "0.1.0";
+          inherit (cargoUnitPrebuiltVariantMid) hash;
+          rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
+          rmeta = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rmeta";
+          toolchainId = ix.cargoUnit.defaultToolchainId;
+          depUnits = [ cargoUnitPrebuiltLibUnitWithPhantomDep ];
+        };
         ${cargoUnitPrebuiltVariantLib.key} = cargoUnitPrebuiltLibUnitFromPlain;
       };
     }
@@ -4443,11 +4481,13 @@ let
       message = "buildWorkspace should auto-inject a prebuilt unit's recorded depUnits";
     }
     {
-      # An explicit extraUnits entry for a dep key beats the recorded dep.
+      # An explicit extraUnits entry for a dep key beats the recorded dep, and
+      # the discarded dep's subtree is pruned: forcing this workspace at all
+      # would fail C1 on the phantom dep's key if the traversal walked it.
       assertion =
         cargoUnitPrebuiltChainOverride.units.${cargoUnitPrebuiltVariantLib.key}.drvPath
         == cargoUnitPrebuiltLibUnitFromPlain.drvPath;
-      message = "an explicit extraUnits entry should override an auto-injected dep unit";
+      message = "an explicit extraUnits entry should override an auto-injected dep unit and prune its subtree";
     }
     {
       # A toolchain id mismatch must be caught at eval, not at link time.
