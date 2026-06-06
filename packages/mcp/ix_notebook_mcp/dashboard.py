@@ -37,6 +37,8 @@ async function tick(){
   const r=await fetch('api/jobs');const js=await r.json();
   const el=document.getElementById('jobs');
   if(!js.length){el.innerHTML='<div class="empty">no executions yet</div>';return;}
+  js.sort((a,b)=>a.started_at-b.started_at);          // oldest at top, newest at bottom
+  const nearBottom=(window.innerHeight+window.scrollY)>=(document.body.scrollHeight-120);
   el.innerHTML=js.map(j=>{
    const dur=((j.ended_at||Date.now()/1000)-j.started_at).toFixed(1);
    const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -50,6 +52,7 @@ async function tick(){
      ${j.error&&!j.output.includes(j.error)?`<pre class="error">${esc(j.error)}</pre>`:''}
    </div>`;
   }).join('');
+  if(nearBottom) window.scrollTo(0, document.body.scrollHeight);
  }catch(e){}
 }
 tick();setInterval(tick,1000);

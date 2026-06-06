@@ -300,6 +300,7 @@ def install(user_ns: dict | None = None) -> None:
     target["Job"] = Job
     target["__ix_run"] = __ix_run
     target["__ix_exec"] = __ix_exec
+    target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")
 
     try:
         asyncio.get_event_loop().create_task(_flusher())

@@ -184,6 +184,9 @@ def _serve(args: argparse.Namespace) -> int:
     # writes there) and the private IPYTHONDIR (so the runtime startup runs)
     # before the kernel starts.
     os.environ["IX_MCP_STORE"] = str(store_path)
+    # Surface the dashboard URL to the kernel so `DASHBOARD_URL` is one lookup
+    # away (the agent should not have to spelunk the runtime dir to find it).
+    os.environ["IX_MCP_DASHBOARD_URL"] = cfg.dashboard_url()
     os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(dashboard_port))
 
     asyncio.run(_run(cfg))

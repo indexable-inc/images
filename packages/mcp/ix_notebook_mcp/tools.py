@@ -37,7 +37,7 @@ mcp = FastMCP(
         "off the event loop. Bundled modules import with no install step: `fff` "
         "(async file search/grep), `tui`, `search`, `exa_py`, `google_auth`, "
         "numpy, polars, duckdb, httpx, matplotlib, playwright. A dashboard shows "
-        "every running job and its live output; its URL is printed at startup."
+        "every running job and its live output; its URL is the `DASHBOARD_URL` variable in the namespace (share it with the human)."
     ),
 )
 
