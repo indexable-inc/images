@@ -1,0 +1,30 @@
+[package]
+name = "lake-iceberg"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "The Iceberg corpus lake: append+tombstone document log with snapshot-cursor reads"
+
+[lints]
+workspace = true
+
+[dependencies]
+# iceberg 0.9 pins arrow/parquet ^57.1; the rest of the workspace is on 58 for
+# the plain-parquet pair. The 57 tree is pinned here directly (not in the
+# workspace table) so it stays an implementation detail of this crate; both
+# trees coexist (`multiple_crate_versions` is allowed workspace-wide).
+arrow-array = "57"
+arrow-schema = "57"
+futures.workspace = true
+iceberg.workspace = true
+iceberg-catalog-rest.workspace = true
+iceberg-storage-opendal.workspace = true
+parquet-57 = { package = "parquet", version = "57", features = ["arrow"] }
+serde_json.workspace = true
+snafu.workspace = true
+source-meta.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

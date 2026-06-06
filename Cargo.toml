@@ -38,6 +38,7 @@ members = [
   "packages/indexbench",
   "packages/ix-dev-diagnose",
   "packages/kitty",
+  "packages/lake/iceberg",
   "packages/minecraft/nbt",
   "packages/minecraft/sound",
   "packages/minecraft/sync-managed",
@@ -147,6 +148,7 @@ google-calendar = { path = "packages/google/calendar" }
 google-gmail = { path = "packages/google/gmail" }
 indexbench = { path = "packages/indexbench" }
 kitty = { path = "packages/kitty" }
+lake-iceberg = { path = "packages/lake/iceberg" }
 color-eyre = "0.6"
 dashboard-core = { path = "packages/dashboard-core" }
 devicons = "0.6"
@@ -157,6 +159,12 @@ futures = "0.3"
 git2 = { version = "0.20", default-features = false }
 glob = "0.3"
 hegeltest = { version = "0.14", default-features = false }
+# The Iceberg corpus lake (issue #752). iceberg 0.9 pins arrow/parquet ^57.1
+# while the workspace parquet pair is on 58; the 57 tree stays isolated inside
+# lake-iceberg (see its Cargo.toml).
+iceberg = "0.9"
+iceberg-catalog-rest = "0.9"
+iceberg-storage-opendal = { version = "0.9", features = ["opendal-s3"] }
 ignore = "0.4"
 indicatif = "0.18"
 insta = { version = "1.42", features = ["json"] }
