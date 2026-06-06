@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use source_meta::{Document, SourceAdapter, keys};
+use source_meta::{Document, Reconciler, Source, keys};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path as ObjectPath;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
@@ -56,12 +56,6 @@ pub enum Error {
         bucket: String,
         /// Underlying object-store error.
         source: object_store::Error,
-    },
-    /// The source adapter failed while producing documents.
-    #[snafu(display("source adapter failed while producing documents"))]
-    Adapter {
-        /// Underlying adapter error.
-        source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// An object could not be read.
     #[snafu(display("failed to read object {path}"))]
@@ -119,50 +113,69 @@ pub struct Report {
     pub skipped: bool,
 }
 
-/// Sync one source's documents to the bucket as a single parquet file, skipping
-/// the rewrite when the source's corpus hash is unchanged.
-///
-/// # Errors
-/// Returns an error if the client cannot be built, the adapter fails, or any
-/// object cannot be read, written, or encoded.
-pub async fn sync<A: SourceAdapter + Sync>(adapter: &A, config: &Config) -> Result<Report> {
-    let store = build_store(config)?;
-    sync_to(adapter, &store, &config.prefix).await
+/// Reconciles a source's documents into the bucket as one parquet file per
+/// source. The production store is [`AmazonS3`] (see [`Config::connect`]);
+/// tests drive an in-memory store.
+#[derive(Debug, Clone)]
+pub struct ParquetReconciler<S = AmazonS3> {
+    /// The object store written to.
+    pub store: S,
+    /// Key prefix every object lands under (e.g. `corpus/host=<host>`).
+    pub prefix: String,
 }
 
-/// The store-agnostic core of [`sync`], so tests can drive an in-memory store.
-///
-/// `A: Sync` so the returned future is `Send` (the adapter is borrowed across no
-/// await, but the bound keeps the future usable from a multi-threaded runtime).
-async fn sync_to<A: SourceAdapter + Sync>(
-    adapter: &A,
-    store: &dyn ObjectStore,
-    prefix: &str,
-) -> Result<Report> {
-    let source = adapter.source();
-    let mut documents = Vec::new();
-    for document in adapter.documents() {
-        documents.push(document.map_err(|err| AdapterSnafu.into_error(Box::new(err)))?);
+impl Config {
+    /// Build the S3-backed reconciler for this config. Credentials come from
+    /// the environment (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`).
+    ///
+    /// # Errors
+    /// Returns an error if the S3 client cannot be built from the config and
+    /// environment.
+    pub fn connect(&self) -> Result<ParquetReconciler> {
+        Ok(ParquetReconciler { store: build_store(self)?, prefix: self.prefix.clone() })
     }
-    if documents.is_empty() {
-        return Ok(Report { rows: 0, skipped: true });
-    }
+}
 
-    let data_path = ObjectPath::from(format!("{prefix}/source={source}/data.parquet"));
-    let manifest_path = ObjectPath::from(format!("{prefix}/source={source}/_manifest.json"));
-    let hash = corpus_hash(&documents);
-    if load_manifest(store, &manifest_path).await? == Some(hash.clone()) {
-        return Ok(Report { rows: 0, skipped: true });
+impl<S: Clone> ParquetReconciler<S> {
+    /// The same store, writing under a different prefix (the indexer derives
+    /// per-user prefixes from one connected reconciler this way).
+    #[must_use]
+    pub fn with_prefix(&self, prefix: impl Into<String>) -> Self {
+        Self { store: self.store.clone(), prefix: prefix.into() }
     }
+}
 
-    let batch = record_batch(&documents)?;
-    let bytes = encode_parquet(&batch)?;
-    store
-        .put(&data_path, PutPayload::from(bytes))
-        .await
-        .context(PutSnafu { path: data_path.to_string() })?;
-    save_manifest(store, &manifest_path, &hash).await?;
-    Ok(Report { rows: documents.len(), skipped: false })
+impl<S: ObjectStore> Reconciler for ParquetReconciler<S> {
+    type Report = Report;
+    type Error = Error;
+
+    /// Write `documents` as `<prefix>/source=<source>/data.parquet` in one
+    /// full-file overwrite, skipping the rewrite when the corpus hash in the
+    /// sibling manifest is unchanged. The file always reflects the source's
+    /// current desired state, so a document absent from `documents` simply
+    /// vanishes with the rewrite.
+    async fn reconcile(&self, source: &Source, documents: &[Document]) -> Result<Report> {
+        if documents.is_empty() {
+            return Ok(Report { rows: 0, skipped: true });
+        }
+
+        let prefix = &self.prefix;
+        let data_path = ObjectPath::from(format!("{prefix}/source={source}/data.parquet"));
+        let manifest_path = ObjectPath::from(format!("{prefix}/source={source}/_manifest.json"));
+        let hash = corpus_hash(documents);
+        if load_manifest(&self.store, &manifest_path).await? == Some(hash.clone()) {
+            return Ok(Report { rows: 0, skipped: true });
+        }
+
+        let batch = record_batch(documents)?;
+        let bytes = encode_parquet(&batch)?;
+        self.store
+            .put(&data_path, PutPayload::from(bytes))
+            .await
+            .context(PutSnafu { path: data_path.to_string() })?;
+        save_manifest(&self.store, &manifest_path, &hash).await?;
+        Ok(Report { rows: documents.len(), skipped: false })
+    }
 }
 
 /// Build the S3 client. Credentials come from the environment
@@ -281,26 +294,12 @@ async fn save_manifest(store: &dyn ObjectStore, path: &ObjectPath, hash: &str) -
 
 #[cfg(test)]
 mod tests {
-    use super::{Report, sync_to};
-    use source_meta::{Document, Source, SourceAdapter};
+    use super::{ParquetReconciler, Report};
+    use source_meta::{Document, Reconciler as _, Source};
     use object_store::ObjectStoreExt;
     use object_store::memory::InMemory;
     use object_store::path::Path as ObjectPath;
     use serde_json::json;
-
-    struct TestSource {
-        docs: Vec<Document>,
-    }
-
-    impl SourceAdapter for TestSource {
-        type Error = std::convert::Infallible;
-        fn source(&self) -> Source {
-            Source::new("test")
-        }
-        fn documents(&self) -> impl Iterator<Item = Result<Document, Self::Error>> + Send {
-            self.docs.clone().into_iter().map(Ok)
-        }
-    }
 
     fn doc(id: &str, body: &str) -> Document {
         let content_hash = source_meta::hash_body(body.as_bytes());
@@ -322,31 +321,49 @@ mod tests {
 
     #[tokio::test]
     async fn writes_parquet_and_manifest_then_skips_unchanged() {
-        let store = InMemory::new();
-        let adapter = TestSource { docs: vec![doc("a", "alpha"), doc("b", "beta")] };
+        let reconciler =
+            ParquetReconciler { store: InMemory::new(), prefix: "corpus".to_owned() };
+        let source = Source::new("test");
+        let docs = vec![doc("a", "alpha"), doc("b", "beta")];
 
-        let first: Report = sync_to(&adapter, &store, "corpus").await.expect("first sync");
+        let first: Report = reconciler.reconcile(&source, &docs).await.expect("first sync");
         assert_eq!(first.rows, 2);
         assert!(!first.skipped);
 
         // The parquet file and manifest both landed under the source partition.
         let data = ObjectPath::from("corpus/source=test/data.parquet");
         let manifest = ObjectPath::from("corpus/source=test/_manifest.json");
-        assert!(store.get(&data).await.is_ok());
-        assert!(store.get(&manifest).await.is_ok());
+        assert!(reconciler.store.get(&data).await.is_ok());
+        assert!(reconciler.store.get(&manifest).await.is_ok());
 
         // A second identical run is a no-op (corpus hash unchanged).
-        let second = sync_to(&adapter, &store, "corpus").await.expect("second sync");
+        let second = reconciler.reconcile(&source, &docs).await.expect("second sync");
         assert!(second.skipped);
         assert_eq!(second.rows, 0);
     }
 
     #[tokio::test]
     async fn empty_source_writes_nothing() {
-        let store = InMemory::new();
-        let adapter = TestSource { docs: vec![] };
-        let report = sync_to(&adapter, &store, "corpus").await.expect("sync");
+        let reconciler =
+            ParquetReconciler { store: InMemory::new(), prefix: "corpus".to_owned() };
+        let report =
+            reconciler.reconcile(&Source::new("test"), &[]).await.expect("sync");
         assert!(report.skipped);
         assert_eq!(report.rows, 0);
+    }
+
+    #[tokio::test]
+    async fn with_prefix_scopes_writes_under_the_new_prefix() {
+        // `with_prefix` derives the per-user reconciler in the fleet path; the
+        // derived writer must land objects under the new prefix, not the base.
+        let store = std::sync::Arc::new(InMemory::new());
+        let base = ParquetReconciler { store: std::sync::Arc::clone(&store), prefix: "corpus/host=h".to_owned() };
+        let scoped = base.with_prefix("corpus/host=h/user=alice");
+
+        scoped.reconcile(&Source::new("test"), &[doc("a", "alpha")]).await.expect("sync");
+        let scoped_path = ObjectPath::from("corpus/host=h/user=alice/source=test/data.parquet");
+        let base_path = ObjectPath::from("corpus/host=h/source=test/data.parquet");
+        assert!(store.get(&scoped_path).await.is_ok());
+        assert!(store.get(&base_path).await.is_err(), "base prefix must stay untouched");
     }
 }

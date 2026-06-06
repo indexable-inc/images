@@ -23,6 +23,7 @@
 pub mod keys;
 
 use std::fmt;
+use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -198,6 +199,40 @@ pub trait SourceAdapter {
 
     /// The current desired-state documents for this corpus.
     fn documents(&self) -> impl Iterator<Item = Result<Document, Self::Error>> + Send;
+}
+
+/// Converges one external view to a source's current desired-state document set.
+///
+/// The consumer counterpart of [`SourceAdapter`]: adapters produce desired
+/// state, reconcilers make a view (a search index, an object-store log, an
+/// analytics table) match it.
+///
+/// The contract every implementation upholds:
+///
+/// 1. **Desired state, not deltas.** `documents` is `source`'s complete current
+///    set. Implementations converge toward it; what absence means (keep vs
+///    delete) is each implementation's documented choice.
+/// 2. **Idempotent.** Reconciling the same set twice is a no-op, keyed on
+///    `external_id` + `content_hash` (see [`hash_body`]).
+/// 3. **Source-scoped.** A reconcile reads and writes only `source`'s records,
+///    never another source's.
+///
+/// A view can also satisfy this contract at the engine level instead of
+/// implementing the trait: replayed duplicates collapsing in storage (e.g. a
+/// `ClickHouse` `ReplacingMergeTree` whose sorting key is the record's natural
+/// identity) is the same idempotence, declared rather than coded.
+pub trait Reconciler {
+    /// Per-pass outcome; each view reports its own shape.
+    type Report;
+    /// Reconcile failure type.
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Converge the view to `documents`, the current desired state of `source`.
+    fn reconcile(
+        &self,
+        source: &Source,
+        documents: &[Document],
+    ) -> impl Future<Output = Result<Self::Report, Self::Error>> + Send;
 }
 
 /// The `content_hash` of a body: `sha256:<hex>` over the exact bytes embedded.

@@ -181,6 +181,11 @@ let
   # what turns an at-least-once transport plus this view into effectively-once:
   # the broker may re-deliver and the shipper may re-send the whole file on
   # restart, yet every duplicate folds back into the single canonical row.
+  #
+  # In corpus terms this lane satisfies source-meta's `Reconciler` contract at
+  # the engine level: idempotent convergence is declared in the table engine
+  # (replayed duplicates collapse in storage) rather than implemented in a
+  # consumer.
   createTableSql = ''
     CREATE TABLE IF NOT EXISTS ${database}.${table} (
       ${columnDefs},

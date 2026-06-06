@@ -24,13 +24,14 @@ use std::time::Duration;
 use anyhow::Context as _;
 use clap::Parser;
 use search_core::MixedbreadStore;
-use sink_mixedbread::sync_documents;
+use sink_mixedbread::MixedbreadReconciler;
+use sink_parquet::ParquetReconciler;
 
 /// Manifest limits for code repos, matching `search-core`'s defaults.
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 /// Cap on new files uploaded per code sync (a runaway guard).
 const MAX_FILES: usize = 10_000;
-use source_meta::{Document, Source, SourceAdapter, keys};
+use source_meta::{Document, Reconciler as _, Source, SourceAdapter, keys};
 
 /// How long to wait for Mixedbread to finish embedding new documents.
 const INDEX_TIMEOUT: Duration = Duration::from_mins(2);
@@ -123,13 +124,9 @@ struct Cli {
     host: Option<String>,
 }
 
-/// The Mixedbread sink for a run: the connected store and the store name to
-/// sync into. Passed together wherever a source may fan out to Mixedbread.
-#[derive(Clone, Copy)]
-struct Mixedbread<'a> {
-    store: &'a MixedbreadStore,
-    name: &'a str,
-}
+/// The Mixedbread view for a run: the connected store, the store name, and the
+/// embedding wait, passed together wherever a source may fan out to Mixedbread.
+type Mixedbread<'a> = MixedbreadReconciler<'a, MixedbreadStore>;
 
 /// Per-run tally of how many sources were indexed, soft-skipped, or failed.
 ///
@@ -163,8 +160,10 @@ async fn main() -> anyhow::Result<()> {
         }
         None => None,
     };
-    let mixedbread =
-        store.as_ref().zip(cli.mixedbread_store.as_deref()).map(|(store, name)| Mixedbread { store, name });
+    let mixedbread = store
+        .as_ref()
+        .zip(cli.mixedbread_store.as_deref())
+        .map(|(store, name)| Mixedbread { store, name, index_timeout: INDEX_TIMEOUT });
 
     // Consume mode (parquet corpus log): read the per-source `data.parquet` files
     // `sink-parquet` wrote at this prefix under `--bucket` and reconcile them back
@@ -193,14 +192,19 @@ async fn main() -> anyhow::Result<()> {
         // and the per-host manifest skip-gate makes them ping-pong every tick.
         // `host`/`user`/`source` are all hive partitions, matching the old
         // history-ship layout (`host=<host>/user=<user>/...`).
+        //
+        // Connecting here (once per run, not once per source) also surfaces a
+        // misconfigured endpoint or missing credentials at startup instead of
+        // as a per-source failure.
         Some(bucket) => {
             let host = resolve_host(&cli).context("resolving host for the parquet archive prefix")?;
-            Some(sink_parquet::Config {
+            let config = sink_parquet::Config {
                 bucket: bucket.clone(),
                 endpoint: cli.endpoint.clone(),
                 region: cli.region.clone(),
                 prefix: archive_prefix(&cli.prefix, &host),
-            })
+            };
+            Some(config.connect().context("building the S3 client for the parquet archive")?)
         }
         None => None,
     };
@@ -258,7 +262,7 @@ const fn any_source_selected(cli: &Cli) -> bool {
 async fn run_sources(
     cli: &Cli,
     mixedbread: Option<Mixedbread<'_>>,
-    parquet: Option<&sink_parquet::Config>,
+    parquet: Option<&ParquetReconciler>,
 ) -> Counts {
     let home = dirs::home_dir();
     let default = |suffix: &str| home.as_ref().map(|h| h.join(suffix));
@@ -286,7 +290,7 @@ async fn run_sources(
         record("codex", result, &mut counts);
     }
     if let Some(db) = atuin {
-        match open_atuin("shell", &db, mixedbread, parquet, &mut counts) {
+        match open_atuin("shell", &db, mixedbread.is_some() || parquet.is_some(), &mut counts) {
             Ok(Atuin::Ready(adapter)) => {
                 let result = run_source("shell", &adapter, mixedbread, parquet).await;
                 record("shell", result, &mut counts);
@@ -349,7 +353,7 @@ async fn run_sources(
 async fn run_users(
     cli: &Cli,
     mixedbread: Option<Mixedbread<'_>>,
-    parquet: Option<&sink_parquet::Config>,
+    parquet: Option<&ParquetReconciler>,
     counts: &mut Counts,
 ) {
     let host = match resolve_host(cli) {
@@ -371,24 +375,6 @@ async fn run_users(
                 counts.failures += 1;
             }
         }
-    }
-}
-
-/// An in-memory source: documents already tagged with one `source`, used by
-/// [`run_consume`] to reuse the per-source Mixedbread reconcile (which scopes its
-/// skip-if-unchanged listing by `source`).
-struct VecSource {
-    source: Source,
-    documents: Vec<Document>,
-}
-
-impl SourceAdapter for VecSource {
-    type Error = std::convert::Infallible;
-    fn source(&self) -> Source {
-        self.source.clone()
-    }
-    fn documents(&self) -> impl Iterator<Item = Result<Document, Self::Error>> + Send {
-        self.documents.clone().into_iter().map(Ok)
     }
 }
 
@@ -424,11 +410,10 @@ async fn run_consume(documents: Vec<Document>, mixedbread: Mixedbread<'_>) -> Co
         by_source.entry(source).or_default().push(document);
     }
 
-    let Mixedbread { store, name } = mixedbread;
     for (source, documents) in by_source {
         let label = format!("consume:{source}");
-        let adapter = VecSource { source: Source::new(source), documents };
-        let result = sync_documents(&adapter, store, name, INDEX_TIMEOUT, |_, _| {})
+        let result = mixedbread
+            .reconcile(&Source::new(source), &documents)
             .await
             .map(|report| {
                 eprintln!(
@@ -455,7 +440,7 @@ async fn index_user(
     user: &User,
     host: &str,
     mixedbread: Option<Mixedbread<'_>>,
-    parquet: Option<&sink_parquet::Config>,
+    parquet: Option<&ParquetReconciler>,
     counts: &mut Counts,
 ) {
     let name = user.name.as_str();
@@ -465,7 +450,8 @@ async fn index_user(
     // in full per run, and every account produces the same `source=claude` etc.).
     // The Mixedbread sink needs no such scoping: its `external_id`s already carry
     // the per-message uuid, so records never collide across users there.
-    let user_parquet = parquet.map(|config| user_scoped_parquet(config, name));
+    let user_parquet =
+        parquet.map(|reconciler| reconciler.with_prefix(user_prefix(&reconciler.prefix, name)));
     let parquet = user_parquet.as_ref();
     if let Some(claude_dir) = safe_path_under(home, &[".claude", "projects"], true) {
         let label = format!("claude:{name}");
@@ -495,7 +481,7 @@ async fn index_user(
     // such account cannot fail the whole fleet run (ENG-2141).
     if let Some(atuin_db) = safe_path_under(home, &[".local", "share", "atuin", "history.db"], false) {
         let label = format!("shell:{name}");
-        match open_atuin(&label, &atuin_db, mixedbread, parquet, counts) {
+        match open_atuin(&label, &atuin_db, mixedbread.is_some() || parquet.is_some(), counts) {
             Ok(Atuin::Ready(adapter)) => {
                 let result = run_source(&label, &adapter, mixedbread, parquet).await;
                 record(&label, result, counts);
@@ -545,7 +531,7 @@ fn archive_prefix(base: &str, host: &str) -> String {
     format!("{base}/host={host}")
 }
 
-/// User-scope a parquet config for the multi-user `--user` path:
+/// User-scope a parquet prefix for the multi-user `--user` path:
 /// `<host-prefix>/user=<name>`. `sink-parquet` writes one full-file-overwrite
 /// `source=<source>/data.parquet` per (prefix, source), and several accounts on
 /// one host produce the same `source=claude` (etc.), so without a `user` segment
@@ -553,13 +539,8 @@ fn archive_prefix(base: &str, host: &str) -> String {
 /// [`parse_user`] to a safe charset (no `/`/`=`), so it cannot escape the
 /// partition. `user` is the inner hive partition under `host`, matching the old
 /// history-ship `host=<host>/user=<user>/...` layout.
-fn user_scoped_parquet(config: &sink_parquet::Config, name: &str) -> sink_parquet::Config {
-    sink_parquet::Config {
-        bucket: config.bucket.clone(),
-        endpoint: config.endpoint.clone(),
-        region: config.region.clone(),
-        prefix: format!("{}/user={name}", config.prefix),
-    }
+fn user_prefix(base: &str, name: &str) -> String {
+    format!("{base}/user={name}")
 }
 
 /// Resolve a user-controlled subpath under a trusted `home`, refusing to follow
@@ -617,7 +598,7 @@ async fn index_code(
     repo_dir: &std::path::Path,
     mixedbread: Option<Mixedbread<'_>>,
 ) -> anyhow::Result<()> {
-    let Some(Mixedbread { store, name }) = mixedbread else {
+    let Some(Mixedbread { store, name, .. }) = mixedbread else {
         anyhow::bail!("--code-repo requires --mixedbread-store (code is semantic-search only)");
     };
     let manifest = search_core::Manifest::build(repo_dir, None, MAX_FILE_BYTES)
@@ -671,8 +652,7 @@ enum Atuin {
 fn open_atuin(
     label: &str,
     db: &Path,
-    mixedbread: Option<Mixedbread<'_>>,
-    parquet: Option<&sink_parquet::Config>,
+    has_sink: bool,
     counts: &mut Counts,
 ) -> anyhow::Result<Atuin> {
     match source_atuin::AtuinHistory::open(db) {
@@ -684,7 +664,7 @@ fn open_atuin(
             // db cannot let a sink-less run exit 0 when the identical config fails
             // once the `history` table exists.
             anyhow::ensure!(
-                mixedbread.is_some() || parquet.is_some(),
+                has_sink,
                 "[{label}] no sink configured: pass --mixedbread-store and/or --bucket"
             );
             eprintln!("[{label}] skipped: {error} ({db})", db = db.display());
@@ -709,7 +689,7 @@ async fn run_source<A: SourceAdapter + Sync>(
     label: &str,
     adapter: &A,
     mixedbread: Option<Mixedbread<'_>>,
-    parquet: Option<&sink_parquet::Config>,
+    parquet: Option<&ParquetReconciler>,
 ) -> anyhow::Result<()> {
     // A selected source with no sink is a misconfiguration, not a no-op: a missing
     // `--mixedbread-store`/`--bucket` would otherwise drop the source silently
@@ -719,10 +699,20 @@ async fn run_source<A: SourceAdapter + Sync>(
         "[{label}] no sink configured: pass --mixedbread-store and/or --bucket"
     );
 
+    // One pass over the adapter feeds every view (each sink used to re-run, and
+    // re-parse, the source's iterator independently). An adapter error fails the
+    // source before either view is touched, exactly as it failed both sinks
+    // mid-iteration before.
+    let source = adapter.source();
+    let documents = adapter
+        .documents()
+        .collect::<Result<Vec<Document>, _>>()
+        .with_context(|| format!("[{label}] reading documents"))?;
+
     let mut errors: Vec<anyhow::Error> = Vec::new();
 
-    if let Some(config) = parquet {
-        match sink_parquet::sync(adapter, config).await {
+    if let Some(reconciler) = parquet {
+        match reconciler.reconcile(&source, &documents).await {
             Ok(report) if report.skipped => eprintln!("[{label}] parquet: skipped (unchanged)"),
             Ok(report) => eprintln!("[{label}] parquet: wrote {} rows", report.rows),
             Err(error) => {
@@ -731,8 +721,8 @@ async fn run_source<A: SourceAdapter + Sync>(
         }
     }
 
-    if let Some(Mixedbread { store, name }) = mixedbread {
-        match sync_documents(adapter, store, name, INDEX_TIMEOUT, |_, _| {}).await {
+    if let Some(reconciler) = mixedbread {
+        match reconciler.reconcile(&source, &documents).await {
             Ok(report) => eprintln!(
                 "[{label}] mixedbread: uploaded {}, skipped {} of {}",
                 report.uploaded, report.skipped, report.total
@@ -764,7 +754,7 @@ mod tests {
 
     use super::{
         Atuin, Counts, archive_prefix, finish, open_atuin, parse_user, safe_path_under,
-        user_scoped_parquet,
+        user_prefix,
     };
 
     /// Create a valid sqlite db with no `history` table at `path`, mirroring
@@ -773,30 +763,18 @@ mod tests {
         rusqlite::Connection::open(path).expect("create empty sqlite db");
     }
 
-    /// A throwaway parquet sink config so `open_atuin`'s sink validation passes;
-    /// the bucket is never written to in these tests (they assert open/skip
-    /// behavior). `open_atuin`'s validation only checks that a sink is present.
-    fn parquet_sink() -> sink_parquet::Config {
-        sink_parquet::Config {
-            bucket: "test-bucket".to_string(),
-            endpoint: None,
-            region: "auto".to_string(),
-            prefix: "corpus".to_string(),
-        }
-    }
-
     #[test]
     fn uninitialized_atuin_db_is_soft_skipped_and_run_succeeds() {
         // ENG-2141: one account whose atuin db exists but has no `history` table
         // (atuin never ran there) must be a logged soft skip, not a failure, so
-        // the whole indexing unit still succeeds.
+        // the whole indexing unit still succeeds. `has_sink` is true: a sink is
+        // configured, it just never gets written in this test.
         let temp = tempfile::tempdir().expect("tempdir");
         let db = temp.path().join("history.db");
         make_uninitialized_db(&db);
 
         let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
-        let sink = parquet_sink();
-        let outcome = open_atuin("shell:tester", &db, None, Some(&sink), &mut counts)
+        let outcome = open_atuin("shell:tester", &db, true, &mut counts)
             .expect("uninitialized db is not an error");
 
         assert!(matches!(outcome, Atuin::Skipped), "uninitialized db must be skipped");
@@ -814,9 +792,8 @@ mod tests {
         let db = temp.path().join("does-not-exist.db");
 
         let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
-        let sink = parquet_sink();
         assert!(
-            open_atuin("shell:tester", &db, None, Some(&sink), &mut counts).is_err(),
+            open_atuin("shell:tester", &db, true, &mut counts).is_err(),
             "a missing db file must remain a real error, not a soft skip"
         );
         assert_eq!(counts.skipped, 0, "a real error must not be tallied as a skip");
@@ -834,7 +811,7 @@ mod tests {
 
         let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
         assert!(
-            open_atuin("shell:tester", &db, None, None, &mut counts).is_err(),
+            open_atuin("shell:tester", &db, false, &mut counts).is_err(),
             "an uninitialized db with no sink must error, not silently skip"
         );
         assert_eq!(counts.skipped, 0, "a misconfiguration must not be tallied as a skip");
@@ -909,23 +886,16 @@ mod tests {
     }
 
     #[test]
-    fn user_scoped_parquet_adds_user_partition() {
+    fn user_prefix_adds_user_partition() {
         // Several accounts on one host produce the same `source=claude`, so the
         // per-user parquet log must add a `user=` segment under the host prefix or
         // they clobber each other in the full-file-overwrite sink.
-        let base = sink_parquet::Config {
-            bucket: "corpus-bucket".to_string(),
-            endpoint: Some("http://127.0.0.1:9010".to_string()),
-            region: "auto".to_string(),
-            prefix: archive_prefix("corpus", "hil-compute-1"),
-        };
-        let alice = user_scoped_parquet(&base, "alice");
-        let bob = user_scoped_parquet(&base, "bob");
-        assert_eq!(alice.prefix, "corpus/host=hil-compute-1/user=alice");
-        assert_ne!(alice.prefix, bob.prefix, "two users must not share a parquet prefix");
-        // Bucket/endpoint/region carry through unchanged; only the prefix scopes.
-        assert_eq!(alice.bucket, base.bucket);
-        assert_eq!(alice.endpoint, base.endpoint);
-        assert_eq!(alice.region, base.region);
+        let base = archive_prefix("corpus", "hil-compute-1");
+        assert_eq!(user_prefix(&base, "alice"), "corpus/host=hil-compute-1/user=alice");
+        assert_ne!(
+            user_prefix(&base, "alice"),
+            user_prefix(&base, "bob"),
+            "two users must not share a parquet prefix"
+        );
     }
 }
