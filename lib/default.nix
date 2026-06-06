@@ -300,12 +300,12 @@ let
   symphonyFor =
     pkgs:
     import (paths.packagesRoot + "/symphony") {
-      inherit lib;
+      inherit lib writeNushellApplication;
       pkgs = import nixpkgs {
         inherit (pkgs.stdenv.hostPlatform) system;
         overlays = [ rust-overlay.overlays.default ];
       };
-      mcp = (packageSetFor pkgs).mcp;
+      inherit (packageSetFor pkgs) mcp;
     };
 
   /**

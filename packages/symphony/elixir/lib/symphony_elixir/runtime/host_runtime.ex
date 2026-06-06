@@ -20,7 +20,7 @@ defmodule SymphonyElixir.Runtime.HostRuntime do
   `Runtime.Placement` (`host_passwd`, `systemd_run`, `systemctl_stop`,
   `pick_port`, `wait_for_room`, ...), so tests exercise the lifecycle without
   `systemd-run`. The unit names share the `symphony-host-` prefix the polkit
-  grant in `modules/services/symphony` scopes to.
+  grant in `modules/services/symphony.nix` scopes to.
   """
 
   alias SymphonyElixir.{Command, Config}

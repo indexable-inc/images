@@ -85,9 +85,7 @@ in
           "--wt-port"
           (toString cfg.wtPort)
         ];
-        Environment = lib.optionals (cfg.sitePackage != null) [
-          "ROOM_SITE_DIR=${cfg.sitePackage}"
-        ];
+        Environment = lib.optional (cfg.sitePackage != null) "ROOM_SITE_DIR=${cfg.sitePackage}";
         Restart = "on-failure";
         StateDirectory = "room";
         NoNewPrivileges = true;
@@ -98,7 +96,7 @@ in
       };
     };
 
-    networking.firewall.allowedTCPPorts = lib.optionals cfg.openFirewall [ cfg.port ];
-    networking.firewall.allowedUDPPorts = lib.optionals cfg.openFirewall [ cfg.wtPort ];
+    networking.firewall.allowedTCPPorts = lib.optional cfg.openFirewall cfg.port;
+    networking.firewall.allowedUDPPorts = lib.optional cfg.openFirewall cfg.wtPort;
   };
 }

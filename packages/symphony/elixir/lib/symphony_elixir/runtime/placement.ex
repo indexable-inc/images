@@ -39,7 +39,7 @@ defmodule SymphonyElixir.Runtime.Placement do
   room-server as a privilege-dropped `systemd-run` unit on this host (its
   own cgroup/PID, no VM), the IR successor to the per-node lifecycle in
   `Codex.Host`. The unit names share the `symphony-host-` prefix the polkit
-  grant in `modules/services/symphony` scopes to, so the non-root Symphony
+  grant in `modules/services/symphony.nix` scopes to, so the non-root Symphony
   service is authorized to manage them.
 
   When `:ixvm` provisioning fails before the first turn, `acquire/3` retries

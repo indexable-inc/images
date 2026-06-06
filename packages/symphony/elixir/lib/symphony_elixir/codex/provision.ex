@@ -244,7 +244,7 @@ defmodule SymphonyElixir.Codex.Provision do
   @doc """
   The `systemd-run` unit-name base for a run/node, prefixed with
   `symphony-host-` so the polkit grant (scoped to that prefix in
-  `modules/services/symphony`) authorizes the non-root service to manage
+  `modules/services/symphony.nix`) authorizes the non-root service to manage
   it. The `.service` suffix and any role suffix (`-setup`, `-clean`) are
   the caller's to append.
   """

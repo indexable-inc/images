@@ -131,4 +131,4 @@ Claude turns are billed against `ANTHROPIC_API_KEY`. The codex-only `sandbox`
 
 Pair the module with whichever secret store you prefer (sops-nix, agenix,
 Bitwarden Secrets Manager via `secretsCommand`, etc). See the module options
-in `modules/services/symphony/default.nix`.
+in `modules/services/symphony.nix`.

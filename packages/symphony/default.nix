@@ -8,10 +8,13 @@
 # derivation the codex wrapper spawns as the agent's only MCP server. Passing
 # `mcp` in (instead of importing index's lib here) keeps the dependency
 # direction one-way and avoids a circular reference through the overlay.
+# `writeNushellApplication` is the repo writer from lib/util/writers.nix; the
+# wrappers below are Nu because writeShellApplication is lint-banned.
 {
   lib,
   pkgs,
   mcp,
+  writeNushellApplication,
 }:
 let
   rustToolchain = pkgs.rust-bin.nightly."2026-05-04".default;
@@ -75,28 +78,35 @@ let
     mcp_servers.index.command = lib.getExe mcp;
   };
 
-  codexWithIndexMcp = pkgs.writeShellApplication {
+  codexWithIndexMcp = writeNushellApplication pkgs {
     name = "codex-with-index-mcp";
     runtimeInputs = [
       pkgs.coreutils
       pkgs.codex
     ];
     text = ''
-      source_home="''${ROOM_CODEX_AUTH_HOME:-''${CODEX_HOME:-$HOME/.codex}}"
-      runtime_root="''${XDG_RUNTIME_DIR:-''${TMPDIR:-/tmp}}/symphony-codex"
-      mkdir -p "$runtime_root"
-      isolated_home="$(mktemp -d "$runtime_root/codex-home.XXXXXX")"
+      def --wrapped main [...args] {
+        let source_home = $env.ROOM_CODEX_AUTH_HOME? | default (
+          $env.CODEX_HOME? | default ($env.HOME | path join ".codex")
+        )
+        let runtime_root = $env.XDG_RUNTIME_DIR? | default (
+          $env.TMPDIR? | default "/tmp"
+        ) | path join "symphony-codex"
+        mkdir $runtime_root
+        let isolated_home = mktemp --directory --tmpdir-path $runtime_root "codex-home.XXXXXX"
 
-      if [ -f "$source_home/auth.json" ]; then
-        ln -s "$source_home/auth.json" "$isolated_home/auth.json"
-      fi
+        let source_auth = $source_home | path join "auth.json"
+        if ($source_auth | path exists) {
+          ^ln -s $source_auth ($isolated_home | path join "auth.json")
+        }
 
-      # codex churns config.toml at runtime, so copy the generated file in
-      # writable (a /nix/store copy is 0444).
-      install -m600 ${codexConfig} "$isolated_home/config.toml"
+        # codex churns config.toml at runtime, so copy the generated file in
+        # writable (a /nix/store copy is 0444).
+        ^install -m600 ${codexConfig} ($isolated_home | path join "config.toml")
 
-      export CODEX_HOME="$isolated_home"
-      exec ${lib.getExe pkgs.codex} "$@"
+        $env.CODEX_HOME = $isolated_home
+        exec ${lib.getExe pkgs.codex} ...$args
+      }
     '';
   };
 
@@ -130,7 +140,12 @@ let
       ''
         mkdir -p $out/bin
         makeWrapper ${roomServerRaw}/bin/room-server $out/bin/room-server \
-          --prefix PATH : ${lib.makeBinPath [ codexWithIndexMcp pkgs.codex ]} \
+          --prefix PATH : ${
+            lib.makeBinPath [
+              codexWithIndexMcp
+              pkgs.codex
+            ]
+          } \
           --set-default ROOM_CODEX_BIN ${lib.getExe codexWithIndexMcp}
       '';
 
@@ -162,7 +177,7 @@ let
   # node + rust toolchain, cds into the live working tree's room subdir, and
   # execs `tauri dev`. It operates on the checkout, not the store copy, because
   # `tauri dev` writes node_modules, target/, and gen/ in place.
-  tauriDev = pkgs.writeShellApplication {
+  tauriDev = writeNushellApplication pkgs {
     name = "tauri-dev";
     runtimeInputs = [
       pkgs.coreutils
@@ -171,16 +186,17 @@ let
       rustToolchain
     ];
     text = ''
-      repo_root="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || true)"
-      if [ -z "$repo_root" ]; then
-        echo "tauri-dev: run from inside the index checkout" >&2
-        exit 1
-      fi
-      cd "$repo_root/packages/symphony/packages/room"
-      if [ ! -d node_modules ]; then
-        npm ci
-      fi
-      exec npm run tauri:dev
+      def main [] {
+        let repo_root = do { ^git rev-parse --show-toplevel } | complete
+        if $repo_root.exit_code != 0 {
+          error make { msg: "tauri-dev: run from inside the index checkout" }
+        }
+        cd ($repo_root.stdout | str trim | path join "packages/symphony/packages/room")
+        if not ("node_modules" | path exists) {
+          ^npm ci
+        }
+        exec npm run "tauri:dev"
+      }
     '';
   };
 in
@@ -192,7 +208,7 @@ in
   };
 
   nixosModules = {
-    room = ./modules/services/room;
-    symphony = ./modules/services/symphony;
+    room = ./modules/services/room.nix;
+    symphony = ./modules/services/symphony.nix;
   };
 }
