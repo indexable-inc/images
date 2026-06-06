@@ -219,6 +219,10 @@ struct TokenResponse {
     access_token: String,
     #[serde(default)]
     refresh_token: Option<String>,
+    /// The granted scopes as the endpoint reports them. Read on the initial
+    /// code exchange to record what was granted; ignored on refresh, where the
+    /// authoritative scopes come from the stored grant (a refresh response often
+    /// omits `scope`).
     #[serde(default)]
     scope: Option<String>,
     /// Access-token lifetime in seconds, when the endpoint reports one.

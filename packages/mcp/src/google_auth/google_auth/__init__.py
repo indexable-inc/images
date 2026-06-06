@@ -70,7 +70,11 @@ def _mint() -> dict:
     try:
         return json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        raise GoogleAuthError(f"gcal returned non-JSON output: {proc.stdout!r}") from exc
+        # Deliberately omit the body: with `--json` it should be JSON, and on a
+        # bug it could contain the access token, which must not land in an error.
+        raise GoogleAuthError(
+            f"gcal print-access-token returned non-JSON output ({len(proc.stdout)} bytes)"
+        ) from exc
 
 
 def _expiry(expires_in: object) -> datetime.datetime:
