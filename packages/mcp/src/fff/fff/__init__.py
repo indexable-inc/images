@@ -262,14 +262,21 @@ def _encode(value) -> bytes | None:
 
 def _u32(name: str, value: int) -> int:
     """Validate an unsigned-32 argument; ctypes would otherwise silently wrap."""
-    if not isinstance(value, int) or value < 0 or value > 0xFFFFFFFF:
+    # `bool` is an `int` subclass, so reject it explicitly: `limit=True` should
+    # be a type error, not a silent 1.
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 0xFFFFFFFF:
         raise ValueError(f"{name} must be an int in [0, 2**32); got {value!r}")
     return value
 
 
 def _u64(name: str, value: int) -> int:
     """Validate an unsigned-64 argument; ctypes would otherwise silently wrap."""
-    if not isinstance(value, int) or value < 0 or value > 0xFFFFFFFFFFFFFFFF:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or value > 0xFFFFFFFFFFFFFFFF
+    ):
         raise ValueError(f"{name} must be an int in [0, 2**64); got {value!r}")
     return value
 
@@ -697,9 +704,8 @@ class FileFinder:
 #
 # One finder per directory, shared by `find` and `grep`. It is content-indexed
 # and watching, so repeated queries against the same tree skip the rescan cost
-# and `grep` always gets the SIMD content index. The cache is a bounded LRU: an
-# evicted finder is closed so its native instance and watcher thread are
-# released rather than leaking for the kernel's lifetime.
+# and `grep` always gets the SIMD content index. The cache is a bounded LRU, so
+# the live native instances and watcher threads stay bounded by `_CACHE_MAX`.
 
 _CACHE_MAX = 8
 _cache: OrderedDict[str, FileFinder] = OrderedDict()
@@ -720,11 +726,18 @@ def _cached(path) -> FileFinder:
             return existing
         ff = FileFinder(key, watch=True, content_indexing=True)
         ff.wait_for_scan(10_000)
-        _cache[key] = ff
-        _cache.move_to_end(key)
+        _cache[key] = ff  # a fresh insert is already the most-recent (LRU) end
         while len(_cache) > _CACHE_MAX:
-            _, evicted = _cache.popitem(last=False)
-            evicted.close()
+            # Drop the LRU entry but do NOT close() it here. A concurrent caller
+            # may still hold this finder and be mid-query on it (ctypes releases
+            # the GIL across the native call), so destroying the handle now would
+            # be a use-after-free. Removing the cache's reference is enough:
+            # FileFinder.__del__ reclaims the native instance once the last
+            # caller reference is gone, which is the only safe point to destroy
+            # it. Callers only ever hold a finder transiently (find/grep return
+            # results, not the finder), so this reclaims promptly under CPython
+            # refcounting and the watcher count still stays bounded.
+            _cache.popitem(last=False)
         return ff
 
 
