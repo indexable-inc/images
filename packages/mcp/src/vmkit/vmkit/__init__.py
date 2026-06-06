@@ -799,13 +799,11 @@ class Driver:
         if proc.poll() is not None:
             raise VmkitError(f"driver process exited with code {proc.returncode}")
         # Drain acks left pending by an earlier timed-out read so this command
-        # reads its OWN ack, never a stale one.
+        # reads its OWN ack, never a stale one. The pending ack is already in
+        # flight, so this waits (unbounded) for it.
         while self._pending_acks > 0:
-            stale = proc.stdout.readline()
-            if stale == "":
-                raise VmkitError("driver closed its output while draining a pending ack")
-            if stale.rstrip("\n"):
-                self._pending_acks -= 1
+            self._read_ack(proc, None)
+            self._pending_acks -= 1
         line = command.rstrip("\n")
         try:
             proc.stdin.write(line + "\n")
@@ -813,33 +811,45 @@ class Driver:
         except (BrokenPipeError, OSError) as exc:
             raise VmkitError(f"driver process closed its input: {exc}") from exc
         deadline = None if ack_timeout is None else time.monotonic() + ack_timeout
-        # stderr is discarded, so the next stdout line is this command's ack;
-        # skip a stray blank line all the same.
+        ack = self._read_ack(proc, deadline)
+        if ack is None:
+            # The ack is still coming; mark it so the next command drains it
+            # instead of mistaking it for its own (no desync).
+            self._pending_acks += 1
+            raise VmkitError(
+                f"timed out after {ack_timeout}s waiting for ack to {command!r}"
+            )
+        if ack.startswith("err"):
+            raise VmkitError(f"command {command!r} failed: {ack}")
+        return ack
+
+    def _read_ack(self, proc: "subprocess.Popen[str]", deadline: float | None) -> str | None:
+        """Return the next ack line, skipping guest-console noise; ``None`` on
+        deadline.
+
+        The binary writes every ack as ``ok``/``err`` (optionally followed by a
+        detail), one per command. A Linux guest's serial console can share this
+        stdout, so any line that is not an ack (boot logs, blank lines) is
+        skipped rather than mistaken for one. Raises :class:`VmkitError` if the
+        process closes its output.
+        """
         while True:
             if deadline is not None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    # The ack is still coming; mark it so the next command drains
-                    # it instead of mistaking it for its own (no desync).
-                    self._pending_acks += 1
-                    raise VmkitError(
-                        f"timed out after {ack_timeout}s waiting for ack to {command!r}"
-                    )
+                    return None
                 if not select.select([proc.stdout], [], [], remaining)[0]:
                     continue
-            ack = proc.stdout.readline()
-            if ack == "":
-                rc = proc.poll()
+            raw = proc.stdout.readline()
+            if raw == "":
                 raise VmkitError(
-                    f"driver process gave no ack for {command!r} "
-                    f"(process exited with code {rc})"
+                    f"driver process closed its output (exited with code {proc.poll()})"
                 )
-            ack = ack.rstrip("\n")
-            if ack != "":
-                break
-        if ack.startswith("err"):
-            raise VmkitError(f"command {command!r} failed: {ack}")
-        return ack
+            ack = raw.strip()
+            if ack in ("ok", "err") or ack.startswith(("ok ", "err ")):
+                return ack
+            # Otherwise: guest console output on the shared stdout, or a blank
+            # line. Skip it and keep reading for the real ack.
 
     def key(self, name: str, count: int = 1) -> str:
         """Press a named key (``return``, ``tab``, arrows, ``f1``..``f12``, a

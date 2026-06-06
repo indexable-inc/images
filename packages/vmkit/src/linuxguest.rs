@@ -122,7 +122,7 @@ pub fn drive_linux(drive: DriveLinux) -> Result<(), Error> {
 
 /// Build the Linux GUI guest configuration: generic platform booted by EFI off
 /// the raw disk, one virtio-gpu scanout, USB keyboard + pointing device, a
-/// serial console to stdout (the guest must use `console=hvc0`), and entropy +
+/// serial console to stderr (the guest must use `console=hvc0`), and entropy +
 /// balloon. Shared by the screenshot ([`boot_linux_gui`]) and interactive
 /// ([`drive_linux`]) paths.
 fn build_linux_gui_config(
@@ -191,16 +191,22 @@ fn build_linux_gui_config(
     let keyboard = unsafe { VZUSBKeyboardConfiguration::new() };
     let pointing = unsafe { VZUSBScreenCoordinatePointingDeviceConfiguration::new() };
 
-    // Guest serial console -> our stdout for boot debugging. VZ rejects a null
-    // read handle, so give it the (unwritten) read end of a fresh pipe.
+    // Guest serial console -> our stderr for boot debugging. stdout is the
+    // command/ack channel (see `crate::drive::run_commands`); routing the guest
+    // console there too would interleave kernel/systemd boot lines with acks and
+    // break the interactive `drive-linux` protocol. stderr keeps stdout a clean
+    // ack-only channel (the Python `Driver` reads acks from stdout and discards
+    // stderr) while console logs stay visible when the binary is run directly.
+    // VZ rejects a null read handle, so give it the (unwritten) read end of a
+    // fresh pipe.
     let pipe = NSPipe::pipe();
     let read_handle = pipe.fileHandleForReading();
-    let stdout_handle = NSFileHandle::fileHandleWithStandardOutput();
+    let stderr_handle = NSFileHandle::fileHandleWithStandardError();
     let serial_attachment = unsafe {
         VZFileHandleSerialPortAttachment::initWithFileHandleForReading_fileHandleForWriting(
             VZFileHandleSerialPortAttachment::alloc(),
             Some(&read_handle),
-            Some(&stdout_handle),
+            Some(&stderr_handle),
         )
     };
     let serial = unsafe { VZVirtioConsoleDeviceSerialPortConfiguration::new() };

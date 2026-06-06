@@ -847,6 +847,20 @@ let
     dd._proc = types.SimpleNamespace(
         poll=lambda: None, returncode=None, stdin=_Sink(), stdout=rfile
     )
+    # Guest serial console can share stdout (Linux guest): non-ack lines are
+    # skipped, the real ok/err ack is returned.
+    wfile.write("[  OK  ] Reached target Initrd Root Device.\n")
+    wfile.write("Starting File System Check...\n")
+    wfile.write("\n")
+    wfile.write("ok size 1280 800\n")
+    assert dd._send_locked("size") == "ok size 1280 800"
+    wfile.write("[  OK  ] Started Service.\n")
+    wfile.write("err size guest framebuffer not available yet\n")
+    try:
+        dd._send_locked("size")
+        raise AssertionError("err ack should raise")
+    except vmkit.VmkitError as exc:
+        assert "framebuffer not available" in str(exc), exc
     try:
         dd._send_locked("shot /tmp/x", ack_timeout=0.2)
         raise AssertionError("bounded read should have timed out")
