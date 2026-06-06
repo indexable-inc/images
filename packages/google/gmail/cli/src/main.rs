@@ -551,13 +551,13 @@ async fn run_label(command: LabelCommand) -> anyhow::Result<()> {
         }
         LabelCommand::Apply(args) => {
             let _ = client
-                .modify_labels(&args.message_id, &[args.label_id.clone()], &[])
+                .modify_labels(&args.message_id, std::slice::from_ref(&args.label_id), &[])
                 .await?;
             println!("applied {} to {}", args.label_id, args.message_id);
         }
         LabelCommand::Remove(args) => {
             let _ = client
-                .modify_labels(&args.message_id, &[], &[args.label_id.clone()])
+                .modify_labels(&args.message_id, &[], std::slice::from_ref(&args.label_id))
                 .await?;
             println!("removed {} from {}", args.label_id, args.message_id);
         }
@@ -572,19 +572,16 @@ async fn run_attach(command: AttachCommand) -> anyhow::Result<()> {
             let bytes = client
                 .get_attachment(&args.message_id, &args.attachment_id)
                 .await?;
-            match args.output {
-                Some(path) => {
-                    tokio::fs::write(&path, &bytes)
-                        .await
-                        .with_context(|| format!("writing attachment to {}", path.display()))?;
-                    println!("wrote {} bytes to {}", bytes.len(), path.display());
-                }
-                None => {
-                    use tokio::io::AsyncWriteExt as _;
-                    let mut stdout = tokio::io::stdout();
-                    stdout.write_all(&bytes).await.context("writing to stdout")?;
-                    stdout.flush().await.ok();
-                }
+            if let Some(path) = args.output {
+                tokio::fs::write(&path, &bytes)
+                    .await
+                    .with_context(|| format!("writing attachment to {}", path.display()))?;
+                println!("wrote {} bytes to {}", bytes.len(), path.display());
+            } else {
+                use tokio::io::AsyncWriteExt as _;
+                let mut stdout = tokio::io::stdout();
+                stdout.write_all(&bytes).await.context("writing to stdout")?;
+                stdout.flush().await.ok();
             }
         }
     }

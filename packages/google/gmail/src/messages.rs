@@ -15,16 +15,18 @@ pub const LABEL_INBOX: &str = "INBOX";
 pub const LABEL_UNREAD: &str = "UNREAD";
 
 /// Which projection of a message to fetch. The wire `format` parameter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MessageFormat {
     /// `id`, `threadId`, `labelIds`, `snippet`, `historyId`,
     /// `internalDate`, `sizeEstimate`. No headers or body.
     Minimal,
     /// `Minimal` plus the parsed payload tree (headers, MIME parts, inline
     /// body bytes). The default, and what most reads want.
+    #[default]
     Full,
     /// `Minimal` plus the original RFC 5322 source as base64url in
-    /// [`Message::raw`]. Use when you want to forward the message verbatim.
+    /// [`crate::Message::raw`]. Use when you want to forward the message
+    /// verbatim.
     Raw,
     /// `Minimal` plus the payload-level headers; bodies are not returned.
     Metadata,
@@ -38,12 +40,6 @@ impl MessageFormat {
             Self::Raw => "raw",
             Self::Metadata => "metadata",
         }
-    }
-}
-
-impl Default for MessageFormat {
-    fn default() -> Self {
-        Self::Full
     }
 }
 

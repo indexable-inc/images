@@ -24,5 +24,4 @@ schemars = "1"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std"] }
-tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

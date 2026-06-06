@@ -1,11 +1,11 @@
-//! Tool surface exposed by `ix-google-mcp`. Each tool is a thin shaper over
-//! a [`google_calendar::Client`] or [`google_gmail::Client`] method.
+//! Tool surface exposed by `ix-google-mcp`. Each tool is a thin shaper
+//! over a [`google_calendar::Client`] or [`google_gmail::Client`] method.
 //!
-//! Tool naming: calendar tools keep the `calendar_*` prefix already used by
-//! the Python FastMCP they replace; mail tools use `mail_*` and match
-//! `superhuman-mail`'s surface 1:1 first (RFC 0003 + #599), so swapping
-//! `superhuman-mail` out for this server is a single config change for
-//! every agent already wired to it.
+//! Tool naming: calendar tools keep the `calendar_*` prefix already used
+//! by the Python `FastMCP` they replace; mail tools use `mail_*` and
+//! match `superhuman-mail`'s surface 1:1 first (RFC 0003 + #599), so
+//! swapping `superhuman-mail` out for this server is a single config
+//! change for every agent already wired to it.
 
 use std::sync::Arc;
 
@@ -27,7 +27,7 @@ use google_gmail::{
 
 /// The MCP server. Holds the two API clients shared across tool calls.
 #[derive(Clone)]
-pub(crate) struct GoogleMcp {
+pub struct GoogleMcp {
     calendar: Arc<google_calendar::Client>,
     gmail: Arc<google_gmail::Client>,
     tool_router: ToolRouter<Self>,
@@ -132,7 +132,7 @@ impl GoogleMcp {
             .to_owned();
         let created = self
             .calendar
-            .create_event(&calendar, &draft, send_updates(args.notify))
+            .create_event(&calendar, &draft, send_updates(args.notify.as_deref()))
             .await
             .map_err(into_tool_error)?;
         json_string(&created)
@@ -149,7 +149,7 @@ impl GoogleMcp {
             .unwrap_or(PRIMARY_CALENDAR)
             .to_owned();
         self.calendar
-            .cancel_event(&calendar, &args.event_id, send_updates(args.notify))
+            .cancel_event(&calendar, &args.event_id, send_updates(args.notify.as_deref()))
             .await
             .map_err(into_tool_error)?;
         Ok(json!({ "cancelled": args.event_id }).to_string())
@@ -216,7 +216,7 @@ impl GoogleMcp {
     ) -> Result<String, ErrorData> {
         let message = self
             .gmail
-            .get_message(&args.message_id, message_format(args.format))
+            .get_message(&args.message_id, message_format(args.format.as_deref()))
             .await
             .map_err(into_tool_error)?;
         json_string(&message)
@@ -248,7 +248,7 @@ impl GoogleMcp {
     ) -> Result<String, ErrorData> {
         let thread = self
             .gmail
-            .get_thread(&args.thread_id, message_format(args.format))
+            .get_thread(&args.thread_id, message_format(args.format.as_deref()))
             .await
             .map_err(into_tool_error)?;
         json_string(&thread)
@@ -502,8 +502,8 @@ impl ServerHandler for GoogleMcp {
         // start from a Default and patch the fields we care about.
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        info.server_info.name = "ix-google-mcp".to_owned();
-        info.server_info.version = env!("CARGO_PKG_VERSION").to_owned();
+        "ix-google-mcp".clone_into(&mut info.server_info.name);
+        env!("CARGO_PKG_VERSION").clone_into(&mut info.server_info.version);
         info.instructions = Some(
             "Gmail and Google Calendar via the shared google-auth grant. \
              Run `gmail auth` (or `gcal auth`) on the host once to mint \
@@ -519,10 +519,10 @@ impl ServerHandler for GoogleMcp {
 // ---------------------------------------------------------------------
 
 #[derive(Deserialize, JsonSchema, Default)]
-pub(crate) struct EmptyArgs {}
+pub struct EmptyArgs {}
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct CalendarEventsArgs {
+pub struct CalendarEventsArgs {
     /// Calendar id: an email address, or `primary` (the default).
     #[serde(default)]
     pub calendar_id: Option<String>,
@@ -541,14 +541,14 @@ pub(crate) struct CalendarEventsArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct CalendarEventGetArgs {
+pub struct CalendarEventGetArgs {
     pub event_id: String,
     #[serde(default)]
     pub calendar_id: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct CalendarEventCreateArgs {
+pub struct CalendarEventCreateArgs {
     pub summary: String,
     /// RFC 3339 instant (timed event) or YYYY-MM-DD (all-day).
     pub start: String,
@@ -572,7 +572,7 @@ pub(crate) struct CalendarEventCreateArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct CalendarEventCancelArgs {
+pub struct CalendarEventCancelArgs {
     pub event_id: String,
     #[serde(default)]
     pub calendar_id: Option<String>,
@@ -581,7 +581,7 @@ pub(crate) struct CalendarEventCancelArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailSearchArgs {
+pub struct MailSearchArgs {
     /// Gmail search syntax (e.g. `from:alice newer_than:7d label:work`).
     pub query: String,
     /// Restrict to messages carrying every label in this set.
@@ -596,7 +596,7 @@ pub(crate) struct MailSearchArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailListMessagesArgs {
+pub struct MailListMessagesArgs {
     /// Optional Gmail search query. If omitted, the call returns the most
     /// recent messages on the mailbox, restricted by `label_ids` if set.
     #[serde(default)]
@@ -610,7 +610,7 @@ pub(crate) struct MailListMessagesArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailGetMessageArgs {
+pub struct MailGetMessageArgs {
     pub message_id: String,
     /// `full` (default) | `minimal` | `metadata` | `raw`.
     #[serde(default)]
@@ -618,7 +618,7 @@ pub(crate) struct MailGetMessageArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailGetThreadArgs {
+pub struct MailGetThreadArgs {
     pub thread_id: String,
     /// `full` (default) | `minimal` | `metadata` | `raw`.
     #[serde(default)]
@@ -626,7 +626,7 @@ pub(crate) struct MailGetThreadArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailComposeArgs {
+pub struct MailComposeArgs {
     /// Primary recipients.
     pub to: Vec<String>,
     #[serde(default)]
@@ -651,7 +651,7 @@ pub(crate) struct MailComposeArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct AttachmentInput {
+pub struct AttachmentInput {
     /// Display filename in the recipient's client.
     pub filename: String,
     /// MIME type (e.g. `application/pdf`).
@@ -661,36 +661,36 @@ pub(crate) struct AttachmentInput {
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailDraftUpdateArgs {
+pub struct MailDraftUpdateArgs {
     pub draft_id: String,
     #[serde(flatten)]
     pub compose: MailComposeArgs,
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailDraftIdArgs {
+pub struct MailDraftIdArgs {
     pub draft_id: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailDraftListArgs {
+pub struct MailDraftListArgs {
     #[serde(default)]
     pub max_results: Option<usize>,
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailMessageIdArgs {
+pub struct MailMessageIdArgs {
     pub message_id: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailLabelMutateArgs {
+pub struct MailLabelMutateArgs {
     pub message_id: String,
     pub label_id: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct MailAttachmentGetArgs {
+pub struct MailAttachmentGetArgs {
     pub message_id: String,
     pub attachment_id: String,
 }
@@ -742,16 +742,16 @@ fn parse_event_time(
     }
 }
 
-fn send_updates(notify: Option<String>) -> SendUpdates {
-    match notify.as_deref() {
+fn send_updates(notify: Option<&str>) -> SendUpdates {
+    match notify {
         Some("none") => SendUpdates::None,
-        Some("external-only") | Some("externalOnly") => SendUpdates::ExternalOnly,
+        Some("external-only" | "externalOnly") => SendUpdates::ExternalOnly,
         _ => SendUpdates::All,
     }
 }
 
-fn message_format(format: Option<String>) -> MessageFormat {
-    match format.as_deref() {
+fn message_format(format: Option<&str>) -> MessageFormat {
+    match format {
         Some("minimal") => MessageFormat::Minimal,
         Some("metadata") => MessageFormat::Metadata,
         Some("raw") => MessageFormat::Raw,

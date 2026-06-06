@@ -30,7 +30,7 @@ use crate::Result;
 /// # Errors
 /// Returns [`Error::UnsafeHeader`] if any header value contains a bare
 /// newline or an ASCII control character.
-pub(crate) fn build_raw(message: &OutgoingMessage) -> Result<String> {
+pub fn build_raw(message: &OutgoingMessage) -> Result<String> {
     let bytes = build_rfc5322(message)?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
@@ -118,7 +118,10 @@ impl Layout {
                 write_body_text(out, &body);
                 Ok(())
             }
-            Self::Alternative { text, html } => write_alternative(out, &text, &html),
+            Self::Alternative { text, html } => {
+                write_alternative(out, &text, &html);
+                Ok(())
+            }
             Self::Mixed {
                 primary,
                 attachments,
@@ -162,7 +165,7 @@ fn boundary(prefix: &str) -> String {
     format!("=_{}_{}", prefix, Uuid::new_v4().simple())
 }
 
-fn write_alternative(out: &mut Vec<u8>, text: &str, html: &str) -> Result<()> {
+fn write_alternative(out: &mut Vec<u8>, text: &str, html: &str) {
     let bound = boundary("alt");
     out.extend_from_slice(
         format!("Content-Type: multipart/alternative; boundary=\"{bound}\"\r\n").as_bytes(),
@@ -180,7 +183,6 @@ fn write_alternative(out: &mut Vec<u8>, text: &str, html: &str) -> Result<()> {
     write_body_text(out, html);
 
     write_boundary(out, &bound, true);
-    Ok(())
 }
 
 fn write_mixed(out: &mut Vec<u8>, primary: PrimaryPart, attachments: &[Attachment]) -> Result<()> {

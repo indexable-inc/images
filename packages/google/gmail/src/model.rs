@@ -70,7 +70,7 @@ pub struct MessagePart {
     pub body: Option<MessagePartBody>,
     /// Child parts for multipart MIME containers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub parts: Vec<MessagePart>,
+    pub parts: Vec<Self>,
 }
 
 impl MessagePart {
@@ -233,6 +233,10 @@ where
     )
 }
 
+// serde's `serialize_with` calls this with `&Option<T>` because the field
+// is `Option<T>`; we cannot widen the param to `Option<&T>` without a
+// wrapper. The match here reads the inner value by reference.
+#[allow(clippy::ref_option, reason = "shape dictated by serde's serialize_with")]
 fn serialize_internal_date<S>(
     instant: &Option<DateTime<Utc>>,
     serializer: S,
@@ -240,7 +244,7 @@ fn serialize_internal_date<S>(
 where
     S: serde::Serializer,
 {
-    match instant {
+    match instant.as_ref() {
         None => serializer.serialize_none(),
         Some(instant) => serializer.serialize_str(&instant.timestamp_millis().to_string()),
     }

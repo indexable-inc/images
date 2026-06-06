@@ -61,10 +61,10 @@ const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const MAX_REDIRECT_REQUEST: usize = 8 * 1024;
 
 /// Refresh the access token this long before its nominal expiry, so a call
-/// that races the clock cannot land an expired bearer at Google. Half a
+/// that races the clock cannot land an expired bearer at Google. One
 /// minute is shorter than every Google service's expected latency, and
 /// shorter than the token's lifetime by two orders of magnitude.
-const ACCESS_TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(60);
+const ACCESS_TOKEN_REFRESH_MARGIN: Duration = Duration::from_mins(1);
 
 /// The team OAuth client identity.
 ///
@@ -187,10 +187,10 @@ impl TokenStore {
     /// Returns [`Error::NoToken`] if neither file exists, and read/parse
     /// errors otherwise.
     pub fn load(&self) -> Result<StoredToken> {
-        match self.read_bytes(&self.path)? {
-            Some(bytes) => self.parse(&self.path, &bytes),
-            None => self.load_or_migrate_legacy(),
-        }
+        read_bytes(&self.path)?.map_or_else(
+            || self.load_or_migrate_legacy(),
+            |bytes| parse(&self.path, &bytes),
+        )
     }
 
     fn load_or_migrate_legacy(&self) -> Result<StoredToken> {
@@ -200,34 +200,18 @@ impl TokenStore {
             }
             .fail();
         };
-        let Some(bytes) = self.read_bytes(legacy)? else {
+        let Some(bytes) = read_bytes(legacy)? else {
             return NoTokenSnafu {
                 path: self.path.clone(),
             }
             .fail();
         };
-        let token = self.parse(legacy, &bytes)?;
+        let token = parse(legacy, &bytes)?;
         // Persist into the canonical location so the next call skips the
         // legacy probe and so a subsequent `save` (refresh rotation) does
         // not silently revert to the old path.
         self.save(&token)?;
         Ok(token)
-    }
-
-    fn read_bytes(&self, path: &Path) -> Result<Option<Vec<u8>>> {
-        match std::fs::read(path) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err).context(ReadTokenSnafu {
-                path: path.to_path_buf(),
-            }),
-        }
-    }
-
-    fn parse(&self, path: &Path, bytes: &[u8]) -> Result<StoredToken> {
-        serde_json::from_slice(bytes).context(ParseTokenSnafu {
-            path: path.to_path_buf(),
-        })
     }
 
     /// Persist a grant, creating parent directories and keeping the file
@@ -273,6 +257,22 @@ impl TokenStore {
     }
 }
 
+fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).context(ReadTokenSnafu {
+            path: path.to_path_buf(),
+        }),
+    }
+}
+
+fn parse(path: &Path, bytes: &[u8]) -> Result<StoredToken> {
+    serde_json::from_slice(bytes).context(ParseTokenSnafu {
+        path: path.to_path_buf(),
+    })
+}
+
 /// What the token endpoint returns for both the code exchange and a refresh.
 #[derive(Deserialize)]
 struct TokenResponse {
@@ -292,7 +292,7 @@ struct TokenResponse {
 /// Conservative fallback lifetime when Google omits `expires_in`. Google's
 /// access tokens live an hour in practice; this matches that without
 /// trusting it.
-const DEFAULT_ACCESS_TOKEN_LIFETIME: Duration = Duration::from_secs(3600);
+const DEFAULT_ACCESS_TOKEN_LIFETIME: Duration = Duration::from_hours(1);
 
 /// A freshly minted access token plus the metadata a caller needs to cache
 /// it themselves.
@@ -507,6 +507,12 @@ impl Authenticator {
             .map(|cached| cached.token.clone())
     }
 
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "the write lock is intentionally held across the refresh \
+                  await so concurrent callers serialize on one token-endpoint \
+                  round-trip rather than each minting their own"
+    )]
     async fn mint_cached(&self) -> Result<String> {
         let mut guard = self.cache.write().await;
         // Recheck inside the write lock: another task may have refreshed
