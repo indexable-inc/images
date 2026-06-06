@@ -1,0 +1,83 @@
+:root {
+  --bg: #0b0b0c;
+  --panel: #141416;
+  --panel-2: #1a1a1d;
+  --inset: #101012;
+  --line: #242427;
+  --line-2: #2e2e33;
+  --text: #e6e6e6;
+  --dim: #9a9aa0;
+  --muted: #6a6a70;
+  --faint: #45454b;
+  --active: #f2f2f2;
+  --err: #cf5a5a;
+  --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, 'Cascadia Code', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scrollbar-color: var(--line-2) transparent;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.55 var(--mono);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: #33333a;
+  color: #fff;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Rich notebook output is the agent's own HTML (a DataFrame table, a custom
+   widget), injected with {@html}. Svelte does not scope styles into {@html},
+   so these table rules are global. The grayscale DataFrame renderer in
+   packages/mcp/src/view already inlines its own colors; this styles any other
+   HTML table (itables, a hand-built table) to match. */
+.rich {
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  max-height: 480px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+.rich table {
+  border-collapse: collapse;
+  font: 12px/1.45 var(--mono);
+  color: var(--text);
+}
+.rich th,
+.rich td {
+  padding: 3px 12px;
+  text-align: right;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+}
+.rich th {
+  color: var(--dim);
+  font-weight: 600;
+  border-bottom: 1px solid var(--line-2);
+}
+.rich tr:hover td {
+  background: var(--panel-2);
+}

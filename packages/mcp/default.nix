@@ -397,6 +397,28 @@ let
   # `ix-mcp` is just the pinned interpreter invoked on the bundled package's CLI.
   # Everything (the entrypoint, the one shared kernel, the dashboard) runs in this
   # one interpreter, so the bundled modules are all importable with no install step.
+  # The dashboard UI is a Svelte/Vite app under ./site, built by nix to one
+  # self-contained index.html (viteSingleFile). The aiohttp dashboard server
+  # (ix_notebook_mcp/dashboard.py) serves that file and feeds it the live
+  # execution log over its REST API, so there is no committed build artifact and
+  # no runtime asset dependency (the same shape as dashboard-core's embedded UI,
+  # but read at runtime via IX_MCP_DASHBOARD_HTML since the server is Python).
+  dashboardSiteSrc = lib.fileset.toSource {
+    root = ./site;
+    fileset = lib.fileset.intersection (lib.fileset.gitTracked ./.) ./site;
+  };
+  dashboardSite = ix.buildSvelteSite pkgs {
+    pname = "ix-mcp-site";
+    version = "0.1.0";
+    src = dashboardSiteSrc;
+    serve.enable = false;
+    devServer = {
+      name = "ix-mcp-site-dev";
+      checkoutSubdir = "packages/mcp/site";
+    };
+  };
+  dashboardHtml = "${dashboardSite}/share/ix-mcp-site/index.html";
+
   package =
     pkgs.runCommand "ix-mcp"
       {
@@ -413,6 +435,7 @@ let
           --add-flags "-m ix_notebook_mcp" \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
+          --set IX_MCP_DASHBOARD_HTML ${lib.escapeShellArg dashboardHtml} \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
       '';
 
@@ -1009,6 +1032,7 @@ package.overrideAttrs (old: {
         bindDefaultSmoke
         viewSmoke
         ;
+      site = dashboardSite;
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
       inherit screenBundled vmkitBundled vmkitResourceSmoke;

@@ -1,0 +1,30 @@
+<script lang="ts">
+  import type { JobStatus } from '$lib/types';
+  let { status }: { status: JobStatus } = $props();
+</script>
+
+<span class="chip {status}">{status}</span>
+
+<style>
+  .chip {
+    padding: 2px 6px;
+    border: 1px solid var(--line-2);
+    color: var(--dim);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .running {
+    background: var(--active);
+    color: #0b0b0c;
+    border-color: var(--active);
+  }
+  .error {
+    color: var(--err);
+    border-color: #43282b;
+  }
+  .cancelled {
+    color: var(--muted);
+  }
+</style>
