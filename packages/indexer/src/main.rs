@@ -1,6 +1,8 @@
 //! `indexer`: sync every configured corpus source into Mixedbread (semantic
-//! search) and a durable Parquet corpus log, the log-as-source-of-truth with the
-//! Mixedbread index as a materialized view (issue #736).
+//! search) and a durable corpus log — the full-file-overwrite Parquet log
+//! and/or its successor, the Iceberg corpus lake (issue #752) — the
+//! log-as-source-of-truth with the Mixedbread index as a materialized view
+//! (issue #736).
 //!
 //! Each source is an adapter implementing [`source_meta::SourceAdapter`]. The
 //! routing differs by corpus shape:
@@ -23,6 +25,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use clap::Parser;
+use lake_iceberg::IcebergReconciler;
 use search_core::MixedbreadStore;
 use sink_mixedbread::MixedbreadReconciler;
 use sink_parquet::ParquetReconciler;
@@ -72,6 +75,25 @@ struct Cli {
     /// scanning local sources.
     #[arg(long, env = "INDEXER_FROM_PARQUET_PREFIX")]
     from_parquet_prefix: Option<String>,
+
+    /// Iceberg REST catalog URI; enables the corpus-lake sink (issue #752).
+    /// For R2 Data Catalog: `https://catalog.cloudflarestorage.com/<account>/<bucket>`.
+    #[arg(long, env = "INDEXER_CATALOG_URI")]
+    catalog_uri: Option<String>,
+
+    /// Iceberg warehouse name (R2: `<account>_<bucket>`); required with --catalog-uri.
+    #[arg(long, env = "INDEXER_WAREHOUSE")]
+    warehouse: Option<String>,
+
+    /// Bearer token for the catalog REST API.
+    #[arg(long, env = "INDEXER_CATALOG_TOKEN", hide_env_values = true)]
+    catalog_token: Option<String>,
+
+    /// Rebuild the Mixedbread index from the Iceberg corpus lake; pair with
+    /// --mixedbread-store and the --catalog-* flags. The lake's analog of
+    /// --from-parquet-prefix.
+    #[arg(long, env = "INDEXER_FROM_ICEBERG")]
+    from_iceberg: bool,
 
     /// Index local agent/shell history (claude, codex, atuin) at their default
     /// paths, in addition to any explicit `--*` overrides below.
@@ -165,6 +187,26 @@ async fn main() -> anyhow::Result<()> {
         .zip(cli.mixedbread_store.as_deref())
         .map(|(store, name)| Mixedbread { store, name, index_timeout: INDEX_TIMEOUT });
 
+    // Consume mode (Iceberg corpus lake): fold the lake's revision log into its
+    // current document set and reconcile that back into Mixedbread — the lake's
+    // replay/rebuild path. Like the parquet consume below, emit and consume run
+    // as separate invocations of this binary.
+    if cli.from_iceberg {
+        anyhow::ensure!(
+            cli.from_parquet_prefix.is_none(),
+            "--from-iceberg and --from-parquet-prefix are mutually exclusive (one log at a time)"
+        );
+        let mixedbread =
+            mixedbread.context("--from-iceberg requires --mixedbread-store (the reconcile target)")?;
+        let config = lake_config(&cli)?;
+        let catalog = config.connect().await.context("connecting the Iceberg catalog")?;
+        let ident =
+            lake_iceberg::ensure_table(catalog.as_ref()).await.context("ensuring the lake table")?;
+        let documents =
+            lake_iceberg::read_all(catalog.as_ref(), &ident).await.context("reading the lake")?;
+        return finish(run_consume(documents, mixedbread).await);
+    }
+
     // Consume mode (parquet corpus log): read the per-source `data.parquet` files
     // `sink-parquet` wrote at this prefix under `--bucket` and reconcile them back
     // into Mixedbread. Uses the SAME bucket/endpoint/region the parquet sink uses,
@@ -208,8 +250,23 @@ async fn main() -> anyhow::Result<()> {
         }
         None => None,
     };
-    if store.is_none() && parquet.is_none() {
-        anyhow::bail!("nothing to do: pass --mixedbread-store and/or --bucket");
+    // The Iceberg corpus lake (issue #752): the parquet log's successor, run
+    // alongside it during the migration. Connecting and ensuring the table here
+    // surfaces a bad catalog config at startup, like the parquet connect above.
+    let lake = match cli.catalog_uri.as_ref() {
+        Some(_) => {
+            let config = lake_config(&cli)?;
+            let catalog = config.connect().await.context("connecting the Iceberg catalog")?;
+            let ident = lake_iceberg::ensure_table(catalog.as_ref())
+                .await
+                .context("ensuring the lake table")?;
+            let host = resolve_host(&cli).context("resolving host for the lake")?;
+            Some(IcebergReconciler::new(catalog, ident, host))
+        }
+        None => None,
+    };
+    if store.is_none() && parquet.is_none() && lake.is_none() {
+        anyhow::bail!("nothing to do: pass --mixedbread-store, --bucket, and/or --catalog-uri");
     }
     if !any_source_selected(&cli) {
         anyhow::bail!(
@@ -217,7 +274,22 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    finish(run_sources(&cli, mixedbread, parquet.as_ref()).await)
+    finish(run_sources(&cli, mixedbread, parquet.as_ref(), lake.as_ref()).await)
+}
+
+/// Build the lake's catalog config from the CLI: the catalog flags plus the
+/// shared S3 endpoint/region (the lake's data plane is the same account the
+/// parquet archive uses during the migration).
+fn lake_config(cli: &Cli) -> anyhow::Result<lake_iceberg::Config> {
+    let uri = cli.catalog_uri.clone().context("--catalog-uri is required for the Iceberg lake")?;
+    let warehouse = cli.warehouse.clone().context("--warehouse is required with --catalog-uri")?;
+    Ok(lake_iceberg::Config {
+        uri,
+        warehouse,
+        token: cli.catalog_token.clone(),
+        s3_endpoint: cli.endpoint.clone(),
+        s3_region: cli.region.clone(),
+    })
 }
 
 /// Turn the per-run counts into the process result: success only when no source
@@ -263,6 +335,7 @@ async fn run_sources(
     cli: &Cli,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
 ) -> Counts {
     let home = dirs::home_dir();
     let default = |suffix: &str| home.as_ref().map(|h| h.join(suffix));
@@ -275,7 +348,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open(&dir)
                 .with_context(|| format!("parsing Claude transcripts at {}", dir.display()))?;
-            run_source("claude", &adapter, mixedbread, parquet).await
+            run_source("claude", &adapter, mixedbread, parquet, lake).await
         }
         .await;
         record("claude", result, &mut counts);
@@ -284,15 +357,20 @@ async fn run_sources(
         let result = async {
             let adapter = source_codex::CodexHistory::open(&file)
                 .with_context(|| format!("parsing Codex history at {}", file.display()))?;
-            run_source("codex", &adapter, mixedbread, parquet).await
+            run_source("codex", &adapter, mixedbread, parquet, lake).await
         }
         .await;
         record("codex", result, &mut counts);
     }
     if let Some(db) = atuin {
-        match open_atuin("shell", &db, mixedbread.is_some() || parquet.is_some(), &mut counts) {
+        match open_atuin(
+            "shell",
+            &db,
+            mixedbread.is_some() || parquet.is_some() || lake.is_some(),
+            &mut counts,
+        ) {
             Ok(Atuin::Ready(adapter)) => {
-                let result = run_source("shell", &adapter, mixedbread, parquet).await;
+                let result = run_source("shell", &adapter, mixedbread, parquet, lake).await;
                 record("shell", result, &mut counts);
             }
             // An uninitialized db is already logged and tallied as a soft skip.
@@ -304,7 +382,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_slack::SlackExport::open(dir)
                 .with_context(|| format!("reading Slack export at {}", dir.display()))?;
-            run_source("slack", &adapter, mixedbread, parquet).await
+            run_source("slack", &adapter, mixedbread, parquet, lake).await
         }
         .await;
         record("slack", result, &mut counts);
@@ -313,7 +391,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_linear::LinearExport::open(dir)
                 .with_context(|| format!("reading Linear export at {}", dir.display()))?;
-            run_source("linear", &adapter, mixedbread, parquet).await
+            run_source("linear", &adapter, mixedbread, parquet, lake).await
         }
         .await;
         record("linear", result, &mut counts);
@@ -322,7 +400,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_github::GithubExport::open(dir)
                 .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
-            run_source("github", &adapter, mixedbread, parquet).await
+            run_source("github", &adapter, mixedbread, parquet, lake).await
         }
         .await;
         record("github", result, &mut counts);
@@ -332,7 +410,7 @@ async fn run_sources(
         let result = async {
             let adapter = source_git::GitLog::open(repo)
                 .with_context(|| format!("reading git history at {}", repo.display()))?;
-            run_source("git", &adapter, mixedbread, parquet).await
+            run_source("git", &adapter, mixedbread, parquet, lake).await
         }
         .await;
         record(&label, result, &mut counts);
@@ -343,7 +421,7 @@ async fn run_sources(
         record(&label, result, &mut counts);
     }
     if !cli.users.is_empty() {
-        run_users(cli, mixedbread, parquet, &mut counts).await;
+        run_users(cli, mixedbread, parquet, lake, &mut counts).await;
     }
     counts
 }
@@ -354,6 +432,7 @@ async fn run_users(
     cli: &Cli,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
     counts: &mut Counts,
 ) {
     let host = match resolve_host(cli) {
@@ -369,7 +448,7 @@ async fn run_users(
     };
     for spec in &cli.users {
         match parse_user(spec) {
-            Ok(user) => index_user(&user, &host, mixedbread, parquet, counts).await,
+            Ok(user) => index_user(&user, &host, mixedbread, parquet, lake, counts).await,
             Err(error) => {
                 eprintln!("[users] bad --user spec: {error:#}");
                 counts.failures += 1;
@@ -441,6 +520,7 @@ async fn index_user(
     host: &str,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
     counts: &mut Counts,
 ) {
     let name = user.name.as_str();
@@ -448,17 +528,21 @@ async fn index_user(
     // User-scope the parquet log so several accounts on one host do not clobber
     // each other's `source=<source>/data.parquet` (the sink overwrites that file
     // in full per run, and every account produces the same `source=claude` etc.).
+    // The lake scopes the same way: its slice (and so its tombstones) must be
+    // per-account, or one user's reconcile would delete another's documents.
     // The Mixedbread sink needs no such scoping: its `external_id`s already carry
     // the per-message uuid, so records never collide across users there.
     let user_parquet =
         parquet.map(|reconciler| reconciler.with_prefix(user_prefix(&reconciler.prefix, name)));
     let parquet = user_parquet.as_ref();
+    let user_lake = lake.map(|reconciler| reconciler.with_user(name));
+    let lake = user_lake.as_ref();
     if let Some(claude_dir) = safe_path_under(home, &[".claude", "projects"], true) {
         let label = format!("claude:{name}");
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name)
                 .with_context(|| format!("parsing Claude transcripts for {name} at {}", claude_dir.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet).await
+            run_source(&label, &adapter, mixedbread, parquet, lake).await
         }
         .await;
         record(&label, result, counts);
@@ -469,7 +553,7 @@ async fn index_user(
         let result = async {
             let adapter = source_codex::CodexHistory::open_with(&codex_file, host, name)
                 .with_context(|| format!("parsing Codex history for {name} at {}", codex_file.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet).await
+            run_source(&label, &adapter, mixedbread, parquet, lake).await
         }
         .await;
         record(&label, result, counts);
@@ -481,9 +565,14 @@ async fn index_user(
     // such account cannot fail the whole fleet run (ENG-2141).
     if let Some(atuin_db) = safe_path_under(home, &[".local", "share", "atuin", "history.db"], false) {
         let label = format!("shell:{name}");
-        match open_atuin(&label, &atuin_db, mixedbread.is_some() || parquet.is_some(), counts) {
+        match open_atuin(
+            &label,
+            &atuin_db,
+            mixedbread.is_some() || parquet.is_some() || lake.is_some(),
+            counts,
+        ) {
             Ok(Atuin::Ready(adapter)) => {
-                let result = run_source(&label, &adapter, mixedbread, parquet).await;
+                let result = run_source(&label, &adapter, mixedbread, parquet, lake).await;
                 record(&label, result, counts);
             }
             Ok(Atuin::Skipped) => {}
@@ -499,7 +588,7 @@ async fn index_user(
         let result = async {
             let adapter = source_debug::DebugLogs::open_with(&debug_dir, host, name)
                 .with_context(|| format!("reading Claude debug logs for {name} at {}", debug_dir.display()))?;
-            run_source(&label, &adapter, mixedbread, parquet).await
+            run_source(&label, &adapter, mixedbread, parquet, lake).await
         }
         .await;
         record(&label, result, counts);
@@ -678,25 +767,26 @@ fn open_atuin(
 
 /// Fan one source out to every enabled sink.
 ///
-/// The parquet archive runs FIRST and the two sinks are INDEPENDENT: a slow or
-/// failing Mixedbread upload must not gate or skip the durable archive. The
-/// archive write is a fast local-S3 full-file put, while the Mixedbread leg is
-/// network-bound and rate-limited (429 + backoff), so ordering it first lands
-/// the queryable parquet in seconds instead of after a multi-hour upload. Each
-/// sink's error is captured separately and only combined at the end, so one
-/// sink's failure still lets the other run.
+/// The durable logs run FIRST (parquet, then the Iceberg lake) and every sink
+/// is INDEPENDENT: a slow or failing Mixedbread upload must not gate or skip a
+/// durable write. The log writes are fast object-store puts, while the
+/// Mixedbread leg is network-bound and rate-limited (429 + backoff), so
+/// ordering it last lands the queryable logs in seconds instead of after a
+/// multi-hour upload. Each sink's error is captured separately and only
+/// combined at the end, so one sink's failure still lets the others run.
 async fn run_source<A: SourceAdapter + Sync>(
     label: &str,
     adapter: &A,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
 ) -> anyhow::Result<()> {
     // A selected source with no sink is a misconfiguration, not a no-op: a missing
-    // `--mixedbread-store`/`--bucket` would otherwise drop the source silently
-    // while still counting as a success.
+    // `--mixedbread-store`/`--bucket`/`--catalog-uri` would otherwise drop the
+    // source silently while still counting as a success.
     anyhow::ensure!(
-        mixedbread.is_some() || parquet.is_some(),
-        "[{label}] no sink configured: pass --mixedbread-store and/or --bucket"
+        mixedbread.is_some() || parquet.is_some() || lake.is_some(),
+        "[{label}] no sink configured: pass --mixedbread-store, --bucket, and/or --catalog-uri"
     );
 
     // One pass over the adapter feeds every view (each sink used to re-run, and
@@ -717,6 +807,19 @@ async fn run_source<A: SourceAdapter + Sync>(
             Ok(report) => eprintln!("[{label}] parquet: wrote {} rows", report.rows),
             Err(error) => {
                 errors.push(anyhow::Error::new(error).context(format!("[{label}] parquet sync")));
+            }
+        }
+    }
+
+    if let Some(reconciler) = lake {
+        match reconciler.reconcile(&source, &documents).await {
+            Ok(report) if report.skipped => eprintln!("[{label}] lake: skipped (unchanged)"),
+            Ok(report) => eprintln!(
+                "[{label}] lake: appended {} upserts, {} tombstones",
+                report.upserts, report.deletes
+            ),
+            Err(error) => {
+                errors.push(anyhow::Error::new(error).context(format!("[{label}] lake sync")));
             }
         }
     }

@@ -11,40 +11,45 @@ pub enum Error {
     /// The lake table schema could not be built.
     #[snafu(display("failed to build the lake table schema"))]
     Schema {
-        /// Underlying iceberg error.
-        source: iceberg::Error,
+        /// Underlying iceberg error (boxed: it is large, and errors are cold).
+        #[snafu(source(from(iceberg::Error, Box::new)))]
+        source: Box<iceberg::Error>,
     },
     /// The REST catalog could not be connected.
     #[snafu(display("failed to connect the Iceberg catalog at {uri}"))]
     Connect {
         /// Catalog URI dialed.
         uri: String,
-        /// Underlying iceberg error.
-        source: iceberg::Error,
+        /// Underlying iceberg error (boxed: it is large, and errors are cold).
+        #[snafu(source(from(iceberg::Error, Box::new)))]
+        source: Box<iceberg::Error>,
     },
     /// The corpus namespace or table could not be created or loaded.
     #[snafu(display("failed to ensure the lake table {table}"))]
     EnsureTable {
         /// Table identifier.
         table: String,
-        /// Underlying iceberg error.
-        source: iceberg::Error,
+        /// Underlying iceberg error (boxed: it is large, and errors are cold).
+        #[snafu(source(from(iceberg::Error, Box::new)))]
+        source: Box<iceberg::Error>,
     },
     /// The lake table could not be loaded from the catalog.
     #[snafu(display("failed to load the lake table {table}"))]
     LoadTable {
         /// Table identifier.
         table: String,
-        /// Underlying iceberg error.
-        source: iceberg::Error,
+        /// Underlying iceberg error (boxed: it is large, and errors are cold).
+        #[snafu(source(from(iceberg::Error, Box::new)))]
+        source: Box<iceberg::Error>,
     },
     /// A table scan failed.
     #[snafu(display("failed to scan the lake table ({stage})"))]
     Scan {
         /// Which scan stage failed.
         stage: &'static str,
-        /// Underlying iceberg error.
-        source: iceberg::Error,
+        /// Underlying iceberg error (boxed: it is large, and errors are cold).
+        #[snafu(source(from(iceberg::Error, Box::new)))]
+        source: Box<iceberg::Error>,
     },
     /// The append record batch could not be assembled.
     #[snafu(display("failed to build the append record batch"))]
@@ -57,24 +62,27 @@ pub enum Error {
     Write {
         /// Which writer stage failed.
         stage: &'static str,
-        /// Underlying iceberg error.
-        source: iceberg::Error,
+        /// Underlying iceberg error (boxed: it is large, and errors are cold).
+        #[snafu(source(from(iceberg::Error, Box::new)))]
+        source: Box<iceberg::Error>,
     },
     /// Committing the append failed (conflicts are retried first).
     #[snafu(display("failed to commit the lake append after {attempts} attempt(s)"))]
     Commit {
         /// How many commit attempts were made.
         attempts: u32,
-        /// Underlying iceberg error.
-        source: iceberg::Error,
+        /// Underlying iceberg error (boxed: it is large, and errors are cold).
+        #[snafu(source(from(iceberg::Error, Box::new)))]
+        source: Box<iceberg::Error>,
     },
     /// A data file could not be read during an incremental walk.
     #[snafu(display("failed to read lake data file {path}"))]
     ReadFile {
         /// Object path of the data file.
         path: String,
-        /// Underlying iceberg error.
-        source: iceberg::Error,
+        /// Underlying iceberg error (boxed: it is large, and errors are cold).
+        #[snafu(source(from(iceberg::Error, Box::new)))]
+        source: Box<iceberg::Error>,
     },
     /// A data file could not be opened as parquet.
     #[snafu(display("failed to parse lake data file {path} as parquet"))]

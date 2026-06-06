@@ -40,16 +40,16 @@ pub const OP_DELETE: &str = "delete";
 /// The columns a [`Document`] (or tombstone) is reconstructed from; the rest of
 /// the schema is a projection out of `meta_json`. Mirrors `source-parquet`'s
 /// four-column rule, plus the log's `op` and `observed_at`.
-pub(crate) const CODEC_COLUMNS: [&str; 6] =
+pub const CODEC_COLUMNS: [&str; 6] =
     ["external_id", "content_hash", "body", "meta_json", "op", "observed_at"];
 
 /// The columns the sink needs to diff a slice's live state against desired
 /// state: identity, change-detection hash, and the fold keys.
-pub(crate) const STATE_COLUMNS: [&str; 4] = ["external_id", "content_hash", "op", "observed_at"];
+pub const STATE_COLUMNS: [&str; 4] = ["external_id", "content_hash", "op", "observed_at"];
 
 /// The lake's Iceberg schema. Field ids are stable and append-only: the first
 /// nine are `sink-parquet`'s columns in its order, then the log's additions.
-pub(crate) fn table_schema() -> Result<Schema> {
+pub fn table_schema() -> Result<Schema> {
     let optional =
         |id: i32, name: &str| NestedField::optional(id, name, Type::Primitive(PrimitiveType::String));
     let required =
@@ -79,7 +79,7 @@ pub(crate) fn table_schema() -> Result<Schema> {
 /// fleet path) the observations belong to. Tombstones are scoped to a slice so
 /// host A never deletes what host B still observes.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Slice<'a> {
+pub struct Slice<'a> {
     /// The writing host (`networking.hostName` on the fleet).
     pub host: &'a str,
     /// The account, for per-user sources; `None` for host-level bulk exports.
@@ -89,7 +89,7 @@ pub(crate) struct Slice<'a> {
 /// Encode one reconcile pass — upserts plus tombstones — as a single record
 /// batch against the table's arrow schema (which carries the parquet field-id
 /// metadata the writer requires).
-pub(crate) fn encode_batch(
+pub fn encode_batch(
     arrow_schema: &Arc<ArrowSchema>,
     source: &Source,
     slice: Slice<'_>,
@@ -141,7 +141,7 @@ pub(crate) fn encode_batch(
 
 /// A row's operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Op {
+pub enum Op {
     /// The document was observed in the writer's desired state.
     Upsert,
     /// The document left the writer's desired state.
@@ -151,7 +151,7 @@ pub(crate) enum Op {
 /// One decoded log row: identity, fold keys, and (for payload reads) the
 /// content needed to reconstruct a [`Document`].
 #[derive(Debug)]
-pub(crate) struct LakeRow {
+pub struct LakeRow {
     /// Stable per-record id (the store `external_id`).
     pub external_id: String,
     /// sha256 of the body; `None` only on tombstones.
@@ -170,7 +170,7 @@ pub(crate) struct LakeRow {
 /// Decode one record batch into rows, appending to `out`. `with_payload` says
 /// whether `body`/`meta_json` are expected in the batch (a state-projected
 /// scan omits them).
-pub(crate) fn rows_from_batch(
+pub fn rows_from_batch(
     batch: &RecordBatch,
     with_payload: bool,
     out: &mut Vec<LakeRow>,
@@ -231,7 +231,7 @@ pub(crate) fn rows_from_batch(
 ///
 /// Calling this on a tombstone or state-projected row is a typed error
 /// ([`rows_from_batch`] already validated payload presence for upserts).
-pub(crate) fn document_from_row(row: LakeRow) -> Result<Document> {
+pub fn document_from_row(row: LakeRow) -> Result<Document> {
     let tombstone = |what: &'static str| TombstoneDocumentSnafu { what };
     let body = row.body.context(tombstone("body"))?.into_bytes();
     let meta_str = row.meta_json.context(tombstone("meta_json"))?;
@@ -250,7 +250,7 @@ pub(crate) fn document_from_row(row: LakeRow) -> Result<Document> {
 /// (ties: the later-read row). Per-slice writers are serialized by the fleet's
 /// oneshot units, so within a slice `observed_at` only moves forward; across
 /// slices the rule is "any writer's most recent observation wins".
-pub(crate) fn fold_latest(rows: Vec<LakeRow>) -> HashMap<String, LakeRow> {
+pub fn fold_latest(rows: Vec<LakeRow>) -> HashMap<String, LakeRow> {
     let mut latest: HashMap<String, LakeRow> = HashMap::new();
     for row in rows {
         match latest.get(&row.external_id) {

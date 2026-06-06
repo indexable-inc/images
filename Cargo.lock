@@ -3331,6 +3331,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs",
+ "lake-iceberg",
  "mixedbread",
  "nix 0.30.1",
  "rusqlite",

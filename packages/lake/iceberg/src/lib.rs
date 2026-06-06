@@ -212,10 +212,10 @@ impl IcebergReconciler {
 
     /// The predicate selecting this slice's rows for one source.
     fn slice_filter(&self, source: &Source) -> Predicate {
-        let user = match &self.user {
-            Some(user) => Reference::new("user").equal_to(Datum::string(user)),
-            None => Reference::new("user").is_null(),
-        };
+        let user = self.user.as_ref().map_or_else(
+            || Reference::new("user").is_null(),
+            |user| Reference::new("user").equal_to(Datum::string(user)),
+        );
         Reference::new("source")
             .equal_to(Datum::string(source.as_str()))
             .and(Reference::new("host").equal_to(Datum::string(&self.host)))
@@ -289,9 +289,11 @@ impl Reconciler for IcebergReconciler {
     }
 }
 
-/// Fold the whole log into the current document set (every slice, tombstones
-/// applied, latest observation per `external_id`), sorted by id. The full
-/// rebuild primitive: replaying this into a view reproduces current state.
+/// Fold the whole log into the current document set, sorted by id.
+///
+/// Every slice, tombstones applied, latest observation per `external_id` —
+/// the full rebuild primitive: replaying this into a view reproduces current
+/// state.
 ///
 /// # Errors
 /// Returns an error if the table cannot be loaded or scanned, or a row is
@@ -519,9 +521,12 @@ fn now_ms() -> Result<i64> {
     let elapsed =
         SystemTime::now().duration_since(UNIX_EPOCH).context(ClockBeforeEpochSnafu)?;
     let now = i64::try_from(elapsed.as_millis()).context(ClockSnafu)?;
-    let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let stamped = now.max(*last + 1);
-    *last = stamped;
+    let stamped = {
+        let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let stamped = now.max(*last + 1);
+        *last = stamped;
+        stamped
+    };
     Ok(stamped)
 }
 
