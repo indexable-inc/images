@@ -1,0 +1,31 @@
+# Phase 0.4 spike for issue #752: does iceberg-rust 0.9 + a REST catalog
+# (Cloudflare R2 Data Catalog) support the corpus-log design — append commits,
+# snapshot-cursor incremental reads, and concurrent-writer conflict retry?
+#
+# Standalone on purpose: carries its own [workspace] (like packages/nix-cargo-unit)
+# so this throwaway never touches the root lockfile, unit graph, or lint wall.
+[package]
+name = "iceberg-r2-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+# arrow/parquet pinned to iceberg 0.9.1's requirement (^57.1); the root
+# workspace is on arrow 58 — coexistence is a PR-D design point, not a problem
+# here since this spike is workspace-excluded.
+arrow-array = "57"
+arrow-schema = "57"
+futures = "0.3"
+iceberg = "0.9"
+iceberg-catalog-rest = "0.9"
+# S3 data-plane FileIO for the REST/R2 path (0.9 moved storage backends out of
+# core behind the StorageFactory trait).
+iceberg-storage-opendal = { version = "0.9", features = ["opendal-s3"] }
+parquet = "57"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid = { version = "1", features = ["v4"] }
