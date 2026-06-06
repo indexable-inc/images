@@ -1,12 +1,13 @@
 // The rmcp tool-router macros expand into a hand-keyed registration chain
 // and per-tool dispatch shims that nightly clippy flags through the
-// pedantic and nursery groups (function-argument layout, return-type
-// readability, branches-sharing-code in the macro skeleton). The expansion
-// is not under our control and the macros do not emit
-// `#[automatically_derived]`, so allow those groups at the crate root for
-// this thin binding. The two restriction lints the workspace explicitly
-// enables (`anonymous_tuple_return_type`, `fallible_int_fallback`) stay on.
-#![allow(clippy::pedantic, clippy::nursery)]
+// default lint groups (function-argument layout, return-type readability,
+// branches-sharing-code in the macro skeleton, default-trait-access in the
+// generated builder). The expansion is not under our control and the macros
+// do not emit `#[automatically_derived]`, so allow the standard groups at
+// the crate root for this thin binding. The two restriction lints the
+// workspace explicitly enables (`anonymous_tuple_return_type`,
+// `fallible_int_fallback`) stay on.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery)]
 
 //! `ix-google-mcp`: a stdio MCP server that exposes Gmail and Google
 //! Calendar to an MCP client (Claude, Codex) in one process, sharing one
