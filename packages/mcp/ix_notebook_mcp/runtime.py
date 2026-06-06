@@ -19,15 +19,20 @@ numpy, a subprocess) stays non-blocking by going through ``asyncio.to_thread``
 
 Every job also writes itself to the SQLite store at ``IX_MCP_STORE`` (start, a
 throttled output tail while running, final status) so the dashboard can show all
-running things and their live output without ever touching the kernel.
+running things and their live output without ever touching the kernel. The
+result's rich display (HTML tables, images) and any ``display()`` calls made
+while a job runs are captured into the store too, so the dashboard renders them
+like a notebook instead of plain text.
 """
 
 from __future__ import annotations
 
 import ast
 import asyncio
+import base64
 import contextvars
 import inspect
+import json
 import os
 import sys
 import time
@@ -41,10 +46,31 @@ _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", d
 # memory, store writes, and poll payloads all stay bounded.
 _MAX_OUTPUT_CHARS = 256_000
 
+# The custom mime the kernel hands the server to carry a job summary (mirrors
+# outputs.JOB_MIME; duplicated so the kernel-side runtime stays import-light).
+JOB_MIME = "application/x-ix-job+json"
+
+# Rich display capture: which mimes we keep for the dashboard, and per-mime size
+# caps. Truncating a base64 image yields a corrupt data URI, so an oversize image
+# is dropped whole rather than clipped; text mimes clip with a marker.
+_RICH_MIMES = (
+    "text/html",
+    "image/png",
+    "image/jpeg",
+    "image/svg+xml",
+    "text/markdown",
+    "application/json",
+    "text/plain",
+)
+_IMAGE_MIMES = frozenset({"image/png", "image/jpeg"})
+_MAX_TEXT_BUNDLE = 400_000
+_MAX_IMAGE_BUNDLE = 4_000_000
+
 # Opened lazily in install(); None when no store path is configured (the
 # one-shot eval/exec paths, or a bare kernel started outside the server).
 _store_conn = None
 _store = None
+_shell = None  # the InteractiveShell, set in install(); used to format rich results
 
 
 class _Tee:
@@ -90,6 +116,8 @@ class Job:
         self.error: str | None = None
         self._buf: list[str] = []
         self._buflen = 0
+        # Rich outputs (mime bundles) display()-ed while this job runs.
+        self._displays: list[dict] = []
         self.task: asyncio.Task | None = None
 
     def _append(self, s: str) -> None:
@@ -200,6 +228,7 @@ def _persist_final(job: Job) -> None:
             output=job.output,
             result=result_repr,
             error=job.error,
+            outputs=_job_outputs(job),
         )
     except Exception:
         # Best-effort logging: persisting the final status must not raise during cleanup.
@@ -213,6 +242,54 @@ def _safe_repr(value) -> str:
         return f"<unreprable {type(value).__name__}>"
 
 
+def _normalize_bundle(data: dict, metadata: dict | None = None) -> dict:
+    """Coerce a display formatter mime bundle to JSON-safe values (bytes -> base64),
+    keeping only whitelisted mimes within size caps, for the store and dashboard."""
+    out: dict[str, str] = {}
+    for mime in _RICH_MIMES:
+        if mime not in data:
+            continue
+        value = data[mime]
+        if isinstance(value, (bytes, bytearray)):
+            value = base64.b64encode(bytes(value)).decode("ascii")
+        elif not isinstance(value, str):
+            try:
+                value = json.dumps(value)
+            except Exception:
+                value = str(value)
+        if mime in _IMAGE_MIMES:
+            if len(value) > _MAX_IMAGE_BUNDLE:
+                continue  # clipping a base64 image corrupts the data URI; drop it
+        elif len(value) > _MAX_TEXT_BUNDLE:
+            value = value[:_MAX_TEXT_BUNDLE] + "\n... [truncated]"
+        out[mime] = value
+    return {"data": out, "metadata": metadata or {}}
+
+
+def _result_bundle(value) -> dict | None:
+    """Render a job's result through IPython's display machinery (a polars
+    DataFrame yields text/html, a matplotlib Figure image/png) for the dashboard."""
+    if _shell is None:
+        return None
+    try:
+        data, metadata = _shell.display_formatter.format(value)
+    except Exception:
+        return None
+    bundle = _normalize_bundle(data, metadata)
+    return bundle if bundle["data"] else None
+
+
+def _job_outputs(job: "Job") -> list[dict]:
+    """A job's rich outputs for the store: every display() bundle captured while it
+    ran, plus the trailing-expression result rendered the same way."""
+    outs = list(job._displays)
+    if job.result is not None and not job.running():
+        bundle = _result_bundle(job.result)
+        if bundle is not None:
+            outs.append(bundle)
+    return outs
+
+
 async def _flusher() -> None:
     """Throttled background loop: persist every running job's output tail to the
     store so the dashboard shows live output. One loop for all jobs (cheap)."""
@@ -223,7 +300,7 @@ async def _flusher() -> None:
         for job in list(jobs.values()):
             if job.running():
                 try:
-                    _store.update_output(_store_conn, job.id, job.output)
+                    _store.update_output(_store_conn, job.id, job.output, job._displays or None)
                 except Exception:
                     # Best-effort live output: a store write must not kill the loop.
                     pass
@@ -254,7 +331,7 @@ def _emit(job: Job) -> None:
         "result": None if job.result is None else _safe_repr(job.result),
         "error": job.error,
     }
-    publish_display_data({"application/x-ix-job+json": summary, "text/plain": f"[{job.id}] {job.status}"})
+    publish_display_data({JOB_MIME: summary, "text/plain": f"[{job.id}] {job.status}"})
     if job.result is not None and not job.running():
         try:
             display(job.result)
@@ -269,19 +346,69 @@ async def __ix_exec(code: str, budget: float = 15.0, name: str | None = None) ->
     _emit(job)
 
 
+def _install_display_capture(shell) -> None:
+    """Route display() / rich auto-display made *inside a job* to that job's output
+    list (still forwarding to IOPub for the agent's reply), so the dashboard can
+    show images and HTML tables, not just text."""
+    pub = shell.display_pub
+    if getattr(pub, "_ix_wrapped", False):
+        return
+    original = pub.publish
+
+    def publish(data, metadata=None, **kwargs):
+        job = _ix_current.get()
+        if job is not None and isinstance(data, dict) and JOB_MIME not in data:
+            bundle = _normalize_bundle(data, metadata)
+            if bundle["data"]:
+                job._displays.append(bundle)
+        return original(data, metadata, **kwargs)
+
+    pub.publish = publish
+    pub._ix_wrapped = True
+
+
+def _figure_png(fig) -> bytes:
+    import io
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    return buf.getvalue()
+
+
+def _register_rich_formatters(shell) -> None:
+    """Make matplotlib figures render as image/png. A bare ipykernel only wires the
+    inline png formatter after %matplotlib inline; register it lazily by type name
+    so importing matplotlib stays the user's choice."""
+    try:
+        png = shell.display_formatter.formatters["image/png"]
+        png.for_type_by_name("matplotlib.figure", "Figure", _figure_png)
+    except Exception:
+        # No display formatter (non-IPython host) or a matplotlib too old to wire.
+        pass
+
+
 _user_ns: dict | None = None
 
 
 def install(user_ns: dict | None = None) -> None:
     """Wire the runtime into the kernel: tee stdout/err, open the store, start the
     flusher, and expose the registry + entrypoints in the user namespace."""
-    global _store, _store_conn, _user_ns
+    global _store, _store_conn, _user_ns, _shell
     _user_ns = user_ns
 
     if not isinstance(sys.stdout, _Tee):
         sys.stdout = _Tee(sys.stdout)
     if not isinstance(sys.stderr, _Tee):
         sys.stderr = _Tee(sys.stderr)
+
+    import IPython
+
+    _shell = IPython.get_ipython()
+    if _shell is not None:
+        # Capture rich display output and teach the kernel to render figures, so
+        # the dashboard shows tables/images like a notebook (not just text).
+        _install_display_capture(_shell)
+        _register_rich_formatters(_shell)
 
     store_path = os.environ.get("IX_MCP_STORE")
     if store_path:

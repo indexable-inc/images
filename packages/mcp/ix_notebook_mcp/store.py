@@ -52,8 +52,17 @@ def start(conn: sqlite3.Connection, *, id: str, name: str, code: str, started_at
     )
 
 
-def update_output(conn: sqlite3.Connection, id: str, output: str) -> None:
-    conn.execute("UPDATE executions SET output = ? WHERE id = ?", (output, id))
+def update_output(conn: sqlite3.Connection, id: str, output: str, outputs: list | None = None) -> None:
+    """Persist a running job's live output. When ``outputs`` is given (rich display
+    bundles captured so far), update that column too so the dashboard can show a
+    long job's in-progress tables/images, not only its text."""
+    if outputs is None:
+        conn.execute("UPDATE executions SET output = ? WHERE id = ?", (output, id))
+    else:
+        conn.execute(
+            "UPDATE executions SET output = ?, outputs = ? WHERE id = ?",
+            (output, json.dumps(outputs), id),
+        )
 
 
 def finish(

@@ -36,8 +36,14 @@ mcp = FastMCP(
         "op, a subprocess) wrap it in `await asyncio.to_thread(...)` so it stays "
         "off the event loop. Bundled modules import with no install step: `fff` "
         "(async file search/grep), `tui`, `search`, `exa_py`, `google_auth`, "
-        "numpy, polars, duckdb, httpx, matplotlib, playwright. A dashboard shows "
-        "every running job and its live output; its URL is the `DASHBOARD_URL` variable in the namespace (share it with the human)."
+        "numpy, polars, duckdb, httpx, matplotlib, playwright. Use polars (`pl`) "
+        "for dataframes; pandas is not bundled. End a cell with a bare expression "
+        "to display its result richly: a polars DataFrame renders as an HTML table "
+        "and a matplotlib figure as an image, both in this reply and on the "
+        "dashboard. Reach for that instead of print() for data and plots (keep "
+        "print() for plain log lines). A dashboard shows every running job and its "
+        "live output; its URL is the `DASHBOARD_URL` variable in the namespace "
+        "(share it with the human)."
     ),
 )
 
@@ -49,7 +55,9 @@ Content = list[outputs.Content]
         "Run Python on the shared persistent kernel. Waits up to `budget` seconds; "
         "if the code is still running it keeps going in the background as jobs['<id>'] "
         "and this returns a job handle. Inspect/await/cancel background jobs with more "
-        "python_exec against the `jobs` dict. The namespace persists across calls."
+        "python_exec against the `jobs` dict. The namespace persists across calls. End "
+        "with a bare expression to display the result richly (DataFrame as a table, "
+        "figure as an image) instead of print()."
     )
 )
 async def python_exec(

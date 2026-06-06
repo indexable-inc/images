@@ -688,6 +688,91 @@ let
         mkdir -p "$out"
       '';
 
+  # Exercises the rich-output capture path: a DataFrame result is persisted to the
+  # store with its text/html bundle (so the dashboard renders a table, not a repr),
+  # a display() call made while a job runs is captured the same way, and a bytes
+  # image payload normalizes to a base64 string. Stands up an InteractiveShell
+  # in-process so the formatter runs without booting a kernel; sandbox-safe.
+  richTestPy = pkgs.writeText "ix-mcp-rich-test.py" ''
+    import asyncio
+    import json
+    import os
+    import sqlite3
+    import tempfile
+
+    from IPython.core.interactiveshell import InteractiveShell
+
+    # A kernel always has a shell; this in-process test stands one up so the rich
+    # formatter path runs without booting a kernel.
+    InteractiveShell.instance()
+
+    store_path = tempfile.mktemp(suffix=".db")
+    os.environ["IX_MCP_STORE"] = store_path
+
+    import polars as pl
+
+    from ix_notebook_mcp import runtime
+
+    # A bytes image payload must normalize to a base64 string: raw bytes would not
+    # survive JSON storage or an <img> data URI.
+    bundle = runtime._normalize_bundle({"image/png": b"\x89PNG\r\n", "text/plain": "x"})
+    assert isinstance(bundle["data"]["image/png"], str), bundle
+
+    ns = {"pl": pl}
+    runtime.install(ns)
+    run = ns["__ix_run"]
+
+
+    async def main():
+        # A DataFrame result is stored with its text/html bundle.
+        df_job = await run("pl.DataFrame({'a': [1, 2], 'b': ['x', 'y']})", budget=3.0, name="df")
+        await df_job.task
+        conn = sqlite3.connect(store_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT status, outputs FROM executions WHERE id = ?", (df_job.id,)).fetchone()
+        assert row["status"] == "done", row["status"]
+        result_mimes = {mime for out in json.loads(row["outputs"]) for mime in out["data"]}
+        assert "text/html" in result_mimes, ("result mimes", result_mimes)
+
+        # A display() call made while a job runs is captured too.
+        disp_job = await run(
+            "from IPython.display import display\ndisplay(pl.DataFrame({'z': [9]}))",
+            budget=3.0,
+            name="disp",
+        )
+        await disp_job.task
+        disp_outputs = conn.execute(
+            "SELECT outputs FROM executions WHERE id = ?", (disp_job.id,)
+        ).fetchone()[0]
+        disp_mimes = {mime for out in json.loads(disp_outputs) for mime in out["data"]}
+        assert "text/html" in disp_mimes, ("display mimes", disp_mimes)
+
+
+    asyncio.run(main())
+    print("rich-ok")
+  '';
+  richSmoke =
+    pkgs.runCommand "ix-mcp-rich-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${richTestPy} >stdout 2>stderr || {
+          echo "ix-mcp rich smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'rich-ok' stdout || {
+          echo "ix-mcp rich smoke did not confirm rich-output capture:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # macOS-only modules (`screen`, `vmkit`) are only bundled on Darwin; their
   # import tests only exist there.
   screenBundled = importTest "screen" "import screen; print('screen-ok', callable(screen.capture), callable(screen.click), callable(screen.accessibility_trusted))";
@@ -709,6 +794,7 @@ package.overrideAttrs (old: {
         serverTools
         evalSmoke
         runtimeSmoke
+        richSmoke
         bindDefaultSmoke
         ;
     }
