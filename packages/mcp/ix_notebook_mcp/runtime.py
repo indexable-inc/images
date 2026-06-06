@@ -31,6 +31,7 @@ import ast
 import asyncio
 import base64
 import contextvars
+import dataclasses
 import inspect
 import json
 import os
@@ -160,6 +161,35 @@ class Job:
         head = f"<Job {self.id} ({self.name}) [{self.status}] {dur:.2f}s>"
         out = self.tail(800)
         return head + ("\n" + out if out else "")
+
+
+@dataclasses.dataclass
+class Result:
+    """Split a cell's final value into a human view and a model view.
+
+    Return ``Result(user_html=..., llm_result=...)`` as a cell's trailing
+    expression. The dashboard renders ``user_html`` (a rich HTML view for the
+    human watching) while the model's ``python_exec`` tool result receives only
+    ``llm_result`` (concise text). The two never cross: the human is not shown
+    the model's text, and the model does not pay tokens for the HTML render.
+
+    It is a mime bundle under the hood: ``text/html`` carries ``user_html`` (the
+    dashboard prefers HTML) and ``text/plain`` carries ``llm_result`` (what the
+    tool result renders, since to_mcp prefers text/plain). Nothing else in the
+    pipeline changes.
+    """
+
+    user_html: str
+    llm_result: str
+
+    def _repr_mimebundle_(self, **_kwargs) -> dict[str, str]:
+        # IPython's display protocol: html for the dashboard, plain for the model.
+        return {"text/html": self.user_html, "text/plain": self.llm_result}
+
+    def __repr__(self) -> str:
+        # Plain-text fallback (the stored result repr, non-rich hosts): the model
+        # view, never the HTML.
+        return self.llm_result
 
 
 jobs: dict[str, Job] = {}
@@ -425,6 +455,7 @@ def install(user_ns: dict | None = None) -> None:
     target = user_ns if user_ns is not None else globals()
     target["jobs"] = jobs
     target["Job"] = Job
+    target["Result"] = Result
     target["__ix_run"] = __ix_run
     target["__ix_exec"] = __ix_exec
     target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")

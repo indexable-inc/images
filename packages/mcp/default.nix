@@ -747,6 +747,19 @@ let
         disp_mimes = {mime for out in json.loads(disp_outputs) for mime in out["data"]}
         assert "text/html" in disp_mimes, ("display mimes", disp_mimes)
 
+        # A Result splits the human view (HTML on the dashboard) from the model
+        # view (text in the tool result): the stored bundle carries user_html as
+        # text/html, and to_mcp hands the model only the text/plain llm_result.
+        from ix_notebook_mcp import outputs
+        res_job = await run("Result(user_html='<b>hi</b>', llm_result='just-text')", budget=3.0, name="res")
+        await res_job.task
+        res_outputs = conn.execute("SELECT outputs FROM executions WHERE id = ?", (res_job.id,)).fetchone()[0]
+        res_bundle = [out["data"] for out in json.loads(res_outputs)][-1]
+        assert res_bundle.get("text/html") == "<b>hi</b>", res_bundle
+        mcp = outputs.to_mcp([{"output_type": "execute_result", "data": res_bundle, "metadata": {}}])
+        texts = [c.text for c in mcp if getattr(c, "text", None) is not None]
+        assert texts == ["just-text"], texts
+
 
     asyncio.run(main())
     print("rich-ok")

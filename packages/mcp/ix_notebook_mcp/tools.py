@@ -25,7 +25,9 @@ mcp = FastMCP(
     "ix-mcp",
     instructions=(
         "Run Python on one shared, persistent kernel with `python_exec`. The "
-        "namespace persists across calls, so variables you define stay defined. "
+        "namespace persists across calls, so variables, functions, classes, and "
+        "imports you define stay defined and are reusable by every later call \u2014 "
+        "define a helper once and call it again next turn. "
         "Each call runs as an async task and waits up to `budget` seconds; if the "
         "work is still going it keeps running in the background and the call "
         "returns a job handle. Background jobs live in the `jobs` dict, so manage "
@@ -41,7 +43,11 @@ mcp = FastMCP(
         "to display its result richly: a polars DataFrame renders as an HTML table "
         "and a matplotlib figure as an image, both in this reply and on the "
         "dashboard. Reach for that instead of print() for data and plots (keep "
-        "print() for plain log lines). A dashboard shows every running job and its "
+        "print() for plain log lines). To split what the human sees from what you "
+        "get back, end a cell with `Result(user_html=..., llm_result=...)`: the "
+        "dashboard renders `user_html` for the human while your tool result receives "
+        "only `llm_result` (text), so a big rendered view never costs you tokens. "
+        "A dashboard shows every running job and its "
         "live output; its URL is the `DASHBOARD_URL` variable in the namespace "
         "(share it with the human)."
     ),
@@ -55,9 +61,12 @@ Content = list[outputs.Content]
         "Run Python on the shared persistent kernel. Waits up to `budget` seconds; "
         "if the code is still running it keeps going in the background as jobs['<id>'] "
         "and this returns a job handle. Inspect/await/cancel background jobs with more "
-        "python_exec against the `jobs` dict. The namespace persists across calls. End "
+        "python_exec against the `jobs` dict. The namespace persists across calls, so "
+        "functions and classes you define are reusable next turn. End "
         "with a bare expression to display the result richly (DataFrame as a table, "
-        "figure as an image) instead of print()."
+        "figure as an image) instead of print(); return `Result(user_html=..., "
+        "llm_result=...)` to show the human a rich HTML view while your tool result "
+        "gets only the text."
     )
 )
 async def python_exec(

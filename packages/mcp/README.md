@@ -37,10 +37,30 @@ jobs['ab12'].cancel()                       # stop it
 [j for j in jobs.values() if j.running()]   # list running jobs
 ```
 
+Anything you define on the kernel persists, so define a function or class once
+and call it again on a later turn; you are building up a session, not running
+one-shot snippets.
+
 Many jobs run at once and none blocks the others. The concurrency is cooperative:
 a job yields the loop at each `await`. For a blocking call (a heavy numpy/polars
 op, `fff`, a subprocess) wrap it in `await asyncio.to_thread(...)` so its
 GIL-releasing work runs off the loop and stays non-blocking.
+
+## Two audiences: `Result(user_html, llm_result)`
+
+When a cell's final value should read differently for the human watching and for
+you, return a `Result`:
+
+```python
+Result(user_html="<table>…</table>", llm_result="42 rows, mean 3.1")
+```
+
+The dashboard renders `user_html` (a rich HTML view for the human) while your
+`python_exec` tool result receives only `llm_result` (concise text). It is a mime
+bundle under the hood (`text/html` for the dashboard, `text/plain` for you), so a
+large rendered view never costs you tokens. For an ordinary value the two
+audiences share one rendering: a bare trailing expression still shows its rich
+repr on the dashboard and its text to you.
 
 ## How it works
 
@@ -91,6 +111,6 @@ The default Tailscale-IP bind keeps the trust boundary at the tailnet.
 - You need crash isolation between executions: they share one kernel, so a hard
   crash (a segfaulting C extension) takes the kernel down. State is recoverable
   by re-running; the durable log survives.
-- You want rich (image/HTML) output in the dashboard: v1 renders code, status,
-  output, and result text. Images/HTML still come back to the agent through
-  `python_exec`; the dashboard rendering them is a follow-up.
+- You want a human and the model to read the *same* large output cheaply: the
+  model reads everything it is sent, so a giant HTML blob meant for the dashboard
+  costs tokens unless you split it behind a `Result(user_html=…, llm_result=…)`.
