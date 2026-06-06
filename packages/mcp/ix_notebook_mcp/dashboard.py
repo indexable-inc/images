@@ -4,7 +4,8 @@ Auto-started by the CLI. It serves one self-contained HTML page (a Svelte/Vite
 app under ``packages/mcp/site``, built by nix to a single ``index.html`` and
 pointed to via ``IX_MCP_DASHBOARD_HTML`` on the package wrapper, the same shape
 as dashboard-core's ``IX_DASHBOARD_SITE_HTML``). The page is static; it pulls
-the live execution log from ``/api/jobs`` and ``/api/resources`` once a second,
+the live execution log from ``/api/jobs``, ``/api/resources``, and the curated
+``/api/cells`` presentation once a second,
 so a human can watch every running "thing" and its output like a notebook.
 
 The page diffs the DOM reactively (Svelte) instead of rebuilding it, so scroll
@@ -63,9 +64,13 @@ async def start(config: Config) -> web.AppRunner:
     async def resources(_request: web.Request) -> web.Response:
         return web.json_response(store.live_resources(conn))
 
+    async def cells(_request: web.Request) -> web.Response:
+        return web.json_response(store.cells(conn))
+
     app.router.add_get("/", index)
     app.router.add_get("/api/jobs", jobs)
     app.router.add_get("/api/resources", resources)
+    app.router.add_get("/api/cells", cells)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, config.host, config.dashboard_port)

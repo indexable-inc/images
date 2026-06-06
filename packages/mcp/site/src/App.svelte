@@ -2,37 +2,40 @@
   import { feed } from '$lib/feed.svelte';
   import { now } from '$lib/now.svelte';
   import JobCard from '$components/JobCard.svelte';
+  import CellCard from '$components/CellCard.svelte';
   import ResourceCard from '$components/ResourceCard.svelte';
 
-  // Oldest at top, newest at bottom: the feed reads like a notebook.
+  // Executions read like a notebook: oldest at top, newest at the bottom.
   const ordered = $derived([...feed.jobs].sort((a, b) => a.started_at - b.started_at));
   const running = $derived(feed.jobs.filter((j) => j.status === 'running').length);
 
-  // Stick-to-bottom that never fights the user: we only re-pin to the bottom on
-  // a refresh if the user was already near it. Scrolling up frees the view, and
-  // because the list is keyed, scroll position is otherwise untouched.
-  let nearBottom = true;
-  function trackScroll(): void {
-    nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 120;
+  // Each column owns its own scroll, so the page never scrolls as a whole and a
+  // refresh to one column never moves another. Stick-to-bottom on executions only
+  // re-pins when the user was already near the bottom; scrolling up frees it.
+  let execBody: HTMLDivElement;
+  let pinned = true;
+  function trackExec(): void {
+    if (!execBody) return;
+    pinned = execBody.scrollHeight - execBody.scrollTop - execBody.clientHeight < 80;
   }
 
   $effect(() => {
     feed.start();
     now.start();
-    window.addEventListener('scroll', trackScroll, { passive: true });
-    trackScroll();
     return () => {
       feed.stop();
       now.stop();
-      window.removeEventListener('scroll', trackScroll);
     };
   });
 
   $effect(() => {
-    // Re-run on every refresh (feed.jobs is reassigned each poll).
+    // Re-pin to the bottom after an executions update, but only if the user was
+    // already there. Depend on the array so this runs on each real change.
     void feed.jobs;
-    if (nearBottom) {
-      requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight));
+    if (pinned && execBody) {
+      requestAnimationFrame(() => {
+        if (execBody) execBody.scrollTop = execBody.scrollHeight;
+      });
     }
   });
 </script>
@@ -42,39 +45,57 @@
   <span class="spacer"></span>
   <span class="stat" class:stale={!feed.connected}>
     {#if running}<span class="dot"></span><b>{running}</b> running &nbsp;{/if}
-    <b>{feed.jobs.length}</b> total
+    <b>{feed.jobs.length}</b> runs
   </span>
 </header>
 
-<div class="wrap">
-  <main>
-    <div class="sec">executions</div>
-    {#if ordered.length === 0}
-      <div class="empty">no executions yet</div>
-    {:else}
-      {#each ordered as job (job.id)}
-        <JobCard {job} />
-      {/each}
-    {/if}
-  </main>
+<div class="panes">
+  <!-- The agent's curated highlight reel: the most important results, presented. -->
+  <section class="pane cells-pane">
+    <div class="sec">cells <span class="count">{feed.cells.length}</span></div>
+    <div class="pane-body">
+      {#if feed.cells.length === 0}
+        <div class="empty">the agent has not pinned any results yet</div>
+      {:else}
+        {#each feed.cells as cell (cell.id)}
+          <CellCard {cell} />
+        {/each}
+      {/if}
+    </div>
+  </section>
 
-  <aside class="sidebar">
-    <div class="sec">resources</div>
-    {#if feed.resources.length === 0}
-      <div class="empty">no live resources</div>
-    {:else}
-      {#each feed.resources as resource (resource.id)}
-        <ResourceCard {resource} />
-      {/each}
-    {/if}
-  </aside>
+  <!-- Every run, oldest first, streaming live as it goes. -->
+  <section class="pane exec-pane">
+    <div class="sec">executions <span class="count">{feed.jobs.length}</span></div>
+    <div class="pane-body" bind:this={execBody} onscroll={trackExec}>
+      {#if ordered.length === 0}
+        <div class="empty">no executions yet</div>
+      {:else}
+        {#each ordered as job (job.id)}
+          <JobCard {job} />
+        {/each}
+      {/if}
+    </div>
+  </section>
+
+  <!-- Live, self-updating views: a terminal screen, a VM framebuffer, a widget. -->
+  <section class="pane res-pane">
+    <div class="sec">resources <span class="count">{feed.resources.length}</span></div>
+    <div class="pane-body">
+      {#if feed.resources.length === 0}
+        <div class="empty">no live resources</div>
+      {:else}
+        {#each feed.resources as resource (resource.id)}
+          <ResourceCard {resource} />
+        {/each}
+      {/if}
+    </div>
+  </section>
 </div>
 
 <style>
   .top {
-    position: sticky;
-    top: 0;
-    z-index: 5;
+    flex: none;
     display: flex;
     gap: 12px;
     align-items: center;
@@ -117,50 +138,76 @@
     background: var(--active);
     vertical-align: middle;
   }
-  .wrap {
-    display: flex;
-    gap: 18px;
-    align-items: flex-start;
-    max-width: 1600px;
-    margin: 0 auto;
-    padding: 18px;
-  }
-  main {
+
+  /* Three columns filling the viewport; each scrolls on its own. */
+  .panes {
     flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    gap: 1px;
+    background: var(--line);
+  }
+  .pane {
+    display: flex;
+    flex-direction: column;
     min-width: 0;
+    min-height: 0;
+    background: var(--bg);
   }
-  .sidebar {
-    position: sticky;
-    top: 62px;
-    flex: 0 0 520px;
-    max-height: calc(100vh - 78px);
+  .cells-pane {
+    flex: 1.4 1 0;
+  }
+  .exec-pane {
+    flex: 1 1 0;
+  }
+  .res-pane {
+    flex: 0 0 clamp(320px, 26%, 460px);
+  }
+  .pane-body {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: auto;
-  }
-  @media (max-width: 1100px) {
-    .wrap {
-      flex-direction: column;
-    }
-    .sidebar {
-      position: static;
-      flex: none;
-      width: 100%;
-      max-height: none;
-    }
+    overflow-anchor: none;
+    padding: 14px 16px 32px;
   }
   .sec {
-    margin: 0 0 12px;
-    padding-bottom: 7px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 9px 16px;
     color: var(--muted);
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.2em;
     text-transform: uppercase;
     border-bottom: 1px solid var(--line);
+    background: var(--bg);
+  }
+  .sec .count {
+    color: var(--faint);
+    letter-spacing: 0.04em;
   }
   .empty {
     padding: 2px 0;
     color: var(--faint);
     font-size: 12px;
     font-style: italic;
+  }
+
+  /* Stack the columns on a narrow screen; the page scrolls and each pane sizes
+     to its content rather than competing for one screen's height. */
+  @media (max-width: 1000px) {
+    .panes {
+      flex-direction: column;
+      overflow: auto;
+    }
+    .pane {
+      flex: none;
+    }
+    .pane-body {
+      overflow: visible;
+    }
   }
 </style>

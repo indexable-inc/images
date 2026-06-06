@@ -24,6 +24,10 @@ _OUTPUT_TYPES = frozenset({"stream", "execute_result", "display_data", "error"})
 # The custom mime the kernel runtime uses to hand the server a job summary.
 JOB_MIME = "application/x-ix-job+json"
 
+# The mime a Result uses to carry the model-facing view (text + images). The
+# server unpacks it to real content blocks; it never reaches the dashboard.
+IX_LLM_MIME = "application/x-ix-llm+json"
+
 Content = mcp_types.TextContent | mcp_types.ImageContent
 
 
@@ -54,6 +58,17 @@ def to_mcp(outputs: list[dict]) -> list[Content]:
             data = output.get("data", {})
             if JOB_MIME in data:
                 continue  # internal summary, surfaced separately
+            if IX_LLM_MIME in data:
+                # A Result's explicit model view: its text, then its images.
+                spec = data[IX_LLM_MIME]
+                if isinstance(spec, dict):
+                    if spec.get("text"):
+                        content.append(text(spec["text"]))
+                    for img in spec.get("images", []):
+                        if images < _MAX_IMAGES and isinstance(img, dict) and img.get("data"):
+                            content.append(_image(img.get("mime", "image/png"), img["data"]))
+                            images += 1
+                continue
             for mime in ("image/png", "image/jpeg"):
                 if images < _MAX_IMAGES and mime in data:
                     content.append(_image(mime, data[mime]))

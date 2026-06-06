@@ -51,6 +51,12 @@ _MAX_OUTPUT_CHARS = 256_000
 # outputs.JOB_MIME; duplicated so the kernel-side runtime stays import-light).
 JOB_MIME = "application/x-ix-job+json"
 
+# The custom mime a Result uses to carry the model-facing view (text plus
+# images) for the server to unpack; it never reaches the dashboard render
+# (it is not in _RICH_MIMES), so the human sees user_html and the model sees
+# this. Mirrors outputs.IX_LLM_MIME.
+IX_LLM_MIME = "application/x-ix-llm+json"
+
 # Rich display capture: which mimes we keep for the dashboard, and per-mime size
 # caps. Truncating a base64 image yields a corrupt data URI, so an oversize image
 # is dropped whole rather than clipped; text mimes clip with a marker.
@@ -66,6 +72,16 @@ _RICH_MIMES = (
 _IMAGE_MIMES = frozenset({"image/png", "image/jpeg"})
 _MAX_TEXT_BUNDLE = 400_000
 _MAX_IMAGE_BUNDLE = 4_000_000
+
+_RESULT_REQUIRED = (
+    "python_exec: every cell must END with a Result(...). This cell's last "
+    "expression was not a Result, so nothing was returned. Wrap your final value:\n"
+    "  Result.text('done')                       # same text to human and model\n"
+    "  Result.ok('what happened')                # a quiet confirmation for a side effect\n"
+    "  Result.of(value)                          # render any value richly for the human\n"
+    "  Result(user_html='<b>hi</b>', llm_result='hi', llm_images=[fig])\n"
+    "Curate the human's view of the most important results with cells.add(value)."
+)
 
 # Opened lazily in install(); None when no store path is configured (the
 # one-shot eval/exec paths, or a bare kernel started outside the server).
@@ -167,29 +183,84 @@ class Job:
 class Result:
     """Split a cell's final value into a human view and a model view.
 
-    Return ``Result(user_html=..., llm_result=...)`` as a cell's trailing
-    expression. The dashboard renders ``user_html`` (a rich HTML view for the
-    human watching) while the model's ``python_exec`` tool result receives only
-    ``llm_result`` (concise text). The two never cross: the human is not shown
-    the model's text, and the model does not pay tokens for the HTML render.
+    Every ``python_exec`` cell must END with one of these (the kernel rejects a
+    cell whose last expression is not a Result, so a run always declares what the
+    human sees and what the model gets back). The dashboard renders
+    ``user_html`` (a rich HTML view for the human watching); the model's tool
+    result receives ``llm_result`` (concise text) plus any ``llm_images``. The
+    two never cross: the human is not shown the model's text, and the model does
+    not pay tokens for the HTML render.
 
-    It is a mime bundle under the hood: ``text/html`` carries ``user_html`` (the
-    dashboard prefers HTML) and ``text/plain`` carries ``llm_result`` (what the
-    tool result renders, since to_mcp prefers text/plain). Nothing else in the
-    pipeline changes.
+    Construct it directly for full control, or use the shortcuts for the common
+    cases::
+
+        Result.text("done")                      # same text to human and model
+        Result.ok("all 12 checks passed")        # a quiet confirmation
+        Result.of(df)                            # render any value richly for
+                                                 # the human, its repr to you
+        Result(user_html="<b>hi</b>", llm_result="hi")
+        Result(user_html=fig_html, llm_result="see plot", llm_images=[fig])
+
+    ``llm_images`` items may be raw PNG/JPEG bytes, a base64 string, a data URI,
+    a matplotlib Figure, a PIL image, or a path to an image file; each is sent to
+    the model as a real image block. It is a mime bundle under the hood:
+    ``text/html`` carries ``user_html`` and, when present, ``IX_LLM_MIME`` carries
+    the model's text+images (unpacked by the server); ``text/plain`` carries the
+    text as a fallback for plain hosts.
     """
 
     user_html: str
-    llm_result: str
+    llm_result: str = ""
+    llm_images: list = dataclasses.field(default_factory=list)
 
-    def _repr_mimebundle_(self, **_kwargs) -> dict[str, str]:
-        # IPython's display protocol: html for the dashboard, plain for the model.
-        return {"text/html": self.user_html, "text/plain": self.llm_result}
+    @classmethod
+    def text(cls, value, *, html: str | None = None) -> "Result":
+        """A Result that shows the same text to the human and the model. Pass
+        ``html`` to give the human a richer view than the plain text."""
+        body = value if isinstance(value, str) else _safe_repr(value)
+        user = html if html is not None else f"<pre class=\"ix-result\">{_escape_html(body)}</pre>"
+        return cls(user_html=user, llm_result=body)
+
+    @classmethod
+    def ok(cls, message: str = "done") -> "Result":
+        """A quiet confirmation for a side-effecting cell (an import, a cancel, a
+        terminal keystroke) that has no value to return."""
+        msg = str(message)
+        user = f'<div class="ix-ok">\u2713 {_escape_html(msg)}</div>'
+        return cls(user_html=user, llm_result=msg)
+
+    @classmethod
+    def of(cls, value, *, llm_result: str | None = None) -> "Result":
+        """Wrap any value: render it richly for the human (a DataFrame as a
+        table, a figure as an image, anything else as its display HTML or repr)
+        and hand the model its ``repr`` (override with ``llm_result``)."""
+        text_view = llm_result if llm_result is not None else _safe_repr(value)
+        bundle = _result_bundle(value)
+        data = (bundle or {}).get("data", {})
+        if "text/html" in data:
+            user = data["text/html"]
+        elif "image/png" in data:
+            user = f'<img alt="" src="data:image/png;base64,{data["image/png"]}" />'
+        elif "image/svg+xml" in data:
+            user = data["image/svg+xml"]
+        else:
+            user = f'<pre class="ix-result">{_escape_html(text_view)}</pre>'
+        return cls(user_html=user, llm_result=text_view)
+
+    def _repr_mimebundle_(self, **_kwargs) -> dict:
+        # IPython's display protocol: html is the human view (the dashboard
+        # prefers it); IX_LLM_MIME carries the model's text+images, which the
+        # server unpacks and the dashboard ignores; text/plain is the fallback.
+        bundle: dict = {"text/html": self.user_html, "text/plain": self.llm_result or ""}
+        images = [img for img in (_coerce_image(i) for i in self.llm_images) if img]
+        if images:
+            bundle[IX_LLM_MIME] = {"text": self.llm_result or "", "images": images}
+        return bundle
 
     def __repr__(self) -> str:
         # Plain-text fallback (the stored result repr, non-rich hosts): the model
         # view, never the HTML.
-        return self.llm_result
+        return self.llm_result or ""
 
 
 class Resource:
@@ -283,6 +354,143 @@ jobs: dict[str, Job] = {}
 resources: dict[str, Resource] = {}
 
 
+@dataclasses.dataclass
+class _Cell:
+    id: str
+    title: str
+    outputs: list  # rendered mime bundles, newest render
+
+
+class Cells:
+    """The curated presentation pane: what the agent chooses to PRESENT.
+
+    Where ``jobs`` is every run (the dashboard's executions column shows them
+    all) and ``resources`` is every live view, ``cells`` is the agent's own
+    highlight reel. Fill it with the most important results and the dashboard
+    renders them as a third pane, in order, so a session reads as a live,
+    informative summary instead of a raw log. Each value is rendered the way the
+    dashboard renders any result: a :class:`Result`'s ``user_html``, a polars
+    DataFrame as a table, a matplotlib figure as an image, anything else as its
+    display HTML or repr.
+
+        cells.add(df, title="latency by host")   # append a titled cell, returns its id
+        cells.add(fig, title="throughput")
+        cells.set(0, df2)                         # replace a cell in place (id or index)
+        cells.remove(0)                           # drop one (id or index)
+        cells.clear()                             # start the presentation over
+
+    Adding with an ``id`` that already exists replaces that cell, so a loop can
+    keep one cell updated in place (a live metric) rather than appending forever.
+    """
+
+    def __init__(self) -> None:
+        self._items: list[_Cell] = []
+        self._rev = 0
+        self._synced = -1
+
+    def _render(self, value, title: str | None) -> list:
+        bundle = _result_bundle(value)
+        if bundle is not None and bundle.get("data"):
+            return [bundle]
+        return [{"data": {"text/plain": _safe_repr(value)}, "metadata": {}}]
+
+    def _find(self, key) -> int:
+        """Resolve an int index or a string id to a list index, or -1."""
+        if isinstance(key, int):
+            return key if -len(self._items) <= key < len(self._items) else -1
+        for i, cell in enumerate(self._items):
+            if cell.id == key:
+                return i
+        return -1
+
+    def add(self, value, *, title: str | None = None, id: str | None = None) -> str:
+        """Append a cell (or replace the one with ``id``); return its id."""
+        outputs = self._render(value, title)
+        idx = self._find(id) if id is not None else -1
+        if idx >= 0:
+            self._items[idx].title = title or self._items[idx].title
+            self._items[idx].outputs = outputs
+            cid = self._items[idx].id
+        else:
+            cid = id or uuid.uuid4().hex[:8]
+            self._items.append(_Cell(cid, title or "", outputs))
+        self._rev += 1
+        return cid
+
+    # append is the list-flavoured spelling of add.
+    append = add
+
+    def set(self, key, value, *, title: str | None = None) -> str:
+        """Replace the cell at ``key`` (an int index or a string id) in place."""
+        idx = self._find(key)
+        if idx < 0:
+            raise KeyError(f"no cell {key!r}")
+        self._items[idx].outputs = self._render(value, title)
+        if title is not None:
+            self._items[idx].title = title
+        self._rev += 1
+        return self._items[idx].id
+
+    def remove(self, key) -> None:
+        """Drop the cell at ``key`` (an int index or a string id)."""
+        idx = self._find(key)
+        if idx < 0:
+            raise KeyError(f"no cell {key!r}")
+        del self._items[idx]
+        self._rev += 1
+
+    def clear(self) -> None:
+        """Empty the presentation."""
+        if self._items:
+            self._items = []
+            self._rev += 1
+
+    def __setitem__(self, key, value) -> None:
+        if isinstance(key, str):
+            self.add(value, id=key)
+        else:
+            self.set(key, value)
+
+    def __getitem__(self, key) -> _Cell:
+        idx = self._find(key)
+        if idx < 0:
+            raise KeyError(f"no cell {key!r}")
+        return self._items[idx]
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __iter__(self):
+        return iter(self._items)
+
+    def __repr__(self) -> str:
+        titles = ", ".join(c.title or c.id for c in self._items)
+        return f"<Cells [{len(self._items)}]{': ' + titles if titles else ''}>"
+
+    def _sync(self) -> None:
+        """Mirror the current presentation to the store when it has changed.
+
+        Declarative: ``cells`` is the source of truth and the store is a derived
+        view, so each change replaces the table contents wholesale (the set is
+        small). Guarded by a revision counter so an unchanged presentation costs
+        nothing per flush tick."""
+        if self._rev == self._synced or _store is None or _store_conn is None:
+            return
+        rows = [
+            {"id": c.id, "title": c.title, "position": i, "outputs": c.outputs}
+            for i, c in enumerate(self._items)
+        ]
+        try:
+            _store.replace_cells(_store_conn, rows)
+            self._synced = self._rev
+        except Exception:
+            # Best-effort mirror: a store write must not raise into user code.
+            pass
+
+
+cells = Cells()
+
+
 def _compile(code: str, filename: str):
     """Compile statements with top-level ``await`` allowed, capturing the value
     of a trailing expression into ``__ix_result`` (REPL-style), so a job has a
@@ -314,7 +522,17 @@ async def _runner(job: Job, ns: dict) -> None:
         if inspect.iscoroutine(maybe):
             await maybe
         job.result = ns.pop("__ix_result", None)
-        job.status = "done"
+        if isinstance(job.result, Result):
+            job.status = "done"
+        else:
+            # Enforce the Result contract: every cell must END with a Result so a
+            # run always declares what the human sees and what the model gets.
+            # A bare value (or a side-effecting cell that returns None) is a
+            # failed run with an instructive message rather than a silent pass.
+            job.status = "error"
+            job.error = _RESULT_REQUIRED
+            job._append(job.error)
+            job.result = None
     except asyncio.CancelledError:
         job.status = "cancelled"
         raise
@@ -358,6 +576,57 @@ def _safe_repr(value) -> str:
         return repr(value)
     except Exception:
         return f"<unreprable {type(value).__name__}>"
+
+
+def _coerce_image(value) -> dict | None:
+    """Coerce one ``Result.llm_images`` item to ``{"mime", "data"}`` (base64),
+    or None if it is not an image we can encode. Accepts raw PNG/JPEG bytes, a
+    base64 / data-URI string, a path to an image file, a matplotlib Figure, or
+    any object with ``_repr_png_`` / ``_repr_jpeg_`` (a PIL image, a plot)."""
+    if value is None:
+        return None
+    # Raw bytes: sniff PNG vs JPEG by magic, default to PNG.
+    if isinstance(value, (bytes, bytearray)):
+        raw = bytes(value)
+        mime = "image/jpeg" if raw[:3] == b"\xff\xd8\xff" else "image/png"
+        return {"mime": mime, "data": base64.b64encode(raw).decode("ascii")}
+    if isinstance(value, str):
+        s = value.strip()
+        if s.startswith("data:image/"):
+            head, _, payload = s.partition(",")
+            mime = head[5:].split(";", 1)[0] or "image/png"
+            return {"mime": mime, "data": payload}
+        # A filesystem path to an image.
+        if len(s) < 4096 and os.path.isfile(s):
+            try:
+                raw = open(s, "rb").read()
+            except OSError:
+                return None
+            mime = "image/jpeg" if s.lower().endswith((".jpg", ".jpeg")) else "image/png"
+            return {"mime": mime, "data": base64.b64encode(raw).decode("ascii")}
+        # Otherwise assume it is already base64-encoded PNG.
+        return {"mime": "image/png", "data": s}
+    # matplotlib Figure: render to PNG.
+    if type(value).__module__.startswith("matplotlib") and hasattr(value, "savefig"):
+        try:
+            return {"mime": "image/png", "data": base64.b64encode(_figure_png(value)).decode("ascii")}
+        except Exception:
+            return None
+    # Anything with a rich image repr (a PIL image, a plotly/altair object).
+    for method, mime in (("_repr_png_", "image/png"), ("_repr_jpeg_", "image/jpeg")):
+        repr_fn = getattr(value, method, None)
+        if callable(repr_fn):
+            try:
+                out = repr_fn()
+            except Exception:
+                continue
+            if out is None:
+                continue
+            if isinstance(out, (bytes, bytearray)):
+                return {"mime": mime, "data": base64.b64encode(bytes(out)).decode("ascii")}
+            if isinstance(out, str):
+                return {"mime": mime, "data": out}
+    return None
 
 
 def _normalize_bundle(data: dict, metadata: dict | None = None) -> dict:
@@ -587,6 +856,7 @@ async def _flusher() -> None:
                     # Best-effort live output: a store write must not kill the loop.
                     pass
         await _sweep_resources()
+        cells._sync()
 
 
 async def __ix_run(code: str, budget: float = 15.0, name: str | None = None) -> Job:
@@ -615,7 +885,9 @@ def _emit(job: Job) -> None:
         "error": job.error,
     }
     publish_display_data({JOB_MIME: summary, "text/plain": f"[{job.id}] {job.status}"})
-    if job.result is not None and not job.running():
+    # On success job.result is always a Result (the runner enforces it); display
+    # it so the server can unpack the model view and the dashboard the human one.
+    if job.status == "done" and job.result is not None:
         try:
             display(job.result)
         except Exception:
@@ -709,6 +981,8 @@ def install(user_ns: dict | None = None) -> None:
     target["jobs"] = jobs
     target["Job"] = Job
     target["Result"] = Result
+    target["cells"] = cells
+    target["Cells"] = Cells
     target["resources"] = resources
     target["Resource"] = Resource
     target["register_resource"] = register_resource

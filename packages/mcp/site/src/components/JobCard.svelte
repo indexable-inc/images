@@ -1,12 +1,14 @@
 <script lang="ts">
   import type { Job } from '$lib/types';
   import { now } from '$lib/now.svelte';
-  import { duration } from '$lib/format';
+  import { duration, jobTitle } from '$lib/format';
   import StatusChip from './StatusChip.svelte';
   import RichOutput from './RichOutput.svelte';
 
   let { job }: { job: Job } = $props();
 
+  // A readable label from the source (or a caller name), never the raw hash.
+  const title = $derived(jobTitle(job.name, job.id, job.code));
   // A running job's elapsed time tracks the shared clock; a finished one is fixed.
   const elapsed = $derived(duration((job.ended_at ?? now.value) - job.started_at));
   const hasRich = $derived(job.outputs.length > 0);
@@ -17,8 +19,7 @@
 <article class="job {job.status}">
   <header class="hdr">
     <StatusChip status={job.status} />
-    <span class="id">{job.id}</span>
-    <span class="name">{job.name}</span>
+    <span class="name" title={job.code}>{title}</span>
     <span class="dur">{elapsed}</span>
   </header>
 
@@ -60,18 +61,15 @@
   }
   .hdr {
     display: flex;
-    flex-wrap: wrap;
     gap: 9px;
-    align-items: center;
-  }
-  .id {
-    color: var(--muted);
-    font-size: 12px;
+    align-items: baseline;
   }
   .name {
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     color: var(--text);
-    font-size: 12px;
+    font-size: 12.5px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -110,9 +108,12 @@
     border: 1px solid var(--line);
     padding: 9px 11px;
   }
+  /* Output shows in full; the column scrolls, not each card, so you are not
+     trapped scrolling a 340px box inside a box. A runaway stream is still capped
+     generously so one job cannot push everything else off-screen. */
   pre {
     margin: 8px 0 0;
-    max-height: 340px;
+    max-height: 70vh;
     overflow: auto;
     white-space: pre-wrap;
     word-break: break-word;

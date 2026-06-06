@@ -11,11 +11,17 @@
   --faint: #45454b;
   --active: #f2f2f2;
   --err: #cf5a5a;
+  --accent: #6ea8fe;
   --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, 'Cascadia Code', monospace;
 }
 
 * {
   box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
 }
 
 html {
@@ -29,6 +35,26 @@ body {
   font: 13px/1.55 var(--mono);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* The three panes own all scrolling; the page itself never scrolls. */
+  overflow: hidden;
+}
+
+/* The app fills the viewport as a column: a fixed header over the panes row. */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* On a narrow screen the panes stack and the page scrolls instead. */
+@media (max-width: 1000px) {
+  body {
+    overflow: auto;
+  }
+  #app {
+    height: auto;
+    min-height: 100%;
+  }
 }
 
 ::selection {
@@ -56,7 +82,7 @@ body {
   margin: 8px 0 0;
   padding: 10px;
   overflow: auto;
-  max-height: 480px;
+  max-height: 80vh;
   background: var(--inset);
   border: 1px solid var(--line);
   color: var(--text);

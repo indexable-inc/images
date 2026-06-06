@@ -14,7 +14,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
+
+
+def _now() -> float:
+    return time.time()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS executions (
@@ -30,6 +35,14 @@ CREATE TABLE IF NOT EXISTS executions (
     outputs     TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS executions_started ON executions (started_at);
+
+CREATE TABLE IF NOT EXISTS cells (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL DEFAULT '',
+    position    INTEGER NOT NULL,
+    outputs     TEXT NOT NULL DEFAULT '[]',
+    updated_at  REAL NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS resources (
     id          TEXT PRIMARY KEY,
@@ -102,6 +115,52 @@ def recent(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
         "SELECT id, name, code, status, started_at, ended_at, output, result, error, outputs "
         "FROM executions ORDER BY (status = 'running') DESC, started_at DESC LIMIT ?",
         (limit,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["outputs"] = json.loads(d.get("outputs") or "[]")
+        out.append(d)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Cells: the agent's curated presentation pane.
+#
+# Unlike executions (append-only history) and resources (live, self-updating
+# views), cells are whatever the agent chooses to PRESENT: an ordered highlight
+# reel it rebuilds as the session evolves. The kernel mirrors the whole set on
+# change (it is small and order matters), so the store always holds the current
+# presentation and the dashboard just lists it.
+# --------------------------------------------------------------------------- #
+
+
+def replace_cells(conn: sqlite3.Connection, items: list[dict]) -> None:
+    """Replace the presentation with ``items`` (each ``{id, title, position,
+    outputs}``) in one transaction, so a reader never sees a half-written set."""
+    rows = [
+        (it["id"], it.get("title", ""), it["position"], json.dumps(it.get("outputs") or []), _now())
+        for it in items
+    ]
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("DELETE FROM cells")
+        if rows:
+            conn.executemany(
+                "INSERT INTO cells (id, title, position, outputs, updated_at) VALUES (?, ?, ?, ?, ?)",
+                rows,
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def cells(conn: sqlite3.Connection) -> list[dict]:
+    """The current presentation, in display order, as plain dicts."""
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, title, position, outputs, updated_at FROM cells ORDER BY position ASC"
     ).fetchall()
     out = []
     for r in rows:
