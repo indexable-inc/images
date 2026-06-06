@@ -1,0 +1,384 @@
+/* Design tokens tuned for macOS-native feel.
+ *
+ * Surfaces lean on NSVisualEffectView vibrancy applied at the window
+ * level (see src-tauri/src/lib.rs), so most backgrounds are either
+ * transparent (let vibrancy through) or opaque material panels.
+ * Type sizes follow Apple HIG: control text 13px, captions 11px,
+ * headings 14-17px.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Light tokens (default) */
+  --bg:                transparent;
+  /* Main content pane: solid material, NOT translucent. Sidebar stays
+     vibrant (transparent over NSVisualEffectView) — this is the
+     Mail/Finder/Messages two-tone pattern. */
+  --bg-pane:           #fafaf9;
+  --bg-elev:           #ffffff;
+  --bg-pill:           rgba(0, 0, 0, 0.05);
+  --bg-pill-hi:        rgba(0, 0, 0, 0.08);
+  --bg-hover:          rgba(0, 0, 0, 0.04);
+  --bg-active:         rgba(0, 0, 0, 0.07);
+  --bg-selected:       rgba(0, 0, 0, 0.08);
+  --border:            rgba(0, 0, 0, 0.08);
+  --border-hi:         rgba(0, 0, 0, 0.14);
+  --border-strong:     rgba(0, 0, 0, 0.20);
+
+  --text:              rgba(0, 0, 0, 0.85);
+  --text-strong:       rgba(0, 0, 0, 0.95);
+  --text-muted:        rgba(0, 0, 0, 0.55);
+  --text-dim:          rgba(0, 0, 0, 0.35);
+  --text-on-accent:    #ffffff;
+
+  /* No color accent — grayscale only. "Accent" is the strongest
+     text tone, used for primary buttons (inverted fill) and focus
+     rings (low-opacity overlay). */
+  --accent:            rgba(0, 0, 0, 0.90);
+  --accent-soft:       rgba(0, 0, 0, 0.10);
+  --accent-text:       #ffffff;
+
+  --success:           rgba(0, 0, 0, 0.70);
+  --warning:           rgba(0, 0, 0, 0.70);
+  --danger:            rgba(0, 0, 0, 0.70);
+  --info:              rgba(0, 0, 0, 0.70);
+
+  --avatar-1:          #af52de;
+  --avatar-2:          #ff9500;
+  --avatar-3:          #34c759;
+  --avatar-4:          #00c7be;
+  --avatar-5:          #ff2d55;
+  --avatar-6:          #ffcc00;
+  --avatar-7:          #5856d6;
+  --avatar-8:          #30b0c7;
+
+  --radius-xs:         4px;
+  --radius-sm:         6px;
+  --radius:            8px;
+  --radius-lg:         12px;
+  --radius-xl:         16px;
+
+  /* SF Pro on macOS, falls back to Inter/system. */
+  --font-sans:         -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro',
+                       system-ui, 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --font-display:      -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro',
+                       system-ui, 'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:         'Fira Code Variable', 'Fira Code', ui-monospace,
+                       'SF Mono', 'JetBrains Mono', SFMono-Regular,
+                       Menlo, Monaco, Consolas, monospace;
+
+  --shadow-popover:    0 0 0 0.5px rgba(0, 0, 0, 0.10),
+                       0 8px 24px rgba(0, 0, 0, 0.10),
+                       0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-inset:      inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+
+  --sidebar-w:         264px;
+  --header-h:          44px;
+  --traffic-inset:     28px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:              transparent;
+    --bg-pane:         #1c1c1e;
+    --bg-elev:         #232325;
+    --bg-pill:         rgba(255, 255, 255, 0.07);
+    --bg-pill-hi:      rgba(255, 255, 255, 0.10);
+    --bg-hover:        rgba(255, 255, 255, 0.06);
+    --bg-active:       rgba(255, 255, 255, 0.09);
+    --bg-selected:     rgba(255, 255, 255, 0.10);
+    --border:          rgba(255, 255, 255, 0.08);
+    --border-hi:       rgba(255, 255, 255, 0.14);
+    --border-strong:   rgba(255, 255, 255, 0.22);
+
+    --text:            rgba(255, 255, 255, 0.92);
+    --text-strong:     rgba(255, 255, 255, 1);
+    --text-muted:      rgba(255, 255, 255, 0.55);
+    --text-dim:        rgba(255, 255, 255, 0.32);
+
+    --accent:          rgba(255, 255, 255, 0.95);
+    --accent-soft:     rgba(255, 255, 255, 0.12);
+    --accent-text:     #0e0e10;
+
+    --success:         rgba(255, 255, 255, 0.70);
+    --warning:         rgba(255, 255, 255, 0.70);
+    --danger:          rgba(255, 255, 255, 0.70);
+    --info:            rgba(255, 255, 255, 0.70);
+
+    --avatar-1:        #bf5af2;
+    --avatar-2:        #ff9f0a;
+    --avatar-3:        #30d158;
+    --avatar-4:        #66d4cf;
+    --avatar-5:        #ff375f;
+    --avatar-6:        #ffd60a;
+    --avatar-7:        #5e5ce6;
+    --avatar-8:        #40c8e0;
+
+    --shadow-popover:  0 0 0 0.5px rgba(0, 0, 0, 0.55),
+                       0 12px 32px rgba(0, 0, 0, 0.45),
+                       0 2px 6px rgba(0, 0, 0, 0.30);
+    --shadow-inset:    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent;
+}
+
+body {
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+  letter-spacing: -0.003em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+#app {
+  min-height: 100%;
+  height: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--text-strong);
+}
+
+button {
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Native-feel overlay scrollbars. Thin, fade-in on hover. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.32);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+@media (prefers-color-scheme: dark) {
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.32);
+    background-clip: padding-box;
+  }
+}
+
+/* Inline code and code blocks used by the markdown renderer. Fira
+   Code's contextual ligatures (=>, ->, ==, ===, !=, <=, >=, ...) are
+   off by default in CSS — opt in explicitly. `discretionary-ligatures`
+   adds the more decorative subset (-->, www, etc.). */
+code,
+kbd,
+samp {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  font-variant-ligatures: contextual common-ligatures discretionary-ligatures;
+  font-feature-settings: 'calt' 1, 'liga' 1, 'dlig' 1, 'ss02' 1;
+}
+
+.md code:not(pre code) {
+  background: var(--bg-pill);
+  color: var(--text-strong);
+  padding: 1px 6px;
+  border-radius: 5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.md pre {
+  background: var(--bg-pill);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+.md pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  /* Slightly larger inside fenced blocks than inline so the ligatures
+     and per-token colors read clearly. */
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+/* Shiki dual-theme. With `defaultColor: false` Shiki emits both
+   --shiki-light and --shiki-dark on every span (and -bg for the pre
+   wrapper). The picker rules below choose which set of variables to
+   actually paint with based on the active color scheme. Same pattern
+   the iam + margins-ink sites use. */
+.md pre.shiki,
+.md code.shiki {
+  background: var(--shiki-light-bg) !important;
+}
+.md pre.shiki span,
+.md code.shiki span {
+  color: var(--shiki-light);
+}
+@media (prefers-color-scheme: dark) {
+  .md pre.shiki,
+  .md code.shiki {
+    background: var(--shiki-dark-bg) !important;
+  }
+  .md pre.shiki span,
+  .md code.shiki span {
+    color: var(--shiki-dark);
+  }
+}
+/* Explicit dark-class override wins over prefers-color-scheme so a
+   future in-app theme toggle can force one or the other. */
+.dark .md pre.shiki,
+.dark .md code.shiki {
+  background: var(--shiki-dark-bg) !important;
+}
+.dark .md pre.shiki span,
+.dark .md code.shiki span {
+  color: var(--shiki-dark);
+}
+
+.md pre.shiki code {
+  display: block;
+  background: transparent !important;
+}
+
+/* Inline use of Shiki tokens (no <pre>, no background). Used by
+   ToolWork's Bash row to render the command itself as syntax-
+   highlighted bash inline with the rest of the action line. The
+   tokens still carry --shiki-light / --shiki-dark via the dual-theme
+   setup, so the rules below mirror the .md pre.shiki picker. */
+.shiki-inline {
+  background: transparent;
+  font-family: var(--font-mono);
+  font-variant-ligatures: contextual common-ligatures discretionary-ligatures;
+  font-feature-settings: 'calt' 1, 'liga' 1, 'dlig' 1, 'ss02' 1;
+}
+.shiki-inline span {
+  color: var(--shiki-light);
+}
+@media (prefers-color-scheme: dark) {
+  .shiki-inline span {
+    color: var(--shiki-dark);
+  }
+}
+.dark .shiki-inline span {
+  color: var(--shiki-dark);
+}
+/* Shiki wraps each line in <span class="line">; keep tabular spacing
+   so indentation aligns even with ligatures collapsing widths. */
+.md pre.shiki .line {
+  font-variant-numeric: tabular-nums;
+}
+
+.md a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 2px;
+}
+.md a:hover {
+  text-decoration-color: var(--accent);
+}
+
+.md p {
+  margin: 8px 0;
+  line-height: 1.65;
+}
+.md ul,
+.md ol {
+  margin: 8px 0;
+  padding-left: 22px;
+  line-height: 1.65;
+}
+.md li {
+  margin: 3px 0;
+}
+.md li::marker {
+  color: var(--text-dim);
+}
+.md strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.md em {
+  color: var(--text);
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5 {
+  color: var(--text-strong);
+  margin: 18px 0 8px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.md h1 { font-size: 1.4em; }
+.md h2 { font-size: 1.2em; }
+.md h3 { font-size: 1.05em; }
+.md blockquote {
+  border-left: 2px solid var(--border-hi);
+  padding-left: 12px;
+  color: var(--text-muted);
+  margin: 10px 0;
+}
+.md hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+
+/* CSS Custom Highlight API targets used by ChatFind. The pseudo
+   paints over the existing text without DOM mutation, so markdown
+   structure (links, code, etc.) is preserved. */
+::highlight(chat-find) {
+  background-color: rgba(255, 213, 0, 0.35);
+  color: inherit;
+}
+::highlight(chat-find-active) {
+  background-color: rgba(255, 149, 0, 0.65);
+  color: inherit;
+}

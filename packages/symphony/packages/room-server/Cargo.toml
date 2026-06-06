@@ -1,0 +1,35 @@
+[package]
+name = "room-server"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "room_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "room-server"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+bytes = "1"
+clap = { workspace = true, features = ["derive", "env"] }
+futures.workspace = true
+hex = "0.4"
+loro = "1.12"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror = "2"
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tower-http = { workspace = true, features = ["cors", "fs", "trace"] }
+ulid.workspace = true
+wtransport = "0.7"

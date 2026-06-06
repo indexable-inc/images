@@ -1,0 +1,12 @@
+{
+  "threadId": "thread_abc",
+  "outcome": { "kind": "ok" },
+  "eventCount": 4,
+  "usage": {
+    "tokensIn": 1200,
+    "tokensOut": 340,
+    "cacheRead": 800,
+    "cacheCreation": 64,
+    "costUsd": 0.0123
+  }
+}
