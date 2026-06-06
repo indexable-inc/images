@@ -495,8 +495,7 @@ impl Authenticator {
     pub async fn mint_access_token(&self) -> Result<AccessToken> {
         let stored = self.store.load()?;
         self.check_scopes(&stored)?;
-        let (access, _stored_after) = self.refresh_from(stored).await?;
-        Ok(access)
+        self.refresh_from(stored).await
     }
 
     async fn fresh_cached(&self) -> Option<String> {
@@ -526,7 +525,7 @@ impl Authenticator {
         let stored = self.store.load()?;
         self.check_scopes(&stored)?;
 
-        let (access, _) = self.refresh_from(stored).await?;
+        let access = self.refresh_from(stored).await?;
         let lifetime = access
             .expires_in
             .map_or(DEFAULT_ACCESS_TOKEN_LIFETIME, Duration::from_secs);
@@ -538,10 +537,9 @@ impl Authenticator {
         Ok(access.token)
     }
 
-    /// Exchange `stored.refresh_token` for an access token. Returns the
-    /// minted [`AccessToken`] and the (possibly rotated) stored grant. The
-    /// rotation is persisted to the store as a side effect.
-    async fn refresh_from(&self, stored: StoredToken) -> Result<(AccessToken, StoredToken)> {
+    /// Exchange `stored.refresh_token` for an access token. A rotated
+    /// refresh token is persisted to the store as a side effect.
+    async fn refresh_from(&self, stored: StoredToken) -> Result<AccessToken> {
         let outcome = self
             .token
             .post(&[
@@ -556,30 +554,20 @@ impl Authenticator {
         };
 
         let scopes = stored.scopes;
-        let stored_after = if let Some(rotated) = response.refresh_token {
+        if let Some(rotated) = response.refresh_token {
             // Google occasionally rotates the refresh token on refresh; the
             // old one stops working, so persist the replacement immediately.
-            let updated = StoredToken {
+            self.store.save(&StoredToken {
                 refresh_token: rotated,
                 scopes: scopes.clone(),
-            };
-            self.store.save(&updated)?;
-            updated
-        } else {
-            StoredToken {
-                refresh_token: stored.refresh_token,
-                scopes: scopes.clone(),
-            }
-        };
+            })?;
+        }
 
-        Ok((
-            AccessToken {
-                token: response.access_token,
-                expires_in: response.expires_in,
-                scopes,
-            },
-            stored_after,
-        ))
+        Ok(AccessToken {
+            token: response.access_token,
+            expires_in: response.expires_in,
+            scopes,
+        })
     }
 
     fn check_scopes(&self, stored: &StoredToken) -> Result<()> {
