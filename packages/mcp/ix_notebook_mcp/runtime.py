@@ -410,6 +410,8 @@ def _job_outputs(job: "Job") -> list[dict]:
 
 _tui_mod = None
 _tui_probed = False
+_vmkit_mod = None
+_vmkit_probed = False
 
 
 def _tui_module():
@@ -465,6 +467,61 @@ def _discover_tui_resources() -> None:
         )
 
 
+def _vmkit_module():
+    """The ``vmkit`` module if importable, cached. None when unavailable.
+
+    vmkit is darwin-only in the interpreter, so on other platforms this provider
+    simply contributes nothing (same graceful-absence pattern as ``tui``).
+    """
+    global _vmkit_mod, _vmkit_probed
+    if not _vmkit_probed:
+        _vmkit_probed = True
+        try:
+            import vmkit as _m
+
+            _vmkit_mod = _m
+        except Exception:
+            _vmkit_mod = None
+    return _vmkit_mod
+
+
+def _vmkit_renderer(driver):
+    async def render() -> str:
+        # The capture is a blocking pipe round trip; keep it off the event loop.
+        return await asyncio.to_thread(driver.resource_html)
+
+    return render
+
+
+def _discover_vmkit_resources() -> None:
+    """Resource provider: surface every booted ``vmkit.Driver`` as a resource.
+
+    Decoupled from vmkit: poll the public ``Driver.list_all()`` and register any
+    guest not seen yet (keyed by its id). When a guest stops it drops out of
+    ``list_all`` and its ``is_alive`` flips false, so the sweep closes the
+    resource. The live HTML is the guest's framebuffer as an inline PNG.
+    """
+    vmkit = _vmkit_module()
+    if vmkit is None:
+        return
+    try:
+        live = vmkit.Driver.list_all()
+    except Exception:
+        return
+    for driver in live:
+        rid = f"vm:{driver.id}"
+        if rid in resources:
+            continue
+        register_resource(
+            driver,
+            id=rid,
+            kind="vm",
+            title=driver.title,
+            render=_vmkit_renderer(driver),
+            alive=lambda d=driver: d.is_alive,
+        )
+
+
 def _escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -474,6 +531,7 @@ async def _sweep_resources() -> None:
     if _store is None or _store_conn is None:
         return
     _discover_tui_resources()
+    _discover_vmkit_resources()
     now = time.time()
     for res in list(resources.values()):
         if not res.alive():

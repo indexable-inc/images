@@ -84,10 +84,16 @@ from __future__ import annotations
 
 import os
 import pathlib
+import select
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+import uuid
+import weakref
+import base64
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -625,6 +631,17 @@ class Driver:
     independent instances drive different guests in parallel.
     """
 
+    # Every booted driver registers here so the dashboard can discover live
+    # guests with no coupling (the runtime polls ``Driver.list_all()``, mirroring
+    # the ``Tui`` resource provider). WeakValueDictionary so a driver that is
+    # dropped without ``close()`` simply falls out.
+    _live: "weakref.WeakValueDictionary[str, Driver]" = weakref.WeakValueDictionary()
+
+    @classmethod
+    def list_all(cls) -> "list[Driver]":
+        """Every currently-booted driver, for resource discovery."""
+        return [d for d in cls._live.values() if d.is_alive]
+
     def __init__(
         self,
         bundle: str | os.PathLike | None = None,
@@ -661,6 +678,20 @@ class Driver:
         self._proc: subprocess.Popen[str] | None = None
         # Cached captured-framebuffer size in pixels (see `size()`).
         self._size: tuple[int, int] | None = None
+        # Stable id + a guard so the dashboard's background framebuffer grab can
+        # never interleave with a user command on this driver's single lockstep
+        # pipe (the protocol is one-command-one-ack; concurrent writers would
+        # desync the ack stream). Every pipe round trip goes through the lock.
+        self.id = uuid.uuid4().hex[:8]
+        self._lock = threading.Lock()
+        # Most recent framebuffer PNG, so the live resource can serve a frame
+        # without a fresh capture when the pipe is busy with a user command.
+        self._frame_png: bytes | None = None
+        self._frame_at: float = 0.0
+        # Acks left unread by a timed-out bounded read (the dashboard grab); the
+        # next pipe round trip drains them first so a command never reads a stale
+        # ack (keeps the single lockstep pipe in sync).
+        self._pending_acks = 0
 
     def __enter__(self) -> "Driver":
         bin_path = _binary()
@@ -692,6 +723,7 @@ class Driver:
             text=True,
             bufsize=1,
         )
+        type(self)._live[self.id] = self
         return self
 
     def __exit__(self, *_exc: object) -> None:
@@ -699,6 +731,7 @@ class Driver:
 
     def close(self) -> None:
         """Quit the guest and tear down the process. Idempotent."""
+        type(self)._live.pop(self.id, None)
         proc = self._proc
         self._proc = None
         if proc is None:
@@ -728,26 +761,72 @@ class Driver:
                     except OSError:
                         pass
 
+    @property
+    def is_alive(self) -> bool:
+        """True while the driver process is running (for resource liveness)."""
+        proc = self._proc
+        return proc is not None and proc.poll() is None
+
+    @property
+    def title(self) -> str:
+        """A short label for the dashboard sidebar."""
+        target = self._bundle or self._disk or "guest"
+        return f"vm \u00b7 {os.path.basename(str(target))}"
+
     def send(self, command: str) -> str:
         """Write one ``command`` line, flush, and return its one-line ack.
 
+        Serialized by ``self._lock`` so the dashboard's background framebuffer
+        grab never interleaves with a user command on the single lockstep pipe.
         Raises :class:`VmkitError` on an ``err ...`` ack, or if the driver
         process has died or closed its output.
+        """
+        with self._lock:
+            return self._send_locked(command)
+
+    def _send_locked(self, command: str, ack_timeout: float | None = None) -> str:
+        """The raw one-command/one-ack round trip; caller must hold ``_lock``.
+
+        ``ack_timeout`` bounds the wait for the ack (the dashboard grab passes
+        one so a wedged guest can never hold the lock forever and stall the
+        agent's own driving); ``None`` waits indefinitely, as a slow guest boot
+        needs. A timed-out ack is not lost: it is recorded and drained before the
+        next command's ack so the lockstep pipe never desyncs.
         """
         proc = self._proc
         if proc is None or proc.stdin is None or proc.stdout is None:
             raise VmkitError("driver is not running (use it as a context manager)")
         if proc.poll() is not None:
             raise VmkitError(f"driver process exited with code {proc.returncode}")
+        # Drain acks left pending by an earlier timed-out read so this command
+        # reads its OWN ack, never a stale one.
+        while self._pending_acks > 0:
+            stale = proc.stdout.readline()
+            if stale == "":
+                raise VmkitError("driver closed its output while draining a pending ack")
+            if stale.rstrip("\n"):
+                self._pending_acks -= 1
         line = command.rstrip("\n")
         try:
             proc.stdin.write(line + "\n")
             proc.stdin.flush()
         except (BrokenPipeError, OSError) as exc:
             raise VmkitError(f"driver process closed its input: {exc}") from exc
+        deadline = None if ack_timeout is None else time.monotonic() + ack_timeout
         # stderr is discarded, so the next stdout line is this command's ack;
         # skip a stray blank line all the same.
         while True:
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    # The ack is still coming; mark it so the next command drains
+                    # it instead of mistaking it for its own (no desync).
+                    self._pending_acks += 1
+                    raise VmkitError(
+                        f"timed out after {ack_timeout}s waiting for ack to {command!r}"
+                    )
+                if not select.select([proc.stdout], [], [], remaining)[0]:
+                    continue
             ack = proc.stdout.readline()
             if ack == "":
                 rc = proc.poll()
@@ -889,6 +968,51 @@ class Driver:
             # Load and detach before the temp dir is removed.
             with Image.open(out) as img:
                 return img.convert("RGB")
+
+
+    def _shot_png_locked(self) -> bytes:
+        """Capture the framebuffer to PNG bytes; caller must hold ``_lock``."""
+        with tempfile.TemporaryDirectory(prefix="ix-vmkit-frame-") as tmp:
+            out = pathlib.Path(tmp) / "frame.png"
+            # Bounded: the dashboard grab must never hold the lock indefinitely.
+            self._send_locked(f"shot {out}", ack_timeout=4.0)
+            png = out.read_bytes()
+        self._frame_png = png
+        self._frame_at = time.time()
+        return png
+
+    def resource_html(self, max_age: float = 1.0) -> str:
+        """Live dashboard view: the guest's framebuffer as an inline PNG.
+
+        Serves the cached frame when it is fresh, or when the pipe is busy with a
+        user command (a non-blocking lock so the dashboard never stalls or
+        interferes with the agent's own driving). Falls back to a placeholder
+        until the first frame exists.
+        """
+        now = time.time()
+        fresh = self._frame_png is not None and (now - self._frame_at) < max_age
+        if not fresh and self.is_alive and self._lock.acquire(blocking=False):
+            try:
+                self._shot_png_locked()
+            except (VmkitError, OSError):
+                pass  # bad/slow frame: keep serving the last good one
+            finally:
+                self._lock.release()
+        if self._frame_png is None:
+            return (
+                '<div style="color:#7aa2f7;font:13px monospace;padding:8px">'
+                "booting guest\u2026</div>"
+            )
+        b64 = base64.b64encode(self._frame_png).decode("ascii")
+        age = max(0.0, time.time() - self._frame_at)
+        return (
+            '<div style="background:#000;border-radius:6px;overflow:hidden">'
+            f'<img src="data:image/png;base64,{b64}" '
+            'style="display:block;width:100%;height:auto" alt="vm framebuffer"/>'
+            '</div>'
+            f'<div style="color:#565f89;font:11px monospace;padding:2px 4px">'
+            f'{self.title} \u00b7 {age:.1f}s ago</div>'
+        )
 
 
 def drive(
