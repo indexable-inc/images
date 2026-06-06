@@ -700,14 +700,14 @@ let
     run = ns["__ix_run"]
 
     async def main():
-        a = await run("import asyncio\nfor i in range(3):\n    print('A', i)\n    await asyncio.sleep(0.05)\n'A done'", budget=0.02, name="A")
-        b = await run("import asyncio\nfor i in range(3):\n    print('B', i)\n    await asyncio.sleep(0.05)\n'B done'", budget=0.02, name="B")
+        a = await run("import asyncio\nfor i in range(3):\n    print('A', i)\n    await asyncio.sleep(0.05)\nResult.text('A done')", budget=0.02, name="A")
+        b = await run("import asyncio\nfor i in range(3):\n    print('B', i)\n    await asyncio.sleep(0.05)\nResult.text('B done')", budget=0.02, name="B")
         assert a.running() and b.running(), (a.status, b.status)
         assert len(jobs) == 2, len(jobs)
         await asyncio.sleep(0.5)
         assert a.status == "done" and b.status == "done", (a.status, b.status)
         assert "A 0" in a.output and "B 0" in b.output, (a.output, b.output)
-        assert a.result == "A done" and b.result == "B done", (a.result, b.result)
+        assert a.result.llm_result == "A done" and b.result.llm_result == "B done", (a.result, b.result)
 
     asyncio.run(main())
     print("runtime-ok")
@@ -771,7 +771,7 @@ let
 
     async def main():
         # A DataFrame result is stored with its text/html bundle.
-        df_job = await run("pl.DataFrame({'a': [1, 2], 'b': ['x', 'y']})", budget=3.0, name="df")
+        df_job = await run("Result.of(pl.DataFrame({'a': [1, 2], 'b': ['x', 'y']}))", budget=3.0, name="df")
         await df_job.task
         conn = sqlite3.connect(store_path)
         conn.row_factory = sqlite3.Row
@@ -782,7 +782,7 @@ let
 
         # A display() call made while a job runs is captured too.
         disp_job = await run(
-            "from IPython.display import display\ndisplay(pl.DataFrame({'z': [9]}))",
+            "from IPython.display import display\ndisplay(pl.DataFrame({'z': [9]}))\nResult.ok('shown')",
             budget=3.0,
             name="disp",
         )
