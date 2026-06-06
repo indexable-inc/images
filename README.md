@@ -66,6 +66,7 @@ nix build .#minecraft   # realize one image closure
 ## Layout
 
 - [`packages/`](packages/) repo-owned tools (search, PTY driver, agent loops, MCP server, the `reel` demo recorder).
+- [`packages/symphony/`](packages/symphony/) the multiplayer Codex agent runtime tucked in from indexable-inc/symphony: an Elixir orchestrator, a Rust `room-server` (HTTP/3 + WebTransport SFU), and a Tauri desktop client. Self-contained nested Cargo workspace; the room-server is exposed through `pkgs.symphony-room-server` for [`images/dev/symphony-codex`](images/dev/symphony-codex/).
 - [`images/`](images/) runnable NixOS systems packaged as OCI archives.
 - [`modules/`](modules/) opt-in NixOS service modules, auto-discovered.
 - [`lib/`](lib/) shared helper and builder API.
