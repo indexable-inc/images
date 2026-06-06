@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "prebuilt-chain-consumer"
+version = "0.1.0"
+dependencies = [
+ "prebuilt-mid",
+]
+
+[[package]]
 name = "prebuilt-consumer"
 version = "0.1.0"
 dependencies = [
@@ -12,3 +19,10 @@ dependencies = [
 [[package]]
 name = "prebuilt-lib"
 version = "0.1.0"
+
+[[package]]
+name = "prebuilt-mid"
+version = "0.1.0"
+dependencies = [
+ "prebuilt-lib",
+]

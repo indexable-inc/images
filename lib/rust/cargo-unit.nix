@@ -10,7 +10,9 @@ let
     elem
     elemAt
     filter
+    genericClosure
     hasAttr
+    head
     length
     removeAttrs
     replaceStrings
@@ -102,8 +104,43 @@ let
         else
           targets;
 
-      extraUnits = rawArgs.extraUnits or { };
+      explicitExtraUnits = rawArgs.extraUnits or { };
       extraLibraries = rawArgs.extraLibraries or { };
+
+      # Every injected unit plus everything reachable from one through
+      # `passthru.depUnits` (recorded by `mkPrebuiltLibraryUnit`), deduplicated
+      # by derivation. Walking by drvPath rather than unitKey keeps two distinct
+      # derivations that claim the same unit key visible to the conflict guard
+      # below instead of silently dropping one of them.
+      injectedUnitClosure = map (item: item.unit) (genericClosure {
+        startSet = lib.mapAttrsToList (_: unit: {
+          key = unit.drvPath;
+          inherit unit;
+        }) explicitExtraUnits;
+        operator =
+          item:
+          map (dep: {
+            key = dep.drvPath;
+            unit = dep;
+          }) (item.unit.passthru.depUnits or [ ]);
+      });
+
+      # The closure grouped by recorded unit key. Injected units without a
+      # `passthru.unitKey` (arbitrary caller-owned derivations) record no key
+      # and never participate in auto-injection.
+      injectedUnitsByKey = lib.groupBy (unit: unit.passthru.unitKey) (
+        filter (unit: unit ? passthru.unitKey) injectedUnitClosure
+      );
+
+      # Transitive deps of the injected prebuilts, auto-injected under their own
+      # recorded unit keys so a caller injects only the root unit (ENG-2166).
+      # An explicit `extraUnits` entry wins the merge below, so a caller can
+      # deliberately pin one dep key to a different artifact.
+      autoInjectedDepUnits = lib.mapAttrs (_: head) (
+        lib.filterAttrs (key: _: !(hasAttr key explicitExtraUnits)) injectedUnitsByKey
+      );
+
+      extraUnits = autoInjectedDepUnits // explicitExtraUnits;
 
       # First IFD stage: emit Cargo's `--unit-graph` JSON for the vendored
       # workspace, one cargo invocation per `cargoTargets` entry merged into one
@@ -343,14 +380,51 @@ let
           the toolchain that produced it. Thread the workspace's rustToolchain into
           mkPrebuiltLibraryUnit.'';
 
+      # C3: when an explicitly injected unit records its own unit key, the
+      # caller's chosen attr key must agree with it. The artifact names inside
+      # the unit embed that key's hash, and auto-injection keys the unit's deps
+      # by `passthru.unitKey`, so a disagreement would inject one derivation
+      # under two keys.
+      injectionUnitKeyMismatchProblems =
+        let
+          mismatched = lib.filterAttrs (key: unit: (unit.passthru.unitKey or key) != key) explicitExtraUnits;
+          render = key: unit: "${key} (the unit's own passthru.unitKey is ${unit.passthru.unitKey})";
+        in
+        lib.optional (mismatched != { }) ''
+          extraUnits key(s) that disagree with the injected unit's recorded unitKey:
+            ${lib.concatStringsSep "\n  " (lib.mapAttrsToList render mismatched)}
+          A prebuilt unit must be injected under its `passthru.unitKey`; the rlib and
+          extern-path inside it are named for that key's hash.'';
+
+      # C4: two recorded prebuilts claiming one unit key with different
+      # derivations is ambiguous, and whichever the graph linked would be a
+      # silent choice. An explicit `extraUnits` entry for the key resolves the
+      # ambiguity (it wins the merge), so only unpinned keys are problems.
+      depUnitConflictProblems =
+        let
+          conflicts = lib.filterAttrs (
+            key: unitDrvs: length unitDrvs > 1 && !(hasAttr key explicitExtraUnits)
+          ) injectedUnitsByKey;
+          render =
+            key: unitDrvs: "${key}:\n    ${lib.concatMapStringsSep "\n    " (unit: unit.drvPath) unitDrvs}";
+        in
+        lib.optional (conflicts != { }) ''
+          conflicting prebuilt derivations recorded for the same dependency unit key:
+            ${lib.concatStringsSep "\n  " (lib.mapAttrsToList render conflicts)}
+          Two injected prebuilt units recorded different derivations for one transitive
+          dep (`passthru.depUnits`). Pin the key in extraUnits explicitly to choose one.'';
+
       # All prebuilt-injection guard problems, gathered so a single assert can
       # report every offending key at once (and so the assert keeps its
       # `lib.assertMsg` shape, per the no-bare-assert lint).
       injectionProblems =
-        injectionKeyProblems "extraUnits" extraUnits generatedUnitKeys
+        injectionKeyProblems "extraUnits" explicitExtraUnits generatedUnitKeys
+        ++ injectionKeyProblems "extraUnits (auto-injected depUnits)" autoInjectedDepUnits generatedUnitKeys
         ++ injectionKeyProblems "extraLibraries" extraLibraries generatedLibraryKeys
         ++ injectionToolchainProblems "extraUnits" extraUnits
-        ++ injectionToolchainProblems "extraLibraries" extraLibraries;
+        ++ injectionToolchainProblems "extraLibraries" extraLibraries
+        ++ injectionUnitKeyMismatchProblems
+        ++ depUnitConflictProblems;
 
       units =
         assert lib.assertMsg (injectionProblems == [ ]) (
@@ -628,13 +702,20 @@ let
       only for the toolchain-id assertion. A caller whose `buildWorkspace` uses a
       non-default toolchain MUST thread that same `rustToolchain` here, or the
       workspace-side cross-check in `buildWorkspace` will reject the injection.
-    - `depUnits`: optional list of this prebuilt's own transitive dependency unit
-      derivations, recorded to `$out/nix-support/dependency-units` for provenance.
-      Defaults to `[ ]` (a leaf library, the validated path). NOTE: this is
-      currently informational only and is NOT auto-injected into the consuming
-      graph; a prebuilt with transitive deps still requires those dep units to be
-      present in the consumer's graph (keyed by the same hash) and injected via
-      `extraUnits`. Tracked in ENG-2166.
+    - `depUnits`: this prebuilt's own dependency unit derivations, each built
+      with `mkPrebuiltLibraryUnit` (each entry must carry `passthru.unitKey`).
+      Direct deps that each record their own `depUnits`, or a flattened
+      transitive list, inject identically. Defaults to `[ ]` (a leaf library).
+      `buildWorkspace` walks `passthru.depUnits` transitively and auto-injects
+      every recorded unit into the consuming graph under its own
+      `passthru.unitKey`, so the caller injects only the root unit. Each
+      auto-injected key must name a unit the consumer's graph already
+      references (the C1 guard), which holds exactly when the consumer's
+      manifest pins the dependency closure the prebuilt was compiled against:
+      the unit hash folds in dependency hashes recursively, so a root key match
+      implies every dep key matches. An explicit `extraUnits` entry for a dep
+      key overrides the recorded derivation. The deps are also recorded to
+      `$out/nix-support/dependency-units` for provenance.
   */
   mkPrebuiltLibraryUnit =
     {
@@ -670,10 +751,21 @@ let
     assert lib.assertMsg (lib.hasSuffix ".rmeta" (toString rmeta)) ''
       cargoUnit.mkPrebuiltLibraryUnit: `rmeta` for `${name}` must be a .rmeta path; got ${toString rmeta}.
     '';
+    # Auto-injection keys each dep by its `passthru.unitKey`, so an entry
+    # without one could never be wired into a consuming graph. Reject it at
+    # construction, naming the offender, instead of at injection time.
+    assert lib.assertMsg (filter (dep: !(dep ? passthru.unitKey)) depUnits == [ ]) ''
+      cargoUnit.mkPrebuiltLibraryUnit: depUnits for `${name}` must be prebuilt unit
+      derivations carrying `passthru.unitKey` (build them with mkPrebuiltLibraryUnit); got:
+        ${lib.concatMapStringsSep "\n  " (dep: dep.name or "<non-derivation>") (
+          filter (dep: !(dep ? passthru.unitKey)) depUnits
+        )}
+    '';
     pkgs.runCommand "cargo-unit-prebuilt-${name}-${version}-${hash}"
       {
         # Surfaced for callers/tests that want to confirm the injected key
-        # without reconstructing the format string.
+        # without reconstructing the format string. `depUnits` is what
+        # `buildWorkspace` walks to auto-inject this unit's transitive deps.
         passthru = {
           unitKey = "${name}-${version}-${hash}";
           libraryName = libName;
@@ -682,6 +774,7 @@ let
             version
             hash
             toolchainId
+            depUnits
             ;
         };
       }

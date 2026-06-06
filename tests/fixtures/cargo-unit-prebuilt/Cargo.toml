@@ -2,5 +2,7 @@
 members = [
   "crates/prebuilt-lib",
   "crates/prebuilt-consumer",
+  "crates/prebuilt-mid",
+  "crates/prebuilt-chain-consumer",
 ]
 resolver = "3"

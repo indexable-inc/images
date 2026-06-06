@@ -1,0 +1,15 @@
+[package]
+name = "prebuilt-chain-consumer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "prebuilt-chain-consumer"
+path = "src/main.rs"
+
+# Depends only on prebuilt-mid: prebuilt-lib enters this binary's link line
+# purely as mid's transitive dep, which is the path depUnits auto-injection
+# exercises.
+[dependencies]
+prebuilt-mid = { path = "../prebuilt-mid" }

@@ -713,6 +713,11 @@ let
   # consumer prints 99. Using a distinguishable variant is what makes the proof
   # real: a same-source rlib is byte-identical, so a runtime check could not tell
   # prebuilt from source; 99-vs-42 can only come from the injected prebuilt.
+  # The fixture also has a chained pair (prebuilt-mid depends on prebuilt-lib,
+  # prebuilt-chain-consumer depends only on prebuilt-mid) proving that a
+  # prebuilt unit's recorded `depUnits` are auto-injected into the consuming
+  # graph: the chain consumer links and prints 100 (variant 99 + 1) with only
+  # the mid prebuilt passed to extraUnits.
   cargoUnitPrebuiltFixture = fs.toSource {
     root = ./fixtures/cargo-unit-prebuilt;
     fileset = fs.unions [
@@ -758,24 +763,29 @@ let
     }
   );
 
-  # The single `prebuilt_lib-0.1.0-<hash>` unit from the variant graph, found by
-  # key prefix (mirrors `cargoUnitScopeUnit`). Its attr name IS the unit key.
-  cargoUnitPrebuiltLibMatches = lib.filterAttrs (
-    name: _: lib.hasPrefix "prebuilt_lib-0.1.0-" name
-  ) cargoUnitPrebuiltVariant.units;
-  cargoUnitPrebuiltLibKey =
+  # Find the single unit whose key starts with `<target-name>-<version>-` in a
+  # workspace's unit set (mirrors `cargoUnitScopeUnit`; the attr name IS the
+  # unit key) and split out the trailing hash. The crate names here have no
+  # dashes and the version is a fixed literal, so stripping the prefix leaves
+  # the hash. Exactly one match is asserted so a manifest or profile drift
+  # fails here, not downstream.
+  cargoUnitPrebuiltUnitByPrefix =
+    workspace: prefix:
     let
-      names = builtins.attrNames cargoUnitPrebuiltLibMatches;
+      names = builtins.filter (lib.hasPrefix prefix) (builtins.attrNames workspace.units);
+      key = builtins.head names;
     in
     assert lib.assertMsg (
       builtins.length names == 1
-    ) "expected exactly one prebuilt_lib unit, found ${lib.concatStringsSep ", " names}";
-    builtins.head names;
-  # The hash component of "<name>-<version>-<hash>". The library crate name has
-  # no dashes, and the version is the fixed literal above, so stripping the known
-  # prefix leaves the hash.
-  cargoUnitPrebuiltLibHash = lib.removePrefix "prebuilt_lib-0.1.0-" cargoUnitPrebuiltLibKey;
-  cargoUnitPrebuiltVariantLibUnit = cargoUnitPrebuiltLibMatches.${cargoUnitPrebuiltLibKey};
+    ) "expected exactly one ${prefix}* unit, found ${lib.concatStringsSep ", " names}";
+    {
+      inherit key;
+      hash = lib.removePrefix prefix key;
+      unit = workspace.units.${key};
+    };
+
+  cargoUnitPrebuiltVariantLib = cargoUnitPrebuiltUnitByPrefix cargoUnitPrebuiltVariant "prebuilt_lib-0.1.0-";
+  cargoUnitPrebuiltVariantMid = cargoUnitPrebuiltUnitByPrefix cargoUnitPrebuiltVariant "prebuilt_mid-0.1.0-";
 
   # (b) Wrap the variant's rlib+rmeta as a prebuilt unit. The rlib/rmeta paths
   # are reconstructed from the known underscored name + hash, exactly as the
@@ -788,10 +798,24 @@ let
     # The package is `prebuilt-lib`; its lib target is `prebuilt_lib`.
     name = "prebuilt_lib";
     version = "0.1.0";
-    hash = cargoUnitPrebuiltLibHash;
-    rlib = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
-    rmeta = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
+    inherit (cargoUnitPrebuiltVariantLib) hash;
+    rlib = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib";
+    rmeta = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rmeta";
     toolchainId = ix.cargoUnit.defaultToolchainId;
+  };
+
+  # The variant mid prebuilt, recording its leaf dep so buildWorkspace can
+  # auto-inject it. The mid rlib embeds the VARIANT leaf's SVH, so linking it
+  # in a consumer graph only works when the leaf prebuilt rides along; that is
+  # the path the chain arm proves end to end (ENG-2166).
+  cargoUnitPrebuiltMidUnit = ix.cargoUnit.mkPrebuiltLibraryUnit {
+    name = "prebuilt_mid";
+    version = "0.1.0";
+    inherit (cargoUnitPrebuiltVariantMid) hash;
+    rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
+    rmeta = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rmeta";
+    toolchainId = ix.cargoUnit.defaultToolchainId;
+    depUnits = [ cargoUnitPrebuiltLibUnit ];
   };
 
   # Negative arm: a wrong toolchain id must fail at eval (not at link time).
@@ -801,10 +825,26 @@ let
       (ix.cargoUnit.mkPrebuiltLibraryUnit {
         name = "prebuilt_lib";
         version = "0.1.0";
-        hash = cargoUnitPrebuiltLibHash;
-        rlib = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib";
-        rmeta = "${cargoUnitPrebuiltVariantLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta";
+        inherit (cargoUnitPrebuiltVariantLib) hash;
+        rlib = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib";
+        rmeta = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rmeta";
         toolchainId = "definitely-not-the-toolchain";
+      }).drvPath
+      true
+  );
+
+  # Negative arm: depUnits entries that carry no `passthru.unitKey` could never
+  # be auto-injected; mkPrebuiltLibraryUnit must reject them at construction.
+  cargoUnitPrebuiltBadDepEval = builtins.tryEval (
+    builtins.seq
+      (ix.cargoUnit.mkPrebuiltLibraryUnit {
+        name = "prebuilt_mid";
+        version = "0.1.0";
+        inherit (cargoUnitPrebuiltVariantMid) hash;
+        rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
+        rmeta = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rmeta";
+        toolchainId = ix.cargoUnit.defaultToolchainId;
+        depUnits = [ (pkgs.runCommand "not-a-prebuilt-unit" { } ''mkdir "$out"'') ];
       }).drvPath
       true
   );
@@ -820,7 +860,7 @@ let
       pname = "cargo-unit-prebuilt-injected";
       src = cargoUnitPrebuiltFixture;
       extraUnits = {
-        ${cargoUnitPrebuiltLibKey} = cargoUnitPrebuiltLibUnit;
+        ${cargoUnitPrebuiltVariantLib.key} = cargoUnitPrebuiltLibUnit;
       };
       extraLibraries = {
         prebuilt_lib = cargoUnitPrebuiltLibUnit;
@@ -829,6 +869,22 @@ let
   );
 
   cargoUnitPrebuiltConsumer = cargoUnitPrebuiltInjected.binaries.prebuilt-consumer;
+
+  # (d) ENG-2166: inject ONLY the mid prebuilt; its recorded leaf dep must be
+  # auto-injected for the chain consumer to link at all. The mid rlib references
+  # the VARIANT leaf's SVH, which no from-source leaf build can satisfy, so a
+  # successful link plus the 100 output proves the dep auto-injection worked.
+  cargoUnitPrebuiltChainInjected = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-chain";
+      src = cargoUnitPrebuiltFixture;
+      extraUnits = {
+        ${cargoUnitPrebuiltVariantMid.key} = cargoUnitPrebuiltMidUnit;
+      };
+    }
+  );
+  cargoUnitPrebuiltChainConsumer = cargoUnitPrebuiltChainInjected.binaries.prebuilt-chain-consumer;
 
   # The consumer workspace's OWN from-source lib unit key (no injection). Used to
   # prove the variant (different source) hashes to the same key, which is the
@@ -840,10 +896,83 @@ let
       src = cargoUnitPrebuiltFixture;
     }
   );
-  cargoUnitPrebuiltPlainLibKey = builtins.head (
-    builtins.filter (lib.hasPrefix "prebuilt_lib-0.1.0-") (
-      builtins.attrNames cargoUnitPrebuiltPlain.units
-    )
+  cargoUnitPrebuiltPlainLib = cargoUnitPrebuiltUnitByPrefix cargoUnitPrebuiltPlain "prebuilt_lib-0.1.0-";
+  cargoUnitPrebuiltPlainMid = cargoUnitPrebuiltUnitByPrefix cargoUnitPrebuiltPlain "prebuilt_mid-0.1.0-";
+
+  # A SECOND prebuilt for the same leaf unit key, wrapped from the PLAIN
+  # workspace's artifacts (answer = 42): same unit key, different derivation.
+  # Used by the explicit-override arm and the dep-conflict negative arm below.
+  cargoUnitPrebuiltLibUnitFromPlain = ix.cargoUnit.mkPrebuiltLibraryUnit {
+    name = "prebuilt_lib";
+    version = "0.1.0";
+    inherit (cargoUnitPrebuiltPlainLib) hash;
+    rlib = "${cargoUnitPrebuiltPlainLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltPlainLib.hash}.rlib";
+    rmeta = "${cargoUnitPrebuiltPlainLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltPlainLib.hash}.rmeta";
+    toolchainId = ix.cargoUnit.defaultToolchainId;
+  };
+
+  # Explicit override of an auto-injected dep: the caller pins the leaf key to
+  # a different derivation than the one the mid prebuilt recorded. Eval-only:
+  # the assertion below checks the graph routes the key to the explicit pin.
+  # Actually LINKING this combination would fail (the mid rlib references the
+  # variant leaf's SVH, not the plain one's), which is exactly why replacing a
+  # recorded dep must be an explicit caller choice and never a silent merge.
+  cargoUnitPrebuiltChainOverride = ix.cargoUnit.buildWorkspace (
+    cargoUnitPrebuiltCommon
+    // {
+      pname = "cargo-unit-prebuilt-chain-override";
+      src = cargoUnitPrebuiltFixture;
+      extraUnits = {
+        ${cargoUnitPrebuiltVariantMid.key} = cargoUnitPrebuiltMidUnit;
+        ${cargoUnitPrebuiltVariantLib.key} = cargoUnitPrebuiltLibUnitFromPlain;
+      };
+    }
+  );
+
+  # C4 negative arm: one root recording two different derivations for the same
+  # dep unit key, with no explicit pin to break the tie, must fail at eval.
+  cargoUnitPrebuiltDepConflictEval = builtins.tryEval (
+    builtins.seq (builtins.attrNames
+      (ix.cargoUnit.buildWorkspace (
+        cargoUnitPrebuiltCommon
+        // {
+          pname = "cargo-unit-prebuilt-dep-conflict";
+          src = cargoUnitPrebuiltFixture;
+          extraUnits = {
+            ${cargoUnitPrebuiltVariantMid.key} = ix.cargoUnit.mkPrebuiltLibraryUnit {
+              name = "prebuilt_mid";
+              version = "0.1.0";
+              inherit (cargoUnitPrebuiltVariantMid) hash;
+              rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
+              rmeta = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rmeta";
+              toolchainId = ix.cargoUnit.defaultToolchainId;
+              depUnits = [
+                cargoUnitPrebuiltLibUnit
+                cargoUnitPrebuiltLibUnitFromPlain
+              ];
+            };
+          };
+        }
+      )).units
+    ) true
+  );
+
+  # C3 negative arm: injecting a prebuilt under a key that disagrees with its
+  # own recorded unitKey must fail at eval. The mid's generated key exists in
+  # the graph and the toolchain matches, so only the key-mismatch guard fires.
+  cargoUnitPrebuiltKeyMismatchEval = builtins.tryEval (
+    builtins.seq (builtins.attrNames
+      (ix.cargoUnit.buildWorkspace (
+        cargoUnitPrebuiltCommon
+        // {
+          pname = "cargo-unit-prebuilt-key-mismatch";
+          src = cargoUnitPrebuiltFixture;
+          extraUnits = {
+            ${cargoUnitPrebuiltVariantMid.key} = cargoUnitPrebuiltLibUnit;
+          };
+        }
+      )).units
+    ) true
   );
 
   # M1 / C1 negative arm: a mis-keyed injection (a key absent from the generated
@@ -4257,26 +4386,35 @@ let
   # Proves mkPrebuiltLibraryUnit + extraUnits/extraLibraries: a leaf library is
   # built from source, its rlib+rmeta and source-independent hash are captured,
   # and those artifacts are re-injected as a prebuilt unit that a downstream
-  # consumer links with no library source in its own graph.
+  # consumer links with no library source in its own graph. The chain arm
+  # proves the same for a prebuilt WITH a dep: only the mid prebuilt is passed
+  # to extraUnits, and its recorded depUnits are auto-injected (ENG-2166).
   cargoUnitPrebuiltAssertions = [
     {
       # Source-independence: the variant lib (answer = 99) hashes to the SAME
       # unit key as the consumer's own from-source lib (answer = 42). This is the
       # property that lets a metadata-faithful prebuilt stand in for source.
-      assertion = cargoUnitPrebuiltLibKey == cargoUnitPrebuiltPlainLibKey;
+      assertion = cargoUnitPrebuiltVariantLib.key == cargoUnitPrebuiltPlainLib.key;
       message = "a metadata-identical variant should produce the same unit key as the from-source lib";
+    }
+    {
+      # Recursive source-independence: the mid unit's hash folds in the leaf
+      # dep's hash, so it must also key identically across the variant and
+      # from-source graphs. This is what makes auto-injected dep keys resolve.
+      assertion = cargoUnitPrebuiltVariantMid.key == cargoUnitPrebuiltPlainMid.key;
+      message = "a metadata-identical variant should produce the same unit key for a lib with a dep";
     }
     {
       # The injected prebuilt unit is a genuinely different derivation from the
       # variant's from-source compile unit.
-      assertion = cargoUnitPrebuiltLibUnit.drvPath != cargoUnitPrebuiltVariantLibUnit.drvPath;
+      assertion = cargoUnitPrebuiltLibUnit.drvPath != cargoUnitPrebuiltVariantLib.unit.drvPath;
       message = "mkPrebuiltLibraryUnit should produce a distinct prebuilt derivation, not the from-source unit";
     }
     {
       # `extraUnits` merges over the generated `units` set under the unit key, so
       # the downstream consumer's `units.<key>` reference resolves to it.
       assertion =
-        cargoUnitPrebuiltInjected.units.${cargoUnitPrebuiltLibKey}.drvPath
+        cargoUnitPrebuiltInjected.units.${cargoUnitPrebuiltVariantLib.key}.drvPath
         == cargoUnitPrebuiltLibUnit.drvPath;
       message = "extraUnits should override the generated units entry with the injected prebuilt unit";
     }
@@ -4287,8 +4425,29 @@ let
       message = "extraLibraries should override the libraries entry with the injected prebuilt unit";
     }
     {
-      assertion = cargoUnitPrebuiltLibUnit.passthru.unitKey == cargoUnitPrebuiltLibKey;
+      assertion = cargoUnitPrebuiltLibUnit.passthru.unitKey == cargoUnitPrebuiltVariantLib.key;
       message = "mkPrebuiltLibraryUnit should expose the unit key it was injected under";
+    }
+    {
+      assertion =
+        cargoUnitPrebuiltChainInjected.units.${cargoUnitPrebuiltVariantMid.key}.drvPath
+        == cargoUnitPrebuiltMidUnit.drvPath;
+      message = "extraUnits should override the generated mid unit with the injected prebuilt";
+    }
+    {
+      # ENG-2166: the leaf key was never passed to extraUnits; it must arrive
+      # through the mid prebuilt's recorded depUnits.
+      assertion =
+        cargoUnitPrebuiltChainInjected.units.${cargoUnitPrebuiltVariantLib.key}.drvPath
+        == cargoUnitPrebuiltLibUnit.drvPath;
+      message = "buildWorkspace should auto-inject a prebuilt unit's recorded depUnits";
+    }
+    {
+      # An explicit extraUnits entry for a dep key beats the recorded dep.
+      assertion =
+        cargoUnitPrebuiltChainOverride.units.${cargoUnitPrebuiltVariantLib.key}.drvPath
+        == cargoUnitPrebuiltLibUnitFromPlain.drvPath;
+      message = "an explicit extraUnits entry should override an auto-injected dep unit";
     }
     {
       # A toolchain id mismatch must be caught at eval, not at link time.
@@ -4301,15 +4460,32 @@ let
       assertion = !cargoUnitPrebuiltMiskeyEval.success;
       message = "buildWorkspace should reject an extraUnits key absent from the generated graph";
     }
+    {
+      assertion = !cargoUnitPrebuiltBadDepEval.success;
+      message = "mkPrebuiltLibraryUnit should reject depUnits entries without passthru.unitKey";
+    }
+    {
+      # C4: two recorded prebuilts for one dep key with no explicit pin.
+      assertion = !cargoUnitPrebuiltDepConflictEval.success;
+      message = "buildWorkspace should reject conflicting recorded derivations for one dep unit key";
+    }
+    {
+      # C3: the injection key must agree with the unit's own recorded unitKey.
+      assertion = !cargoUnitPrebuiltKeyMismatchEval.success;
+      message = "buildWorkspace should reject an extraUnits key that disagrees with the unit's recorded unitKey";
+    }
   ];
 
   cargoUnitPrebuiltScript = ''
     # The injected unit's $out matches the unit contract: extern-path holds the
     # absolute path to the rlib (render.rs:1386-1398).
-    test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rlib
-    test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltLibHash}.rmeta
+    test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib
+    test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rmeta
     test -f ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
     grep -q '\.rlib$' ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
+
+    # Provenance: the mid prebuilt records its leaf dep's store path.
+    grep -qx '${cargoUnitPrebuiltLibUnit}' ${cargoUnitPrebuiltMidUnit}/nix-support/dependency-units
 
     # M1 (definitive source-less proof): the consumer's OWN source returns 42,
     # but it links the injected prebuilt rlib built from the variant (99). The
@@ -4321,6 +4497,19 @@ let
     grep -q 'prebuilt-lib:99 (answer=99)' cargo-unit-prebuilt.out
     if grep -q 'answer=42' cargo-unit-prebuilt.out; then
       echo "error: consumer used its own from-source lib (42), not the injected prebuilt (99)" >&2
+      exit 1
+    fi
+
+    # ENG-2166 chained proof: the chain consumer's own sources answer 43
+    # (42 + 1); the injected variant mid answers 100 (99 + 1) and its rlib
+    # references the variant leaf's SVH, which only the auto-injected leaf
+    # prebuilt satisfies. Linking at all, and printing 100, therefore proves
+    # the recorded depUnits were injected without being passed to extraUnits.
+    ${cargoUnitPrebuiltChainConsumer}/bin/prebuilt-chain-consumer > cargo-unit-prebuilt-chain.out
+    cat cargo-unit-prebuilt-chain.out
+    grep -q 'prebuilt-mid:100 (answer=100)' cargo-unit-prebuilt-chain.out
+    if grep -q 'answer=43' cargo-unit-prebuilt-chain.out; then
+      echo "error: chain consumer used from-source libs (43), not the injected prebuilts (100)" >&2
       exit 1
     fi
   '';
