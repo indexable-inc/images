@@ -66,11 +66,16 @@ defmodule SymphonyElixirWeb.LinearWebhookController do
           |> Plug.Conn.get_req_header("linear-signature")
           |> List.first()
 
+        expected = expected_signature(conn.assigns.raw_body)
+
         cond do
           is_nil(provided) ->
             {:error, :unauthorized, "missing Linear-Signature header"}
 
-          not Plug.Crypto.secure_compare(provided, expected_signature(conn.assigns.raw_body)) ->
+          byte_size(provided) != byte_size(expected) ->
+            {:error, :unauthorized, "signature mismatch"}
+
+          not Plug.Crypto.secure_compare(provided, expected) ->
             {:error, :unauthorized, "signature mismatch"}
 
           true ->
