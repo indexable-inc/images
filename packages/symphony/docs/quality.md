@@ -11,8 +11,7 @@ make quality
 
 That target runs `mix quality` (format check, Credo strict, Sobelow, deps
 audit, Dialyzer) followed by `mix coveralls`. None of these are part of `make
-all`, the required CI check; the gate lives in its own `quality` target and its
-own `.github/workflows/quality.yml` workflow.
+all`; the gate lives in its own `quality` target.
 
 ## Tools
 
@@ -31,19 +30,14 @@ own `.github/workflows/quality.yml` workflow.
   `mix.lock`.
 - `mix coveralls`: test-suite line coverage total (`excoveralls`).
 
-## CI workflow
+## CI
 
-`.github/workflows/quality.yml` runs on `pull_request` and `push` to `main`.
-It has two jobs:
-
-- `elixir-quality`: mirrors `make-all.yml`'s mise setup and dependency cache,
-  adds a PLT cache, and runs `make quality`.
-- `rust-quality`: runs `cargo fmt --check` and `cargo clippy --all-targets` for
-  `packages/room-server`. Clippy runs without `-D warnings` and with
-  `continue-on-error: true` because the crate has known pre-existing findings.
-
-This workflow is not in branch protection, so a red quality run will not block
-a merge.
+The standalone symphony repo ran `make all` and `make quality` through its own
+GitHub workflows. Those did not survive the move into the index monorepo:
+GitHub only reads workflows from the repository root, so the nested copies were
+deleted rather than left inert. Index CI builds `room-server` through Nix
+(`pkgs.symphony-room-server`) but does not run the Elixir suite or the quality
+gate; run both locally until an index CI lane picks them up.
 
 ## Phased rollout
 
@@ -52,10 +46,9 @@ being brought into compliance.
 
 ### Phase A (this PR, WS-8): tooling plus non-blocking reporting
 
-Install the tools, add the `quality` Make target and alias, add the separate
-`quality.yml` workflow, and surface a violations summary. Nothing here makes the
-required `make all` check stricter. The point is to see the violations, not to
-enforce them yet.
+Install the tools, add the `quality` Make target and alias, and surface a
+violations summary. Nothing here makes `make all` stricter. The point is to see
+the violations, not to enforce them yet.
 
 ### Phase B (WS-9, after the overhaul cutover): enforce
 
@@ -69,7 +62,7 @@ final, so we do not spend effort on modules the cutover deletes. Steps:
    door to the room-server; `bridge`/`state`/`http` never name a concrete
    engine.
 3. Fix the `credo --strict` and Dialyzer violations.
-4. Flip the quality job to a required check in branch protection.
+4. Wire `make quality` into index CI as a required check.
 
 Boundary is deferred until post-cutover on purpose. The module topology is
 still changing in the overhaul, so annotating modules now would encode layer
