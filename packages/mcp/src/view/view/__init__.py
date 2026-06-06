@@ -51,16 +51,18 @@ __all__ = [
 # (no gradients/animation): the "sexy" comes from typography, spacing, and a
 # small dtype-aware color set, not motion.
 _PAL = {
-    "panel": "#1f2335",
-    "alt": "#1c2030",
-    "border": "#2a2e42",
-    "head": "#7aa2f7",
-    "text": "#c0caf5",
-    "muted": "#565f89",
-    "num": "#ff9e64",
-    "str": "#9ece6a",
-    "bool": "#bb9af7",
-    "null": "#414868",
+    # Grayscale to match the dashboard: dtypes are distinguished by lightness,
+    # not hue (numbers brightest, then strings, then bools, then null).
+    "panel": "#141416",
+    "alt": "#17171a",
+    "border": "#242427",
+    "head": "#2e2e33",
+    "text": "#e6e6e6",
+    "muted": "#6a6a70",
+    "num": "#e6e6e6",
+    "str": "#bcbcc2",
+    "bool": "#9a9aa0",
+    "null": "#55555b",
 }
 _MONO = "ui-monospace,SFMono-Regular,Menlo,monospace"
 
