@@ -311,8 +311,44 @@ jobs:
             git --no-pager diff --stat=200 "${BASE_SHA}...${HEAD_SHA}"
             echo
             echo "Unified diff:"
-            git --no-pager diff --unified=5 "${BASE_SHA}...${HEAD_SHA}"
           } > ai-review-prompt.md
+          git --no-pager diff --unified=5 "${BASE_SHA}...${HEAD_SHA}" > ai-review-full.diff
+          python3 - <<'PY'
+          # codex-action rejects turn input over 1,048,576 characters
+          # (input_too_large), so a subtree-sized PR cannot paste its whole
+          # diff. Append whole per-file diffs in order until the prompt budget
+          # runs out, then say how many were left out; every changed file is
+          # already named above and the prompt instructs the reviewer to read
+          # the checked-out head rather than rely only on the paste.
+          BUDGET = 900_000  # headroom under the cap for schema and turn overhead
+
+          with open("ai-review-full.diff", encoding="utf-8", errors="replace") as diff_file:
+              diff = diff_file.read()
+          with open("ai-review-prompt.md", encoding="utf-8", errors="replace") as prompt_file:
+              remaining = BUDGET - len(prompt_file.read())
+
+          with open("ai-review-prompt.md", "a", encoding="utf-8") as prompt:
+              if len(diff) <= remaining:
+                  prompt.write(diff)
+                  raise SystemExit(0)
+
+              boundary = "\ndiff --git "
+              parts = diff.split(boundary)
+              chunks = parts[:1] + [boundary + part for part in parts[1:]]
+              omitted = 0
+              for chunk in chunks:
+                  if omitted == 0 and len(chunk) <= remaining:
+                      prompt.write(chunk)
+                      remaining -= len(chunk)
+                  else:
+                      omitted += 1
+              prompt.write(
+                  "\n\n[Prompt budget reached: inline diffs omitted for "
+                  f"{omitted} of {len(chunks)} changed file(s). The omitted "
+                  "files appear in the Changed files list above; review them "
+                  "from the checked-out head.]\n"
+              )
+          PY
 
       - name: Remove stale AI review output
         run: rm -f ai-review-output.json
