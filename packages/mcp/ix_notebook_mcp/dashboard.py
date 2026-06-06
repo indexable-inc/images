@@ -28,7 +28,13 @@ _PAGE = """<!doctype html>
  .running .st{background:#9ece6a;color:#1a1b26}.done .st{background:#2a2e42}
  .error .st{background:#f7768e;color:#1a1b26}.cancelled .st{background:#565f89;color:#1a1b26}
  pre{white-space:pre-wrap;word-break:break-word;margin:6px 0 0;color:#a9b1d6;max-height:320px;overflow:auto}
- .code{color:#565f89;max-height:80px}.res{color:#9ece6a}
+ details.code{margin:6px 0 0}
+ details.code>summary{cursor:pointer;color:#565f89;font-size:11px;list-style:none;user-select:none;display:inline-block}
+ details.code>summary::-webkit-details-marker{display:none}
+ details.code>summary::before{content:"▸ code"}
+ details.code[open]>summary::before{content:"▾ code"}
+ details.code>pre{color:#565f89;max-height:320px}
+ .res{color:#9ece6a}
  .empty{color:#565f89}
  .rich{background:#fff;color:#111;padding:8px;border-radius:4px;margin:6px 0 0;overflow:auto;max-height:460px}
  .rich table{border-collapse:collapse;font:12px/1.4 ui-monospace,Menlo,monospace}
@@ -66,7 +72,7 @@ async function tick(){
      <div class="hdr"><span class="st">${j.status}</span>
      <span class="id">${j.id}</span><span class="name">${esc(j.name)}</span>
      <span class="dur">${dur}s</span></div>
-     <pre class="code">${esc(j.code)}</pre>
+     <details class="code"><summary></summary><pre>${esc(j.code)}</pre></details>
      ${j.output?`<pre>${esc(j.output)}</pre>`:''}
      ${richOut}
      ${j.error&&!j.output.includes(j.error)?`<pre class="error">${esc(j.error)}</pre>`:''}
