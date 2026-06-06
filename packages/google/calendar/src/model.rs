@@ -6,7 +6,7 @@
 //! surfaces actually use are modeled; unknown upstream fields are ignored on
 //! read and never invented on write.
 
-use chrono::{DateTime, FixedOffset, NaiveDate};
+use chrono::{DateTime, Days, FixedOffset, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 /// When an event starts or ends. Mirrors the `start`/`end` halves of the
@@ -30,6 +30,18 @@ pub enum EventTime {
         #[serde(rename = "timeZone", default, skip_serializing_if = "Option::is_none")]
         time_zone: Option<String>,
     },
+}
+
+impl EventTime {
+    /// The wire `end` for an all-day event whose last day is `last`,
+    /// spoken the human way: "June 10 to June 12" includes the 12th.
+    /// Google's all-day `end.date` is exclusive, so this is the day after
+    /// `last`. `None` only when `last` is the last representable date.
+    #[must_use]
+    pub fn all_day_end_from_inclusive(last: NaiveDate) -> Option<Self> {
+        let date = last.checked_add_days(Days::new(1))?;
+        Some(Self::AllDay { date })
+    }
 }
 
 /// One attendee on an event.
@@ -152,6 +164,38 @@ impl SendUpdates {
     }
 }
 
+/// A `notify` keyword that is not one of the documented values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidSendUpdates(String);
+
+impl std::fmt::Display for InvalidSendUpdates {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown notify value {:?}; expected all, external-only, or none",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for InvalidSendUpdates {}
+
+impl std::str::FromStr for SendUpdates {
+    type Err = InvalidSendUpdates;
+
+    /// Accepts the documented keywords plus the wire spelling
+    /// `externalOnly`. Anything else is an error: a typo here decides who
+    /// gets emailed, so guessing a default is not safe.
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        match input {
+            "all" => Ok(Self::All),
+            "external-only" | "externalOnly" => Ok(Self::ExternalOnly),
+            "none" => Ok(Self::None),
+            other => Err(InvalidSendUpdates(other.to_owned())),
+        }
+    }
+}
+
 /// Selection for [`crate::Client::list_events`]. `None` bounds leave that side
 /// of the window open.
 #[derive(Debug, Clone)]
@@ -169,7 +213,9 @@ pub struct EventQuery {
 
 #[cfg(test)]
 mod tests {
-    use super::{Event, EventTime};
+    use chrono::NaiveDate;
+
+    use super::{Event, EventTime, SendUpdates};
 
     #[test]
     fn timed_boundary_round_trips() {
@@ -203,5 +249,36 @@ mod tests {
             .expect("cancelled stub parses");
         assert_eq!(event.status.as_deref(), Some("cancelled"));
         assert!(event.start.is_none());
+    }
+
+    #[test]
+    fn all_day_end_converts_the_inclusive_last_day_to_the_exclusive_wire_date() {
+        let last: NaiveDate = "2026-06-12".parse().expect("date");
+        let end = EventTime::all_day_end_from_inclusive(last).expect("in range");
+        assert_eq!(
+            end,
+            EventTime::AllDay {
+                date: "2026-06-13".parse().expect("date"),
+            }
+        );
+    }
+
+    #[test]
+    fn all_day_end_refuses_the_calendar_edge() {
+        assert_eq!(EventTime::all_day_end_from_inclusive(NaiveDate::MAX), None);
+    }
+
+    #[test]
+    fn send_updates_parses_the_documented_keywords() {
+        assert_eq!("all".parse(), Ok(SendUpdates::All));
+        assert_eq!("external-only".parse(), Ok(SendUpdates::ExternalOnly));
+        assert_eq!("externalOnly".parse(), Ok(SendUpdates::ExternalOnly));
+        assert_eq!("none".parse(), Ok(SendUpdates::None));
+    }
+
+    #[test]
+    fn send_updates_rejects_unknown_keywords_naming_the_choices() {
+        let err = "non".parse::<SendUpdates>().expect_err("rejects");
+        assert!(err.to_string().contains("external-only"), "got: {err}");
     }
 }

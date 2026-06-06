@@ -49,21 +49,24 @@ fn pythonize_owned<T: serde::Serialize>(value: &T) -> PyResult<Py<PyAny>> {
     })
 }
 
-fn parse_message_format(name: Option<&str>) -> MessageFormat {
-    match name {
-        Some("minimal") => MessageFormat::Minimal,
-        Some("metadata") => MessageFormat::Metadata,
-        Some("raw") => MessageFormat::Raw,
-        _ => MessageFormat::Full,
-    }
+/// `format` defaults to `Full` only when absent; an unrecognized value is
+/// an error rather than silently fetching full bodies.
+fn parse_message_format(name: Option<&str>) -> PyResult<MessageFormat> {
+    name.map_or(Ok(MessageFormat::Full), |value| {
+        value
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("format: {err}")))
+    })
 }
 
-fn parse_send_updates(name: Option<&str>) -> SendUpdates {
-    match name {
-        Some("none") => SendUpdates::None,
-        Some("external-only" | "externalOnly") => SendUpdates::ExternalOnly,
-        _ => SendUpdates::All,
-    }
+/// `notify` defaults to `All` only when absent; an unrecognized value is
+/// an error, because it decides who Google emails.
+fn parse_send_updates(name: Option<&str>) -> PyResult<SendUpdates> {
+    name.map_or(Ok(SendUpdates::All), |value| {
+        value
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("notify: {err}")))
+    })
 }
 
 fn parse_event_time(input: &str, all_day: bool, field: &'static str) -> PyResult<EventTime> {
@@ -79,6 +82,16 @@ fn parse_event_time(input: &str, all_day: bool, field: &'static str) -> PyResult
             date_time,
             time_zone: None,
         })
+    }
+}
+
+/// Parse the `end` of an event. All-day input is the inclusive last day;
+/// Google's all-day `end.date` is exclusive, so convert at this boundary.
+fn parse_event_end(input: &str, all_day: bool) -> PyResult<EventTime> {
+    match parse_event_time(input, all_day, "end")? {
+        EventTime::AllDay { date } => EventTime::all_day_end_from_inclusive(date)
+            .ok_or_else(|| PyValueError::new_err(format!("end: no day follows {date}"))),
+        timed @ EventTime::Timed { .. } => Ok(timed),
     }
 }
 
@@ -161,7 +174,7 @@ impl GmailClient {
         format: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
-        let fmt = parse_message_format(format.as_deref());
+        let fmt = parse_message_format(format.as_deref())?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let message = client
                 .get_message(&message_id, fmt)
@@ -203,7 +216,7 @@ impl GmailClient {
         format: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
-        let fmt = parse_message_format(format.as_deref());
+        let fmt = parse_message_format(format.as_deref())?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let thread = client
                 .get_thread(&thread_id, fmt)
@@ -228,6 +241,7 @@ impl GmailClient {
         thread_id = None,
         attachments = None,
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn send<'py>(
         &self,
         py: Python<'py>,
@@ -598,8 +612,8 @@ impl CalendarClient {
     }
 
     /// Create an event. `start` and `end` are RFC 3339 (timed) or
-    /// `YYYY-MM-DD` (all-day). `notify` is `all` (default), `external-only`,
-    /// or `none`.
+    /// `YYYY-MM-DD` (all-day; `end` is the inclusive last day). `notify`
+    /// is `all` (default), `external-only`, or `none`.
     #[pyo3(signature = (
         summary,
         start,
@@ -627,7 +641,7 @@ impl CalendarClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
         let start_time = parse_event_time(&start, all_day, "start")?;
-        let end_time = parse_event_time(&end, all_day, "end")?;
+        let end_time = parse_event_end(&end, all_day)?;
         let draft = EventDraft {
             summary,
             description,
@@ -642,7 +656,7 @@ impl CalendarClient {
         };
         let calendar = calendar_id
             .unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
-        let send_updates = parse_send_updates(notify.as_deref());
+        let send_updates = parse_send_updates(notify.as_deref())?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let event = client
                 .create_event(&calendar, &draft, send_updates)
@@ -664,7 +678,7 @@ impl CalendarClient {
         let client = Arc::clone(&self.inner);
         let calendar = calendar_id
             .unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
-        let send_updates = parse_send_updates(notify.as_deref());
+        let send_updates = parse_send_updates(notify.as_deref())?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             client
                 .cancel_event(&calendar, &event_id, send_updates)

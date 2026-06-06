@@ -7,8 +7,8 @@
 
 use anyhow::{Context as _, bail, ensure};
 use chrono::{
-    DateTime, Days, FixedOffset, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime,
-    TimeDelta, TimeZone as _,
+    DateTime, FixedOffset, Local, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta,
+    TimeZone as _,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use google_calendar::{
@@ -341,12 +341,7 @@ async fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 async fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     let (start, end) = if args.all_day {
         let window = all_day_window(&args.start, args.end.as_deref())?;
-        (
-            EventTime::AllDay { date: window.first },
-            EventTime::AllDay {
-                date: window.after_last,
-            },
-        )
+        (EventTime::AllDay { date: window.first }, window.end)
     } else {
         let start = parse_instant(&args.start)?;
         let end_input = args
@@ -410,13 +405,13 @@ async fn run_cancel(args: CancelArgs) -> anyhow::Result<()> {
 #[derive(Debug)]
 struct AllDayWindow {
     first: NaiveDate,
-    /// The day after the last day, Google's exclusive `end.date`.
-    after_last: NaiveDate,
+    /// Google's exclusive `end.date`: the day after the last day.
+    end: EventTime,
 }
 
 /// Resolve `--start`/`--end` dates for `--all-day`. The CLI takes the last
-/// day inclusive (how humans say "June 10 to June 12") and converts to the
-/// API's exclusive end date here.
+/// day inclusive (how humans say "June 10 to June 12"); the crate owns the
+/// conversion to the API's exclusive end date.
 fn all_day_window(start: &str, end: Option<&str>) -> anyhow::Result<AllDayWindow> {
     let first = parse_date(start)?;
     let last = match end {
@@ -430,10 +425,9 @@ fn all_day_window(start: &str, end: Option<&str>) -> anyhow::Result<AllDayWindow
         }
         None => first,
     };
-    let after_last = last
-        .checked_add_days(Days::new(1))
+    let end = EventTime::all_day_end_from_inclusive(last)
         .context("--end is out of the representable date range")?;
-    Ok(AllDayWindow { first, after_last })
+    Ok(AllDayWindow { first, end })
 }
 
 /// Parse a point in time: RFC 3339 with offset, a naive local datetime, or a
@@ -616,13 +610,23 @@ mod tests {
     fn all_day_end_is_inclusive_at_the_cli_and_exclusive_on_the_wire() {
         let window = all_day_window("2026-06-10", Some("2026-06-12")).expect("window");
         assert_eq!(window.first, date("2026-06-10"));
-        assert_eq!(window.after_last, date("2026-06-13"));
+        assert_eq!(
+            window.end,
+            EventTime::AllDay {
+                date: date("2026-06-13"),
+            }
+        );
     }
 
     #[test]
     fn all_day_defaults_to_one_day() {
         let window = all_day_window("2026-06-10", None).expect("window");
-        assert_eq!(window.after_last, date("2026-06-11"));
+        assert_eq!(
+            window.end,
+            EventTime::AllDay {
+                date: date("2026-06-11"),
+            }
+        );
     }
 
     #[test]

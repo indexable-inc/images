@@ -41,7 +41,7 @@ impl GoogleMcp {
     /// Returns an error if the env vars are unset, the store is empty, or
     /// either API client cannot be constructed.
     pub fn new() -> anyhow::Result<Self> {
-        let (calendar, gmail) = crate::build_clients()?;
+        let crate::Clients { calendar, gmail } = crate::build_clients()?;
         Ok(Self {
             calendar,
             gmail,
@@ -104,15 +104,16 @@ impl GoogleMcp {
     #[tool(
         description = "Create a Google Calendar event. start/end are RFC 3339 \
                        (with offset) for timed events, or YYYY-MM-DD for all-day \
-                       events. notify selects who Google emails about the invite \
-                       (all|external-only|none, default all)."
+                       events (end being the inclusive last day). notify selects \
+                       who Google emails about the invite (all|external-only|none, \
+                       default all)."
     )]
     async fn calendar_event_create(
         &self,
         Parameters(args): Parameters<CalendarEventCreateArgs>,
     ) -> Result<String, ErrorData> {
         let start = parse_event_time(&args.start, args.all_day, "start")?;
-        let end = parse_event_time(&args.end, args.all_day, "end")?;
+        let end = parse_event_end(&args.end, args.all_day)?;
         let draft = EventDraft {
             summary: args.summary,
             description: args.description,
@@ -132,7 +133,7 @@ impl GoogleMcp {
             .to_owned();
         let created = self
             .calendar
-            .create_event(&calendar, &draft, send_updates(args.notify.as_deref()))
+            .create_event(&calendar, &draft, send_updates(args.notify.as_deref())?)
             .await
             .map_err(into_tool_error)?;
         json_string(&created)
@@ -149,7 +150,7 @@ impl GoogleMcp {
             .unwrap_or(PRIMARY_CALENDAR)
             .to_owned();
         self.calendar
-            .cancel_event(&calendar, &args.event_id, send_updates(args.notify.as_deref()))
+            .cancel_event(&calendar, &args.event_id, send_updates(args.notify.as_deref())?)
             .await
             .map_err(into_tool_error)?;
         Ok(json!({ "cancelled": args.event_id }).to_string())
@@ -216,7 +217,7 @@ impl GoogleMcp {
     ) -> Result<String, ErrorData> {
         let message = self
             .gmail
-            .get_message(&args.message_id, message_format(args.format.as_deref()))
+            .get_message(&args.message_id, message_format(args.format.as_deref())?)
             .await
             .map_err(into_tool_error)?;
         json_string(&message)
@@ -248,7 +249,7 @@ impl GoogleMcp {
     ) -> Result<String, ErrorData> {
         let thread = self
             .gmail
-            .get_thread(&args.thread_id, message_format(args.format.as_deref()))
+            .get_thread(&args.thread_id, message_format(args.format.as_deref())?)
             .await
             .map_err(into_tool_error)?;
         json_string(&thread)
@@ -742,21 +743,40 @@ fn parse_event_time(
     }
 }
 
-fn send_updates(notify: Option<&str>) -> SendUpdates {
-    match notify {
-        Some("none") => SendUpdates::None,
-        Some("external-only" | "externalOnly") => SendUpdates::ExternalOnly,
-        _ => SendUpdates::All,
+/// Parse the `end` of an event. All-day input is the inclusive last day
+/// (how the tools document it); Google's all-day `end.date` is exclusive,
+/// so convert at this boundary.
+fn parse_event_end(input: &str, all_day: bool) -> Result<EventTime, ErrorData> {
+    match parse_event_time(input, all_day, "end")? {
+        EventTime::AllDay { date } => EventTime::all_day_end_from_inclusive(date).ok_or_else(|| {
+            ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("end: no day follows {date}"),
+                None,
+            )
+        }),
+        timed @ EventTime::Timed { .. } => Ok(timed),
     }
 }
 
-fn message_format(format: Option<&str>) -> MessageFormat {
-    match format {
-        Some("minimal") => MessageFormat::Minimal,
-        Some("metadata") => MessageFormat::Metadata,
-        Some("raw") => MessageFormat::Raw,
-        _ => MessageFormat::Full,
-    }
+/// `notify` defaults to `All` only when absent; an unrecognized value is
+/// an error, because it decides who Google emails.
+fn send_updates(notify: Option<&str>) -> Result<SendUpdates, ErrorData> {
+    notify.map_or(Ok(SendUpdates::All), |value| {
+        value.parse().map_err(|err| {
+            ErrorData::new(ErrorCode::INVALID_PARAMS, format!("notify: {err}"), None)
+        })
+    })
+}
+
+/// `format` defaults to `Full` only when absent; an unrecognized value is
+/// an error rather than silently fetching full bodies.
+fn message_format(format: Option<&str>) -> Result<MessageFormat, ErrorData> {
+    format.map_or(Ok(MessageFormat::Full), |value| {
+        value.parse().map_err(|err| {
+            ErrorData::new(ErrorCode::INVALID_PARAMS, format!("format: {err}"), None)
+        })
+    })
 }
 
 fn build_outgoing(args: MailComposeArgs) -> Result<OutgoingMessage, ErrorData> {
@@ -797,3 +817,42 @@ fn build_outgoing(args: MailComposeArgs) -> Result<OutgoingMessage, ErrorData> {
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use google_calendar::{EventTime, SendUpdates};
+    use google_gmail::MessageFormat;
+    use rmcp::model::ErrorCode;
+
+    use super::{message_format, parse_event_end, send_updates};
+
+    #[test]
+    fn all_day_end_is_inclusive_at_the_tool_and_exclusive_on_the_wire() {
+        let end = parse_event_end("2026-06-12", true).expect("parses");
+        assert_eq!(
+            end,
+            EventTime::AllDay {
+                date: "2026-06-13".parse().expect("date"),
+            }
+        );
+    }
+
+    #[test]
+    fn absent_notify_and_format_keep_their_documented_defaults() {
+        assert_eq!(send_updates(None).expect("default"), SendUpdates::All);
+        assert_eq!(message_format(None).expect("default"), MessageFormat::Full);
+    }
+
+    #[test]
+    fn unknown_notify_is_invalid_params_not_email_everyone() {
+        let err = send_updates(Some("non")).expect_err("rejects");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("notify"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn unknown_format_is_invalid_params_not_full_bodies() {
+        let err = message_format(Some("ful")).expect_err("rejects");
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("format"), "got: {}", err.message);
+    }
+}

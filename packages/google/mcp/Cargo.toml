@@ -5,12 +5,8 @@ edition.workspace = true
 publish.workspace = true
 description = "ix-google-mcp: a Rust MCP server exposing Gmail and Google Calendar tools over stdio, sharing one auth grant per RFC 0003"
 
-# The rmcp tool-router macros expand into code that nightly clippy flags
-# through every group; the macros do not emit `#[automatically_derived]`
-# and the expansion is not under our control. Don't inherit the workspace
-# lint policy for this thin RFC 0003 binding; the bin is verified by the
-# existing wire-level tests against the underlying core crates instead.
 [lints]
+workspace = true
 
 [[bin]]
 name = "ix-google-mcp"

@@ -48,14 +48,21 @@ fn init_logging() {
         .init();
 }
 
-/// Construct the two API clients backing the tools. They share the
-/// on-disk token store (one refresh token) but hold their own
-/// expiry-aware access-token caches, so a refresh in one does not block
-/// the other.
-pub(crate) fn build_clients() -> anyhow::Result<(
-    Arc<google_calendar::Client>,
-    Arc<google_gmail::Client>,
-)> {
+/// The API clients backing the tools.
+///
+/// They share the on-disk token store (one refresh token) but hold their
+/// own expiry-aware access-token caches, so a refresh in one does not
+/// block the other. If Google rotates the refresh token during one
+/// client's refresh, the other client's in-flight refresh can lose that
+/// race and fail once; its next mint re-reads the rotated token the
+/// winner persisted, so the failure heals without re-consent.
+pub(crate) struct Clients {
+    pub(crate) calendar: Arc<google_calendar::Client>,
+    pub(crate) gmail: Arc<google_gmail::Client>,
+}
+
+/// Construct the API clients from the environment and the token store.
+pub(crate) fn build_clients() -> anyhow::Result<Clients> {
     let secrets = ClientSecrets::from_env().context(
         "ix-google-mcp expects GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in the \
          environment; run gmail auth (or gcal auth) on the host to mint the refresh token",
@@ -70,5 +77,8 @@ pub(crate) fn build_clients() -> anyhow::Result<(
     let calendar =
         google_calendar::Client::new(calendar_auth).context("building the calendar client")?;
     let gmail = google_gmail::Client::new(gmail_auth).context("building the gmail client")?;
-    Ok((Arc::new(calendar), Arc::new(gmail)))
+    Ok(Clients {
+        calendar: Arc::new(calendar),
+        gmail: Arc::new(gmail),
+    })
 }

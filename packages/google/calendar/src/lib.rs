@@ -17,7 +17,8 @@ pub use google_auth::{
     AuthCode, Authenticator, ClientSecrets, PendingConsent, StoredToken, TokenStore, begin_consent,
 };
 pub use model::{
-    Attendee, AttendeeDraft, Event, EventDraft, EventQuery, EventTime, Person, SendUpdates,
+    Attendee, AttendeeDraft, Event, EventDraft, EventQuery, EventTime, InvalidSendUpdates, Person,
+    SendUpdates,
 };
 
 use serde::Deserialize;

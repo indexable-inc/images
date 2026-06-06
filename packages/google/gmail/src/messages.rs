@@ -43,6 +43,38 @@ impl MessageFormat {
     }
 }
 
+/// A message `format` keyword that is not one of the documented values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidMessageFormat(String);
+
+impl std::fmt::Display for InvalidMessageFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown message format {:?}; expected full, minimal, metadata, or raw",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for InvalidMessageFormat {}
+
+impl std::str::FromStr for MessageFormat {
+    type Err = InvalidMessageFormat;
+
+    /// Accepts the wire keywords. Anything else is an error: a typo must
+    /// not silently widen the projection to full bodies.
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        match input {
+            "minimal" => Ok(Self::Minimal),
+            "full" => Ok(Self::Full),
+            "raw" => Ok(Self::Raw),
+            "metadata" => Ok(Self::Metadata),
+            other => Err(InvalidMessageFormat(other.to_owned())),
+        }
+    }
+}
+
 /// One page of `users.messages.list`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -201,5 +233,24 @@ impl Client {
     /// Returns auth, transport, or API errors.
     pub async fn mark_message_unread(&self, id: &str) -> Result<Message> {
         self.modify_labels(id, &[LABEL_UNREAD.to_owned()], &[]).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MessageFormat;
+
+    #[test]
+    fn format_parses_the_documented_keywords() {
+        assert_eq!("full".parse(), Ok(MessageFormat::Full));
+        assert_eq!("minimal".parse(), Ok(MessageFormat::Minimal));
+        assert_eq!("metadata".parse(), Ok(MessageFormat::Metadata));
+        assert_eq!("raw".parse(), Ok(MessageFormat::Raw));
+    }
+
+    #[test]
+    fn format_rejects_unknown_keywords_naming_the_choices() {
+        let err = "ful".parse::<MessageFormat>().expect_err("rejects");
+        assert!(err.to_string().contains("minimal"), "got: {err}");
     }
 }
