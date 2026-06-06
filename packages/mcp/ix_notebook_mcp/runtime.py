@@ -192,7 +192,95 @@ class Result:
         return self.llm_result
 
 
+class Resource:
+    """A live, self-updating HTML view that lives as long as its source does.
+
+    Where a :class:`Result` is a cell's *final* value rendered once, a Resource
+    is a living thing the kernel keeps re-rendering: a running terminal, a custom
+    widget, anything with a current HTML representation. Register one with
+    :func:`register_resource`; while it stays alive the runtime mirrors its
+    latest HTML to the store every flush tick and the dashboard sidebar shows
+    all live resources updating in place. The resource closes itself (leaves the
+    sidebar) when its ``alive`` predicate reports the source is gone.
+    """
+
+    def __init__(self, id, title, kind, render, alive=None):
+        self.id = id
+        self.title = title
+        self.kind = kind
+        self._render = render
+        self._alive = alive
+        self.status = "live"
+        self.created = time.time()
+        self.html = ""
+        self.error: str | None = None
+
+    def closed(self) -> bool:
+        return self.status == "closed"
+
+    def close(self) -> "Resource":
+        """Close the resource so the sidebar drops it on the next tick."""
+        self.status = "closed"
+        return self
+
+    def alive(self) -> bool:
+        if self.closed():
+            return False
+        if self._alive is None:
+            return True
+        try:
+            return bool(self._alive())
+        except Exception:
+            # A source whose liveness check raises is treated as gone.
+            return False
+
+    async def render_html(self) -> str:
+        """The current HTML for this resource (awaits the render if it is async)."""
+        out = self._render() if callable(self._render) else self._render
+        if inspect.iscoroutine(out):
+            out = await out
+        return out if isinstance(out, str) else str(out)
+
+    def __repr__(self) -> str:
+        return f"<Resource {self.id} ({self.title}) [{self.status}] {self.kind}>"
+
+
+def register_resource(
+    source=None, *, title=None, render=None, id=None, kind="html", alive=None
+) -> Resource:
+    """Register a live HTML resource for the dashboard sidebar.
+
+    Pass a ``render`` callable returning the current HTML (sync or async), or a
+    ``source`` object the runtime renders by calling its ``resource_html()`` /
+    ``to_html()`` (whichever it has). ``alive`` is an optional predicate; when it
+    returns False the resource closes itself and leaves the sidebar. Returns the
+    :class:`Resource` handle (call ``.close()`` to remove it explicitly).
+    """
+    if render is None:
+        if source is None:
+            raise ValueError("register_resource needs a render callable or a source object")
+        if hasattr(source, "resource_html"):
+            render = source.resource_html
+        elif hasattr(source, "to_html"):
+            render = source.to_html
+        elif callable(source):
+            render = source
+        else:
+            raise TypeError(
+                f"{type(source).__name__} has no resource_html()/to_html(); pass render="
+            )
+    if title is None:
+        title = getattr(source, "title", None) or (
+            type(source).__name__ if source is not None else "resource"
+        )
+    rid = id or uuid.uuid4().hex[:8]
+    res = Resource(rid, str(title), kind, render, alive)
+    resources[rid] = res
+    return res
+
+
 jobs: dict[str, Job] = {}
+resources: dict[str, Resource] = {}
 
 
 def _compile(code: str, filename: str):
@@ -320,9 +408,115 @@ def _job_outputs(job: "Job") -> list[dict]:
     return outs
 
 
+_tui_mod = None
+_tui_probed = False
+
+
+def _tui_module():
+    """The ``tui`` module if importable, cached. None when it is not available."""
+    global _tui_mod, _tui_probed
+    if not _tui_probed:
+        _tui_probed = True
+        try:
+            import tui as _m
+
+            _tui_mod = _m
+        except Exception:
+            # No tui in this kernel: the POC provider simply contributes nothing.
+            _tui_mod = None
+    return _tui_mod
+
+
+def _tui_renderer(term):
+    async def render() -> str:
+        snap = await term.snapshot()
+        return snap.to_html()
+
+    return render
+
+
+def _discover_tui_resources() -> None:
+    """POC resource provider: surface every live ``Tui`` as a resource.
+
+    Decoupled from tui-py: poll the public ``Tui.list_all()`` and register any
+    terminal not seen yet (keyed by its id). When a terminal exits it drops out
+    of ``list_all`` and its ``is_alive`` flips false, so the sweep closes the
+    resource. This is the proof of concept; any object can be a resource via
+    :func:`register_resource`.
+    """
+    tui = _tui_module()
+    if tui is None:
+        return
+    try:
+        live = tui.Tui.list_all()
+    except Exception:
+        return
+    for term in live:
+        rid = f"tui:{term.id}"
+        if rid in resources:
+            continue
+        register_resource(
+            term,
+            id=rid,
+            kind="tui",
+            title=f"tui \u00b7 {term.command}",
+            render=_tui_renderer(term),
+            alive=lambda t=term: t.is_alive,
+        )
+
+
+def _escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+async def _sweep_resources() -> None:
+    """Render every live resource to the store; close the ones whose source died."""
+    if _store is None or _store_conn is None:
+        return
+    _discover_tui_resources()
+    now = time.time()
+    for res in list(resources.values()):
+        if not res.alive():
+            try:
+                _store.close_resource(_store_conn, id=res.id, updated_at=now)
+            except Exception:
+                # Best-effort: a store write must not kill the loop.
+                pass
+            resources.pop(res.id, None)
+            continue
+        status = "live"
+        try:
+            # Bound each render so one wedged source cannot stall the whole loop.
+            res.html = await asyncio.wait_for(res.render_html(), timeout=2.0)
+            res.error = None
+        except Exception as exc:
+            status = "error"
+            res.error = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+            res.html = (
+                '<pre style="color:#f7768e;margin:0">resource render failed:\n'
+                + _escape_html(res.error)
+                + "</pre>"
+            )
+        try:
+            _store.upsert_resource(
+                _store_conn,
+                id=res.id,
+                title=res.title,
+                kind=res.kind,
+                html=res.html,
+                status=status,
+                created_at=res.created,
+                updated_at=now,
+            )
+        except Exception:
+            # Best-effort live render: a store write must not kill the loop.
+            pass
+
+
 async def _flusher() -> None:
-    """Throttled background loop: persist every running job's output tail to the
-    store so the dashboard shows live output. One loop for all jobs (cheap)."""
+    """Throttled background loop: persist every running job's output tail and
+    re-render every live resource to the store so the dashboard shows both live.
+    One loop for all jobs and resources (cheap)."""
     if _store is None or _store_conn is None:
         return
     while True:
@@ -334,6 +528,7 @@ async def _flusher() -> None:
                 except Exception:
                     # Best-effort live output: a store write must not kill the loop.
                     pass
+        await _sweep_resources()
 
 
 async def __ix_run(code: str, budget: float = 15.0, name: str | None = None) -> Job:
@@ -456,6 +651,9 @@ def install(user_ns: dict | None = None) -> None:
     target["jobs"] = jobs
     target["Job"] = Job
     target["Result"] = Result
+    target["resources"] = resources
+    target["Resource"] = Resource
+    target["register_resource"] = register_resource
     target["__ix_run"] = __ix_run
     target["__ix_exec"] = __ix_exec
     target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")

@@ -30,6 +30,16 @@ CREATE TABLE IF NOT EXISTS executions (
     outputs     TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS executions_started ON executions (started_at);
+
+CREATE TABLE IF NOT EXISTS resources (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'html',
+    html        TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'live',
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL
+);
 """
 
 
@@ -99,3 +109,55 @@ def recent(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
         d["outputs"] = json.loads(d.get("outputs") or "[]")
         out.append(d)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Resources: live, self-updating views (a Tui's screen, a custom HTML widget).
+#
+# A resource is the long-lived counterpart to an execution: an execution is a
+# finished fact (one row, written once and amended to 'done'), while a resource
+# is a *living* thing the kernel keeps re-rendering to HTML for as long as it is
+# alive. The kernel upserts the latest HTML each flush tick and flips status to
+# 'closed' when the underlying object goes away; the dashboard sidebar reads the
+# still-live rows. Same single-writer / many-reader split as executions.
+# --------------------------------------------------------------------------- #
+
+
+def upsert_resource(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    title: str,
+    kind: str,
+    html: str,
+    status: str,
+    created_at: float,
+    updated_at: float,
+) -> None:
+    """Insert a resource or refresh its rendered HTML/status in place."""
+    conn.execute(
+        "INSERT INTO resources (id, title, kind, html, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "title = excluded.title, kind = excluded.kind, html = excluded.html, "
+        "status = excluded.status, updated_at = excluded.updated_at",
+        (id, title, kind, html, status, created_at, updated_at),
+    )
+
+
+def close_resource(conn: sqlite3.Connection, *, id: str, updated_at: float) -> None:
+    """Mark a resource closed so the sidebar drops it (the row stays for history)."""
+    conn.execute(
+        "UPDATE resources SET status = 'closed', updated_at = ? WHERE id = ?",
+        (updated_at, id),
+    )
+
+
+def live_resources(conn: sqlite3.Connection) -> list[dict]:
+    """Every resource not yet closed, oldest first, as plain dicts for the sidebar."""
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, title, kind, html, status, created_at, updated_at "
+        "FROM resources WHERE status != 'closed' ORDER BY created_at ASC"
+    ).fetchall()
+    return [dict(r) for r in rows]

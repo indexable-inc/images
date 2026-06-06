@@ -41,8 +41,23 @@ _PAGE = """<!doctype html>
  .rich th,.rich td{border:1px solid #d0d7de;padding:2px 7px;text-align:right}
  .rich th{background:#f6f8fa}
  .img{display:block;max-width:100%;margin:6px 0 0;border-radius:4px;background:#fff}
+ .layout{display:flex;gap:16px;align-items:flex-start}
+ #main{flex:1 1 auto;min-width:0}
+ .sidebar{flex:0 0 540px;position:sticky;top:0;max-height:100vh;overflow:auto}
+ .res-card{border:1px solid #2a2e42;border-radius:6px;margin:0 0 10px;padding:8px}
+ .res-card.live{border-color:#7dcfff}
+ .res-card.error{border-color:#f7768e}
+ .res-hdr{display:flex;gap:8px;align-items:center;margin:0 0 6px}
+ .res-dot{width:8px;height:8px;border-radius:50%;background:#7dcfff;flex:none}
+ .res-card.error .res-dot{background:#f7768e}
+ .res-title{color:#bb9af7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .res-kind{color:#565f89;font-size:11px;margin-left:auto;flex:none}
+ .res-body{overflow:auto;max-height:60vh}
 </style></head><body>
-<h1>ix-mcp executions</h1><div id="jobs"></div>
+<div class="layout">
+ <div id="main"><h1>ix-mcp executions</h1><div id="jobs"></div></div>
+ <aside class="sidebar"><h1>resources</h1><div id="resources"></div></aside>
+</div>
 <script>
 async function tick(){
  try{
@@ -81,7 +96,25 @@ async function tick(){
   if(nearBottom) window.scrollTo(0, document.body.scrollHeight);
  }catch(e){}
 }
+async function tickResources(){
+ try{
+  const r=await fetch('api/resources');const rs=await r.json();
+  const el=document.getElementById('resources');
+  if(!rs.length){el.innerHTML='<div class="empty">no live resources</div>';return;}
+  const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  // A resource's html is the agent's own live render (a terminal screen, a custom
+  // widget). The dashboard is read-only over the tailnet (the trust boundary), so
+  // it is injected as-is, exactly like job output above.
+  el.innerHTML=rs.map(x=>`<div class="res-card ${esc(x.status)}">
+    <div class="res-hdr"><span class="res-dot"></span>
+    <span class="res-title">${esc(x.title)}</span>
+    <span class="res-kind">${esc(x.kind)}</span></div>
+    <div class="res-body">${x.html||''}</div>
+  </div>`).join('');
+ }catch(e){}
+}
 tick();setInterval(tick,1000);
+tickResources();setInterval(tickResources,1000);
 </script></body></html>"""
 
 
@@ -95,8 +128,12 @@ async def start(config: Config) -> web.AppRunner:
     async def jobs(_request: web.Request) -> web.Response:
         return web.json_response(store.recent(conn, limit=200))
 
+    async def resources(_request: web.Request) -> web.Response:
+        return web.json_response(store.live_resources(conn))
+
     app.router.add_get("/", index)
     app.router.add_get("/api/jobs", jobs)
+    app.router.add_get("/api/resources", resources)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, config.host, config.dashboard_port)
