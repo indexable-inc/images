@@ -341,10 +341,10 @@ let
     ];
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
-  # `--system-site-packages`, so `tui`, `search`, numpy, polars (incl. Postgres
-  # via psycopg + SQLAlchemy), duckdb, httpx, and playwright are importable by
-  # default while an in-session `pip install` still writes to the per-session
-  # venv.
+  # `--system-site-packages`, so `tui`, `search`, `fff`, `exa_py`, numpy, polars
+  # (incl. Postgres via psycopg + SQLAlchemy), duckdb, httpx, and playwright are
+  # importable by default while an in-session `pip install` still writes to the
+  # per-session venv.
   mcpPython = pkgs.python3.withPackages (
     ps:
     [
@@ -375,6 +375,12 @@ let
       # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
       # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
       ps.httpx
+      # exa-py: the official Exa (exa.ai) SDK, so a session can run neural web
+      # search, get page contents, and `answer(...)` over the live web with no
+      # install step (`from exa_py import Exa`). It is a thin client over the Exa
+      # REST API. No key is bundled: the caller brings `EXA_API_KEY` (sourced
+      # from rbw/op per the secrets split), e.g. `Exa(os.environ["EXA_API_KEY"])`.
+      ps.exa-py
       # Gmail / Google Workspace, the "third surface" for an integration alongside
       # the MCP binding and the index CLI (rfcs/0003): a session can drive the
       # Gmail and Calendar APIs directly with no install step. This is the official
@@ -575,6 +581,11 @@ let
     + "build('gmail', 'v1', credentials=Credentials(token='x'), static_discovery=True); "
     + "print('gmail-libs-ok')"
   );
+  exaBundled = importTest "exa" (
+    "from exa_py import Exa; e = Exa('dummy-key'); "
+    + "assert callable(e.search) and callable(e.answer); "
+    + "print('exa-ok')"
+  );
   jupyterBundled = importTest "jupyter" (
     "import ipykernel, jupyter_server, jupyterlab, nbformat, jupyter_collaboration, "
     + "jupyter_server_ydoc, jupyter_ydoc, pycrdt, mcp; "
@@ -757,6 +768,7 @@ package.overrideAttrs (old: {
         fffBundled
         dataLibsBundled
         gmailLibsBundled
+        exaBundled
         jupyterBundled
         serverTools
         evalSmoke
