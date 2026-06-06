@@ -1,0 +1,12 @@
+id: prefer-lib-optional
+language: nix
+severity: warning
+message: "`if cond then [ x ] else [ ]` is `lib.optional cond x`. `if cond then xs else [ ]` is `lib.optionals cond xs`."
+note: |
+  WHY: Conditional list construction is the canonical use case for
+  `lib.optional` / `lib.optionals`. The `if … then [ … ] else [ ]` shape
+  reinvents it inline and is harder to grep.
+  NIXPKGS: Convention across nixpkgs services and packaging.
+  REPO: Use `lib.optional` for one-element and `lib.optionals` for many.
+rule:
+  pattern: if $COND then [ $X ] else [ ]

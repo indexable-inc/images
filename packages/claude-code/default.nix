@@ -12,18 +12,30 @@
   gnupg,
   formats,
   binName ? "claude",
-  # Start every session in bypass-permissions mode by default. We run a trusted
-  # config inside disposable sandboxes (ix guest VMs, the dev image, throwaway
-  # checkouts) where a per-tool approval dialog buys nothing and only stalls an
-  # agent that has nowhere unsafe to go. Folded into `settingsDefaults` below so
-  # it rides the same `--settings` layer as the other defaults; a consumer turns
-  # it off with `claude-code.override { dangerouslySkipPermissions = false; }`.
-  # This only flips the default mode: the upstream uid-0 guard still refuses
-  # bypass for an unsandboxed root user (no IS_SANDBOX=1 is baked here, since a
-  # bare host genuinely is not a sandbox), so it is a no-op exactly where it
-  # would be unsafe. Sandboxed-root consumers (e.g. the dev image) keep their own
-  # IS_SANDBOX=1 wrapper and managed-settings layer.
+  # Default posture: start every session in bypass-permissions mode. We run a
+  # trusted config inside disposable sandboxes (ix guest VMs, the dev image,
+  # throwaway checkouts) where a per-tool approval dialog buys nothing and only
+  # stalls an agent that has nowhere unsafe to go. The upstream uid-0 guard still
+  # refuses bypass for an unsandboxed root user (no IS_SANDBOX=1 is baked here,
+  # since a bare host genuinely is not a sandbox), so it is a no-op exactly where
+  # it would be unsafe; sandboxed-root consumers (e.g. the dev image) keep their
+  # own IS_SANDBOX=1 wrapper and managed-settings layer. Turn it off with
+  # `claude-code.override { dangerouslySkipPermissions = false; }`.
   dangerouslySkipPermissions ? true,
+  # Opt-in alternative posture: confine the agent to a fixed allow-list and
+  # nothing else. Set to a list of permission rules (typically one MCP server,
+  # e.g. `[ "mcp__index" "mcp__index__*" ]`) and the wrapper switches to plain
+  # `default` permission mode, `allow`s exactly those rules, and bare-`deny`s
+  # every other built-in tool (Bash, Read, Edit, Write, ...), stripping them from
+  # the model's context. The agent can then only use the allowed tools; anything
+  # else (shell, file IO, HTTP) it must do through whatever those tools expose
+  # (e.g. a python/Jupyter MCP kernel). A built-in name listed here is removed
+  # from the deny list, so you can also re-allow a specific built-in.
+  # `bypassPermissions` cannot express this (it skips the permission layer
+  # entirely, so deny rules are silently ignored) and `dontAsk` is intentionally
+  # avoided. Takes PRECEDENCE over `dangerouslySkipPermissions`, since bypass
+  # would void the deny rules. `null` (default) leaves the normal posture.
+  restrictToTools ? null,
   # Only the flake package set injects the Nushell writer; the overlay eval
   # context does not. The updater is a maintainer-facing flake output, so the
   # overlay build of `pkgs.claude-code` simply omits `passthru.updateScript`.
@@ -81,18 +93,68 @@ let
   # prepend ours and silently shadow a user's `--settings`.
   #   cleanupPeriodDays: keep transcripts + the wrapper's --debug logs ~1yr for
   #     the optimize analysis and troubleshooting (CLI default 30).
-  #   permissions.defaultMode + skipDangerousModePermissionPrompt (only when
-  #     `dangerouslySkipPermissions`): start in bypass mode and pre-accept the
-  #     one-time dangerous-mode warning. Both keys are required: managed/flag
-  #     bypass alone does not suppress that warning. skipDangerousModePermission-
-  #     Prompt is honored in every scope except *project* (a guard against
-  #     untrusted repos), so it takes effect from this flagSettings layer. Same
-  #     two keys the dev image (images/dev/development-base) enforces via managed
-  #     settings; see its comment for the full rationale.
+  #   permissions.{allow,deny} (only when `restrictToTools` is set, opt-in):
+  #     confine the agent to that allow-list and strip every other built-in tool
+  #     from context. Arrays concat across layers and a deny at any scope wins, so
+  #     a downstream user/project/local settings file cannot un-deny these; the
+  #     only un-lock is dropping the nix `restrictToTools` override. Caveat: a
+  #     managed `bypassPermissions` skips the whole permission layer, so these
+  #     deny rules would be inert under one.
+  #   permissions.defaultMode + skipDangerousModePermissionPrompt (the default,
+  #     unless `restrictToTools` takes precedence): start in bypass mode and
+  #     pre-accept the one-time dangerous-mode warning. Both keys are
+  #     required: managed/flag bypass alone does not suppress that warning.
+  #     skipDangerousModePermissionPrompt is honored in every scope except
+  #     *project* (a guard against untrusted repos), so it takes effect from this
+  #     flagSettings layer. Same two keys the dev image
+  #     (images/dev/development-base) enforces via managed settings; see its
+  #     comment for the full rationale.
+  #
+  # Bare tool names as deny rules remove the built-in tool from the model's
+  # context entirely (per the permissions docs), not merely gate it behind a
+  # prompt, so the agent never sees a shell/file/web/subagent tool. Read-only Bash
+  # (`cat`, `ls`, ...) is otherwise always allowed in every mode, so denying bare
+  # `Bash` is what actually closes the shell.
+  deniedBuiltinTools = [
+    "Agent"
+    "Bash"
+    "BashOutput"
+    "Edit"
+    "ExitPlanMode"
+    "Glob"
+    "Grep"
+    "KillShell"
+    "ListMcpResources"
+    "NotebookEdit"
+    "PowerShell"
+    "Read"
+    "ReadMcpResource"
+    "Skill"
+    "SlashCommand"
+    "Task"
+    "TodoWrite"
+    "WebFetch"
+    "WebSearch"
+    "Write"
+  ];
+
+  # The lockdown is active whenever the caller pins an allow-list.
+  restrictTools = restrictToTools != null;
+
   settingsDefaults = {
     cleanupPeriodDays = 365;
   }
-  // lib.optionalAttrs dangerouslySkipPermissions {
+  // lib.optionalAttrs restrictTools {
+    permissions = {
+      allow = restrictToTools;
+      # A built-in named in the allow-list is re-allowed by dropping it here.
+      deny = lib.subtractLists restrictToTools deniedBuiltinTools;
+    };
+  }
+  # restrictToTools takes precedence: bypass would skip the permission layer and
+  # void its deny rules, so the two never co-set `permissions` (a shallow //
+  # merge would otherwise clobber allow/deny with defaultMode).
+  // lib.optionalAttrs (dangerouslySkipPermissions && !restrictTools) {
     permissions.defaultMode = "bypassPermissions";
     skipDangerousModePermissionPrompt = true;
   };

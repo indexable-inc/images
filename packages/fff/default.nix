@@ -10,8 +10,11 @@
 # pinned `fetchFromGitHub` rev with `rustPlatform.buildRustPackage`. See
 # `agent-context/sections/13-dependency-intake.md` and `packages/launchk`.
 #
-# fff is a fast file-search toolkit for humans and AI agents. The shipped binary
-# is `fff-mcp`: a CLI / MCP server over the in-memory file + content index.
+# fff is a fast file-search toolkit for humans and AI agents. Two artifacts ship
+# from one build:
+#   * `bin/fff-mcp`        – the CLI / MCP server over the in-memory file index.
+#   * `lib/libfff_c.{so,dylib}` – the stable C ABI (crate `fff-c`), which the
+#     `mcp` package loads via ctypes to expose `import fff` in notebook sessions.
 let
   src = fetchFromGitHub {
     owner = "dmtrKovalenko";
@@ -40,15 +43,43 @@ rustPlatform.buildRustPackage {
     pkg-config
   ];
 
-  # Build only the fff-mcp binary and skip the workspace's default `zlob`
-  # feature, which shells out to a system Zig install at build time (see
-  # crates/fff-core/build.rs). Without zlob the crate falls back to the pure-Rust
+  # Build the fff-mcp binary and the fff-c cdylib in one cargo invocation so
+  # both artifacts share the dependency compile. Scoping to these two packages
+  # (rather than the whole workspace) keeps out fff-nvim's mlua/Lua build.
+  # `--no-default-features` skips the workspace's default `zlob` feature, which
+  # shells out to a system Zig install at build time (see
+  # crates/fff-core/build.rs); without it the crate falls back to the pure-Rust
   # globset matcher.
-  buildAndTestSubdir = "crates/fff-mcp";
+  cargoBuildFlags = [
+    "--package"
+    "fff-mcp"
+    "--package"
+    "fff-c"
+  ];
+  cargoTestFlags = [
+    "--package"
+    "fff-mcp"
+    "--package"
+    "fff-c"
+  ];
   buildNoDefaultFeatures = true;
 
+  # buildRustPackage installs the binary to bin/, but the fff-c cdylib is not
+  # picked up automatically. Copy the unhashed final artifact into lib/ (skip
+  # the hashed copy under deps/) for both the Linux .so and the macOS .dylib.
+  postInstall = ''
+    mkdir -p "$out/lib"
+    find target -type f \( -name 'libfff_c.so' -o -name 'libfff_c.dylib' \) \
+      -not -path '*/deps/*' -exec install -Dm555 {} "$out/lib/" \;
+    if [ -z "$(ls -A "$out/lib" 2>/dev/null)" ]; then
+      echo "fff: no libfff_c cdylib found under target/" >&2
+      find target -name 'libfff_c.*' >&2 || true
+      exit 1
+    fi
+  '';
+
   meta = {
-    description = "Fast file-search toolkit for humans and AI agents (fff-mcp CLI / MCP server)";
+    description = "Fast file-search toolkit for humans and AI agents (fff-mcp CLI / MCP server + fff-c cdylib)";
     homepage = "https://github.com/dmtrKovalenko/fff";
     license = lib.licenses.mit;
     mainProgram = "fff-mcp";
