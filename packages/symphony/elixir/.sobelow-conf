@@ -1,0 +1,14 @@
+# Sobelow static security scanner config.
+# https://hexdocs.pm/sobelow/Mix.Tasks.Sobelow.html
+#
+# `mix sobelow --config` reads this file. WS-8 runs sobelow as an
+# informational gate only, so do not set `exit: "low"` here; that would turn
+# any finding into a nonzero exit and could gate a PR once the quality job is
+# promoted to required in WS-9. Keep this scan reporting-only until then.
+[
+  verbose: false,
+  private: false,
+  skip: false,
+  router: "lib/symphony_elixir_web/router.ex",
+  format: "txt"
+]

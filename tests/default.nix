@@ -542,6 +542,31 @@ let
       packageNames = map lib.getName config.environment.systemPackages;
     };
 
+  # The symphony control-plane module (modules/services/symphony) evaluated
+  # standalone, the way ix's host modules consume it. `package` only needs a
+  # /bin path shape at eval, so hello stands in for the launcher.
+  symphonyService =
+    let
+      config = evalConfig [
+        {
+          ix.image = {
+            name = "test/symphony-module";
+            tag = "test";
+          };
+          services.symphony = {
+            enable = true;
+            package = pkgs.hello;
+            primaryRepo = "/srv/checkouts/index";
+            environmentFile = "/run/secrets/symphony.env";
+          };
+        }
+      ];
+    in
+    {
+      inherit config;
+      unit = config.systemd.services.symphony;
+    };
+
   pythonAppClosureProbe = ix.writePythonApplication pkgs {
     name = "python-app-closure-probe";
     src = pkgs.writeText "python-app-closure-probe.py" ''
@@ -2984,6 +3009,34 @@ let
           in
           workspace != null && workspace.fsType == "tmpfs" && builtins.elem "size=32g" workspace.options;
         message = "symphony-codex image should back /workspace with a sized tmpfs so the per-run checkout skips the vmfsd write path";
+      }
+    ];
+
+    # The control-plane runtime module that moved in-tree with
+    # packages/symphony. These pin the env contract ix's hil deployment and
+    # the worker module read off the unit, so a refactor that renames an
+    # option or drops the EnvironmentFile pass-through fails here instead of
+    # on a host switch.
+    symphony = [
+      {
+        assertion = symphonyService.unit.environment.SYMPHONY_WORKFLOW_PACK == "example";
+        message = "symphony module should default to the bundled example workflow pack";
+      }
+      {
+        assertion = symphonyService.unit.environment.SYMPHONY_PRIMARY_REPO == "/srv/checkouts/index";
+        message = "symphony module should export the primary repo checkout to the runtime";
+      }
+      {
+        assertion = lib.hasSuffix "/bin/symphony" symphonyService.unit.serviceConfig.ExecStart;
+        message = "symphony module should exec /bin/symphony from the configured package";
+      }
+      {
+        assertion = symphonyService.unit.serviceConfig.EnvironmentFile == "/run/secrets/symphony.env";
+        message = "symphony module should pass the secrets EnvironmentFile through to systemd";
+      }
+      {
+        assertion = !(symphonyService.unit.environment ? SYMPHONY_HOST_USER);
+        message = "symphony module should keep host-placement env unset until hostRuntime.enable";
       }
     ];
 

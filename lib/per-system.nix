@@ -633,6 +633,11 @@ let
               printf '%s\n' '${forced}' > "$out"
             '';
           run-records-session = repoPackages.run.passthru.tests.recordsSession;
+          # Symphony's required quality lane (compile -Werror, mix format,
+          # credo, mix test) as a sandboxed derivation; see
+          # packages/symphony/default.nix. The advisory lane (dialyzer,
+          # sobelow, deps.audit) stays a local `mix quality` run.
+          symphony-elixir = repoPackages.symphony.passthru.tests.elixir;
           # Deterministic alloc-count gate for indexbench: runs the counting-
           # allocator demo bench once through `indexbench assert` and fails if its
           # allocation count exceeds the declared budget. Reproducible, unlike
@@ -807,6 +812,20 @@ in
         pkgs.valgrind
         pkgs.samply
         pkgs.jemalloc
+      ];
+    };
+
+    # Dev loop for packages/symphony: the Elixir/OTP pairing the runtime pins
+    # (1.19 on 28) plus the host tools bin/run-nix expects. codex is the plain
+    # nixpkgs CLI; authenticate it before `nix run .#symphony`.
+    symphony = pkgs.mkShellNoCC {
+      packages = [
+        (ix.languages.elixir.toolchain pkgs { version = "1.19"; })
+        (ix.languages.erlang.toolchain pkgs { version = "28"; })
+        pkgs.codex
+        pkgs.gh
+        pkgs.git
+        pkgs.openssh
       ];
     };
   };

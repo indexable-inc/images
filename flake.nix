@@ -57,6 +57,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Provides only `room-server` for images/dev/symphony-codex (through
+    # `pkgs.symphony-room-server` in lib/overlay.nix). The Elixir runtime
+    # itself lives in packages/symphony now; room-server's source moved to
+    # the ix monorepo, so this pin stays on the last symphony rev that still
+    # builds it and retires once the image's room-server seam moves too.
     symphony = {
       url = "github:indexable-inc/symphony/main";
       inputs.nixpkgs.follows = "nixpkgs";
