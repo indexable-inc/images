@@ -80,14 +80,8 @@ members = [
 # so it owns its own Cargo.toml + Cargo.lock (it carries its own `[workspace]`).
 # Excluding it here keeps the root lockfile from pulling it in, so a root-lock
 # bump never recompiles it; its Nix build keys only on its own folder.
-#
-# packages/symphony is the tucked-in subtree from indexable-inc/symphony. It
-# carries its own nested Cargo workspace (`packages/symphony/Cargo.toml`) plus
-# its own `Cargo.nix.lock` for room-server's Nix build, so the same exclude
-# pattern keeps it isolated from the root lockfile.
 exclude = [
   "packages/nix-cargo-unit",
-  "packages/symphony",
 ]
 resolver = "3"
 

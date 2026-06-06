@@ -57,6 +57,12 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    symphony = {
+      url = "github:indexable-inc/symphony/main";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.rust-overlay.follows = "rust-overlay";
+    };
+
     # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
     # `packages/vt/libghostty-vt` owns the build. Pinned to the commit the
     # local clone validated against; `requireZig` in `build.zig.zon` is exact
@@ -76,6 +82,7 @@
       rust-overlay,
       home-manager,
       hermes-agent,
+      symphony,
       clippy-fork,
       ghostty,
       ...
@@ -120,6 +127,7 @@
           rust-overlay
           home-manager
           hermes-agent
+          symphony
           clippy-fork
           ghostty
           ;
