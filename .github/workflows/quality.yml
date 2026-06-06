@@ -1,0 +1,87 @@
+name: quality
+
+# Informational, non-blocking quality gate (WS-8). This workflow is not in
+# branch protection on purpose: it reports format/credo/sobelow/audit/dialyzer
+# and coverage findings while the codebase is brought into compliance. WS-9
+# promotes it to required after the overhaul cutover. Do not add this workflow
+# to branch protection until then.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  elixir-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: elixir
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install: true
+          cache: true
+          working_directory: elixir
+
+      - name: Cache deps and build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            elixir/deps
+            elixir/_build
+          key: ${{ runner.os }}-mix-${{ hashFiles('elixir/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      # PLT build is the slow part of dialyzer; cache it keyed on the lockfile
+      # and the pinned toolchain so a toolchain bump invalidates the stale PLT.
+      - name: Cache dialyzer PLTs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: elixir/priv/plts
+          key: ${{ runner.os }}-plt-${{ hashFiles('elixir/mise.toml') }}-${{ hashFiles('elixir/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-plt-${{ hashFiles('elixir/mise.toml') }}-
+
+      - name: Run make quality
+        run: make quality
+
+  rust-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/room-server
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Rust toolchain
+        run: rustup component add rustfmt clippy
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/room-server/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('packages/room-server/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      # Known pre-existing clippy findings: report them without -D warnings and
+      # do not fail the job until WS-9 brings the crate into compliance.
+      - name: cargo clippy
+        continue-on-error: true
+        run: cargo clippy --all-targets

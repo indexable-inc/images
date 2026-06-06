@@ -1,0 +1,11 @@
+{
+  "engine": "codex",
+  "model": "gpt-5.3-codex",
+  "effort": "medium",
+  "permissions": "workspace_write",
+  "cwd": "/workspace/run_x/primary",
+  "prompt": "write FOO to ./hello.txt and stop",
+  "tools": [],
+  "runId": "run_x",
+  "nodeId": "n0"
+}

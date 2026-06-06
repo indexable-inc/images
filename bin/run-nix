@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+SYMPHONY_STATE_DIR="${SYMPHONY_STATE_DIR:-$HOME/.local/state/symphony}"
+SYMPHONY_RUNTIME_DIR="${SYMPHONY_RUNTIME_DIR:-$SYMPHONY_STATE_DIR/runtime}"
+SYMPHONY_LOGS_ROOT="${SYMPHONY_LOGS_ROOT:-$SYMPHONY_STATE_DIR/log}"
+SYMPHONY_HTTP_PORT="${SYMPHONY_HTTP_PORT:-${SYMPHONY_PORT:-4040}}"
+
+# The new DAG runtime calls this SYMPHONY_WORKSPACES_DIR; the older
+# escript called it SYMPHONY_WORKSPACE_ROOT. Accept either, prefer the
+# new name.
+SYMPHONY_WORKSPACES_DIR="${SYMPHONY_WORKSPACES_DIR:-${SYMPHONY_WORKSPACE_ROOT:-$SYMPHONY_STATE_DIR/workspaces}}"
+
+# Run history (per-run JSON snapshots that drive the dashboard). The
+# default in SymphonyElixir.Config is $SYMPHONY_ROOT/runs, but
+# SYMPHONY_ROOT here points at the runtime copy which gets wiped on
+# every restart. Anchor runs/ at the stable state dir so the dashboard
+# shows historical runs after rebuilds.
+SYMPHONY_RUNS_DIR="${SYMPHONY_RUNS_DIR:-$SYMPHONY_STATE_DIR/runs}"
+
+if ! command -v codex >/dev/null 2>&1; then
+  echo "codex is required on PATH and must already be authenticated" >&2
+  exit 1
+fi
+
+mkdir -p "$SYMPHONY_STATE_DIR" "$SYMPHONY_WORKSPACES_DIR" "$SYMPHONY_LOGS_ROOT" "$SYMPHONY_RUNS_DIR"
+
+# Stage the repo into the runtime dir so mix can write _build there
+# without touching the source checkout (which is read-only when invoked
+# from nix store, and live-edited when invoked from a working tree).
+rm -rf "$SYMPHONY_RUNTIME_DIR.tmp"
+mkdir -p "$SYMPHONY_RUNTIME_DIR.tmp"
+cp -R "$REPO_ROOT/." "$SYMPHONY_RUNTIME_DIR.tmp/"
+chmod -R u+w "$SYMPHONY_RUNTIME_DIR.tmp"
+rm -rf "$SYMPHONY_RUNTIME_DIR"
+mv "$SYMPHONY_RUNTIME_DIR.tmp" "$SYMPHONY_RUNTIME_DIR"
+
+# SYMPHONY_ROOT is read by SymphonyElixir.Config at boot to anchor the
+# catalogs (workflows/ and skills/ live there) and to resolve relative
+# paths. Anchor it at the runtime copy so a live edit of REPO_ROOT does
+# not get half-loaded mid-run.
+export SYMPHONY_ROOT="$SYMPHONY_RUNTIME_DIR"
+export SYMPHONY_WORKSPACES_DIR
+export SYMPHONY_RUNS_DIR
+export SYMPHONY_LOGS_ROOT
+export SYMPHONY_HTTP_PORT
+
+cd "$SYMPHONY_RUNTIME_DIR/elixir"
+
+# Production runs use MIX_ENV=prod; default to prod for the systemd
+# unit invocation. Callers can override (e.g. dev iteration).
+export MIX_ENV="${MIX_ENV:-prod}"
+
+mix deps.get --only "$MIX_ENV"
+mix compile --warnings-as-errors
+
+# mix run --no-halt starts SymphonyElixir.Application (which boots the
+# Catalog, WorkflowCatalog, the run supervisor, the LiveView endpoint,
+# and the triggers) and stays in the foreground so systemd can supervise
+# it.
+exec mix run --no-halt
