@@ -81,7 +81,9 @@ The kernel runs on the same pinned interpreter as the server (see
 [`default.nix`](./default.nix)), so notebook cells can `import` the bundled
 modules with no install step: `tui` (PTY driver), `search` (semantic/grep over
 the `index` corpus), `fff` (fast fuzzy file search / content grep over a repo),
-`exa_py` (the Exa web-search SDK; bring your own `EXA_API_KEY`), numpy, polars,
+`exa_py` (the Exa web-search SDK; bring your own `EXA_API_KEY`), `google_auth`
+(Gmail and Calendar through the official Google client: `google_auth.gmail()` /
+`google_auth.calendar()`, backed by the shared `gcal` grant), numpy, polars,
 duckdb, httpx, matplotlib, playwright, the Google API client, and on macOS
 `screen` and `vmkit`. A per-notebook kernel is shared with the human, so state
 set by an agent cell is visible in the browser.

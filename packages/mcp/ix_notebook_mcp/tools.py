@@ -28,7 +28,8 @@ mcp = FastMCP(
         "write the notebook as a readable narrative: markdown for context, code "
         "cells for steps. Call `notebook_use` first to pick or create a notebook. "
         "The kernel is shared with the human, and bundled modules (`tui`, `search`, "
-        "`fff`, `exa_py`, numpy, polars, duckdb, httpx, playwright, ...) import with "
+        "`fff`, `exa_py`, `google_auth` (Gmail/Calendar via `google_auth.gmail()` / "
+        "`.calendar()`), numpy, polars, duckdb, httpx, playwright, ...) import with "
         "no install step. "
         "`cell_add(run=True)` is the usual way to add and execute a step in one call."
     ),

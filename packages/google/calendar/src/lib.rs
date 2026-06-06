@@ -5,17 +5,22 @@
 //! HTTP client, the wire types, OAuth, and error mapping. The user-facing
 //! surfaces stay thin per RFC 0003: the `gcal` CLI
 //! (`packages/google/calendar/cli`) shapes arguments, and the ix-mcp calendar
-//! tools (`packages/mcp`) run that CLI with `--json`. When the Gmail
-//! integration (#644) lands, the `auth` module is the part to graduate into a
-//! shared `packages/google/auth` crate.
+//! tools (`packages/mcp`) run that CLI with `--json`.
+//!
+//! The `auth` module owns the shared Google grant: its consent now covers Gmail
+//! (`gmail.modify`, `gmail.send`) alongside `calendar.events`, and
+//! `gcal print-access-token` hands a current token to the bundled Python
+//! `google_auth` helper so notebook cells can drive Gmail and Calendar through
+//! the official client. When more Google surfaces land, this `auth` module is
+//! the part to graduate into a shared `packages/google/auth` crate (#644).
 
 pub mod auth;
 mod error;
 mod model;
 
 pub use auth::{
-    AuthCode, Authenticator, ClientSecrets, EVENTS_SCOPE, PendingConsent, StoredToken, TokenStore,
-    begin_consent,
+    AccessToken, AuthCode, Authenticator, ClientSecrets, EVENTS_SCOPE, GMAIL_MODIFY_SCOPE,
+    GMAIL_SEND_SCOPE, PendingConsent, StoredToken, TokenStore, begin_consent,
 };
 pub use error::{Error, Result};
 pub use model::{

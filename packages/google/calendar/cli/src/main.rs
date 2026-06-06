@@ -13,8 +13,14 @@ use chrono::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use google_calendar::{
     Attendee, AttendeeDraft, Authenticator, Client, ClientSecrets, EVENTS_SCOPE, Event, EventDraft,
-    EventQuery, EventTime, PRIMARY_CALENDAR, SendUpdates, TokenStore, begin_consent,
+    EventQuery, EventTime, GMAIL_MODIFY_SCOPE, GMAIL_SEND_SCOPE, PRIMARY_CALENDAR, SendUpdates,
+    TokenStore, begin_consent,
 };
+
+/// Scopes the one-time consent requests: Calendar events plus Gmail
+/// read/modify and send, so the single stored grant authorizes both the
+/// calendar tools and the bundled Python `google_auth` helper.
+const CONSENT_SCOPES: [&str; 3] = [EVENTS_SCOPE, GMAIL_MODIFY_SCOPE, GMAIL_SEND_SCOPE];
 
 /// Command-line arguments.
 #[derive(Parser)]
@@ -31,8 +37,14 @@ enum Command {
     /// Needs the team OAuth client in `GOOGLE_OAUTH_CLIENT_ID` and
     /// `GOOGLE_OAUTH_CLIENT_SECRET`. Prints a consent URL; with a local browser
     /// the redirect lands automatically, over SSH pass `--paste` and feed the
-    /// redirect URL back on stdin.
+    /// redirect URL back on stdin. The grant covers Calendar and Gmail.
     Auth(AuthArgs),
+    /// Print a current OAuth access token minted from the stored grant.
+    ///
+    /// With `--json`, emits `{access_token, expires_in, scopes}`; this is the
+    /// contract the bundled Python `google_auth` helper consumes to drive the
+    /// Gmail and Calendar APIs. Without it, prints the bare token.
+    PrintAccessToken(PrintAccessTokenArgs),
     /// List events in a window (default: now through 7 days from now).
     List(ListArgs),
     /// Show one event.
@@ -41,6 +53,14 @@ enum Command {
     Create(CreateArgs),
     /// Cancel (delete) an event.
     Cancel(CancelArgs),
+}
+
+#[derive(Args)]
+struct PrintAccessTokenArgs {
+    /// Emit `{access_token, expires_in, scopes}` as JSON instead of the bare
+    /// token (what the Python `google_auth` helper reads).
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -184,6 +204,7 @@ impl From<Notify> for SendUpdates {
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Auth(args) => run_auth(args).await,
+        Command::PrintAccessToken(args) => run_print_access_token(args).await,
         Command::List(args) => run_list(args).await,
         Command::Show(args) => run_show(args).await,
         Command::Create(args) => run_create(args).await,
@@ -200,7 +221,7 @@ fn client() -> anyhow::Result<Client> {
 async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
     let secrets = ClientSecrets::from_env()?;
     let store = TokenStore::new()?;
-    let pending = begin_consent(secrets.clone(), &[EVENTS_SCOPE]).await?;
+    let pending = begin_consent(secrets.clone(), &CONSENT_SCOPES).await?;
 
     println!("Open this URL in your browser:\n\n  {}\n", pending.auth_url);
     let code = if args.paste {
@@ -231,6 +252,24 @@ async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
     };
     client.list_events(PRIMARY_CALENDAR, &probe).await?;
     println!("Verified: the Calendar API answers with this grant.");
+    Ok(())
+}
+
+async fn run_print_access_token(args: PrintAccessTokenArgs) -> anyhow::Result<()> {
+    let auth = Authenticator::new(ClientSecrets::from_env()?, TokenStore::new()?)?;
+    let minted = auth.mint_access_token().await?;
+    if args.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "access_token": minted.token,
+                "expires_in": minted.expires_in,
+                "scopes": minted.scopes,
+            })
+        );
+    } else {
+        println!("{}", minted.token);
+    }
     Ok(())
 }
 

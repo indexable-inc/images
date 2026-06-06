@@ -275,6 +275,29 @@ let
       ''
   );
 
+  # `google_auth`: mint Google credentials for the bundled Gmail/Calendar Python
+  # clients. Pure Python (no cdylib): it shells to the bundled `gcal` binary
+  # (`IX_GCAL_BIN`, set on the wrapper below) for a short-lived access token from
+  # the shared Google grant, and wraps it as a `google.oauth2.credentials`
+  # object the official client accepts. The refresh token / client secret stay
+  # inside `gcal`; only access tokens cross into Python.
+  googleAuthPythonSource = builtins.path {
+    name = "ix-mcp-google-auth-python-source";
+    path = ./src/google_auth;
+  };
+  googleAuthModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-google-auth-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Google OAuth credentials helper bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/google_auth"
+        mkdir -p "$site"
+        cp -r ${googleAuthPythonSource}/google_auth/. "$site/"
+      ''
+  );
+
   # Native macOS screen capture and cursor control, bundled like `tui` and
   # `search` so every session can `import screen`. This one is pure Python (no
   # PyO3 cdylib): it wraps the Apple-maintained pyobjc `Quartz` binding for
@@ -438,6 +461,7 @@ let
       tuiModule
       searchModule
       fffModule
+      googleAuthModule
       ixNotebookMcpModule
     ]
     ++ darwinExtraPackages ps
@@ -586,6 +610,26 @@ let
     + "assert callable(e.search) and callable(e.answer); "
     + "print('exa-ok')"
   );
+  # The `google_auth` helper imports (pulling in google-auth) and exposes its
+  # builders. A real token mint needs IX_GCAL_BIN + a prior `gcal auth`, so the
+  # sandbox-safe assertion is the unset path: it must raise a clear, typed error
+  # naming the missing piece rather than hanging or crashing vaguely.
+  googleAuthBundled = importTest "google-auth" ''
+    import os
+
+    import google_auth
+
+    assert callable(google_auth.credentials)
+    assert callable(google_auth.gmail) and callable(google_auth.calendar)
+    os.environ.pop("IX_GCAL_BIN", None)
+    try:
+        google_auth.credentials()
+    except google_auth.GoogleAuthError as exc:
+        assert "IX_GCAL_BIN" in str(exc), exc
+    else:
+        raise SystemExit("expected GoogleAuthError when IX_GCAL_BIN is unset")
+    print("google-auth-ok")
+  '';
   jupyterBundled = importTest "jupyter" (
     "import ipykernel, jupyter_server, jupyterlab, nbformat, jupyter_collaboration, "
     + "jupyter_server_ydoc, jupyter_ydoc, pycrdt, mcp; "
@@ -769,6 +813,7 @@ package.overrideAttrs (old: {
         dataLibsBundled
         gmailLibsBundled
         exaBundled
+        googleAuthBundled
         jupyterBundled
         serverTools
         evalSmoke

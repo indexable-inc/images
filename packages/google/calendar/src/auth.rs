@@ -45,6 +45,14 @@ pub const CLIENT_SECRET_ENV: &str = "GOOGLE_OAUTH_CLIENT_SECRET";
 /// access to calendar settings or the user's calendar list.
 pub const EVENTS_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events";
 
+/// Gmail read/modify scope: read messages, labels, and threads, and change
+/// labels/read-state (archive, trash). Does not cover sending; pair it with
+/// [`GMAIL_SEND_SCOPE`] for that.
+pub const GMAIL_MODIFY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify";
+
+/// Gmail send scope: send mail as the authenticated user.
+pub const GMAIL_SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
+
 /// Google's OAuth consent endpoint.
 const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 
@@ -213,6 +221,9 @@ struct TokenResponse {
     refresh_token: Option<String>,
     #[serde(default)]
     scope: Option<String>,
+    /// Access-token lifetime in seconds, when the endpoint reports one.
+    #[serde(default)]
+    expires_in: Option<u64>,
 }
 
 /// The token endpoint's error body (RFC 6749 §5.2).
@@ -310,6 +321,32 @@ impl TokenClient {
     }
 }
 
+/// A freshly minted access token plus the metadata a caller needs to cache it.
+///
+/// Returned by [`Authenticator::mint_access_token`]: the bearer token, its
+/// reported lifetime, and the scopes the underlying grant covers (read from the
+/// stored grant, since the refresh response often omits `scope`). The token is
+/// the short-lived credential, so `Debug` redacts it.
+#[derive(Clone)]
+pub struct AccessToken {
+    /// The bearer access token.
+    pub token: String,
+    /// Lifetime in seconds, when the token endpoint reported one.
+    pub expires_in: Option<u64>,
+    /// Scopes the grant covers (e.g. calendar.events, gmail.modify).
+    pub scopes: Vec<String>,
+}
+
+impl std::fmt::Debug for AccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccessToken")
+            .field("token", &"<redacted>")
+            .field("expires_in", &self.expires_in)
+            .field("scopes", &self.scopes)
+            .finish()
+    }
+}
+
 /// Mints access tokens from the stored refresh token.
 ///
 /// One access token is fetched lazily per `Authenticator` and reused for its
@@ -351,11 +388,27 @@ impl Authenticator {
     /// [`crate::Error::TokenRevoked`] when the grant no longer works, and
     /// transport errors otherwise.
     pub async fn access_token(&self) -> Result<&str> {
-        let token = self.access.get_or_try_init(|| self.refresh()).await?;
+        let token = self
+            .access
+            .get_or_try_init(|| async { self.refresh().await.map(|minted| minted.token) })
+            .await?;
         Ok(token)
     }
 
-    async fn refresh(&self) -> Result<String> {
+    /// Mint a fresh access token (always a network refresh, never the cache),
+    /// returning the token plus its lifetime and the grant's scopes. This is
+    /// the path the `print-access-token` CLI uses to hand a current token to the
+    /// bundled Python `google_auth` helper for Gmail/Calendar calls.
+    ///
+    /// # Errors
+    /// Same as [`Self::access_token`]: [`crate::Error::NoToken`] when nothing is
+    /// stored, [`crate::Error::TokenRevoked`] when the grant no longer works,
+    /// and transport errors otherwise.
+    pub async fn mint_access_token(&self) -> Result<AccessToken> {
+        self.refresh().await
+    }
+
+    async fn refresh(&self) -> Result<AccessToken> {
         let stored = self.store.load()?;
         let outcome = self
             .token
@@ -369,15 +422,20 @@ impl Authenticator {
             TokenOutcome::Granted(token) => token,
             TokenOutcome::Denied(denied) => return Err(denied.refresh_error()),
         };
+        let scopes = stored.scopes;
         if let Some(rotated) = token.refresh_token {
             // Google occasionally rotates the refresh token on refresh; the
             // old one stops working, so persist the replacement immediately.
             self.store.save(&StoredToken {
                 refresh_token: rotated,
-                scopes: stored.scopes,
+                scopes: scopes.clone(),
             })?;
         }
-        Ok(token.access_token)
+        Ok(AccessToken {
+            token: token.access_token,
+            expires_in: token.expires_in,
+            scopes,
+        })
     }
 }
 
