@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { buildMcpEnv } from "./env.js";
 
 // Bridge the ix-mcp Python-execution MCP server into Pi as native tools.
 //
@@ -20,7 +21,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
   const command = process.env.IX_MCP_BIN ?? "ix-mcp";
 
   const client = new Client({ name: "ix-mcp-bridge", version: "0.1.0" });
-  await client.connect(new StdioClientTransport({ command, args: ["serve"] }));
+  await client.connect(
+    new StdioClientTransport({ command, args: ["serve"], env: buildMcpEnv() }),
+  );
 
   const { tools } = await client.listTools();
   for (const tool of tools) {

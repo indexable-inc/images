@@ -28,6 +28,8 @@ let
     root = ./extension;
     fileset = lib.fileset.unions [
       (./extension + "/ix-mcp-bridge.ts")
+      (./extension + "/env.js")
+      (./extension + "/env.test.mjs")
       (./extension + "/package.json")
       (./extension + "/package-lock.json")
     ];
@@ -44,10 +46,16 @@ let
     npmDepsHash = "sha256-Nis7wQLp7wASaEu4n/Cp3pthB3z+9FsTJs5pK3oq77M=";
     # No build script: install the source plus production node_modules verbatim.
     dontNpmBuild = true;
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      npm test
+      runHook postCheck
+    '';
     installPhase = ''
       runHook preInstall
       mkdir -p $out
-      cp ix-mcp-bridge.ts package.json $out/
+      cp ix-mcp-bridge.ts env.js package.json $out/
       cp -r node_modules $out/node_modules
       runHook postInstall
     '';

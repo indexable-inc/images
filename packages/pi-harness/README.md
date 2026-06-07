@@ -28,6 +28,7 @@ PI_HARNESS_MODEL=codex pi-harness "..."  # gpt-5.5 via OpenAI
 | Machine-readable stream | `--mode json` (default); `PI_HARNESS_MODE=text` for interactive dev |
 | Model selection | `models.nix` table → `--provider`/`--model` |
 | API keys | Read by Pi from the env the caller provides (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`); never looked up here |
+| MCP subprocess env | `ix-mcp` receives a scrubbed allowlist; model-provider keys are blocked so `python_exec` cannot read them |
 
 ## Design decisions (the ticket's open questions)
 
@@ -79,6 +80,11 @@ The bridge is packaged with `buildNpmPackage`, so the store extension ships its
 `node_modules` and Pi resolves `@modelcontextprotocol/sdk` at runtime. Refresh
 the pinned dep hash after changing `package-lock.json` with
 `nix run nixpkgs#prefetch-npm-deps -- extension/package-lock.json`.
+
+The MCP bridge's env scrubber is covered by `npm test` inside the Nix build.
+If an MCP feature needs an extra non-provider environment variable, add it via
+`PI_HARNESS_MCP_ENV_ALLOWLIST=NAME`; model-provider keys remain blocked even
+when listed there.
 
 ## Follow-ups (intentionally deferred)
 

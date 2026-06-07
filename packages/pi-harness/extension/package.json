@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Bridge the ix-mcp Python-execution MCP server into Pi as native tools",
+  "scripts": {
+    "test": "node --test env.test.mjs"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
   }
