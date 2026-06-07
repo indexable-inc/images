@@ -1197,6 +1197,15 @@ let
     out = view.df_html(lsdf)
     assert "<table" in out and "rows" in out and "tabular-nums" in out, out[:120]
 
+    # Nested List(Struct)/Struct cells render as boxed sub-tables, not a
+    # truncated str(value): the inner field values must reach the HTML.
+    nested = pl.DataFrame({"host": ["h1"]}).with_columns(
+        mounts=pl.lit([{"mount": "/data", "pct": 91}], dtype=pl.List(pl.Struct({"mount": pl.String, "pct": pl.Int64})))
+    )
+    nout = view.df_html(nested)
+    assert "/data" in nout and ">91<" in nout, nout[:200]
+    assert "[{" not in nout and "…" not in nout, "nested cell fell back to a truncated repr"
+
     c = view.cat(base + "/default.nix", lines=(1, 3))
     assert isinstance(c, view.Code)
     assert repr(c).count("\n") <= 3
