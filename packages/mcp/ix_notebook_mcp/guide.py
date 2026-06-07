@@ -97,11 +97,14 @@ HTML = (
 )
 
 VIEW = (
-    "Prefer these over shelling out: `view.ls/tree/grep/find` return polars DataFrames "
-    "(composable + a styled HTML table) and `view.cat/read/head/json/diff` return a "
-    "syntax-highlighted view, and `view.edit(path, old, new)` applies a change and returns it as "
-    "a highlighted diff (never edit blind), so you never hand-roll display HTML or run "
-    "`ls`/`grep`/`cat` in bash."
+    "Prefer these over shelling out, and never reach for a subprocess to do them: `view.ls(path)` "
+    "/ `view.tree(path)` list a directory as a polars DataFrame you can `.filter` / `.sort` "
+    "(never `ls` — not via bash, `sh`, or `asyncio.create_subprocess_exec`, and never paste a raw "
+    "`ls -la` dump at the human), `view.grep` / `view.find` search as DataFrames, "
+    "`view.cat/read/head/json/diff` return a syntax-highlighted view, and `view.edit(path, old, "
+    "new)` applies a change and returns it as a highlighted diff (never edit blind). Shelling out "
+    "to `ls` / `cat` / `grep` / `find` is always wrong here — you throw away the table and the "
+    "highlighting and dump unstyled text the human has to read."
 )
 
 POLARS = (
