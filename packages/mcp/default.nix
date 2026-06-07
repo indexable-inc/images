@@ -374,25 +374,29 @@ let
   # which is exactly where escaping is forgotten (the dtype-header XSS this
   # package set just had to patch). Not in nixpkgs; pure Python, one dep
   # (markupsafe). https://htpy.dev
-  htpyModule = pkgs.python3.pkgs.buildPythonPackage rec {
-    pname = "htpy";
-    version = "26.5.1";
-    pyproject = true;
-    src = pkgs.fetchPypi {
+  htpyModule =
+    let
+      pname = "htpy";
+      version = "26.5.1";
+    in
+    pkgs.python3.pkgs.buildPythonPackage {
       inherit pname version;
-      hash = "sha256-Q6NlwfxnAJTaeBuSOIMBkznOwDE5fWHV/l+OLyJ4tj4=";
+      pyproject = true;
+      src = pkgs.fetchPypi {
+        inherit pname version;
+        hash = "sha256-Q6NlwfxnAJTaeBuSOIMBkznOwDE5fWHV/l+OLyJ4tj4=";
+      };
+      # setuptools-scm reads the version from the sdist's PKG-INFO, but pin it so
+      # the build never depends on a .git that the sdist does not carry.
+      env.SETUPTOOLS_SCM_PRETEND_VERSION = version;
+      build-system = [
+        pkgs.python3.pkgs.setuptools
+        pkgs.python3.pkgs.setuptools-scm
+      ];
+      dependencies = [ pkgs.python3.pkgs.markupsafe ];
+      pythonImportsCheck = [ "htpy" ];
+      doCheck = false;
     };
-    # setuptools-scm reads the version from the sdist's PKG-INFO, but pin it so
-    # the build never depends on a .git that the sdist does not carry.
-    env.SETUPTOOLS_SCM_PRETEND_VERSION = version;
-    build-system = [
-      pkgs.python3.pkgs.setuptools
-      pkgs.python3.pkgs.setuptools-scm
-    ];
-    dependencies = [ pkgs.python3.pkgs.markupsafe ];
-    pythonImportsCheck = [ "htpy" ];
-    doCheck = false;
-  };
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
   # `--system-site-packages`, so `tui`, `search`, `fff`, `exa_py`, numpy, polars
