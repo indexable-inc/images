@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "btop-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780863565,
+        "narHash": "sha256-o8HUTwhZYiivv/uvd/CUgB/zJpQJ/4aHFx/OWfuLJXs=",
+        "owner": "indexable-inc",
+        "repo": "btop",
+        "rev": "a49aa61bec9b0e0564704c904a3e1689612c8aef",
+        "type": "github"
+      },
+      "original": {
+        "owner": "indexable-inc",
+        "repo": "btop",
+        "rev": "a49aa61bec9b0e0564704c904a3e1689612c8aef",
+        "type": "github"
+      }
+    },
     "clippy-fork": {
       "flake": false,
       "locked": {
@@ -13,6 +30,42 @@
       "original": {
         "owner": "indexable-inc",
         "repo": "clippy",
+        "type": "github"
+      }
+    },
+    "drgn-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1777486813,
+        "narHash": "sha256-RyMWHiNfpJ6gAefXVB5cQKbtXQzBEJ+0syPsry2me1I=",
+        "ref": "refs/tags/v0.2.0",
+        "rev": "818b5a7e8a4db82a1e0326667e7afaec5bf5fd19",
+        "revCount": 3016,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/osandov/drgn"
+      },
+      "original": {
+        "ref": "refs/tags/v0.2.0",
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/osandov/drgn"
+      }
+    },
+    "fff-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780561592,
+        "narHash": "sha256-6ZmEeN/Ued9FZo/qfUb8/0L02F+8ECV0smAiQvIqyzU=",
+        "owner": "dmtrKovalenko",
+        "repo": "fff",
+        "rev": "1e055f9d7b94f33a7f393ac95e779bed72650d56",
+        "type": "github"
+      },
+      "original": {
+        "owner": "dmtrKovalenko",
+        "ref": "v0.9.1",
+        "repo": "fff",
         "type": "github"
       }
     },
@@ -97,6 +150,23 @@
       "original": {
         "owner": "nix-community",
         "repo": "home-manager",
+        "type": "github"
+      }
+    },
+    "launchk-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1749324662,
+        "narHash": "sha256-yZZGCPul1Q8KBgFIG9qkevnOxqnRbK8sqIu5OUPPTFQ=",
+        "owner": "mach-kernel",
+        "repo": "launchk",
+        "rev": "6f5f09e0dfa3fea662e859de5d7d49ac09a9dbe6",
+        "type": "github"
+      },
+      "original": {
+        "owner": "mach-kernel",
+        "repo": "launchk",
+        "rev": "6f5f09e0dfa3fea662e859de5d7d49ac09a9dbe6",
         "type": "github"
       }
     },
@@ -227,10 +297,14 @@
     },
     "root": {
       "inputs": {
+        "btop-src": "btop-src",
         "clippy-fork": "clippy-fork",
+        "drgn-src": "drgn-src",
+        "fff-src": "fff-src",
         "ghostty": "ghostty",
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
+        "launchk-src": "launchk-src",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       }

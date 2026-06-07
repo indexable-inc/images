@@ -1,6 +1,6 @@
 {
   lib,
-  fetchFromGitHub,
+  ix,
   python3,
   pkg-config,
   elfutils,
@@ -16,13 +16,7 @@ python3.pkgs.buildPythonApplication (finalAttrs: {
   version = "0.2.0";
   pyproject = true;
 
-  src = fetchFromGitHub {
-    owner = "osandov";
-    repo = "drgn";
-    tag = "v${finalAttrs.version}";
-    hash = "sha256-RyMWHiNfpJ6gAefXVB5cQKbtXQzBEJ+0syPsry2me1I=";
-    fetchSubmodules = true;
-  };
+  src = ix.drgnSrc;
 
   build-system = [ python3.pkgs.setuptools ];
 

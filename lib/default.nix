@@ -6,6 +6,10 @@
   rust-overlay,
   home-manager,
   hermes-agent,
+  btop-src,
+  drgn-src,
+  fff-src,
+  launchk-src,
   clippy-fork,
   ghostty,
   # Flake source revision, stamped into builds that want to report it (see
@@ -378,6 +382,10 @@ let
       writeProcessComposeApplication
       writePythonApplication
       ;
+    btopSrc = btop-src;
+    drgnSrc = drgn-src;
+    fffSrc = fff-src;
+    launchkSrc = launchk-src;
   };
 
   /**

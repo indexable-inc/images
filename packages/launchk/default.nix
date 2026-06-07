@@ -1,18 +1,13 @@
 {
   lib,
   rustPlatform,
-  fetchFromGitHub,
+  ix,
 }:
 # Reference package for the external-Rust-tool house style: a standalone
-# third-party binary built from a pinned `fetchFromGitHub` rev with
+# third-party binary built from a pinned flake source input with
 # `rustPlatform.buildRustPackage`. See `agent-context/sections/13-dependency-intake.md`.
 let
-  src = fetchFromGitHub {
-    owner = "mach-kernel";
-    repo = "launchk";
-    rev = "6f5f09e0dfa3fea662e859de5d7d49ac09a9dbe6";
-    hash = "sha256-yZZGCPul1Q8KBgFIG9qkevnOxqnRbK8sqIu5OUPPTFQ=";
-  };
+  src = ix.launchkSrc;
 in
 rustPlatform.buildRustPackage {
   pname = "launchk";

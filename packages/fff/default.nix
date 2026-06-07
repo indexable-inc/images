@@ -1,13 +1,13 @@
 {
   lib,
   rustPlatform,
-  fetchFromGitHub,
+  ix,
   cmake,
   pkg-config,
   stdenv,
 }:
 # External-Rust-tool house style: a standalone third-party binary built from a
-# pinned `fetchFromGitHub` rev with `rustPlatform.buildRustPackage`. See
+# pinned flake source input with `rustPlatform.buildRustPackage`. See
 # `agent-context/sections/13-dependency-intake.md` and `packages/launchk`.
 #
 # fff is a fast file-search toolkit for humans and AI agents. Two artifacts ship
@@ -16,12 +16,7 @@
 #   * `lib/libfff_c.{so,dylib}` – the stable C ABI (crate `fff-c`), which the
 #     `mcp` package loads via ctypes to expose `import fff` in notebook sessions.
 let
-  src = fetchFromGitHub {
-    owner = "dmtrKovalenko";
-    repo = "fff";
-    rev = "v0.9.1";
-    hash = "sha256-6ZmEeN/Ued9FZo/qfUb8/0L02F+8ECV0smAiQvIqyzU=";
-  };
+  src = ix.fffSrc;
 in
 rustPlatform.buildRustPackage {
   pname = "fff";

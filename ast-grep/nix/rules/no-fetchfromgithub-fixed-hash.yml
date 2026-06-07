@@ -1,0 +1,16 @@
+id: no-fetchfromgithub-fixed-hash
+language: nix
+severity: error
+message: "Do not pin GitHub source with `fetchFromGitHub { ... hash = ...; }`. Add it as a flake input with `flake = false` and consume that source instead."
+note: |
+  WHY: A GitHub source used by repo packages is a repository-level dependency,
+  not package-local string data. Putting the pin in flake.lock gives us one
+  update path, visible dependency metadata, and avoids duplicating a rev plus
+  fixed-output hash in Nix expressions.
+  REPO: Add a flake input like `name-src = { url = "github:owner/repo/rev";
+  flake = false; };`, thread it through `ix`, and use that source as `src`.
+rule:
+  any:
+    - pattern: fetchFromGitHub { owner = $OWNER; repo = $REPO; rev = $REV; hash = $HASH; }
+    - pattern: fetchFromGitHub { owner = $OWNER; repo = $REPO; tag = $TAG; hash = $HASH; $$$REST }
+    - pattern: fetchFromGitHub { inherit owner repo rev hash; }

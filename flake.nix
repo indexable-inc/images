@@ -46,6 +46,26 @@
       flake = false;
     };
 
+    btop-src = {
+      url = "github:indexable-inc/btop/a49aa61bec9b0e0564704c904a3e1689612c8aef";
+      flake = false;
+    };
+
+    drgn-src = {
+      url = "git+https://github.com/osandov/drgn?ref=refs/tags/v0.2.0&submodules=1";
+      flake = false;
+    };
+
+    fff-src = {
+      url = "github:dmtrKovalenko/fff/v0.9.1";
+      flake = false;
+    };
+
+    launchk-src = {
+      url = "github:mach-kernel/launchk/6f5f09e0dfa3fea662e859de5d7d49ac09a9dbe6";
+      flake = false;
+    };
+
     # Nous Research's Hermes agent ships its own NixOS module
     # (`nixosModules.default`) and uv2nix-built Python closure. Pinned to
     # a release tag so routine bumps are review events; `nix flake update
@@ -85,6 +105,10 @@
       rust-overlay,
       home-manager,
       hermes-agent,
+      btop-src,
+      drgn-src,
+      fff-src,
+      launchk-src,
       clippy-fork,
       ghostty,
       ...
@@ -145,6 +169,10 @@
           rust-overlay
           home-manager
           hermes-agent
+          btop-src
+          drgn-src
+          fff-src
+          launchk-src
           clippy-fork
           ghostty
           ;
