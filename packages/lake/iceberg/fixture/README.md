@@ -32,3 +32,8 @@ The stale-base leg prints which behavior the backend exhibits (`MERGES` or
 (issue #752, phase 0.4). What it cannot cover locally: R2's managed
 compaction interacting with the snapshot cursor, and snapshot expiration —
 those need the R2 staging run.
+
+`ensure_table` creates the table but never migrates it. A staging
+`corpus.documents` created before the `version` column (field 13) was added
+will fail every append with an arrow column-count error; drop the table and
+let the next run recreate it.

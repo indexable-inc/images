@@ -1,15 +1,22 @@
 //! The lake table's schema and the row ↔ [`Document`] codec.
 //!
 //! One row is one *observation*: a source's document as seen by one writer
-//! (`host`, optional `user`) at `observed_at`, tagged `op = upsert`, or a
-//! tombstone (`op = delete`) recording that the document left that writer's
-//! desired state. The table is an append-only revision log; current state is a
-//! latest-wins fold per `external_id` (see [`crate::read_all`]).
+//! slice (`host`, optional `user`), tagged `op = upsert`, or a tombstone
+//! (`op = delete`) recording that the document left that slice's desired
+//! state. The table is an append-only revision log; current state is a
+//! per-slice fold ordered by `version` (see [`fold_slices`]): an id is live
+//! while any slice's latest op for it is an upsert.
+//!
+//! `version` is the slice's revision counter, assigned by the writer as its
+//! slice's previous maximum plus one. It is committed data, so it survives
+//! compaction and clock steps; `observed_at` (wall-clock epoch ms) is kept for
+//! queryability and as the freshness arbiter between live replicas of one id
+//! in different slices, never to order one slice's operations.
 //!
 //! The first nine columns are exactly `sink-parquet`'s flat corpus schema, so
 //! every existing polars/duckdb query ports by adding `op != 'delete'` to its
-//! filter. `user`, `op`, and `observed_at` are the log's additions. As in the
-//! parquet log, `source`/`title`/`url`/`host`/`timestamp`/`user` are
+//! filter. `user`, `op`, `observed_at`, and `version` are the log's additions.
+//! As in the parquet log, `source`/`title`/`url`/`host`/`timestamp`/`user` are
 //! projections for queryability: a [`Document`] is reconstructed from
 //! `external_id`, `content_hash`, `body`, and `meta_json` alone.
 //!
@@ -19,6 +26,7 @@
 //! error, never a default.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use arrow_array::{Array as _, ArrayRef, Int64Array, RecordBatch, StringArray};
@@ -37,15 +45,28 @@ pub const OP_UPSERT: &str = "upsert";
 /// `op` value for a tombstone (the document left the writer's desired state).
 pub const OP_DELETE: &str = "delete";
 
-/// The columns a [`Document`] (or tombstone) is reconstructed from; the rest of
-/// the schema is a projection out of `meta_json`. Mirrors `source-parquet`'s
-/// four-column rule, plus the log's `op` and `observed_at`.
-pub const CODEC_COLUMNS: [&str; 6] =
-    ["external_id", "content_hash", "body", "meta_json", "op", "observed_at"];
+/// The non-payload columns every read needs: identity, grouping (`source`),
+/// the slice and version fold keys, the change-detection hash, and the
+/// cross-slice freshness arbiter. Enough to diff a slice's live state against
+/// desired state or to judge global liveness, without hauling bodies.
+pub const STATE_COLUMNS: [&str; 8] =
+    ["external_id", "source", "content_hash", "host", "user", "op", "observed_at", "version"];
 
-/// The columns the sink needs to diff a slice's live state against desired
-/// state: identity, change-detection hash, and the fold keys.
-pub const STATE_COLUMNS: [&str; 4] = ["external_id", "content_hash", "op", "observed_at"];
+/// [`STATE_COLUMNS`] plus the payload a [`Document`] is reconstructed from
+/// (`body`, `meta_json`); the rest of the schema is a projection out of
+/// `meta_json`, mirroring `source-parquet`'s four-column rule.
+pub const CODEC_COLUMNS: [&str; 10] = [
+    "external_id",
+    "source",
+    "content_hash",
+    "host",
+    "user",
+    "op",
+    "observed_at",
+    "version",
+    "body",
+    "meta_json",
+];
 
 /// The lake's Iceberg schema. Field ids are stable and append-only: the first
 /// nine are `sink-parquet`'s columns in its order, then the log's additions.
@@ -70,6 +91,7 @@ pub fn table_schema() -> Result<Schema> {
             optional(10, "user").into(),
             required(11, "op").into(),
             NestedField::required(12, "observed_at", Type::Primitive(PrimitiveType::Long)).into(),
+            NestedField::required(13, "version", Type::Primitive(PrimitiveType::Long)).into(),
         ])
         .build()
         .context(SchemaSnafu)
@@ -88,12 +110,14 @@ pub struct Slice<'a> {
 
 /// Encode one reconcile pass — upserts plus tombstones — as a single record
 /// batch against the table's arrow schema (which carries the parquet field-id
-/// metadata the writer requires).
+/// metadata the writer requires). `version` is the slice's revision counter
+/// for this pass (its previous maximum plus one).
 pub fn encode_batch(
     arrow_schema: &Arc<ArrowSchema>,
     source: &Source,
     slice: Slice<'_>,
     observed_at: i64,
+    version: i64,
     upserts: &[&Document],
     deletes: &[&str],
 ) -> Result<RecordBatch> {
@@ -135,6 +159,7 @@ pub fn encode_batch(
         string_col(&|_| slice.user.map(str::to_owned)),
         string_col(&|i| Some((if i < up { OP_UPSERT } else { OP_DELETE }).to_owned())),
         Arc::new((0..n).map(|_| Some(observed_at)).collect::<Int64Array>()),
+        Arc::new((0..n).map(|_| Some(version)).collect::<Int64Array>()),
     ];
     RecordBatch::try_new(Arc::clone(arrow_schema), columns).context(BatchSnafu)
 }
@@ -154,6 +179,12 @@ pub enum Op {
 pub struct LakeRow {
     /// Stable per-record id (the store `external_id`).
     pub external_id: String,
+    /// The source the row belongs to (grouping key for the per-source view).
+    pub source: String,
+    /// The writing host (slice fold key).
+    pub host: String,
+    /// The account, for per-user slices (slice fold key).
+    pub user: Option<String>,
     /// sha256 of the body; `None` only on tombstones.
     pub content_hash: Option<String>,
     /// The embedded text; `None` on tombstones, or when the read was projected
@@ -163,8 +194,11 @@ pub struct LakeRow {
     pub meta_json: Option<String>,
     /// The row's operation.
     pub op: Op,
-    /// When the writer observed this state (epoch milliseconds).
+    /// When the writer observed this state (epoch milliseconds). Informational
+    /// and a cross-slice freshness arbiter; never orders a slice's operations.
     pub observed_at: i64,
+    /// The slice's committed revision counter; orders the slice's operations.
+    pub version: i64,
 }
 
 /// Decode one record batch into rows, appending to `out`. `with_payload` says
@@ -176,9 +210,13 @@ pub fn rows_from_batch(
     out: &mut Vec<LakeRow>,
 ) -> Result<()> {
     let external_id = string_column(batch, "external_id")?;
+    let source = string_column(batch, "source")?;
+    let host = string_column(batch, "host")?;
+    let user = string_column(batch, "user")?;
     let content_hash = string_column(batch, "content_hash")?;
     let op_col = string_column(batch, "op")?;
     let observed_at = long_column(batch, "observed_at")?;
+    let version = long_column(batch, "version")?;
     let payload = if with_payload {
         Some((string_column(batch, "body")?, string_column(batch, "meta_json")?))
     } else {
@@ -210,16 +248,23 @@ pub fn rows_from_batch(
                 return NullValueSnafu { column: "meta_json", row }.fail();
             }
         }
+        let long = |array: &Int64Array, column: &'static str| {
+            array
+                .is_valid(row)
+                .then(|| array.value(row))
+                .context(NullValueSnafu { column, row })
+        };
         out.push(LakeRow {
             external_id: non_null_str(external_id, row, "external_id")?.to_owned(),
+            source: non_null_str(source, row, "source")?.to_owned(),
+            host: non_null_str(host, row, "host")?.to_owned(),
+            user: opt(user),
             content_hash: opt(content_hash),
             body,
             meta_json,
             op,
-            observed_at: observed_at
-                .is_valid(row)
-                .then(|| observed_at.value(row))
-                .context(NullValueSnafu { column: "observed_at", row })?,
+            observed_at: long(observed_at, "observed_at")?,
+            version: long(version, "version")?,
         });
     }
     Ok(())
@@ -246,21 +291,47 @@ pub fn document_from_row(row: LakeRow) -> Result<Document> {
     })
 }
 
-/// Keep, per `external_id`, only the row with the greatest `observed_at`
-/// (ties: the later-read row). Per-slice writers are serialized by the fleet's
-/// oneshot units, so within a slice `observed_at` only moves forward; across
-/// slices the rule is "any writer's most recent observation wins".
-pub fn fold_latest(rows: Vec<LakeRow>) -> HashMap<String, LakeRow> {
-    let mut latest: HashMap<String, LakeRow> = HashMap::new();
+/// Fold rows into current state: per `external_id`, each slice's latest row.
+///
+/// Within a slice, "latest" is the greatest `version` — the writer's committed
+/// revision counter — so ordering is immune to wall-clock steps and to
+/// compaction rewriting files. (A version tie means two writers raced one
+/// slice, which the fleet's serialized oneshot units rule out; it breaks by
+/// `observed_at`, then the later-read row, to stay deterministic.) Slices are
+/// kept apart because tombstones are slice-scoped: one host's delete must not
+/// erase a record another slice still observes — liveness belongs to
+/// [`live_winner`].
+pub fn fold_slices(rows: Vec<LakeRow>) -> HashMap<String, Vec<LakeRow>> {
+    let mut latest: HashMap<String, HashMap<(String, Option<String>), LakeRow>> = HashMap::new();
     for row in rows {
-        match latest.get(&row.external_id) {
-            Some(existing) if existing.observed_at > row.observed_at => {}
-            _ => {
-                latest.insert(row.external_id.clone(), row);
+        let slices = latest.entry(row.external_id.clone()).or_default();
+        match slices.entry((row.host.clone(), row.user.clone())) {
+            Entry::Occupied(mut entry) => {
+                let held = entry.get();
+                if (row.version, row.observed_at) >= (held.version, held.observed_at) {
+                    entry.insert(row);
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(row);
             }
         }
     }
-    latest
+    latest.into_iter().map(|(id, slices)| (id, slices.into_values().collect())).collect()
+}
+
+/// The row representing one id's live state, given its slice-latest rows from
+/// [`fold_slices`]: the id is live while *any* slice's latest op is an upsert,
+/// and the greatest `observed_at` (ties: slice identity) among those upserts
+/// picks which replica's content the view shows. Versions order operations
+/// within a slice and are not comparable across slices, so wall clock here
+/// only arbitrates between concurrently live copies of the same record — it
+/// never decides whether an id lives or dies. `None` means every slice that
+/// ever held the id has tombstoned it.
+pub fn live_winner(rows: Vec<LakeRow>) -> Option<LakeRow> {
+    rows.into_iter()
+        .filter(|row| row.op == Op::Upsert)
+        .max_by(|a, b| (a.observed_at, &a.host, &a.user).cmp(&(b.observed_at, &b.host, &b.user)))
 }
 
 /// Borrow one column as a `StringArray`, erroring (never defaulting) when the

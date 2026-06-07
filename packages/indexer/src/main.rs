@@ -26,7 +26,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use clap::Parser;
 use lake_iceberg::IcebergReconciler;
-use search_core::MixedbreadStore;
+use search_core::{MixedbreadStore, Store};
 use sink_mixedbread::MixedbreadReconciler;
 use sink_parquet::ParquetReconciler;
 
@@ -212,16 +212,19 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Consume mode (Iceberg corpus lake, full): fold the lake's revision log
-    // into its current document set and reconcile that back into Mixedbread —
-    // the lake's replay/rebuild path. Like the parquet consume below, emit and
-    // consume run as separate invocations of this binary.
+    // into its current per-source document sets and REPLACE each source's
+    // Mixedbread records with them — the lake's replay/rebuild path. Replace,
+    // not reconcile: the fold's absences are explicit tombstones, so the
+    // rebuild also deletes view records the lake has let go of, including a
+    // source whose records are all tombstoned. Like the parquet consume below,
+    // emit and consume run as separate invocations of this binary.
     if cli.from_iceberg {
         let mixedbread =
-            mixedbread.context("--from-iceberg requires --mixedbread-store (the reconcile target)")?;
+            mixedbread.context("--from-iceberg requires --mixedbread-store (the replace target)")?;
         let Lake { catalog, ident } = connect_lake(&cli).await?;
-        let documents =
-            lake_iceberg::read_all(catalog.as_ref(), &ident).await.context("reading the lake")?;
-        return finish(run_consume(documents, mixedbread).await);
+        let state =
+            lake_iceberg::read_state(catalog.as_ref(), &ident).await.context("reading the lake")?;
+        return finish(run_replace(state, mixedbread).await);
     }
 
     // Consume mode (Iceberg corpus lake, incremental): apply the changes since
@@ -347,11 +350,11 @@ async fn connect_lake(cli: &Cli) -> anyhow::Result<Lake> {
 
 /// Apply the lake's changes since `cursor` to Mixedbread, returning the
 /// snapshot the store is now caught up to (the next cursor).
-async fn run_lake_delta(
+async fn run_lake_delta<S: Store + Sync>(
     catalog: &dyn lake_iceberg::Catalog,
     ident: &lake_iceberg::TableIdent,
     cursor: i64,
-    mixedbread: Mixedbread<'_>,
+    mixedbread: MixedbreadReconciler<'_, S>,
 ) -> anyhow::Result<Option<i64>> {
     let delta = lake_iceberg::added_since(catalog, ident, cursor)
         .await
@@ -370,13 +373,13 @@ async fn run_lake_delta(
 
 /// Steady-state lake consume: cursor from `path`, delta applied to Mixedbread,
 /// new cursor written back. Bootstraps (absent file) and recovers (expired
-/// cursor) via a full rebuild. The apply is idempotent, so a crash before the
-/// cursor write replays safely on the next run.
-async fn run_cursor_consume(
+/// cursor) via a full replace rebuild. The apply is idempotent, so a crash
+/// before the cursor write replays safely on the next run.
+async fn run_cursor_consume<S: Store + Sync>(
     catalog: &dyn lake_iceberg::Catalog,
     ident: &lake_iceberg::TableIdent,
     path: &Path,
-    mixedbread: Mixedbread<'_>,
+    mixedbread: MixedbreadReconciler<'_, S>,
 ) -> Counts {
     let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
     let cursor = match read_cursor(path) {
@@ -414,25 +417,27 @@ async fn run_cursor_consume(
         }
     }
 
-    // Bootstrap / recovery: full rebuild, then store the snapshot read BEFORE
-    // the fold, so appends landing mid-rebuild are replayed next pass rather
-    // than skipped.
+    // Bootstrap / recovery: full rebuild with replace semantics — the cursor
+    // is gone, so tombstones appended while it was lost can never arrive as a
+    // delta, and only a full-state diff (deleting view records the lake no
+    // longer holds) can apply them before the new cursor buries them. The
+    // snapshot is read BEFORE the fold, so appends landing mid-rebuild are
+    // replayed next pass rather than skipped.
     let rebuild = async {
         let to_snapshot = lake_iceberg::current_snapshot_id(catalog, ident)
             .await
             .context("reading the lake snapshot")?;
-        let documents =
-            lake_iceberg::read_all(catalog, ident).await.context("reading the lake")?;
-        anyhow::Ok((to_snapshot, documents))
+        let state = lake_iceberg::read_state(catalog, ident).await.context("reading the lake")?;
+        anyhow::Ok((to_snapshot, state))
     }
     .await;
     match rebuild {
-        Ok((to_snapshot, documents)) => {
-            let consume = run_consume(documents, mixedbread).await;
-            counts.indexed += consume.indexed;
-            counts.skipped += consume.skipped;
-            counts.failures += consume.failures;
-            if consume.failures == 0
+        Ok((to_snapshot, state)) => {
+            let replace = run_replace(state, mixedbread).await;
+            counts.indexed += replace.indexed;
+            counts.skipped += replace.skipped;
+            counts.failures += replace.failures;
+            if replace.failures == 0
                 && let Some(snapshot) = to_snapshot
             {
                 record("lake-cursor", write_cursor(path, snapshot), &mut counts);
@@ -653,12 +658,44 @@ async fn consume_parquet(config: &source_parquet::Config, mixedbread: Mixedbread
     run_consume(documents, mixedbread).await
 }
 
+/// Replace each lake source's Mixedbread records with the lake's live fold:
+/// upload the new or changed, delete the records the lake no longer holds.
+///
+/// Only sources present in the lake are touched, so a store shared with
+/// directly indexed sources (code repos) keeps those intact — and a source
+/// whose lake records are all tombstoned still gets its view records deleted.
+/// The lake consume paths use this instead of [`run_consume`] because the
+/// lake's absences are explicit tombstone folds, while the parquet log has no
+/// tombstones and its absences stay protective.
+async fn run_replace<S: Store + Sync>(
+    state: lake_iceberg::LakeState,
+    mixedbread: MixedbreadReconciler<'_, S>,
+) -> Counts {
+    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+    for (source, documents) in state.sources {
+        let label = format!("replace:{source}");
+        let result = mixedbread
+            .replace(&Source::new(source), &documents)
+            .await
+            .map(|report| {
+                eprintln!(
+                    "[{label}] mixedbread: uploaded {}, skipped {}, deleted {} of {}",
+                    report.uploaded, report.skipped, report.deleted, report.total
+                );
+            })
+            .with_context(|| format!("[{label}] Mixedbread replace"));
+        record(&label, result, &mut counts);
+    }
+    counts
+}
+
 /// Reconcile already-read documents into Mixedbread, grouped by their `source`.
 ///
 /// Grouping keeps each Mixedbread reconcile scoped to one source, exactly as the
 /// direct per-source ingestion did, so a consumed record dedups against its own
 /// source and never touches another's. The parquet consume path reads its
-/// documents first, then shares this reconcile.
+/// documents first, then shares this reconcile (the lake paths replace instead;
+/// see [`run_replace`]).
 async fn run_consume(documents: Vec<Document>, mixedbread: Mixedbread<'_>) -> Counts {
     let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
     let mut by_source: BTreeMap<String, Vec<Document>> = BTreeMap::new();
@@ -1036,11 +1073,20 @@ async fn run_source<A: SourceAdapter + Sync>(
 mod tests {
     #![expect(clippy::expect_used, reason = "tests assert observable filesystem outcomes")]
 
+    use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use iceberg::CatalogBuilder as _;
+    use lake_iceberg::IcebergReconciler;
+    use search_core::{MemoryStore, Store as _};
+    use sink_mixedbread::MixedbreadReconciler;
+    use source_meta::{Reconciler as _, Source};
 
     use super::{
         Atuin, Counts, archive_prefix, finish, open_atuin, parse_user, read_cursor,
-        safe_path_under, user_prefix, write_cursor,
+        run_cursor_consume, safe_path_under, user_prefix, write_cursor,
     };
 
     /// Create a valid sqlite db with no `history` table at `path`, mirroring
@@ -1206,5 +1252,84 @@ mod tests {
             user_prefix(&base, "bob"),
             "two users must not share a parquet prefix"
         );
+    }
+
+    /// A `source=test` document for the lake-consume tests.
+    fn lake_doc(id: &str) -> source_meta::Document {
+        let body = format!("body of {id}");
+        let content_hash = source_meta::hash_body(body.as_bytes());
+        source_meta::Document {
+            external_id: id.to_owned(),
+            file_name: id.to_owned(),
+            mime: "text/plain",
+            body: body.into_bytes(),
+            meta_json: serde_json::json!({
+                "source": "test",
+                "external_id": id,
+                "content_hash": content_hash,
+            }),
+            content_hash,
+        }
+    }
+
+    /// The store's current external ids, for asserting view state.
+    async fn stored_ids(store: &MemoryStore) -> Vec<String> {
+        let mut ids: Vec<String> =
+            store.list_external_ids("s", None).await.expect("list").into_iter().collect();
+        ids.sort();
+        ids
+    }
+
+    #[tokio::test]
+    async fn cursor_rebuild_gcs_tombstones_missed_while_the_cursor_was_gone() {
+        // The recovery contract: when the cursor is absent or expired, the
+        // rebuild must not just re-upload the lake's current documents — it
+        // must also DELETE view records whose lake rows were tombstoned while
+        // no consumer was watching, because writing the new cursor buries
+        // those tombstones forever.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let warehouse = format!("file://{}", dir.path().display());
+        let catalog = iceberg::memory::MemoryCatalogBuilder::default()
+            .load(
+                "lake",
+                HashMap::from([(iceberg::memory::MEMORY_CATALOG_WAREHOUSE.to_owned(), warehouse)]),
+            )
+            .await
+            .expect("memory catalog");
+        let catalog: Arc<dyn lake_iceberg::Catalog> = Arc::new(catalog);
+        let ident = lake_iceberg::ensure_table(catalog.as_ref()).await.expect("ensure table");
+        let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
+        let source = Source::new("test");
+        let store = MemoryStore::new();
+        let mixedbread =
+            MixedbreadReconciler { store: &store, name: "s", index_timeout: Duration::from_secs(1) };
+        let cursor = dir.path().join("cursor.json");
+
+        // Bootstrap (absent cursor file): a full rebuild lands both documents.
+        sink.reconcile(&source, &[lake_doc("a"), lake_doc("b")]).await.expect("seed");
+        let counts = run_cursor_consume(catalog.as_ref(), &ident, &cursor, mixedbread).await;
+        assert_eq!(counts.failures, 0);
+        assert_eq!(stored_ids(&store).await, ["a", "b"]);
+        read_cursor(&cursor).expect("cursor readable").expect("cursor written");
+
+        // While no consumer watches, `a` is tombstoned — then the cursor
+        // expires (an unknown snapshot id is exactly what expiry surfaces as).
+        sink.reconcile(&source, &[lake_doc("b")]).await.expect("tombstone a");
+        write_cursor(&cursor, 0).expect("plant an expired cursor");
+        let counts = run_cursor_consume(catalog.as_ref(), &ident, &cursor, mixedbread).await;
+        assert_eq!(counts.failures, 0);
+        assert_eq!(
+            stored_ids(&store).await,
+            ["b"],
+            "the rebuild must GC the record tombstoned while the cursor was gone"
+        );
+        let rebuilt = read_cursor(&cursor).expect("cursor readable").expect("cursor rewritten");
+        assert_ne!(rebuilt, 0, "the rebuild must store the snapshot it read");
+
+        // Steady state after the rebuild: the next change arrives as a delta.
+        sink.reconcile(&source, &[lake_doc("c")]).await.expect("replace b with c");
+        let counts = run_cursor_consume(catalog.as_ref(), &ident, &cursor, mixedbread).await;
+        assert_eq!(counts.failures, 0);
+        assert_eq!(stored_ids(&store).await, ["c"], "the delta applies b's tombstone and c");
     }
 }

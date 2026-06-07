@@ -36,5 +36,8 @@ dirs.workspace = true
 nix = { workspace = true, features = ["hostname"] }
 
 [dev-dependencies]
+# The lake-consume tests drive run_cursor_consume against iceberg's in-memory
+# catalog (the same harness lake-iceberg's own suite uses).
+iceberg.workspace = true
 rusqlite = { workspace = true, features = ["bundled"] }
 tempfile.workspace = true

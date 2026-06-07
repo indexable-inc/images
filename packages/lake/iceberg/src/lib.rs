@@ -5,8 +5,12 @@
 //! [`Document`] observations: each reconcile pass appends only the documents
 //! that are new or changed (`op = upsert`) plus tombstones for the ones that
 //! left the writer's desired state (`op = delete`). Current state is a
-//! latest-wins fold per `external_id`; replay and incremental catch-up share
-//! one discipline, the **snapshot cursor** ([`added_since`]).
+//! per-slice fold ordered by each slice's committed `version` counter: an
+//! `external_id` is live while any slice's latest op for it is an upsert, so
+//! one host's tombstone cannot erase a record another slice still observes,
+//! and a wall-clock step on a writer cannot reorder its operations. Replay
+//! and incremental catch-up share one discipline, the **snapshot cursor**
+//! ([`added_since`]).
 //!
 //! Both halves live in this one crate — unlike the `sink-parquet` /
 //! `source-parquet` pair, where the object layout is the whole contract, the
@@ -19,11 +23,13 @@
 //!   An empty desired set is treated as "source absent", never as "delete
 //!   everything" (matching `sink-parquet`), so a transiently empty read cannot
 //!   tombstone a corpus.
-//! - **Read half**: [`read_all`] folds the whole log into current documents
-//!   (full rebuilds); [`added_since`] walks only the snapshots a cursor has
-//!   not seen (steady-state view catch-up). Compaction (`Replace` snapshots,
-//!   e.g. R2 Data Catalog's managed compaction) rewrites files without adding
-//!   rows, so the cursor walk follows `Append` snapshots only.
+//! - **Read half**: [`read_state`] folds the whole log into the current
+//!   per-source document sets (full rebuilds, including sources whose records
+//!   are all tombstoned, so a rebuild can also garbage-collect); [`added_since`]
+//!   walks only the snapshots a cursor has not seen (steady-state view
+//!   catch-up). Compaction (`Replace` snapshots, e.g. R2 Data Catalog's
+//!   managed compaction) rewrites files without adding rows, so the cursor
+//!   walk follows `Append` snapshots only.
 //!
 //! Production is a REST catalog (Cloudflare R2 Data Catalog) over S3-compatible
 //! storage ([`Config::connect`]); tests run the same code against iceberg's
@@ -34,7 +40,7 @@
 mod codec;
 mod error;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -239,12 +245,17 @@ impl Reconciler for IcebergReconciler {
         let table = load_table(self.catalog.as_ref(), &self.ident).await?;
 
         // The slice's live state: latest observation per id, minus tombstones.
+        // The filter pins one slice, so each id folds to exactly one row.
         let rows =
             scan_rows(&table, Some(self.slice_filter(source)), &codec::STATE_COLUMNS, false)
                 .await?;
+        // The slice's next committed revision: its previous maximum plus one.
+        // `version`, not wall clock, is what orders this slice's operations in
+        // the fold, so a clock step between runs cannot reorder them.
+        let version = rows.iter().map(|row| row.version).max().unwrap_or(0) + 1;
         let mut live: HashMap<String, Option<String>> = HashMap::new();
-        for (id, row) in codec::fold_latest(rows) {
-            if row.op == Op::Upsert {
+        for (id, slice_rows) in codec::fold_slices(rows) {
+            if let Some(row) = codec::live_winner(slice_rows) {
                 live.insert(id, row.content_hash);
             }
         }
@@ -281,6 +292,7 @@ impl Reconciler for IcebergReconciler {
             source,
             Slice { host: &self.host, user: self.user.as_deref() },
             now_ms()?,
+            version,
             &upserts,
             &deletes,
         )?;
@@ -290,25 +302,44 @@ impl Reconciler for IcebergReconciler {
     }
 }
 
-/// Fold the whole log into the current document set, sorted by id.
+/// The lake's folded current state, for the rebuild/replace consume paths.
+#[derive(Debug, Default)]
+pub struct LakeState {
+    /// Every source that has ever written a row, mapped to its live documents
+    /// (sorted by `external_id`). A source whose records are all tombstoned is
+    /// present with an empty set, so a rebuild can still garbage-collect its
+    /// view records.
+    pub sources: BTreeMap<String, Vec<Document>>,
+}
+
+/// Fold the whole log into [`LakeState`] — the full rebuild primitive:
+/// replaying it into a view (uploads for what is here, deletes for what is
+/// not, per source) reproduces current state.
 ///
-/// Every slice, tombstones applied, latest observation per `external_id` —
-/// the full rebuild primitive: replaying this into a view reproduces current
-/// state.
+/// Liveness is per slice: an id stays while any slice's latest op for it is
+/// an upsert, so one host's tombstone never erases a record another slice
+/// still observes.
 ///
 /// # Errors
 /// Returns an error if the table cannot be loaded or scanned, or a row is
 /// malformed.
-pub async fn read_all(catalog: &dyn Catalog, ident: &TableIdent) -> Result<Vec<Document>> {
+pub async fn read_state(catalog: &dyn Catalog, ident: &TableIdent) -> Result<LakeState> {
     let table = load_table(catalog, ident).await?;
     let rows = scan_rows(&table, None, &codec::CODEC_COLUMNS, true).await?;
-    let mut documents = codec::fold_latest(rows)
-        .into_values()
-        .filter(|row| row.op == Op::Upsert)
-        .map(codec::document_from_row)
-        .collect::<Result<Vec<Document>>>()?;
-    documents.sort_by(|a, b| a.external_id.cmp(&b.external_id));
-    Ok(documents)
+    let mut sources: BTreeMap<String, Vec<Document>> = BTreeMap::new();
+    for row in &rows {
+        sources.entry(row.source.clone()).or_default();
+    }
+    for slice_rows in codec::fold_slices(rows).into_values() {
+        if let Some(row) = codec::live_winner(slice_rows) {
+            let documents = sources.entry(row.source.clone()).or_default();
+            documents.push(codec::document_from_row(row)?);
+        }
+    }
+    for documents in sources.values_mut() {
+        documents.sort_by(|a, b| a.external_id.cmp(&b.external_id));
+    }
+    Ok(LakeState { sources })
 }
 
 /// The table's current snapshot id, the cursor a caught-up consumer stores.
@@ -321,12 +352,17 @@ pub async fn current_snapshot_id(catalog: &dyn Catalog, ident: &TableIdent) -> R
     Ok(table.metadata().current_snapshot().map(|snapshot| snapshot.snapshot_id()))
 }
 
-/// The changes a cursor has not seen, folded (a later op on the same id wins).
+/// The changes a cursor has not seen, folded per slice (a slice's later op on
+/// an id supersedes its earlier one; liveness spans slices).
 #[derive(Debug)]
 pub struct Delta {
-    /// Documents observed new or changed since the cursor.
+    /// Documents observed new or changed since the cursor, plus the surviving
+    /// replica's document for any id one slice tombstoned while another still
+    /// holds it (so the view converges to [`read_state`]).
     pub upserts: Vec<Document>,
-    /// Ids tombstoned since the cursor.
+    /// Ids tombstoned since the cursor by their last holder: verified against
+    /// the whole table's state, not just the delta, so a slice-scoped
+    /// tombstone never deletes a record live in another slice.
     pub deletes: Vec<String>,
     /// The snapshot this delta is current to; store it as the next cursor.
     pub to_snapshot: Option<i64>,
@@ -342,9 +378,16 @@ pub struct Delta {
 /// added are read — manifest files are immutable and carried forward, so an
 /// unfiltered walk would also re-deliver every old file.
 ///
+/// An id whose post-cursor rows end in tombstones only proves those slices
+/// let go of it; a slice untouched since the cursor may still hold it live.
+/// Such candidates are checked against the whole table's state (a cheap
+/// no-payload scan, only on deltas that contain tombstones) before they reach
+/// `deletes`, and a surviving replica is re-emitted as an upsert so the view
+/// converges to [`read_state`].
+///
 /// # Errors
 /// Returns [`Error::CursorNotFound`] when `cursor` is no longer in table
-/// metadata (snapshot expiration) — the caller falls back to [`read_all`] —
+/// metadata (snapshot expiration) — the caller falls back to [`read_state`] —
 /// and other errors when the walk or a data file read fails.
 pub async fn added_since(
     catalog: &dyn Catalog,
@@ -391,16 +434,55 @@ pub async fn added_since(
     }
 
     let mut upserts = Vec::new();
-    let mut deletes = Vec::new();
-    for (id, row) in codec::fold_latest(rows) {
-        match row.op {
-            Op::Upsert => upserts.push(codec::document_from_row(row)?),
-            Op::Delete => deletes.push(id),
+    let mut candidates = Vec::new();
+    for (id, slice_rows) in codec::fold_slices(rows) {
+        match codec::live_winner(slice_rows) {
+            Some(row) => upserts.push(codec::document_from_row(row)?),
+            None => candidates.push(id),
         }
     }
+
+    let mut deletes = Vec::new();
+    if !candidates.is_empty() {
+        let state = scan_rows(&table, None, &codec::STATE_COLUMNS, false).await?;
+        let global = codec::fold_slices(state);
+        let mut survivors = Vec::new();
+        for id in candidates {
+            let live = global
+                .get(&id)
+                .is_some_and(|rows| rows.iter().any(|row| row.op == Op::Upsert));
+            if live {
+                survivors.push(id);
+            } else {
+                deletes.push(id);
+            }
+        }
+        upserts.extend(read_documents_by_id(&table, &survivors).await?);
+    }
+
     upserts.sort_by(|a, b| a.external_id.cmp(&b.external_id));
     deletes.sort();
     Ok(Delta { upserts, deletes, to_snapshot: meta.current_snapshot().map(|s| s.snapshot_id()) })
+}
+
+/// Read the current live document of each id — the survivor fetch: ids whose
+/// post-cursor rows are all tombstones but which another slice still holds
+/// live. Scoped to those ids by predicate, so it reads payloads for a handful
+/// of records, not the table.
+async fn read_documents_by_id(table: &Table, ids: &[String]) -> Result<Vec<Document>> {
+    let Some(filter) = ids
+        .iter()
+        .map(|id| Reference::new("external_id").equal_to(Datum::string(id)))
+        .reduce(Predicate::or)
+    else {
+        return Ok(Vec::new());
+    };
+    let rows = scan_rows(table, Some(filter), &codec::CODEC_COLUMNS, true).await?;
+    codec::fold_slices(rows)
+        .into_values()
+        .filter_map(codec::live_winner)
+        .map(codec::document_from_row)
+        .collect()
 }
 
 /// Load the lake table, with a typed error naming it.
@@ -544,7 +626,9 @@ mod tests {
     use snafu::IntoError as _;
     use source_meta::{Document, Reconciler as _, Source};
 
-    use super::{IcebergReconciler, added_since, current_snapshot_id, ensure_table, read_all};
+    use super::{
+        IcebergReconciler, LakeState, added_since, current_snapshot_id, ensure_table, read_state,
+    };
 
     /// A memory-catalog lake for one test.
     struct TestLake {
@@ -588,6 +672,12 @@ mod tests {
         doc_in("test", id, body)
     }
 
+    /// Flatten a [`LakeState`] into its live documents (source-major, id-sorted
+    /// within a source) — the shape most assertions want.
+    fn live_docs(state: LakeState) -> Vec<Document> {
+        state.sources.into_values().flatten().collect()
+    }
+
     #[tokio::test]
     async fn reconcile_appends_then_skips_then_reads_back() {
         let TestLake { catalog, ident, _dir } = lake().await;
@@ -613,7 +703,7 @@ mod tests {
 
         // Full read-back round-trips the documents (source-parquet parity:
         // file_name = external_id, plain-text mime, meta_json intact).
-        let all = read_all(catalog.as_ref(), &ident).await.expect("read_all");
+        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].external_id, "a");
         assert_eq!(all[0].body, b"alpha");
@@ -635,7 +725,7 @@ mod tests {
             sink.reconcile(&source, &[doc("a", "alpha EDITED")]).await.expect("delta");
         assert_eq!((report.upserts, report.deletes), (1, 1));
 
-        let all = read_all(catalog.as_ref(), &ident).await.expect("read_all");
+        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
         assert_eq!(all.len(), 1, "the tombstoned document must fold away");
         assert_eq!(all[0].external_id, "a");
         assert_eq!(all[0].body, b"alpha EDITED");
@@ -652,7 +742,7 @@ mod tests {
         // a skip, not a corpus wipe.
         let report = sink.reconcile(&source, &[]).await.expect("empty");
         assert!(report.skipped);
-        let all = read_all(catalog.as_ref(), &ident).await.expect("read_all");
+        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
         assert_eq!(all.len(), 1, "the document must survive an empty pass");
     }
 
@@ -668,7 +758,7 @@ mod tests {
         // host-1's document vanishes; host-2's slice must be untouched.
         let report = host1.reconcile(&source, &[doc("one-b", "new")]).await.expect("host1 delta");
         assert_eq!(report.deletes, 1);
-        let all = read_all(catalog.as_ref(), &ident).await.expect("read_all");
+        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
         let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
         assert_eq!(ids, ["one-b", "two"], "host-2's document must survive host-1's tombstone");
 
@@ -679,14 +769,18 @@ mod tests {
         assert!(report.skipped, "host-level slice must not see alice's rows");
     }
 
-    /// Commit a small batch onto an explicit (possibly stale) table handle,
-    /// bypassing the reconciler's reload-per-attempt loop — the construction
-    /// both conflict tests share.
+    /// Commit one crafted batch onto an explicit (possibly stale) table
+    /// handle, bypassing the reconciler's reload-per-attempt loop and its
+    /// clock/version assignment — the construction the conflict tests and the
+    /// ordering tests share.
     async fn commit_on(
         catalog: &dyn Catalog,
         table: &iceberg::table::Table,
         source: &Source,
-        document: &Document,
+        observed_at: i64,
+        version: i64,
+        upserts: &[&Document],
+        deletes: &[&str],
     ) -> super::Result<()> {
         use iceberg::transaction::{ApplyTransactionAction as _, Transaction};
         let schema = Arc::new(
@@ -697,9 +791,10 @@ mod tests {
             &schema,
             source,
             crate::codec::Slice { host: "host-1", user: None },
-            1,
-            &[document],
-            &[],
+            observed_at,
+            version,
+            upserts,
+            deletes,
         )
         .expect("batch");
         let files = super::write_batch(table, batch).await.expect("write files");
@@ -727,10 +822,11 @@ mod tests {
         // CASes the metadata pointer surfaces the same race as HTTP 409 →
         // CatalogCommitConflicts, which commit_files retries; that leg is
         // exercised in rest_round_trip_via_env against a real server.)
-        commit_on(catalog.as_ref(), &stale, &source, &doc("c", "gamma"))
+        let gamma = doc("c", "gamma");
+        commit_on(catalog.as_ref(), &stale, &source, 1, 1, &[&gamma], &[])
             .await
             .expect("a stale-base append must merge");
-        let all = read_all(catalog.as_ref(), &ident).await.expect("read_all");
+        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
         let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
         assert_eq!(ids, ["a", "b", "c"], "no commit may be lost to the race");
     }
@@ -753,7 +849,7 @@ mod tests {
             let report = handle.await.expect("join").expect("reconcile");
             assert!(!report.skipped);
         }
-        let all = read_all(catalog.as_ref(), &ident).await.expect("read_all");
+        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
         assert_eq!(all.len(), 4, "every concurrent writer's document must land");
     }
 
@@ -798,12 +894,12 @@ mod tests {
         let delta_report = sink.reconcile(&source, &changed).await.expect("delta");
         assert_eq!((delta_report.upserts, delta_report.deletes), (1, 1));
 
-        let mine: Vec<Document> = read_all(catalog.as_ref(), &ident)
-            .await
-            .expect("read_all")
-            .into_iter()
-            .filter(|d| d.meta_json["source"] == tag.as_str())
-            .collect();
+        let mine: Vec<Document> = live_docs(
+            read_state(catalog.as_ref(), &ident).await.expect("read_state"),
+        )
+        .into_iter()
+        .filter(|d| d.meta_json["source"] == tag.as_str())
+        .collect();
         assert_eq!(mine.len(), 1);
         assert_eq!(mine[0].body, b"one EDITED");
 
@@ -818,15 +914,16 @@ mod tests {
         // is a contract break.
         let stale = catalog.load_table(&ident).await.expect("stale handle");
         sink.reconcile(&source, &[doc_in(&tag, &id("r3"), "three")]).await.expect("advance");
-        match commit_on(catalog.as_ref(), &stale, &source, &doc_in(&tag, &id("c1"), "x")).await {
+        let c1 = doc_in(&tag, &id("c1"), "x");
+        match commit_on(catalog.as_ref(), &stale, &source, 1, 1, &[&c1], &[]).await {
             Ok(()) => {
                 eprintln!("[rest_round_trip] stale-base append: backend MERGES (no retry needed)");
-                let mine: Vec<Document> = read_all(catalog.as_ref(), &ident)
-                    .await
-                    .expect("read_all after merge")
-                    .into_iter()
-                    .filter(|d| d.meta_json["source"] == tag.as_str())
-                    .collect();
+                let mine: Vec<Document> = live_docs(
+                    read_state(catalog.as_ref(), &ident).await.expect("read_state after merge"),
+                )
+                .into_iter()
+                .filter(|d| d.meta_json["source"] == tag.as_str())
+                .collect();
                 assert!(
                     mine.iter().any(|d| d.external_id == id("c1")),
                     "the merged append must not be lost"
@@ -879,6 +976,106 @@ mod tests {
         assert!(
             matches!(missing, Err(super::Error::CursorNotFound { snapshot: 0, .. })),
             "an unknown cursor must demand a full rescan, got {missing:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn version_orders_a_slice_not_wall_clock() {
+        let TestLake { catalog, ident, _dir } = lake().await;
+        let source = Source::new("test");
+        let alpha = doc("a", "alpha");
+
+        // A writer whose clock stepped backward between runs (NTP, reboot):
+        // the tombstone at version 2 carries a SMALLER observed_at than the
+        // upsert it supersedes. Committed version order must decide.
+        let table = catalog.load_table(&ident).await.expect("table");
+        commit_on(catalog.as_ref(), &table, &source, 1_000, 1, &[&alpha], &[])
+            .await
+            .expect("upsert");
+        let cursor = current_snapshot_id(catalog.as_ref(), &ident)
+            .await
+            .expect("snapshot")
+            .expect("one commit");
+        let table = catalog.load_table(&ident).await.expect("reload");
+        commit_on(catalog.as_ref(), &table, &source, 10, 2, &[], &["a"])
+            .await
+            .expect("tombstone");
+
+        let docs = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        assert!(docs.is_empty(), "the version-2 tombstone must win over the older wall clock");
+        let delta = added_since(catalog.as_ref(), &ident, cursor).await.expect("delta");
+        assert_eq!(delta.deletes, ["a"], "the cursor read must apply the same order");
+
+        // And back: a later re-observation with an even older clock revives it.
+        let table = catalog.load_table(&ident).await.expect("reload");
+        let revived = doc("a", "alpha revived");
+        commit_on(catalog.as_ref(), &table, &source, 5, 3, &[&revived], &[])
+            .await
+            .expect("revive");
+        let docs = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].body, b"alpha revived");
+    }
+
+    #[tokio::test]
+    async fn cross_slice_tombstone_keeps_the_other_slices_record() {
+        let TestLake { catalog, ident, _dir } = lake().await;
+        let source = Source::new("test");
+        let host1 = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
+        let host2 = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-2");
+        // The same record observed by two slices (synced shell history, the
+        // same repo indexed on two hosts).
+        host1.reconcile(&source, &[doc("x", "shared")]).await.expect("host1 seed");
+        host2.reconcile(&source, &[doc("x", "shared")]).await.expect("host2 seed");
+        let cursor = current_snapshot_id(catalog.as_ref(), &ident)
+            .await
+            .expect("snapshot")
+            .expect("committed");
+
+        // host-1 lets go of x; host-2 still observes it.
+        host1.reconcile(&source, &[doc("y", "new")]).await.expect("host1 delta");
+        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
+        assert_eq!(ids, ["x", "y"], "host-2's replica must keep x alive");
+
+        let delta = added_since(catalog.as_ref(), &ident, cursor).await.expect("delta");
+        assert_eq!(
+            delta.deletes,
+            Vec::<String>::new(),
+            "a slice-scoped tombstone must not delete a record live in another slice"
+        );
+        let upsert_ids: Vec<&str> = delta.upserts.iter().map(|d| d.external_id.as_str()).collect();
+        assert_eq!(upsert_ids, ["x", "y"], "the surviving replica is re-emitted to converge");
+
+        // Once the last holder lets go, the delete goes through.
+        let cursor = delta.to_snapshot.expect("snapshot");
+        host2.reconcile(&source, &[doc("z", "other")]).await.expect("host2 delta");
+        let delta = added_since(catalog.as_ref(), &ident, cursor).await.expect("second delta");
+        assert_eq!(delta.deletes, ["x"], "the last holder's tombstone must delete");
+        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
+        assert_eq!(ids, ["y", "z"]);
+    }
+
+    #[tokio::test]
+    async fn read_state_keeps_fully_tombstoned_sources_for_gc() {
+        let TestLake { catalog, ident, _dir } = lake().await;
+        let source = Source::new("test");
+        let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
+        sink.reconcile(&source, &[doc("a", "alpha")]).await.expect("seed");
+        // Tombstone the source's only record (crafted directly: the reconciler
+        // never appends a bare tombstone, but manual surgery can leave a
+        // source fully dead, and the rebuild must still GC its view records).
+        let table = catalog.load_table(&ident).await.expect("table");
+        commit_on(catalog.as_ref(), &table, &source, 2, 2, &[], &["a"])
+            .await
+            .expect("tombstone");
+
+        let state = read_state(catalog.as_ref(), &ident).await.expect("read_state");
+        assert_eq!(
+            state.sources.get("test").map(Vec::len),
+            Some(0),
+            "a fully tombstoned source must stay listed so a rebuild can GC it"
         );
     }
 }
