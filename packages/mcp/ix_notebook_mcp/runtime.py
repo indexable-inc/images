@@ -145,6 +145,16 @@ class _Tee:
         return getattr(self._original, name)
 
 
+class JobStillRunning(RuntimeError):
+    """Raised by ``Job.result`` when the job has not finished yet.
+
+    Reaching for a running job's result is the one job-polling footgun: a plain
+    ``None`` reads as "finished with no value". This raises instead, so the
+    confusion surfaces as a clear instruction to ``await`` it (or poll
+    ``.done()``) rather than a silent wrong answer.
+    """
+
+
 class Job:
     """A single ``python_exec`` execution: an awaitable handle over the asyncio
     task running the code, with its captured output, result, and status."""
@@ -156,7 +166,10 @@ class Job:
         self.status = "running"
         self.started = time.time()
         self.ended: float | None = None
-        self.result = None
+        # The cell's final value (a Result), exposed through the `result`
+        # property; stored privately so an access while running can raise rather
+        # than hand back a misleading None.
+        self._result = None
         self.error: str | None = None
         self._buf: list[str] = []
         self._buflen = 0
@@ -250,6 +263,34 @@ class Job:
     def running(self) -> bool:
         return self.status == "running"
 
+    def done(self) -> bool:
+        """True once the job has finished (done, error, or cancelled). Pair it
+        with `.result`, which only yields a value once the job is done."""
+        return self.status != "running"
+
+    @property
+    def ok(self) -> bool:
+        """True if the job finished successfully (no error, not cancelled)."""
+        return self.status == "done"
+
+    @property
+    def result(self):
+        """This run's final value -- the `Result` the cell produced (or the one
+        auto-wrapped from a bare displayable final expression like a DataFrame).
+
+        Accessing it while the job is still running raises `JobStillRunning`,
+        instead of returning a misleading `None`: background the work, then
+        `await jobs['id']` to get the result, or poll `.done()` / `.running()`
+        first. Once finished this is exactly what `await jobs['id']` yields."""
+        if self.running():
+            dur = time.time() - self.started
+            raise JobStillRunning(
+                f"job {self.id} is still running ({dur:.1f}s); "
+                f"`await jobs['{self.id}']` to get its result, "
+                f"or check `.done()` / `.running()` first"
+            )
+        return self._result
+
     def cancel(self) -> "Job":
         if self.task is not None and not self.task.done():
             self.task.cancel()
@@ -260,7 +301,7 @@ class Job:
         # returns None, so wait for it then hand back the captured result.
         async def _await_result():
             await self.task
-            return self.result
+            return self._result
 
         return _await_result().__await__()
 
@@ -695,6 +736,33 @@ def _display_result(result: "Result") -> None:
         pass
 
 
+def _is_displayable(value) -> bool:
+    """True if a bare final expression value is rich enough to auto-wrap in
+    ``Result.of`` (so ``df`` on the last line just works), False if returning it
+    is the print-like anti-pattern the Result contract nudges away from.
+
+    Displayable = it already knows how to render itself: an IPython rich repr
+    (a polars DataFrame, a ``view.Code``, ...), an htpy-style ``__html__``, or a
+    figure/image that renders through a registered formatter. Plain scalars,
+    ``str``/``bytes``, and the container types (dict/list/tuple/set) are NOT --
+    those still fail the contract, to keep pushing key/value data toward a
+    DataFrame and confirmations toward ``Result.ok``.
+    """
+    if value is None or isinstance(
+        value, (str, bytes, bool, int, float, complex, dict, list, tuple, set, frozenset)
+    ):
+        return False
+    for attr in (
+        "_repr_html_", "_repr_png_", "_repr_jpeg_", "_repr_svg_",
+        "_repr_markdown_", "_repr_latex_", "_repr_mimebundle_", "__html__",
+    ):
+        if callable(getattr(value, attr, None)):
+            return True
+    # Figures/axes/images render via a registered formatter, not a method.
+    module = type(value).__module__ or ""
+    return module.startswith("matplotlib") or module.startswith("PIL")
+
+
 async def _runner(job: Job, ns: dict) -> None:
     token = _ix_current.set(job)
     if _store is not None and _store_conn is not None:
@@ -734,23 +802,31 @@ async def _runner(job: Job, ns: dict) -> None:
                     job.status = "done"
             # The results were displayed as they streamed; there is no single
             # trailing value to return.
-            job.result = None
+            job._result = None
         else:
             maybe = eval(code_obj, ns)
             if inspect.iscoroutine(maybe):
                 await maybe
-            job.result = ns.pop("__ix_result", None)
-            if isinstance(job.result, Result):
+            value = ns.pop("__ix_result", None)
+            if not isinstance(value, Result) and _is_displayable(value):
+                # A bare final value that already knows how to render itself (a
+                # DataFrame, a figure, a view.Code, an htpy element) is wrapped
+                # in Result.of, so `df` on the last line just works. Plain
+                # scalars / dicts / None fall through to the contract error below.
+                value = Result.of(value)
+            job._result = value
+            if isinstance(value, Result):
                 job.status = "done"
             else:
                 # Enforce the Result contract: a non-yielding cell must END with a
-                # Result so a run always declares what the human sees and what the
-                # model gets. A bare value (or a side-effecting cell that returns
-                # None) is a failed run with an instructive message, not a silent pass.
+                # Result (or a value that renders as one) so a run always declares
+                # what the human sees and what the model gets. A bare scalar (or a
+                # side-effecting cell returning None) is a failed run with an
+                # instructive message, not a silent pass.
                 job.status = "error"
                 job.error = _RESULT_REQUIRED + _stdout_hint(job)
                 job._append(job.error)
-                job.result = None
+                job._result = None
     except asyncio.CancelledError:
         job.status = "cancelled"
         raise
@@ -790,7 +866,7 @@ def _persist_final(job: Job) -> None:
     if _store is None or _store_conn is None:
         return
     try:
-        result_repr = None if job.result is None else _safe_repr(job.result)
+        result_repr = None if job._result is None else _safe_repr(job._result)
         _store.finish(
             _store_conn,
             id=job.id,
@@ -1000,8 +1076,8 @@ def _job_outputs(job: "Job") -> list[dict]:
     """A job's rich outputs for the store: every display() bundle captured while it
     ran, plus the trailing-expression result rendered the same way."""
     outs = list(job._displays)
-    if job.result is not None and not job.running():
-        bundle = _result_bundle(job.result)
+    if not job.running() and job._result is not None:
+        bundle = _result_bundle(job._result)
         if bundle is not None:
             outs.append(bundle)
     return outs
@@ -1290,9 +1366,9 @@ _SUMMARY_CHARS = 50_000
 def _result_text(job: Job) -> str:
     """The job result's model-facing text (a Result's ``llm_result``, else its
     repr), used only to measure how much the inline summary leaves out."""
-    if job.result is None:
+    if job._result is None:
         return ""
-    return getattr(job.result, "llm_result", None) or _safe_repr(job.result)
+    return getattr(job._result, "llm_result", None) or _safe_repr(job._result)
 
 
 def _job_summary(job: Job) -> dict:
@@ -1307,7 +1383,7 @@ def _job_summary(job: Job) -> dict:
         "running": job.running(),
         "output": job.tail(_SUMMARY_CHARS),
         "output_chars": len(job.output),
-        "result": None if job.result is None else _safe_repr(job.result),
+        "result": None if job._result is None else _safe_repr(job._result),
         "result_chars": len(_result_text(job)),
         "error": job.error,
     }
@@ -1341,11 +1417,11 @@ def _emit(job: Job) -> None:
 
     summary = _job_summary(job)
     publish_display_data({JOB_MIME: summary, "text/plain": f"[{job.id}] {job.status}"})
-    # On success job.result is always a Result (the runner enforces it); display
+    # On success job._result is always a Result (the runner enforces it); display
     # it so the server can unpack the model view and the dashboard the human one.
-    if job.status == "done" and job.result is not None:
+    if job.status == "done" and job._result is not None:
         try:
-            display(job.result)
+            display(job._result)
         except Exception:
             # Rich display is best-effort; failures must not block the summary.
             pass

@@ -888,6 +888,28 @@ let
         assert "printed to stdout" in p.error, p.error
         assert "hello-from-stdout" in p.error, p.error
 
+        # A bare final value that already renders richly is auto-wrapped in
+        # Result.of, so `df` on the last line just works without an explicit Result.
+        d = await run("import polars as pl\npl.DataFrame({'x': [1, 2]})", budget=2.0, name="auto-df")
+        assert d.status == "done", (d.status, d.error)
+        assert isinstance(d.result, runtime.Result), type(d.result)
+        # A plain scalar is not displayable, so the contract still rejects it.
+        sc = await run("1 + 1", budget=2.0, name="scalar")
+        assert sc.status == "error", sc.status
+
+        # .result raises while the job runs (a misleading None would read as
+        # "finished with no value"); .done()/.ok track the lifecycle.
+        slow = await run("import asyncio\nawait asyncio.sleep(0.4)\nResult.text('late')", budget=0.02, name="slow")
+        assert slow.running() and not slow.done(), slow.status
+        try:
+            _ = slow.result
+            raise AssertionError("expected .result to raise while running")
+        except runtime.JobStillRunning:
+            pass
+        await slow.task
+        assert slow.done() and slow.ok, slow.status
+        assert slow.result.llm_result == "late", slow.result
+
     asyncio.run(main())
     # api(): a discoverable catalog of kernel builtins + bundled modules.
     cat = ns["api"]()
@@ -971,6 +993,14 @@ let
         assert not any("big.py" in n for n in _gi), _gi
         assert not any("debug.log" in n for n in _gi), _gi
         assert any("src" in n for n in _gi), _gi
+
+        # view.ls stays flat but flags git-ignored entries in an `ignored` column
+        # (it never drops them, unlike tree): the *.log file is ignored, src is not.
+        _lsg = _view.ls(_g)
+        assert "ignored" in _lsg.columns, _lsg.columns
+        _byname = {r["name"]: r["ignored"] for r in _lsg.iter_rows(named=True)}
+        assert _byname.get("debug.log") is True, _byname
+        assert _byname.get("src") is False, _byname
 
     print("runtime-ok")
   '';
@@ -1562,6 +1592,10 @@ let
 
     lsdf = view.ls(base)
     assert isinstance(lsdf, pl.DataFrame) and "kind" in lsdf.columns, lsdf.columns
+    # ls flags git-ignored entries in an `ignored` Boolean column rather than
+    # dropping them; outside a git work tree (this store path) nothing is ignored.
+    assert lsdf.schema["ignored"] == pl.Boolean, lsdf.schema
+    assert not lsdf["ignored"].any(), lsdf
     # A DataFrame stays a DataFrame through polars ops (composable).
     assert isinstance(lsdf.filter(pl.col("kind") == "dir"), pl.DataFrame)
 
@@ -1989,6 +2023,101 @@ let
         mkdir -p "$out"
       '';
 
+  # The worktree module: drive real `git worktree` against a throwaway repo
+  # (git is on PATH in this sandbox). Proves add() creates a new branch in its
+  # own tree (and checks out an existing branch instead of recreating it),
+  # list() is a DataFrame marking the current tree, the Worktree is os.PathLike
+  # and `wt / "x"` joins onto it, commit() stages new files, and remove() drops
+  # the tree. Pure git + the bundled sh, so the sandbox runs it.
+  worktreeTestPy = pkgs.writeText "ix-mcp-worktree-test.py" ''
+    import asyncio
+    import os
+    import pathlib
+    import subprocess
+    import tempfile
+
+    import polars as pl
+
+    import worktree
+
+
+    def _git(*args, cwd):
+        subprocess.run(["git", "-C", cwd, *args], check=True, capture_output=True)
+
+
+    async def main():
+        repo = tempfile.mkdtemp()
+        _git("init", "-q", cwd=repo)
+        _git("config", "user.email", "t@t", cwd=repo)
+        _git("config", "user.name", "t", cwd=repo)
+        _git("commit", "--allow-empty", "-q", "-m", "init", cwd=repo)
+
+        # add() creates a NEW branch in its own tree off HEAD.
+        wt = await worktree.add("feature-x", repo=repo)
+        assert wt.branch == "feature-x", wt
+        assert wt.path.is_dir(), wt.path
+
+        # os.PathLike + `wt / "x"` join onto the tree.
+        assert os.fspath(wt) == str(wt.path), wt
+        (wt / "hello.txt").write_text("hi")
+
+        # list() is a DataFrame; exactly one tree is `current` (the main one), and
+        # the new worktree is not it.
+        lst = worktree.list(repo)
+        assert isinstance(lst, pl.DataFrame) and "current" in lst.columns, lst.columns
+        assert "feature-x" in set(lst["branch"].to_list()), lst
+        assert lst.filter(pl.col("current")).height == 1, lst
+        assert not lst.filter(pl.col("branch") == "feature-x")["current"][0], lst
+
+        # commit() stages the new (untracked) file, so it lands in the commit.
+        c = await wt.commit("add hello")
+        assert c.ok, c.text
+        tracked = subprocess.run(
+            ["git", "-C", str(wt.path), "ls-files"], capture_output=True, text=True
+        ).stdout
+        assert "hello.txt" in tracked, tracked
+
+        # An existing branch is checked out (not recreated) by add().
+        _git("branch", "existing", cwd=repo)
+        wt2 = await worktree.add("existing", repo=repo)
+        assert wt2.branch == "existing", wt2
+
+        # remove() drops the tree (force discards uncommitted changes in it);
+        # main + feature-x remain.
+        rm = await wt2.remove(force=True)
+        assert rm.ok, rm.text
+        assert worktree.list(repo).height == 2, worktree.list(repo)
+
+        print("worktree-ok")
+
+
+    asyncio.run(main())
+  '';
+  worktreeSmoke =
+    pkgs.runCommand "ix-mcp-worktree-smoke"
+      {
+        nativeBuildInputs = [
+          mcpPython
+          pkgs.git
+        ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${worktreeTestPy} >stdout 2>stderr || {
+          echo "ix-mcp worktree smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'worktree-ok' stdout || {
+          echo "ix-mcp worktree smoke did not confirm the worktree module:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   screenBundled = importTest "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
   vmkitBundled = importTest "vmkit" "import vmkit; print('vmkit-ok', callable(vmkit.boot_linux), callable(vmkit.drive), callable(vmkit.screenshot))";
 in
@@ -2018,6 +2147,7 @@ package.overrideAttrs (old: {
         nixSmoke
         fleetSmoke
         shSmoke
+        worktreeSmoke
         ;
       site = dashboardSite;
     }

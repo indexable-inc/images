@@ -29,15 +29,17 @@ JOBS = (
     "Each call runs as an async task and waits up to `budget` seconds; if the work is still going "
     "it keeps running in the background and the call returns a job handle. Background jobs live "
     "in the `jobs` dict, so manage them with more python_exec: `jobs['ab12']` to inspect, `await "
-    "jobs['ab12']` to wait, `jobs['ab12'].cancel()` to stop, `[j for j in jobs.values() if "
+    "jobs['ab12']` to wait (it yields the run's value), `jobs['ab12'].cancel()` to stop, "
+    "`jobs['ab12'].done()` to test if it has finished, `[j for j in jobs.values() if "
     "j.running()]` to list."
 )
 
 PAGING = (
     "Every run is kept in `jobs`, so a truncated reply is never lost: page the run with "
     "jobs['<id>'].tail(n) / .head(n) / .slice(a, b) / .grep('pat') / .lines(a, b), or read "
-    "jobs['<id>'].output (stdout) and jobs['<id>'].result (the value); history() lists recent "
-    "runs."
+    "jobs['<id>'].output (stdout) and, once it has finished, jobs['<id>'].result (the value — "
+    "it raises while the job is still running rather than return a misleading None, so `await "
+    "jobs['<id>']` to wait for it); history() lists recent runs."
 )
 
 BLOCKING = (
@@ -56,7 +58,10 @@ RESULT_CONTRACT = (
     "surface anything worth seeing as a Result. A cell must either END with a `Result(...)` or "
     "`yield Result(...)` one or more times — each yielded Result streams to both the human and "
     "you the moment it is produced, so prefer yielding as you go to report progress and partial "
-    "results. The kernel rejects a cell that neither ends with nor yields a Result."
+    "results. The kernel rejects a cell that neither ends with nor yields a Result — except that "
+    "a bare final value which already renders richly (a polars DataFrame, a matplotlib figure, a "
+    "view/fff render, an htpy element) is auto-wrapped in `Result.of` for you, so `df` on the "
+    "last line just works; a plain scalar, dict, list, or None still needs an explicit Result."
 )
 
 # --- kernel guide only ---
@@ -119,7 +124,8 @@ VIEW = (
     "(`view.tree` prunes noise — anything the repo's `.gitignore` ignores, plus a denylist of heavy "
     "dirs like node_modules / target / dist — so a project's structure is not buried under vendored "
     "or generated files; an ignored dir collapses to one row, an ignored file drops, and `all=True` "
-    "shows everything) "
+    "shows everything; `view.ls` stays flat instead and adds an `ignored` column flagging the "
+    "git-ignored entries rather than dropping them) "
     "(never `ls` — not via bash, `sh`, or `asyncio.create_subprocess_exec`, and never paste a raw "
     "`ls -la` dump at the human), `view.grep` / `view.find` search as DataFrames, "
     "`view.cat/read/head/json/diff` return a syntax-highlighted view, and `view.edit(path, old, "

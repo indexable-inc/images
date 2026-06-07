@@ -29,9 +29,10 @@ Two ways in:
   gets the finished :class:`NixLog` back -- ``log.activities`` / ``log.events``
   are polars frames, ``log.tree()`` is the rendered DAG.
 
-Run it as a background job (``await nix.build(".#foo")`` past the budget) and the
-model can sample ``jobs['..'].result`` -- the same :class:`NixLog`, mutated in
-place -- between turns: the durable, growable interface for a long build.
+Run it as a background job (``await nix.build(".#foo")`` runs past the budget and
+backgrounds); next turn ``await jobs['..']`` yields the finished :class:`NixLog`
+(``log.activities`` / ``log.events`` / ``log.tree()``), while the dashboard
+Resource shows the DAG growing live as it builds.
 """
 
 from __future__ import annotations

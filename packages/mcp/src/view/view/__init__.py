@@ -474,15 +474,23 @@ def _lang_for(path: pathlib.Path) -> str | None:
 
 
 def ls(path: str | os.PathLike = ".", *, all: bool = False) -> "pl.DataFrame":
-    """A directory listing as a DataFrame (name, kind, size, modified).
+    """A directory listing as a DataFrame (name, kind, size, modified, ignored).
 
     Dirs sort first, then by name. Hidden entries are skipped unless ``all``.
+    ``ignored`` flags the entries the repo's ``.gitignore`` ignores (when ``path``
+    is in a git work tree, else always False) -- unlike :func:`tree`, ``ls`` stays
+    flat and never drops them, so ``view.ls("node_modules")`` still lists its
+    contents; filter with ``.filter(~pl.col("ignored"))`` when you want them gone.
     """
     base = pathlib.Path(path)
+    entries = [
+        p for p in base.iterdir() if all or not p.name.startswith(".")
+    ]
+    ignored = (
+        set() if all else _git_ignored(base, [p.name for p in entries])
+    )
     rows = []
-    for p in base.iterdir():
-        if not all and p.name.startswith("."):
-            continue
+    for p in entries:
         try:
             st = p.stat()
             size = st.st_size if p.is_file() else None
@@ -491,7 +499,13 @@ def ls(path: str | os.PathLike = ".", *, all: bool = False) -> "pl.DataFrame":
             size, mtime = None, None
         kind = "dir" if p.is_dir() else ("link" if p.is_symlink() else "file")
         rows.append(
-            {"name": p.name, "kind": kind, "size": size, "modified": mtime}
+            {
+                "name": p.name,
+                "kind": kind,
+                "size": size,
+                "modified": mtime,
+                "ignored": p.name in ignored,
+            }
         )
     df = pl.DataFrame(
         rows,
@@ -500,6 +514,7 @@ def ls(path: str | os.PathLike = ".", *, all: bool = False) -> "pl.DataFrame":
             "kind": pl.Utf8,
             "size": pl.Int64,
             "modified": pl.Datetime,
+            "ignored": pl.Boolean,
         },
     )
     if df.height:
