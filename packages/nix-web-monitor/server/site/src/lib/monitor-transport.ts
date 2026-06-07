@@ -240,7 +240,12 @@ export function openMonitorEvents(onSnapshot: SnapshotHandler, onStatus: StatusH
       socket = ws;
       ws.binaryType = 'arraybuffer';
 
-      const working = createWorking();
+      // `applyDelta` mutates in place for incremental deltas but returns a fresh
+      // object for `reset` (the seed), so the binding must be reassignable: the
+      // seed carries the builds/activities for a page loaded mid-build, and
+      // dropping the return would silently discard them (logs survived only
+      // because their delta mutates in place).
+      let working = createWorking();
       let frameDue = false;
       let sawFinished = false;
       // Coalesce bursts of deltas into one snapshot per animation frame. The
@@ -266,7 +271,7 @@ export function openMonitorEvents(onSnapshot: SnapshotHandler, onStatus: StatusH
       ws.onmessage = (event: MessageEvent): void => {
         const delta = decodeDelta(new Uint8Array(event.data as ArrayBuffer));
         if (delta === null) return;
-        applyDelta(working, delta);
+        working = applyDelta(working, delta);
         if (delta.type === 'finished') {
           sawFinished = true;
           flush();
