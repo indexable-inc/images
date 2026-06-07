@@ -393,7 +393,14 @@ let
         pkgs.python3.pkgs.setuptools
         pkgs.python3.pkgs.setuptools-scm
       ];
-      dependencies = [ pkgs.python3.pkgs.markupsafe ];
+      # typing-extensions is only a dep below 3.13 (htpy's own marker); the
+      # pinned interpreter is 3.13, so it is conditional rather than always-on.
+      dependencies = [
+        pkgs.python3.pkgs.markupsafe
+      ]
+      ++ lib.optionals (lib.versionOlder pkgs.python3.pythonVersion "3.13") [
+        pkgs.python3.pkgs.typing-extensions
+      ];
       pythonImportsCheck = [ "htpy" ];
       doCheck = false;
     };
