@@ -9,16 +9,23 @@ text). The kernel-side runtime also emits a structured summary under the
 from __future__ import annotations
 
 import base64
+import os
 import re
 from typing import Any
 
 import nbformat
 from mcp import types as mcp_types
 
-# Max chars of a single text block shown to the model per reply. The full output
-# is never lost: it stays in the kernel as ``jobs['<id>']`` (see tools.python_exec),
-# which pages it with tail/head/slice/grep/lines.
-MAX_TEXT_CHARS = 50_000
+# Max chars of a single text block shown to the model per reply, overridable with
+# ``IX_MCP_MAX_RESULT_CHARS`` (set it low to force aggressive paging, high to read
+# more in one shot). The full output is never lost: it stays in the kernel as
+# ``jobs['<id>']`` (see tools.python_exec), which pages it with
+# tail/head/slice/grep/lines. An over-cap block is shown as a head+tail preview
+# (see :func:`text`) so its shape is visible while the bulk is paged, not dumped.
+try:
+    MAX_TEXT_CHARS = max(500, int(os.environ.get("IX_MCP_MAX_RESULT_CHARS", "50000")))
+except ValueError:
+    MAX_TEXT_CHARS = 50_000
 _MAX_IMAGES = 8
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -90,8 +97,22 @@ def to_mcp(outputs: list[dict]) -> list[Content]:
 
 def text(value: Any) -> mcp_types.TextContent:
     rendered = _ANSI.sub("", value if isinstance(value, str) else "".join(value))
-    if len(rendered) > MAX_TEXT_CHARS:
-        rendered = f"{rendered[:MAX_TEXT_CHARS]}\n... [truncated {len(rendered) - MAX_TEXT_CHARS} chars; full run kept as jobs['<id>'] — see the pager note below]"
+    if len(rendered) <= MAX_TEXT_CHARS:
+        return mcp_types.TextContent(type="text", text=rendered)
+    # Too large to return whole. Show a head AND a tail so the shape of the output
+    # is visible (the end of a traceback, the last rows of a frame) rather than a
+    # one-sided clip, and point at paging/filtering instead of dumping a wall. The
+    # full run stays in the kernel as jobs['<id>'] (see the pager note in tools).
+    head_n = MAX_TEXT_CHARS * 2 // 3
+    tail_n = MAX_TEXT_CHARS - head_n
+    omitted = len(rendered) - head_n - tail_n
+    rendered = (
+        f"{rendered[:head_n]}\n"
+        f"... [output too large: {len(rendered)} chars, {omitted} omitted. Read the "
+        f"full run with jobs['<id>'].grep('pattern') / .head(n) / .tail(n) / "
+        f".slice(a, b), or narrow your query so it returns less.] ...\n"
+        f"{rendered[-tail_n:]}"
+    )
     return mcp_types.TextContent(type="text", text=rendered)
 
 

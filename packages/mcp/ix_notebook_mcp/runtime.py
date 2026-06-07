@@ -49,6 +49,16 @@ _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", d
 # memory, store writes, and poll payloads all stay bounded.
 _MAX_OUTPUT_CHARS = 256_000
 
+# Longest edge (px) of an image returned to the model. A full-page screenshot or
+# hi-DPI figure otherwise spends vision tokens scaling with its resolution for no
+# added legibility, so an oversize raster image is downscaled (aspect preserved,
+# re-encoded as PNG) before it is base64-encoded into the reply. Set
+# ``IX_MCP_IMAGE_MAX_DIM=0`` to disable downscaling and send images at full size.
+try:
+    _IMAGE_MAX_DIM = int(os.environ.get("IX_MCP_IMAGE_MAX_DIM", "1280"))
+except ValueError:
+    _IMAGE_MAX_DIM = 1280
+
 # The custom mime the kernel hands the server to carry a job summary (mirrors
 # outputs.JOB_MIME; duplicated so the kernel-side runtime stays import-light).
 JOB_MIME = "application/x-ix-job+json"
@@ -653,6 +663,24 @@ def _compile_generator(code: str, filename: str) -> "types.CodeType":
     return compile(shell, filename, "exec")
 
 
+def _stdout_hint(job: "Job") -> str:
+    """A suffix for the Result-contract error when the cell also printed: stdout
+    never reaches the model, so the bare "you must return a Result" message leaves
+    a printing agent unsure what happened to its output. Show a preview of what
+    was printed and the one-line fix, turning a silent dead-end into a nudge."""
+    printed = job.output.strip()
+    if not printed:
+        return ""
+    limit = 1500
+    if len(printed) > limit:
+        printed = f"{printed[:limit]}\n... [+{len(printed) - limit} more chars in jobs['{job.id}'].output]"
+    return (
+        "\n\nThis cell printed to stdout, which the model never receives. To send "
+        f"this text, return it (e.g. `Result.text(...)`) or page jobs['{job.id}'].output. "
+        f"What the cell printed:\n{printed}"
+    )
+
+
 def _display_result(result: "Result") -> None:
     """Show one yielded Result to both audiences. The IPython display goes onto
     the running job's captured outputs (the dashboard) and out on iopub (the
@@ -700,7 +728,7 @@ async def _runner(job: Job, ns: dict) -> None:
                 # Loop ran to completion (no non-Result break).
                 if emitted == 0:
                     job.status = "error"
-                    job.error = _YIELD_REQUIRED
+                    job.error = _YIELD_REQUIRED + _stdout_hint(job)
                     job._append(job.error)
                 else:
                     job.status = "done"
@@ -720,7 +748,7 @@ async def _runner(job: Job, ns: dict) -> None:
                 # model gets. A bare value (or a side-effecting cell that returns
                 # None) is a failed run with an instructive message, not a silent pass.
                 job.status = "error"
-                job.error = _RESULT_REQUIRED
+                job.error = _RESULT_REQUIRED + _stdout_hint(job)
                 job._append(job.error)
                 job.result = None
     except asyncio.CancelledError:
@@ -833,24 +861,71 @@ def _df_llm_text(df) -> str:
         return _safe_repr(df)
 
 
+def _fit_image_bytes(raw: bytes, mime: str) -> tuple[bytes, str]:
+    """Downscale raster image bytes so the longest edge is at most
+    ``_IMAGE_MAX_DIM`` (aspect preserved), re-encoding as PNG. Returns the bytes
+    unchanged when the cap is disabled, Pillow is unavailable, or the image is
+    already small enough. Never raises: on any failure the original bytes/mime are
+    returned, so downscaling can only ever shrink the reply, never break it."""
+    if _IMAGE_MAX_DIM <= 0:
+        return raw, mime
+    try:
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(raw)) as img:
+            width, height = img.size
+            longest = max(width, height)
+            if longest <= _IMAGE_MAX_DIM:
+                return raw, mime
+            scale = _IMAGE_MAX_DIM / longest
+            resized = img.resize((max(1, round(width * scale)), max(1, round(height * scale))))
+            if resized.mode not in ("RGB", "RGBA", "L"):
+                resized = resized.convert("RGBA")
+            buf = io.BytesIO()
+            resized.save(buf, format="PNG", optimize=True)
+            return buf.getvalue(), "image/png"
+    except Exception:
+        return raw, mime
+
+
+def _encode_image_bytes(raw: bytes, mime: str) -> dict:
+    """One image as a downscaled ``{"mime", "data"}`` base64 dict."""
+    raw, mime = _fit_image_bytes(raw, mime)
+    return {"mime": mime, "data": base64.b64encode(raw).decode("ascii")}
+
+
+def _encode_image_b64(b64: str, mime: str) -> dict:
+    """Like :func:`_encode_image_bytes` for already-base64 input: decode so it can
+    be downscaled, falling back to the original string if it is not valid base64
+    (then it is passed through untouched)."""
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except (ValueError, base64.binascii.Error):
+        return {"mime": mime, "data": b64}
+    return _encode_image_bytes(raw, mime)
+
+
 def _coerce_image(value) -> dict | None:
-    """Coerce one ``Result.llm_images`` item to ``{"mime", "data"}`` (base64),
-    or None if it is not an image we can encode. Accepts raw PNG/JPEG bytes, a
-    base64 / data-URI string, a path to an image file, a matplotlib Figure, or
-    any object with ``_repr_png_`` / ``_repr_jpeg_`` (a PIL image, a plot)."""
+    """Coerce one ``Result.llm_images`` item to a downscaled ``{"mime", "data"}``
+    (base64), or None if it is not an image we can encode. Accepts raw PNG/JPEG
+    bytes, a base64 / data-URI string, a path to an image file, a matplotlib
+    Figure, or any object with ``_repr_png_`` / ``_repr_jpeg_`` (a PIL image, a
+    plot). Every path runs through the downscaler (see ``_IMAGE_MAX_DIM``)."""
     if value is None:
         return None
     # Raw bytes: sniff PNG vs JPEG by magic, default to PNG.
     if isinstance(value, (bytes, bytearray)):
         raw = bytes(value)
         mime = "image/jpeg" if raw[:3] == b"\xff\xd8\xff" else "image/png"
-        return {"mime": mime, "data": base64.b64encode(raw).decode("ascii")}
+        return _encode_image_bytes(raw, mime)
     if isinstance(value, str):
         s = value.strip()
         if s.startswith("data:image/"):
             head, _, payload = s.partition(",")
             mime = head[5:].split(";", 1)[0] or "image/png"
-            return {"mime": mime, "data": payload}
+            return _encode_image_b64(payload, mime)
         # A filesystem path to an image.
         if len(s) < 4096 and os.path.isfile(s):
             try:
@@ -858,13 +933,13 @@ def _coerce_image(value) -> dict | None:
             except OSError:
                 return None
             mime = "image/jpeg" if s.lower().endswith((".jpg", ".jpeg")) else "image/png"
-            return {"mime": mime, "data": base64.b64encode(raw).decode("ascii")}
+            return _encode_image_bytes(raw, mime)
         # Otherwise assume it is already base64-encoded PNG.
-        return {"mime": "image/png", "data": s}
+        return _encode_image_b64(s, "image/png")
     # matplotlib Figure: render to PNG.
     if type(value).__module__.startswith("matplotlib") and hasattr(value, "savefig"):
         try:
-            return {"mime": "image/png", "data": base64.b64encode(_figure_png(value)).decode("ascii")}
+            return _encode_image_bytes(_figure_png(value), "image/png")
         except Exception:
             return None
     # Anything with a rich image repr (a PIL image, a plotly/altair object).
@@ -878,9 +953,9 @@ def _coerce_image(value) -> dict | None:
             if out is None:
                 continue
             if isinstance(out, (bytes, bytearray)):
-                return {"mime": mime, "data": base64.b64encode(bytes(out)).decode("ascii")}
+                return _encode_image_bytes(bytes(out), mime)
             if isinstance(out, str):
-                return {"mime": mime, "data": out}
+                return _encode_image_b64(out, mime)
     return None
 
 
@@ -1487,6 +1562,17 @@ def install(user_ns: dict | None = None) -> None:
     except Exception:
         # Outside the bundled interpreter the module may be absent; skip it.
         pass
+    # Pre-bind the two most-reached-for bundled modules so `fff.grep(...)` and
+    # `view.ls(...)` work with no import, the way Result/cells/jobs/sh do (an
+    # explicit `import fff` returns the same object, so both styles agree). Both
+    # are already imported at startup (01-ix-polars installs view's renderer, which
+    # imports fff), so binding them here costs nothing; heavier modules (nix,
+    # fleet, search) stay import-on-demand to keep the namespace lean.
+    for _mod_name in ("fff", "view"):
+        try:
+            target[_mod_name] = __import__(_mod_name)
+        except Exception:
+            pass
     target["api"] = api
 
     try:

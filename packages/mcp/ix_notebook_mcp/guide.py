@@ -67,13 +67,26 @@ INTRO = (
 
 DISCOVER = (
     "Call `api()` (always in the namespace, no import) to list every helper you have — the kernel "
-    "builtins (`Result`, `cells`, `jobs`, `sh`, ...) and each bundled module's functions with "
+    "builtins (`Result`, `cells`, `jobs`, `sh`, plus `fff` and `view`, all bound with no import) "
+    "and each bundled module's functions with "
     "signatures and summaries — or `api('grep')` to filter; reach for it instead of guessing "
     "names or grepping source."
 )
 
+VERIFY = (
+    "Verify a change by its actual effect, not by a proxy: when you change "
+    "something whose result a static check cannot see — an interactive UI, a "
+    "rendered page, a runtime behaviour — exercise it and observe the outcome "
+    "(screenshot it with the bundled `playwright`, run the path, diff the live "
+    "state) BEFORE reporting it done. A green type-check or linter is necessary "
+    "but not sufficient: 'it compiles' is not 'it works', and 'the tab switches "
+    "in the source' is not 'the tab switches on screen'."
+)
+
 MODULES = (
-    "Bundled modules import with no install step: `fff` (async file search/grep), `view`, `tui`, "
+    "Bundled modules need no install step. `fff` (async file search/grep) and `view` are already "
+    "bound in the namespace, so use them with no import (an explicit `import fff` returns the same "
+    "object); the rest you `import` once and reuse: `tui`, "
     "`exa_py`, `google_auth`, `fleet` (async polars SSH fan-out across hosts: `await "
     "fleet.read_ndjson(hosts, path)` or `await fleet.scan(hosts, cmd)`; pass "
     "`username=`/`connect_timeout=` through to asyncssh, and note that `on_error='collect'` waits "
@@ -99,6 +112,9 @@ HTML = (
 VIEW = (
     "Prefer these over shelling out, and never reach for a subprocess to do them: `view.ls(path)` "
     "/ `view.tree(path)` list a directory as a polars DataFrame you can `.filter` / `.sort` "
+    "(`view.tree` lists but does not descend into node_modules / target / build / dist and other "
+    "heavy dirs, so a project's structure is not buried under vendored files — pass `all=True` to "
+    "walk them) "
     "(never `ls` — not via bash, `sh`, or `asyncio.create_subprocess_exec`, and never paste a raw "
     "`ls -la` dump at the human), `view.grep` / `view.find` search as DataFrames, "
     "`view.cat/read/head/json/diff` return a syntax-highlighted view, and `view.edit(path, old, "

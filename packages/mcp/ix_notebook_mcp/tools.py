@@ -49,6 +49,7 @@ _KERNEL_GUIDE = guide.compose(
     guide.MODULES,
     guide.HTML,
     guide.VIEW,
+    guide.VERIFY,
     guide.POLARS,
     guide.SEARCH,
     guide.RESULT_CONTRACT,

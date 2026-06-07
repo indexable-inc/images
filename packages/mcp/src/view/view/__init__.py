@@ -31,6 +31,26 @@ from datetime import datetime
 
 import polars as pl
 
+# Heavy, rarely-relevant directories `tree` collapses (lists but does not descend
+# into) unless ``all=True``: dependency installs, build output, vendored code, and
+# caches. Dotted dirs (.git, .venv, .svelte-kit, ...) are already skipped by the
+# hidden-entry rule, so this names only the non-dotted offenders that otherwise
+# bury a project's real structure under thousands of files.
+_NOISE_DIRS = frozenset(
+    {
+        "node_modules",
+        "target",
+        "build",
+        "dist",
+        "out",
+        "result",
+        "vendor",
+        "venv",
+        "coverage",
+        "__pycache__",
+    }
+)
+
 __all__ = [
     "ls",
     "tree",
@@ -469,7 +489,11 @@ def tree(
     """A recursive listing to ``depth`` as a DataFrame (depth, name, path, kind).
 
     ``name`` is indented by depth for a tree shape; ``path`` is relative to the
-    root so results stay sortable/filterable.
+    root so results stay sortable/filterable. Heavy dependency/build/cache dirs
+    (``node_modules``, ``target``, ``dist``, ...) are listed but not descended
+    into, so a tree of a real project shows its structure instead of thousands of
+    vendored files; pass ``all=True`` to include hidden entries and walk those
+    dirs too. A collapsed dir's ``name`` is suffixed ``/…``.
     """
     root = pathlib.Path(path)
     rows = []
@@ -486,16 +510,17 @@ def tree(
         for p in entries:
             if not all and p.name.startswith("."):
                 continue
-            kind = "dir" if p.is_dir() else "file"
+            is_dir = p.is_dir()
+            collapsed = is_dir and not all and p.name in _NOISE_DIRS
             rows.append(
                 {
                     "depth": level,
-                    "name": ("  " * level) + p.name,
+                    "name": ("  " * level) + p.name + ("/\u2026" if collapsed else ""),
                     "path": str(p.relative_to(root)),
-                    "kind": kind,
+                    "kind": "dir" if is_dir else "file",
                 }
             )
-            if p.is_dir():
+            if is_dir and not collapsed:
                 walk(p, level + 1)
 
     walk(root, 0)
