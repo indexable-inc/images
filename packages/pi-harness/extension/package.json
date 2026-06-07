@@ -1,0 +1,10 @@
+{
+  "name": "ix-mcp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bridge the ix-mcp Python-execution MCP server into Pi as native tools",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
