@@ -710,6 +710,40 @@ main.dragging-v .splitter-v::after {
   text-align: right;
 }
 
+/* Inline copy/download progress: a compact bar plus a byte (and live rate)
+ * readout, so a slow "copying …" / "downloading …" row shows how much data is
+ * moving and how fast instead of only a ticking duration. */
+.activity-progress {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-progress .pbar {
+  position: relative;
+  width: 4rem;
+  height: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.activity-progress .pbar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--p, 0%);
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--green)));
+  transition: width 200ms ease-out;
+}
+
+.activity-progress .pbar-text {
+  white-space: nowrap;
+}
+
 /* ---------- builds ---------- */
 
 .build-table {

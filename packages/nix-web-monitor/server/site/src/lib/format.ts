@@ -76,8 +76,16 @@ export function formatDuration(ms: number): string {
 /// `2.4 MB/s` reading stays legible; whole numbers above to avoid noise.
 export function formatRate(bytesPerSecond: number): string {
   if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0 B/s';
-  const units = ['B/s', 'kB/s', 'MB/s', 'GB/s'];
-  let value = bytesPerSecond;
+  return `${formatBytes(bytesPerSecond)}/s`;
+}
+
+/// Human byte count in decimal units (`kB`/`MB` are 1000-based, matching how
+/// Nix substituters and binary caches report path sizes). One decimal below 100
+/// so `2.4 MB` stays legible; whole numbers above to keep the column quiet.
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'kB', 'MB', 'GB', 'TB'];
+  let value = bytes;
   let unit = 0;
   while (value >= 1000 && unit < units.length - 1) {
     value /= 1000;
@@ -85,4 +93,17 @@ export function formatRate(bytesPerSecond: number): string {
   }
   const text = unit === 0 || value >= 100 ? String(Math.round(value)) : value.toFixed(1);
   return `${text} ${units[unit]}`;
+}
+
+/// Whether an activity's `progress` counters measure bytes or item counts. Nix
+/// reports `copy_path` and `file_transfer` progress in bytes (data moving across
+/// a store copy or substituter download); everything else (`copy_paths`,
+/// `builds`, ...) counts items. The activities panel uses this to label a row as
+/// `12.4 MB / 80 MB` versus `3 / 10`.
+export type ProgressUnit = 'bytes' | 'count';
+
+export function progressUnit(activityTypeName: string): ProgressUnit {
+  return activityTypeName === 'file_transfer' || activityTypeName === 'copy_path'
+    ? 'bytes'
+    : 'count';
 }

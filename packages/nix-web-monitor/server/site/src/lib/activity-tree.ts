@@ -19,8 +19,24 @@
 /// the builds and downloads an operator actually cares about. The fold keeps one
 /// row per distinct label per parent and pushes the real work back into view.
 
-import { activityKind, splitDerivation, type DerivationParts } from '$lib/format';
+import {
+  activityKind,
+  progressUnit,
+  splitDerivation,
+  type DerivationParts,
+  type ProgressUnit
+} from '$lib/format';
 import type { ActivityNode, ActivityStatus, BuildNode, BuildStatus } from '$lib/types';
+
+/// Byte/item progress for a copy or download row, summed across a folded group.
+/// `unit` says whether `done`/`expected` are bytes (a store copy or substituter
+/// download) or item counts. Only present when the activity reports measurable
+/// progress; a build or a copy before its first progress event has none.
+export type RowProgress = Readonly<{
+  done: number;
+  expected: number;
+  unit: ProgressUnit;
+}>;
 
 export type ActivityRowMeta = Readonly<{
   id: number;
@@ -39,6 +55,9 @@ export type ActivityRowMeta = Readonly<{
   startedAtMs: number;
   /// Latest stop across the folded group, or `null` while any member still runs.
   stoppedAtMs: number | null;
+  /// Copy/download progress, summed across the folded group, or `null` when the
+  /// row reports nothing measurable. Lets the row show how much data is moving.
+  progress: RowProgress | null;
 }>;
 
 export type ActivityTree = Readonly<{
@@ -160,6 +179,22 @@ export function buildActivityTree(activities: ActivityNode[], builds: BuildNode[
 
   const roots = descend(rawRoots);
 
+  /// Sum the `done`/`expected` counters across a folded group, classifying the
+  /// unit from the activity type (bytes for copies and downloads, items
+  /// otherwise). `null` when nothing in the group has measurable expected work,
+  /// so a build or a copy before its first progress event shows no bar.
+  function groupProgress(group: number[], typeName: string): RowProgress | null {
+    let done = 0;
+    let expected = 0;
+    for (const member of group) {
+      const progress = byId.get(member)?.progress;
+      if (progress === null || progress === undefined) continue;
+      done += progress.done;
+      expected += progress.expected;
+    }
+    return expected > 0 ? { done, expected, unit: progressUnit(typeName) } : null;
+  }
+
   const rowMeta = new Map<number, ActivityRowMeta>();
   for (const [rep, group] of members) {
     const desc = descriptor.get(rep);
@@ -175,7 +210,8 @@ export function buildActivityTree(activities: ActivityNode[], builds: BuildNode[
         text: desc.text,
         count: 1,
         startedAtMs: activity.startedAtMs,
-        stoppedAtMs: activity.stoppedAtMs
+        stoppedAtMs: activity.stoppedAtMs,
+        progress: groupProgress(group, activity.activityType.name)
       });
       continue;
     }
@@ -198,7 +234,8 @@ export function buildActivityTree(activities: ActivityNode[], builds: BuildNode[
       text: desc.text,
       count: group.length,
       startedAtMs,
-      stoppedAtMs
+      stoppedAtMs,
+      progress: groupProgress(group, activity.activityType.name)
     });
   }
 

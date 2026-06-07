@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { SvelteSet } from 'svelte/reactivity';
   import Self from '$components/ActivityTreeRow.svelte';
-  import { formatDuration, middleTruncate } from '$lib/format';
+  import { formatBytes, formatDuration, formatRate, middleTruncate } from '$lib/format';
   import type { ActivityRowMeta } from '$lib/activity-tree';
 
   type Props = {
@@ -29,6 +29,34 @@
 
   function elapsed(row: ActivityRowMeta): number {
     return Math.max(0, (row.stoppedAtMs ?? now) - row.startedAtMs);
+  }
+
+  function percent(progress: NonNullable<ActivityRowMeta['progress']>): number {
+    return Math.min(100, Math.round((progress.done / progress.expected) * 100));
+  }
+
+  /// Average transfer rate (total bytes moved / elapsed) for a running byte row.
+  /// `null` for item-count rows, finished rows, or a span too short to divide,
+  /// where an instantaneous figure would just be noise.
+  function byteRate(row: ActivityRowMeta): number | null {
+    if (row.progress === null || row.progress.unit !== 'bytes' || row.stoppedAtMs !== null) {
+      return null;
+    }
+    const seconds = (now - row.startedAtMs) / 1000;
+    return seconds >= 0.5 ? row.progress.done / seconds : null;
+  }
+
+  /// Trailing readout next to the bar: `12.4 MB / 80 MB` plus a live rate for an
+  /// in-flight download, or `3 / 10` for an item-count activity.
+  function progressLabel(row: ActivityRowMeta): string {
+    const progress = row.progress;
+    if (progress === null) return '';
+    if (progress.unit !== 'bytes') {
+      return `${String(progress.done)} / ${String(progress.expected)}`;
+    }
+    const moved = `${formatBytes(progress.done)} / ${formatBytes(progress.expected)}`;
+    const rate = byteRate(row);
+    return rate === null ? moved : `${moved} · ${formatRate(rate)}`;
   }
 </script>
 
@@ -71,6 +99,14 @@
     {/if}
     {#if isCollapsed && children.length > 0}
       <span class="subtree-count">+{String(children.length)}</span>
+    {/if}
+    {#if meta.progress !== null}
+      <span class="activity-progress" title={progressLabel(meta)}>
+        <span class="pbar" aria-hidden="true"
+          ><span class="pbar-fill" style="--p: {String(percent(meta.progress))}%"></span></span
+        >
+        <span class="pbar-text">{progressLabel(meta)}</span>
+      </span>
     {/if}
     <span class="activity-dur">{formatDuration(elapsed(meta))}</span>
   </div>
