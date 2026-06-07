@@ -941,6 +941,21 @@ let
     migrated = {row[1] for row in conn_a.execute("PRAGMA table_info(executions)")}
     assert "bindings" in migrated, migrated
 
+    # The duplicate-column race itself: a connection that observed the column
+    # missing (here forced via a shim) but runs ALTER after another connection
+    # already added it must swallow the error, not raise. This exercises the
+    # except branch the idempotency case above skips.
+    class _StaleSchema:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, *args):
+            if sql.startswith("PRAGMA table_info"):
+                return [(0, "id"), (1, "name")]  # pretend bindings is still absent
+            return self._conn.execute(sql, *args)
+
+    store_mod._migrate(_StaleSchema(conn_a))  # ALTER -> duplicate column -> caught
+
     # End to end: a finished job snapshots its bindings into the store row.
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
