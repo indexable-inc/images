@@ -638,6 +638,11 @@ let
     ];
     packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
     packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
+    # Drive the packageBuildEnv -> build.rs -> rustc-env path: the build script
+    # reads CARGO_UNIT_BUILD_ENV and re-exposes it; the fixture test compares the
+    # baked value against this expected value (passed at test runtime).
+    packageBuildEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV = "build-ok";
+    packageTestEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV_EXPECTED = "build-ok";
     cargoTargets = [
       [ "--workspace" ]
       [
@@ -662,6 +667,10 @@ let
     workspaceRoot = ./fixtures/cargo-unit-hello;
     packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
     packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
+    # Mirror cargoUnitWorkspace exactly except cargoTargets so the byte-identical
+    # root assertion (a packageBuildEnv-tagged unit must narrow identically) holds.
+    packageBuildEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV = "build-ok";
+    packageTestEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV_EXPECTED = "build-ok";
     cargoTargets = [ [ "--workspace" ] ];
   };
 

@@ -17,6 +17,13 @@
   testArgsByPackage ? {},
   packageTestInputs ? {},
   packageTestEnv ? {},
+  # Per-package build env, keyed by Cargo package name. Merged onto the env of
+  # that package's own compile and build-script-run units only (the renderer
+  # tags those units with `packageName`); other packages and vendored
+  # dependency units are untouched. Use this instead of workspace-wide `extraEnv`
+  # for values that change often (e.g. a git commit baked into one crate) so the
+  # churn invalidates that one package's units, not the whole dependency closure.
+  packageBuildEnv ? {},
   extraPolicyChecks ? {},
   extraRustcArgs ? [],
   extraRustcArgsForPlatform ? _platform: [],
@@ -138,10 +145,15 @@ let
     in
     if audit.scope == "closure" then audit.relative else "";
 
-  mkUnit = attrs: pkgs.stdenv.mkDerivation (attrs // {
+  # `packageName` is a render-time tag the renderer attaches to a unit's own
+  # compile and build-script-run units so per-package build env can find them. It
+  # is not a derivation attribute, so strip it before `mkDerivation`; for a
+  # package with no `packageBuildEnv` entry the resulting derivation is
+  # byte-identical to one rendered without the tag.
+  mkUnit = attrs: pkgs.stdenv.mkDerivation ((builtins.removeAttrs attrs [ "packageName" ]) // {
     dontUnpack = true;
     dontConfigure = true;
-    env = (attrs.env or {}) // extraEnv;
+    env = (attrs.env or {}) // extraEnv // (packageBuildEnv.${attrs.packageName or ""} or {});
   });
 
   # Shape-identical to `mkUnit`. Kept distinct so per-unit clippy derivation

@@ -769,6 +769,12 @@ struct UnitDerivation<'a> {
     native_build_inputs: &'a str,
     driver: Driver,
     install_phase: String,
+    // `Some` only for a unit that compiles the package's own code, so
+    // `packageBuildEnv.<package>` can be merged onto its env in the template.
+    // `None` for the clippy and panic-object check units: build env is for
+    // producing the artifact, not for lints, and tagging them would needlessly
+    // invalidate them when the env changes.
+    package_name: Option<String>,
 }
 
 // Shared scaffold for the build, clippy, and panic-object derivations. They
@@ -787,10 +793,14 @@ fn render_unit_derivation(
         native_build_inputs,
         driver,
         install_phase,
+        package_name,
     } = spec;
     let mut attrs = Attrs::new();
 
     attrs.string("pname", &pname);
+    if let Some(package_name) = &package_name {
+        attrs.string("packageName", package_name);
+    }
     attrs.string("version", graph.units[index].package_version());
     attrs.expr("src", &prepared.source_ref(index));
     attrs.expr("nativeBuildInputs", native_build_inputs);
@@ -849,6 +859,7 @@ fn render_rustc_unit(
             native_build_inputs,
             driver: Driver::Rustc,
             install_phase: render_install_phase(unit, options, &prepared.hashes[index]),
+            package_name: Some(unit.package_name().into_owned()),
         },
     )
 }
@@ -874,6 +885,7 @@ fn render_clippy_unit(
             native_build_inputs: "[ rustToolchain ] ++ extraNativeBuildInputs ++ extraClippyNativeBuildInputs",
             driver: Driver::Clippy,
             install_phase: "mkdir -p $out\n".to_string(),
+            package_name: None,
         },
     )
 }
@@ -899,6 +911,7 @@ fn render_panic_object_unit(
             install_phase:
                 "mkdir -p $out\nfind build -maxdepth 1 -name '*.o' -exec cp {} \"$out/\" ';'\n"
                     .to_string(),
+            package_name: None,
         },
     )
 }
@@ -1432,6 +1445,10 @@ fn render_build_script_run(
         "pname",
         &format!("{}-build-script-output", run_unit.package_name()),
     );
+    // Tag so `packageBuildEnv.<package>` reaches the build script's process env:
+    // this is the unit that runs build.rs, and a `cargo:rustc-env` it emits in
+    // turn flows to this package's compile units.
+    attrs.string("packageName", &run_unit.package_name());
     attrs.string("version", run_unit.package_version());
     attrs.expr("src", &prepared.source_ref(run_index));
     attrs.expr(
@@ -3552,6 +3569,11 @@ mod tests {
         assert!(rendered.contains("testArgsByPackage ? {}"));
         assert!(rendered.contains("packageTestInputs ? {}"));
         assert!(rendered.contains("packageTestEnv ? {}"));
+        // Per-package build env: the param exists, mkUnit merges it keyed by the
+        // unit's `packageName` tag, and strips that tag before `mkDerivation`.
+        assert!(rendered.contains("packageBuildEnv ? {}"));
+        assert!(rendered.contains("packageBuildEnv.${attrs.packageName or \"\"} or {}"));
+        assert!(rendered.contains("builtins.removeAttrs attrs [ \"packageName\" ]"));
         assert!(rendered.contains("mkTestEntry ="));
         assert!(rendered.contains("RUST_TEST_THREADS"));
         assert!(rendered.contains("mkTestCases ="));

@@ -50,7 +50,11 @@ let
     call that only narrows `cargoTargets` yields byte-identical root
     derivations (pinned by a tests/default.nix assertion) and adds a unit-graph
     plus render IFD; create a separate workspace only when unit identity
-    changes (profile, policy, rustToolchain, env, extraRustcArgs). Top-level
+    changes (profile, policy, rustToolchain, env, extraRustcArgs). `env` folds
+    into every unit, so a value that changes often (a baked git commit) busts the
+    whole dependency closure; scope it with `packageBuildEnv.<package> = { ... }`
+    instead, which only reaches that package's own compile and build-script-run
+    units. Top-level
     `binaries`/`libraries` dedupe by Cargo target name and the first
     `cargoTargets` entry wins, so when one crate roots under several entries,
     select through `targetSets.<set>` instead. Per-case discovery is the
@@ -338,6 +342,7 @@ let
             testArgsByPackage = rawArgs.testArgsByPackage or { };
             packageTestInputs = rawArgs.packageTestInputs or { };
             packageTestEnv = rawArgs.packageTestEnv or { };
+            packageBuildEnv = rawArgs.packageBuildEnv or { };
             inherit extraRustcArgsForPlatform;
             # Manifest-derived flags come first so per-call `policy.clippy`
             # entries land later in argv and can override them. Cargo's
