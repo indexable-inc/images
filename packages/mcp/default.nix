@@ -832,13 +832,25 @@ let
         h = ns["history"]()
         assert isinstance(h, runtime.Result) and a.id in h.llm_result and b.id in h.llm_result
 
-        # A KeyboardInterrupt (what the server's wedge watchdog raises to free a
-        # blocked kernel) becomes a failed job with an actionable message, not a
-        # raw traceback that escapes the runner.
+        # A KeyboardInterrupt the user's own code raises keeps its real traceback
+        # (it is NOT misattributed to the wedge watchdog, whose flag is unset here).
         k = await run("raise KeyboardInterrupt", budget=1.0, name="kbi")
         assert k.status == "error", k.status
-        assert "asyncio.to_thread" in k.error, k.error
-        assert "Traceback" not in k.error, k.error
+        assert "Traceback" in k.error and "KeyboardInterrupt" in k.error, k.error
+        assert "asyncio.to_thread" not in k.error, k.error
+
+        # When the watchdog flag IS set (as the SIGUSR2 handler does before raising),
+        # the same interrupt yields the actionable wedge message instead. The cell
+        # sets the flag on its own running job via the runtime ContextVar.
+        w = await run(
+            "import ix_notebook_mcp.runtime as _rt\n"
+            "_rt._ix_current.get().interrupted_by_watchdog = True\n"
+            "raise KeyboardInterrupt",
+            budget=1.0,
+            name="kbi-watchdog",
+        )
+        assert w.status == "error", w.status
+        assert "asyncio.to_thread" in w.error and "Traceback" not in w.error, w.error
 
     asyncio.run(main())
     print("runtime-ok")

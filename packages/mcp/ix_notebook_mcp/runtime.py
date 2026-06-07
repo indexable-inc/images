@@ -137,6 +137,9 @@ class Job:
         # Rich outputs (mime bundles) display()-ed while this job runs.
         self._displays: list[dict] = []
         self.task: asyncio.Task | None = None
+        # Set by the SIGUSR2 wedge watchdog so _runner can tell its interrupt from
+        # a KeyboardInterrupt the user's own code raised.
+        self.interrupted_by_watchdog = False
 
     def _append(self, s: str) -> None:
         """Append output, trimming to the most recent _MAX_OUTPUT_CHARS so a
@@ -608,18 +611,21 @@ async def _runner(job: Job, ns: dict) -> None:
         job.status = "cancelled"
         raise
     except KeyboardInterrupt:
-        # The only source of an interrupt here is the server's wedge watchdog
-        # (SIGUSR2, fired after config.wedge_grace): a synchronous call blocked the
-        # event loop past the budget, so the kernel was interrupted to free it.
-        # Record a crisp, actionable message instead of a bare traceback.
         job.status = "error"
-        job.error = (
-            "Interrupted: this cell exceeded its budget while blocking the "
-            "kernel's event loop with a synchronous call (subprocess.run, "
-            "time.sleep, requests, a long CPU op), which freezes every job. Wrap "
-            "it in `await asyncio.to_thread(...)` or use an async API, and run "
-            "anything slow as a background job."
-        )
+        if job.interrupted_by_watchdog:
+            # The server's wedge watchdog (SIGUSR2, fired after config.wedge_grace)
+            # raised this: a synchronous call blocked the event loop past the
+            # budget. Record a crisp, actionable message instead of a bare traceback.
+            job.error = (
+                "Interrupted: this cell exceeded its budget while blocking the "
+                "kernel's event loop with a synchronous call (subprocess.run, "
+                "time.sleep, requests, a long CPU op), which freezes every job. Wrap "
+                "it in `await asyncio.to_thread(...)` or use an async API, and run "
+                "anything slow as a background job."
+            )
+        else:
+            # The user's own code raised KeyboardInterrupt; keep its real traceback.
+            job.error = traceback.format_exc()
         job._append(job.error)
     except (Exception, SystemExit):
         # Isolate user code from the kernel: a job's SyntaxError, exception, or
@@ -1146,14 +1152,20 @@ def _install_signal_handlers() -> None:
     trace_path = os.environ.get("IX_MCP_KERNEL_TRACE")
     if trace_path:
         _trace_file = open(trace_path, "w")  # truncates any stale dump from a prior kernel
+        # enable() handles fatal signals (SIGSEGV/SIGABRT) -> stderr; register()
+        # adds the on-demand SIGUSR1 all-thread dump the kernel_trace tool reads.
         faulthandler.enable()
         faulthandler.register(signal.SIGUSR1, file=_trace_file, all_threads=True, chain=False)
 
     def _break(signum, frame):
         # Only raise while a job is on the stack; a stray signal to an idle kernel
         # must not blow up the event loop. The handler runs in the interrupted
-        # frame's context, so it sees the running job's ContextVar.
-        if _ix_current.get() is not None:
+        # frame's context, so it sees the running job's ContextVar. Flag the job so
+        # _runner can tell this watchdog interrupt from a KeyboardInterrupt the
+        # user's own code raised (which must keep its real traceback).
+        job = _ix_current.get()
+        if job is not None:
+            job.interrupted_by_watchdog = True
             raise KeyboardInterrupt("ix: cell exceeded its budget while blocking the event loop")
 
     try:

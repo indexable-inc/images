@@ -30,16 +30,24 @@ _READY_TIMEOUT = 60.0
 TRACE_ENV = "IX_MCP_KERNEL_TRACE"
 
 
-def _wedged_summary(budget: float, grace: float, deadline: float) -> dict:
+def _wedged_summary(budget: float, grace: float, deadline: float, interrupted: bool) -> dict:
     """A per-call summary, shaped like ``runtime._job_summary``, returned when a
     cell blocks the kernel past ``deadline``. The server renders it like any
     other summary, so the caller gets a clear, actionable message rather than an
-    opaque transport timeout."""
+    opaque transport timeout. ``interrupted`` reports whether the rescue signal
+    was actually sent, so the message does not claim a recovery that did not
+    happen when the kernel pid is unknown."""
+    recovery = (
+        "The kernel was interrupted and is usable again."
+        if interrupted
+        else "The kernel could NOT be interrupted (its pid is unknown); it is still "
+        "blocked and likely needs a restart."
+    )
     message = (
         f"Cell blocked the kernel's event loop for over {deadline:.0f}s "
         f"(budget {budget:.0f}s + {grace:.0f}s grace) with a synchronous "
-        "call, so the budget could not background it. The kernel was interrupted "
-        "and is usable again. Wrap blocking calls (subprocess.run, time.sleep, "
+        f"call, so the budget could not background it. {recovery} "
+        "Wrap blocking calls (subprocess.run, time.sleep, "
         "requests, heavy CPU) in `await asyncio.to_thread(...)` or use an async "
         "API, and run anything slow as a background job. The interrupted run is "
         "recoverable in this kernel via history() / jobs['<id>']."
@@ -63,6 +71,7 @@ class Kernel:
         self._km = None
         self._kc = None
         self._lock = asyncio.Lock()
+        self._trace_lock = asyncio.Lock()
         self._trace_path: Path | None = None
         self._pid: int | None = None
 
@@ -99,19 +108,22 @@ class Kernel:
         if self._km is None or self._trace_path is None or self._pid is None:
             return "kernel is not running"
         path = self._trace_path
-        before = path.stat().st_size if path.exists() else 0
-        try:
-            os.kill(self._pid, signal.SIGUSR1)
-        except ProcessLookupError:
-            return "kernel process is not alive"
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while loop.time() < deadline:
-            await asyncio.sleep(0.05)
-            if path.exists() and path.stat().st_size > before:
-                # A short settle so the whole multi-thread dump has flushed.
+        # Serialize dumps: two concurrent traces share the same `before` offset and
+        # would each read both appended dumps. The lock keeps each dump clean.
+        async with self._trace_lock:
+            before = path.stat().st_size if path.exists() else 0
+            try:
+                os.kill(self._pid, signal.SIGUSR1)
+            except ProcessLookupError:
+                return "kernel process is not alive"
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            while loop.time() < deadline:
                 await asyncio.sleep(0.05)
-                return path.read_text()[before:].strip() or "(empty trace)"
+                if path.exists() and path.stat().st_size > before:
+                    # A short settle so the whole multi-thread dump has flushed.
+                    await asyncio.sleep(0.05)
+                    return path.read_text()[before:].strip() or "(empty trace)"
         return (
             f"No trace was produced within {timeout:.0f}s. The kernel may not have "
             "the faulthandler registered (older build) or cannot service signals."
@@ -155,26 +167,33 @@ class Kernel:
         try:
             return await self._execute(wrapper, timeout=deadline)
         except TimeoutError:
-            await self._interrupt()
-            return [], _wedged_summary(budget, grace, deadline)
+            interrupted = await self._interrupt()
+            return [], _wedged_summary(budget, grace, deadline, interrupted)
 
-    async def _interrupt(self) -> None:
+    async def _interrupt(self) -> bool:
         """Break a synchronous call wedging the kernel's event loop. ipykernel's
         own ``interrupt_kernel`` cancels the asyncio task, which a synchronous call
         never yields to, so it cannot break a wedged async cell. Send SIGUSR2 to
         the kernel's runtime handler instead: it raises ``KeyboardInterrupt`` inline
         at the blocked frame, which ``_runner`` records as a failed job so the
-        kernel returns to idle and the next call runs."""
+        kernel returns to idle and the next call runs. Returns whether the signal
+        was actually delivered, so the caller's summary does not claim a recovery
+        that did not happen."""
         if self._pid is None:
-            return
+            return False
         try:
             os.kill(self._pid, signal.SIGUSR2)
         except ProcessLookupError:
-            pass
+            return False
+        return True
 
     async def restart(self) -> None:
         if self._km is not None:
             await self._km.restart_kernel(now=True)
+            # The restart launches a new process, so refresh the pid the trace and
+            # interrupt signals target; a stale pid would signal a dead or reused
+            # process. The new kernel re-runs install() and re-opens the trace file.
+            self._pid = self._kernel_pid()
             await self._kc.wait_for_ready(timeout=_READY_TIMEOUT)
 
     async def shutdown(self) -> None:
