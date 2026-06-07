@@ -9,19 +9,12 @@
 # This is an ordinary NixOS module: `services.*`, `users.*`, and `systemd.*` all
 # work here. Per-VM differences in this example come from the package list in
 # `flake.nix`; share everything else from here.
+{ modulesPath, ... }:
 {
-  lib,
-  modulesPath,
-  ...
-}: {
   imports = [
     "${modulesPath}/virtualisation/docker-image.nix"
   ];
 
-  # docker-image.nix injects post-boot image setup that is not valid for a
-  # switch-activated system root; priority 50 matches NixOS's force level while
-  # naming the conflict.
-  boot.postBootCommands = lib.mkOverride 50 "";
   documentation.enable = false;
   system.stateVersion = "25.11";
 }
