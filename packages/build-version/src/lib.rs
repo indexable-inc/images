@@ -36,22 +36,22 @@ const SHORT_REV_LEN: usize = 12;
 /// (a dev `cargo run`) the env vars are unset and the bare crate version is
 /// returned. Computed once per process; the first call wins, matching how clap
 /// reads the version a single time at startup.
+#[must_use]
 pub fn version_static(crate_version: &str) -> &'static str {
     static CACHE: OnceLock<String> = OnceLock::new();
     CACHE.get_or_init(|| {
-        let rev = std::env::var(REV_ENV).ok().filter(|rev| !rev.is_empty());
-        match rev {
-            Some(rev) => {
-                let epoch = std::env::var(EPOCH_ENV)
-                    .ok()
-                    .and_then(|raw| raw.parse::<i64>().ok());
-                format!(
-                    "{crate_version} ({})",
-                    stamp(&rev, epoch, SystemTime::now())
-                )
-            }
-            None => crate_version.to_owned(),
-        }
+        std::env::var(REV_ENV)
+            .ok()
+            .filter(|rev| !rev.is_empty())
+            .map_or_else(
+                || crate_version.to_owned(),
+                |rev| {
+                    let epoch = std::env::var(EPOCH_ENV)
+                        .ok()
+                        .and_then(|raw| raw.parse::<i64>().ok());
+                    format!("{crate_version} ({})", stamp(&rev, epoch, SystemTime::now()))
+                },
+            )
     })
 }
 
@@ -127,16 +127,16 @@ mod tests {
         assert_eq!(humanize_ago(120), "2 minutes ago");
         assert_eq!(humanize_ago(3600), "1 hour ago");
         assert_eq!(humanize_ago(5 * 3600), "5 hours ago");
-        assert_eq!(humanize_ago(2 * 86400), "2 days ago");
-        assert_eq!(humanize_ago(8 * 86400), "1 week ago");
-        assert_eq!(humanize_ago(45 * 86400), "1 month ago");
-        assert_eq!(humanize_ago(400 * 86400), "1 year ago");
+        assert_eq!(humanize_ago(2 * 86_400), "2 days ago");
+        assert_eq!(humanize_ago(8 * 86_400), "1 week ago");
+        assert_eq!(humanize_ago(45 * 86_400), "1 month ago");
+        assert_eq!(humanize_ago(400 * 86_400), "1 year ago");
     }
 
     #[test]
     fn stamp_abbreviates_rev_and_renders_date_and_age() {
         // epoch 0 is 1970-01-01T00:00:00Z; `now` two days later.
-        let now = UNIX_EPOCH + Duration::from_secs(2 * 86400);
+        let now = UNIX_EPOCH + Duration::from_secs(2 * 86_400);
         let rendered = stamp("7e42ccdb18827401226635", Some(0), now);
         assert_eq!(rendered, "7e42ccdb1882, 1970-01-01, 2 days ago");
     }
