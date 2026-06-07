@@ -251,6 +251,7 @@ async def run_cli(
     *,
     dry_run: bool,
     timeout: int | None = None,
+    cwd: Path | None = None,
 ) -> str:
     step("+ " + " ".join(command))
     if dry_run:
@@ -260,6 +261,7 @@ async def run_cli(
         *command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        cwd=str(cwd) if cwd is not None else None,
     )
     assert process.stdout is not None
     assert process.stderr is not None
@@ -653,27 +655,35 @@ async def switch_node_from_source(
     *,
     dry_run: bool,
 ) -> None:
+    # `ix switch` was folded into `ix up` (indexable-inc/ix#4442): `ix up
+    # <installable> --name <vm>` is the converge path. `ix up` auto-uploads its
+    # working directory as the build source, so run it from `source_root` instead
+    # of passing the removed `--source`; `--workdir` selects the eval subdir
+    # relative to that root.
+    workdir = source_workdir
+    if workdir.is_absolute():
+        try:
+            workdir = workdir.relative_to(source_root)
+        except ValueError:
+            pass
     command = [
         "ix",
-        "switch",
-        node.name,
+        "up",
         node.switch.sourceInstallable,
-        "--build-on",
-        "remote",
-        "--source",
-        str(source_root),
-        "--source-workdir",
-        str(source_workdir),
+        "--name",
+        node.name,
+        "--workdir",
+        str(workdir),
     ]
     if node.switch.buildVm is not None:
         command.extend(["--build-vm", node.switch.buildVm])
     for name, path in sorted(node.switch.overrideInputs.items()):
-        command.extend(["--override-input", name, path])
+        command.extend(["--override-input", f"{name}={path}"])
 
     for attempt in range(1, MAX_SWITCH_RETRIES + 1):
         try:
             step(f"switching {node.name} from source (attempt {attempt}/{MAX_SWITCH_RETRIES})")
-            await run_cli(command, dry_run=dry_run, timeout=3600)
+            await run_cli(command, dry_run=dry_run, timeout=3600, cwd=source_root)
             return
         except (CliError, CliTimeoutError) as e:
             error_msg = e.output or str(e)

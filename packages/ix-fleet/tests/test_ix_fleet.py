@@ -600,8 +600,13 @@ class DownTests(unittest.TestCase):
 
 
 class SwitchSourceTests(unittest.TestCase):
-    def test_override_inputs_are_separate_nix_flag_arguments(self) -> None:
+    def test_source_switch_runs_ix_up_from_source_root(self) -> None:
+        # `ix switch` was folded into `ix up` (indexable-inc/ix#4442): the source
+        # switch now runs `ix up <installable> --name <vm>` from the source root
+        # (which `ix up` auto-uploads), with `--workdir` relative to that root and
+        # `--override-input NAME=VALUE` single-token flags.
         calls: list[list[str]] = []
+        cwds: list[Path | None] = []
         node_data = fleet_node("api")
         node_data["switch"]["buildVm"] = "builder"
         node_data["switch"]["overrideInputs"] = {
@@ -610,10 +615,17 @@ class SwitchSourceTests(unittest.TestCase):
         }
         node = ix_fleet.FleetNode.model_validate(node_data)
 
-        async def fake_run_cli(command: list[str], *, dry_run: bool, timeout: int | None = None) -> str:
+        async def fake_run_cli(
+            command: list[str],
+            *,
+            dry_run: bool,
+            timeout: int | None = None,
+            cwd: Path | None = None,
+        ) -> str:
             del timeout
             self.assertFalse(dry_run)
             calls.append(command)
+            cwds.append(cwd)
             return ""
 
         with patch.object(ix_fleet, "run_cli", fake_run_cli):
@@ -631,26 +643,22 @@ class SwitchSourceTests(unittest.TestCase):
             [
                 [
                     "ix",
-                    "switch",
-                    "api",
+                    "up",
                     ".#api",
-                    "--build-on",
-                    "remote",
-                    "--source",
-                    "/source",
-                    "--source-workdir",
-                    "/source/subdir",
+                    "--name",
+                    "api",
+                    "--workdir",
+                    "subdir",
                     "--build-vm",
                     "builder",
                     "--override-input",
-                    "ix",
-                    "github:indexable-inc/ix",
+                    "ix=github:indexable-inc/ix",
                     "--override-input",
-                    "ix-images",
-                    "path:/workspace/index",
+                    "ix-images=path:/workspace/index",
                 ],
             ],
         )
+        self.assertEqual(cwds, [Path("/source")])
 
 
 def argparse_namespace(**kwargs: typing.Any) -> typing.Any:
