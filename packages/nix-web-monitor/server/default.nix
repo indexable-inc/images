@@ -51,9 +51,15 @@ let
         # `nix build .#x` would. Pinning a specific Nix here drags an
         # extra copy into every closure and silently shadows custom
         # builds.
+        # Stamp the build revision and commit time for `--version`. These ride
+        # the wrapper env (not `env!`) and the `build-version` crate renders
+        # them at runtime, so a new commit re-stamps this tiny wrapper without
+        # rebuilding the Rust unit. `IX_BUILD_*` are the shared names every
+        # ix tool reads; see `build-version` and `ix.rev` / `ix.revEpoch`.
         makeWrapper ${lib.getExe unwrapped} "$out/bin/nix-web-monitor" \
           --set NIX_WEB_MONITOR_SITE_DIR "$out/share/nix-web-monitor" \
-          --set NIX_WEB_MONITOR_BUILD ${lib.escapeShellArg ix.buildStamp}
+          --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
+          --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)}
       '';
 in
 wrapper

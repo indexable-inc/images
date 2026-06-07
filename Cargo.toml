@@ -3,6 +3,7 @@ members = [
   "modules/services/resource-monitor/stats-writer",
   "packages/agents-md",
   "packages/blast-radius",
+  "packages/build-version",
   "packages/claude-stories",
   "packages/ast-merge/ast",
   "packages/ast-merge/cli",
@@ -125,6 +126,7 @@ ast-merge-langs = { path = "packages/ast-merge/langs" }
 ast-merge-matcher = { path = "packages/ast-merge/matcher" }
 axum = "0.8"
 base64 = "0.22"
+build-version = { path = "packages/build-version" }
 bytes = "1"
 chrono = { version = "0.4", default-features = false }
 clap = "4"

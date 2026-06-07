@@ -1,0 +1,12 @@
+[package]
+name = "build-version"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Format a binary's --version line from Nix-stamped build metadata"
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["alloc"] }

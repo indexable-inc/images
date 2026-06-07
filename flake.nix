@@ -102,13 +102,13 @@
       # `<commit>-dirty`; neither (eval from a non-git source) -> "dev".
       rev = self.rev or self.dirtyRev or "dev";
 
-      # Commit date of that revision as `YYYYMMDDHHMMSS`, threaded alongside
-      # `rev` so a build can stamp a human-meaningful date. Under reproducible
-      # builds there is no wall-clock compile time; this is the source date Nix
-      # already records (`lastModifiedDate`): the commit date on a clean tree,
-      # the working-tree mtime on a dirty one. Empty when evaluated from a
-      # non-git source.
-      revDate = self.lastModifiedDate or "";
+      # Commit time of that revision as unix epoch seconds, threaded alongside
+      # `rev` so a build can stamp a human date and relative age. Under
+      # reproducible builds there is no wall-clock compile time; this is the
+      # source date Nix already records (`self.lastModified`): the commit time
+      # on a clean tree, the working-tree mtime on a dirty one. `0` when
+      # evaluated from a non-git source.
+      revEpoch = self.lastModified or 0;
 
       # All path literals the flake exposes. Centralized so lib/ and
       # lib/per-system.nix have a single source of truth.
@@ -143,7 +143,7 @@
       ix = import ./lib {
         inherit
           rev
-          revDate
+          revEpoch
           nixpkgs
           paths
           rust-overlay
