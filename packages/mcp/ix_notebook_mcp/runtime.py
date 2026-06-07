@@ -1116,14 +1116,27 @@ def _figure_png(fig) -> bytes:
 
 
 def _register_rich_formatters(shell) -> None:
-    """Make matplotlib figures render as image/png. A bare ipykernel only wires the
-    inline png formatter after %matplotlib inline; register it lazily by type name
-    so importing matplotlib stays the user's choice."""
+    """Make the bundled view objects render richly in the dashboard.
+
+    Two gaps in a bare ipykernel: it only wires the inline matplotlib png
+    formatter after ``%matplotlib inline``, and IPython's ``text/html`` formatter
+    consults only ``_repr_html_``, never the ``__html__`` protocol that htpy (the
+    bundled HTML builder) and markupsafe implement. Without the latter, an htpy
+    element handed to ``cells.add``/``Result.of`` falls back to its ``repr``
+    (``<Element '<div ...>...'>``) instead of rendering. Register both lazily by
+    type name so importing matplotlib or htpy stays the user's choice."""
     try:
         png = shell.display_formatter.formatters["image/png"]
         png.for_type_by_name("matplotlib.figure", "Figure", _figure_png)
     except Exception:
         # No display formatter (non-IPython host) or a matplotlib too old to wire.
+        pass
+    try:
+        html = shell.display_formatter.formatters["text/html"]
+        html.for_type_by_name("htpy._elements", "BaseElement", lambda el: el.__html__())
+        html.for_type_by_name("markupsafe", "Markup", str)
+    except Exception:
+        # No display formatter, or an htpy/markupsafe layout this does not match.
         pass
 
 

@@ -1011,6 +1011,19 @@ let
         result_mimes = {mime for out in json.loads(row["outputs"]) for mime in out["data"]}
         assert "text/html" in result_mimes, ("result mimes", result_mimes)
 
+        # An htpy element renders through the __html__ protocol: IPython's html
+        # formatter ignores __html__ by default, so without _register_rich_formatters
+        # cells.add/Result.of would store the element's repr instead of its HTML.
+        htpy_job = await run(
+            "import htpy\nResult.of(htpy.div(class_='x')['<hi>'])", budget=3.0, name="htpy"
+        )
+        await htpy_job.task
+        htpy_outputs = conn.execute(
+            "SELECT outputs FROM executions WHERE id = ?", (htpy_job.id,)
+        ).fetchone()[0]
+        htpy_html = [out["data"].get("text/html") for out in json.loads(htpy_outputs)][-1]
+        assert htpy_html == '<div class="x">&lt;hi&gt;</div>', htpy_html
+
         # A display() call made while a job runs is captured too.
         disp_job = await run(
             "from IPython.display import display\ndisplay(pl.DataFrame({'z': [9]}))\nResult.ok('shown')",
