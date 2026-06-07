@@ -65,7 +65,6 @@
     symphony = {
       url = "github:indexable-inc/symphony/main";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.rust-overlay.follows = "rust-overlay";
     };
 
     # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
