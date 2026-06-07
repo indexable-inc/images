@@ -3,17 +3,17 @@
     "btop-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1780863565,
-        "narHash": "sha256-o8HUTwhZYiivv/uvd/CUgB/zJpQJ/4aHFx/OWfuLJXs=",
+        "lastModified": 1780871699,
+        "narHash": "sha256-dUM7UGO6lzT1At7m2xnnJD9mFbyFO7gjHonVE++YK58=",
         "owner": "indexable-inc",
         "repo": "btop",
-        "rev": "a49aa61bec9b0e0564704c904a3e1689612c8aef",
+        "rev": "711f4a128b1b7009ee9cf0fa179a586c82586613",
         "type": "github"
       },
       "original": {
         "owner": "indexable-inc",
         "repo": "btop",
-        "rev": "a49aa61bec9b0e0564704c904a3e1689612c8aef",
+        "rev": "711f4a128b1b7009ee9cf0fa179a586c82586613",
         "type": "github"
       }
     },

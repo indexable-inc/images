@@ -47,7 +47,7 @@
     };
 
     btop-src = {
-      url = "github:indexable-inc/btop/a49aa61bec9b0e0564704c904a3e1689612c8aef";
+      url = "github:indexable-inc/btop/711f4a128b1b7009ee9cf0fa179a586c82586613";
       flake = false;
     };
 
