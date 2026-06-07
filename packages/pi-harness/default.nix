@@ -2,6 +2,7 @@
   lib,
   stdenv,
   buildNpmPackage,
+  python3,
   # Pi is not yet packaged in this repo. Until the dependency-intake follow-up
   # lands a pinned `pi` derivation, the wrapper calls `pi` from PATH (the dev
   # image / system already provides it). Pass a derivation here to pin it.
@@ -63,9 +64,12 @@ let
     '';
   };
 
-  runtimeInputs = lib.optional (pi != null) pi ++ lib.optional (ix-mcp != null) ix-mcp;
+  mapper = ./room_event_mapper.py;
+
+  runtimeInputs = [ python3 ] ++ lib.optional (pi != null) pi ++ lib.optional (ix-mcp != null) ix-mcp;
   runtimePath = lib.makeBinPath runtimeInputs;
   piCommand = if pi == null then "pi" else lib.getExe pi;
+  pythonCommand = lib.getExe python3;
   isLinux = stdenv.hostPlatform.isLinux;
   hardenerLibraryName = "libpi-harness-harden.so";
   hardenerPath = lib.optionalString isLinux "$out/lib/${hardenerLibraryName}";
@@ -75,6 +79,7 @@ stdenv.mkDerivation {
   version = "0.1.0";
   dontUnpack = true;
   strictDeps = true;
+  doCheck = true;
 
   buildPhase = ''
         runHook preBuild
@@ -193,6 +198,32 @@ stdenv.mkDerivation {
           return set_joined_env("LD_PRELOAD", hardener, " ");
         }
 
+        static char *make_default_store_path(void) {
+          const char *tmpdir = env_or_default("TMPDIR", "/tmp");
+          size_t template_len = strlen(tmpdir) + strlen("/pi-harness.XXXXXX") + 1;
+          char *template = malloc(template_len);
+          if (template == NULL) {
+            return NULL;
+          }
+          snprintf(template, template_len, "%s/pi-harness.XXXXXX", tmpdir);
+
+          char *dir = mkdtemp(template);
+          if (dir == NULL) {
+            free(template);
+            return NULL;
+          }
+
+          size_t store_len = strlen(dir) + strlen("/ix-mcp.sqlite") + 1;
+          char *store = malloc(store_len);
+          if (store == NULL) {
+            free(template);
+            return NULL;
+          }
+          snprintf(store, store_len, "%s/ix-mcp.sqlite", dir);
+          free(template);
+          return store;
+        }
+
         int main(int argc, char **argv) {
         #ifdef __linux__
           pi_harness_harden_current_process();
@@ -217,37 +248,74 @@ stdenv.mkDerivation {
           );
           const char *pi = ${builtins.toJSON piCommand};
           const char *extension = ${builtins.toJSON "${extension}/ix-mcp-bridge.ts"};
+          const char *python = ${builtins.toJSON pythonCommand};
+          const char *mapper = ${builtins.toJSON mapper};
 
           size_t rest = (argc > 1) ? (size_t)(argc - 1) : 0;
-          char **args = calloc(17 + rest, sizeof(char *));
-          if (args == NULL) {
+          char **pi_args = calloc(17 + rest, sizeof(char *));
+          if (pi_args == NULL) {
             fprintf(stderr, "pi-harness: failed to allocate argv\n");
             return 125;
           }
 
           size_t i = 0;
-          args[i++] = (char *)pi;
-          args[i++] = "--no-builtin-tools";
-          args[i++] = "--no-extensions";
-          args[i++] = "--no-skills";
-          args[i++] = "--no-session";
-          args[i++] = "--mode";
-          args[i++] = (char *)mode;
-          args[i++] = "--print";
-          args[i++] = "--provider";
-          args[i++] = (char *)cfg->provider;
-          args[i++] = "--model";
-          args[i++] = (char *)cfg->model;
-          args[i++] = "--system-prompt";
-          args[i++] = (char *)system_prompt;
-          args[i++] = "--extension";
-          args[i++] = (char *)extension;
+          pi_args[i++] = (char *)pi;
+          pi_args[i++] = "--no-builtin-tools";
+          pi_args[i++] = "--no-extensions";
+          pi_args[i++] = "--no-skills";
+          pi_args[i++] = "--no-session";
+          pi_args[i++] = "--mode";
+          pi_args[i++] = (char *)mode;
+          pi_args[i++] = "--print";
+          pi_args[i++] = "--provider";
+          pi_args[i++] = (char *)cfg->provider;
+          pi_args[i++] = "--model";
+          pi_args[i++] = (char *)cfg->model;
+          pi_args[i++] = "--system-prompt";
+          pi_args[i++] = (char *)system_prompt;
+          pi_args[i++] = "--extension";
+          pi_args[i++] = (char *)extension;
           for (int j = 1; j < argc; j++) {
-            args[i++] = argv[j];
+            pi_args[i++] = argv[j];
           }
-          args[i] = NULL;
+          pi_args[i] = NULL;
+          size_t pi_argc = i;
 
-          execvp(pi, args);
+          if (strcmp(mode, "json") == 0) {
+            const char *store = getenv("IX_MCP_STORE");
+            char *owned_store = NULL;
+            if (store == NULL || store[0] == '\0') {
+              owned_store = make_default_store_path();
+              if (owned_store == NULL || setenv("IX_MCP_STORE", owned_store, 1) != 0) {
+                fprintf(stderr, "pi-harness: failed to prepare IX_MCP_STORE: %s\n", strerror(errno));
+                return 125;
+              }
+              store = owned_store;
+            }
+
+            char **mapper_args = calloc(6 + pi_argc, sizeof(char *));
+            if (mapper_args == NULL) {
+              fprintf(stderr, "pi-harness: failed to allocate mapper argv\n");
+              return 125;
+            }
+
+            size_t k = 0;
+            mapper_args[k++] = (char *)python;
+            mapper_args[k++] = (char *)mapper;
+            mapper_args[k++] = "--store";
+            mapper_args[k++] = (char *)store;
+            mapper_args[k++] = "--";
+            for (size_t j = 0; j < pi_argc; j++) {
+              mapper_args[k++] = pi_args[j];
+            }
+            mapper_args[k] = NULL;
+
+            execv(python, mapper_args);
+            fprintf(stderr, "pi-harness: failed to exec %s: %s\n", python, strerror(errno));
+            return 127;
+          }
+
+          execvp(pi, pi_args);
           fprintf(stderr, "pi-harness: failed to exec %s: %s\n", pi, strerror(errno));
           return 127;
         }
@@ -261,6 +329,12 @@ stdenv.mkDerivation {
         $CC launcher.c -o pi-harness
 
         runHook postBuild
+  '';
+
+  checkPhase = ''
+    runHook preCheck
+    PYTHONPATH=${./.} ${pythonCommand} ${./room_event_mapper_test.py}
+    runHook postCheck
   '';
 
   installPhase = ''

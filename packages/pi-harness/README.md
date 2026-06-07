@@ -25,7 +25,7 @@ PI_HARNESS_MODEL=codex pi-harness "..."  # gpt-5.5 via OpenAI
 | No accidental tools | `--no-extensions --no-skills` (the bridge still loads via explicit `-e`) |
 | Only tool surface | `extension/ix-mcp-bridge.ts` runs `ix-mcp serve` over stdio and re-exposes its tools (`python_exec`, `search_*`, `calendar_*`) via `pi.registerTool` |
 | Minimal context | `--system-prompt` defaults to a one-line controlled prompt; override with `PI_HARNESS_SYSTEM_PROMPT` |
-| Machine-readable stream | `--mode json` (default); `PI_HARNESS_MODE=text` for interactive dev |
+| Machine-readable stream | `--mode json` (default) via `room_event_mapper.py`; `PI_HARNESS_MODE=text` for direct interactive dev |
 | Model selection | `models.nix` table → `--provider`/`--model` |
 | API keys | Read by Pi from the env the caller provides (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`); never looked up here |
 | MCP subprocess env | `ix-mcp` receives a scrubbed allowlist; model-provider keys are blocked so `python_exec` cannot read them |
@@ -63,8 +63,34 @@ value):
 | `turn_end` | `turn_completed` |
 | error events | `error` |
 
-This first cut emits Pi's native JSON; the mapper and the `cell_update` /
-`resource_update` detail land with ENG-2263.
+ENG-2263 adds `room_event_mapper.py`. In JSON mode, the hardened launcher
+allocates a per-run `IX_MCP_STORE` when the caller did not provide one, starts
+the mapper, and the mapper starts Pi. The mapper combines Pi's JSON lifecycle
+events with ix-mcp's SQLite rows, which are the same `Job`, `Cell`, and
+`Resource` objects consumed by the existing MCP Svelte dashboard.
+
+The harness does not render cells, tool calls, or TUIs itself. It emits a
+machine-readable feed for the Room server to ingest; the Room Svelte/Tauri UI
+will render inline jobs/cells and sidebar resources later.
+
+Pi lifecycle/tool events keep the original Pi event under `raw` and map to
+stable Room-facing names such as `turn_started`, `text_delta`,
+`reasoning_delta`, `tool_call_started`, `tool_call_output`, `usage`,
+`turn_completed`, and `error`.
+
+ix-mcp store updates emit the dashboard-shaped payloads directly:
+
+```json
+{ "type": "cell_update", "cell_kind": "execution", "job": { "...": "MCP Job" } }
+{ "type": "cell_update", "cell_kind": "presentation", "cell": { "...": "MCP Cell" } }
+{ "type": "resource_update", "resource": { "...": "MCP Resource" } }
+```
+
+Those payloads preserve the MCP dashboard interpretations for source/code,
+stdout tail, status, final result, rich mime outputs, bindings, curated cells,
+and live HTML resources. `code_html` is intentionally empty in the harness feed;
+the MCP UI already falls back to raw `code`, and final Room rendering owns
+syntax highlighting.
 
 ## Validation
 
@@ -87,6 +113,12 @@ If an MCP feature needs an extra non-provider environment variable, add it via
 `PI_HARNESS_MCP_ENV_ALLOWLIST=NAME`; model-provider keys remain blocked even
 when listed there.
 
+The Room event mapper has a pure stdlib test:
+
+```
+python3 packages/pi-harness/room_event_mapper_test.py
+```
+
 The process hardening is part of the shipped `pi-harness` binary. On Linux,
 the launcher hardens itself first, then sets `LD_PRELOAD` for Pi so the
 post-`exec` Pi process reapplies the same non-dumpable boundary. The MCP child
@@ -97,4 +129,5 @@ provider keys.
 
 - Package `pi` as a pinned nix dependency (dependency-intake) and wire it +
   `ix-mcp` into `default.nix` `runtimeInputs` instead of relying on PATH.
-- Add the Pi→Room event mapper (ENG-2263).
+- Run the ENG-2263 live smoke matrix in CI once model-provider test credentials
+  are available.
