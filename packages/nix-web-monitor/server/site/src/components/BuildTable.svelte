@@ -2,7 +2,7 @@
   import { SvelteSet } from 'svelte/reactivity';
   import PanelHeader from '$lib/PanelHeader.svelte';
   import BuildTree from '$components/BuildTree.svelte';
-  import { derivationLabelKey, shortHash, splitDerivation } from '$lib/format';
+  import { shortHash, splitDerivation } from '$lib/format';
   import { durationLabel, isRemote, whereLabel } from '$lib/build-row';
   import { buildDependencyTree, flattenVisible, hasChildren, ROOT_SENTINEL } from '$lib/build-tree';
   import { useNow } from '$lib/now.svelte';
@@ -261,7 +261,6 @@
     {:else}
       {#each ordered as build (build.derivation)}
         {@const parts = splitDerivation(build.derivation)}
-        {@const ambiguous = tree.ambiguousLabels.has(derivationLabelKey(parts))}
         {@const selected = build.activityId !== null && build.activityId === selectedActivityId}
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div
@@ -284,8 +283,10 @@
           <div class="drv" title={build.derivation}>
             <span class="drv-name">{parts.name}</span>{#if parts.version.length > 0}<span
                 class="drv-version">{parts.version}</span
-              >{/if}{#if ambiguous && parts.hash.length > 0}<span class="drv-hash"
+              >{/if}{#if parts.hash.length > 0}<span class="drv-hash"
                 >{shortHash(parts)}</span
+              >{/if}{#if build.contentAddressed}<span class="drv-ca"
+                title="content-addressed: Nix resolved this derivation before building it">ca</span
               >{/if}
           </div>
           <div class="where" class:remote={isRemote(build.host)} title={whereLabel(build.host)}>

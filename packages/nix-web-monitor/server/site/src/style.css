@@ -849,14 +849,27 @@ main.dragging-v .splitter-v::after {
   margin-left: 0.5ch;
 }
 
-/* Shown only when a name+version is shared by sibling rows (e.g. the many
- * `ix-0.1.0` cargo units in one build). The short hash is what tells the
- * otherwise-identical rows apart, so it stays faint but selectable. */
+/* The store hash, shown on every build row so the path is identifiable and the
+ * many same-named units one build produces (e.g. `ix-0.1.0`) stay distinct. It
+ * stays faint but selectable for copy/inspect. */
 .drv-hash {
   color: var(--faint);
   opacity: 0.75;
   margin-left: 0.5ch;
   user-select: all;
+}
+
+/* Marks a content-addressed derivation: Nix resolved it before building, so its
+ * resolved build is folded onto this row instead of appearing as a look-alike. */
+.drv-ca {
+  margin-left: 0.5ch;
+  padding: 0 0.3ch;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-size: 0.85em;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .where {

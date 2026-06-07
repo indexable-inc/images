@@ -43,6 +43,13 @@ mod result_code {
 
 mod activity_code {
     pub const BUILD: u64 = 105;
+    /// Nix emits this right before building a content-addressed derivation: it
+    /// "resolves" the derivation (rewrites each input reference to the input's
+    /// actual output) into a second `.drv` with a different hash, then builds
+    /// that resolved drv. `fields[0]` is the original (requested) drv, `fields[1]`
+    /// the resolved one. We fold the two so a CA build shows one row, not a
+    /// look-alike pair. See [`MonitorState::resolved_to_original`].
+    pub const RESOLVE: u64 = 111;
 }
 
 /// Where the message stream sits relative to a build-plan announcement. Nix
@@ -259,6 +266,14 @@ pub struct MonitorState {
     /// the "will be fetched" list or unrelated output.
     #[serde(skip)]
     plan_section: PlanSection,
+    /// Maps a resolved derivation back to the original (content-addressed) one
+    /// Nix resolved it from. A CA build emits `resolved derivation: A -> B` and
+    /// then builds `B`; folding `B`'s build onto `A` keeps the row the user
+    /// asked for (`.#dashboard` is `A`) instead of a second look-alike for `B`.
+    /// Nix logs the resolve immediately before the build, so the alias is always
+    /// known by the time `B`'s build activity starts.
+    #[serde(skip)]
+    resolved_to_original: BTreeMap<String, String>,
     /// Monotonic counter for `LogEntry.index`. Kept independent of
     /// `logs.len()` so retention pruning never reuses an index.
     log_counter: u64,
@@ -441,11 +456,24 @@ impl MonitorState {
     fn start_activity(&mut self, action: &StartAction) {
         let now = next_tick(self.activities.len());
         let now_ms = current_unix_ms();
-        let (build, host) = if action.activity_type.code == activity_code::BUILD {
-            (text_field(&action.fields, 0), text_field(&action.fields, 1))
+        let raw_build = if action.activity_type.code == activity_code::BUILD {
+            text_field(&action.fields, 0)
         } else {
-            (None, None)
+            None
         };
+        let host = if action.activity_type.code == activity_code::BUILD {
+            text_field(&action.fields, 1)
+        } else {
+            None
+        };
+        // A content-addressed build runs under its resolved drv; fold it onto the
+        // original so the row stays the one the user asked for, flagged `ca`. The
+        // resolve message always precedes the build, so the alias is known here.
+        let content_addressed = raw_build
+            .as_ref()
+            .is_some_and(|drv| self.resolved_to_original.contains_key(drv));
+        let build =
+            raw_build.map(|drv| self.resolved_to_original.get(&drv).cloned().unwrap_or(drv));
 
         self.activities.insert(
             action.id,
@@ -461,10 +489,14 @@ impl MonitorState {
                 started_tick: now,
                 started_at_ms: now_ms,
                 stopped_at_ms: None,
+                // Point the activity at the folded derivation so stop/finish and
+                // log attribution resolve to the same row the build uses.
                 build: build.clone(),
                 size_bytes: None,
             },
         );
+
+        self.note_resolved_derivation(action);
 
         if let Some(derivation) = build {
             use std::collections::btree_map::Entry;
@@ -479,6 +511,7 @@ impl MonitorState {
                     node.status = BuildStatus::Running;
                     node.started_at_ms = now_ms;
                     node.stopped_at_ms = None;
+                    node.content_addressed |= content_addressed;
                 }
                 Entry::Vacant(entry) => {
                     entry.insert(BuildNode {
@@ -490,12 +523,38 @@ impl MonitorState {
                         log_count: 0,
                         started_at_ms: now_ms,
                         stopped_at_ms: None,
+                        content_addressed,
                     });
                 }
             }
             self.emit_build(&derivation);
         }
         self.emit_activity(action.id);
+    }
+
+    /// Record a `resolved derivation: A -> B` activity: alias the resolved drv
+    /// `B` back to the original `A` and flag `A` content-addressed. The build
+    /// activity for `B` arrives next and folds onto `A` via the alias.
+    fn note_resolved_derivation(&mut self, action: &StartAction) {
+        if action.activity_type.code != activity_code::RESOLVE {
+            return;
+        }
+        let (Some(original), Some(resolved)) =
+            (text_field(&action.fields, 0), text_field(&action.fields, 1))
+        else {
+            return;
+        };
+        self.resolved_to_original.insert(resolved, original.clone());
+        let flagged = match self.builds.get_mut(&original) {
+            Some(node) => {
+                node.content_addressed = true;
+                true
+            }
+            None => false,
+        };
+        if flagged {
+            self.emit_build(&original);
+        }
     }
 
     /// Seed a planned build node from the "will be built" announcement. No-op if
@@ -517,6 +576,7 @@ impl MonitorState {
             // the UI shows no duration while a node is still planned.
             started_at_ms: current_unix_ms(),
             stopped_at_ms: None,
+            content_addressed: false,
         });
         self.emit_build(derivation);
     }
@@ -657,17 +717,22 @@ impl MonitorState {
     fn mark_failed_build(&mut self, failure: &BuilderFailure) {
         use std::collections::btree_map::Entry;
         let now_ms = current_unix_ms();
-        match self.builds.entry(failure.derivation.clone()) {
+        // A CA failure names the resolved drv; fold it onto the original row.
+        let original = self.resolved_to_original.get(&failure.derivation).cloned();
+        let content_addressed = original.is_some();
+        let derivation = original.unwrap_or_else(|| failure.derivation.clone());
+        match self.builds.entry(derivation.clone()) {
             Entry::Occupied(mut entry) => {
                 let build = entry.get_mut();
                 build.status = BuildStatus::Failed;
                 if build.stopped_at_ms.is_none() {
                     build.stopped_at_ms = Some(now_ms);
                 }
+                build.content_addressed |= content_addressed;
             }
             Entry::Vacant(entry) => {
                 entry.insert(BuildNode {
-                    derivation: failure.derivation.clone(),
+                    derivation: derivation.clone(),
                     activity_id: None,
                     host: None,
                     phase: None,
@@ -675,10 +740,11 @@ impl MonitorState {
                     log_count: 0,
                     started_at_ms: now_ms,
                     stopped_at_ms: Some(now_ms),
+                    content_addressed,
                 });
             }
         }
-        self.emit_build(&failure.derivation);
+        self.emit_build(&derivation);
     }
 
     fn push_log(&mut self, activity_id: Option<u64>, level: Option<i64>, text: &str) {
@@ -881,6 +947,10 @@ pub struct BuildNode {
     pub log_count: usize,
     pub started_at_ms: u64,
     pub stopped_at_ms: Option<u64>,
+    /// True once Nix resolved this derivation before building it, which only
+    /// content-addressed derivations do. The row carries a `ca` badge so the
+    /// folded resolved build is explained rather than looking like a stray.
+    pub content_addressed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1330,6 +1400,56 @@ mod tests {
         state.apply_line("error: builder for '/nix/store/abc-demo.drv' failed with exit code 1");
 
         assert_eq!(state.snapshot().builds[0].status, BuildStatus::Failed);
+    }
+
+    #[test]
+    fn folds_resolved_ca_derivation_into_one_row() {
+        let original = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboard-0.1.0.drv";
+        let resolved = "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-dashboard-0.1.0.drv";
+        let mut state = MonitorState::default();
+        // Nix resolves the CA derivation, then builds the resolved drv.
+        state.apply_line(&format!(
+            r#"@nix {{"action":"start","fields":["{original}","{resolved}"],"id":1,"level":3,"text":"resolved derivation","type":111}}"#
+        ));
+        state.apply_line(&format!(
+            r#"@nix {{"action":"start","fields":["{resolved}","local",1,1],"id":2,"level":3,"text":"building","type":105}}"#
+        ));
+
+        let snapshot = state.snapshot();
+        assert_eq!(
+            snapshot.builds.len(),
+            1,
+            "the resolved build folds onto the original instead of adding a look-alike row"
+        );
+        let build = &snapshot.builds[0];
+        assert_eq!(
+            build.derivation, original,
+            "the surviving row keeps the requested (original) derivation"
+        );
+        assert!(
+            build.content_addressed,
+            "a derivation Nix resolved before building is content-addressed"
+        );
+        assert_eq!(build.status, BuildStatus::Running);
+    }
+
+    #[test]
+    fn stopping_the_resolved_build_settles_the_folded_row() {
+        let original = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboard-0.1.0.drv";
+        let resolved = "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-dashboard-0.1.0.drv";
+        let mut state = MonitorState::default();
+        state.apply_line(&format!(
+            r#"@nix {{"action":"start","fields":["{original}","{resolved}"],"id":1,"level":3,"text":"resolved derivation","type":111}}"#
+        ));
+        state.apply_line(&format!(
+            r#"@nix {{"action":"start","fields":["{resolved}","local",1,1],"id":2,"level":3,"text":"building","type":105}}"#
+        ));
+        // The stop carries the resolved build's activity id; it must still reach
+        // the folded original row.
+        state.apply_line(r#"@nix {"action":"stop","id":2}"#);
+        assert_eq!(state.snapshot().builds[0].status, BuildStatus::Stopped);
+        state.finish(Some(0));
+        assert_eq!(state.snapshot().builds[0].status, BuildStatus::Succeeded);
     }
 
     #[test]

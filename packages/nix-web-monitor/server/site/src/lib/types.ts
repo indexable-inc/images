@@ -54,7 +54,10 @@ export const buildNodeSchema = v.object({
   status: buildStatusSchema,
   logCount: v.number(),
   startedAtMs: v.number(),
-  stoppedAtMs: v.nullable(v.number())
+  stoppedAtMs: v.nullable(v.number()),
+  /// True when Nix resolved this derivation before building it (content-
+  /// addressed). The row shows a `ca` badge and the resolved build is folded in.
+  contentAddressed: v.boolean()
 });
 
 export const logEntrySchema = v.object({
