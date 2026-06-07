@@ -20,6 +20,7 @@ import ast
 import inspect
 import reprlib
 import types
+from itertools import islice
 
 # A cell can mention many names; cap how many we resolve so a huge generated cell
 # cannot blow up the per-row payload. The cell's own code bounds the realistic
@@ -120,7 +121,9 @@ def describe(value) -> dict:
         return _describe_ndarray(value, type_name)
 
     if isinstance(value, dict):
-        keys = ", ".join(_repr.repr(k) for k in list(value)[:6])
+        # islice, not list(value)[:6]: a huge dict must not be fully materialized
+        # here, since this runs synchronously on the kernel's shared event loop.
+        keys = ", ".join(_repr.repr(k) for k in islice(value, 6))
         more = ", …" if len(value) > 6 else ""
         return {
             "kind": "mapping",
@@ -184,7 +187,7 @@ def _describe_callable(value, type_name: str) -> dict:
 
 def _describe_polars_df(value, type_name: str) -> dict:
     rows, cols = value.height, value.width
-    schema = "\n".join(f"  {name}: {dtype}" for name, dtype in zip(value.columns, value.dtypes))
+    schema = _schema_lines(zip(value.columns, value.dtypes), cols)
     return {
         "kind": "dataframe",
         "type": type_name,
@@ -197,12 +200,27 @@ def _describe_polars_lazy(value, type_name: str) -> dict:
     detail = "LazyFrame (not yet collected)"
     try:
         schema = value.collect_schema()
-        lines = "\n".join(f"  {name}: {dtype}" for name, dtype in schema.items())
+        lines = _schema_lines(schema.items(), len(schema))
         detail = f"LazyFrame · {len(schema)} cols\n{lines}"
     except Exception:
         # An optimizer that cannot resolve the schema cheaply: name only.
         pass
     return {"kind": "lazyframe", "type": type_name, "summary": "LazyFrame", "detail": detail}
+
+
+# Cap on schema lines in a frame's hover detail. A wide frame (thousands of
+# feature columns) must not produce a multi-KB string that is stored per row and
+# polled to the browser; show the head and a count of the rest.
+_MAX_SCHEMA_COLS = 24
+
+
+def _schema_lines(pairs, total: int) -> str:
+    """Up to ``_MAX_SCHEMA_COLS`` ``name: dtype`` lines from ``pairs``, with a
+    ``… (+N more)`` tail when the frame is wider."""
+    lines = [f"  {name}: {dtype}" for name, dtype in islice(pairs, _MAX_SCHEMA_COLS)]
+    if total > _MAX_SCHEMA_COLS:
+        lines.append(f"  … (+{total - _MAX_SCHEMA_COLS} more)")
+    return "\n".join(lines)
 
 
 def _describe_ndarray(value, type_name: str) -> dict:

@@ -889,6 +889,11 @@ let
     df_desc = introspect.describe(pl.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]}))
     assert df_desc["kind"] == "dataframe" and "3×2" in df_desc["summary"], df_desc
 
+    # A wide frame's schema detail is capped, not dumped whole, so the stored row
+    # and poll payload stay bounded.
+    wide = introspect.describe(pl.DataFrame({f"c{i}": [0] for i in range(30)}))
+    assert "+6 more" in wide["detail"], wide
+
     def sample(x):
         "a doc line"
         return x
@@ -917,6 +922,24 @@ let
     assert 'data-ix-name="df"' in highlighted, highlighted
     assert 'data-ix-name="rows"' in highlighted, highlighted
     assert 'data-ix-name="total"' in highlighted, highlighted
+
+    # Opening a pre-bindings store migrates it, and a second open (the kernel and
+    # dashboard each open the store) is a no-op rather than an error.
+    from ix_notebook_mcp import store as store_mod
+
+    legacy = tempfile.mktemp(suffix=".db")
+    seed = sqlite3.connect(legacy)
+    seed.execute(
+        "CREATE TABLE executions (id TEXT PRIMARY KEY, name TEXT, code TEXT NOT NULL, "
+        "status TEXT NOT NULL, started_at REAL NOT NULL, ended_at REAL, "
+        "output TEXT, result TEXT, error TEXT, outputs TEXT)"
+    )
+    seed.commit()
+    seed.close()
+    conn_a = store_mod.connect(legacy)
+    store_mod.connect(legacy)
+    migrated = {row[1] for row in conn_a.execute("PRAGMA table_info(executions)")}
+    assert "bindings" in migrated, migrated
 
     # End to end: a finished job snapshots its bindings into the store row.
     store_path = tempfile.mktemp(suffix=".db")

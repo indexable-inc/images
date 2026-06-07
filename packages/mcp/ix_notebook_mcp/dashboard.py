@@ -78,7 +78,10 @@ def _code_html(code: str) -> str:
             text = html.escape(value)
             css = _token_css(style, token_type)
             # Anchor only real identifiers (not builtins, operators, or the `@` of
-            # a decorator) so the inlay/hover attaches to user namespace names.
+            # a decorator) so the inlay/hover attaches to user namespace names. This
+            # also tags attribute parts (`head` in `df.head`); the join is by name,
+            # so they stay inert unless a same-named variable is live, an accepted
+            # edge of name-keyed (vs position-keyed) matching.
             if token_type in Token.Name and token_type not in Token.Name.Builtin and value.isidentifier():
                 attr = html.escape(value, quote=True)
                 style_attr = f' style="{css}"' if css else ""

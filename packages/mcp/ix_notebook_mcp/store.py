@@ -75,7 +75,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     older build is missing newer columns; add each idempotently."""
     have = {row[1] for row in conn.execute("PRAGMA table_info(executions)")}
     if "bindings" not in have:
-        conn.execute("ALTER TABLE executions ADD COLUMN bindings TEXT NOT NULL DEFAULT '{}'")
+        try:
+            conn.execute("ALTER TABLE executions ADD COLUMN bindings TEXT NOT NULL DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            # The kernel and the dashboard open the store from two processes at
+            # startup, so both can see the column missing and race to add it; a
+            # duplicate-column error here means the other won, which is fine. This
+            # is a logical error, not SQLITE_BUSY, so busy_timeout does not cover it.
+            pass
 
 
 def start(conn: sqlite3.Connection, *, id: str, name: str, code: str, started_at: float) -> None:
