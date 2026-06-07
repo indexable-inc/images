@@ -331,9 +331,9 @@ impl MonitorState {
     /// Attach a measured byte size to a "copying <path> to the store" activity
     /// and re-broadcast the row. The server measures the source itself because
     /// Nix reports that copy with no byte progress (see [`copy_to_store_source`]);
-    /// this is the only place `size_bytes` is set. A no-op if the activity has
-    /// already stopped and been dropped, so a slow measurement that lands late
-    /// is harmless.
+    /// this is the only place `size_bytes` is set. Activities are never removed,
+    /// so a slow measurement that lands after the copy stopped still annotates
+    /// the (stopped) row; the only no-op is an id that was never seen.
     pub fn set_activity_size(&mut self, id: u64, size_bytes: i64) {
         let Some(activity) = self.activities.get_mut(&id) else {
             return;
@@ -682,6 +682,10 @@ impl MonitorState {
     }
 
     fn push_log(&mut self, activity_id: Option<u64>, level: Option<i64>, text: &str) {
+        #[expect(
+            clippy::fallible_int_fallback,
+            reason = "log_counter is a u64 index that always fits usize on the repo's 64-bit targets"
+        )]
         let index = usize::try_from(self.log_counter).unwrap_or(usize::MAX);
         self.log_counter = self.log_counter.saturating_add(1);
         if let Some(id) = activity_id
@@ -797,7 +801,7 @@ pub fn copy_to_store_source(text: &str) -> Option<&str> {
     let body = &rest[quote.len_utf8()..];
     let end = body.find(quote)?;
     let path = &body[..end];
-    if body[end + quote.len_utf8()..].trim_start() != "to the store" {
+    if path.is_empty() || body[end + quote.len_utf8()..].trim_start() != "to the store" {
         return None;
     }
     Some(path.strip_suffix('/').unwrap_or(path))
@@ -1163,6 +1167,10 @@ fn text_field(fields: &[FieldValue], index: usize) -> Option<String> {
     })
 }
 
+#[expect(
+    clippy::fallible_int_fallback,
+    reason = "a usize always fits in u64 on every supported target, so the fallback is unreachable"
+)]
 fn next_tick(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
@@ -1730,6 +1738,8 @@ mod tests {
         assert_eq!(copy_to_store_source("building '/nix/store/x.drv'"), None);
         assert_eq!(copy_to_store_source("copying '/tmp/x' to somewhere else"), None);
         assert_eq!(copy_to_store_source("copying /tmp/x to the store"), None);
+        // An empty path would make the server walk its own CWD; reject it.
+        assert_eq!(copy_to_store_source("copying '' to the store"), None);
     }
 
     #[test]

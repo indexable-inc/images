@@ -504,9 +504,14 @@ async fn measure_copy_size(
 fn copied_size(source: &Path) -> Result<i64> {
     let mut total: u64 = 0;
     // `hidden(false)` keeps tracked dotfiles (`.github`, `.gitignore`); the
-    // gitignore filters stay on by default; `.git` itself is never copied.
+    // gitignore filters stay on by default; `.git` itself is never copied;
+    // `parents(false)` confines the rules to the source tree's own ignore files,
+    // ignoring any `.gitignore` in a directory above the flake root. This is an
+    // approximate hint: it follows gitignore semantics rather than git's tracked
+    // set, so it can differ from Nix's copy for untracked-but-unignored files.
     let walker = WalkBuilder::new(source)
         .hidden(false)
+        .parents(false)
         .filter_entry(|entry| entry.file_name() != ".git")
         .build();
     for entry in walker {
@@ -517,7 +522,9 @@ fn copied_size(source: &Path) -> Result<i64> {
             total = total.saturating_add(metadata.len());
         }
     }
-    Ok(i64::try_from(total).unwrap_or(i64::MAX))
+    // The wire size is i64 (matching the progress counters); a source tree above
+    // 8 EiB cannot occur, so surface the impossible overflow rather than clamp.
+    i64::try_from(total).context("source tree size exceeds i64 range")
 }
 
 /// Drain the deltas accumulated by the latest mutation and broadcast each as an
