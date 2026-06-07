@@ -427,7 +427,7 @@ def grep(
 
     result = fff.grep(query, str(path), mode=mode, limit=limit)
     rows = [
-        {"path": m.path, "line": m.line_number, "text": m.line_content.strip()}
+        {"path": m.path, "line": m.line_number, "text": m.line.strip()}
         for m in result.matches
     ]
     return pl.DataFrame(
@@ -444,7 +444,7 @@ def find(
     result = fff.find(query, str(path), limit=limit)
     rows = [
         {"path": h.path, "name": h.name, "size": getattr(h, "size", None)}
-        for h in result.items
+        for h in result.hits
     ]
     return pl.DataFrame(
         rows, schema={"path": pl.Utf8, "name": pl.Utf8, "size": pl.Int64}

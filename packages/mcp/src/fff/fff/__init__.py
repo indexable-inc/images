@@ -9,11 +9,11 @@ index; this module loads the `fff-c` cdylib (`packages/fff` emits it next to the
     import fff
 
     # one-shot helpers keep a cached, file-watching index per directory:
-    for hit in fff.find("picker", path=".").items:
+    for hit in fff.find("picker", root=".").hits:
         print(hit.path, hit.frecency)
 
-    for m in fff.grep("fn main", path=".").matches:
-        print(f"{m.path}:{m.line_number}: {m.line_content}")
+    for m in fff.grep("fn main", root=".").matches:
+        print(f"{m.path}:{m.line_number}: {m.line}")
 
     # or hold an instance for repeated queries against one tree:
     with fff.FileFinder(".", content_indexing=True) as ff:
@@ -336,15 +336,15 @@ class FileHit:
 
 @dataclass(frozen=True)
 class SearchResult:
-    items: list[FileHit]
+    hits: list[FileHit]
     total_matched: int
     total_files: int
 
     def __iter__(self):
-        return iter(self.items)
+        return iter(self.hits)
 
     def __len__(self) -> int:
-        return len(self.items)
+        return len(self.hits)
 
     @property
     def df(self):
@@ -352,7 +352,7 @@ class SearchResult:
         renders as the dashboard's styled table). Requires polars."""
         pl = _polars()
         if pl is None:
-            raise FffError("polars is not available; iterate .items instead")
+            raise FffError("polars is not available; iterate .hits instead")
         return pl.DataFrame(
             [
                 {
@@ -363,7 +363,7 @@ class SearchResult:
                     "git": h.git_status,
                     "binary": h.is_binary,
                 }
-                for h in self.items
+                for h in self.hits
             ],
             schema={
                 "path": pl.Utf8,
@@ -382,11 +382,11 @@ class SearchResult:
         return self.df._repr_html_() if pl is not None else None
 
     def __repr__(self) -> str:
-        head = "\n".join(f"  {h.path}" for h in self.items[:30])
-        more = f"\n  ... ({len(self.items) - 30} more)" if len(self.items) > 30 else ""
+        head = "\n".join(f"  {h.path}" for h in self.hits[:30])
+        more = f"\n  ... ({len(self.hits) - 30} more)" if len(self.hits) > 30 else ""
         return (
-            f"SearchResult: {len(self.items)} of {self.total_files} files "
-            f"(matched {self.total_matched})" + (f"\n{head}{more}" if self.items else "")
+            f"SearchResult: {len(self.hits)} of {self.total_files} files "
+            f"(matched {self.total_matched})" + (f"\n{head}{more}" if self.hits else "")
         )
 
 
@@ -405,7 +405,7 @@ class GrepMatch:
     line_number: int
     col: int
     byte_offset: int
-    line_content: str
+    line: str
     is_definition: bool
     is_binary: bool
     git_status: str | None = None
@@ -440,7 +440,7 @@ class GrepResult:
                     "path": m.path,
                     "line": m.line_number,
                     "col": m.col,
-                    "content": m.line_content,
+                    "content": m.line,
                     "def": m.is_definition,
                     "git": m.git_status,
                 }
@@ -464,7 +464,7 @@ class GrepResult:
 
     def __repr__(self) -> str:
         head = "\n".join(
-            f"  {m.path}:{m.line_number}: {m.line_content.strip()}" for m in self.matches[:30]
+            f"  {m.path}:{m.line_number}: {m.line.strip()}" for m in self.matches[:30]
         )
         more = f"\n  ... ({len(self.matches) - 30} more)" if len(self.matches) > 30 else ""
         return (
@@ -487,7 +487,7 @@ class FileFinder:
 
     def __init__(
         self,
-        path=".",
+        root=".",
         *,
         ai_mode: bool = True,
         watch: bool = False,
@@ -498,7 +498,7 @@ class FileFinder:
     ) -> None:
         opts = _CreateOptions()
         opts.version = _OPTIONS_VERSION
-        opts.base_path = _encode(os.path.abspath(os.fspath(path)))
+        opts.base_path = _encode(os.path.abspath(os.fspath(root)))
         opts.frecency_db_path = _encode(frecency_db)
         opts.history_db_path = _encode(history_db)
         opts.enable_mmap_cache = mmap_cache
@@ -654,7 +654,7 @@ class FileFinder:
                 )
             )
         return SearchResult(
-            items=items,
+            hits=items,
             total_matched=_lib.fff_search_result_get_total_matched(h),
             total_files=_lib.fff_search_result_get_total_files(h),
         )
@@ -814,7 +814,7 @@ class FileFinder:
                     line_number=_lib.fff_grep_match_get_line_number(m),
                     col=_lib.fff_grep_match_get_col(m),
                     byte_offset=_lib.fff_grep_match_get_byte_offset(m),
-                    line_content=_str(_lib.fff_grep_match_get_line_content(m)) or "",
+                    line=_str(_lib.fff_grep_match_get_line_content(m)) or "",
                     is_definition=bool(_lib.fff_grep_match_get_is_definition(m)),
                     is_binary=bool(_lib.fff_grep_match_get_is_binary(m)),
                     git_status=_str(_lib.fff_grep_match_get_git_status(m)),
@@ -843,13 +843,13 @@ _cache: OrderedDict[str, FileFinder] = OrderedDict()
 _cache_lock = threading.Lock()
 
 
-def finder(path=".", **kwargs) -> FileFinder:
+def finder(root=".", **kwargs) -> FileFinder:
     """Construct a `FileFinder` (does not scan; call `wait_for_scan` yourself)."""
-    return FileFinder(path, **kwargs)
+    return FileFinder(root, **kwargs)
 
 
-def _cached(path) -> FileFinder:
-    key = os.path.abspath(os.fspath(path))
+def _cached(root) -> FileFinder:
+    key = os.path.abspath(os.fspath(root))
     with _cache_lock:
         existing = _cache.get(key)
         if existing is not None and not existing._closed:
@@ -872,24 +872,24 @@ def _cached(path) -> FileFinder:
         return ff
 
 
-def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
-    """Fuzzy file search over `path`, reusing a cached watched index."""
-    return _cached(path).search(query, limit=limit)
+def find(query: str, root=".", *, limit: int = 100) -> SearchResult:
+    """Fuzzy file search over `root`, reusing a cached watched index."""
+    return _cached(root).search(query, limit=limit)
 
 
-def grep(query: str, path=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
-    """Content grep over `path`, reusing a cached watched (content-indexed) index."""
-    return _cached(path).grep(query, mode=mode, limit=limit)
+def grep(query: str, root=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
+    """Content grep over `root`, reusing a cached watched (content-indexed) index."""
+    return _cached(root).grep(query, mode=mode, limit=limit)
 
 
-async def afind(query: str, path=".", *, limit: int = 100) -> SearchResult:
+async def afind(query: str, root=".", *, limit: int = 100) -> SearchResult:
     """Async fuzzy file search: runs off the event loop (non-blocking)."""
-    return await asyncio.to_thread(find, query, path, limit=limit)
+    return await asyncio.to_thread(find, query, root, limit=limit)
 
 
-async def agrep(query: str, path=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
+async def agrep(query: str, root=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
     """Async content grep: runs off the event loop (non-blocking)."""
-    return await asyncio.to_thread(grep, query, path, mode=mode, limit=limit)
+    return await asyncio.to_thread(grep, query, root, mode=mode, limit=limit)
 
 
 import html as _html_mod
@@ -928,7 +928,7 @@ class CodeMap:
             lines.append(f" {path}")
             for m in hits:
                 mark = "\u25cf" if m.is_definition else "\u25cb"
-                lines.append(f"   {mark} {m.line_number:>5}  {m.line_content.strip()}")
+                lines.append(f"   {mark} {m.line_number:>5}  {m.line.strip()}")
         return "\n".join(lines)
 
     def _repr_html_(self) -> str:
@@ -945,7 +945,7 @@ class CodeMap:
             for m in hits:
                 mark = "\u25cf" if m.is_definition else "\u25cb"
                 mark_col = "#e6e6e6" if m.is_definition else "#55555b"
-                line_html = _html_mod.escape(m.line_content.rstrip())
+                line_html = _html_mod.escape(m.line.rstrip())
                 rows.append(
                     '<div style="display:flex;gap:10px;padding:1px 0">'
                     f'<span style="color:{mark_col};width:1em">{mark}</span>'
@@ -975,14 +975,14 @@ class CodeMap:
         )
 
 
-def map(query: str, path=".", *, mode: str = "plain", limit: int = 200) -> CodeMap:
+def map(query: str, root=".", *, mode: str = "plain", limit: int = 200) -> CodeMap:
     """Content grep grouped into a :class:`CodeMap`: hits per file with
     definitions ranked first. A glanceable answer to "where is X defined and
     used?" built straight on :func:`grep`."""
-    return CodeMap(query, grep(query, path, mode=mode, limit=limit).matches)
+    return CodeMap(query, grep(query, root, mode=mode, limit=limit).matches)
 
 
-async def amap(query: str, path=".", *, mode: str = "plain", limit: int = 200) -> CodeMap:
+async def amap(query: str, root=".", *, mode: str = "plain", limit: int = 200) -> CodeMap:
     """Async :func:`map`: the same code map, off the event loop."""
-    res = await agrep(query, path, mode=mode, limit=limit)
+    res = await agrep(query, root, mode=mode, limit=limit)
     return CodeMap(query, res.matches)

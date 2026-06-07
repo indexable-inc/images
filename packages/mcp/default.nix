@@ -605,12 +605,12 @@ let
         for _ in range(20):
             finder.wait_for_scan(2000)
             result = finder.search("hello")
-            match = next((h for h in result.items if "hello_world" in h.path), None)
+            match = next((h for h in result.hits if "hello_world" in h.path), None)
             if match is not None:
                 hit_path = match.path
                 break
             time.sleep(0.25)
-        assert hit_path is not None, f"fuzzy search did not find hello_world.txt: {result.items!r}"
+        assert hit_path is not None, f"fuzzy search did not find hello_world.txt: {result.hits!r}"
 
         grep_result = finder.grep("find me on this line", limit=10)
         files = {m.path for m in grep_result.matches}
@@ -620,8 +620,8 @@ let
         assert defs.matches, "regex grep returned no matches"
 
         glob_result = finder.glob("**/*.rs")
-        assert any("main.rs" in h.path for h in glob_result.items), (
-            f"glob missed main.rs: {glob_result.items!r}"
+        assert any("main.rs" in h.path for h in glob_result.hits), (
+            f"glob missed main.rs: {glob_result.hits!r}"
         )
     finally:
         finder.close()
