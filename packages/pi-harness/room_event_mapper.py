@@ -209,6 +209,7 @@ class StorePoller:
         self._interval = interval
         self._emitter = emitter
         self._seen: dict[str, str] = {}
+        self._presentation_cell_ids: set[str] | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="ix-mcp-store-poller", daemon=True)
 
@@ -230,6 +231,7 @@ class StorePoller:
             return
         try:
             events: list[Json] = []
+            presentation_cell_ids: set[str] = set()
             for row in _rows(
                 conn,
                 "SELECT id, name, code, status, started_at, ended_at, output, result, error, outputs, bindings "
@@ -240,7 +242,9 @@ class StorePoller:
                 conn,
                 "SELECT id, title, position, outputs, updated_at FROM cells ORDER BY position ASC",
             ):
-                events.append(_presentation_cell_event(row))
+                event = _presentation_cell_event(row)
+                presentation_cell_ids.add(event["id"])
+                events.append(event)
             for row in _rows(
                 conn,
                 "SELECT id, title, kind, html, status, created_at, updated_at FROM resources ORDER BY created_at ASC",
@@ -248,6 +252,20 @@ class StorePoller:
                 events.append(_resource_event(row))
         finally:
             conn.close()
+
+        if self._presentation_cell_ids is not None:
+            for removed_id in sorted(self._presentation_cell_ids - presentation_cell_ids):
+                events.append(
+                    {
+                        "type": "cell_update",
+                        "source": "ix-mcp",
+                        "cell_kind": "presentation",
+                        "id": removed_id,
+                        "removed": True,
+                        "cell": {"id": removed_id, "removed": True},
+                    }
+                )
+        self._presentation_cell_ids = presentation_cell_ids
 
         for event in events:
             key = f"{event['type']}:{event.get('cell_kind', '')}:{event['id']}"
@@ -265,9 +283,12 @@ def _reader(lines: queue.Queue[str | None]) -> None:
 
 
 def _read_stream(stream, lines: queue.Queue[str | None]) -> None:
-    for line in stream:
-        lines.put(line)
-    lines.put(None)
+    try:
+        with stream:
+            for line in stream:
+                lines.put(line)
+    finally:
+        lines.put(None)
 
 
 def _strip_command_separator(command: list[str]) -> list[str]:
@@ -277,6 +298,7 @@ def _strip_command_separator(command: list[str]) -> list[str]:
 
 
 def run(store: Path, interval: float, command: list[str] | None = None) -> int:
+    os.environ["IX_MCP_STORE"] = str(store)
     emitter = Emitter()
     poller = StorePoller(store, interval, emitter)
     poller.start()

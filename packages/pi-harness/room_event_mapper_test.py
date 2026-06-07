@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -111,6 +113,66 @@ class MapperTest(unittest.TestCase):
 
             poller.poll_once()
             self.assertEqual(len(emitter.events), 3)
+
+    def test_polls_removed_presentation_cell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "mcp.sqlite"
+            conn = sqlite3.connect(store)
+            conn.executescript(SCHEMA)
+            conn.execute(
+                "INSERT INTO cells VALUES (?, ?, ?, ?, ?)",
+                ("cell-removed", "Stale", 0, json.dumps([]), 1.0),
+            )
+            conn.commit()
+            conn.close()
+
+            emitter = CaptureEmitter()
+            poller = mapper.StorePoller(store, 0.1, emitter)  # type: ignore[arg-type]
+            poller.poll_once()
+            self.assertEqual(emitter.events[-1]["cell"]["id"], "cell-removed")
+
+            conn = sqlite3.connect(store)
+            conn.execute("DELETE FROM cells WHERE id = ?", ("cell-removed",))
+            conn.commit()
+            conn.close()
+
+            poller.poll_once()
+            removed = emitter.events[-1]
+            self.assertEqual(removed["type"], "cell_update")
+            self.assertEqual(removed["cell_kind"], "presentation")
+            self.assertEqual(removed["id"], "cell-removed")
+            self.assertTrue(removed["removed"])
+            self.assertTrue(removed["cell"]["removed"])
+
+    def test_spawned_command_gets_store_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "mcp.sqlite"
+            env_seen = Path(tmp) / "env-seen.txt"
+            old = os.environ.pop("IX_MCP_STORE", None)
+            old_env_seen = os.environ.get("ENV_SEEN")
+            os.environ["ENV_SEEN"] = str(env_seen)
+            try:
+                rc = mapper.run(
+                    store,
+                    0.05,
+                    [
+                        sys.executable,
+                        "-c",
+                        "import os, pathlib; pathlib.Path(os.environ['ENV_SEEN']).write_text(os.environ.get('IX_MCP_STORE', ''))",
+                    ],
+                )
+            finally:
+                if old is not None:
+                    os.environ["IX_MCP_STORE"] = old
+                else:
+                    os.environ.pop("IX_MCP_STORE", None)
+                if old_env_seen is not None:
+                    os.environ["ENV_SEEN"] = old_env_seen
+                else:
+                    os.environ.pop("ENV_SEEN", None)
+            self.assertEqual(rc, 0)
+            self.assertEqual(env_seen.read_text(), str(store))
+            self.assertEqual(os.environ.get("IX_MCP_STORE"), old)
 
 
 if __name__ == "__main__":
