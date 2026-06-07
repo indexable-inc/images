@@ -237,6 +237,10 @@ pub struct MonitorState {
     pub expected: BTreeMap<String, i64>,
     pub exit_code: Option<i32>,
     pub finished: bool,
+    /// The Nix invocation being monitored (e.g. `nix build .#ix`), shown as the
+    /// label of the single tree root so the whole build hangs under the goal.
+    /// Constant for a run; set once via [`MonitorState::new`].
+    command: String,
     /// Transitive input `.drv` closure per derivation, learned out-of-band from
     /// `nix-store --query --requisites` (the internal-json stream carries no
     /// dependency edges). Because the closure is transitive, the snapshot can
@@ -267,11 +271,22 @@ pub struct MonitorState {
 }
 
 impl MonitorState {
+    /// Construct a monitor for one Nix invocation. `command` is the displayed
+    /// build label (e.g. `nix build .#ix`); everything else starts empty.
+    #[must_use]
+    pub fn new(command: String) -> Self {
+        Self {
+            command,
+            ..Self::default()
+        }
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> MonitorSnapshot {
         let log_tail_start = self.logs.len().saturating_sub(SNAPSHOT_LOG_LIMIT);
         let observed: BTreeSet<&str> = self.builds.keys().map(String::as_str).collect();
         MonitorSnapshot {
+            command: self.command.clone(),
             activities: self.activities.values().cloned().collect(),
             builds: self.builds.values().cloned().collect(),
             logs: self.logs[log_tail_start..].to_vec(),
@@ -752,6 +767,8 @@ fn planned_derivation(text: &str) -> Option<&str> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitorSnapshot {
+    /// The Nix invocation being monitored, used as the build tree's root label.
+    pub command: String,
     pub activities: Vec<ActivityNode>,
     pub builds: Vec<BuildNode>,
     pub logs: Vec<LogEntry>,

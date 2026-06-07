@@ -71,6 +71,8 @@ export const derivationEdgeSchema = v.object({
 });
 
 export const snapshotSchema = v.object({
+  /// The Nix invocation being monitored, shown as the build tree's root label.
+  command: v.string(),
   activities: v.array(activityNodeSchema),
   builds: v.array(buildNodeSchema),
   logs: v.array(logEntrySchema),
@@ -124,6 +126,7 @@ export type LogLevelFilter = (typeof LOG_LEVEL_FILTERS)[number];
 export const ACTIVITY_NAME_BUILD = 'build';
 
 export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
+  command: '',
   activities: [],
   builds: [],
   logs: [],

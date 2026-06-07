@@ -31,6 +31,7 @@ const ERROR_RETAIN = 2_000;
 /// Mutable accumulation of the snapshot, keyed for O(1) upserts. Kept private to
 /// this module; callers only ever see the immutable projection.
 type Working = {
+  command: string;
   activities: Map<number, ActivityNode>;
   builds: Map<string, BuildNode>;
   logs: LogEntry[];
@@ -44,6 +45,7 @@ type Working = {
 
 function createWorking(): Working {
   return {
+    command: '',
     activities: new Map(),
     builds: new Map(),
     logs: [],
@@ -98,6 +100,7 @@ export function applyDelta(working: Working, delta: Delta): Working {
 
 function fromSnapshot(snapshot: MonitorSnapshot): Working {
   return {
+    command: snapshot.command,
     activities: new Map(snapshot.activities.map((activity) => [activity.id, activity])),
     builds: new Map(snapshot.builds.map((build) => [build.derivation, build])),
     logs: [...snapshot.logs],
@@ -130,6 +133,7 @@ function capHead(items: unknown[], max: number): void {
 /// display ordering on top.
 export function projectSnapshot(working: Working): MonitorSnapshot {
   return {
+    command: working.command,
     activities: [...working.activities.values()].toSorted((a, b) => a.id - b.id),
     builds: [...working.builds.values()].toSorted((a, b) =>
       a.derivation.localeCompare(b.derivation)

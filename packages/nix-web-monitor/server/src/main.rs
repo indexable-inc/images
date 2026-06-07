@@ -103,7 +103,8 @@ async fn main() -> Result<()> {
         std::fs::read(args.site_dir.join("index.html")).context("reading index.html")?,
     );
 
-    let monitor = Arc::new(RwLock::new(MonitorState::default()));
+    let command = format!("nix {}", args.nix_args.join(" "));
+    let monitor = Arc::new(RwLock::new(MonitorState::new(command)));
     let (deltas, _) = broadcast::channel::<Bytes>(DELTA_CHANNEL_CAPACITY);
 
     let http_addr: SocketAddr = format!("{}:{}", args.host, args.port)

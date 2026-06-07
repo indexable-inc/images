@@ -191,6 +191,7 @@
         <BuildTable
           builds={snapshot.builds}
           dependencies={snapshot.dependencies}
+          command={snapshot.command}
           expected={snapshot.expected}
           finished={snapshot.finished}
           exitCode={snapshot.exitCode}

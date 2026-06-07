@@ -562,6 +562,58 @@ main.dragging-v .splitter-v::after {
   min-width: 0;
 }
 
+/* The single tree root: the Nix command plus a rolled-up status line. Sits
+ * above every derivation so the whole build reads as one tree from the goal. */
+.root-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  gap: 0.5rem;
+  padding-top: 0.22rem;
+  padding-bottom: 0.22rem;
+}
+
+.root-cmd {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.root-stats {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat {
+  color: var(--muted);
+}
+
+.stat.done {
+  color: var(--ink);
+}
+
+.stat.running {
+  color: var(--amber);
+}
+
+.stat.failed {
+  color: var(--red);
+}
+
+.stat-sep {
+  color: var(--faint);
+  margin: 0 0.1ch;
+}
+
 /* Box-drawing guides. Fixed-width cells keep the vertical stems aligned
  * column-to-column so a child's connector meets its ancestor's line. */
 .guides {
@@ -735,23 +787,16 @@ main.dragging-v .splitter-v::after {
   white-space: nowrap;
 }
 
-/* The store-path hash is opaque noise; keep it collapsed so the package name
- * leads, and reveal it only when the operator hovers, focuses, or selects the
- * row (the full path is always in the row's title for copy/inspect). */
-.drv-hash {
-  display: none;
-  color: var(--faint);
-}
-
-.build-row:hover .drv-hash,
-.build-row:focus-visible .drv-hash,
-.build-row.selected .drv-hash,
-.activity-row:hover .drv-hash {
-  display: inline;
-}
-
 .drv-name {
   color: var(--ink);
+}
+
+/* Version trails the name, dimmed: there for disambiguation but not competing
+ * with the package name for attention. The store hash and `.drv` suffix are
+ * dropped entirely (the full path stays in the row's title for copy/inspect). */
+.drv-version {
+  color: var(--faint);
+  margin-left: 0.5ch;
 }
 
 .where {

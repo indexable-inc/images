@@ -1,23 +1,35 @@
-/// Split a Nix store path / derivation name into the leading content hash
-/// (everything up to and including the first `-`) and the human-meaningful
-/// `name-version[.drv]` remainder. The hash is opaque noise to readers; the
-/// UI dims it so the actual package name jumps out.
+/// Split a Nix store path / derivation name into the parts a reader actually
+/// wants: the package `name`, its `version`, and the leading content `hash`. The
+/// `.drv` suffix and store hash are noise, so the UI shows `name` prominently,
+/// dims `version`, and drops the hash from the row (it stays in the row's
+/// title for disambiguation).
 ///
-/// Returns `{ hash: '', name: input }` when the input has no `-`, which is
-/// not a real Nix path but is the right fallback for any oddball name.
+/// The store base is `<hash>-<pname>-<version>.drv`; `pname` may itself contain
+/// dashes, so the version is taken as the first `-<digit…>` run, matching Nix's
+/// `pname-version` convention. Names with no version (e.g. `build-script-build`)
+/// return an empty `version`. Returns the whole input as `name` for any oddball
+/// string with no leading hash.
 export type DerivationParts = Readonly<{
   hash: string;
   name: string;
+  version: string;
 }>;
 
 export function splitDerivation(path: string): DerivationParts {
   const slash = path.lastIndexOf('/');
-  const base = slash === -1 ? path : path.slice(slash + 1);
+  const base = (slash === -1 ? path : path.slice(slash + 1)).replace(/\.drv$/, '');
   const dash = base.indexOf('-');
-  if (dash === -1) return { hash: '', name: base };
+  if (dash === -1) return { hash: '', name: base, version: '' };
+
+  const hash = `${base.slice(0, dash)}-`;
+  const rest = base.slice(dash + 1);
+  // First `-<digit>` starts the version; everything before it is the name.
+  const versionAt = rest.search(/-\d/);
+  if (versionAt === -1) return { hash, name: rest, version: '' };
   return {
-    hash: `${base.slice(0, dash)}-`,
-    name: base.slice(dash + 1)
+    hash,
+    name: rest.slice(0, versionAt),
+    version: rest.slice(versionAt + 1)
   };
 }
 

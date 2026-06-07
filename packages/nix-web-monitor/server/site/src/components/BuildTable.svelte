@@ -15,6 +15,8 @@
   type Props = {
     builds: BuildNode[];
     dependencies: DerivationEdge[];
+    /// The Nix invocation, shown as the tree's single root label.
+    command: string;
     expected: Record<string, number>;
     /// Whether the Nix run has exited. Flips the empty placeholder from a
     /// "waiting" message to a terminal one so a finished run with no builds
@@ -27,8 +29,16 @@
     onselect: (activityId: number | null) => void;
   };
 
-  const { builds, dependencies, expected, finished, exitCode, selectedActivityId, onselect }: Props =
-    $props();
+  const {
+    builds,
+    dependencies,
+    command,
+    expected,
+    finished,
+    exitCode,
+    selectedActivityId,
+    onselect
+  }: Props = $props();
 
   const now = useNow();
 
@@ -54,7 +64,7 @@
   let layout = $state<'flat' | 'tree'>('tree');
 
   const ordered = $derived(builds.toSorted(compareBuilds));
-  const tree = $derived(buildDependencyTree(builds, dependencies, compareBuilds));
+  const tree = $derived(buildDependencyTree(builds, dependencies, compareBuilds, command));
   const collapsed = new SvelteSet<string>();
 
   const expectedBuilds = $derived(expected[ACTIVITY_NAME_BUILD] ?? 0);
@@ -161,7 +171,9 @@
         >
           <div class="state" data-state={build.status} title={build.status}></div>
           <div class="drv" title={build.derivation}>
-            <span class="drv-hash">{parts.hash}</span><span class="drv-name">{parts.name}</span>
+            <span class="drv-name">{parts.name}</span>{#if parts.version.length > 0}<span
+                class="drv-version">{parts.version}</span
+              >{/if}
           </div>
           <div class="where" class:remote={whereIsRemote(build.host)} title={whereLabel(build.host)}>
             {whereLabel(build.host)}
