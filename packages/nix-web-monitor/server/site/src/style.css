@@ -993,49 +993,14 @@ main.dragging-v .splitter-v::after {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.line.expandable {
-  cursor: pointer;
-}
-
-.line.expandable .text::after {
-  content: '⤵';
-  color: var(--faint);
-  margin-left: 0.35rem;
-  opacity: 0;
-  transition: opacity 100ms ease-out;
-}
-
-.line.expandable:hover .text::after,
-.line.expandable:focus-visible .text::after {
-  opacity: 0.8;
-}
-
-.line.expandable.expanded .text::after {
-  content: '⤴';
-  opacity: 0.8;
-}
-
-.line.expandable:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
-}
-
 .idx {
   color: var(--faint);
   user-select: none;
 }
 
 .text {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.line.expanded .text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  overflow: visible;
-  text-overflow: clip;
 }
 
 .log-error { color: var(--red); }

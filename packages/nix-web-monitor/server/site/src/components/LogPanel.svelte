@@ -1,6 +1,5 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { SvelteSet } from 'svelte/reactivity';
   import PanelHeader from '$lib/PanelHeader.svelte';
   import { splitDerivation } from '$lib/format';
   import { LOG_LEVEL_FILTERS, type LogEntry, type LogLevelFilter } from '$lib/types';
@@ -42,9 +41,6 @@
   /// scroll handler flips this off the moment the user scrolls up, and back
   /// on if they scroll back to the end.
   let follow = $state(true);
-  /// Set of log indices the user has chosen to expand from the default
-  /// single-line truncation.
-  const expanded = new SvelteSet<number>();
 
   const filtered = $derived(filterLogs(logs, level, search, selectedActivityId));
   const visible = $derived(filtered.slice(-RECENT_LOG_LIMIT));
@@ -94,15 +90,6 @@
       default:
         return level === null ? '' : 'log-debug';
     }
-  }
-
-  function isMultiline(text: string): boolean {
-    return text.length > 120 || text.includes('\n');
-  }
-
-  function toggleExpanded(index: number): void {
-    if (expanded.has(index)) expanded.delete(index);
-    else expanded.add(index);
   }
 
   function onScroll(): void {
@@ -197,30 +184,7 @@
   </PanelHeader>
   <div class="log-stream" bind:this={stream} onscroll={onScroll}>
     {#each visible as log (log.index)}
-      {@const long = isMultiline(log.text)}
-      {@const open = expanded.has(log.index)}
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <div
-        class="line {lineClass(log.level)}"
-        class:expandable={long}
-        class:expanded={open}
-        role={long ? 'button' : undefined}
-        tabindex={long ? 0 : undefined}
-        onclick={long
-          ? () => {
-              toggleExpanded(log.index);
-            }
-          : undefined}
-        onkeydown={long
-          ? (event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                toggleExpanded(log.index);
-              }
-            }
-          : undefined}
-        title={long && !open ? log.text : undefined}
-      >
+      <div class="line {lineClass(log.level)}">
         <span class="idx">{String(log.index).padStart(5, '0')}</span>
         <span class="text">{log.text}</span>
       </div>
