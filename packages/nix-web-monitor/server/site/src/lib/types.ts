@@ -83,8 +83,8 @@ export const snapshotSchema = v.object({
 });
 
 /// One incremental change to the monitor state, mirroring Rust's `Delta` enum.
-/// The live WebTransport stream carries these (msgpack-framed) after an initial
-/// `reset` seed; the discriminant rides in `type`. Field names are camelCase to
+/// The live WebSocket stream carries these (one msgpack frame each) after an
+/// initial `reset` seed; the discriminant rides in `type`. Field names are camelCase to
 /// match the serde wire shape.
 export const deltaSchema = v.variant('type', [
   v.object({ type: v.literal('reset'), snapshot: snapshotSchema }),

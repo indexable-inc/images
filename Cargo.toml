@@ -261,5 +261,4 @@ url = { version = "2.5.8", default-features = false }
 uuid = "1"
 vt100 = "0.16"
 webpki-roots = "1"
-wtransport = "0.7"
 x509-parser = "0.18"

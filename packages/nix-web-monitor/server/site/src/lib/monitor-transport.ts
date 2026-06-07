@@ -1,16 +1,16 @@
-/// WebTransport client for the live delta stream.
+/// WebSocket client for the live delta stream.
 ///
-/// The server pushes a `reset` seed then incremental `Delta`s as msgpack frames
-/// (a `u32` big-endian length prefix per frame) on one unidirectional stream. We
-/// reframe, decode, validate, and fold them into a working model, projecting a
-/// fresh `MonitorSnapshot` to the caller. There is deliberately no SSE or
-/// WebSocket fallback: a browser without WebTransport reports an error.
+/// The server pushes a `reset` seed then incremental `Delta`s as msgpack
+/// payloads, one delta per binary WebSocket frame. WebSocket preserves message
+/// boundaries, so there is no length prefix to reassemble: we decode each frame,
+/// validate it, and fold it into a working model, projecting a fresh
+/// `MonitorSnapshot` to the caller. The page is served over plain HTTP on the
+/// same origin, so the socket opens `ws://` with no TLS or certificate dance.
 
 import { decode } from '@msgpack/msgpack';
 import * as v from 'valibot';
 import {
   deltaSchema,
-  EMPTY_SNAPSHOT,
   type ActivityNode,
   type BuildNode,
   type ConnectionStatus,
@@ -22,11 +22,6 @@ import {
 
 type SnapshotHandler = (snapshot: MonitorSnapshot) => void;
 type StatusHandler = (status: ConnectionStatus) => void;
-
-const transportInfoSchema = v.object({
-  port: v.number(),
-  certHash: v.array(v.number())
-});
 
 /// Mirror the server's retention caps so a long run cannot grow these without
 /// bound. The UI only renders the tail anyway; older entries fall off the head.
@@ -169,28 +164,25 @@ const GRACE_MS = 1_200;
 const BACKOFF_MIN_MS = 250;
 const BACKOFF_MAX_MS = 5_000;
 
-/// Open the WebTransport session and drive the snapshot/status callbacks until
-/// the returned disposer is called or the monitored run finishes. A dropped
-/// session reconnects with backoff; there is still no cross-protocol fallback.
+/// Open the WebSocket session and drive the snapshot/status callbacks until the
+/// returned disposer is called or the monitored run finishes. A dropped session
+/// reconnects with backoff.
 export function openMonitorEvents(onSnapshot: SnapshotHandler, onStatus: StatusHandler): () => void {
   onStatus('connecting');
-
-  if (typeof WebTransport === 'undefined') {
-    onSnapshot(EMPTY_SNAPSHOT);
-    onStatus('error');
-    return () => {};
-  }
 
   // Cancellation flips with the disposer from outside the async flow. Read
   // through `isAborted()` so the type-aware lint re-evaluates it at each
   // await-point instead of narrowing it to a constant after the first guard.
   const aborted = new AbortController();
   const isAborted = (): boolean => aborted.signal.aborted;
-  let transport: WebTransport | null = null;
+  let socket: WebSocket | null = null;
   // `live` once a session has ever come up: it picks the degraded label
   // (`reconnecting` vs the initial `error`) and is the signal that a drop is
   // transient rather than a cold start against a server that is not up yet.
   let everLive = false;
+  // Reconnect counter, reset to zero each time a socket opens so the backoff
+  // grows only across consecutive failures.
+  let attempt = 0;
   let degradeTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Hold the visible status on its pre-drop value until the link has been down
@@ -212,30 +204,16 @@ export function openMonitorEvents(onSnapshot: SnapshotHandler, onStatus: StatusH
   void loop();
 
   async function loop(): Promise<void> {
-    let attempt = 0;
     while (!isAborted()) {
       let finished = false;
       try {
-        const info = await fetchTransportInfo();
-        if (isAborted()) return;
-        transport = new WebTransport(`https://${location.hostname}:${String(info.port)}/`, {
-          serverCertificateHashes: [{ algorithm: 'sha-256', value: new Uint8Array(info.certHash) }]
-        });
-        await transport.ready;
-        if (isAborted()) return;
-        attempt = 0;
-        everLive = true;
-        clearDegrade();
-        onStatus('live');
-        finished = await consume(transport);
+        finished = await runSession();
       } catch {
         // Fall through to the reconnect/degrade handling below.
       }
       if (isAborted()) return;
-      transport?.close();
-      transport = null;
       // A clean end carrying the `finished` delta means the run is over; stop.
-      // Any other end (thrown, or stream closed mid-run) is treated as a drop.
+      // Any other close (errored or dropped mid-run) is treated as a drop.
       if (finished) {
         onStatus('closed');
         return;
@@ -246,42 +224,60 @@ export function openMonitorEvents(onSnapshot: SnapshotHandler, onStatus: StatusH
     }
   }
 
-  /// Drain one session's delta stream into snapshots. Returns `true` when the
-  /// stream ended on a `finished` delta (run complete) and `false` when it ended
-  /// otherwise, which the caller treats as a drop to reconnect through.
-  async function consume(wt: WebTransport): Promise<boolean> {
-    // The DOM lib types incoming streams loosely; narrow to the byte stream we
-    // know the server opens.
-    const streams = wt.incomingUnidirectionalStreams.getReader();
-    const result = await streams.read();
-    if (result.done) return false;
-    const stream = result.value as ReadableStream<Uint8Array>;
+  /// Run one WebSocket session, folding each binary frame into a snapshot.
+  /// Resolves `true` when the socket closed after a `finished` delta (run
+  /// complete) and `false` on any other close, which the caller reconnects
+  /// through. Resolves rather than rejects on error: a failed connect is just a
+  /// drop, and `onclose` always follows `onerror`, so the outcome settles once.
+  function runSession(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${scheme}://${location.host}/ws`);
+      socket = ws;
+      ws.binaryType = 'arraybuffer';
 
-    const working = createWorking();
-    let frameDue = false;
-    // Coalesce bursts of deltas into one snapshot per frame. The terminal
-    // snapshot is delivered either by the `finished` branch's explicit flush or
-    // by the last scheduled frame, so no trailing flush is needed after the loop.
-    const flush = (): void => {
-      frameDue = false;
-      if (!isAborted()) onSnapshot(projectSnapshot(working));
-    };
-    const schedule = (): void => {
-      if (frameDue) return;
-      frameDue = true;
-      requestAnimationFrame(flush);
-    };
+      const working = createWorking();
+      let frameDue = false;
+      let sawFinished = false;
+      // Coalesce bursts of deltas into one snapshot per animation frame. The
+      // terminal snapshot is delivered either by the `finished` branch's
+      // explicit flush or by the last scheduled frame, so no trailing flush is
+      // needed once the socket closes.
+      const flush = (): void => {
+        frameDue = false;
+        if (!isAborted()) onSnapshot(projectSnapshot(working));
+      };
+      const schedule = (): void => {
+        if (frameDue) return;
+        frameDue = true;
+        requestAnimationFrame(flush);
+      };
 
-    for await (const delta of frames(stream)) {
-      if (isAborted()) break;
-      applyDelta(working, delta);
-      if (delta.type === 'finished') {
-        flush();
-        return true;
-      }
-      schedule();
-    }
-    return false;
+      ws.onopen = (): void => {
+        attempt = 0;
+        everLive = true;
+        clearDegrade();
+        if (!isAborted()) onStatus('live');
+      };
+      ws.onmessage = (event: MessageEvent): void => {
+        const delta = decodeDelta(new Uint8Array(event.data as ArrayBuffer));
+        if (delta === null) return;
+        applyDelta(working, delta);
+        if (delta.type === 'finished') {
+          sawFinished = true;
+          flush();
+          ws.close();
+          return;
+        }
+        schedule();
+      };
+      // A transport error always pairs with a `close` event; let `onclose`
+      // settle the result so it resolves exactly once.
+      ws.onerror = (): void => {};
+      ws.onclose = (): void => {
+        resolve(sawFinished);
+      };
+    });
   }
 
   /// Backoff sleep that resolves early when the disposer aborts, so teardown
@@ -300,44 +296,9 @@ export function openMonitorEvents(onSnapshot: SnapshotHandler, onStatus: StatusH
     });
   }
 
-  /// Reassemble length-prefixed msgpack frames from the raw byte stream and
-  /// yield each decoded, validated delta.
-  async function* frames(stream: ReadableStream<Uint8Array>): AsyncGenerator<Delta> {
-    const reader = stream.getReader();
-    let buffer: Uint8Array = new Uint8Array(0);
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) return;
-      buffer = concat(buffer, value);
-
-      for (;;) {
-        if (buffer.length < 4) break;
-        const length = new DataView(buffer.buffer, buffer.byteOffset, 4).getUint32(0, false);
-        if (buffer.length < 4 + length) break;
-        const delta = decodeDelta(buffer.subarray(4, 4 + length));
-        buffer = buffer.slice(4 + length);
-        if (delta !== null) yield delta;
-      }
-    }
-  }
-
   return () => {
     aborted.abort();
     clearDegrade();
-    transport?.close();
+    socket?.close();
   };
-}
-
-async function fetchTransportInfo(): Promise<v.InferOutput<typeof transportInfoSchema>> {
-  const response = await fetch('/api/transport');
-  if (!response.ok) throw new Error(`transport handshake failed: ${String(response.status)}`);
-  return v.parse(transportInfoSchema, await response.json());
-}
-
-function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
-  if (left.length === 0) return right;
-  const merged = new Uint8Array(left.length + right.length);
-  merged.set(left);
-  merged.set(right, left.length);
-  return merged;
 }
