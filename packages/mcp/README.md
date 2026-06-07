@@ -84,14 +84,13 @@ read-only dashboard, and the MCP transport, all on one event loop.
 
 ## Pinned interpreter and bundled modules
 
-The kernel runs on the same pinned interpreter as the server (see
-[`default.nix`](./default.nix)), so code can `import` the bundled modules with no
-install step: `fff` (fast fuzzy file search / content grep, with async
-`search_async`/`grep_async` + `afind`/`agrep`), `tui` (PTY driver), `search`
-(semantic/grep over the `index` corpus), `exa_py` (Exa web search; bring your own
-`EXA_API_KEY`), `google_auth` (Gmail/Calendar via `google_auth.gmail()` /
-`google_auth.calendar()`), `fleet` (polars-returning SSH fan-out: `await fleet.scan(hosts, cmd)` reads files/command-output from many hosts in parallel into one DataFrame), numpy, polars, duckdb, httpx, matplotlib, playwright,
-the Google API client, and on macOS `screen` and `vmkit`.
+The kernel runs on the same pinned interpreter as the server, so code can
+`import` a set of bundled modules (the data libraries plus the in-house `fff` /
+`view` / `tui` / `search` / `fleet` helpers) with no install step. The canonical
+list lives in one place, the MCP server `instructions=` string in
+[`tools.py`](./ix_notebook_mcp/tools.py); the interpreter that
+backs it is assembled in [`default.nix`](./default.nix). Both are kept here
+rather than re-enumerated in this README so the list cannot drift.
 
 ## Remote access
 
