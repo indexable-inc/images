@@ -1545,46 +1545,64 @@ def _tilde(path) -> str:
     return text
 
 
-# File-type glyphs for the read note, keyed by lowercased extension. Emoji (not
-# Nerd Font glyphs) so they render on the dashboard everywhere; a few
-# extension-less names get a dedicated icon, everything else a generic page.
-_FILE_ICONS = {
-    "py": "\U0001F40D",
-    "rs": "\U0001F980",
-    "go": "\U0001F439",
-    "js": "\U0001F4DC", "mjs": "\U0001F4DC", "cjs": "\U0001F4DC",
-    "ts": "\U0001F4DC", "tsx": "\U0001F4DC", "jsx": "\U0001F4DC",
-    "json": "\U0001F9FE", "jsonl": "\U0001F9FE", "ndjson": "\U0001F9FE",
-    "toml": "\u2699\ufe0f", "yaml": "\u2699\ufe0f", "yml": "\u2699\ufe0f",
-    "ini": "\u2699\ufe0f", "cfg": "\u2699\ufe0f", "conf": "\u2699\ufe0f", "env": "\u2699\ufe0f",
-    "nix": "\u2744\ufe0f",
-    "md": "\U0001F4DD", "rst": "\U0001F4DD", "txt": "\U0001F4C4",
-    "sh": "\U0001F41A", "bash": "\U0001F41A", "zsh": "\U0001F41A",
-    "fish": "\U0001F41A", "nu": "\U0001F41A",
-    "html": "\U0001F310", "htm": "\U0001F310", "xml": "\U0001F310",
-    "css": "\U0001F3A8", "scss": "\U0001F3A8",
-    "csv": "\U0001F4CA", "tsv": "\U0001F4CA", "parquet": "\U0001F4CA",
-    "log": "\U0001F4CB",
-    "lock": "\U0001F512",
-    "sql": "\U0001F5C3\ufe0f",
-    "pdf": "\U0001F4D5",
-    "png": "\U0001F5BC\ufe0f", "jpg": "\U0001F5BC\ufe0f", "jpeg": "\U0001F5BC\ufe0f",
-    "gif": "\U0001F5BC\ufe0f", "svg": "\U0001F5BC\ufe0f", "webp": "\U0001F5BC\ufe0f",
+# File-type icons for the read note, rendered as inline SVG so the dashboard
+# (which trusts agent HTML/SVG -- see RichOutput.svelte) shows a real document
+# glyph with the extension on a colored ribbon, not an emoji. The color is keyed
+# by lowercased extension; any unknown extension still gets the document shape
+# with a neutral ribbon, so every file reads as a file.
+_EXT_COLORS = {
+    "py": "#3776ab", "rs": "#dea584", "go": "#00add8",
+    "js": "#f1e05a", "mjs": "#f1e05a", "cjs": "#f1e05a",
+    "ts": "#3178c6", "tsx": "#3178c6", "jsx": "#f1e05a",
+    "json": "#cbcb41", "jsonl": "#cbcb41", "ndjson": "#cbcb41",
+    "toml": "#9c4221", "yaml": "#cb171e", "yml": "#cb171e",
+    "ini": "#8a8a92", "cfg": "#8a8a92", "conf": "#8a8a92", "env": "#8a8a92",
+    "nix": "#7e7eff",
+    "md": "#519aba", "rst": "#519aba", "txt": "#9aa0a6",
+    "sh": "#89e051", "bash": "#89e051", "zsh": "#89e051", "fish": "#89e051", "nu": "#3aa675",
+    "html": "#e44d26", "htm": "#e44d26", "xml": "#e37933",
+    "css": "#563d7c", "scss": "#c6538c",
+    "csv": "#41b883", "tsv": "#41b883", "parquet": "#41b883",
+    "log": "#9aa0a6", "lock": "#e3c15b", "sql": "#dad8d8", "pdf": "#e02d2d",
+    "png": "#a074c4", "jpg": "#a074c4", "jpeg": "#a074c4",
+    "gif": "#a074c4", "svg": "#ffb13b", "webp": "#a074c4",
 }
-_NAMED_ICONS = {"dockerfile": "\U0001F433", "makefile": "\U0001F528"}
-_GENERIC_FILE_ICON = "\U0001F4C4"
-# A read of a kernel value (not a file) keeps the book glyph.
-_VALUE_ICON = "\U0001F4D6"
+_NAMED_EXTS = {"dockerfile": "docker", "makefile": "make"}
+_DEFAULT_EXT_COLOR = "#8a8a92"
 
 
-def _file_icon(path) -> str:
-    """A file-type glyph for the read note, chosen by a known filename or the
-    extension, falling back to a generic page icon."""
-    p = pathlib.Path(path)
-    name = p.name.lower()
-    if name in _NAMED_ICONS:
-        return _NAMED_ICONS[name]
-    return _FILE_ICONS.get(p.suffix.lstrip(".").lower(), _GENERIC_FILE_ICON)
+def _file_icon_svg(path, *, px: int = 16) -> str:
+    """An inline-SVG file icon for the read note: a document with a folded corner
+    and the extension on a category-colored ribbon. Works for any extension."""
+    name = pathlib.Path(path).name
+    ext = (_NAMED_EXTS.get(name.lower()) or pathlib.Path(name).suffix.lstrip(".") or "txt").lower()
+    color = _EXT_COLORS.get(ext, _DEFAULT_EXT_COLOR)
+    label = _escape_html(ext[:4].upper())
+    width = round(px * 0.8)
+    return (
+        f'<svg width="{width}" height="{px}" viewBox="0 0 40 50" fill="none" '
+        f'xmlns="http://www.w3.org/2000/svg" style="vertical-align:-3px;flex:none">'
+        f'<path d="M5 2h21l9 9v35a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" '
+        f'fill="#23232a" stroke="#3a3a42" stroke-width="1.5"/>'
+        f'<path d="M26 2l9 9h-9z" fill="#3a3a42"/>'
+        f'<rect x="3" y="30" width="34" height="14" rx="2" fill="{color}"/>'
+        f'<text x="20" y="40.5" font-family="ui-monospace,Menlo,monospace" font-size="11" '
+        f'font-weight="700" text-anchor="middle" fill="#111">{label}</text></svg>'
+    )
+
+
+def _value_icon_svg(*, px: int = 16) -> str:
+    """An inline-SVG icon for a read of a kernel value (not a file): braces, to
+    distinguish a value/object dump from a file read."""
+    width = round(px * 0.8)
+    return (
+        f'<svg width="{width}" height="{px}" viewBox="0 0 40 50" fill="none" '
+        f'xmlns="http://www.w3.org/2000/svg" style="vertical-align:-3px;flex:none">'
+        f'<rect x="3" y="6" width="34" height="38" rx="4" fill="#23232a" '
+        f'stroke="#3a3a42" stroke-width="1.5"/>'
+        f'<text x="20" y="33" font-family="ui-monospace,Menlo,monospace" font-size="18" '
+        f'font-weight="700" text-anchor="middle" fill="#9aa0a6">{{ }}</text></svg>'
+    )
 
 
 async def __ix_read(target, start=None, end=None) -> "Result":
@@ -1610,12 +1628,12 @@ async def __ix_read(target, start=None, end=None) -> "Result":
         # freezes every other job on the shared event loop.
         full = await asyncio.to_thread(path.read_text, errors="replace")
         label = _tilde(path)
-        icon = _file_icon(path)
+        icon = _file_icon_svg(path)
     else:
         value = eval(target, ns) if isinstance(target, str) else target
         full = value if isinstance(value, str) else _safe_repr(value)
         label = target if isinstance(target, str) else _safe_repr(target)
-        icon = _VALUE_ICON
+        icon = _value_icon_svg()
     lines = full.splitlines()
     total = len(lines)
     if start is not None or end is not None:
