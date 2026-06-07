@@ -42,6 +42,7 @@ import html as _html
 import os
 import re
 import shlex
+import signal
 
 __all__ = ["sh", "Output", "ShellError"]
 
@@ -60,7 +61,19 @@ except Exception:  # pragma: no cover - exercised only outside the kernel
     _ResultBase = object
     _HAS_RESULT = False
 
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# Strip the terminal escape families a CLI actually emits, not just CSI color.
+# With FORCE_COLOR forced on, tools like `gh`/`eza`/`ls` emit OSC-8 hyperlinks
+# and charset-reset (`ESC ( B`) around their output; matching CSI alone would
+# leak the `\x1b` bytes of those into the model's text. Order matters: the
+# string-terminated families (OSC/DCS) come before the single-final forms so an
+# introducer is never half-matched.
+_ANSI = re.compile(
+    r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC string, BEL- or ST-terminated
+    r"|\x1b[P^_X][^\x1b]*\x1b\\"  # DCS/PM/APC/SOS string, ST-terminated
+    r"|\x1b\[[0-9;?]*[ -/]*[@-~]"  # CSI (color, cursor, mode)
+    r"|\x1b[()*+#%][@-~]"  # charset designation / selection (e.g. ESC ( B)
+    r"|\x1b[@-Z\\-_a-z=>]"  # remaining solo Fe/Fs escapes (RIS, keypad, ...)
+)
 
 # Environment that asks well-behaved CLIs to emit SGR color even though their
 # stdout is a pipe, not a TTY. PAGER=cat keeps a tool that auto-pages (git, gh)
@@ -170,13 +183,29 @@ def _ansi_to_html(raw: str) -> str:
     ``ansi2html`` converter is unavailable."""
     try:
         from ansi2html import Ansi2HTMLConverter
-
-        conv = Ansi2HTMLConverter(inline=True, scheme="osx", dark_bg=True)
-        return conv.convert(raw, full=False)
-    except Exception:
-        # No converter (or a malformed stream): show the escape-stripped text
-        # rather than raw control bytes.
+    except ImportError:
+        # The converter is not installed (module used outside the bundled
+        # interpreter): show the escape-stripped text rather than control bytes.
         return _html.escape(_strip_ansi(raw))
+    conv = Ansi2HTMLConverter(inline=True, scheme="osx", dark_bg=True)
+    return conv.convert(raw, full=False)
+
+
+def _terminate(proc: asyncio.subprocess.Process) -> None:
+    """Kill the child and the process group it leads.
+
+    ``sh`` starts each child in its own session (``start_new_session=True``), so a
+    command that backgrounds a grandchild (which would otherwise keep the merged
+    stdout pipe open and hang the reap forever) is killed as a group here.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        # Process already gone, or no group to signal: kill the child directly.
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
 
 
 async def sh(
@@ -193,9 +222,13 @@ async def sh(
     ``cmd`` is a string (run through the shell, so pipes and globs work) or an
     argv list (executed directly, no shell parsing). stdout and stderr are merged
     in order. ``cwd`` and ``env`` extend the current directory and environment;
-    ``timeout`` (seconds) kills the child and raises :class:`TimeoutError`;
-    ``check=True`` raises :class:`ShellError` on a non-zero exit; ``color=False``
-    suppresses the forced-color environment.
+    ``timeout`` (seconds) kills the child's whole process group and raises
+    :class:`TimeoutError`; ``check=True`` raises :class:`ShellError` on a non-zero
+    exit; ``color=False`` suppresses the forced-color environment.
+
+    With no ``timeout`` a command that keeps the stdout pipe open (a daemon it
+    backgrounds, say) waits for that pipe to close. The await yields to the loop,
+    so it never blocks other jobs; pass ``timeout`` to bound such a command.
     """
     full_env = dict(os.environ)
     if color:
@@ -212,6 +245,7 @@ async def sh(
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
             env=full_env,
+            start_new_session=True,
         )
     else:
         shown = cmd
@@ -221,9 +255,10 @@ async def sh(
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
             env=full_env,
+            start_new_session=True,
         )
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     started = loop.time()
     try:
         if timeout is not None:
@@ -231,8 +266,13 @@ async def sh(
         else:
             stdout, _ = await proc.communicate()
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
+        _terminate(proc)
+        # The group is dead, so the pipe closes and this reap returns promptly;
+        # bound it anyway so a wedged reap can never hang the job past its timeout.
+        try:
+            await asyncio.wait_for(proc.wait(), 2.0)
+        except asyncio.TimeoutError:
+            pass
         raise TimeoutError(f"command timed out after {timeout}s: {shown}") from None
 
     duration = loop.time() - started

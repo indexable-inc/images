@@ -1272,6 +1272,26 @@ let
         else:
             raise SystemExit("expected ShellError on a non-zero exit with check=True")
 
+        # An OSC-8 hyperlink (what gh/eza emit under FORCE_COLOR) is a non-CSI
+        # escape: the stripper must remove its \x1b bytes too, not just SGR color.
+        osc = await sh.sh(r"printf '\033]8;;https://x\033\\link\033]8;;\033\\\n'")
+        assert "\x1b" not in osc.text and "link" in osc.text, repr(osc.text)
+        assert "\x1b" not in osc.llm_result, repr(osc.llm_result)
+
+        # A timeout must terminate the command's whole group and return promptly,
+        # even when the command backgrounds a child that holds the stdout pipe
+        # (the case where a naive kill + reap hangs forever).
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        try:
+            await sh.sh("sleep 30 & echo started; wait", timeout=0.5)
+        except TimeoutError:
+            pass
+        else:
+            raise SystemExit("expected TimeoutError from a command that outlives its timeout")
+        elapsed = loop.time() - start
+        assert elapsed < 10, f"timeout did not return promptly: {elapsed:.1f}s"
+
         print("sh-ok", sh.__version__)
 
 
