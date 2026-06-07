@@ -289,6 +289,27 @@ let
         cp -r ${fleetPythonSource}/fleet/. "$site/"
       ''
   );
+  # Async shell-out helper: `import sh`, then `out = await sh("gh run list")`.
+  # Runs on the kernel's loop (never blocks it like a bare subprocess.run) and
+  # returns an Output that IS a Result, so the dashboard sees the command's ANSI
+  # color rendered to HTML while the model gets the same text escape-stripped.
+  # Pure Python over the bundled ansi2html; cross-platform.
+  shPythonSource = builtins.path {
+    name = "ix-mcp-sh-python-source";
+    path = ./src/sh;
+  };
+  shModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-sh-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Async shell-out helper bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/sh"
+        mkdir -p "$site"
+        cp -r ${shPythonSource}/sh/. "$site/"
+      ''
+  );
   screenPythonSource = builtins.path {
     name = "ix-mcp-screen-python-source";
     path = ./src/screen;
@@ -400,6 +421,9 @@ let
       ps.matplotlib
       # pygments: syntax highlighting for `view`'s Code views (cat/json/diff).
       ps.pygments
+      # ansi2html: render a shell command's ANSI color to HTML for the `sh`
+      # helper's human/dashboard view (the model view is escape-stripped).
+      ps.ansi2html
       # playwright for browser automation out of the box. The Nix python package
       # is patched to use `playwright-driver` as its node driver, and the wrapper
       # below points PLAYWRIGHT_BROWSERS_PATH at the matching browser bundle, so
@@ -430,6 +454,7 @@ let
       viewModule
       nixModule
       fleetModule
+      shModule
     ]
     ++ darwinExtraPackages ps
   );
@@ -1207,6 +1232,73 @@ let
         mkdir -p "$out"
       '';
 
+  # The sh module: runs a real subprocess on the loop and proves the human/model
+  # split. The command emits ANSI color; the dashboard view (_repr_html_ /
+  # user_html) must carry that color as HTML while the model view (repr /
+  # llm_result) is escape-stripped. Also guards the Result contract (an Output is
+  # a Result, so a cell can end with it), exit-code capture, and check=True.
+  # Pure local subprocess over the bundled ansi2html, so the sandbox runs it.
+  shTestPy = pkgs.writeText "ix-mcp-sh-test.py" ''
+    import asyncio
+
+    import sh
+    from ix_notebook_mcp.runtime import Result
+
+
+    async def main():
+        # A command that emits an SGR color escape around its output.
+        colored = await sh.sh(r"printf '\033[31mred\033[0m\n'")
+        assert colored.ok and colored.code == 0, colored.code
+        # Model view: no escape bytes, the word survives.
+        assert "\x1b" not in colored.text and "red" in colored.text, repr(colored.text)
+        assert "\x1b" not in colored.llm_result, repr(colored.llm_result)
+        # Human view: color rendered to HTML (a styled span), no raw escapes.
+        html = colored._repr_html_()
+        assert "\x1b" not in html and "span" in html.lower(), html[:200]
+        assert "color" in html.lower(), html[:200]
+        # An Output IS a Result, so ending a cell with it satisfies the contract.
+        assert isinstance(colored, Result), type(colored)
+
+        # argv form, and a non-zero exit is surfaced (not swallowed).
+        failed = await sh.sh(["false"])
+        assert not failed.ok and failed.code == 1, failed.code
+        assert "[exit 1]" in failed.llm_result, failed.llm_result
+
+        # check=True turns a non-zero exit into a typed error carrying the output.
+        try:
+            await sh.sh("exit 3", check=True)
+        except sh.ShellError as exc:
+            assert exc.output.code == 3, exc.output.code
+        else:
+            raise SystemExit("expected ShellError on a non-zero exit with check=True")
+
+        print("sh-ok", sh.__version__)
+
+
+    asyncio.run(main())
+  '';
+  shSmoke =
+    pkgs.runCommand "ix-mcp-sh-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${shTestPy} >stdout 2>stderr || {
+          echo "ix-mcp sh smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -q '^sh-ok' stdout || {
+          echo "ix-mcp sh smoke did not confirm the sh module:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # The fleet module: a mocked asyncssh connection drives the fan-out so the test
   # never depends on a reachable host or a running sshd. It asserts the contract
   # that matters: import works, the semaphore caps in-flight connections,
@@ -1461,6 +1553,7 @@ package.overrideAttrs (old: {
         viewSmoke
         nixSmoke
         fleetSmoke
+        shSmoke
         ;
       site = dashboardSite;
     }
