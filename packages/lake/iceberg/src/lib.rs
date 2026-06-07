@@ -546,8 +546,15 @@ mod tests {
 
     use super::{IcebergReconciler, added_since, current_snapshot_id, ensure_table, read_all};
 
-    /// A memory-catalog lake; the tempdir must outlive the catalog.
-    async fn lake() -> (Arc<dyn Catalog>, TableIdent, tempfile::TempDir) {
+    /// A memory-catalog lake for one test.
+    struct TestLake {
+        catalog: Arc<dyn Catalog>,
+        ident: TableIdent,
+        /// Held for its `Drop`: the warehouse directory lives inside.
+        _dir: tempfile::TempDir,
+    }
+
+    async fn lake() -> TestLake {
         let dir = tempfile::tempdir().expect("tempdir");
         let warehouse = format!("file://{}", dir.path().display());
         let catalog = MemoryCatalogBuilder::default()
@@ -556,7 +563,7 @@ mod tests {
             .expect("memory catalog");
         let catalog: Arc<dyn Catalog> = Arc::new(catalog);
         let ident = ensure_table(catalog.as_ref()).await.expect("ensure table");
-        (catalog, ident, dir)
+        TestLake { catalog, ident, _dir: dir }
     }
 
     fn doc_in(source: &str, id: &str, body: &str) -> Document {
@@ -583,7 +590,7 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_appends_then_skips_then_reads_back() {
-        let (catalog, ident, _dir) = lake().await;
+        let TestLake { catalog, ident, _dir } = lake().await;
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
         let docs = vec![doc("a", "alpha"), doc("b", "beta")];
@@ -618,7 +625,7 @@ mod tests {
 
     #[tokio::test]
     async fn change_and_vanish_append_upsert_and_tombstone() {
-        let (catalog, ident, _dir) = lake().await;
+        let TestLake { catalog, ident, _dir } = lake().await;
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
         sink.reconcile(&source, &[doc("a", "alpha"), doc("b", "beta")]).await.expect("seed");
@@ -636,7 +643,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_desired_state_never_mass_tombstones() {
-        let (catalog, ident, _dir) = lake().await;
+        let TestLake { catalog, ident, _dir } = lake().await;
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
         sink.reconcile(&source, &[doc("a", "alpha")]).await.expect("seed");
@@ -651,7 +658,7 @@ mod tests {
 
     #[tokio::test]
     async fn slices_tombstone_independently() {
-        let (catalog, ident, _dir) = lake().await;
+        let TestLake { catalog, ident, _dir } = lake().await;
         let source = Source::new("test");
         let host1 = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let host2 = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-2");
@@ -705,7 +712,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_base_append_merges_without_losing_either_commit() {
-        let (catalog, ident, _dir) = lake().await;
+        let TestLake { catalog, ident, _dir } = lake().await;
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
         sink.reconcile(&source, &[doc("a", "alpha")]).await.expect("seed");
@@ -730,7 +737,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_writers_all_land() {
-        let (catalog, ident, _dir) = lake().await;
+        let TestLake { catalog, ident, _dir } = lake().await;
         let source = Source::new("test");
         let mut handles = Vec::new();
         for i in 0..4 {
@@ -753,7 +760,7 @@ mod tests {
     /// The same code against a live REST catalog, env-configured. One test,
     /// three backends: the memory catalog covers the suite above,
     /// `fixture/rest-fixture.sh` stands up the apache/iceberg-rest-fixture +
-    /// MinIO pair locally, and R2 Data Catalog staging uses the same
+    /// `MinIO` pair locally, and R2 Data Catalog staging uses the same
     /// variables with Cloudflare values (see fixture/README.md).
     #[tokio::test]
     #[ignore = "needs a live REST catalog: run fixture/rest-fixture.sh, or set LAKE_TEST_* for R2"]
@@ -839,7 +846,7 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_cursor_sees_only_later_appends() {
-        let (catalog, ident, _dir) = lake().await;
+        let TestLake { catalog, ident, _dir } = lake().await;
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
         sink.reconcile(&source, &[doc("a", "alpha")]).await.expect("first");

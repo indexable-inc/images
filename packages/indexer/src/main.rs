@@ -104,7 +104,7 @@ struct Cli {
     /// Steady-state lake consume: read the cursor from this file, apply the
     /// delta to Mixedbread, write the new cursor back. An absent file or an
     /// expired cursor falls back to a full rebuild. The fleet passes a
-    /// StateDirectory path (cursor.json).
+    /// `StateDirectory` path (cursor.json).
     #[arg(long, env = "INDEXER_CURSOR_FILE")]
     cursor_file: Option<PathBuf>,
 
@@ -218,7 +218,7 @@ async fn main() -> anyhow::Result<()> {
     if cli.from_iceberg {
         let mixedbread =
             mixedbread.context("--from-iceberg requires --mixedbread-store (the reconcile target)")?;
-        let (catalog, ident) = connect_lake(&cli).await?;
+        let Lake { catalog, ident } = connect_lake(&cli).await?;
         let documents =
             lake_iceberg::read_all(catalog.as_ref(), &ident).await.context("reading the lake")?;
         return finish(run_consume(documents, mixedbread).await);
@@ -229,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(cursor) = cli.from_snapshot {
         let mixedbread =
             mixedbread.context("--from-snapshot requires --mixedbread-store (the apply target)")?;
-        let (catalog, ident) = connect_lake(&cli).await?;
+        let Lake { catalog, ident } = connect_lake(&cli).await?;
         let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
         let result =
             run_lake_delta(catalog.as_ref(), &ident, cursor, mixedbread).await.map(|_| ());
@@ -243,7 +243,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(path) = cli.cursor_file.clone() {
         let mixedbread =
             mixedbread.context("--cursor-file requires --mixedbread-store (the apply target)")?;
-        let (catalog, ident) = connect_lake(&cli).await?;
+        let Lake { catalog, ident } = connect_lake(&cli).await?;
         return finish(run_cursor_consume(catalog.as_ref(), &ident, &path, mixedbread).await);
     }
 
@@ -295,7 +295,7 @@ async fn main() -> anyhow::Result<()> {
     // surfaces a bad catalog config at startup, like the parquet connect above.
     let lake = match cli.catalog_uri.as_ref() {
         Some(_) => {
-            let (catalog, ident) = connect_lake(&cli).await?;
+            let Lake { catalog, ident } = connect_lake(&cli).await?;
             let host = resolve_host(&cli).context("resolving host for the lake")?;
             Some(IcebergReconciler::new(catalog, ident, host))
         }
@@ -328,17 +328,21 @@ fn lake_config(cli: &Cli) -> anyhow::Result<lake_iceberg::Config> {
     })
 }
 
+/// A connected lake: the catalog handle and the corpus table within it.
+struct Lake {
+    catalog: std::sync::Arc<dyn lake_iceberg::Catalog>,
+    ident: lake_iceberg::TableIdent,
+}
+
 /// Connect the lake's catalog and ensure its table, shared by the lake sink
 /// and every lake consume mode. Failing here surfaces a bad catalog config at
 /// startup.
-async fn connect_lake(
-    cli: &Cli,
-) -> anyhow::Result<(std::sync::Arc<dyn lake_iceberg::Catalog>, lake_iceberg::TableIdent)> {
+async fn connect_lake(cli: &Cli) -> anyhow::Result<Lake> {
     let config = lake_config(cli)?;
     let catalog = config.connect().await.context("connecting the Iceberg catalog")?;
     let ident =
         lake_iceberg::ensure_table(catalog.as_ref()).await.context("ensuring the lake table")?;
-    Ok((catalog, ident))
+    Ok(Lake { catalog, ident })
 }
 
 /// Apply the lake's changes since `cursor` to Mixedbread, returning the
@@ -388,11 +392,9 @@ async fn run_cursor_consume(
     if let Some(cursor) = cursor {
         match run_lake_delta(catalog, ident, cursor, mixedbread).await {
             Ok(to_snapshot) => {
-                let result = match to_snapshot {
-                    Some(snapshot) => write_cursor(path, snapshot),
-                    // An empty table has no snapshot to store; keep the old cursor.
-                    None => Ok(()),
-                };
+                // An empty table has no snapshot to store; keep the old cursor.
+                let result = to_snapshot
+                    .map_or_else(|| Ok(()), |snapshot| write_cursor(path, snapshot));
                 record("lake-cursor", result, &mut counts);
                 return counts;
             }
