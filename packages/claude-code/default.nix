@@ -47,6 +47,19 @@
   # never occupies (or symlinks) the writable settings.json the CLI churns at
   # runtime. `{ }` (default) ships only the computed defaults.
   extraSettings ? { },
+  # Replace Claude Code's entire system prompt with this text. The string is
+  # materialized to a store file and baked into the wrapper as
+  # `--system-prompt-file <path>`: passing by path (not inline text) keeps
+  # arbitrary content free of shell escaping and, since a store path has no
+  # spaces, it survives makeBinaryWrapper's word splitting where an inline
+  # `--system-prompt "<text with spaces>"` would shatter into separate argv.
+  # This DROPS the default prompt wholesale (tool guidance, safety rules, coding
+  # conventions), so the agent only knows what this text says: use it for a
+  # non-coding agent that supplies its own complete prompt, not to add a rule on
+  # top of the default. Baked with `--add-flags` (prepended) so an explicit
+  # `--system-prompt`/`--system-prompt-file` on the CLI still wins. `null`
+  # (default) bakes no flag.
+  systemPrompt ? null,
   # Only the flake package set injects the Nushell writer; the overlay eval
   # context does not. The updater is a maintainer-facing flake output, so the
   # overlay build of `pkgs.claude-code` simply omits `passthru.updateScript`.
@@ -185,6 +198,16 @@ let
   settingsDefaultsFile =
     (formats.json { }).generate "claude-code-default-settings.json"
       settingsDefaults;
+
+  # System-prompt override (see the `systemPrompt` arg). Materialize the text to
+  # a store file and add `--system-prompt-file <path>` as makeBinaryWrapper args.
+  # escapeShellArgs emits the `--system-prompt-file <path>` pair as one shell
+  # word so makeBinaryWrapper re-splits it into the two argv tokens the CLI wants;
+  # when unset the list is empty and contributes nothing.
+  systemPromptWrapperArgs = lib.optionals (systemPrompt != null) [
+    "--add-flags"
+    "--system-prompt-file ${builtins.toFile "claude-code-system-prompt.txt" systemPrompt}"
+  ];
 
   inherit (stdenv.hostPlatform) system;
   target =
@@ -340,6 +363,7 @@ stdenv.mkDerivation {
       --add-flags --debug \
       --add-flags "--thinking-display summarized" \
       --append-flags "--settings ${settingsDefaultsFile}" \
+      ${lib.escapeShellArgs systemPromptWrapperArgs} \
       --set DISABLE_AUTOUPDATER 1 \
       --set DISABLE_INSTALLATION_CHECKS 1 \
       --set USE_BUILTIN_RIPGREP 0 \
