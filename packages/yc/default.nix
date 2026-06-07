@@ -3,14 +3,20 @@
   stdenv,
   fetchurl,
   autoPatchelfHook,
+  nix,
+  # Bound to a real builder only on the flake-package path (lib/packages.nix),
+  # which is where `nix run .#yc.updateScript` resolves; the overlay path passes
+  # nothing, so `pkgs.yc` carries no updateScript. Same pattern as claude-code.
+  writeNushellApplication ? null,
 }:
 let
   # Slug map and pinned hashes live in manifest.json as the single owner; this
-  # file only reads them back. Bump by editing the version and refreshing the
-  # four hashes (the upstream binaries are republished per release at the S3
-  # bucket below). Mirrors the packages/claude-code layout.
+  # file only reads them back. Refresh with `nix run .#yc.updateScript` (see the
+  # updateScript below). Mirrors the packages/claude-code layout.
   manifest = lib.importJSON ./manifest.json;
   inherit (manifest) version;
+
+  baseUrl = "https://bookface-public.s3.us-west-2.amazonaws.com/cli";
 
   inherit (stdenv.hostPlatform) system;
   target =
@@ -18,9 +24,56 @@ let
       or (throw "yc: no prebuilt binary for ${system}; supported: ${lib.concatStringsSep ", " (builtins.attrNames manifest.platforms)}");
 
   src = fetchurl {
-    url = "https://bookface-public.s3.us-west-2.amazonaws.com/cli/${version}/yc-${target.slug}";
+    url = "${baseUrl}/${version}/yc-${target.slug}";
     inherit (target) hash;
   };
+
+  # Tracks the upstream `cli/latest` pointer (a 6-byte text file holding the
+  # version, e.g. "0.0.8") and refreshes manifest.json with the per-platform SRI
+  # hashes. Unlike claude-code, Y Combinator publishes no signed manifest, so
+  # there is NO provenance check: the updater pins whatever bytes the release
+  # host serves (the version tag is not even immutable, 0.0.5 was observed
+  # republished under the same tag). The `nix build .#yc` step in the update
+  # workflow only proves the pinned bytes fetch and patch, not that they are
+  # authentic, so the real gate is human review of the four hash changes in the
+  # auto-bump PR. The S3 bucket denies ListBucket, hence the `latest` pointer
+  # rather than enumerating versions.
+  updateScript =
+    if writeNushellApplication == null then
+      null
+    else
+      writeNushellApplication {
+        name = "yc-update";
+        runtimeInputs = [ nix ];
+        meta.description = "Refresh packages/yc/manifest.json to the latest YC CLI release";
+        text = ''
+          const base = "${baseUrl}"
+          const slugs = {
+            "aarch64-darwin": "darwin-arm64",
+            "x86_64-darwin": "darwin-x64",
+            "x86_64-linux": "linux-x64",
+            "aarch64-linux": "linux-arm64"
+          }
+
+          # Run from the repo root: `nix run .#yc.updateScript -- [version]`.
+          # Without a version argument it tracks the upstream `cli/latest` pointer.
+          def main [version?: string] {
+            let v = ($version | default (http get $"($base)/latest" | str trim))
+            let platforms = (
+              $slugs
+              | transpose system slug
+              | reduce --fold {} {|row acc|
+                  let url = $"($base)/($v)/yc-($row.slug)"
+                  let sri = (^nix store prefetch-file --json $url | from json | get hash)
+                  $acc | insert $row.system { slug: $row.slug, hash: $sri }
+                }
+            )
+            let out = "packages/yc/manifest.json"
+            { version: $v, platforms: $platforms } | to json --indent 2 | save --force $out
+            print $"updated ($out) to ($v)"
+          }
+        '';
+      };
 in
 stdenv.mkDerivation {
   pname = "yc";
@@ -36,6 +89,10 @@ stdenv.mkDerivation {
     install -Dm755 $src $out/bin/yc
     runHook postInstall
   '';
+
+  passthru = lib.optionalAttrs (updateScript != null) {
+    inherit updateScript;
+  };
 
   meta = {
     description = "YC CLI: search Bookface and chat with the YC Agent from the terminal";

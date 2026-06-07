@@ -33,6 +33,7 @@ let
     "packageSet"
     "passthruTests"
     "path"
+    "updateScript"
   ];
 
   assertKnownKeys =
@@ -130,6 +131,11 @@ let
       overlay = normalizeOverlay label id (raw.overlay or null);
       inRustWorkspace = raw.inRustWorkspace or false;
       passthruTests = normalizePassthruTests label id (raw.passthruTests or null);
+      # `updateScript = true` marks a package that exposes a
+      # `passthru.updateScript` (e.g. a pinned prebuilt binary that tracks an
+      # upstream "latest" pointer). The generated `update` app runs every
+      # flagged package's updater; see lib/per-system.nix.
+      updateScript = raw.updateScript or false;
     };
 
   entries = map importMetadata packageDirs;
@@ -148,6 +154,12 @@ let
   flakeEntriesFor = system: lib.filter (entry: enabledForSystem system entry.flake) entries;
 
   overlayEntriesFor = system: lib.filter (entry: enabledForSystem system entry.overlay) entries;
+
+  # Packages that expose a `passthru.updateScript`, restricted to those actually
+  # built for `system` (the flake package-set path is where `updateScript` is
+  # bound). Drives the generated `update` aggregator.
+  updateScriptEntriesFor =
+    system: lib.filter (entry: entry.updateScript) (packageSetEntriesFor system);
 
   passthruTestEntriesFor =
     system:
@@ -172,6 +184,7 @@ assert lib.assertMsg (
     packageSetEntriesFor
     flakeEntriesFor
     overlayEntriesFor
+    updateScriptEntriesFor
     passthruTestEntriesFor
     rustWorkspaceEntries
     ;

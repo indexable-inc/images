@@ -347,6 +347,49 @@ let
 
   repoPackages = ix.packageSetFor pkgs;
 
+  # One general updater for every content source in the repo, run in parallel
+  # via dag-runner (the same engine `lint` uses). The Minecraft catalog and
+  # sound updaters are fixed apps; the pinned prebuilt-binary updaters
+  # (claude-code, yc, ...) are discovered from the registry `updateScript` flag,
+  # so adding such a package joins this set with no change here. The nodes are
+  # independent (each writes its own source files: mod/loader/sound catalogs or
+  # packages/<id>/manifest.json), so they run concurrently. dag-runner fails the
+  # run if any node exits non-zero, so a bad signature or fetch error surfaces
+  # in CI. Each updater writes relative to the repo root, so `update` must run
+  # from the repo root.
+  updatableEntries = packageRegistry.updateScriptEntriesFor system;
+  updaterFor =
+    entry:
+    let
+      pkg =
+        lib.attrByPath entry.packageSet.attrPath
+          (throw "update: package `${entry.id}` is flagged `updateScript = true` but is absent from the package set for ${system}")
+          repoPackages;
+    in
+    lib.getExe (
+      pkg.updateScript
+        or (throw "update: package `${entry.id}` is flagged `updateScript = true` but exposes no `passthru.updateScript`")
+    );
+  updateNodes = {
+    mods.command = [ (lib.getExe updateMods) ];
+    loaders.command = [ (lib.getExe updateLoaders) ];
+    sounds.command = [ (lib.getExe updateSounds) ];
+  }
+  // lib.genAttrs' updatableEntries (
+    entry: lib.nameValuePair entry.id { command = [ (updaterFor entry) ]; }
+  );
+  updateSpec = (pkgs.formats.json { }).generate "update-dag.json" { nodes = updateNodes; };
+  update = ix.writeNushellApplication pkgs {
+    name = "update";
+    meta.description = "Refresh every repo content source (Minecraft catalogs + pinned binaries) in parallel via dag-runner";
+    runtimeInputs = [ repoPackages.dag-runner ];
+    text = ''
+      def --wrapped main [...args] {
+        exec dag-runner ...$args ${updateSpec}
+      }
+    '';
+  };
+
   # Cross-compiled standalone binaries, exposed as `packages.<host>.<bin>-<triple>`.
   # Linux-only: the Apple (zig + macOS SDK) and musl cross toolchains run on a
   # Linux build host; an aarch64-darwin Mac builds Darwin targets natively and
@@ -754,6 +797,7 @@ in
       bench-filesystem = benchFilesystem;
       update-mods = updateMods;
       update-loaders = updateLoaders;
+      inherit update;
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
       update-sounds = updateSounds;
