@@ -1,5 +1,6 @@
 {
   lib,
+  ix,
   stdenv,
   fetchurl,
   makeBinaryWrapper,
@@ -162,7 +163,7 @@ let
   # Caller's extraSettings first, then the computed defaults recursively merged
   # ON TOP, so the security-relevant `permissions`/bypass keys below always win a
   # conflict while the caller's other keys (hooks, statusLine, ...) pass through.
-  settingsDefaults = lib.recursiveUpdate extraSettings (
+  settingsDefaults = ix.deepMerge.rhs extraSettings (
     {
       cleanupPeriodDays = 365;
     }
