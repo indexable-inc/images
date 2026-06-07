@@ -702,9 +702,8 @@ let
   serverTools = importTest "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
-    + "expected = {'python_exec','kernel_trace','search_semantic','search_grep','calendar_events','calendar_event_create','calendar_event_cancel'}; "
-    + "missing = expected - set(names); "
-    + "assert not missing, ('missing tools: %r' % (missing,)); "
+    + "expected = {'python_exec','kernel_trace'}; "
+    + "assert set(names) == expected, ('tool surface drifted: %r' % (names,)); "
     + "print('server-ok', len(names))"
   );
 
