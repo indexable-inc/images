@@ -141,6 +141,28 @@ let
     "CronList"
   ];
 
+  # Lean code-execution agent: the only surface this build needs is the index MCP
+  # (its `mcp__index__*` tools, e.g. python_exec, which MCP namespacing leaves
+  # untouched by `--disallowedTools`). Drop the built-in meta-tools so the model
+  # works turn-by-turn through code execution instead of branching into plan
+  # mode, structured task lists, agent teams, worktrees, or multiple-choice
+  # prompts. Removed regardless of permission mode, same as the autonomy list.
+  disallowedMetaTools = [
+    "EnterPlanMode"
+    "ExitPlanMode"
+    "AskUserQuestion"
+    "TaskCreate"
+    "TaskList"
+    "TaskGet"
+    "TaskUpdate"
+    "TeamCreate"
+    "TeamDelete"
+    "SendMessage"
+    "EnterWorktree"
+    "ExitWorktree"
+    "WaitForMcpServers"
+  ];
+
   # Settings-key defaults that have no env knob, shipped as a JSON the wrapper
   # injects via `--settings`. The package wraps the binary, so it can carry env
   # vars and CLI flags but not a settings.json *key* directly. `--settings` adds
@@ -393,7 +415,7 @@ stdenv.mkDerivation {
       --inherit-argv0 \
       --add-flags --debug \
       --add-flags "--thinking-display summarized" \
-      --add-flags "--disallowedTools ${lib.concatStringsSep "," disallowedAutonomyTools}" \
+      --add-flags "--disallowedTools ${lib.concatStringsSep "," (disallowedAutonomyTools ++ disallowedMetaTools)}" \
       --append-flags "--settings ${settingsDefaultsFile}" \
       ${lib.escapeShellArgs systemPromptWrapperArgs} \
       --set DISABLE_AUTOUPDATER 1 \
