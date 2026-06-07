@@ -42,6 +42,7 @@ __all__ = [
     "tail",
     "json",
     "diff",
+    "edit",
     "img",
     "Code",
     "df_html",
@@ -532,6 +533,48 @@ def diff(
         at.splitlines(), bt.splitlines(), fromfile=an, tofile=bn, lineterm=""
     )
     return Code("\n".join(out), "diff", title=f"{an} -> {bn}")
+
+
+def edit(
+    path: str | os.PathLike,
+    old: str,
+    new: str,
+    *,
+    count: int = 1,
+    dry_run: bool = False,
+) -> Code:
+    """Replace ``old`` with ``new`` in the file at ``path`` and return the change
+    as a highlighted unified diff, so an edit is never blind: the human sees
+    exactly what moved and you get the same diff as text.
+
+    ``old`` must occur exactly ``count`` times (default 1); pass ``count=N`` for
+    an intended N, or ``count=-1`` to replace every occurrence. A miss (pattern
+    absent, or a count mismatch) raises ``ValueError`` and writes nothing, so a
+    too-broad pattern can never silently rewrite the file. With ``dry_run=True``
+    the file is left untouched and only the preview diff is returned.
+    """
+    p = pathlib.Path(path)
+    before = p.read_text()
+    found = before.count(old)
+    if found == 0:
+        raise ValueError(f"edit: pattern not found in {p}")
+    if count != -1 and found != count:
+        raise ValueError(
+            f"edit: pattern found {found}x in {p}, expected {count} "
+            f"(pass count={found} to accept, or count=-1 for all)"
+        )
+    after = before.replace(old, new, -1 if count == -1 else count)
+    if not dry_run:
+        p.write_text(after)
+    label = "edit (preview)" if dry_run else "edit"
+    hunks = difflib.unified_diff(
+        before.splitlines(),
+        after.splitlines(),
+        fromfile=f"{p} (before)",
+        tofile=f"{p} (after)",
+        lineterm="",
+    )
+    return Code("\n".join(hunks), "diff", title=f"{label} {p}")
 
 
 def img(path: str | os.PathLike):

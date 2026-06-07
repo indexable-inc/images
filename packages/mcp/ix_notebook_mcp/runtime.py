@@ -934,6 +934,86 @@ def _escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+# Bundled modules an agent should be able to discover without grepping source.
+_API_MODULES = ("fff", "view", "nix", "fleet", "search", "tui")
+# Always-present namespace builtins (no import needed); see install().
+_API_BUILTINS = ("Result", "cells", "jobs", "history", "resources", "register_resource", "sh", "api", "DASHBOARD_URL")
+
+
+def _api_rows() -> list[dict]:
+    """One row per discoverable helper: kernel builtins plus each bundled
+    module's public surface, with signature and a one-line summary."""
+    rows: list[dict] = []
+
+    def add(where: str, name: str, obj) -> None:
+        if inspect.iscoroutinefunction(obj):
+            kind = "async"
+        elif inspect.isclass(obj):
+            kind = "class"
+        elif callable(obj):
+            kind = "func"
+        else:
+            kind = "value"
+        sig = name
+        if callable(obj) and not inspect.isclass(obj):
+            try:
+                sig = f"{name}{inspect.signature(obj)}"
+            except (ValueError, TypeError):
+                sig = f"{name}(...)"
+        doc = inspect.getdoc(obj) or ""
+        summary = doc.strip().split("\n", 1)[0]
+        rows.append({"where": where, "name": name, "kind": kind, "sig": sig, "summary": summary})
+
+    target = _user_ns if _user_ns is not None else globals()
+    for name in _API_BUILTINS:
+        if name in target:
+            add("kernel", name, target[name])
+
+    for mod_name in _API_MODULES:
+        try:
+            mod = __import__(mod_name)
+        except Exception:
+            # A module that is absent or fails to import just drops out of the
+            # catalog; discovery must never raise.
+            continue
+        names = getattr(mod, "__all__", None) or [n for n in dir(mod) if not n.startswith("_")]
+        for name in names:
+            obj = getattr(mod, name, None)
+            if obj is not None:
+                add(mod_name, name, obj)
+    return rows
+
+
+def api(filter: str | None = None):
+    """A live catalog of every helper the kernel gives you: the always-present
+    namespace builtins (`Result`, `cells`, `jobs`, `sh`, ...) and the public
+    surface of each bundled module (`fff`, `view`, `nix`, `fleet`, ...), each with
+    its signature and a one-line summary. Call `api()` to discover what exists
+    instead of guessing names or grepping source; pass `filter` to match a
+    substring against the name, summary, or module.
+
+    Returns a polars DataFrame (filter/sort it further, e.g.
+    `api().filter(pl.col("where") == "fff")`), or plain text if polars is absent.
+    """
+    rows = _api_rows()
+    if filter:
+        q = filter.lower()
+        rows = [
+            r for r in rows
+            if q in r["name"].lower() or q in r["summary"].lower() or q in r["where"].lower()
+        ]
+    try:
+        import polars as _pl
+
+        return _pl.DataFrame(
+            rows,
+            schema={"where": _pl.Utf8, "name": _pl.Utf8, "kind": _pl.Utf8, "sig": _pl.Utf8, "summary": _pl.Utf8},
+        )
+    except Exception:
+        width = max((len(r["sig"]) for r in rows), default=0)
+        return "\n".join(f'{r["where"]:>6}  {r["sig"]:<{width}}  {r["summary"]}' for r in rows)
+
+
 async def _sweep_resources() -> None:
     """Render every live resource to the store; close the ones whose source died."""
     if _store is None or _store_conn is None:
@@ -1246,6 +1326,7 @@ def install(user_ns: dict | None = None) -> None:
     except Exception:
         # Outside the bundled interpreter the module may be absent; skip it.
         pass
+    target["api"] = api
 
     try:
         asyncio.get_event_loop().create_task(_flusher())

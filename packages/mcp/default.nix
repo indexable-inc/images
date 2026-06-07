@@ -626,6 +626,14 @@ let
     finally:
         finder.close()
 
+    # CodeMap groups grep matches (defs first) and renders foldable per-file.
+    cm = fff.CodeMap("find me on this line", grep_result.matches)
+    assert cm.by_file and cm.matches and "find me on this line" in repr(cm), repr(cm)
+    cm_html = cm._repr_html_()
+    assert "<details" in cm_html and "find me" in cm_html, cm_html[:200]
+    # map() is the grep -> CodeMap convenience (type only; avoids a scan race).
+    assert isinstance(fff.map("fn main", root), fff.CodeMap)
+
     print("fff-ok", fff.__version__)
   '';
   fffBundled =
@@ -852,6 +860,13 @@ let
         assert "asyncio.to_thread" in w.error and "Traceback" not in w.error, w.error
 
     asyncio.run(main())
+    # api(): a discoverable catalog of kernel builtins + bundled modules.
+    cat = ns["api"]()
+    names = set(cat["name"].to_list())
+    assert {"Result", "cells", "jobs", "sh", "api"} <= names, names
+    filt = ns["api"]("cells")
+    assert 1 <= filt.height <= cat.height, (filt.height, cat.height)
+
     print("runtime-ok")
   '';
   runtimeSmoke =
@@ -1390,6 +1405,23 @@ let
     d = view.diff("x\ny\n", "x\nz\n")
     assert "-y" in repr(d) and "+z" in repr(d)
 
+    # edit() applies a replacement and returns it as a highlighted diff.
+    import pathlib as _pl_path
+    import tempfile as _tmp
+    ep = _pl_path.Path(_tmp.mkdtemp()) / "f.txt"
+    ep.write_text("alpha\nbeta\n")
+    ed = view.edit(ep, "beta", "gamma")
+    assert isinstance(ed, view.Code) and "-beta" in repr(ed) and "+gamma" in repr(ed), repr(ed)
+    assert ep.read_text() == "alpha\ngamma\n", ep.read_text()
+    try:
+        view.edit(ep, "missing-zzz", "q")
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("edit should raise on a missing pattern")
+    prev = view.edit(ep, "gamma", "delta", dry_run=True)
+    assert "+delta" in repr(prev) and ep.read_text() == "alpha\ngamma\n", "dry_run must not write"
+
     print("view-ok")
   '';
   viewSmoke =
@@ -1713,6 +1745,22 @@ let
         '@nix {"action":"result","id":1,"type":105,"fields":["nan","oops",0,0]}'
     )
     assert bad.activities.row(0, named=True)["done"] == 0, bad.activities
+
+    # attrs(): the flake-show parser flattens systemed + plain outputs, filtered
+    # to the requested system; an omitted (empty) system contributes no rows.
+    show = {
+        "packages": {
+            "aarch64-darwin": {"mcp": {"type": "derivation", "description": "the mcp"}},
+            "x86_64-linux": {},
+        },
+        "nixosConfigurations": {"host": {"type": "nixos-configuration"}},
+    }
+    rows = nix._flake_show_rows(show, "aarch64-darwin")
+    by = {(r["kind"], r["attr"]): r for r in rows}
+    assert by[("packages", "mcp")]["description"] == "the mcp", rows
+    assert ("nixosConfigurations", "host") in by, rows
+    assert all(r["attr"] for r in rows), rows
+    assert isinstance(nix._current_system(), str) and "-" in nix._current_system()
 
     print("nix-ok", nix.__version__)
   '';

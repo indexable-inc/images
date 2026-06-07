@@ -60,6 +60,9 @@ __all__ = [
     "find",
     "finder",
     "grep",
+    "map",
+    "amap",
+    "CodeMap",
 ]
 
 __version__ = "0.9.1"
@@ -887,3 +890,99 @@ async def afind(query: str, path=".", *, limit: int = 100) -> SearchResult:
 async def agrep(query: str, path=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
     """Async content grep: runs off the event loop (non-blocking)."""
     return await asyncio.to_thread(grep, query, path, mode=mode, limit=limit)
+
+
+import html as _html_mod
+
+
+class CodeMap:
+    """A grep result grouped into a glanceable code map: hits per file, with
+    definitions (\u25cf) ranked above references (\u25cb).
+
+    ``repr`` is a compact text tree for the agent; ``_repr_html_`` is a render
+    where each file is a native ``<details>`` you can fold, so a wide search
+    stays scannable on the dashboard.
+    """
+
+    def __init__(self, query: str, matches: list["GrepMatch"]) -> None:
+        self.query = query
+        self.matches = matches
+        self.by_file: dict[str, list["GrepMatch"]] = {}
+        for m in matches:
+            self.by_file.setdefault(m.path, []).append(m)
+        for hits in self.by_file.values():
+            hits.sort(key=lambda h: (not h.is_definition, h.line_number))
+
+    @property
+    def defs(self) -> list["GrepMatch"]:
+        return [m for m in self.matches if m.is_definition]
+
+    def __repr__(self) -> str:
+        if not self.matches:
+            return f"no matches for {self.query!r}"
+        lines = [
+            f"{self.query}  ({len(self.defs)} def, {len(self.matches)} hits, "
+            f"{len(self.by_file)} files)"
+        ]
+        for path, hits in self.by_file.items():
+            lines.append(f" {path}")
+            for m in hits:
+                mark = "\u25cf" if m.is_definition else "\u25cb"
+                lines.append(f"   {mark} {m.line_number:>5}  {m.line_content.strip()}")
+        return "\n".join(lines)
+
+    def _repr_html_(self) -> str:
+        if not self.matches:
+            return (
+                '<div style="color:#6a6a70;font-style:italic">'
+                f"no matches for {_html_mod.escape(self.query)}</div>"
+            )
+        mono = "ui-monospace,SFMono-Regular,Menlo,monospace"
+        blocks = []
+        for path, hits in self.by_file.items():
+            ndef = sum(1 for h in hits if h.is_definition)
+            rows = []
+            for m in hits:
+                mark = "\u25cf" if m.is_definition else "\u25cb"
+                mark_col = "#e6e6e6" if m.is_definition else "#55555b"
+                line_html = _html_mod.escape(m.line_content.rstrip())
+                rows.append(
+                    '<div style="display:flex;gap:10px;padding:1px 0">'
+                    f'<span style="color:{mark_col};width:1em">{mark}</span>'
+                    f'<span style="color:#6a6a70;min-width:3.5em;text-align:right">{m.line_number}</span>'
+                    f'<span style="color:#bcbcc2;white-space:pre;overflow:hidden;text-overflow:ellipsis">{line_html}</span>'
+                    "</div>"
+                )
+            summary = (
+                '<summary style="cursor:pointer;color:#e6e6e6;padding:4px 0">'
+                f"{_html_mod.escape(path)} "
+                f'<span style="color:#6a6a70">\u00b7 {ndef} def / {len(hits)} hits</span>'
+                "</summary>"
+            )
+            blocks.append(
+                '<details open style="border-top:1px solid #242427;padding:4px 10px">'
+                f"{summary}<div>{''.join(rows)}</div></details>"
+            )
+        head = (
+            '<div style="color:#6a6a70;padding:6px 10px">'
+            f"{_html_mod.escape(self.query)} \u00b7 {len(self.defs)} def \u00b7 "
+            f"{len(self.matches)} hits \u00b7 {len(self.by_file)} files</div>"
+        )
+        return (
+            '<div style="background:#141416;border:1px solid #242427;border-radius:6px;'
+            f'color:#e6e6e6;font-family:{mono};font-size:12px;overflow:auto">'
+            f"{head}{''.join(blocks)}</div>"
+        )
+
+
+def map(query: str, path=".", *, mode: str = "plain", limit: int = 200) -> CodeMap:
+    """Content grep grouped into a :class:`CodeMap`: hits per file with
+    definitions ranked first. A glanceable answer to "where is X defined and
+    used?" built straight on :func:`grep`."""
+    return CodeMap(query, grep(query, path, mode=mode, limit=limit).matches)
+
+
+async def amap(query: str, path=".", *, mode: str = "plain", limit: int = 200) -> CodeMap:
+    """Async :func:`map`: the same code map, off the event loop."""
+    res = await agrep(query, path, mode=mode, limit=limit)
+    return CodeMap(query, res.matches)

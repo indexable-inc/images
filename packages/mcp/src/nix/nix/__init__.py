@@ -45,7 +45,7 @@ from collections.abc import Iterable
 
 import polars as pl
 
-__all__ = ["NixLog", "parse", "run", "build", "ACTIVITY_TYPES", "RESULT_TYPES"]
+__all__ = ["NixLog", "parse", "run", "build", "attrs", "ACTIVITY_TYPES", "RESULT_TYPES"]
 
 __version__ = "0.1.0"
 
@@ -405,3 +405,93 @@ async def run(
 async def build(attr: str, *flags: str, cwd: str | None = None, live: bool = True) -> NixLog:
     """Convenience for :func:`run` of ``nix build <attr> [flags]``."""
     return await run(["build", attr, *flags], cwd=cwd, live=live, label=attr)
+
+
+# Kinds of flake output that are keyed by system (`<kind>.<system>.<name>`); the
+# rest (nixosConfigurations, overlays, ...) are keyed by name directly.
+_SYSTEMED = frozenset(
+    {"packages", "legacyPackages", "apps", "checks", "devShells", "bundlers", "formatter"}
+)
+
+
+def _current_system() -> str:
+    """The nix system double for this host (e.g. ``aarch64-darwin``)."""
+    import platform
+    import sys as _sys
+
+    machine = platform.machine()
+    arch = {"arm64": "aarch64", "amd64": "x86_64"}.get(machine, machine)
+    os_name = "darwin" if _sys.platform == "darwin" else "linux"
+    return f"{arch}-{os_name}"
+
+
+def _flake_show_rows(data: dict, system: str) -> list[dict]:
+    """Flatten ``nix flake show --json`` into one row per buildable attribute.
+
+    Pure (no subprocess), so it is testable on a captured payload. Systemed
+    kinds are filtered to ``system``; an omitted (not-evaluated) system shows up
+    as an empty dict and is skipped.
+    """
+    rows: list[dict] = []
+
+    def emit(kind: str, attr: str, leaf: object) -> None:
+        leaf = leaf if isinstance(leaf, dict) else {}
+        rows.append(
+            {
+                "kind": kind,
+                "attr": attr,
+                "type": leaf.get("type"),
+                "description": leaf.get("description"),
+            }
+        )
+
+    for kind, sub in data.items():
+        if not isinstance(sub, dict):
+            continue
+        if kind in _SYSTEMED:
+            branch = sub.get(system)
+            if not isinstance(branch, dict) or not branch:
+                continue
+            if branch.get("type"):  # a single leaf (e.g. formatter.<system>)
+                emit(kind, kind, branch)
+            else:
+                for name, leaf in branch.items():
+                    emit(kind, name, leaf)
+        else:
+            for name, leaf in sub.items():
+                emit(kind, name, leaf)
+
+    rows.sort(key=lambda r: (r["kind"], r["attr"]))
+    return rows
+
+
+async def attrs(flake: str = ".", *, system: str | None = None, cwd: str | None = None) -> pl.DataFrame:
+    """Catalog a flake's buildable attributes as a ``polars.DataFrame``
+    (``kind``, ``attr``, ``type``, ``description``).
+
+    Answers "what can I build, and what is it?" without guessing attr paths.
+    Composes with the polars API (``.filter`` by kind, search ``description``)
+    and renders as the dashboard's styled table. Runs ``nix flake show --json``
+    on the event loop and keeps only the current ``system`` (override with
+    ``system=``). Note: flake-show lists declared outputs, not ``passthru``
+    sub-attributes.
+    """
+    system = system or _current_system()
+    proc = await asyncio.create_subprocess_exec(
+        "nix",
+        "flake",
+        "show",
+        "--json",
+        "--no-warn-dirty",
+        flake,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"nix flake show failed: {err.decode('utf-8', 'replace').strip()}")
+    return pl.DataFrame(
+        _flake_show_rows(json.loads(out), system),
+        schema={"kind": pl.Utf8, "attr": pl.Utf8, "type": pl.Utf8, "description": pl.Utf8},
+    )
