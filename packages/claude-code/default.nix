@@ -54,12 +54,16 @@
   # spaces, it survives makeBinaryWrapper's word splitting where an inline
   # `--system-prompt "<text with spaces>"` would shatter into separate argv.
   # This DROPS the default prompt wholesale (tool guidance, safety rules, coding
-  # conventions), so the agent only knows what this text says: use it for a
-  # non-coding agent that supplies its own complete prompt, not to add a rule on
-  # top of the default. Baked with `--add-flags` (prepended) so an explicit
-  # `--system-prompt`/`--system-prompt-file` on the CLI still wins. `null`
-  # (default) bakes no flag.
-  systemPrompt ? null,
+  # conventions), so the agent only knows what this text says. Baked with
+  # `--add-flags` (prepended) so an explicit
+  # `--system-prompt`/`--system-prompt-file` on the CLI still wins. Defaults to the
+  # house prompt below (location plus the pre-v1 backward-compatibility engineering
+  # rule); set to `null` to bake no flag and keep Claude Code's stock prompt.
+  systemPrompt ? ''
+    You live at SOMA, SF.
+
+    Treat this codebase as pre-v1: by default do not preserve backward compatibility. Design the correct API, then rename and migrate every call site in the same change rather than adding aliases, shims, or deprecated compatibility paths. Keep a compatibility layer only when explicitly asked or when a real external consumer is out of reach.
+  '',
   # Only the flake package set injects the Nushell writer; the overlay eval
   # context does not. The updater is a maintainer-facing flake output, so the
   # overlay build of `pkgs.claude-code` simply omits `passthru.updateScript`.
