@@ -21,9 +21,11 @@ test("buildMcpEnv keeps only safe defaults", () => {
 
 test("buildMcpEnv strips model-provider keys even when explicitly allowlisted", () => {
   const env = buildMcpEnv({
-    [EXTRA_ALLOWLIST_ENV]: "OPENAI_API_KEY,ANTHROPIC_API_KEY,EXA_API_KEY",
+    [EXTRA_ALLOWLIST_ENV]:
+      "OPENAI_API_KEY,ANTHROPIC_API_KEY,AWS_SECRET_ACCESS_KEY,EXA_API_KEY",
     OPENAI_API_KEY: "openai-secret",
     ANTHROPIC_API_KEY: "anthropic-secret",
+    AWS_SECRET_ACCESS_KEY: "aws-secret",
     EXA_API_KEY: "tool-secret",
   });
 

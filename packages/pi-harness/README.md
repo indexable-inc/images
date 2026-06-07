@@ -29,6 +29,7 @@ PI_HARNESS_MODEL=codex pi-harness "..."  # gpt-5.5 via OpenAI
 | Model selection | `models.nix` table → `--provider`/`--model` |
 | API keys | Read by Pi from the env the caller provides (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`); never looked up here |
 | MCP subprocess env | `ix-mcp` receives a scrubbed allowlist; model-provider keys are blocked so `python_exec` cannot read them |
+| Parent process env | On Linux, the launcher marks itself non-dumpable before env/model setup, then preloads a tiny hardening library into Pi so both secret-bearing parent processes deny same-UID `/proc/<pid>/environ` reads before MCP starts |
 
 ## Design decisions (the ticket's open questions)
 
@@ -85,6 +86,12 @@ The MCP bridge's env scrubber is covered by `npm test` inside the Nix build.
 If an MCP feature needs an extra non-provider environment variable, add it via
 `PI_HARNESS_MCP_ENV_ALLOWLIST=NAME`; model-provider keys remain blocked even
 when listed there.
+
+The process hardening is part of the shipped `pi-harness` binary. On Linux,
+the launcher hardens itself first, then sets `LD_PRELOAD` for Pi so the
+post-`exec` Pi process reapplies the same non-dumpable boundary. The MCP child
+still gets the explicit scrubbed env from the bridge and does not inherit
+provider keys.
 
 ## Follow-ups (intentionally deferred)
 

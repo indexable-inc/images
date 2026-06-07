@@ -1,6 +1,6 @@
 {
   lib,
-  writeNushellApplication,
+  stdenv,
   buildNpmPackage,
   # Pi is not yet packaged in this repo. Until the dependency-intake follow-up
   # lands a pinned `pi` derivation, the wrapper calls `pi` from PATH (the dev
@@ -14,13 +14,15 @@ let
   models = import ./models.nix;
   defaultModel = "claude";
 
-  # Render the declarative model table (models.nix) as a Nushell record literal,
-  # so models.nix stays the single source of truth for provider/model selection.
-  modelTable = lib.concatStringsSep ", " (
+  # Render the declarative model table (models.nix) as C data, so models.nix
+  # stays the single source of truth for provider/model selection.
+  modelTable = lib.concatStringsSep "\n" (
     lib.mapAttrsToList (
-      alias: m: ''"${alias}": { provider: "${m.provider}", model: "${m.model}" }''
+      alias: m:
+      "    { ${builtins.toJSON alias}, ${builtins.toJSON m.provider}, ${builtins.toJSON m.model} },"
     ) models
   );
+  defaultSystemPrompt = "You are a coding agent. All actions - shell, file IO, HTTP - run through the python_exec tool on a shared Python kernel.";
 
   # Name exactly the files the build needs, so node_modules/_probe never enter
   # the source closure.
@@ -62,46 +64,213 @@ let
   };
 
   runtimeInputs = lib.optional (pi != null) pi ++ lib.optional (ix-mcp != null) ix-mcp;
+  runtimePath = lib.makeBinPath runtimeInputs;
+  piCommand = if pi == null then "pi" else lib.getExe pi;
+  isLinux = stdenv.hostPlatform.isLinux;
+  hardenerLibraryName = "libpi-harness-harden.so";
+  hardenerPath = lib.optionalString isLinux "$out/lib/${hardenerLibraryName}";
 in
-writeNushellApplication {
-  name = "pi-harness";
-  inherit runtimeInputs;
-  text = ''
-    # Pi engine harness (ENG-2262): run Pi as a Room-facing engine with the
-    # built-in tools ABSENT (--no-builtin-tools), exposing only the ix-mcp tool
-    # surface via the bridge extension, and emitting a JSON event stream. Model
-    # selection is declarative (models.nix); API keys come from the caller's
-    # environment, never looked up here.
-    def main [...rest] {
-      let alias = ($env.PI_HARNESS_MODEL? | default "${defaultModel}")
-      let table = { ${modelTable} }
-      let cfg = ($table | get --ignore-errors $alias)
-      if ($cfg == null) {
-        print --stderr $"pi-harness: unknown model alias '($alias)'"
-        exit 2
-      }
+stdenv.mkDerivation {
+  pname = "pi-harness";
+  version = "0.1.0";
+  dontUnpack = true;
+  strictDeps = true;
 
-      # Minimal, controlled system prompt by default - no accidental repo-wide
-      # instructions. Override with PI_HARNESS_SYSTEM_PROMPT for a richer agent.
-      let system_prompt = (
-        $env.PI_HARNESS_SYSTEM_PROMPT?
-        | default "You are a coding agent. All actions - shell, file IO, HTTP - run through the python_exec tool on a shared Python kernel."
-      )
+  buildPhase = ''
+        runHook preBuild
 
-      # --mode json: stable JSON event stream for Room (default). text/rpc are
-      # available via PI_HARNESS_MODE for interactive dev.
-      let mode = ($env.PI_HARNESS_MODE? | default "json")
+    ${lib.optionalString isLinux ''
+          cat > harden.c <<'EOF'
+          #define _GNU_SOURCE
+          #ifdef __linux__
+          #include <errno.h>
+          #include <stdio.h>
+          #include <string.h>
+          #include <sys/prctl.h>
+          #include <unistd.h>
 
-      (
-        ^pi
-        --no-builtin-tools --no-extensions --no-skills --no-session
-        --mode $mode --print
-        --provider $cfg.provider --model $cfg.model
-        --system-prompt $system_prompt
-        --extension ${extension}/ix-mcp-bridge.ts
-        ...$rest
-      )
-    }
+          static void pi_harness_fail_closed(const char *operation) {
+            int err = errno;
+            dprintf(STDERR_FILENO, "pi-harness: %s failed: %s\n", operation, strerror(err));
+            _exit(126);
+          }
+
+          __attribute__((constructor)) static void pi_harness_harden(void) {
+            if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
+              pi_harness_fail_closed("PR_SET_DUMPABLE");
+            }
+            if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+              pi_harness_fail_closed("PR_SET_NO_NEW_PRIVS");
+            }
+          }
+          #endif
+      EOF
+    ''}
+
+        cat > launcher.c <<'EOF'
+        #define _GNU_SOURCE
+        #include <errno.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+        #include <string.h>
+        #ifdef __linux__
+        #include <sys/prctl.h>
+        #endif
+        #include <unistd.h>
+
+        struct model_config {
+          const char *alias;
+          const char *provider;
+          const char *model;
+        };
+
+        static const struct model_config MODEL_TABLE[] = {
+    ${modelTable}
+        };
+
+        #ifdef __linux__
+        static void pi_harness_fail_closed(const char *operation) {
+          int err = errno;
+          dprintf(STDERR_FILENO, "pi-harness: %s failed: %s\n", operation, strerror(err));
+          _exit(126);
+        }
+
+        static void pi_harness_harden_current_process(void) {
+          if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
+            pi_harness_fail_closed("PR_SET_DUMPABLE");
+          }
+          if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+            pi_harness_fail_closed("PR_SET_NO_NEW_PRIVS");
+          }
+        }
+        #endif
+
+        static const char *env_or_default(const char *name, const char *fallback) {
+          const char *value = getenv(name);
+          return (value != NULL && value[0] != '\0') ? value : fallback;
+        }
+
+        static const struct model_config *find_model(const char *alias) {
+          size_t count = sizeof(MODEL_TABLE) / sizeof(MODEL_TABLE[0]);
+          for (size_t i = 0; i < count; i++) {
+            if (strcmp(MODEL_TABLE[i].alias, alias) == 0) {
+              return &MODEL_TABLE[i];
+            }
+          }
+          return NULL;
+        }
+
+        static int set_joined_env(const char *name, const char *first, const char *sep) {
+          const char *old = getenv(name);
+          if (old == NULL || old[0] == '\0') {
+            return setenv(name, first, 1);
+          }
+
+          size_t len = strlen(first) + strlen(sep) + strlen(old) + 1;
+          char *joined = malloc(len);
+          if (joined == NULL) {
+            return -1;
+          }
+          snprintf(joined, len, "%s%s%s", first, sep, old);
+          int rc = setenv(name, joined, 1);
+          free(joined);
+          return rc;
+        }
+
+        static int prepend_runtime_path(void) {
+          const char *runtime_path = ${builtins.toJSON runtimePath};
+          if (runtime_path[0] == '\0') {
+            return 0;
+          }
+          return set_joined_env("PATH", runtime_path, ":");
+        }
+
+        static int preload_hardener(void) {
+          const char *hardener = "@HARDENER_PATH@";
+          if (hardener[0] == '\0') {
+            return 0;
+          }
+          return set_joined_env("LD_PRELOAD", hardener, " ");
+        }
+
+        int main(int argc, char **argv) {
+        #ifdef __linux__
+          pi_harness_harden_current_process();
+        #endif
+
+          const char *alias = env_or_default("PI_HARNESS_MODEL", ${builtins.toJSON defaultModel});
+          const struct model_config *cfg = find_model(alias);
+          if (cfg == NULL) {
+            fprintf(stderr, "pi-harness: unknown model alias '%s'\n", alias);
+            return 2;
+          }
+
+          if (prepend_runtime_path() != 0 || preload_hardener() != 0) {
+            fprintf(stderr, "pi-harness: failed to prepare environment: %s\n", strerror(errno));
+            return 125;
+          }
+
+          const char *mode = env_or_default("PI_HARNESS_MODE", "json");
+          const char *system_prompt = env_or_default(
+            "PI_HARNESS_SYSTEM_PROMPT",
+            ${builtins.toJSON defaultSystemPrompt}
+          );
+          const char *pi = ${builtins.toJSON piCommand};
+          const char *extension = ${builtins.toJSON "${extension}/ix-mcp-bridge.ts"};
+
+          size_t rest = (argc > 1) ? (size_t)(argc - 1) : 0;
+          char **args = calloc(17 + rest, sizeof(char *));
+          if (args == NULL) {
+            fprintf(stderr, "pi-harness: failed to allocate argv\n");
+            return 125;
+          }
+
+          size_t i = 0;
+          args[i++] = (char *)pi;
+          args[i++] = "--no-builtin-tools";
+          args[i++] = "--no-extensions";
+          args[i++] = "--no-skills";
+          args[i++] = "--no-session";
+          args[i++] = "--mode";
+          args[i++] = (char *)mode;
+          args[i++] = "--print";
+          args[i++] = "--provider";
+          args[i++] = (char *)cfg->provider;
+          args[i++] = "--model";
+          args[i++] = (char *)cfg->model;
+          args[i++] = "--system-prompt";
+          args[i++] = (char *)system_prompt;
+          args[i++] = "--extension";
+          args[i++] = (char *)extension;
+          for (int j = 1; j < argc; j++) {
+            args[i++] = argv[j];
+          }
+          args[i] = NULL;
+
+          execvp(pi, args);
+          fprintf(stderr, "pi-harness: failed to exec %s: %s\n", pi, strerror(errno));
+          return 127;
+        }
+    EOF
+
+        substituteInPlace launcher.c --replace-fail '@HARDENER_PATH@' "${hardenerPath}"
+
+    ${lib.optionalString isLinux ''
+      $CC -shared -fPIC harden.c -o ${hardenerLibraryName}
+    ''}
+        $CC launcher.c -o pi-harness
+
+        runHook postBuild
+  '';
+
+  installPhase = ''
+    runHook preInstall
+    mkdir -p "$out/bin" "$out/lib"
+    cp pi-harness "$out/bin/pi-harness"
+    ${lib.optionalString isLinux ''
+      cp ${hardenerLibraryName} "$out/lib/${hardenerLibraryName}"
+    ''}
+    runHook postInstall
   '';
 
   meta = {
