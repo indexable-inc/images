@@ -3834,7 +3834,6 @@ dependencies = [
  "clap",
  "nix-web-monitor-parser",
  "rmp-serde",
- "serde",
  "serde_json",
  "tokio",
  "tower",

@@ -200,7 +200,7 @@ async fn serve_index(State(state): State<AppState>) -> impl IntoResponse {
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        state.index_html.clone(),
+        state.index_html,
     )
 }
 
@@ -256,10 +256,10 @@ async fn serve_socket(
             // Detect a client close promptly even while the build is quiet, so
             // the task drops instead of lingering until the next delta send.
             incoming = socket.recv() => match incoming {
-                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                None | Some(Err(_) | Ok(Message::Close(_))) => break,
                 Some(Ok(_)) => {} // ignore any other client-sent frame
             },
-            received = receiver.recv() => match received {
+            delivered = receiver.recv() => match delivered {
                 Ok(payload) => {
                     if !send_frame(&mut socket, payload).await {
                         break;

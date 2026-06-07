@@ -56,11 +56,12 @@ pub fn version_static(crate_version: &str) -> &'static str {
     })
 }
 
-/// Build the parenthesised stamp from raw metadata: `7e42ccdb1882, 2026-06-07,
-/// 2 days ago`. Split out from [`version_static`] so it is testable without
-/// touching the environment or the wall clock. The revision is abbreviated; the
-/// date and relative age come from `epoch`, and degrade to the short revision
-/// alone when no epoch is known.
+/// Build the parenthesised stamp from raw metadata.
+///
+/// Renders `7e42ccdb1882, 2026-06-07, 2 days ago`. Split out from
+/// [`version_static`] so it is testable without touching the environment or the
+/// wall clock. The revision is abbreviated; the date and relative age come from
+/// `epoch`, and degrade to the short revision alone when no epoch is known.
 #[must_use]
 pub fn stamp(rev: &str, epoch: Option<i64>, now: SystemTime) -> String {
     let short: String = rev.chars().take(SHORT_REV_LEN).collect();
@@ -82,10 +83,12 @@ pub fn stamp(rev: &str, epoch: Option<i64>, now: SystemTime) -> String {
     format!("{short}, {date}, {}", humanize_ago(now_epoch - epoch))
 }
 
-/// Render an elapsed span in seconds as a short relative phrase: `just now`,
-/// `5 minutes ago`, `2 days ago`, `1 year ago`. Spans under a minute, and
-/// negative spans (the build clock is ahead of ours), collapse to `just now`
-/// rather than reading `0 minutes ago` or inventing a future.
+/// Render an elapsed span in seconds as a short relative phrase.
+///
+/// For example `just now`, `5 minutes ago`, `2 days ago`, `1 year ago`. Spans
+/// under a minute, and negative spans (the build clock is ahead of ours),
+/// collapse to `just now` rather than reading `0 minutes ago` or inventing a
+/// future.
 #[must_use]
 pub fn humanize_ago(seconds: i64) -> String {
     const MINUTE: i64 = 60;
@@ -139,10 +142,12 @@ mod tests {
 
     #[test]
     fn stamp_abbreviates_rev_and_renders_date_and_age() {
-        // epoch 0 is 1970-01-01T00:00:00Z; `now` two days later.
-        let now = UNIX_EPOCH + Duration::from_secs(2 * 86_400);
-        let rendered = stamp("7e42ccdb18827401226635", Some(0), now);
-        assert_eq!(rendered, "7e42ccdb1882, 1970-01-01, 2 days ago");
+        // epoch = 1970-01-02T00:00:00Z (nonzero so it is not the "unknown"
+        // sentinel); `now` two days after that.
+        let epoch = 86_400;
+        let now = UNIX_EPOCH + Duration::from_days(3);
+        let rendered = stamp("7e42ccdb18827401226635", Some(epoch), now);
+        assert_eq!(rendered, "7e42ccdb1882, 1970-01-02, 2 days ago");
     }
 
     #[test]
