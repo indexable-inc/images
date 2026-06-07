@@ -1,4 +1,8 @@
 :root {
+  /* Dark is the default palette; the light overrides live in the
+     prefers-color-scheme media query at the foot of this file. color-scheme
+     keeps native UI (scrollbars, form controls) in step with the theme. */
+  color-scheme: dark;
   --bg: #0b0b0c;
   --panel: #141416;
   --panel-2: #1a1a1d;
@@ -12,7 +16,43 @@
   --active: #f2f2f2;
   --err: #cf5a5a;
   --accent: #6ea8fe;
+  /* Derived roles, named so components never hardcode a literal: text that sits
+     on an --active fill, the error chip's border, the header's translucent
+     backdrop, and the text selection. */
+  --on-active: #0b0b0c;
+  --err-line: #43282b;
+  --header-bg: rgba(11, 11, 12, 0.86);
+  --sel-bg: #33333a;
+  --sel-fg: #ffffff;
   --mono: 'Berkeley Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, 'Cascadia Code', monospace;
+}
+
+/* Follow the browser's light preference. Only the palette flips; every rule
+   below is authored against the variables, so the layout is untouched. The
+   highlighted-source token colors flip too, served as a second scoped palette
+   by dashboard.py (see _highlight_css). */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #fbfbfc;
+    --panel: #ffffff;
+    --panel-2: #f1f1f4;
+    --inset: #f6f6f8;
+    --line: #e4e4e8;
+    --line-2: #d4d4da;
+    --text: #1b1b1f;
+    --dim: #55555c;
+    --muted: #80808a;
+    --faint: #a8a8b0;
+    --active: #18181b;
+    --err: #c0392b;
+    --accent: #2563eb;
+    --on-active: #fbfbfc;
+    --err-line: #f0c9c4;
+    --header-bg: rgba(251, 251, 252, 0.86);
+    --sel-bg: #cfe0ff;
+    --sel-fg: #0b0b0c;
+  }
 }
 
 * {
@@ -64,8 +104,8 @@ body {
 }
 
 ::selection {
-  background: #33333a;
-  color: #fff;
+  background: var(--sel-bg);
+  color: var(--sel-fg);
 }
 
 ::-webkit-scrollbar {

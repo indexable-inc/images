@@ -27,9 +27,11 @@ from .config import Config
 
 _STUB = (
     "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-    "<title>ix-mcp</title></head>"
-    "<body style=\"font:14px ui-monospace,monospace;background:#0b0b0c;"
-    "color:#e6e6e6;padding:2rem\">"
+    "<title>ix-mcp</title>"
+    "<style>:root{color-scheme:dark light}"
+    "body{font:14px ui-monospace,monospace;background:#0b0b0c;color:#e6e6e6;padding:2rem}"
+    "@media(prefers-color-scheme:light){body{background:#fbfbfc;color:#1b1b1f}}</style>"
+    "</head><body>"
     "<p>The dashboard UI was not built. Build through nix "
     "(<code>nix build .#mcp</code>), which sets <code>IX_MCP_DASHBOARD_HTML</code> "
     "to the Vite output. The data API is live at "
@@ -48,35 +50,32 @@ def _load_page() -> str:
     return _STUB
 
 
-# Read once at startup: the page is an immutable nix-store artifact for the life
-# of the server, and the live data arrives over the API rather than the HTML.
-_PAGE = _load_page()
-
-
 @functools.lru_cache(maxsize=512)
 def _code_html(code: str) -> str:
-    """A python snippet as self-contained highlighted HTML (inline monokai
-    styles, no wrapping ``<pre>`` so the card controls layout). Every identifier
-    token carries a ``data-ix-name`` so the dashboard can attach the value inlay
-    and hover card to it; the join with values is by name, done in the browser
-    against the job's ``bindings`` (kept out of here so this stays cache-keyed on
-    the code text alone). Cached so each unique snippet is highlighted once, not
-    on every one-second poll; falls back to empty (the card then shows the raw
-    text) when pygments is unavailable."""
+    """A python snippet as highlighted HTML: one ``<span class="...">`` per token
+    using pygments' standard short class names, with no inline colors and no
+    wrapping ``<pre>`` (the card controls layout). The class palette is themed in
+    CSS (``_highlight_css``), so the same cached HTML reads correctly in both the
+    dark and light dashboard. Every identifier token also carries a
+    ``data-ix-name`` so the dashboard can attach the value hover card; the join
+    with values is by name, done in the browser against the job's ``bindings``
+    (kept out of here so this stays cache-keyed on the code text alone). Cached so
+    each unique snippet is highlighted once, not on every one-second poll; falls
+    back to empty (the card then shows the raw text) when pygments is
+    unavailable."""
     if not code:
         return ""
     try:
         from pygments.lexers import PythonLexer
-        from pygments.styles import get_style_by_name
         from pygments.token import Token
 
-        style = get_style_by_name("monokai")
         parts: list[str] = []
         for token_type, value in PythonLexer().get_tokens(code):
             if not value:
                 continue
             text = html.escape(value)
-            css = _token_css(style, token_type)
+            cls = _token_class(token_type)
+            cls_attr = f' class="{cls}"' if cls else ""
             # Anchor only real identifiers (not builtins, operators, or the `@` of
             # a decorator) so the inlay/hover attaches to user namespace names. This
             # also tags attribute parts (`head` in `df.head`); the join is by name,
@@ -84,10 +83,9 @@ def _code_html(code: str) -> str:
             # edge of name-keyed (vs position-keyed) matching.
             if token_type in Token.Name and token_type not in Token.Name.Builtin and value.isidentifier():
                 attr = html.escape(value, quote=True)
-                style_attr = f' style="{css}"' if css else ""
-                parts.append(f'<span data-ix-name="{attr}"{style_attr}>{text}</span>')
-            elif css:
-                parts.append(f'<span style="{css}">{text}</span>')
+                parts.append(f'<span{cls_attr} data-ix-name="{attr}">{text}</span>')
+            elif cls:
+                parts.append(f'<span{cls_attr}>{text}</span>')
             else:
                 parts.append(text)
         return "".join(parts).strip("\n")
@@ -96,20 +94,66 @@ def _code_html(code: str) -> str:
         return ""
 
 
-def _token_css(style, token_type) -> str:
-    """Inline CSS for one pygments token under ``style`` (the noclasses path,
-    rebuilt here so we can also emit identifier anchors)."""
-    spec = style.style_for_token(token_type)
-    parts: list[str] = []
-    if spec.get("color"):
-        parts.append(f"color:#{spec['color']}")
-    if spec.get("bold"):
-        parts.append("font-weight:bold")
-    if spec.get("italic"):
-        parts.append("font-style:italic")
-    if spec.get("underline"):
-        parts.append("text-decoration:underline")
-    return ";".join(parts)
+def _token_class(token_type) -> str:
+    """The pygments standard short CSS class for a token (``k``, ``s``, ``nf``,
+    ...), climbing to the nearest classified ancestor. Empty for plain text,
+    which is then emitted without a span. Matches the class names in the
+    stylesheet ``_highlight_css`` builds."""
+    from pygments.token import STANDARD_TYPES
+
+    ttype = token_type
+    while ttype not in STANDARD_TYPES:
+        ttype = ttype.parent
+    return STANDARD_TYPES[ttype]
+
+
+def _highlight_css() -> str:
+    """Two scoped token palettes for the highlighted source: monokai for the dark
+    dashboard (the default) and a light palette under ``prefers-color-scheme:
+    light``. Both are scoped to ``.ix-code`` so they only touch injected source
+    spans, and the chrome rules (background, line numbers, highlight line) are
+    dropped so tokens inherit the dashboard's own ``--inset`` box. Empty when
+    pygments is unavailable."""
+    try:
+        from pygments.formatters import HtmlFormatter
+    except Exception:
+        return ""
+
+    def token_rules(style_name: str) -> str:
+        defs = HtmlFormatter(style=style_name).get_style_defs(".ix-code")
+        rules: list[str] = []
+        for line in defs.splitlines():
+            stripped = line.strip()
+            # Keep only per-token color rules (".ix-code .<cls> { ... }"), not the
+            # background, line-number, or highlight-line chrome the formatter adds.
+            if not stripped.startswith(".ix-code ."):
+                continue
+            if stripped.startswith(".ix-code .hll"):
+                continue
+            rules.append(stripped)
+        return "\n".join(rules)
+
+    dark = token_rules("monokai")
+    light = token_rules("xcode")
+    return f"{dark}\n@media (prefers-color-scheme: light) {{\n{light}\n}}\n"
+
+
+def _with_highlight_css(page: str) -> str:
+    """Inline the highlight palette into the served page's head so the
+    single-file dashboard stays self-contained (no sidecar request)."""
+    css = _highlight_css()
+    if not css:
+        return page
+    tag = f'<style id="ix-highlight">\n{css}</style>'
+    if "</head>" in page:
+        return page.replace("</head>", f"{tag}</head>", 1)
+    return tag + page
+
+
+# Read once at startup: the page is an immutable nix-store artifact for the life
+# of the server, and the live data arrives over the API rather than the HTML. The
+# highlight palette is inlined now so every served copy carries both themes.
+_PAGE = _with_highlight_css(_load_page())
 
 
 async def start(config: Config) -> web.AppRunner:

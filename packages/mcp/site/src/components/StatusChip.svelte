@@ -21,12 +21,12 @@
   }
   .running {
     background: var(--active);
-    color: #0b0b0c;
+    color: var(--on-active);
     border-color: var(--active);
   }
   .error {
     color: var(--err);
-    border-color: #43282b;
+    border-color: var(--err-line);
   }
   .cancelled {
     color: var(--muted);

@@ -258,7 +258,7 @@
     gap: 12px;
     align-items: center;
     padding: 11px 18px;
-    background: rgba(11, 11, 12, 0.86);
+    background: var(--header-bg);
     backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--line);
   }
