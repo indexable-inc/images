@@ -35,10 +35,20 @@ is wrong, change the manifest or generator that owns it.
 A prebuilt-binary package pins its version and per-platform hashes in a generated
 `manifest.json` read with `lib.importJSON` and refreshed by a
 `passthru.updateScript`; bump by running the updater, never by hand-editing the
-hashes. When upstream signs its release manifest, the updater verifies that
-signature against a pinned key and fails closed before writing hashes. See
-[`packages/claude-code`](packages/claude-code) for the worked shape:
-`nix run .#claude-code.updateScript -- <version>`.
+hashes. Set `updateScript = true` in the package's `package.nix` so it joins the
+repo-wide updater: `nix run .#update` runs every flagged package's updater (plus
+the Minecraft catalogs) in parallel via dag-runner, and the `update.yml` workflow
+runs it hourly and opens one PR. Do not add a per-package update workflow. See
+[`packages/claude-code`](packages/claude-code) and [`packages/yc`](packages/yc)
+for the worked shape: `nix run .#claude-code.updateScript -- <version>`.
+
+When upstream signs its release manifest, the updater verifies that signature
+against a pinned key and fails closed before writing hashes (claude-code). When
+upstream publishes no signature (yc), there is no provenance check: the updater
+pins whatever bytes the release host serves, the CI build only proves the hash
+fetches and builds on one platform, and the real gate is human review of the hash
+changes in the auto-bump PR. Say which case applies in a comment next to the
+updater.
 
 Keep binary and generated artifacts near the owner that can explain and refresh
 them. Use small manifests for curated sets, generated catalogs for URLs and
