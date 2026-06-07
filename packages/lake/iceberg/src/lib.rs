@@ -40,6 +40,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub use codec::{OP_DELETE, OP_UPSERT};
 pub use error::{Error, Result};
+// Re-exported so consumers can hold a connected lake without depending on the
+// iceberg crate (and its arrow tree) directly.
+pub use iceberg::{Catalog, TableIdent};
 
 use futures::TryStreamExt as _;
 use iceberg::expr::{Predicate, Reference};
@@ -56,9 +59,7 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter as _, IcebergWriterBuilder as _};
-use iceberg::{
-    Catalog, CatalogBuilder as _, ErrorKind, NamespaceIdent, TableCreation, TableIdent,
-};
+use iceberg::{CatalogBuilder as _, ErrorKind, NamespaceIdent, TableCreation};
 use iceberg_catalog_rest::{
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
 };

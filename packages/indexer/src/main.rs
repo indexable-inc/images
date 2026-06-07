@@ -95,6 +95,19 @@ struct Cli {
     #[arg(long, env = "INDEXER_FROM_ICEBERG")]
     from_iceberg: bool,
 
+    /// Apply the lake's changes since this snapshot to Mixedbread (incremental
+    /// catch-up from an explicit cursor); pair with --mixedbread-store and the
+    /// --catalog-* flags. Prints the snapshot to use as the next cursor.
+    #[arg(long, env = "INDEXER_FROM_SNAPSHOT")]
+    from_snapshot: Option<i64>,
+
+    /// Steady-state lake consume: read the cursor from this file, apply the
+    /// delta to Mixedbread, write the new cursor back. An absent file or an
+    /// expired cursor falls back to a full rebuild. The fleet passes a
+    /// StateDirectory path (cursor.json).
+    #[arg(long, env = "INDEXER_CURSOR_FILE")]
+    cursor_file: Option<PathBuf>,
+
     /// Index local agent/shell history (claude, codex, atuin) at their default
     /// paths, in addition to any explicit `--*` overrides below.
     #[arg(long)]
@@ -187,24 +200,51 @@ async fn main() -> anyhow::Result<()> {
         .zip(cli.mixedbread_store.as_deref())
         .map(|(store, name)| Mixedbread { store, name, index_timeout: INDEX_TIMEOUT });
 
-    // Consume mode (Iceberg corpus lake): fold the lake's revision log into its
-    // current document set and reconcile that back into Mixedbread — the lake's
-    // replay/rebuild path. Like the parquet consume below, emit and consume run
-    // as separate invocations of this binary.
+    // The consume modes replay a log into Mixedbread instead of scanning local
+    // sources; exactly one log (and one read discipline) per invocation.
+    let consume_modes = usize::from(cli.from_parquet_prefix.is_some())
+        + usize::from(cli.from_iceberg)
+        + usize::from(cli.from_snapshot.is_some())
+        + usize::from(cli.cursor_file.is_some());
+    anyhow::ensure!(
+        consume_modes <= 1,
+        "--from-parquet-prefix, --from-iceberg, --from-snapshot, and --cursor-file are mutually exclusive consume modes"
+    );
+
+    // Consume mode (Iceberg corpus lake, full): fold the lake's revision log
+    // into its current document set and reconcile that back into Mixedbread —
+    // the lake's replay/rebuild path. Like the parquet consume below, emit and
+    // consume run as separate invocations of this binary.
     if cli.from_iceberg {
-        anyhow::ensure!(
-            cli.from_parquet_prefix.is_none(),
-            "--from-iceberg and --from-parquet-prefix are mutually exclusive (one log at a time)"
-        );
         let mixedbread =
             mixedbread.context("--from-iceberg requires --mixedbread-store (the reconcile target)")?;
-        let config = lake_config(&cli)?;
-        let catalog = config.connect().await.context("connecting the Iceberg catalog")?;
-        let ident =
-            lake_iceberg::ensure_table(catalog.as_ref()).await.context("ensuring the lake table")?;
+        let (catalog, ident) = connect_lake(&cli).await?;
         let documents =
             lake_iceberg::read_all(catalog.as_ref(), &ident).await.context("reading the lake")?;
         return finish(run_consume(documents, mixedbread).await);
+    }
+
+    // Consume mode (Iceberg corpus lake, incremental): apply the changes since
+    // an explicit cursor. Stateless — the caller owns the cursor.
+    if let Some(cursor) = cli.from_snapshot {
+        let mixedbread =
+            mixedbread.context("--from-snapshot requires --mixedbread-store (the apply target)")?;
+        let (catalog, ident) = connect_lake(&cli).await?;
+        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        let result =
+            run_lake_delta(catalog.as_ref(), &ident, cursor, mixedbread).await.map(|_| ());
+        record("lake-delta", result, &mut counts);
+        return finish(counts);
+    }
+
+    // Consume mode (Iceberg corpus lake, steady state): the cursor lives in a
+    // file; absent or expired falls back to a full rebuild. This is the
+    // deployed view-catch-up invocation.
+    if let Some(path) = cli.cursor_file.clone() {
+        let mixedbread =
+            mixedbread.context("--cursor-file requires --mixedbread-store (the apply target)")?;
+        let (catalog, ident) = connect_lake(&cli).await?;
+        return finish(run_cursor_consume(catalog.as_ref(), &ident, &path, mixedbread).await);
     }
 
     // Consume mode (parquet corpus log): read the per-source `data.parquet` files
@@ -255,11 +295,7 @@ async fn main() -> anyhow::Result<()> {
     // surfaces a bad catalog config at startup, like the parquet connect above.
     let lake = match cli.catalog_uri.as_ref() {
         Some(_) => {
-            let config = lake_config(&cli)?;
-            let catalog = config.connect().await.context("connecting the Iceberg catalog")?;
-            let ident = lake_iceberg::ensure_table(catalog.as_ref())
-                .await
-                .context("ensuring the lake table")?;
+            let (catalog, ident) = connect_lake(&cli).await?;
             let host = resolve_host(&cli).context("resolving host for the lake")?;
             Some(IcebergReconciler::new(catalog, ident, host))
         }
@@ -290,6 +326,151 @@ fn lake_config(cli: &Cli) -> anyhow::Result<lake_iceberg::Config> {
         s3_endpoint: cli.endpoint.clone(),
         s3_region: cli.region.clone(),
     })
+}
+
+/// Connect the lake's catalog and ensure its table, shared by the lake sink
+/// and every lake consume mode. Failing here surfaces a bad catalog config at
+/// startup.
+async fn connect_lake(
+    cli: &Cli,
+) -> anyhow::Result<(std::sync::Arc<dyn lake_iceberg::Catalog>, lake_iceberg::TableIdent)> {
+    let config = lake_config(cli)?;
+    let catalog = config.connect().await.context("connecting the Iceberg catalog")?;
+    let ident =
+        lake_iceberg::ensure_table(catalog.as_ref()).await.context("ensuring the lake table")?;
+    Ok((catalog, ident))
+}
+
+/// Apply the lake's changes since `cursor` to Mixedbread, returning the
+/// snapshot the store is now caught up to (the next cursor).
+async fn run_lake_delta(
+    catalog: &dyn lake_iceberg::Catalog,
+    ident: &lake_iceberg::TableIdent,
+    cursor: i64,
+    mixedbread: Mixedbread<'_>,
+) -> anyhow::Result<Option<i64>> {
+    let delta = lake_iceberg::added_since(catalog, ident, cursor)
+        .await
+        .context("reading the lake delta")?;
+    let to_snapshot = delta.to_snapshot;
+    let report = mixedbread
+        .apply(delta.upserts, &delta.deletes)
+        .await
+        .context("applying the lake delta to Mixedbread")?;
+    eprintln!(
+        "[lake-delta] applied {} upserts, {} deletes (cursor {cursor} -> {to_snapshot:?})",
+        report.uploaded, report.deleted
+    );
+    Ok(to_snapshot)
+}
+
+/// Steady-state lake consume: cursor from `path`, delta applied to Mixedbread,
+/// new cursor written back. Bootstraps (absent file) and recovers (expired
+/// cursor) via a full rebuild. The apply is idempotent, so a crash before the
+/// cursor write replays safely on the next run.
+async fn run_cursor_consume(
+    catalog: &dyn lake_iceberg::Catalog,
+    ident: &lake_iceberg::TableIdent,
+    path: &Path,
+    mixedbread: Mixedbread<'_>,
+) -> Counts {
+    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+    let cursor = match read_cursor(path) {
+        Ok(cursor) => cursor,
+        Err(error) => {
+            // A malformed cursor file is a real error, not a silent rebuild: it
+            // means state corruption worth a human look.
+            record("lake-cursor", Err(error), &mut counts);
+            return counts;
+        }
+    };
+
+    if let Some(cursor) = cursor {
+        match run_lake_delta(catalog, ident, cursor, mixedbread).await {
+            Ok(to_snapshot) => {
+                let result = match to_snapshot {
+                    Some(snapshot) => write_cursor(path, snapshot),
+                    // An empty table has no snapshot to store; keep the old cursor.
+                    None => Ok(()),
+                };
+                record("lake-cursor", result, &mut counts);
+                return counts;
+            }
+            // The one recoverable failure: snapshot expiration outran the
+            // cursor. Fall through to the full rebuild below.
+            Err(error)
+                if error
+                    .downcast_ref::<lake_iceberg::Error>()
+                    .is_some_and(|e| matches!(e, lake_iceberg::Error::CursorNotFound { .. })) =>
+            {
+                eprintln!("[lake-cursor] cursor {cursor} expired; falling back to a full rebuild");
+            }
+            Err(error) => {
+                record("lake-cursor", Err(error), &mut counts);
+                return counts;
+            }
+        }
+    }
+
+    // Bootstrap / recovery: full rebuild, then store the snapshot read BEFORE
+    // the fold, so appends landing mid-rebuild are replayed next pass rather
+    // than skipped.
+    let rebuild = async {
+        let to_snapshot = lake_iceberg::current_snapshot_id(catalog, ident)
+            .await
+            .context("reading the lake snapshot")?;
+        let documents =
+            lake_iceberg::read_all(catalog, ident).await.context("reading the lake")?;
+        anyhow::Ok((to_snapshot, documents))
+    }
+    .await;
+    match rebuild {
+        Ok((to_snapshot, documents)) => {
+            let consume = run_consume(documents, mixedbread).await;
+            counts.indexed += consume.indexed;
+            counts.skipped += consume.skipped;
+            counts.failures += consume.failures;
+            if consume.failures == 0
+                && let Some(snapshot) = to_snapshot
+            {
+                record("lake-cursor", write_cursor(path, snapshot), &mut counts);
+            }
+        }
+        Err(error) => record("lake-cursor", Err(error), &mut counts),
+    }
+    counts
+}
+
+/// Read the cursor file: `Ok(None)` when absent (bootstrap), the snapshot id
+/// when well-formed, and an error when present but malformed.
+fn read_cursor(path: &Path) -> anyhow::Result<Option<i64>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(anyhow::Error::new(error)
+                .context(format!("reading the cursor file {}", path.display())));
+        }
+    };
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("parsing the cursor file {}", path.display()))?;
+    let snapshot = value
+        .get("snapshot")
+        .and_then(serde_json::Value::as_i64)
+        .with_context(|| format!("cursor file {} has no integer `snapshot`", path.display()))?;
+    Ok(Some(snapshot))
+}
+
+/// Write the cursor file atomically (temp file + rename, same directory), so a
+/// crash mid-write can never leave a truncated cursor.
+fn write_cursor(path: &Path, snapshot: i64) -> anyhow::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    let body = serde_json::json!({ "snapshot": snapshot }).to_string();
+    std::fs::write(&tmp, body)
+        .with_context(|| format!("writing the cursor temp file {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("renaming the cursor file into place at {}", path.display()))?;
+    Ok(())
 }
 
 /// Turn the per-run counts into the process result: success only when no source
@@ -856,8 +1037,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Atuin, Counts, archive_prefix, finish, open_atuin, parse_user, safe_path_under,
-        user_prefix,
+        Atuin, Counts, archive_prefix, finish, open_atuin, parse_user, read_cursor,
+        safe_path_under, user_prefix, write_cursor,
     };
 
     /// Create a valid sqlite db with no `history` table at `path`, mirroring
@@ -986,6 +1167,29 @@ mod tests {
         // the same bucket never clobber each other.
         assert_eq!(archive_prefix("corpus", "hil-compute-1"), "corpus/host=hil-compute-1");
         assert_ne!(archive_prefix("corpus", "a"), archive_prefix("corpus", "b"));
+    }
+
+    #[test]
+    fn cursor_file_bootstraps_then_round_trips() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("cursor.json");
+        // Absent file is the bootstrap signal, not an error.
+        assert_eq!(read_cursor(&path).expect("absent file"), None);
+        write_cursor(&path, 42).expect("write");
+        assert_eq!(read_cursor(&path).expect("read back"), Some(42));
+        write_cursor(&path, 43).expect("overwrite");
+        assert_eq!(read_cursor(&path).expect("read back"), Some(43));
+        assert!(!path.with_extension("json.tmp").exists(), "the temp file must not linger");
+    }
+
+    #[test]
+    fn malformed_cursor_file_is_an_error_not_a_silent_rebuild() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("cursor.json");
+        std::fs::write(&path, "not json").expect("write garbage");
+        assert!(read_cursor(&path).is_err(), "garbage must surface, not bootstrap");
+        std::fs::write(&path, "{}").expect("write empty object");
+        assert!(read_cursor(&path).is_err(), "a missing `snapshot` key must surface");
     }
 
     #[test]

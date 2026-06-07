@@ -42,6 +42,15 @@ pub struct SyncReport {
     pub total: usize,
 }
 
+/// Outcome of applying a log-derived delta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApplyReport {
+    /// Documents uploaded (the delta's upserts).
+    pub uploaded: usize,
+    /// Records deleted (the delta's tombstones that still existed remotely).
+    pub deleted: usize,
+}
+
 /// Outcome of a garbage-collection pass over one record source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GcReport {
@@ -80,6 +89,63 @@ impl<S> Clone for MixedbreadReconciler<'_, S> {
     }
 }
 impl<S> Copy for MixedbreadReconciler<'_, S> {}
+
+impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
+    /// Apply a log-derived delta: upload the changed documents, then delete
+    /// the tombstoned ids that still exist in the store.
+    ///
+    /// Unlike [`Reconciler::reconcile`], this trusts the log's change
+    /// detection: no remote listing for skip decisions, every upsert uploads.
+    /// Idempotent by construction, so a crash between an apply and its cursor
+    /// write replays safely: re-uploading a document overwrites in place, and
+    /// deletes are filtered against the store's current ids first (the
+    /// production store hard-errors deleting a missing id, which would
+    /// otherwise wedge a replayed cursor in a permanent retry loop).
+    ///
+    /// # Errors
+    /// Returns an error if the store cannot be reached, an upload fails, or a
+    /// delete of a still-existing record fails.
+    pub async fn apply(
+        &self,
+        upserts: Vec<Document>,
+        deletes: &[String],
+    ) -> Result<ApplyReport> {
+        self.store.ensure_store(self.name).await.context(StoreSnafu)?;
+
+        let results: Vec<Result<()>> = stream::iter(upserts)
+            .map(|document| async move {
+                self.store.upload(self.name, document).await.context(StoreSnafu)?;
+                Ok(())
+            })
+            .buffer_unordered(UPLOAD_CONCURRENCY)
+            .collect()
+            .await;
+        let mut uploaded = 0;
+        for result in results {
+            result?;
+            uploaded += 1;
+        }
+        if uploaded > 0 {
+            wait_until_indexed(self.store, self.name, self.index_timeout, |_| {})
+                .await
+                .context(StoreSnafu)?;
+        }
+
+        let mut removed = 0;
+        if !deletes.is_empty() {
+            let existing: HashSet<String> =
+                self.store.list_external_ids(self.name, None).await.context(StoreSnafu)?;
+            for external_id in deletes {
+                if existing.contains(external_id) {
+                    self.store.delete(self.name, external_id).await.context(StoreSnafu)?;
+                    removed += 1;
+                }
+            }
+        }
+
+        Ok(ApplyReport { uploaded, deleted: removed })
+    }
+}
 
 impl<S: Store + Sync> Reconciler for MixedbreadReconciler<'_, S> {
     type Report = SyncReport;
@@ -258,6 +324,32 @@ mod tests {
         let third = sink.reconcile(&source, &changed).await.expect("third");
         assert_eq!(third.uploaded, 1);
         assert_eq!(store.upload_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn apply_delta_uploads_and_deletes_idempotently() {
+        let store = MemoryStore::new();
+        let sink = reconciler(&store, "s");
+        let source = Source::new("linear");
+        sink.reconcile(&source, &[linear_doc("A", "a"), linear_doc("B", "b")])
+            .await
+            .expect("seed");
+
+        // A delta: A changed, B tombstoned, C never existed (a replayed delete).
+        let delta_upserts = vec![linear_doc("A", "a EDITED")];
+        let deletes =
+            vec!["linear:issue:B".to_owned(), "linear:issue:C".to_owned()];
+        let report = sink.apply(delta_upserts.clone(), &deletes).await.expect("apply");
+        assert_eq!(report.uploaded, 1);
+        assert_eq!(report.deleted, 1, "the never-existed id must be skipped, not an error");
+        assert_eq!(store.len(), 1, "only A remains");
+
+        // Replaying the same delta (a crash before the cursor write) is safe:
+        // the re-upload overwrites in place and the delete finds nothing.
+        let replay = sink.apply(delta_upserts, &deletes).await.expect("replay");
+        assert_eq!(replay.uploaded, 1);
+        assert_eq!(replay.deleted, 0);
+        assert_eq!(store.len(), 1);
     }
 
     #[tokio::test]
