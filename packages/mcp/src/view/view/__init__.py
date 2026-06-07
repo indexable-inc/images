@@ -67,8 +67,95 @@ _PAL = {
 _MONO = "ui-monospace,SFMono-Regular,Menlo,monospace"
 
 
+def _nested_table(headers, rows, *, key_col=False) -> str:
+    """A small bordered inline table for a nested Struct/List value.
+
+    nushell-style: nested data renders as a real boxed sub-table rather than a
+    truncated ``str(value)``. ``headers`` is the column labels (None for an
+    unlabeled single-column list); each row is a list of pre-rendered cell HTML.
+    ``key_col`` left-aligns and mutes the first column (struct field names).
+    """
+    head = ""
+    if headers is not None:
+        head = (
+            "<thead><tr>"
+            + "".join(
+                f'<th style="text-align:left;padding:2px 8px;'
+                f'border-bottom:1px solid {_PAL["head"]};color:{_PAL["muted"]};'
+                f'font-weight:600;white-space:nowrap">{_html.escape(str(h))}</th>'
+                for h in headers
+            )
+            + "</tr></thead>"
+        )
+    body_rows = ""
+    for r in rows:
+        tds = ""
+        for j, cell in enumerate(r):
+            mute = key_col and j == 0
+            color = f";color:{_PAL['muted']}" if mute else ""
+            tds += (
+                f'<td style="padding:2px 8px;vertical-align:top;'
+                f'border-bottom:1px solid {_PAL["border"]};'
+                f'font-variant-numeric:tabular-nums{color}">{cell}</td>'
+            )
+        body_rows += f"<tr>{tds}</tr>"
+    return (
+        f'<table style="border-collapse:collapse;margin:0;'
+        f'border:1px solid {_PAL["border"]};border-radius:4px;'
+        f'background:{_PAL["alt"]}">{head}<tbody>{body_rows}</tbody></table>'
+    )
+
+
+_MAX_NESTED_ROWS = 50
+
+
+def _fmt_nested(value, dtype) -> str | None:
+    """Render a Struct/List/Array cell as a nested table; None if not nested."""
+    if isinstance(dtype, pl.Struct):
+        if value is None:
+            return f'<span style="color:{_PAL["null"]};font-style:italic">null</span>'
+        fields = {f.name: f.dtype for f in dtype.fields}
+        rows = [
+            [
+                _html.escape(name),
+                _fmt_cell(value.get(name), ftype)[0],
+            ]
+            for name, ftype in fields.items()
+        ]
+        return _nested_table(None, rows, key_col=True)
+    if isinstance(dtype, (pl.List, pl.Array)):
+        if value is None:
+            return f'<span style="color:{_PAL["null"]};font-style:italic">null</span>'
+        inner = dtype.inner
+        items = list(value)
+        more = ""
+        if len(items) > _MAX_NESTED_ROWS:
+            extra = len(items) - _MAX_NESTED_ROWS
+            items = items[:_MAX_NESTED_ROWS]
+            more = (
+                f'<div style="color:{_PAL["muted"]};padding:2px 8px;'
+                f'font-size:10px">… {extra:,} more</div>'
+            )
+        if isinstance(inner, pl.Struct):
+            # List[Struct] -> a real table: one column per field, one row each.
+            cols = [f.name for f in inner.fields]
+            ftypes = [f.dtype for f in inner.fields]
+            rows = [
+                [_fmt_cell((e or {}).get(c), ft)[0] for c, ft in zip(cols, ftypes)]
+                for e in items
+            ]
+            return _nested_table(cols, rows) + more
+        # List of scalars (or nested lists) -> single column, one row per element.
+        rows = [[_fmt_cell(e, inner)[0]] for e in items]
+        return _nested_table(None, rows) + more
+    return None
+
+
 def _fmt_cell(value, dtype) -> tuple[str, str]:
     """Render one cell to (html, align), colored and aligned by dtype."""
+    nested = _fmt_nested(value, dtype)
+    if nested is not None:
+        return nested, "l"
     if value is None:
         return f'<span style="color:{_PAL["null"]};font-style:italic">null</span>', "c"
     if dtype == pl.Boolean:
