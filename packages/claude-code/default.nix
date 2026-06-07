@@ -36,6 +36,16 @@
   # avoided. Takes PRECEDENCE over `dangerouslySkipPermissions`, since bypass
   # would void the deny rules. `null` (default) leaves the normal posture.
   restrictToTools ? null,
+  # Extra settings.json keys to ship through the read-only flagSettings layer
+  # (the `--settings` file below), deep-merged UNDER the computed defaults so the
+  # security-relevant keys this package controls (the restrictToTools / bypass
+  # `permissions`) always win on a conflict. Lets a consumer keep its whole
+  # static Claude config (hooks, statusLine, enabledPlugins, marketplaces, ...)
+  # in Nix and out of a hand-maintained ~/.claude/settings.json: flagSettings
+  # merges per-key ABOVE user settings and is a separate read-only layer, so it
+  # never occupies (or symlinks) the writable settings.json the CLI churns at
+  # runtime. `{ }` (default) ships only the computed defaults.
+  extraSettings ? { },
   # Only the flake package set injects the Nushell writer; the overlay eval
   # context does not. The updater is a maintainer-facing flake output, so the
   # overlay build of `pkgs.claude-code` simply omits `passthru.updateScript`.
@@ -149,23 +159,28 @@ let
   # The lockdown is active whenever the caller pins an allow-list.
   restrictTools = restrictToTools != null;
 
-  settingsDefaults = {
-    cleanupPeriodDays = 365;
-  }
-  // lib.optionalAttrs restrictTools {
-    permissions = {
-      allow = restrictToTools;
-      # A built-in named in the allow-list is re-allowed by dropping it here.
-      deny = lib.subtractLists restrictToTools deniedBuiltinTools;
-    };
-  }
-  # restrictToTools takes precedence: bypass would skip the permission layer and
-  # void its deny rules, so the two never co-set `permissions` (a shallow //
-  # merge would otherwise clobber allow/deny with defaultMode).
-  // lib.optionalAttrs (dangerouslySkipPermissions && !restrictTools) {
-    permissions.defaultMode = "bypassPermissions";
-    skipDangerousModePermissionPrompt = true;
-  };
+  # Caller's extraSettings first, then the computed defaults recursively merged
+  # ON TOP, so the security-relevant `permissions`/bypass keys below always win a
+  # conflict while the caller's other keys (hooks, statusLine, ...) pass through.
+  settingsDefaults = lib.recursiveUpdate extraSettings (
+    {
+      cleanupPeriodDays = 365;
+    }
+    // lib.optionalAttrs restrictTools {
+      permissions = {
+        allow = restrictToTools;
+        # A built-in named in the allow-list is re-allowed by dropping it here.
+        deny = lib.subtractLists restrictToTools deniedBuiltinTools;
+      };
+    }
+    # restrictToTools takes precedence: bypass would skip the permission layer and
+    # void its deny rules, so the two never co-set `permissions` (a shallow //
+    # merge would otherwise clobber allow/deny with defaultMode).
+    // lib.optionalAttrs (dangerouslySkipPermissions && !restrictTools) {
+      permissions.defaultMode = "bypassPermissions";
+      skipDangerousModePermissionPrompt = true;
+    }
+  );
   settingsDefaultsFile =
     (formats.json { }).generate "claude-code-default-settings.json"
       settingsDefaults;
