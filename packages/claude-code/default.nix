@@ -12,7 +12,6 @@
   nix,
   gnupg,
   formats,
-  ix,
   binName ? "claude",
   # Default posture: start every session in bypass-permissions mode. We run a
   # trusted config inside disposable sandboxes (ix guest VMs, the dev image,
@@ -55,6 +54,11 @@
 }:
 
 let
+  # Imported directly (not via the `ix` package scope) so claude-code still
+  # builds from call sites that lack the overlay — e.g. the OCI image checks
+  # call it through a plain `callPackageWith` that injects no `ix`.
+  deepMerge = import ../../lib/util/deep-merge.nix { inherit lib; };
+
   # Version and per-platform SRI hashes are generated, never hand-edited. Bump
   # with `nix run .#claude-code.updateScript -- <version>`, which refetches
   # Anthropic's per-version manifest and rewrites manifest.json. We pin by raw
@@ -164,7 +168,7 @@ let
   # Caller's extraSettings first, then the computed defaults recursively merged
   # ON TOP, so the security-relevant `permissions`/bypass keys below always win a
   # conflict while the caller's other keys (hooks, statusLine, ...) pass through.
-  settingsDefaults = ix.deepMerge.rhs extraSettings (
+  settingsDefaults = deepMerge.rhs extraSettings (
     {
       cleanupPeriodDays = 365;
     }

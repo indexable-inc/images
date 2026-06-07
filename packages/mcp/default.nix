@@ -1204,7 +1204,17 @@ let
     )
     nout = view.df_html(nested)
     assert "/data" in nout and ">91<" in nout, nout[:200]
-    assert "[{" not in nout and "…" not in nout, "nested cell fell back to a truncated repr"
+    # A nested cell is a real sub-table (outer + inner), not a truncated repr.
+    assert nout.count("<table") >= 2 and "[{" not in nout, nout[:200]
+
+    # A struct field name is attacker-controllable (any frame built from
+    # untrusted data); it must be HTML-escaped both in the column-header dtype
+    # string and in the nested sub-table, never injected as live markup.
+    evil = pl.DataFrame({"x": [1]}).with_columns(
+        rec=pl.lit({"<img src=x>": 1}, dtype=pl.Struct({"<img src=x>": pl.Int64}))
+    )
+    eout = view.df_html(evil)
+    assert "<img src=x>" not in eout and "&lt;img src=x&gt;" in eout, eout[:300]
 
     c = view.cat(base + "/default.nix", lines=(1, 3))
     assert isinstance(c, view.Code)

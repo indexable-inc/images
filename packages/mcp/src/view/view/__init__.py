@@ -211,7 +211,7 @@ def _df_html_impl(df: "pl.DataFrame", max_rows: int) -> str:
         f'<th style="text-align:left;padding:5px 14px;border-bottom:2px solid '
         f'{_PAL["head"]};white-space:nowrap">'
         f'<div style="color:{_PAL["text"]};font-weight:600">{_html.escape(c)}</div>'
-        f'<div style="color:{_PAL["muted"]};font-size:10px">{dt}</div></th>'
+        f'<div style="color:{_PAL["muted"]};font-size:10px">{_html.escape(str(dt))}</div></th>'
         for c, dt in zip(cols, dtypes)
     )
     body = []
