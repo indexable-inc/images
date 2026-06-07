@@ -368,11 +368,37 @@ let
       vmkitModule
     ];
 
+  # htpy: build HTML in plain Python (`div(class_="x")[ ... ]`), auto-escaping
+  # every text node and attribute via markupsafe. Bundled so a session — and the
+  # `view` renderer — can compose dashboard HTML without hand-rolling f-strings,
+  # which is exactly where escaping is forgotten (the dtype-header XSS this
+  # package set just had to patch). Not in nixpkgs; pure Python, one dep
+  # (markupsafe). https://htpy.dev
+  htpyModule = pkgs.python3.pkgs.buildPythonPackage rec {
+    pname = "htpy";
+    version = "26.5.1";
+    pyproject = true;
+    src = pkgs.fetchPypi {
+      inherit pname version;
+      hash = "sha256-Q6NlwfxnAJTaeBuSOIMBkznOwDE5fWHV/l+OLyJ4tj4=";
+    };
+    # setuptools-scm reads the version from the sdist's PKG-INFO, but pin it so
+    # the build never depends on a .git that the sdist does not carry.
+    env.SETUPTOOLS_SCM_PRETEND_VERSION = version;
+    build-system = [
+      pkgs.python3.pkgs.setuptools
+      pkgs.python3.pkgs.setuptools-scm
+    ];
+    dependencies = [ pkgs.python3.pkgs.markupsafe ];
+    pythonImportsCheck = [ "htpy" ];
+    doCheck = false;
+  };
+
   # The interpreter the wrapper pins. Sessions build their venv from this with
   # `--system-site-packages`, so `tui`, `search`, `fff`, `exa_py`, numpy, polars
-  # (incl. Postgres via psycopg + SQLAlchemy), duckdb, httpx, and playwright are
-  # importable by default while an in-session `pip install` still writes to the
-  # per-session venv.
+  # (incl. Postgres via psycopg + SQLAlchemy), duckdb, httpx, htpy, and playwright
+  # are importable by default while an in-session `pip install` still writes to
+  # the per-session venv.
   mcpPython = pkgs.python3.withPackages (
     ps:
     [
@@ -397,6 +423,9 @@ let
       # async via asyncssh/playwright/tui but had no way to call a REST API). Sync
       # `httpx.get(...)` and `async with httpx.AsyncClient()` both work.
       ps.httpx
+      # htpy: compose HTML in Python with automatic escaping (see the module
+      # definition above). The preferred way to build any dashboard markup.
+      htpyModule
       # exa-py: the official Exa (exa.ai) SDK, so a session can run neural web
       # search, get page contents, and `answer(...)` over the live web with no
       # install step (`from exa_py import Exa`). It is a thin client over the Exa
@@ -536,6 +565,8 @@ let
       '';
 
   tuiBundled = importTest "tui" "import tui; print('tui-ok', tui.__version__)";
+  # htpy must import and auto-escape: a `<` in a text node comes out as `&lt;`.
+  htpyBundled = importTest "htpy" "import htpy; print('htpy-ok' if '&lt;' in str(htpy.div['<']) else 'htpy-bad')";
   searchBundled = importTest "search" "import search; print('search-ok', search.__version__)";
 
   # End-to-end through the bundled `fff` ctypes module: index a temp tree, wait
@@ -1577,6 +1608,7 @@ package.overrideAttrs (old: {
     tests = {
       inherit
         tuiBundled
+        htpyBundled
         searchBundled
         fffBundled
         dataLibsBundled
