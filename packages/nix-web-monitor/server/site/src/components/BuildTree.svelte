@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { SvelteSet } from 'svelte/reactivity';
   import Self from '$components/BuildTree.svelte';
-  import { formatDuration, splitDerivation } from '$lib/format';
+  import { derivationLabelKey, formatDuration, shortHash, splitDerivation } from '$lib/format';
   import { durationLabel, whereLabel } from '$lib/build-row';
   import { ROOT_SENTINEL, type BuildTree } from '$lib/build-tree';
   import type { BuildNode } from '$lib/types';
@@ -46,6 +46,9 @@
   const isCommandRoot = $derived(drv === ROOT_SENTINEL);
   const node = $derived(tree.nodeByDrv.get(drv));
   const parts = $derived(splitDerivation(drv));
+  /// Show the short hash only when another build row carries the same name and
+  /// version, so the duplicate-looking cargo units stay distinguishable.
+  const ambiguous = $derived(tree.ambiguousLabels.has(derivationLabelKey(parts)));
   const children = $derived((tree.childrenByDrv.get(drv) ?? []).filter((dep) => !ancestors.has(dep)));
   const isCollapsed = $derived(collapsed.has(drv));
   const isCursor = $derived(drv === cursor);
@@ -140,6 +143,7 @@
     <span class="drv activity-drv" title={drv}>
       <span class="drv-name">{parts.name}</span>{#if parts.version.length > 0}<span
           class="drv-version">{parts.version}</span
+        >{/if}{#if ambiguous && parts.hash.length > 0}<span class="drv-hash">{shortHash(parts)}</span
         >{/if}
     </span>
     {#if node.status !== 'planned'}

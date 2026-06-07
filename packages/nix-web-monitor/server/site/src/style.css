@@ -849,6 +849,16 @@ main.dragging-v .splitter-v::after {
   margin-left: 0.5ch;
 }
 
+/* Shown only when a name+version is shared by sibling rows (e.g. the many
+ * `ix-0.1.0` cargo units in one build). The short hash is what tells the
+ * otherwise-identical rows apart, so it stays faint but selectable. */
+.drv-hash {
+  color: var(--faint);
+  opacity: 0.75;
+  margin-left: 0.5ch;
+  user-select: all;
+}
+
 .where {
   font-size: inherit !important;
   color: var(--muted);
