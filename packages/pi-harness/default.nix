@@ -22,16 +22,15 @@ let
   );
 
   # The bridge source travels with the wrapper; Pi loads it with --extension.
-  # Drop node_modules/_probe so the store copy is reproducible (CI has neither;
-  # making the deps pure via buildNpmPackage is a follow-up).
-  extension = lib.cleanSourceWith {
-    src = ./extension;
-    filter =
-      path: _type:
-      let
-        name = baseNameOf path;
-      in
-      name != "node_modules" && name != "_probe";
+  # Name exactly the files the build needs (the manifests are for the future
+  # buildNpmPackage follow-up), so node_modules/_probe never enter the closure.
+  extension = lib.fileset.toSource {
+    root = ./extension;
+    fileset = lib.fileset.unions [
+      (./extension + "/ix-mcp-bridge.ts")
+      (./extension + "/package.json")
+      (./extension + "/package-lock.json")
+    ];
   };
 
   runtimeInputs = lib.optional (pi != null) pi ++ lib.optional (ix-mcp != null) ix-mcp;
