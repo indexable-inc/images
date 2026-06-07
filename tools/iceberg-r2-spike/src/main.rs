@@ -250,7 +250,9 @@ async fn main() -> Result<()> {
         catalog.create_namespace(&ns, HashMap::new()).await?;
     }
     if catalog.table_exists(&ident).await? {
-        catalog.drop_table(&ident).await?; // fresh run each time
+        bail!(
+            "S1 FAIL  {NAMESPACE}.{TABLE} already exists; delete it explicitly before rerunning the spike"
+        );
     }
     let creation = TableCreation::builder()
         .name(TABLE.to_string())
