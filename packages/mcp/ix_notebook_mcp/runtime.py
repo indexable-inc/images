@@ -1545,6 +1545,48 @@ def _tilde(path) -> str:
     return text
 
 
+# File-type glyphs for the read note, keyed by lowercased extension. Emoji (not
+# Nerd Font glyphs) so they render on the dashboard everywhere; a few
+# extension-less names get a dedicated icon, everything else a generic page.
+_FILE_ICONS = {
+    "py": "\U0001F40D",
+    "rs": "\U0001F980",
+    "go": "\U0001F439",
+    "js": "\U0001F4DC", "mjs": "\U0001F4DC", "cjs": "\U0001F4DC",
+    "ts": "\U0001F4DC", "tsx": "\U0001F4DC", "jsx": "\U0001F4DC",
+    "json": "\U0001F9FE", "jsonl": "\U0001F9FE", "ndjson": "\U0001F9FE",
+    "toml": "\u2699\ufe0f", "yaml": "\u2699\ufe0f", "yml": "\u2699\ufe0f",
+    "ini": "\u2699\ufe0f", "cfg": "\u2699\ufe0f", "conf": "\u2699\ufe0f", "env": "\u2699\ufe0f",
+    "nix": "\u2744\ufe0f",
+    "md": "\U0001F4DD", "rst": "\U0001F4DD", "txt": "\U0001F4C4",
+    "sh": "\U0001F41A", "bash": "\U0001F41A", "zsh": "\U0001F41A",
+    "fish": "\U0001F41A", "nu": "\U0001F41A",
+    "html": "\U0001F310", "htm": "\U0001F310", "xml": "\U0001F310",
+    "css": "\U0001F3A8", "scss": "\U0001F3A8",
+    "csv": "\U0001F4CA", "tsv": "\U0001F4CA", "parquet": "\U0001F4CA",
+    "log": "\U0001F4CB",
+    "lock": "\U0001F512",
+    "sql": "\U0001F5C3\ufe0f",
+    "pdf": "\U0001F4D5",
+    "png": "\U0001F5BC\ufe0f", "jpg": "\U0001F5BC\ufe0f", "jpeg": "\U0001F5BC\ufe0f",
+    "gif": "\U0001F5BC\ufe0f", "svg": "\U0001F5BC\ufe0f", "webp": "\U0001F5BC\ufe0f",
+}
+_NAMED_ICONS = {"dockerfile": "\U0001F433", "makefile": "\U0001F528"}
+_GENERIC_FILE_ICON = "\U0001F4C4"
+# A read of a kernel value (not a file) keeps the book glyph.
+_VALUE_ICON = "\U0001F4D6"
+
+
+def _file_icon(path) -> str:
+    """A file-type glyph for the read note, chosen by a known filename or the
+    extension, falling back to a generic page icon."""
+    p = pathlib.Path(path)
+    name = p.name.lower()
+    if name in _NAMED_ICONS:
+        return _NAMED_ICONS[name]
+    return _FILE_ICONS.get(p.suffix.lstrip(".").lower(), _GENERIC_FILE_ICON)
+
+
 async def __ix_read(target, start=None, end=None) -> "Result":
     """Read a file (or evaluate a kernel value) FOR THE MODEL, quietly.
 
@@ -1568,10 +1610,12 @@ async def __ix_read(target, start=None, end=None) -> "Result":
         # freezes every other job on the shared event loop.
         full = await asyncio.to_thread(path.read_text, errors="replace")
         label = _tilde(path)
+        icon = _file_icon(path)
     else:
         value = eval(target, ns) if isinstance(target, str) else target
         full = value if isinstance(value, str) else _safe_repr(value)
         label = target if isinstance(target, str) else _safe_repr(target)
+        icon = _VALUE_ICON
     lines = full.splitlines()
     total = len(lines)
     if start is not None or end is not None:
@@ -1584,7 +1628,7 @@ async def __ix_read(target, start=None, end=None) -> "Result":
         body = full
         span = f"{total} lines"
     note = f"read {label} \u00b7 {span}, {len(body)} chars"
-    user = f'<div class="ix-ok">\U0001F4D6 {_escape_html(note)}</div>'
+    user = f'<div class="ix-ok">{icon} {_escape_html(note)}</div>'
     return Result(user_html=user, llm_result=body)
 
 
