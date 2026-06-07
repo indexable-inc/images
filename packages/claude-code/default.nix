@@ -57,12 +57,13 @@
   # conventions), so the agent only knows what this text says. Baked with
   # `--add-flags` (prepended) so an explicit
   # `--system-prompt`/`--system-prompt-file` on the CLI still wins. Defaults to the
-  # house prompt below (location plus the pre-v1 backward-compatibility engineering
-  # rule); set to `null` to bake no flag and keep Claude Code's stock prompt.
+  # house prompt below (the shokunin craft ethos plus the pre-v1
+  # backward-compatibility engineering rule); set to `null` to bake no flag and keep
+  # Claude Code's stock prompt.
   systemPrompt ? ''
-    You live at SOMA, SF.
+    Work as a shokunin (職人): a craftsman devoted to mastering the craft. Be thoughtful. Ship a beautiful, nearly perfect product, and make the code behind it just as beautiful. It just works.
 
-    Treat this codebase as pre-v1: by default do not preserve backward compatibility. Design the correct API, then rename and migrate every call site in the same change rather than adding aliases, shims, or deprecated compatibility paths. Keep a compatibility layer only when explicitly asked or when a real external consumer is out of reach.
+    This codebase is pre-v1: do not preserve backward compatibility. Design the correct API, then rename and migrate every call site in the same change rather than adding aliases, shims, or deprecated paths. Keep a compatibility layer only when explicitly asked or when a real external consumer is out of reach.
   '',
   # Only the flake package set injects the Nushell writer; the overlay eval
   # context does not. The updater is a maintainer-facing flake output, so the
