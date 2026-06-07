@@ -14,7 +14,7 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use bytes::Bytes;
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
 use nix_web_monitor_parser::{Delta, MonitorSnapshot, MonitorState, NixEvent, ParsedLine, strip_ansi};
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
@@ -36,8 +36,7 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Parser)]
 #[command(
-    about = "Run a Nix command with quiet terminal output and a live browser monitor.",
-    version
+    about = "Run a Nix command with quiet terminal output and a live browser monitor."
 )]
 #[allow(clippy::struct_field_names)] // `nix_args` is the wire-level name passed to `nix`; renaming would hurt the CLI help text.
 struct Args {
@@ -94,9 +93,32 @@ struct AppState {
     index_html: Bytes,
 }
 
+/// `--version` text: the crate version plus the build stamp the Nix wrapper
+/// sets (`NIX_WEB_MONITOR_BUILD`, the flake revision and its commit date).
+/// Read at runtime, not baked in with `env!`, so a new commit re-stamps the
+/// tiny wrapper without rebuilding the Rust unit. Plain crate version outside
+/// the packaged wrapper (e.g. a dev `cargo run`), where the env var is unset.
+///
+/// Interned in a `OnceLock` so the returned `&'static str` satisfies clap's
+/// `Command::version` bound, which the owned `String` does not.
+fn version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        let base = env!("CARGO_PKG_VERSION");
+        match std::env::var("NIX_WEB_MONITOR_BUILD") {
+            Ok(stamp) if !stamp.is_empty() => format!("{base} ({stamp})"),
+            _ => base.to_owned(),
+        }
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    // Inject the runtime version onto the derived command, then parse. `--help`
+    // / `--version` exit inside `get_matches`; a parse error exits via
+    // `Error::exit`, matching `Args::parse()`'s behavior.
+    let matches = Args::command().version(version()).get_matches();
+    let args = Args::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     validate_site_dir(&args.site_dir)?;
 
     let index_html = Bytes::from(

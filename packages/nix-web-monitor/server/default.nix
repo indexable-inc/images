@@ -52,7 +52,8 @@ let
         # extra copy into every closure and silently shadows custom
         # builds.
         makeWrapper ${lib.getExe unwrapped} "$out/bin/nix-web-monitor" \
-          --set NIX_WEB_MONITOR_SITE_DIR "$out/share/nix-web-monitor"
+          --set NIX_WEB_MONITOR_SITE_DIR "$out/share/nix-web-monitor" \
+          --set NIX_WEB_MONITOR_BUILD ${lib.escapeShellArg ix.buildStamp}
       '';
 in
 wrapper

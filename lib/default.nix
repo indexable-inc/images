@@ -12,6 +12,10 @@
   # Flake source revision, stamped into builds that want to report it (see
   # `sharedHelpers.rev`). Defaulted so a direct `import ./lib` still evaluates.
   rev ? "dev",
+  # Commit date of `rev` as `YYYYMMDDHHMMSS` (Nix's `lastModifiedDate`), for
+  # builds that want to show a human date alongside the revision. Empty when
+  # unknown. Defaulted so a direct `import ./lib` still evaluates.
+  revDate ? "",
 }:
 let
   inherit (nixpkgs) lib;
@@ -337,6 +341,29 @@ let
   appleSdkToolchain = import ./darwin/apple-sdk-toolchain.nix;
 
   /**
+    Human build stamp for a tool's `--version` line: the short flake revision
+    plus its commit date, e.g. `abc123def456, 2026-06-07`. Reproducible builds
+    have no wall-clock compile time, so the commit date (`revDate`) is the
+    meaningful "when". Falls back to the short `rev` alone when `revDate` is
+    unknown, and to `"dev"` on a non-git eval.
+
+    Set this on a wrapper through an env var (`makeWrapper --set ...`) rather
+    than compiling it in, so a new commit only rehashes the wrapper, never the
+    underlying build. Shared here so every tool stamps its version the same way
+    from one source of truth.
+  */
+  buildStamp =
+    let
+      revShort = if rev == "dev" then "dev" else builtins.substring 0 12 rev;
+      date =
+        if builtins.stringLength revDate >= 8 then
+          "${builtins.substring 0 4 revDate}-${builtins.substring 4 2 revDate}-${builtins.substring 6 2 revDate}"
+        else
+          "";
+    in
+    if date == "" then revShort else "${revShort}, ${date}";
+
+  /**
     Helper surface shared by both the per-module `specialArgs.ix`
     (`ixSpecialArgs`) and the public `index.lib` (`ixReturn`). Listed once
     here so a new shared helper reaches both surfaces from a single edit;
@@ -345,6 +372,8 @@ let
   sharedHelpers = {
     inherit
       rev
+      revDate
+      buildStamp
       agentContext
       artifacts
       buildGradleFatJar
