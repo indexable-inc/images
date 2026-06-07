@@ -194,7 +194,7 @@ def _serve(args: argparse.Namespace) -> int:
 
 
 async def _run(cfg: Config) -> None:
-    from . import dashboard, transport
+    from . import dashboard, tools, transport
     from .kernel import Kernel, set_kernel
 
     kernel = Kernel(cfg)
@@ -204,6 +204,9 @@ async def _run(cfg: Config) -> None:
     runner = await dashboard.start(cfg)
     url = cfg.dashboard_url()
     (runtime_dir() / "dashboard-url").write_text(url)
+    # Bake the live URL into the MCP instructions before serving, so the client
+    # gets it in the `initialize` response -- no tool call to discover it.
+    tools.set_dashboard_url(url)
     print(f"[ix-mcp] dashboard (all running things + output): {url}", file=sys.stderr, flush=True)
 
     try:

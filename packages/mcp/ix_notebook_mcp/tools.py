@@ -25,9 +25,7 @@ from pydantic import Field
 from . import outputs
 from .kernel import current_kernel
 
-mcp = FastMCP(
-    "ix-mcp",
-    instructions=(
+_INSTRUCTIONS = (
         "Run Python on one shared, persistent kernel with `python_exec`. The "
         "namespace persists across calls, so variables, functions, classes, and "
         "imports you define stay defined and are reusable by every later call \u2014 "
@@ -132,10 +130,24 @@ mcp = FastMCP(
         "important results with `cells.add(value, title=...)`, and prune stale "
         "ones as the state moves on \u2014 `cells.set(key, value)` to replace in "
         "place, `cells.remove(key)` to drop one, `cells.clear()` to start over \u2014 "
-        "so the page always reflects where things stand now. The dashboard URL is "
-        "the `DASHBOARD_URL` variable in the namespace (share it with the human)."
-    ),
-)
+        "so the page always reflects where things stand now."
+    )
+
+mcp = FastMCP("ix-mcp", instructions=_INSTRUCTIONS)
+
+
+def set_dashboard_url(url: str) -> None:
+    """Bake the live dashboard URL into the server instructions so a client reads
+    it straight out of the ``initialize`` response -- the agent has the URL from
+    the first message, with no tool call to look it up. The CLI calls this once
+    the dashboard has bound its port, before the transport serves ``initialize``.
+    """
+    mcp._mcp_server.instructions = (
+        f"{_INSTRUCTIONS}\n\nThis session's live dashboard (every running job, "
+        f"its output, and your curated cells) is at {url} -- share it with the "
+        f"human now. It is also the `DASHBOARD_URL` variable in the kernel "
+        f"namespace."
+    )
 
 # Report the build's source revision as the MCP `serverInfo.version` so a client
 # can see exactly which commit of the server it is talking to. The nix wrapper
