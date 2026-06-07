@@ -28,6 +28,8 @@
       const b = name ? bindings[name] : undefined;
       if (!name || !b) continue;
       el.classList.add('ix-bound');
+      // Make the token keyboard-reachable so the card is not mouse-only.
+      el.tabIndex = 0;
       // The inlay sits after the first mention only; later uses stay clean but
       // still light up on hover.
       if (!seen.has(name)) {
@@ -51,7 +53,9 @@
     return strip;
   });
 
-  function over(event: MouseEvent): void {
+  // Shared by mouse and keyboard: a FocusEvent and a MouseEvent both expose the
+  // target/relatedTarget this reads, so one handler serves hover and focus.
+  function enter(event: MouseEvent | FocusEvent): void {
     const target = (event.target as HTMLElement | null)?.closest<HTMLElement>('[data-ix-name]');
     const name = target?.dataset.ixName;
     const b = name ? bindings[name] : undefined;
@@ -60,14 +64,24 @@
     card = { name, b, x: rect.left, y: rect.bottom + 5 };
   }
 
-  function out(event: MouseEvent): void {
+  function leave(event: MouseEvent | FocusEvent): void {
     const to = event.relatedTarget as HTMLElement | null;
     if (to?.closest?.('[data-ix-name]')) return;
     card = null;
   }
 </script>
 
-<pre class="code ix-code" bind:this={host} onmouseover={over} onmouseout={out}>{@html html}</pre>
+<!-- svelte-ignore a11y_mouse_events_have_key_events -->
+<!-- The keyboard path uses focusin/focusout, which bubble from the {@html}-injected
+     tokens; onfocus/onblur do not bubble, so they cannot model this delegated case. -->
+<pre
+  class="code ix-code"
+  bind:this={host}
+  onmouseover={enter}
+  onmouseout={leave}
+  onfocusin={enter}
+  onfocusout={leave}
+>{@html html}</pre>
 
 {#if card}
   <div class="ix-card" style="left:{card.x}px; top:{card.y}px">

@@ -908,6 +908,16 @@ let
     assert set(bound) == {"df", "n"}, bound
     assert bound["df"]["kind"] == "dataframe" and bound["n"]["summary"] == "7", bound
 
+    # The highlighter marks each identifier token with data-ix-name, the anchor the
+    # browser joins with bindings; attribute parts (head) are not names so the
+    # frontend never lights them up, but the token is still present in the markup.
+    from ix_notebook_mcp import dashboard
+
+    highlighted = dashboard._code_html("rows = df.head()\ntotal = n + 1\n")
+    assert 'data-ix-name="df"' in highlighted, highlighted
+    assert 'data-ix-name="rows"' in highlighted, highlighted
+    assert 'data-ix-name="total"' in highlighted, highlighted
+
     # End to end: a finished job snapshots its bindings into the store row.
     store_path = tempfile.mktemp(suffix=".db")
     os.environ["IX_MCP_STORE"] = store_path
