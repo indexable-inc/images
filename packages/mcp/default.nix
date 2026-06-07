@@ -930,12 +930,39 @@ let
     assert any("node_modules" in n for n in _names), _names
     assert not any("index.js" in n for n in _names), _names
 
+    # .gitignore-aware pruning (git is on PATH in this sandbox): a dir the repo
+    # ignores but that is NOT in the static denylist still collapses, and an
+    # ignored file drops entirely.
+    import shutil as _shutil
+    import subprocess as _sub
+
+    if _shutil.which("git"):
+        _g = _tf.mkdtemp()
+        _pl.Path(_g, "src").mkdir()
+        _gen = _pl.Path(_g, "generated")
+        _gen.mkdir()
+        (_gen / "big.py").write_text("x")
+        (_pl.Path(_g) / "debug.log").write_text("x")
+        (_pl.Path(_g) / ".gitignore").write_text("generated/" + chr(10) + "*.log" + chr(10))
+        _sub.run(["git", "init", "-q"], cwd=_g, check=True)
+        _gi = _view.tree(_g, depth=3)["name"].to_list()
+        assert any("generated" in n for n in _gi), _gi
+        assert not any("big.py" in n for n in _gi), _gi
+        assert not any("debug.log" in n for n in _gi), _gi
+        assert any("src" in n for n in _gi), _gi
+
     print("runtime-ok")
   '';
   runtimeSmoke =
     pkgs.runCommand "ix-mcp-runtime-smoke"
       {
-        nativeBuildInputs = [ mcpPython ];
+        # git is on PATH so the view.tree .gitignore-pruning assertion can init a
+        # throwaway repo; without it that path falls back to the denylist (still
+        # covered by the no-git case in the same test).
+        nativeBuildInputs = [
+          mcpPython
+          pkgs.git
+        ];
         strictDeps = true;
       }
       ''

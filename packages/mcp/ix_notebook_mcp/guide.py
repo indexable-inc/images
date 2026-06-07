@@ -112,9 +112,10 @@ HTML = (
 VIEW = (
     "Prefer these over shelling out, and never reach for a subprocess to do them: `view.ls(path)` "
     "/ `view.tree(path)` list a directory as a polars DataFrame you can `.filter` / `.sort` "
-    "(`view.tree` lists but does not descend into node_modules / target / build / dist and other "
-    "heavy dirs, so a project's structure is not buried under vendored files — pass `all=True` to "
-    "walk them) "
+    "(`view.tree` prunes noise — anything the repo's `.gitignore` ignores, plus a denylist of heavy "
+    "dirs like node_modules / target / dist — so a project's structure is not buried under vendored "
+    "or generated files; an ignored dir collapses to one row, an ignored file drops, and `all=True` "
+    "shows everything) "
     "(never `ls` — not via bash, `sh`, or `asyncio.create_subprocess_exec`, and never paste a raw "
     "`ls -la` dump at the human), `view.grep` / `view.find` search as DataFrames, "
     "`view.cat/read/head/json/diff` return a syntax-highlighted view, and `view.edit(path, old, "
