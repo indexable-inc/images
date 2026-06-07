@@ -3,12 +3,13 @@
 
   // Highlighted source with live-value affordances. The server marks every
   // identifier token with `data-ix-name` (dashboard.py); here we join those
-  // anchors with the run's `bindings` by name: a dimmed inlay chip after each
-  // name's first use, and one shared hover card with the value's type, detail,
-  // and (for things with source) its definition site. The code HTML is injected
-  // with {@html}, which Svelte does not scope or manage, so the chips and the
-  // `.ix-bound` underline are styled globally (style.css) and the hover is driven
-  // by event delegation on the host rather than per-node listeners.
+  // anchors with the run's `bindings` by name and underline the bound ones, then
+  // surface the value on demand through one shared hover card with the value's
+  // type, detail, and (for things with source) its definition site. The code HTML
+  // is injected with {@html}, which Svelte does not scope or manage, so the
+  // `.ix-bound` underline is styled globally (style.css) and the hover is driven
+  // by event delegation on the host rather than per-node listeners. Inlay chips
+  // are intentionally not rendered; `strip` still clears any stale ones.
   let { html, bindings = {} }: { html: string; bindings?: Record<string, Binding> } = $props();
 
   let host: HTMLElement;
@@ -22,7 +23,6 @@
 
   function decorate(): void {
     if (!host) return;
-    const seen = new Set<string>();
     for (const el of host.querySelectorAll<HTMLElement>('[data-ix-name]')) {
       const name = el.dataset.ixName;
       const b = name ? bindings[name] : undefined;
@@ -30,16 +30,7 @@
       el.classList.add('ix-bound');
       // Make the token keyboard-reachable so the card is not mouse-only.
       el.tabIndex = 0;
-      // The inlay sits after the first mention only; later uses stay clean but
-      // still light up on hover.
-      if (!seen.has(name)) {
-        seen.add(name);
-        const chip = document.createElement('span');
-        chip.className = 'ix-inlay';
-        chip.dataset.ixChip = '';
-        chip.textContent = b.summary;
-        el.after(chip);
-      }
+      // No inlay chip: the value shows only on hover/focus via the card below.
     }
   }
 
