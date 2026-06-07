@@ -48,12 +48,12 @@ __all__ = [
     "df_html",
 ]
 
-# Tokyo-night-ish palette, matching the dashboard's dark theme. Flat and still
-# (no gradients/animation): the "sexy" comes from typography, spacing, and a
-# small dtype-aware color set, not motion.
+# Grayscale palette matching the dashboard, in two themes. Flat and still (no
+# gradients/animation): the "sexy" comes from typography, spacing, and a small
+# dtype-aware color set, not motion. dtypes are distinguished by lightness, not
+# hue (numbers brightest, then strings, then bools, then null). The light values
+# mirror the dashboard's own light variables (packages/mcp/site/src/style.css).
 _PAL = {
-    # Grayscale to match the dashboard: dtypes are distinguished by lightness,
-    # not hue (numbers brightest, then strings, then bools, then null).
     "panel": "#141416",
     "alt": "#17171a",
     "border": "#242427",
@@ -64,8 +64,89 @@ _PAL = {
     "str": "#bcbcc2",
     "bool": "#9a9aa0",
     "null": "#55555b",
+    # Background behind the syntax-highlighted Code view (monokai's own).
+    "codebg": "#272822",
+}
+_PAL_LIGHT = {
+    "panel": "#ffffff",
+    "alt": "#f6f6f8",
+    "border": "#e4e4e8",
+    "head": "#d4d4da",
+    "text": "#1b1b1f",
+    "muted": "#80808a",
+    "num": "#1b1b1f",
+    "str": "#55555c",
+    "bool": "#80808a",
+    "null": "#a8a8b0",
+    "codebg": "#ffffff",
 }
 _MONO = "ui-monospace,SFMono-Regular,Menlo,monospace"
+
+# Scope class carrying the themeable CSS variables; a top-level output sets it on
+# its container so the prefers-color-scheme overrides in `_theme_style` apply.
+_THEME_CLASS = "ixv"
+# Pygments cssclass for the Code view's token spans (themed by `_code_css`).
+_CODE_CLASS = "ixv-hl"
+
+
+def _c(key: str) -> str:
+    """A CSS color reference for ``key``: the themeable ``--ixv-*`` variable with
+    the dark value as its fallback. So a fragment renders dark on its own (no
+    style block) and flips to light when a `_theme_style` block is present on an
+    ancestor (the top-level output emits one; nested fragments inherit it)."""
+    return f"var(--ixv-{key},{_PAL[key]})"
+
+
+def _theme_style() -> str:
+    """A ``<style>`` block flipping the ``--ixv-*`` palette to light under
+    ``prefers-color-scheme: light``, scoped to ``.ixv``. Emitted once per
+    top-level output; the dark values are the inline ``var(...)`` fallbacks, so
+    only the light overrides live here."""
+    light = ";".join(f"--ixv-{k}:{v}" for k, v in _PAL_LIGHT.items())
+    return (
+        f"<style>@media(prefers-color-scheme:light)"
+        f"{{.{_THEME_CLASS}{{{light}}}}}</style>"
+    )
+
+
+def _code_css() -> str:
+    """Embedded two-palette stylesheet for the Code view's highlighted tokens:
+    monokai for the dark theme (the default), an xcode-based palette under
+    ``prefers-color-scheme: light``, both scoped to ``.ixv-hl``. The light block
+    overrides *every* class the dark block colors: monokai paints punctuation
+    (the parens, commas, dots) near-white and the light style never restyles it,
+    so without the override it would vanish white-on-white. Chrome rules
+    (background, line numbers) are dropped so tokens sit on the container box."""
+    try:
+        from pygments.formatters import HtmlFormatter
+    except Exception:
+        return ""
+    sel = f".{_CODE_CLASS}"
+
+    def token_rules(style_name: str) -> dict[str, str]:
+        defs = HtmlFormatter(style=style_name, cssclass=_CODE_CLASS).get_style_defs(sel)
+        rules: dict[str, str] = {}
+        for line in defs.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith(f"{sel} ."):
+                continue
+            if stripped.startswith(f"{sel} .hll"):
+                continue
+            selector, _, rest = stripped.partition("{")
+            rules[selector.strip()] = rest.split("}", 1)[0].strip()
+        return rules
+
+    dark = token_rules("monokai")
+    light = token_rules("xcode")
+    reset = "color: inherit; font-weight: normal; font-style: normal"
+    dark_css = "".join(f"{sel_} {{ {decl} }}" for sel_, decl in dark.items())
+    light_css = "".join(
+        f"{sel_} {{ {light.get(sel_, reset)} }}" for sel_ in {**dark, **light}
+    )
+    return (
+        f"<style>{dark_css}@media (prefers-color-scheme: light) "
+        f"{{{light_css}}}</style>"
+    )
 
 
 def _nested_table(headers, rows, *, key_col=False) -> str:
@@ -82,7 +163,7 @@ def _nested_table(headers, rows, *, key_col=False) -> str:
             "<thead><tr>"
             + "".join(
                 f'<th style="text-align:left;padding:2px 8px;'
-                f'border-bottom:1px solid {_PAL["head"]};color:{_PAL["muted"]};'
+                f'border-bottom:1px solid {_c("head")};color:{_c("muted")};'
                 f'font-weight:600;white-space:nowrap">{_html.escape(str(h))}</th>'
                 for h in headers
             )
@@ -93,17 +174,17 @@ def _nested_table(headers, rows, *, key_col=False) -> str:
         tds = ""
         for j, cell in enumerate(r):
             mute = key_col and j == 0
-            color = f";color:{_PAL['muted']}" if mute else ""
+            color = f";color:{_c('muted')}" if mute else ""
             tds += (
                 f'<td style="padding:2px 8px;vertical-align:top;'
-                f'border-bottom:1px solid {_PAL["border"]};'
+                f'border-bottom:1px solid {_c("border")};'
                 f'font-variant-numeric:tabular-nums{color}">{cell}</td>'
             )
         body_rows += f"<tr>{tds}</tr>"
     return (
         f'<table style="border-collapse:collapse;margin:0;'
-        f'border:1px solid {_PAL["border"]};border-radius:4px;'
-        f'background:{_PAL["alt"]}">{head}<tbody>{body_rows}</tbody></table>'
+        f'border:1px solid {_c("border")};border-radius:4px;'
+        f'background:{_c("alt")}">{head}<tbody>{body_rows}</tbody></table>'
     )
 
 
@@ -114,7 +195,7 @@ def _fmt_nested(value, dtype) -> str | None:
     """Render a Struct/List/Array cell as a nested table; None if not nested."""
     if isinstance(dtype, pl.Struct):
         if value is None:
-            return f'<span style="color:{_PAL["null"]};font-style:italic">null</span>'
+            return f'<span style="color:{_c("null")};font-style:italic">null</span>'
         fields = {f.name: f.dtype for f in dtype.fields}
         rows = [
             [
@@ -126,7 +207,7 @@ def _fmt_nested(value, dtype) -> str | None:
         return _nested_table(None, rows, key_col=True)
     if isinstance(dtype, (pl.List, pl.Array)):
         if value is None:
-            return f'<span style="color:{_PAL["null"]};font-style:italic">null</span>'
+            return f'<span style="color:{_c("null")};font-style:italic">null</span>'
         inner = dtype.inner
         items = list(value)
         more = ""
@@ -134,7 +215,7 @@ def _fmt_nested(value, dtype) -> str | None:
             extra = len(items) - _MAX_NESTED_ROWS
             items = items[:_MAX_NESTED_ROWS]
             more = (
-                f'<div style="color:{_PAL["muted"]};padding:2px 8px;'
+                f'<div style="color:{_c("muted")};padding:2px 8px;'
                 f'font-size:10px">… {extra:,} more</div>'
             )
         if isinstance(inner, pl.Struct):
@@ -158,9 +239,9 @@ def _fmt_cell(value, dtype) -> tuple[str, str]:
     if nested is not None:
         return nested, "l"
     if value is None:
-        return f'<span style="color:{_PAL["null"]};font-style:italic">null</span>', "c"
+        return f'<span style="color:{_c("null")};font-style:italic">null</span>', "c"
     if dtype == pl.Boolean:
-        return f'<span style="color:{_PAL["bool"]}">{str(value).lower()}</span>', "c"
+        return f'<span style="color:{_c("bool")}">{str(value).lower()}</span>', "c"
     try:
         numeric = dtype.is_numeric()
     except Exception:
@@ -172,11 +253,11 @@ def _fmt_cell(value, dtype) -> tuple[str, str]:
             text = f"{value:,.4g}"
         else:
             text = str(value)
-        return f'<span style="color:{_PAL["num"]}">{_html.escape(text)}</span>', "r"
+        return f'<span style="color:{_c("num")}">{_html.escape(text)}</span>', "r"
     text = str(value)
     short = text if len(text) <= 60 else text[:57] + "…"
     return (
-        f'<span style="color:{_PAL["str"]}" title="{_html.escape(text)}">'
+        f'<span style="color:{_c("str")}" title="{_html.escape(text)}">'
         f"{_html.escape(short)}</span>",
         "l",
     )
@@ -193,8 +274,9 @@ def df_html(df: "pl.DataFrame", max_rows: int = 50) -> str:
         return _df_html_impl(df, max_rows)
     except Exception:
         return (
-            f'<pre style="font-family:{_MONO};font-size:12px;color:{_PAL["text"]};'
-            f'background:{_PAL["panel"]};padding:8px;margin:0">'
+            f'{_theme_style()}<pre class="{_THEME_CLASS}" '
+            f'style="font-family:{_MONO};font-size:12px;color:{_c("text")};'
+            f'background:{_c("panel")};padding:8px;margin:0">'
             f"{_html.escape(str(df))}</pre>"
         )
 
@@ -210,14 +292,14 @@ def _df_html_impl(df: "pl.DataFrame", max_rows: int) -> str:
     cols, dtypes, n = df.columns, df.dtypes, df.height
     head = "".join(
         f'<th style="text-align:left;padding:5px 14px;border-bottom:2px solid '
-        f'{_PAL["head"]};white-space:nowrap">'
-        f'<div style="color:{_PAL["text"]};font-weight:600">{_html.escape(c)}</div>'
-        f'<div style="color:{_PAL["muted"]};font-size:10px">{_html.escape(str(dt))}</div></th>'
+        f'{_c("head")};white-space:nowrap">'
+        f'<div style="color:{_c("text")};font-weight:600">{_html.escape(c)}</div>'
+        f'<div style="color:{_c("muted")};font-size:10px">{_html.escape(str(dt))}</div></th>'
         for c, dt in zip(cols, dtypes)
     )
     body = []
     for i, row in enumerate(df.head(max_rows).iter_rows()):
-        bg = _PAL["alt"] if i % 2 else _PAL["panel"]
+        bg = _c("alt") if i % 2 else _c("panel")
         cells = ""
         for value, dtype in zip(row, dtypes):
             cell, align = _fmt_cell(value, dtype)
@@ -225,21 +307,22 @@ def _df_html_impl(df: "pl.DataFrame", max_rows: int) -> str:
             cells += (
                 f'<td style="padding:3px 14px;text-align:{a};'
                 f'font-variant-numeric:tabular-nums;'
-                f'border-bottom:1px solid {_PAL["border"]}">{cell}</td>'
+                f'border-bottom:1px solid {_c("border")}">{cell}</td>'
             )
         body.append(f'<tr style="background:{bg}">{cells}</tr>')
     more = (
-        f'<div style="color:{_PAL["muted"]};padding:6px 14px;font-size:11px">'
+        f'<div style="color:{_c("muted")};padding:6px 14px;font-size:11px">'
         f"… {n - max_rows:,} more rows</div>"
         if n > max_rows
         else ""
     )
     return (
-        f'<div style="display:inline-block;background:{_PAL["panel"]};'
-        f'border:1px solid {_PAL["border"]};font-family:{_MONO};font-size:12px;'
-        f'color:{_PAL["text"]}">'
-        f'<div style="padding:6px 14px;color:{_PAL["muted"]};'
-        f'border-bottom:1px solid {_PAL["border"]};letter-spacing:.3px">'
+        f'{_theme_style()}<div class="{_THEME_CLASS}" '
+        f'style="display:inline-block;background:{_c("panel")};'
+        f'border:1px solid {_c("border")};font-family:{_MONO};font-size:12px;'
+        f'color:{_c("text")}">'
+        f'<div style="padding:6px 14px;color:{_c("muted")};'
+        f'border-bottom:1px solid {_c("border")};letter-spacing:.3px">'
         f"{n:,} rows × {len(cols)} cols</div>"
         f'<table style="border-collapse:collapse;margin:0"><thead><tr>{head}</tr>'
         f"</thead><tbody>{''.join(body)}</tbody></table>{more}</div>"
@@ -279,11 +362,12 @@ def _highlight(text: str, lang: str | None, start_line: int) -> str:
             lexer = guess_lexer(text)
         except Exception:
             lexer = TextLexer()
-    # noclasses inlines the style so no external CSS is needed; monokai matches
-    # the dashboard's dark theme.
+    # Class-based (not inline) tokens so the palette can flip with the OS theme;
+    # the two-palette stylesheet is emitted by `_code_css` onto the Code box.
     formatter = HtmlFormatter(
         style="monokai",
-        noclasses=True,
+        noclasses=False,
+        cssclass=_CODE_CLASS,
         linenos="inline",
         linenostart=start_line,
         nowrap=False,
@@ -315,13 +399,15 @@ class Code:
     def _repr_html_(self) -> str:
         body = _highlight(self.text, self.lang, self.start_line)
         cap = (
-            f'<div style="font-family:{_MONO};font-size:11px;color:{_PAL["muted"]};'
+            f'<div style="font-family:{_MONO};font-size:11px;color:{_c("muted")};'
             f'padding:4px 8px">{_html.escape(self.title)}</div>'
             if self.title
             else ""
         )
         return (
-            f'<div style="background:#272822;border:1px solid {_PAL["border"]};'
+            f"{_theme_style()}{_code_css()}"
+            f'<div class="{_THEME_CLASS}" style="background:{_c("codebg")};'
+            f'border:1px solid {_c("border")};'
             f'font-family:{_MONO};font-size:12px;overflow:auto">{cap}{body}</div>'
         )
 
