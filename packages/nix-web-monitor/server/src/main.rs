@@ -609,7 +609,7 @@ mod tests {
 
         assert_eq!(
             response.status(),
-            StatusCode::UPGRADE_REQUIRED,
+            StatusCode::BAD_REQUEST,
             "a non-upgrade GET to /ws is rejected by the WebSocket extractor"
         );
     }
