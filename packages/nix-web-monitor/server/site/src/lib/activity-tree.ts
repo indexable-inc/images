@@ -58,6 +58,10 @@ export type ActivityRowMeta = Readonly<{
   /// Copy/download progress, summed across the folded group, or `null` when the
   /// row reports nothing measurable. Lets the row show how much data is moving.
   progress: RowProgress | null;
+  /// Total bytes being copied to the store, summed across the folded group, or
+  /// `null` when nothing in the group was measured. Set for Nix's local source
+  /// copy, which it reports without `progress`, so the row can still show a size.
+  sizeBytes: number | null;
 }>;
 
 export type ActivityTree = Readonly<{
@@ -195,6 +199,21 @@ export function buildActivityTree(activities: ActivityNode[], builds: BuildNode[
     return expected > 0 ? { done, expected, unit: progressUnit(typeName) } : null;
   }
 
+  /// Sum the measured copy size across a folded group. `null` when no member was
+  /// measured, so a row that is not a "copying … to the store" activity (or one
+  /// whose measurement has not landed yet) shows no size badge.
+  function groupSize(group: number[]): number | null {
+    let total = 0;
+    let measured = false;
+    for (const member of group) {
+      const size = byId.get(member)?.sizeBytes;
+      if (size === null || size === undefined) continue;
+      total += size;
+      measured = true;
+    }
+    return measured ? total : null;
+  }
+
   const rowMeta = new Map<number, ActivityRowMeta>();
   for (const [rep, group] of members) {
     const desc = descriptor.get(rep);
@@ -211,7 +230,8 @@ export function buildActivityTree(activities: ActivityNode[], builds: BuildNode[
         count: 1,
         startedAtMs: activity.startedAtMs,
         stoppedAtMs: activity.stoppedAtMs,
-        progress: groupProgress(group, activity.activityType.name)
+        progress: groupProgress(group, activity.activityType.name),
+        sizeBytes: groupSize(group)
       });
       continue;
     }
@@ -235,7 +255,8 @@ export function buildActivityTree(activities: ActivityNode[], builds: BuildNode[
       count: group.length,
       startedAtMs,
       stoppedAtMs,
-      progress: groupProgress(group, activity.activityType.name)
+      progress: groupProgress(group, activity.activityType.name),
+      sizeBytes: groupSize(group)
     });
   }
 

@@ -107,6 +107,12 @@
         >
         <span class="pbar-text">{progressLabel(meta)}</span>
       </span>
+    {:else if meta.sizeBytes !== null}
+      <!-- Nix reports the local source copy with no byte progress, so show the
+           measured total instead of a bar. -->
+      <span class="activity-size" title="{formatBytes(meta.sizeBytes)} copied to the store"
+        >{formatBytes(meta.sizeBytes)}</span
+      >
     {/if}
     <span class="activity-dur">{formatDuration(elapsed(meta))}</span>
   </div>

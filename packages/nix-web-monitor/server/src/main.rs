@@ -15,7 +15,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use bytes::Bytes;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
-use nix_web_monitor_parser::{Delta, MonitorSnapshot, MonitorState, NixEvent, ParsedLine, strip_ansi};
+use ignore::WalkBuilder;
+use nix_web_monitor_parser::{
+    Delta, MonitorSnapshot, MonitorState, NixEvent, ParsedLine, copy_to_store_source, strip_ansi,
+};
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast, mpsc};
@@ -448,9 +451,73 @@ where
         if let Some(rendered) = render_for(terminal_output, &parsed) {
             eprintln!("{rendered}");
         }
+        // A "copying <path> to the store" activity is Nix's local source copy,
+        // which it reports as an unstructured activity with no byte progress.
+        // Measure the source off the parse path so the row can show its size.
+        if let ParsedLine::Event(NixEvent::Start(start)) = &parsed
+            && let Some(source) = copy_to_store_source(&start.text)
+        {
+            tokio::spawn(measure_copy_size(
+                start.id,
+                PathBuf::from(source),
+                Arc::clone(&monitor),
+                deltas.clone(),
+            ));
+        }
         broadcast_deltas(&monitor, &deltas).await?;
     }
     Ok(())
+}
+
+/// Measure the source path of a "copying … to the store" activity and attach the
+/// size to its row, so a copy Nix reports without byte progress still shows how
+/// large it is. The filesystem walk runs on a blocking thread and the row is
+/// re-broadcast once it lands. A measurement failure leaves the row unannotated
+/// rather than failing the build.
+async fn measure_copy_size(
+    activity_id: u64,
+    source: PathBuf,
+    monitor: Arc<RwLock<MonitorState>>,
+    deltas: broadcast::Sender<Bytes>,
+) -> Result<()> {
+    let size = match tokio::task::spawn_blocking(move || copied_size(&source)).await {
+        Ok(Ok(size)) => size,
+        Ok(Err(error)) => {
+            eprintln!("nix-web-monitor: measuring copy source failed: {error:#}");
+            return Ok(());
+        }
+        Err(error) => {
+            eprintln!("nix-web-monitor: copy-size measurement task panicked: {error}");
+            return Ok(());
+        }
+    };
+    monitor.write().await.set_activity_size(activity_id, size);
+    broadcast_deltas(&monitor, &deltas).await
+}
+
+/// Sum the apparent byte size of the files Nix would copy from `source` into the
+/// store: every regular file the gitignore rules do not exclude, which mirrors
+/// how a flake's source tree is assembled. `.git` is skipped because Nix never
+/// copies it. The figure is an approximate hint (apparent file sizes, not the
+/// NAR encoding), so a file that vanishes or is unreadable mid-walk contributes
+/// nothing rather than aborting the measurement.
+fn copied_size(source: &Path) -> Result<i64> {
+    let mut total: u64 = 0;
+    // `hidden(false)` keeps tracked dotfiles (`.github`, `.gitignore`); the
+    // gitignore filters stay on by default; `.git` itself is never copied.
+    let walker = WalkBuilder::new(source)
+        .hidden(false)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .build();
+    for entry in walker {
+        let entry = entry.context("walking copy source")?;
+        if entry.file_type().is_some_and(|file_type| file_type.is_file())
+            && let Ok(metadata) = entry.metadata()
+        {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    Ok(i64::try_from(total).unwrap_or(i64::MAX))
 }
 
 /// Drain the deltas accumulated by the latest mutation and broadcast each as an

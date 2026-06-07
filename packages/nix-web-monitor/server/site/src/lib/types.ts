@@ -40,7 +40,10 @@ export const activityNodeSchema = v.object({
   startedTick: v.number(),
   startedAtMs: v.number(),
   stoppedAtMs: v.nullable(v.number()),
-  build: v.nullable(v.string())
+  build: v.nullable(v.string()),
+  /// Total bytes the server measured for a "copying … to the store" activity,
+  /// which Nix reports without byte progress. `null` on every other activity.
+  sizeBytes: v.nullable(v.number())
 });
 
 export const buildNodeSchema = v.object({

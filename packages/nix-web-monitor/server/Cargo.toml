@@ -14,6 +14,7 @@ axum = { workspace = true, features = ["ws"] }
 build-version.workspace = true
 bytes.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
+ignore.workspace = true
 nix-web-monitor-parser.workspace = true
 rmp-serde.workspace = true
 serde_json.workspace = true

@@ -744,6 +744,14 @@ main.dragging-v .splitter-v::after {
   white-space: nowrap;
 }
 
+/* Measured size of a source copy Nix reports without byte progress. */
+.activity-size {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ---------- builds ---------- */
 
 .build-table {

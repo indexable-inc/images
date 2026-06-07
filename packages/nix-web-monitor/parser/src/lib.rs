@@ -328,6 +328,20 @@ impl MonitorState {
         }
     }
 
+    /// Attach a measured byte size to a "copying <path> to the store" activity
+    /// and re-broadcast the row. The server measures the source itself because
+    /// Nix reports that copy with no byte progress (see [`copy_to_store_source`]);
+    /// this is the only place `size_bytes` is set. A no-op if the activity has
+    /// already stopped and been dropped, so a slow measurement that lands late
+    /// is harmless.
+    pub fn set_activity_size(&mut self, id: u64, size_bytes: i64) {
+        let Some(activity) = self.activities.get_mut(&id) else {
+            return;
+        };
+        activity.size_bytes = Some(size_bytes);
+        self.emit_activity(id);
+    }
+
     /// Record the transitive input `.drv` closure of one derivation, learned
     /// from `nix-store --query --requisites`. The caller filters source paths
     /// and the derivation itself out before calling. Stored unfiltered by build
@@ -448,6 +462,7 @@ impl MonitorState {
                 started_at_ms: now_ms,
                 stopped_at_ms: None,
                 build: build.clone(),
+                size_bytes: None,
             },
         );
 
@@ -764,6 +779,30 @@ fn planned_derivation(text: &str) -> Option<&str> {
     (path.starts_with("/nix/store/") && path.ends_with(DRV_SUFFIX)).then_some(path)
 }
 
+/// Extract the source path from a Nix "copying <path> to the store" activity.
+///
+/// Nix emits this for the local source-tree copy as an unstructured `unknown`
+/// activity carrying no byte progress, so the server measures the path itself to
+/// show how large the copy is (see [`MonitorState::set_activity_size`]). Handles
+/// both quote styles Nix uses (`'…'` for a `git+file` flake, `"…"` for a `path:`
+/// flake) and trims a trailing slash so the returned path stats cleanly. Returns
+/// `None` for any other activity text.
+#[must_use]
+pub fn copy_to_store_source(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix("copying ")?;
+    let quote = rest.chars().next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    let body = &rest[quote.len_utf8()..];
+    let end = body.find(quote)?;
+    let path = &body[..end];
+    if body[end + quote.len_utf8()..].trim_start() != "to the store" {
+        return None;
+    }
+    Some(path.strip_suffix('/').unwrap_or(path))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitorSnapshot {
@@ -811,6 +850,13 @@ pub struct ActivityNode {
     pub started_at_ms: u64,
     pub stopped_at_ms: Option<u64>,
     pub build: Option<String>,
+    /// Total bytes the server measured for a "copying <path> to the store"
+    /// activity. Nix reports that local source copy as an unstructured `unknown`
+    /// activity with no byte progress (see [`copy_to_store_source`]), so without
+    /// this the operator cannot tell whether the copy moves a megabyte or a
+    /// hundred gigabytes. `None` on every other activity and until the
+    /// measurement lands.
+    pub size_bytes: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1662,6 +1708,55 @@ mod tests {
         assert!(
             state.drain_deltas().is_empty(),
             "a second drain with no intervening mutation is empty"
+        );
+    }
+
+    #[test]
+    fn copy_to_store_source_handles_both_quote_styles() {
+        // `git+file` flakes single-quote and append a trailing slash; `path:`
+        // flakes double-quote with no slash. Both must yield the bare path.
+        assert_eq!(
+            copy_to_store_source("copying '/home/me/proj/' to the store"),
+            Some("/home/me/proj")
+        );
+        assert_eq!(
+            copy_to_store_source(r#"copying "/tmp/proj" to the store"#),
+            Some("/tmp/proj")
+        );
+    }
+
+    #[test]
+    fn copy_to_store_source_rejects_other_text() {
+        assert_eq!(copy_to_store_source("building '/nix/store/x.drv'"), None);
+        assert_eq!(copy_to_store_source("copying '/tmp/x' to somewhere else"), None);
+        assert_eq!(copy_to_store_source("copying /tmp/x to the store"), None);
+    }
+
+    #[test]
+    fn set_activity_size_attaches_bytes_and_reupserts() {
+        let mut state = MonitorState::default();
+        state.apply_line(
+            r#"@nix {"action":"start","id":3,"level":4,"text":"copying \"/tmp/proj\" to the store","type":0}"#,
+        );
+        state.drain_deltas();
+
+        state.set_activity_size(3, 4_096);
+
+        assert_eq!(state.activities[&3].size_bytes, Some(4_096));
+        let upserted = state.drain_deltas().into_iter().find_map(|delta| match delta {
+            Delta::ActivityUpsert { activity } if activity.id == 3 => activity.size_bytes,
+            _ => None,
+        });
+        assert_eq!(upserted, Some(4_096), "the measured size rides an ActivityUpsert");
+    }
+
+    #[test]
+    fn set_activity_size_is_a_noop_for_a_missing_activity() {
+        let mut state = MonitorState::default();
+        state.set_activity_size(99, 1);
+        assert!(
+            state.drain_deltas().is_empty(),
+            "measuring a dropped activity broadcasts nothing"
         );
     }
 }

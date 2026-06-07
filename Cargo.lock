@@ -3832,6 +3832,7 @@ dependencies = [
  "build-version",
  "bytes",
  "clap",
+ "ignore",
  "nix-web-monitor-parser",
  "rmp-serde",
  "serde_json",
