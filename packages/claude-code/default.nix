@@ -106,6 +106,14 @@ let
     # settings key would, since flagSettings outranks user settings.json).
     # Re-enable 1M per machine: `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
     CLAUDE_CODE_DISABLE_1M_CONTEXT = 1;
+    # Self-driving autonomy off fleet-wide. Background tasks are a
+    # `run_in_background` *parameter* (no tool to disallow), so this env knob is
+    # the only lever; the cron family is also dropped via `--disallowedTools`
+    # below, with this as defense in depth. `--set-default`, so a machine opts
+    # back in with `export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=` /
+    # `export CLAUDE_CODE_DISABLE_CRON=`.
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = 1;
+    CLAUDE_CODE_DISABLE_CRON = 1;
   };
   envDefaultFlags = lib.concatLists (
     lib.mapAttrsToList (name: value: [
@@ -114,6 +122,22 @@ let
       (toString value)
     ]) wrapperEnvDefaults
   );
+
+  # Autonomy tools removed from every session: self-watching (Monitor),
+  # self-scheduling (ScheduleWakeup and the cron family), and the
+  # user-interrupting PushNotification. `--disallowedTools` drops them from the
+  # model's tool set regardless of permission mode; `permissions.deny` would not,
+  # since the default `bypassPermissions` posture skips the permission layer.
+  # Monitor and PushNotification are server-gated with no env knob, so this flag
+  # is their only off-switch.
+  disallowedAutonomyTools = [
+    "Monitor"
+    "ScheduleWakeup"
+    "PushNotification"
+    "CronCreate"
+    "CronDelete"
+    "CronList"
+  ];
 
   # Settings-key defaults that have no env knob, shipped as a JSON the wrapper
   # injects via `--settings`. The package wraps the binary, so it can carry env
@@ -367,6 +391,7 @@ stdenv.mkDerivation {
       --inherit-argv0 \
       --add-flags --debug \
       --add-flags "--thinking-display summarized" \
+      --add-flags "--disallowedTools ${lib.concatStringsSep "," disallowedAutonomyTools}" \
       --append-flags "--settings ${settingsDefaultsFile}" \
       ${lib.escapeShellArgs systemPromptWrapperArgs} \
       --set DISABLE_AUTOUPDATER 1 \
