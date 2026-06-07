@@ -80,6 +80,13 @@ mcp = FastMCP(
     ),
 )
 
+# Report the build's source revision as the MCP `serverInfo.version` so a client
+# can see exactly which commit of the server it is talking to. The nix wrapper
+# sets `IX_MCP_VERSION` to the flake rev (`<commit>` / `<commit>-dirty` / "dev");
+# FastMCP does not take a version, so stamp the low-level server directly. Absent
+# the env var (a bare `python -m ix_notebook_mcp`) it falls back to "dev".
+mcp._mcp_server.version = os.environ.get("IX_MCP_VERSION") or "dev"
+
 Content = list[outputs.Content]
 
 

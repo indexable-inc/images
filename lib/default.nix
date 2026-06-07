@@ -9,6 +9,9 @@
   symphony,
   clippy-fork,
   ghostty,
+  # Flake source revision, stamped into builds that want to report it (see
+  # `sharedHelpers.rev`). Defaulted so a direct `import ./lib` still evaluates.
+  rev ? "dev",
 }:
 let
   inherit (nixpkgs) lib;
@@ -337,6 +340,7 @@ let
   */
   sharedHelpers = {
     inherit
+      rev
       agentContext
       artifacts
       buildGradleFatJar

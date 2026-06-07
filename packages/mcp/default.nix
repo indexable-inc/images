@@ -455,6 +455,7 @@ let
         mkdir -p $out/bin
         makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
           --add-flags "-m ix_notebook_mcp" \
+          --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           --set IX_MCP_DASHBOARD_HTML ${lib.escapeShellArg dashboardHtml} \

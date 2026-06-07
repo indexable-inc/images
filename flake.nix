@@ -83,6 +83,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       rust-overlay,
       home-manager,
@@ -94,6 +95,12 @@
     }:
     let
       inherit (nixpkgs) lib;
+
+      # The flake's own source revision, threaded into `ix` so packages can
+      # stamp the running build (e.g. the MCP server reports it as its
+      # `serverInfo.version`). Clean tree -> the commit hash; dirty tree ->
+      # `<commit>-dirty`; neither (eval from a non-git source) -> "dev".
+      rev = self.rev or self.dirtyRev or "dev";
 
       # All path literals the flake exposes. Centralized so lib/ and
       # lib/per-system.nix have a single source of truth.
@@ -127,6 +134,7 @@
 
       ix = import ./lib {
         inherit
+          rev
           nixpkgs
           paths
           rust-overlay
