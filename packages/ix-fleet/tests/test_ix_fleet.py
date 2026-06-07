@@ -660,6 +660,27 @@ class SwitchSourceTests(unittest.TestCase):
         )
         self.assertEqual(cwds, [Path("/source")])
 
+    def test_source_switch_rejects_workdir_outside_source_root(self) -> None:
+        # `--workdir` is resolved relative to the uploaded source root, so an
+        # absolute workdir outside that root has no valid mapping and must fail
+        # loudly rather than forwarding a path `ix up` cannot interpret.
+        node = ix_fleet.FleetNode.model_validate(fleet_node("api"))
+
+        async def fail_run_cli(*args: typing.Any, **kwargs: typing.Any) -> str:
+            del args, kwargs
+            raise AssertionError("run_cli should not be reached")
+
+        with patch.object(ix_fleet, "run_cli", fail_run_cli):
+            with self.assertRaises(ValueError):
+                asyncio.run(
+                    ix_fleet.switch_node_from_source(
+                        node,
+                        Path("/source"),
+                        Path("/elsewhere/subdir"),
+                        dry_run=False,
+                    )
+                )
+
 
 def argparse_namespace(**kwargs: typing.Any) -> typing.Any:
     return type("Args", (), kwargs)()

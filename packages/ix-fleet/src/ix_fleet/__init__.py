@@ -665,7 +665,12 @@ async def switch_node_from_source(
         try:
             workdir = workdir.relative_to(source_root)
         except ValueError:
-            pass
+            # `ix up --workdir` is resolved relative to the uploaded source root,
+            # so an absolute workdir outside that root has no valid mapping.
+            # Reject it instead of forwarding a path `ix up` cannot interpret.
+            raise ValueError(
+                f"source workdir {source_workdir} is outside source root {source_root}"
+            ) from None
     command = [
         "ix",
         "up",
