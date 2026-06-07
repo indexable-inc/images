@@ -124,11 +124,11 @@ def _load_json(value: Any, fallback: Any) -> Any:
         return fallback
 
 
-def _rows(conn: sqlite3.Connection, query: str) -> list[sqlite3.Row]:
+def _rows(conn: sqlite3.Connection, query: str) -> list[sqlite3.Row] | None:
     try:
         return list(conn.execute(query).fetchall())
     except sqlite3.Error:
-        return []
+        return None
 
 
 def _job_from_row(row: sqlite3.Row) -> Json:
@@ -231,29 +231,38 @@ class StorePoller:
             return
         try:
             events: list[Json] = []
-            presentation_cell_ids: set[str] = set()
-            for row in _rows(
+            presentation_cell_ids: set[str] | None = None
+            execution_rows = _rows(
                 conn,
                 "SELECT id, name, code, status, started_at, ended_at, output, result, error, outputs, bindings "
                 "FROM executions ORDER BY started_at ASC",
-            ):
-                events.append(_execution_event(row))
-            for row in _rows(
+            )
+            if execution_rows is not None:
+                for row in execution_rows:
+                    events.append(_execution_event(row))
+
+            cell_rows = _rows(
                 conn,
                 "SELECT id, title, position, outputs, updated_at FROM cells ORDER BY position ASC",
-            ):
-                event = _presentation_cell_event(row)
-                presentation_cell_ids.add(event["id"])
-                events.append(event)
-            for row in _rows(
+            )
+            if cell_rows is not None:
+                presentation_cell_ids = set()
+                for row in cell_rows:
+                    event = _presentation_cell_event(row)
+                    presentation_cell_ids.add(event["id"])
+                    events.append(event)
+
+            resource_rows = _rows(
                 conn,
                 "SELECT id, title, kind, html, status, created_at, updated_at FROM resources ORDER BY created_at ASC",
-            ):
-                events.append(_resource_event(row))
+            )
+            if resource_rows is not None:
+                for row in resource_rows:
+                    events.append(_resource_event(row))
         finally:
             conn.close()
 
-        if self._presentation_cell_ids is not None:
+        if presentation_cell_ids is not None and self._presentation_cell_ids is not None:
             for removed_id in sorted(self._presentation_cell_ids - presentation_cell_ids):
                 events.append(
                     {
@@ -265,7 +274,8 @@ class StorePoller:
                         "cell": {"id": removed_id, "removed": True},
                     }
                 )
-        self._presentation_cell_ids = presentation_cell_ids
+        if presentation_cell_ids is not None:
+            self._presentation_cell_ids = presentation_cell_ids
 
         for event in events:
             key = f"{event['type']}:{event.get('cell_kind', '')}:{event['id']}"

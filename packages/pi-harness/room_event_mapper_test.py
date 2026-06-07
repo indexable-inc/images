@@ -144,6 +144,32 @@ class MapperTest(unittest.TestCase):
             self.assertTrue(removed["removed"])
             self.assertTrue(removed["cell"]["removed"])
 
+    def test_cell_query_failure_does_not_emit_removals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "mcp.sqlite"
+            conn = sqlite3.connect(store)
+            conn.executescript(SCHEMA)
+            conn.execute(
+                "INSERT INTO cells VALUES (?, ?, ?, ?, ?)",
+                ("cell-kept", "Kept", 0, json.dumps([]), 1.0),
+            )
+            conn.commit()
+            conn.close()
+
+            emitter = CaptureEmitter()
+            poller = mapper.StorePoller(store, 0.1, emitter)  # type: ignore[arg-type]
+            poller.poll_once()
+            self.assertEqual(emitter.events[-1]["cell"]["id"], "cell-kept")
+
+            conn = sqlite3.connect(store)
+            conn.execute("DROP TABLE cells")
+            conn.commit()
+            conn.close()
+
+            before = len(emitter.events)
+            poller.poll_once()
+            self.assertEqual(len(emitter.events), before)
+
     def test_spawned_command_gets_store_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = Path(tmp) / "mcp.sqlite"
