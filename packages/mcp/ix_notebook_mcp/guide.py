@@ -105,7 +105,8 @@ NO_SHELL = (
     "syntax-highlighted views) — so the human gets a styled table and you get a clean frame "
     "rather than an unstyled text dump. To list a directory use `view.ls`/`view.tree`, never "
     "`os.walk` or `ls`; to edit, `view.edit(path, old, new)`, never blind. For meaning-based "
-    "recall across a corpus, `import search`."
+    "recall across a corpus, `import search`. When you genuinely must shell out, `sh` requires a "
+    "`cwd=` (`cwd=\".\"` for here) — pass the directory there, never a `cd X && ...` prefix."
 )
 
 VERIFY = (

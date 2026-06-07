@@ -122,8 +122,8 @@ class Worktree:
         import sh as _sh
 
         if all:
-            await _sh(["git", "-C", str(self.path), "add", "-A"], check=True)
-        return await _sh(["git", "-C", str(self.path), "commit", "-m", message])
+            await _sh(["git", "-C", str(self.path), "add", "-A"], check=True, cwd=str(self.path))
+        return await _sh(["git", "-C", str(self.path), "commit", "-m", message], cwd=str(self.path))
 
     async def build(self, attr: str, *flags: str, add: bool = True, **kwargs):
         """``nix build`` this worktree's flake (bundled ``nix``, ``cwd`` threaded).
@@ -137,7 +137,7 @@ class Worktree:
         if add:
             import sh as _sh
 
-            await _sh(["git", "-C", str(self.path), "add", "-A"], check=True)
+            await _sh(["git", "-C", str(self.path), "add", "-A"], check=True, cwd=str(self.path))
         return await _nix.build(attr, *flags, cwd=str(self.path), **kwargs)
 
     async def remove(self, *, force: bool = False):
@@ -262,7 +262,7 @@ async def add(
         argv += ["-b", branch, str(dest)]
         if base is not None:
             argv.append(base)
-    await _sh(argv, check=True)
+    await _sh(argv, check=True, cwd=str(top))
     head = _run(dest, "rev-parse", "HEAD").stdout.strip()
     return Worktree(path=dest.resolve(), branch=branch, head=head, repo=top)
 
@@ -285,7 +285,7 @@ async def remove(
     if force:
         argv.append("--force")
     argv.append(str(target))
-    return await _sh(argv)
+    return await _sh(argv, cwd=str(top))
 
 
 async def prune(repo: str | os.PathLike = "."):
@@ -296,4 +296,4 @@ async def prune(repo: str | os.PathLike = "."):
     import sh as _sh
 
     top = _toplevel(repo)
-    return await _sh(["git", "-C", str(top), "worktree", "prune", "-v"])
+    return await _sh(["git", "-C", str(top), "worktree", "prune", "-v"], cwd=str(top))

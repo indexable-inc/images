@@ -6,7 +6,7 @@ invocation with no Python binding), do it without blocking the one shared event
 loop and without leaking terminal escape codes into your own context.
 
     import sh
-    out = await sh("gh run list --limit 5")
+    out = await sh("gh run list --limit 5", cwd=".")
     out                       # last expr: dashboard shows the COLORED terminal
                               # block, you get the escape-stripped plain text
 
@@ -211,7 +211,7 @@ def _terminate(proc: asyncio.subprocess.Process) -> None:
 async def sh(
     cmd: str | list[str],
     *,
-    cwd: str | os.PathLike | None = None,
+    cwd: str | os.PathLike,
     env: dict[str, str] | None = None,
     timeout: float | None = None,
     check: bool = False,
@@ -221,7 +221,9 @@ async def sh(
 
     ``cmd`` is a string (run through the shell, so pipes and globs work) or an
     argv list (executed directly, no shell parsing). stdout and stderr are merged
-    in order. ``cwd`` and ``env`` extend the current directory and environment;
+    in order. ``cwd`` is REQUIRED -- pass the directory to run in (``cwd="."`` for
+    here) instead of a `cd X && ...` prefix, which is rejected, so the command
+    string stays clean. ``env`` extends the environment;
     ``timeout`` (seconds) kills the child's whole process group and raises
     :class:`TimeoutError`; ``check=True`` raises :class:`ShellError` on a non-zero
     exit; ``color=False`` suppresses the forced-color environment.
@@ -230,6 +232,11 @@ async def sh(
     backgrounds, say) waits for that pipe to close. The await yields to the loop,
     so it never blocks other jobs; pass ``timeout`` to bound such a command.
     """
+    if isinstance(cmd, str) and re.match(r"\s*cd\b", cmd):
+        raise ValueError(
+            "sh() takes no `cd ...` prefix: pass the working directory as cwd= and keep "
+            "the command itself clean, e.g. await sh('ix trace <id>', cwd='/path/to/repo')."
+        )
     full_env = dict(os.environ)
     if color:
         full_env.update(_COLOR_ENV)
