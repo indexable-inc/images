@@ -113,29 +113,45 @@ def _highlight_css() -> str:
     light``. Both are scoped to ``.ix-code`` so they only touch injected source
     spans, and the chrome rules (background, line numbers, highlight line) are
     dropped so tokens inherit the dashboard's own ``--inset`` box. Empty when
-    pygments is unavailable."""
+    pygments is unavailable.
+
+    The light block must override *every* class the dark block colors. monokai
+    paints punctuation (``.p`` -- the parens, commas, dots) and several generic
+    tokens near-white; the light style (xcode) never restyles those, so without
+    an explicit override the dark white leaks into light mode and the punctuation
+    is invisible white-on-white. For any class the light style omits we reset to
+    the dashboard's own text color so it always reads."""
     try:
         from pygments.formatters import HtmlFormatter
     except Exception:
         return ""
 
-    def token_rules(style_name: str) -> str:
+    def token_rules(style_name: str) -> dict[str, str]:
+        """Map each token selector (``.ix-code .<cls>``) to its declaration body,
+        keeping only per-token rules (not the background/line-number/highlight
+        chrome the formatter adds)."""
         defs = HtmlFormatter(style=style_name).get_style_defs(".ix-code")
-        rules: list[str] = []
+        rules: dict[str, str] = {}
         for line in defs.splitlines():
             stripped = line.strip()
-            # Keep only per-token color rules (".ix-code .<cls> { ... }"), not the
-            # background, line-number, or highlight-line chrome the formatter adds.
             if not stripped.startswith(".ix-code ."):
                 continue
             if stripped.startswith(".ix-code .hll"):
                 continue
-            rules.append(stripped)
-        return "\n".join(rules)
+            selector, _, rest = stripped.partition("{")
+            rules[selector.strip()] = rest.split("}", 1)[0].strip()
+        return rules
 
     dark = token_rules("monokai")
     light = token_rules("xcode")
-    return f"{dark}\n@media (prefers-color-scheme: light) {{\n{light}\n}}\n"
+    # Reset (not just recolor) any class the light palette omits, clearing the
+    # dark weight/style too so nothing bleeds through.
+    reset = "color: inherit; font-weight: normal; font-style: normal"
+    dark_css = "\n".join(f"{sel} {{ {decl} }}" for sel, decl in dark.items())
+    light_css = "\n".join(
+        f"{sel} {{ {light.get(sel, reset)} }}" for sel in {**dark, **light}
+    )
+    return f"{dark_css}\n@media (prefers-color-scheme: light) {{\n{light_css}\n}}\n"
 
 
 def _with_highlight_css(page: str) -> str:
