@@ -54,7 +54,9 @@
     pkgs.pkg-config
     pkgs.python3
     pkgs.ripgrep
-    pkgs.symphony-room-server
+    # TODO: re-add pkgs.symphony-room-server (room-server lives in ix monorepo;
+    # ix<->index flake cycle blocks sourcing it). Ports/portClaims below kept
+    # so re-adding is just this line.
     pkgs.unzip
     pkgs.which
     pkgs.zstd

@@ -232,8 +232,7 @@
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay",
-        "symphony": "symphony"
+        "rust-overlay": "rust-overlay"
       }
     },
     "rust-overlay": {
@@ -253,27 +252,6 @@
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "type": "github"
-      }
-    },
-    "symphony": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1780772522,
-        "narHash": "sha256-hGwQqPLYF/ksn1PU68iPVKd8YY4+uiSpMaISba2NoM8=",
-        "owner": "indexable-inc",
-        "repo": "symphony",
-        "rev": "e645d0d8db5c78341ce9ce931a83cd0a379e7a0b",
-        "type": "github"
-      },
-      "original": {
-        "owner": "indexable-inc",
-        "ref": "main",
-        "repo": "symphony",
         "type": "github"
       }
     },

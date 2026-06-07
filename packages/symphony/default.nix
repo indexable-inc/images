@@ -7,9 +7,10 @@
 # did from the standalone flake's `packages.default`.
 #
 # The room stack symphony drives over HTTP (room-server and the room UI)
-# lives in the ix monorepo. The `room-server` binary baked into
-# `images/dev/symphony-codex` still resolves from the pinned `symphony`
-# flake input (see flake.nix); only the runtime moved here.
+# lives in the ix monorepo. TODO: re-add the `room-server` binary to
+# `images/dev/symphony-codex`; the pinned `symphony` flake input that provided
+# it was removed (the ix<->index flake cycle blocks sourcing it from ix). Only
+# the runtime moved here.
 {
   lib,
   pkgs,

@@ -1,7 +1,6 @@
 {
   lib,
   packageRegistry,
-  symphony,
   buildIxRustTool,
   clippy-fork,
   writePythonApplication,
@@ -43,7 +42,10 @@ lib.genAttrs' (packageRegistry.overlayEntriesFor packageSystem) (
   entry: lib.nameValuePair entry.overlay.attrName (buildOverlayPackage entry)
 )
 // {
-  symphony-room-server = symphony.packages."${packageSystem}".room-server;
+  # TODO: re-add symphony-room-server. The room-server binary lives in the ix
+  # monorepo (`ix#packages.x86_64-linux.room-server`); the ix<->index flake
+  # cycle blocks sourcing it from there, so the old `symphony` input pin was
+  # removed. images/dev/symphony-codex consumes this when re-added.
 
   # Default Temurin JRE for repo-owned package sets. The major lives in
   # `lib/languages/jvm-defaults.nix`, shared with `ix.languages.{java,scala}`

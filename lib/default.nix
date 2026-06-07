@@ -6,7 +6,6 @@
   rust-overlay,
   home-manager,
   hermes-agent,
-  symphony,
   clippy-fork,
   ghostty,
   # Flake source revision, stamped into builds that want to report it (see
@@ -51,7 +50,6 @@ let
     inherit
       lib
       packageRegistry
-      symphony
       buildIxRustTool
       clippy-fork
       writePythonApplication

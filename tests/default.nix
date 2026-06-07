@@ -2960,10 +2960,9 @@ let
     ];
 
     symphony-codex = [
-      {
-        assertion = builtins.elem pkgs.symphony-room-server symphonyCodex.packages;
-        message = "symphony-codex image should include the room-server binary it starts";
-      }
+      # TODO: re-add the room-server-presence assertion once
+      # pkgs.symphony-room-server is restored (the `symphony` flake input pin was
+      # removed; referencing the missing attr would fail eval).
       {
         assertion = builtins.elem pkgs.codex symphonyCodex.packages;
         message = "symphony-codex image should include codex for diagnostic shell sessions";

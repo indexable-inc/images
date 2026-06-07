@@ -30,7 +30,7 @@ The launcher requires an authenticated `codex` on PATH and refuses to start with
 ## Neighbors
 
 - The room stack symphony drives over HTTP (`room-server` and the room UI) lives in the ix monorepo (`crates/room`, `packages/room`).
-- `location: ixvm` placements provision VMs from the [`symphony-codex`](../../images/dev/symphony-codex/) image, which carries `room-server` on PATH.
+- `location: ixvm` placements provision VMs from the [`symphony-codex`](../../images/dev/symphony-codex/) image. TODO: that image temporarily does **not** carry `room-server` on PATH (the `symphony` flake input pin was removed; room-server lives in the ix monorepo and the ix<->index flake cycle blocks sourcing it from ix).
 - Deployment goes through the [`symphony` NixOS module](../../modules/services/symphony/) (`services.symphony.*`), with secrets supplied via `environmentFile` or `secretsCommand`.
 
 ## Developing

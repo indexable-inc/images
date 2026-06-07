@@ -57,15 +57,13 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Provides only `room-server` for images/dev/symphony-codex (through
-    # `pkgs.symphony-room-server` in lib/overlay.nix). The Elixir runtime
-    # itself lives in packages/symphony now; room-server's source moved to
-    # the ix monorepo, so this pin stays on the last symphony rev that still
-    # builds it and retires once the image's room-server seam moves too.
-    symphony = {
-      url = "github:indexable-inc/symphony/main";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # TODO: re-add the `symphony` flake input that provided
+    # `pkgs.symphony-room-server` for images/dev/symphony-codex. room-server's
+    # real home is the ix monorepo (`crates/room`,
+    # `ix#packages.x86_64-linux.room-server`), but ix already inputs index
+    # (`ix/flake.nix`), so index cannot source it from ix without a circular
+    # flake dependency. Pin removed for now; re-add once that cycle is resolved
+    # or the symphony-codex image moves into ix.
 
     # Ghostty's terminal VT engine, consumed as a source tree (not a flake) so
     # `packages/vt/libghostty-vt` owns the build. Pinned to the commit the
@@ -87,7 +85,6 @@
       rust-overlay,
       home-manager,
       hermes-agent,
-      symphony,
       clippy-fork,
       ghostty,
       ...
@@ -148,7 +145,6 @@
           rust-overlay
           home-manager
           hermes-agent
-          symphony
           clippy-fork
           ghostty
           ;
