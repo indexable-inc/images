@@ -38,6 +38,7 @@ import os
 import sys
 import time
 import traceback
+import types
 import uuid
 
 _ix_current: contextvars.ContextVar = contextvars.ContextVar("ix_current_job", default=None)
@@ -74,13 +75,27 @@ _MAX_TEXT_BUNDLE = 400_000
 _MAX_IMAGE_BUNDLE = 4_000_000
 
 _RESULT_REQUIRED = (
-    "python_exec: every cell must END with a Result(...). This cell's last "
-    "expression was not a Result, so nothing was returned. Wrap your final value:\n"
+    "python_exec: a cell must declare its result. Either END with a Result(...), "
+    "or `yield Result(...)` one or more times to stream results as you go. This "
+    "cell's last expression was not a Result and it did not yield, so nothing was "
+    "returned. Wrap your final value (or yield each result):\n"
     "  Result.text('done')                       # same text to human and model\n"
     "  Result.ok('what happened')                # a quiet confirmation for a side effect\n"
     "  Result.of(value)                          # render any value richly for the human\n"
     "  Result(user_html='<b>hi</b>', llm_result='hi', llm_images=[fig])\n"
-    "Curate the human's view of the most important results with cells.add(value)."
+    "  yield Result.ok('step 1'); ...; yield Result.of(df)   # stream as you go\n"
+    "Print is not a channel: stdout is not returned to the model and is hidden in "
+    "the dashboard by default, so surface anything worth seeing as a Result."
+)
+
+_YIELD_REQUIRED = (
+    "python_exec: this cell uses `yield` but yielded no Result(...). Yield at "
+    "least one Result(...) so the run declares what the human and model receive."
+)
+
+_YIELD_NOT_RESULT = (
+    "python_exec: a yielded value was not a Result(...). Every top-level `yield` "
+    "in a cell must yield a Result (Result.text/ok/of or Result(user_html=...))."
 )
 
 # Opened lazily in install(); None when no store path is configured (the
@@ -565,18 +580,90 @@ class Cells:
 cells = Cells()
 
 
-def _compile(code: str, filename: str):
-    """Compile statements with top-level ``await`` allowed, capturing the value
-    of a trailing expression into ``__ix_result`` (REPL-style), so a job has a
-    result like a notebook cell does."""
+# AST node types that open their own scope: a `yield` (or a name binding) inside
+# one of these belongs to that inner scope, not the cell's top level.
+_NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def _has_toplevel_yield(nodes) -> bool:
+    """True if a ``yield``/``yield from`` appears at the cell's own top level
+    (not inside a nested def, lambda, or class). Such a cell is run as a
+    generator: each ``yield Result(...)`` streams a result to both the human and
+    the model, instead of the cell ending with a single trailing Result."""
+    for node in nodes:
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            return True
+        if isinstance(node, _NESTED_SCOPES):
+            continue  # its own scope: a yield in there is that scope's, not ours
+        if _has_toplevel_yield(ast.iter_child_nodes(node)):
+            return True
+    return False
+
+
+def _compile(code: str, filename: str) -> tuple[str, "types.CodeType"]:
+    """Compile a cell, returning ``(mode, code_obj)``.
+
+    ``mode == "gen"`` for a cell that yields at top level (run as an async
+    generator; see :func:`_compile_generator`). Otherwise ``mode == "expr"``: the
+    classic path that allows top-level ``await`` and captures a trailing
+    expression into ``__ix_result`` (REPL-style) so the cell has a result like a
+    notebook cell does."""
     tree = ast.parse(code, filename, "exec")
+    if _has_toplevel_yield(tree.body):
+        return ("gen", _compile_generator(code, filename))
     if tree.body and isinstance(tree.body[-1], ast.Expr):
         last = tree.body[-1]
         assign = ast.Assign(targets=[ast.Name(id="__ix_result", ctx=ast.Store())], value=last.value)
         ast.copy_location(assign, last)
         tree.body[-1] = assign
         ast.fix_missing_locations(tree)
-    return compile(tree, filename, "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    return ("expr", compile(tree, filename, "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT))
+
+
+def _compile_generator(code: str, filename: str) -> "types.CodeType":
+    """Compile a yielding cell as ``async def __ix_cell__()`` whose top-level
+    names stay in the shared namespace.
+
+    Wrapping the body in an async function makes top-level ``yield`` and ``await``
+    legal; declaring every name the body binds ``global`` keeps assignments
+    persistent across calls, exactly like a normal module-level cell. The set of
+    bound names is read from Python's own scope analysis (the compiled function's
+    locals and cellvars), so it is precisely the names that would otherwise be
+    function-locals, without re-deriving Python's scoping rules by hand. The user
+    statements keep their original line numbers (only an enclosing def is added),
+    so tracebacks still point at the cell's real lines."""
+    user = ast.parse(code, filename, "exec")
+    shell = ast.parse("async def __ix_cell__():\n    pass\n", filename, "exec")
+    func = shell.body[0]
+    func.body = user.body  # the cell's own statements, original line numbers intact
+    ast.fix_missing_locations(shell)
+    probe = compile(shell, filename, "exec")
+    cell_code = next(
+        c for c in probe.co_consts if isinstance(c, types.CodeType) and c.co_name == "__ix_cell__"
+    )
+    # co_varnames + co_cellvars are the names this function binds; making them
+    # global is what turns "function locals" back into "notebook globals". Names
+    # like ".0" (comprehension internals) live in their own code objects, never
+    # here, but filter the dotted ones defensively.
+    names = [n for n in (cell_code.co_varnames + cell_code.co_cellvars) if not n.startswith(".")]
+    if names:
+        func.body.insert(0, ast.parse("global " + ", ".join(names)).body[0])
+        ast.fix_missing_locations(shell)
+    return compile(shell, filename, "exec")
+
+
+def _display_result(result: "Result") -> None:
+    """Show one yielded Result to both audiences. The IPython display goes onto
+    the running job's captured outputs (the dashboard) and out on iopub (the
+    model's tool result), the same path the trailing Result takes \u2014 so a
+    yielding cell needs no separate plumbing."""
+    from IPython.display import display
+
+    try:
+        display(result)
+    except Exception:
+        # Rich display is best-effort; a formatter failure must not abort the run.
+        pass
 
 
 async def _runner(job: Job, ns: dict) -> None:
@@ -590,23 +677,51 @@ async def _runner(job: Job, ns: dict) -> None:
     try:
         # Compile inside the runner so a SyntaxError is recorded as a job error
         # (status + traceback in the store/dashboard) instead of escaping __ix_run.
-        code_obj = _compile(job.code, f"<job {job.id}>")
+        mode, code_obj = _compile(job.code, f"<job {job.id}>")
         ns.pop("__ix_result", None)
-        maybe = eval(code_obj, ns)
-        if inspect.iscoroutine(maybe):
-            await maybe
-        job.result = ns.pop("__ix_result", None)
-        if isinstance(job.result, Result):
-            job.status = "done"
-        else:
-            # Enforce the Result contract: every cell must END with a Result so a
-            # run always declares what the human sees and what the model gets.
-            # A bare value (or a side-effecting cell that returns None) is a
-            # failed run with an instructive message rather than a silent pass.
-            job.status = "error"
-            job.error = _RESULT_REQUIRED
-            job._append(job.error)
+        if mode == "gen":
+            # A yielding cell streams results: drain the async generator and
+            # display each yielded Result so it reaches the human (the job's
+            # captured outputs) and the model (iopub) as it is produced. The
+            # yields ARE the results, so there is no trailing-Result requirement.
+            exec(code_obj, ns)
+            agen = ns.pop("__ix_cell__")()
+            emitted = 0
+            async for item in agen:
+                if not isinstance(item, Result):
+                    job.status = "error"
+                    job.error = _YIELD_NOT_RESULT
+                    job._append(job.error)
+                    break
+                _display_result(item)
+                emitted += 1
+            else:
+                # Loop ran to completion (no non-Result break).
+                if emitted == 0:
+                    job.status = "error"
+                    job.error = _YIELD_REQUIRED
+                    job._append(job.error)
+                else:
+                    job.status = "done"
+            # The results were displayed as they streamed; there is no single
+            # trailing value to return.
             job.result = None
+        else:
+            maybe = eval(code_obj, ns)
+            if inspect.iscoroutine(maybe):
+                await maybe
+            job.result = ns.pop("__ix_result", None)
+            if isinstance(job.result, Result):
+                job.status = "done"
+            else:
+                # Enforce the Result contract: a non-yielding cell must END with a
+                # Result so a run always declares what the human sees and what the
+                # model gets. A bare value (or a side-effecting cell that returns
+                # None) is a failed run with an instructive message, not a silent pass.
+                job.status = "error"
+                job.error = _RESULT_REQUIRED
+                job._append(job.error)
+                job.result = None
     except asyncio.CancelledError:
         job.status = "cancelled"
         raise

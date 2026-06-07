@@ -15,10 +15,11 @@
   const hasRich = $derived(job.outputs.length > 0);
   // Don't repeat the error if it's already in the captured stdout tail.
   const showError = $derived(!!job.error && !(job.output ?? '').includes(job.error));
-  // A run reads as its output by default: the source is one click away, not in
-  // the way. Only runs that actually carry source get a reveal toggle.
-  const hasCode = $derived(!!(job.code_html || job.code));
-  let showCode = $state(false);
+  // A run reads as its results by default: the source and the captured stdout are
+  // one click away, not in the way (stdout is not the channel — a run reports
+  // through Results). Only runs that carry source or stdout get a reveal toggle.
+  const hasDetails = $derived(!!(job.code_html || job.code || job.output));
+  let showDetails = $state(false);
 </script>
 
 <article class="job {job.status}">
@@ -27,27 +28,26 @@
   <button
     class="hdr"
     type="button"
-    aria-expanded={showCode}
-    disabled={!hasCode}
-    title={hasCode ? (showCode ? 'Hide source' : 'Show source') : undefined}
-    onclick={() => (showCode = !showCode)}
+    aria-expanded={showDetails}
+    disabled={!hasDetails}
+    title={hasDetails ? (showDetails ? 'Hide source & output' : 'Show source & output') : undefined}
+    onclick={() => (showDetails = !showDetails)}
   >
-    {#if hasCode}<span class="caret" aria-hidden="true">{showCode ? '▾' : '▸'}</span>{/if}
+    {#if hasDetails}<span class="caret" aria-hidden="true">{showDetails ? '▾' : '▸'}</span>{/if}
     <StatusChip status={job.status} />
     {#if title}<span class="name">{title}</span>{/if}
     <span class="dur">{elapsed}</span>
   </button>
 
-  {#if showCode}
+  {#if showDetails}
     {#if job.code_html}
       <CodeView html={job.code_html} bindings={job.bindings} />
     {:else if job.code}
       <pre class="code">{job.code}</pre>
     {/if}
-  {/if}
-
-  {#if job.output}
-    <pre class="out">{job.output}</pre>
+    {#if job.output}
+      <pre class="out">{job.output}</pre>
+    {/if}
   {/if}
 
   {#if hasRich}

@@ -99,9 +99,14 @@ mcp = FastMCP(
         "listing. `fff.map(pattern)` groups hits into a foldable code map with "
         "definitions ranked first, for \u201cwhere is X defined and used?\u201d. "
         "For meaning-based recall across a corpus, `import search`. "
-        "EVERY cell MUST END with a `Result(...)`; the kernel rejects a cell whose "
-        "last expression is not one (a bare value or a side-effect that returns "
-        "nothing fails with a reminder). A Result splits the human view from your "
+        "Return results through `Result`, never `print`: a cell's stdout is NOT "
+        "sent to you and is hidden in the dashboard by default (it is kept only "
+        "for paging via jobs['<id>'].output), so surface anything worth seeing as "
+        "a Result. A cell must either END with a `Result(...)` or `yield "
+        "Result(...)` one or more times \u2014 each yielded Result streams to both "
+        "the human and you the moment it is produced, so prefer yielding as you go "
+        "to report progress and partial results. The kernel rejects a cell that "
+        "neither ends with nor yields a Result. A Result splits the human view from your "
         "view: the dashboard renders `user_html` for the human while your tool "
         "result gets `llm_result` text plus any `llm_images`, so a big rendered "
         "view never costs you tokens and you can hand yourself back images. Use the "
@@ -156,8 +161,12 @@ Content = list[outputs.Content]
         "shared event loop: a blocking call (`subprocess.run`, `time.sleep`, a heavy "
         "CPU op) freezes EVERY job and your own next cell, so it MUST be wrapped in "
         "`await asyncio.to_thread(...)` (or use an async API) and backgrounded if slow. "
-        "EVERY cell MUST END "
-        "with a `Result(...)` or the run is rejected: `Result.text('done')` (same text "
+        "Results go back through `Result`, never `print`: stdout is NOT returned to you "
+        "and is hidden in the dashboard by default (kept only for paging via "
+        "jobs['<id>'].output). A cell must END with a `Result(...)` OR `yield Result(...)` "
+        "one or more times (each yielded Result streams to both the human and you as it "
+        "is produced \u2014 prefer yielding to report progress); a cell that does neither is "
+        "rejected. `Result.text('done')` (same text "
         "to human and model), `Result.ok('what happened')` (a side-effect confirmation), "
         "`Result.of(value)` (render a DataFrame/figure/value richly for the human, its "
         "repr to you), or `Result(user_html=..., llm_result=..., llm_images=[fig])` to "
@@ -183,13 +192,15 @@ async def python_exec(
         json.dumps({"job": summary.get("id"), "status": summary.get("status"), "running": summary.get("running")})
     )
     parts: Content = [header]
-    # The job's captured stdout/stderr and (on failure) its traceback live in the
-    # summary, not in the kernel display stream, so surface them to the caller.
-    captured = summary.get("output")
-    if captured:
-        parts.append(outputs.text(captured))
-    # Rich result blocks (images / HTML / the result repr) come from the kernel
-    # display; drop the "(no output)" placeholder to_mcp emits when there were none.
+    # Print is not a channel back to the model: a job's stdout is captured for the
+    # dashboard (collapsed) and for paging via jobs['<id>'].output, but it is not
+    # returned here \u2014 results come from Result/yield. A failing run is the
+    # exception: its traceback IS the result, so surface that.
+    if summary.get("status") == "error" and summary.get("error"):
+        parts.append(outputs.text(summary["error"]))
+    # Rich result blocks (images / HTML / the result repr, including every yielded
+    # Result) come from the kernel display; drop the "(no output)" placeholder
+    # to_mcp emits when there were none.
     parts.extend(item for item in rendered if getattr(item, "text", None) != "(no output)")
     # When the reply was clipped to fit, the full run still lives in the kernel as
     # jobs['<id>']. Point the caller at it (with the ops to page it) so a large
@@ -198,7 +209,7 @@ async def python_exec(
     job_id = summary.get("id")
     output_chars = summary.get("output_chars") or 0
     result_chars = summary.get("result_chars") or 0
-    clipped = output_chars > len(captured or "") or result_chars > outputs.MAX_TEXT_CHARS
+    clipped = result_chars > outputs.MAX_TEXT_CHARS
     if clipped and job_id:
         parts.append(
             outputs.text(

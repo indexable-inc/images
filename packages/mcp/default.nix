@@ -1069,6 +1069,100 @@ let
     asyncio.run(main())
     print("rich-ok")
   '';
+  # Proves the yielding-cell contract end to end: a cell that `yield Result(...)`
+  # streams every yielded Result to the store (the dashboard) and to the model
+  # (to_mcp), keeps its top-level names in the namespace like a normal cell, and a
+  # non-Result yield fails the run. A plain (non-yielding) cell is unchanged. In
+  # process (a shell, the store), no kernel boot or network, so the sandbox runs it.
+  yieldTestPy = pkgs.writeText "ix-mcp-yield-test.py" ''
+    import asyncio
+    import json
+    import os
+    import sqlite3
+    import tempfile
+
+    from IPython.core.interactiveshell import InteractiveShell
+
+    InteractiveShell.instance()
+
+    store_path = tempfile.mktemp(suffix=".db")
+    os.environ["IX_MCP_STORE"] = store_path
+
+    from ix_notebook_mcp import outputs, runtime
+
+    ns = {}
+    runtime.install(ns)
+    run = ns["__ix_run"]
+
+
+    async def main():
+        conn = sqlite3.connect(store_path)
+        conn.row_factory = sqlite3.Row
+
+        # A yielding cell streams multiple Results; its top-level names persist.
+        code = (
+            "acc = 0\n"
+            "for i in range(3):\n"
+            "    acc += i\n"
+            "    yield Result.ok(f'step {i}')\n"
+            "yield Result.of(acc)"
+        )
+        job = await run(code, budget=3.0, name="yield")
+        await job.task
+        assert job.status == "done", (job.status, job.error)
+        assert ns["acc"] == 3, ns.get("acc")
+        outs = json.loads(
+            conn.execute("SELECT outputs FROM executions WHERE id = ?", (job.id,)).fetchone()[0]
+        )
+        htmls = [o["data"].get("text/html") for o in outs if "text/html" in o["data"]]
+        assert len(htmls) == 4, ("expected 4 yielded results", len(htmls), outs)
+
+        # Each yielded Result reaches the model: to_mcp over the stored bundles
+        # hands back the llm text for every one.
+        mcp = outputs.to_mcp(
+            [{"output_type": "display_data", "data": o["data"], "metadata": {}} for o in outs]
+        )
+        texts = [c.text for c in mcp if getattr(c, "text", None) is not None]
+        assert "step 0" in texts and "3" in texts, texts
+
+        # A non-Result yield fails the run with the contract message.
+        bad = await run("yield 123", budget=3.0, name="bad")
+        await bad.task
+        assert bad.status == "error", bad.status
+        assert "was not a Result" in (bad.error or ""), bad.error
+
+        # A normal (non-yielding) cell is unchanged: it must still end with a Result.
+        plain = await run("Result.ok('plain')", budget=3.0, name="plain")
+        await plain.task
+        assert plain.status == "done", (plain.status, plain.error)
+
+
+    asyncio.run(main())
+    print("yield-ok")
+  '';
+
+  yieldSmoke =
+    pkgs.runCommand "ix-mcp-yield-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${yieldTestPy} >stdout 2>stderr || {
+          echo "ix-mcp yield smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'yield-ok' stdout || {
+          echo "ix-mcp yield smoke did not confirm yielded results:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   richSmoke =
     pkgs.runCommand "ix-mcp-rich-smoke"
       {
@@ -1806,6 +1900,7 @@ package.overrideAttrs (old: {
         runtimeSmoke
         wedgeSmoke
         richSmoke
+        yieldSmoke
         bindingsSmoke
         bindDefaultSmoke
         viewSmoke
