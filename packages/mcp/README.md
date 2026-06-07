@@ -1,6 +1,6 @@
 # ix-mcp
 
-A single-tool Python execution MCP server. One tool, `python_exec`, runs code on
+A Python execution MCP server. Its one general tool, `python_exec`, runs code on
 **one shared, persistent IPython kernel**. The namespace persists across calls,
 many executions run **concurrently** on the kernel's event loop, and work that
 outlives a short foreground budget keeps running in the background. An
@@ -20,7 +20,7 @@ read-only (it renders the execution log); access is gated by reachability: the
 default bind is loopback, and the fleet only exposes it over Tailscale (see
 [Remote access](#remote-access)).
 
-## The one tool
+## The main tool
 
 `python_exec(code, budget=15, name=None)` runs `code` on the shared kernel and
 waits up to `budget` seconds. If the code finishes in time you get its output and
@@ -76,11 +76,11 @@ read-only dashboard, and the MCP transport, all on one event loop.
 - `store.py` is the append-only execution log (one SQLite file in WAL mode).
 - `dashboard.py` serves a one-page live view of that log.
 - `outputs.py` renders kernel messages for the agent (text, images).
-- `tools.py` is the MCP surface: `python_exec`, plus `search_semantic`/
-  `search_grep` over the shared `index` corpus and `calendar_events`/
-  `calendar_event_create`/`calendar_event_cancel` (thin bindings over the bundled
-  [`gcal`](../google/calendar/README.md) binary). All of these are also reachable
-  from `python_exec` by importing the bundled modules.
+- `tools.py` is the MCP surface: the general `python_exec`, plus `read` (pull a
+  file or kernel value into the model's context while the dashboard stays quiet)
+  and `kernel_trace` (an out-of-band stack dump for a wedged kernel). Everything
+  else an agent needs is reachable from `python_exec` by importing the bundled
+  modules.
 
 ## Pinned interpreter and bundled modules
 

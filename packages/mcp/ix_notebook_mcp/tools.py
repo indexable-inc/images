@@ -1,16 +1,23 @@
 """The MCP tool surface.
 
-Two tools only. ``python_exec`` runs code on the single shared kernel with a
-foreground budget and, if the work outlives the budget, leaves it running in the
-background as an entry in the in-kernel ``jobs`` dict. Job control needs no extra
-tools because ``jobs`` is just namespace state: inspect/await/cancel it with more
-``python_exec`` (``jobs['ab12'].cancel()``). Everything else an agent might want
-(search the index, read the calendar, shell out) is reachable the same way, by
-importing the bundled module inside a cell, so it does not earn a dedicated tool.
+``python_exec`` is the one general tool: it runs code on the single shared kernel
+with a foreground budget and, if the work outlives the budget, leaves it running
+in the background as an entry in the in-kernel ``jobs`` dict. Job control needs no
+extra tools because ``jobs`` is just namespace state: inspect/await/cancel it with
+more ``python_exec`` (``jobs['ab12'].cancel()``). Everything else an agent might
+want (search the index, read the calendar, shell out) is reachable the same way,
+by importing the bundled module inside a cell, so it does not earn a dedicated
+tool.
 
-``kernel_trace`` is the one exception: it dumps the kernel's stack out of band
-(a faulthandler signal, not the execute channel) so it works even when a cell has
-wedged the event loop, which is exactly when ``python_exec`` cannot help.
+Two tools earn their place beside it because they do something ``python_exec``
+cannot. ``read`` pulls a file or a kernel value into the MODEL's context without
+spamming the human: the full text comes back to the agent while the dashboard
+shows only a one-line note. A plain cell cannot make that split for free — its
+result streams to both audiences — so reading a large file or paging a job's
+output through ``python_exec`` either floods the dashboard or costs the human a
+wall of text they did not ask for. ``kernel_trace`` dumps the kernel's stack out
+of band (a faulthandler signal, not the execute channel) so it works even when a
+cell has wedged the event loop, which is exactly when ``python_exec`` cannot help.
 """
 
 from __future__ import annotations
@@ -84,7 +91,7 @@ _INSTRUCTIONS = (
         "`Result.of(df)`) and the human gets the styled HTML table for free "
         "while you get the frame as compact, untruncated CSV \u2014 so you never "
         "hand-build a table and a wide/long-stringed frame is never clipped to "
-        "you. Use `pl`; pandas is not bundled. "
+        "you. Use `pl`; pandas is not bundled. Even key/value data \u2014 environment variables, a config dict, counts \u2014 is tabular: return a two-column DataFrame, never a `\\n`-joined string or a printed dict. "
         "To find files or code, use `fff` with polars \u2014 never shell out to "
         "`rg`/`grep`/`fd`/`find`/`ls`/`mgrep`, and never write a one-off search "
         "helper. `fff.find(query)` (typo-tolerant, frecency-ranked file find) "
@@ -97,6 +104,11 @@ _INSTRUCTIONS = (
         "listing. `fff.map(pattern)` groups hits into a foldable code map with "
         "definitions ranked first, for \u201cwhere is X defined and used?\u201d. "
         "For meaning-based recall across a corpus, `import search`. "
+        "When you want to pull a file or a big kernel value into YOUR context, "
+        "reach for the `read` tool rather than `cat`/`view.cat` or printing it "
+        "through a cell: `read` hands the full text back to you while the "
+        "dashboard shows only a one-line note, so a large read never floods the "
+        "human's view. "
         "Return results through `Result`, never `print`: a cell's stdout is NOT "
         "sent to you and is hidden in the dashboard by default (it is kept only "
         "for paging via jobs['<id>'].output), so surface anything worth seeing as "
@@ -121,13 +133,17 @@ _INSTRUCTIONS = (
         "expression. "
         "Three dashboard panes show the session live: every running/finished run "
         "under executions, every live view (a terminal, a widget) under resources, "
-        "and your curated highlight reel under cells. Answer THROUGH cells by "
+        "and your curated highlight reel under cells; its address is the "
+        "`DASHBOARD_URL` value in the namespace (read the variable \u2014 there "
+        "is no `dashboard()` function to call). Answer THROUGH cells by "
         "default: the cells pane is what the human reads as the answer, so put "
         "any result worth seeing there with `cells.add(value, title=...)` (a "
         "DataFrame, a figure, a `view`/`fff` render, an htpy element) rather than "
         "leaving it only in your tool text. Treat cells as the FINAL "
         "PRESENTATION of the CURRENT state, not an append-only log: add the most "
-        "important results with `cells.add(value, title=...)`, and prune stale "
+        "important results with `cells.add(value, id=..., title=...)` (a stable "
+        "`id=` makes a re-run replace that cell in place instead of stacking a "
+        "duplicate), and prune stale "
         "ones as the state moves on \u2014 `cells.set(key, value)` to replace in "
         "place, `cells.remove(key)` to drop one, `cells.clear()` to start over \u2014 "
         "so the page always reflects where things stand now."
@@ -183,7 +199,8 @@ Content = list[outputs.Content]
         "`Result.of(value)` (render a DataFrame/figure/value richly for the human, its "
         "repr to you), or `Result(user_html=..., llm_result=..., llm_images=[fig])` to "
         "split the human's rich HTML view from your text+images. Curate the dashboard's "
-        "presentation pane with `cells.add(value, title=...)` — it is the final view of "
+        "presentation pane with `cells.add(value, id=..., title=...)` — a stable id= "
+        "replaces a cell in place instead of duplicating it, and it is the final view of "
         "the current state, so prune stale cells (`cells.set`/`.remove`/`.clear`) rather "
         "than letting it grow into a log. "
         "Write readable, idiomatic Python: the dashboard shows your source verbatim, so "
@@ -234,6 +251,42 @@ async def python_exec(
             )
         )
     return parts
+
+
+@mcp.tool(
+    description=(
+        "Read a file (or a kernel value) into YOUR context WITHOUT spamming the "
+        "human's dashboard: the full text comes back to you, while the dashboard "
+        "shows only a one-line note (path, line span, size). Use this instead of "
+        "`cat`/`view.cat` or printing a big value through python_exec whenever the "
+        "content is for you to read, not for the human to look at \u2014 a normal "
+        "cell's result streams to BOTH audiences, so it would flood the dashboard. "
+        "`target` is read as a file when it names an existing file, otherwise it is "
+        "evaluated as a Python expression in the kernel namespace (e.g. "
+        "`jobs['ab12'].output` to page a job, or a variable you bound earlier). "
+        "Pass `start`/`end` for a 1-based inclusive line range."
+    )
+)
+async def read(
+    target: Annotated[
+        str,
+        Field(
+            description=(
+                "A file path, or a Python expression evaluated in the kernel "
+                "(e.g. jobs['ab12'].output, or a variable you bound earlier)"
+            )
+        ),
+    ],
+    start: Annotated[int | None, Field(description="1-based first line to include")] = None,
+    end: Annotated[int | None, Field(description="Last line to include (inclusive)")] = None,
+) -> Content:
+    code = f"await __ix_read({target!r}, {start!r}, {end!r})"
+    cell_outputs, summary = await current_kernel().python_exec(code, budget=30.0)
+    if summary is not None and summary.get("status") == "error" and summary.get("error"):
+        return [outputs.text(summary["error"])]
+    rendered = outputs.to_mcp(cell_outputs)
+    content = [item for item in rendered if getattr(item, "text", None) != "(no output)"]
+    return content or rendered
 
 
 @mcp.tool(

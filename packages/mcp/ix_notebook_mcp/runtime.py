@@ -35,6 +35,7 @@ import dataclasses
 import inspect
 import json
 import os
+import pathlib
 import sys
 import time
 import traceback
@@ -1281,6 +1282,50 @@ async def __ix_exec(code: str, budget: float = 15.0, name: str | None = None) ->
     _emit(job)
 
 
+async def __ix_read(target, start=None, end=None) -> "Result":
+    """Read a file (or evaluate a kernel value) FOR THE MODEL, quietly.
+
+    Returns a Result whose ``llm_result`` is the full text the model receives and
+    whose ``user_html`` is a one-line note the human sees, so a large read informs
+    the model without flooding the dashboard. ``target`` is read as a file when it
+    names an existing file, otherwise evaluated as a Python expression in the user
+    namespace (e.g. ``jobs['ab12'].output``, a variable you bound). ``start`` and
+    ``end`` select a 1-based inclusive line range. Backs the ``read`` MCP tool.
+    """
+    ns = _user_ns if _user_ns is not None else globals()
+    path = None
+    if isinstance(target, str):
+        try:
+            candidate = pathlib.Path(target).expanduser()
+            path = candidate if candidate.is_file() else None
+        except OSError:
+            path = None
+    if path is not None:
+        # Off the loop: a large file read is blocking I/O, the one thing that
+        # freezes every other job on the shared event loop.
+        full = await asyncio.to_thread(path.read_text, errors="replace")
+        label = str(path)
+    else:
+        value = eval(target, ns) if isinstance(target, str) else target
+        full = value if isinstance(value, str) else _safe_repr(value)
+        label = target if isinstance(target, str) else _safe_repr(target)
+    lines = full.splitlines()
+    total = len(lines)
+    if start is not None or end is not None:
+        lo = max((start or 1) - 1, 0)
+        hi = total if end is None else min(end, total)
+        selected = lines[lo:hi]
+        body = "\n".join(selected)
+        span = f"lines {lo + 1}-{lo + len(selected)} of {total}"
+    else:
+        body = full
+        span = f"{total} lines"
+    note = f"read {label} \u00b7 {span}, {len(body)} chars"
+    user = f'<div class="ix-ok">\U0001F4D6 {_escape_html(note)}</div>'
+    return Result(user_html=user, llm_result=body)
+
+
+
 def _install_display_capture(shell) -> None:
     """Route display() / rich auto-display made *inside a job* to that job's output
     list (still forwarding to IOPub for the agent's reply), so the dashboard can
@@ -1431,6 +1476,7 @@ def install(user_ns: dict | None = None) -> None:
     target["register_resource"] = register_resource
     target["__ix_run"] = __ix_run
     target["__ix_exec"] = __ix_exec
+    target["__ix_read"] = __ix_read
     target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")
     # `sh` is a bundled, callable module (see packages/mcp/src/sh). Bind it here
     # so `await sh(cmd)` works with no import, the way Result/cells/jobs do; an
