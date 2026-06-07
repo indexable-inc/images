@@ -708,6 +708,18 @@ let
         assert a.status == "done" and b.status == "done", (a.status, b.status)
         assert "A 0" in a.output and "B 0" in b.output, (a.output, b.output)
         assert a.result.llm_result == "A done" and b.result.llm_result == "B done", (a.result, b.result)
+        # paging ops over a finished job keep a large output recoverable
+        assert "A 0" in a.head(10000) and a.slice(0, 1) == a.output[0]
+        assert a.lines(0, 1).startswith("0: ")
+        g = a.grep("A 1")
+        assert "A 1" in g and g.split(":", 1)[0].strip().isdigit(), g
+        assert "no lines match" in a.grep("nonesuch-xyz-pattern")
+        # full sizes the server uses to detect a truncated reply
+        s = runtime._job_summary(a)
+        assert s["output_chars"] == len(a.output) and s["result_chars"] == len("A done"), s
+        # history() indexes the runs and returns a Result naming both jobs
+        h = ns["history"]()
+        assert isinstance(h, runtime.Result) and a.id in h.llm_result and b.id in h.llm_result
 
     asyncio.run(main())
     print("runtime-ok")

@@ -15,7 +15,10 @@ from typing import Any
 import nbformat
 from mcp import types as mcp_types
 
-_MAX_TEXT_CHARS = 50_000
+# Max chars of a single text block shown to the model per reply. The full output
+# is never lost: it stays in the kernel as ``jobs['<id>']`` (see tools.python_exec),
+# which pages it with tail/head/slice/grep/lines.
+MAX_TEXT_CHARS = 50_000
 _MAX_IMAGES = 8
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -87,8 +90,8 @@ def to_mcp(outputs: list[dict]) -> list[Content]:
 
 def text(value: Any) -> mcp_types.TextContent:
     rendered = _ANSI.sub("", value if isinstance(value, str) else "".join(value))
-    if len(rendered) > _MAX_TEXT_CHARS:
-        rendered = f"{rendered[:_MAX_TEXT_CHARS]}\n... [truncated {len(rendered) - _MAX_TEXT_CHARS} chars]"
+    if len(rendered) > MAX_TEXT_CHARS:
+        rendered = f"{rendered[:MAX_TEXT_CHARS]}\n... [truncated {len(rendered) - MAX_TEXT_CHARS} chars; full run kept as jobs['<id>'] — see the pager note below]"
     return mcp_types.TextContent(type="text", text=rendered)
 
 

@@ -153,7 +153,69 @@ class Job:
         return "".join(self._buf)
 
     def tail(self, n: int = 2000) -> str:
+        """Last ``n`` chars of this job's captured output."""
         return self.output[-n:]
+
+    def head(self, n: int = 2000) -> str:
+        """First ``n`` chars of this job's captured output."""
+        return self.output[:n]
+
+    def slice(self, start: int = 0, end: int | None = None) -> str:
+        """A character window ``output[start:end]``, for paging a large output a
+        chunk at a time after `grep`/`lines` locates the region."""
+        return self.output[start:end]
+
+    def lines(self, start: int = 0, end: int | None = None) -> str:
+        """Output lines ``[start:end]`` (0-based, ``end`` exclusive), numbered to
+        match `grep`'s line numbers so you can jump straight to a region."""
+        numbered = self.output.splitlines()
+        return "\n".join(f"{i}: {numbered[i]}" for i in range(*slice(start, end).indices(len(numbered))))
+
+    def grep(
+        self,
+        pattern: str,
+        ctx: int = 0,
+        *,
+        ignore_case: bool = True,
+        max_matches: int = 200,
+        max_chars: int = 20_000,
+    ) -> str:
+        """Lines of the captured output matching ``pattern`` (a regex), each with
+        ``ctx`` lines of surrounding context and its line number. Capped at
+        ``max_matches`` matches and ``max_chars`` total so the return is small
+        enough to read in one reply; once you spot the region, widen with
+        ``lines``/``slice``. Use this to find the needle in a truncated run
+        instead of re-running the work."""
+        import re as _re
+
+        rx = _re.compile(pattern, _re.IGNORECASE if ignore_case else 0)
+        src = self.output.splitlines()
+        keep: list[int] = []
+        seen: set[int] = set()
+        matches = 0
+        for index, line in enumerate(src):
+            if rx.search(line):
+                matches += 1
+                if matches > max_matches:
+                    break
+                for j in range(max(0, index - ctx), min(len(src), index + ctx + 1)):
+                    if j not in seen:
+                        seen.add(j)
+                        keep.append(j)
+        keep.sort()
+        rendered: list[str] = []
+        prev: int | None = None
+        for j in keep:
+            if prev is not None and j > prev + 1:
+                rendered.append("--")
+            rendered.append(f"{j}: {src[j]}")
+            prev = j
+        body = "\n".join(rendered)
+        if len(body) > max_chars:
+            body = body[:max_chars] + f"\n... [grep output clipped to {max_chars} chars; use slice()]"
+        if matches > max_matches:
+            body += f"\n... [stopped at {max_matches} matches; narrow the pattern]"
+        return body or f"(no lines match {pattern!r} in {len(src)} lines)"
 
     def running(self) -> bool:
         return self.status == "running"
@@ -870,20 +932,66 @@ async def __ix_run(code: str, budget: float = 15.0, name: str | None = None) -> 
     return job
 
 
+# How many chars of a job's output/result the per-call summary carries inline.
+# The full output stays in the kernel as ``jobs[id]`` (paged via tail/head/slice/
+# grep/lines); the summary also reports the full sizes so the server can tell the
+# caller when a reply was truncated and point at the job to page.
+_SUMMARY_CHARS = 50_000
+
+
+def _result_text(job: Job) -> str:
+    """The job result's model-facing text (a Result's ``llm_result``, else its
+    repr), used only to measure how much the inline summary leaves out."""
+    if job.result is None:
+        return ""
+    return getattr(job.result, "llm_result", None) or _safe_repr(job.result)
+
+
+def _job_summary(job: Job) -> dict:
+    """The structured per-call summary the MCP server parses. ``output_chars`` and
+    ``result_chars`` are the *full* sizes (the inline ``output`` is only a tail),
+    so the server can detect a truncated reply and tell the caller to page
+    ``jobs['<id>']``."""
+    return {
+        "id": job.id,
+        "name": job.name,
+        "status": job.status,
+        "running": job.running(),
+        "output": job.tail(_SUMMARY_CHARS),
+        "output_chars": len(job.output),
+        "result": None if job.result is None else _safe_repr(job.result),
+        "result_chars": len(_result_text(job)),
+        "error": job.error,
+    }
+
+
+def history(n: int = 20) -> "Result":
+    """A compact, newest-last listing of the most recent runs in this kernel, so
+    you can see what is available to drill into without remembering ids. Each row
+    is a ``jobs['<id>']`` you can page: ``.tail()/.head()/.slice()/.lines()/
+    .grep()`` for its output, ``.output`` for the full stdout, ``.result`` for the
+    value. The full runs persist in the kernel; this is just the index over them."""
+    items = list(jobs.values())[-n:]
+    header = f"{'id':<10}{'name':<18}{'status':<10}{'dur':>8}{'out':>9}{'result':>9}"
+    rows = [header]
+    for job in items:
+        dur = (job.ended or time.time()) - job.started
+        name = "" if job.name == job.id else job.name
+        rows.append(
+            f"{job.id:<10}{name[:17]:<18}{job.status:<10}{dur:>7.1f}s"
+            f"{len(job.output):>9}{len(_result_text(job)):>9}"
+        )
+    body = "\n".join(rows) if items else "(no runs yet)"
+    html = f'<pre class="ix-result">{_escape_html(body)}</pre>'
+    return Result.text(body, html=html)
+
+
 def _emit(job: Job) -> None:
     """Publish a structured summary the MCP server parses, plus the result's rich
     repr (image/HTML/table) as normal display output the server already renders."""
     from IPython.display import display, publish_display_data
 
-    summary = {
-        "id": job.id,
-        "name": job.name,
-        "status": job.status,
-        "running": job.running(),
-        "output": job.tail(50_000),
-        "result": None if job.result is None else _safe_repr(job.result),
-        "error": job.error,
-    }
+    summary = _job_summary(job)
     publish_display_data({JOB_MIME: summary, "text/plain": f"[{job.id}] {job.status}"})
     # On success job.result is always a Result (the runner enforces it); display
     # it so the server can unpack the model view and the dashboard the human one.
@@ -979,6 +1087,7 @@ def install(user_ns: dict | None = None) -> None:
 
     target = user_ns if user_ns is not None else globals()
     target["jobs"] = jobs
+    target["history"] = history
     target["Job"] = Job
     target["Result"] = Result
     target["cells"] = cells

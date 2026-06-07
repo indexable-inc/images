@@ -77,7 +77,11 @@ Content = list[outputs.Content]
         "Run Python on the shared persistent kernel. Waits up to `budget` seconds; "
         "if the code is still running it keeps going in the background as jobs['<id>'] "
         "and this returns a job handle. Inspect/await/cancel background jobs with more "
-        "python_exec against the `jobs` dict. The namespace persists across calls, so "
+        "python_exec against the `jobs` dict. Every run is kept there, so a reply that "
+        "gets truncated is never lost: page the full run with jobs['<id>'].grep('pat') / "
+        ".tail(n) / .head(n) / .slice(a, b) / .lines(a, b), or read jobs['<id>'].output "
+        "(stdout) and jobs['<id>'].result (the value); history() lists recent runs. "
+        "The namespace persists across calls, so "
         "functions and classes you define are reusable next turn. The kernel is one "
         "shared event loop: a blocking call (`subprocess.run`, `time.sleep`, a heavy "
         "CPU op) freezes EVERY job and your own next cell, so it MUST be wrapped in "
@@ -112,6 +116,25 @@ async def python_exec(
     # Rich result blocks (images / HTML / the result repr) come from the kernel
     # display; drop the "(no output)" placeholder to_mcp emits when there were none.
     parts.extend(item for item in rendered if getattr(item, "text", None) != "(no output)")
+    # When the reply was clipped to fit, the full run still lives in the kernel as
+    # jobs['<id>']. Point the caller at it (with the ops to page it) so a large
+    # result is recoverable without re-running the work \u2014 the failure mode this
+    # whole jobs registry exists to avoid.
+    job_id = summary.get("id")
+    output_chars = summary.get("output_chars") or 0
+    result_chars = summary.get("result_chars") or 0
+    clipped = output_chars > len(captured or "") or result_chars > outputs.MAX_TEXT_CHARS
+    if clipped and job_id:
+        parts.append(
+            outputs.text(
+                f"[Reply truncated to fit. The full run stays in this kernel as "
+                f"jobs['{job_id}'] (stdout {output_chars} chars, result {result_chars} chars). "
+                f"Page it in a new python_exec cell instead of re-running: "
+                f"Result.text(jobs['{job_id}'].grep('pattern')) | .tail(8000) | .head(8000) | "
+                f".slice(50000, 70000) | .lines(0, 200). jobs['{job_id}'].output is the full "
+                f"stdout, jobs['{job_id}'].result the value; history() lists recent runs.]"
+            )
+        )
     return parts
 
 
