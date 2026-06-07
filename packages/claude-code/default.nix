@@ -124,15 +124,17 @@ let
   );
 
   # Autonomy tools removed from every session: self-watching (Monitor),
-  # self-scheduling (ScheduleWakeup and the cron family), and the
-  # user-interrupting PushNotification. `--disallowedTools` drops them from the
-  # model's tool set regardless of permission mode; `permissions.deny` would not,
-  # since the default `bypassPermissions` posture skips the permission layer.
-  # Monitor and PushNotification are server-gated with no env knob, so this flag
-  # is their only off-switch.
+  # self-scheduling (ScheduleWakeup, the cron family, and RemoteTrigger, which
+  # creates/runs claude.ai routines server-side), and the user-interrupting
+  # PushNotification. `--disallowedTools` drops them from the model's tool set
+  # regardless of permission mode; `permissions.deny` would not, since the
+  # default `bypassPermissions` posture skips the permission layer. Monitor,
+  # PushNotification, and RemoteTrigger are server-gated with no env knob, so
+  # this flag is their only off-switch.
   disallowedAutonomyTools = [
     "Monitor"
     "ScheduleWakeup"
+    "RemoteTrigger"
     "PushNotification"
     "CronCreate"
     "CronDelete"
