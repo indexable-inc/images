@@ -1,34 +1,24 @@
 ---
 name: writing-style
 disclosure: always
-description: "How to write prose in docs, comments, issues, and PRs."
+description: "How to write prose (docs, comments, issues, PRs) and replies to the user."
 ---
 
 ## Writing style
 
-These rules apply to prose in docs, READMEs, comments, issues, and PR
-descriptions.
+Covers prose (docs, READMEs, comments, issues, PRs) and replies to the user in
+chat and reviews.
 
-Start with the reader's task. A README opens with a short plain-language summary
-directly under the title, then moves into task-specific headings. Keep paragraphs
-short. Remove completeness theater.
+Lead with the answer or the reader's task: no preamble, filler, or "I'll happily
+help" opener. Keep it short and cut completeness theater. Use concrete nouns and
+measured detail: a number, path, or failure message beats an adjective. Name
+real limits and failure modes.
 
-Write in concrete nouns. Link the first mention of repo-owned tools, packages,
-commands, directories, and important upstream projects in each section. Match
-upstream capitalization: `nixpkgs`, `systemd`, `ix`, `pnpm`.
+Never use em dashes or double-hyphen substitutes; split the sentence or use a
+colon. Avoid `X, not Y` slogans and manufactured three-part cadence; state the
+thing directly.
 
-Use measured details where they matter. A number, command, file path, upstream
-issue, or failure message earns more trust than a smooth adjective. Prefer "the
-first build takes about 40 minutes" over "slow at first".
-
-Name limits and failure modes. A short "bad fit if" or "known limitations"
-paragraph often helps more than another claim of strength. Say what breaks, how
-to notice it, and which workaround hurts.
-
-Avoid slogan shapes that contrast a good phrase with a bad one, such as
-`X, not Y` or `X, don't Y`. State the desired thing directly. Avoid em dashes;
-split the sentence or use a colon.
-
-Avoid balanced three-part cadence when it feels manufactured. Vary the rhythm:
-two beats, four beats, a precise odd detail, or a short sentence with teeth.
-
+For a codebase question, give the answer and the repo-relative path, and quote a
+snippet only when it is the clearest proof. Numbered steps for sequences, bullets
+for parallel facts, no decorative emoji unless asked. Do not hard-wrap Markdown
+sent to a renderer.
