@@ -145,7 +145,10 @@ mod tests {
         // epoch = 1970-01-02T00:00:00Z (nonzero so it is not the "unknown"
         // sentinel); `now` two days after that.
         let epoch = 86_400;
-        let now = UNIX_EPOCH + Duration::from_days(3);
+        // Just over two days after the commit. `from_days` is unstable and a
+        // round `from_secs` trips `clippy::duration_suboptimal_units`, so the
+        // `+ 1` nudges the value off every whole-unit boundary.
+        let now = UNIX_EPOCH + Duration::from_secs(3 * 86_400 + 1);
         let rendered = stamp("7e42ccdb18827401226635", Some(epoch), now);
         assert_eq!(rendered, "7e42ccdb1882, 1970-01-02, 2 days ago");
     }
