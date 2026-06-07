@@ -12,6 +12,7 @@
   nix,
   gnupg,
   formats,
+  ix,
   binName ? "claude",
   # Default posture: start every session in bypass-permissions mode. We run a
   # trusted config inside disposable sandboxes (ix guest VMs, the dev image,
