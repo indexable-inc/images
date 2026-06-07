@@ -1214,6 +1214,8 @@ let
         rec=pl.lit({"<img src=x>": 1}, dtype=pl.Struct({"<img src=x>": pl.Int64}))
     )
     eout = view.df_html(evil)
+    # The `not in` clause is the S1 regression guard: it fails on the unfixed
+    # header that interpolated the dtype string raw.
     assert "<img src=x>" not in eout and "&lt;img src=x&gt;" in eout, eout[:300]
 
     c = view.cat(base + "/default.nix", lines=(1, 3))
