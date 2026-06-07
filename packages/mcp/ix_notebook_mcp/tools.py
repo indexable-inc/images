@@ -174,6 +174,21 @@ async def python_exec(
 
 
 @mcp.tool(
+    description=(
+        "Dump the kernel's current Python stack for every thread. Works even when "
+        "a cell has wedged the kernel by blocking its event loop with a synchronous "
+        "call (subprocess.run, time.sleep, requests, a long CPU op): the dump is "
+        "captured via a faulthandler signal, not the execute channel, so it returns "
+        "while the loop is still frozen. Use it to see WHERE a wedged or slow cell "
+        "is stuck, then fix the blocking call (wrap it in `await asyncio.to_thread"
+        "(...)` and background it)."
+    )
+)
+async def kernel_trace() -> str:
+    return await current_kernel().dump_trace()
+
+
+@mcp.tool(
     description="Read-only semantic search over the shared `index` corpus (code plus "
     "Claude/Codex/shell history across the fleet). Scope with source, user, repo, "
     "host, project. Returns matching chunks as JSON."

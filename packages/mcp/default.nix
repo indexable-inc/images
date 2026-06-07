@@ -662,7 +662,7 @@ let
   serverTools = importTest "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
-    + "expected = {'python_exec','search_semantic','search_grep','calendar_events','calendar_event_create','calendar_event_cancel'}; "
+    + "expected = {'python_exec','kernel_trace','search_semantic','search_grep','calendar_events','calendar_event_create','calendar_event_cancel'}; "
     + "missing = expected - set(names); "
     + "assert not missing, ('missing tools: %r' % (missing,)); "
     + "print('server-ok', len(names))"
@@ -792,6 +792,14 @@ let
         h = ns["history"]()
         assert isinstance(h, runtime.Result) and a.id in h.llm_result and b.id in h.llm_result
 
+        # A KeyboardInterrupt (what the server's wedge watchdog raises to free a
+        # blocked kernel) becomes a failed job with an actionable message, not a
+        # raw traceback that escapes the runner.
+        k = await run("raise KeyboardInterrupt", budget=1.0, name="kbi")
+        assert k.status == "error", k.status
+        assert "asyncio.to_thread" in k.error, k.error
+        assert "Traceback" not in k.error, k.error
+
     asyncio.run(main())
     print("runtime-ok")
   '';
@@ -811,6 +819,95 @@ let
         }
         grep -qx 'runtime-ok' stdout || {
           echo "ix-mcp runtime smoke did not confirm concurrent jobs:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
+  # Boots a real kernel and proves the two signal-driven recoveries for a cell
+  # that blocks the kernel's event loop with a synchronous call:
+  #   1. kernel_trace (SIGUSR1 -> faulthandler) returns the kernel's stack WHILE
+  #      the loop is wedged, since it never touches the execute channel.
+  #   2. the wedge watchdog (SIGUSR2 -> KeyboardInterrupt) breaks the block past
+  #      budget+grace, returns a 'wedged' summary in about budget+grace (not the
+  #      sleep's full duration), and leaves the kernel usable for the next cell.
+  # Guards the fix for the opaque "Timeout waiting for output" a forgotten
+  # blocking call used to cause. SIGINT is NOT enough here: every cell is async
+  # (await __ix_exec), and ipykernel interrupts async cells by cancelling the
+  # asyncio task, which a synchronous call never yields to.
+  wedgeTestPy = pkgs.writeText "ix-mcp-wedge-test.py" ''
+    import asyncio
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from ix_notebook_mcp import cli
+    from ix_notebook_mcp.config import Config
+    from ix_notebook_mcp.kernel import Kernel
+
+    # Install the shipped IPython startup so the in-kernel runtime (__ix_exec,
+    # Result, jobs, the SIGUSR1/SIGUSR2 handlers) loads in the booted kernel,
+    # exactly as the CLI wires it.
+    os.environ["IPYTHONDIR"] = str(cli._prepare_ipython_startup(0))
+    config = Config(workdir=Path(tempfile.mkdtemp()), wedge_grace=1.0)
+
+
+    async def main():
+        kernel = Kernel(config)
+        await kernel.start()
+        try:
+            loop = asyncio.get_running_loop()
+
+            # (1) A trace must come back even while a cell blocks the loop. Start a
+            # blocking cell (budget high enough that the watchdog does not fire),
+            # let it enter the sleep, then dump the kernel stack out of band.
+            blocking = asyncio.ensure_future(
+                kernel.python_exec("import time\ntime.sleep(6)\nResult.ok('slept')", budget=30.0, name="blk")
+            )
+            await asyncio.sleep(1.0)
+            trace = await kernel.dump_trace()
+            assert "Thread" in trace and 'File "' in trace, ("not a faulthandler dump", trace)
+            _, blk = await blocking
+            assert blk is not None and blk["status"] == "done", blk
+
+            # (2) A cell that blocks past budget+grace is interrupted via SIGUSR2
+            # and the kernel is usable for the next cell.
+            started = loop.time()
+            _, summary = await kernel.python_exec(
+                "import time\ntime.sleep(30)\nResult.ok('done')", budget=0.5, name="block"
+            )
+            elapsed = loop.time() - started
+            assert summary is not None and summary["status"] == "wedged", summary
+            assert elapsed < 15, ("watchdog did not fire promptly", elapsed)
+            assert "asyncio.to_thread" in summary["error"], summary
+
+            _, after = await kernel.python_exec("Result.text('alive')", budget=10.0, name="after")
+            assert after is not None and after["status"] == "done", after
+            assert after["result"] is not None, after
+        finally:
+            await kernel.shutdown()
+
+
+    asyncio.run(main())
+    print("wedge-ok")
+  '';
+  wedgeSmoke =
+    pkgs.runCommand "ix-mcp-wedge-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${wedgeTestPy} >stdout 2>stderr || {
+          echo "ix-mcp wedge smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'wedge-ok' stdout || {
+          echo "ix-mcp wedge smoke did not confirm the watchdog:" >&2
           cat stdout stderr >&2
           exit 1
         }
@@ -1567,6 +1664,7 @@ package.overrideAttrs (old: {
         serverTools
         evalSmoke
         runtimeSmoke
+        wedgeSmoke
         richSmoke
         bindingsSmoke
         bindDefaultSmoke

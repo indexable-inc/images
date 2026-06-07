@@ -43,6 +43,11 @@ class Config:
     stdin_fd: int | None = None
     stdout_fd: int | None = None
 
+    # Seconds past a cell's own ``budget`` that the server waits for the kernel to
+    # report idle before treating it as wedged by a synchronous call, interrupting
+    # the kernel, and returning an actionable summary. See ``kernel.python_exec``.
+    wedge_grace: float = 15.0
+
     def dashboard_url(self) -> str:
         return f"http://{self.advertised_host}:{self.dashboard_port}/"
 
