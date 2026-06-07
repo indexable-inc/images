@@ -398,9 +398,7 @@ let
       dependencies = [
         pkgs.python3.pkgs.markupsafe
       ]
-      ++ lib.optionals (lib.versionOlder pkgs.python3.pythonVersion "3.13") [
-        pkgs.python3.pkgs.typing-extensions
-      ];
+      ++ lib.optional (lib.versionOlder pkgs.python3.pythonVersion "3.13") pkgs.python3.pkgs.typing-extensions;
       pythonImportsCheck = [ "htpy" ];
       doCheck = false;
     };
