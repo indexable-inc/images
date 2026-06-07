@@ -96,7 +96,11 @@ MODULES = (
     "and `await nix.attrs()` catalogs the flake's buildable attrs as a polars frame, so you stop "
     "guessing attr paths), `sh` (when you must shell out: `out = await sh('gh run list')` runs on "
     "the loop and returns an Output that IS a Result, so the dashboard shows the command's ANSI "
-    "color as HTML while you get `.text`/`.code`/`.ok` with escape codes stripped), numpy, "
+    "color as HTML while you get `.text`/`.code`/`.ok` with escape codes stripped), "
+    "`worktree` (do risky or parallel work on a throwaway branch in its own checked-out tree, "
+    "so the main tree is never disturbed: `wt = await worktree.add('my-fix')`, edit through "
+    "`wt / 'path'`, `await wt.build('.#mcp')` stages + nix-builds it, `await wt.commit(msg)`, "
+    "`await wt.remove()`; `worktree.list()` is a DataFrame), numpy, "
     "polars, duckdb, httpx, matplotlib, playwright,"
 )
 

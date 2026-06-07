@@ -1126,7 +1126,7 @@ def _escape_html(text: str) -> str:
 
 
 # Bundled modules an agent should be able to discover without grepping source.
-_API_MODULES = ("fff", "view", "nix", "fleet", "search", "tui")
+_API_MODULES = ("fff", "view", "nix", "fleet", "search", "tui", "worktree")
 # Always-present namespace builtins (no import needed); see install().
 _API_BUILTINS = ("Result", "cells", "jobs", "history", "resources", "register_resource", "sh", "api", "DASHBOARD_URL")
 

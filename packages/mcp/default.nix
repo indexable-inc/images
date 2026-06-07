@@ -310,6 +310,26 @@ let
         cp -r ${shPythonSource}/sh/. "$site/"
       ''
   );
+  # Git worktrees as the unit of isolated work: `import worktree`, then
+  # `wt = await worktree.add("my-fix")` checks out a new branch in its own tree,
+  # `await wt.build(".#mcp")` stages + nix-builds it, `worktree.list()` is a
+  # DataFrame. Pure Python over the bundled sh/nix/polars; cross-platform.
+  worktreePythonSource = builtins.path {
+    name = "ix-mcp-worktree-python-source";
+    path = ./src/worktree;
+  };
+  worktreeModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-worktree-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Git-worktree helper bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/worktree"
+        mkdir -p "$site"
+        cp -r ${worktreePythonSource}/worktree/. "$site/"
+      ''
+  );
   screenPythonSource = builtins.path {
     name = "ix-mcp-screen-python-source";
     path = ./src/screen;
@@ -493,6 +513,7 @@ let
       nixModule
       fleetModule
       shModule
+      worktreeModule
     ]
     ++ darwinExtraPackages ps
   );
