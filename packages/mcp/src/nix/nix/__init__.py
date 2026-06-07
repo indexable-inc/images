@@ -115,6 +115,13 @@ def _strip(s: object) -> str:
     return _ANSI.sub("", s if isinstance(s, str) else "" if s is None else str(s))
 
 
+def _as_int(v: object) -> int:
+    try:
+        return int(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
 class NixLog:
     """A growing record of one ``nix`` invocation's ``internal-json`` stream.
 
@@ -179,15 +186,19 @@ class NixLog:
             rtype = o.get("type")
             fields = o.get("fields") or []
             if rtype == 105 and len(fields) >= 2:  # progress: [done, expected, ...]
-                act["done"], act["expected"] = fields[0], fields[1]
+                # Coerce defensively: the Int64 schema would crash `.activities`
+                # on a non-numeric field (nix always sends ints, but never trust).
+                act["done"], act["expected"] = _as_int(fields[0]), _as_int(fields[1])
             elif rtype == 104 and fields:  # setPhase: [phase]
                 act["phase"] = _strip(fields[0])
             elif rtype in (101, 107) and fields:  # build / post-build log line
                 act["last_log"] = _strip(fields[0])
         elif action == "msg":
             msg = _strip(o.get("msg") or o.get("raw_msg"))
-            if msg and (o.get("level", 99) <= 1 or "error:" in msg.lower()):
-                # First error wins; nix prints the root cause first.
+            # Nix Verbosity: lvlError=0, lvlWarn=1, ... Capture only true errors
+            # (level 0); a warning or an info line that merely contains "error:"
+            # is not the build's failure. First error wins (root cause prints first).
+            if msg and o.get("level") == 0:
                 self.error = self.error or msg
 
     # -- frames ---------------------------------------------------------------
@@ -244,11 +255,17 @@ class NixLog:
     def _depths(self) -> dict[int, int]:
         depth: dict[int, int] = {}
 
-        def d(i: int) -> int:
+        def d(i: int, seen: frozenset[int] = frozenset()) -> int:
             if i in depth:
                 return depth[i]
             act = self._acts.get(i)
-            depth[i] = 0 if act is None or act["parent"] == 0 else d(act["parent"]) + 1
+            parent = act["parent"] if act is not None else 0
+            # Guard a malformed parent cycle (self-parent or a→b→a) so a forward
+            # reference can't infinite-recurse the live render path.
+            if act is None or parent == 0 or parent in seen or parent == i:
+                depth[i] = 0
+            else:
+                depth[i] = d(parent, seen | {i}) + 1
             return depth[i]
 
         return {i: d(i) for i in self._order}
@@ -343,6 +360,9 @@ async def run(
     appended. With ``live`` (the default) the in-flight log shows up as a
     self-closing dashboard Resource. Run it as a background job for a long build
     and sample the returned NixLog between turns.
+
+    ``cwd`` defaults to the kernel process's working directory; pass ``cwd=`` to
+    resolve a flake ref (``.#foo``) against a specific worktree.
     """
     log = NixLog(label=label or (args[1] if len(args) > 1 else args[0] if args else "nix"))
     if live:
@@ -357,12 +377,28 @@ async def run(
         stderr=asyncio.subprocess.STDOUT,
     )
     assert proc.stdout is not None
-    async for raw in proc.stdout:
-        log.feed(raw.decode(errors="replace"))
-    log.returncode = await proc.wait()
-    log.done = True
-    if log.returncode and not log.error:
-        log.error = f"nix exited with code {log.returncode}"
+    # Read raw chunks and split on newlines ourselves: a single `buildLogLine`
+    # (a compiler/test/minified line) can exceed asyncio's default 64 KiB
+    # StreamReader limit, which would make `async for`/`readline` raise and
+    # abort mid-stream. `finally` guarantees the process is reaped and the live
+    # Resource self-closes (`alive` keys off `log.done`) on every exit path.
+    buf = b""
+    try:
+        while True:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                break
+            buf += chunk
+            *complete, buf = buf.split(b"\n")
+            for line in complete:
+                log.feed(line.decode(errors="replace"))
+        if buf:
+            log.feed(buf.decode(errors="replace"))
+    finally:
+        log.returncode = await proc.wait()
+        log.done = True
+        if log.returncode and not log.error:
+            log.error = f"nix exited with code {log.returncode}"
     return log
 
 

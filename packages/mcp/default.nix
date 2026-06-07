@@ -1392,6 +1392,28 @@ let
     assert empty.events.height == 0 and empty.activities.height == 0
     assert empty.events.schema["seq"] == pl.Int64
 
+    # A warning (level 1) or an info line containing "error:" is NOT the failure.
+    warn = nix.parse(
+        '@nix {"action":"msg","level":1,"msg":"warning: deprecated"}\n'
+        '@nix {"action":"msg","level":3,"msg":"note: see error: above"}'
+    )
+    assert warn.error is None, warn.error
+
+    # Malformed parent cycle must not infinite-recurse the activities/render path.
+    cyc = nix.parse(
+        '@nix {"action":"start","id":1,"parent":2,"text":"a","type":0}\n'
+        '@nix {"action":"start","id":2,"parent":1,"text":"b","type":0}'
+    )
+    assert cyc.activities.height == 2, cyc.activities
+    assert "a" in cyc.tree()
+
+    # Non-int progress fields must not crash the Int64 activities schema.
+    bad = nix.parse(
+        '@nix {"action":"start","id":1,"parent":0,"text":"x","type":101}\n'
+        '@nix {"action":"result","id":1,"type":105,"fields":["nan","oops",0,0]}'
+    )
+    assert bad.activities.row(0, named=True)["done"] == 0, bad.activities
+
     print("nix-ok", nix.__version__)
   '';
   nixSmoke =
