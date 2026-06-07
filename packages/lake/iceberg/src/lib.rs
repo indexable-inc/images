@@ -541,6 +541,7 @@ mod tests {
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
     use iceberg::{Catalog, CatalogBuilder as _, TableIdent};
     use serde_json::json;
+    use snafu::IntoError as _;
     use source_meta::{Document, Reconciler as _, Source};
 
     use super::{IcebergReconciler, added_since, current_snapshot_id, ensure_table, read_all};
@@ -558,7 +559,7 @@ mod tests {
         (catalog, ident, dir)
     }
 
-    fn doc(id: &str, body: &str) -> Document {
+    fn doc_in(source: &str, id: &str, body: &str) -> Document {
         let content_hash = source_meta::hash_body(body.as_bytes());
         Document {
             external_id: id.to_owned(),
@@ -566,7 +567,7 @@ mod tests {
             mime: "text/plain",
             body: body.as_bytes().to_vec(),
             meta_json: json!({
-                "source": "test",
+                "source": source,
                 "external_id": id,
                 "content_hash": content_hash,
                 "title": format!("title {id}"),
@@ -574,6 +575,10 @@ mod tests {
             }),
             content_hash,
         }
+    }
+
+    fn doc(id: &str, body: &str) -> Document {
+        doc_in("test", id, body)
     }
 
     #[tokio::test]
@@ -665,6 +670,171 @@ mod tests {
         alice.reconcile(&source, &[doc("alice-1", "hers")]).await.expect("alice seed");
         let report = host1.reconcile(&source, &[doc("one-b", "new")]).await.expect("host1 again");
         assert!(report.skipped, "host-level slice must not see alice's rows");
+    }
+
+    /// Commit a small batch onto an explicit (possibly stale) table handle,
+    /// bypassing the reconciler's reload-per-attempt loop — the construction
+    /// both conflict tests share.
+    async fn commit_on(
+        catalog: &dyn Catalog,
+        table: &iceberg::table::Table,
+        source: &Source,
+        document: &Document,
+    ) -> super::Result<()> {
+        use iceberg::transaction::{ApplyTransactionAction as _, Transaction};
+        let schema = Arc::new(
+            iceberg::arrow::schema_to_arrow_schema(table.metadata().current_schema())
+                .expect("arrow schema"),
+        );
+        let batch = crate::codec::encode_batch(
+            &schema,
+            source,
+            crate::codec::Slice { host: "host-1", user: None },
+            1,
+            &[document],
+            &[],
+        )
+        .expect("batch");
+        let files = super::write_batch(table, batch).await.expect("write files");
+        let tx = Transaction::new(table);
+        let tx = tx.fast_append().add_data_files(files).apply(tx).expect("apply");
+        tx.commit(catalog).await.map(|_| ()).map_err(|error| {
+            super::error::CommitSnafu { attempts: 1_u32 }.into_error(error)
+        })
+    }
+
+    #[tokio::test]
+    async fn stale_base_append_merges_without_losing_either_commit() {
+        let (catalog, ident, _dir) = lake().await;
+        let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
+        let source = Source::new("test");
+        sink.reconcile(&source, &[doc("a", "alpha")]).await.expect("seed");
+
+        // Hold a stale handle while another commit advances the table.
+        let stale = catalog.load_table(&ident).await.expect("stale handle");
+        sink.reconcile(&source, &[doc("a", "alpha"), doc("b", "beta")]).await.expect("advance");
+
+        // Appends carry no snapshot-ref requirement, so a commit from the
+        // stale base MERGES rather than conflicts: that is the lost-update
+        // safety the fleet's concurrent writers rely on. (A REST server that
+        // CASes the metadata pointer surfaces the same race as HTTP 409 →
+        // CatalogCommitConflicts, which commit_files retries; that leg is
+        // exercised in rest_round_trip_via_env against a real server.)
+        commit_on(catalog.as_ref(), &stale, &source, &doc("c", "gamma"))
+            .await
+            .expect("a stale-base append must merge");
+        let all = read_all(catalog.as_ref(), &ident).await.expect("read_all");
+        let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c"], "no commit may be lost to the race");
+    }
+
+    #[tokio::test]
+    async fn concurrent_writers_all_land() {
+        let (catalog, ident, _dir) = lake().await;
+        let source = Source::new("test");
+        let mut handles = Vec::new();
+        for i in 0..4 {
+            let catalog = Arc::clone(&catalog);
+            let ident = ident.clone();
+            let source = source.clone();
+            handles.push(tokio::spawn(async move {
+                let sink = IcebergReconciler::new(catalog, ident, format!("host-{i}"));
+                sink.reconcile(&source, &[doc(&format!("doc-{i}"), "body")]).await
+            }));
+        }
+        for handle in handles {
+            let report = handle.await.expect("join").expect("reconcile");
+            assert!(!report.skipped);
+        }
+        let all = read_all(catalog.as_ref(), &ident).await.expect("read_all");
+        assert_eq!(all.len(), 4, "every concurrent writer's document must land");
+    }
+
+    /// The same code against a live REST catalog, env-configured. One test,
+    /// three backends: the memory catalog covers the suite above,
+    /// `fixture/rest-fixture.sh` stands up the apache/iceberg-rest-fixture +
+    /// MinIO pair locally, and R2 Data Catalog staging uses the same
+    /// variables with Cloudflare values (see fixture/README.md).
+    #[tokio::test]
+    #[ignore = "needs a live REST catalog: run fixture/rest-fixture.sh, or set LAKE_TEST_* for R2"]
+    async fn rest_round_trip_via_env() {
+        let uri = std::env::var("LAKE_TEST_CATALOG_URI")
+            .expect("LAKE_TEST_CATALOG_URI must be set; see fixture/README.md");
+        let config = super::Config {
+            uri,
+            warehouse: std::env::var("LAKE_TEST_WAREHOUSE").unwrap_or_default(),
+            token: std::env::var("LAKE_TEST_CATALOG_TOKEN").ok(),
+            s3_endpoint: std::env::var("LAKE_TEST_S3_ENDPOINT").ok(),
+            s3_region: std::env::var("LAKE_TEST_S3_REGION").unwrap_or_else(|_| "auto".to_owned()),
+        };
+        let catalog = config.connect().await.expect("connect");
+        let ident = ensure_table(catalog.as_ref()).await.expect("ensure table");
+
+        // Unique ids and source tag per run: repeated runs share the catalog.
+        let tag = format!("resttest-{}", uuid::Uuid::new_v4());
+        let source = Source::new(tag.clone());
+        let id = |suffix: &str| format!("{tag}:{suffix}");
+        let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "rest-host");
+
+        // Reconcile, converge, change + tombstone — the memory-catalog suite's
+        // arc, through the production REST + S3 wiring.
+        let seed = vec![doc_in(&tag, &id("r1"), "one"), doc_in(&tag, &id("r2"), "two")];
+        let first = sink.reconcile(&source, &seed).await.expect("seed");
+        assert_eq!((first.upserts, first.deletes, first.skipped), (2, 0, false));
+        assert!(sink.reconcile(&source, &seed).await.expect("converged").skipped);
+
+        let cursor = current_snapshot_id(catalog.as_ref(), &ident)
+            .await
+            .expect("snapshot")
+            .expect("committed");
+        let changed = vec![doc_in(&tag, &id("r1"), "one EDITED")];
+        let delta_report = sink.reconcile(&source, &changed).await.expect("delta");
+        assert_eq!((delta_report.upserts, delta_report.deletes), (1, 1));
+
+        let mine: Vec<Document> = read_all(catalog.as_ref(), &ident)
+            .await
+            .expect("read_all")
+            .into_iter()
+            .filter(|d| d.meta_json["source"] == tag.as_str())
+            .collect();
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].body, b"one EDITED");
+
+        let delta = added_since(catalog.as_ref(), &ident, cursor).await.expect("added_since");
+        assert!(delta.deletes.contains(&id("r2")), "the tombstone must arrive via the cursor");
+
+        // The stale-base leg, against a real server. Two acceptable behaviors
+        // exist, and which one a backend exhibits is exactly what this records:
+        // an Iceberg-aware server rebases the append (merge, like the memory
+        // catalog), while a metadata-pointer-CAS server answers HTTP 409,
+        // which must map to the kind commit_files retries on. Anything else
+        // is a contract break.
+        let stale = catalog.load_table(&ident).await.expect("stale handle");
+        sink.reconcile(&source, &[doc_in(&tag, &id("r3"), "three")]).await.expect("advance");
+        match commit_on(catalog.as_ref(), &stale, &source, &doc_in(&tag, &id("c1"), "x")).await {
+            Ok(()) => {
+                eprintln!("[rest_round_trip] stale-base append: backend MERGES (no retry needed)");
+                let mine: Vec<Document> = read_all(catalog.as_ref(), &ident)
+                    .await
+                    .expect("read_all after merge")
+                    .into_iter()
+                    .filter(|d| d.meta_json["source"] == tag.as_str())
+                    .collect();
+                assert!(
+                    mine.iter().any(|d| d.external_id == id("c1")),
+                    "the merged append must not be lost"
+                );
+            }
+            Err(super::Error::Commit { source: inner, .. }) => {
+                eprintln!("[rest_round_trip] stale-base append: backend CASes (409, retryable)");
+                assert_eq!(
+                    inner.kind(),
+                    iceberg::ErrorKind::CatalogCommitConflicts,
+                    "a commit rejection must carry the kind the retry loop matches"
+                );
+            }
+            Err(other) => panic!("unexpected stale-base failure shape: {other:?}"),
+        }
     }
 
     #[tokio::test]
