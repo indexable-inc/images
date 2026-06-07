@@ -15,6 +15,7 @@ run outside nix), a small stub explains how to build the UI.
 
 from __future__ import annotations
 
+import functools
 import os
 from pathlib import Path
 
@@ -51,6 +52,26 @@ def _load_page() -> str:
 _PAGE = _load_page()
 
 
+@functools.lru_cache(maxsize=512)
+def _code_html(code: str) -> str:
+    """A python snippet as self-contained highlighted HTML (inline monokai
+    styles, no wrapping ``<pre>`` so the card controls layout). Cached so each
+    unique snippet is highlighted once, not on every one-second poll; falls back
+    to empty (the card then shows the raw text) when pygments is unavailable."""
+    if not code:
+        return ""
+    try:
+        from pygments import highlight
+        from pygments.formatters import HtmlFormatter
+        from pygments.lexers import PythonLexer
+
+        formatter = HtmlFormatter(style="monokai", noclasses=True, nowrap=True)
+        return highlight(code, PythonLexer(), formatter).strip()
+    except Exception:
+        # Highlighting is cosmetic: a missing/old pygments must not break the API.
+        return ""
+
+
 async def start(config: Config) -> web.AppRunner:
     app = web.Application()
     conn = store.connect(config.store_path)
@@ -59,7 +80,11 @@ async def start(config: Config) -> web.AppRunner:
         return web.Response(text=_PAGE, content_type="text/html")
 
     async def jobs(_request: web.Request) -> web.Response:
-        return web.json_response(store.recent(conn, limit=200))
+        rows = store.recent(conn, limit=200)
+        for row in rows:
+            # Highlight once per unique snippet (cached); the card renders it.
+            row["code_html"] = _code_html(row.get("code") or "")
+        return web.json_response(rows)
 
     async def resources(_request: web.Request) -> web.Response:
         return web.json_response(store.live_resources(conn))

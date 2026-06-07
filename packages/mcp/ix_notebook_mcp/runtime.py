@@ -295,8 +295,16 @@ class Result:
     def of(cls, value, *, llm_result: str | None = None) -> "Result":
         """Wrap any value: render it richly for the human (a DataFrame as a
         table, a figure as an image, anything else as its display HTML or repr)
-        and hand the model its ``repr`` (override with ``llm_result``)."""
-        text_view = llm_result if llm_result is not None else _safe_repr(value)
+        and hand the model concise text. For a polars DataFrame the model text is
+        the frame as compact, untruncated CSV (the human still gets the styled
+        HTML table), so a wide or long-stringed frame is never clipped to the
+        agent the way the boxed text repr clips it. Override with ``llm_result``."""
+        if llm_result is not None:
+            text_view = llm_result
+        elif _is_polars_df(value):
+            text_view = _df_llm_text(value)
+        else:
+            text_view = _safe_repr(value)
         bundle = _result_bundle(value)
         data = (bundle or {}).get("data", {})
         if "text/html" in data:
@@ -638,6 +646,39 @@ def _safe_repr(value) -> str:
         return repr(value)
     except Exception:
         return f"<unreprable {type(value).__name__}>"
+
+
+# How many rows of a DataFrame the model-facing text carries. The human's HTML
+# table is unaffected (it renders the whole frame, paged); this only bounds the
+# CSV handed back to the agent so a million-row frame cannot flood its context.
+_DF_LLM_ROWS = 200
+
+
+def _is_polars_df(value) -> bool:
+    """True for a polars DataFrame, by duck typing. runtime.py stays import-light
+    (polars is the user's to bring), so it never imports polars to check."""
+    return (
+        type(value).__module__.split(".", 1)[0] == "polars"
+        and hasattr(value, "write_csv")
+        and hasattr(value, "columns")
+        and hasattr(value, "height")
+    )
+
+
+def _df_llm_text(df) -> str:
+    """A polars DataFrame as compact text for the model: a shape + dtype header
+    then CSV, with cell values never truncated (only the row count is bounded by
+    ``_DF_LLM_ROWS``). CSV is denser than the boxed repr and drops no value, so
+    the agent reads the real data instead of a width-clipped table."""
+    try:
+        schema = ", ".join(f"{name}:{dtype}" for name, dtype in zip(df.columns, df.dtypes))
+        rows, cols = df.shape
+        body = df.head(_DF_LLM_ROWS).write_csv().rstrip("\n")
+        more = f"\n... ({rows - _DF_LLM_ROWS} more rows)" if rows > _DF_LLM_ROWS else ""
+        return f"shape: ({rows}, {cols}) | {schema}\n{body}{more}"
+    except Exception:
+        # An exotic frame that resists write_csv falls back to its plain repr.
+        return _safe_repr(df)
 
 
 def _coerce_image(value) -> dict | None:

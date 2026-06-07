@@ -305,6 +305,19 @@ def _validate_grep_args(
 # ── result types ─────────────────────────────────────────────────────────────
 
 
+def _polars():
+    """The bundled ``polars`` module, or None. fff's core carries no polars
+    dependency; the ``.df``/HTML views are a convenience for the ix-mcp kernel
+    (where polars is always present), so import it lazily and degrade to text
+    when it is absent."""
+    try:
+        import polars as pl
+
+        return pl
+    except Exception:
+        return None
+
+
 @dataclass(frozen=True)
 class FileHit:
     """One file from `search`/`glob`, ranked by fuzzy score and frecency."""
@@ -329,6 +342,49 @@ class SearchResult:
 
     def __len__(self) -> int:
         return len(self.items)
+
+    @property
+    def df(self):
+        """The hits as a ``polars.DataFrame`` (composes with the polars API and
+        renders as the dashboard's styled table). Requires polars."""
+        pl = _polars()
+        if pl is None:
+            raise FffError("polars is not available; iterate .items instead")
+        return pl.DataFrame(
+            [
+                {
+                    "path": h.path,
+                    "name": h.name,
+                    "size": h.size,
+                    "frecency": h.frecency,
+                    "git": h.git_status,
+                    "binary": h.is_binary,
+                }
+                for h in self.items
+            ],
+            schema={
+                "path": pl.Utf8,
+                "name": pl.Utf8,
+                "size": pl.Int64,
+                "frecency": pl.Int64,
+                "git": pl.Utf8,
+                "binary": pl.Boolean,
+            },
+        )
+
+    def _repr_html_(self) -> str | None:
+        """Render as the styled table for the dashboard (None when polars is
+        absent, so the human falls back to the text repr)."""
+        pl = _polars()
+        return self.df._repr_html_() if pl is not None else None
+
+    def __repr__(self) -> str:
+        head = "\n".join(f"  {h.path}" for h in self.items[:30])
+        more = f"\n  ... ({len(self.items) - 30} more)" if len(self.items) > 30 else ""
+        return (
+            f"SearchResult: {len(self.items)} of {self.total_files} files "
+            f"(matched {self.total_matched})" + (f"\n{head}{more}" if self.items else "")
+        )
 
 
 @dataclass(frozen=True)
@@ -367,6 +423,52 @@ class GrepResult:
 
     def __len__(self) -> int:
         return len(self.matches)
+
+    @property
+    def df(self):
+        """The matches as a ``polars.DataFrame`` (composes with the polars API
+        and renders as the dashboard's styled table). Requires polars."""
+        pl = _polars()
+        if pl is None:
+            raise FffError("polars is not available; iterate .matches instead")
+        return pl.DataFrame(
+            [
+                {
+                    "path": m.path,
+                    "line": m.line_number,
+                    "col": m.col,
+                    "content": m.line_content,
+                    "def": m.is_definition,
+                    "git": m.git_status,
+                }
+                for m in self.matches
+            ],
+            schema={
+                "path": pl.Utf8,
+                "line": pl.Int64,
+                "col": pl.Int64,
+                "content": pl.Utf8,
+                "def": pl.Boolean,
+                "git": pl.Utf8,
+            },
+        )
+
+    def _repr_html_(self) -> str | None:
+        """Render as the styled table for the dashboard (None when polars is
+        absent, so the human falls back to the text repr)."""
+        pl = _polars()
+        return self.df._repr_html_() if pl is not None else None
+
+    def __repr__(self) -> str:
+        head = "\n".join(
+            f"  {m.path}:{m.line_number}: {m.line_content.strip()}" for m in self.matches[:30]
+        )
+        more = f"\n  ... ({len(self.matches) - 30} more)" if len(self.matches) > 30 else ""
+        return (
+            f"GrepResult: {len(self.matches)} matches in "
+            f"{self.total_files_searched} files (total {self.total_matched})"
+            + (f"\n{head}{more}" if self.matches else "")
+        )
 
 
 # ── the finder ───────────────────────────────────────────────────────────────

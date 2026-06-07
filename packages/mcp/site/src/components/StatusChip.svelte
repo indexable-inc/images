@@ -3,7 +3,11 @@
   let { status }: { status: JobStatus } = $props();
 </script>
 
-<span class="chip {status}">{status}</span>
+<!-- A finished run is the uninteresting default: show a chip only for the
+     states worth a glance (running, error, cancelled), nothing for done. -->
+{#if status !== 'done'}
+  <span class="chip {status}">{status}</span>
+{/if}
 
 <style>
   .chip {

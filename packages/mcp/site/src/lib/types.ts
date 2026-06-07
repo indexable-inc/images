@@ -15,6 +15,7 @@ export interface Job {
   id: string;
   name: string;
   code: string;
+  code_html: string;
   status: JobStatus;
   started_at: number;
   ended_at: number | null;

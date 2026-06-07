@@ -7,8 +7,8 @@
 
   let { job }: { job: Job } = $props();
 
-  // A readable label from the source (or a caller name), never the raw hash.
-  const title = $derived(jobTitle(job.name, job.id, job.code));
+  // Only an explicit caller name labels the card; the source is shown below.
+  const title = $derived(jobTitle(job.name, job.id));
   // A running job's elapsed time tracks the shared clock; a finished one is fixed.
   const elapsed = $derived(duration((job.ended_at ?? now.value) - job.started_at));
   const hasRich = $derived(job.outputs.length > 0);
@@ -19,14 +19,15 @@
 <article class="job {job.status}">
   <header class="hdr">
     <StatusChip status={job.status} />
-    <span class="name" title={job.code}>{title}</span>
+    {#if title}<span class="name">{title}</span>{/if}
     <span class="dur">{elapsed}</span>
   </header>
 
-  <details class="code">
-    <summary></summary>
-    <pre>{job.code}</pre>
-  </details>
+  {#if job.code_html}
+    <pre class="code">{@html job.code_html}</pre>
+  {:else if job.code}
+    <pre class="code">{job.code}</pre>
+  {/if}
 
   {#if job.output}
     <pre class="out">{job.output}</pre>
@@ -80,33 +81,14 @@
     font-size: 11px;
     font-variant-numeric: tabular-nums;
   }
-  .code {
+  /* The source, syntax-highlighted (inline monokai spans from the server). Sits
+     quietly under the header: the colored tokens carry the meaning, so the box
+     itself stays flat and dim. */
+  pre.code {
     margin: 8px 0 0;
-  }
-  .code > summary {
-    display: inline-block;
-    color: var(--faint);
-    font-size: 10px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    list-style: none;
-    cursor: pointer;
-    user-select: none;
-  }
-  .code > summary::-webkit-details-marker {
-    display: none;
-  }
-  .code > summary::before {
-    content: '+ source';
-  }
-  .code[open] > summary::before {
-    content: '\2212 source';
-  }
-  .code > pre {
-    color: var(--dim);
+    padding: 9px 11px;
     background: var(--inset);
     border: 1px solid var(--line);
-    padding: 9px 11px;
   }
   /* Output shows in full; the column scrolls, not each card, so you are not
      trapped scrolling a 340px box inside a box. A runaway stream is still capped
