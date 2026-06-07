@@ -8,7 +8,8 @@
 //! baked into the binary and rides the wrapper env instead.
 //!
 //! ```no_run
-//! let command = clap::Command::new("mytool").version(build_version::version_static(env!("CARGO_PKG_VERSION")));
+//! // Hand the interned `&'static str` straight to clap's `Command::version`.
+//! let version: &'static str = build_version::version_static(env!("CARGO_PKG_VERSION"));
 //! ```
 
 use std::sync::OnceLock;
@@ -63,7 +64,10 @@ pub fn version_static(crate_version: &str) -> &'static str {
 #[must_use]
 pub fn stamp(rev: &str, epoch: Option<i64>, now: SystemTime) -> String {
     let short: String = rev.chars().take(SHORT_REV_LEN).collect();
-    let Some(epoch) = epoch else {
+    // `0` is the `revEpoch ? 0` sentinel for a non-git eval (no real build is
+    // dated to 1970), so treat it as "no date" rather than printing an absurd
+    // `1970-01-01, 56 years ago`.
+    let Some(epoch) = epoch.filter(|&seconds| seconds != 0) else {
         return short;
     };
     let Some(committed) = DateTime::from_timestamp(epoch, 0) else {
@@ -144,6 +148,12 @@ mod tests {
     #[test]
     fn stamp_without_epoch_is_short_rev_only() {
         let rendered = stamp("7e42ccdb18827401226635", None, SystemTime::now());
+        assert_eq!(rendered, "7e42ccdb1882");
+    }
+
+    #[test]
+    fn stamp_treats_zero_epoch_as_unknown() {
+        let rendered = stamp("7e42ccdb18827401226635", Some(0), SystemTime::now());
         assert_eq!(rendered, "7e42ccdb1882");
     }
 }
