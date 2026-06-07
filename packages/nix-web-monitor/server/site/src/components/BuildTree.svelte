@@ -2,6 +2,7 @@
   import type { SvelteSet } from 'svelte/reactivity';
   import Self from '$components/BuildTree.svelte';
   import { formatDuration, splitDerivation } from '$lib/format';
+  import { durationLabel, whereLabel } from '$lib/build-row';
   import { ROOT_SENTINEL, type BuildTree } from '$lib/build-tree';
   import type { BuildNode } from '$lib/types';
 
@@ -13,6 +14,9 @@
     now: number;
     selectedActivityId: number | null;
     onselect: (activityId: number | null) => void;
+    /// Keyboard cursor: the row vim navigation currently sits on, highlighted
+    /// independently of the click selection that drives the log filter.
+    cursor: string | null;
     /// Vertical-line flags for each ancestor column (true = ancestor has a
     /// following sibling, so its column keeps a `│`). Empty for roots.
     guideLines: boolean[];
@@ -32,6 +36,7 @@
     now,
     selectedActivityId,
     onselect,
+    cursor,
     guideLines,
     isLast,
     isRoot,
@@ -43,6 +48,7 @@
   const parts = $derived(splitDerivation(drv));
   const children = $derived((tree.childrenByDrv.get(drv) ?? []).filter((dep) => !ancestors.has(dep)));
   const isCollapsed = $derived(collapsed.has(drv));
+  const isCursor = $derived(drv === cursor);
   const childGuideLines = $derived(isRoot ? [] : [...guideLines, !isLast]);
   const childAncestors = $derived(new Set([...ancestors, drv]));
 
@@ -56,14 +62,6 @@
     return formatDuration(Math.max(0, end - startedAtMs));
   });
 
-  function elapsedMs(build: BuildNode): number {
-    return Math.max(0, (build.stoppedAtMs ?? now) - build.startedAtMs);
-  }
-
-  function whereLabel(host: string | null): string {
-    return host === null || host.length === 0 ? 'local' : host;
-  }
-
   function toggleSelect(build: BuildNode): void {
     if (build.activityId === null) return;
     onselect(selectedActivityId === build.activityId ? null : build.activityId);
@@ -72,7 +70,7 @@
 
 {#if isCommandRoot}
   {@const summary = tree.summary}
-  <div class="activity-row root-row">
+  <div class="activity-row root-row" class:cursor={isCursor}>
     <button
       type="button"
       class="twirl"
@@ -106,6 +104,7 @@
     class:planned={node.status === 'planned'}
     class:clickable
     class:selected
+    class:cursor={isCursor}
     role={clickable ? 'button' : undefined}
     tabindex={clickable ? 0 : undefined}
     aria-pressed={clickable ? selected : undefined}
@@ -158,7 +157,7 @@
     {#if isCollapsed && children.length > 0}
       <span class="subtree-count">+{String(children.length)}</span>
     {/if}
-    <span class="activity-dur">{node.status === 'planned' ? '' : formatDuration(elapsedMs(node))}</span>
+    <span class="activity-dur">{durationLabel(node, now)}</span>
   </div>
 {/if}
 
@@ -172,6 +171,7 @@
       {now}
       {selectedActivityId}
       {onselect}
+      {cursor}
       guideLines={childGuideLines}
       isLast={index === children.length - 1}
       isRoot={false}

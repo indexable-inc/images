@@ -46,6 +46,15 @@
 
   const showErrors = $derived(snapshot.errors.length > errorsDismissed);
 
+  /// Derivation backing the pinned activity, so the log drawer can name the
+  /// build it is filtered to instead of showing a bare activity id.
+  const selectedDrv = $derived.by((): string | null => {
+    if (selectedActivityId === null) return null;
+    return (
+      snapshot.builds.find((build) => build.activityId === selectedActivityId)?.derivation ?? null
+    );
+  });
+
   function dismissErrors(): void {
     errorsDismissed = snapshot.errors.length;
   }
@@ -225,6 +234,7 @@
         bind:this={logPanel}
         logs={snapshot.logs}
         {selectedActivityId}
+        {selectedDrv}
         collapsed={logsCollapsed}
         oncollapse={() => {
           setLogsCollapsed(!logsCollapsed);

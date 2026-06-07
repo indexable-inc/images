@@ -2,8 +2,9 @@
   import { SvelteSet } from 'svelte/reactivity';
   import PanelHeader from '$lib/PanelHeader.svelte';
   import BuildTree from '$components/BuildTree.svelte';
-  import { splitDerivation, formatDuration } from '$lib/format';
-  import { buildDependencyTree } from '$lib/build-tree';
+  import { splitDerivation } from '$lib/format';
+  import { durationLabel, isRemote, whereLabel } from '$lib/build-row';
+  import { buildDependencyTree, flattenVisible, hasChildren, ROOT_SENTINEL } from '$lib/build-tree';
   import { useNow } from '$lib/now.svelte';
   import {
     ACTIVITY_NAME_BUILD,
@@ -80,31 +81,139 @@
     return 'waiting for build phase';
   });
 
-  function elapsedMs(build: BuildNode): number {
-    const end = build.stoppedAtMs ?? now.value;
-    return Math.max(0, end - build.startedAtMs);
-  }
-
-  /// Planned rows have not started, so their elapsed time is meaningless; the
-  /// duration column stays blank until the build is live or done.
-  function durationLabel(build: BuildNode): string {
-    return build.status === 'planned' ? '' : formatDuration(elapsedMs(build));
-  }
-
-  function whereLabel(host: string | null): string {
-    if (host === null || host.length === 0) return 'local';
-    return host;
-  }
-
-  function whereIsRemote(host: string | null): boolean {
-    return host !== null && host.length > 0;
-  }
-
   function toggleSelect(build: BuildNode): void {
     if (build.activityId === null) return;
     onselect(selectedActivityId === build.activityId ? null : build.activityId);
   }
+
+  // ---- vim-style keyboard navigation -------------------------------------
+  // The build panel is the primary surface, so it owns the navigation keys
+  // (j/k/h/l, gg/G, o/Enter). The log drawer keeps only `/` and Esc, so the two
+  // window handlers never fight over a key.
+
+  /// The row the keyboard cursor sits on, highlighted separately from the click
+  /// selection that drives the log filter. Null until the first key moves it.
+  let cursor = $state<string | null>(null);
+  let tableEl = $state<HTMLDivElement | null>(null);
+  /// First half of a pending `gg`. Reset by any other key.
+  let awaitingG = $state(false);
+
+  /// The rows currently on screen, in display order: the flattened tree, or the
+  /// plain sorted list in flat layout. This is what the cursor steps through.
+  const visibleRows = $derived(
+    layout === 'tree'
+      ? flattenVisible(tree, collapsed)
+      : ordered.map((build) => build.derivation)
+  );
+
+  /// The cursor, snapped to a row that still exists (a build finishing or a
+  /// collapse can drop the row out from under it). Defaults to the first row.
+  const cursorDrv = $derived.by((): string | null => {
+    if (visibleRows.length === 0) return null;
+    if (cursor !== null && visibleRows.includes(cursor)) return cursor;
+    return visibleRows[0];
+  });
+
+  function moveCursor(delta: number): void {
+    if (visibleRows.length === 0) return;
+    const current = cursorDrv === null ? 0 : visibleRows.indexOf(cursorDrv);
+    const next = Math.min(visibleRows.length - 1, Math.max(0, current + delta));
+    cursor = visibleRows[next];
+  }
+
+  /// `h`: collapse an open node, else step to its parent. Leaves the cursor put
+  /// at the very top.
+  function collapseOrParent(): void {
+    const drv = cursorDrv;
+    if (drv === null || layout !== 'tree') return;
+    if (hasChildren(tree, drv) && !collapsed.has(drv)) {
+      collapsed.add(drv);
+      return;
+    }
+    const parent = tree.parentByDrv.get(drv);
+    if (parent !== undefined) cursor = parent;
+  }
+
+  /// `l`: expand a collapsed node, else descend to its first child.
+  function expandOrChild(): void {
+    const drv = cursorDrv;
+    if (drv === null || layout !== 'tree' || !hasChildren(tree, drv)) return;
+    if (collapsed.has(drv)) {
+      collapsed.delete(drv);
+      return;
+    }
+    const first = (tree.childrenByDrv.get(drv) ?? []).at(0);
+    if (first !== undefined) cursor = first;
+  }
+
+  /// `o`/Enter: select the cursor's build to pin the log drawer to it. The
+  /// command root has no logs of its own, so it is a no-op there.
+  function selectCursor(): void {
+    const drv = cursorDrv;
+    if (drv === null || drv === ROOT_SENTINEL) return;
+    const id = tree.nodeByDrv.get(drv)?.activityId ?? null;
+    if (id !== null) onselect(selectedActivityId === id ? null : id);
+  }
+
+  function onWindowKeydown(event: KeyboardEvent): void {
+    const target = event.target;
+    const typing =
+      target instanceof HTMLElement &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+    if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+
+    // `gg` jumps to the first row; the first `g` just arms the second.
+    if (event.key === 'g') {
+      if (awaitingG) {
+        cursor = visibleRows.at(0) ?? null;
+        awaitingG = false;
+        event.preventDefault();
+      } else {
+        awaitingG = true;
+      }
+      return;
+    }
+    awaitingG = false;
+
+    switch (event.key) {
+      case 'j':
+      case 'ArrowDown':
+        moveCursor(1);
+        break;
+      case 'k':
+      case 'ArrowUp':
+        moveCursor(-1);
+        break;
+      case 'G':
+        cursor = visibleRows.at(-1) ?? null;
+        break;
+      case 'h':
+      case 'ArrowLeft':
+        collapseOrParent();
+        break;
+      case 'l':
+      case 'ArrowRight':
+        expandOrChild();
+        break;
+      case 'o':
+      case 'Enter':
+        selectCursor();
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+  }
+
+  /// Keep the cursor row scrolled into view as it moves under keyboard control.
+  $effect(() => {
+    void cursorDrv;
+    const row = tableEl?.querySelector('.cursor');
+    if (row instanceof HTMLElement) row.scrollIntoView({ block: 'nearest' });
+  });
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <section class="panel builds-panel">
   <PanelHeader title="builds">
@@ -126,7 +235,7 @@
       {String(builds.length)}{#if expectedBuilds > 0} / {String(expectedBuilds)}{/if}
     </span>
   </PanelHeader>
-  <div class="build-table" class:tree={layout === 'tree'}>
+  <div class="build-table" class:tree={layout === 'tree'} bind:this={tableEl}>
     {#if layout === 'tree'}
       {#each tree.roots as rootDrv, index (rootDrv)}
         <BuildTree
@@ -140,6 +249,7 @@
           now={now.value}
           {selectedActivityId}
           {onselect}
+          cursor={cursorDrv}
           guideLines={[]}
           isLast={index === tree.roots.length - 1}
           isRoot={true}
@@ -175,11 +285,11 @@
                 class="drv-version">{parts.version}</span
               >{/if}
           </div>
-          <div class="where" class:remote={whereIsRemote(build.host)} title={whereLabel(build.host)}>
+          <div class="where" class:remote={isRemote(build.host)} title={whereLabel(build.host)}>
             {whereLabel(build.host)}
           </div>
           <div class="phase">{build.phase ?? ''}</div>
-          <div class="duration">{durationLabel(build)}</div>
+          <div class="duration">{durationLabel(build, now.value)}</div>
           <div class="right">{String(build.logCount)}</div>
         </div>
       {:else}

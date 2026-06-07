@@ -553,6 +553,14 @@ main.dragging-v .splitter-v::after {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
+/* Keyboard cursor (vim j/k/h/l): a left rail plus a faint wash, distinct from
+ * the accent fill of a click-selected row so both can show at once. */
+.activity-row.cursor,
+.build-row.cursor {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
 .dep-row .where {
   flex: 0 0 auto;
 }

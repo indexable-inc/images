@@ -2,11 +2,15 @@
   import { tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import PanelHeader from '$lib/PanelHeader.svelte';
+  import { splitDerivation } from '$lib/format';
   import { LOG_LEVEL_FILTERS, type LogEntry, type LogLevelFilter } from '$lib/types';
 
   type Props = {
     logs: LogEntry[];
     selectedActivityId: number | null;
+    /// Derivation whose logs are pinned, so the filter chip names the build
+    /// instead of an opaque activity id. Null when nothing is selected.
+    selectedDrv: string | null;
     onclearselection: () => void;
     /// Drawer collapse state, owned by the shell. The panel only renders the
     /// caret and reports clicks; the shell resizes the drawer around it.
@@ -16,7 +20,11 @@
 
   const RECENT_LOG_LIMIT = 500;
 
-  const { logs, selectedActivityId, onclearselection, collapsed, oncollapse }: Props = $props();
+  const { logs, selectedActivityId, selectedDrv, onclearselection, collapsed, oncollapse }: Props =
+    $props();
+
+  /// Package name of the pinned build, for the selection chip.
+  const selectedName = $derived(selectedDrv === null ? null : splitDerivation(selectedDrv).name);
 
   let level = $state<LogLevelFilter>('all');
   let search = $state('');
@@ -108,9 +116,10 @@
     if (stream !== null) stream.scrollTop = stream.scrollHeight;
   }
 
-  /// Power-user shortcuts: `/` focuses the filter, `Esc` peels back the current
-  /// filter then the build selection, `g`/`G` jumps to the live tail. Typing in
-  /// a field is left alone except for `Esc`, which still clears the filter.
+  /// Log shortcuts: `/` focuses the filter and `Esc` peels back the current
+  /// filter then the build selection. The build tree owns `j/k/h/l` and `g`/`G`
+  /// (jump to the live tail stays a button), so the two window handlers never
+  /// contend for the same key. Typing in a field is left alone except for `Esc`.
   function onWindowKeydown(event: KeyboardEvent): void {
     const target = event.target;
     const typing =
@@ -131,11 +140,6 @@
       } else if (target === searchInput) {
         searchInput?.blur();
       }
-      return;
-    }
-    if ((event.key === 'g' || event.key === 'G') && !typing) {
-      event.preventDefault();
-      jumpToEnd();
     }
   }
 </script>
@@ -174,8 +178,13 @@
         bind:value={search}
       />
       {#if selectedActivityId !== null}
-        <button type="button" class="chip selection" onclick={onclearselection}>
-          build #{String(selectedActivityId)} &times;
+        <button
+          type="button"
+          class="chip selection"
+          title={selectedDrv ?? undefined}
+          onclick={onclearselection}
+        >
+          {selectedName ?? `build #${String(selectedActivityId)}`} &times;
         </button>
       {/if}
       {#if !follow}
