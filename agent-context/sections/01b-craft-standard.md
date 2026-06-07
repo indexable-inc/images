@@ -1,6 +1,6 @@
 ---
 name: craft-standard
-disclosure: always
+disclosure: progressive
 description: "The craft bar and defaults for every change: clear ownership, typed boundaries, checked defaults, root-cause fixes, no silent fallbacks."
 ---
 

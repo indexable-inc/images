@@ -1,6 +1,6 @@
 ---
 name: writing-style
-disclosure: always
+disclosure: progressive
 description: "How to write prose (docs, comments, issues, PRs) and replies to the user."
 ---
 

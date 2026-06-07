@@ -1,6 +1,6 @@
 ---
 name: intro
-disclosure: always
+disclosure: progressive
 description: "What this repo is: pre-built OCI images for ix VMs plus composable NixOS modules."
 ---
 
