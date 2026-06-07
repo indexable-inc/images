@@ -10,6 +10,7 @@
   drgn-src,
   fff-src,
   launchk-src,
+  snix-src,
   clippy-fork,
   ghostty,
   # Flake source revision, stamped into builds that want to report it (see
@@ -386,6 +387,7 @@ let
     drgnSrc = drgn-src;
     fffSrc = fff-src;
     launchkSrc = launchk-src;
+    snixSrc = snix-src;
   };
 
   /**

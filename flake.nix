@@ -66,6 +66,16 @@
       flake = false;
     };
 
+    # snix (Rust reimplementation of Nix; TVL-style depot, no flake.nix) consumed
+    # as a source tree so `packages/snix` builds its CLI through cargo-unit
+    # instead of the upstream crate2nix `Cargo.nix`. The Cargo workspace lives in
+    # the repo's `snix/` subdirectory. Pinned in flake.lock; `nix flake update
+    # snix-src` to bump.
+    snix-src = {
+      url = "git+https://git.snix.dev/snix/snix?ref=canon";
+      flake = false;
+    };
+
     # Nous Research's Hermes agent ships its own NixOS module
     # (`nixosModules.default`) and uv2nix-built Python closure. Pinned to
     # a release tag so routine bumps are review events; `nix flake update
@@ -109,6 +119,7 @@
       drgn-src,
       fff-src,
       launchk-src,
+      snix-src,
       clippy-fork,
       ghostty,
       ...
@@ -173,6 +184,7 @@
           drgn-src
           fff-src
           launchk-src
+          snix-src
           clippy-fork
           ghostty
           ;
