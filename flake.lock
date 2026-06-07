@@ -306,7 +306,8 @@
         "home-manager": "home-manager",
         "launchk-src": "launchk-src",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "snix-src": "snix-src"
       }
     },
     "rust-overlay": {
@@ -327,6 +328,23 @@
         "owner": "oxalica",
         "repo": "rust-overlay",
         "type": "github"
+      }
+    },
+    "snix-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780855864,
+        "narHash": "sha256-I4jQAPpAxU6GMj/4mr20qfWZJ5enMVzyEpX/fXI6lU0=",
+        "ref": "canon",
+        "rev": "2272a9fc758e49a7f13a1685de1ebded84a0182e",
+        "revCount": 22436,
+        "type": "git",
+        "url": "https://git.snix.dev/snix/snix"
+      },
+      "original": {
+        "ref": "canon",
+        "type": "git",
+        "url": "https://git.snix.dev/snix/snix"
       }
     },
     "uv2nix": {
