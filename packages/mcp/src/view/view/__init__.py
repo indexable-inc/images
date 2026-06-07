@@ -143,8 +143,16 @@ def _code_css() -> str:
     light_css = "".join(
         f"{sel_} {{ {light.get(sel_, reset)} }}" for sel_ in {**dark, **light}
     )
+    # The `linenos="inline"` line-number spans are chrome, not tokens, so they
+    # are not in the palette above. Style them explicitly (theme-aware via the
+    # `--ixv-*` vars): a muted color and a gap so they read as a gutter, not as
+    # digits fused to the first token, and unselectable so a copy skips them.
+    gutter = (
+        f"{sel} .linenos {{ color: {_c('muted')}; "
+        f"padding-right: 1.25em; user-select: none; -webkit-user-select: none }}"
+    )
     return (
-        f"<style>{dark_css}@media (prefers-color-scheme: light) "
+        f"<style>{gutter}{dark_css}@media (prefers-color-scheme: light) "
         f"{{{light_css}}}</style>"
     )
 
