@@ -472,6 +472,16 @@ def _as_frame_if_tabular(value):
             return pl.DataFrame(list(value))
         except Exception:
             return value
+    if isinstance(value, (list, tuple)) and value:
+        # A plain list/tuple of scalars is tabular too: one styled `value` column
+        # for the human, compact CSV for you. (Lists of mappings are records above.)
+        try:
+            return pl.DataFrame({"value": list(value)})
+        except Exception:
+            try:
+                return pl.DataFrame({"value": [_safe_repr(v) for v in value]})
+            except Exception:
+                return value
     return value
 
 
