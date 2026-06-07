@@ -90,7 +90,7 @@ install step: `fff` (fast fuzzy file search / content grep, with async
 `search_async`/`grep_async` + `afind`/`agrep`), `tui` (PTY driver), `search`
 (semantic/grep over the `index` corpus), `exa_py` (Exa web search; bring your own
 `EXA_API_KEY`), `google_auth` (Gmail/Calendar via `google_auth.gmail()` /
-`google_auth.calendar()`), numpy, polars, duckdb, httpx, matplotlib, playwright,
+`google_auth.calendar()`), `fleet` (polars-returning SSH fan-out: `await fleet.scan(hosts, cmd)` reads files/command-output from many hosts in parallel into one DataFrame), numpy, polars, duckdb, httpx, matplotlib, playwright,
 the Google API client, and on macOS `screen` and `vmkit`.
 
 ## Remote access
