@@ -15,19 +15,35 @@
   const hasRich = $derived(job.outputs.length > 0);
   // Don't repeat the error if it's already in the captured stdout tail.
   const showError = $derived(!!job.error && !(job.output ?? '').includes(job.error));
+  // A run reads as its output by default: the source is one click away, not in
+  // the way. Only runs that actually carry source get a reveal toggle.
+  const hasCode = $derived(!!(job.code_html || job.code));
+  let showCode = $state(false);
 </script>
 
 <article class="job {job.status}">
-  <header class="hdr">
+  <!-- The header doubles as the source toggle: a caret on the left reveals the
+       code, the rest stays a quiet label. Inert when there is no source. -->
+  <button
+    class="hdr"
+    type="button"
+    aria-expanded={showCode}
+    disabled={!hasCode}
+    title={hasCode ? (showCode ? 'Hide source' : 'Show source') : undefined}
+    onclick={() => (showCode = !showCode)}
+  >
+    {#if hasCode}<span class="caret" aria-hidden="true">{showCode ? '▾' : '▸'}</span>{/if}
     <StatusChip status={job.status} />
     {#if title}<span class="name">{title}</span>{/if}
     <span class="dur">{elapsed}</span>
-  </header>
+  </button>
 
-  {#if job.code_html}
-    <CodeView html={job.code_html} bindings={job.bindings} />
-  {:else if job.code}
-    <pre class="code">{job.code}</pre>
+  {#if showCode}
+    {#if job.code_html}
+      <CodeView html={job.code_html} bindings={job.bindings} />
+    {:else if job.code}
+      <pre class="code">{job.code}</pre>
+    {/if}
   {/if}
 
   {#if job.output}
@@ -61,10 +77,39 @@
   .job.error {
     border-left-color: var(--err);
   }
+  /* The header is the source toggle, so it is a full-width button reset to read
+     as the plain status line it replaces. */
   .hdr {
+    appearance: none;
+    width: 100%;
     display: flex;
     gap: 9px;
     align-items: baseline;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .hdr:disabled {
+    cursor: default;
+  }
+  .hdr:focus-visible {
+    outline: 1px solid var(--active);
+    outline-offset: 2px;
+  }
+  .caret {
+    flex: none;
+    color: var(--faint);
+    font-size: 9px;
+    line-height: 1;
+    align-self: center;
+  }
+  .hdr:hover .caret {
+    color: var(--active);
   }
   .name {
     flex: 1 1 auto;
