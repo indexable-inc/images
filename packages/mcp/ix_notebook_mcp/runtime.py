@@ -452,6 +452,18 @@ def _as_frame_if_tabular(value):
     except Exception:
         return value
     if isinstance(value, Mapping) and value:
+        vals = list(value.values())
+        # A dict whose values are themselves mappings is NESTED data: render the
+        # value column as a polars Struct so `view.df_html` shows each value as a
+        # recursive nushell-style sub-table rather than a clipped repr. Scalar or
+        # heterogeneous values fall back to the flat key/value repr below.
+        if all(isinstance(v, Mapping) for v in vals):
+            try:
+                return pl.DataFrame(
+                    {"key": [str(k) for k in value], "value": pl.Series([dict(v) for v in vals])}
+                )
+            except Exception:
+                pass
         return pl.DataFrame(
             {"key": [str(k) for k in value], "value": [_safe_repr(v) for v in value.values()]}
         )

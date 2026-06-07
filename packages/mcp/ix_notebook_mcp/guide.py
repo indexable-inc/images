@@ -133,7 +133,10 @@ POLARS = (
     "you never hand-build a table and a wide/long-stringed frame is never clipped to you. Use "
     "`pl`; pandas is not bundled. Even key/value data — environment variables, a config dict, "
     "counts — is tabular: return a two-column DataFrame, never a `\\n`-joined string or a printed "
-    "dict."
+    "dict. Nested data renders recursively: a dict of dicts (or a frame with struct/list columns) "
+    "shows each value as a nushell-style nested sub-table, so prefer one frame with struct/list "
+    "columns over a `{label: blob}` dict that collapses each value to a clipped repr — or add each "
+    "item as its own `cells.add`."
 )
 
 RESULT_SPLIT = (
