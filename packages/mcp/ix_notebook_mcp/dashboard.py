@@ -16,6 +16,7 @@ run outside nix), a small stub explains how to build the UI.
 from __future__ import annotations
 
 import functools
+import html
 import os
 from pathlib import Path
 
@@ -55,21 +56,57 @@ _PAGE = _load_page()
 @functools.lru_cache(maxsize=512)
 def _code_html(code: str) -> str:
     """A python snippet as self-contained highlighted HTML (inline monokai
-    styles, no wrapping ``<pre>`` so the card controls layout). Cached so each
-    unique snippet is highlighted once, not on every one-second poll; falls back
-    to empty (the card then shows the raw text) when pygments is unavailable."""
+    styles, no wrapping ``<pre>`` so the card controls layout). Every identifier
+    token carries a ``data-ix-name`` so the dashboard can attach the value inlay
+    and hover card to it; the join with values is by name, done in the browser
+    against the job's ``bindings`` (kept out of here so this stays cache-keyed on
+    the code text alone). Cached so each unique snippet is highlighted once, not
+    on every one-second poll; falls back to empty (the card then shows the raw
+    text) when pygments is unavailable."""
     if not code:
         return ""
     try:
-        from pygments import highlight
-        from pygments.formatters import HtmlFormatter
         from pygments.lexers import PythonLexer
+        from pygments.styles import get_style_by_name
+        from pygments.token import Token
 
-        formatter = HtmlFormatter(style="monokai", noclasses=True, nowrap=True)
-        return highlight(code, PythonLexer(), formatter).strip()
+        style = get_style_by_name("monokai")
+        parts: list[str] = []
+        for token_type, value in PythonLexer().get_tokens(code):
+            if not value:
+                continue
+            text = html.escape(value)
+            css = _token_css(style, token_type)
+            # Anchor only real identifiers (not builtins, operators, or the `@` of
+            # a decorator) so the inlay/hover attaches to user namespace names.
+            if token_type in Token.Name and token_type not in Token.Name.Builtin and value.isidentifier():
+                attr = html.escape(value, quote=True)
+                style_attr = f' style="{css}"' if css else ""
+                parts.append(f'<span data-ix-name="{attr}"{style_attr}>{text}</span>')
+            elif css:
+                parts.append(f'<span style="{css}">{text}</span>')
+            else:
+                parts.append(text)
+        return "".join(parts).strip("\n")
     except Exception:
         # Highlighting is cosmetic: a missing/old pygments must not break the API.
         return ""
+
+
+def _token_css(style, token_type) -> str:
+    """Inline CSS for one pygments token under ``style`` (the noclasses path,
+    rebuilt here so we can also emit identifier anchors)."""
+    spec = style.style_for_token(token_type)
+    parts: list[str] = []
+    if spec.get("color"):
+        parts.append(f"color:#{spec['color']}")
+    if spec.get("bold"):
+        parts.append("font-weight:bold")
+    if spec.get("italic"):
+        parts.append("font-style:italic")
+    if spec.get("underline"):
+        parts.append("text-decoration:underline")
+    return ";".join(parts)
 
 
 async def start(config: Config) -> web.AppRunner:

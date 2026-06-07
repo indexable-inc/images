@@ -866,6 +866,100 @@ let
         mkdir -p "$out"
       '';
 
+  # Exercises the live-value introspection that feeds the dashboard's hover/inlay:
+  # describe() classifies scalars, DataFrames, functions (with a source location),
+  # and modules; cell_bindings() resolves a cell's mentioned names against the
+  # namespace (excluding attribute parts); and a finished job persists those
+  # bindings to the store, which is where the dashboard reads them. In-process, no
+  # kernel or network, so the sandbox runs it.
+  bindingsTestPy = pkgs.writeText "ix-mcp-bindings-test.py" ''
+    import asyncio
+    import inspect
+    import json
+    import os
+    import sqlite3
+    import tempfile
+
+    import polars as pl
+
+    from ix_notebook_mcp import introspect
+
+    # Direct descriptors: each kind carries the inlay summary the dashboard shows.
+    assert introspect.describe(42)["summary"] == "42"
+    df_desc = introspect.describe(pl.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]}))
+    assert df_desc["kind"] == "dataframe" and "3×2" in df_desc["summary"], df_desc
+
+    def sample(x):
+        "a doc line"
+        return x
+
+    fn_desc = introspect.describe(sample)
+    assert fn_desc["kind"] == "callable" and fn_desc["summary"].startswith("ƒ sample"), fn_desc
+    # A function has a definition site: this is the go-to-definition payload.
+    assert ":" in fn_desc.get("def", ""), fn_desc
+
+    mod_desc = introspect.describe(inspect)
+    assert mod_desc["kind"] == "module" and mod_desc["summary"] == "module inspect", mod_desc
+
+    # cell_bindings resolves names a cell mentions; an attribute (df.height) is not
+    # a name, so only `df` and `n` are described, not `height`.
+    ns = {"df": pl.DataFrame({"a": [1]}), "n": 7}
+    bound = introspect.cell_bindings("rows = df.height\ntotal = n + 1\n", ns)
+    assert set(bound) == {"df", "n"}, bound
+    assert bound["df"]["kind"] == "dataframe" and bound["n"]["summary"] == "7", bound
+
+    # End to end: a finished job snapshots its bindings into the store row.
+    store_path = tempfile.mktemp(suffix=".db")
+    os.environ["IX_MCP_STORE"] = store_path
+
+    from IPython.core.interactiveshell import InteractiveShell
+
+    InteractiveShell.instance()
+
+    from ix_notebook_mcp import runtime
+
+    user_ns = {"pl": pl}
+    runtime.install(user_ns)
+    run = user_ns["__ix_run"]
+
+
+    async def main():
+        job = await run("frame = pl.DataFrame({'a': [1, 2]})\nResult.ok('made it')", budget=3.0, name="bind")
+        await job.task
+        conn = sqlite3.connect(store_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT bindings FROM executions WHERE id = ?", (job.id,)).fetchone()
+        stored = json.loads(row["bindings"])
+        assert stored.get("frame", {}).get("kind") == "dataframe", stored
+        # `pl` is referenced and live, so it is described as a module.
+        assert stored.get("pl", {}).get("kind") == "module", stored
+
+
+    asyncio.run(main())
+    print("bindings-ok")
+  '';
+  bindingsSmoke =
+    pkgs.runCommand "ix-mcp-bindings-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${bindingsTestPy} >stdout 2>stderr || {
+          echo "ix-mcp bindings smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'bindings-ok' stdout || {
+          echo "ix-mcp bindings smoke did not confirm value introspection:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # The vmkit guest surfaces as a live dashboard resource: a booted Driver shows
   # up in Driver.list_all(), renders its framebuffer to inline-PNG HTML, and the
   # runtime's resource provider discovers it. Uses a fake proc + a seeded frame
@@ -1182,6 +1276,7 @@ package.overrideAttrs (old: {
         evalSmoke
         runtimeSmoke
         richSmoke
+        bindingsSmoke
         bindDefaultSmoke
         viewSmoke
         fleetSmoke

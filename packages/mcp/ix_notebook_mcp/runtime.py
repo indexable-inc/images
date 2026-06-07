@@ -635,10 +635,25 @@ def _persist_final(job: Job) -> None:
             result=result_repr,
             error=job.error,
             outputs=_job_outputs(job),
+            bindings=_cell_bindings(job),
         )
     except Exception:
         # Best-effort logging: persisting the final status must not raise during cleanup.
         pass
+
+
+def _cell_bindings(job: Job) -> dict:
+    """The live value each of the cell's identifiers is bound to, snapshotted now
+    that the job has finished. Read off the shared user namespace (the same one
+    the code ran in), so the dashboard can show inlay hints and hover values that
+    reflect the actual objects. Best-effort: a failure here just means no hints."""
+    ns = _user_ns if _user_ns is not None else globals()
+    try:
+        from .introspect import cell_bindings
+
+        return cell_bindings(job.code, ns)
+    except Exception:
+        return {}
 
 
 def _safe_repr(value) -> str:

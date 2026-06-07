@@ -11,6 +11,18 @@ export interface RichOutput {
 
 export type JobStatus = 'running' | 'done' | 'error' | 'cancelled';
 
+// The live value one of a cell's identifiers was bound to when the run finished
+// (ix_notebook_mcp/introspect.py). `summary` is the inlay chip shown after the
+// name; `detail` and the optional `def` (a "file:line" definition site) fill the
+// hover card. Keyed by identifier name in `Job.bindings`.
+export interface Binding {
+  kind: string;
+  type: string;
+  summary: string;
+  detail: string;
+  def?: string;
+}
+
 export interface Job {
   id: string;
   name: string;
@@ -23,6 +35,7 @@ export interface Job {
   result: string | null;
   error: string | null;
   outputs: RichOutput[];
+  bindings: Record<string, Binding>;
 }
 
 export interface Resource {

@@ -107,3 +107,29 @@ body {
 .rich tr:hover td {
   background: var(--panel-2);
 }
+
+/* Live-value affordances on highlighted source. CodeView injects the code with
+   {@html} and tags identifier tokens server-side, so (like .rich above) these
+   cannot be component-scoped. A bound name carries a dotted underline to mark it
+   hoverable; an inlay chip shows the value snapshot after the name's first use. */
+.ix-bound {
+  text-decoration: underline dotted var(--faint);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.ix-bound:hover {
+  text-decoration-color: var(--dim);
+}
+.ix-inlay {
+  margin-left: 4px;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-style: italic;
+  user-select: none;
+}
+.ix-inlay::before {
+  content: '‹';
+}
+.ix-inlay::after {
+  content: '›';
+}

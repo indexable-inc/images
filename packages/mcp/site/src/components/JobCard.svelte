@@ -4,6 +4,7 @@
   import { duration, jobTitle } from '$lib/format';
   import StatusChip from './StatusChip.svelte';
   import RichOutput from './RichOutput.svelte';
+  import CodeView from './CodeView.svelte';
 
   let { job }: { job: Job } = $props();
 
@@ -24,7 +25,7 @@
   </header>
 
   {#if job.code_html}
-    <pre class="code">{@html job.code_html}</pre>
+    <CodeView html={job.code_html} bindings={job.bindings} />
   {:else if job.code}
     <pre class="code">{job.code}</pre>
   {/if}
