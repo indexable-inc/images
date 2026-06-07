@@ -12,7 +12,7 @@
   --active: #f2f2f2;
   --err: #cf5a5a;
   --accent: #6ea8fe;
-  --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, 'Cascadia Code', monospace;
+  --mono: 'Berkeley Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, 'Cascadia Code', monospace;
 }
 
 * {
@@ -35,6 +35,12 @@ body {
   font: 13px/1.55 var(--mono);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Berkeley Mono ligatures. The `font` shorthand above resets font-variant, so
+     ligatures are driven by font-feature-settings (inherited, not reset by the
+     shorthand) and so apply to every descendant, including `font`-shorthand
+     elements like .rich table and the .ix-result <pre>s. */
+  font-feature-settings: 'liga' 1, 'calt' 1;
+  font-variant-ligatures: contextual;
   /* The three panes own all scrolling; the page itself never scrolls. */
   overflow: hidden;
 }

@@ -1237,6 +1237,15 @@ def install(user_ns: dict | None = None) -> None:
     target["__ix_run"] = __ix_run
     target["__ix_exec"] = __ix_exec
     target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")
+    # `sh` is a bundled, callable module (see packages/mcp/src/sh). Bind it here
+    # so `await sh(cmd)` works with no import, the way Result/cells/jobs do; an
+    # explicit `import sh` returns the same object, so both styles agree.
+    try:
+        import sh as _sh_module
+        target["sh"] = _sh_module
+    except Exception:
+        # Outside the bundled interpreter the module may be absent; skip it.
+        pass
 
     try:
         asyncio.get_event_loop().create_task(_flusher())

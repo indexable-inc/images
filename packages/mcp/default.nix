@@ -1474,6 +1474,12 @@ let
         elapsed = loop.time() - start
         assert elapsed < 10, f"timeout did not return promptly: {elapsed:.1f}s"
 
+        # The module object itself is callable: the documented
+        # `import sh; await sh(cmd)` works without reaching for `sh.sh`.
+        assert callable(sh), "sh module is not callable"
+        direct = await sh("printf hi")
+        assert direct.ok and direct.text == "hi", repr(direct.text)
+
         print("sh-ok", sh.__version__)
 
 

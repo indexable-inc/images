@@ -285,3 +285,21 @@ async def sh(
     if check and not out.ok:
         raise ShellError(out)
     return out
+
+
+# Make the module itself callable, so the documented `import sh; await sh(cmd)`
+# works without reaching for `sh.sh`. The module object's class is swapped for a
+# ModuleType subclass that forwards a call to the sh() coroutine function. The
+# kernel binds this same module object as `sh` in the user namespace too (see
+# ix_notebook_mcp.runtime.install), so `await sh(...)` works with or without an
+# explicit import, while `sh.Output` / `sh.ShellError` stay reachable as attrs.
+import sys as _sys
+import types as _types
+
+
+class _CallableModule(_types.ModuleType):
+    def __call__(self, *args, **kwargs):
+        return sh(*args, **kwargs)
+
+
+_sys.modules[__name__].__class__ = _CallableModule
