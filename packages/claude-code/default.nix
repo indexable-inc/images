@@ -144,12 +144,12 @@ let
   # Lean code-execution agent: the only surface this build needs is the index MCP
   # (its `mcp__index__*` tools, e.g. python_exec, which MCP namespacing leaves
   # untouched by `--disallowedTools`). Drop the built-in meta-tools so the model
-  # works turn-by-turn through code execution instead of branching into plan
-  # mode, structured task lists, agent teams, worktrees, or multiple-choice
-  # prompts. Removed regardless of permission mode, same as the autonomy list.
+  # works turn-by-turn through code execution instead of branching into
+  # structured task lists, agent teams, worktrees, or multiple-choice prompts.
+  # Plan mode (EnterPlanMode/ExitPlanMode) is intentionally NOT dropped, so the
+  # agent can propose a plan for a non-trivial change before executing it.
+  # Removed regardless of permission mode, same as the autonomy list.
   disallowedMetaTools = [
-    "EnterPlanMode"
-    "ExitPlanMode"
     "AskUserQuestion"
     "TaskCreate"
     "TaskList"
@@ -205,7 +205,6 @@ let
     "Bash"
     "BashOutput"
     "Edit"
-    "ExitPlanMode"
     "Glob"
     "Grep"
     "KillShell"
@@ -415,7 +414,9 @@ stdenv.mkDerivation {
       --inherit-argv0 \
       --add-flags --debug \
       --add-flags "--thinking-display summarized" \
-      --add-flags "--disallowedTools ${lib.concatStringsSep "," (disallowedAutonomyTools ++ disallowedMetaTools)}" \
+      --add-flags "--disallowedTools ${
+        lib.concatStringsSep "," (disallowedAutonomyTools ++ disallowedMetaTools)
+      }" \
       --append-flags "--settings ${settingsDefaultsFile}" \
       ${lib.escapeShellArgs systemPromptWrapperArgs} \
       --set DISABLE_AUTOUPDATER 1 \
