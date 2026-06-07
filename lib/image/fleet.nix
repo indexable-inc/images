@@ -258,7 +258,7 @@ let
       replacementDestination = deploy.destination or "${imageName}:${imageTag}";
       switchBuildOn = deploy.switch.buildOn or "remote";
       ipv4HealthChecks = lib.filterAttrs (_: check: check.requiresIpv4) config.ix.healthChecks;
-      # ix switch expects a system out-path for local copy and a .drv for remote
+      # ix up expects a system out-path for local copy and a .drv for remote
       # build. Picking the wrong shape uploads the build-time closure and tries
       # to run `<drv>/bin/switch-to-configuration`, which deadlocks.
       switchTarget = deploy.switch.target or unsafeDiscardStringContext (

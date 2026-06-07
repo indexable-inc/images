@@ -2,7 +2,7 @@
 # The auto-enabled base profile (modules/profiles/base) supplies version
 # control, editors, the nushell workspace wrapper, gdb/lldb, strace, tcpdump,
 # jaq, btop, bpftrace, lsof, ncdu, pv, file, and the gnutar/gzip/zstd trio
-# needed to stay `ix switch`-able.
+# needed to stay `ix up`-switchable.
 {
   ix,
   lib,

@@ -1,7 +1,7 @@
 { pkgs, ... }:
 {
   # This is the line to edit. Add or remove packages, then run `ix up` again
-  # (or `ix switch`) and ix rebuilds the closure and activates it on the running
+  # and ix rebuilds the closure and activates it on the running
   # VM in place, the same contract as `nixos-rebuild switch`.
   #
   # This is an ordinary NixOS module: `services.*`, `users.*`, `systemd.*`, and

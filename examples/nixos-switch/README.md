@@ -1,6 +1,6 @@
 # NixOS switch
 
-The smallest fork-and-go example of the native `ix switch` loop: boot a NixOS VM
+The smallest fork-and-go example of the native `ix up` loop: boot a NixOS VM
 from the `ix/base` image, add a package, and watch ix rebuild and activate the
 new system on the running VM in place.
 
@@ -44,6 +44,6 @@ rights: it builds and activates your own system onto your own VM.
 
 ## Scope
 
-This builds on the target VM itself, the `ix up` / `ix switch` default. Building
+This builds on the target VM itself, the `ix up` default. Building
 on a separate per-user builder VM (`--build-vm`) is a follow-up; the same-VM
 path shown here is the native switch primitive.
