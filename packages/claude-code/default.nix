@@ -56,7 +56,7 @@ let
   # Env defaults applied through the wrapper, declared as data (single source)
   # and derived into flags below rather than hand-written into the install phase.
   # `--set-default` (not `--set`) so an explicit env or settings.json `env` value
-  # still overrides per machine. Two groups:
+  # still overrides per machine. Three groups:
   #  - Output-truncation caps raised to the CLI's built-in maxima: we run a
   #    trusted config (our own CLAUDE.md / AGENTS.md / hooks / MCP servers), so
   #    prefer full output over pruning. BASH_MAX_OUTPUT_LENGTH default 30000
@@ -64,11 +64,19 @@ let
   #    160000); MAX_MCP_OUTPUT_TOKENS default ~25000 tokens (no clamp).
   #  - Feature toggles on by default fleet-wide: agent teams, still gated behind
   #    the EXPERIMENTAL_ env var in this build.
+  #  - Context window: default every session to standard 200K Opus 4.8, not the
+  #    1M window the `opus` alias is silently auto-upgraded to on
+  #    Max/Team/Enterprise/API (1M reads past 200K are uncached and slower per
+  #    turn). Per the inline note this is the env knob, not a `model` setting.
   wrapperEnvDefaults = {
     BASH_MAX_OUTPUT_LENGTH = 150000;
     TASK_MAX_OUTPUT_LENGTH = 160000;
     MAX_MCP_OUTPUT_TOKENS = 200000;
     CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = 1;
+    # Drops [1m] variants from /model without touching model selection (a `model`
+    # settings key would, since flagSettings outranks user settings.json).
+    # Re-enable 1M per machine: `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
+    CLAUDE_CODE_DISABLE_1M_CONTEXT = 1;
   };
   envDefaultFlags = lib.concatLists (
     lib.mapAttrsToList (name: value: [
