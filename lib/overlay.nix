@@ -5,6 +5,13 @@
   buildIxRustTool,
   clippy-fork,
   writePythonApplication,
+  # Curated cross-cutting helper surface (`lib`'s `sharedHelpers`), threaded in
+  # as the `ix` arg so overlay-built packages can reach pure helpers like
+  # `ix.deepMerge` exactly as flake-output packages do (lib/packages.nix binds
+  # `ix` for the `packageSetFor` path). Without this, an overlay package that
+  # takes an `ix` argument fails callPackage with a missing-arg error (e.g.
+  # packages/claude-code uses `ix.deepMerge.rhs`).
+  ix,
 }:
 final: _prev:
 let
@@ -15,6 +22,7 @@ let
       final
       buildIxRustTool
       clippy-fork
+      ix
       ;
     pkgs = final;
     inherit (entry) path;

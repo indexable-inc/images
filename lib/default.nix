@@ -51,6 +51,10 @@ let
       clippy-fork
       writePythonApplication
       ;
+    # Pure cross-cutting helpers (deepMerge, writers, ...) so overlay packages
+    # that take an `ix` argument resolve it the same way flake-output packages
+    # do. Defined below in this recursive `let`; threaded lazily.
+    ix = sharedHelpers;
   };
   overlays = [ overlay ];
 
