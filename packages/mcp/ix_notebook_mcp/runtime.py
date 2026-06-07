@@ -1533,6 +1533,18 @@ async def __ix_exec(code: str, budget: float = 15.0, name: str | None = None) ->
     _emit(job)
 
 
+def _tilde(path) -> str:
+    """An absolute path with the home directory collapsed to ``~`` for a compact,
+    privacy-friendly note (``/Users/me/.ix/trace/x`` -> ``~/.ix/trace/x``)."""
+    text = str(path)
+    home = str(pathlib.Path.home())
+    if text == home:
+        return "~"
+    if text.startswith(home + os.sep):
+        return "~" + text[len(home):]
+    return text
+
+
 async def __ix_read(target, start=None, end=None) -> "Result":
     """Read a file (or evaluate a kernel value) FOR THE MODEL, quietly.
 
@@ -1555,7 +1567,7 @@ async def __ix_read(target, start=None, end=None) -> "Result":
         # Off the loop: a large file read is blocking I/O, the one thing that
         # freezes every other job on the shared event loop.
         full = await asyncio.to_thread(path.read_text, errors="replace")
-        label = str(path)
+        label = _tilde(path)
     else:
         value = eval(target, ns) if isinstance(target, str) else target
         full = value if isinstance(value, str) else _safe_repr(value)
