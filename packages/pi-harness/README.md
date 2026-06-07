@@ -66,18 +66,22 @@ This first cut emits Pi's native JSON; the mapper and the `cell_update` /
 
 ## Validation
 
-`smoke/run.sh` builds `ix-mcp`, resolves the bridge deps, runs one prompt, and
-asserts: built-ins absent, `python_exec` exposed, JSON turn events emitted. It
-needs network + an API key, so run it yourself:
+`smoke/run.sh` builds `ix-mcp`, builds `.#pi-harness`, runs one prompt through
+the **shipped** `bin/pi-harness`, and asserts: built-ins absent, `python_exec`
+exposed, JSON turn events emitted. It needs network + an API key, so run it
+yourself:
 
 ```
 ANTHROPIC_API_KEY=... ./packages/pi-harness/smoke/run.sh
 ```
 
+The bridge is packaged with `buildNpmPackage`, so the store extension ships its
+`node_modules` and Pi resolves `@modelcontextprotocol/sdk` at runtime. Refresh
+the pinned dep hash after changing `package-lock.json` with
+`nix run nixpkgs#prefetch-npm-deps -- extension/package-lock.json`.
+
 ## Follow-ups (intentionally deferred)
 
 - Package `pi` as a pinned nix dependency (dependency-intake) and wire it +
   `ix-mcp` into `default.nix` `runtimeInputs` instead of relying on PATH.
-- Make the bridge's `node_modules` pure via `buildNpmPackage` (today the smoke
-  runs `npm install`).
 - Add the Pi→Room event mapper (ENG-2263).

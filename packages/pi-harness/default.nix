@@ -1,6 +1,7 @@
 {
   lib,
   writeNushellApplication,
+  buildNpmPackage,
   # Pi is not yet packaged in this repo. Until the dependency-intake follow-up
   # lands a pinned `pi` derivation, the wrapper calls `pi` from PATH (the dev
   # image / system already provides it). Pass a derivation here to pin it.
@@ -21,16 +22,35 @@ let
     ) models
   );
 
-  # The bridge source travels with the wrapper; Pi loads it with --extension.
-  # Name exactly the files the build needs (the manifests are for the future
-  # buildNpmPackage follow-up), so node_modules/_probe never enter the closure.
-  extension = lib.fileset.toSource {
+  # Name exactly the files the build needs, so node_modules/_probe never enter
+  # the source closure.
+  extensionSrc = lib.fileset.toSource {
     root = ./extension;
     fileset = lib.fileset.unions [
       (./extension + "/ix-mcp-bridge.ts")
       (./extension + "/package.json")
       (./extension + "/package-lock.json")
     ];
+  };
+
+  # Build the bridge WITH its npm deps so the shipped extension actually loads:
+  # Pi resolves `@modelcontextprotocol/sdk` from node_modules next to the .ts,
+  # the same layout proven to work end-to-end. npmDepsHash pins the dep closure;
+  # refresh it with `nix run nixpkgs#prefetch-npm-deps -- extension/package-lock.json`.
+  extension = buildNpmPackage {
+    pname = "ix-mcp-bridge";
+    version = "0.1.0";
+    src = extensionSrc;
+    npmDepsHash = "sha256-Nis7wQLp7wASaEu4n/Cp3pthB3z+9FsTJs5pK3oq77M=";
+    # No build script: install the source plus production node_modules verbatim.
+    dontNpmBuild = true;
+    installPhase = ''
+      runHook preInstall
+      mkdir -p $out
+      cp ix-mcp-bridge.ts package.json $out/
+      cp -r node_modules $out/node_modules
+      runHook postInstall
+    '';
   };
 
   runtimeInputs = lib.optional (pi != null) pi ++ lib.optional (ix-mcp != null) ix-mcp;
