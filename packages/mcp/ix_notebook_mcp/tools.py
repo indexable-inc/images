@@ -73,6 +73,13 @@ mcp = FastMCP(
         "happened')` (a quiet confirmation for a side-effecting cell), "
         "`Result.of(df)` (render any value richly for the human, its repr to you), "
         "or `Result(user_html=..., llm_result=..., llm_images=[fig, png_bytes])`. "
+        "Write the cell as readable, idiomatic Python, not a cramped one-liner: "
+        "the dashboard shows your source verbatim, so a human reads it. Use real "
+        "statements over several lines, bind intermediate results to clearly named "
+        "variables, and break a long comprehension or chained call across lines "
+        "instead of nesting it inside a `str(...)` or a `Result(...)` call. Let the "
+        "final `Result(...)` name what it returns rather than wrap one dense "
+        "expression. "
         "Three dashboard panes show the session live: every running/finished run "
         "under executions, every live view (a terminal, a widget) under resources, "
         "and your curated highlight reel under cells \u2014 fill it with the most "
@@ -113,7 +120,10 @@ Content = list[outputs.Content]
         "`Result.of(value)` (render a DataFrame/figure/value richly for the human, its "
         "repr to you), or `Result(user_html=..., llm_result=..., llm_images=[fig])` to "
         "split the human's rich HTML view from your text+images. Curate the dashboard's "
-        "presentation pane with `cells.add(value, title=...)`."
+        "presentation pane with `cells.add(value, title=...)`. "
+        "Write readable, idiomatic Python: the dashboard shows your source verbatim, so "
+        "prefer multi-line statements with named intermediates over a one-liner that "
+        "nests a comprehension or chain inside a `str(...)`/`Result(...)` call."
     )
 )
 async def python_exec(
