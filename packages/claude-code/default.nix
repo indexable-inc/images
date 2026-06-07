@@ -58,13 +58,16 @@
   # `--add-flags` (prepended) so an explicit
   # `--system-prompt`/`--system-prompt-file` on the CLI still wins. Defaults to the
   # house prompt below (the shokunin craft ethos plus the pre-v1
-  # backward-compatibility engineering rule); set to `null` to bake no flag and keep
-  # Claude Code's stock prompt.
-  systemPrompt ? ''
-    Work as a shokunin (職人): a craftsman devoted to mastering the craft. Be thoughtful. Ship a beautiful, nearly perfect product, and make the code behind it just as beautiful. It just works.
-
-    This codebase is pre-v1: do not preserve backward compatibility. Design the correct API, then rename and migrate every call site in the same change rather than adding aliases, shims, or deprecated paths. Keep a compatibility layer only when explicitly asked or when a real external consumer is out of reach.
-  '',
+  # backward-compatibility engineering rule, plus a preference for working in git
+  # worktrees); set to `null` to bake no flag and keep Claude Code's stock prompt.
+  # Authored as one paragraph per list element and joined with blank lines, so a
+  # rule reads as a self-contained line of source instead of buried in a wall of
+  # indented-string prose.
+  systemPrompt ? lib.concatStringsSep "\n\n" [
+    "Work as a shokunin (職人): a craftsman devoted to mastering the craft. Be thoughtful. Ship a beautiful, nearly perfect product, and make the code behind it just as beautiful. It just works."
+    "This codebase is pre-v1: do not preserve backward compatibility. Design the correct API, then rename and migrate every call site in the same change rather than adding aliases, shims, or deprecated paths. Keep a compatibility layer only when explicitly asked or when a real external consumer is out of reach."
+    "Prefer working in a git worktree. Create or use a dedicated worktree for your changes instead of editing the primary checkout directly, so the main working tree stays clean and independent lines of work stay isolated."
+  ],
   # Only the flake package set injects the Nushell writer; the overlay eval
   # context does not. The updater is a maintainer-facing flake output, so the
   # overlay build of `pkgs.claude-code` simply omits `passthru.updateScript`.
