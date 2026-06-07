@@ -3,13 +3,15 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::Response;
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use bytes::Bytes;
 use clap::{Parser, ValueEnum};
@@ -17,7 +19,8 @@ use nix_web_monitor_parser::{Delta, MonitorSnapshot, MonitorState, NixEvent, Par
 use tokio::io::{self, AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast, mpsc};
-use tower_http::services::{ServeDir, ServeFile};
+use tokio::time::timeout;
+use tower_http::services::ServeDir;
 
 mod dependencies;
 use dependencies::resolve_dependencies;
@@ -25,6 +28,11 @@ use dependencies::resolve_dependencies;
 /// Bound on the delta broadcast ring. A client that falls this far behind gets
 /// resynced with a fresh `Reset` rather than the dropped frames.
 const DELTA_CHANNEL_CAPACITY: usize = 1024;
+
+/// Cap on a single WebSocket frame send. A client that completes the handshake
+/// but then stops reading would otherwise park the per-client task in `send`
+/// indefinitely; this bounds that to a drop instead of a permanent pin.
+const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Parser)]
 #[command(
@@ -76,18 +84,24 @@ enum TerminalOutput {
     Quiet,
 }
 
-/// Shared state for the HTTP handlers: the monitor for one-shot JSON snapshots
-/// and the broadcast sender each WebSocket subscribes to for the live feed.
+/// Shared state for the HTTP handlers: the monitor for one-shot JSON snapshots,
+/// the broadcast sender each WebSocket subscribes to for the live feed, and the
+/// cached `index.html` bytes served with cache-busting headers.
 #[derive(Clone)]
 struct AppState {
     monitor: Arc<RwLock<MonitorState>>,
     deltas: broadcast::Sender<Bytes>,
+    index_html: Bytes,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
     validate_site_dir(&args.site_dir)?;
+
+    let index_html = Bytes::from(
+        std::fs::read(args.site_dir.join("index.html")).context("reading index.html")?,
+    );
 
     let monitor = Arc::new(RwLock::new(MonitorState::default()));
     let (deltas, _) = broadcast::channel::<Bytes>(DELTA_CHANNEL_CAPACITY);
@@ -99,6 +113,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         monitor: Arc::clone(&monitor),
         deltas: deltas.clone(),
+        index_html,
     };
     let http_server = serve(http_addr, args.site_dir, state).await?;
 
@@ -146,17 +161,39 @@ async fn serve(
     }))
 }
 
-/// Build the HTTP router: the JSON snapshot, the WebSocket live feed, and the
-/// static UI fallback, all on one port. Split from [`serve`] so it can be
-/// exercised without binding a socket.
+/// Build the HTTP router: the JSON snapshot, the WebSocket live feed, the
+/// cache-busting `index.html`, and the hashed static assets, all on one port.
+/// Split from [`serve`] so it can be exercised without binding a socket.
+///
+/// `/` is served by [`serve_index`] (not `ServeDir`) so it carries `no-store`;
+/// every other path falls through to `ServeDir`, which 404s a missing file
+/// rather than answering with `index.html`. Returning HTML for a missing
+/// `/assets/*.js` is what makes the browser reject it for the wrong MIME type
+/// after a rebuild changes the asset hashes.
 fn router(site_dir: &Path, state: AppState) -> Router {
-    let index = site_dir.join("index.html");
-    let static_files = ServeDir::new(site_dir).fallback(ServeFile::new(index));
+    let static_files = ServeDir::new(site_dir);
     Router::new()
+        .route("/", get(serve_index))
         .route("/api/state", get(state_snapshot))
         .route("/ws", get(ws_handler))
         .fallback_service(static_files)
         .with_state(state)
+}
+
+/// Serve `index.html` with `Cache-Control: no-store`. It names the
+/// content-hashed asset files, so a cached copy would point the browser at
+/// assets a rebuilt server no longer has. nix store mtimes are a constant
+/// epoch, so a weaker `no-cache` would let the browser 304-revalidate the stale
+/// copy; `no-store` forces a fresh fetch each load, keeping the asset
+/// references in sync with what the server actually serves.
+async fn serve_index(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        state.index_html.clone(),
+    )
 }
 
 /// One-shot snapshot of the current monitor state as JSON, for scripts and
@@ -202,7 +239,7 @@ async fn serve_socket(
         };
         (seed, receiver)
     };
-    if socket.send(Message::Binary(seed)).await.is_err() {
+    if !send_frame(&mut socket, seed).await {
         return;
     }
 
@@ -216,23 +253,32 @@ async fn serve_socket(
             },
             received = receiver.recv() => match received {
                 Ok(payload) => {
-                    if socket.send(Message::Binary(payload)).await.is_err() {
+                    if !send_frame(&mut socket, payload).await {
                         break;
                     }
                 }
-                // A slow client outran the ring; resync from a fresh snapshot
-                // rather than leaving it stuck on stale state.
+                // The client outran the ring. Reseed from a fresh snapshot and
+                // take a new subscription under the read lock, so the buffered
+                // backlog is dropped rather than replayed on top of the reset
+                // (replay would double-apply non-idempotent deltas like log
+                // appends). Same no-gap guarantee as the initial seed.
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    let resync = match encode(&Delta::Reset {
-                        snapshot: monitor.read().await.snapshot(),
-                    }) {
-                        Ok(resync) => resync,
-                        Err(error) => {
-                            eprintln!("nix-web-monitor: encoding WebSocket resync failed: {error:#}");
-                            break;
+                    let resync = {
+                        let state = monitor.read().await;
+                        receiver = deltas.subscribe();
+                        match encode(&Delta::Reset {
+                            snapshot: state.snapshot(),
+                        }) {
+                            Ok(resync) => resync,
+                            Err(error) => {
+                                eprintln!(
+                                    "nix-web-monitor: encoding WebSocket resync failed: {error:#}"
+                                );
+                                break;
+                            }
                         }
                     };
-                    if socket.send(Message::Binary(resync)).await.is_err() {
+                    if !send_frame(&mut socket, resync).await {
                         break;
                     }
                 }
@@ -240,6 +286,16 @@ async fn serve_socket(
             },
         }
     }
+}
+
+/// Send one binary frame under [`SEND_TIMEOUT`]. Returns `false` when the send
+/// failed or the client stopped reading past the timeout, signaling the caller
+/// to drop the connection.
+async fn send_frame(socket: &mut WebSocket, payload: Bytes) -> bool {
+    matches!(
+        timeout(SEND_TIMEOUT, socket.send(Message::Binary(payload))).await,
+        Ok(Ok(()))
+    )
 }
 
 /// Encode one delta as a msgpack payload. WebSocket preserves message
@@ -496,6 +552,7 @@ mod tests {
         AppState {
             monitor: Arc::new(RwLock::new(MonitorState::default())),
             deltas,
+            index_html: Bytes::from_static(b"<!doctype html><title>test</title>"),
         }
     }
 
@@ -546,6 +603,55 @@ mod tests {
             response.status(),
             StatusCode::UPGRADE_REQUIRED,
             "a non-upgrade GET to /ws is rejected by the WebSocket extractor"
+        );
+    }
+
+    /// `/` must serve `index.html` with `Cache-Control: no-store`. Without it,
+    /// the browser caches a stale `index.html` whose asset hashes a rebuilt
+    /// server no longer has, producing the wrong-MIME load failure this header
+    /// exists to prevent.
+    #[tokio::test]
+    async fn index_is_served_no_store() {
+        let response = router(Path::new("/nonexistent-site"), test_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store"),
+            "index.html must not be cached so asset references stay current"
+        );
+    }
+
+    /// A missing asset must 404, not fall back to `index.html`. Returning HTML
+    /// for a missing `/assets/*.js` is exactly what the browser rejects for the
+    /// wrong MIME type once a rebuild changes the asset hashes.
+    #[tokio::test]
+    async fn missing_asset_404s_instead_of_html_fallback() {
+        let response = router(Path::new("/nonexistent-site"), test_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/index-deadbeef.js")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "a missing asset must 404 rather than serve index.html"
         );
     }
 
