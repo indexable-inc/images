@@ -29,6 +29,21 @@ The :class:`Output` also exposes the parts programmatically::
     out.text     # combined stdout+stderr, escape codes stripped
     out.raw      # the same, with the original ANSI color preserved
     out.cmd      # the command that was run
+    out.lines()  # out.text split into lines
+    out.json()   # parse out.text as one JSON document
+    out.jsonl()  # parse out.text as JSON Lines (one value per line)
+
+For a command that emits structured output, decode it straight into a polars
+DataFrame without a hand-written ``json.loads``::
+
+    import polars as pl
+    prs = (await sh("gh pr list --json number,title,state", cwd=".")).json()
+    pl.DataFrame(prs)
+    # JSON Lines (cargo, nix --log-format internal-json) -> .jsonl()
+    msgs = (await sh("cargo metadata --format-version 1", cwd=".")).json()
+
+``json``/``jsonl`` raise :class:`ShellError` when the command failed, so a broken
+``gh ... --json`` surfaces its real error instead of a confusing decode failure.
 
 stdout and stderr are merged in emission order (terminal-style). A non-zero exit
 is surfaced, never swallowed: the model view appends an ``[exit N]`` marker, and
@@ -39,6 +54,7 @@ from __future__ import annotations
 
 import asyncio
 import html as _html
+import json as _json
 import os
 import re
 import shlex
@@ -139,6 +155,31 @@ class Output(_ResultBase):
     def lines(self) -> list[str]:
         """The escape-stripped output split into lines (trailing newline dropped)."""
         return self.text.splitlines()
+
+    def json(self):
+        """Parse the command's stdout as a single JSON document.
+
+        For a tool with a JSON mode (``gh ... --json``, ``cargo metadata``,
+        ``nix eval --json``): ``(await sh(...)).json()`` hands back the decoded
+        Python value, ready for ``pl.DataFrame(...)``. Raises :class:`ShellError`
+        if the command exited non-zero (so the real failure surfaces, not a
+        :class:`json.JSONDecodeError` over an error message), and
+        :class:`json.JSONDecodeError` if the output is not valid JSON.
+        """
+        if not self.ok:
+            raise ShellError(self)
+        return _json.loads(self.text)
+
+    def jsonl(self) -> list:
+        """Parse stdout as JSON Lines: one JSON value per non-empty line.
+
+        For tools that stream line-delimited JSON (``cargo --message-format
+        json``, ``nix ... --log-format internal-json``). Same non-zero guard as
+        :meth:`json`; blank lines are skipped.
+        """
+        if not self.ok:
+            raise ShellError(self)
+        return [_json.loads(line) for line in self.text.splitlines() if line.strip()]
 
     def _render_text(self) -> str:
         body = self.text

@@ -1868,6 +1868,19 @@ let
         direct = await sh("printf hi", cwd=".")
         assert direct.ok and direct.text == "hi", repr(direct.text)
 
+        # Structured stdout decodes straight to Python (the polars on-ramp).
+        doc = await sh.sh("printf '%s' '{\"a\": 1, \"b\": [2, 3]}'", cwd=".")
+        assert doc.json() == {"a": 1, "b": [2, 3]}, doc.json()
+        rows = await sh.sh("printf '%s\\n%s\\n' '{\"n\": 1}' '{\"n\": 2}'", cwd=".")
+        assert rows.jsonl() == [{"n": 1}, {"n": 2}], rows.jsonl()
+        # A failed command raises ShellError from json(), never a decode error.
+        try:
+            (await sh.sh("echo nope; exit 4", cwd=".")).json()
+        except sh.ShellError as exc:
+            assert exc.output.code == 4, exc.output.code
+        else:
+            raise SystemExit("expected ShellError from json() on a non-zero exit")
+
         print("sh-ok", sh.__version__)
 
 
