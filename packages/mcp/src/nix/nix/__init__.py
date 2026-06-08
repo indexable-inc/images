@@ -142,6 +142,14 @@ class NixLog:
         self.returncode: int | None = None
         self.started = time.time()
 
+    @property
+    def ok(self) -> bool:
+        """True once the build has finished successfully (done, exit 0, no error),
+        mirroring ``sh()``'s ``Output.ok`` so "await a build, branch on success"
+        reads the same across both. False while still running, so it never reads
+        like a missing attribute the way ``getattr(log, "ok", None)`` -> None did."""
+        return self.done and self.returncode == 0 and self.error is None
+
     def feed(self, line: str) -> None:
         """Consume one line of nix output (``@nix {...}`` JSON or plain text)."""
         line = line.rstrip("\n")
