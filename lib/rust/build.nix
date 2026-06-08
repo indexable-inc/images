@@ -141,7 +141,7 @@ let
       buildFlags = config.build.rustflags or null;
       chosen = if targetFlags != null then targetFlags else buildFlags;
     in
-    if chosen == null then [ ] else normalize chosen;
+    lib.optionals (chosen != null) (normalize chosen);
 
   nativeBuildInputsForPolicy = policy: lib.optional policy.linker.useMold pkgs.mold;
 

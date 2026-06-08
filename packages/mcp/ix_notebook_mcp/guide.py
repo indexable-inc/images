@@ -49,7 +49,11 @@ JOBS = (
     "in the `jobs` dict, so manage them with more python_exec: `jobs['ab12']` to inspect, `await "
     "jobs['ab12']` to wait (it yields the run's value), `jobs['ab12'].cancel()` to stop, "
     "`jobs['ab12'].done()` to test if it has finished, `[j for j in jobs.values() if "
-    "j.running()]` to list."
+    "j.running()]` to list. `budget` is how long the run holds the one shared shell channel "
+    "before it backgrounds, so keep it small and poll: do NOT pass a huge budget to sit on a "
+    "long `await jobs['ab12']` in the foreground — it blocks every other call for that whole "
+    "time and is capped server-side anyway. Let the work background, then re-await or poll "
+    "`.done()` in a later cell."
 )
 
 PAGING = (

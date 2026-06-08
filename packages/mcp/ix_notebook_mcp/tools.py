@@ -37,6 +37,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from . import guide, outputs
+from .config import config
 from .kernel import current_kernel
 
 _KERNEL_GUIDE = guide.compose(
@@ -126,7 +127,13 @@ async def python_exec(
     budget: Annotated[float, Field(description="Seconds to wait before backgrounding the run")] = 15.0,
     name: Annotated[str | None, Field(description="Optional label for the job in the dashboard")] = None,
 ) -> Content:
-    cell_outputs, summary = await current_kernel().python_exec(code, budget, name)
+    # A foreground budget is how long the run holds the one shared shell channel
+    # before it backgrounds, so cap it: a giant budget (a 15-minute `await
+    # jobs[...]`) would block every other call behind it. The clamp is surfaced
+    # below so the caller knows to poll the job rather than silently lose the wait.
+    cap = config().max_budget
+    effective_budget = min(budget, cap)
+    cell_outputs, summary = await current_kernel().python_exec(code, effective_budget, name)
     rendered = outputs.to_mcp(cell_outputs)
     if summary is None:
         return rendered
@@ -149,6 +156,19 @@ async def python_exec(
     # result is recoverable without re-running the work \u2014 the failure mode this
     # whole jobs registry exists to avoid.
     job_id = summary.get("id")
+    # The requested budget exceeded the cap, so the run was given the smaller
+    # foreground window and (if it outlived it) backgrounded. Tell the caller so a
+    # long wait is resumed by polling the job, not mistaken for a finished run.
+    if budget > cap and job_id:
+        parts.append(
+            outputs.text(
+                f"[budget {budget:g}s exceeds the {cap:g}s cap and was clamped to "
+                f"{cap:g}s: a foreground call holds the kernel's one shell channel, so "
+                f"a longer wait backgrounds instead of blocking every other call. If "
+                f"jobs['{job_id}'] is still running, resume it with await jobs['{job_id}'] "
+                f"(or poll jobs['{job_id}'].done()) in a later cell.]"
+            )
+        )
     output_chars = summary.get("output_chars") or 0
     result_chars = summary.get("result_chars") or 0
     clipped = result_chars > outputs.MAX_TEXT_CHARS

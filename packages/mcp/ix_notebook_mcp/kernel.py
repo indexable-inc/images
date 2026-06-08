@@ -144,9 +144,36 @@ class Kernel:
                     summary = found
                 outputs.append(output)
 
-            await self._kc.execute_interactive(
-                code, timeout=timeout, allow_stdin=False, output_hook=on_iopub, store_history=True
+            # Run the request as a task and shield it from client-side
+            # cancellation. A CancelledError thrown straight into
+            # execute_interactive (the client cancels the python_exec call)
+            # abandons a half-read multipart reply on the shared shell socket,
+            # desyncing it so EVERY later python_exec hangs -- the "I cancelled and
+            # now nothing runs" wedge. The cell self-backgrounds at its budget, so
+            # the reply always arrives within ``timeout``; on cancel we still drain
+            # it (lock held) before re-raising, leaving the channel clean.
+            task = asyncio.ensure_future(
+                self._kc.execute_interactive(
+                    code, timeout=timeout, allow_stdin=False, output_hook=on_iopub, store_history=True
+                )
             )
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                try:
+                    await task
+                except TimeoutError:
+                    # The cell is synchronously wedging the loop, so the reply
+                    # never arrives within the deadline. The drain alone would
+                    # leave the kernel stuck behind the cancelled-but-still-running
+                    # cell, so fire the same SIGUSR2 watchdog the outer timeout
+                    # path uses to break the blocked frame and free the channel.
+                    await self._interrupt()
+                except BaseException:
+                    # Any other drain error: we only need the socket read to
+                    # finish before releasing the lock.
+                    pass
+                raise
             return outputs, summary
 
     async def python_exec(self, code: str, budget: float, name: str | None = None) -> tuple[list[dict], dict | None]:
