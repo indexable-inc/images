@@ -186,6 +186,97 @@ pub async fn read_from_store(store: &dyn ObjectStore, prefix: &str) -> Result<Ve
     Ok(documents)
 }
 
+/// A corpus slice: one `data.parquet` and the `host=/user=/source=` identity
+/// parsed from its key.
+///
+/// The lake fold needs each slice's origin host and user, which
+/// [`read_documents`] flattens away.
+pub struct Slice {
+    /// The `host=` segment, when present in the key.
+    pub host: Option<String>,
+    /// The `user=` segment, when present (host-level sources have none).
+    pub user: Option<String>,
+    /// The `source=` segment (the corpus tag).
+    pub source: String,
+    /// The documents this slice's data file carries.
+    pub documents: Vec<Document>,
+}
+
+/// The hive-partition identity (`host=/user=/source=`) parsed from a key.
+#[derive(Debug, PartialEq, Eq)]
+struct SliceId {
+    /// The `host=` segment, when present.
+    host: Option<String>,
+    /// The `user=` segment, when present.
+    user: Option<String>,
+    /// The `source=` segment.
+    source: String,
+}
+
+/// Parse the hive identity from a data-file key.
+///
+/// Returns `None` when there is no `source=` segment: the identity is
+/// incomplete, so the object is not a corpus slice.
+fn parse_slice_key(key: &str) -> Option<SliceId> {
+    let mut host = None;
+    let mut user = None;
+    let mut source = None;
+    for segment in key.split('/') {
+        if let Some(value) = segment.strip_prefix("host=") {
+            host = Some(value.to_owned());
+        } else if let Some(value) = segment.strip_prefix("user=") {
+            user = Some(value.to_owned());
+        } else if let Some(value) = segment.strip_prefix("source=") {
+            source = Some(value.to_owned());
+        }
+    }
+    source.map(|source| SliceId { host, user, source })
+}
+
+/// Read every `data.parquet` under the prefix as a [`Slice`], keyed by its
+/// `host=/user=/source=` identity.
+///
+/// Unlike [`read_documents`], which flattens the whole prefix into one
+/// host/user-less document set, this keeps each slice separate, so the lake fold
+/// can reconcile it scoped to its origin host and user instead of silently
+/// merging records across hosts.
+///
+/// # Errors
+/// Returns an error if the client cannot be built, the prefix cannot be listed,
+/// or any object cannot be read or decoded.
+pub async fn read_slices(config: &Config) -> Result<Vec<Slice>> {
+    let store = build_store(config)?;
+    read_slices_from_store(&store, &config.prefix).await
+}
+
+/// The store-agnostic core of [`read_slices`], so tests can drive an in-memory
+/// store. A `data.parquet` whose key carries no `source=` segment is skipped,
+/// like the `_manifest.json` sidecar.
+///
+/// # Errors
+/// Returns an error if the store cannot be listed, an object cannot be read, or
+/// a data file cannot be parsed as the corpus parquet schema.
+pub async fn read_slices_from_store(store: &dyn ObjectStore, prefix: &str) -> Result<Vec<Slice>> {
+    let mut slices = Vec::new();
+    let mut listing = store.list(Some(&ObjectPath::from(prefix)));
+    while let Some(entry) = listing.next().await {
+        let meta = entry.context(ListSnafu { prefix })?;
+        let key = meta.location.to_string();
+        if !key.ends_with(DATA_SUFFIX) {
+            continue;
+        }
+        let Some(SliceId { host, user, source }) = parse_slice_key(&key) else {
+            continue;
+        };
+        let result = store.get(&meta.location).await.context(GetSnafu { key: key.clone() })?;
+        let bytes = result.bytes().await.context(GetSnafu { key: key.clone() })?;
+        let mut documents = Vec::new();
+        parse_parquet(bytes, &key, &mut documents)?;
+        slices.push(Slice { host, user, source, documents });
+    }
+    Ok(slices)
+}
+
 /// Build the S3 client. Credentials come from the environment
 /// (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`).
 fn build_store(config: &Config) -> Result<AmazonS3> {
@@ -290,7 +381,7 @@ mod tests {
     use parquet::arrow::ArrowWriter;
     use serde_json::json;
 
-    use super::{Error, read_from_store};
+    use super::{Error, SliceId, parse_slice_key, read_from_store, read_slices_from_store};
 
     /// The exact flat schema `sink-parquet` writes (kept in lockstep with its
     /// `schema()`), so this test round-trips the real on-disk shape.
@@ -385,6 +476,75 @@ mod tests {
         let store = InMemory::new();
         let docs = read_from_store(&store, "corpus").await.expect("read");
         assert!(docs.is_empty());
+    }
+
+    #[test]
+    fn parse_slice_key_extracts_hive_identity() {
+        assert_eq!(
+            parse_slice_key("corpus/host=h1/user=root/source=shell/data.parquet"),
+            Some(SliceId {
+                host: Some("h1".to_owned()),
+                user: Some("root".to_owned()),
+                source: "shell".to_owned()
+            })
+        );
+        // A host-level source has no `user=` segment.
+        assert_eq!(
+            parse_slice_key("corpus/host=h2/source=git/data.parquet"),
+            Some(SliceId { host: Some("h2".to_owned()), user: None, source: "git".to_owned() })
+        );
+        // No `source=` segment: not a corpus slice.
+        assert_eq!(parse_slice_key("corpus/host=h2/data.parquet"), None);
+    }
+
+    #[tokio::test]
+    async fn slices_preserve_per_host_identity() {
+        // The lake fold relies on this: two hosts' slices must stay separate,
+        // each tagged with its own host/user, never flattened together (which
+        // would let a shared external_id silently clobber across hosts).
+        let store = InMemory::new();
+        store
+            .put(
+                &ObjectPath::from("corpus/host=hil-compute-1/user=root/source=shell/data.parquet"),
+                encode_two_rows().into(),
+            )
+            .await
+            .expect("put slice a");
+        store
+            .put(
+                &ObjectPath::from("corpus/host=hil-compute-2/source=git/data.parquet"),
+                encode_two_rows().into(),
+            )
+            .await
+            .expect("put slice b");
+        // A manifest sibling must be skipped, like the flat read.
+        store
+            .put(
+                &ObjectPath::from(
+                    "corpus/host=hil-compute-1/user=root/source=shell/_manifest.json",
+                ),
+                serde_json::to_vec(&json!({ "content_hash": "sha256:aaa" }))
+                    .expect("serialize manifest")
+                    .into(),
+            )
+            .await
+            .expect("put manifest");
+
+        let mut slices = read_slices_from_store(&store, "corpus").await.expect("read slices");
+        slices.sort_by(|a, b| a.source.cmp(&b.source));
+        assert_eq!(slices.len(), 2, "one slice per data.parquet, manifest skipped");
+
+        let git = &slices[0];
+        assert_eq!(git.source, "git");
+        assert_eq!(git.host.as_deref(), Some("hil-compute-2"));
+        assert_eq!(git.user, None, "a host-level source carries no user");
+        assert_eq!(git.documents.len(), 2);
+
+        let shell = &slices[1];
+        assert_eq!(shell.source, "shell");
+        assert_eq!(shell.host.as_deref(), Some("hil-compute-1"));
+        assert_eq!(shell.user.as_deref(), Some("root"));
+        assert_eq!(shell.documents.len(), 2);
     }
 
     /// A schema whose required columns are written nullable, so a row can carry a

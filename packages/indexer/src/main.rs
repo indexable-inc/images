@@ -257,8 +257,6 @@ async fn main() -> anyhow::Result<()> {
     // log) and consume (replay the log into Mixedbread) run as separate
     // invocations of this binary; consume reconciles the log rather than scanning.
     if let Some(prefix) = cli.from_parquet_prefix.clone() {
-        let mixedbread = mixedbread
-            .context("--from-parquet-prefix requires --mixedbread-store (the reconcile target)")?;
         let bucket = cli.bucket.clone().context("--from-parquet-prefix requires --bucket")?;
         let config = source_parquet::Config {
             bucket,
@@ -266,6 +264,17 @@ async fn main() -> anyhow::Result<()> {
             region: cli.region.clone(),
             prefix,
         };
+        // With --catalog-uri this folds the parquet archive INTO the lake (the
+        // leader's parquet->lake step under leader-funnel, issue #752);
+        // otherwise it replays the archive into Mixedbread. The lake fold keeps
+        // each (host, user, source) slice separate, so it cannot share
+        // consume_parquet's host-flattened read.
+        if cli.catalog_uri.is_some() {
+            let Lake { catalog, ident } = connect_lake(&cli).await?;
+            return finish(fold_parquet_into_lake(&config, catalog, &ident).await);
+        }
+        let mixedbread = mixedbread
+            .context("--from-parquet-prefix requires --mixedbread-store or --catalog-uri")?;
         return finish(consume_parquet(&config, mixedbread).await);
     }
 
@@ -656,6 +665,62 @@ async fn consume_parquet(config: &source_parquet::Config, mixedbread: Mixedbread
         }
     };
     run_consume(documents, mixedbread).await
+}
+
+/// Fold the parquet corpus archive into the Iceberg lake, one slice per
+/// `(host, user, source)`: the leader's parquet->lake step under leader-funnel.
+///
+/// Each slice reconciles scoped to its origin host and user, so a shared
+/// `external_id` on two hosts stays two rows instead of one host silently
+/// clobbering the other (issue #752). A slice failure is logged and tallied but
+/// never aborts the rest, matching [`run_source`].
+async fn fold_parquet_into_lake(
+    config: &source_parquet::Config,
+    catalog: std::sync::Arc<dyn lake_iceberg::Catalog>,
+    ident: &lake_iceberg::TableIdent,
+) -> Counts {
+    let slices = match source_parquet::read_slices(config).await {
+        Ok(slices) => slices,
+        Err(error) => {
+            eprintln!("[fold] failed to read the parquet corpus log: {error:#}");
+            return Counts { indexed: 0, skipped: 0, failures: 1 };
+        }
+    };
+    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+    for slice in slices {
+        let source_parquet::Slice { host, user, source, documents } = slice;
+        let Some(host) = host else {
+            eprintln!("[fold:{source}] skipping a slice whose key has no host= segment");
+            counts.failures += 1;
+            continue;
+        };
+        let mut reconciler =
+            IcebergReconciler::new(std::sync::Arc::clone(&catalog), ident.clone(), host);
+        if let Some(user) = user {
+            reconciler = reconciler.with_user(user);
+        }
+        let source = Source::new(source);
+        match reconciler.reconcile(&source, &documents).await {
+            Ok(report) if report.skipped => {
+                eprintln!("[fold:{}] skipped (unchanged)", source.as_str());
+                counts.skipped += 1;
+            }
+            Ok(report) => {
+                eprintln!(
+                    "[fold:{}] appended {} upserts, {} tombstones",
+                    source.as_str(),
+                    report.upserts,
+                    report.deletes
+                );
+                counts.indexed += 1;
+            }
+            Err(error) => {
+                eprintln!("[fold:{}] failed: {error:#}", source.as_str());
+                counts.failures += 1;
+            }
+        }
+    }
+    counts
 }
 
 /// Replace each lake source's Mixedbread records with the lake's live fold:
