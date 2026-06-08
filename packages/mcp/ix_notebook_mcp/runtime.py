@@ -398,6 +398,13 @@ class Result:
         the frame as compact, untruncated CSV (the human still gets the styled
         HTML table), so a wide or long-stringed frame is never clipped to the
         agent the way the boxed text repr clips it. Override with ``llm_result``."""
+        if _is_multi_rich(value):
+            # A tuple/list that carries a rich element (a DataFrame, a figure, a
+            # nested Result) is several things to SHOW, not one table: render each
+            # element with its own view, stacked, rather than stringifying the rich
+            # one into a `value` cell. `Result((repr_text, df))` thus shows the text
+            # and the real table, not a 2-row frame of two reprs.
+            return _result_from_values(list(value), llm_result=llm_result)
         value = _as_frame_if_tabular(value)
         if llm_result is not None:
             text_view = llm_result
@@ -486,6 +493,22 @@ def _as_frame_if_tabular(value):
             except Exception:
                 return value
     return value
+
+
+def _is_rich_element(value) -> bool:
+    """True if ``value`` carries its own rich view (a DataFrame, a figure/image,
+    an htpy element, or a Result), so flattening it into a one-column frame would
+    throw that view away. Plain scalars and containers are not rich."""
+    return isinstance(value, Result) or _is_polars_df(value) or _is_displayable(value)
+
+
+def _is_multi_rich(value) -> bool:
+    """True for a non-empty list/tuple that carries at least one rich element, so
+    ``Result.of`` should stack each element's view instead of coercing the whole
+    sequence to a single table. A list/tuple of plain scalars (or of mappings)
+    stays tabular -- only a sequence mixing in a DataFrame/figure/Result needs the
+    stacked treatment."""
+    return isinstance(value, (list, tuple)) and bool(value) and any(_is_rich_element(v) for v in value)
 
 
 def _result_from_values(values, *, llm_result=None):

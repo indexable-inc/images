@@ -1177,6 +1177,16 @@ let
     runtime.install(ns)
     run = ns["__ix_run"]
 
+    # A tuple/list carrying a rich value (a DataFrame) renders each element with
+    # its own view, stacked, instead of stringifying the frame into a one-column
+    # table -- Result((repr_text, df)) shows the text AND the real table.
+    stacked = runtime.Result.of(("GrepResult: 0 matches", pl.DataFrame({"a": [1, 2]})))
+    assert stacked.user_html.count("<table") == 1, stacked.user_html[:200]
+    assert "GrepResult: 0 matches" in stacked.llm_result and "shape:" in stacked.llm_result, stacked.llm_result
+    # A plain list of scalars is still ONE table (not stacked), unchanged.
+    scalars = runtime.Result.of([1, 2, 3])
+    assert scalars.user_html.count("<table") == 1, scalars.user_html[:200]
+
 
     async def main():
         # A DataFrame result is stored with its text/html bundle.
@@ -1249,7 +1259,9 @@ let
         ).fetchone()
         assert multi_row["status"] == "done", multi_row["status"]
         multi_text = [out["data"].get("text/plain", "") for out in json.loads(multi_row["outputs"])][-1]
-        assert "True" in multi_text and "[1, 2, 3]" in multi_text, ("multi-value dropped a value", multi_text)
+        # Both values are shown: the bool by its repr, the list as its one-column
+        # frame (CSV rows 1/2/3), not collapsed to just the first value.
+        assert "True" in multi_text and "1\n2\n3" in multi_text, ("multi-value dropped a value", multi_text)
 
 
     asyncio.run(main())

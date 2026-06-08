@@ -157,7 +157,10 @@ RESULT_VARIANTS = (
     "Use the shortcuts: `Result.text('done')` (same text to both), `Result.ok('what happened')` "
     "(a quiet confirmation for a side-effecting cell), `Result.of(df)` (render any value richly "
     "for the human, its repr to you), or `Result(user_html=..., llm_result=..., llm_images=[fig, "
-    "png_bytes])`."
+    "png_bytes])`. To show several values at once, pass them as separate args "
+    "(`Result(repr(hits), hits.df)`) or in one list/tuple: each renders with its "
+    "OWN view, stacked, so a DataFrame stays a real table and is never flattened "
+    "into a cell of some outer frame."
 )
 
 READABLE = (
