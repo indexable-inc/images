@@ -1469,6 +1469,7 @@ def _escape_html(text: str) -> str:
 _API_MODULES = registry.module_names()
 # Always-present namespace builtins (no import needed); see install().
 _API_BUILTINS = registry.builtin_names()
+_BUILTIN_TAGLINES = {b.name: b.tagline for b in registry.BUILTINS}
 
 
 def _api_rows() -> list[dict]:
@@ -1476,7 +1477,7 @@ def _api_rows() -> list[dict]:
     module's public surface, with signature and a one-line summary."""
     rows: list[dict] = []
 
-    def add(where: str, name: str, obj) -> None:
+    def add(where: str, name: str, obj, summary: str | None = None) -> None:
         if inspect.iscoroutinefunction(obj):
             kind = "async"
         elif inspect.isclass(obj):
@@ -1491,14 +1492,21 @@ def _api_rows() -> list[dict]:
                 sig = f"{name}{inspect.signature(obj)}"
             except (ValueError, TypeError):
                 sig = f"{name}(...)"
-        doc = inspect.getdoc(obj) or ""
-        summary = doc.strip().split("\n", 1)[0]
+        if summary is None:
+            # inspect.getdoc on a plain value returns its TYPE's doc (e.g. a str
+            # value yields `str(object='') -> str`), which says nothing about the
+            # value -- so only fall back to getdoc for things that document
+            # themselves (callables/classes/modules), never a bare value.
+            doc = (inspect.getdoc(obj) or "") if callable(obj) or inspect.ismodule(obj) else ""
+            summary = doc.strip().split("\n", 1)[0]
         rows.append({"where": where, "name": name, "kind": kind, "sig": sig, "summary": summary})
 
     target = _user_ns if _user_ns is not None else globals()
     for name in _API_BUILTINS:
         if name in target:
-            add("kernel", name, target[name])
+            # Builtins carry an authored one-line tagline in the registry; it is
+            # the curated summary, so prefer it over introspection.
+            add("kernel", name, target[name], summary=_BUILTIN_TAGLINES.get(name))
 
     for mod_name in _API_MODULES:
         try:
@@ -1534,6 +1542,23 @@ def _api_rows() -> list[dict]:
             pass
         rows.append({"where": "library", "name": lib_name, "kind": "library", "sig": sig, "summary": summary})
     return rows
+
+
+def doc(obj) -> "Result":
+    """The signature and docstring of any object, RETURNED (not printed) as a
+    Result -- so the documented "everything through Result" path also works for
+    reading docs. ``help()`` only writes to stdout (not your channel) and returns
+    ``None``, so ``Result(help(x))`` shows nothing; use ``doc(fff.grep)`` instead.
+    Pair it with `api()`: `api('grep')` to find a name, `doc(fff.grep)` to read it."""
+    name = getattr(obj, "__name__", None) or type(obj).__name__
+    sig = ""
+    if callable(obj):
+        try:
+            sig = f"{name}{inspect.signature(obj)}"
+        except (ValueError, TypeError):
+            sig = name if inspect.isclass(obj) else f"{name}(...)"
+    body = inspect.getdoc(obj) or "(no docstring)"
+    return Result.text(f"{sig}\n\n{body}" if sig else body)
 
 
 def api(filter: str | None = None):
@@ -1977,6 +2002,7 @@ def install(user_ns: dict | None = None) -> None:
     target = user_ns if user_ns is not None else globals()
     target["jobs"] = jobs
     target["history"] = history
+    target["doc"] = doc
     target["Job"] = Job
     target["Result"] = Result
     target["cells"] = cells

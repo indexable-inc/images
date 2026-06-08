@@ -76,6 +76,7 @@ BUILTINS: tuple[Builtin, ...] = (
     Builtin("cells", "curate the dashboard's highlight reel (`cells.add` / `set` / `remove` / `clear`)"),
     Builtin("jobs", "the background-run registry (inspect / await / cancel / page each run)"),
     Builtin("history", "list recent runs"),
+    Builtin("doc", "the signature + docstring of any object, returned as a Result (help() only prints and returns None)"),
     Builtin("resources", "the live, self-updating views (a terminal, a widget)"),
     Builtin("register_resource", "publish a live Resource to the dashboard"),
     Builtin("sh", "shell out on the loop; the Output IS a Result (ANSI as HTML for the human, `.text`/`.code`/`.ok` for you)"),
