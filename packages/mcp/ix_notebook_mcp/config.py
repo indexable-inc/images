@@ -48,6 +48,14 @@ class Config:
     # the kernel, and returning an actionable summary. See ``kernel.python_exec``.
     wedge_grace: float = 15.0
 
+    # Hard ceiling on a single ``python_exec`` foreground ``budget``. The budget is
+    # how long the ONE shared shell channel is held before the run backgrounds, so
+    # an oversized budget (a 15-minute ``await jobs['x']``) wedges every other call
+    # behind it for that whole time. Clamp it: a longer wait backgrounds and is
+    # resumed by polling ``jobs['x']`` in a later cell. Raise it with a reason if a
+    # workload genuinely needs a longer foreground hold.
+    max_budget: float = 120.0
+
     def dashboard_url(self) -> str:
         return f"http://{self.advertised_host}:{self.dashboard_port}/"
 

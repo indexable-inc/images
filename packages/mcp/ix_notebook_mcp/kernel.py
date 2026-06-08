@@ -144,9 +144,29 @@ class Kernel:
                     summary = found
                 outputs.append(output)
 
-            await self._kc.execute_interactive(
-                code, timeout=timeout, allow_stdin=False, output_hook=on_iopub, store_history=True
+            # Run the request as a task and shield it from client-side
+            # cancellation. A CancelledError thrown straight into
+            # execute_interactive (the client cancels the python_exec call)
+            # abandons a half-read multipart reply on the shared shell socket,
+            # desyncing it so EVERY later python_exec hangs -- the "I cancelled and
+            # now nothing runs" wedge. The cell self-backgrounds at its budget, so
+            # the reply always arrives within ``timeout``; on cancel we still drain
+            # it (lock held) before re-raising, leaving the channel clean.
+            task = asyncio.ensure_future(
+                self._kc.execute_interactive(
+                    code, timeout=timeout, allow_stdin=False, output_hook=on_iopub, store_history=True
+                )
             )
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                try:
+                    await task
+                except BaseException:
+                    # The drained request may itself time out or error; we only
+                    # need the socket read to finish before releasing the lock.
+                    pass
+                raise
             return outputs, summary
 
     async def python_exec(self, code: str, budget: float, name: str | None = None) -> tuple[list[dict], dict | None]:

@@ -1079,7 +1079,7 @@ let
     # Result, jobs, the SIGUSR1/SIGUSR2 handlers) loads in the booted kernel,
     # exactly as the CLI wires it.
     os.environ["IPYTHONDIR"] = str(cli._prepare_ipython_startup(0))
-    config = Config(workdir=Path(tempfile.mkdtemp()), wedge_grace=1.0)
+    config = Config(workdir=Path(tempfile.mkdtemp()), wedge_grace=1.0, max_budget=2.0)
 
 
     async def main():
@@ -1114,6 +1114,41 @@ let
             _, after = await kernel.python_exec("Result.text('alive')", budget=10.0, name="after")
             assert after is not None and after["status"] == "done", after
             assert after["result"] is not None, after
+
+            # (3) Cancelling an in-flight python_exec (the client cancels the call)
+            # must not desync the shared shell channel. Start a cell that
+            # backgrounds at its small budget, cancel the foreground wait while the
+            # reply is in flight, then prove a later call still runs.
+            inflight = asyncio.ensure_future(
+                kernel.python_exec("await asyncio.sleep(5)\nResult.ok('slept')", budget=0.4, name="cancelme")
+            )
+            await asyncio.sleep(0.1)
+            inflight.cancel()
+            try:
+                await inflight
+            except asyncio.CancelledError:
+                pass
+            _, revived = await kernel.python_exec("Result.text('post-cancel')", budget=10.0, name="post-cancel")
+            assert revived is not None and revived["status"] == "done", revived
+            assert revived["result"] is not None, revived
+
+            # (4) The python_exec TOOL clamps an oversized budget to max_budget so a
+            # giant foreground wait cannot sit on the one shell channel: the call
+            # returns within the cap (not the requested 600s) and says it clamped.
+            from ix_notebook_mcp import tools
+            from ix_notebook_mcp.config import set_config
+            from ix_notebook_mcp.kernel import set_kernel
+
+            set_config(config)
+            set_kernel(kernel)
+            started = loop.time()
+            clamped = await tools.python_exec(
+                "await asyncio.sleep(30)\nResult.ok('done')", budget=600.0, name="bigbudget"
+            )
+            elapsed = loop.time() - started
+            assert elapsed < 10, ("budget was not clamped", elapsed)
+            note = " ".join(getattr(c, "text", "") or "" for c in clamped)
+            assert "clamped" in note, note
         finally:
             await kernel.shutdown()
 
