@@ -96,6 +96,14 @@ fn plain(bytes: &[u8]) -> String {
     String::from_utf8(strip_ansi_escapes::strip(bytes)).unwrap()
 }
 
+/// Whether `bytes` carry the strikethrough SGR effect (parameter `9`), regardless
+/// of the color parameters folded into the same escape. Used to assert deleted
+/// files are struck through without depending on the exact byte layout.
+fn has_strikethrough(bytes: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(bytes);
+    ["[9m", "[9;", ";9m", ";9;"].iter().any(|needle| text.contains(needle))
+}
+
 #[test]
 fn log_lists_commits_ahead_of_main() {
     let dir = repo_ahead_of_main();
@@ -200,4 +208,39 @@ fn diff_subcommand_renders_changed_file_tree() {
     let stdout = plain(&output.stdout);
     assert!(stdout.contains("files changed in main...HEAD"), "got: {stdout}");
     assert!(stdout.contains("src/lib.rs"), "got: {stdout}");
+}
+
+#[test]
+fn diff_strikes_through_deleted_files() {
+    // A feature branch removes a file that exists on main. The diff view must
+    // still list it, grayed out and struck through, so the deletion is obvious.
+    let MainRepo {
+        repo,
+        dir,
+        main_oid,
+    } = init_on_main();
+    let sig = signature();
+
+    let main_commit = repo.find_commit(main_oid).unwrap();
+    repo.branch("feature", &main_commit, false).expect("create feature");
+    repo.set_head("refs/heads/feature").expect("checkout feature");
+
+    // Drop README.md (committed on main) on the feature branch.
+    std::fs::remove_file(dir.path().join("README.md")).unwrap();
+    let mut index = repo.index().unwrap();
+    index.remove_path(std::path::Path::new("README.md")).unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "chore: drop readme", &tree, &[&main_commit])
+        .unwrap();
+
+    let output = run(dir.path(), &["diff", "main", "HEAD"]);
+    assert!(output.status.success(), "stderr: {}", plain(&output.stderr));
+
+    assert!(plain(&output.stdout).contains("README.md"), "got: {}", plain(&output.stdout));
+    assert!(
+        has_strikethrough(&output.stdout),
+        "deleted file not struck through: {:?}",
+        String::from_utf8_lossy(&output.stdout),
+    );
 }

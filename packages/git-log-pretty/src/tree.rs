@@ -10,28 +10,31 @@ use std::collections::BTreeMap;
 use anstyle::Color;
 use devicons::icon_for_file;
 
+use crate::git::{ChangeKind, ChangedFile};
 use crate::palette::{self, GRAY, Theme};
 
 /// Closed-folder glyph (Nerd Font `nf-md-folder`), shown for directory nodes.
 const FOLDER_GLYPH: &str = "\u{e5ff}";
 
-/// A node in the path trie. Leaves are files; interior nodes are directories.
+/// A node in the path trie. Leaves are files (`change` carries how the file was
+/// touched); interior nodes are directories.
 #[derive(Default)]
 struct Node {
     is_file: bool,
+    change: Option<ChangeKind>,
     children: BTreeMap<String, Self>,
 }
 
 /// Render `files` as a tree, one line per node, joined by newlines. Returns an
 /// empty string when there are no files so callers can skip printing.
-pub fn render(files: &[String], theme: Theme) -> String {
+pub fn render(files: &[ChangedFile], theme: Theme) -> String {
     if files.is_empty() {
         return String::new();
     }
 
     let mut root = Node::default();
-    for path in files {
-        insert(&mut root, path);
+    for file in files {
+        insert(&mut root, file);
     }
     collapse(&mut root);
 
@@ -40,16 +43,19 @@ pub fn render(files: &[String], theme: Theme) -> String {
     lines.join("\n")
 }
 
-/// Insert one slash-separated path into the trie, marking the final segment as a
-/// file.
-fn insert(root: &mut Node, path: &str) {
-    let parts: Vec<&str> = path.split('/').collect();
+/// Insert one changed file into the trie, marking the final path segment as a
+/// file and recording how it changed so the leaf can be styled.
+fn insert(root: &mut Node, file: &ChangedFile) {
+    let parts: Vec<&str> = file.path.split('/').collect();
     let mut node = root;
 
     for (index, part) in parts.iter().enumerate() {
         let is_last = index == parts.len() - 1;
         node = node.children.entry((*part).to_string()).or_default();
-        node.is_file = node.is_file || is_last;
+        if is_last {
+            node.is_file = true;
+            node.change = Some(file.kind);
+        }
     }
 }
 
@@ -111,8 +117,11 @@ fn render_children(node: &Node, theme: Theme, prefix: &str, lines: &mut Vec<Stri
 /// (gray directory segments, high-contrast basename) followed by its colored
 /// icon. The basename follows the detected theme so it stays readable on light
 /// terminals (black) as well as dark ones (white).
+///
+/// A deleted file is grayed out and struck through end to end — directory
+/// segments, basename, and icon alike — so a removal reads at a glance and never
+/// competes for attention with the files that still exist.
 fn node_label(name: &str, child: &Node, theme: Theme) -> String {
-    let basename_fg = Color::Rgb(palette::chip_foreground(theme));
     let gray = palette::fg(Color::Rgb(GRAY));
 
     if !child.is_file {
@@ -123,16 +132,28 @@ fn node_label(name: &str, child: &Node, theme: Theme) -> String {
         );
     }
 
+    let deleted = child.change == Some(ChangeKind::Deleted);
+    let dir_style = if deleted { gray.strikethrough() } else { gray };
+    let basename_style = if deleted {
+        gray.strikethrough()
+    } else {
+        palette::fg(Color::Rgb(palette::chip_foreground(theme)))
+    };
+
     let icon = icon_for_file(name, &Some(palette::devicons(theme)));
-    let icon_style = palette::fg(Color::Rgb(palette::parse_hex(icon.color)));
+    let icon_style = if deleted {
+        gray.strikethrough()
+    } else {
+        palette::fg(Color::Rgb(palette::parse_hex(icon.color)))
+    };
 
     let name_part = name.rfind('/').map_or_else(
-        || palette::paint(palette::fg(basename_fg), name),
+        || palette::paint(basename_style, name),
         |slash| {
             format!(
                 "{}{}",
-                palette::paint(gray, &name[..=slash]),
-                palette::paint(palette::fg(basename_fg), &name[slash + 1..]),
+                palette::paint(dir_style, &name[..=slash]),
+                palette::paint(basename_style, &name[slash + 1..]),
             )
         },
     );
@@ -153,6 +174,22 @@ mod tests {
         String::from_utf8(bytes).unwrap()
     }
 
+    /// A file touched without being removed, the common case.
+    fn modified(path: &str) -> ChangedFile {
+        ChangedFile {
+            path: path.to_string(),
+            kind: ChangeKind::Modified,
+        }
+    }
+
+    /// A removed file, which the renderer grays out and strikes through.
+    fn deleted(path: &str) -> ChangedFile {
+        ChangedFile {
+            path: path.to_string(),
+            kind: ChangeKind::Deleted,
+        }
+    }
+
     #[test]
     fn empty_input_renders_nothing() {
         assert_eq!(render(&[], Theme::Dark), "");
@@ -160,7 +197,7 @@ mod tests {
 
     #[test]
     fn single_chain_collapses_into_one_node() {
-        let rendered = plain(&render(&["a/b/c.rs".to_string()], Theme::Dark));
+        let rendered = plain(&render(&[modified("a/b/c.rs")], Theme::Dark));
         assert!(rendered.contains("a/b/c.rs"), "got: {rendered}");
         assert_eq!(rendered.lines().count(), 1, "got: {rendered}");
     }
@@ -168,10 +205,31 @@ mod tests {
     #[test]
     fn siblings_use_branch_and_last_connectors() {
         let rendered = plain(&render(
-            &["src/a.rs".to_string(), "src/b.rs".to_string()],
+            &[modified("src/a.rs"), modified("src/b.rs")],
             Theme::Dark,
         ));
         assert!(rendered.contains("├ "), "got: {rendered}");
         assert!(rendered.contains("└ "), "got: {rendered}");
+    }
+
+    /// The strikethrough SGR prefix (`\x1b[9m`) the deleted style emits, used to
+    /// assert styling without depending on the surrounding color parameters.
+    fn strike_prefix() -> String {
+        palette::fg(Color::Rgb(GRAY)).strikethrough().render().to_string()
+    }
+
+    #[test]
+    fn deleted_file_is_struck_through_but_keeps_its_name() {
+        let styled = render(&[deleted("src/gone.rs")], Theme::Dark);
+        // The path still reads plainly once SGR is stripped...
+        assert!(plain(&styled).contains("gone.rs"), "got: {}", plain(&styled));
+        // ...but the styled output carries the strikethrough effect.
+        assert!(styled.contains(&strike_prefix()), "deleted file not struck through");
+    }
+
+    #[test]
+    fn surviving_file_is_not_struck_through() {
+        let styled = render(&[modified("src/stays.rs")], Theme::Dark);
+        assert!(!styled.contains(&strike_prefix()), "modified file should not be struck through");
     }
 }

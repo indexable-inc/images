@@ -6,11 +6,44 @@ use std::collections::HashSet;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use git2::{Commit, DiffOptions, Oid, Repository};
 
-/// A commit selected for display, paired with the paths it changed. The ahead
+/// How a file changed in a commit, distilled from git's per-delta status. The
+/// display layer struck-through and dims deletions so a removed file reads at a
+/// glance; the other kinds render normally today but are kept distinct so
+/// additions and renames can grow their own styling without another migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+impl ChangeKind {
+    /// Map git's per-delta [`git2::Delta`] onto the coarser set the display
+    /// cares about. Unmodified and unreadable deltas never reach us (a diff only
+    /// yields touched files), so they collapse into `Modified`.
+    fn from_delta(status: git2::Delta) -> Self {
+        match status {
+            git2::Delta::Added | git2::Delta::Copied | git2::Delta::Untracked => Self::Added,
+            git2::Delta::Deleted => Self::Deleted,
+            git2::Delta::Renamed => Self::Renamed,
+            _ => Self::Modified,
+        }
+    }
+}
+
+/// A file a commit (or diff) touched, paired with how it changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedFile {
+    pub path: String,
+    pub kind: ChangeKind,
+}
+
+/// A commit selected for display, paired with the files it changed. The ahead
 /// list is sorted newest-first by commit time.
 pub struct AheadCommit<'repo> {
     pub commit: Commit<'repo>,
-    pub changed_files: Vec<String>,
+    pub changed_files: Vec<ChangedFile>,
 }
 
 /// Open the repository containing the current directory.
@@ -99,7 +132,7 @@ fn reachable(repo: &Repository, start: Oid) -> Result<HashSet<Oid>> {
 
 /// Paths touched by `commit` relative to its first parent. A root commit (no
 /// parent) reports every file in its tree.
-pub fn changed_files(repo: &Repository, commit: &Commit) -> Result<Vec<String>> {
+pub fn changed_files(repo: &Repository, commit: &Commit) -> Result<Vec<ChangedFile>> {
     let new_tree = commit.tree().wrap_err("failed to read commit tree")?;
 
     let old_tree = match commit.parent(0) {
@@ -112,7 +145,7 @@ pub fn changed_files(repo: &Repository, commit: &Commit) -> Result<Vec<String>> 
         .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut options))
         .wrap_err("failed to diff commit against its parent")?;
 
-    Ok(collect_diff_paths(&diff))
+    Ok(collect_diff_changes(&diff))
 }
 
 /// Commits reachable from HEAD but not from `base`, newest-first, each paired
@@ -143,7 +176,7 @@ pub fn commits_ahead<'repo>(repo: &'repo Repository, base: &str) -> Result<Vec<A
 /// advertises with the triple dot: diffing the merge base against `head` so
 /// commits that landed on `base` after the fork point do not pollute the tree.
 /// `head` accepts `"HEAD"` for the current head.
-pub fn diff_stat_files(repo: &Repository, base: &str, head: &str) -> Result<Vec<String>> {
+pub fn diff_stat_files(repo: &Repository, base: &str, head: &str) -> Result<Vec<ChangedFile>> {
     let base_oid = target_oid(&resolve_ref(repo, base)?, base)?;
     let head_oid = target_oid(&resolve_ref(repo, head)?, head)?;
 
@@ -165,16 +198,20 @@ pub fn diff_stat_files(repo: &Repository, base: &str, head: &str) -> Result<Vec<
         .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut options))
         .wrap_err("failed to diff merge base against head")?;
 
-    Ok(collect_diff_paths(&diff))
+    Ok(collect_diff_changes(&diff))
 }
 
-/// Pull one display path per delta, preferring the new path and falling back to
-/// the old one for deletions.
-fn collect_diff_paths(diff: &git2::Diff) -> Vec<String> {
+/// Pull one [`ChangedFile`] per delta, preferring the new path and falling back
+/// to the old one for deletions, and tagging each with how it changed.
+fn collect_diff_changes(diff: &git2::Diff) -> Vec<ChangedFile> {
     diff.deltas()
         .filter_map(|delta| {
             let path = delta.new_file().path().or_else(|| delta.old_file().path());
-            path.and_then(|p| p.to_str()).map(str::to_string)
+            let path = path.and_then(|p| p.to_str())?.to_string();
+            Some(ChangedFile {
+                path,
+                kind: ChangeKind::from_delta(delta.status()),
+            })
         })
         .collect()
 }
