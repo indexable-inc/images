@@ -1,9 +1,4 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash"
-    ]
-  },
   "extraKnownMarketplaces": {
     "mixedbread-skills": {
       "source": {
