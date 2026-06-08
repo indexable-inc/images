@@ -1,4 +1,0 @@
-interface:
-  display_name: "Slack Init MCP"
-  short_description: "Install and debug Slack MCP for Codex."
-  default_prompt: "Initialize Slack MCP for Codex and verify it works."

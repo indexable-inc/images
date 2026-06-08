@@ -24,7 +24,6 @@
 #     owns the CI sounds) and a different palette from the ix-downtime outage bars
 #     (red/yellow/blue) so the two never read alike. This module just imports that
 #     component and turns it on with our repos;
-#   * the token-free `/optimize` history scan (`optimize-scan`);
 #   * the shared "play a gentle sound, then speak it detached" helper
 #     (`say-detached`), now used only by the ix-downtime watcher.
 #
@@ -122,41 +121,6 @@ let
       indexPkgs.bossbar
     ];
     text = builtins.readFile ./scripts/ix-downtime.sh;
-  };
-
-  # Token-free periodic refresh of the /optimize history analysis. Runs the
-  # `optimize` skill's own bundled polars library headless via `uv run --with
-  # polars` (no index MCP session under launchd/systemd, and uv is the clean way
-  # to get polars off-session; uv manages its own python). The script path is
-  # baked from the skill's asset so the service and the skill share one source of
-  # truth. It scans the last 60 days of ~/.claude history into
-  # ~/.claude/optimize/{latest.txt, *.parquet} — NO LLM, NO sound — so it is safe
-  # to run often; `/optimize` reads these fresh caches for the synthesized report.
-  # coreutils provides ls/cp/date/tail for the dated-snapshot rotation.
-  optimizeScan = mkBashApp {
-    name = "optimize-scan";
-    runtimeInputs = [
-      pkgs.uv
-      pkgs.coreutils
-      pkgs.perl # flock(2) for the non-overlap guard (no flock(1) on macOS)
-    ];
-    text = ''
-      OUT="$HOME/.claude/optimize"
-      mkdir -p "$OUT"
-      # Non-overlap guard: if a prior scan is still running, skip this fire. perl
-      # takes an exclusive non-blocking flock on fd 9, which the shell keeps open
-      # for the whole run, so the lock auto-releases on exit or crash. Prevents two
-      # uv processes racing the parquet/HTML writes when a slow scan overruns the
-      # interval (the old personal launchd agent had this via lockArgs).
-      exec 9>"$OUT/.scan.lock"
-      perl -e 'use Fcntl ":flock"; flock(STDIN, LOCK_EX | LOCK_NB) or exit 1' <&9 || exit 0
-      uv run --with polars ${../../skills/optimize/assets/build_history_df.py} \
-        --days 60 --out "$OUT" > "$OUT/latest.txt" 2>&1
-      cp "$OUT/latest.txt" "$OUT/report-$(date +%F).txt"
-      # keep only the 14 most recent dated snapshots
-      { ls -1t "$OUT"/report-*.txt 2>/dev/null || true; } | tail -n +15 \
-        | while read -r f; do rm -f "$f"; done
-    '';
   };
 
   # Stage-2 of the pr-watch CI response: a per-run DEEP DIVE into a main-branch
@@ -282,20 +246,6 @@ in
       };
     };
 
-    optimize = {
-      enable = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = "Run the token-free /optimize history scan on a schedule (refreshes ~/.claude/optimize for the /optimize skill).";
-      };
-
-      interval = lib.mkOption {
-        type = lib.types.ints.positive;
-        default = 3600;
-        description = "Re-scan ~/.claude history every N seconds.";
-      };
-    };
-
     prWatch = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -391,17 +341,6 @@ in
           # (default true) fires the first poll immediately even for interval
           # services, and the launchd Label defaults to the space-free home
           # convention. The script's own flock guard prevents overlap.
-        };
-      })
-      (lib.mkIf cfg.optimize.enable {
-        optimize-scan = {
-          description = "optimize history scan";
-          command = [ (lib.getExe' optimizeScan "optimize-scan") ];
-          interval = cfg.optimize.interval;
-          standardOutPath = "${cfg.logDir}/optimize-scan.log";
-          standardErrorPath = "${cfg.logDir}/optimize-scan.log";
-          # runAtLoad (default true) gives an immediate first scan on load;
-          # Label defaults to the space-free home convention. No escape hatch.
         };
       })
       (lib.mkIf cfg.prWatch.enable {

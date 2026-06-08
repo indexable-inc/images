@@ -1,4 +1,0 @@
-interface:
-  display_name: "Profile Memory Usage"
-  short_description: "Trace RSS growth and page faults with bpftrace"
-  default_prompt: "Profile memory usage for a running process with bpftrace and explain the RSS growth."
