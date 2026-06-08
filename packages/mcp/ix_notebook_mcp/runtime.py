@@ -202,23 +202,33 @@ class Job:
     def output(self) -> str:
         return "".join(self._buf)
 
+    @property
+    def pageable(self) -> str:
+        """The text the paging helpers (`tail`/`head`/`slice`/`lines`/`grep`)
+        operate on: this job's captured stdout, or -- when the cell printed
+        nothing and its bulk is the returned value (a `Result`, or `sh()` output,
+        whose text lives in the result, not stdout) -- the result's model-facing
+        text. So the paging the over-cap notice advertises reaches a big returned
+        value just as it reaches a big `print()`, never an empty buffer."""
+        return self.output or _result_text(self)
+
     def tail(self, n: int = 2000) -> str:
-        """Last ``n`` chars of this job's captured output."""
-        return self.output[-n:]
+        """Last ``n`` chars of this job's output (stdout, else its result text)."""
+        return self.pageable[-n:]
 
     def head(self, n: int = 2000) -> str:
-        """First ``n`` chars of this job's captured output."""
-        return self.output[:n]
+        """First ``n`` chars of this job's output (stdout, else its result text)."""
+        return self.pageable[:n]
 
     def slice(self, start: int = 0, end: int | None = None) -> str:
-        """A character window ``output[start:end]``, for paging a large output a
+        """A character window ``pageable[start:end]``, for paging a large output a
         chunk at a time after `grep`/`lines` locates the region."""
-        return self.output[start:end]
+        return self.pageable[start:end]
 
     def lines(self, start: int = 0, end: int | None = None) -> str:
         """Output lines ``[start:end]`` (0-based, ``end`` exclusive), numbered to
         match `grep`'s line numbers so you can jump straight to a region."""
-        numbered = self.output.splitlines()
+        numbered = self.pageable.splitlines()
         return "\n".join(f"{i}: {numbered[i]}" for i in range(*slice(start, end).indices(len(numbered))))
 
     def grep(
@@ -239,7 +249,7 @@ class Job:
         import re as _re
 
         rx = _re.compile(pattern, _re.IGNORECASE if ignore_case else 0)
-        src = self.output.splitlines()
+        src = self.pageable.splitlines()
         keep: list[int] = []
         seen: set[int] = set()
         matches = 0
