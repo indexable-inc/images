@@ -20,9 +20,7 @@ let
     elemAt
     filter
     getAttr
-    groupBy
     hasAttr
-    length
     match
     removeAttrs
     toJSON
@@ -47,13 +45,7 @@ let
   isEmpty = l: l == [ ];
   nonEmpty = l: l != [ ];
 
-  findDuplicatesBy =
-    keyfn: list:
-    let
-      groups = groupBy keyfn list;
-      multiples = lib.filterAttrs (_: group: length group > 1) groups;
-    in
-    attrNames multiples;
+  inherit (import ../util/lists.nix { inherit lib; }) findDuplicatesBy;
 
   optionalInherit = s: k: if s ? "${k}" then { "${k}" = s."${k}"; } else { };
   optionalInherits = s: keys: lib.mergeAttrsList (map (optionalInherit s) keys);
@@ -124,12 +116,19 @@ let
 
   # Apply the rustflags a normal `cargo build` reads from `.cargo/config.toml`,
   # which cargoUnit otherwise ignores (it assembles rustc args itself instead of
-  # going through cargo). Returns the rustc args for a target triple following
-  # cargo precedence: `target.<triple>.rustflags` wins outright over
-  # `build.rustflags` (cargo does not merge the two). Flags may be a TOML array
-  # or a single whitespace-separated string. `cfg(...)` target sections and the
-  # `[env]` table are NOT honored. A `configPath` that does not exist yields no
-  # flags, so callers may pass the path unconditionally.
+  # going through cargo). Parsing the config here is the only route: cargo's
+  # `cargo build --unit-graph` does NOT carry rustflags (each unit records only
+  # dependencies/features/mode/pkg_id/platform/profile/target), because cargo
+  # resolves config rustflags at compile time and applies them when it invokes
+  # rustc, which cargoUnit bypasses by invoking rustc per unit from the graph. So
+  # there is nothing in the graph to pick up automatically; we read the config.
+  # Returns the rustc args for a target triple following cargo precedence:
+  # `target.<triple>.rustflags` wins outright over `build.rustflags` (cargo does
+  # not merge the two). Flags may be a TOML array or a single whitespace-
+  # separated string. `cfg(...)` target sections and the `[env]` table are NOT
+  # honored (cargo evaluates those against the full target cfg set, which this
+  # static parse does not reproduce). A `configPath` that does not exist yields
+  # no flags, so callers may pass the path unconditionally.
   rustflagsFromCargoConfig =
     configPath: platform:
     let
@@ -317,17 +316,7 @@ let
   # `buildPackage` here, and cargoUnit's `generateUnitGraph` / `generateUnitsNix` /
   # workspace import. Both files are two pieces of one unit, so the lockfile,
   # toolchain, policy, and vendor resolution live here rather than being re-derived
-  # per side. Each entry point normalizes its raw args exactly once and threads the
-  # result onward; nothing downstream re-normalizes or re-checks these values.
-  #
-  # Defaults are applied here and only here, and the policy/vendor resolution that
-  # used to live in standalone single-use helpers is inlined as the `policy`,
-  # `vendorSources`, and `vendorDir` bindings below. Vendor resolution stays lazy,
-  # so lockfile-only consumers never force the vendor derivations.
-  #
-  # Per-consumer knobs (`pname`, `rustPlatform`, clippy's cargoArgs override, and
-  # cargoUnit's `profile` / `contentAddressed` / `test*` / ...) are not here: each
-  # has a single reader and is resolved at that use site.
+  # per side.
   normalizeArgs =
     args:
     let

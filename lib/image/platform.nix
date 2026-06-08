@@ -209,9 +209,7 @@ in
         assertion = conflictingPortClaimGroups == { };
         message = ''
           ix.networking.portClaims has same-namespace port collisions:
-            ${lib.concatStringsSep "\n  " (
-              lib.mapAttrsToList renderPortClaimConflict conflictingPortClaimGroups
-            )}
+            ${lib.concatMapAttrsStringSep "\n  " renderPortClaimConflict conflictingPortClaimGroups}
 
           Put services that need the same public protocol port in separate fleet nodes/VMs, or choose an explicit alternate port when same-image co-location is intentional.
         '';

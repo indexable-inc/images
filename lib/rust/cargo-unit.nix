@@ -167,19 +167,18 @@ let
         let
           profile = rawArgs.profile or "release";
           target = rawArgs.target or null;
+
+          profileArgs =
+            {
+              release = [ "--release" ];
+              dev = [ ];
+            }
+            ."${profile}" or [
+              "--profile"
+              profile
+            ];
           renderTarget =
             cargoTarget:
-            let
-              profileArgs =
-                {
-                  release = [ "--release" ];
-                  dev = [ ];
-                }
-                ."${profile}" or [
-                  "--profile"
-                  profile
-                ];
-            in
             lib.escapeShellArgs (
               [
                 "build"

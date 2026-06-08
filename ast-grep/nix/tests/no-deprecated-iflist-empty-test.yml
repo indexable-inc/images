@@ -7,10 +7,13 @@ valid:
   - 'if cond then [ a ] else [ b ]'
   - 'if s ? k then s.k else fallback'
   - 'if s ? k then s.k else [ ]'
+  # Swapped orientation (empty `then`) is intentionally not flagged: the
+  # non-empty `else` is frequently a list-valued result, not elements to
+  # splice, so `lib.optionals (!cond) …` would obscure rather than clarify.
+  - 'if cond then [ ] else [ x ]'
+  - 'if cond then [ ] else [ a b ]'
+  - 'if callerHasTargetSelector && !clippyCargoArgsSet then [ ] else args.policy.clippy.cargoArgs'
 invalid:
   - 'if cond then [ x ] else [ ]'
   - 'if cond then [ a b ] else [ ]'
   - 'if cond then xs else [ ]'
-  - 'if cond then [ ] else [ x ]'
-  - 'if cond then [ ] else [ a b ]'
-  - 'if callerHasTargetSelector && !clippyCargoArgsSet then [ ] else args.policy.clippy.cargoArgs'

@@ -69,11 +69,8 @@ let
     '';
   };
 
-  budgetFlags = lib.concatStringsSep " " (
-    lib.mapAttrsToList (metric: max: "--max ${lib.escapeShellArg "${metric}=${toString max}"}") (
-      allocCheck.budgets or { }
-    )
-  );
+  budgetFlag = metric: max: "--max ${lib.escapeShellArg "${metric}=${toString max}"}";
+  budgetFlags = lib.concatMapAttrsStringSep " " budgetFlag (allocCheck.budgets or { });
 
   check =
     if allocCheck == null then

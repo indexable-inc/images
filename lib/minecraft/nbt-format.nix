@@ -21,10 +21,8 @@ let
   jsonFormat = pkgs.formats.json { };
   minecraftNbt = buildIxRustTool pkgs (packagePath "minecraft-nbt");
 in
-assert lib.assertMsg (builtins.elem format validFormats)
-  "mkMinecraftNbtFormat: format must be one of ${lib.concatStringsSep ", " validFormats}";
-assert lib.assertMsg (builtins.elem flavor validFlavors)
-  "mkMinecraftNbtFormat: flavor must be one of ${lib.concatStringsSep ", " validFlavors}";
+assert lib.assertOneOf "mkMinecraftNbtFormat format" format validFormats;
+assert lib.assertOneOf "mkMinecraftNbtFormat flavor" flavor validFlavors;
 {
   inherit (jsonFormat) type;
   generate =

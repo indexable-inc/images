@@ -158,7 +158,6 @@ let
       '';
       checkPhase = ''${lib.getExe' pkgs.bash "bash"} -n "$out/bin/${name}"'';
     };
-  exeOf = pkg: name: "${pkg}/bin/${name}";
 
   ccName = "apple-sdk-cc-${target}";
   cxxName = "apple-sdk-cxx-${target}";
@@ -200,11 +199,11 @@ let
     exit 1
   '';
 
-  appleCc = exeOf appleCcPackage ccName;
-  appleCxx = exeOf appleCxxPackage cxxName;
-  appleLinker = exeOf appleLinkerPackage linkerName;
-  appleAr = exeOf appleArPackage arName;
-  appleRanlib = exeOf appleRanlibPackage ranlibName;
+  appleCc = lib.getExe' appleCcPackage ccName;
+  appleCxx = lib.getExe' appleCxxPackage cxxName;
+  appleLinker = lib.getExe' appleLinkerPackage linkerName;
+  appleAr = lib.getExe' appleArPackage arName;
+  appleRanlib = lib.getExe' appleRanlibPackage ranlibName;
 
   appleCmakeToolchain = pkgs.writeText "apple-sdk-toolchain-${target}.cmake" ''
     set(CMAKE_SYSTEM_NAME Darwin)

@@ -14,9 +14,11 @@ let
 
   allSkills = skillNames;
 
-  antithesisSkills = builtins.filter (name: lib.hasPrefix "antithesis" name) allSkills;
+  partitioned = lib.partition (lib.hasPrefix "antithesis") allSkills;
 
-  commonSkills = lib.subtractLists antithesisSkills allSkills;
+  antithesisSkills = partitioned.right;
+
+  commonSkills = partitioned.wrong;
 
   profiles = {
     antithesis = antithesisSkills;

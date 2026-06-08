@@ -1,5 +1,7 @@
 { lib, root }:
 let
+  inherit (import ../lib/util/lists.nix { inherit lib; }) findDuplicates;
+
   relativePath = path: lib.removePrefix "${builtins.toString root}/" (builtins.toString path);
 
   childDirs =
@@ -140,9 +142,7 @@ let
 
   entries = map importMetadata packageDirs;
   ids = map (entry: entry.id) entries;
-  duplicateIds = lib.filter (id: builtins.length (lib.filter (candidate: candidate == id) ids) > 1) (
-    lib.unique ids
-  );
+  duplicateIds = findDuplicates ids;
   byId = lib.genAttrs' entries (entry: lib.nameValuePair entry.id entry);
 
   enabledForSystem =

@@ -81,16 +81,13 @@ let
     if webSearch == null then
       null
     else
-      assert lib.assertMsg (builtins.elem webSearch webSearchBackends)
-        "_module.args.hermes.webSearch = ${builtins.toJSON webSearch}; expected null or one of ${builtins.toJSON webSearchBackends}";
+      assert lib.assertOneOf "hermes.webSearch" webSearch webSearchBackends;
       webSearch;
   validTts =
-    assert lib.assertMsg (builtins.elem tts ttsBackends)
-      "_module.args.hermes.tts = ${builtins.toJSON tts}; expected one of ${builtins.toJSON ttsBackends}";
+    assert lib.assertOneOf "hermes.tts" tts ttsBackends;
     tts;
   validMemory =
-    assert lib.assertMsg (builtins.elem memory memoryBackends)
-      "_module.args.hermes.memory = ${builtins.toJSON memory}; expected one of ${builtins.toJSON memoryBackends}";
+    assert lib.assertOneOf "hermes.memory" memory memoryBackends;
     memory;
 
   envFiles = lib.unique (

@@ -196,6 +196,13 @@ let
   */
   relativePath = import ./util/relative-path.nix { inherit lib; };
 
+  /**
+    List helpers not covered by `nixpkgs.lib`: `findDuplicates` (repeated
+    elements) and `findDuplicatesBy` (elements colliding under a key function).
+    See [`lib/util/lists.nix`](lib/util/lists.nix).
+  */
+  lists = import ./util/lists.nix { inherit lib; };
+
   mkMinecraftLoader = import ./minecraft/loader.nix;
 
   /**
@@ -367,6 +374,7 @@ let
       deepMerge
       goUnit
       languages
+      lists
       minecraft
       mkBenchSuite
       mkMinecraftLoader

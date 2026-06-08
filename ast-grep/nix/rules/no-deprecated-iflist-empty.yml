@@ -1,34 +1,22 @@
 id: no-deprecated-iflist-empty
 language: nix
 severity: warning
-message: "`if cond then [ x ] else [ ]` is `lib.optional cond x`; the swapped `if cond then [ ] else y` is `lib.optionals (!cond) y` (or `lib.optional (!cond) x` for a single element)."
+message: "`if cond then [ x ] else [ ]` is `lib.optional cond x`, or `lib.optionals cond xs` when the non-empty branch is list-valued."
 note: |
   WHY: Conditional list construction is the canonical use case for
   `lib.optional` / `lib.optionals`. The `if … then [ … ] else [ ]` shape
   reinvents it inline and is harder to grep.
   NIXPKGS: Convention across nixpkgs services and packaging.
-  REPO: Use `lib.optional` for a one-element branch and `lib.optionals` for a
-  multi-element branch. When the empty list is the `else` branch, the condition
-  stays as written (`lib.optionals cond xs`); when it is the `then` branch,
-  negate it (`lib.optionals (!cond) xs`). Both orientations flag a bare
-  list-valued variable in the non-empty branch (`if cond then xs else [ ]`), not
-  just a `[ … ]` literal: the other branch being `[ ]` already proves it is a
-  list. The single carve-out is `if s ? k then s.k else [ ]`, which
-  `prefer-or-default-over-has-attr-guard` owns with the better `s.k or [ ]`.
-# fleet.nix's cycle detection returns `if cycles == [ ] then [ ] else head cycles`:
-# the non-empty branch yields the first cycle found, not list elements to splice,
-# so `lib.optionals (cycles != [ ]) (head cycles)` reads as "include these" and
-# obscures the "return the offending cycle, else none" intent. Exempt the file.
-ignores:
-  - "lib/image/fleet.nix"
+  REPO: Use `lib.optional cond x` for a one-element non-empty branch and
+  `lib.optionals cond xs` for a list-valued one; the `else [ ]` already proves
+  the non-empty branch is a list, so a bare variable (`if cond then xs else [ ]`)
+  flags too, not just a `[ … ]` literal. The single carve-out is
+  `if s ? k then s.k else [ ]`, which `prefer-or-default-over-has-attr-guard`
+  owns with the better `s.k or [ ]`.
 rule:
-  any:
-    # Empty `else`: any non-empty `then` branch, except the `s ? k` / `s.k`
-    # guard shape that `prefer-or-default-over-has-attr-guard` rewrites to
-    # `s.k or [ ]`.
-    - all:
-        - pattern: if $COND then $THEN else [ ]
-        - not: { pattern: "if $S ? $K then $S.$K else [ ]" }
-    # Empty `then`: any `else` branch. An empty-list `then` can never be the
-    # `s.k` attr access the guard rule keys on, so there is nothing to carve out.
-    - pattern: if $COND then [ ] else $ELSE
+  # Empty `else`: any non-empty `then` branch, except the `s ? k` / `s.k`
+  # guard shape that `prefer-or-default-over-has-attr-guard` rewrites to
+  # `s.k or [ ]`.
+  all:
+    - pattern: if $COND then $THEN else [ ]
+    - not: { pattern: "if $S ? $K then $S.$K else [ ]" }

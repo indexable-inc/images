@@ -87,10 +87,7 @@ let
   finalSettings = tunedDefaults // cfg.settings;
 
   sparkDefaultsConf = pkgs.writeText "spark-defaults.conf" (
-    lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (key: value: "${key} ${toString value}") finalSettings
-    )
-    + "\n"
+    lib.concatMapAttrsStringSep "" (key: value: "${key} ${toString value}\n") finalSettings
   );
 
   confDir = pkgs.runCommand "spark-conf" { } ''

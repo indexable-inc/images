@@ -1,16 +1,20 @@
 id: no-bare-assert
 language: nix
 severity: warning
-message: "Bare `assert <cond>;` gives an opaque failure. Use `assert lib.assertMsg <cond> \"<why>\";` so the diagnostic names the invariant."
+message: "Bare `assert <cond>;` gives an opaque failure. Use `assert lib.assertMsg <cond> \"<why>\";` (or `lib.assertOneOf`) so the diagnostic names the invariant."
 note: |
   WHY: When a bare `assert` fires, Nix prints the AST of the condition with no
   context — which is uselessly cryptic for anyone downstream. `lib.assertMsg cond
   msg` evaluates to `true` iff the cond holds and emits `msg` otherwise; combine it
   with `assert` to both fail the eval and tell the operator what went wrong.
+  `lib.assertOneOf "<name>" val xs` is the membership specialization: it checks
+  `elem val xs` and emits its own named message, so it satisfies this rule too.
   REPO: Required by AGENTS.md (Nix > DRY / derivations: "lib.assertMsg, ¬ bare assert").
 rule:
   kind: assert_expression
   not:
     has:
-      pattern: lib.assertMsg $$$ARGS
       stopBy: end
+      any:
+        - pattern: lib.assertMsg $$$ARGS
+        - pattern: lib.assertOneOf $$$ARGS

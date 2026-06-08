@@ -149,28 +149,26 @@ let
   ) enabledPlugins;
   pluginFileNames = map (plugin: plugin.fileName) pluginJars;
   invalidPluginFileNames = ix.relativePath.unsafeNames pluginFileNames;
-  duplicatePluginFileNames = lib.filter (
-    fileName: builtins.length (lib.filter (candidate: candidate == fileName) pluginFileNames) > 1
-  ) (lib.unique pluginFileNames);
+  duplicatePluginFileNames = ix.lists.findDuplicates pluginFileNames;
 
   mkManaged =
     label: files:
+    let
+      linkEntry =
+        path: value:
+        let
+          file = (formatFor path).generate (baseNameOf path) value;
+          target = ix.relativePath.shellPath "$out" path;
+          targetDir = ix.relativePath.shellParent "$out" path;
+        in
+        ''
+          mkdir -p ${targetDir}
+          ln -sf ${lib.escapeShellArg file} ${target}
+        '';
+    in
     pkgs.runCommand "velocity-managed-${label}" { } ''
       mkdir -p "$out"
-      ${lib.concatStringsSep "\n" (
-        lib.mapAttrsToList (
-          path: value:
-          let
-            file = (formatFor path).generate (baseNameOf path) value;
-            target = ix.relativePath.shellPath "$out" path;
-            targetDir = ix.relativePath.shellParent "$out" path;
-          in
-          ''
-            mkdir -p ${targetDir}
-            ln -sf ${lib.escapeShellArg file} ${target}
-          ''
-        ) files
-      )}
+      ${lib.concatMapAttrsStringSep "\n" linkEntry files}
     '';
 
   managed = {

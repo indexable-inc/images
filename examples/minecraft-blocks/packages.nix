@@ -43,7 +43,6 @@ let
   # nullability annotations, Guava `Multimap` on `Material`); they are
   # compile-only and are not shipped in the jar.
   apiClasspath = ix.artifacts.attachArtifactSources (lib.importJSON ./plugin/api-deps.json);
-  apiJars = lib.mapAttrsToList (_: entry: entry.src) apiClasspath;
 
   # The repo's default JVM major (OpenJDK 25), which is what the Paper API and
   # the Minecraft server runtime target. Compiling against an older JDK fails on
@@ -59,7 +58,7 @@ let
       {
         nativeBuildInputs = [ pluginJdk ];
         src = pluginSrc;
-        classpath = lib.concatStringsSep ":" apiJars;
+        classpath = lib.concatMapAttrsStringSep ":" (_: entry: entry.src) apiClasspath;
       }
       ''
         # Compile against the real API jars on the classpath. They are a
