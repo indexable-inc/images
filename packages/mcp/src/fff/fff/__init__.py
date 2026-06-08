@@ -9,22 +9,22 @@ index; this module loads the `fff-c` cdylib (`packages/fff` emits it next to the
     import fff
 
     # one-shot helpers keep a cached, file-watching index per directory:
-    for hit in fff.find("picker", path=".").hits:
+    for hit in fff.find(query="picker", path=".").hits:
         print(hit.path, hit.frecency)
 
-    for m in fff.grep("fn main", path=".", mode="regex").matches:
+    for m in fff.grep(query="fn main", path=".", mode="regex").matches:
         print(f"{m.path}:{m.line_number}: {m.line}")
 
     # one query, or many at once (matched as a literal OR in a single pass):
-    fff.grep(["TODO", "FIXME", "XXX"], path=".", mode="plain")
+    fff.grep(query=["TODO", "FIXME", "XXX"], path=".", mode="plain")
 
     # or hold an instance for repeated queries against one tree:
-    with fff.FileFinder(".", content_indexing=True) as ff:
+    with fff.FileFinder(root=".", content_indexing=True) as ff:
         ff.wait_for_scan()              # block until the initial scan finishes
-        ff.search("readme")            # fuzzy file search, frecency-ranked
-        ff.glob("**/*.rs")             # literal glob, no fuzzy parsing
-        ff.grep("TODO", mode="regex")  # content search (smart | plain | regex | fuzzy)
-        ff.multi_grep(["foo", "bar"])  # OR across many literals (Aho-Corasick)
+        ff.search(query="readme")      # fuzzy file search, frecency-ranked
+        ff.glob(pattern="**/*.rs")     # literal glob, no fuzzy parsing
+        ff.grep(query="TODO", mode="regex")  # content search (plain | regex | fuzzy)
+        ff.multi_grep(patterns=["foo", "bar"])  # OR across many literals (Aho-Corasick)
 
 Results are plain dataclasses (`FileHit`, `GrepMatch`, `SearchResult`,
 `GrepResult`). Only the accessor-backed surfaces of fff-c are bound: file search
@@ -42,9 +42,9 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import html
 import json
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -80,34 +80,6 @@ _OPTIONS_VERSION = 1
 
 # fff_live_grep mode byte: 0 plain (SIMD literal), 1 regex, 2 fuzzy.
 _GREP_MODES = {"plain": 0, "text": 0, "regex": 1, "fuzzy": 2}
-
-# Regex metacharacters that tell a regex query apart from a literal one. With
-# mode="smart" a query containing any of these is run as a regex when it
-# compiles, otherwise as a fast SIMD literal -- a convenience for callers who
-# want auto-detection, opted into explicitly (grep has no default mode).
-_RE_META = frozenset("\\^$.|?*+()[]{}")
-
-
-def _resolve_mode(query: str, mode: str) -> str:
-    """Resolve the public ``mode`` to a concrete fff grep mode.
-
-    ``"smart"`` inspects ``query``: regex when it holds regex metacharacters and
-    compiles to a valid pattern, else plain literal. Every other mode passes
-    through after validation.
-    """
-    if mode == "smart":
-        if any(c in _RE_META for c in query):
-            try:
-                re.compile(query)
-                return "regex"
-            except re.error:
-                return "plain"
-        return "plain"
-    if mode not in _GREP_MODES:
-        raise ValueError(
-            f"unknown grep mode {mode!r}; use 'smart', 'plain', 'regex', or 'fuzzy'"
-        )
-    return mode
 
 
 class FffError(RuntimeError):
@@ -533,8 +505,8 @@ class FileFinder:
 
     def __init__(
         self,
-        root=".",
         *,
+        root,
         ai_mode: bool = True,
         watch: bool = False,
         content_indexing: bool = False,
@@ -624,8 +596,8 @@ class FileFinder:
 
     def search(
         self,
-        query: str,
         *,
+        query: str,
         limit: int = 100,
         page: int = 0,
         current_file=None,
@@ -655,8 +627,8 @@ class FileFinder:
 
     def glob(
         self,
-        pattern: str,
         *,
+        pattern: str,
         limit: int = 100,
         page: int = 0,
         current_file=None,
@@ -709,8 +681,8 @@ class FileFinder:
 
     def grep(
         self,
-        query: str,
         *,
+        query: str,
         mode: str,
         limit: int = 50,
         max_matches_per_file: int = 0,
@@ -724,13 +696,13 @@ class FileFinder:
     ) -> GrepResult:
         """Content search across indexed files.
 
-        ``mode`` is required (no default), so each call states its intent:
-        ``"plain"`` (fast SIMD literal), ``"regex"``, ``"fuzzy"``, or ``"smart"``
-        (regex when the query holds regex metacharacters and compiles, else a
-        literal).
+        ``mode`` is required (no default): ``"plain"`` (fast SIMD literal),
+        ``"regex"``, or ``"fuzzy"``.
         """
         self._check_open()
-        mode_byte = _GREP_MODES[_resolve_mode(query, mode)]
+        if mode not in _GREP_MODES:
+            raise ValueError(f"unknown grep mode {mode!r}; use 'plain', 'regex', or 'fuzzy'")
+        mode_byte = _GREP_MODES[mode]
         _validate_grep_args(
             limit,
             max_matches_per_file,
@@ -763,8 +735,8 @@ class FileFinder:
 
     def multi_grep(
         self,
-        patterns: list[str],
         *,
+        patterns: list[str],
         constraints: str | None = None,
         limit: int = 50,
         max_matches_per_file: int = 0,
@@ -893,9 +865,9 @@ _cache: OrderedDict[str, FileFinder] = OrderedDict()
 _cache_lock = threading.Lock()
 
 
-def finder(root=".", **kwargs) -> FileFinder:
+def finder(*, root, **kwargs) -> FileFinder:
     """Construct a `FileFinder` (does not scan; call `wait_for_scan` yourself)."""
-    return FileFinder(root, **kwargs)
+    return FileFinder(root=root, **kwargs)
 
 
 def _cached(root) -> FileFinder:
@@ -905,7 +877,7 @@ def _cached(root) -> FileFinder:
         if existing is not None and not existing._closed:
             _cache.move_to_end(key)
             return existing
-        ff = FileFinder(key, watch=True, content_indexing=True)
+        ff = FileFinder(root=key, watch=True, content_indexing=True)
         ff.wait_for_scan(10_000)
         _cache[key] = ff  # a fresh insert is already the most-recent (LRU) end
         while len(_cache) > _CACHE_MAX:
@@ -985,12 +957,12 @@ def _isolated_file_finder(abspath: str, tmp: str, *, content_indexing: bool) -> 
     """
     copy_name = os.path.basename(abspath).lstrip(".") or "file"
     shutil.copy2(abspath, os.path.join(tmp, copy_name))
-    ff = FileFinder(tmp, watch=False, content_indexing=content_indexing)
+    ff = FileFinder(root=tmp, watch=False, content_indexing=content_indexing)
     ff.wait_for_scan(10_000)
     return ff
 
 
-def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
+def find(*, query: str, path, limit: int = 100) -> SearchResult:
     """Fuzzy file search over `path`, reusing a cached watched index.
 
     `path` may be a directory (searched whole) or a single file (searched on its
@@ -1002,24 +974,22 @@ def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
     if only is None:
         if _is_unindexable_root(root):
             raise _refuse_unindexable_dir(root)
-        return _cached(root).search(query, limit=limit)
+        return _cached(root).search(query=query, limit=limit)
     with tempfile.TemporaryDirectory(prefix="ix-fff-file-") as tmp:
         with _isolated_file_finder(os.path.join(root, only), tmp, content_indexing=False) as ff:
-            result = ff.search(query, limit=limit)
+            result = ff.search(query=query, limit=limit)
     hits = [replace(h, path=only, name=only) for h in result.hits][:limit]
     return SearchResult(hits=hits, total_matched=len(hits), total_files=len(hits))
 
 
-def grep(query: str | list[str], path=".", *, mode: str, limit: int = 50) -> GrepResult:
+def grep(*, query: str | list[str], path, mode: str, limit: int = 50) -> GrepResult:
     """Content grep over `path`, reusing a cached watched (content-indexed) index.
 
     `query` is one pattern, or a list of patterns matched as literals in a single
     OR pass (Aho-Corasick) -- the one call for "where does any of these appear?",
     so you never loop grep over a list. `mode` is required (no default), so each
     call states its intent:
-      - one string: ``"plain"`` (fast SIMD literal), ``"regex"``, ``"fuzzy"``, or
-        ``"smart"`` (regex when the query holds regex metacharacters and compiles,
-        else a literal);
+      - one string: ``"plain"`` (fast SIMD literal), ``"regex"``, or ``"fuzzy"``;
       - a list: matched literally, so pass ``"plain"`` (for a regex, pass one
         string like ``"a|b"`` with ``"regex"``).
 
@@ -1038,7 +1008,11 @@ def grep(query: str | list[str], path=".", *, mode: str, limit: int = 50) -> Gre
         )
 
     def _run(ff: "FileFinder") -> GrepResult:
-        return ff.multi_grep(query, limit=limit) if multi else ff.grep(query, mode=mode, limit=limit)
+        return (
+            ff.multi_grep(patterns=query, limit=limit)
+            if multi
+            else ff.grep(query=query, mode=mode, limit=limit)
+        )
 
     root, only = _split_path(path)
     if only is None:
@@ -1057,17 +1031,14 @@ def grep(query: str | list[str], path=".", *, mode: str, limit: int = 50) -> Gre
     )
 
 
-async def afind(query: str, path=".", *, limit: int = 100) -> SearchResult:
+async def afind(*, query: str, path, limit: int = 100) -> SearchResult:
     """Async fuzzy file search: runs off the event loop (non-blocking)."""
-    return await asyncio.to_thread(find, query, path, limit=limit)
+    return await asyncio.to_thread(find, query=query, path=path, limit=limit)
 
 
-async def agrep(query: str | list[str], path=".", *, mode: str, limit: int = 50) -> GrepResult:
+async def agrep(*, query: str | list[str], path, mode: str, limit: int = 50) -> GrepResult:
     """Async content grep: runs off the event loop (non-blocking)."""
-    return await asyncio.to_thread(grep, query, path, mode=mode, limit=limit)
-
-
-import html as _html_mod
+    return await asyncio.to_thread(grep, query=query, path=path, mode=mode, limit=limit)
 
 
 class CodeMap:
@@ -1079,7 +1050,7 @@ class CodeMap:
     stays scannable on the dashboard.
     """
 
-    def __init__(self, query: "str | list[str]", matches: list["GrepMatch"]) -> None:
+    def __init__(self, *, query: "str | list[str]", matches: list["GrepMatch"]) -> None:
         self.query = query
         # A list query (multi-pattern OR) displays as ``a | b`` in the headers.
         self._query_str = query if isinstance(query, str) else " | ".join(query)
@@ -1157,7 +1128,7 @@ class CodeMap:
         if not self.matches:
             return (
                 '<div style="color:#6a6a70;font-style:italic">'
-                f"no matches for {_html_mod.escape(self._query_str)}</div>"
+                f"no matches for {html.escape(self._query_str)}</div>"
             )
         mono = "ui-monospace,SFMono-Regular,Menlo,monospace"
         blocks = []
@@ -1167,7 +1138,7 @@ class CodeMap:
             for m in hits:
                 mark = "\u25cf" if m.is_definition else "\u25cb"
                 mark_col = "#e6e6e6" if m.is_definition else "#55555b"
-                line_html = _html_mod.escape(m.line.rstrip())
+                line_html = html.escape(m.line.rstrip())
                 rows.append(
                     '<div style="display:flex;gap:10px;padding:1px 0">'
                     f'<span style="color:{mark_col};width:1em">{mark}</span>'
@@ -1177,7 +1148,7 @@ class CodeMap:
                 )
             summary = (
                 '<summary style="cursor:pointer;color:#e6e6e6;padding:4px 0">'
-                f"{_html_mod.escape(path)} "
+                f"{html.escape(path)} "
                 f'<span style="color:#6a6a70">\u00b7 {ndef} def / {len(hits)} hits</span>'
                 "</summary>"
             )
@@ -1187,7 +1158,7 @@ class CodeMap:
             )
         head = (
             '<div style="color:#6a6a70;padding:6px 10px">'
-            f"{_html_mod.escape(self._query_str)} \u00b7 {len(self.defs)} def \u00b7 "
+            f"{html.escape(self._query_str)} \u00b7 {len(self.defs)} def \u00b7 "
             f"{len(self.matches)} hits \u00b7 {len(self.by_file)} files</div>"
         )
         return (
@@ -1197,14 +1168,14 @@ class CodeMap:
         )
 
 
-def map(query: str | list[str], path=".", *, mode: str, limit: int = 200) -> CodeMap:
+def map(*, query: str | list[str], path, mode: str, limit: int = 200) -> CodeMap:
     """Content grep grouped into a :class:`CodeMap`: hits per file with
     definitions ranked first. A glanceable answer to "where is X defined and
     used?" built straight on :func:`grep`."""
-    return CodeMap(query, grep(query, path, mode=mode, limit=limit).matches)
+    return CodeMap(query=query, matches=grep(query=query, path=path, mode=mode, limit=limit).matches)
 
 
-async def amap(query: str | list[str], path=".", *, mode: str, limit: int = 200) -> CodeMap:
+async def amap(*, query: str | list[str], path, mode: str, limit: int = 200) -> CodeMap:
     """Async :func:`map`: the same code map, off the event loop."""
-    res = await agrep(query, path, mode=mode, limit=limit)
-    return CodeMap(query, res.matches)
+    res = await agrep(query=query, path=path, mode=mode, limit=limit)
+    return CodeMap(query=query, matches=res.matches)
