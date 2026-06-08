@@ -11,7 +11,14 @@
   // Only an explicit caller name labels the card; the source is shown below.
   const title = $derived(jobTitle(job.name, job.id));
   // A running job's elapsed time tracks the shared clock; a finished one is fixed.
-  const elapsed = $derived(duration((job.ended_at ?? now.value) - job.started_at));
+  const elapsedSec = $derived((job.ended_at ?? now.value) - job.started_at);
+  const elapsed = $derived(duration(elapsedSec));
+  // While running, a blue bar fills over the foreground budget (the "total
+  // timeout" before the call backgrounds). Once elapsed passes the budget the
+  // job has been backgrounded but is still running: the bar reads as full and
+  // shimmers to mark it as over budget.
+  const frac = $derived(job.budget > 0 ? Math.min(1, elapsedSec / job.budget) : 0);
+  const overBudget = $derived(elapsedSec >= job.budget);
   const hasRich = $derived(job.outputs.length > 0);
   // Don't repeat the error if it's already in the captured stdout tail.
   const showError = $derived(!!job.error && !(job.output ?? '').includes(job.error));
@@ -38,6 +45,19 @@
     {#if title}<span class="name">{title}</span>{/if}
     <span class="dur">{elapsed}</span>
   </button>
+
+  {#if job.status === 'running'}
+    <div
+      class="budget {overBudget ? 'over' : ''}"
+      role="progressbar"
+      aria-valuemin="0"
+      aria-valuemax={job.budget}
+      aria-valuenow={Math.min(elapsedSec, job.budget)}
+      title={`${Math.round(elapsedSec)}s / ${job.budget}s`}
+    >
+      <div class="fill" style:width="{frac * 100}%"></div>
+    </div>
+  {/if}
 
   {#if showDetails}
     {#if job.code_html}
@@ -126,6 +146,51 @@
     color: var(--faint);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
+  }
+  /* A blue bar tracking elapsed-vs-budget for a running job: how much of the
+     foreground "total timeout" has been spent before the call backgrounds. */
+  .budget {
+    margin: 7px 0 1px;
+    height: 3px;
+    background: var(--inset);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .budget .fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: inherit;
+    /* Smooth the jump between the page's one-second clock ticks. */
+    transition: width 1s linear;
+  }
+  /* Past budget the job is backgrounded but still running: hold the bar full and
+     sweep a highlight across it so it reads as ongoing, not stalled. */
+  .budget.over .fill {
+    transition: none;
+    background-image: linear-gradient(
+      90deg,
+      var(--accent) 0%,
+      color-mix(in srgb, var(--accent) 45%, transparent) 50%,
+      var(--accent) 100%
+    );
+    background-size: 200% 100%;
+    animation: budget-sweep 1.1s linear infinite;
+  }
+  @keyframes budget-sweep {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .budget .fill {
+      transition: none;
+    }
+    .budget.over .fill {
+      animation: none;
+    }
   }
   /* The source, syntax-highlighted (inline monokai spans from the server). Sits
      quietly under the header: the colored tokens carry the meaning, so the box

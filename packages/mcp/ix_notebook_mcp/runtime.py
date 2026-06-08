@@ -162,12 +162,15 @@ class Job:
     """A single ``python_exec`` execution: an awaitable handle over the asyncio
     task running the code, with its captured output, result, and status."""
 
-    def __init__(self, code: str, name: str | None = None):
+    def __init__(self, code: str, name: str | None = None, budget: float = 15.0):
         self.id = uuid.uuid4().hex[:8]
         self.code = code
         self.name = name or self.id
         self.status = "running"
         self.started = time.time()
+        # The foreground budget (seconds) this run was given before it backgrounds;
+        # the dashboard draws a progress bar of elapsed-vs-budget while it runs.
+        self.budget = float(budget)
         self.ended: float | None = None
         # The cell's final value (a Result), exposed through the `result`
         # property; stored privately so an access while running can raise rather
@@ -864,7 +867,7 @@ async def _runner(job: Job, ns: dict) -> None:
     token = _ix_current.set(job)
     if _store is not None and _store_conn is not None:
         try:
-            _store.start(_store_conn, id=job.id, name=job.name, code=job.code, started_at=job.started)
+            _store.start(_store_conn, id=job.id, name=job.name, code=job.code, started_at=job.started, budget=job.budget)
         except Exception:
             # Best-effort logging: a store write must never abort the job.
             pass
@@ -1449,7 +1452,7 @@ async def __ix_run(code: str, budget: float = 15.0, name: str | None = None) -> 
     """Run ``code`` as a task; wait up to ``budget`` for it; return the Job either
     way (done, or still running in the background)."""
     ns = _user_ns if _user_ns is not None else globals()
-    job = Job(code, name)
+    job = Job(code, name, budget=budget)
     jobs[job.id] = job
     job.task = asyncio.ensure_future(_runner(job, ns))
     await asyncio.wait({job.task}, timeout=budget)

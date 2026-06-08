@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS executions (
     status      TEXT NOT NULL,
     started_at  REAL NOT NULL,
     ended_at    REAL,
+    budget      REAL NOT NULL DEFAULT 15,
     output      TEXT NOT NULL DEFAULT '',
     result      TEXT,
     error       TEXT,
@@ -74,22 +75,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
     TABLE IF NOT EXISTS`` never alters an existing table, so a store written by an
     older build is missing newer columns; add each idempotently."""
     have = {row[1] for row in conn.execute("PRAGMA table_info(executions)")}
+    # The kernel and the dashboard open the store from two processes at startup,
+    # so both can see a column missing and race to add it; a duplicate-column
+    # error means the other won, which is fine. This is a logical error, not
+    # SQLITE_BUSY, so busy_timeout does not cover it.
     if "bindings" not in have:
         try:
             conn.execute("ALTER TABLE executions ADD COLUMN bindings TEXT NOT NULL DEFAULT '{}'")
         except sqlite3.OperationalError:
-            # The kernel and the dashboard open the store from two processes at
-            # startup, so both can see the column missing and race to add it; a
-            # duplicate-column error here means the other won, which is fine. This
-            # is a logical error, not SQLITE_BUSY, so busy_timeout does not cover it.
+            pass
+    if "budget" not in have:
+        try:
+            conn.execute("ALTER TABLE executions ADD COLUMN budget REAL NOT NULL DEFAULT 15")
+        except sqlite3.OperationalError:
             pass
 
 
-def start(conn: sqlite3.Connection, *, id: str, name: str, code: str, started_at: float) -> None:
+def start(conn: sqlite3.Connection, *, id: str, name: str, code: str, started_at: float, budget: float = 15.0) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO executions (id, name, code, status, started_at, output) "
-        "VALUES (?, ?, ?, 'running', ?, '')",
-        (id, name, code, started_at),
+        "INSERT OR REPLACE INTO executions (id, name, code, status, started_at, budget, output) "
+        "VALUES (?, ?, ?, 'running', ?, ?, '')",
+        (id, name, code, started_at, budget),
     )
 
 
@@ -131,7 +137,7 @@ def recent(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
     # Running jobs sort first so a long-running job is never dropped by the limit
     # (a finished-jobs backlog could otherwise push it past LIMIT); then newest.
     rows = conn.execute(
-        "SELECT id, name, code, status, started_at, ended_at, output, result, error, outputs, bindings "
+        "SELECT id, name, code, status, started_at, ended_at, budget, output, result, error, outputs, bindings "
         "FROM executions ORDER BY (status = 'running') DESC, started_at DESC LIMIT ?",
         (limit,),
     ).fetchall()

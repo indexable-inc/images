@@ -31,6 +31,7 @@ export interface Job {
   status: JobStatus;
   started_at: number;
   ended_at: number | null;
+  budget: number;
   output: string;
   result: string | null;
   error: string | null;
