@@ -148,15 +148,10 @@ let
     # the unit hash, so this must equal ix's `public-rlib`.
     profile = "public-rlib";
     # Per-unit clippy / unused-dep / audit gates do not apply to a prebuilt
-    # artifact, and the stub is never compiled, so disable them here. (They do
+    # artifact, and the stub is never compiled, so disable them all. (They do
     # NOT affect the unit hash; that is purely metadata + lint_rustflags +
     # profile + deps + toolchain.)
-    policy = {
-      denyUnusedCrateDependencies = false;
-      cargoAudit.enable = false;
-      cargoMachete.enable = false;
-      clippy.enable = false;
-    };
+    policy = cargoUnit.policyPresets.pureBuild;
     # exportReferencesGraph (the closure-exclusion proof below) does not support
     # CA derivations; the unit hash is independent of this flag.
     contentAddressed = false;
