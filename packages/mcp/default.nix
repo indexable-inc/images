@@ -2098,6 +2098,17 @@ let
     assert all(r["attr"] for r in rows), rows
     assert isinstance(nix._current_system(), str) and "-" in nix._current_system()
 
+    # eval(): the arg builder quotes nothing through a shell and substitutes the
+    # {system} template, so `--apply` rides as its own argv element.
+    assert nix._eval_args(".#mcp") == ["eval", ".#mcp", "--json", "--no-warn-dirty"]
+    assert nix._eval_args(".#mcp", apply="builtins.attrNames") == [
+        "eval", ".#mcp", "--json", "--no-warn-dirty", "--apply", "builtins.attrNames",
+    ]
+    assert nix._eval_args(".#x", raw=True)[2] == "--raw", nix._eval_args(".#x", raw=True)
+    sysd = nix._current_system()
+    assert nix._eval_args(".#checks.{system}.lint")[1] == f".#checks.{sysd}.lint"
+    assert nix._eval_args(".#checks.{system}", system="x86_64-linux")[1] == ".#checks.x86_64-linux"
+
     print("nix-ok", nix.__version__)
   '';
   nixSmoke =

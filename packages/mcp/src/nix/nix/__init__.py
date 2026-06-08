@@ -46,7 +46,7 @@ from collections.abc import Iterable
 
 import polars as pl
 
-__all__ = ["NixLog", "parse", "run", "build", "attrs", "ACTIVITY_TYPES", "RESULT_TYPES"]
+__all__ = ["NixLog", "parse", "run", "build", "attrs", "eval", "ACTIVITY_TYPES", "RESULT_TYPES"]
 
 __version__ = "0.1.0"
 
@@ -493,6 +493,67 @@ async def attrs(flake: str = ".", *, system: str | None = None, cwd: str | None 
     if proc.returncode != 0:
         raise RuntimeError(f"nix flake show failed: {err.decode('utf-8', 'replace').strip()}")
     return pl.DataFrame(
-        _flake_show_rows(json.loads(out), system),
+        _flake_show_rows(_json.loads(out), system),
         schema={"kind": pl.Utf8, "attr": pl.Utf8, "type": pl.Utf8, "description": pl.Utf8},
     )
+
+
+def _eval_args(
+    installable: str, *, apply: str | None = None, system: str | None = None, raw: bool = False
+) -> list[str]:
+    """Build the ``nix eval`` argv (pure, so the quoting is testable).
+
+    ``{system}`` in ``installable`` is substituted with ``system`` (or the host's
+    system), so ``.#checks.{system}.lint`` resolves without hardcoding the double.
+    ``apply`` rides as its own argv element, never spliced into a shell string.
+    """
+    target = installable.replace("{system}", system or _current_system())
+    args = ["eval", target, "--raw" if raw else "--json", "--no-warn-dirty"]
+    if apply is not None:
+        args += ["--apply", apply]
+    return args
+
+
+async def eval(
+    installable: str = ".",
+    *,
+    apply: str | None = None,
+    system: str | None = None,
+    cwd: str | None = None,
+    raw: bool = False,
+):
+    """Evaluate a Nix installable and return the result as a native Python value.
+
+    The friction this removes: ``nix eval .#checks.aarch64-linux --apply
+    'builtins.attrNames'`` makes you hand-quote a Nix function inside a shell
+    string inside a Python string, and hardcode the system double. Here ``apply``
+    is a plain Python string passed as its own argv element (``create_subprocess_exec``,
+    no shell, so no quoting), and the JSON result decodes to native Python ready
+    for polars::
+
+        names = await nix.eval(".#checks.{system}", apply="builtins.attrNames")
+        pl.Series("check", names)                    # by lines / as a frame
+
+        desc = await nix.eval(".#mcp", apply="p: p.meta.description")
+
+    ``installable`` is a flake ref or attr path; ``{system}`` in it is replaced
+    with ``system`` (default: the host's system double). ``apply`` is a Nix
+    function applied before serialization. ``raw=True`` returns the string
+    verbatim (``nix eval --raw``, e.g. a derivation's ``outPath``) instead of
+    decoding JSON. ``cwd`` resolves a relative flake ref against a worktree. Runs
+    on the shared event loop, so it never blocks other jobs; raise on a non-zero
+    exit with nix's own stderr.
+    """
+    args = _eval_args(installable, apply=apply, system=system, raw=raw)
+    proc = await asyncio.create_subprocess_exec(
+        "nix",
+        *args,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"nix eval failed: {err.decode('utf-8', 'replace').strip()}")
+    text = out.decode("utf-8", "replace")
+    return text if raw else _json.loads(text)
