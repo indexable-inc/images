@@ -398,6 +398,16 @@ class Result:
         the frame as compact, untruncated CSV (the human still gets the styled
         HTML table), so a wide or long-stringed frame is never clipped to the
         agent the way the boxed text repr clips it. Override with ``llm_result``."""
+        if isinstance(value, Result):
+            # An existing Result is already split into its two views: copy it
+            # faithfully (keeping llm_images) instead of rebuilding it from its
+            # display bundle, which would drop the model image blocks. This also
+            # preserves images when a nested Result is stacked below.
+            return cls(
+                user_html=value.user_html,
+                llm_result=value.llm_result if llm_result is None else llm_result,
+                llm_images=value.llm_images,
+            )
         if _is_multi_rich(value):
             # A tuple/list that carries a rich element (a DataFrame, a figure, a
             # nested Result) is several things to SHOW, not one table: render each

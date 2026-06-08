@@ -1221,6 +1221,11 @@ let
     # A plain list of scalars is still ONE table (not stacked), unchanged.
     scalars = runtime.Result.of([1, 2, 3])
     assert scalars.user_html.count("<table") == 1, scalars.user_html[:200]
+    # Stacking preserves a nested Result's model images (Result.of copies a
+    # Result faithfully instead of rebuilding it from its display bundle).
+    inner = runtime.Result(user_html="<b>x</b>", llm_result="x", llm_images=[b"\x89PNG\r\n"])
+    nested = runtime.Result.of([inner, pl.DataFrame({"a": [1]})])
+    assert len(nested.llm_images) == 1, ("nested Result dropped its images", nested.llm_images)
 
 
     async def main():
