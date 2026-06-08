@@ -441,6 +441,9 @@ in
             body = builtins.readFile ./nvim/islands-body.lua;
             colorscheme =
               variant: slots:
+              let
+                colorTable = lib.concatMapAttrsStringSep "\n" (slot: hex: ''${slot} = "${hex}",'') slots;
+              in
               pkgs.writeText "ix-islands-${variant}.lua" ''
                 -- ix-islands-${variant}
                 --
@@ -454,7 +457,7 @@ in
                 vim.g.colors_name = "ix-islands-${variant}"
 
                 local c = {
-                ${lib.concatStringsSep "\n" (lib.mapAttrsToList (slot: hex: ''${slot} = "${hex}",'') slots)}
+                ${colorTable}
                 }
 
                 ${body}

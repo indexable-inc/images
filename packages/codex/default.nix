@@ -31,13 +31,13 @@ let
   toToml =
     value:
     if builtins.isBool value then
-      (if value then "true" else "false")
+      (lib.boolToString value)
     else if builtins.isString value then
       builtins.toJSON value
     else if builtins.isInt value || builtins.isFloat value then
       toString value
     else if builtins.isAttrs value then
-      "{${lib.concatStringsSep "," (lib.mapAttrsToList (k: v: "${k}=${toToml v}") value)}}"
+      "{${lib.concatMapAttrsStringSep "," (k: v: "${k}=${toToml v}") value}}"
     else
       throw "codex: unsupported config value type for ${builtins.toJSON value}";
   configFlags = lib.mapAttrsToList (key: value: "--config ${key}=${toToml value}") settings;

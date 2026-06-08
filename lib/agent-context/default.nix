@@ -73,11 +73,10 @@ let
   alwaysSections = lib.filter (section: section.disclosure == "always") checkedSections;
   progressiveSections = lib.filter (section: section.disclosure == "progressive") checkedSections;
 
-  stripTrailingNewlines =
-    text: if lib.hasSuffix "\n" text then stripTrailingNewlines (lib.removeSuffix "\n" text) else text;
-
   alwaysDocBody =
-    lib.concatStringsSep "\n\n" (map (section: stripTrailingNewlines section.body) alwaysSections)
+    lib.concatStringsSep "\n\n" (
+      map (section: lib.trimWith { end = true; } section.body) alwaysSections
+    )
     + "\n";
 
   alwaysDocLength = lib.stringLength alwaysDocBody;
@@ -100,7 +99,7 @@ let
       ---
     ''
     + "\n"
-    + stripTrailingNewlines section.body
+    + lib.trimWith { end = true; } section.body
     + "\n";
 
   documents = [

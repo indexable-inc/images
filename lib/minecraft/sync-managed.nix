@@ -43,7 +43,7 @@ let
     "--rcon-password-file"
     rconPasswordFile
     "--rcon-broadcast-to-ops"
-    (if rconBroadcastToOps then "true" else "false")
+    (lib.boolToString rconBroadcastToOps)
   ]
   ++ lib.optional rconEnabled "--rcon-enable";
 

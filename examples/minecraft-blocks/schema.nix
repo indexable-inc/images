@@ -131,7 +131,7 @@ let
   # (one `1` per axis) selects the equal-interleave Z-order curve, which is the
   # form that round-trips through `mortonDecode`. Each axis is cast to UInt32
   # after the offset shift so the encode sees the unsigned space.
-  mortonMask = "(" + lib.concatStringsSep ", " (lib.genList (_: "1") axisCount) + ")";
+  mortonMask = "(" + lib.concatStringsSep ", " (lib.replicate axisCount "1") + ")";
   shiftedAxis = f: "toUInt32(${f.name} + ${toString coordOffset})";
   mortonExpr =
     "mortonEncode(${mortonMask}, " + lib.concatMapStringsSep ", " shiftedAxis mortonFields + ")";

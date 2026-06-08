@@ -20,9 +20,7 @@ let
     elemAt
     filter
     getAttr
-    groupBy
     hasAttr
-    length
     match
     removeAttrs
     toJSON
@@ -47,13 +45,7 @@ let
   isEmpty = l: l == [ ];
   nonEmpty = l: l != [ ];
 
-  findDuplicatesBy =
-    keyfn: list:
-    let
-      groups = groupBy keyfn list;
-      multiples = lib.filterAttrs (_: group: length group > 1) groups;
-    in
-    attrNames multiples;
+  inherit (import ../util/lists.nix { inherit lib; }) findDuplicatesBy;
 
   optionalInherit = s: k: if s ? "${k}" then { "${k}" = s."${k}"; } else { };
   optionalInherits = s: keys: lib.mergeAttrsList (map (optionalInherit s) keys);
@@ -317,17 +309,7 @@ let
   # `buildPackage` here, and cargoUnit's `generateUnitGraph` / `generateUnitsNix` /
   # workspace import. Both files are two pieces of one unit, so the lockfile,
   # toolchain, policy, and vendor resolution live here rather than being re-derived
-  # per side. Each entry point normalizes its raw args exactly once and threads the
-  # result onward; nothing downstream re-normalizes or re-checks these values.
-  #
-  # Defaults are applied here and only here, and the policy/vendor resolution that
-  # used to live in standalone single-use helpers is inlined as the `policy`,
-  # `vendorSources`, and `vendorDir` bindings below. Vendor resolution stays lazy,
-  # so lockfile-only consumers never force the vendor derivations.
-  #
-  # Per-consumer knobs (`pname`, `rustPlatform`, clippy's cargoArgs override, and
-  # cargoUnit's `profile` / `contentAddressed` / `test*` / ...) are not here: each
-  # has a single reader and is resolved at that use site.
+  # per side.
   normalizeArgs =
     args:
     let

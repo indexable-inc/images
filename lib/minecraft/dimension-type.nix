@@ -63,9 +63,8 @@ let
           message = "services.minecraft.datapacks.<n>.dimensionTypes.${name}: logical_height (${toString logicalHeight}) must not exceed height (${toString height}).";
         }
       ];
-      failing = lib.filter (check: !check.assertion) checks;
     in
-    if failing == [ ] then rendered else throw (builtins.head failing).message;
+    lib.checkAssertWarn checks [ ] rendered;
 
   # Project a dimensionTypes submodule value to the JSON written to disk: strip
   # the `base` field, merge the named vanilla snapshot underneath, default

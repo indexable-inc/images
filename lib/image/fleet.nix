@@ -33,11 +33,8 @@ let
     elem
     filter
     hasAttr
-    head
     isAttrs
     isInt
-    listToAttrs
-    tail
     unsafeDiscardStringContext
     ;
 
@@ -131,19 +128,22 @@ let
         };
       }
     else
-      listToAttrs (
-        lib.genList (index: {
-          name = "${name}-${toString index}";
-          value = spec // {
-            name = "${name}-${toString index}";
-            baseName = name;
-            replicaIndex = index;
-          };
-        }) spec.replicas
+      lib.listToAttrs (
+        lib.genList (
+          index:
+          lib.nameValuePair "${name}-${toString index}" (
+            spec
+            // {
+              name = "${name}-${toString index}";
+              baseName = name;
+              replicaIndex = index;
+            }
+          )
+        ) spec.replicas
       );
 
   rawNodeSpecs = lib.mapAttrs normalizeNode prefixedNodes;
-  nodeSpecs = lib.mergeAttrsList (lib.mapAttrsToList expandReplicas rawNodeSpecs);
+  nodeSpecs = lib.concatMapAttrs expandReplicas rawNodeSpecs;
   knownDependency = dep: hasAttr dep rawNodeSpecs || hasAttr dep nodeSpecs;
   unknownDependencies = lib.filterAttrs (_: deps: deps != [ ]) (
     lib.mapAttrs (_name: spec: filter (dep: !(knownDependency dep)) spec.dependsOn) rawNodeSpecs
@@ -152,7 +152,7 @@ let
   checkedKnownNodeSpecs =
     assert lib.assertMsg (unknownDependencies == { }) ''
       fleet nodes reference unknown dependencies:
-        ${lib.concatStringsSep "\n  " (lib.mapAttrsToList renderUnknownDependencies unknownDependencies)}
+        ${lib.concatMapAttrsStringSep "\n  " renderUnknownDependencies unknownDependencies}
     '';
     nodeSpecs;
   expandDependency =
@@ -167,41 +167,15 @@ let
   expandedDependencies = lib.mapAttrs (
     _name: spec: lib.unique (lib.concatMap expandDependency spec.dependsOn)
   ) checkedKnownNodeSpecs;
-  cycleFromPath =
-    target: path:
-    let
-      go =
-        remaining:
-        if remaining == [ ] then
-          [ target ]
-        else if head remaining == target then
-          remaining ++ [ target ]
-        else
-          go (tail remaining);
-    in
-    go path;
-  detectDependencyCycle =
-    dependencies:
-    let
-      visit =
-        path: name:
-        if elem name path then
-          cycleFromPath name path
-        else
-          let
-            cycles = filter (cycle: cycle != [ ]) (
-              map (dep: visit (path ++ [ name ]) dep) dependencies.${name}
-            );
-          in
-          if cycles == [ ] then [ ] else head cycles;
-      cycles = filter (cycle: cycle != [ ]) (map (name: visit [ ] name) (attrNames dependencies));
-    in
-    if cycles == [ ] then [ ] else head cycles;
-  dependencyCycle = detectDependencyCycle expandedDependencies;
+  # `before a b` holds when a must be ordered before b, i.e. b depends on a.
+  # toposort returns `{ result = … }` when acyclic and `{ cycle; loops; }` otherwise.
+  dependencyOrder = lib.toposort (a: b: elem a expandedDependencies.${b}) (
+    attrNames expandedDependencies
+  );
   checkedNodeSpecs =
-    assert lib.assertMsg (dependencyCycle == [ ]) ''
+    assert lib.assertMsg (dependencyOrder ? result) ''
       fleet nodes contain a dependency cycle:
-        ${lib.concatStringsSep " -> " dependencyCycle}
+        ${lib.concatStringsSep " -> " (dependencyOrder.cycle or [ ])}
     '';
     checkedKnownNodeSpecs;
 

@@ -35,22 +35,11 @@ let
   flattenProperties =
     value:
     let
-      pairsFor =
-        prefix: current:
-        if builtins.isAttrs current && !lib.isDerivation current then
-          lib.concatMap (name: pairsFor (prefix ++ [ name ]) current.${name}) (lib.attrNames current)
-        else
-          [
-            {
-              name = lib.concatStringsSep "." prefix;
-              value = current;
-            }
-          ];
-      pairs = pairsFor [ ] value;
+      pairs = lib.mapAttrsToListRecursiveCond (_: as: !lib.isDerivation as) (
+        path: leaf: lib.nameValuePair (lib.concatStringsSep "." path) leaf
+      ) value;
       names = map (pair: pair.name) pairs;
-      duplicateNames = lib.filter (
-        name: builtins.length (lib.filter (candidate: candidate == name) names) > 1
-      ) (lib.unique names);
+      duplicateNames = ix.lists.findDuplicates names;
     in
     assert lib.assertMsg (
       duplicateNames == [ ]
@@ -338,9 +327,7 @@ let
 
   players = lib.attrValues cfg.players;
   playerUUIDs = map (player: player.uuid) players;
-  duplicatePlayerUUIDs = lib.filter (
-    uuid: builtins.length (lib.filter (candidate: candidate == uuid) playerUUIDs) > 1
-  ) (lib.unique playerUUIDs);
+  duplicatePlayerUUIDs = ix.lists.findDuplicates playerUUIDs;
   rawAccessFileNames = lib.intersectLists [
     "ops.json"
     "whitelist.json"

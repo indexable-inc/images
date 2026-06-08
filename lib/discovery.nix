@@ -8,10 +8,7 @@
 }:
 let
   inherit (import ./util/deep-merge.nix { inherit lib; }) strictList;
-
-  listHasPrefix =
-    prefix: list:
-    builtins.length prefix <= builtins.length list && lib.take (builtins.length prefix) list == prefix;
+  inherit (import ./util/lists.nix { inherit lib; }) findDuplicatesBy;
 
   /**
     Walk a directory tree and return `{ <name> = { path; metadata; }; }`.
@@ -32,8 +29,8 @@ let
         path: segments:
         let
           entries = builtins.readDir path;
-          dirs = lib.filter (name: entries.${name} == "directory" && !(lib.hasPrefix "_" name)) (
-            builtins.attrNames entries
+          dirs = lib.attrNames (
+            lib.filterAttrs (name: type: type == "directory" && !(lib.hasPrefix "_" name)) entries
           );
           hasRequiredFiles = lib.all (file: (entries.${file} or null) == "regular") requiredFiles;
           baseMetadata = {
@@ -66,22 +63,19 @@ let
         ++ lib.concatMap (name: walk (path + "/${name}") (segments ++ [ name ])) dirs;
 
       discovered = walk root [ ];
-      claimsByName = lib.groupBy (claim: claim.name) (lib.concatMap (entry: entry.claims) discovered);
-      duplicateClaims = lib.filterAttrs (_: claims: builtins.length claims > 1) claimsByName;
-      duplicateMessages = lib.mapAttrsToList (
-        name: claims:
-        "discoverTree: duplicate output name '${name}' claimed by "
-        + lib.concatStringsSep " and " (
-          map (claim: "${claim.relativePath} at ${builtins.toString claim.path}") claims
-        )
-      ) duplicateClaims;
+      allClaims = lib.concatMap (entry: entry.claims) discovered;
+      duplicateNames = findDuplicatesBy (claim: claim.name) allClaims;
+      duplicateClaims = lib.filter (claim: builtins.elem claim.name duplicateNames) allClaims;
     in
-    if duplicateMessages != [ ] then
-      throw (lib.concatStringsSep "\n" duplicateMessages)
-    else
-      lib.genAttrs' discovered (
-        entry: lib.nameValuePair entry.metadata.name { inherit (entry) path metadata; }
-      );
+    assert lib.assertMsg (duplicateClaims == [ ]) (
+      lib.concatMapStringsSep "\n" (
+        claim:
+        "discoverTree: duplicate output name '${claim.name}' claimed by ${claim.relativePath} at ${builtins.toString claim.path}"
+      ) duplicateClaims
+    );
+    lib.genAttrs' discovered (
+      entry: lib.nameValuePair entry.metadata.name { inherit (entry) path metadata; }
+    );
 
   # One image directory -> { <name> = pkg; <name>_<ver> = pkg; ... }.
   # Without versions.nix, the dir is a single module.
@@ -210,8 +204,7 @@ let
       hasDescendant =
         modulePath:
         lib.any (
-          otherPath:
-          builtins.length otherPath > builtins.length modulePath && listHasPrefix modulePath otherPath
+          otherPath: otherPath != modulePath && lib.lists.hasPrefix modulePath otherPath
         ) modulePaths;
       entryAsTree =
         entry:

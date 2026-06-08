@@ -62,12 +62,10 @@ let
     };
   };
 
-  metricOptionAttrs = lib.mapAttrs (_: mkOption) (lib.concatMapAttrs (_: group: group) metricOptions);
+  metricOptionAttrs = lib.mapAttrs (_: mkOption) (lib.mergeAttrsList (lib.attrValues metricOptions));
 
-  metricConfig = lib.mapAttrs (
-    _: group: lib.genAttrs (lib.attrNames group) (name: cfg.${name})
-  ) metricOptions;
-  metricValues = lib.concatMapAttrs (_: group: group) metricConfig;
+  metricConfig = lib.mapAttrs (_: group: builtins.intersectAttrs group cfg) metricOptions;
+  metricValues = lib.mergeAttrsList (lib.attrValues metricConfig);
 
   siteSrc = fs.toSource {
     root = ./site;
