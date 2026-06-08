@@ -72,7 +72,11 @@ BLOCKING = (
     "non-blocking: wrap it in `await asyncio.to_thread(...)`, or prefer the async API (`fff`, "
     "`httpx`, and the bundled `sh(cmd, cwd=...)` to shell out instead of `subprocess.run`), and run "
     "anything slow as a background job you "
-    "poll, never inline."
+    "poll, never inline. To shell out, reach for `sh()` rather than a hand-rolled "
+    "`asyncio.create_subprocess_exec/_shell` + `communicate()`: `sh()` runs the child in its own "
+    "session and enforces a timeout with a process-group kill, so it cannot sit in `running` "
+    "forever when the command has finished but a child left the merged stdout pipe open (a "
+    "`communicate()` that never returns) — the exact hang a raw async subprocess gives you."
 )
 
 RESULT_CONTRACT = (
