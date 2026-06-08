@@ -226,8 +226,9 @@ TRACE = (
 
 _DASHBOARD_URL_NOTE = (
     "This session's live dashboard (every running job, its output, and your curated cells) is at "
-    "{url} -- share it with the human now. It is also the `DASHBOARD_URL` variable in the kernel "
-    "namespace."
+    "{url} -- ALWAYS give the human this link in your very first reply of the session, before or "
+    "alongside your first answer, so they can watch the work unfold live; never make them ask for "
+    "it. It is also the `DASHBOARD_URL` variable in the kernel namespace."
 )
 
 
