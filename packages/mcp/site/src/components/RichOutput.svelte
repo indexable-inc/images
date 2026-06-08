@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { RichOutput } from '$lib/types';
+  import { type RichOutput, type LlmView, IX_LLM_MIME } from '$lib/types';
+  import { view } from '$lib/view.svelte';
   let { output }: { output: RichOutput } = $props();
 
   const data = $derived(output.data ?? {});
@@ -10,9 +11,33 @@
   const html = $derived(data['text/html']);
   const markdown = $derived(data['text/markdown']);
   const plain = $derived(data['text/plain']);
+
+  // The raw model-facing view, when the header toggle is on: the exact text and
+  // images the agent received. IX_LLM_MIME carries both (text plus downscaled
+  // images) when a Result had images; otherwise text/plain is the model's text.
+  const llm = $derived.by((): LlmView => {
+    const encoded = data[IX_LLM_MIME];
+    if (encoded) {
+      try {
+        return JSON.parse(encoded) as LlmView;
+      } catch {
+        // Fall through to the text-only view below.
+      }
+    }
+    return { text: plain ?? '', images: [] };
+  });
 </script>
 
-{#if png}
+{#if view.rawLLM}
+  <!-- What the LLM actually saw: its concise text and any images it was sent. -->
+  {#if llm.text}<pre class="res">{llm.text}</pre>{/if}
+  {#each llm.images as img, i (i)}
+    <img class="img" src={`data:${img.mime};base64,${img.data}`} alt="" />
+  {/each}
+  {#if !llm.text && llm.images.length === 0}
+    <pre class="res dim">(no model output)</pre>
+  {/if}
+{:else if png}
   <img class="img" src={`data:image/png;base64,${png}`} alt="" />
 {:else if jpeg}
   <img class="img" src={`data:image/jpeg;base64,${jpeg}`} alt="" />
@@ -47,5 +72,9 @@
   }
   pre.res {
     color: var(--text);
+  }
+  pre.dim {
+    color: var(--faint);
+    font-style: italic;
   }
 </style>

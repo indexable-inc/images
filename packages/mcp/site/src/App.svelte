@@ -1,6 +1,7 @@
 <script lang="ts">
   import { feed } from '$lib/feed.svelte';
   import { now } from '$lib/now.svelte';
+  import { view } from '$lib/view.svelte';
   import JobCard from '$components/JobCard.svelte';
   import CellCard from '$components/CellCard.svelte';
   import ResourceCard from '$components/ResourceCard.svelte';
@@ -171,6 +172,14 @@
 <header class="top">
   <span class="brand"><b>ix</b> &middot; mcp</span>
   <span class="spacer"></span>
+  <button
+    class="reset"
+    class:on={view.rawLLM}
+    type="button"
+    aria-pressed={view.rawLLM}
+    title={view.rawLLM ? "Showing the raw model view; click for the human view" : "Show what the LLM actually sees (raw text & images)"}
+    onclick={() => view.toggle()}
+  >raw llm</button>
   <button class="reset" type="button" title="Reset layout" onclick={resetLayout}>reset</button>
   <span class="stat" class:stale={!feed.connected}>
     {#if running}<span class="dot"></span><b>{running}</b> running &nbsp;{/if}
@@ -291,6 +300,14 @@
   .reset:hover {
     color: var(--text);
     border-color: var(--active);
+  }
+  .reset.on {
+    color: var(--bg);
+    background: var(--active);
+    border-color: var(--active);
+  }
+  .reset.on:hover {
+    color: var(--bg);
   }
   .stat {
     color: var(--muted);

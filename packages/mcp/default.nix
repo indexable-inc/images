@@ -1212,6 +1212,19 @@ let
     runtime.install(ns)
     run = ns["__ix_run"]
 
+    # The model-facing view (IX_LLM_MIME: the exact llm_result text plus downscaled
+    # images) rides into the stored bundle so the dashboard's raw-LLM toggle can
+    # show precisely what the agent received, not just the human HTML.
+    llm_bundle = runtime._result_bundle(
+        runtime.Result(user_html="<b>chart</b>", llm_result="a chart of x", llm_images=[b"\x89PNG\r\n"])
+    )
+    assert runtime.IX_LLM_MIME in llm_bundle["data"], list(llm_bundle["data"])
+    decoded = json.loads(llm_bundle["data"][runtime.IX_LLM_MIME])
+    assert decoded["text"] == "a chart of x" and len(decoded["images"]) == 1, decoded
+    # A result with no model images carries no IX_LLM_MIME (text/plain is the text).
+    plain_bundle = runtime._result_bundle(runtime.Result(user_html="<b>hi</b>", llm_result="hi"))
+    assert runtime.IX_LLM_MIME not in plain_bundle["data"], list(plain_bundle["data"])
+
     # A tuple/list carrying a rich value (a DataFrame) renders each element with
     # its own view, stacked, instead of stringifying the frame into a one-column
     # table -- Result((repr_text, df)) shows the text AND the real table.

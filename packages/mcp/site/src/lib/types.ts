@@ -9,6 +9,18 @@ export interface RichOutput {
   data?: Record<string, string>;
 }
 
+// The custom mime a Result carries so the dashboard can reconstruct the exact
+// model-facing view (mirrors ix_notebook_mcp.runtime.IX_LLM_MIME). Stored
+// JSON-encoded in a RichOutput's `data` map; parse it to a `LlmView`.
+export const IX_LLM_MIME = 'application/x-ix-llm+json';
+
+// What the agent actually received for one output: the `llm_result` text and the
+// downscaled `llm_images`, each a base64 payload with its mime.
+export interface LlmView {
+  text: string;
+  images: { mime: string; data: string }[];
+}
+
 export type JobStatus = 'running' | 'done' | 'error' | 'cancelled';
 
 // The live value one of a cell's identifiers was bound to when the run finished
