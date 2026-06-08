@@ -1224,6 +1224,13 @@ let
     # A result with no model images carries no IX_LLM_MIME (text/plain is the text).
     plain_bundle = runtime._result_bundle(runtime.Result(user_html="<b>hi</b>", llm_result="hi"))
     assert runtime.IX_LLM_MIME not in plain_bundle["data"], list(plain_bundle["data"])
+    # A huge llm_result is clipped to the same cap as any other text mime, so it
+    # can never bypass the limit into the store / each dashboard poll.
+    big = runtime._result_bundle(
+        runtime.Result(user_html="<b>x</b>", llm_result="z" * 500_000, llm_images=[b"\x89PNG\r\n"])
+    )
+    big_text = json.loads(big["data"][runtime.IX_LLM_MIME])["text"]
+    assert big_text.endswith("[truncated]") and len(big_text) <= runtime._MAX_TEXT_BUNDLE + 32, len(big_text)
 
     # A tuple/list carrying a rich value (a DataFrame) renders each element with
     # its own view, stacked, instead of stringifying the frame into a one-column

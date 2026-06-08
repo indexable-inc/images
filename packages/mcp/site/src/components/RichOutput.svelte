@@ -19,12 +19,21 @@
     const encoded = data[IX_LLM_MIME];
     if (encoded) {
       try {
-        return JSON.parse(encoded) as LlmView;
+        const parsed = JSON.parse(encoded) as LlmView;
+        if (typeof parsed.text === 'string' && Array.isArray(parsed.images)) return parsed;
       } catch {
-        // Fall through to the text-only view below.
+        // Fall through to the text/image fallback below.
       }
     }
-    return { text: plain ?? '', images: [] };
+    // No IX_LLM_MIME: the model still received this bundle's text/plain and any
+    // image mimes (a bare plot or screenshot), so reflect those, not just text.
+    return {
+      text: plain ?? (html && !png ? '[HTML output; see the dashboard]' : ''),
+      images: [
+        ...(png ? [{ mime: 'image/png', data: png }] : []),
+        ...(jpeg ? [{ mime: 'image/jpeg', data: jpeg }] : []),
+      ],
+    };
   });
 </script>
 

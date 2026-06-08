@@ -1196,9 +1196,16 @@ def _normalize_bundle(data: dict, metadata: dict | None = None) -> dict:
     # so cap the whole only as a guard, dropping images (never the text) if huge.
     llm = data.get(IX_LLM_MIME)
     if isinstance(llm, dict):
-        encoded = json.dumps(llm)
+        # Clip the text to the same cap as every other text mime so a huge
+        # llm_result can never bypass it into SQLite or each dashboard poll, and
+        # the raw view matches the model's own clipped text. Drop the images
+        # (never the text) if the whole still exceeds the image cap.
+        text = llm.get("text", "")
+        if len(text) > _MAX_TEXT_BUNDLE:
+            text = text[:_MAX_TEXT_BUNDLE] + "\n... [truncated]"
+        encoded = json.dumps({"text": text, "images": llm.get("images", [])})
         if len(encoded) > _MAX_IMAGE_BUNDLE:
-            encoded = json.dumps({"text": llm.get("text", ""), "images": []})
+            encoded = json.dumps({"text": text, "images": []})
         out[IX_LLM_MIME] = encoded
     return {"data": out, "metadata": metadata or {}}
 
