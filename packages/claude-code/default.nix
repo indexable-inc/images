@@ -149,11 +149,14 @@ let
   # untouched by `--disallowedTools`). Drop the built-in meta-tools so the model
   # works turn-by-turn through code execution instead of branching into
   # structured task lists, agent teams, worktrees, or multiple-choice prompts.
-  # Plan mode (EnterPlanMode/ExitPlanMode) is intentionally NOT dropped, so the
-  # agent can propose a plan for a non-trivial change before executing it.
+  # Plan mode (EnterPlanMode/ExitPlanMode) is dropped too: this agent plans and
+  # executes turn-by-turn through code execution rather than branching into the
+  # built-in plan/approve flow.
   # Removed regardless of permission mode, same as the autonomy list.
   disallowedMetaTools = [
     "AskUserQuestion"
+    "EnterPlanMode"
+    "ExitPlanMode"
     "TaskCreate"
     "TaskList"
     "TaskGet"
