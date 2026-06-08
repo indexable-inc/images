@@ -41,6 +41,7 @@ import asyncio
 import ctypes
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -76,6 +77,35 @@ _OPTIONS_VERSION = 1
 
 # fff_live_grep mode byte: 0 plain (SIMD literal), 1 regex, 2 fuzzy.
 _GREP_MODES = {"plain": 0, "text": 0, "regex": 1, "fuzzy": 2}
+
+# Regex metacharacters that tell a regex query apart from a literal one. With
+# mode="smart" (the default) a query containing any of these is run as a regex
+# when it compiles, otherwise as a fast SIMD literal. This avoids both footguns
+# of a fixed default: a plain default silently treats `a|b` or `(?i)x` as text,
+# while a regex default breaks an ordinary literal like `fn main(`.
+_RE_META = frozenset("\\^$.|?*+()[]{}")
+
+
+def _resolve_mode(query: str, mode: str) -> str:
+    """Resolve the public ``mode`` to a concrete fff grep mode.
+
+    ``"smart"`` inspects ``query``: regex when it holds regex metacharacters and
+    compiles to a valid pattern, else plain literal. Every other mode passes
+    through after validation.
+    """
+    if mode == "smart":
+        if any(c in _RE_META for c in query):
+            try:
+                re.compile(query)
+                return "regex"
+            except re.error:
+                return "plain"
+        return "plain"
+    if mode not in _GREP_MODES:
+        raise ValueError(
+            f"unknown grep mode {mode!r}; use 'smart', 'plain', 'regex', or 'fuzzy'"
+        )
+    return mode
 
 
 class FffError(RuntimeError):
@@ -377,6 +407,12 @@ class SearchResult:
             },
         )
 
+    def _ix_to_frame_(self):
+        """Kernel table protocol: render as this polars frame for both the human
+        (styled HTML) and the model (compact CSV). None when polars is absent so
+        the kernel falls back to the text repr."""
+        return self.df if _polars() is not None else None
+
     def _repr_html_(self) -> str | None:
         """Render as the styled table for the dashboard (None when polars is
         absent, so the human falls back to the text repr)."""
@@ -457,6 +493,12 @@ class GrepResult:
                 "git": pl.Utf8,
             },
         )
+
+    def _ix_to_frame_(self):
+        """Kernel table protocol: render as this polars frame for both the human
+        (styled HTML) and the model (compact CSV). None when polars is absent so
+        the kernel falls back to the text repr."""
+        return self.df if _polars() is not None else None
 
     def _repr_html_(self) -> str | None:
         """Render as the styled table for the dashboard (None when polars is
@@ -667,7 +709,7 @@ class FileFinder:
         self,
         query: str,
         *,
-        mode: str = "plain",
+        mode: str = "smart",
         limit: int = 50,
         max_matches_per_file: int = 0,
         smart_case: bool = True,
@@ -678,11 +720,14 @@ class FileFinder:
         after_context: int = 0,
         classify_definitions: bool = False,
     ) -> GrepResult:
-        """Content search across indexed files. mode: plain | regex | fuzzy."""
+        """Content search across indexed files.
+
+        ``mode``: ``"smart"`` (default) runs the query as a regex when it holds
+        regex metacharacters and as a fast literal otherwise; force it with
+        ``"plain"``, ``"regex"``, or ``"fuzzy"``.
+        """
         self._check_open()
-        mode_byte = _GREP_MODES.get(mode)
-        if mode_byte is None:
-            raise ValueError(f"unknown grep mode {mode!r}; use one of {sorted(_GREP_MODES)}")
+        mode_byte = _GREP_MODES[_resolve_mode(query, mode)]
         _validate_grep_args(
             limit,
             max_matches_per_file,
@@ -962,7 +1007,7 @@ def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
     return SearchResult(hits=hits, total_matched=len(hits), total_files=len(hits))
 
 
-def grep(query: str, path=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
+def grep(query: str, path=".", *, mode: str = "smart", limit: int = 50) -> GrepResult:
     """Content grep over `path`, reusing a cached watched (content-indexed) index.
 
     `path` may be a directory (grepped whole) or a single file. A single file is
@@ -993,7 +1038,7 @@ async def afind(query: str, path=".", *, limit: int = 100) -> SearchResult:
     return await asyncio.to_thread(find, query, path, limit=limit)
 
 
-async def agrep(query: str, path=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
+async def agrep(query: str, path=".", *, mode: str = "smart", limit: int = 50) -> GrepResult:
     """Async content grep: runs off the event loop (non-blocking)."""
     return await asyncio.to_thread(grep, query, path, mode=mode, limit=limit)
 
@@ -1022,6 +1067,51 @@ class CodeMap:
     @property
     def defs(self) -> list["GrepMatch"]:
         return [m for m in self.matches if m.is_definition]
+
+    @property
+    def df(self):
+        """The map as a nested ``polars.DataFrame``: one row per file, with the
+        per-file matches as a ``list[struct]`` of (line, col, def, content), and
+        ``defs``/``hits`` counts. Requires polars. (For a flat table use
+        ``fff.grep(...).df``; the nested frame is for grouping/aggregation.)"""
+        pl = _polars()
+        if pl is None:
+            raise FffError("polars is not available; iterate .by_file instead")
+        rows = [
+            {
+                "path": path,
+                "defs": sum(1 for h in hits if h.is_definition),
+                "hits": len(hits),
+                "matches": [
+                    {
+                        "line": h.line_number,
+                        "col": h.col,
+                        "def": h.is_definition,
+                        "content": h.line.strip(),
+                    }
+                    for h in hits
+                ],
+            }
+            for path, hits in self.by_file.items()
+        ]
+        return pl.DataFrame(
+            rows,
+            schema={
+                "path": pl.Utf8,
+                "defs": pl.Int64,
+                "hits": pl.Int64,
+                "matches": pl.List(
+                    pl.Struct(
+                        {
+                            "line": pl.Int64,
+                            "col": pl.Int64,
+                            "def": pl.Boolean,
+                            "content": pl.Utf8,
+                        }
+                    )
+                ),
+            },
+        )
 
     def __repr__(self) -> str:
         if not self.matches:
@@ -1081,14 +1171,14 @@ class CodeMap:
         )
 
 
-def map(query: str, path=".", *, mode: str = "plain", limit: int = 200) -> CodeMap:
+def map(query: str, path=".", *, mode: str = "smart", limit: int = 200) -> CodeMap:
     """Content grep grouped into a :class:`CodeMap`: hits per file with
     definitions ranked first. A glanceable answer to "where is X defined and
     used?" built straight on :func:`grep`."""
     return CodeMap(query, grep(query, path, mode=mode, limit=limit).matches)
 
 
-async def amap(query: str, path=".", *, mode: str = "plain", limit: int = 200) -> CodeMap:
+async def amap(query: str, path=".", *, mode: str = "smart", limit: int = 200) -> CodeMap:
     """Async :func:`map`: the same code map, off the event loop."""
     res = await agrep(query, path, mode=mode, limit=limit)
     return CodeMap(query, res.matches)

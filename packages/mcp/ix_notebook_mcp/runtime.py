@@ -415,6 +415,20 @@ class Result:
             # one into a `value` cell. `Result((repr_text, df))` thus shows the text
             # and the real table, not a 2-row frame of two reprs.
             return _result_from_values(list(value), llm_result=llm_result)
+        frame = _frame_view(value)
+        if frame is not None:
+            # A rich result type (fff GrepResult/SearchResult) that exposes a
+            # polars frame: render that frame the same as a bare DataFrame -- a
+            # styled table for the human, compact CSV for the model -- so the
+            # model reads the real rows, not a one-line summary repr.
+            text_view = llm_result if llm_result is not None else _df_llm_text(frame)
+            try:
+                import view as _view
+
+                return cls(user_html=_view.df_html(frame), llm_result=text_view)
+            except Exception:
+                user = f'<pre class="ix-result">{_escape_html(text_view)}</pre>'
+                return cls(user_html=user, llm_result=text_view)
         value = _as_frame_if_tabular(value)
         if llm_result is not None:
             text_view = llm_result
@@ -1052,6 +1066,22 @@ def _is_polars_df(value) -> bool:
         and hasattr(value, "columns")
         and hasattr(value, "height")
     )
+
+
+def _frame_view(value):
+    """A non-DataFrame value that opts into the table protocol by exposing
+    ``_ix_to_frame_()`` returning a polars DataFrame (e.g. an fff ``GrepResult``
+    or ``SearchResult``). Returns that frame, else None. Lets a rich result type
+    render as the styled table for the human and compact CSV for the model,
+    instead of falling back to its one-line summary repr."""
+    hook = getattr(value, "_ix_to_frame_", None)
+    if hook is None:
+        return None
+    try:
+        frame = hook()
+    except Exception:
+        return None
+    return frame if _is_polars_df(frame) else None
 
 
 def _df_llm_text(df) -> str:

@@ -7,11 +7,12 @@ listings an agent does constantly, and never shell out to ``ls``/``grep``/``cat`
 
 Two flavors of view:
 
-* The tabular helpers (:func:`ls`, :func:`tree`, :func:`grep`, :func:`find`)
-  return a plain ``polars.DataFrame``. They compose with the full polars API
-  (``.filter()``, ``.sort()``, ``.join()`` ...) and render as the dashboard's
-  styled HTML table, because the kernel installs a global
-  ``polars.DataFrame._repr_html_`` built from :func:`df_html`.
+* The tabular helpers (:func:`ls`, :func:`tree`) return a plain
+  ``polars.DataFrame``. They compose with the full polars API (``.filter()``,
+  ``.sort()``, ``.join()`` ...) and render as the dashboard's styled HTML table,
+  because the kernel installs a global ``polars.DataFrame._repr_html_`` built
+  from :func:`df_html`. For content/file search use ``fff.grep`` / ``fff.find``
+  (their results render as the same styled table and expose ``.df``).
 * The file helpers (:func:`cat`/:func:`read`, :func:`head`, :func:`tail`,
   :func:`json`, :func:`diff`) return a :class:`Code`: a syntax-highlighted HTML
   render for the human plus the raw text as the agent's value.
@@ -78,8 +79,6 @@ def _git_ignored(root: pathlib.Path, rels: list[str]) -> set[str]:
 __all__ = [
     "ls",
     "tree",
-    "grep",
-    "find",
     "cat",
     "read",
     "head",
@@ -585,41 +584,6 @@ def tree(
             "path": pl.Utf8,
             "kind": pl.Utf8,
         },
-    )
-
-
-def grep(
-    query: str, path: str | os.PathLike = ".", *, limit: int = 50, mode: str = "plain"
-) -> "pl.DataFrame":
-    """Content search via the bundled ``fff``, as a DataFrame (path, line, text).
-
-    ``mode`` is passed through to ``fff.grep`` (e.g. ``"plain"`` or ``"regex"``).
-    """
-    import fff
-
-    result = fff.grep(query, str(path), mode=mode, limit=limit)
-    rows = [
-        {"path": m.path, "line": m.line_number, "text": m.line.strip()}
-        for m in result.matches
-    ]
-    return pl.DataFrame(
-        rows, schema={"path": pl.Utf8, "line": pl.Int64, "text": pl.Utf8}
-    )
-
-
-def find(
-    query: str, path: str | os.PathLike = ".", *, limit: int = 100
-) -> "pl.DataFrame":
-    """Fuzzy file-name search via the bundled ``fff``, as a DataFrame."""
-    import fff
-
-    result = fff.find(query, str(path), limit=limit)
-    rows = [
-        {"path": h.path, "name": h.name, "size": getattr(h, "size", None)}
-        for h in result.hits
-    ]
-    return pl.DataFrame(
-        rows, schema={"path": pl.Utf8, "name": pl.Utf8, "size": pl.Int64}
     )
 
 

@@ -697,6 +697,28 @@ let
     except fff.FffError as exc:
         assert "subdirectory" in str(exc), f"unhelpful home-dir error: {exc}"
 
+    # mode="smart" (the default) runs a query as regex when it holds regex
+    # metacharacters and as a fast literal otherwise: an alternation matches with
+    # no mode= (the old plain default silently matched nothing), while an
+    # ordinary literal with an unbalanced paren falls back to literal, never errors.
+    assert fff.grep("greetings|fn main", path=root).matches, "smart default missed the alternation"
+    assert fff.grep("greetings|fn main", path=root, mode="plain").matches == [], (
+        "plain mode must treat the alternation literally"
+    )
+    assert fff.grep("fn main(", path=root).matches, "smart must fall back to literal for an unbalanced paren"
+
+    # The flat results opt into the kernel table protocol (_ix_to_frame_), so a
+    # bare return renders as a polars table for both the human and the model;
+    # CodeMap exposes the nested per-file frame instead.
+    import polars as _pl
+
+    assert isinstance(fff.grep("find me on this line", path=root)._ix_to_frame_(), _pl.DataFrame)
+    assert isinstance(fff.find("main", path=root)._ix_to_frame_(), _pl.DataFrame)
+    cmdf = fff.map("find me on this line", path=root).df
+    assert cmdf.schema["matches"] == _pl.List(
+        _pl.Struct({"line": _pl.Int64, "col": _pl.Int64, "def": _pl.Boolean, "content": _pl.Utf8})
+    ), cmdf.schema
+
     print("fff-ok", fff.__version__)
   '';
   fffBundled =
@@ -1272,6 +1294,30 @@ let
     nested = runtime.Result.of([inner, pl.DataFrame({"a": [1]})])
     assert len(nested.llm_images) == 1, ("nested Result dropped its images", nested.llm_images)
 
+    # The table protocol: a non-DataFrame value exposing _ix_to_frame_() renders
+    # as its polars frame -- a styled table for the human, compact CSV for the
+    # model -- instead of its one-line summary repr. This is what makes an fff
+    # GrepResult/SearchResult show the model the real rows, not just a count.
+    class _Framed:
+        def _ix_to_frame_(self):
+            return pl.DataFrame({"path": ["a.py"], "line": [3]})
+
+        def __repr__(self):
+            return "Framed: 1 match (summary)"
+
+    framed = runtime.Result.of(_Framed())
+    assert "<table" in framed.user_html, framed.user_html[:200]
+    assert framed.llm_result.startswith("shape: (1, 2)") and "a.py" in framed.llm_result, framed.llm_result
+    assert "summary" not in framed.llm_result, "must render the frame, not the summary repr"
+
+    # A hook that raises or returns a non-frame is ignored: fall back to the
+    # normal repr path rather than blowing up the result.
+    class _BadFrame:
+        def _ix_to_frame_(self):
+            raise RuntimeError("nope")
+
+    assert "BadFrame" in runtime.Result.of(_BadFrame()).llm_result
+
 
     async def main():
         # A DataFrame result is stored with its text/html bundle.
@@ -1741,11 +1787,19 @@ let
     # A DataFrame stays a DataFrame through polars ops (composable).
     assert isinstance(lsdf.filter(pl.col("kind") == "dir"), pl.DataFrame)
 
-    g = view.grep("viewTestPy", base)
-    assert isinstance(g, pl.DataFrame) and set(g.columns) == {"path", "line", "text"}, g.columns
-    assert g.height > 0, "expected a grep hit for the marker"
+    # Content/file search lives in fff now (one canonical grep/find): the rich
+    # GrepResult/SearchResult expose .df (the styled-table frame) and opt into
+    # the kernel table protocol via _ix_to_frame_, so a bare return renders as a
+    # table for both the human and the model.
+    import fff
 
-    f = view.find("default.nix", base)
+    gr = fff.grep("viewTestPy", base)
+    g = gr.df
+    assert isinstance(g, pl.DataFrame) and {"path", "line", "content"} <= set(g.columns), g.columns
+    assert g.height > 0, "expected a grep hit for the marker"
+    assert gr._ix_to_frame_() is not None, "GrepResult must expose the table protocol"
+
+    f = fff.find("default.nix", base).df
     assert isinstance(f, pl.DataFrame) and "path" in f.columns
 
     tr = view.tree(base, depth=1)
