@@ -663,6 +663,15 @@ let
         assert "path" in _params and "root" not in _params, (_fn.__name__, list(_params))
     assert isinstance(fff.grep("find me on this line", path=root), fff.GrepResult)
 
+    # A single file as `path` is grepped on its own (fff-c cannot content-index a
+    # lone file as a root, so the helpers root at its parent and scope to it).
+    main_rs = os.path.join(root, "src", "main.rs")
+    one = fff.grep("find me on this line", path=main_rs)
+    assert {m.path for m in one.matches} == {"main.rs"}, f"file grep not scoped: {one.matches!r}"
+    assert fff.grep("no such content anywhere", path=main_rs).matches == [], "empty file grep should be empty"
+    assert any(h.path == "main.rs" for h in fff.find("main", path=main_rs).hits), "file find missed it"
+    assert fff.map("find me on this line", path=main_rs).by_file, "file map should group the hit"
+
     print("fff-ok", fff.__version__)
   '';
   fffBundled =

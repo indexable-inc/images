@@ -872,14 +872,74 @@ def _cached(root) -> FileFinder:
         return ff
 
 
+def _split_path(path) -> tuple[str, str | None]:
+    """Resolve a search `path` into an indexable directory root and an optional
+    single-file scope.
+
+    fff-c indexes a directory tree; a lone file as the root scans no content (it
+    reports one file but builds no content index, so every grep returns zero).
+    When `path` is a file, root the index at its parent directory and return the
+    file's name (its path relative to that root), so the caller can scope results
+    to just that file. A directory passes through unscoped.
+    """
+    fspath = os.fspath(path)
+    if os.path.isfile(fspath):
+        absolute = os.path.abspath(fspath)
+        return os.path.dirname(absolute), os.path.basename(absolute)
+    return fspath, None
+
+
+def _grep_one_file(ff: FileFinder, query: str, relpath: str, *, mode: str, limit: int) -> GrepResult:
+    """Grep a single file via a finder rooted at its directory.
+
+    fff returns whole files per page (matches are file-grouped, and `limit` is a
+    soft cap that stops only after a file completes), so the target's matches
+    arrive together in the page whose window reaches it. Page by `file_offset`
+    until that file appears; there is no pre-filter `limit` hole because we never
+    truncate before finding it. Returns empty when the file has no match.
+    """
+    file_offset = 0
+    while True:
+        page = ff.grep(query, mode=mode, limit=limit, file_offset=file_offset, max_matches_per_file=limit)
+        hits = [m for m in page.matches if m.path == relpath][:limit]
+        if hits:
+            return GrepResult(
+                matches=hits,
+                total_matched=len(hits),
+                total_files_searched=1,
+                next_file_offset=0,
+            )
+        if page.next_file_offset in (0, file_offset):
+            return GrepResult(matches=[], total_matched=0, total_files_searched=0, next_file_offset=0)
+        file_offset = page.next_file_offset
+
+
 def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
-    """Fuzzy file search over `path`, reusing a cached watched index."""
-    return _cached(path).search(query, limit=limit)
+    """Fuzzy file search over `path`, reusing a cached watched index.
+
+    `path` may be a directory (searched whole) or a single file (matched on its
+    own, by rooting the index at its parent directory).
+    """
+    root, only = _split_path(path)
+    result = _cached(root).search(query, limit=limit)
+    if only is None:
+        return result
+    hits = [h for h in result.hits if h.path == only][:limit]
+    return SearchResult(hits=hits, total_matched=len(hits), total_files=len(hits))
 
 
 def grep(query: str, path=".", *, mode: str = "plain", limit: int = 50) -> GrepResult:
-    """Content grep over `path`, reusing a cached watched (content-indexed) index."""
-    return _cached(path).grep(query, mode=mode, limit=limit)
+    """Content grep over `path`, reusing a cached watched (content-indexed) index.
+
+    `path` may be a directory (grepped whole) or a single file: a lone file
+    cannot be content-indexed as a root, so it is grepped by rooting the index at
+    its parent directory and scoping the result to that file.
+    """
+    root, only = _split_path(path)
+    ff = _cached(root)
+    if only is None:
+        return ff.grep(query, mode=mode, limit=limit)
+    return _grep_one_file(ff, query, only, mode=mode, limit=limit)
 
 
 async def afind(query: str, path=".", *, limit: int = 100) -> SearchResult:
