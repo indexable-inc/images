@@ -1249,7 +1249,7 @@ let
         ).fetchone()
         assert multi_row["status"] == "done", multi_row["status"]
         multi_text = [out["data"].get("text/plain", "") for out in json.loads(multi_row["outputs"])][-1]
-        assert "True" in multi_text and "[1, 2, 3]" in multi_text, ("multi-value dropped a value", multi_text)
+        assert "True" in multi_text and "1\n2\n3" in multi_text, ("multi-value dropped a value", multi_text)
 
 
     asyncio.run(main())
@@ -1745,7 +1745,7 @@ let
 
     async def main():
         # A command that emits an SGR color escape around its output.
-        colored = await sh.sh(r"printf '\033[31mred\033[0m\n'")
+        colored = await sh.sh(r"printf '\033[31mred\033[0m\n'", cwd=".")
         assert colored.ok and colored.code == 0, colored.code
         # Model view: no escape bytes, the word survives.
         assert "\x1b" not in colored.text and "red" in colored.text, repr(colored.text)
@@ -1758,13 +1758,13 @@ let
         assert isinstance(colored, Result), type(colored)
 
         # argv form, and a non-zero exit is surfaced (not swallowed).
-        failed = await sh.sh(["false"])
+        failed = await sh.sh(["false"], cwd=".")
         assert not failed.ok and failed.code == 1, failed.code
         assert "[exit 1]" in failed.llm_result, failed.llm_result
 
         # check=True turns a non-zero exit into a typed error carrying the output.
         try:
-            await sh.sh("exit 3", check=True)
+            await sh.sh("exit 3", check=True, cwd=".")
         except sh.ShellError as exc:
             assert exc.output.code == 3, exc.output.code
         else:
@@ -1772,7 +1772,7 @@ let
 
         # An OSC-8 hyperlink (what gh/eza emit under FORCE_COLOR) is a non-CSI
         # escape: the stripper must remove its \x1b bytes too, not just SGR color.
-        osc = await sh.sh(r"printf '\033]8;;https://x\033\\link\033]8;;\033\\\n'")
+        osc = await sh.sh(r"printf '\033]8;;https://x\033\\link\033]8;;\033\\\n'", cwd=".")
         assert "\x1b" not in osc.text and "link" in osc.text, repr(osc.text)
         assert "\x1b" not in osc.llm_result, repr(osc.llm_result)
 
@@ -1782,7 +1782,7 @@ let
         loop = asyncio.get_running_loop()
         start = loop.time()
         try:
-            await sh.sh("sleep 30 & echo started; wait", timeout=0.5)
+            await sh.sh("sleep 30 & echo started; wait", timeout=0.5, cwd=".")
         except TimeoutError:
             pass
         else:
@@ -1793,7 +1793,7 @@ let
         # The module object itself is callable: the documented
         # `import sh; await sh(cmd)` works without reaching for `sh.sh`.
         assert callable(sh), "sh module is not callable"
-        direct = await sh("printf hi")
+        direct = await sh("printf hi", cwd=".")
         assert direct.ok and direct.text == "hi", repr(direct.text)
 
         print("sh-ok", sh.__version__)
