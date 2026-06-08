@@ -66,7 +66,8 @@ MODULES: tuple[Module, ...] = (
     Module(
         "browser",
         "drive a running browser over CDP with Playwright (connects to the standard debug port "
-        "9222 by default); `browser.shot()` renders the screenshot inline",
+        "9222 by default); `browser.read()` is a cheap text/elements readout, `browser.shot()` "
+        "renders a screenshot inline",
     ),
 )
 

@@ -14,6 +14,7 @@ are started once and cached, so successive calls reuse the same session.
     await browser.get_or_create_browser()        # connect, or launch a visible Dia
     await browser.goto("https://example.com")     # navigate the front tab
     await browser.shot()                          # screenshot -> a Result (image)
+    await browser.read()                          # cheap text+elements readout (no vision tokens)
     page = await browser.page()                   # the live Page: full Playwright API
 
     # Drive a page (every Playwright call is awaited; reuse the one `page`):
@@ -261,6 +262,64 @@ async def shot(target=None, *, endpoint: str = DEFAULT_ENDPOINT, full_page: bool
     except Exception:
         # Outside the kernel (no runtime): hand back the raw PNG bytes.
         return png
+
+
+async def read(target=None, *, endpoint: str = DEFAULT_ENDPOINT, max_chars: int = 8000):
+    """A cheap, text-first readout of a page (or the front tab when ``target`` is
+    None): its title/url, visible text, and the interactive elements (links,
+    buttons, inputs) with their role and accessible name -- an accessibility-style
+    snapshot for an iterative navigate -> inspect -> click loop WITHOUT the vision
+    tokens of a full-res :func:`shot`. Returns a :class:`Result`. Reach for `shot()`
+    only when you actually need to SEE layout/visuals; `read()` is enough to find
+    and click things. ``max_chars`` caps the visible-text section."""
+    pg = target if target is not None else await page(endpoint=endpoint)
+    snapshot = await pg.evaluate(
+        """() => {
+          const vis = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+          const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+          const out = [];
+          const sel = 'a[href], button, input, select, textarea, [role=button], [role=link], [role=checkbox], [role=tab], [contenteditable=true]';
+          for (const el of document.querySelectorAll(sel)) {
+            if (!vis(el)) continue;
+            const tag = el.tagName.toLowerCase();
+            out.push({
+              role: el.getAttribute('role') || tag,
+              name: norm(el.getAttribute('aria-label') || el.innerText || el.value || el.getAttribute('placeholder') || el.getAttribute('name') || el.getAttribute('title')).slice(0, 100),
+              href: el.getAttribute('href') || '',
+              type: el.getAttribute('type') || '',
+            });
+            if (out.length >= 200) break;
+          }
+          return { text: norm(document.body ? document.body.innerText : ''), els: out };
+        }"""
+    )
+    title = await pg.title()
+    text = snapshot.get("text", "")
+    clipped = text[:max_chars]
+    if len(text) > max_chars:
+        clipped += f"\n... [+{len(text) - max_chars} more chars]"
+    lines = []
+    for e in snapshot.get("els", []):
+        name = e.get("name") or ""
+        extra = e.get("href") or (f"[{e['type']}]" if e.get("type") else "")
+        lines.append(f"- {e.get('role', '?')} {name!r}" + (f" -> {extra}" if extra else ""))
+    elements = "\n".join(lines) or "(none)"
+    body = (
+        f"{title} \u2014 {pg.url}\n\n## visible text\n{clipped}\n\n"
+        f"## interactive ({len(snapshot.get('els', []))})\n{elements}"
+    )
+    try:
+        from ix_notebook_mcp.runtime import Result
+
+        head = _html.escape(f"{title} \u2014 {pg.url}")
+        user_html = (
+            f'<div style="font:13px ui-monospace,monospace"><b>{head}</b>'
+            f'<pre style="white-space:pre-wrap;max-height:24em;overflow:auto">{_html.escape(body)}</pre></div>'
+        )
+        return Result(user_html=user_html, llm_result=body)
+    except Exception:
+        return body
 
 
 async def close(endpoint: str | None = None):
