@@ -698,6 +698,34 @@ let
   };
 
   cargoUnitHello = cargoUnitWorkspace.binaries.cargo-unit-hello;
+
+  # Exercises `cargoConfigRustflags`: the fixture's crate compiles only when the
+  # `--cfg cargo_config_ok` from its `.cargo/config.toml` ([build] rustflags) is
+  # applied, so building this binary at all proves the option fed those flags to
+  # rustc (a plain build would hit the crate's compile_error). See
+  # tests/fixtures/cargo-unit-cargo-config.
+  cargoUnitCargoConfigFixture = fs.toSource {
+    root = ./fixtures/cargo-unit-cargo-config;
+    fileset = fs.unions [
+      ./fixtures/cargo-unit-cargo-config/.cargo
+      ./fixtures/cargo-unit-cargo-config/Cargo.lock
+      ./fixtures/cargo-unit-cargo-config/Cargo.toml
+      ./fixtures/cargo-unit-cargo-config/src
+    ];
+  };
+  cargoUnitCargoConfigWorkspace = ix.cargoUnit.buildWorkspace {
+    src = cargoUnitCargoConfigFixture;
+    workspaceRoot = ./fixtures/cargo-unit-cargo-config;
+    cargoConfigRustflags = true;
+    cargoArgs = [ "--workspace" ];
+    policy = {
+      denyUnusedCrateDependencies = false;
+      cargoAudit.enable = false;
+      cargoMachete.enable = false;
+      clippy.enable = false;
+    };
+  };
+  cargoUnitCargoConfig = cargoUnitCargoConfigWorkspace.binaries.cargo-unit-cargo-config;
   cargoUnitSelectedHello = ix.cargoUnit.selectBinaryWithTests cargoUnitWorkspace {
     binary = "cargo-unit-hello";
     packageName = "cargo-unit-hello";
@@ -4383,6 +4411,8 @@ let
 
     ${cargoUnitHello}/bin/cargo-unit-hello > cargo-unit-hello.out
     grep -q 'hello from cargo-unit' cargo-unit-hello.out
+    ${cargoUnitCargoConfig}/bin/cargo-unit-cargo-config > cargo-unit-cargo-config.out
+    grep -q 'cargo-config rustflags applied' cargo-unit-cargo-config.out
     ${cargoUnitBinaries.cargo-unit-goodbye}/bin/cargo-unit-goodbye > cargo-unit-goodbye.out
     grep -q 'goodbye from cargo-unit' cargo-unit-goodbye.out
     test -d ${cargoUnitWorkspace.targetSets.test.tests.cargo_unit_hello.all}

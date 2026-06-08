@@ -68,6 +68,12 @@ let
     `llvm-cov` and `llvm-profdata`, or callers must pass explicit tool paths to
     `makeCoverageReport`.
 
+    `cargoConfigRustflags = true` applies the rustflags a normal `cargo build`
+    would read from `<workspaceRoot>/.cargo/config.toml` (cargoUnit otherwise
+    ignores cargo's config). Flags are resolved per target triple with cargo
+    precedence (`target.<triple>.rustflags` over `build.rustflags`); `cfg(...)`
+    target sections and the `[env]` table are not honored. Default off.
+
     Returns the generated attrset with `sourceAudit`, `units`, `roots`, `checkedRoots`,
     `packages`, `binaries`, `libraries`, `benchmarks`, `coverageReport`, `default`,
     `policyChecks`, plus the intermediate `unitGraphJson`, `unitsNix`, and `vendorDir`
@@ -305,7 +311,13 @@ let
               resolvedPlatform = if platform == null then pkgs.stdenv.hostPlatform.config else platform;
             in
             rust.rustcArgsForPolicyForPlatform args.policy resolvedPlatform
-            ++ (rawArgs.extraRustcArgsForPlatform or (_platform: [ ])) platform;
+            ++ (rawArgs.extraRustcArgsForPlatform or (_platform: [ ])) platform
+            # Opt-in: apply `.cargo/config.toml` rustflags (per target triple,
+            # cargo precedence) so consumers do not hand-copy them into
+            # `extraRustcArgs`. Appended last so explicit caller args still win.
+            ++ lib.optionals (rawArgs.cargoConfigRustflags or false) (
+              rust.rustflagsFromCargoConfig (workspaceRoot + "/.cargo/config.toml") resolvedPlatform
+            );
         in
         import unitsNix (
           {

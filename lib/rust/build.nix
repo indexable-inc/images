@@ -122,6 +122,27 @@ let
       "link-arg=-fuse-ld=mold"
     ];
 
+  # Apply the rustflags a normal `cargo build` reads from `.cargo/config.toml`,
+  # which cargoUnit otherwise ignores (it assembles rustc args itself instead of
+  # going through cargo). Returns the rustc args for a target triple following
+  # cargo precedence: `target.<triple>.rustflags` wins outright over
+  # `build.rustflags` (cargo does not merge the two). Flags may be a TOML array
+  # or a single whitespace-separated string. `cfg(...)` target sections and the
+  # `[env]` table are NOT honored. A `configPath` that does not exist yields no
+  # flags, so callers may pass the path unconditionally.
+  rustflagsFromCargoConfig =
+    configPath: platform:
+    let
+      config = if builtins.pathExists configPath then lib.importTOML configPath else { };
+      normalize =
+        flags:
+        if builtins.isList flags then flags else filter (flag: flag != "") (lib.splitString " " flags);
+      targetFlags = config.target.${platform}.rustflags or null;
+      buildFlags = config.build.rustflags or null;
+      chosen = if targetFlags != null then targetFlags else buildFlags;
+    in
+    if chosen == null then [ ] else normalize chosen;
+
   nativeBuildInputsForPolicy = policy: lib.optional policy.linker.useMold pkgs.mold;
 
   dependencyPackages =
@@ -833,6 +854,7 @@ in
     normalizeArgs
     policyChecksFor
     rustcArgsForPolicyForPlatform
+    rustflagsFromCargoConfig
     toolchainId
     vendorConfigScript
     ;
