@@ -15,7 +15,19 @@ are started once and cached, so successive calls reuse the same session.
     await browser.goto("https://example.com")     # navigate the front tab
     await browser.shot()                          # screenshot -> a Result (image)
     page = await browser.page()                   # the live Page: full Playwright API
-    await page.click("text=Sign in")
+
+    # Drive a page (every Playwright call is awaited; reuse the one `page`):
+    await page.fill("input[name=q]", "ix mcp")    # type into a field
+    await page.click("text=Sign in")              # click by text / CSS / role
+    await page.wait_for_selector(".results")      # wait for an element...
+    await page.wait_for_load_state("networkidle")  # ...or for the page to settle
+    text = await page.inner_text(".results")      # read text (or .text_content / .content)
+    await page.screenshot()                       # bare bytes auto-render as an image
+
+`await page.screenshot()` returns raw PNG bytes; ending a cell with it (or with
+`browser.shot()`) renders the image inline for the human and the model -- so the
+"do something, then look" loop is one obvious flow. Never `print()` a screenshot:
+its byte repr is a ~50k-char wall that blows the result cap.
 
 ``get_or_create_browser()`` is the entry point: it connects to whatever is already
 on the port, and otherwise launches a real, on-screen browser listening there. It
