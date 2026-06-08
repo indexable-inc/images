@@ -15,6 +15,9 @@ index; this module loads the `fff-c` cdylib (`packages/fff` emits it next to the
     for m in fff.grep("fn main", path=".", mode="regex").matches:
         print(f"{m.path}:{m.line_number}: {m.line}")
 
+    # one query, or many at once (matched as a literal OR in a single pass):
+    fff.grep(["TODO", "FIXME", "XXX"], path=".", mode="plain")
+
     # or hold an instance for repeated queries against one tree:
     with fff.FileFinder(".", content_indexing=True) as ff:
         ff.wait_for_scan()              # block until the initial scan finishes
@@ -1007,12 +1010,18 @@ def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
     return SearchResult(hits=hits, total_matched=len(hits), total_files=len(hits))
 
 
-def grep(query: str, path=".", *, mode: str, limit: int = 50) -> GrepResult:
+def grep(query: str | list[str], path=".", *, mode: str, limit: int = 50) -> GrepResult:
     """Content grep over `path`, reusing a cached watched (content-indexed) index.
 
-    `mode` is required (no default), so each call states its intent: ``"plain"``
-    (fast SIMD literal), ``"regex"``, ``"fuzzy"``, or ``"smart"`` (regex when the
-    query holds regex metacharacters and compiles, else a literal).
+    `query` is one pattern, or a list of patterns matched as literals in a single
+    OR pass (Aho-Corasick) -- the one call for "where does any of these appear?",
+    so you never loop grep over a list. `mode` is required (no default), so each
+    call states its intent:
+      - one string: ``"plain"`` (fast SIMD literal), ``"regex"``, ``"fuzzy"``, or
+        ``"smart"`` (regex when the query holds regex metacharacters and compiles,
+        else a literal);
+      - a list: matched literally, so pass ``"plain"`` (for a regex, pass one
+        string like ``"a|b"`` with ``"regex"``).
 
     `path` may be a directory (grepped whole) or a single file. A single file is
     grepped in an isolated one-file index, so it works even for a dotfile (which
@@ -1020,14 +1029,25 @@ def grep(query: str, path=".", *, mode: str, limit: int = 50) -> GrepResult:
     won't index whole). A bare `~`/`/` *directory* is refused with guidance
     toward a file or a scoped subdirectory.
     """
+    multi = not isinstance(query, str)
+    if multi and mode != "plain":
+        raise ValueError(
+            'a list of patterns is matched literally (OR across them); pass '
+            'mode="plain". For a regex, pass a single pattern string with '
+            'mode="regex" (e.g. "a|b").'
+        )
+
+    def _run(ff: "FileFinder") -> GrepResult:
+        return ff.multi_grep(query, limit=limit) if multi else ff.grep(query, mode=mode, limit=limit)
+
     root, only = _split_path(path)
     if only is None:
         if _is_unindexable_root(root):
             raise _refuse_unindexable_dir(root)
-        return _cached(root).grep(query, mode=mode, limit=limit)
+        return _run(_cached(root))
     with tempfile.TemporaryDirectory(prefix="ix-fff-file-") as tmp:
         with _isolated_file_finder(os.path.join(root, only), tmp, content_indexing=True) as ff:
-            result = ff.grep(query, mode=mode, limit=limit)
+            result = _run(ff)
     matches = [replace(m, path=only, name=only) for m in result.matches]
     return GrepResult(
         matches=matches,
@@ -1042,7 +1062,7 @@ async def afind(query: str, path=".", *, limit: int = 100) -> SearchResult:
     return await asyncio.to_thread(find, query, path, limit=limit)
 
 
-async def agrep(query: str, path=".", *, mode: str, limit: int = 50) -> GrepResult:
+async def agrep(query: str | list[str], path=".", *, mode: str, limit: int = 50) -> GrepResult:
     """Async content grep: runs off the event loop (non-blocking)."""
     return await asyncio.to_thread(grep, query, path, mode=mode, limit=limit)
 
@@ -1059,8 +1079,10 @@ class CodeMap:
     stays scannable on the dashboard.
     """
 
-    def __init__(self, query: str, matches: list["GrepMatch"]) -> None:
+    def __init__(self, query: "str | list[str]", matches: list["GrepMatch"]) -> None:
         self.query = query
+        # A list query (multi-pattern OR) displays as ``a | b`` in the headers.
+        self._query_str = query if isinstance(query, str) else " | ".join(query)
         self.matches = matches
         self.by_file: dict[str, list["GrepMatch"]] = {}
         for m in matches:
@@ -1119,9 +1141,9 @@ class CodeMap:
 
     def __repr__(self) -> str:
         if not self.matches:
-            return f"no matches for {self.query!r}"
+            return f"no matches for {self._query_str!r}"
         lines = [
-            f"{self.query}  ({len(self.defs)} def, {len(self.matches)} hits, "
+            f"{self._query_str}  ({len(self.defs)} def, {len(self.matches)} hits, "
             f"{len(self.by_file)} files)"
         ]
         for path, hits in self.by_file.items():
@@ -1135,7 +1157,7 @@ class CodeMap:
         if not self.matches:
             return (
                 '<div style="color:#6a6a70;font-style:italic">'
-                f"no matches for {_html_mod.escape(self.query)}</div>"
+                f"no matches for {_html_mod.escape(self._query_str)}</div>"
             )
         mono = "ui-monospace,SFMono-Regular,Menlo,monospace"
         blocks = []
@@ -1165,7 +1187,7 @@ class CodeMap:
             )
         head = (
             '<div style="color:#6a6a70;padding:6px 10px">'
-            f"{_html_mod.escape(self.query)} \u00b7 {len(self.defs)} def \u00b7 "
+            f"{_html_mod.escape(self._query_str)} \u00b7 {len(self.defs)} def \u00b7 "
             f"{len(self.matches)} hits \u00b7 {len(self.by_file)} files</div>"
         )
         return (
@@ -1175,14 +1197,14 @@ class CodeMap:
         )
 
 
-def map(query: str, path=".", *, mode: str, limit: int = 200) -> CodeMap:
+def map(query: str | list[str], path=".", *, mode: str, limit: int = 200) -> CodeMap:
     """Content grep grouped into a :class:`CodeMap`: hits per file with
     definitions ranked first. A glanceable answer to "where is X defined and
     used?" built straight on :func:`grep`."""
     return CodeMap(query, grep(query, path, mode=mode, limit=limit).matches)
 
 
-async def amap(query: str, path=".", *, mode: str, limit: int = 200) -> CodeMap:
+async def amap(query: str | list[str], path=".", *, mode: str, limit: int = 200) -> CodeMap:
     """Async :func:`map`: the same code map, off the event loop."""
     res = await agrep(query, path, mode=mode, limit=limit)
     return CodeMap(query, res.matches)

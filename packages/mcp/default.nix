@@ -728,6 +728,20 @@ let
         _pl.Struct({"line": _pl.Int64, "col": _pl.Int64, "def": _pl.Boolean, "content": _pl.Utf8})
     ), cmdf.schema
 
+    # One grep, one OR many patterns: a list is matched as a literal OR in a
+    # single pass (no Python loop of greps). A list requires mode="plain".
+    multi = fff.grep(["greetings", "fn main"], path=root, mode="plain")
+    multi_files = {m.path for m in multi.matches}
+    assert any("hello_world" in f for f in multi_files) and any("main.rs" in f for f in multi_files), (
+        multi_files
+    )
+    try:
+        fff.grep(["a", "b"], path=root, mode="regex")
+        raise AssertionError("a list query must reject a non-plain mode")
+    except ValueError:
+        pass
+    assert isinstance(fff.map(["greetings", "fn main"], path=root, mode="plain"), fff.CodeMap)
+
     print("fff-ok", fff.__version__)
   '';
   fffBundled =
