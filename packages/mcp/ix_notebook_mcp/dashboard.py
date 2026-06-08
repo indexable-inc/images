@@ -22,7 +22,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import store
+from . import feed, store
 from .config import Config
 
 _STUB = (
@@ -179,12 +179,16 @@ async def start(config: Config) -> web.AppRunner:
     async def index(_request: web.Request) -> web.Response:
         return web.Response(text=_PAGE, content_type="text/html")
 
-    async def jobs(_request: web.Request) -> web.Response:
-        rows = store.recent(conn, limit=200)
+    def _highlight(rows: list[dict]) -> list[dict]:
+        # Highlight each job's source once per unique snippet (cached); the
+        # dashboard card renders the spans. This is a dashboard-only view detail,
+        # so it is layered here, not in `feed` (an embedder highlights its own way).
         for row in rows:
-            # Highlight once per unique snippet (cached); the card renders it.
             row["code_html"] = _code_html(row.get("code") or "")
-        return web.json_response(rows)
+        return rows
+
+    async def jobs(_request: web.Request) -> web.Response:
+        return web.json_response(_highlight(store.recent(conn, limit=feed.JOBS_LIMIT)))
 
     async def resources(_request: web.Request) -> web.Response:
         return web.json_response(store.live_resources(conn))
@@ -192,10 +196,26 @@ async def start(config: Config) -> web.AppRunner:
     async def cells(_request: web.Request) -> web.Response:
         return web.json_response(store.cells(conn))
 
+    async def snapshot(_request: web.Request) -> web.Response:
+        # The whole presentation in one read, the embed contract an external
+        # consumer (the room server) polls; `rev` lets it skip unchanged renders.
+        return web.json_response(feed.snapshot(conn))
+
+    async def job(request: web.Request) -> web.Response:
+        # One execution by id: the rich outputs for the `jobs['<id>']` a
+        # python_exec tool result already names, so an embedder renders that run's
+        # tables/plots/HTML beside the tool call.
+        one = feed.job(conn, request.match_info["id"])
+        if one is None:
+            return web.json_response({"error": "no such job"}, status=404)
+        return web.json_response(one)
+
     app.router.add_get("/", index)
     app.router.add_get("/api/jobs", jobs)
+    app.router.add_get("/api/jobs/{id}", job)
     app.router.add_get("/api/resources", resources)
     app.router.add_get("/api/cells", cells)
+    app.router.add_get("/api/snapshot", snapshot)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, config.host, config.dashboard_port)

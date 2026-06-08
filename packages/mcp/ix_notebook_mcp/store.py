@@ -131,23 +131,43 @@ def finish(
     )
 
 
+# The execution columns every reader projects, in one place so `recent` and
+# `get` return the identical shape (the embed contract in feed.py depends on it).
+_EXEC_COLUMNS = (
+    "id, name, code, status, started_at, ended_at, budget, output, result, error, outputs, bindings"
+)
+
+
+def _exec_row(row: sqlite3.Row) -> dict:
+    """One execution row as a plain dict with its JSON columns decoded."""
+    d = dict(row)
+    d["outputs"] = json.loads(d.get("outputs") or "[]")
+    d["bindings"] = json.loads(d.get("bindings") or "{}")
+    return d
+
+
 def recent(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
     """The most recent executions, newest first, as plain dicts for the dashboard."""
     conn.row_factory = sqlite3.Row
     # Running jobs sort first so a long-running job is never dropped by the limit
     # (a finished-jobs backlog could otherwise push it past LIMIT); then newest.
     rows = conn.execute(
-        "SELECT id, name, code, status, started_at, ended_at, budget, output, result, error, outputs, bindings "
+        f"SELECT {_EXEC_COLUMNS} "
         "FROM executions ORDER BY (status = 'running') DESC, started_at DESC LIMIT ?",
         (limit,),
     ).fetchall()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["outputs"] = json.loads(d.get("outputs") or "[]")
-        d["bindings"] = json.loads(d.get("bindings") or "{}")
-        out.append(d)
-    return out
+    return [_exec_row(r) for r in rows]
+
+
+def get(conn: sqlite3.Connection, id: str) -> dict | None:
+    """One execution by id (or None), same shape as a `recent` row. An embedder
+    joins this to the ``jobs['<id>']`` a ``python_exec`` tool result already names,
+    to render that run's rich outputs inline with the tool call."""
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        f"SELECT {_EXEC_COLUMNS} FROM executions WHERE id = ?", (id,)
+    ).fetchone()
+    return _exec_row(row) if row is not None else None
 
 
 # --------------------------------------------------------------------------- #

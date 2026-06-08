@@ -92,6 +92,27 @@ list lives in one place, the MCP server `instructions=` string in
 backs it is assembled in [`default.nix`](./default.nix). Both are kept here
 rather than re-enumerated in this README so the list cannot drift.
 
+## Embedding (the room server)
+
+The same rich feed the dashboard renders is the contract an embedder consumes.
+`ix_notebook_mcp/feed.py` is the single source of truth for the agent's
+presentation as structured data; the dashboard is one view of it, the room
+server is another. Read it two ways:
+
+- In-process: `feed.snapshot(conn)` returns `{jobs, cells, resources, rev}`, and
+  `feed.job(conn, id)` returns one execution by id. `rev` is a cheap change
+  marker so a poller re-renders only when something moved.
+- Over HTTP (what an out-of-process embedder like the Rust room server uses):
+  `GET /api/snapshot` is the whole feed; `GET /api/jobs/{id}` is one run.
+
+`jobs` carry rich `outputs` as nbformat-style mime bundles: `text/html` is the
+human view, `application/x-ix-llm+json` is what the model received. A
+`python_exec` tool result already names its run as `jobs['<id>']`, so an embedder
+parses that id and fetches `/api/jobs/{id}` to render that turn's tables, plots,
+and HTML inline beside the agent's text. `cells` is the agent's curated highlight
+reel (`cells.add(...)`), and `resources` are live, self-updating views. The JSON
+shape mirrors `site/src/lib/types.ts`.
+
 ## Remote access
 
 - `IX_MCP_HOST`: the address the dashboard binds. Default is this node's

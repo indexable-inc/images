@@ -1104,6 +1104,74 @@ let
 
     print("runtime-ok")
   '';
+  # Locks the embed contract (ix_notebook_mcp/feed.py): the dashboard and the
+  # room server both read the agent's presentation through `feed`, so prove a
+  # snapshot returns running-pinned jobs with decoded rich outputs, the curated
+  # cells and live resources, a change marker that advances as a running job
+  # streams output, and that `feed.job` fetches one run by the id a python_exec
+  # tool result names (and None for a miss).
+  feedTestPy = pkgs.writeText "ix-mcp-feed-test.py" ''
+    import tempfile
+    import time
+
+    from ix_notebook_mcp import feed, store
+
+    conn = store.connect(tempfile.mktemp(suffix=".db"))
+    now = time.time()
+    store.start(conn, id="aa11", name="run1", code="Result.of(df)", started_at=now, budget=15.0)
+    store.finish(
+        conn, id="aa11", status="done", ended_at=now + 1, output="hi", result="42 rows",
+        error=None, outputs=[{"data": {"text/html": "<table>x</table>"}}],
+        bindings={"df": {"kind": "DataFrame"}},
+    )
+    store.start(conn, id="bb22", name="run2", code="time.sleep(99)", started_at=now + 2, budget=5.0)
+    store.replace_cells(conn, [{"id": "cell0", "title": "latency", "position": 0,
+                                "outputs": [{"data": {"text/html": "<b>p50</b>"}}]}])
+    store.upsert_resource(conn, id="res0", title="term", kind="html", html="<pre>$</pre>",
+                          status="live", created_at=now, updated_at=now)
+
+    snap = feed.snapshot(conn)
+    assert len(snap["jobs"]) == 2, snap["jobs"]
+    assert snap["jobs"][0]["id"] == "bb22", "running job must pin first"
+    done = snap["jobs"][1]
+    assert done["outputs"][0]["data"]["text/html"] == "<table>x</table>", done
+    assert done["bindings"] == {"df": {"kind": "DataFrame"}}, done
+    assert snap["cells"][0]["outputs"][0]["data"]["text/html"] == "<b>p50</b>", snap["cells"]
+    assert snap["resources"][0]["html"] == "<pre>$</pre>", snap["resources"]
+    assert isinstance(snap["rev"], str), snap["rev"]
+
+    one = feed.job(conn, "aa11")
+    assert one is not None and one["result"] == "42 rows", one
+    assert one["outputs"][0]["data"]["text/html"] == "<table>x</table>", one
+    assert feed.job(conn, "nope") is None
+
+    store.update_output(conn, "bb22", "tick tick tick")
+    assert feed.snapshot(conn)["rev"] != snap["rev"], "rev must advance on streamed output"
+
+    print("feed-ok")
+  '';
+  feedSmoke =
+    pkgs.runCommand "ix-mcp-feed-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${feedTestPy} >stdout 2>stderr || {
+          echo "ix-mcp feed smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'feed-ok' stdout || {
+          echo "ix-mcp feed smoke did not confirm the embed contract:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   runtimeSmoke =
     pkgs.runCommand "ix-mcp-runtime-smoke"
       {
@@ -2376,6 +2444,7 @@ package.overrideAttrs (old: {
         serverTools
         evalSmoke
         runtimeSmoke
+        feedSmoke
         wedgeSmoke
         richSmoke
         yieldSmoke
