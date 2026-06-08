@@ -22,6 +22,13 @@ The grant covers Gmail (read/modify/send) and Calendar events. It needs a
 one-time `gcal auth` on the host running the MCP server; until then (or if the
 stored grant predates the Gmail scopes) calls raise `GoogleAuthError` with that
 instruction.
+
+Gmail and Calendar reach the user's personal mailbox and schedule, so they are
+gated to an **incognito (private) session**: a chat whose transcript is never
+replicated to the shared room. The MCP server the room spawns for incognito
+threads sets ``IX_MCP_PRIVATE=1`` (and is the only one given the gcal grant), so
+minting a token outside that context raises `GoogleAuthError`. This keeps a
+personal credential, and any mail it reads, off the synced room state.
 """
 
 from __future__ import annotations
@@ -52,7 +59,30 @@ class GoogleAuthError(RuntimeError):
     """Raised when an access token cannot be minted from the stored grant."""
 
 
+# The env var the room sets on the MCP instance backing incognito threads. Gmail
+# and Calendar refuse to mint a token unless it is truthy, so a normal (synced)
+# chat can never reach the personal Google grant even if the binary is on PATH.
+PRIVATE_ENV = "IX_MCP_PRIVATE"
+
+
+def _require_private() -> None:
+    """Allow token minting only inside an incognito session.
+
+    Gmail/Calendar read personal data; binding them to ``IX_MCP_PRIVATE`` keeps
+    that access (and the credential behind it) inside chats that never sync to
+    the shared room. The room runs a dedicated, private MCP for incognito
+    threads and routes only those threads to it.
+    """
+    if not os.environ.get(PRIVATE_ENV):
+        raise GoogleAuthError(
+            "Gmail and Calendar are available only in an incognito chat (the "
+            "session is not private). Start an incognito chat to use them; their "
+            "credential is scoped to that context and never reaches the shared room."
+        )
+
+
 def _mint() -> dict:
+    _require_private()
     binary = os.environ.get("IX_GCAL_BIN")
     if not binary:
         raise GoogleAuthError("IX_GCAL_BIN is not set; the gcal binary is bundled into ix-mcp")

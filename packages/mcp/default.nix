@@ -800,6 +800,22 @@ let
 
     assert callable(google_auth.credentials)
     assert callable(google_auth.gmail) and callable(google_auth.calendar)
+
+    # Gmail/Calendar are gated to an incognito (private) session. Outside one
+    # (IX_MCP_PRIVATE unset) minting refuses before it ever looks for the grant,
+    # so a synced chat can never reach the personal credential.
+    os.environ.pop("IX_MCP_PRIVATE", None)
+    os.environ["IX_GCAL_BIN"] = "/nonexistent/gcal"
+    try:
+        google_auth.credentials()
+    except google_auth.GoogleAuthError as exc:
+        assert "incognito" in str(exc).lower(), exc
+    else:
+        raise SystemExit("expected GoogleAuthError when the session is not private")
+
+    # Inside a private session the gate passes; minting then fails on the missing
+    # binary instead, proving the gate is the only thing that blocked it before.
+    os.environ["IX_MCP_PRIVATE"] = "1"
     os.environ.pop("IX_GCAL_BIN", None)
     try:
         google_auth.credentials()
