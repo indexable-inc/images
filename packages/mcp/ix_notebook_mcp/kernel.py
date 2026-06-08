@@ -162,9 +162,16 @@ class Kernel:
             except asyncio.CancelledError:
                 try:
                     await task
+                except TimeoutError:
+                    # The cell is synchronously wedging the loop, so the reply
+                    # never arrives within the deadline. The drain alone would
+                    # leave the kernel stuck behind the cancelled-but-still-running
+                    # cell, so fire the same SIGUSR2 watchdog the outer timeout
+                    # path uses to break the blocked frame and free the channel.
+                    await self._interrupt()
                 except BaseException:
-                    # The drained request may itself time out or error; we only
-                    # need the socket read to finish before releasing the lock.
+                    # Any other drain error: we only need the socket read to
+                    # finish before releasing the lock.
                     pass
                 raise
             return outputs, summary
