@@ -124,12 +124,19 @@ let
 
   # Apply the rustflags a normal `cargo build` reads from `.cargo/config.toml`,
   # which cargoUnit otherwise ignores (it assembles rustc args itself instead of
-  # going through cargo). Returns the rustc args for a target triple following
-  # cargo precedence: `target.<triple>.rustflags` wins outright over
-  # `build.rustflags` (cargo does not merge the two). Flags may be a TOML array
-  # or a single whitespace-separated string. `cfg(...)` target sections and the
-  # `[env]` table are NOT honored. A `configPath` that does not exist yields no
-  # flags, so callers may pass the path unconditionally.
+  # going through cargo). Parsing the config here is the only route: cargo's
+  # `cargo build --unit-graph` does NOT carry rustflags (each unit records only
+  # dependencies/features/mode/pkg_id/platform/profile/target), because cargo
+  # resolves config rustflags at compile time and applies them when it invokes
+  # rustc, which cargoUnit bypasses by invoking rustc per unit from the graph. So
+  # there is nothing in the graph to pick up automatically; we read the config.
+  # Returns the rustc args for a target triple following cargo precedence:
+  # `target.<triple>.rustflags` wins outright over `build.rustflags` (cargo does
+  # not merge the two). Flags may be a TOML array or a single whitespace-
+  # separated string. `cfg(...)` target sections and the `[env]` table are NOT
+  # honored (cargo evaluates those against the full target cfg set, which this
+  # static parse does not reproduce). A `configPath` that does not exist yields
+  # no flags, so callers may pass the path unconditionally.
   rustflagsFromCargoConfig =
     configPath: platform:
     let
