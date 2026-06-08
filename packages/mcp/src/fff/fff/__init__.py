@@ -9,8 +9,11 @@ index; this module loads the `fff-c` cdylib (`packages/fff` emits it next to the
     import fff
 
     # one-shot helpers keep a cached, file-watching index per directory:
-    for hit in fff.find(query="picker", path=".").hits:
+    res = fff.find(query="picker", path=".")
+    for hit in res.hits:
         print(hit.path, hit.frecency)
+    res[0]                              # results are subscriptable (and sliceable)
+    Path(res[0]).read_text()           # a hit is os.PathLike -> its absolute path
 
     for m in fff.grep(query="fn main", path=".", mode="regex").matches:
         print(f"{m.path}:{m.line_number}: {m.line}")
@@ -71,7 +74,7 @@ __all__ = [
     "CodeMap",
 ]
 
-__version__ = "0.9.1"
+__version__ = "0.9.2"
 
 # Mirrors `FFF_CREATE_OPTIONS_VERSION` in fff-c. The options struct only ever
 # appends fields, so v1 stays valid forever; the library reads exactly the
@@ -329,7 +332,13 @@ def _polars():
 
 @dataclass(frozen=True)
 class FileHit:
-    """One file from `search`/`glob`, ranked by fuzzy score and frecency."""
+    """One file from `search`/`glob`, ranked by fuzzy score and frecency.
+
+    ``path`` is relative to the index ``root`` (compact for display); ``abspath``
+    joins the two. The hit is ``os.PathLike`` -- ``os.fspath(hit)`` returns the
+    *absolute* path, so ``open(hit)`` / ``Path(hit).read_text()`` work from any
+    cwd, not just the index root.
+    """
 
     path: str
     name: str
@@ -338,6 +347,16 @@ class FileHit:
     frecency: int
     is_binary: bool
     git_status: str | None = None
+    root: str | None = None
+
+    @property
+    def abspath(self) -> str:
+        """The absolute filesystem path (``root`` joined with the relative
+        ``path``), or ``path`` unchanged when no root is known."""
+        return os.path.join(self.root, self.path) if self.root else self.path
+
+    def __fspath__(self) -> str:
+        return self.abspath
 
 
 @dataclass(frozen=True)
@@ -351,6 +370,16 @@ class SearchResult:
 
     def __len__(self) -> int:
         return len(self.hits)
+
+    def __getitem__(self, index):
+        """Index a single ``FileHit`` (``result[0]``) or slice into a new
+        ``SearchResult`` (``result[:10]``), so the result composes like a list."""
+        if isinstance(index, slice):
+            sliced = self.hits[index]
+            return SearchResult(
+                hits=sliced, total_matched=self.total_matched, total_files=self.total_files
+            )
+        return self.hits[index]
 
     @property
     def df(self):
@@ -424,6 +453,16 @@ class GrepMatch:
     match_ranges: list[MatchRange] = field(default_factory=list)
     context_before: list[str] = field(default_factory=list)
     context_after: list[str] = field(default_factory=list)
+    root: str | None = None
+
+    @property
+    def abspath(self) -> str:
+        """The absolute path of the matched file (``root`` joined with the
+        relative ``path``), or ``path`` unchanged when no root is known."""
+        return os.path.join(self.root, self.path) if self.root else self.path
+
+    def __fspath__(self) -> str:
+        return self.abspath
 
 
 @dataclass(frozen=True)
@@ -438,6 +477,19 @@ class GrepResult:
 
     def __len__(self) -> int:
         return len(self.matches)
+
+    def __getitem__(self, index):
+        """Index a single ``GrepMatch`` (``result[0]``) or slice into a new
+        ``GrepResult`` (``result[:10]``), so the result composes like a list."""
+        if isinstance(index, slice):
+            sliced = self.matches[index]
+            return GrepResult(
+                matches=sliced,
+                total_matched=self.total_matched,
+                total_files_searched=self.total_files_searched,
+                next_file_offset=self.next_file_offset,
+            )
+        return self.matches[index]
 
     @property
     def df(self):
@@ -514,9 +566,10 @@ class FileFinder:
         frecency_db=None,
         history_db=None,
     ) -> None:
+        self._root = os.path.abspath(os.fspath(root))
         opts = _CreateOptions()
         opts.version = _OPTIONS_VERSION
-        opts.base_path = _encode(os.path.abspath(os.fspath(root)))
+        opts.base_path = _encode(self._root)
         opts.frecency_db_path = _encode(frecency_db)
         opts.history_db_path = _encode(history_db)
         opts.enable_mmap_cache = mmap_cache
@@ -669,6 +722,7 @@ class FileFinder:
                     frecency=_lib.fff_file_item_get_total_frecency_score(it),
                     is_binary=bool(_lib.fff_file_item_get_is_binary(it)),
                     git_status=_str(_lib.fff_file_item_get_git_status(it)),
+                    root=self._root,
                 )
             )
         return SearchResult(
@@ -843,6 +897,7 @@ class FileFinder:
                     match_ranges=ranges,
                     context_before=before,
                     context_after=after,
+                    root=self._root,
                 )
             )
         return GrepResult(
@@ -978,7 +1033,7 @@ def find(*, query: str, path, limit: int = 100) -> SearchResult:
     with tempfile.TemporaryDirectory(prefix="ix-fff-file-") as tmp:
         with _isolated_file_finder(os.path.join(root, only), tmp, content_indexing=False) as ff:
             result = ff.search(query=query, limit=limit)
-    hits = [replace(h, path=only, name=only) for h in result.hits][:limit]
+    hits = [replace(h, path=only, name=only, root=root) for h in result.hits][:limit]
     return SearchResult(hits=hits, total_matched=len(hits), total_files=len(hits))
 
 
@@ -1022,7 +1077,7 @@ def grep(*, query: str | list[str], path, mode: str, limit: int = 50) -> GrepRes
     with tempfile.TemporaryDirectory(prefix="ix-fff-file-") as tmp:
         with _isolated_file_finder(os.path.join(root, only), tmp, content_indexing=True) as ff:
             result = _run(ff)
-    matches = [replace(m, path=only, name=only) for m in result.matches]
+    matches = [replace(m, path=only, name=only, root=root) for m in result.matches]
     return GrepResult(
         matches=matches,
         total_matched=result.total_matched,
