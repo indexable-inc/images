@@ -12,7 +12,7 @@ index; this module loads the `fff-c` cdylib (`packages/fff` emits it next to the
     for hit in fff.find("picker", path=".").hits:
         print(hit.path, hit.frecency)
 
-    for m in fff.grep("fn main", path=".").matches:
+    for m in fff.grep("fn main", path=".", mode="regex").matches:
         print(f"{m.path}:{m.line_number}: {m.line}")
 
     # or hold an instance for repeated queries against one tree:
@@ -20,7 +20,7 @@ index; this module loads the `fff-c` cdylib (`packages/fff` emits it next to the
         ff.wait_for_scan()              # block until the initial scan finishes
         ff.search("readme")            # fuzzy file search, frecency-ranked
         ff.glob("**/*.rs")             # literal glob, no fuzzy parsing
-        ff.grep("TODO", mode="regex")  # content search (plain | regex | fuzzy)
+        ff.grep("TODO", mode="regex")  # content search (smart | plain | regex | fuzzy)
         ff.multi_grep(["foo", "bar"])  # OR across many literals (Aho-Corasick)
 
 Results are plain dataclasses (`FileHit`, `GrepMatch`, `SearchResult`,
@@ -79,10 +79,9 @@ _OPTIONS_VERSION = 1
 _GREP_MODES = {"plain": 0, "text": 0, "regex": 1, "fuzzy": 2}
 
 # Regex metacharacters that tell a regex query apart from a literal one. With
-# mode="smart" (the default) a query containing any of these is run as a regex
-# when it compiles, otherwise as a fast SIMD literal. This avoids both footguns
-# of a fixed default: a plain default silently treats `a|b` or `(?i)x` as text,
-# while a regex default breaks an ordinary literal like `fn main(`.
+# mode="smart" a query containing any of these is run as a regex when it
+# compiles, otherwise as a fast SIMD literal -- a convenience for callers who
+# want auto-detection, opted into explicitly (grep has no default mode).
 _RE_META = frozenset("\\^$.|?*+()[]{}")
 
 
@@ -709,7 +708,7 @@ class FileFinder:
         self,
         query: str,
         *,
-        mode: str = "smart",
+        mode: str,
         limit: int = 50,
         max_matches_per_file: int = 0,
         smart_case: bool = True,
@@ -722,9 +721,10 @@ class FileFinder:
     ) -> GrepResult:
         """Content search across indexed files.
 
-        ``mode``: ``"smart"`` (default) runs the query as a regex when it holds
-        regex metacharacters and as a fast literal otherwise; force it with
-        ``"plain"``, ``"regex"``, or ``"fuzzy"``.
+        ``mode`` is required (no default), so each call states its intent:
+        ``"plain"`` (fast SIMD literal), ``"regex"``, ``"fuzzy"``, or ``"smart"``
+        (regex when the query holds regex metacharacters and compiles, else a
+        literal).
         """
         self._check_open()
         mode_byte = _GREP_MODES[_resolve_mode(query, mode)]
@@ -1007,8 +1007,12 @@ def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
     return SearchResult(hits=hits, total_matched=len(hits), total_files=len(hits))
 
 
-def grep(query: str, path=".", *, mode: str = "smart", limit: int = 50) -> GrepResult:
+def grep(query: str, path=".", *, mode: str, limit: int = 50) -> GrepResult:
     """Content grep over `path`, reusing a cached watched (content-indexed) index.
+
+    `mode` is required (no default), so each call states its intent: ``"plain"``
+    (fast SIMD literal), ``"regex"``, ``"fuzzy"``, or ``"smart"`` (regex when the
+    query holds regex metacharacters and compiles, else a literal).
 
     `path` may be a directory (grepped whole) or a single file. A single file is
     grepped in an isolated one-file index, so it works even for a dotfile (which
@@ -1038,7 +1042,7 @@ async def afind(query: str, path=".", *, limit: int = 100) -> SearchResult:
     return await asyncio.to_thread(find, query, path, limit=limit)
 
 
-async def agrep(query: str, path=".", *, mode: str = "smart", limit: int = 50) -> GrepResult:
+async def agrep(query: str, path=".", *, mode: str, limit: int = 50) -> GrepResult:
     """Async content grep: runs off the event loop (non-blocking)."""
     return await asyncio.to_thread(grep, query, path, mode=mode, limit=limit)
 
@@ -1171,14 +1175,14 @@ class CodeMap:
         )
 
 
-def map(query: str, path=".", *, mode: str = "smart", limit: int = 200) -> CodeMap:
+def map(query: str, path=".", *, mode: str, limit: int = 200) -> CodeMap:
     """Content grep grouped into a :class:`CodeMap`: hits per file with
     definitions ranked first. A glanceable answer to "where is X defined and
     used?" built straight on :func:`grep`."""
     return CodeMap(query, grep(query, path, mode=mode, limit=limit).matches)
 
 
-async def amap(query: str, path=".", *, mode: str = "smart", limit: int = 200) -> CodeMap:
+async def amap(query: str, path=".", *, mode: str, limit: int = 200) -> CodeMap:
     """Async :func:`map`: the same code map, off the event loop."""
     res = await agrep(query, path, mode=mode, limit=limit)
     return CodeMap(query, res.matches)

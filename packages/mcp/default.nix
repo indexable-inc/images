@@ -633,7 +633,7 @@ let
             time.sleep(0.25)
         assert hit_path is not None, f"fuzzy search did not find hello_world.txt: {result.hits!r}"
 
-        grep_result = finder.grep("find me on this line", limit=10)
+        grep_result = finder.grep("find me on this line", mode="plain", limit=10)
         files = {m.path for m in grep_result.matches}
         assert any("hello_world" in f for f in files), f"grep missed the txt file: {files!r}"
         assert any("main.rs" in f for f in files), f"grep missed main.rs: {files!r}"
@@ -653,7 +653,7 @@ let
     cm_html = cm._repr_html_()
     assert "<details" in cm_html and "find me" in cm_html, cm_html[:200]
     # map() is the grep -> CodeMap convenience (type only; avoids a scan race).
-    assert isinstance(fff.map("fn main", root), fff.CodeMap)
+    assert isinstance(fff.map("fn main", root, mode="plain"), fff.CodeMap)
 
     # The public search surface takes `path=` (consistent with `view`), not `root=`.
     import inspect as _inspect
@@ -661,18 +661,18 @@ let
     for _fn in (fff.find, fff.grep, fff.afind, fff.agrep, fff.map, fff.amap):
         _params = _inspect.signature(_fn).parameters
         assert "path" in _params and "root" not in _params, (_fn.__name__, list(_params))
-    assert isinstance(fff.grep("find me on this line", path=root), fff.GrepResult)
+    assert isinstance(fff.grep("find me on this line", path=root, mode="plain"), fff.GrepResult)
 
     # A single file as `path` is grepped on its own, in an isolated one-file
     # index: fff-c cannot content-index a lone file as a root, and its indexer
     # skips dotfiles and ignored paths, so the helper copies the target into a
     # throwaway visible-named tree and remaps matches back to its real name.
     main_rs = os.path.join(root, "src", "main.rs")
-    one = fff.grep("find me on this line", path=main_rs)
+    one = fff.grep("find me on this line", path=main_rs, mode="plain")
     assert {m.path for m in one.matches} == {"main.rs"}, f"file grep not scoped: {one.matches!r}"
-    assert fff.grep("no such content anywhere", path=main_rs).matches == [], "empty file grep should be empty"
+    assert fff.grep("no such content anywhere", path=main_rs, mode="plain").matches == [], "empty file grep should be empty"
     assert any(h.path == "main.rs" for h in fff.find("main", path=main_rs).hits), "file find missed it"
-    assert fff.map("find me on this line", path=main_rs).by_file, "file map should group the hit"
+    assert fff.map("find me on this line", path=main_rs, mode="plain").by_file, "file map should group the hit"
 
     # Regression guard for indexable-inc/index#890: a dotfile, and a file
     # directly under $HOME, are both greppable even though fff's indexer skips
@@ -680,41 +680,50 @@ let
     dotfile = os.path.join(root, ".env")
     with open(dotfile, "w") as fh:
         fh.write("SECRET=find me on this line\n")
-    assert fff.grep("find me on this line", path=dotfile).matches, "dotfile grep found nothing"
+    assert fff.grep("find me on this line", path=dotfile, mode="plain").matches, "dotfile grep found nothing"
 
     home_file = os.path.join(os.environ["HOME"], ".zshrc")
     with open(home_file, "w") as fh:
         fh.write("export FIND_ME=1\n")
-    home_hit = fff.grep("FIND_ME", path=home_file)
+    home_hit = fff.grep("FIND_ME", path=home_file, mode="plain")
     assert {m.path for m in home_hit.matches} == {".zshrc"}, f"home dotfile grep: {home_hit.matches!r}"
     assert any(h.path == ".zshrc" for h in fff.find("zshrc", path=home_file).hits), "home dotfile find missed it"
 
     # A bare home / fs-root *directory* is refused with actionable guidance —
     # never silently, and never with a message that nudges toward shelling out.
     try:
-        fff.grep("anything", path=os.environ["HOME"])
+        fff.grep("anything", path=os.environ["HOME"], mode="plain")
         raise AssertionError("expected a refusal for the bare home directory")
     except fff.FffError as exc:
         assert "subdirectory" in str(exc), f"unhelpful home-dir error: {exc}"
 
-    # mode="smart" (the default) runs a query as regex when it holds regex
-    # metacharacters and as a fast literal otherwise: an alternation matches with
-    # no mode= (the old plain default silently matched nothing), while an
-    # ordinary literal with an unbalanced paren falls back to literal, never errors.
-    assert fff.grep("greetings|fn main", path=root).matches, "smart default missed the alternation"
+    # `mode` is REQUIRED (no default): omitting it is a TypeError, so every call
+    # states whether it wants a literal or a regex rather than guessing.
+    try:
+        fff.grep("greetings", path=root)
+        raise AssertionError("grep must require an explicit mode")
+    except TypeError:
+        pass
+
+    # mode="regex" runs the query as a regex and mode="plain" as a fast literal,
+    # so an alternation matches under regex but not under plain. mode="smart" is
+    # the explicit auto-detect: regex for a metacharacter query that compiles,
+    # literal otherwise (an unbalanced paren falls back to literal, never errors).
+    assert fff.grep("greetings|fn main", path=root, mode="regex").matches, "regex missed the alternation"
     assert fff.grep("greetings|fn main", path=root, mode="plain").matches == [], (
-        "plain mode must treat the alternation literally"
+        "plain must treat the alternation literally"
     )
-    assert fff.grep("fn main(", path=root).matches, "smart must fall back to literal for an unbalanced paren"
+    assert fff.grep("greetings|fn main", path=root, mode="smart").matches, "smart should pick regex here"
+    assert fff.grep("fn main(", path=root, mode="smart").matches, "smart should fall back to a literal"
 
     # The flat results opt into the kernel table protocol (_ix_to_frame_), so a
     # bare return renders as a polars table for both the human and the model;
     # CodeMap exposes the nested per-file frame instead.
     import polars as _pl
 
-    assert isinstance(fff.grep("find me on this line", path=root)._ix_to_frame_(), _pl.DataFrame)
+    assert isinstance(fff.grep("find me on this line", path=root, mode="plain")._ix_to_frame_(), _pl.DataFrame)
     assert isinstance(fff.find("main", path=root)._ix_to_frame_(), _pl.DataFrame)
-    cmdf = fff.map("find me on this line", path=root).df
+    cmdf = fff.map("find me on this line", path=root, mode="plain").df
     assert cmdf.schema["matches"] == _pl.List(
         _pl.Struct({"line": _pl.Int64, "col": _pl.Int64, "def": _pl.Boolean, "content": _pl.Utf8})
     ), cmdf.schema
@@ -1793,7 +1802,7 @@ let
     # table for both the human and the model.
     import fff
 
-    gr = fff.grep("viewTestPy", base)
+    gr = fff.grep("viewTestPy", base, mode="plain")
     g = gr.df
     assert isinstance(g, pl.DataFrame) and {"path", "line", "content"} <= set(g.columns), g.columns
     assert g.height > 0, "expected a grep hit for the marker"
