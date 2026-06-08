@@ -1,22 +1,18 @@
 id: no-deprecated-iflist-empty
 language: nix
 severity: warning
-message: "`if cond then [ x ] else [ ]` is `lib.optional cond x`, or `lib.optionals cond xs` when the non-empty branch is list-valued."
+message: "`if cond then [ x ] else [ ]` is `lib.optional cond x`."
 note: |
-  WHY: Conditional list construction is the canonical use case for
-  `lib.optional` / `lib.optionals`. The `if … then [ … ] else [ ]` shape
-  reinvents it inline and is harder to grep.
+  WHY: A one-element-list-or-empty conditional is the canonical use case for
+  `lib.optional`. The `if cond then [ x ] else [ ]` shape reinvents it inline
+  and is harder to grep.
   NIXPKGS: Convention across nixpkgs services and packaging.
-  REPO: Use `lib.optional cond x` for a one-element non-empty branch and
-  `lib.optionals cond xs` for a list-valued one; the `else [ ]` already proves
-  the non-empty branch is a list, so a bare variable (`if cond then xs else [ ]`)
-  flags too, not just a `[ … ]` literal. The single carve-out is
-  `if s ? k then s.k else [ ]`, which `prefer-or-default-over-has-attr-guard`
-  owns with the better `s.k or [ ]`.
+  REPO: Use `lib.optional cond x`. Only the single-element list literal flags;
+  a list-valued non-literal branch (`if cond then xs else [ ]`, which would be
+  `lib.optionals cond xs`) is left to the author, since spelling it `lib.optionals`
+  on an opaque expression often obscures rather than clarifies.
 rule:
-  # Empty `else`: any non-empty `then` branch, except the `s ? k` / `s.k`
-  # guard shape that `prefer-or-default-over-has-attr-guard` rewrites to
-  # `s.k or [ ]`.
-  all:
-    - pattern: if $COND then $THEN else [ ]
-    - not: { pattern: "if $S ? $K then $S.$K else [ ]" }
+  # Empty `else` with a single-element list literal `then`. Bare variables and
+  # multi-element literals (the `lib.optionals` cases) are intentionally not
+  # flagged.
+  pattern: if $COND then [ $X ] else [ ]
