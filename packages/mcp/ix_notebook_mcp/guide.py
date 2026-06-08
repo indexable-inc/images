@@ -98,15 +98,21 @@ DISCOVER = (
 )
 
 NO_SHELL = (
-    "Never shell out for what the bundled helpers already do — no `ls`/`cat`/`grep`/`find`/`rg`/"
+    "Never shell out for what the bundled helpers already do: no `ls`/`cat`/`grep`/`find`/`rg`/"
     "`fd` via bash, `sh`, or `asyncio.create_subprocess_exec`, and no one-off search or listing "
-    "helper. `fff` finds files and greps content, `view` lists directories and shows files, and "
-    "both return polars frames you compose `.filter`/`.sort`/`.group_by`/`.head` on (or "
-    "syntax-highlighted views) — so the human gets a styled table and you get a clean frame "
-    "rather than an unstyled text dump. To list a directory use `view.ls`/`view.tree`, never "
+    "helper. Doing it by hand is concretely worse, not just off-style: a bare `subprocess.run` "
+    "runs synchronously on the kernel's one event loop and freezes every other job until it "
+    "returns, and its piped output arrives corrupted (ANSI color codes get interleaved into the "
+    "matched text, silently mangling and truncating the very tokens you searched for). `fff` finds "
+    "files and greps content, `view` lists directories and shows files; both run off the loop, "
+    "reuse a cached content index so they are faster than re-walking the tree each call, and "
+    "return polars frames you compose `.filter`/`.sort`/`.group_by`/`.head` on (or "
+    "syntax-highlighted views), so the human gets a styled table and you get a clean, uncorrupted "
+    "frame rather than an unstyled text dump. To list a directory use `view.ls`/`view.tree`, never "
     "`os.walk` or `ls`; to edit, `view.edit(path, old, new)`, never blind. For meaning-based "
-    "recall across a corpus, `import search`. When you genuinely must shell out, `sh` requires a "
-    "`cwd=` (`cwd=\".\"` for here) — pass the directory there, never a `cd X && ...` prefix."
+    "recall across a corpus, `import search`. When you genuinely must shell out, use the async "
+    "`sh` (it runs off the loop and preserves clean color) and pass it a `cwd=` (`cwd=\".\"` for "
+    "here), never a `cd X && ...` prefix."
 )
 
 VERIFY = (
