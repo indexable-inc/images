@@ -11,6 +11,23 @@ so a human can watch every running "thing" and its output like a notebook.
 The page diffs the DOM reactively (Svelte) instead of rebuilding it, so scroll
 position and open panels survive each refresh. When the env var is unset (a bare
 run outside nix), a small stub explains how to build the UI.
+
+The JSON routes are also the stable *embedding contract*: a host that runs
+``ix-mcp`` to drive an agent (the room server points its Codex at this MCP as the
+agent's only tool) reads the agent's rich results back over HTTP and renders them
+in its own UI. The host pins the address with ``IX_MCP_HOST`` + ``IX_MCP_DASHBOARD_PORT``
+so it knows where to reach this instance, then polls:
+
+  - ``GET /api/jobs``       recent runs, newest first (running first), each with
+                            ``code``, ``status``, ``output`` (stdout tail) and
+                            ``outputs`` (nbformat display bundles: ``text/plain``,
+                            ``text/html``, ``image/png`` for the human view).
+  - ``GET /api/jobs/<id>``  one run by id (404 if unknown). The model-facing
+                            ``python_exec`` reply carries the job id, so the host
+                            fetches exactly the run behind a tool call and renders
+                            its tables/images/HTML inline.
+  - ``GET /api/resources``  live, self-updating HTML widgets (a Tui screen, a VM).
+  - ``GET /api/cells``      the agent's curated presentation pane, in order.
 """
 
 from __future__ import annotations
@@ -179,12 +196,20 @@ async def start(config: Config) -> web.AppRunner:
     async def index(_request: web.Request) -> web.Response:
         return web.Response(text=_PAGE, content_type="text/html")
 
+    def with_code_html(row: dict) -> dict:
+        # Highlight once per unique snippet (cached); the card renders it.
+        row["code_html"] = _code_html(row.get("code") or "")
+        return row
+
     async def jobs(_request: web.Request) -> web.Response:
-        rows = store.recent(conn, limit=200)
-        for row in rows:
-            # Highlight once per unique snippet (cached); the card renders it.
-            row["code_html"] = _code_html(row.get("code") or "")
+        rows = [with_code_html(row) for row in store.recent(conn, limit=200)]
         return web.json_response(rows)
+
+    async def job(request: web.Request) -> web.Response:
+        row = store.get(conn, request.match_info["id"])
+        if row is None:
+            return web.json_response({"error": "no such job"}, status=404)
+        return web.json_response(with_code_html(row))
 
     async def resources(_request: web.Request) -> web.Response:
         return web.json_response(store.live_resources(conn))
@@ -194,6 +219,7 @@ async def start(config: Config) -> web.AppRunner:
 
     app.router.add_get("/", index)
     app.router.add_get("/api/jobs", jobs)
+    app.router.add_get("/api/jobs/{id}", job)
     app.router.add_get("/api/resources", resources)
     app.router.add_get("/api/cells", cells)
     runner = web.AppRunner(app)

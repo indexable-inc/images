@@ -150,6 +150,26 @@ def recent(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
     return out
 
 
+def get(conn: sqlite3.Connection, id: str) -> dict | None:
+    """One execution by id, or None, as a plain dict (same shape as a
+    :func:`recent` row). The by-id lookup an embedder uses to fetch the rich
+    outputs of a specific run: the model-facing ``python_exec`` reply carries the
+    job id, so a host (e.g. the room server) reads ``GET /api/jobs/<id>`` to
+    render that run's tables/images/HTML in its own UI."""
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id, name, code, status, started_at, ended_at, budget, output, result, error, outputs, bindings "
+        "FROM executions WHERE id = ?",
+        (id,),
+    ).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    d["outputs"] = json.loads(d.get("outputs") or "[]")
+    d["bindings"] = json.loads(d.get("bindings") or "{}")
+    return d
+
+
 # --------------------------------------------------------------------------- #
 # Cells: the agent's curated presentation pane.
 #

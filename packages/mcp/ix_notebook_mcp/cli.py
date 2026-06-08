@@ -85,6 +85,17 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _dashboard_port() -> int:
+    """The port the read-only data API / dashboard binds. An embedder (the room
+    server runs ``ix-mcp`` as its agent's tool and reads results back over HTTP)
+    pins it with ``IX_MCP_DASHBOARD_PORT`` so it knows where to reach this
+    instance; left unset, a free port is chosen so a bare run never collides."""
+    pinned = os.environ.get("IX_MCP_DASHBOARD_PORT")
+    if pinned:
+        return int(pinned)
+    return _free_port()
+
+
 def _tailscale_status() -> dict | None:
     tailscale = shutil.which("tailscale") or next(
         (p for p in ("/usr/local/bin/tailscale", "/usr/bin/tailscale") if os.path.exists(p)), None
@@ -159,7 +170,7 @@ def _serve(args: argparse.Namespace) -> int:
         host, _, port = http.partition(":")
         mcp_http_host, mcp_http_port = host or "127.0.0.1", int(port) if port else 8000
 
-    dashboard_port = _free_port()
+    dashboard_port = _dashboard_port()
     store_path = runtime_dir() / f"store-{dashboard_port}.db"
     # Fresh execution log per server: if this port was used by a prior server,
     # drop its database (and WAL sidecars) so the dashboard never shows stale runs.

@@ -923,6 +923,120 @@ let
         mkdir -p "$out"
       '';
 
+  # The read-only data API is also the embedding contract: a host (the room
+  # server runs `ix-mcp` as its agent's only tool) reads the agent's rich
+  # results back over HTTP and renders them in its own UI. Exercise that path
+  # in-process: seed the store, start the dashboard server, and assert the JSON
+  # routes (incl. the by-id lookup an embedder keys off the job id in a tool
+  # reply) return the run's nbformat output bundles, cells, and live resources.
+  apiTest = pkgs.writeText "ix-mcp-api-test.py" ''
+    import asyncio, tempfile
+    from pathlib import Path
+
+    import aiohttp
+
+    from ix_notebook_mcp import cli, dashboard, store
+    from ix_notebook_mcp.config import Config, set_config
+
+    # An embedder pins the data-API port so it knows where to reach this instance.
+    import os
+
+    os.environ["IX_MCP_DASHBOARD_PORT"] = "54321"
+    assert cli._dashboard_port() == 54321, cli._dashboard_port()
+    os.environ.pop("IX_MCP_DASHBOARD_PORT")
+    assert isinstance(cli._dashboard_port(), int)
+
+    tmp = Path(tempfile.mkdtemp())
+    store_path = tmp / "store.db"
+    conn = store.connect(store_path)
+    rich = [
+        {
+            "output_type": "execute_result",
+            "data": {
+                "text/plain": "shape: (1, 1)",
+                "text/html": "<table><tr><td>1</td></tr></table>",
+            },
+        }
+    ]
+    store.start(conn, id="job1", name="demo", code="df.head()", started_at=1000.0, budget=15.0)
+    store.finish(
+        conn,
+        id="job1",
+        status="done",
+        ended_at=1001.0,
+        output="stdout tail",
+        result="ok",
+        error=None,
+        outputs=rich,
+        bindings={"df": {"summary": "DataFrame"}},
+    )
+    store.replace_cells(conn, [{"id": "c1", "title": "Result", "position": 0, "outputs": rich}])
+    store.upsert_resource(
+        conn, id="r1", title="Live", kind="html", html="<b>hi</b>", status="live",
+        created_at=1000.0, updated_at=1000.0,
+    )
+
+    cfg = Config(
+        workdir=tmp, host="127.0.0.1", advertised_host="127.0.0.1",
+        dashboard_port=cli._free_port(), store_path=store_path,
+    )
+    set_config(cfg)
+
+    async def main():
+        runner = await dashboard.start(cfg)
+        base = f"http://127.0.0.1:{cfg.dashboard_port}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(base + "/api/jobs") as resp:
+                    jobs = await resp.json()
+                assert len(jobs) == 1 and jobs[0]["id"] == "job1", jobs
+                assert jobs[0]["outputs"] == rich, jobs[0]["outputs"]
+                assert jobs[0].get("code_html"), "expected highlighted code"
+
+                async with session.get(base + "/api/jobs/job1") as resp:
+                    assert resp.status == 200, resp.status
+                    one = await resp.json()
+                assert one["id"] == "job1" and one["outputs"] == rich
+                assert one["bindings"] == {"df": {"summary": "DataFrame"}}, one["bindings"]
+
+                async with session.get(base + "/api/jobs/nope") as resp:
+                    assert resp.status == 404, resp.status
+
+                async with session.get(base + "/api/cells") as resp:
+                    cells = await resp.json()
+                assert cells[0]["id"] == "c1" and cells[0]["outputs"] == rich
+
+                async with session.get(base + "/api/resources") as resp:
+                    resources = await resp.json()
+                assert resources[0]["id"] == "r1" and resources[0]["html"] == "<b>hi</b>"
+        finally:
+            await runner.cleanup()
+
+    asyncio.run(main())
+    print("api-ok")
+  '';
+  apiSmoke =
+    pkgs.runCommand "ix-mcp-api-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${mcpPython}/bin/python3 ${apiTest} >stdout 2>stderr || {
+          echo "ix-mcp api smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'api-ok' stdout || {
+          echo "ix-mcp api smoke did not confirm the embedding data API:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # Exercises the in-kernel runtime (ix_notebook_mcp/runtime.py) in-process: two
   # jobs run concurrently on one event loop, neither blocks the other, each keeps
   # its own captured stdout, and the trailing expression is captured as the
@@ -2381,6 +2495,7 @@ package.overrideAttrs (old: {
         yieldSmoke
         bindingsSmoke
         bindDefaultSmoke
+        apiSmoke
         viewSmoke
         nixSmoke
         fleetSmoke
