@@ -152,18 +152,37 @@ _EXTRACT_JS = r"""
 """
 
 
+# X/Twitter is the only site this reader is allowed to drive: it is advertised
+# and permission-gated as an X reader and reuses the signed-in browser, so a full
+# URL must point at X, never an arbitrary site. Accept x.com / twitter.com and any
+# subdomain (mobile., www., pro., ...).
+def _is_x_host(host: str) -> bool:
+    host = host.lower().rsplit(":", 1)[0]
+    return host in ("x.com", "twitter.com") or host.endswith((".x.com", ".twitter.com"))
+
+
 def _resolve(source: str | None) -> str:
     """Turn a friendly ``source`` into the x.com URL to open.
 
-    ``None`` is the home timeline. A full ``http(s)`` URL is used as-is. A bare
-    keyword (``"home"``, ``"notifications"``, ...) maps to its timeline. ``"@name"``
-    is a profile; ``"#tag"`` or any other text is a search.
+    ``None`` is the home timeline. A full ``http(s)`` URL is used as-is, but only
+    if it points at X/Twitter (this reader is gated to X and drives the signed-in
+    browser, so it refuses to navigate anywhere else). A bare keyword (``"home"``,
+    ``"notifications"``, ...) maps to its timeline. ``"@name"`` is a profile;
+    ``"#tag"`` or any other text is a search.
     """
 
     if not source:
         return _NAMED["home"]
     s = source.strip()
     if s.startswith(("http://", "https://")):
+        from urllib.parse import urlparse
+        host = urlparse(s).hostname or ""
+        if not _is_x_host(host):
+            raise ValueError(
+                f"x.posts only reads X/Twitter URLs, not {host!r}. Pass an "
+                "x.com/twitter.com link, a \"@handle\", a \"#tag\" or search "
+                "text, or a timeline keyword like \"home\"."
+            )
         return s
     low = s.lower()
     if low in _NAMED:
