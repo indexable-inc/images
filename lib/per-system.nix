@@ -199,19 +199,34 @@ let
             # GitHub Actions log group so a long clippy dump stays collapsible;
             # harmless plain text in a local `nix run .#check`.
             print --stderr $"::group::build log: ($f.attr)"
+            let inst = $".#ciChecks.x86_64-linux.($f.attr)"
+            # Fast path: replay the retained build log via `nix log` (works for
+            # input-addressed checks like the browser smoke test).
             let drv = (
               ^nix eval --raw
                 --option accept-flake-config true
                 --option extra-experimental-features ca-derivations
-                $".#ciChecks.x86_64-linux.($f.attr).drvPath"
+                $"($inst).drvPath"
               | complete
             )
-            if $drv.exit_code == 0 and (($drv.stdout | str trim) | is-not-empty) {
-              # `nix log` replays the build output nix-fast-build swallowed,
-              # including the clippy diagnostic that explains the failure.
-              ^nix log ($drv.stdout | str trim) | print --stderr
+            let logged = if $drv.exit_code == 0 and (($drv.stdout | str trim) | is-not-empty) {
+              ^nix log ($drv.stdout | str trim) | complete
             } else {
-              print --stderr $"  could not resolve a drvPath for ($f.attr); error was: ($f.error)"
+              { exit_code: 1, stdout: "" }
+            }
+            if $logged.exit_code == 0 and (($logged.stdout | str trim) | is-not-empty) {
+              print --stderr $logged.stdout
+            } else {
+              # A content-addressed build (the rust units default to CA) keeps
+              # its log under the *resolved* drv, which `nix log` cannot fetch by
+              # the original -- so re-run the one failed check with -L to stream
+              # the diagnostic (clippy lint / test output). nix does not cache
+              # failures, so this just re-attempts that single check.
+              try {
+                ^nix build $inst "-L" "--no-link"
+                  "--option" "accept-flake-config" "true"
+                  "--option" "extra-experimental-features" "ca-derivations"
+              } catch { }
             }
             print --stderr "::endgroup::"
           }
