@@ -3640,8 +3640,8 @@ dependencies = [
 name = "lake-iceberg"
 version = "0.1.0"
 dependencies = [
- "arrow-array 57.3.1",
- "arrow-schema 57.3.1",
+ "arrow-array 59.0.0",
+ "arrow-schema 59.0.0",
  "futures",
  "iceberg",
  "iceberg-catalog-rest",
