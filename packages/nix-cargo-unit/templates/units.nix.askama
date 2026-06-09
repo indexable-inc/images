@@ -654,8 +654,11 @@ let
       ''
       + pkgs.lib.concatMapStrings (target: ''
         (
-          ${target.binary} --list --format terse > "$out"/${pkgs.lib.escapeShellArg target.name}.list
-          ${target.binary} --list --format terse --ignored > "$out"/${pkgs.lib.escapeShellArg target.name}.ignored.list
+          if ! ${target.binary} --list --format terse > "$out"/${pkgs.lib.escapeShellArg target.name}.list ||
+             ! ${target.binary} --list --format terse --ignored > "$out"/${pkgs.lib.escapeShellArg target.name}.ignored.list; then
+            echo >&2 "error: cargo-unit: failed to list tests for ${target.name} (${target.binary})"
+            exit 1
+          fi
         ) &
         running=$((running + 1))
         if [ "$running" -ge "$max_jobs" ]; then
@@ -668,7 +671,7 @@ let
         done
 
         if [ "$failures" -ne 0 ]; then
-          echo >&2 "error: cargo-unit failed to list $failures test target(s)"
+          echo >&2 "error: cargo-unit failed to list $failures test target(s); each is named above"
           exit 1
         fi
       ''

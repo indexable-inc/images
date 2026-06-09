@@ -3578,6 +3578,7 @@ mod tests {
         assert!(rendered.contains("source-roots.tsv"));
         assert!(rendered.contains("testManifestDrv ="));
         assert!(rendered.contains("cargo-unit-test-manifest"));
+        assert!(rendered.contains("failed to list tests for"));
     }
 
     #[test]
