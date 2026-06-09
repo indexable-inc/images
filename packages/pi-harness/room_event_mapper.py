@@ -69,6 +69,20 @@ def _event_type(event: Json) -> str | None:
     return None
 
 
+def _room_event_type(event: Json, pi_type: str | None) -> str:
+    if pi_type == "message_update":
+        nested = event.get("assistantMessageEvent")
+        nested_type = nested.get("type") if isinstance(nested, dict) else None
+        if nested_type == "text_delta":
+            return "text_delta"
+        if nested_type in {"reasoning_delta", "thinking_delta"}:
+            return "reasoning_delta"
+        if nested_type is None and _text_delta(event) is not None:
+            return "text_delta"
+        return "pi_event"
+    return PI_TO_ROOM_EVENTS.get(pi_type or "", "pi_event")
+
+
 def _text_delta(event: Json) -> str | None:
     for key in ("delta", "text", "content"):
         value = event.get(key)
@@ -86,7 +100,7 @@ def _text_delta(event: Json) -> str | None:
 
 def map_pi_event(event: Json) -> Json:
     pi_type = _event_type(event)
-    room_type = PI_TO_ROOM_EVENTS.get(pi_type or "", "pi_event")
+    room_type = _room_event_type(event, pi_type)
     mapped: Json = {"type": room_type, "source": "pi", "raw": event}
 
     if pi_type is not None:

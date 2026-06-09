@@ -59,6 +59,19 @@ class MapperTest(unittest.TestCase):
         text = mapper.map_pi_event({"type": "message_update", "delta": "hi"})
         self.assertEqual(text["type"], "text_delta")
         self.assertEqual(text["delta"], "hi")
+        text_start = mapper.map_pi_event(
+            {"type": "message_update", "assistantMessageEvent": {"type": "text_start"}}
+        )
+        self.assertEqual(text_start["type"], "pi_event")
+        text_delta = mapper.map_pi_event(
+            {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "hi"}}
+        )
+        self.assertEqual(text_delta["type"], "text_delta")
+        self.assertEqual(text_delta["delta"], "hi")
+        text_end = mapper.map_pi_event(
+            {"type": "message_update", "assistantMessageEvent": {"type": "text_end", "delta": "hi"}}
+        )
+        self.assertEqual(text_end["type"], "pi_event")
         self.assertEqual(mapper.map_pi_event({"type": "tool_execution_start", "id": "t1"})["type"], "tool_call_started")
         self.assertEqual(mapper.map_pi_event({"type": "turn_end"})["type"], "turn_completed")
 

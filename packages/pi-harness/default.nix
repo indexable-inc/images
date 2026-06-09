@@ -246,7 +246,7 @@ stdenv.mkDerivation {
             "PI_HARNESS_SYSTEM_PROMPT",
             ${builtins.toJSON defaultSystemPrompt}
           );
-          const char *pi = ${builtins.toJSON piCommand};
+          const char *pi = env_or_default("PI_HARNESS_PI_BIN", ${builtins.toJSON piCommand});
           const char *extension = ${builtins.toJSON "${extension}/ix-mcp-bridge.ts"};
           const char *python = ${builtins.toJSON pythonCommand};
           const char *mapper = ${builtins.toJSON mapper};
