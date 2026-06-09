@@ -412,11 +412,11 @@
     "snix-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1781040704,
-        "narHash": "sha256-9aM7i6OIK8tRa33vjzVZ/GjVvaVWVA4qpwF8/sMrWrw=",
+        "lastModified": 1781048291,
+        "narHash": "sha256-dHs7qAmPzo2oIaSZlppTozCF0WOfvdkW4jc+k+zTzTI=",
         "ref": "canon",
-        "rev": "90a88d7f3fbf05ef9601b3a4b3a344adb8515205",
-        "revCount": 22445,
+        "rev": "146233821c1fb22da3e863223fcf67d91d056ab4",
+        "revCount": 22446,
         "type": "git",
         "url": "https://git.snix.dev/snix/snix"
       },
