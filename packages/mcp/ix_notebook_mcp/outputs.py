@@ -27,6 +27,18 @@ try:
 except ValueError:
     MAX_TEXT_CHARS = 50_000
 _MAX_IMAGES = 8
+
+# Hard byte cap (decoded) on a single image block to the model. The kernel
+# already fits Result images to this budget (IX_MCP_IMAGE_MAX_BYTES, see
+# runtime._fit_image_bytes), so this is the final net catching any image that
+# reaches the model UNfitted -- a raw ``display(fig)`` bundle that never went
+# through a Result -- which is dropped with a short note here instead of dumped as
+# megabytes of base64 (which floods the reply or is rejected by the host). Set
+# ``IX_MCP_IMAGE_MAX_BYTES=0`` to disable.
+try:
+    MAX_IMAGE_BYTES = max(0, int(os.environ.get("IX_MCP_IMAGE_MAX_BYTES", "1000000")))
+except ValueError:
+    MAX_IMAGE_BYTES = 1_000_000
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 _OUTPUT_TYPES = frozenset({"stream", "execute_result", "display_data", "error"})
@@ -116,6 +128,22 @@ def text(value: Any) -> mcp_types.TextContent:
     return mcp_types.TextContent(type="text", text=rendered)
 
 
-def _image(mime: str, data: Any) -> mcp_types.ImageContent:
-    encoded = data if isinstance(data, str) else base64.b64encode(bytes(data)).decode("ascii")
-    return mcp_types.ImageContent(type="image", data=encoded.strip(), mimeType=mime)
+def _image(mime: str, data: Any) -> Content:
+    """One image as an MCP image block -- unless its decoded size exceeds
+    ``MAX_IMAGE_BYTES``, in which case it is dropped with a short text note rather
+    than flooding the reply with base64. ``data`` is base64 text or raw bytes."""
+    if isinstance(data, str):
+        try:
+            raw = base64.b64decode(data, validate=True)
+        except (ValueError, base64.binascii.Error):
+            raw = None  # not decodable; pass the string through untouched below
+    else:
+        raw = bytes(data)
+    if raw is not None and MAX_IMAGE_BYTES and len(raw) > MAX_IMAGE_BYTES:
+        return text(
+            f"[{mime} image dropped: {len(raw)} bytes exceeds the "
+            f"{MAX_IMAGE_BYTES}-byte cap. Return it via Result(llm_images=[...]) -- "
+            f"the kernel shrinks those to fit -- or raise IX_MCP_IMAGE_MAX_BYTES.]"
+        )
+    encoded = data.strip() if isinstance(data, str) else base64.b64encode(raw).decode("ascii")
+    return mcp_types.ImageContent(type="image", data=encoded, mimeType=mime)

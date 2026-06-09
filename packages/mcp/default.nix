@@ -1078,6 +1078,28 @@ let
     _w, _h = _Image.open(_io.BytesIO(_b64.b64decode(_coerced["data"]))).size
     assert max(_w, _h) <= runtime._IMAGE_MAX_DIM, (_w, _h, runtime._IMAGE_MAX_DIM)
 
+    # The dimension cap alone does not bound bytes: a busy 1280px screenshot stays
+    # megabytes as PNG. So _fit_image_bytes also enforces _IMAGE_MAX_BYTES, falling
+    # back to JPEG (and further downscales) -- a high-entropy image comes back well
+    # under the byte cap instead of flooding the model's reply with base64.
+    import os as _osr
+
+    _noisy = _Image.frombytes("RGB", (3000, 1500), _osr.urandom(3000 * 1500 * 3))
+    _nbuf = _io.BytesIO()
+    _noisy.save(_nbuf, format="PNG")
+    assert len(_nbuf.getvalue()) > runtime._IMAGE_MAX_BYTES, len(_nbuf.getvalue())
+    _fit = runtime._coerce_image(_nbuf.getvalue())
+    _raw = _b64.b64decode(_fit["data"])
+    assert len(_raw) <= runtime._IMAGE_MAX_BYTES, ("over byte cap", len(_raw))
+    _fw, _fh = _Image.open(_io.BytesIO(_raw)).size
+    assert max(_fw, _fh) <= runtime._IMAGE_MAX_DIM, (_fw, _fh)
+    # A small lossless image fits both caps and is kept byte-for-byte (a crisp PNG
+    # for UI/diagrams is never needlessly re-encoded).
+    _sbuf = _io.BytesIO()
+    _Image.new("RGB", (200, 100), (10, 20, 30)).save(_sbuf, format="PNG")
+    _small = _sbuf.getvalue()
+    assert _b64.b64decode(runtime._coerce_image(_small)["data"]) == _small
+
     # outputs.text() renders an over-cap block as a head+tail preview (not a
     # one-sided clip) with paging guidance, and honours IX_MCP_MAX_RESULT_CHARS.
     import importlib as _il
@@ -1092,6 +1114,21 @@ let
     assert "output too large" in _blk and len(_blk) < 2000, len(_blk)
     _os.environ.pop("IX_MCP_MAX_RESULT_CHARS", None)
     _il.reload(_outputs)
+
+    # outputs._image is the final byte net for every image reaching the model: a
+    # small image becomes a real image block, but an oversize blob (e.g. a raw
+    # display(fig) bundle that never went through the kernel's fitter) is dropped
+    # with a short note rather than dumped as megabytes of base64.
+    _ok = _outputs._image("image/png", _b64.b64encode(_small).decode("ascii"))
+    assert _ok.type == "image", _ok
+    _over = _b64.b64encode(b"x" * (_outputs.MAX_IMAGE_BYTES + 5000)).decode("ascii")
+    _dropped = _outputs._image("image/png", _over)
+    assert _dropped.type == "text" and "dropped" in _dropped.text, _dropped
+    assert len(_dropped.text) < 400, len(_dropped.text)
+    # End to end: an oversize image in a display bundle yields no giant text block.
+    _rendered = _outputs.to_mcp([{"output_type": "display_data", "data": {"image/png": _over}}])
+    assert all(_c.type == "text" for _c in _rendered), [_c.type for _c in _rendered]
+    assert max(len(_c.text) for _c in _rendered) < 400, [len(_c.text) for _c in _rendered]
 
     # view.tree lists but does not descend into heavy dirs (node_modules, ...)
     # unless all=True, so a project's structure is not buried under vendored files.

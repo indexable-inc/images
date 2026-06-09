@@ -63,6 +63,19 @@ try:
 except ValueError:
     _IMAGE_MAX_DIM = 1280
 
+# Max encoded size (bytes) of a single image returned to the model. The dimension
+# cap alone does not bound bytes: a busy 1280px screenshot re-encoded as PNG can
+# still be several megabytes, which floods the reply (and the model's context) and
+# can exceed the host's per-image limit, so the host falls back to dumping the
+# base64 as text. After the dimension cap an oversize image is therefore
+# re-encoded as JPEG at descending quality -- and, if still over, downscaled
+# further -- until it fits. Set ``IX_MCP_IMAGE_MAX_BYTES=0`` to disable the byte
+# cap (the dimension cap still applies).
+try:
+    _IMAGE_MAX_BYTES = int(os.environ.get("IX_MCP_IMAGE_MAX_BYTES", "1000000"))
+except ValueError:
+    _IMAGE_MAX_BYTES = 1_000_000
+
 # The custom mime the kernel hands the server to carry a job summary (mirrors
 # outputs.JOB_MIME; duplicated so the kernel-side runtime stays import-light).
 JOB_MIME = "application/x-ix-job+json"
@@ -1167,37 +1180,91 @@ def _df_llm_text(df) -> str:
         return _safe_repr(df)
 
 
+def _png_bytes(img) -> bytes:
+    """Encode a Pillow image as an optimized PNG (lossless)."""
+    import io
+
+    if img.mode not in ("RGB", "RGBA", "L"):
+        img = img.convert("RGBA")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
+
+def _jpeg_bytes(img, quality: int) -> bytes:
+    """Encode a Pillow image as JPEG at ``quality``, flattening any alpha onto a
+    white background (JPEG has no alpha) so transparency does not turn black."""
+    import io
+
+    from PIL import Image
+
+    if img.mode != "RGB":
+        rgba = img.convert("RGBA")
+        flat = Image.new("RGB", rgba.size, (255, 255, 255))
+        flat.paste(rgba, mask=rgba.split()[-1])
+        img = flat
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
 def _fit_image_bytes(raw: bytes, mime: str) -> tuple[bytes, str]:
-    """Downscale raster image bytes so the longest edge is at most
-    ``_IMAGE_MAX_DIM`` (aspect preserved), re-encoding as PNG. Returns the bytes
-    unchanged when the cap is disabled, Pillow is unavailable, or the image is
-    already small enough. Never raises: on any failure the original bytes/mime are
-    returned, so downscaling can only ever shrink the reply, never break it."""
-    if _IMAGE_MAX_DIM <= 0:
+    """Bound a raster image for the model. First downscale so its longest edge is
+    at most ``_IMAGE_MAX_DIM`` (aspect preserved); then ensure the encoding is at
+    most ``_IMAGE_MAX_BYTES`` -- preferring a lossless PNG, falling back to JPEG
+    at descending quality and, if still over, repeated downscales -- so a detailed
+    screenshot can never flood the reply with megabytes of base64. Returns the
+    bytes unchanged when both caps are disabled, Pillow is unavailable, or the
+    image already fits untouched (a crisp PNG is kept for small UI/diagrams).
+    Never raises: on any failure the original bytes/mime are returned, so fitting
+    can only ever shrink the reply, never break it."""
+    if _IMAGE_MAX_DIM <= 0 and _IMAGE_MAX_BYTES <= 0:
         return raw, mime
     try:
         import io
 
         from PIL import Image
 
-        with Image.open(io.BytesIO(raw)) as img:
-            width, height = img.size
-            longest = max(width, height)
-            if longest <= _IMAGE_MAX_DIM:
-                return raw, mime
+        img = Image.open(io.BytesIO(raw))
+        img.load()
+        width, height = img.size
+        longest = max(width, height)
+        resized = False
+        if _IMAGE_MAX_DIM > 0 and longest > _IMAGE_MAX_DIM:
             scale = _IMAGE_MAX_DIM / longest
-            resized = img.resize((max(1, round(width * scale)), max(1, round(height * scale))))
-            if resized.mode not in ("RGB", "RGBA", "L"):
-                resized = resized.convert("RGBA")
-            buf = io.BytesIO()
-            resized.save(buf, format="PNG", optimize=True)
-            return buf.getvalue(), "image/png"
+            img = img.resize((max(1, round(width * scale)), max(1, round(height * scale))))
+            resized = True
+        # Untouched and already under the byte cap: keep the original bytes -- a
+        # crisp lossless PNG is worth more than a needless re-encode.
+        within_bytes = _IMAGE_MAX_BYTES <= 0 or len(raw) <= _IMAGE_MAX_BYTES
+        if not resized and within_bytes:
+            return raw, mime
+        # Prefer a lossless PNG if it fits the byte cap.
+        png = _png_bytes(img)
+        if _IMAGE_MAX_BYTES <= 0 or len(png) <= _IMAGE_MAX_BYTES:
+            return png, "image/png"
+        # PNG is too big (a photographic / busy screenshot): switch to JPEG and
+        # walk quality, then dimensions, down until it fits the byte cap.
+        for quality in (85, 70, 55, 40, 25):
+            jpg = _jpeg_bytes(img, quality)
+            if len(jpg) <= _IMAGE_MAX_BYTES:
+                return jpg, "image/jpeg"
+        for _ in range(8):
+            w, h = img.size
+            if w <= 16 or h <= 16:
+                break
+            img = img.resize((max(1, w * 3 // 4), max(1, h * 3 // 4)))
+            jpg = _jpeg_bytes(img, 40)
+            if len(jpg) <= _IMAGE_MAX_BYTES:
+                return jpg, "image/jpeg"
+        return jpg, "image/jpeg"  # best effort: the smallest we could produce
     except Exception:
         return raw, mime
 
 
 def _encode_image_bytes(raw: bytes, mime: str) -> dict:
-    """One image as a downscaled ``{"mime", "data"}`` base64 dict."""
+    """One image as a size-bounded ``{"mime", "data"}`` base64 dict (see
+    :func:`_fit_image_bytes`)."""
     raw, mime = _fit_image_bytes(raw, mime)
     return {"mime": mime, "data": base64.b64encode(raw).decode("ascii")}
 
@@ -1231,7 +1298,8 @@ def _coerce_image(value) -> dict | None:
     (base64), or None if it is not an image we can encode. Accepts raw PNG/JPEG
     bytes, a base64 / data-URI string, a path to an image file, a matplotlib
     Figure, or any object with ``_repr_png_`` / ``_repr_jpeg_`` (a PIL image, a
-    plot). Every path runs through the downscaler (see ``_IMAGE_MAX_DIM``)."""
+    plot). Every path runs through :func:`_fit_image_bytes` (dimension and byte
+    caps)."""
     if value is None:
         return None
     # Raw bytes: sniff PNG vs JPEG by magic, default to PNG.
