@@ -2032,6 +2032,18 @@ let
     assert imessage._norm("+1 (202) 555-0123") == imessage._norm("2025550123")
     assert imessage._norm("Me@Example.COM ") == "me@example.com"
 
+    # reply/tapback reference parsing: strip the "p:<part>/" or "bp:" prefix to the
+    # bare GUID, and decode associated_message_type into a tapback label.
+    assert imessage._bare_guid("p:0/ABC") == "ABC"
+    assert imessage._bare_guid("bp:XYZ") == "XYZ"
+    assert imessage._bare_guid("ABC") == "ABC"
+    assert imessage._bare_guid(None) is None
+    assert imessage._tapback(2000) == "loved"
+    assert imessage._tapback(2005) == "questioned"
+    assert imessage._tapback(3003) == "removed-laughed"
+    assert imessage._tapback(0) is None
+    assert imessage._tapback(None) is None
+
     work = tempfile.mkdtemp()
     chat = os.path.join(work, "chat.db")
     con = sqlite3.connect(chat)
@@ -2039,7 +2051,7 @@ let
         """
         CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
         CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, display_name TEXT, chat_identifier TEXT, service_name TEXT);
-        CREATE TABLE message (ROWID INTEGER PRIMARY KEY, date INTEGER, text TEXT, attributedBody BLOB, is_from_me INTEGER, is_read INTEGER, service TEXT, handle_id INTEGER);
+        CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, text TEXT, attributedBody BLOB, is_from_me INTEGER, is_read INTEGER, service TEXT, handle_id INTEGER, thread_originator_guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER DEFAULT 0, date_edited INTEGER DEFAULT 0, date_retracted INTEGER DEFAULT 0);
         CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
         CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
         """
@@ -2053,8 +2065,8 @@ let
     t2 = datetime(2024, 1, 2, 3, 5, 5, tzinfo=timezone.utc)
     con.execute("INSERT INTO handle VALUES (1, '+12025550123')")
     con.execute("INSERT INTO chat VALUES (1, NULL, '+12025550123', 'iMessage')")
-    con.execute("INSERT INTO message VALUES (1, ?, 'plain text', NULL, 1, 1, 'iMessage', 1)", (ns(t1),))
-    con.execute("INSERT INTO message VALUES (2, ?, NULL, ?, 0, 0, 'iMessage', 1)", (ns(t2), blob))
+    con.execute("INSERT INTO message (ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id) VALUES (1, 'm1', ?, 'plain text', NULL, 1, 1, 'iMessage', 1)", (ns(t1),))
+    con.execute("INSERT INTO message (ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id) VALUES (2, 'm2', ?, NULL, ?, 0, 0, 'iMessage', 1)", (ns(t2), blob))
     con.execute("INSERT INTO chat_message_join VALUES (1, 1), (1, 2)")
     con.execute("INSERT INTO message_attachment_join VALUES (2, 99)")
     con.commit()
@@ -2070,6 +2082,12 @@ let
     assert df["text"].to_list() == ["héllo 👋 world", "plain text"], df["text"].to_list()
     assert df["is_from_me"].to_list() == [False, True], df
     assert df["name"].to_list() == [None, None], df
+    # the relational columns default cleanly when a message is none of these.
+    assert df["reply_to_guid"].to_list() == [None, None], df
+    assert df["reply_to_rowid"].to_list() == [None, None], df
+    assert df["tapback"].to_list() == [None, None], df
+    assert df["edited"].to_list() == [False, False], df
+    assert df["unsent"].to_list() == [False, False], df
 
     row2 = df.filter(pl.col("rowid") == 2)
     assert row2["date"][0] == t2, (row2["date"][0], t2)
@@ -2096,13 +2114,47 @@ let
     writer = sqlite3.connect(chat)
     writer.execute("PRAGMA journal_mode=WAL")
     writer.execute(
-        "INSERT INTO message VALUES (3, ?, 'in the wal', NULL, 1, 1, 'iMessage', 1)",
+        "INSERT INTO message (ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id) VALUES (3, 'm3', ?, 'in the wal', NULL, 1, 1, 'iMessage', 1)",
         (ns(datetime(2024, 1, 2, 3, 6, 5, tzinfo=timezone.utc)),),
     )
     writer.execute("INSERT INTO chat_message_join VALUES (1, 3)")
     writer.commit()
     assert "in the wal" in imessage.messages(db=chat)["text"].to_list(), "WAL rows must be visible"
     writer.close()
+
+    # reply threading, tapbacks, edits, and unsends: insert one of each and assert
+    # messages() resolves a threaded reply to its originator and decodes the rest.
+    con = sqlite3.connect(chat)
+    cols2 = "(ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id, thread_originator_guid, associated_message_guid, associated_message_type, date_edited, date_retracted)"
+    t3 = datetime(2024, 1, 2, 4, 0, 0, tzinfo=timezone.utc)
+    # a threaded reply to message 1 ("plain text"); the originator ref carries a
+    # "p:0/" part prefix that must be stripped back to the bare guid "m1".
+    con.execute("INSERT INTO message " + cols2 + " VALUES (10, 'm10', ?, 'a reply', NULL, 0, 1, 'iMessage', 1, 'p:0/m1', NULL, 0, 0, 0)", (ns(t3),))
+    # a Loved tapback on message 2, and a removed-liked on message 1.
+    con.execute("INSERT INTO message " + cols2 + " VALUES (11, 'm11', ?, 'Loved a message', NULL, 1, 1, 'iMessage', 1, NULL, 'p:0/m2', 2000, 0, 0)", (ns(t3),))
+    con.execute("INSERT INTO message " + cols2 + " VALUES (12, 'm12', ?, 'Removed a like', NULL, 1, 1, 'iMessage', 1, NULL, 'p:0/m1', 3001, 0, 0)", (ns(t3),))
+    # an edited message and an unsent (retracted) message.
+    con.execute("INSERT INTO message " + cols2 + " VALUES (13, 'm13', ?, 'fixed typo', NULL, 1, 1, 'iMessage', 1, NULL, NULL, 0, ?, 0)", (ns(t3), ns(t3)))
+    con.execute("INSERT INTO message " + cols2 + " VALUES (14, 'm14', ?, 'oops', NULL, 1, 1, 'iMessage', 1, NULL, NULL, 0, 0, ?)", (ns(t3), ns(t3)))
+    con.execute("INSERT INTO chat_message_join VALUES (1, 10), (1, 11), (1, 12), (1, 13), (1, 14)")
+    con.commit()
+    con.close()
+
+    thr = imessage.messages(db=chat, limit=50)
+    reply = thr.filter(pl.col("rowid") == 10).row(0, named=True)
+    assert reply["reply_to_guid"] == "m1", reply
+    assert reply["reply_to_rowid"] == 1, reply
+    assert reply["reply_to_text"] == "plain text", reply
+    love = thr.filter(pl.col("rowid") == 11).row(0, named=True)
+    assert love["tapback"] == "loved" and love["tapback_target_guid"] == "m2", love
+    removed = thr.filter(pl.col("rowid") == 12).row(0, named=True)
+    assert removed["tapback"] == "removed-liked" and removed["tapback_target_guid"] == "m1", removed
+    assert thr.filter(pl.col("rowid") == 13)["edited"][0] is True
+    assert thr.filter(pl.col("rowid") == 14)["unsent"][0] is True
+    # a plain message carries none of this metadata.
+    plain = thr.filter(pl.col("rowid") == 1).row(0, named=True)
+    assert plain["reply_to_guid"] is None and plain["tapback"] is None, plain
+    assert plain["edited"] is False and plain["unsent"] is False, plain
 
     # contacts: phones/emails aggregate into list columns under one display name.
     ab = os.path.join(work, "ab.abcddb")

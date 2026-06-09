@@ -284,6 +284,47 @@ def _apple_ns(when: datetime | str) -> int:
     return int(when.timestamp() * 1_000_000_000) - _APPLE_EPOCH_NS
 
 
+# A reply or tapback references another message by GUID, sometimes prefixed with
+# the message *part* it points at: "p:<part>/<guid>" for one part of a balloon,
+# "bp:<guid>" for the whole balloon. Only the bare GUID joins back to `message.guid`.
+_ASSOC_PREFIX = re.compile(r"^(?:p:\d+/|bp:)")
+
+
+def _bare_guid(value: str | None) -> str | None:
+    """The bare message GUID from a reply/tapback reference, any part prefix stripped."""
+
+    if not value:
+        return None
+    return _ASSOC_PREFIX.sub("", value)
+
+
+# `associated_message_type` encodes a tapback: 2000-2007 add one, 3000-3007 retract
+# the matching one. The low digit is the reaction; the thousands digit is add (2)
+# vs. remove (3), so one table keyed on the offset covers both.
+_TAPBACKS = {
+    0: "loved", 1: "liked", 2: "disliked", 3: "laughed",
+    4: "emphasized", 5: "questioned", 6: "emoji", 7: "sticker",
+}
+
+
+def _tapback(assoc_type: int | None) -> str | None:
+    """A tapback label for `associated_message_type`, or None for a real message.
+
+    ``0`` is an ordinary message; ``2000``-``2007`` are tapbacks and
+    ``3000``-``3007`` retract the matching one (``"removed-loved"``).
+    """
+
+    if not assoc_type:
+        return None
+    base, offset = divmod(assoc_type, 1000)
+    name = _TAPBACKS.get(offset)
+    if name is None:
+        return None
+    if base == 3:
+        return f"removed-{name}"
+    return name
+
+
 def messages(
     *,
     contact: str | None = None,
@@ -297,9 +338,14 @@ def messages(
 ) -> pl.DataFrame:
     """Messages from ``chat.db`` as a polars DataFrame, newest first.
 
-    Columns: ``rowid``, ``date`` (UTC datetime), ``name`` (resolved contact name
-    or None), ``handle`` (phone/email of the other party), ``is_from_me`` (bool),
-    ``text`` (decoded from ``attributedBody`` when needed), ``service``
+    Columns: ``rowid``, ``guid``, ``date`` (UTC datetime), ``name`` (resolved
+    contact name or None), ``handle`` (phone/email of the other party),
+    ``is_from_me`` (bool), ``text`` (decoded from ``attributedBody`` when needed),
+    ``reply_to_guid`` / ``reply_to_rowid`` / ``reply_to_text`` (the message this
+    one is a threaded reply to, resolved; all None when it is not a reply),
+    ``tapback`` (``"loved"`` / ``"removed-liked"`` / ... for a reaction, else
+    None) and ``tapback_target_guid`` (the message it reacts to), ``edited`` and
+    ``unsent`` (bool, from ``date_edited`` / ``date_retracted``), ``service``
     (``iMessage`` / ``SMS``), ``chat_id``, ``chat_name``, ``chat_identifier``,
     ``is_read`` (bool), ``n_attachments``.
 
@@ -339,10 +385,14 @@ def messages(
             params.append(_apple_ns(until))
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
-            SELECT m.ROWID AS rowid, m.date AS date, m.text AS text,
+            SELECT m.ROWID AS rowid, m.guid AS guid, m.date AS date, m.text AS text,
                    m.attributedBody AS attributed_body,
                    m.is_from_me AS is_from_me, m.is_read AS is_read,
                    m.service AS service, h.id AS handle,
+                   m.thread_originator_guid AS reply_to_raw,
+                   m.associated_message_guid AS assoc_guid,
+                   m.associated_message_type AS assoc_type,
+                   m.date_edited AS date_edited, m.date_retracted AS date_retracted,
                    c.ROWID AS chat_id, c.display_name AS chat_name,
                    c.chat_identifier AS chat_identifier,
                    (SELECT COUNT(*) FROM message_attachment_join maj
@@ -356,21 +406,33 @@ def messages(
             LIMIT ?
         """
         rows = con.execute(sql, [*params, int(limit)]).fetchall()
+        reply_to = _resolve_reply_targets(con, rows)
     finally:
         con.close()
 
     records = []
     name_index = _name_index(None) if resolve_names else {}
     for r in rows:
-        (rowid, date, t, ab, is_from_me, is_read, service, handle,
+        (rowid, guid, date, t, ab, is_from_me, is_read, service, handle,
+         reply_to_raw, assoc_guid, assoc_type, date_edited, date_retracted,
          chat_id, chat_name, chat_identifier, n_att) = r
+        reply_to_guid = _bare_guid(reply_to_raw)
+        target_rowid, target_text = reply_to.get(reply_to_guid, (None, None))
         records.append({
             "rowid": rowid,
+            "guid": guid,
             "date": date,
             "name": name_index.get(_norm(handle)),
             "handle": handle,
             "is_from_me": bool(is_from_me),
             "text": t if t is not None else _decode_attributed_body(ab),
+            "reply_to_guid": reply_to_guid,
+            "reply_to_rowid": target_rowid,
+            "reply_to_text": target_text,
+            "tapback": _tapback(assoc_type),
+            "tapback_target_guid": _bare_guid(assoc_guid),
+            "edited": bool(date_edited),
+            "unsent": bool(date_retracted),
             "service": service,
             "chat_id": chat_id,
             "chat_name": chat_name,
@@ -383,11 +445,38 @@ def messages(
     return pl.DataFrame(records, schema=_MESSAGE_SCHEMA).with_columns(_to_datetime("date").alias("date"))
 
 
+def _resolve_reply_targets(
+    con: sqlite3.Connection, rows: list[tuple]
+) -> dict[str, tuple[int, str | None]]:
+    """Map each replied-to GUID in ``rows`` to its ``(rowid, text)``.
+
+    A threaded reply only stores the originator's GUID; one extra query resolves
+    those GUIDs to the original message's row id and decoded text so a reply is
+    readable on its own. ``reply_to_raw`` is the 10th selected column.
+    """
+
+    wanted = {_bare_guid(r[9]) for r in rows}
+    wanted.discard(None)
+    if not wanted:
+        return {}
+    placeholders = ",".join("?" * len(wanted))
+    resolved: dict[str, tuple[int, str | None]] = {}
+    for guid, rowid, text, ab in con.execute(
+        f"SELECT guid, ROWID, text, attributedBody FROM message WHERE guid IN ({placeholders})",
+        list(wanted),
+    ):
+        resolved[guid] = (rowid, text if text is not None else _decode_attributed_body(ab))
+    return resolved
+
+
 _MESSAGE_SCHEMA = {
-    "rowid": pl.Int64, "date": pl.Int64, "name": pl.Utf8, "handle": pl.Utf8,
-    "is_from_me": pl.Boolean, "text": pl.Utf8, "service": pl.Utf8,
-    "chat_id": pl.Int64, "chat_name": pl.Utf8, "chat_identifier": pl.Utf8,
-    "is_read": pl.Boolean, "n_attachments": pl.Int64,
+    "rowid": pl.Int64, "guid": pl.Utf8, "date": pl.Int64, "name": pl.Utf8,
+    "handle": pl.Utf8, "is_from_me": pl.Boolean, "text": pl.Utf8,
+    "reply_to_guid": pl.Utf8, "reply_to_rowid": pl.Int64, "reply_to_text": pl.Utf8,
+    "tapback": pl.Utf8, "tapback_target_guid": pl.Utf8,
+    "edited": pl.Boolean, "unsent": pl.Boolean,
+    "service": pl.Utf8, "chat_id": pl.Int64, "chat_name": pl.Utf8,
+    "chat_identifier": pl.Utf8, "is_read": pl.Boolean, "n_attachments": pl.Int64,
 }
 
 
