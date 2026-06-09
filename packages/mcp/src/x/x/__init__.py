@@ -231,46 +231,64 @@ async def posts(
 
     _require_incognito()
     url = _resolve(source)
-    await browser.get_or_create_browser(endpoint=endpoint, app=app)
-    page = await browser.goto(url, endpoint=endpoint, wait_until="domcontentloaded", timeout=timeout * 1000)
+    await browser.get_or_create_browser(endpoint=endpoint, app=app, timeout=timeout)
+    # Open a dedicated tab (``new=True``) rather than reusing the shared front
+    # tab: the runtime runs jobs concurrently, so two reads sharing one tab would
+    # clobber each other's navigation and scroll. Close it in ``finally`` so
+    # repeated reads do not pile up tabs.
+    page = await browser.goto(
+        url,
+        endpoint=endpoint,
+        new=True,
+        wait_until="domcontentloaded",
+        timeout=timeout * 1000,
+    )
 
     try:
-        await page.wait_for_selector("article", timeout=timeout * 1000)
-    except Exception:
-        # No tweets rendered (an empty timeline, a login wall, a deleted post):
-        # return an empty, correctly-typed frame rather than raise.
-        return pl.DataFrame(schema=_SCHEMA)
+        try:
+            await page.wait_for_selector("article", timeout=timeout * 1000)
+        except Exception:
+            # No tweets rendered (an empty timeline, a login wall, a deleted
+            # post): return an empty, correctly-typed frame rather than raise.
+            return pl.DataFrame(schema=_SCHEMA)
 
-    collected: dict[str, dict] = {}
-    order: list[str] = []
-    stable = 0
-    max_passes = 60 if scroll else 1
-    for _ in range(max_passes):
-        before = len(collected)
-        for row in await page.evaluate(_EXTRACT_JS):
-            # Key on the permalink id; fall back to a synthetic key for the rare
-            # promoted/edge card without one so it is not silently dropped.
-            key = row.get("id") or f"{row.get('handle')}:{row.get('text')[:40]}"
-            if key not in collected:
-                order.append(key)
-            collected[key] = row
-        if len(collected) >= limit or not scroll:
-            break
-        # Stop once a few scrolls in a row load nothing new (the end of the
-        # timeline, or X has stopped loading more). `before` is the count from
-        # before this pass's extraction, so the comparison reflects what the
-        # previous scroll actually loaded, not the rows already in hand.
-        stable = stable + 1 if len(collected) == before else 0
-        if stable >= 3:
-            break
-        await page.evaluate("window.scrollBy(0, window.innerHeight * 1.5)")
-        await asyncio.sleep(0.8)
+        collected: dict[str, dict] = {}
+        order: list[str] = []
+        stable = 0
+        max_passes = 60 if scroll else 1
+        for _ in range(max_passes):
+            before = len(collected)
+            for row in await page.evaluate(_EXTRACT_JS):
+                # Key on the permalink id; fall back to a synthetic key for the
+                # rare promoted/edge card without one so it is not silently dropped.
+                key = row.get("id") or f"{row.get('handle')}:{row.get('text')[:40]}"
+                if key not in collected:
+                    order.append(key)
+                collected[key] = row
+            if len(collected) >= limit or not scroll:
+                break
+            # Stop once a few scrolls in a row load nothing new (the end of the
+            # timeline, or X has stopped loading more). `before` is the count from
+            # before this pass's extraction, so the comparison reflects what the
+            # previous scroll actually loaded, not the rows already in hand.
+            stable = stable + 1 if len(collected) == before else 0
+            if stable >= 3:
+                break
+            await page.evaluate("window.scrollBy(0, window.innerHeight * 1.5)")
+            await asyncio.sleep(0.8)
 
-    rows = [collected[k] for k in order][:limit]
-    if not rows:
-        return pl.DataFrame(schema=_SCHEMA)
+        rows = [collected[k] for k in order][:limit]
+        if not rows:
+            return pl.DataFrame(schema=_SCHEMA)
 
-    df = pl.DataFrame(rows, schema_overrides={k: v for k, v in _SCHEMA.items() if k != "time"})
-    return df.with_columns(
-        pl.col("time").str.to_datetime(time_zone="UTC", strict=False)
-    ).select(list(_SCHEMA))
+        df = pl.DataFrame(
+            rows, schema_overrides={k: v for k, v in _SCHEMA.items() if k != "time"}
+        )
+        return df.with_columns(
+            pl.col("time").str.to_datetime(time_zone="UTC", strict=False)
+        ).select(list(_SCHEMA))
+    finally:
+        try:
+            await page.close()
+        except Exception:
+            pass
