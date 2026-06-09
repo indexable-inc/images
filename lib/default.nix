@@ -41,6 +41,7 @@ let
   inherit (import ./util/writers.nix { inherit lib; })
     writePythonApplication
     writeNushellApplication
+    writeBashApplication
     writeProcessComposeApplication
     ;
 
@@ -388,6 +389,7 @@ let
       secrets
       skills
       systemdHardening
+      writeBashApplication
       writeNushellApplication
       writeProcessComposeApplication
       writePythonApplication

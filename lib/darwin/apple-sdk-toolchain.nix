@@ -6,9 +6,10 @@
 # nix-cargo-unit renderer picks up `CARGO_TARGET_<T>_LINKER` per unit and
 # threads `--target` into rustc itself (see packages/nix-cargo-unit/src/render.rs).
 #
-# Ported from the sibling `ix` repo (nix/lib/apple-sdk-toolchain.nix). The wrapper
-# scripts use `writeTextFile` rather than `writeShellApplication` because the
-# latter is lint-banned here; a `bash -n` checkPhase keeps the syntax checked.
+# Ported from the sibling `ix` repo (nix/lib/apple-sdk-toolchain.nix). The
+# wrapper scripts go through the shared `writeBashApplication`
+# (lib/util/writers.nix), which checks them with `bash -n` and shellcheck at
+# build time.
 {
   appleSdk,
   lib,
@@ -143,21 +144,9 @@ let
   ar = lib.getExe' pkgs.llvmPackages.bintools "ar";
   ranlib = lib.getExe' pkgs.llvmPackages.bintools "ranlib";
 
-  # writeTextFile + `bash -n` checkPhase: a checked replacement for the
-  # lint-banned writeShellApplication for these internal build wrappers.
-  mkScript =
-    name: text:
-    pkgs.writeTextFile {
-      inherit name;
-      executable = true;
-      destination = "/bin/${name}";
-      text = ''
-        #!${pkgs.runtimeShell}
-        set -euo pipefail
-        ${text}
-      '';
-      checkPhase = ''${lib.getExe' pkgs.bash "bash"} -n "$out/bin/${name}"'';
-    };
+  # These wrappers must be bash (argv rewriting with arrays, `exec "$@"`), so
+  # they use the repo's one checked-bash escape hatch instead of Nushell.
+  inherit (import ../util/writers.nix { inherit lib; }) writeBashApplication;
 
   ccName = "apple-sdk-cc-${target}";
   cxxName = "apple-sdk-cxx-${target}";
@@ -165,39 +154,57 @@ let
   arName = "apple-sdk-ar-${target}";
   ranlibName = "apple-sdk-ranlib-${target}";
 
-  appleCcPackage = mkScript ccName ''
-    ${zigCachePreamble}
-    ${argLoop}
-    if [ "$has_target" -eq 0 ]; then
-      apple_args=("--target=${zigTarget}" "''${apple_args[@]}")
-    fi
-    exec ${zig} cc -mmacosx-version-min=11.0 ${frameworkFlags} "''${apple_args[@]}" -fno-sanitize=undefined
-  '';
-  appleCxxPackage = mkScript cxxName ''
-    ${zigCachePreamble}
-    ${argLoop}
-    if [ "$has_target" -eq 0 ]; then
-      apple_args=("--target=${zigTarget}" "''${apple_args[@]}")
-    fi
-    exec ${zig} c++ -mmacosx-version-min=11.0 ${frameworkFlags} "''${apple_args[@]}" -fno-sanitize=undefined
-  '';
-  appleLinkerPackage = mkScript linkerName ''
-    ${argLoop}
-    if [ "$has_target" -eq 0 ]; then
-      apple_args=("--target=${target}" "''${apple_args[@]}")
-    fi
-    exec ${clang} -B${pkgs.lld}/bin -fuse-ld=lld -mmacosx-version-min=11.0 -isysroot ${appleSdk} -Wno-unused-command-line-argument "''${apple_args[@]}" -fno-sanitize=undefined
-  '';
-  appleArPackage = mkScript arName ''exec ${ar} "$@"'';
-  appleRanlibPackage = mkScript ranlibName ''exec ${ranlib} "$@"'';
-  appleXcrun = mkScript "xcrun" ''
-    if [ "$#" -eq 3 ] && [ "$1" = "--sdk" ] && [ "$2" = "macosx" ] && [ "$3" = "--show-sdk-path" ]; then
-      printf '%s\n' ${appleSdk}
-      exit 0
-    fi
-    echo "unsupported xcrun invocation: $*" >&2
-    exit 1
-  '';
+  appleCcPackage = writeBashApplication pkgs {
+    name = ccName;
+    text = ''
+      ${zigCachePreamble}
+      ${argLoop}
+      if [ "$has_target" -eq 0 ]; then
+        apple_args=("--target=${zigTarget}" "''${apple_args[@]}")
+      fi
+      exec ${zig} cc -mmacosx-version-min=11.0 ${frameworkFlags} "''${apple_args[@]}" -fno-sanitize=undefined
+    '';
+  };
+  appleCxxPackage = writeBashApplication pkgs {
+    name = cxxName;
+    text = ''
+      ${zigCachePreamble}
+      ${argLoop}
+      if [ "$has_target" -eq 0 ]; then
+        apple_args=("--target=${zigTarget}" "''${apple_args[@]}")
+      fi
+      exec ${zig} c++ -mmacosx-version-min=11.0 ${frameworkFlags} "''${apple_args[@]}" -fno-sanitize=undefined
+    '';
+  };
+  appleLinkerPackage = writeBashApplication pkgs {
+    name = linkerName;
+    text = ''
+      ${argLoop}
+      if [ "$has_target" -eq 0 ]; then
+        apple_args=("--target=${target}" "''${apple_args[@]}")
+      fi
+      exec ${clang} -B${pkgs.lld}/bin -fuse-ld=lld -mmacosx-version-min=11.0 -isysroot ${appleSdk} -Wno-unused-command-line-argument "''${apple_args[@]}" -fno-sanitize=undefined
+    '';
+  };
+  appleArPackage = writeBashApplication pkgs {
+    name = arName;
+    text = ''exec ${ar} "$@"'';
+  };
+  appleRanlibPackage = writeBashApplication pkgs {
+    name = ranlibName;
+    text = ''exec ${ranlib} "$@"'';
+  };
+  appleXcrun = writeBashApplication pkgs {
+    name = "xcrun";
+    text = ''
+      if [ "$#" -eq 3 ] && [ "$1" = "--sdk" ] && [ "$2" = "macosx" ] && [ "$3" = "--show-sdk-path" ]; then
+        printf '%s\n' ${appleSdk}
+        exit 0
+      fi
+      echo "unsupported xcrun invocation: $*" >&2
+      exit 1
+    '';
+  };
 
   appleCc = lib.getExe' appleCcPackage ccName;
   appleCxx = lib.getExe' appleCxxPackage cxxName;

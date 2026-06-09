@@ -580,6 +580,14 @@ let
     processes.hello.command = "true";
   };
 
+  bashApplicationProbe = ix.writeBashApplication pkgs {
+    name = "bash-application-probe";
+    runtimeInputs = [ pkgs.hello ];
+    text = ''
+      hello
+    '';
+  };
+
   zigAppFixture = fs.toSource {
     root = ./fixtures/zig-app;
     fileset = fs.unions [
@@ -4518,6 +4526,8 @@ let
     ${lib.getExe pythonAppClosureProbe} > python-app-closure-probe.out
     grep -q 'python app source is in the runtime closure' python-app-closure-probe.out
     test -e ${processComposeApplication.passthru.tests.dryRun}
+    ${lib.getExe bashApplicationProbe} > bash-application-probe.out
+    grep -q 'Hello, world!' bash-application-probe.out
 
     ${lib.getExe zigApplication} > zig-app-fixture.out
     grep -q 'hello from zig app fixture' zig-app-fixture.out

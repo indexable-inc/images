@@ -42,36 +42,13 @@ let
 
   defaultBossbar = (indexPackages pkgs.stdenv.hostPlatform.system).bossbar;
 
-  # Checked replacement for the lint-banned writeShellApplication: writeTextFile
-  # gives a real bash script, runtimeInputs are prepended to PATH like
-  # writeShellApplication does, and `bash -n` + shellcheck run in the build so a
-  # syntax or shellcheck-class bug fails the derivation instead of surfacing at
-  # runtime. The body assumes `set -euo pipefail` + runtimeInputs on PATH. Same
-  # escape hatch as lib/darwin/apple-sdk-toolchain.nix's `mkScript`; kept inline so this
-  # module is self-contained and copy-pasteable for other people.
-  mkBashApp =
-    {
-      name,
-      text,
-      runtimeInputs ? [ ],
-    }:
-    pkgs.writeTextFile {
-      inherit name;
-      executable = true;
-      destination = "/bin/${name}";
-      text = ''
-        #!${pkgs.runtimeShell}
-        set -euo pipefail
-        export PATH=${lib.makeBinPath runtimeInputs}''${PATH:+:$PATH}
-        ${text}
-      '';
-      checkPhase = ''
-        ${lib.getExe' pkgs.bash "bash"} -n "$out/bin/${name}"
-        ${lib.getExe pkgs.shellcheck} --shell=bash --severity=warning "$out/bin/${name}"
-      '';
-    };
+  # The repo's checked-bash writer (lib/util/writers.nix): the watcher leans on
+  # bash process control (the perl flock guard), so it uses the shared escape
+  # hatch instead of Nushell. The script body gets `set -euo pipefail` and
+  # runtimeInputs on PATH, and `bash -n` + shellcheck run in the build.
+  inherit (import ../../lib/util/writers.nix { inherit lib; }) writeBashApplication;
 
-  ciBars = mkBashApp {
+  ciBars = writeBashApplication pkgs {
     name = "ci-bars";
     runtimeInputs = [
       pkgs.gh

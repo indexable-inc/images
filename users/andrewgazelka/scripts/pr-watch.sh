@@ -1,5 +1,5 @@
 # Body of the `pr-watch` bash app (see users/andrewgazelka/home.nix).
-# No shebang / `set` line: the mkBashApp wrapper supplies bash + `set -euo
+# No shebang / `set` line: the writeBashApplication wrapper supplies bash + `set -euo
 # pipefail` and bakes gh/jq/ci-triage/claude/coreutils onto PATH via
 # runtimeInputs. The module bakes these placeholders at build time:
 #   @REPOS@            the watched repos as a quoted bash-array body
