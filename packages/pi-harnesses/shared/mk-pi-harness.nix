@@ -61,8 +61,8 @@ let
       "--no-extensions"
       "--no-skills"
     ]
-    ++ lib.optionals (!session) [ "--no-session" ]
-    ++ lib.optionals headless [ "--print" ]
+    ++ lib.optional (!session) "--no-session"
+    ++ lib.optional headless "--print"
     ++ lib.optionals (headless && mode != null) [
       "--mode"
       mode
