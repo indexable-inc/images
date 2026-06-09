@@ -15,11 +15,11 @@
 # default; set PI_HARNESS_MODEL=codex + OPENAI_API_KEY for gpt-5.5). `pi` must be
 # on PATH. Run it yourself - first build can exceed a couple of minutes.
 #
-#   ANTHROPIC_API_KEY=... ./packages/pi-harness/smoke/run.sh
+#   ANTHROPIC_API_KEY=... ./packages/pi-harnesses/engine/smoke/run.sh
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$here/../../.." && pwd)"
+repo_root="$(cd "$here/../../../.." && pwd)"
 
 # 1. Build ix-mcp and expose it to the bridge (it spawns `ix-mcp serve`).
 echo "[smoke] building ix-mcp..." >&2
