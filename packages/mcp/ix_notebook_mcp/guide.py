@@ -70,7 +70,7 @@ BLOCKING = (
     "CPU-bound numpy op) freezes the WHOLE kernel: every other job and even your own next "
     "status-check cell stall behind it until it returns. So a blocking call MUST be made "
     "non-blocking: wrap it in `await asyncio.to_thread(...)`, or prefer the async API (`fff`, "
-    "`httpx`, and the bundled `sh(cmd, cwd=...)` to shell out instead of `subprocess.run`), and run "
+    "`httpx`, and the bundled `sh(cmd)` to shell out instead of `subprocess.run`), and run "
     "anything slow as a background job you "
     "poll, never inline. To shell out, reach for `sh()` rather than a hand-rolled "
     "`asyncio.create_subprocess_exec/_shell` + `communicate()`: `sh()` runs the child in its own "
@@ -120,8 +120,8 @@ NO_SHELL = (
     "frame rather than an unstyled text dump. To list a directory use `view.ls`/`view.tree`, never "
     "`os.walk` or `ls`; to edit, `view.edit(path, old, new)`, never blind. For meaning-based "
     "recall across a corpus, `import search`. When you genuinely must shell out, use the async "
-    "`sh` (it runs off the loop and preserves clean color) and pass it a `cwd=` (`cwd=\".\"` for "
-    "here), never a `cd X && ...` prefix."
+    "`sh` (it runs off the loop, streams into the job's pageable output, and preserves clean "
+    "color); to run elsewhere pass `cwd=`, never a `cd X && ...` prefix."
 )
 
 VERIFY = (
@@ -217,7 +217,8 @@ READ = (
     "cell's result streams to BOTH audiences, so it would flood the dashboard. `target` is read "
     "as a file when it names an existing file, otherwise it is evaluated as a Python expression "
     "in the kernel namespace (e.g. `jobs['ab12'].output` to page a job, or a variable you bound "
-    "earlier). Pass `start` / `end` for a 1-based inclusive line range."
+    "earlier); an expression whose value is a string naming an existing file reads that file "
+    "too. Pass `start` / `end` for a 1-based inclusive line range."
 )
 
 TRACE = (

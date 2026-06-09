@@ -6,7 +6,7 @@ invocation with no Python binding), do it without blocking the one shared event
 loop and without leaking terminal escape codes into your own context.
 
     import sh
-    out = await sh("gh run list --limit 5", cwd=".")
+    out = await sh("gh run list --limit 5")
     out                       # last expr: dashboard shows the COLORED terminal
                               # block, you get the escape-stripped plain text
 
@@ -30,19 +30,31 @@ The :class:`Output` also exposes the parts programmatically::
     out.raw      # the same, with the original ANSI color preserved
     out.cmd      # the command that was run
 
+An ``Output`` also behaves like its text for the common string operations
+(``out[-4000:]``, ``out + "..."``, ``"error" in out``, ``len(out)``,
+``str(out)``), so composing command output needs no ``str(...)`` wrapping.
+
 stdout and stderr are merged in emission order (terminal-style). A non-zero exit
 is surfaced, never swallowed: the model view appends an ``[exit N]`` marker, and
 ``await sh(cmd, check=True)`` raises :class:`ShellError` instead of returning.
+
+Inside the kernel the child's output also streams to the running cell's stdout
+as it arrives, so it lands in ``jobs['<id>'].output`` live: a long command's log
+is pageable from the job even when the cell backgrounds (or is cancelled) before
+the ``Output`` value is ever bound. Cancelling the task kills the child's whole
+process group, never orphaning it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import codecs
 import html as _html
 import os
 import re
 import shlex
 import signal
+import sys
 
 __all__ = ["sh", "Output", "ShellError"]
 
@@ -55,7 +67,7 @@ __version__ = "0.1.0"
 # module still imports and `_repr_html_`/`__repr__` carry the rendering.
 try:
     from ix_notebook_mcp.runtime import Result as _ResultBase
-    from ix_notebook_mcp.runtime import _ansi_to_html, _strip_ansi
+    from ix_notebook_mcp.runtime import _ANSI, _ansi_to_html, _ix_current, _strip_ansi
 
     _HAS_RESULT = True
 except Exception:  # pragma: no cover - exercised only outside the kernel
@@ -64,9 +76,12 @@ except Exception:  # pragma: no cover - exercised only outside the kernel
     # escape for HTML rather than reimplement the escape grammar here.
     _ResultBase = object
     _HAS_RESULT = False
+    _ix_current = None
+    # SGR color only; the full escape grammar is the runtime's to own.
+    _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
     def _strip_ansi(text: str) -> str:
-        return text
+        return _ANSI.sub("", text)
 
     def _ansi_to_html(text: str) -> str:
         return _html.escape(text)
@@ -169,6 +184,33 @@ class Output(_ResultBase):
     def _repr_html_(self) -> str:
         return self._render_html()
 
+    # An Output composes like its text: slice it, concatenate it, search it,
+    # measure it -- no `str(...)` wrapping. All delegate to `.text` (the
+    # escape-stripped output), the same view `str(out)` returns.
+    def __str__(self) -> str:
+        return self.text
+
+    def __bool__(self) -> bool:
+        # Defining __len__ would otherwise make an empty (but successful) output
+        # falsy; an Output is a result object, so it is always truthy -- test
+        # success with `.ok`, emptiness with `len(out)`.
+        return True
+
+    def __getitem__(self, key) -> str:
+        return self.text[key]
+
+    def __len__(self) -> int:
+        return len(self.text)
+
+    def __contains__(self, item) -> bool:
+        return item in self.text
+
+    def __add__(self, other) -> str:
+        return self.text + other
+
+    def __radd__(self, other) -> str:
+        return other + self.text
+
 
 def _terminate(proc: asyncio.subprocess.Process) -> None:
     """Kill the child and the process group it leads.
@@ -187,25 +229,69 @@ def _terminate(proc: asyncio.subprocess.Process) -> None:
             pass
 
 
+class _EchoStripper:
+    """Incrementally strip ANSI escapes from streamed chunks.
+
+    A chunk boundary can split an escape sequence in two; a naive per-chunk
+    ``_strip_ansi`` would then leak half of it as visible garbage. This holds
+    back a trailing, still-incomplete escape and prepends it to the next chunk,
+    so the echoed stream is clean no matter where the pipe chops it.
+    """
+
+    def __init__(self) -> None:
+        self._pending = ""
+
+    def feed(self, text: str) -> str:
+        text = self._pending + text
+        self._pending = ""
+        cut = text.rfind("\x1b")
+        if cut != -1:
+            tail = text[cut:]
+            # A complete sequence (or ESC followed by plain text) strips fine;
+            # only a short, genuinely unfinished introducer is held back.
+            if _ANSI.match(tail) is None and len(tail) < 64:
+                self._pending = tail
+                text = text[:cut]
+        return _strip_ansi(text)
+
+    def flush(self) -> str:
+        text, self._pending = self._pending, ""
+        return _strip_ansi(text)
+
+
+def _in_kernel_job() -> bool:
+    """True when this call runs inside a kernel job, where ``sys.stdout`` routes
+    to that job's captured output (the runtime's tee)."""
+    return _ix_current is not None and _ix_current.get() is not None
+
+
 async def sh(
     cmd: str | list[str],
     *,
-    cwd: str | os.PathLike,
+    cwd: str | os.PathLike | None = None,
     env: dict[str, str] | None = None,
     timeout: float | None = None,
     check: bool = False,
     color: bool = True,
+    echo: bool | None = None,
 ) -> Output:
     """Run ``cmd`` on the shared async loop and return its :class:`Output`.
 
     ``cmd`` is a string (run through the shell, so pipes and globs work) or an
     argv list (executed directly, no shell parsing). stdout and stderr are merged
-    in order. ``cwd`` is REQUIRED -- pass the directory to run in (``cwd="."`` for
-    here) instead of a `cd X && ...` prefix, which is rejected, so the command
-    string stays clean. ``env`` extends the environment;
+    in order. ``cwd`` is the directory to run in (defaults to the kernel's
+    current directory); pass it instead of a `cd X && ...` prefix, which is
+    rejected, so the command string stays clean. ``env`` extends the environment;
     ``timeout`` (seconds) kills the child's whole process group and raises
     :class:`TimeoutError`; ``check=True`` raises :class:`ShellError` on a non-zero
     exit; ``color=False`` suppresses the forced-color environment.
+
+    Output STREAMS as it arrives: inside the kernel each chunk is echoed
+    (escape-stripped) to the running cell's stdout, so a long command's log is in
+    ``jobs['<id>'].output`` live and survives the cell backgrounding or being
+    cancelled. ``echo`` overrides that default (it is off outside the kernel).
+    Cancelling the awaiting task kills the child's whole process group, so a
+    cancelled cell never leaves an orphan running (or holding a lock) behind.
 
     With no ``timeout`` a command that keeps the stdout pipe open (a daemon it
     backgrounds, say) waits for that pipe to close. The await yields to the loop,
@@ -244,13 +330,36 @@ async def sh(
             start_new_session=True,
         )
 
+    do_echo = _in_kernel_job() if echo is None else echo
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    stripper = _EchoStripper()
+    chunks: list[str] = []
+
+    def _keep(text: str) -> None:
+        chunks.append(text)
+        if do_echo:
+            sys.stdout.write(stripper.feed(text))
+
+    async def _drain() -> None:
+        while True:
+            block = await proc.stdout.read(8192)
+            if not block:
+                break
+            _keep(decoder.decode(block))
+        tail = decoder.decode(b"", final=True)
+        if tail:
+            _keep(tail)
+        if do_echo:
+            sys.stdout.write(stripper.flush())
+        await proc.wait()
+
     loop = asyncio.get_running_loop()
     started = loop.time()
     try:
         if timeout is not None:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout)
+            await asyncio.wait_for(_drain(), timeout)
         else:
-            stdout, _ = await proc.communicate()
+            await _drain()
     except asyncio.TimeoutError:
         _terminate(proc)
         # The group is dead, so the pipe closes and this reap returns promptly;
@@ -260,12 +369,18 @@ async def sh(
         except asyncio.TimeoutError:
             pass
         raise TimeoutError(f"command timed out after {timeout}s: {shown}") from None
+    except asyncio.CancelledError:
+        # The awaiting task was cancelled (jobs['<id>'].cancel()): take the child
+        # and its whole group down with it, so a cancelled cell never leaves an
+        # orphan still running (and holding locks) in the background.
+        _terminate(proc)
+        raise
 
     duration = loop.time() - started
     out = Output(
         cmd=shown,
         code=proc.returncode if proc.returncode is not None else -1,
-        raw=stdout.decode("utf-8", "replace"),
+        raw="".join(chunks),
         duration=duration,
     )
     if check and not out.ok:
@@ -279,7 +394,6 @@ async def sh(
 # kernel binds this same module object as `sh` in the user namespace too (see
 # ix_notebook_mcp.runtime.install), so `await sh(...)` works with or without an
 # explicit import, while `sh.Output` / `sh.ShellError` stay reachable as attrs.
-import sys as _sys
 import types as _types
 
 
@@ -288,4 +402,4 @@ class _CallableModule(_types.ModuleType):
         return sh(*args, **kwargs)
 
 
-_sys.modules[__name__].__class__ = _CallableModule
+sys.modules[__name__].__class__ = _CallableModule

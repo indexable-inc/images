@@ -326,6 +326,16 @@ class Job:
             self.task.cancel()
         return self
 
+    async def wait(self, timeout: float | None = None) -> "Job":
+        """Wait until this job finishes, or up to ``timeout`` seconds, and return
+        the job (check ``.done()`` / ``.status`` / ``.result`` on it). Unlike
+        ``await jobs['<id>']`` it never raises on a slow job -- it just returns
+        the still-running handle at the deadline -- so one cell replaces a
+        sleep-and-poll loop: ``(await jobs['ab12'].wait(30)).status``."""
+        if self.task is not None and not self.task.done():
+            await asyncio.wait({self.task}, timeout=timeout)
+        return self
+
     def __await__(self):
         # `await jobs['id']` should yield the job's result, but the runner task
         # returns None, so wait for it then hand back the captured result.
@@ -340,6 +350,24 @@ class Job:
         head = f"<Job {self.id} ({self.name}) [{self.status}] {dur:.2f}s>"
         out = self.tail(800)
         return head + ("\n" + out if out else "")
+
+
+def _llm_text(value):
+    """Coerce a model-facing text field to ``str`` (or None to keep a default).
+
+    ``llm_result`` flows into string paths (the job summary, ``Job.tail``
+    paging, the reply text), so a non-str here -- most commonly a Result nested
+    inside a Result, e.g. ``Result(llm_result=await browser.read(pg))`` -- used
+    to surface later as an opaque ``TypeError`` deep in the runtime. Flatten a
+    nested Result/Output to its own model text, and any other value to its repr,
+    at construction time instead.
+    """
+    if value is None or isinstance(value, str):
+        return value
+    inner = getattr(value, "llm_result", None)
+    if isinstance(inner, str):
+        return inner
+    return _safe_repr(value)
 
 
 class Result:
@@ -365,7 +393,12 @@ class Result:
 
     ``llm_images`` items may be raw PNG/JPEG bytes, a base64 string, a data URI,
     a matplotlib Figure, a PIL image, or a path to an image file; each is sent to
-    the model as a real image block. It is a mime bundle under the hood:
+    the model as a real image block, downscaled and re-encoded to fit the model
+    image budget (``IX_MCP_IMAGE_MAX_DIM`` / ``IX_MCP_IMAGE_MAX_BYTES``), so a
+    full-res screenshot never floods the reply. For an image meant only for the
+    human, put it in ``user_html`` (an ``<img>`` data URI) and omit
+    ``llm_images``: the dashboard shows the picture, the model pays no vision
+    tokens at all. It is a mime bundle under the hood:
     ``text/html`` carries ``user_html`` and, when present, ``IX_LLM_MIME`` carries
     the model's text+images (unpacked by the server); ``text/plain`` carries the
     text as a fallback for plain hosts.
@@ -378,6 +411,7 @@ class Result:
     # the keywords, which always win: `Result(user_html=..., llm_result=...,
     # llm_images=[...])`.
     def __init__(self, *values, user_html=None, llm_result=None, llm_images=None):
+        llm_result = _llm_text(llm_result)
         if user_html is not None:
             self.user_html = user_html
             self.llm_result = llm_result if llm_result is not None else ""
@@ -441,6 +475,18 @@ class Result:
             user = f'<img alt="" src="data:{img["mime"]};base64,{img["data"]}" />'
             note = llm_result if llm_result is not None else f"[{image_mime} image, {len(bytes(value))} bytes]"
             return cls(user_html=user, llm_result=note, llm_images=[value])
+        module = type(value).__module__ or ""
+        if module.startswith(("matplotlib", "PIL")):
+            # A figure or PIL image (e.g. `screen.capture()`): treat it exactly
+            # like raw screenshot bytes -- inline image for the human, a real,
+            # size-fitted image block for the model -- rather than leaving the
+            # model a repr while a full-res PNG rides the display bundle (where
+            # the byte cap would drop it entirely).
+            img = _coerce_image(value)
+            if img is not None:
+                user = f'<img alt="" src="data:{img["mime"]};base64,{img["data"]}" />'
+                note = llm_result if llm_result is not None else f"[{img['mime']} image]"
+                return cls(user_html=user, llm_result=note, llm_images=[value])
         if isinstance(value, str):
             # A plain string is output, not a Python literal: hand the model the
             # string verbatim with terminal escapes stripped, so captured CLI /
@@ -1743,10 +1789,16 @@ _SUMMARY_CHARS = 50_000
 
 def _result_text(job: Job) -> str:
     """The job result's model-facing text (a Result's ``llm_result``, else its
-    repr), used only to measure how much the inline summary leaves out."""
+    repr). Feeds ``Job.pageable`` and the per-call summary, so it must always be
+    a ``str`` -- a non-str ``llm_result`` (now coerced at Result construction,
+    but possibly present on an old object) falls back to the repr rather than
+    crash the summary path."""
     if job._result is None:
         return ""
-    return getattr(job._result, "llm_result", None) or _safe_repr(job._result)
+    text = getattr(job._result, "llm_result", None)
+    if isinstance(text, str) and text:
+        return text
+    return _safe_repr(job._result)
 
 
 def _job_summary(job: Job) -> dict:
@@ -1809,6 +1861,19 @@ async def __ix_exec(code: str, budget: float = 15.0, name: str | None = None) ->
     """The MCP server's per-call entrypoint: run with a budget, emit the summary."""
     job = await __ix_run(code, budget=budget, name=name)
     _emit(job)
+
+
+def _existing_file(value) -> pathlib.Path | None:
+    """``value`` as a :class:`pathlib.Path` when it is a string naming an
+    existing file, else None. The one rule `__ix_read` applies to both the raw
+    ``target`` and to a string an expression evaluates to."""
+    if not isinstance(value, str) or not value or len(value) > 4096 or "\n" in value:
+        return None
+    try:
+        candidate = pathlib.Path(value).expanduser()
+        return candidate if candidate.is_file() else None
+    except OSError:
+        return None
 
 
 def _tilde(path) -> str:
@@ -1894,13 +1959,15 @@ async def __ix_read(target, start=None, end=None) -> "Result":
     ``end`` select a 1-based inclusive line range. Backs the ``read`` MCP tool.
     """
     ns = _user_ns if _user_ns is not None else globals()
-    path = None
-    if isinstance(target, str):
-        try:
-            candidate = pathlib.Path(target).expanduser()
-            path = candidate if candidate.is_file() else None
-        except OSError:
-            path = None
+    value = None
+    path = _existing_file(target)
+    if path is None:
+        # Not a file on disk: evaluate the expression. If the VALUE is a string
+        # naming an existing file (`os.path.join(...)`, a variable holding a
+        # path), the same file rule applies to it -- an expression yielding a
+        # path reads the file, never echoes the path string back.
+        value = eval(target, ns) if isinstance(target, str) else target
+        path = _existing_file(value)
     if path is not None:
         # Off the loop: a large file read is blocking I/O, the one thing that
         # freezes every other job on the shared event loop.
@@ -1908,7 +1975,6 @@ async def __ix_read(target, start=None, end=None) -> "Result":
         label = _tilde(path)
         icon = _file_icon_svg(path)
     else:
-        value = eval(target, ns) if isinstance(target, str) else target
         full = value if isinstance(value, str) else _safe_repr(value)
         label = target if isinstance(target, str) else _safe_repr(target)
         icon = _value_icon_svg()

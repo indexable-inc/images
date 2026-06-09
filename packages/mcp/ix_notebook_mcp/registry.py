@@ -59,6 +59,25 @@ MODULES: tuple[Module, ...] = (
     Module("search", "meaning-based semantic recall across an indexed corpus"),
     Module("tui", "drive and snapshot a terminal program; renders as HTML"),
     Module(
+        "screen",
+        "native macOS desktop control: capture the screen, a region, or one app's window "
+        "(`screen.capture(app=...)`), move/click the mouse, type, and manage apps (macOS only)",
+    ),
+    Module(
+        "vmkit",
+        "boot and drive a macOS/Linux guest VM fully off-screen and screenshot its display "
+        "(macOS only)",
+    ),
+    Module(
+        "imessage",
+        "read Messages and Contacts into polars and send iMessages "
+        "(`imessage.messages()` / `chats()` / `send()`) (macOS only)",
+    ),
+    Module(
+        "tasks",
+        "generate and read the task-graph demo's SQLite DAG (`tasks.seed` / `load` / `frame`)",
+    ),
+    Module(
         "worktree",
         "do risky or parallel work on a throwaway branch in its own checkout, leaving the main "
         "tree untouched",

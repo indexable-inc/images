@@ -10,6 +10,7 @@ the framebuffer and the mouse, and posts synthetic input through CoreGraphics.
     print(img.size)                 # auto-rendered inline by python_eval/exec
 
     region = screen.capture(screen.Rect(0, 0, 400, 300))  # a sub-rectangle
+    dia = screen.capture(app="Dia")  # one app's frontmost window (or capture("Dia"))
     where = screen.cursor()         # current pointer, a screen.Point
     screen.move(100, 200)           # warp the cursor (no permission needed)
     screen.click(100, 200)          # synthetic click (needs Accessibility, see below)
@@ -85,6 +86,7 @@ __all__ = [
     "press",
     "screen_size",
     "terminate",
+    "window_bounds",
     "write",
 ]
 
@@ -213,24 +215,65 @@ def _cgimage_to_pil(image: object) -> Image.Image:
     return pil.convert("RGB")
 
 
-def capture(region: Rect | None = None) -> Image.Image:
-    """Capture the screen (or a sub-rectangle) as an RGB `PIL.Image`.
+def window_bounds(app: str) -> Rect:
+    """The on-screen bounds of ``app``'s frontmost window, as a `Rect` in points.
 
-    With no argument, captures the full virtual desktop across all displays.
-    Pass a `Rect` in points to capture a region. The returned image is rendered
-    inline when it is the value of a python_eval/python_exec cell.
+    ``app`` is a display name or bundle id (case-insensitive), the same key
+    `activate`/`terminate` take. Raises `LookupError` when the app has no
+    on-screen window (not running, hidden, or minimized).
     """
 
-    if region is None:
-        image = Quartz.CGDisplayCreateImage(Quartz.CGMainDisplayID())
-    else:
-        cg_rect = Quartz.CGRectMake(region.x, region.y, region.width, region.height)
-        image = Quartz.CGWindowListCreateImage(
-            cg_rect,
-            Quartz.kCGWindowListOptionOnScreenOnly,
-            Quartz.kCGNullWindowID,
-            Quartz.kCGWindowImageDefault,
+    running = _find_running(app)
+    pid = int(running.processIdentifier()) if running is not None else None
+    key = app.lower()
+    windows = Quartz.CGWindowListCopyWindowInfo(
+        Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+        Quartz.kCGNullWindowID,
+    )
+    for win in windows or ():
+        owner_matches = (
+            (pid is not None and int(win.get("kCGWindowOwnerPID", -1)) == pid)
+            or str(win.get("kCGWindowOwnerName", "")).lower() == key
         )
+        # Layer 0 is a normal document window (not a menu bar item or overlay).
+        if owner_matches and int(win.get("kCGWindowLayer", 0)) == 0:
+            b = win.get("kCGWindowBounds", {})
+            return Rect(float(b["X"]), float(b["Y"]), float(b["Width"]), float(b["Height"]))
+    raise LookupError(
+        f"screen: no on-screen window found for {app!r}. Is it running and visible? "
+        "(launch()/activate() it first; minimized windows are not on screen.)"
+    )
+
+
+def capture(region: Rect | str | None = None, *, app: str | None = None) -> Image.Image:
+    """Capture the screen, a region, or one app's window as an RGB `PIL.Image`.
+
+    With no argument, captures the full virtual desktop across all displays
+    (multi-monitor setups included). Pass a `Rect` in points for a region, or
+    target one application's frontmost window with ``app="Dia"`` (an app name as
+    the positional argument means the same), which is what a "did the UI do the
+    right thing?" check almost always wants. The returned image is rendered
+    inline -- automatically downscaled for the model -- when it is the value of a
+    python_exec cell.
+    """
+
+    if isinstance(region, str):
+        app, region = region, None
+    if app is not None:
+        if region is not None:
+            raise ValueError("screen.capture: pass a region OR an app, not both")
+        region = window_bounds(app)
+    cg_rect = (
+        Quartz.CGRectInfinite
+        if region is None
+        else Quartz.CGRectMake(region.x, region.y, region.width, region.height)
+    )
+    image = Quartz.CGWindowListCreateImage(
+        cg_rect,
+        Quartz.kCGWindowListOptionOnScreenOnly,
+        Quartz.kCGNullWindowID,
+        Quartz.kCGWindowImageDefault,
+    )
     if image is None:
         raise RuntimeError(
             "screen: capture returned no image. On recent macOS, reading the "
@@ -240,15 +283,16 @@ def capture(region: Rect | None = None) -> Image.Image:
     return _cgimage_to_pil(image)
 
 
-def capture_ndarray(region: Rect | None = None):
+def capture_ndarray(region: Rect | str | None = None, *, app: str | None = None):
     """Capture as an `(H, W, 3)` uint8 NumPy array (RGB).
 
-    Convenience for pixel math and image diffing; wraps `capture()`.
+    Convenience for pixel math and image diffing; wraps `capture()` (same
+    region / app targeting).
     """
 
     import numpy as np
 
-    return np.asarray(capture(region))
+    return np.asarray(capture(region, app=app))
 
 
 def cursor() -> Point:

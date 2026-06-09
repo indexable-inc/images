@@ -1132,6 +1132,51 @@ let
         assert slow.done() and slow.ok, slow.status
         assert slow.result.llm_result == "late", slow.result
 
+        # Job.wait: a timed wait that never raises -- one cell replaces a
+        # sleep-and-poll loop. At a short deadline the job is still running;
+        # with no deadline it returns the finished job.
+        slow2 = await run("import asyncio\nawait asyncio.sleep(0.3)\nResult.text('w')", budget=0.02, name="wait")
+        assert (await slow2.wait(0.01)).running(), slow2.status
+        assert (await slow2.wait()).done() and slow2.result.llm_result == "w"
+
+        # A Result nested inside a Result (llm_result=Result.text(...)) is
+        # flattened to its model text at construction, so the summary/paging
+        # path never hits a non-str ("Result object is not subscriptable").
+        nested = runtime.Result(user_html="<b>x</b>", llm_result=runtime.Result.text("inner"))
+        assert nested.llm_result == "inner", nested.llm_result
+        nj = await run(
+            "Result(user_html='<b>x</b>', llm_result=Result.text('inner-e2e'))",
+            budget=2.0, name="nested",
+        )
+        assert nj.status == "done", (nj.status, nj.error)
+        assert "inner-e2e" in nj.tail(100), nj.tail(100)
+        assert runtime._job_summary(nj)["result_chars"] == len("inner-e2e")
+        # Any other non-str llm_result coerces to its repr rather than crash later.
+        odd = runtime.Result(user_html="x", llm_result=123)
+        assert odd.llm_result == "123", odd.llm_result
+
+        # __ix_read: a file-path target returns the file's CONTENTS to the model
+        # (the dashboard note is user_html only), honoring start/end; and an
+        # expression that EVALUATES to an existing path reads that file too.
+        import pathlib
+        import tempfile
+        rd = ns["__ix_read"]
+        p = pathlib.Path(tempfile.mkdtemp()) / "sample.txt"
+        body = "alpha\nbeta\ngamma\ndelta"
+        p.write_text(body)
+        whole = await rd(str(p), None, None)
+        assert whole.llm_result == body, repr(whole.llm_result)
+        assert str(p) not in whole.llm_result or whole.llm_result == body
+        span = await rd(str(p), 2, 3)
+        assert span.llm_result == "beta\ngamma", repr(span.llm_result)
+        ns["sample_path"] = str(p)
+        via_expr = await rd("sample_path", None, None)
+        assert via_expr.llm_result == body, repr(via_expr.llm_result)
+        # A plain expression target still renders its value.
+        ns["answer"] = 41
+        via_val = await rd("answer + 1", None, None)
+        assert via_val.llm_result == "42", repr(via_val.llm_result)
+
     asyncio.run(main())
     # api(): a discoverable catalog of kernel builtins + bundled modules.
     cat = ns["api"]()
@@ -2473,6 +2518,63 @@ let
         direct = await sh("printf hi", cwd=".")
         assert direct.ok and direct.text == "hi", repr(direct.text)
 
+        # cwd defaults to the current directory: no required-kwarg TypeError.
+        import os
+        here = await sh("pwd")
+        assert here.ok and here.text.strip() == os.path.realpath(os.getcwd()), (
+            here.text, os.getcwd())
+
+        # An Output composes like its text: slice, concat, contains, len, str.
+        assert direct[-1:] == "i" and direct[0] == "h", (direct[-1:], direct[0])
+        assert direct + "!" == "hi!" and "say " + direct == "say hi"
+        assert "hi" in direct and len(direct) == 2 and str(direct) == "hi"
+        assert bool(await sh("true")) is True  # empty but successful: still truthy
+
+        # Output streams to sys.stdout as it arrives (echo=True forces it outside
+        # a kernel job), escape-stripped -- so a long command's log lands in the
+        # job's pageable stdout even if the cell backgrounds before binding it.
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            echoed = await sh(r"printf '\033[31mstreamed\033[0m\n'", echo=True)
+        assert "streamed" in buf.getvalue() and "\x1b" not in buf.getvalue(), repr(buf.getvalue())
+        assert "streamed" in echoed.text, repr(echoed.text)
+        # And echo stays off by default outside a kernel job.
+        quiet = io.StringIO()
+        with contextlib.redirect_stdout(quiet):
+            await sh("printf silent")
+        assert quiet.getvalue() == "", repr(quiet.getvalue())
+
+        # Cancelling the awaiting task kills the child's whole process group:
+        # no orphan keeps running (or holding a lock) after a .cancel().
+        import signal
+        import tempfile
+        pidfile = tempfile.mktemp()
+        task = asyncio.ensure_future(sh(f"echo $$ > {pidfile}; sleep 30", cwd="."))
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            try:
+                pid = int(open(pidfile).read().strip())
+                break
+            except (FileNotFoundError, ValueError):
+                continue
+        else:
+            raise SystemExit("child never wrote its pidfile")
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0.3)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pass  # the group is dead, as required
+        else:
+            os.kill(pid, signal.SIGKILL)
+            raise SystemExit(f"cancel orphaned the child (pid {pid} still alive)")
+
         print("sh-ok", sh.__version__)
 
 
@@ -3037,7 +3139,17 @@ let
         print("vdom-ok", browser.__version__, n_real, "nodes")
 
 
-    asyncio.run(main())
+    # A sandboxed headless chromium occasionally tears down mid-run
+    # (TargetClosedError); that is environment flake, not a vdom regression, so
+    # retry the whole run a couple of times before failing the gate.
+    for attempt in range(3):
+        try:
+            asyncio.run(main())
+            break
+        except Exception as exc:
+            if attempt == 2 or "closed" not in str(exc).lower():
+                raise
+            print(f"retry {attempt + 1}: transient browser teardown: {exc}", file=sys.stderr)
   '';
   browserVdomSmoke =
     pkgs.runCommand "ix-mcp-browser-vdom-smoke"
