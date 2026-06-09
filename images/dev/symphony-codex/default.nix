@@ -1,4 +1,21 @@
-{ ix, pkgs, ... }:
+{
+  ix,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  # Claude Code refuses bypass-permissions mode for the root user unless it is
+  # told it is sandboxed. Symphony agents run as root inside this disposable VM,
+  # so use the same narrow wrapper as development-base instead of a global env
+  # variable.
+  claude-code =
+    pkgs.runCommand "claude-code-${pkgs.claude-code.version}"
+      { nativeBuildInputs = [ pkgs.makeWrapper ]; }
+      ''
+        makeWrapper ${pkgs.claude-code}/bin/claude "$out/bin/claude" --set IS_SANDBOX 1
+      '';
+in
 {
   ix.image = {
     name = "ix/symphony-codex";
@@ -29,10 +46,17 @@
     ];
   };
 
+  # Claude Code ships under Anthropic's commercial terms (unfree in nixpkgs).
+  # Keep the exception scoped to that package; mcp and codex are repo/open
+  # packages.
+  nixpkgs.config.allowUnfreePredicate =
+    pkg: builtins.elem (pkg.pname or (lib.getName pkg)) [ "claude-code" ];
+
   environment.systemPackages = [
     pkgs.ast-grep
     pkgs.bashInteractive
     pkgs.cacert
+    claude-code
     pkgs.cmake
     pkgs.codex
     pkgs.coreutils
@@ -49,6 +73,7 @@
     pkgs.gnutar
     pkgs.gzip
     pkgs.jaq
+    pkgs.mcp
     pkgs.nodejs_24
     pkgs.openssh
     pkgs.pkg-config
