@@ -12,11 +12,14 @@ defmodule SymphonyElixir.Engine.Envelope do
 
   ## Fields
 
-  - `engine` - `:codex` or `:claude`. Explicit; never inferred from the
-    model name.
+  - `engine` - `:codex`, `:claude`, or `:pi`. Explicit; never inferred
+    from the model name.
   - `model` - the model identifier passed through to the engine verbatim
     (for example `gpt-5.3-codex` or `claude-opus-4-8`, or the `opus` /
-    `sonnet` / `haiku` aliases Claude accepts).
+    `sonnet` / `haiku` aliases Claude accepts). For `:pi` it is a
+    pi-harness model alias (`claude`, `codex`, ...): the room-server
+    forwards it as `PI_HARNESS_MODEL` and the harness's own model table
+    resolves the provider and concrete model.
   - `effort` - reasoning budget. One of `:none`, `:minimal`, `:low`,
     `:medium`, `:high`, `:xhigh`, or `nil` to let the engine pick its
     default.
@@ -40,7 +43,7 @@ defmodule SymphonyElixir.Engine.Envelope do
   @enforce_keys [:engine, :model]
   defstruct [:engine, :model, :effort, :permissions, :location]
 
-  @engines [:codex, :claude]
+  @engines [:codex, :claude, :pi]
   @efforts [:none, :minimal, :low, :medium, :high, :xhigh]
   @permissions [:read_only, :workspace_write, :danger_full_access]
   # The placement targets a `location` can name. `:host` and `:room` carry
@@ -236,4 +239,11 @@ defmodule SymphonyElixir.Engine.Envelope do
   defp check_engine_model_agree(:claude, model) do
     if claude_model?(model), do: :ok, else: {:error, {:engine_model_mismatch, :claude, model}}
   end
+
+  # Pi is a meta-harness fronting multiple providers: its model value is a
+  # pi-harness alias ("claude", "codex", ...) resolved by the harness's own
+  # model table, so a Claude-looking model under :pi is correct, not a
+  # mismatch. Existence of the alias is validated by the harness at turn
+  # start, where the table lives.
+  defp check_engine_model_agree(:pi, _model), do: :ok
 end

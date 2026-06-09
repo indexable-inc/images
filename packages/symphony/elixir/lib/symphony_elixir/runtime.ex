@@ -789,7 +789,9 @@ defmodule SymphonyElixir.Runtime do
   # An attempt records what executed it. Agent attempts carry the engine;
   # exec/subrun carry the executor kind so the run record is honest about a
   # node that never touched an engine.
-  defp attempt_engine(%Node{kind: :agent, envelope: %{engine: engine}}) when engine in [:codex, :claude], do: engine
+  defp attempt_engine(%Node{kind: :agent, envelope: %{engine: engine}}) when engine in [:codex, :claude, :pi],
+    do: engine
+
   defp attempt_engine(%Node{kind: :exec}), do: :exec
   defp attempt_engine(%Node{kind: :subrun}), do: :subrun
   defp attempt_engine(_node), do: :codex
