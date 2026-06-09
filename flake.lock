@@ -1,5 +1,29 @@
 {
   "nodes": {
+    "agent-context": {
+      "flake": false,
+      "locked": {
+        "path": "./agent-context",
+        "type": "path"
+      },
+      "original": {
+        "path": "./agent-context",
+        "type": "path"
+      },
+      "parent": []
+    },
+    "bench-filesystem": {
+      "flake": false,
+      "locked": {
+        "path": "./bench/filesystem",
+        "type": "path"
+      },
+      "original": {
+        "path": "./bench/filesystem",
+        "type": "path"
+      },
+      "parent": []
+    },
     "btop-src": {
       "flake": false,
       "locked": {
@@ -51,6 +75,18 @@
         "type": "git",
         "url": "https://github.com/osandov/drgn"
       }
+    },
+    "examples": {
+      "flake": false,
+      "locked": {
+        "path": "./examples",
+        "type": "path"
+      },
+      "original": {
+        "path": "./examples",
+        "type": "path"
+      },
+      "parent": []
     },
     "fff-src": {
       "flake": false,
@@ -152,6 +188,18 @@
         "repo": "home-manager",
         "type": "github"
       }
+    },
+    "images": {
+      "flake": false,
+      "locked": {
+        "path": "./images",
+        "type": "path"
+      },
+      "original": {
+        "path": "./images",
+        "type": "path"
+      },
+      "parent": []
     },
     "launchk-src": {
       "flake": false,
@@ -297,17 +345,24 @@
     },
     "root": {
       "inputs": {
+        "agent-context": "agent-context",
+        "bench-filesystem": "bench-filesystem",
         "btop-src": "btop-src",
         "clippy-fork": "clippy-fork",
         "drgn-src": "drgn-src",
+        "examples": "examples",
         "fff-src": "fff-src",
         "ghostty": "ghostty",
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
+        "images": "images",
         "launchk-src": "launchk-src",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay",
-        "snix-src": "snix-src"
+        "site": "site",
+        "skills": "skills",
+        "snix-src": "snix-src",
+        "tests": "tests"
       }
     },
     "rust-overlay": {
@@ -330,6 +385,30 @@
         "type": "github"
       }
     },
+    "site": {
+      "flake": false,
+      "locked": {
+        "path": "./site",
+        "type": "path"
+      },
+      "original": {
+        "path": "./site",
+        "type": "path"
+      },
+      "parent": []
+    },
+    "skills": {
+      "flake": false,
+      "locked": {
+        "path": "./skills",
+        "type": "path"
+      },
+      "original": {
+        "path": "./skills",
+        "type": "path"
+      },
+      "parent": []
+    },
     "snix-src": {
       "flake": false,
       "locked": {
@@ -346,6 +425,18 @@
         "type": "git",
         "url": "https://git.snix.dev/snix/snix"
       }
+    },
+    "tests": {
+      "flake": false,
+      "locked": {
+        "path": "./tests",
+        "type": "path"
+      },
+      "original": {
+        "path": "./tests",
+        "type": "path"
+      },
+      "parent": []
     },
     "uv2nix": {
       "inputs": {
