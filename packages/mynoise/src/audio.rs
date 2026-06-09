@@ -1,8 +1,9 @@
 //! Mix a generator's band loops and play them until interrupted.
 //!
 //! Each band is one OGG loop. The website mixes them in the browser with a
-//! per-band volume; we do the same by giving each band its own rodio `Sink` on
-//! a shared output stream (the stream sums all sinks) and looping it forever.
+//! per-band volume; we do the same by giving each band its own rodio `Player`
+//! on a shared device sink (the sink's mixer sums all players) and looping it
+//! forever.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -11,7 +12,7 @@ use std::thread;
 
 use anyhow::{Context as _, Result, bail};
 use rodio::source::Source as _;
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, DeviceSinkBuilder, Player};
 
 /// A band file paired with the linear amplitude (0.0..) to play it at.
 pub struct Band {
@@ -22,10 +23,13 @@ pub struct Band {
 /// Decode each band, loop it forever, mix them, and block until the process is
 /// interrupted (Ctrl-C). Bands at zero amplitude are skipped entirely.
 pub fn play(bands: &[Band]) -> Result<()> {
-    let (_stream, handle) = OutputStream::try_default().context("open audio output device")?;
+    // The device sink prints a notice to stderr when dropped; playback only
+    // ends when the whole process does, so that notice is just noise.
+    let mut device = DeviceSinkBuilder::open_default_sink().context("open audio output device")?;
+    device.log_on_drop(false);
 
-    // Hold every sink for the life of playback; dropping a sink stops its band.
-    let mut sinks = Vec::new();
+    // Hold every player for the life of playback; dropping one stops its band.
+    let mut players = Vec::new();
     for band in bands {
         if band.amplitude <= 0.0 {
             continue;
@@ -39,18 +43,18 @@ pub fn play(bands: &[Band]) -> Result<()> {
             .buffered()
             .repeat_infinite()
             .amplify(band.amplitude);
-        let sink = Sink::try_new(&handle).context("create audio sink")?;
-        sink.append(source);
-        sinks.push(sink);
+        let player = Player::connect_new(device.mixer());
+        player.append(source);
+        players.push(player);
     }
 
-    if sinks.is_empty() {
+    if players.is_empty() {
         bail!("every band is muted; nothing to play");
     }
 
     // The loops never end on their own; park forever (cheaper than a timed
     // sleep loop) until the user sends Ctrl-C, which terminates the process and
-    // tears down the output stream. `park` may wake spuriously, so loop.
+    // tears down the device sink. `park` may wake spuriously, so loop.
     loop {
         thread::park();
     }

@@ -200,7 +200,7 @@ reqwest = { version = "0.12", default-features = false, features = [
   "multipart",
 ] }
 rmp-serde = "1"
-rodio = { version = "0.22", default-features = false, features = ["vorbis"] }
+rodio = { version = "0.22", default-features = false, features = ["playback", "vorbis"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 rustc-hash = "2.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
