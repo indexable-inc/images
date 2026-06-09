@@ -407,8 +407,10 @@ impl MonitorState {
         if self.daemon == daemon {
             return;
         }
-        self.daemon = daemon.clone();
-        self.emit(Delta::DaemonSet { daemon });
+        self.daemon = daemon;
+        self.emit(Delta::DaemonSet {
+            daemon: self.daemon.clone(),
+        });
     }
 
     /// Record the transitive input `.drv` closure of one derivation, learned
