@@ -161,6 +161,44 @@ class MapperTest(unittest.TestCase):
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0]["error"], "boom")
 
+    def test_stream_cut_after_retry_announcement_still_terminates_turn(self) -> None:
+        # willRetry suppressed the attempt's turn_end, then the stream died
+        # before the next attempt produced one: the suppressed attempt must
+        # surface as the failed terminal event so Room sees the turn end.
+        emitted = self._run_lifecycle(
+            [
+                {"type": "turn_start"},
+                {"type": "message_end", "message": {"stopReason": "error", "errorMessage": "overloaded"}},
+                {"type": "turn_end"},
+                {"type": "agent_end", "willRetry": True},
+                {"type": "auto_retry_start", "attempt": 2},
+            ]
+        )
+        completed = [event for event in emitted if event["type"] == "turn_completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["status"], "error")
+        self.assertEqual(completed[0]["error"], "overloaded")
+        self.assertEqual(emitted[-1], completed[0])
+
+    def test_stream_cut_during_second_attempt_uses_suppressed_fallback(self) -> None:
+        # The retry started (turn_start arrived) but died before its turn_end:
+        # the suppressed first attempt still terminates the turn.
+        emitted = self._run_lifecycle(
+            [
+                {"type": "turn_start"},
+                {"type": "message_end", "message": {"stopReason": "error", "errorMessage": "overloaded"}},
+                {"type": "turn_end"},
+                {"type": "agent_end", "willRetry": True},
+                {"type": "auto_retry_start", "attempt": 2},
+                {"type": "turn_start"},
+                {"type": "message_start"},
+            ]
+        )
+        completed = [event for event in emitted if event["type"] == "turn_completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["status"], "error")
+        self.assertEqual(completed[0]["error"], "overloaded")
+
     def test_multi_turn_run_keeps_each_turn_completed(self) -> None:
         # Consecutive turns in one agent run are real completions, not retries.
         emitted = self._run_lifecycle(

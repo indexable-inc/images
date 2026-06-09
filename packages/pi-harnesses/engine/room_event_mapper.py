@@ -139,14 +139,17 @@ class TurnLifecycle:
     the next attempt. Room terminates the turn on the first turn_completed, so a
     per-attempt mapping ends a retried turn early. This holds each turn_end
     until agent_end (or the next event) reveals whether the attempt is final,
-    drops the suppressed attempts, and stamps the terminal turn_completed with
-    the provider error when the last attempt also failed.
+    suppresses the retried attempts, and stamps the terminal turn_completed
+    with the provider error when the last attempt also failed. A suppressed
+    attempt is kept as a fallback so a stream that dies between the retry
+    announcement and the next attempt's turn_end still terminates the turn.
     """
 
     def __init__(self, emitter: Emitter) -> None:
         self._emitter = emitter
         self._pending_turn_end: Json | None = None
         self._error: str | None = None
+        self._suppressed: tuple[Json, str] | None = None
 
     def handle(self, event: Json) -> None:
         pi_type = _event_type(event)
@@ -162,8 +165,15 @@ class TurnLifecycle:
             self._pending_turn_end = event
             return
         if pi_type == "auto_retry_start" or (pi_type == "agent_end" and _will_retry(event)):
-            # The attempt is being retried: suppress its turn_completed.
-            self._pending_turn_end = None
+            # The attempt is being retried: suppress its turn_completed, but
+            # keep it so close() can still terminate the turn if the retry
+            # never produces another turn_end.
+            if self._pending_turn_end is not None:
+                self._suppressed = (
+                    self._pending_turn_end,
+                    self._error or "provider error: turn interrupted during auto-retry",
+                )
+                self._pending_turn_end = None
             self._emitter.emit(map_pi_event(event))
             return
         if pi_type == "message_end":
@@ -179,7 +189,19 @@ class TurnLifecycle:
         self._emitter.emit(map_pi_event(event))
 
     def close(self) -> None:
-        self._flush()
+        if self._pending_turn_end is not None:
+            self._flush()
+            return
+        if self._suppressed is not None:
+            # The stream died after a retry announcement and before the next
+            # attempt finished: surface the suppressed attempt as the failed
+            # terminal event instead of leaving the turn open.
+            event, error = self._suppressed
+            self._suppressed = None
+            mapped = map_pi_event(event)
+            mapped["status"] = "error"
+            mapped["error"] = error
+            self._emitter.emit(mapped)
 
     def _flush(self) -> None:
         if self._pending_turn_end is None:
@@ -190,6 +212,7 @@ class TurnLifecycle:
             mapped["error"] = self._error
         self._pending_turn_end = None
         self._error = None
+        self._suppressed = None
         self._emitter.emit(mapped)
 
 
