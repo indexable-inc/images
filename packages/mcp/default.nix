@@ -335,6 +335,27 @@ let
         cp -r ${browserPythonSource}/browser/. "$site/"
       ''
   );
+  # Read recent X (Twitter) posts into polars by driving the logged-in browser:
+  # `import x`, then `await x.posts("@handle")` / `x.posts("home")` navigates the
+  # browser `browser` connects to, scrolls until it has enough tweets, and parses
+  # them into a polars frame. Pure Python over the bundled browser/playwright/polars
+  # (X has no usable unauthenticated read API); cross-platform.
+  xPythonSource = builtins.path {
+    name = "ix-mcp-x-python-source";
+    path = ./src/x;
+  };
+  xModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-x-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Read recent X posts to polars via the logged-in browser, bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/x"
+        mkdir -p "$site"
+        cp -r ${xPythonSource}/x/. "$site/"
+      ''
+  );
   # Git worktrees as the unit of isolated work: `import worktree`, then
   # `wt = await worktree.add("my-fix")` checks out a new branch in its own tree,
   # `await wt.build(".#mcp")` stages + nix-builds it, `worktree.list()` is a
@@ -584,6 +605,7 @@ let
       shModule
       worktreeModule
       browserModule
+      xModule
       tasksModule
     ]
     ++ darwinExtraPackages ps
@@ -3046,6 +3068,7 @@ let
   screenBundled = importTest "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
   vmkitBundled = importTest "vmkit" "import vmkit; print('vmkit-ok', callable(vmkit.boot_linux), callable(vmkit.drive), callable(vmkit.screenshot))";
   imessageBundled = importTest "imessage" "import imessage; print('imessage-ok', all(callable(getattr(imessage, n)) for n in ('messages', 'chats', 'contacts', 'send')))";
+  xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
 in
 package.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
@@ -3077,6 +3100,7 @@ package.overrideAttrs (old: {
         worktreeSmoke
         browserSmoke
         browserVdomSmoke
+        xBundled
         ;
       site = dashboardSite;
     }

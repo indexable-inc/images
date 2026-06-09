@@ -78,6 +78,12 @@ MODULES: tuple[Module, ...] = (
         "`await google_auth.login()` signs in through your browser and `status()` / `logout()` "
         "manage the grant. Incognito sessions only (a personal mailbox never reaches a shared room)",
     ),
+    Module(
+        "x",
+        "read recent X (Twitter) posts into polars by driving your logged-in browser: "
+        "`x.posts(\"@handle\")` / `x.posts(\"home\")` / `x.posts(\"#tag\")` / a thread URL, "
+        "scrolled until it has `limit` tweets (one row each, with author, time, text and counts)",
+    ),
 )
 
 # Always-present namespace builtins (installed by runtime.install; no import).
