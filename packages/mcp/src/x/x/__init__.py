@@ -234,17 +234,13 @@ async def posts(
     await browser.get_or_create_browser(endpoint=endpoint, app=app, timeout=timeout)
     # Open a dedicated tab (``new=True``) rather than reusing the shared front
     # tab: the runtime runs jobs concurrently, so two reads sharing one tab would
-    # clobber each other's navigation and scroll. Close it in ``finally`` so
-    # repeated reads do not pile up tabs.
-    page = await browser.goto(
-        url,
-        endpoint=endpoint,
-        new=True,
-        wait_until="domcontentloaded",
-        timeout=timeout * 1000,
-    )
+    # clobber each other's navigation and scroll. Acquire the tab *before*
+    # navigating so the ``finally`` below closes it even when ``goto`` itself
+    # fails (a navigation timeout would otherwise leak the tab).
+    page = await browser.page(endpoint=endpoint, new=True)
 
     try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
         try:
             await page.wait_for_selector("article", timeout=timeout * 1000)
         except Exception:
