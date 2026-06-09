@@ -304,13 +304,15 @@ mod tests {
         assert_eq!(event.path, None);
 
         assert!(parse_strace_line("+++ exited with 0 +++").is_none());
-        assert!(parse_strace_line(r#"[pid 1] <... read resumed>) = 0"#).is_none());
+        assert!(parse_strace_line(r"[pid 1] <... read resumed>) = 0").is_none());
     }
 
     #[test]
     fn trace_records_and_projects() {
-        let mut trace = DaemonTrace::default();
-        trace.workers = vec![10, 11];
+        let mut trace = DaemonTrace {
+            workers: vec![10, 11],
+            ..DaemonTrace::default()
+        };
         trace.record(SyscallEvent {
             op: OpClass::Write,
             path: Some("/nix/store/x".to_owned()),
