@@ -13,9 +13,12 @@
   coreutils,
   git,
   nodejs,
-  # Pi is not yet packaged in this repo (same situation as the engine harness):
-  # the wrapper calls `pi` from PATH. Pass a derivation here to pin it.
-  pi ? null,
+  pi-coding-agent,
+  # The bare `pi` binary the wrapper execs. Pinned to nixpkgs' `pi-coding-agent`
+  # (same posture as the engine harness) so the wrapper never resolves `pi`
+  # from the caller's PATH, where a host-level wrapper can inject conflicting
+  # flags and extensions. Pass a derivation here to override.
+  pi ? pi-coding-agent,
 }:
 {
   name,
@@ -45,14 +48,14 @@
   checkLib ? [ ],
 }:
 let
-  piBin = if pi == null then "pi" else lib.getExe pi;
+  piBin = lib.getExe pi;
   path = lib.makeBinPath (
     [
       coreutils
       git
+      pi
     ]
     ++ runtimeInputs
-    ++ lib.optional (pi != null) pi
   );
 
   flags =

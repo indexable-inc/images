@@ -1,7 +1,10 @@
 {
   callPackage,
   git,
-  pi ? null,
+  pi-coding-agent,
+  # Pinned bare `pi` binary (see ../shared/mk-pi-harness.nix). Override here
+  # to swap the pi the wrapper execs.
+  pi ? pi-coding-agent,
 }:
 let
   mkPiHarness = callPackage ../shared/mk-pi-harness.nix { inherit pi; };

@@ -49,8 +49,10 @@ PI_HARNESS_MODEL=codex nix run .#pi-prosecutor -- "..."   # gpt-5.5 medium
 ```
 
 API keys come from the caller's environment (`ANTHROPIC_API_KEY` /
-`OPENAI_API_KEY`); the harness owns model *selection* only. `pi` must be on PATH
-until the dependency-intake follow-up pins a `pi` derivation (same as engine).
+`OPENAI_API_KEY`); the harness owns model *selection* only. Every harness execs
+nixpkgs' pinned `pi-coding-agent` binary, never a `pi` resolved from the
+caller's PATH (host-level wrappers there inject conflicting flags and
+extensions); swap it with `.override { pi = ...; }`.
 
 ## Adding a harness
 

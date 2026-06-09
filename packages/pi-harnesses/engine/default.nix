@@ -3,10 +3,14 @@
   stdenv,
   buildNpmPackage,
   python3,
-  # Pi is not yet packaged in this repo. Until the dependency-intake follow-up
-  # lands a pinned `pi` derivation, the wrapper calls `pi` from PATH (the dev
-  # image / system already provides it). Pass a derivation here to pin it.
-  pi ? null,
+  pi-coding-agent,
+  # The bare `pi` binary the launcher execs. Pinned to nixpkgs'
+  # `pi-coding-agent` so the shipped harness never resolves `pi` from the
+  # caller's PATH: host-level `pi` wrappers inject their own `--extension` /
+  # `--provider` flags, which loads a second ix-mcp-bridge copy, makes every
+  # tool name conflict, and kills the lockdown posture. Override with a
+  # different derivation here, or at runtime with `PI_HARNESS_PI_BIN`.
+  pi ? pi-coding-agent,
   # ix-mcp supplies the ONLY tool surface (python_exec + search_* + calendar_*),
   # built from index/packages/mcp. Pass null to fall back to PATH for local dev.
   ix-mcp ? null,
@@ -66,9 +70,13 @@ let
 
   mapper = ./room_event_mapper.py;
 
-  runtimeInputs = [ python3 ] ++ lib.optional (pi != null) pi ++ lib.optional (ix-mcp != null) ix-mcp;
+  runtimeInputs = [
+    python3
+    pi
+  ]
+  ++ lib.optional (ix-mcp != null) ix-mcp;
   runtimePath = lib.makeBinPath runtimeInputs;
-  piCommand = if pi == null then "pi" else lib.getExe pi;
+  piCommand = lib.getExe pi;
   pythonCommand = lib.getExe python3;
   isLinux = stdenv.hostPlatform.isLinux;
   hardenerLibraryName = "libpi-harness-harden.so";

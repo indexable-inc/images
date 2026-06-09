@@ -135,7 +135,5 @@ provider keys.
 
 ## Follow-ups (intentionally deferred)
 
-- Package `pi` as a pinned nix dependency (dependency-intake) and wire it +
-  `ix-mcp` into `default.nix` `runtimeInputs` instead of relying on PATH.
 - Run the ENG-2263 live smoke matrix in CI once model-provider test credentials
   are available.
