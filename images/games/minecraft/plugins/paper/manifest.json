@@ -101,6 +101,16 @@
       {
         "slug": "viarewind",
         "pluginName": "ViaRewind"
+      },
+      {
+        "slug": "grimac",
+        "pluginName": "GrimAC"
+      }
+    ],
+    "1.21.11": [
+      {
+        "slug": "grimac",
+        "pluginName": "GrimAC"
       }
     ]
   },

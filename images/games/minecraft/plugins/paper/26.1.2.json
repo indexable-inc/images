@@ -34,6 +34,11 @@
     "pluginName": "EternalEconomy",
     "url": "https://cdn.modrinth.com/data/2p0LH33p/versions/iJ7s5W89/EternalEconomy%20v1.0.0.jar"
   },
+  "grimac": {
+    "hash": "sha512-42JjvW4/vMn8KZjxcugA2o+rTZxQFxdjjS6w3esY763NbMchzO/cO3NNxLDwD/jls3iXKTV0nq3xHJyfTC/qUA==",
+    "pluginName": "GrimAC",
+    "url": "https://cdn.modrinth.com/data/LJNGWSvH/versions/1NaW5ThO/grimac-bukkit-2.3.74-6b28271.jar"
+  },
   "luckperms": {
     "hash": "sha512-dziVZEJgsziBi/7/DHj41PWQ9WsPcRw3ik7skb5uizc1QJm12x6lstzkwCSGITKXptoJZ1yb9vAU+aQAtXcs8w==",
     "pluginName": "LuckPerms",
