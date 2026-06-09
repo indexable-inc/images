@@ -158,9 +158,10 @@ fontdue = "0.9"
 futures = "0.3"
 git2 = { version = "0.21", default-features = false }
 glob = "0.3"
+hex = "0.4"
 hegeltest = { version = "0.14", default-features = false }
 # The Iceberg corpus lake (issue #752). iceberg 0.9 pins arrow/parquet ^57.1
-# while the workspace parquet pair is on 58; the 57 tree stays isolated inside
+# while the workspace parquet pair is on 59; the 57 tree stays isolated inside
 # lake-iceberg (see its Cargo.toml).
 iceberg = "0.9"
 iceberg-catalog-rest = "0.9"

@@ -3643,8 +3643,8 @@ dependencies = [
 name = "lake-iceberg"
 version = "0.1.0"
 dependencies = [
- "arrow-array 59.0.0",
- "arrow-schema 59.0.0",
+ "arrow-array 57.3.1",
+ "arrow-schema 57.3.1",
  "futures",
  "iceberg",
  "iceberg-catalog-rest",
@@ -4892,6 +4892,7 @@ name = "oci-image-builder"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "hex",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -6227,6 +6228,7 @@ dependencies = [
  "dirs",
  "futures",
  "git2",
+ "hex",
  "mixedbread",
  "rayon",
  "regex",
@@ -6591,6 +6593,7 @@ name = "sink-parquet"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "hex",
  "object_store",
  "parquet 59.0.0",
  "serde_json",

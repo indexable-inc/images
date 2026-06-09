@@ -57,7 +57,7 @@ impl Resolver {
         let origin = repo
             .find_remote("origin")
             .ok()
-            .and_then(|remote| remote.url().and_then(github_avatar::parse_remote));
+            .and_then(|remote| remote.url().ok().and_then(github_avatar::parse_remote));
 
         let cache_dir = avatar_cache_dir();
         let login_cache = cache_dir
@@ -270,7 +270,8 @@ fn load_identities(repo: &Repository) -> HashMap<String, String> {
     // it so it matches only `githublogin.map` and not other keys.
     if let Ok(entries) = config.entries(Some("^githublogin\\.map$")) {
         let _ = entries.for_each(|entry| {
-            if let Some((email, login)) = entry.value().and_then(|value| value.split_once('=')) {
+            if let Some((email, login)) = entry.value().ok().and_then(|value| value.split_once('='))
+            {
                 let (email, login) = (email.trim(), login.trim());
                 if !email.is_empty() && !login.is_empty() {
                     map.insert(email.to_string(), login.to_string());

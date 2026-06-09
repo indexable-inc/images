@@ -81,7 +81,12 @@ fn commit_block(
 ) -> color_eyre::eyre::Result<CommitBlock> {
     let commit = &ahead.commit;
     let short = commit.id().to_string().chars().take(7).collect::<String>();
-    let summary = commit.summary().unwrap_or("<no message>").trim();
+    let summary = commit
+        .summary()
+        .ok()
+        .flatten()
+        .unwrap_or("<no message>")
+        .trim();
     let when = time::relative(commit.time().seconds())?;
 
     let yellow = palette::fg(Color::Ansi(AnsiColor::Yellow));

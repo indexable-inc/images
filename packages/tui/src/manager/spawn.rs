@@ -62,27 +62,22 @@ pub(super) fn spawn_tui(
     let display = format!("{command} {}", args.join(" "));
 
     let (pty, child) = runtime.block_on(async {
-        let pty = pty_process::Pty::new().map_err(|e| process_spawn_error(&display, e))?;
-
-        let pty_slave = pty
-            .pts()
-            .map_err(|e| process_spawn_error("get PTY slave", e))?;
+        // `pty_process::open` allocates the PTY master and its slave together.
+        let (pty, pty_slave) = pty_process::open().map_err(|e| process_spawn_error(&display, e))?;
 
         pty.resize(pty_process::Size::new(rows, cols))
             .map_err(|e| process_spawn_error("resize PTY", e))?;
 
-        let mut cmd = pty_process::Command::new(&command);
-        cmd.args(&args);
         // A PTY-backed emulator is only as useful as the TERM the child thinks
         // it is driving. With no TERM the child inherits the host's, so curses
         // and terminfo capabilities (e.g. `curs_set`) silently fail or differ
         // by machine. ix-vt implements an xterm-256color superset, so advertise
         // that plus truecolor for a consistent, capable default.
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
-
-        let child = cmd
-            .spawn(&pty_slave)
+        let child = pty_process::Command::new(&command)
+            .args(&args)
+            .env("TERM", "xterm-256color")
+            .env("COLORTERM", "truecolor")
+            .spawn(pty_slave)
             .map_err(|e| process_spawn_error(&display, e))?;
 
         Ok::<_, Error>((pty, child))

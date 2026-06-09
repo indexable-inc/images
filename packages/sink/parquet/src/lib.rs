@@ -327,7 +327,7 @@ fn corpus_hash(documents: &[Document]) -> String {
         digest.update(content_hash.as_bytes());
         digest.update([0]);
     }
-    format!("{:x}", digest.finalize())
+    hex::encode(digest.finalize())
 }
 
 /// Load the per-source manifest's corpus hash, or `None` when it does not exist

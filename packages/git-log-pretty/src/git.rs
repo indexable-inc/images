@@ -58,7 +58,7 @@ pub fn discover() -> Result<Repository> {
 pub fn head_branch_name(repo: &Repository) -> Option<String> {
     let head = repo.head().ok()?;
     head.is_branch()
-        .then(|| head.shorthand().map(str::to_string))?
+        .then(|| head.shorthand().ok().map(str::to_string))?
 }
 
 /// Pair a commit with the files it changed, the shape the display layer expects.

@@ -29,7 +29,7 @@ pub fn repo_slug(root: &Path) -> RepoSlug {
 fn origin_slug(root: &Path) -> Option<String> {
     let repo = git2::Repository::discover(root).ok()?;
     let remote = repo.find_remote("origin").ok()?;
-    slug_from_url(remote.url()?)
+    slug_from_url(remote.url().ok()?)
 }
 
 /// Extract `owner/repo` from a git remote URL, dropping a trailing `.git`.
