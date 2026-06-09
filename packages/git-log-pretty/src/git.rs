@@ -22,7 +22,7 @@ impl ChangeKind {
     /// Map git's per-delta [`git2::Delta`] onto the coarser set the display
     /// cares about. Unmodified and unreadable deltas never reach us (a diff only
     /// yields touched files), so they collapse into `Modified`.
-    fn from_delta(status: git2::Delta) -> Self {
+    const fn from_delta(status: git2::Delta) -> Self {
         match status {
             git2::Delta::Added | git2::Delta::Copied | git2::Delta::Untracked => Self::Added,
             git2::Delta::Deleted => Self::Deleted,

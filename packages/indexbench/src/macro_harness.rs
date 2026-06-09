@@ -83,7 +83,7 @@ pub fn parse_custom_metric(line: &str) -> Result<Option<CustomMetric>, String> {
                 value = Some(
                     raw.parse::<f64>()
                         .map_err(|err| format!("value `{raw}`: {err}"))?,
-                )
+                );
             }
             "unit" => raw.clone_into(&mut unit),
             "lower_is_better" => {
@@ -234,7 +234,7 @@ fn wait4(pid: i32, program: &str) -> crate::Result<Reaped> {
     clippy::cast_precision_loss,
     reason = "byte counts at bench magnitudes are far below 2^52, so the f64 is exact"
 )]
-fn maxrss_to_bytes(ru_maxrss_bytes: i64) -> f64 {
+const fn maxrss_to_bytes(ru_maxrss_bytes: i64) -> f64 {
     ru_maxrss_bytes as f64
 }
 

@@ -221,80 +221,11 @@ async fn main() -> anyhow::Result<()> {
         "--from-parquet-prefix, --from-iceberg, --from-snapshot, and --cursor-file are mutually exclusive consume modes"
     );
 
-    // Consume mode (Iceberg corpus lake, full): fold the lake's revision log
-    // into its current per-source document sets and REPLACE each source's
-    // Mixedbread records with them — the lake's replay/rebuild path. Replace,
-    // not reconcile: the fold's absences are explicit tombstones, so the
-    // rebuild also deletes view records the lake has let go of, including a
-    // source whose records are all tombstoned. Like the parquet consume below,
-    // emit and consume run as separate invocations of this binary.
-    if cli.from_iceberg {
-        let mixedbread = mixedbread
-            .context("--from-iceberg requires --mixedbread-store (the replace target)")?;
-        let Lake { catalog, ident } = connect_lake(&cli).await?;
-        let state = lake_iceberg::read_state(catalog.as_ref(), &ident)
-            .await
-            .context("reading the lake")?;
-        return finish(run_replace(state, mixedbread).await);
-    }
-
-    // Consume mode (Iceberg corpus lake, incremental): apply the changes since
-    // an explicit cursor. Stateless — the caller owns the cursor.
-    if let Some(cursor) = cli.from_snapshot {
-        let mixedbread =
-            mixedbread.context("--from-snapshot requires --mixedbread-store (the apply target)")?;
-        let Lake { catalog, ident } = connect_lake(&cli).await?;
-        let mut counts = Counts {
-            indexed: 0,
-            skipped: 0,
-            failures: 0,
-        };
-        let result = run_lake_delta(catalog.as_ref(), &ident, cursor, mixedbread)
-            .await
-            .map(|_| ());
-        record("lake-delta", result, &mut counts);
-        return finish(counts);
-    }
-
-    // Consume mode (Iceberg corpus lake, steady state): the cursor lives in a
-    // file; absent or expired falls back to a full rebuild. This is the
-    // deployed view-catch-up invocation.
-    if let Some(path) = cli.cursor_file.clone() {
-        let mixedbread =
-            mixedbread.context("--cursor-file requires --mixedbread-store (the apply target)")?;
-        let Lake { catalog, ident } = connect_lake(&cli).await?;
-        return finish(run_cursor_consume(catalog.as_ref(), &ident, &path, mixedbread).await);
-    }
-
-    // Consume mode (parquet corpus log): read the per-source `data.parquet` files
-    // `sink-parquet` wrote at this prefix under `--bucket` and reconcile them back
-    // into Mixedbread. Uses the SAME bucket/endpoint/region the parquet sink uses,
-    // so it reads exactly what was written. Emit (scan local sources, write the
-    // log) and consume (replay the log into Mixedbread) run as separate
-    // invocations of this binary; consume reconciles the log rather than scanning.
-    if let Some(prefix) = cli.from_parquet_prefix.clone() {
-        let bucket = cli
-            .bucket
-            .clone()
-            .context("--from-parquet-prefix requires --bucket")?;
-        let config = source_parquet::Config {
-            bucket,
-            endpoint: cli.endpoint.clone(),
-            region: cli.region.clone(),
-            prefix,
-        };
-        // With --catalog-uri this folds the parquet archive INTO the lake (the
-        // leader's parquet->lake step under leader-funnel, issue #752);
-        // otherwise it replays the archive into Mixedbread. The lake fold keeps
-        // each (host, user, source) slice separate, so it cannot share
-        // consume_parquet's host-flattened read.
-        if cli.catalog_uri.is_some() {
-            let Lake { catalog, ident } = connect_lake(&cli).await?;
-            return finish(fold_parquet_into_lake(&config, catalog, &ident).await);
-        }
-        let mixedbread = mixedbread
-            .context("--from-parquet-prefix requires --mixedbread-store or --catalog-uri")?;
-        return finish(consume_parquet(&config, mixedbread).await);
+    // Consume modes replay a corpus log into Mixedbread/the lake instead of
+    // scanning local sources; dispatched in `run_consume_mode` to keep `main`
+    // a thin top-level. Exactly one is set here (guarded by the check above).
+    if consume_modes == 1 {
+        return run_consume_mode(&cli, mixedbread).await;
     }
 
     let parquet = match cli.bucket.as_ref() {
@@ -347,6 +278,91 @@ async fn main() -> anyhow::Result<()> {
     }
 
     finish(run_sources(&cli, mixedbread, parquet.as_ref(), lake.as_ref()).await)
+}
+
+/// Dispatch the consume modes: replay a corpus log (the Iceberg lake or the
+/// parquet archive) into Mixedbread/the lake instead of scanning local
+/// sources. Split out of [`main`] to keep the entry point readable.
+/// Precondition: exactly one consume flag is set (the caller guards on
+/// `consume_modes == 1`).
+async fn run_consume_mode(cli: &Cli, mixedbread: Option<Mixedbread<'_>>) -> anyhow::Result<()> {
+    // Consume mode (Iceberg corpus lake, full): fold the lake's revision log
+    // into its current per-source document sets and REPLACE each source's
+    // Mixedbread records with them — the lake's replay/rebuild path. Replace,
+    // not reconcile: the fold's absences are explicit tombstones, so the
+    // rebuild also deletes view records the lake has let go of, including a
+    // source whose records are all tombstoned. Like the parquet consume below,
+    // emit and consume run as separate invocations of this binary.
+    if cli.from_iceberg {
+        let mixedbread = mixedbread
+            .context("--from-iceberg requires --mixedbread-store (the replace target)")?;
+        let Lake { catalog, ident } = connect_lake(cli).await?;
+        let state = lake_iceberg::read_state(catalog.as_ref(), &ident)
+            .await
+            .context("reading the lake")?;
+        return finish(run_replace(state, mixedbread).await);
+    }
+
+    // Consume mode (Iceberg corpus lake, incremental): apply the changes since
+    // an explicit cursor. Stateless — the caller owns the cursor.
+    if let Some(cursor) = cli.from_snapshot {
+        let mixedbread =
+            mixedbread.context("--from-snapshot requires --mixedbread-store (the apply target)")?;
+        let Lake { catalog, ident } = connect_lake(cli).await?;
+        let mut counts = Counts {
+            indexed: 0,
+            skipped: 0,
+            failures: 0,
+        };
+        let result = run_lake_delta(catalog.as_ref(), &ident, cursor, mixedbread)
+            .await
+            .map(|_| ());
+        record("lake-delta", result, &mut counts);
+        return finish(counts);
+    }
+
+    // Consume mode (Iceberg corpus lake, steady state): the cursor lives in a
+    // file; absent or expired falls back to a full rebuild. This is the
+    // deployed view-catch-up invocation.
+    if let Some(path) = cli.cursor_file.clone() {
+        let mixedbread =
+            mixedbread.context("--cursor-file requires --mixedbread-store (the apply target)")?;
+        let Lake { catalog, ident } = connect_lake(cli).await?;
+        return finish(run_cursor_consume(catalog.as_ref(), &ident, &path, mixedbread).await);
+    }
+
+    // Consume mode (parquet corpus log): read the per-source `data.parquet` files
+    // `sink-parquet` wrote at this prefix under `--bucket` and reconcile them back
+    // into Mixedbread. Uses the SAME bucket/endpoint/region the parquet sink uses,
+    // so it reads exactly what was written. Emit (scan local sources, write the
+    // log) and consume (replay the log into Mixedbread) run as separate
+    // invocations of this binary; consume reconciles the log rather than scanning.
+    if let Some(prefix) = cli.from_parquet_prefix.clone() {
+        let bucket = cli
+            .bucket
+            .clone()
+            .context("--from-parquet-prefix requires --bucket")?;
+        let config = source_parquet::Config {
+            bucket,
+            endpoint: cli.endpoint.clone(),
+            region: cli.region.clone(),
+            prefix,
+        };
+        // With --catalog-uri this folds the parquet archive INTO the lake (the
+        // leader's parquet->lake step under leader-funnel, issue #752);
+        // otherwise it replays the archive into Mixedbread. The lake fold keeps
+        // each (host, user, source) slice separate, so it cannot share
+        // consume_parquet's host-flattened read.
+        if cli.catalog_uri.is_some() {
+            let Lake { catalog, ident } = connect_lake(cli).await?;
+            return finish(fold_parquet_into_lake(&config, catalog, &ident).await);
+        }
+        let mixedbread = mixedbread
+            .context("--from-parquet-prefix requires --mixedbread-store or --catalog-uri")?;
+        return finish(consume_parquet(&config, mixedbread).await);
+    }
+
+    unreachable!("run_consume_mode requires exactly one consume flag set")
 }
 
 /// Build the lake's catalog config from the CLI: the catalog flags plus the
@@ -632,33 +648,7 @@ async fn run_sources(
             Err(error) => record("shell", Err(error), &mut counts),
         }
     }
-    if let Some(dir) = &cli.slack_export {
-        let result = async {
-            let adapter = source_slack::SlackExport::open(dir)
-                .with_context(|| format!("reading Slack export at {}", dir.display()))?;
-            run_source("slack", &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record("slack", result, &mut counts);
-    }
-    if let Some(dir) = &cli.linear_export {
-        let result = async {
-            let adapter = source_linear::LinearExport::open(dir)
-                .with_context(|| format!("reading Linear export at {}", dir.display()))?;
-            run_source("linear", &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record("linear", result, &mut counts);
-    }
-    if let Some(dir) = &cli.github_export {
-        let result = async {
-            let adapter = source_github::GithubExport::open(dir)
-                .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
-            run_source("github", &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record("github", result, &mut counts);
-    }
+    run_static_exports(cli, mixedbread, parquet, lake, &mut counts).await;
     for repo in &cli.git_repos {
         let label = format!("git:{}", repo.display());
         let result = async {
@@ -678,6 +668,45 @@ async fn run_sources(
         run_users(cli, mixedbread, parquet, lake, &mut counts).await;
     }
     counts
+}
+
+/// Run the directory-based export sources (Slack, Linear, GitHub), each
+/// independent (a failure never aborts the others), accumulating into the
+/// shared counters. Split out of [`run_sources`] to keep each function focused.
+async fn run_static_exports(
+    cli: &Cli,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
+    counts: &mut Counts,
+) {
+    if let Some(dir) = &cli.slack_export {
+        let result = async {
+            let adapter = source_slack::SlackExport::open(dir)
+                .with_context(|| format!("reading Slack export at {}", dir.display()))?;
+            run_source("slack", &adapter, mixedbread, parquet, lake).await
+        }
+        .await;
+        record("slack", result, counts);
+    }
+    if let Some(dir) = &cli.linear_export {
+        let result = async {
+            let adapter = source_linear::LinearExport::open(dir)
+                .with_context(|| format!("reading Linear export at {}", dir.display()))?;
+            run_source("linear", &adapter, mixedbread, parquet, lake).await
+        }
+        .await;
+        record("linear", result, counts);
+    }
+    if let Some(dir) = &cli.github_export {
+        let result = async {
+            let adapter = source_github::GithubExport::open(dir)
+                .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
+            run_source("github", &adapter, mixedbread, parquet, lake).await
+        }
+        .await;
+        record("github", result, counts);
+    }
 }
 
 /// Run the `--user NAME:HOME` multi-user phase, accumulating into the shared

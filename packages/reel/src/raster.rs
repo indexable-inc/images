@@ -119,7 +119,7 @@ pub fn render_frame(
     draw_chrome(&mut canvas, palette, font, layout);
     match frame {
         Frame::Terminal { cells, cursor } => {
-            draw_terminal(&mut canvas, palette, font, layout, cells, *cursor)
+            draw_terminal(&mut canvas, palette, font, layout, cells, *cursor);
         }
         Frame::Card(card) => draw_card(&mut canvas, palette, font, layout, card),
     }
