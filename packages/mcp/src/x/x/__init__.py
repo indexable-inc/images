@@ -33,6 +33,7 @@ signed out. Cross-platform.
 from __future__ import annotations
 
 import asyncio
+import os
 
 import polars as pl
 
@@ -46,12 +47,35 @@ __version__ = "0.1.0"
 DEFAULT_ENDPOINT = browser.DEFAULT_ENDPOINT
 DEFAULT_APP = browser.DEFAULT_APP
 
+# A shared (multiplayer) room marks the MCP it replicates across participants with
+# this env var. Reading X timelines/notifications/bookmarks exposes the signed-in
+# account's personal data, so -- like `google_auth` -- it is confined to incognito
+# sessions (the default for a plain ix-mcp); only a truthy value refuses access.
+SHARED_ENV = "IX_MCP_SHARED"
+
+
+def _require_incognito() -> None:
+    """Refuse to read personal X data in a shared (multiplayer) room.
+
+    `x.posts()` reads whatever the signed-in browser can see (home timeline,
+    notifications, bookmarks, a private account's posts), so a shared room would
+    leak one person's feed into state everyone can see. A shared room sets
+    ``IX_MCP_SHARED``; only then is access refused.
+    """
+    if os.environ.get(SHARED_ENV):
+        raise RuntimeError(
+            "x.posts is not available in a shared (multiplayer) room "
+            "(IX_MCP_SHARED is set), because it would expose the signed-in "
+            "X account's personal feed to everyone in the room. Use it from an "
+            "incognito chat instead; its transcript stays private to you."
+        )
+
 # Named timeline shortcuts: a bare keyword maps to its x.com path. Anything else
 # is treated as a handle (leading "@"), a search ("#tag" or free text), or a URL.
 _NAMED = {
     "home": "https://x.com/home",
     "notifications": "https://x.com/notifications",
-    "bookmarks": "https://i.x.com/bookmarks",
+    "bookmarks": "https://x.com/i/bookmarks",
     "explore": "https://x.com/explore",
     "following": "https://x.com/home",
 }
@@ -180,8 +204,13 @@ async def posts(
     Drives the browser :mod:`browser` connects to (``endpoint``), launching ``app``
     if nothing is listening. Reading a signed-in timeline needs that browser signed
     in to X. Returns an empty (correctly typed) frame when no posts are found.
+
+    Reads the signed-in account's personal feed, so it is confined to incognito
+    sessions: in a shared (multiplayer) room (``IX_MCP_SHARED`` set) it raises
+    rather than leak one person's timeline into shared state.
     """
 
+    _require_incognito()
     url = _resolve(source)
     await browser.get_or_create_browser(endpoint=endpoint, app=app)
     page = await browser.goto(url, endpoint=endpoint, wait_until="domcontentloaded", timeout=timeout * 1000)

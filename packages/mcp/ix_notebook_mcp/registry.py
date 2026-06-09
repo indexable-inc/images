@@ -82,7 +82,7 @@ MODULES: tuple[Module, ...] = (
         "x",
         "read recent X (Twitter) posts into polars by driving your logged-in browser: "
         "`x.posts(\"@handle\")` / `x.posts(\"home\")` / `x.posts(\"#tag\")` / a thread URL, "
-        "scrolled until it has `limit` tweets (one row each, with author, time, text and counts)",
+        "scrolled until it has `limit` tweets (one row each, with author, time, text and counts). Reads the signed-in account's personal feed, so incognito sessions only (a shared room never sees your timeline)",
     ),
 )
 
