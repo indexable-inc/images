@@ -245,10 +245,17 @@ let
             } > "$out"
           '';
 
+      # The workspace's toolchain id, handed to the renderer and baked into
+      # every from-source unit hash. A prebuilt unit must have been compiled
+      # with this exact toolchain, or its hash (hence its key) would not
+      # match. `mkPrebuiltLibraryUnit` asserts against its own `rustToolchain`
+      # arg; the injection guards below cross-check against this id, the one
+      # the graph really used.
+      workspaceToolchainId = rust.toolchainId args.rustToolchain;
+
       # Second IFD stage: render `units.nix` from the unit graph above.
       unitsNix =
         let
-          toolchainId = rust.toolchainId args.rustToolchain;
           contentAddressed = rawArgs.contentAddressed or true;
 
           extraFlags =
@@ -265,7 +272,7 @@ let
             nix-cargo-unit render \
               --workspace-root ${escapeShellArg args.src} \
               --vendor-root ${escapeShellArg args.vendorDir} \
-              --toolchain-id ${escapeShellArg toolchainId} \
+              --toolchain-id ${escapeShellArg workspaceToolchainId} \
               ${lib.escapeShellArgs extraFlags} \
               --cargo-lock "$cargoLockForRender" \
               < ${unitGraphJson} \
@@ -360,14 +367,6 @@ let
       };
       generatedUnitKeys = attrNames generatedView.units;
       generatedLibraryKeys = attrNames generatedView.libraries;
-
-      # The workspace's ACTUAL toolchain id (cargo-unit.nix toolchainId at render
-      # time), which is what every from-source unit hash was computed with. A
-      # prebuilt unit must have been compiled with this exact toolchain, or its
-      # hash (hence its key) would not match. `mkPrebuiltLibraryUnit` asserts
-      # against its own `rustToolchain` arg; this is the workspace-side
-      # cross-check against the toolchain the graph really used.
-      workspaceToolchainId = rust.toolchainId args.rustToolchain;
 
       # C1: a prebuilt injection must OVERRIDE a unit/library the graph already
       # references. A key that is absent silently builds from source, defeating
@@ -481,22 +480,24 @@ let
       inherit (args) policy;
     };
 
+  # One lookup for every selector that picks a root out of a workspace: fail
+  # with the calling selector's name and the full set of available keys, so a
+  # typo'd target name reads as a menu instead of a bare missing-attribute
+  # error.
+  rootOrThrow =
+    caller: kind: roots: name:
+    roots.${name}
+      or (throw "${caller}: no ${kind} `${name}` in workspace; available: ${lib.concatStringsSep ", " (attrNames roots)}");
+
   /**
     Select one binary target from a generated workspace graph.
   */
   buildBinary =
-    {
-      binary,
-      cargoArgs ? [ ],
-      ...
-    }@args:
+    { binary, ... }@args:
     let
       workspace = buildWorkspace (removeAttrs args [ "binary" ]);
     in
-    workspace.binaries.${binary}
-      or (throw "buildBinary: no binary `${binary}` in workspace; available: ${
-        lib.concatStringsSep ", " (attrNames (workspace.binaries or { }))
-      }");
+    rootOrThrow "buildBinary" "binary" (workspace.binaries or { }) binary;
 
   /**
     Pick a binary out of a pre-built `buildWorkspace` plus its test
@@ -521,11 +522,7 @@ let
       passthru ? { },
     }:
     selectRootWithTests workspace {
-      rootDrv =
-        workspace.binaries.${binary}
-          or (throw "selectBinaryWithTests: no binary `${binary}` in workspace; available: ${
-            lib.concatStringsSep ", " (attrNames (workspace.binaries or { }))
-          }");
+      rootDrv = rootOrThrow "selectBinaryWithTests" "binary" (workspace.binaries or { }) binary;
       inherit
         packageName
         includeTestCases
@@ -554,11 +551,7 @@ let
       passthru ? { },
     }:
     selectRootWithTests workspace {
-      rootDrv =
-        workspace.libraries.${library}
-          or (throw "selectLibraryWithTests: no library `${library}` in workspace; available: ${
-            lib.concatStringsSep ", " (attrNames (workspace.libraries or { }))
-          }");
+      rootDrv = rootOrThrow "selectLibraryWithTests" "library" (workspace.libraries or { }) library;
       inherit
         packageName
         includeTestCases
@@ -651,21 +644,11 @@ let
     roots from several Cargo executions, such as build and test graphs.
   */
   buildBinaries =
-    {
-      binaries,
-      cargoArgs ? [ ],
-      ...
-    }@args:
+    { binaries, ... }@args:
     let
       workspace = buildWorkspace (removeAttrs args [ "binaries" ]);
     in
-    lib.genAttrs binaries (
-      binary:
-      workspace.binaries.${binary}
-        or (throw "buildBinaries: no binary `${binary}` in workspace; available: ${
-          lib.concatStringsSep ", " (attrNames (workspace.binaries or { }))
-        }")
-    );
+    lib.genAttrs binaries (rootOrThrow "buildBinaries" "binary" (workspace.binaries or { }));
 
   /**
     Build a library unit derivation from already-compiled artifacts instead of
