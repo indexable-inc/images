@@ -119,7 +119,7 @@ fallible_int_fallback = "deny"
 anstream = "1"
 anstyle = "1"
 anyhow = "1"
-arrow = "58"
+arrow = "59"
 ast-merge-ast = { path = "packages/ast-merge/ast" }
 ast-merge-diff = { path = "packages/ast-merge/diff" }
 ast-merge-git = { path = "packages/ast-merge/git" }
@@ -152,11 +152,11 @@ lake-iceberg = { path = "packages/lake/iceberg" }
 color-eyre = "0.6"
 dashboard-core = { path = "packages/dashboard-core" }
 devicons = "0.6"
-dirs = "5"
+dirs = "6"
 file-language = { path = "packages/file-language" }
 fontdue = "0.9"
 futures = "0.3"
-git2 = { version = "0.20", default-features = false }
+git2 = { version = "0.21", default-features = false }
 glob = "0.3"
 hegeltest = { version = "0.14", default-features = false }
 # The Iceberg corpus lake (issue #752). iceberg 0.9 pins arrow/parquet ^57.1
@@ -177,15 +177,15 @@ loro = "1.12"
 napi = { version = "3", default-features = false, features = ["napi6", "tokio_rt"] }
 napi-build = "2"
 napi-derive = "3"
-ndarray = "0.16"
-nix = "0.30"
+ndarray = "0.17"
+nix = "0.31"
 nix-web-monitor-parser = { path = "packages/nix-web-monitor/parser" }
 numpy = "0.28"
 object_store = { version = "0.13", features = ["aws"] }
 parking_lot = "0.12"
-parquet = { version = "58", features = ["arrow"] }
+parquet = { version = "59", features = ["arrow"] }
 progress-style = { path = "packages/progress-style" }
-pty-process = { version = "0.4", features = ["async"] }
+pty-process = { version = "0.5", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 pythonize = "0.28"
@@ -200,8 +200,8 @@ reqwest = { version = "0.12", default-features = false, features = [
   "multipart",
 ] }
 rmp-serde = "1"
-rodio = { version = "0.19", default-features = false, features = ["vorbis"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rodio = { version = "0.22", default-features = false, features = ["vorbis"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 rustc-hash = "2.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
@@ -210,8 +210,8 @@ source-meta = { path = "packages/source/meta" }
 serde = "1"
 serde_json = "1"
 serde_norway = "0.9"
-sha2 = "0.10"
-similar = "2"
+sha2 = "0.11"
+similar = "3"
 source-slack = { path = "packages/source/slack" }
 source-parquet = { path = "packages/source/parquet" }
 sink-mixedbread = { path = "packages/sink/mixedbread" }

@@ -13,8 +13,8 @@ workspace = true
 # the plain-parquet pair. The 57 tree is pinned here directly (not in the
 # workspace table) so it stays an implementation detail of this crate; both
 # trees coexist (`multiple_crate_versions` is allowed workspace-wide).
-arrow-array = "57"
-arrow-schema = "57"
+arrow-array = "59"
+arrow-schema = "59"
 futures.workspace = true
 iceberg.workspace = true
 iceberg-catalog-rest.workspace = true
