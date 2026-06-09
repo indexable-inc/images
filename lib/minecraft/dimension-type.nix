@@ -64,7 +64,7 @@ let
         }
       ];
     in
-    lib.checkAssertWarn checks [ ] rendered;
+    lib.asserts.checkAssertWarn checks [ ] rendered;
 
   # Project a dimensionTypes submodule value to the JSON written to disk: strip
   # the `base` field, merge the named vanilla snapshot underneath, default
