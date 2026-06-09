@@ -64,10 +64,7 @@ let
         }
       ];
     in
-    # Assert every check (each carries its own message), then return `rendered`.
-    # Matches the `assert lib.assertMsg ...` idiom the rest of lib/ uses; the
-    # old `lib.checkAssertWarn` helper was removed in the lib/builtins refactor.
-    lib.foldl' (val: c: assert lib.assertMsg c.assertion c.message; val) rendered checks;
+    lib.checkAssertWarn checks [ ] rendered;
 
   # Project a dimensionTypes submodule value to the JSON written to disk: strip
   # the `base` field, merge the named vanilla snapshot underneath, default
