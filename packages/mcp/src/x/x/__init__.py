@@ -10,12 +10,12 @@ posts, and parses the rendered tweets into a ``polars`` DataFrame.
 
     import x
 
-    x.posts()                      # your home timeline, most recent first
-    x.posts("@andrewgazelka")      # a user's recent posts
-    x.posts("notifications")       # your notifications
-    x.posts("#rustlang")           # a search
-    x.posts("rust async runtime")  # any text is a search
-    x.posts("https://x.com/Plambey/status/2064307527114793062")  # a thread
+    await x.posts()                # your home timeline, most recent first
+    await x.posts("@andrewgazelka")  # a user's recent posts
+    await x.posts("notifications")   # your notifications
+    await x.posts("#rustlang")       # a search
+    await x.posts("rust async runtime")  # any text is a search
+    await x.posts("https://x.com/Plambey/status/2064307527114793062")  # a thread
 
 Each call returns one row per post with: ``id``, ``handle``, ``author``,
 ``time`` (UTC datetime), ``text``, ``replies`` / ``reposts`` / ``likes`` /
