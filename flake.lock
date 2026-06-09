@@ -333,11 +333,11 @@
     "snix-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1780955024,
-        "narHash": "sha256-cjFZl3TMWM+O8XtMmtmEpvwnYEcpX/iL4GMhADIhqGo=",
+        "lastModified": 1781038315,
+        "narHash": "sha256-w7cJgIh5RUXtEd96FrcGGv/L8VSbMrkDcMW3I1n5tf4=",
         "ref": "canon",
-        "rev": "43e1d735490ef9576c96db59405893d2fca809f6",
-        "revCount": 22442,
+        "rev": "41eccac4b6c58ce7b4c7bfb4fbaed5f0b3a90dfe",
+        "revCount": 22443,
         "type": "git",
         "url": "https://git.snix.dev/snix/snix"
       },
