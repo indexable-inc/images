@@ -12,6 +12,7 @@ mkPiHarness {
   description = "Pi with the base UX pack: live tok/s, git status widget, /diff, /lg.";
 
   extensions = [
+    ./extension/banner.ts
     ./extension/tps-tracker.ts
     ./extension/git-status-widget.ts
     ./extension/turn-diff.ts
