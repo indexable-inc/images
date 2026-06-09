@@ -2,11 +2,15 @@ defmodule SymphonyElixirWeb.SkillsLive do
   @moduledoc """
   Skill catalog view.
 
-  - `:index` lists every skill the catalog has loaded with its codex
-    envelope (model, sandbox, approval policy, tools).
+  - `:index` lists every skill the catalog has loaded with its
+    description and tools.
   - `:show` renders the full system-prompt body for one skill so the
     operator can read what the agent is being told without leaving the
     dashboard.
+
+  A skill is a model-agnostic prompt body: the execution envelope
+  (engine, model, effort, permissions) lives on the workflow `.sym`
+  agent node, not the skill, and is shown on the runs view.
 
   Reads through `Catalog`; hot-reloads when `skills/*.md` changes on
   disk because Catalog re-emits the skill list on its 1s tick.
@@ -55,8 +59,7 @@ defmodule SymphonyElixirWeb.SkillsLive do
         <%= for skill <- @skills do %>
           <div class="dag-row">
             <div class="name"><a href={"/skills/" <> skill.name}>{skill.name}</a></div>
-            <div class="muted mono" title={model_summary(skill)}>{model_summary(skill)}</div>
-            <div class="muted" title={skill.sandbox}>{skill.sandbox}</div>
+            <div class="muted" title={description_summary(skill.description)}>{description_summary(skill.description)}</div>
             <div class="muted right-align" title={tool_summary(skill.tools)}>{tool_summary(skill.tools)}</div>
           </div>
         <% end %>
@@ -82,14 +85,8 @@ defmodule SymphonyElixirWeb.SkillsLive do
             <div class="muted mono">{Path.relative_to_cwd(@skill.path)}</div>
           </div>
           <dl class="kv" style="margin-top:12px">
-            <dt>codex model</dt>
-            <dd class="mono">{@skill.codex_model}</dd>
-            <dt>reasoning effort</dt>
-            <dd class="mono">{effort_label(@skill.reasoning_effort)}</dd>
-            <dt>sandbox</dt>
-            <dd class="mono">{@skill.sandbox}</dd>
-            <dt>approval policy</dt>
-            <dd class="mono">{@skill.approval_policy}</dd>
+            <dt>description</dt>
+            <dd>{description_summary(@skill.description)}</dd>
             <dt>tools</dt>
             <dd class="mono">{tool_summary(@skill.tools)}</dd>
           </dl>
@@ -110,11 +107,6 @@ defmodule SymphonyElixirWeb.SkillsLive do
   defp tool_summary([]), do: "(no tools)"
   defp tool_summary(tools), do: Enum.join(tools, ", ")
 
-  defp model_summary(skill) do
-    "#{skill.codex_model} (#{effort_label(skill.reasoning_effort)})"
-  end
-
-  defp effort_label(nil), do: "default"
-  defp effort_label(""), do: "default"
-  defp effort_label(effort) when is_binary(effort), do: effort
+  defp description_summary(nil), do: "(no description)"
+  defp description_summary(description) when is_binary(description), do: description
 end
