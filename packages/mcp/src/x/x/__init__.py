@@ -198,6 +198,7 @@ async def posts(
     stable = 0
     max_passes = 60 if scroll else 1
     for _ in range(max_passes):
+        before = len(collected)
         for row in await page.evaluate(_EXTRACT_JS):
             # Key on the permalink id; fall back to a synthetic key for the rare
             # promoted/edge card without one so it is not silently dropped.
@@ -207,14 +208,15 @@ async def posts(
             collected[key] = row
         if len(collected) >= limit or not scroll:
             break
-        before = len(collected)
-        await page.evaluate("window.scrollBy(0, window.innerHeight * 1.5)")
-        await asyncio.sleep(0.8)
-        # Stop once a few scrolls in a row add nothing (the end of the timeline,
-        # or X has stopped loading more).
+        # Stop once a few scrolls in a row load nothing new (the end of the
+        # timeline, or X has stopped loading more). `before` is the count from
+        # before this pass's extraction, so the comparison reflects what the
+        # previous scroll actually loaded, not the rows already in hand.
         stable = stable + 1 if len(collected) == before else 0
         if stable >= 3:
             break
+        await page.evaluate("window.scrollBy(0, window.innerHeight * 1.5)")
+        await asyncio.sleep(0.8)
 
     rows = [collected[k] for k in order][:limit]
     if not rows:
