@@ -98,6 +98,19 @@ def _text_delta(event: Json) -> str | None:
     return None
 
 
+def _message_error(event: Json) -> str | None:
+    """Return the provider error message when a message ended with stopReason error."""
+    for container in (event, event.get("message")):
+        if isinstance(container, dict) and container.get("stopReason") == "error":
+            message = container.get("errorMessage")
+            return message if isinstance(message, str) else "unknown provider error"
+    return None
+
+
+def _will_retry(event: Json) -> bool:
+    return bool(event.get("willRetry"))
+
+
 def map_pi_event(event: Json) -> Json:
     pi_type = _event_type(event)
     room_type = _room_event_type(event, pi_type)
@@ -116,6 +129,68 @@ def map_pi_event(event: Json) -> Json:
             mapped[key] = event[key]
 
     return mapped
+
+
+class TurnLifecycle:
+    """Coalesce pi's auto-retried attempts into one terminal turn_completed.
+
+    Pi retries provider errors up to three times: each failed attempt emits its
+    own turn_end, then agent_end with willRetry=true and auto_retry_start before
+    the next attempt. Room terminates the turn on the first turn_completed, so a
+    per-attempt mapping ends a retried turn early. This holds each turn_end
+    until agent_end (or the next event) reveals whether the attempt is final,
+    drops the suppressed attempts, and stamps the terminal turn_completed with
+    the provider error when the last attempt also failed.
+    """
+
+    def __init__(self, emitter: Emitter) -> None:
+        self._emitter = emitter
+        self._pending_turn_end: Json | None = None
+        self._error: str | None = None
+
+    def handle(self, event: Json) -> None:
+        pi_type = _event_type(event)
+        if pi_type in {"turn_start", "turn_started"}:
+            # A new turn in the same agent run: the previous turn really ended.
+            self._flush()
+            self._error = None
+            self._emitter.emit(map_pi_event(event))
+            return
+        if pi_type in {"turn_end", "turn_completed"}:
+            # Defer: only agent_end / auto_retry_start knows whether pi retries.
+            self._flush()
+            self._pending_turn_end = event
+            return
+        if pi_type == "auto_retry_start" or (pi_type == "agent_end" and _will_retry(event)):
+            # The attempt is being retried: suppress its turn_completed.
+            self._pending_turn_end = None
+            self._emitter.emit(map_pi_event(event))
+            return
+        if pi_type == "message_end":
+            error = _message_error(event)
+            if error is not None:
+                self._error = error
+            self._emitter.emit(map_pi_event(event))
+            return
+        if pi_type == "agent_end":
+            self._flush()
+            self._emitter.emit(map_pi_event(event))
+            return
+        self._emitter.emit(map_pi_event(event))
+
+    def close(self) -> None:
+        self._flush()
+
+    def _flush(self) -> None:
+        if self._pending_turn_end is None:
+            return
+        mapped = map_pi_event(self._pending_turn_end)
+        if self._error is not None:
+            mapped["status"] = "error"
+            mapped["error"] = self._error
+        self._pending_turn_end = None
+        self._error = None
+        self._emitter.emit(mapped)
 
 
 def _connect(path: Path) -> sqlite3.Connection | None:
@@ -324,6 +399,7 @@ def _strip_command_separator(command: list[str]) -> list[str]:
 def run(store: Path, interval: float, command: list[str] | None = None) -> int:
     os.environ["IX_MCP_STORE"] = str(store)
     emitter = Emitter()
+    lifecycle = TurnLifecycle(emitter)
     poller = StorePoller(store, interval, emitter)
     poller.start()
 
@@ -354,10 +430,11 @@ def run(store: Path, interval: float, command: list[str] | None = None) -> int:
                 emitter.emit({"type": "error", "source": "pi-harness", "message": str(exc), "line": stripped})
                 continue
             if isinstance(event, dict):
-                emitter.emit(map_pi_event(event))
+                lifecycle.handle(event)
             else:
                 emitter.emit({"type": "pi_event", "source": "pi", "raw": event})
     finally:
+        lifecycle.close()
         poller.stop()
     if process is None:
         return 0

@@ -78,6 +78,14 @@ stable Room-facing names such as `turn_started`, `text_delta`,
 `reasoning_delta`, `tool_call_started`, `tool_call_output`, `usage`,
 `turn_completed`, and `error`.
 
+Pi auto-retries provider errors (up to three attempts; `agent_end` with
+`willRetry: true`, then `auto_retry_start`). The mapper suppresses the
+retried attempts' `turn_end` events and emits exactly one terminal
+`turn_completed` per turn, so a consumer that ends the turn on
+`turn_completed` (the Room server) survives retries. When the final attempt
+still failed (`message_end` with `stopReason: "error"`), the terminal
+`turn_completed` carries top-level `status: "error"` and `error: <message>`.
+
 ix-mcp store updates emit the dashboard-shaped payloads directly:
 
 ```json

@@ -75,6 +75,107 @@ class MapperTest(unittest.TestCase):
         self.assertEqual(mapper.map_pi_event({"type": "tool_execution_start", "id": "t1"})["type"], "tool_call_started")
         self.assertEqual(mapper.map_pi_event({"type": "turn_end"})["type"], "turn_completed")
 
+    def _run_lifecycle(self, events):
+        emitter = CaptureEmitter()
+        lifecycle = mapper.TurnLifecycle(emitter)  # type: ignore[arg-type]
+        for event in events:
+            lifecycle.handle(event)
+        lifecycle.close()
+        return emitter.events
+
+    def test_single_attempt_emits_one_turn_completed_without_error(self) -> None:
+        emitted = self._run_lifecycle(
+            [
+                {"type": "agent_start"},
+                {"type": "turn_start"},
+                {"type": "message_start"},
+                {"type": "message_end", "message": {"stopReason": "stop"}},
+                {"type": "turn_end"},
+                {"type": "agent_end"},
+            ]
+        )
+        completed = [event for event in emitted if event["type"] == "turn_completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertNotIn("error", completed[0])
+        self.assertNotIn("status", completed[0])
+        # The terminal turn_completed lands before agent_end, as in the raw stream.
+        self.assertEqual([event["pi_type"] for event in emitted[-2:]], ["turn_end", "agent_end"])
+
+    def test_retried_then_succeeded_emits_one_terminal_turn_completed(self) -> None:
+        emitted = self._run_lifecycle(
+            [
+                {"type": "agent_start"},
+                {"type": "turn_start"},
+                {"type": "message_start"},
+                {"type": "message_end", "message": {"stopReason": "error", "errorMessage": "overloaded"}},
+                {"type": "turn_end"},
+                {"type": "agent_end", "willRetry": True},
+                {"type": "auto_retry_start", "attempt": 2},
+                {"type": "turn_start"},
+                {"type": "message_start"},
+                {"type": "message_end", "message": {"stopReason": "stop"}},
+                {"type": "turn_end"},
+                {"type": "agent_end"},
+            ]
+        )
+        completed = [event for event in emitted if event["type"] == "turn_completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertNotIn("error", completed[0])
+        self.assertNotIn("status", completed[0])
+        # The first attempt's turn_end is suppressed entirely; the retry
+        # bookkeeping events still pass through for observability.
+        self.assertIn("auto_retry_start", [event.get("pi_type") for event in emitted])
+
+    def test_all_attempts_failed_emits_one_turn_completed_with_error(self) -> None:
+        failed_attempt = [
+            {"type": "turn_start"},
+            {"type": "message_start"},
+            {"type": "message_end", "message": {"stopReason": "error", "errorMessage": "overloaded"}},
+            {"type": "turn_end"},
+        ]
+        emitted = self._run_lifecycle(
+            [{"type": "agent_start"}]
+            + failed_attempt
+            + [{"type": "agent_end", "willRetry": True}, {"type": "auto_retry_start", "attempt": 2}]
+            + failed_attempt
+            + [{"type": "agent_end", "willRetry": True}, {"type": "auto_retry_start", "attempt": 3}]
+            + failed_attempt
+            + [{"type": "agent_end"}]
+        )
+        completed = [event for event in emitted if event["type"] == "turn_completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["status"], "error")
+        self.assertEqual(completed[0]["error"], "overloaded")
+
+    def test_stream_ending_after_turn_end_still_flushes(self) -> None:
+        # No agent_end (pi crashed or stream cut): close() must still emit the
+        # held turn_completed so Room sees the turn terminate.
+        emitted = self._run_lifecycle(
+            [
+                {"type": "turn_start"},
+                {"type": "message_end", "stopReason": "error", "errorMessage": "boom"},
+                {"type": "turn_end"},
+            ]
+        )
+        completed = [event for event in emitted if event["type"] == "turn_completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["error"], "boom")
+
+    def test_multi_turn_run_keeps_each_turn_completed(self) -> None:
+        # Consecutive turns in one agent run are real completions, not retries.
+        emitted = self._run_lifecycle(
+            [
+                {"type": "turn_start"},
+                {"type": "turn_end"},
+                {"type": "turn_start"},
+                {"type": "turn_end"},
+                {"type": "agent_end"},
+            ]
+        )
+        completed = [event for event in emitted if event["type"] == "turn_completed"]
+        self.assertEqual(len(completed), 2)
+        self.assertNotIn("error", completed[0])
+
     def test_strips_command_separator(self) -> None:
         self.assertEqual(mapper._strip_command_separator(["--", "pi", "--mode", "json"]), ["pi", "--mode", "json"])
         self.assertEqual(mapper._strip_command_separator(["pi"]), ["pi"])
