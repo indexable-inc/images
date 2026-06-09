@@ -65,8 +65,26 @@ export default function (pi: ExtensionAPI): void {
     return undefined;
   });
 
-  pi.on("tool_execution_end", (event: any) => {
+  // Keep the supervision state visible: a footer status with the current
+  // trust interval, streak, and actions remaining until the next check-in.
+  const updateStatus = (ctx: any) => {
+    if (!ctx?.hasUI) return;
+    const theme = ctx.ui.theme;
+    const left = Math.max(0, trust.interval - sinceCheckin);
+    ctx.ui.setStatus(
+      "prosecutor",
+      `${theme.fg("accent", `trust ${trust.interval}/16`)} ${theme.fg(
+        "dim",
+        `streak ${trust.streak} · check-in in ${left}`,
+      )}`,
+    );
+  };
+
+  pi.on("session_start", (_event: any, ctx: any) => updateStatus(ctx));
+
+  pi.on("tool_execution_end", (event: any, ctx: any) => {
     if (event?.toolName !== "claim") sinceCheckin += 1;
+    updateStatus(ctx);
   });
 
   pi.registerTool({
@@ -84,6 +102,10 @@ export default function (pi: ExtensionAPI): void {
         "claim is literally true right now. Trust nothing you cannot observe.\n" +
         'End with exactly one line: "VERDICT: UPHELD" or "VERDICT: BROKEN <one-line evidence>".';
       const prompt = `Claim: ${params.statement}\nSuggested check: ${params.verify}`;
+
+      // The isolated verification can take up to two minutes; without a
+      // working message the TUI just looks frozen.
+      if (ctx?.hasUI) ctx.ui.setWorkingMessage("prosecutor verifying claim...");
 
       let verdict: { upheld: boolean; evidence: string };
       try {
@@ -103,10 +125,21 @@ export default function (pi: ExtensionAPI): void {
         verdict = parseVerdict(`${res.stdout}\n${res.stderr}`);
       } catch (err) {
         verdict = { upheld: false, evidence: `prosecutor failed to run: ${String(err)}` };
+      } finally {
+        if (ctx?.hasUI) ctx.ui.setWorkingMessage(undefined);
       }
 
       const t = trust.record(verdict.upheld);
       sinceCheckin = 0;
+
+      if (ctx?.hasUI) {
+        if (verdict.upheld) {
+          ctx.ui.notify(`Claim UPHELD - trust interval now ${t.interval}`, "info");
+        } else {
+          ctx.ui.notify(`Claim BROKEN: ${verdict.evidence}`, "error");
+        }
+        updateStatus(ctx);
+      }
 
       // Persist the verdict out of the model's context for replay/audit.
       pi.appendEntry("prosecutor", {

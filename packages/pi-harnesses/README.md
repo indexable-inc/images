@@ -14,6 +14,7 @@ pi-harnesses/
     models.nix            # canonical alias -> { provider, model } table
     ext-lib/              # reusable extension helpers (trust, child-agent, probes, scoring, turn-cap)
   engine/                 # id: pi-harness   - the locked-down Room engine (tools ABSENT, JSON event stream)
+  base/                   # id: pi-base       - base UX pack: live tok/s, git widget, /diff, /lg
   prosecutor/             # id: pi-prosecutor - executor under a skeptical, earned-trust supervisor
   beam/                   # id: pi-beam       - executor with beam search over isolated worktree branches
 ```
