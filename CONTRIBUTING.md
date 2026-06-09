@@ -30,7 +30,7 @@ case derivations, and coverage runs.
 
 ## Cargo Unit Benchmarks
 
-[`ix.cargoUnit.buildWorkspace`](lib/cargo-unit.nix) exposes Cargo `[[bench]]`
+[`ix.cargoUnit.buildWorkspace`](lib/rust/cargo-unit.nix) exposes Cargo `[[bench]]`
 roots under `benchmarks` when a target set includes `--benches` or a specific
 `--bench <name>`. Tango benches work as Nix artifacts, including the usual
 Linux/macOS `cargo:rustc-link-arg-benches=-rdynamic` build-script line.
