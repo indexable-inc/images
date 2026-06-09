@@ -1,0 +1,94 @@
+name: Update Cargo dependencies
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Hourly refresh of the Rust workspace, mirroring the flake.lock
+    # (update-flake-lock.yml) and content (update.yml) updaters. A plain
+    # `cargo update` only moves dependencies *within* the SemVer ranges pinned
+    # in Cargo.toml, so this also advances the SemVer-*incompatible* (major)
+    # ranges via `cargo update --breaking`. The resulting PR is gated by
+    # `flake-check`, which is what actually proves the new versions still build.
+    # A no-op run opens no PR and the updater reuses one branch, so this stays
+    # cheap and never stacks PRs. The minute is offset from the other updaters
+    # so the three never start in the same tick.
+    - cron: "47 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-cargo
+  cancel-in-progress: false
+
+jobs:
+  update-cargo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      # The GitHub-hosted Ubuntu runner ships rustup, and the repo's
+      # rust-toolchain.toml pins the nightly cargo it downloads on first use
+      # (same toolchain story as fuzz-nbt.yml). nightly is what makes
+      # `cargo update --breaking` available: it is an unstable option.
+      - name: Update Cargo dependencies
+        env:
+          # Deterministic, un-colored status lines so the parse below is stable
+          # regardless of whether the runner looks like a TTY.
+          CARGO_TERM_COLOR: never
+        run: |
+          set -euo pipefail
+
+          # Major (SemVer-incompatible) bumps rewrite Cargo.toml, so cargo gates
+          # them behind `--breaking`. Run whole-workspace it is atomic: a single
+          # crate that cannot resolve (a renamed feature, a yanked release)
+          # aborts every other major bump with it. So discover the candidates
+          # with a dry run, then apply each on its own and let the unresolvable
+          # ones fall away instead of blocking the rest. cargo prints the
+          # `Upgrading <crate> ...` plan to stderr, hence the 2>&1.
+          mapfile -t breaking < <(
+            cargo update --breaking -Zunstable-options --dry-run 2>&1 \
+              | awk '$1 == "Upgrading" { print $2 }' | sort -u
+          )
+          for crate in "${breaking[@]}"; do
+            echo "::group::cargo update --breaking $crate"
+            cargo update --breaking -Zunstable-options "$crate" \
+              || echo "skipped $crate: no SemVer-incompatible version resolves"
+            echo "::endgroup::"
+          done
+
+          # The ordinary SemVer-compatible refresh for everything else, which
+          # also normalizes the lockfile after the breaking edits above.
+          cargo update
+
+      # Opens (or updates) a single PR, and only when something changed:
+      # create-pull-request no-ops on an empty diff. It reuses the
+      # `update-cargo` branch so each run advances the same PR.
+      #
+      # `token`: a PR opened with the default GITHUB_TOKEN does not trigger the
+      # `pull_request` workflows (`flake-check`), so branch protection would
+      # block the merge. Set an `AUTOBUMP_TOKEN` repo secret (a PAT or GitHub
+      # App token) to make the PR run CI; without it this falls back to
+      # GITHUB_TOKEN and a maintainer must re-trigger `flake-check`.
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.AUTOBUMP_TOKEN || github.token }}
+          base: main
+          branch: update-cargo
+          delete-branch: true
+          commit-message: "cargo: update dependencies"
+          title: "cargo: update dependencies"
+          body: |
+            Automated refresh of the Rust workspace dependencies.
+
+            `cargo update` advanced every dependency within its existing SemVer range, and `cargo update --breaking` was applied per-crate to also bump the **major** (SemVer-incompatible) ranges in `Cargo.toml`. A crate whose major bump can't resolve (for example a renamed feature) is skipped so it never blocks the others.
+
+            `flake-check` is what proves the new versions actually build, so review its result before merging.
+
+            Auto-bump, made with Claude Opus 4.8.
