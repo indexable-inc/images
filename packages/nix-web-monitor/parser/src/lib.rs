@@ -89,6 +89,9 @@ pub enum ParseError {
     #[snafu(display("expected two numeric fields"))]
     TwoNumericFields,
 
+    #[snafu(display("expected a byte count and an optional block count"))]
+    FileLinkedFields,
+
     #[snafu(display("expected four numeric progress fields"))]
     ProgressFields,
 
@@ -164,9 +167,17 @@ pub enum FieldValue {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ActivityResult {
+    /// One duplicate store file Nix replaced with a hard link.
+    ///
+    /// Nix emits this per linked file during `actOptimiseStore`, with the
+    /// file's apparent size and (off Windows) its block count -- the space that
+    /// hard-linking reclaims. The state machine folds these into
+    /// [`OptimiseStats`] so the run-wide hard-linking cost is visible;
+    /// auto-optimise-store does this work inline on every store add, which is a
+    /// common reason a "copying ... to the store" step is slow.
     FileLinked {
-        linked: i64,
-        total: i64,
+        bytes: i64,
+        blocks: Option<i64>,
     },
     BuildLogLine {
         line: String,
@@ -201,6 +212,22 @@ pub struct ActivityProgress {
     pub failed: i64,
 }
 
+/// Run-wide store-optimisation totals.
+///
+/// Accumulated from the per-file [`ActivityResult::FileLinked`] events Nix
+/// emits while hard-linking duplicate store files. Nix reports no aggregate, so
+/// the state machine sums one here: `files_linked` counts the events and
+/// `bytes_freed` sums their apparent sizes (the space hard-linking reclaims).
+/// Carried in the snapshot like [`ActivityProgress`] so the UI can show how
+/// much store optimisation a run did -- the otherwise-invisible cost behind a
+/// slow "copying to the store".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimiseStats {
+    pub files_linked: u64,
+    pub bytes_freed: i64,
+}
+
 /// One incremental change to the monitor state, mirroring the snapshot shape.
 ///
 /// The state machine accumulates these as it applies each Nix log line, so the
@@ -223,6 +250,8 @@ pub enum Delta {
     LogsAppend { entries: Vec<LogEntry> },
     /// The aggregate progress line moved.
     ProgressSet { progress: ActivityProgress },
+    /// Run-wide store-optimisation totals moved (a file was hard-linked).
+    OptimiseSet { optimise: OptimiseStats },
     /// The expected count for one activity type was (re)declared.
     ExpectedSet { name: String, value: i64 },
     /// One operator/error message was appended to the errors list.
@@ -241,6 +270,8 @@ pub struct MonitorState {
     pub logs: Vec<LogEntry>,
     pub errors: Vec<String>,
     pub progress: Option<ActivityProgress>,
+    /// Run-wide store-optimisation totals, summed from `FileLinked` events.
+    pub optimise: OptimiseStats,
     pub expected: BTreeMap<String, i64>,
     pub exit_code: Option<i32>,
     pub finished: bool,
@@ -307,6 +338,7 @@ impl MonitorState {
             logs: self.logs[log_tail_start..].to_vec(),
             errors: self.errors.clone(),
             progress: self.progress,
+            optimise: self.optimise,
             expected: self.expected.clone(),
             dependencies: dependency_edges(&self.closure_deps, &observed),
             exit_code: self.exit_code,
@@ -680,7 +712,18 @@ impl MonitorState {
                 let cleaned = strip_ansi(status);
                 self.push_log(Some(action.id), None, &cleaned);
             }
-            ActivityResult::FileLinked { .. } | ActivityResult::Other { .. } => {}
+            ActivityResult::FileLinked { bytes, .. } => {
+                // Each event is one duplicate store file replaced by a hard link;
+                // sum the count and the reclaimed bytes so the run-wide
+                // optimisation cost is visible. `bytes` is an apparent file size
+                // and never negative, but clamp defensively before summing.
+                self.optimise.files_linked = self.optimise.files_linked.saturating_add(1);
+                self.optimise.bytes_freed = self.optimise.bytes_freed.saturating_add((*bytes).max(0));
+                self.emit(Delta::OptimiseSet {
+                    optimise: self.optimise,
+                });
+            }
+            ActivityResult::Other { .. } => {}
         }
     }
 
@@ -883,6 +926,8 @@ pub struct MonitorSnapshot {
     pub logs: Vec<LogEntry>,
     pub errors: Vec<String>,
     pub progress: Option<ActivityProgress>,
+    /// Run-wide store-optimisation totals, summed from `FileLinked` events.
+    pub optimise: OptimiseStats,
     pub expected: BTreeMap<String, i64>,
     /// Minimal dependency DAG over derivations Nix actually built: each edge's
     /// `from` directly requires `to`. Derived from `direct_deps` at snapshot
@@ -1054,11 +1099,8 @@ fn parse_result(raw: &Value) -> Result<ResultAction, ParseError> {
     let fields = fields(raw);
     let result = match result_type {
         result_code::FILE_LINKED => {
-            let NumberPair {
-                first: linked,
-                second: total,
-            } = two_numbers(&fields)?;
-            ActivityResult::FileLinked { linked, total }
+            let LinkedFile { bytes, blocks } = file_linked_fields(&fields)?;
+            ActivityResult::FileLinked { bytes, blocks }
         }
         result_code::BUILD_LOG_LINE => ActivityResult::BuildLogLine {
             line: one_text(&fields)?,
@@ -1138,6 +1180,32 @@ fn two_numbers(fields: &[FieldValue]) -> Result<NumberPair, ParseError> {
             second: *second,
         }),
         _ => Err(ParseError::TwoNumericFields),
+    }
+}
+
+/// The fields of a `resFileLinked` result.
+struct LinkedFile {
+    /// The linked file's apparent size in bytes (the space hard-linking reclaims).
+    bytes: i64,
+    /// The file's block count, present only on platforms that report one.
+    blocks: Option<i64>,
+}
+
+/// Parse a `resFileLinked` result's numeric fields.
+///
+/// Nix omits the block field on Windows (`st_blocks` has no analogue), so it is
+/// optional rather than required.
+fn file_linked_fields(fields: &[FieldValue]) -> Result<LinkedFile, ParseError> {
+    match fields {
+        [FieldValue::Number(bytes)] => Ok(LinkedFile {
+            bytes: *bytes,
+            blocks: None,
+        }),
+        [FieldValue::Number(bytes), FieldValue::Number(blocks)] => Ok(LinkedFile {
+            bytes: *bytes,
+            blocks: Some(*blocks),
+        }),
+        _ => Err(ParseError::FileLinkedFields),
     }
 }
 
@@ -1836,6 +1904,65 @@ mod tests {
         assert!(
             state.drain_deltas().is_empty(),
             "a second drain with no intervening mutation is empty"
+        );
+    }
+
+    #[test]
+    fn file_linked_accumulates_optimise_stats() {
+        let mut state = MonitorState::default();
+        // Nix emits one resFileLinked (type 100) per hard-linked file, fields
+        // [apparent_size_bytes, st_blocks].
+        state.apply_line(r#"@nix {"action":"result","fields":[4096,8],"id":1,"type":100}"#);
+        state.apply_line(r#"@nix {"action":"result","fields":[1024,2],"id":1,"type":100}"#);
+
+        let optimise = state.snapshot().optimise;
+        assert_eq!(optimise.files_linked, 2);
+        assert_eq!(optimise.bytes_freed, 5120);
+    }
+
+    #[test]
+    fn file_linked_parses_with_or_without_block_count() {
+        // Off Windows Nix sends [bytes, blocks]; on Windows just [bytes].
+        let two = parse_line(r#"@nix {"action":"result","fields":[4096,8],"id":1,"type":100}"#);
+        assert!(matches!(
+            two,
+            ParsedLine::Event(NixEvent::Result(ResultAction {
+                result: ActivityResult::FileLinked {
+                    bytes: 4096,
+                    blocks: Some(8)
+                },
+                ..
+            }))
+        ));
+        let one = parse_line(r#"@nix {"action":"result","fields":[4096],"id":1,"type":100}"#);
+        assert!(matches!(
+            one,
+            ParsedLine::Event(NixEvent::Result(ResultAction {
+                result: ActivityResult::FileLinked {
+                    bytes: 4096,
+                    blocks: None
+                },
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn file_linked_emits_optimise_delta() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"result","fields":[2048,4],"id":1,"type":100}"#);
+        let deltas = state.drain_deltas();
+        assert!(
+            deltas.iter().any(|delta| matches!(
+                delta,
+                Delta::OptimiseSet {
+                    optimise: OptimiseStats {
+                        files_linked: 1,
+                        bytes_freed: 2048,
+                    }
+                }
+            )),
+            "a hard-linked file should broadcast the updated optimise totals"
         );
     }
 

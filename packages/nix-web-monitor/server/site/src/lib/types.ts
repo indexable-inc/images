@@ -29,6 +29,15 @@ export const activityProgressSchema = v.object({
   failed: v.number()
 });
 
+/// Run-wide store-optimisation totals: how many duplicate store files Nix
+/// replaced with hard links and the apparent bytes that reclaimed. Summed by
+/// the parser from per-file `FileLinked` events; surfaced so the operator can
+/// see the store-optimisation work behind an otherwise-silent slow store add.
+export const optimiseStatsSchema = v.object({
+  filesLinked: v.number(),
+  bytesFreed: v.number()
+});
+
 export const activityNodeSchema = v.object({
   id: v.number(),
   parent: v.nullable(v.number()),
@@ -84,6 +93,7 @@ export const snapshotSchema = v.object({
   logs: v.array(logEntrySchema),
   errors: v.array(v.string()),
   progress: v.nullable(activityProgressSchema),
+  optimise: optimiseStatsSchema,
   expected: v.record(v.string(), v.number()),
   dependencies: v.array(derivationEdgeSchema),
   exitCode: v.nullable(v.number()),
@@ -100,6 +110,7 @@ export const deltaSchema = v.variant('type', [
   v.object({ type: v.literal('activityUpsert'), activity: activityNodeSchema }),
   v.object({ type: v.literal('logsAppend'), entries: v.array(logEntrySchema) }),
   v.object({ type: v.literal('progressSet'), progress: activityProgressSchema }),
+  v.object({ type: v.literal('optimiseSet'), optimise: optimiseStatsSchema }),
   v.object({ type: v.literal('expectedSet'), name: v.string(), value: v.number() }),
   v.object({ type: v.literal('errorAppend'), message: v.string() }),
   v.object({ type: v.literal('dependenciesSet'), edges: v.array(derivationEdgeSchema) }),
@@ -110,6 +121,7 @@ export type ActivityStatus = v.InferOutput<typeof activityStatusSchema>;
 export type BuildStatus = v.InferOutput<typeof buildStatusSchema>;
 export type ActivityType = v.InferOutput<typeof activityTypeSchema>;
 export type ActivityProgress = v.InferOutput<typeof activityProgressSchema>;
+export type OptimiseStats = v.InferOutput<typeof optimiseStatsSchema>;
 export type ActivityNode = v.InferOutput<typeof activityNodeSchema>;
 export type BuildNode = v.InferOutput<typeof buildNodeSchema>;
 export type LogEntry = v.InferOutput<typeof logEntrySchema>;
@@ -138,6 +150,7 @@ export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
   logs: [],
   errors: [],
   progress: null,
+  optimise: { filesLinked: 0, bytesFreed: 0 },
   expected: {},
   dependencies: [],
   exitCode: null,

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatDuration, formatRate } from '$lib/format';
+  import { formatBytes, formatDuration, formatRate } from '$lib/format';
   import { useNow } from '$lib/now.svelte';
   import {
     ACTIVITY_NAME_BUILD,
@@ -168,6 +168,18 @@
       <div class="kpi kpi-info">
         <span class="kpi-num">{querying}</span>
         <span class="kpi-label">querying</span>
+      </div>
+    {/if}
+    {#if snapshot.optimise.filesLinked > 0}
+      <div
+        class="kpi kpi-info"
+        title="store optimisation: {String(snapshot.optimise.filesLinked)} duplicate files hard-linked, {formatBytes(
+          snapshot.optimise.bytesFreed
+        )} reclaimed"
+      >
+        <span class="kpi-num">{snapshot.optimise.filesLinked}</span>
+        <span class="kpi-label">linked</span>
+        <span class="kpi-num kpi-faint">{formatBytes(snapshot.optimise.bytesFreed)}</span>
       </div>
     {/if}
     {#if counts.succeeded > 0}

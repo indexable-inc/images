@@ -752,6 +752,32 @@ main.dragging-v .splitter-v::after {
   white-space: nowrap;
 }
 
+/* A store I/O activity (copy / substitute / optimise / query) still running
+ * past the slow threshold. The daemon goes silent while it writes a path or
+ * hard-links files (auto-optimise-store), so an in-flight store step would
+ * otherwise read as just another long-ticking row; the amber rail plus the
+ * `slow` tag pull it to the foreground. Scoped to in-flight rows so a finished
+ * row keeps the muted/stopped treatment. */
+.activity-row.slow:not(.stopped) {
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+.activity-row.slow:not(.stopped) .activity-text,
+.activity-row.slow:not(.stopped) .activity-kind {
+  color: var(--amber);
+}
+
+.slow-tag {
+  flex: 0 0 auto;
+  color: var(--amber);
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+  border-radius: 3px;
+  padding: 0 0.25rem;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 /* ---------- builds ---------- */
 
 .build-table {
