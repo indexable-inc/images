@@ -76,6 +76,7 @@ in
     pkgs.mcp
     pkgs.nodejs_24
     pkgs.openssh
+    pkgs.pi-harness
     pkgs.pkg-config
     pkgs.python3
     pkgs.ripgrep
