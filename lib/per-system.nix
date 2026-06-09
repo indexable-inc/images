@@ -223,9 +223,13 @@ let
               # the diagnostic (clippy lint / test output). nix does not cache
               # failures, so this just re-attempts that single check.
               try {
-                ^nix build $inst "-L" "--no-link"
+                ^nix build ...[
+                  $inst
+                  "-L"
+                  "--no-link"
                   "--option" "accept-flake-config" "true"
                   "--option" "extra-experimental-features" "ca-derivations"
+                ]
               } catch { }
             }
             print --stderr "::endgroup::"
