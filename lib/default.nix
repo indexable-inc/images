@@ -358,6 +358,7 @@ let
     each consumer splices its own extras on top with `//`.
   */
   sharedHelpers = {
+    inherit (import ./util/endpoint.nix { inherit lib; }) endpoint endpointOf;
     inherit
       rev
       revEpoch

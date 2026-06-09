@@ -13,24 +13,15 @@ in
     virtualHosts.localhost.locations."/".return = "200 'ix nginx lifecycle ok\n'";
   };
 
-  networking.firewall.allowedTCPPorts = [ nginxPort ];
   environment.systemPackages = [ pkgs.curl ];
 
-  ix.networking.portClaims.nginx = {
-    protocol = "tcp";
+  ix.networking.expose.nginx = {
     port = nginxPort;
     description = "nginx lifecycle HTTP";
   };
 
   ix.healthChecks = {
-    nginx = {
-      command = [
-        (lib.getExe' config.systemd.package "systemctl")
-        "is-active"
-        "--quiet"
-        "nginx.service"
-      ];
-    };
+    nginx.unit = "nginx";
 
     nginx-http = {
       description = "nginx HTTP loopback";

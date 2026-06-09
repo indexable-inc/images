@@ -187,13 +187,7 @@ in
   # Surface the daemon health to fleet-wide health checks. The unit is
   # forking with `Restart=always`, so `is-active` is the right probe.
   ix.healthChecks.hermes-agent = {
-    from = "guest";
     description = "Hermes agent gateway is active";
-    command = [
-      (lib.getExe' config.systemd.package "systemctl")
-      "is-active"
-      "--quiet"
-      "hermes-agent.service"
-    ];
+    unit = "hermes-agent";
   };
 }

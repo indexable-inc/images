@@ -6,14 +6,42 @@
   ...
 }:
 let
+  # `ix.healthChecks.<name>.unit` sugar: probe a systemd unit with
+  # `systemctl is-active`. A bare name gets the `.service` suffix; pass an
+  # explicit `foo.socket`/`foo.timer` to probe another unit type.
+  unitName = unit: if lib.hasInfix "." unit then unit else "${unit}.service";
+  mkUnitCommand = unit: [
+    (lib.getExe' config.systemd.package "systemctl")
+    "is-active"
+    "--quiet"
+    (unitName unit)
+  ];
+
   healthCheckType = lib.types.submodule (
-    { name, ... }:
+    { name, config, ... }:
     {
       options = {
         description = lib.mkOption {
           type = lib.types.str;
           default = name;
           description = "Human-readable check name shown by fleet health commands.";
+        };
+
+        unit = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "nginx";
+          description = ''
+            A systemd unit to probe with `systemctl is-active --quiet`.
+
+            Sugar for the overwhelmingly common "is this unit running?" check:
+            setting `unit` derives `command` for you, so
+            `ix.healthChecks.nginx.unit = "nginx";` replaces the full
+            `systemctl is-active` argv. A bare name gets the `.service` suffix;
+            pass `foo.socket` or `foo.timer` to probe another unit type.
+
+            Mutually exclusive with `command`: set one or the other, not both.
+          '';
         };
 
         from = lib.mkOption {
@@ -40,6 +68,11 @@ let
             `ix shell`. For `from = "host"` it runs directly with the
             `IX_NODE*` env vars described above; tools must be on the
             operator's PATH.
+
+            When `unit` is set this defaults to a `systemctl is-active` probe of
+            that unit, so most checks only set `unit`. Set `command` for a real
+            readiness probe (an HTTP request, a query) rather than a bare unit
+            liveness check; set one of `unit` or `command`.
           '';
         };
 
@@ -72,6 +105,14 @@ let
             with this requirement unless `deployment.ipv4 = true`.
           '';
         };
+      };
+
+      # `unit` sugar lives here, not in `command`'s default: a public option's
+      # default must be a self-contained literal (repo ast-grep rule), so the
+      # `unit` -> command branch is seeded in config as an mkDefault a real
+      # `command` (priority 100) still overrides.
+      config = lib.mkIf (config.unit != null) {
+        command = lib.mkDefault (mkUnitCommand config.unit);
       };
     }
   );
@@ -142,6 +183,81 @@ let
   ipv4GuestHealthChecks = lib.filterAttrs (
     _name: check: check.requiresIpv4 && check.from != "host"
   ) config.ix.healthChecks;
+
+  # Health checks that set `unit` must not also override `command`: the whole
+  # point of `unit` is that it derives the command, so a custom command means
+  # `unit` is silently ignored. Flag it instead of letting them disagree.
+  overSpecifiedHealthChecks = lib.filterAttrs (
+    _name: check: check.unit != null && check.command != mkUnitCommand check.unit
+  ) config.ix.healthChecks;
+
+  # `ix.networking.expose.<name>` is the one declaration for "this image listens
+  # here": it registers the port in the claim registry (so collisions are caught
+  # at eval time) and, by default, opens the in-guest firewall for it. It also
+  # makes the listener discoverable across the fleet via `ix.endpointOf`.
+  exposeType = lib.types.submodule (
+    { name, ... }:
+    {
+      options = {
+        port = lib.mkOption {
+          type = lib.types.port;
+          description = "Port this image listens on.";
+        };
+
+        protocol = lib.mkOption {
+          type = lib.types.enum [
+            "tcp"
+            "udp"
+          ];
+          default = "tcp";
+          description = "Transport protocol of this listener.";
+        };
+
+        address = lib.mkOption {
+          type = lib.types.str;
+          default = "*";
+          description = "Bind address. Use * when the service binds every address or the bind behavior is implicit.";
+        };
+
+        namespace = lib.mkOption {
+          type = lib.types.str;
+          default = "default";
+          description = "Network namespace for this listener. Ordinary image services use the default namespace.";
+        };
+
+        description = lib.mkOption {
+          type = lib.types.str;
+          default = name;
+          description = "Human-readable listener owner, used in collision errors and health output.";
+        };
+
+        firewall = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = ''
+            Open the in-guest firewall for this port. Leave it on for the normal
+            case (this image owns the listener). Set it false when another
+            mechanism already opens the port (a service's own
+            `openFirewall = true`) and you only want the registry entry and
+            cross-node discovery.
+          '';
+        };
+      };
+    }
+  );
+
+  exposeList = lib.attrValues config.ix.networking.expose;
+  exposePortClaims = lib.mapAttrs (_name: e: {
+    inherit (e)
+      protocol
+      port
+      address
+      namespace
+      description
+      ;
+  }) config.ix.networking.expose;
+  exposeFirewallPorts =
+    proto: map (e: e.port) (lib.filter (e: e.firewall && e.protocol == proto) exposeList);
 in
 {
   options.ix = {
@@ -173,6 +289,29 @@ in
         '';
       };
 
+      expose = lib.mkOption {
+        type = lib.types.attrsOf exposeType;
+        default = { };
+        example = lib.literalExpression ''
+          {
+            http = {
+              port = 8080;
+              description = "public HTTP API";
+            };
+          }
+        '';
+        description = ''
+          Listeners this image exposes, declared once. Each entry registers a
+          port claim (so same-namespace collisions fail at eval time), opens the
+          in-guest firewall for the port (unless `firewall = false`), and becomes
+          discoverable from sibling nodes via `ix.endpointOf nodes.<node> "<name>"`.
+
+          This is the one source of truth for a port: prefer it over hand-pairing
+          `networking.firewall.allowed*Ports` with `ix.networking.portClaims`,
+          which is the lower-level primitive `expose` desugars to.
+        '';
+      };
+
       # Networking policy (per-port filtering, L7, WAF, rate limiting, gateway
       # behavior) belongs to the image, not to ix. ix exposes two primitives:
       # east-west group membership (which VMs can reach each other) and
@@ -188,7 +327,7 @@ in
   };
 
   config = {
-    ix.networking.portClaims = {
+    ix.networking.portClaims = exposePortClaims // {
       ix-console = {
         protocol = "tcp";
         port = 5001;
@@ -219,6 +358,17 @@ in
         message = ''
           ix.healthChecks can only set requiresIpv4 on host checks:
             ${lib.concatStringsSep ", " (lib.attrNames ipv4GuestHealthChecks)}
+        '';
+      }
+      {
+        assertion = overSpecifiedHealthChecks == { };
+        message = ''
+          ix.healthChecks set both `unit` and a custom `command`, which conflict
+          (a custom command makes `unit` a no-op):
+            ${lib.concatStringsSep ", " (lib.attrNames overSpecifiedHealthChecks)}
+
+          Set `unit` for a `systemctl is-active` probe, or `command` for an
+          explicit argv -- not both.
         '';
       }
     ];
@@ -291,10 +441,12 @@ in
         enable = lib.mkDefault true;
         allowedTCPPorts = [
           5001 # ix-console shell and terminal snapshot listener.
-        ];
+        ]
+        ++ exposeFirewallPorts "tcp";
         allowedUDPPorts = [
           8443 # ix-agent WebTransport direct-connect endpoint.
-        ];
+        ]
+        ++ exposeFirewallPorts "udp";
       };
     };
 

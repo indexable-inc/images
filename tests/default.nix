@@ -2198,7 +2198,124 @@ let
   );
   # --- Per-image assertion groups -------------------------------------------
 
+  # --- Idiomatic fleet API (expose / healthChecks.unit / endpoint) ----------
+  idiomaticExpose = evalConfig [
+    {
+      networking.hostName = "svc-a";
+      ix = {
+        networking.expose = {
+          web = {
+            port = 8080;
+            description = "demo web listener";
+          };
+          metrics = {
+            port = 9090;
+            # Opened by something else; only register the claim + discovery.
+            firewall = false;
+          };
+          dns = {
+            port = 53;
+            protocol = "udp";
+          };
+        };
+        healthChecks = {
+          web.unit = "nginx";
+          cron.unit = "backup.timer";
+        };
+      };
+    }
+  ];
+
+  idiomaticUnitConflictFailures = failedAssertionsFor [
+    {
+      ix.healthChecks.bad = {
+        unit = "nginx";
+        command = [ "true" ];
+      };
+    }
+  ];
+
+  idiomaticExposeCollisionFailures = failedAssertionsFor [
+    {
+      ix.networking = {
+        expose.first.port = 7000;
+        portClaims.second = {
+          protocol = "tcp";
+          port = 7000;
+        };
+      };
+    }
+  ];
+
   groups = {
+    idiomatic-fleet-api = [
+      {
+        assertion =
+          idiomaticExpose.ix.healthChecks.web.command == [
+            (lib.getExe' idiomaticExpose.systemd.package "systemctl")
+            "is-active"
+            "--quiet"
+            "nginx.service"
+          ];
+        message = "ix.healthChecks.<name>.unit should derive a `systemctl is-active` probe and add the .service suffix";
+      }
+      {
+        assertion = lib.last idiomaticExpose.ix.healthChecks.cron.command == "backup.timer";
+        message = "ix.healthChecks.<name>.unit should keep an explicit unit type suffix (.timer)";
+      }
+      {
+        assertion = idiomaticUnitConflictFailures != [ ];
+        message = "ix.healthChecks should reject setting both `unit` and a custom `command`";
+      }
+      {
+        assertion =
+          let
+            c = idiomaticExpose.ix.networking.portClaims;
+          in
+          c.web.port == 8080 && c.web.protocol == "tcp" && c.metrics.port == 9090 && c.dns.protocol == "udp";
+        message = "ix.networking.expose should register a port claim per listener";
+      }
+      {
+        assertion =
+          let
+            fw = idiomaticExpose.networking.firewall;
+          in
+          builtins.elem 8080 fw.allowedTCPPorts
+          && !(builtins.elem 9090 fw.allowedTCPPorts)
+          && builtins.elem 53 fw.allowedUDPPorts;
+        message = "ix.networking.expose should open the firewall by default, skip it when firewall = false, and use the listener's protocol";
+      }
+      {
+        assertion = idiomaticExposeCollisionFailures != [ ];
+        message = "ix.networking.expose should feed the port-claim registry so it collides with a conflicting portClaim";
+      }
+      {
+        assertion =
+          let
+            e = ix.endpoint {
+              host = "db";
+              port = 5432;
+            };
+          in
+          "${e}" == "db:5432" && e.host == "db" && e.port == 5432 && e.authority == "db:5432";
+        message = "ix.endpoint should stringify to host:port and expose its parts";
+      }
+      {
+        assertion =
+          (ix.endpoint {
+            host = "h";
+            port = 80;
+            scheme = "http";
+            path = "/x";
+          }).url == "http://h:80/x";
+        message = "ix.endpoint should build a scheme URL when given a scheme";
+      }
+      {
+        assertion = "${ix.endpointOf { config = idiomaticExpose; } "web"}" == "svc-a:8080";
+        message = "ix.endpointOf should resolve a peer's exposed listener to its east-west host:port";
+      }
+    ];
+
     base = [
       {
         assertion = base.cfg.shellWorkspace.enable;

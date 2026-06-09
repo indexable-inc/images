@@ -27,8 +27,6 @@ let
     };
   };
 
-  systemctl = lib.getExe' config.systemd.package "systemctl";
-
   scraperArgs = [
     (lib.getExe scraper.package)
     "--output-dir"
@@ -61,14 +59,8 @@ in
   environment.systemPackages = [ scraper.package ];
 
   ix.healthChecks.daily-scraper = {
-    from = "guest";
     description = "Daily scraper timer is active";
-    command = [
-      systemctl
-      "is-active"
-      "--quiet"
-      "daily-scraper.timer"
-    ];
+    unit = "daily-scraper.timer";
   };
 
   systemd.services.daily-scraper = {
