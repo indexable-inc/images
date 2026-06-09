@@ -25,7 +25,9 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio::time::timeout;
 use tower_http::services::ServeDir;
 
+mod daemon;
 mod dependencies;
+use daemon::run_daemon_probe;
 use dependencies::resolve_dependencies;
 
 /// Bound on the delta broadcast ring. A client that falls this far behind gets
@@ -130,6 +132,11 @@ async fn main() -> Result<()> {
 
     eprintln!("nix-web-monitor: http://{http_addr}");
 
+    // Trace the nix-daemon's syscalls for the daemon panel. Independent of the
+    // build task: it keeps reporting (or explaining why it cannot) for the whole
+    // life of the UI. Best-effort, so its handle is just aborted at shutdown.
+    let daemon_probe = tokio::spawn(run_daemon_probe(Arc::clone(&monitor), deltas.clone()));
+
     let build = tokio::spawn(run_nix_command(
         args.nix_args,
         args.terminal_output,
@@ -149,6 +156,7 @@ async fn main() -> Result<()> {
             .await
             .context("waiting for Ctrl-C")?;
     }
+    daemon_probe.abort();
     http_server.abort();
     // Propagate Nix's exit status either way; otherwise the wrapper masks
     // build failures from shells and CI.
@@ -480,6 +488,13 @@ async fn measure_copy_size(
     monitor: Arc<RwLock<MonitorState>>,
     deltas: broadcast::Sender<Bytes>,
 ) -> Result<()> {
+    // A copy whose source is not on the local filesystem is nothing to measure.
+    // `copy_to_store_source` already rejects Nix's virtual `«…»` accessor paths,
+    // but an absolute path can still be a transient that has gone away by the
+    // time this runs; skip it silently rather than logging a walk error.
+    if !tokio::fs::try_exists(&source).await.unwrap_or(false) {
+        return Ok(());
+    }
     let size = match tokio::task::spawn_blocking(move || copied_size(&source)).await {
         Ok(Ok(size)) => size,
         Ok(Err(error)) => {
@@ -515,7 +530,10 @@ fn copied_size(source: &Path) -> Result<i64> {
         .filter_entry(|entry| entry.file_name() != ".git")
         .build();
     for entry in walker {
-        let entry = entry.context("walking copy source")?;
+        // Skip an entry that vanished or is unreadable mid-walk rather than
+        // aborting the whole measurement; the figure is an approximate hint, so
+        // a few missing files just make it a slight undercount.
+        let Ok(entry) = entry else { continue };
         if entry.file_type().is_some_and(|file_type| file_type.is_file())
             && let Ok(metadata) = entry.metadata()
         {

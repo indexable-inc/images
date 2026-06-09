@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import ActivityGraph from '$components/ActivityGraph.svelte';
   import BuildTable from '$components/BuildTable.svelte';
+  import DaemonPanel from '$components/DaemonPanel.svelte';
   import ErrorPanel from '$components/ErrorPanel.svelte';
   import LogPanel from '$components/LogPanel.svelte';
   import SummaryBar from '$components/SummaryBar.svelte';
@@ -216,6 +217,7 @@
         onkeydown={sidebarKeydown}
       />
       <aside class="side-pane">
+        <DaemonPanel daemon={snapshot.daemon} />
         <ActivityGraph activities={snapshot.activities} builds={snapshot.builds} />
       </aside>
     </section>

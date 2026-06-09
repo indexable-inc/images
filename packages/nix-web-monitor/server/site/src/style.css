@@ -498,6 +498,82 @@ main.dragging-v .splitter-v::after {
   font-variant-numeric: tabular-nums;
 }
 
+.side-pane > .daemon-panel {
+  flex: 0 0 auto;
+  max-height: 45%;
+  border-bottom: 1px solid var(--line);
+}
+
+.side-pane > .graph-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ---------- daemon panel ---------- */
+
+.daemon-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.4rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Not-tracing reason / idle note. */
+.daemon-status {
+  color: var(--muted);
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.daemon-ops {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+/* label | proportional bar | count, columns aligned across rows. */
+.daemon-op {
+  display: grid;
+  grid-template-columns: 3.5rem 1fr 3.5rem;
+  align-items: center;
+  gap: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.daemon-op-label {
+  color: var(--muted);
+}
+
+.daemon-op-bar {
+  height: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.daemon-op-fill {
+  display: block;
+  height: 100%;
+  width: var(--p, 0%);
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--green)));
+}
+
+.daemon-op-count {
+  text-align: right;
+  color: var(--ink);
+}
+
+/* The store path the daemon last touched -- the "currently working on" line. */
+.daemon-path {
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------- activity graph ---------- */
 
 .graph,

@@ -38,6 +38,33 @@ export const optimiseStatsSchema = v.object({
   bytesFreed: v.number()
 });
 
+/// Filesystem syscalls the nix-daemon made, grouped by class. Mirrors the Rust
+/// `DaemonOps`; the daemon panel renders these as the breakdown of what kind of
+/// work the daemon is doing (link/rename dominate store optimisation,
+/// write/fsync dominate writing a new path).
+export const daemonOpsSchema = v.object({
+  link: v.number(),
+  rename: v.number(),
+  open: v.number(),
+  write: v.number(),
+  fsync: v.number(),
+  stat: v.number(),
+  unlink: v.number(),
+  other: v.number()
+});
+
+/// Live nix-daemon syscall view. `tracing` is false when no tracer is attached
+/// (no daemon, or it needs root), in which case `status` explains why and the
+/// counters are zero. Mirrors the Rust `DaemonInfo`.
+export const daemonInfoSchema = v.object({
+  tracing: v.boolean(),
+  status: v.string(),
+  workers: v.array(v.number()),
+  ops: daemonOpsSchema,
+  opsPerSec: v.number(),
+  currentPath: v.nullable(v.string())
+});
+
 export const activityNodeSchema = v.object({
   id: v.number(),
   parent: v.nullable(v.number()),
@@ -94,6 +121,7 @@ export const snapshotSchema = v.object({
   errors: v.array(v.string()),
   progress: v.nullable(activityProgressSchema),
   optimise: optimiseStatsSchema,
+  daemon: daemonInfoSchema,
   expected: v.record(v.string(), v.number()),
   dependencies: v.array(derivationEdgeSchema),
   exitCode: v.nullable(v.number()),
@@ -111,6 +139,7 @@ export const deltaSchema = v.variant('type', [
   v.object({ type: v.literal('logsAppend'), entries: v.array(logEntrySchema) }),
   v.object({ type: v.literal('progressSet'), progress: activityProgressSchema }),
   v.object({ type: v.literal('optimiseSet'), optimise: optimiseStatsSchema }),
+  v.object({ type: v.literal('daemonSet'), daemon: daemonInfoSchema }),
   v.object({ type: v.literal('expectedSet'), name: v.string(), value: v.number() }),
   v.object({ type: v.literal('errorAppend'), message: v.string() }),
   v.object({ type: v.literal('dependenciesSet'), edges: v.array(derivationEdgeSchema) }),
@@ -122,6 +151,8 @@ export type BuildStatus = v.InferOutput<typeof buildStatusSchema>;
 export type ActivityType = v.InferOutput<typeof activityTypeSchema>;
 export type ActivityProgress = v.InferOutput<typeof activityProgressSchema>;
 export type OptimiseStats = v.InferOutput<typeof optimiseStatsSchema>;
+export type DaemonOps = v.InferOutput<typeof daemonOpsSchema>;
+export type DaemonInfo = v.InferOutput<typeof daemonInfoSchema>;
 export type ActivityNode = v.InferOutput<typeof activityNodeSchema>;
 export type BuildNode = v.InferOutput<typeof buildNodeSchema>;
 export type LogEntry = v.InferOutput<typeof logEntrySchema>;
@@ -151,6 +182,14 @@ export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
   errors: [],
   progress: null,
   optimise: { filesLinked: 0, bytesFreed: 0 },
+  daemon: {
+    tracing: false,
+    status: '',
+    workers: [],
+    ops: { link: 0, rename: 0, open: 0, write: 0, fsync: 0, stat: 0, unlink: 0, other: 0 },
+    opsPerSec: 0,
+    currentPath: null
+  },
   expected: {},
   dependencies: [],
   exitCode: null,

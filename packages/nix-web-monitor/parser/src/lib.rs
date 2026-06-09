@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snafu::Snafu;
 
+pub mod daemon;
+pub use daemon::{DaemonInfo, DaemonOps, OpClass};
+
 const NIX_JSON_PREFIX: &str = "@nix ";
 
 /// Suffix Nix uses for derivation files. Build-plan lines and closure queries
@@ -252,6 +255,8 @@ pub enum Delta {
     ProgressSet { progress: ActivityProgress },
     /// Run-wide store-optimisation totals moved (a file was hard-linked).
     OptimiseSet { optimise: OptimiseStats },
+    /// The live nix-daemon syscall view changed (new counts, path, or status).
+    DaemonSet { daemon: DaemonInfo },
     /// The expected count for one activity type was (re)declared.
     ExpectedSet { name: String, value: i64 },
     /// One operator/error message was appended to the errors list.
@@ -272,6 +277,8 @@ pub struct MonitorState {
     pub progress: Option<ActivityProgress>,
     /// Run-wide store-optimisation totals, summed from `FileLinked` events.
     pub optimise: OptimiseStats,
+    /// Live nix-daemon syscall view, fed out-of-band by the server's tracer.
+    pub daemon: DaemonInfo,
     pub expected: BTreeMap<String, i64>,
     pub exit_code: Option<i32>,
     pub finished: bool,
@@ -339,6 +346,7 @@ impl MonitorState {
             errors: self.errors.clone(),
             progress: self.progress,
             optimise: self.optimise,
+            daemon: self.daemon.clone(),
             expected: self.expected.clone(),
             dependencies: dependency_edges(&self.closure_deps, &observed),
             exit_code: self.exit_code,
@@ -387,6 +395,20 @@ impl MonitorState {
         };
         activity.size_bytes = Some(size_bytes);
         self.emit_activity(id);
+    }
+
+    /// Replace the live nix-daemon syscall view and broadcast the change.
+    ///
+    /// Called by the server's tracer on its sampling timer. Skips the broadcast
+    /// when nothing changed so an idle daemon (or a tracer that cannot attach)
+    /// does not put a frame on the wire every tick; the snapshot still carries
+    /// the latest value for a freshly-connected client.
+    pub fn set_daemon(&mut self, daemon: DaemonInfo) {
+        if self.daemon == daemon {
+            return;
+        }
+        self.daemon = daemon.clone();
+        self.emit(Delta::DaemonSet { daemon });
     }
 
     /// Record the transitive input `.drv` closure of one derivation, learned
@@ -892,14 +914,22 @@ fn planned_derivation(text: &str) -> Option<&str> {
     (path.starts_with("/nix/store/") && path.ends_with(DRV_SUFFIX)).then_some(path)
 }
 
-/// Extract the source path from a Nix "copying <path> to the store" activity.
+/// Extract the local source path from a Nix "copying <path> to the store"
+/// activity, or `None` when the path is not one the server can measure.
 ///
 /// Nix emits this for the local source-tree copy as an unstructured `unknown`
 /// activity carrying no byte progress, so the server measures the path itself to
 /// show how large the copy is (see [`MonitorState::set_activity_size`]). Handles
 /// both quote styles Nix uses (`'…'` for a `git+file` flake, `"…"` for a `path:`
-/// flake) and trims a trailing slash so the returned path stats cleanly. Returns
-/// `None` for any other activity text.
+/// flake) and trims a trailing slash so the returned path stats cleanly.
+///
+/// Only an absolute filesystem path (one starting with `/`) is returned. Nix
+/// also copies individual files out of fetched flake inputs and prints those
+/// with its virtual source-accessor notation, e.g. `copying
+/// '«github:NixOS/nixpkgs#…»/pkgs/…/foo.patch' to the store`. That `«…»` path
+/// has no on-disk location, so measuring it spams one `No such file or
+/// directory` per patch; rejecting non-absolute paths keeps the measurement to
+/// the real local source tree the operator cares about.
 #[must_use]
 pub fn copy_to_store_source(text: &str) -> Option<&str> {
     let rest = text.strip_prefix("copying ")?;
@@ -910,7 +940,7 @@ pub fn copy_to_store_source(text: &str) -> Option<&str> {
     let body = &rest[quote.len_utf8()..];
     let end = body.find(quote)?;
     let path = &body[..end];
-    if path.is_empty() || body[end + quote.len_utf8()..].trim_start() != "to the store" {
+    if !path.starts_with('/') || body[end + quote.len_utf8()..].trim_start() != "to the store" {
         return None;
     }
     Some(path.strip_suffix('/').unwrap_or(path))
@@ -928,6 +958,8 @@ pub struct MonitorSnapshot {
     pub progress: Option<ActivityProgress>,
     /// Run-wide store-optimisation totals, summed from `FileLinked` events.
     pub optimise: OptimiseStats,
+    /// Live nix-daemon syscall view, fed out-of-band by the server's tracer.
+    pub daemon: DaemonInfo,
     pub expected: BTreeMap<String, i64>,
     /// Minimal dependency DAG over derivations Nix actually built: each edge's
     /// `from` directly requires `to`. Derived from `direct_deps` at snapshot
@@ -1987,6 +2019,14 @@ mod tests {
         assert_eq!(copy_to_store_source("copying /tmp/x to the store"), None);
         // An empty path would make the server walk its own CWD; reject it.
         assert_eq!(copy_to_store_source("copying '' to the store"), None);
+        // Nix's virtual flake-input accessor path has no on-disk location, so
+        // it must be rejected rather than walked (one ENOENT per patch file).
+        assert_eq!(
+            copy_to_store_source(
+                "copying '«github:NixOS/nixpkgs#abc»/pkgs/foo/bar.patch' to the store"
+            ),
+            None
+        );
     }
 
     #[test]
