@@ -317,12 +317,37 @@ def _tapback(assoc_type: int | None) -> str | None:
     if not assoc_type:
         return None
     base, offset = divmod(assoc_type, 1000)
+    if base not in (2, 3):  # only 2xxx (add) and 3xxx (remove) are tapbacks
+        return None
     name = _TAPBACKS.get(offset)
     if name is None:
         return None
-    if base == 3:
-        return f"removed-{name}"
-    return name
+    return f"removed-{name}" if base == 3 else name
+
+
+# These message columns arrived in later macOS releases (thread_originator_guid in
+# macOS 11, date_edited / date_retracted in macOS 13), so an older chat.db lacks
+# them. Each is selected only when present, with NULL otherwise, so reading a
+# legacy database degrades to empty reply/tapback/edit fields instead of raising
+# "no such column".
+_OPTIONAL_COLUMNS = (
+    ("thread_originator_guid", "reply_to_raw"),
+    ("associated_message_guid", "assoc_guid"),
+    ("associated_message_type", "assoc_type"),
+    ("date_edited", "date_edited"),
+    ("date_retracted", "date_retracted"),
+)
+
+
+def _optional_columns(con: sqlite3.Connection) -> str:
+    """The SELECT fragment for version-gated message columns, NULL where absent."""
+
+    present = {row[1] for row in con.execute("PRAGMA table_info(message)")}
+    indent = ",\n" + " " * 19
+    return indent.join(
+        f"m.{name} AS {alias}" if name in present else f"NULL AS {alias}"
+        for name, alias in _OPTIONAL_COLUMNS
+    )
 
 
 def messages(
@@ -384,15 +409,13 @@ def messages(
             clauses.append("m.date <= ?")
             params.append(_apple_ns(until))
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        optional_cols = _optional_columns(con)
         sql = f"""
             SELECT m.ROWID AS rowid, m.guid AS guid, m.date AS date, m.text AS text,
                    m.attributedBody AS attributed_body,
                    m.is_from_me AS is_from_me, m.is_read AS is_read,
                    m.service AS service, h.id AS handle,
-                   m.thread_originator_guid AS reply_to_raw,
-                   m.associated_message_guid AS assoc_guid,
-                   m.associated_message_type AS assoc_type,
-                   m.date_edited AS date_edited, m.date_retracted AS date_retracted,
+                   {optional_cols},
                    c.ROWID AS chat_id, c.display_name AS chat_name,
                    c.chat_identifier AS chat_identifier,
                    (SELECT COUNT(*) FROM message_attachment_join maj

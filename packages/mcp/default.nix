@@ -2041,6 +2041,10 @@ let
     assert imessage._tapback(2000) == "loved"
     assert imessage._tapback(2005) == "questioned"
     assert imessage._tapback(3003) == "removed-laughed"
+    # base outside 2xxx/3xxx is not a tapback even when the low digit collides
+    # with a reaction offset (1000 is an inline association, not a "loved").
+    assert imessage._tapback(1000) is None
+    assert imessage._tapback(2) is None
     assert imessage._tapback(0) is None
     assert imessage._tapback(None) is None
 
@@ -2136,7 +2140,10 @@ let
     # an edited message and an unsent (retracted) message.
     con.execute("INSERT INTO message " + cols2 + " VALUES (13, 'm13', ?, 'fixed typo', NULL, 1, 1, 'iMessage', 1, NULL, NULL, 0, ?, 0)", (ns(t3), ns(t3)))
     con.execute("INSERT INTO message " + cols2 + " VALUES (14, 'm14', ?, 'oops', NULL, 1, 1, 'iMessage', 1, NULL, NULL, 0, 0, ?)", (ns(t3), ns(t3)))
-    con.execute("INSERT INTO chat_message_join VALUES (1, 10), (1, 11), (1, 12), (1, 13), (1, 14)")
+    # associated_message_type 1000 is a non-tapback association: it must not be
+    # mislabeled "loved" just because its low digit is the loved offset.
+    con.execute("INSERT INTO message " + cols2 + " VALUES (15, 'm15', ?, 'inline assoc', NULL, 1, 1, 'iMessage', 1, NULL, 'p:0/m1', 1000, 0, 0)", (ns(t3),))
+    con.execute("INSERT INTO chat_message_join VALUES (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15)")
     con.commit()
     con.close()
 
@@ -2151,10 +2158,35 @@ let
     assert removed["tapback"] == "removed-liked" and removed["tapback_target_guid"] == "m1", removed
     assert thr.filter(pl.col("rowid") == 13)["edited"][0] is True
     assert thr.filter(pl.col("rowid") == 14)["unsent"][0] is True
+    assert thr.filter(pl.col("rowid") == 15)["tapback"][0] is None, thr.filter(pl.col("rowid") == 15)
     # a plain message carries none of this metadata.
     plain = thr.filter(pl.col("rowid") == 1).row(0, named=True)
     assert plain["reply_to_guid"] is None and plain["tapback"] is None, plain
     assert plain["edited"] is False and plain["unsent"] is False, plain
+
+    # legacy chat.db compatibility: a pre-macOS-13 schema has no
+    # thread_originator_guid / date_edited / date_retracted columns. messages()
+    # must select those only when present and degrade to empty fields, not raise.
+    legacy = os.path.join(work, "legacy.db")
+    con = sqlite3.connect(legacy)
+    con.executescript(
+        """
+        CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, display_name TEXT, chat_identifier TEXT, service_name TEXT);
+        CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, text TEXT, attributedBody BLOB, is_from_me INTEGER, is_read INTEGER, service TEXT, handle_id INTEGER);
+        CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+        CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+        """
+    )
+    con.execute("INSERT INTO handle VALUES (1, '+12025550123')")
+    con.execute("INSERT INTO message (ROWID, guid, date, text, is_from_me, is_read, service, handle_id) VALUES (1, 'g1', ?, 'legacy', 1, 1, 'iMessage', 1)", (ns(t1),))
+    con.execute("INSERT INTO chat_message_join VALUES (1, 1)")
+    con.commit()
+    con.close()
+    leg = imessage.messages(db=legacy, limit=5)
+    assert leg.height == 1 and leg["text"][0] == "legacy", leg
+    assert leg["reply_to_guid"][0] is None and leg["tapback"][0] is None, leg
+    assert leg["edited"][0] is False and leg["unsent"][0] is False, leg
 
     # contacts: phones/emails aggregate into list columns under one display name.
     ab = os.path.join(work, "ab.abcddb")
