@@ -144,13 +144,21 @@ fn run_log(allow_pager: bool, want_avatars: bool, avatar_rows: u32) -> Result<()
     )
 }
 
-/// Render the header and commit blocks, paging like `git log`.
+/// Render the header and commit blocks, paging like `git log` unless avatars
+/// are drawn.
 ///
 /// When avatars are enabled (a graphics terminal, a real TTY, and not opted
 /// out), each unique author image is transmitted to the terminal once, up
-/// front, as a kitty Unicode-placeholder virtual placement. The paged text then
-/// only carries placeholder cells, which are ordinary characters, so the log
-/// pages and scrolls with the avatars in place instead of bypassing the pager.
+/// front, as a kitty Unicode-placeholder virtual placement, and the commit
+/// gutter is rendered with placeholder cells that resolve to it.
+///
+/// Those cells must reach the terminal verbatim, so a graphics log bypasses the
+/// pager and writes straight to stdout, leaning on the terminal's own
+/// scrollback. A screen-repainting pager (`less`) redraws each line with its own
+/// cursor and SGR state, which severs a placeholder cell from the foreground
+/// color that carries its image id (and its alternate screen keeps a separate,
+/// empty image store), so the avatars collapse into replacement glyphs. Without
+/// avatars there are no such cells, so the plain log pages like `git log`.
 fn emit_log(
     repo: &git2::Repository,
     header: &str,
@@ -169,9 +177,9 @@ fn emit_log(
         .then(|| fetch_avatars(repo, commits).ok())
         .flatten();
 
-    // Transmit the pixels before the pager starts drawing, so the placeholder
-    // cells it later prints have an image to resolve against. If that write to
-    // the terminal fails, drop the avatars and page the plain log rather than
+    // Transmit the pixels before any output is drawn, so the placeholder cells
+    // printed later have an image to resolve against. If that write to the
+    // terminal fails, drop the avatars and render the plain log rather than
     // erroring out, matching the fetch-failure fallback above.
     if let Some(images) = &fetched
         && transmit_avatars(images, avatar_rows).is_err()
@@ -179,7 +187,14 @@ fn emit_log(
         fetched = None;
     }
 
-    pager::paged(allow_pager, |out| {
+    // Graphics bypass the pager: placeholder cells only survive when written to
+    // the terminal verbatim, so once we are actually drawing an avatar we skip
+    // the pager (see this function's docs). A plain log still pages.
+    let drawing_avatars = fetched
+        .as_ref()
+        .is_some_and(|fetched| fetched.iter().any(Option::is_some));
+
+    pager::paged(allow_pager && !drawing_avatars, |out| {
         writeln!(out, "{}\n", paint(fg(Color::Ansi(AnsiColor::Cyan)), header))?;
         for (index, commit) in commits.iter().enumerate() {
             match fetched.as_ref().and_then(|fetched| fetched.get(index)) {
@@ -201,7 +216,7 @@ fn emit_log(
 
 /// Transmit each unique avatar's pixels to the terminal as a kitty virtual
 /// placement, sized to the avatar box. Writes straight to stdout (the TTY) and
-/// flushes, so the images are stored before the pager prints any placeholders.
+/// flushes, so the images are stored before any placeholder cell is printed.
 fn transmit_avatars(fetched: &[Option<avatar::Avatar>], rows: u32) -> Result<()> {
     let cols = display::avatar_cols(rows);
     let mut out = std::io::stdout().lock();
