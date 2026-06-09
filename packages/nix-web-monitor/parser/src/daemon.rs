@@ -69,7 +69,7 @@ pub struct DaemonOps {
 
 impl DaemonOps {
     /// Count one syscall against its class.
-    pub fn bump(&mut self, op: OpClass) {
+    pub const fn bump(&mut self, op: OpClass) {
         let slot = match op {
             OpClass::Link => &mut self.link,
             OpClass::Rename => &mut self.rename,
@@ -177,7 +177,7 @@ fn best_path<'a>(tokens: impl Iterator<Item = &'a str>) -> Option<String> {
     let mut store: Option<&str> = None;
     let mut any_abs: Option<&str> = None;
     for token in tokens {
-        let cleaned = token.trim_matches(|c| c == '"' || c == ',' || c == '\'');
+        let cleaned = token.trim_matches(['"', ',', '\'']);
         if cleaned.starts_with("/nix/store/") {
             store = Some(cleaned);
         } else if cleaned.starts_with('/') && cleaned.len() > 1 {
@@ -199,11 +199,12 @@ pub fn parse_fs_usage_line(line: &str) -> Option<SyscallEvent> {
     let first = tokens.next()?;
     // The leading token is a `HH:MM:SS.uuuuuu` timestamp; anything else is a
     // header/banner line we skip.
-    if !(first.len() >= 8 && first.as_bytes()[2] == b':' && first.as_bytes()[5] == b':') {
+    let stamp = first.as_bytes();
+    if stamp.len() < 8 || stamp[2] != b':' || stamp[5] != b':' {
         return None;
     }
     let syscall = tokens.next()?;
-    if syscall.is_empty() || !syscall.as_bytes()[0].is_ascii_alphabetic() {
+    if !syscall.starts_with(|c: char| c.is_ascii_alphabetic()) {
         return None;
     }
     let op = OpClass::classify(syscall);
@@ -222,10 +223,9 @@ pub fn parse_fs_usage_line(line: &str) -> Option<SyscallEvent> {
 pub fn parse_strace_line(line: &str) -> Option<SyscallEvent> {
     let line = line.trim_start();
     // Drop an optional `[pid 1234] ` prefix.
-    let rest = if let Some(after) = line.strip_prefix("[pid ") {
-        after.split_once("] ").map(|(_, r)| r)?
-    } else {
-        line
+    let rest = match line.strip_prefix("[pid ") {
+        Some(after) => after.split_once("] ").map(|(_, rest)| rest)?,
+        None => line,
     };
     // The syscall name is the identifier before the first `(`.
     let paren = rest.find('(')?;
