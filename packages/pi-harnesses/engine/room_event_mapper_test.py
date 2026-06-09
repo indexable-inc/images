@@ -161,6 +161,48 @@ class MapperTest(unittest.TestCase):
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0]["error"], "boom")
 
+    def test_suppressed_attempt_usage_lands_on_terminal_event(self) -> None:
+        # Usage billed for a suppressed retry attempt must not vanish: it rides
+        # on the terminal turn_completed under retried_usage, separate from the
+        # final attempt's own usage so consumers cannot double count.
+        emitted = self._run_lifecycle(
+            [
+                {"type": "turn_start"},
+                {"type": "message_end", "message": {"stopReason": "error", "errorMessage": "overloaded"}},
+                {"type": "turn_end", "usage": {"input": 10, "output": 1}},
+                {"type": "agent_end", "willRetry": True},
+                {"type": "auto_retry_start", "attempt": 2},
+                {"type": "turn_start"},
+                {"type": "turn_end", "usage": {"input": 12, "output": 40}},
+                {"type": "agent_end"},
+            ]
+        )
+        completed = [event for event in emitted if event["type"] == "turn_completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["usage"], {"input": 12, "output": 40})
+        self.assertEqual(completed[0]["retried_usage"], [{"input": 10, "output": 1}])
+        self.assertNotIn("error", completed[0])
+
+    def test_fallback_event_does_not_double_count_its_own_usage(self) -> None:
+        # Two suppressed attempts, then the stream dies: the fallback terminal
+        # event is the second attempt's turn_end, so retried_usage keeps only
+        # the first attempt's usage.
+        emitted = self._run_lifecycle(
+            [
+                {"type": "turn_start"},
+                {"type": "turn_end", "usage": {"input": 10}},
+                {"type": "agent_end", "willRetry": True},
+                {"type": "turn_start"},
+                {"type": "turn_end", "usage": {"input": 20}},
+                {"type": "agent_end", "willRetry": True},
+            ]
+        )
+        completed = [event for event in emitted if event["type"] == "turn_completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["usage"], {"input": 20})
+        self.assertEqual(completed[0]["retried_usage"], [{"input": 10}])
+        self.assertEqual(completed[0]["status"], "error")
+
     def test_stream_cut_after_retry_announcement_still_terminates_turn(self) -> None:
         # willRetry suppressed the attempt's turn_end, then the stream died
         # before the next attempt produced one: the suppressed attempt must

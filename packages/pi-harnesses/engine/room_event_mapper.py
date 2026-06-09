@@ -142,7 +142,10 @@ class TurnLifecycle:
     suppresses the retried attempts, and stamps the terminal turn_completed
     with the provider error when the last attempt also failed. A suppressed
     attempt is kept as a fallback so a stream that dies between the retry
-    announcement and the next attempt's turn_end still terminates the turn.
+    announcement and the next attempt's turn_end still terminates the turn,
+    and usage carried on suppressed turn_ends is preserved on the terminal
+    event under retried_usage (a separate key, so consumers that sum the
+    per-attempt usage events do not double count).
     """
 
     def __init__(self, emitter: Emitter) -> None:
@@ -150,6 +153,7 @@ class TurnLifecycle:
         self._pending_turn_end: Json | None = None
         self._error: str | None = None
         self._suppressed: tuple[Json, str] | None = None
+        self._retried_usage: list[Any] = []
 
     def handle(self, event: Json) -> None:
         pi_type = _event_type(event)
@@ -169,6 +173,8 @@ class TurnLifecycle:
             # keep it so close() can still terminate the turn if the retry
             # never produces another turn_end.
             if self._pending_turn_end is not None:
+                if "usage" in self._pending_turn_end:
+                    self._retried_usage.append(self._pending_turn_end["usage"])
                 self._suppressed = (
                     self._pending_turn_end,
                     self._error or "provider error: turn interrupted during auto-retry",
@@ -199,6 +205,14 @@ class TurnLifecycle:
             event, error = self._suppressed
             self._suppressed = None
             mapped = map_pi_event(event)
+            # The fallback event carries its own usage; retried_usage keeps
+            # only the OTHER suppressed attempts to avoid double counting.
+            retried_usage = self._retried_usage
+            self._retried_usage = []
+            if "usage" in event and retried_usage:
+                retried_usage = retried_usage[:-1]
+            if retried_usage:
+                mapped["retried_usage"] = retried_usage
             mapped["status"] = "error"
             mapped["error"] = error
             self._emitter.emit(mapped)
@@ -210,6 +224,9 @@ class TurnLifecycle:
         if self._error is not None:
             mapped["status"] = "error"
             mapped["error"] = self._error
+        if self._retried_usage:
+            mapped["retried_usage"] = self._retried_usage
+            self._retried_usage = []
         self._pending_turn_end = None
         self._error = None
         self._suppressed = None
