@@ -363,23 +363,10 @@ let
     };
   };
 
-  siteSrc = fs.toSource {
-    root = paths.site;
-    fileset = fs.intersection (fs.gitTracked paths.site) (
-      fs.unions [
-        (paths.site + "/package.json")
-        (paths.site + "/package-lock.json")
-        (paths.site + "/mdsvex.config.js")
-        (paths.site + "/svelte.config.js")
-        (paths.site + "/vite.config.ts")
-        (paths.site + "/vitest.config.ts")
-        (paths.site + "/tsconfig.json")
-        (paths.site + "/eslint.config.js")
-        (paths.site + "/src")
-        (paths.site + "/static")
-      ]
-    );
-  };
+  # `paths.site` is the git-filtered `site` subtree input (a store copy, not
+  # a local path), so `lib.fileset`/`gitTracked` cannot apply to it; the input
+  # already scopes source identity to the subtree.
+  siteSrc = paths.site;
 
   siteBuild = ix.buildSvelteSite pkgs {
     pname = "ix-site";
