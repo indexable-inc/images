@@ -1400,6 +1400,16 @@ let
     assert isinstance(cli._dashboard_port(), int)
 
     tmp = Path(tempfile.mkdtemp())
+
+    # An embedder pins the execution store the same way (the pi-harness room
+    # event mapper polls exactly this file); unset, the store is minted in the
+    # runtime dir keyed by the data-API port.
+    os.environ["IX_MCP_STORE"] = str(tmp / "pinned-store.sqlite")
+    assert cli._store_path(54321) == tmp / "pinned-store.sqlite", cli._store_path(54321)
+    os.environ["IX_MCP_STORE"] = ""
+    assert cli._store_path(54321).name == "store-54321.db", cli._store_path(54321)
+    os.environ.pop("IX_MCP_STORE")
+    assert cli._store_path(54321).name == "store-54321.db", cli._store_path(54321)
     store_path = tmp / "store.db"
     conn = store.connect(store_path)
     rich = [

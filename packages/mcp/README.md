@@ -113,6 +113,15 @@ and HTML inline beside the agent's text. `cells` is the agent's curated highligh
 reel (`cells.add(...)`), and `resources` are live, self-updating views. The JSON
 shape mirrors `site/src/lib/types.ts`.
 
+An embedder that polls the SQLite store directly (the pi-harness room event
+mapper) pins its path with `IX_MCP_STORE` before launching `serve`; the server
+uses that path verbatim, so both sides agree on one file. The pinning caller
+owns the parent directory, and the fresh-log invariant still holds: the store
+and its `-wal`/`-shm` sidecars are wiped at startup. Unset, the store is minted
+in the private runtime dir, keyed by the data-API port
+(`IX_MCP_DASHBOARD_PORT`, free port if unset) so concurrent servers never
+collide.
+
 ## Remote access
 
 - `IX_MCP_HOST`: the address the dashboard binds. Default is this node's

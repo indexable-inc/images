@@ -96,6 +96,19 @@ def _dashboard_port() -> int:
     return _free_port()
 
 
+def _store_path(dashboard_port: int) -> Path:
+    """The SQLite execution store. An embedder (the pi-harness room event
+    mapper polls the store for cell/resource updates) pins it with
+    ``IX_MCP_STORE`` so both sides agree on one file; the path is used
+    verbatim and the pinning caller owns its parent directory. Left unset,
+    the store lives in the private runtime dir, keyed by the data-API port
+    so concurrent servers never collide."""
+    pinned = os.environ.get("IX_MCP_STORE")
+    if pinned:
+        return Path(pinned)
+    return runtime_dir() / f"store-{dashboard_port}.db"
+
+
 def _tailscale_status() -> dict | None:
     tailscale = shutil.which("tailscale") or next(
         (p for p in ("/usr/local/bin/tailscale", "/usr/bin/tailscale") if os.path.exists(p)), None
@@ -171,9 +184,10 @@ def _serve(args: argparse.Namespace) -> int:
         mcp_http_host, mcp_http_port = host or "127.0.0.1", int(port) if port else 8000
 
     dashboard_port = _dashboard_port()
-    store_path = runtime_dir() / f"store-{dashboard_port}.db"
-    # Fresh execution log per server: if this port was used by a prior server,
-    # drop its database (and WAL sidecars) so the dashboard never shows stale runs.
+    store_path = _store_path(dashboard_port)
+    # Fresh execution log per server, pinned or minted: a leftover database
+    # (and WAL sidecars) from a prior run would otherwise show stale runs in
+    # the dashboard and the room feed.
     for suffix in ("", "-wal", "-shm"):
         (store_path.parent / (store_path.name + suffix)).unlink(missing_ok=True)
 

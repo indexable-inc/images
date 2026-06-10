@@ -5,15 +5,17 @@
 # - so it exercises the generated Nushell wrapper, the model-alias table, and the
 # Nix-packaged bridge (with its bundled node_modules), not a hand-rolled pi call.
 #
-# Proves three things from the ticket without Room:
+# Proves four things from the ticket without Room:
 #   1. one prompt runs through the packaged harness,
 #   2. the model has NO built-in bash/read/write/edit tools (absent, not denied),
 #      only the ix-mcp surface,
-#   3. the turn produces a stable JSON event stream.
+#   3. the turn produces a stable JSON event stream,
+#   4. a caller-pinned IX_MCP_STORE is honored end-to-end: ix-mcp writes the
+#      run's executions into exactly that file and cell_update events flow.
 #
 # Needs network + an API key for the selected model (ANTHROPIC_API_KEY by
-# default; set PI_HARNESS_MODEL=codex + OPENAI_API_KEY for gpt-5.5). `pi` must be
-# on PATH. Run it yourself - first build can exceed a couple of minutes.
+# default; set PI_HARNESS_MODEL=codex + OPENAI_API_KEY for gpt-5.5). Run it
+# yourself - first build can exceed a couple of minutes.
 #
 #   ANTHROPIC_API_KEY=... ./packages/pi-harnesses/engine/smoke/run.sh
 set -euo pipefail
@@ -33,8 +35,12 @@ harness="$(nix build "$repo_root#pi-harness" --no-link --print-out-paths --accep
 [ -x "$harness/bin/pi-harness" ] || { echo "[smoke] pi-harness not built" >&2; exit 1; }
 
 # 3. Run one prompt through the packaged wrapper and capture its JSON events.
+#    Pin the run store the way the room server does, so step 4 can prove
+#    ix-mcp writes into the caller's file instead of minting its own.
 events="$(mktemp)"
-trap 'rm -f "$events"' EXIT
+store_dir="$(mktemp -d)"
+export IX_MCP_STORE="$store_dir/mcp-store.sqlite"
+trap 'rm -f "$events"; rm -rf "$store_dir"' EXIT
 echo "[smoke] running one turn through bin/pi-harness..." >&2
 "$harness/bin/pi-harness" "What is 2+2? Compute it with python_exec." | tee "$events" >&2
 
@@ -49,6 +55,14 @@ for forbidden in '"bash"' '"read"' '"write"' '"edit"'; do
 done
 grep -q "python_exec" "$events" || { echo "[smoke] FAIL: python_exec not exposed" >&2; fail=1; }
 grep -q '"type":"turn_' "$events" || { echo "[smoke] FAIL: no turn lifecycle events" >&2; fail=1; }
+
+# The pinned store must be the one ix-mcp wrote: the python_exec above must
+# have landed at least one executions row there, and the mapper polling the
+# same path must have surfaced it as cell_update events.
+echo "[smoke] checking the pinned IX_MCP_STORE received the run..." >&2
+rows="$(python3 -c "import sqlite3; print(sqlite3.connect('$IX_MCP_STORE').execute('SELECT count(*) FROM executions').fetchone()[0])" 2>/dev/null || echo 0)"
+[ "$rows" -ge 1 ] || { echo "[smoke] FAIL: pinned IX_MCP_STORE has no executions rows (ix-mcp ignored the pinned store)" >&2; fail=1; }
+grep -q '"type":"cell_update"' "$events" || { echo "[smoke] FAIL: no cell_update events flowed from the pinned store" >&2; fail=1; }
 
 if [ "$fail" -eq 0 ]; then
   echo "[smoke] PASS: built-ins absent, ix-mcp exposed, JSON events emitted via the shipped artifact" >&2
