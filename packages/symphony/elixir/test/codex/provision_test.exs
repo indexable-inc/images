@@ -86,12 +86,29 @@ defmodule SymphonyElixir.Codex.ProvisionTest do
     config = config_with_repos()
     blocks = Provision.repo_blocks(config, "/home/u/symphony-workspaces/run1", "symphony/run1", "ghs_tok")
 
-    assert blocks =~ "clone --depth 1 --branch 'main' 'https://github.com/acme/app.git'"
+    assert blocks =~ "clone --depth 1 --no-checkout --branch 'main' 'https://github.com/acme/app.git'"
     assert blocks =~ "http.https://github.com/.extraheader"
-    assert blocks =~ "checkout -b 'symphony/run1'"
     assert blocks =~ "user.name' 'acme-bot[bot]'"
     assert blocks =~ "user.email' 'bot@acme.dev'"
     assert blocks =~ Base.encode64("x-access-token:ghs_tok")
+  end
+
+  test "repo_blocks provisions the workspace as a linked worktree of a hidden base clone" do
+    config = config_with_repos()
+    blocks = Provision.repo_blocks(config, "/home/u/symphony-workspaces/run1", "symphony/run1", nil)
+
+    # The agent-facing workspace must be a linked worktree, not a
+    # standalone clone: repo-side guards treat git-dir == git-common-dir
+    # as the human's canonical checkout and deny commits (index#1038).
+    assert blocks =~
+             "clone --depth 1 --no-checkout --branch 'main' " <>
+               "'https://github.com/acme/app.git' '/home/u/symphony-workspaces/run1/.base/app'"
+
+    assert blocks =~
+             "git -C '/home/u/symphony-workspaces/run1/.base/app' worktree add " <>
+               "'/home/u/symphony-workspaces/run1/app' -b 'symphony/run1'"
+
+    refute blocks =~ "checkout -b"
   end
 
   test "repo_blocks omits the auth header when no token is available" do
@@ -111,7 +128,7 @@ defmodule SymphonyElixir.Codex.ProvisionTest do
     blocks =
       Provision.repo_blocks(config, "/home/u/symphony-workspaces/run1", "symphony/run1", "ghs_tok", repositories)
 
-    assert blocks =~ "clone --depth 1 --branch 'main' 'https://github.com/indexable-inc/ix.git'"
+    assert blocks =~ "clone --depth 1 --no-checkout --branch 'main' 'https://github.com/indexable-inc/ix.git'"
     refute blocks =~ "acme/app"
   end
 
