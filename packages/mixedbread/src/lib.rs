@@ -68,6 +68,30 @@ const BACKOFF_BASE: Duration = Duration::from_millis(500);
 /// honor, so one absurd header value cannot stall a whole sync.
 const BACKOFF_CAP: Duration = Duration::from_secs(30);
 
+/// Bound on establishing a connection. reqwest's default is none, so one
+/// unanswered SYN under load would hold a whole sync hostage.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bound on one whole request, from send through reading the response body.
+/// reqwest's default is no timeout: when Mixedbread sheds a stream under load
+/// the TCP connection stays ESTAB on keepalives and the response never comes,
+/// so the await never resolves and [`Client::send_retrying`]'s transport-retry
+/// arm never runs. This wedged the ix leader's corpus-view reconcile bootstrap
+/// mid-listing for over an hour (2026-06-10). 120s clears the slowest
+/// legitimate requests (a 1 MiB multipart upload, a reranked search under
+/// load); past that the stream is dead and the retry ladder takes over.
+const REQUEST_TIMEOUT: Duration = Duration::from_mins(2);
+
+/// The crate's HTTP client builder, with every request bounded by
+/// [`CONNECT_TIMEOUT`] and [`REQUEST_TIMEOUT`] so a shed stream surfaces as a
+/// retryable transport error instead of an unbounded await. Every client in
+/// this crate (store API here, token exchange in [`auth`]) builds from this.
+pub(crate) fn bounded_http_builder() -> reqwest::ClientBuilder {
+    HttpClient::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+}
+
 /// Failures from the Mixedbread client.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
@@ -273,7 +297,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP client cannot be built.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Result<Self> {
-        let http = HttpClient::builder().build().context(BuildClientSnafu)?;
+        let http = bounded_http_builder().build().context(BuildClientSnafu)?;
         Ok(Self {
             http,
             base_url: base_url.into(),
@@ -831,9 +855,11 @@ mod tests {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
 
+    use std::time::Duration;
+
     use super::{
-        BACKOFF_BASE, BACKOFF_CAP, Chunk, Client, DEFAULT_RERANK_MODEL, Error, ListRequest,
-        MAX_RETRIES, RawChunk, Rerank, backoff,
+        BACKOFF_BASE, BACKOFF_CAP, Chunk, Client, DEFAULT_RERANK_MODEL, Error, HttpClient,
+        ListRequest, MAX_RETRIES, RawChunk, Rerank, backoff,
     };
     use crate::Filter;
 
@@ -1056,6 +1082,71 @@ mod tests {
             base_url: format!("http://{addr}"),
             calls,
         }
+    }
+
+    /// TCP server that accepts and then holds the connection open without ever
+    /// responding for the first `stall_times` connections, then answers `200`.
+    /// This is the wedge [`super::REQUEST_TIMEOUT`] exists for: the connection
+    /// stays ESTAB, no transport error fires on its own, and only a client-side
+    /// timeout can turn the stall into a retryable error. Returns the base URL
+    /// and a counter of accepted connections.
+    async fn spawn_stalling_tcp(stall_times: usize) -> MockServer {
+        use tokio::io::AsyncWriteExt as _;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let calls_task = Arc::clone(&calls);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    continue;
+                };
+                let n = calls_task.fetch_add(1, Ordering::SeqCst);
+                // Each connection gets its own task: a stalled socket must stay
+                // open (dropping it would be a transport error, a different
+                // test) without blocking the accept loop.
+                tokio::spawn(async move {
+                    if n < stall_times {
+                        tokio::time::sleep(Duration::from_hours(1)).await;
+                    } else {
+                        let _ = sock
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                            .await;
+                        let _ = sock.shutdown().await;
+                    }
+                });
+            }
+        });
+        MockServer {
+            base_url: format!("http://{addr}"),
+            calls,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stalled_response_times_out_and_retries() {
+        // Pays real backoff (~1s), like the transport-error test below.
+        let MockServer { base_url, calls } = spawn_stalling_tcp(2).await;
+        // Built directly rather than via `Client::new` so the stall is bounded
+        // by a test-sized timeout instead of the production REQUEST_TIMEOUT;
+        // the retry path under test is identical.
+        let client = Client {
+            http: HttpClient::builder()
+                .timeout(Duration::from_millis(200))
+                .build()
+                .expect("client"),
+            base_url,
+            api_key: "test-key".into(),
+        };
+        client
+            .ensure_store("store")
+            .await
+            .expect("succeeds after stalled attempts time out");
+        // 2 stalled connections + 1 answered.
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
