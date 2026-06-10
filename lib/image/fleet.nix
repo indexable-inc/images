@@ -326,13 +326,6 @@ let
       inherit (planValue) secrets;
     };
 
-  userLocalBinPath = ''
-    let home = ($env.HOME? | default "")
-    if $home != "" {
-      $env.PATH = [$"($home)/.local/bin"] ++ $env.PATH
-    }
-  '';
-
   resultFor =
     prefix:
     let
@@ -340,16 +333,19 @@ let
       externalKeyed = lib.mapAttrs' (name: value: lib.nameValuePair (externalName name) value);
       planValueFor = if prefix == "" then planValue else prefixedPlanValue prefix;
       plan = (pkgs.formats.json { }).generate "ix-fleet-plan.json" planValueFor;
-      # Wraps `ix-fleet [sub]` with a stable PATH that includes ~/.local/bin so
-      # users see their installed `ix` binary, not whatever nix happens to find.
       mkFleetCmd =
         sub:
         writeNushellApplication pkgs {
           name = if sub == null then "ix-fleet" else "ix-fleet-${sub}";
           runtimeInputs = [ ixFleet ];
+          # Wraps `ix-fleet [sub]` with a stable PATH that includes ~/.local/bin so
+          # users see their installed `ix` binary, not whatever nix happens to find.
           text = ''
             def --wrapped main [...args] {
-              ${userLocalBinPath}
+              let home = ($env.HOME? | default "")
+              if $home != "" {
+                $env.PATH = [$"($home)/.local/bin"] ++ $env.PATH
+              }
               exec ${lib.getExe ixFleet} --plan ${plan} ${lib.optionalString (sub != null) "${sub} "}...$args
             }
           '';
