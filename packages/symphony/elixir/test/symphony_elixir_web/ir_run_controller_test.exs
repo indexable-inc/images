@@ -154,6 +154,7 @@ defmodule SymphonyElixirWeb.IRRunControllerTest do
   # non-Claude model under :claude, so each engine needs an agreeing model.
   defp model_for(:codex), do: "gpt-5.3-codex"
   defp model_for(:claude), do: "claude-opus-4-8"
+  defp model_for(:pi), do: "claude"
 
   test "GET /api/v1/ir/runs lists persisted run summaries" do
     persist_run("run_a", :succeeded)
