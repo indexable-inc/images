@@ -61,7 +61,7 @@ let
   wireVersion = "0.1.0";
   wireHash = "4e5d4b3c3884e404";
   wireToolchainId = "iz0mdcq43pxl3fmxmznc6n38sals6q0x-rust-default-1.98.0-nightly-2026-05-27";
-  r2Base = "https://pub-c52bf5a1e3db4628aaf57fe94cb5de10.r2.dev/rlib/ix-sdk-wire/${wireHash}";
+  r2Base = "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/rlib/ix-sdk-wire/${wireHash}";
 
   # Fixed-output fetches: the SRI hash is the store-path identity, so the URL
   # carries no secret and substituters can short-circuit. These are the actual
