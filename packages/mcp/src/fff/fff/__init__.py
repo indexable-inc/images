@@ -69,6 +69,8 @@ __all__ = [
     "find",
     "finder",
     "grep",
+    "tree",
+    "atree",
     "map",
     "amap",
     "CodeMap",
@@ -394,6 +396,7 @@ class SearchResult:
                     "path": h.path,
                     "name": h.name,
                     "size": h.size,
+                    "modified": h.modified,
                     "frecency": h.frecency,
                     "git": h.git_status,
                     "binary": h.is_binary,
@@ -404,11 +407,12 @@ class SearchResult:
                 "path": pl.Utf8,
                 "name": pl.Utf8,
                 "size": pl.Int64,
+                "modified": pl.Int64,
                 "frecency": pl.Int64,
                 "git": pl.Utf8,
                 "binary": pl.Boolean,
             },
-        )
+        ).with_columns(pl.from_epoch("modified", time_unit="s"))
 
     def _ix_to_frame_(self):
         """Kernel table protocol: render as this polars frame for both the human
@@ -1038,6 +1042,48 @@ def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
             result = ff.search(query=query, limit=limit)
     hits = [replace(h, path=only, name=only, root=root) for h in result.hits][:limit]
     return SearchResult(hits=hits, total_matched=len(hits), total_files=len(hits))
+
+
+def tree(path=".", *, glob: str = "**", limit: int = 10_000) -> SearchResult:
+    """The file tree under `path=` as data: every (gitignore-aware) file with its
+    size and mtime, reusing a cached watched index.
+
+    This is the primitive for "what is in this directory?" -- reach for it
+    instead of hand-rolling `os.walk` with ad-hoc ignore lists. The result's
+    ``.df`` is a polars frame (``path``, ``name``, ``size``, ``modified``, ...),
+    so shaping is a polars expression, not a loop::
+
+        fff.tree("packages/mcp").df.sort("size", descending=True).head(20)
+        fff.tree(".").df.filter(pl.col("path").str.contains("site/"))
+
+    ``glob`` narrows the listing natively (e.g. ``"src/**"``, ``"*.rs"``); the
+    default ``"**"`` lists everything. Honors the same ignore rules as `find`/
+    `grep` (gitignore, hidden files), and refuses a bare `~`/`/` root with
+    guidance toward a scoped subdirectory.
+    """
+    root, only = _split_path(path)
+    if only is not None:
+        # A single file is a one-row tree; stat it directly rather than spinning
+        # up an isolated index.
+        stat = os.stat(os.path.join(root, only))
+        hit = FileHit(
+            path=only,
+            name=only,
+            size=stat.st_size,
+            modified=int(stat.st_mtime),
+            frecency=0,
+            is_binary=False,
+            root=root,
+        )
+        return SearchResult(hits=[hit], total_matched=1, total_files=1)
+    if _is_unindexable_root(root):
+        raise _refuse_unindexable_dir(root)
+    return _cached(root).glob(pattern=glob, limit=limit)
+
+
+async def atree(path=".", *, glob: str = "**", limit: int = 10_000) -> SearchResult:
+    """Async file-tree listing: runs off the event loop (non-blocking)."""
+    return await asyncio.to_thread(tree, path=path, glob=glob, limit=limit)
 
 
 def grep(query: str | list[str], path=".", *, mode: str = "plain", limit: int = 50, glob: str | None = None) -> GrepResult:

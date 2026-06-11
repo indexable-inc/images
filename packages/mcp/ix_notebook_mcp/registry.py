@@ -41,7 +41,8 @@ class Builtin:
 MODULES: tuple[Module, ...] = (
     Module(
         "fff",
-        "typo-tolerant file find + SIMD content grep; every result's `.df` is a polars frame",
+        "file tree listing (`tree`), typo-tolerant find, SIMD content grep; every result's "
+        "`.df` is a polars frame",
         preimport=True,
     ),
     Module(

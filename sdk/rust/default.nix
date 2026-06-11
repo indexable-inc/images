@@ -25,15 +25,17 @@ let
   # The exact toolchain the R2 `ix-sdk-wire` rlib was compiled with. The
   # cargo-unit hash folds in the toolchain id (the store-path basename), so the
   # public SDK workspace MUST build with a toolchain that resolves to id
-  # `a2djkcczjhr55zfcqhhxabxkhzai2hpa-rust-default-1.98.0-nightly-2026-05-27`,
+  # `iz0mdcq43pxl3fmxmznc6n38sals6q0x-rust-default-1.98.0-nightly-2026-05-27`,
   # or the generated `ix-sdk-wire` unit hash diverges from the prebuilt's.
   #
   # ix builds via `rust-bin.fromRustupToolchainFile rust-toolchain.toml`; the
   # equivalent is the index rust toolchain helper with ix's exact pin: the same
   # nightly date, the `default` rust-overlay profile, ix's extra components, and
-  # ix's extra targets (rust-overlay is locked at the SAME rev in both repos:
-  # oxalica/rust-overlay c30ca201). Verified on x86_64-linux that this yields
-  # the `a2dj...` toolchain id above.
+  # ix's extra targets (ix rust-toolchain.toml added aarch64-apple-darwin in
+  # ix#4278, which is what moved the toolchain id off `a2dj...`). The binding
+  # constraint is that this resolves to wireToolchainId (the eval assert in
+  # mkPrebuiltLibraryUnit enforces it); verified on x86_64-linux at index's
+  # rust-overlay d286e969 that this yields the `iz0m...` id above.
   rustToolchain = ix.languages.rust.toolchain pkgs {
     channel = "nightly";
     version = "2026-05-27";
@@ -45,6 +47,7 @@ let
       "llvm-tools"
     ];
     targets = [
+      "aarch64-apple-darwin"
       "x86_64-unknown-linux-musl"
       "wasm32-unknown-unknown"
     ];
@@ -56,20 +59,20 @@ let
   # must GENERATE this same hash for its `ix-sdk-wire` stub or the injection is
   # rejected by buildWorkspace's C1 assert.
   wireVersion = "0.1.0";
-  wireHash = "134ac8c636bf38ee";
-  wireToolchainId = "a2djkcczjhr55zfcqhhxabxkhzai2hpa-rust-default-1.98.0-nightly-2026-05-27";
-  r2Base = "https://pub-c52bf5a1e3db4628aaf57fe94cb5de10.r2.dev/rlib/ix-sdk-wire/${wireHash}";
+  wireHash = "4e5d4b3c3884e404";
+  wireToolchainId = "iz0mdcq43pxl3fmxmznc6n38sals6q0x-rust-default-1.98.0-nightly-2026-05-27";
+  r2Base = "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/rlib/ix-sdk-wire/${wireHash}";
 
   # Fixed-output fetches: the SRI hash is the store-path identity, so the URL
   # carries no secret and substituters can short-circuit. These are the actual
   # compiled artifacts produced in the ix repo, not rebuilt here.
   wireRlib = pkgs.fetchurl {
     url = "${r2Base}/libix_sdk_wire-${wireHash}.rlib";
-    hash = "sha256-2tb6UoAkABVaEU0uSrrUSUMNk1uh3tA9DD1pwjDzHyE=";
+    hash = "sha256-ShWsIGI6UAjCA/rWgRs9CMJ7kdak0L3Yzvn8Wjgb+X8=";
   };
   wireRmeta = pkgs.fetchurl {
     url = "${r2Base}/libix_sdk_wire-${wireHash}.rmeta";
-    hash = "sha256-27T6SgFketntMqD/gAplv563tjYZ6K9/nY7SZV70D0Q=";
+    hash = "sha256-zz7SV4SgbuGRzh+nbbLXT09S+HWaZRPgd635fMhXT04=";
   };
 
   # Wrap the fetched rlib+rmeta as a cargo-unit library unit. The Cargo lib
@@ -129,8 +132,8 @@ let
   # (indexable-inc/ix nix/lib/workspace-cargo-unit.nix) so the resolved tree is
   # byte-identical to ix's.
   outputHashes = {
-    "git+https://github.com/shepmaster/snafu.git#1f8e75f56390c421a198871916100c6316d23d4f" =
-      "sha256-bz0kOXgdKkID7NUb4RGPIifdx4vnVuvnjucVjYdfvZE=";
+    "git+https://github.com/shepmaster/snafu.git#ff50133848f39de1b1fd40c74daa9d781fdda544" =
+      "sha256-eSNVZr0TxDguSSu9c3L6S7rwqq45NemtmTvxHdiDRgM=";
   };
 
   commonArgs = {

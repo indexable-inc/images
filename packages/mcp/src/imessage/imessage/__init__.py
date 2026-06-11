@@ -4,8 +4,8 @@ Bundled into the pinned interpreter the same way ``screen`` and ``vmkit`` are, s
 every session can ``import imessage`` with no install step. macOS keeps the whole
 Messages history in a SQLite database (``~/Library/Messages/chat.db``) and the
 address book in another (``~/Library/Application Support/AddressBook``); this
-module reads both into ``polars`` DataFrames and sends new messages through the
-Messages app over AppleScript.
+module reads both into ``polars`` DataFrames, sends new messages through the
+Messages app over AppleScript, and edits contacts through the Contacts app.
 
     import imessage
 
@@ -18,6 +18,10 @@ Messages app over AppleScript.
 
     imessage.send("+12025550123", "on my way")   # send an iMessage
     imessage.send("a@b.com", "hi", service="SMS")  # …or a green-bubble SMS
+
+    cid = imessage.add_contact(first="Ada", last="Lovelace", phones=["+12025550123"])
+    imessage.update_contact("Ada Lovelace", last="King", add_emails=["ada@example.com"])
+    imessage.delete_contact(cid)             # by id or unique name
 
 Reading is the interesting half. Modern macOS stores most message text not in
 ``message.text`` (often NULL) but in ``message.attributedBody``, an archived
@@ -35,7 +39,10 @@ Reading ``chat.db`` requires the host process to have **Full Disk Access**
 (System Settings > Privacy & Security > Full Disk Access); without it SQLite
 fails to open the file and :func:`messages` raises a clear error pointing here.
 Sending drives the Messages app through AppleScript, which the first time prompts
-for **Automation** permission to control "Messages"; grant it and retry.
+for **Automation** permission to control "Messages"; grant it and retry. Contact
+edits likewise drive the Contacts app (first use prompts for Automation
+permission to control "Contacts"); they save into the default account, so on a
+Mac signed into iCloud they sync to every device like an edit made by hand.
 
 This module is macOS-only (the databases and the Messages app are Apple's);
 importing on a non-Darwin platform raises ``RuntimeError``.
@@ -43,11 +50,13 @@ importing on a non-Darwin platform raises ``RuntimeError``.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Iterable
 from datetime import datetime, timezone
 
 import polars as pl
@@ -55,6 +64,9 @@ import polars as pl
 __all__ = [
     "CHAT_DB",
     "contacts",
+    "add_contact",
+    "update_contact",
+    "delete_contact",
     "chats",
     "messages",
     "send",
@@ -177,27 +189,31 @@ def _contact_db() -> str | None:
     return max(candidates, key=os.path.getmtime)
 
 
+_CONTACT_SCHEMA = {
+    "id": pl.Utf8, "name": pl.Utf8, "first": pl.Utf8, "last": pl.Utf8,
+    "organization": pl.Utf8, "phones": pl.List(pl.Utf8), "emails": pl.List(pl.Utf8),
+}
+
+
 def contacts(*, db: str | None = None) -> pl.DataFrame:
     """The macOS address book as a polars DataFrame, one row per contact.
 
-    Columns: ``name`` (full display name), ``first``, ``last``, ``organization``,
-    ``phones`` (list of strings), ``emails`` (list of strings). Pass ``db`` to
-    read a specific ``.abcddb`` file; by default the newest address-book store is
-    used. Reading requires Full Disk Access (see the module docstring).
+    Columns: ``id`` (the stable address-book unique id, e.g.
+    ``"UUID:ABPerson"`` -- the same id :func:`update_contact` and
+    :func:`delete_contact` accept), ``name`` (full display name), ``first``,
+    ``last``, ``organization``, ``phones`` (list of strings), ``emails`` (list of
+    strings). Pass ``db`` to read a specific ``.abcddb`` file; by default the
+    newest address-book store is used. Reading requires Full Disk Access (see the
+    module docstring).
     """
 
     path = db or _contact_db()
     if path is None:
-        return pl.DataFrame(
-            schema={
-                "name": pl.Utf8, "first": pl.Utf8, "last": pl.Utf8,
-                "organization": pl.Utf8, "phones": pl.List(pl.Utf8), "emails": pl.List(pl.Utf8),
-            }
-        )
+        return pl.DataFrame(schema=_CONTACT_SCHEMA)
     con = _connect(path)
     try:
         records = con.execute(
-            "SELECT Z_PK, ZFIRSTNAME, ZLASTNAME, ZORGANIZATION, ZNICKNAME FROM ZABCDRECORD"
+            "SELECT Z_PK, ZUNIQUEID, ZFIRSTNAME, ZLASTNAME, ZORGANIZATION, ZNICKNAME FROM ZABCDRECORD"
         ).fetchall()
         phones: dict[int, list[str]] = {}
         for owner, number in con.execute(
@@ -213,22 +229,16 @@ def contacts(*, db: str | None = None) -> pl.DataFrame:
         con.close()
 
     rows = []
-    for pk, first, last, org, nick in records:
+    for pk, uid, first, last, org, nick in records:
         name = " ".join(p for p in (first, last) if p) or nick or org
         ph, em = phones.get(pk, []), emails.get(pk, [])
         if not (name or ph or em):
             continue
         rows.append({
-            "name": name, "first": first, "last": last,
+            "id": uid, "name": name, "first": first, "last": last,
             "organization": org, "phones": ph, "emails": em,
         })
-    return pl.DataFrame(
-        rows,
-        schema={
-            "name": pl.Utf8, "first": pl.Utf8, "last": pl.Utf8,
-            "organization": pl.Utf8, "phones": pl.List(pl.Utf8), "emails": pl.List(pl.Utf8),
-        },
-    ).sort("name", nulls_last=True)
+    return pl.DataFrame(rows, schema=_CONTACT_SCHEMA).sort("name", nulls_last=True)
 
 
 def _name_index(contact_db: str | None) -> dict[str, str]:
@@ -590,3 +600,208 @@ def send(to: str, text: str, *, service: str = "iMessage", timeout: float = 30.0
             "an Automation-permission prompt, grant control of Messages under "
             "System Settings > Privacy & Security > Automation, then retry."
         )
+
+
+# --- Contact editing -------------------------------------------------------
+#
+# Writes go through the Contacts app (JXA over osascript), never the SQLite
+# store: contactsd owns that database, and an edit made through the app lands in
+# the default account and syncs to iCloud exactly like a hand-made edit, while a
+# direct SQLite write would be invisible to sync and risk corrupting the store.
+# The whole operation is passed as ONE JSON `run` argument (never interpolated
+# into the script text), so contact data cannot inject code. JXA rather than
+# AppleScript because parsing structured input (lists of labeled phones/emails)
+# is `JSON.parse` instead of string surgery.
+_CONTACTS_SCRIPT = """
+function run(argv) {
+    const spec = JSON.parse(argv[0]);
+    const app = Application("Contacts");
+    const norm = (v) => {
+        const s = String(v).trim();
+        if (s.includes("@")) return s.toLowerCase();
+        const digits = s.replace(/\\D/g, "");
+        return digits.length >= 10 ? digits.slice(-10) : digits;
+    };
+    const FIELDS = { first: "firstName", last: "lastName", organization: "organization" };
+
+    if (spec.op === "add") {
+        const props = {};
+        for (const [key, prop] of Object.entries(FIELDS))
+            if (spec[key] != null) props[prop] = spec[key];
+        const person = app.Person(props);
+        app.people.push(person);
+        for (const p of spec.addPhones) person.phones.push(app.Phone({ label: p.label, value: p.value }));
+        for (const e of spec.addEmails) person.emails.push(app.Email({ label: e.label, value: e.value }));
+        app.save();
+        return person.id();
+    }
+
+    const person = app.people.byId(spec.id);
+    person.id(); // touch it so a stale/foreign id fails here with a clear error
+
+    if (spec.op === "delete") {
+        app.delete(person);
+        app.save();
+        return "";
+    }
+
+    for (const [key, prop] of Object.entries(FIELDS))
+        if (spec[key] != null) person[prop] = spec[key];
+    const drop = (elements, wanted) => {
+        const keys = new Set(wanted.map(norm));
+        // Snapshot before deleting: removing while iterating a live elements
+        // proxy skips neighbors.
+        for (const el of Array.from(elements())) if (keys.has(norm(el.value()))) app.delete(el);
+    };
+    if (spec.removePhones.length) drop(person.phones, spec.removePhones);
+    if (spec.removeEmails.length) drop(person.emails, spec.removeEmails);
+    for (const p of spec.addPhones) person.phones.push(app.Phone({ label: p.label, value: p.value }));
+    for (const e of spec.addEmails) person.emails.push(app.Email({ label: e.label, value: e.value }));
+    app.save();
+    return person.id();
+}
+"""
+
+# Contacts stores its built-in labels in the `_$!<...>!$_` form; a label set to
+# the plain word would show up as a custom label, so the common ones are mapped
+# to the canonical spelling and anything else passes through as a custom label.
+_LABELS = {
+    name.lower(): f"_$!<{name}>!$_"
+    for name in ("Mobile", "iPhone", "Home", "Work", "Main", "School", "Other", "HomePage")
+}
+
+
+def _labeled(values: Iterable[str | tuple[str, str]] | None, default_label: str) -> list[dict[str, str]]:
+    """Normalize ``["+1..."]`` / ``[("work", "+1...")]`` to JXA label/value dicts."""
+
+    out = []
+    for value in values or ():
+        label, value = value if isinstance(value, tuple) else (default_label, value)
+        out.append({"label": _LABELS.get(label.lower(), label), "value": value})
+    return out
+
+
+def _contact_id(contact: str) -> str:
+    """Resolve a contact argument (unique id or name) to an address-book id.
+
+    An id (``"...:ABPerson"``) passes through; anything else is matched against
+    contact names, case-insensitive substring, and must hit exactly one person.
+    """
+
+    if contact.endswith(":ABPerson"):
+        return contact
+    needle = contact.strip().lower()
+    matches = [
+        (row["id"], row["name"])
+        for row in contacts().iter_rows(named=True)
+        if needle in (row["name"] or "").lower()
+    ]
+    if len(matches) == 1:
+        return matches[0][0]
+    if not matches:
+        raise LookupError(f"imessage: no contact matching {contact!r}.")
+    names = ", ".join(f"{name} ({cid})" for cid, name in matches[:10])
+    raise LookupError(
+        f"imessage: {contact!r} matches {len(matches)} contacts: {names}. "
+        "Pass the id instead."
+    )
+
+
+def _run_contacts_script(spec: dict, timeout: float) -> str:
+    proc = subprocess.run(
+        ["osascript", "-l", "JavaScript", "-e", _CONTACTS_SCRIPT, json.dumps(spec)],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.strip() or proc.stdout.strip() or "unknown error"
+        raise RuntimeError(
+            f"imessage: contact {spec['op']} failed: {detail}. If this is an "
+            "Automation-permission prompt, grant control of Contacts under "
+            "System Settings > Privacy & Security > Automation, then retry."
+        )
+    return proc.stdout.strip()
+
+
+def add_contact(
+    *,
+    first: str | None = None,
+    last: str | None = None,
+    organization: str | None = None,
+    phones: Iterable[str | tuple[str, str]] | None = None,
+    emails: Iterable[str | tuple[str, str]] | None = None,
+    timeout: float = 30.0,
+) -> str:
+    """Create a contact and return its address-book id.
+
+    ``phones`` and ``emails`` are plain strings (labeled ``mobile`` / ``home``)
+    or ``(label, value)`` tuples; common labels (``mobile``, ``work``, ...)
+    map to the Contacts built-ins, anything else becomes a custom label. Saves
+    through the Contacts app into the default account, so on an iCloud-signed-in
+    Mac the new contact syncs everywhere (see the module docstring for the
+    Automation permission).
+    """
+
+    if not any((first, last, organization)):
+        raise ValueError("imessage.add_contact: pass at least one of first/last/organization.")
+    return _run_contacts_script(
+        {
+            "op": "add",
+            "first": first, "last": last, "organization": organization,
+            "addPhones": _labeled(phones, "mobile"),
+            "addEmails": _labeled(emails, "home"),
+        },
+        timeout,
+    )
+
+
+def update_contact(
+    contact: str,
+    *,
+    first: str | None = None,
+    last: str | None = None,
+    organization: str | None = None,
+    add_phones: Iterable[str | tuple[str, str]] | None = None,
+    add_emails: Iterable[str | tuple[str, str]] | None = None,
+    remove_phones: Iterable[str] | None = None,
+    remove_emails: Iterable[str] | None = None,
+    timeout: float = 30.0,
+) -> str:
+    """Edit a contact in place and return its address-book id.
+
+    ``contact`` is an id from :func:`contacts` (``"...:ABPerson"``) or a name,
+    which must match exactly one person. ``first`` / ``last`` /
+    ``organization`` replace the field when given (``""`` clears it, ``None``
+    leaves it alone). ``add_phones`` / ``add_emails`` take the same values as
+    :func:`add_contact`; ``remove_phones`` / ``remove_emails`` match loosely
+    (phones on their last 10 digits, emails case-insensitively), so
+    ``"+1 (202) 555-0123"`` removes ``2025550123``. Removals run before
+    additions, so replacing a number is one call. Saves through the Contacts
+    app, so the edit syncs to iCloud like a hand-made one.
+    """
+
+    spec = {
+        "op": "update",
+        "id": _contact_id(contact),
+        "first": first, "last": last, "organization": organization,
+        "addPhones": _labeled(add_phones, "mobile"),
+        "addEmails": _labeled(add_emails, "home"),
+        "removePhones": list(remove_phones or ()),
+        "removeEmails": list(remove_emails or ()),
+    }
+    if not (
+        any(v is not None for v in (first, last, organization))
+        or spec["addPhones"] or spec["addEmails"] or spec["removePhones"] or spec["removeEmails"]
+    ):
+        raise ValueError("imessage.update_contact: nothing to change.")
+    return _run_contacts_script(spec, timeout)
+
+
+def delete_contact(contact: str, *, timeout: float = 30.0) -> None:
+    """Delete a contact by id or unique name (resolved like :func:`update_contact`).
+
+    Deletes through the Contacts app, so the removal syncs to iCloud.
+    """
+
+    _run_contacts_script({"op": "delete", "id": _contact_id(contact)}, timeout)

@@ -64,7 +64,10 @@ def _rev(jobs: list[dict], cells: list[dict], resources: list[dict]) -> str:
     job streaming output advances the marker without hashing whole payloads."""
     parts: list[str] = []
     for j in jobs:
-        parts.append(f"j{j['id']}:{j.get('status')}:{j.get('ended_at') or len(j.get('output') or '')}")
+        parts.append(
+            f"j{j['id']}:{j.get('status')}:{j.get('ended_at') or len(j.get('output') or '')}"
+            f":{j.get('line')}"
+        )
     for c in cells:
         parts.append(f"c{c['id']}:{c.get('updated_at')}")
     for r in resources:

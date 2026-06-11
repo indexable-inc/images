@@ -14,6 +14,11 @@
     "pluginName": "CoreProtect",
     "url": "https://cdn.modrinth.com/data/Lu3KuzdV/versions/6W2ad1iI/CoreProtect-CE-23.2.jar"
   },
+  "discordsrv": {
+    "hash": "sha512-7zHH3Ylix/kHvDe212LA69G1LyD/crst017bDjVAEMA9PrTK+o96zsQqpekZiIFL0MM4pbztBglcB6a5s2ZQXA==",
+    "pluginName": "DiscordSRV",
+    "url": "https://cdn.modrinth.com/data/UmLGoGij/versions/ATlquwiT/DiscordSRV-Build-1.30.5.jar"
+  },
   "distant-horizons-support": {
     "hash": "sha512-eyxQSdPch9lYAX/T/8if+Pmv8ViOskyCTgU9PTkh1ZkIuqLdc66erl+7Rg859LVHjjO6C8Oa7OMDGB9I0RtO9A==",
     "pluginName": "DHSupport",

@@ -1,12 +1,24 @@
 """The ``ix-mcp`` command line.
 
-  ix-mcp serve            run the MCP server over stdio (what a client launches)
-  ix-mcp serve --http A   run it over streamable HTTP at A (host:port)
-  ix-mcp eval EXPR        evaluate one expression on a throwaway kernel
-  ix-mcp exec SRC         run statements on a throwaway kernel
+  ix-mcp serve                 run the MCP server over stdio (what a client launches)
+  ix-mcp serve --http A        run it over streamable HTTP at A (host:port)
+  ix-mcp serve --session F     same, but F is a persistent session file (see below)
+  ix-mcp notebook [F]          run the notebook engine alone (kernel + dashboard, no MCP)
+  ix-mcp eval EXPR             evaluate one expression on a throwaway kernel
+  ix-mcp exec SRC              run statements on a throwaway kernel
 
 `serve` starts ONE shared IPython kernel, an auto-started read-only dashboard
 over the execution store, and the MCP transport, all on one event loop.
+`notebook` is the engine without the MCP surface: the same kernel, store, and
+dashboard, driven only by what is already in the session file and the humans
+watching it.
+
+A session file (``--session work.ixnb`` or ``notebook work.ixnb``) makes the
+store persistent instead of per-run: every cell, its outputs, and a serialized
+checkpoint of the kernel namespace are recorded in that one SQLite file.
+Reopening an existing file restores the namespace from the checkpoint
+instantly, replays only the cells newer than it, and marks cells that died
+mid-run as interrupted -- a Jupyter notebook whose state comes back.
 """
 
 from __future__ import annotations
@@ -20,6 +32,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 import webbrowser
 from pathlib import Path
 
@@ -27,34 +40,6 @@ from .config import Config, runtime_dir, set_config
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _WILDCARD_HOSTS = {"0.0.0.0", "::"}
-
-# Required env vars for each integration. Each entry is (var_name, description).
-# GOOGLE_OAUTH_* are excluded in a shared (multiplayer) room (IX_MCP_SHARED is set)
-# because google_auth refuses minting there by design.
-_REQUIRED_ENV: list[tuple[str, str]] = [
-    ("EXA_API_KEY", "exa web search (exa_py)"),
-    ("IX_GCAL_BIN", "Gmail / Calendar via the bundled gcal binary"),
-    ("GOOGLE_OAUTH_CLIENT_ID", "Gmail / Calendar OAuth client (gcal binary)"),
-    ("GOOGLE_OAUTH_CLIENT_SECRET", "Gmail / Calendar OAuth client (gcal binary)"),
-]
-# Vars that are only required in incognito (non-shared) sessions.
-_GOOGLE_OAUTH_VARS = {"GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"}
-
-
-def _missing_env(shared: bool = False) -> list[tuple[str, str]]:
-    """Return (var, description) pairs for every required env var that is unset or empty.
-
-    When ``shared`` is True the Google OAuth client id/secret are omitted: a
-    shared (multiplayer) room refuses google_auth by design, so those vars are
-    not required there.
-    """
-    missing = []
-    for var, desc in _REQUIRED_ENV:
-        if shared and var in _GOOGLE_OAUTH_VARS:
-            continue
-        if not os.environ.get(var):
-            missing.append((var, desc))
-    return missing
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -71,11 +56,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Serve over streamable HTTP at host:port instead of stdio",
     )
     serve.add_argument(
-        "--no-env-check",
-        action="store_true",
-        default=False,
-        help="Skip the required-env preflight check (also: IX_MCP_SKIP_ENV_CHECK=1)",
+        "--session",
+        metavar="FILE",
+        help="Persistent session file: record every cell, its outputs, and a namespace "
+        "checkpoint there; reopening an existing file restores the state",
     )
+    notebook = sub.add_parser(
+        "notebook", help="Run the notebook engine alone (kernel + dashboard, no MCP transport)"
+    )
+    notebook.add_argument(
+        "session", nargs="?", metavar="FILE", help="Session file to create or reopen"
+    )
+    notebook.add_argument("--workdir", help="Directory the kernel runs in (default: cwd)")
     sub.add_parser("dashboard", help="Open the running server's dashboard URL")
     ev = sub.add_parser("eval", help="Evaluate one expression on a throwaway kernel")
     ev.add_argument("code")
@@ -84,8 +76,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     command = args.command or "serve"
-    if command == "serve":
-        return _serve(args)
+    if command in ("serve", "notebook"):
+        return _serve(args, engine_only=command == "notebook")
     if command == "dashboard":
         return _dashboard()
     if command in ("eval", "exec"):
@@ -224,23 +216,7 @@ def _resolve_ssh_auth_sock(
     return op_sock
 
 
-def _serve(args: argparse.Namespace) -> int:
-    # Fail fast if required env vars are missing, before touching stdio fds or
-    # starting the kernel. This surfaces ALL missing vars at once so the operator
-    # can fix them in one go, rather than discovering each mid-session.
-    skip_check = getattr(args, "no_env_check", False) or os.environ.get("IX_MCP_SKIP_ENV_CHECK")
-    if not skip_check:
-        shared = bool(os.environ.get("IX_MCP_SHARED"))
-        missing = _missing_env(shared=shared)
-        if missing:
-            lines = ["[ix-mcp] missing required environment variables:"]
-            for var, desc in missing:
-                lines.append(f"  {var}  -- {desc}")
-            lines.append("Set the missing variables and restart ix-mcp serve.")
-            lines.append("(Use --no-env-check or IX_MCP_SKIP_ENV_CHECK=1 to skip this check.)")
-            print("\n".join(lines), file=sys.stderr)
-            return 1
-
+def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     wd = getattr(args, "workdir", None)
     workdir = Path(wd).resolve() if wd else Path.cwd()
     workdir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +226,11 @@ def _serve(args: argparse.Namespace) -> int:
 
     http = getattr(args, "http", None)
     stdin_fd = stdout_fd = None
-    if http is None:
+    mcp_http_host, mcp_http_port = "127.0.0.1", 8000
+    if engine_only:
+        # `notebook`: the engine alone, no MCP transport at all.
+        transport = "none"
+    elif http is None:
         # Hand the MCP protocol the real stdin/stdout, then point fd 0/1 at
         # /dev/null and stderr so nothing else can corrupt the JSON-RPC stream.
         stdin_fd = os.dup(0)
@@ -259,7 +239,6 @@ def _serve(args: argparse.Namespace) -> int:
         devnull = os.open(os.devnull, os.O_RDONLY)
         os.dup2(devnull, 0)
         os.close(devnull)
-        mcp_http_host, mcp_http_port = "127.0.0.1", 8000
         transport = "stdio"
     else:
         transport = "http"
@@ -267,12 +246,49 @@ def _serve(args: argparse.Namespace) -> int:
         mcp_http_host, mcp_http_port = host or "127.0.0.1", int(port) if port else 8000
 
     dashboard_port = _dashboard_port()
-    store_path = _store_path(dashboard_port)
-    # Fresh execution log per server, pinned or minted: a leftover database
-    # (and WAL sidecars) from a prior run would otherwise show stale runs in
-    # the dashboard and the room feed.
-    for suffix in ("", "-wal", "-shm"):
-        (store_path.parent / (store_path.name + suffix)).unlink(missing_ok=True)
+    session = getattr(args, "session", None)
+    session_path: Path | None = None
+    session_resume = False
+    if session:
+        if os.environ.get("IX_MCP_STORE"):
+            print(
+                "--session and IX_MCP_STORE both pin the store file; set only one",
+                file=sys.stderr,
+            )
+            return 2
+        # The session file IS the store: one SQLite file carrying the cells,
+        # their outputs, and the namespace checkpoint. Kept across restarts --
+        # persistence is the point -- where an ephemeral store is wiped below.
+        session_path = Path(session).expanduser().resolve()
+        session_path.parent.mkdir(parents=True, exist_ok=True)
+        store_path = session_path
+        session_resume = session_path.exists()
+        os.environ["IX_MCP_SESSION"] = "1"
+        if session_resume:
+            from . import store as store_mod
+
+            conn = store_mod.connect(store_path)
+            try:
+                stale = store_mod.mark_interrupted(conn, ended_at=time.time())
+            finally:
+                conn.close()
+            if stale:
+                print(
+                    f"[ix-mcp] session {store_path.name}: {stale} cell(s) from the "
+                    "previous run marked interrupted",
+                    file=sys.stderr,
+                    flush=True,
+                )
+    else:
+        # Ephemeral mode: make sure a stale flag inherited from a parent's env
+        # cannot switch the kernel runtime into checkpointing.
+        os.environ.pop("IX_MCP_SESSION", None)
+        store_path = _store_path(dashboard_port)
+        # Fresh execution log per ephemeral server, pinned or minted: a leftover
+        # database (and WAL sidecars) from a prior run would otherwise show
+        # stale runs in the dashboard and the room feed.
+        for suffix in ("", "-wal", "-shm"):
+            (store_path.parent / (store_path.name + suffix)).unlink(missing_ok=True)
 
     cfg = Config(
         workdir=workdir,
@@ -280,6 +296,8 @@ def _serve(args: argparse.Namespace) -> int:
         advertised_host=advertised_host,
         dashboard_port=dashboard_port,
         store_path=store_path,
+        session_path=session_path,
+        session_resume=session_resume,
         transport=transport,
         mcp_http_host=mcp_http_host,
         mcp_http_port=mcp_http_port,
@@ -323,6 +341,28 @@ async def _run(cfg: Config) -> None:
     await kernel.start()
     set_kernel(kernel)
 
+    restore_task: asyncio.Task | None = None
+    if cfg.session_resume:
+        # Reopen the session in the kernel. Runs as a task so the transport can
+        # come up immediately, but only after the restore HOLDS the shell
+        # channel (the `locked` event): every tool call submitted later queues
+        # behind it on the kernel lock, so the first cell of the new run always
+        # sees the restored state.
+        locked = asyncio.Event()
+
+        async def _restore() -> None:
+            try:
+                summary = await kernel.restore_session(on_locked=locked.set)
+                if summary:
+                    print(f"[ix-mcp] {summary}", file=sys.stderr, flush=True)
+            except Exception as exc:
+                print(f"[ix-mcp] session restore failed: {exc!r}", file=sys.stderr, flush=True)
+            finally:
+                locked.set()  # a restore that died before locking must not hang serving
+
+        restore_task = asyncio.ensure_future(_restore())
+        await locked.wait()
+
     runner = await dashboard.start(cfg)
     url = cfg.dashboard_url()
     (runtime_dir() / "dashboard-url").write_text(url)
@@ -330,10 +370,23 @@ async def _run(cfg: Config) -> None:
     # gets it in the `initialize` response -- no tool call to discover it.
     tools.set_dashboard_url(url)
     print(f"[ix-mcp] dashboard (all running things + output): {url}", file=sys.stderr, flush=True)
+    if cfg.session_path is not None:
+        print(f"[ix-mcp] session file: {cfg.session_path}", file=sys.stderr, flush=True)
 
     try:
-        await transport.serve()
+        if cfg.transport == "none":
+            # The standalone notebook engine: stay up until the process is
+            # told to stop (Ctrl-C / SIGTERM).
+            await asyncio.Event().wait()
+        else:
+            await transport.serve()
     finally:
+        if restore_task is not None and not restore_task.done():
+            restore_task.cancel()
+        if cfg.session_path is not None:
+            # Final checkpoint so the last cells' state reopens instantly even
+            # when the debounced checkpoint had not fired yet.
+            await kernel.snapshot_session()
         await runner.cleanup()
         await kernel.shutdown()
 

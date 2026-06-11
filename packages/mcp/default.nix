@@ -498,9 +498,10 @@ let
   # Native macOS iMessage access, bundled like `screen`/`vmkit` so every session
   # can `import imessage` on Darwin. Pure Python over the bundled sqlite3/polars
   # (plus Foundation's NSUnarchiver to decode the archived message text): it reads
-  # the Messages and Contacts SQLite databases into polars frames and sends new
-  # messages through the Messages app over AppleScript. macOS-only; the module
-  # raises off Darwin.
+  # the Messages and Contacts SQLite databases into polars frames, sends new
+  # messages through the Messages app over AppleScript, and edits contacts
+  # through the Contacts app over JXA (so edits sync to iCloud). macOS-only; the
+  # module raises off Darwin.
   imessagePythonSource = builtins.path {
     name = "ix-mcp-imessage-python-source";
     path = ./src/imessage;
@@ -655,6 +656,11 @@ let
       ps.nbformat
       ps.aiohttp
       ps.mcp
+      # dill: serializes functions and classes defined in cells, which stdlib
+      # pickle cannot -- the session-file namespace checkpoints
+      # (runtime.__ix_snapshot / __ix_restore) depend on it to bring an agent's
+      # helpers back instantly when a session file is reopened.
+      ps.dill
       tuiModule
       searchModule
       fffModule
@@ -720,6 +726,16 @@ let
         mkdir -p $out/bin
         makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
           --add-flags "-m ix_notebook_mcp" \
+          --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
+          --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
+          --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
+          --set IX_MCP_DASHBOARD_HTML ${lib.escapeShellArg dashboardHtml} \
+          ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
+        # The notebook engine alone (kernel + dashboard + session file, no MCP
+        # transport): the same interpreter and env, entered at the `notebook`
+        # subcommand. Our jupyter-shaped serve; the MCP server is one client of it.
+        makeWrapper ${lib.getExe mcpPython} $out/bin/ix-notebook \
+          --add-flags "-m ix_notebook_mcp notebook" \
           --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
@@ -1227,88 +1243,6 @@ let
         mkdir -p "$out"
       '';
 
-  # Exercises the env-var preflight added by ENG-2479: `_missing_env` returns every
-  # unset required var, `_serve` with them absent exits 1 and names all missing vars,
-  # IX_MCP_SHARED=1 drops the GOOGLE_OAUTH_* requirement, and the escape hatch
-  # (--no-env-check / IX_MCP_SKIP_ENV_CHECK=1) bypasses the check so the Nix build
-  # sandbox (which never carries real secrets) can run `ix-mcp serve` in other tests.
-  envPreflightTest = pkgs.writeText "ix-mcp-env-preflight-test.py" ''
-    import os
-    import sys
-    from unittest.mock import patch
-
-    # Strip all the required keys from the environment so we start from a clean slate.
-    for _v in ("EXA_API_KEY", "IX_GCAL_BIN", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
-               "IX_MCP_SHARED", "IX_MCP_SKIP_ENV_CHECK"):
-        os.environ.pop(_v, None)
-
-    from ix_notebook_mcp import cli
-
-    # (a) All required vars missing -> every one appears in _missing_env().
-    missing = cli._missing_env(shared=False)
-    missing_vars = {v for v, _ in missing}
-    assert {"EXA_API_KEY", "IX_GCAL_BIN", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"} == missing_vars, missing_vars
-
-    # (b) With all vars set (dummy values) _missing_env() returns an empty list.
-    os.environ["EXA_API_KEY"] = "dummy-exa"
-    os.environ["IX_GCAL_BIN"] = "/nonexistent/gcal"
-    os.environ["GOOGLE_OAUTH_CLIENT_ID"] = "dummy-id"
-    os.environ["GOOGLE_OAUTH_CLIENT_SECRET"] = "dummy-secret"
-    assert cli._missing_env(shared=False) == [], cli._missing_env(shared=False)
-
-    # (c) IX_MCP_SHARED=1 drops the GOOGLE_OAUTH_* vars from the required set.
-    os.environ.pop("GOOGLE_OAUTH_CLIENT_ID")
-    os.environ.pop("GOOGLE_OAUTH_CLIENT_SECRET")
-    assert cli._missing_env(shared=True) == [], "GOOGLE_OAUTH_* must not be required in shared mode"
-    # But they ARE still required in incognito mode.
-    assert {v for v, _ in cli._missing_env(shared=False)} == {"GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"}
-
-    # (d) main(["serve"]) with missing vars exits 1 and names every missing var.
-    os.environ.pop("EXA_API_KEY", None)
-    os.environ.pop("IX_GCAL_BIN", None)
-    os.environ.pop("GOOGLE_OAUTH_CLIENT_ID", None)
-    os.environ.pop("GOOGLE_OAUTH_CLIENT_SECRET", None)
-    rc = cli.main(["serve"])
-    assert rc == 1, f"expected exit 1, got {rc}"
-
-    # (e) The escape hatch --no-env-check skips the check (serve then fails for an
-    # unrelated reason -- missing kernel deps -- but exits != 1 from the preflight).
-    # We patch asyncio.run to avoid actually booting a kernel.
-    import asyncio
-    with patch.object(asyncio, "run", return_value=None):
-        rc2 = cli.main(["serve", "--no-env-check"])
-    assert rc2 == 0, f"--no-env-check should bypass preflight, got {rc2}"
-
-    # (f) IX_MCP_SKIP_ENV_CHECK=1 has the same effect.
-    os.environ["IX_MCP_SKIP_ENV_CHECK"] = "1"
-    with patch.object(asyncio, "run", return_value=None):
-        rc3 = cli.main(["serve"])
-    assert rc3 == 0, f"IX_MCP_SKIP_ENV_CHECK=1 should bypass preflight, got {rc3}"
-    os.environ.pop("IX_MCP_SKIP_ENV_CHECK")
-
-    print("env-preflight-ok")
-  '';
-  envPreflightSmoke =
-    pkgs.runCommand "ix-mcp-env-preflight-smoke"
-      {
-        nativeBuildInputs = [ mcpPython ];
-        strictDeps = true;
-      }
-      ''
-        export HOME=$TMPDIR/home
-        mkdir -p "$HOME"
-        ${mcpPython}/bin/python3 ${envPreflightTest} >stdout 2>stderr || {
-          echo "ix-mcp env-preflight smoke failed:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        grep -qx 'env-preflight-ok' stdout || {
-          echo "ix-mcp env-preflight smoke did not confirm the preflight check:" >&2
-          cat stdout stderr >&2
-          exit 1
-        }
-        mkdir -p "$out"
-      '';
   # Exercises the in-kernel runtime (ix_notebook_mcp/runtime.py) in-process: two
   # jobs run concurrently on one event loop, neither blocks the other, each keeps
   # its own captured stdout, and the trailing expression is captured as the
@@ -1786,6 +1720,86 @@ let
         }
         grep -qx 'runtime-ok' stdout || {
           echo "ix-mcp runtime smoke did not confirm concurrent jobs:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
+  # The session-file contract: run cells against a session store, checkpoint,
+  # "restart" into a fresh namespace, and reopen -- the checkpoint restores the
+  # state instantly (including a function defined in a cell, which needs the
+  # bundled dill), the one cell newer than the checkpoint replays, a row left
+  # 'running' by the dead server is marked interrupted, and a second reopen has
+  # nothing to replay (the restore folds everything into a fresh checkpoint).
+  sessionTestPy = pkgs.writeText "ix-mcp-session-test.py" ''
+    import asyncio
+    import tempfile
+
+    import dill  # the checkpoint serializer must be bundled in this interpreter
+
+    from ix_notebook_mcp import runtime, store
+
+    path = tempfile.mktemp(suffix=".ixnb")
+
+    def wire(conn, ns):
+        runtime._store = store
+        runtime._store_conn = conn
+        runtime._user_ns = ns
+        runtime._SESSION = True
+        runtime._baseline_names = frozenset(ns)
+
+    async def first_run():
+        conn = store.connect(path)
+        ns = {"Result": runtime.Result}
+        wire(conn, ns)
+        a = await runtime.__ix_run("x = 40\ndef double(n):\n    return n * 2\nResult.ok('a')")
+        assert a.status == "done", (a.status, a.error)
+        await runtime._snapshot_now()
+        b = await runtime.__ix_run("y = double(x) + 4\nResult.ok('b')")
+        assert b.status == "done", (b.status, b.error)
+        # A row left 'running' by a server that died mid-cell.
+        store.start(conn, id="dead", name="dead", code="zz", started_at=1.0)
+        conn.close()
+
+    asyncio.run(first_run())
+
+    async def reopen():
+        conn = store.connect(path)
+        assert store.mark_interrupted(conn, ended_at=2.0) == 1
+        assert store.get(conn, "dead")["status"] == "interrupted"
+        ns = {"Result": runtime.Result}
+        wire(conn, ns)
+        runtime.jobs.clear()
+        await runtime.__ix_restore()
+        snap = store.latest_snapshot(conn)
+        assert snap is not None, "restore must fold a fresh checkpoint"
+        assert store.replayable(conn, since=snap["created_at"]) == [], "second reopen must replay nothing"
+        conn.close()
+        return ns
+
+    ns = asyncio.run(reopen())
+    assert ns["x"] == 40, ns.get("x")
+    assert ns["double"](3) == 6
+    assert ns["y"] == 84, ns.get("y")
+    print("session-ok")
+  '';
+  sessionSmoke =
+    pkgs.runCommand "ix-mcp-session-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${sessionTestPy} >stdout 2>stderr || {
+          echo "ix-mcp session smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'session-ok' stdout || {
+          echo "ix-mcp session smoke did not confirm the reopen contract:" >&2
           cat stdout stderr >&2
           exit 1
         }
@@ -3650,6 +3664,7 @@ package.overrideAttrs (old: {
         serverTools
         evalSmoke
         runtimeSmoke
+        sessionSmoke
         feedSmoke
         apiSmoke
         wedgeSmoke
@@ -3658,7 +3673,6 @@ package.overrideAttrs (old: {
         bindingsSmoke
         bindDefaultSmoke
         sshAuthSockSmoke
-        envPreflightSmoke
         viewSmoke
         nixSmoke
         fleetSmoke

@@ -101,6 +101,16 @@
       {
         "slug": "viarewind",
         "pluginName": "ViaRewind"
+      },
+      {
+        "slug": "discordsrv",
+        "pluginName": "DiscordSRV"
+      }
+    ],
+    "1.21.11": [
+      {
+        "slug": "discordsrv",
+        "pluginName": "DiscordSRV"
       }
     ]
   },
