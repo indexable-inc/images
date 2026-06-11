@@ -19,6 +19,11 @@
     "pluginName": "DHSupport",
     "url": "https://cdn.modrinth.com/data/IjY7seTG/versions/v7By0W81/DistantHorizonsSupport-0.13.1.jar"
   },
+  "dynmap": {
+    "hash": "sha256-h8YDXCy3O/Ivw0ynOMshotuJq18wvRBxzYCQgCoceLw=",
+    "pluginName": "dynmap",
+    "url": "https://cdn.modrinth.com/data/fRQREgAc/versions/ImNNT17B/Dynmap-3.7-beta-8-spigot.jar"
+  },
   "essentialsx": {
     "hash": "sha256-X7xAnAFPbVxLMvi4rTS/vXSsZ9wb0YT+lj6m1Htg5oU=",
     "pluginName": "Essentials",

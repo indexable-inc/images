@@ -101,6 +101,20 @@
       {
         "slug": "viarewind",
         "pluginName": "ViaRewind"
+      },
+      {
+        "slug": "dynmap",
+        "pluginName": "dynmap",
+        "version": "3.7-beta-8",
+        "url": "https://cdn.modrinth.com/data/fRQREgAc/versions/ImNNT17B/Dynmap-3.7-beta-8-spigot.jar"
+      }
+    ],
+    "1.21.11": [
+      {
+        "slug": "dynmap",
+        "pluginName": "dynmap",
+        "version": "3.7-beta-8",
+        "url": "https://cdn.modrinth.com/data/fRQREgAc/versions/ImNNT17B/Dynmap-3.7-beta-8-spigot.jar"
       }
     ]
   },
