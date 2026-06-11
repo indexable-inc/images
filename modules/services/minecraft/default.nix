@@ -29,7 +29,6 @@ let
 
   dataDir = "/var/lib/minecraft";
   managedRoot = "/etc/minecraft";
-  systemctl = lib.getExe' config.systemd.package "systemctl";
   fileExt = path: lib.last (lib.splitString "." path);
 
   flattenProperties =
@@ -1201,12 +1200,7 @@ in
         minecraft = {
           from = "guest";
           description = "Minecraft systemd unit is active";
-          command = [
-            systemctl
-            "is-active"
-            "--quiet"
-            "minecraft.service"
-          ];
+          unit = "minecraft";
         };
 
         minecraft-status = {

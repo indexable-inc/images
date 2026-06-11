@@ -13,7 +13,10 @@ valid:
   - 'if cond then [ ] else [ x ]'
   - 'if cond then [ ] else [ a b ]'
   - 'if callerHasTargetSelector && !clippyCargoArgsSet then [ ] else args.policy.clippy.cargoArgs'
+  # List-valued non-literal / multi-element `then` (the `lib.optionals` cases)
+  # are intentionally not flagged.
+  - 'if cond then xs else [ ]'
+  - 'if cond then [ a b ] else [ ]'
+  - 'if builtins.pathExists p && chosen != null then normalize chosen else [ ]'
 invalid:
   - 'if cond then [ x ] else [ ]'
-  - 'if cond then [ a b ] else [ ]'
-  - 'if cond then xs else [ ]'

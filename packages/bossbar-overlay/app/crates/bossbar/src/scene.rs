@@ -15,6 +15,7 @@ use overlay_core::{Gpu, Quad, TexHandle, SHADOW};
 
 use crate::assets;
 use crate::bars::{BossBar, Color, Notch};
+use crate::theme::ThemeSprites;
 
 /// Native vanilla sprite dimensions, in unscaled pixels.
 const BAR_W: u32 = 182;
@@ -329,6 +330,11 @@ struct DrawItem<'a> {
     /// Loaded texture for the bar's square icon, if it has one and it decoded.
     /// Drawn left of the title; `None` draws the title alone, as before.
     icon: Option<TexHandle>,
+    /// Loaded user-supplied texture set named by `bar.theme`, replacing the
+    /// vanilla color background/progress pair (and, when the set ships them,
+    /// the notch overlays). `None` renders vanilla, including when the theme
+    /// is missing or broken.
+    theme: Option<&'a ThemeSprites>,
 }
 
 /// The fill fraction to draw: extrapolated live from `since`/`eta` when both are
@@ -402,11 +408,17 @@ fn build_item(gpu: &Gpu, tex: &BarTextures, scale: f32, now_unix: i64, item: &Dr
         }
     }
 
-    // Color background, then color progress cropped to the fill.
-    quads.push(Quad::new(tex.get(TexId::ColorBg(b.color)), bx.left, bx.track_y, bx.bar_w, bx.bar_h, tint));
+    // Background, then progress cropped to the fill. A themed bar samples its
+    // user-supplied texture set in place of the vanilla color pair; the layer
+    // stack and crop math are identical either way.
+    let (bg_tex, fill_tex) = match item.theme {
+        Some(t) => (t.bg, t.fill),
+        None => (tex.get(TexId::ColorBg(b.color)), tex.get(TexId::ColorFill(b.color))),
+    };
+    quads.push(Quad::new(bg_tex, bx.left, bx.track_y, bx.bar_w, bx.bar_h, tint));
     if progress > 0.0 {
         quads.push(Quad::sub(
-            tex.get(TexId::ColorFill(b.color)),
+            fill_tex,
             bx.left,
             bx.track_y,
             bx.bar_w * progress,
@@ -415,12 +427,18 @@ fn build_item(gpu: &Gpu, tex: &BarTextures, scale: f32, now_unix: i64, item: &Dr
             tint,
         ));
     }
-    // Optional notch overlay on top, same draw order.
+    // Optional notch overlay on top, same draw order. A theme may ship its own
+    // notch pair; otherwise the vanilla notch sprites layer over the themed
+    // track (they are mostly-transparent dividers, so this composes).
     if let Some(n) = b.overlay.notch() {
-        quads.push(Quad::new(tex.get(TexId::NotchBg(n)), bx.left, bx.track_y, bx.bar_w, bx.bar_h, tint));
+        let (notch_bg, notch_fill) = item
+            .theme
+            .and_then(|t| t.notch(n))
+            .unwrap_or_else(|| (tex.get(TexId::NotchBg(n)), tex.get(TexId::NotchFill(n))));
+        quads.push(Quad::new(notch_bg, bx.left, bx.track_y, bx.bar_w, bx.bar_h, tint));
         if progress > 0.0 {
             quads.push(Quad::sub(
-                tex.get(TexId::NotchFill(n)),
+                notch_fill,
                 bx.left,
                 bx.track_y,
                 bx.bar_w * progress,
@@ -623,6 +641,7 @@ pub fn build_one(
     gpu: &Gpu,
     tex: &BarTextures,
     icon: Option<TexHandle>,
+    theme: Option<&ThemeSprites>,
     scale: f32,
     width: u32,
     height: u32,
@@ -712,6 +731,7 @@ pub fn build_one(
         alpha,
         panel,
         icon,
+        theme,
     };
     let mut quads = Vec::new();
     build_item(gpu, tex, scale, now_unix, &item, &mut quads);
@@ -727,6 +747,7 @@ pub fn build_all(
     gpu: &Gpu,
     tex: &BarTextures,
     icons: &[Option<TexHandle>],
+    themes: &[Option<ThemeSprites>],
     scale: f32,
     width: u32,
     now_unix: i64,
@@ -751,11 +772,17 @@ pub fn build_all(
     let boxes = layout(scale, bars, width as f32, &sizes, gap);
 
     let mut quads = Vec::new();
-    for (((bar, geom), size), icon) in bars
+    for ((((bar, geom), size), icon), theme) in bars
         .iter()
         .zip(boxes)
         .zip(&sizes)
         .zip(icons.iter().copied().chain(std::iter::repeat(None)))
+        .zip(
+            themes
+                .iter()
+                .map(Option::as_ref)
+                .chain(std::iter::repeat(None)),
+        )
     {
         let panel = size.map(|(panel_w, panel_h)| PanelBox {
             x: ((width as f32 - panel_w) * 0.5).max(0.0),
@@ -776,6 +803,7 @@ pub fn build_all(
             alpha: if Some(bar.id) == highlight { 1.0 } else { opacity },
             panel,
             icon,
+            theme,
         };
         build_item(gpu, tex, scale, now_unix, &item, &mut quads);
     }
@@ -934,6 +962,7 @@ mod tests {
             expandable: true,
             eta: None,
             icon: String::new(),
+            theme: String::new(),
         }
     }
 
@@ -999,7 +1028,7 @@ mod tests {
                 height,
                 |gpu| {
                     let tex = register(gpu);
-                    build_one(gpu, &tex, None, scale, width, height, now, &bar, hover, breathe)
+                    build_one(gpu, &tex, None, None, scale, width, height, now, &bar, hover, breathe)
                 },
                 &out,
             )

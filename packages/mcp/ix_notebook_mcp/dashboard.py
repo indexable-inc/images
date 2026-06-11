@@ -52,28 +52,37 @@ def _load_page() -> str:
 
 @functools.lru_cache(maxsize=512)
 def _code_html(code: str) -> str:
-    """A python snippet as highlighted HTML: one ``<span class="...">`` per token
-    using pygments' standard short class names, with no inline colors and no
-    wrapping ``<pre>`` (the card controls layout). The class palette is themed in
-    CSS (``_highlight_css``), so the same cached HTML reads correctly in both the
-    dark and light dashboard. Every identifier token also carries a
-    ``data-ix-name`` so the dashboard can attach the value hover card; the join
-    with values is by name, done in the browser against the job's ``bindings``
-    (kept out of here so this stays cache-keyed on the code text alone). Cached so
-    each unique snippet is highlighted once, not on every one-second poll; falls
-    back to empty (the card then shows the raw text) when pygments is
-    unavailable."""
+    """A python snippet as highlighted, *line-addressable* HTML.
+
+    Each source line becomes one ``<span class="ix-line" data-line="N">`` (1-based,
+    matching compiler/traceback line numbers) holding its highlighted tokens: one
+    ``<span class="...">`` per token using pygments' standard short class names,
+    with no inline colors and no wrapping ``<pre>`` (the card controls layout).
+    The line spans are what let the dashboard point at a *line*: the live
+    executing line while a job runs and the failing line on an error, plus a CSS
+    line-number gutter (``style.css``). A token spanning lines (a triple-quoted
+    string) is split so every piece sits inside its own line span.
+
+    The class palette is themed in CSS (``_highlight_css``), so the same cached
+    HTML reads correctly in both the dark and light dashboard. Every identifier
+    token also carries a ``data-ix-name`` so the dashboard can attach the value
+    hover card; the join with values is by name, done in the browser against the
+    job's ``bindings`` (kept out of here so this stays cache-keyed on the code
+    text alone). Cached so each unique snippet is highlighted once, not on every
+    one-second poll; falls back to empty (the card then shows the raw text) when
+    pygments is unavailable."""
     if not code:
         return ""
     try:
         from pygments.lexers import PythonLexer
         from pygments.token import Token
 
-        parts: list[str] = []
-        for token_type, value in PythonLexer().get_tokens(code):
+        lines: list[list[str]] = [[]]
+        # stripnl=False: the default strips leading/trailing blank lines, which
+        # would shift data-line off the real (traceback) line numbers.
+        for token_type, value in PythonLexer(stripnl=False).get_tokens(code):
             if not value:
                 continue
-            text = html.escape(value)
             cls = _token_class(token_type)
             cls_attr = f' class="{cls}"' if cls else ""
             # Anchor only real identifiers (not builtins, operators, or the `@` of
@@ -81,14 +90,32 @@ def _code_html(code: str) -> str:
             # also tags attribute parts (`head` in `df.head`); the join is by name,
             # so they stay inert unless a same-named variable is live, an accepted
             # edge of name-keyed (vs position-keyed) matching.
-            if token_type in Token.Name and token_type not in Token.Name.Builtin and value.isidentifier():
-                attr = html.escape(value, quote=True)
-                parts.append(f'<span{cls_attr} data-ix-name="{attr}">{text}</span>')
-            elif cls:
-                parts.append(f'<span{cls_attr}>{text}</span>')
-            else:
-                parts.append(text)
-        return "".join(parts).strip("\n")
+            named = (
+                token_type in Token.Name
+                and token_type not in Token.Name.Builtin
+                and value.isidentifier()
+            )
+            for index, piece in enumerate(value.split("\n")):
+                if index:
+                    lines.append([])
+                if not piece:
+                    continue
+                text = html.escape(piece)
+                if named:
+                    attr = html.escape(value, quote=True)
+                    lines[-1].append(f'<span{cls_attr} data-ix-name="{attr}">{text}</span>')
+                elif cls:
+                    lines[-1].append(f"<span{cls_attr}>{text}</span>")
+                else:
+                    lines[-1].append(text)
+        # Pygments guarantees a trailing newline; drop the trailing blank line(s)
+        # it produces (mirrors the old `.strip("\n")`) without shifting numbering.
+        while lines and not lines[-1]:
+            lines.pop()
+        return "".join(
+            f'<span class="ix-line" data-line="{number}">{"".join(parts)}</span>'
+            for number, parts in enumerate(lines, 1)
+        )
     except Exception:
         # Highlighting is cosmetic: a missing/old pygments must not break the API.
         return ""

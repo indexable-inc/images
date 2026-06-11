@@ -46,7 +46,12 @@ pub struct Metric {
 impl Metric {
     /// Build a deterministic metric (no distribution).
     #[must_use]
-    pub fn deterministic(name: impl Into<String>, value: f64, unit: impl Into<String>, lower_is_better: bool) -> Self {
+    pub fn deterministic(
+        name: impl Into<String>,
+        value: f64,
+        unit: impl Into<String>,
+        lower_is_better: bool,
+    ) -> Self {
         Self {
             name: name.into(),
             value,
@@ -63,7 +68,12 @@ impl Metric {
     /// `samples` is an empty vector; the comparator treats too-few-samples as
     /// deterministic, so this stays well defined rather than panicking.
     #[must_use]
-    pub fn distribution(name: impl Into<String>, unit: impl Into<String>, lower_is_better: bool, samples: Vec<f64>) -> Self {
+    pub fn distribution(
+        name: impl Into<String>,
+        unit: impl Into<String>,
+        lower_is_better: bool,
+        samples: Vec<f64>,
+    ) -> Self {
         let value = median(&samples);
         Self {
             name: name.into(),
@@ -154,11 +164,14 @@ fn cpu_model() -> Option<String> {
 /// Lowercase-hex the first 8 bytes of a digest (16 chars).
 fn hex16(digest: &[u8]) -> String {
     use std::fmt::Write;
-    digest.iter().take(8).fold(String::with_capacity(16), |mut acc, byte| {
-        // `write!` into a String is infallible; the buffer never errors.
-        let _ = write!(acc, "{byte:02x}");
-        acc
-    })
+    digest
+        .iter()
+        .take(8)
+        .fold(String::with_capacity(16), |mut acc, byte| {
+            // `write!` into a String is infallible; the buffer never errors.
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        })
 }
 
 /// Median of a sample slice.
@@ -205,7 +218,10 @@ mod tests {
     fn distribution_metric_uses_median_as_value() {
         let metric = Metric::distribution("wall_clock", "ns", true, vec![10.0, 30.0, 20.0]);
         assert!(close(metric.value, 20.0));
-        assert_eq!(metric.samples.as_deref(), Some([10.0, 30.0, 20.0].as_slice()));
+        assert_eq!(
+            metric.samples.as_deref(),
+            Some([10.0, 30.0, 20.0].as_slice())
+        );
     }
 
     #[test]
@@ -232,7 +248,10 @@ mod tests {
     fn deterministic_metric_omits_samples_in_json() {
         let metric = Metric::deterministic("allocations", 7.0, "count", true);
         let json = serde_json::to_string(&metric).expect("serialize metric");
-        assert!(!json.contains("samples"), "deterministic metric should not serialize a null samples field: {json}");
+        assert!(
+            !json.contains("samples"),
+            "deterministic metric should not serialize a null samples field: {json}"
+        );
     }
 
     #[test]

@@ -12,6 +12,10 @@ let
   fs = lib.fileset;
   repoPackages = ix.packageSetFor pkgs;
   portableServicesTest = import ./portable-services.nix { inherit lib pkgs ix; };
+  # VM boot smoke test for the minecraft-blocks Paper plugin (ENG-2186). Not
+  # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
+  # (`checks.<system>.minecraft-blocks-vm`).
+  minecraftBlocksVmTest = import ./minecraft-blocks-vm.nix { inherit lib pkgs ix; };
   # Public Rust SDK: links the prebuilt, R2-hosted ix-sdk-wire rlib with no
   # ix-sdk-wire source (ENG-2151 / ENG-2154). `proof` is the end-to-end check.
   sdkRust = import ../sdk/rust { inherit lib pkgs ix; };
@@ -580,6 +584,14 @@ let
     processes.hello.command = "true";
   };
 
+  bashApplicationProbe = ix.writeBashApplication pkgs {
+    name = "bash-application-probe";
+    runtimeInputs = [ pkgs.hello ];
+    text = ''
+      hello
+    '';
+  };
+
   zigAppFixture = fs.toSource {
     root = ./fixtures/zig-app;
     fileset = fs.unions [
@@ -638,6 +650,11 @@ let
     ];
     packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
     packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
+    # Drive the packageBuildEnv -> build.rs -> rustc-env path: the build script
+    # reads CARGO_UNIT_BUILD_ENV and re-exposes it; the fixture test compares the
+    # baked value against this expected value (passed at test runtime).
+    packageBuildEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV = "build-ok";
+    packageTestEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV_EXPECTED = "build-ok";
     cargoTargets = [
       [ "--workspace" ]
       [
@@ -662,6 +679,10 @@ let
     workspaceRoot = ./fixtures/cargo-unit-hello;
     packageTestInputs.cargo-unit-hello = [ pkgs.hello ];
     packageTestEnv.cargo-unit-hello.CARGO_UNIT_FIXTURE_ENV = "ok";
+    # Mirror cargoUnitWorkspace exactly except cargoTargets so the byte-identical
+    # root assertion (a packageBuildEnv-tagged unit must narrow identically) holds.
+    packageBuildEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV = "build-ok";
+    packageTestEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV_EXPECTED = "build-ok";
     cargoTargets = [ [ "--workspace" ] ];
   };
 
@@ -1631,8 +1652,7 @@ let
 
   fleetPlan = fleet.planValue.nodes;
 
-  prefixedFleet = ix.mkFleet {
-    nodePrefix = "tprefix-";
+  prefixedFleetBase = ix.mkFleet {
     nodes = {
       api = {
         services.openssh.enable = true;
@@ -1651,6 +1671,8 @@ let
       };
     };
   };
+
+  prefixedFleet = prefixedFleetBase.withNodePrefix "tprefix-";
 
   fleetIpv4HealthCheckEval = builtins.tryEval (
     builtins.deepSeq
@@ -1680,6 +1702,32 @@ let
           ];
         };
       }).planValue.nodes.web.dependsOn
+      true
+  );
+
+  # `deployment.healthChecks` was historically written as if it selected
+  # checks to wait for; nothing ever read it. The plan always carries every
+  # declared `ix.healthChecks`, so the dead key must fail eval, not be
+  # silently dropped.
+  fleetDeploymentHealthChecksEval = builtins.tryEval (
+    builtins.deepSeq
+      (ix.mkFleet {
+        nodes.web = {
+          deployment.healthChecks = [ "nginx" ];
+          modules = [ { } ];
+        };
+      }).planValue.nodes.web.region
+      true
+  );
+
+  fleetUnknownDeploymentKeyEval = builtins.tryEval (
+    builtins.deepSeq
+      (ix.mkFleet {
+        nodes.web = {
+          deployment.regoin = "us-west-1";
+          modules = [ { } ];
+        };
+      }).planValue.nodes.web.region
       true
   );
 
@@ -2198,7 +2246,124 @@ let
   );
   # --- Per-image assertion groups -------------------------------------------
 
+  # --- Idiomatic fleet API (expose / healthChecks.unit / endpoint) ----------
+  idiomaticExpose = evalConfig [
+    {
+      networking.hostName = "svc-a";
+      ix = {
+        networking.expose = {
+          web = {
+            port = 8080;
+            description = "demo web listener";
+          };
+          metrics = {
+            port = 9090;
+            # Opened by something else; only register the claim + discovery.
+            firewall = false;
+          };
+          dns = {
+            port = 53;
+            protocol = "udp";
+          };
+        };
+        healthChecks = {
+          web.unit = "nginx";
+          cron.unit = "backup.timer";
+        };
+      };
+    }
+  ];
+
+  idiomaticUnitConflictFailures = failedAssertionsFor [
+    {
+      ix.healthChecks.bad = {
+        unit = "nginx";
+        command = [ "true" ];
+      };
+    }
+  ];
+
+  idiomaticExposeCollisionFailures = failedAssertionsFor [
+    {
+      ix.networking = {
+        expose.first.port = 7000;
+        portClaims.second = {
+          protocol = "tcp";
+          port = 7000;
+        };
+      };
+    }
+  ];
+
   groups = {
+    idiomatic-fleet-api = [
+      {
+        assertion =
+          idiomaticExpose.ix.healthChecks.web.command == [
+            (lib.getExe' idiomaticExpose.systemd.package "systemctl")
+            "is-active"
+            "--quiet"
+            "nginx.service"
+          ];
+        message = "ix.healthChecks.<name>.unit should derive a `systemctl is-active` probe and add the .service suffix";
+      }
+      {
+        assertion = lib.last idiomaticExpose.ix.healthChecks.cron.command == "backup.timer";
+        message = "ix.healthChecks.<name>.unit should keep an explicit unit type suffix (.timer)";
+      }
+      {
+        assertion = idiomaticUnitConflictFailures != [ ];
+        message = "ix.healthChecks should reject setting both `unit` and a custom `command`";
+      }
+      {
+        assertion =
+          let
+            c = idiomaticExpose.ix.networking.portClaims;
+          in
+          c.web.port == 8080 && c.web.protocol == "tcp" && c.metrics.port == 9090 && c.dns.protocol == "udp";
+        message = "ix.networking.expose should register a port claim per listener";
+      }
+      {
+        assertion =
+          let
+            fw = idiomaticExpose.networking.firewall;
+          in
+          builtins.elem 8080 fw.allowedTCPPorts
+          && !(builtins.elem 9090 fw.allowedTCPPorts)
+          && builtins.elem 53 fw.allowedUDPPorts;
+        message = "ix.networking.expose should open the firewall by default, skip it when firewall = false, and use the listener's protocol";
+      }
+      {
+        assertion = idiomaticExposeCollisionFailures != [ ];
+        message = "ix.networking.expose should feed the port-claim registry so it collides with a conflicting portClaim";
+      }
+      {
+        assertion =
+          let
+            e = ix.endpoint {
+              host = "db";
+              port = 5432;
+            };
+          in
+          "${e}" == "db:5432" && e.host == "db" && e.port == 5432 && e.authority == "db:5432";
+        message = "ix.endpoint should stringify to host:port and expose its parts";
+      }
+      {
+        assertion =
+          (ix.endpoint {
+            host = "h";
+            port = 80;
+            scheme = "http";
+            path = "/x";
+          }).url == "http://h:80/x";
+        message = "ix.endpoint should build a scheme URL when given a scheme";
+      }
+      {
+        assertion = "${ix.endpointOf { config = idiomaticExpose; } "web"}" == "svc-a:8080";
+        message = "ix.endpointOf should resolve a peer's exposed listener to its east-west host:port";
+      }
+    ];
+
     base = [
       {
         assertion = base.cfg.shellWorkspace.enable;
@@ -4169,6 +4334,14 @@ let
         message = "fleet plans should reject unknown dependsOn entries during eval";
       }
       {
+        assertion = !fleetDeploymentHealthChecksEval.success;
+        message = "fleet plans should reject the dead deployment.healthChecks selector during eval";
+      }
+      {
+        assertion = !fleetUnknownDeploymentKeyEval.success;
+        message = "fleet plans should reject unknown deployment keys during eval";
+      }
+      {
         assertion = !fleetDependencyCycleEval.success;
         message = "fleet plans should reject cyclic dependsOn entries during eval";
       }
@@ -4195,22 +4368,35 @@ let
             "tprefix-api"
             "tprefix-worker"
           ];
-        message = "nodePrefix should rename every node in the plan order";
+        message = "withNodePrefix should rename every node in the plan order";
       }
       {
         assertion = prefixedFleet.planValue.nodes."tprefix-worker".dependsOn == [ "tprefix-api" ];
-        message = "nodePrefix should rewrite dependsOn references so the prefixed graph stays connected";
+        message = "withNodePrefix should rewrite dependsOn references so the prefixed graph stays connected";
       }
       {
         assertion = prefixedFleet.planValue.nodes."tprefix-worker".groups == [ "tprefix-private-apps" ];
-        message = "nodePrefix should rewrite east-west group names so scratch fleets do not collide";
+        message = "withNodePrefix should rewrite east-west group names so scratch fleets do not collide";
       }
       {
-        assertion = prefixedFleet.nodes."tprefix-api".networking.hostName == "tprefix-api";
-        message = "nodePrefix should flow into the deployment-level identity (hostname, image name)";
+        assertion =
+          prefixedFleet.planValue.nodes."tprefix-api".replacementImage.destination == "tprefix-api:latest";
+        message = "withNodePrefix should prefix the registry destination so scratch pushes cannot clobber the base tag";
       }
       {
-        assertion = prefixedFleet.nodes."tprefix-worker".environment.etc."api-host".text == "tprefix-api";
+        assertion = prefixedFleet.nodes."tprefix-api".networking.hostName == "api";
+        message = "withNodePrefix is a plan-level rename: guest hostname and image name stay base-named so the prefixed fleet shares the base fleet's closures";
+      }
+      {
+        assertion =
+          prefixedFleet.planValue.nodes."tprefix-api".system == prefixedFleetBase.planValue.nodes.api.system
+          &&
+            prefixedFleet.planValue.nodes."tprefix-api".replacementImage.source
+            == prefixedFleetBase.planValue.nodes.api.replacementImage.source;
+        message = "withNodePrefix must reuse the base fleet's system closure and image source, not re-evaluate them";
+      }
+      {
+        assertion = prefixedFleet.nodes."tprefix-worker".environment.etc."api-host".text == "api";
         message = "nodes module-arg should resolve by the example's base name even when prefixed";
       }
     ];
@@ -4401,6 +4587,8 @@ let
     ${lib.getExe pythonAppClosureProbe} > python-app-closure-probe.out
     grep -q 'python app source is in the runtime closure' python-app-closure-probe.out
     test -e ${processComposeApplication.passthru.tests.dryRun}
+    ${lib.getExe bashApplicationProbe} > bash-application-probe.out
+    grep -q 'Hello, world!' bash-application-probe.out
 
     ${lib.getExe zigApplication} > zig-app-fixture.out
     grep -q 'hello from zig app fixture' zig-app-fixture.out
@@ -4682,6 +4870,7 @@ in
   # End-to-end: public ix-sdk links the R2-hosted prebuilt ix-sdk-wire rlib.
   sdkRustPrebuilt = sdkRust.proof;
   portableServices = portableServicesTest;
+  minecraftBlocksVm = minecraftBlocksVmTest;
 
   # Aggregate. Pulls every per-image test into one derivation so
   # `nix flake check` covers the whole suite.

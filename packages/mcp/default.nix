@@ -137,8 +137,9 @@ let
   # complement to the (untyped) `google_auth` helper. Notebook users pick
   # whichever fits: `import google_auth` gives the official googleapiclient
   # surface, `import ix_google` gives typed `gmail.Client()` /
-  # `calendar.Client()` over the same shared OAuth grant. Auth bootstrap is
-  # `gmail auth` or `gcal auth` on the host once.
+  # `calendar.Client()` over the same shared OAuth grant. Sign-in is
+  # self-service from a session (`await google_auth.login()` opens a browser),
+  # or `gmail auth` / `gcal auth` on the host.
   ixGooglePythonSource = builtins.path {
     name = "ix-google-python-source";
     path = ../google/py/python;
@@ -196,12 +197,14 @@ let
       ''
   );
 
-  # `google_auth`: mint Google credentials for the bundled Gmail/Calendar Python
-  # clients. Pure Python (no cdylib): it shells to the bundled `gcal` binary
-  # (`IX_GCAL_BIN`, set on the wrapper below) for a short-lived access token from
-  # the shared Google grant, and wraps it as a `google.oauth2.credentials`
-  # object the official client accepts. The refresh token / client secret stay
-  # inside `gcal`; only access tokens cross into Python.
+  # `google_auth`: Gmail + Calendar for the kernel, with self-service sign-in.
+  # Pure Python (no cdylib): it shells to the bundled `gcal` binary
+  # (`IX_GCAL_BIN`, set on the wrapper below) to sign in (`login()` drives
+  # `gcal auth --json` and opens a browser), to sign out (`logout()`), and to
+  # mint short-lived access tokens from the shared grant, which it wraps as a
+  # `google.oauth2.credentials` object the official client accepts. The refresh
+  # token / client secret stay inside `gcal`; only access tokens cross into
+  # Python.
   googleAuthPythonSource = builtins.path {
     name = "ix-mcp-google-auth-python-source";
     path = ./src/google_auth;
@@ -332,6 +335,48 @@ let
         cp -r ${browserPythonSource}/browser/. "$site/"
       ''
   );
+  # Read recent X (Twitter) posts into polars by driving the logged-in browser:
+  # `import x`, then `await x.posts("@handle")` / `x.posts("home")` navigates the
+  # browser `browser` connects to, scrolls until it has enough tweets, and parses
+  # them into a polars frame. Pure Python over the bundled browser/playwright/polars
+  # (X has no usable unauthenticated read API); cross-platform.
+  xPythonSource = builtins.path {
+    name = "ix-mcp-x-python-source";
+    path = ./src/x;
+  };
+  xModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-x-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Read recent X posts to polars via the logged-in browser, bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/x"
+        mkdir -p "$site"
+        cp -r ${xPythonSource}/x/. "$site/"
+      ''
+  );
+  # Slack: read channels, messages, threads; send messages; search -- all per-user
+  # with a self-service token flow. Pure Python over stdlib urllib + polars.
+  # Per-user credential: SLACK_USER_TOKEN/SLACK_TOKEN env or ~/.config/slack/token
+  # (mode 0600, written by slack.login(token)). Incognito sessions only (personal
+  # workspace data never reaches a shared room). Cross-platform.
+  slackPythonSource = builtins.path {
+    name = "ix-mcp-slack-python-source";
+    path = ./src/slack;
+  };
+  slackModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-slack-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Per-user Slack channels/messages/search bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/slack"
+        mkdir -p "$site"
+        cp -r ${slackPythonSource}/slack/. "$site/"
+      ''
+  );
   # Git worktrees as the unit of isolated work: `import worktree`, then
   # `wt = await worktree.add("my-fix")` checks out a new branch in its own tree,
   # `await wt.build(".#mcp")` stages + nix-builds it, `worktree.list()` is a
@@ -350,6 +395,67 @@ let
         site="$out/${pkgs.python3.sitePackages}/worktree"
         mkdir -p "$site"
         cp -r ${worktreePythonSource}/worktree/. "$site/"
+      ''
+  );
+  # Example task-dependency graphs generated in Python and stored in SQLite:
+  # `import tasks`, then `tasks.seed("tasks.sqlite")` writes a ~100-node DAG and
+  # `tasks.load(...)` / `tasks.frame(...)` read it back. The task-graph demo site
+  # reads the same SQLite file. Pure stdlib (sqlite3) + lazy polars.
+  tasksPythonSource = builtins.path {
+    name = "ix-mcp-tasks-python-source";
+    path = ./src/tasks;
+  };
+  tasksModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-tasks-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Task-graph SQLite helper bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/tasks"
+        mkdir -p "$site"
+        cp -r ${tasksPythonSource}/tasks/. "$site/"
+      ''
+  );
+  # Linear issue-tracker GraphQL client: `import linear`, then
+  # `await linear.issue("ENG-123")` / `issue_update` / `issue_create` /
+  # `project_create`. Pure Python over the already-bundled httpx; reads
+  # LINEAR_API_KEY from the environment at call time.
+  linearPythonSource = builtins.path {
+    name = "ix-mcp-linear-python-source";
+    path = ./src/linear;
+  };
+  linearModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-linear-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Linear GraphQL client bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/linear"
+        mkdir -p "$site"
+        cp -r ${linearPythonSource}/linear/. "$site/"
+      ''
+  );
+  # `mcp_client`: connect to any Model Context Protocol server and call its tools
+  # from the kernel. Pure Python over the already-bundled `mcp` SDK (no cdylib),
+  # so it wraps the SDK's awkward `async with` transport/session context managers
+  # in a persistent `Server` driven by one background task. `import mcp_client`,
+  # then `await mcp_client.connect(url_or_command)`.
+  mcpClientPythonSource = builtins.path {
+    name = "ix-mcp-mcp-client-python-source";
+    path = ./src/mcp_client;
+  };
+  mcpClientModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-mcp-client-python-module"
+      {
+        strictDeps = true;
+        meta.description = "MCP client helper bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/mcp_client"
+        mkdir -p "$site"
+        cp -r ${mcpClientPythonSource}/mcp_client/. "$site/"
       ''
   );
   screenPythonSource = builtins.path {
@@ -389,6 +495,30 @@ let
         cp -r ${vmkitPythonSource}/vmkit/. "$site/"
       ''
   );
+  # Native macOS iMessage access, bundled like `screen`/`vmkit` so every session
+  # can `import imessage` on Darwin. Pure Python over the bundled sqlite3/polars
+  # (plus Foundation's NSUnarchiver to decode the archived message text): it reads
+  # the Messages and Contacts SQLite databases into polars frames, sends new
+  # messages through the Messages app over AppleScript, and edits contacts
+  # through the Contacts app over JXA (so edits sync to iCloud). macOS-only; the
+  # module raises off Darwin.
+  imessagePythonSource = builtins.path {
+    name = "ix-mcp-imessage-python-source";
+    path = ./src/imessage;
+  };
+  imessageModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-imessage-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Native macOS iMessage read-to-polars + send bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/imessage"
+        mkdir -p "$site"
+        cp -r ${imessagePythonSource}/imessage/. "$site/"
+      ''
+  );
+
   # The vmkit binary `vmkit` spawns. Darwin-only; referenced lazily so a Linux
   # mcp build never forces it.
   vmkitBin = ix.rustWorkspace.units.binaries."vmkit";
@@ -408,6 +538,7 @@ let
       ps.pyobjc-framework-Quartz
       screenModule
       vmkitModule
+      imessageModule
     ];
 
   # htpy: build HTML in plain Python (`div(class_="x")[ ... ]`), auto-escaping
@@ -525,6 +656,11 @@ let
       ps.nbformat
       ps.aiohttp
       ps.mcp
+      # dill: serializes functions and classes defined in cells, which stdlib
+      # pickle cannot -- the session-file namespace checkpoints
+      # (runtime.__ix_snapshot / __ix_restore) depend on it to bring an agent's
+      # helpers back instantly when a session file is reopened.
+      ps.dill
       tuiModule
       searchModule
       fffModule
@@ -537,6 +673,11 @@ let
       shModule
       worktreeModule
       browserModule
+      xModule
+      slackModule
+      tasksModule
+      linearModule
+      mcpClientModule
     ]
     ++ darwinExtraPackages ps
   );
@@ -585,6 +726,16 @@ let
         mkdir -p $out/bin
         makeWrapper ${lib.getExe mcpPython} $out/bin/ix-mcp \
           --add-flags "-m ix_notebook_mcp" \
+          --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
+          --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
+          --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
+          --set IX_MCP_DASHBOARD_HTML ${lib.escapeShellArg dashboardHtml} \
+          ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
+        # The notebook engine alone (kernel + dashboard + session file, no MCP
+        # transport): the same interpreter and env, entered at the `notebook`
+        # subcommand. Our jupyter-shaped serve; the MCP server is one client of it.
+        makeWrapper ${lib.getExe mcpPython} $out/bin/ix-notebook \
+          --add-flags "-m ix_notebook_mcp notebook" \
           --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
@@ -823,22 +974,30 @@ let
 
     assert callable(google_auth.credentials)
     assert callable(google_auth.gmail) and callable(google_auth.calendar)
+    # Self-service sign-in surface: login() is awaitable, status()/logout() are
+    # plain calls. These are what makes Gmail discoverable and usable with no
+    # host-side setup file.
+    import asyncio as _asyncio
 
-    # Gmail/Calendar are gated to an incognito (private) session. Outside one
-    # (IX_MCP_PRIVATE unset) minting refuses before it ever looks for the grant,
-    # so a synced chat can never reach the personal credential.
-    os.environ.pop("IX_MCP_PRIVATE", None)
+    assert _asyncio.iscoroutinefunction(google_auth.login)
+    assert callable(google_auth.status) and callable(google_auth.logout)
+
+    # In a shared (multiplayer) room (IX_MCP_SHARED set) Gmail/Calendar are
+    # refused before minting ever looks for the grant, so a personal mailbox
+    # never reaches state other participants can see.
+    os.environ["IX_MCP_SHARED"] = "1"
     os.environ["IX_GCAL_BIN"] = "/nonexistent/gcal"
     try:
         google_auth.credentials()
     except google_auth.GoogleAuthError as exc:
-        assert "incognito" in str(exc).lower(), exc
+        assert "shared" in str(exc).lower(), exc
     else:
-        raise SystemExit("expected GoogleAuthError when the session is not private")
+        raise SystemExit("expected GoogleAuthError in a shared room")
 
-    # Inside a private session the gate passes; minting then fails on the missing
-    # binary instead, proving the gate is the only thing that blocked it before.
-    os.environ["IX_MCP_PRIVATE"] = "1"
+    # Incognito is the default: with IX_MCP_SHARED unset the gate passes, so
+    # minting then fails on the missing binary instead -- proving the shared
+    # gate is the only thing that blocked it above.
+    os.environ.pop("IX_MCP_SHARED", None)
     os.environ.pop("IX_GCAL_BIN", None)
     try:
         google_auth.credentials()
@@ -846,6 +1005,11 @@ let
         assert "IX_GCAL_BIN" in str(exc), exc
     else:
         raise SystemExit("expected GoogleAuthError when IX_GCAL_BIN is unset")
+
+    # status() answers instead of raising: a not-signed-in session reports
+    # signed_in=False so a caller can branch on it and offer login().
+    state = google_auth.status()
+    assert state["signed_in"] is False, state
     print("google-auth-ok")
   '';
   # Typed PyO3 bindings: the cdylib loads and the two Client classes are
@@ -857,6 +1021,53 @@ let
     + "assert callable(gmail.Client) and callable(calendar.Client); "
     + "print('ix-google-ok', ix_google.__version__)"
   );
+  # The `slack` helper imports and exposes its public surface. A real API call
+  # needs SLACK_USER_TOKEN + network, so the sandbox-safe assertions are: the
+  # module imports, the public callables exist, an unconfigured session raises
+  # SlackError with a helpful message, and IX_MCP_SHARED=1 refuses access.
+  slackBundled = importTest "slack" ''
+    import os
+
+    import slack
+
+    assert callable(slack.login) and callable(slack.logout) and callable(slack.status)
+    import asyncio as _asyncio
+
+    assert _asyncio.iscoroutinefunction(slack.channels)
+    assert _asyncio.iscoroutinefunction(slack.messages)
+    assert _asyncio.iscoroutinefunction(slack.thread)
+    assert _asyncio.iscoroutinefunction(slack.send)
+    assert _asyncio.iscoroutinefunction(slack.search)
+
+    # In a shared (multiplayer) room Slack is refused before any network call,
+    # so personal workspace data never reaches state other participants can see.
+    os.environ["IX_MCP_SHARED"] = "1"
+    try:
+        _asyncio.run(slack.channels())
+    except slack.SlackError as exc:
+        assert "shared" in str(exc).lower(), exc
+    else:
+        raise SystemExit("expected SlackError in a shared room")
+
+    # Incognito is the default: with IX_MCP_SHARED unset the shared guard
+    # passes, so the next failure is a missing token -- proving the guard was
+    # the only thing that blocked it above.
+    os.environ.pop("IX_MCP_SHARED", None)
+    # Ensure no token env vars or file are present.
+    os.environ.pop("SLACK_USER_TOKEN", None)
+    os.environ.pop("SLACK_TOKEN", None)
+    try:
+        _asyncio.run(slack.channels())
+    except slack.SlackError as exc:
+        assert "token" in str(exc).lower(), exc
+    else:
+        raise SystemExit("expected SlackError when no token is configured")
+
+    # status() answers instead of raising when not configured.
+    state = slack.status()
+    assert state["configured"] is False, state
+    print("slack-ok")
+  '';
   engineBundled = importTest "engine" "import ipykernel, jupyter_client, nbformat, aiohttp, mcp; print('engine-ok')";
 
   # The server package imports and registers its full tool surface. Exercises the
@@ -962,6 +1173,76 @@ let
         mkdir -p "$out"
       '';
 
+  # Exercises _resolve_ssh_auth_sock: the helper must redirect SSH_AUTH_SOCK to
+  # the 1Password agent on darwin when the Apple launchd socket (or no socket)
+  # is present, must leave a custom non-Apple agent alone, and must always
+  # return None on non-darwin platforms. Dependency-free pure Python, so the
+  # build sandbox runs it.
+  sshAuthSockTest = pkgs.writeText "ix-mcp-ssh-auth-sock-test.py" ''
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from ix_notebook_mcp.cli import _resolve_ssh_auth_sock
+
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp)
+        op_dir = home / "Library" / "Group Containers" / "2BUA8C4S2C.com.1password" / "t"
+        op_dir.mkdir(parents=True)
+        op_sock = op_dir / "agent.sock"
+        op_sock.touch()
+
+        # darwin + unset SSH_AUTH_SOCK -> forward to 1Password
+        result = _resolve_ssh_auth_sock(None, home, "darwin", exists=os.path.exists)
+        assert result == str(op_sock), f"expected op_sock, got {result!r}"
+
+        # darwin + Apple launchd socket -> forward to 1Password
+        apple = "/var/run/com.apple.launchd.XYZ123/Listeners"
+        result = _resolve_ssh_auth_sock(apple, home, "darwin", exists=os.path.exists)
+        assert result == str(op_sock), f"expected op_sock for apple agent, got {result!r}"
+
+        # darwin + custom non-Apple agent -> do not override
+        custom = "/run/user/1000/gnupg/S.gpg-agent.ssh"
+        result = _resolve_ssh_auth_sock(custom, home, "darwin", exists=os.path.exists)
+        assert result is None, f"must not clobber custom agent, got {result!r}"
+
+        # non-darwin platform -> always None, even with op sock present
+        for plat in ("linux", "win32"):
+            result = _resolve_ssh_auth_sock(None, home, plat, exists=os.path.exists)
+            assert result is None, f"expected None on {plat!r}, got {result!r}"
+            result = _resolve_ssh_auth_sock(apple, home, plat, exists=os.path.exists)
+            assert result is None, f"expected None on {plat!r} with apple sock, got {result!r}"
+
+        # darwin but 1Password socket absent -> None (do not crash)
+        missing_home = Path(tmp) / "missing"
+        missing_home.mkdir()
+        result = _resolve_ssh_auth_sock(None, missing_home, "darwin", exists=os.path.exists)
+        assert result is None, f"expected None when op sock absent, got {result!r}"
+
+    print("ssh-auth-sock-ok")
+  '';
+  sshAuthSockSmoke =
+    pkgs.runCommand "ix-mcp-ssh-auth-sock-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${mcpPython}/bin/python3 ${sshAuthSockTest} >stdout 2>stderr || {
+          echo "ix-mcp ssh-auth-sock smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'ssh-auth-sock-ok' stdout || {
+          echo "ix-mcp ssh-auth-sock smoke did not confirm helper behaviour:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # Exercises the in-kernel runtime (ix_notebook_mcp/runtime.py) in-process: two
   # jobs run concurrently on one event loop, neither blocks the other, each keeps
   # its own captured stdout, and the trailing expression is captured as the
@@ -1049,6 +1330,51 @@ let
         assert slow.done() and slow.ok, slow.status
         assert slow.result.llm_result == "late", slow.result
 
+        # Job.wait: a timed wait that never raises -- one cell replaces a
+        # sleep-and-poll loop. At a short deadline the job is still running;
+        # with no deadline it returns the finished job.
+        slow2 = await run("import asyncio\nawait asyncio.sleep(0.3)\nResult.text('w')", budget=0.02, name="wait")
+        assert (await slow2.wait(0.01)).running(), slow2.status
+        assert (await slow2.wait()).done() and slow2.result.llm_result == "w"
+
+        # A Result nested inside a Result (llm_result=Result.text(...)) is
+        # flattened to its model text at construction, so the summary/paging
+        # path never hits a non-str ("Result object is not subscriptable").
+        nested = runtime.Result(user_html="<b>x</b>", llm_result=runtime.Result.text("inner"))
+        assert nested.llm_result == "inner", nested.llm_result
+        nj = await run(
+            "Result(user_html='<b>x</b>', llm_result=Result.text('inner-e2e'))",
+            budget=2.0, name="nested",
+        )
+        assert nj.status == "done", (nj.status, nj.error)
+        assert "inner-e2e" in nj.tail(100), nj.tail(100)
+        assert runtime._job_summary(nj)["result_chars"] == len("inner-e2e")
+        # Any other non-str llm_result coerces to its repr rather than crash later.
+        odd = runtime.Result(user_html="x", llm_result=123)
+        assert odd.llm_result == "123", odd.llm_result
+
+        # __ix_read: a file-path target returns the file's CONTENTS to the model
+        # (the dashboard note is user_html only), honoring start/end; and an
+        # expression that EVALUATES to an existing path reads that file too.
+        import pathlib
+        import tempfile
+        rd = ns["__ix_read"]
+        p = pathlib.Path(tempfile.mkdtemp()) / "sample.txt"
+        body = "alpha\nbeta\ngamma\ndelta"
+        p.write_text(body)
+        whole = await rd(str(p), None, None)
+        assert whole.llm_result == body, repr(whole.llm_result)
+        assert str(p) not in whole.llm_result or whole.llm_result == body
+        span = await rd(str(p), 2, 3)
+        assert span.llm_result == "beta\ngamma", repr(span.llm_result)
+        ns["sample_path"] = str(p)
+        via_expr = await rd("sample_path", None, None)
+        assert via_expr.llm_result == body, repr(via_expr.llm_result)
+        # A plain expression target still renders its value.
+        ns["answer"] = 41
+        via_val = await rd("answer + 1", None, None)
+        assert via_val.llm_result == "42", repr(via_val.llm_result)
+
     asyncio.run(main())
     # api(): a discoverable catalog of kernel builtins + bundled modules.
     cat = ns["api"]()
@@ -1078,6 +1404,28 @@ let
     _w, _h = _Image.open(_io.BytesIO(_b64.b64decode(_coerced["data"]))).size
     assert max(_w, _h) <= runtime._IMAGE_MAX_DIM, (_w, _h, runtime._IMAGE_MAX_DIM)
 
+    # The dimension cap alone does not bound bytes: a busy 1280px screenshot stays
+    # megabytes as PNG. So _fit_image_bytes also enforces _IMAGE_MAX_BYTES, falling
+    # back to JPEG (and further downscales) -- a high-entropy image comes back well
+    # under the byte cap instead of flooding the model's reply with base64.
+    import os as _osr
+
+    _noisy = _Image.frombytes("RGB", (3000, 1500), _osr.urandom(3000 * 1500 * 3))
+    _nbuf = _io.BytesIO()
+    _noisy.save(_nbuf, format="PNG")
+    assert len(_nbuf.getvalue()) > runtime._IMAGE_MAX_BYTES, len(_nbuf.getvalue())
+    _fit = runtime._coerce_image(_nbuf.getvalue())
+    _raw = _b64.b64decode(_fit["data"])
+    assert len(_raw) <= runtime._IMAGE_MAX_BYTES, ("over byte cap", len(_raw))
+    _fw, _fh = _Image.open(_io.BytesIO(_raw)).size
+    assert max(_fw, _fh) <= runtime._IMAGE_MAX_DIM, (_fw, _fh)
+    # A small lossless image fits both caps and is kept byte-for-byte (a crisp PNG
+    # for UI/diagrams is never needlessly re-encoded).
+    _sbuf = _io.BytesIO()
+    _Image.new("RGB", (200, 100), (10, 20, 30)).save(_sbuf, format="PNG")
+    _small = _sbuf.getvalue()
+    assert _b64.b64decode(runtime._coerce_image(_small)["data"]) == _small
+
     # outputs.text() renders an over-cap block as a head+tail preview (not a
     # one-sided clip) with paging guidance, and honours IX_MCP_MAX_RESULT_CHARS.
     import importlib as _il
@@ -1092,6 +1440,21 @@ let
     assert "output too large" in _blk and len(_blk) < 2000, len(_blk)
     _os.environ.pop("IX_MCP_MAX_RESULT_CHARS", None)
     _il.reload(_outputs)
+
+    # outputs._image is the final byte net for every image reaching the model: a
+    # small image becomes a real image block, but an oversize blob (e.g. a raw
+    # display(fig) bundle that never went through the kernel's fitter) is dropped
+    # with a short note rather than dumped as megabytes of base64.
+    _ok = _outputs._image("image/png", _b64.b64encode(_small).decode("ascii"))
+    assert _ok.type == "image", _ok
+    _over = _b64.b64encode(b"x" * (_outputs.MAX_IMAGE_BYTES + 5000)).decode("ascii")
+    _dropped = _outputs._image("image/png", _over)
+    assert _dropped.type == "text" and "dropped" in _dropped.text, _dropped
+    assert len(_dropped.text) < 400, len(_dropped.text)
+    # End to end: an oversize image in a display bundle yields no giant text block.
+    _rendered = _outputs.to_mcp([{"output_type": "display_data", "data": {"image/png": _over}}])
+    assert all(_c.type == "text" for _c in _rendered), [_c.type for _c in _rendered]
+    assert max(len(_c.text) for _c in _rendered) < 400, [len(_c.text) for _c in _rendered]
 
     # view.tree lists but does not descend into heavy dirs (node_modules, ...)
     # unless all=True, so a project's structure is not buried under vendored files.
@@ -1211,6 +1574,130 @@ let
         mkdir -p "$out"
       '';
 
+  # The read-only data API is also the embedding contract: a host (the room
+  # server runs `ix-mcp` as its agent's only tool) reads the agent's rich
+  # results back over HTTP and renders them in its own UI. Exercise that path
+  # in-process: seed the store, start the dashboard server, and assert the JSON
+  # routes (incl. the by-id lookup an embedder keys off the job id in a tool
+  # reply) return the run's nbformat output bundles, cells, and live resources.
+  apiTest = pkgs.writeText "ix-mcp-api-test.py" ''
+    import asyncio, tempfile
+    from pathlib import Path
+
+    import aiohttp
+
+    from ix_notebook_mcp import cli, dashboard, store
+    from ix_notebook_mcp.config import Config, set_config
+
+    # An embedder pins the data-API port so it knows where to reach this instance.
+    import os
+
+    os.environ["IX_MCP_DASHBOARD_PORT"] = "54321"
+    assert cli._dashboard_port() == 54321, cli._dashboard_port()
+    os.environ.pop("IX_MCP_DASHBOARD_PORT")
+    assert isinstance(cli._dashboard_port(), int)
+
+    tmp = Path(tempfile.mkdtemp())
+
+    # An embedder pins the execution store the same way (the pi-harness room
+    # event mapper polls exactly this file); unset, the store is minted in the
+    # runtime dir keyed by the data-API port.
+    os.environ["IX_MCP_STORE"] = str(tmp / "pinned-store.sqlite")
+    assert cli._store_path(54321) == tmp / "pinned-store.sqlite", cli._store_path(54321)
+    os.environ["IX_MCP_STORE"] = ""
+    assert cli._store_path(54321).name == "store-54321.db", cli._store_path(54321)
+    os.environ.pop("IX_MCP_STORE")
+    assert cli._store_path(54321).name == "store-54321.db", cli._store_path(54321)
+    store_path = tmp / "store.db"
+    conn = store.connect(store_path)
+    rich = [
+        {
+            "output_type": "execute_result",
+            "data": {
+                "text/plain": "shape: (1, 1)",
+                "text/html": "<table><tr><td>1</td></tr></table>",
+            },
+        }
+    ]
+    store.start(conn, id="job1", name="demo", code="df.head()", started_at=1000.0, budget=15.0)
+    store.finish(
+        conn,
+        id="job1",
+        status="done",
+        ended_at=1001.0,
+        output="stdout tail",
+        result="ok",
+        error=None,
+        outputs=rich,
+        bindings={"df": {"summary": "DataFrame"}},
+    )
+    store.replace_cells(conn, [{"id": "c1", "title": "Result", "position": 0, "outputs": rich}])
+    store.upsert_resource(
+        conn, id="r1", title="Live", kind="html", html="<b>hi</b>", status="live",
+        created_at=1000.0, updated_at=1000.0,
+    )
+
+    cfg = Config(
+        workdir=tmp, host="127.0.0.1", advertised_host="127.0.0.1",
+        dashboard_port=cli._free_port(), store_path=store_path,
+    )
+    set_config(cfg)
+
+    async def main():
+        runner = await dashboard.start(cfg)
+        base = f"http://127.0.0.1:{cfg.dashboard_port}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(base + "/api/jobs") as resp:
+                    jobs = await resp.json()
+                assert len(jobs) == 1 and jobs[0]["id"] == "job1", jobs
+                assert jobs[0]["outputs"] == rich, jobs[0]["outputs"]
+                assert jobs[0].get("code_html"), "expected highlighted code"
+
+                async with session.get(base + "/api/jobs/job1") as resp:
+                    assert resp.status == 200, resp.status
+                    one = await resp.json()
+                assert one["id"] == "job1" and one["outputs"] == rich
+                assert one["bindings"] == {"df": {"summary": "DataFrame"}}, one["bindings"]
+
+                async with session.get(base + "/api/jobs/nope") as resp:
+                    assert resp.status == 404, resp.status
+
+                async with session.get(base + "/api/cells") as resp:
+                    cells = await resp.json()
+                assert cells[0]["id"] == "c1" and cells[0]["outputs"] == rich
+
+                async with session.get(base + "/api/resources") as resp:
+                    resources = await resp.json()
+                assert resources[0]["id"] == "r1" and resources[0]["html"] == "<b>hi</b>"
+        finally:
+            await runner.cleanup()
+
+    asyncio.run(main())
+    print("api-ok")
+  '';
+  apiSmoke =
+    pkgs.runCommand "ix-mcp-api-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${mcpPython}/bin/python3 ${apiTest} >stdout 2>stderr || {
+          echo "ix-mcp api smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'api-ok' stdout || {
+          echo "ix-mcp api smoke did not confirm the embedding data API:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   runtimeSmoke =
     pkgs.runCommand "ix-mcp-runtime-smoke"
       {
@@ -1233,6 +1720,86 @@ let
         }
         grep -qx 'runtime-ok' stdout || {
           echo "ix-mcp runtime smoke did not confirm concurrent jobs:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
+  # The session-file contract: run cells against a session store, checkpoint,
+  # "restart" into a fresh namespace, and reopen -- the checkpoint restores the
+  # state instantly (including a function defined in a cell, which needs the
+  # bundled dill), the one cell newer than the checkpoint replays, a row left
+  # 'running' by the dead server is marked interrupted, and a second reopen has
+  # nothing to replay (the restore folds everything into a fresh checkpoint).
+  sessionTestPy = pkgs.writeText "ix-mcp-session-test.py" ''
+    import asyncio
+    import tempfile
+
+    import dill  # the checkpoint serializer must be bundled in this interpreter
+
+    from ix_notebook_mcp import runtime, store
+
+    path = tempfile.mktemp(suffix=".ixnb")
+
+    def wire(conn, ns):
+        runtime._store = store
+        runtime._store_conn = conn
+        runtime._user_ns = ns
+        runtime._SESSION = True
+        runtime._baseline_names = frozenset(ns)
+
+    async def first_run():
+        conn = store.connect(path)
+        ns = {"Result": runtime.Result}
+        wire(conn, ns)
+        a = await runtime.__ix_run("x = 40\ndef double(n):\n    return n * 2\nResult.ok('a')")
+        assert a.status == "done", (a.status, a.error)
+        await runtime._snapshot_now()
+        b = await runtime.__ix_run("y = double(x) + 4\nResult.ok('b')")
+        assert b.status == "done", (b.status, b.error)
+        # A row left 'running' by a server that died mid-cell.
+        store.start(conn, id="dead", name="dead", code="zz", started_at=1.0)
+        conn.close()
+
+    asyncio.run(first_run())
+
+    async def reopen():
+        conn = store.connect(path)
+        assert store.mark_interrupted(conn, ended_at=2.0) == 1
+        assert store.get(conn, "dead")["status"] == "interrupted"
+        ns = {"Result": runtime.Result}
+        wire(conn, ns)
+        runtime.jobs.clear()
+        await runtime.__ix_restore()
+        snap = store.latest_snapshot(conn)
+        assert snap is not None, "restore must fold a fresh checkpoint"
+        assert store.replayable(conn, since=snap["created_at"]) == [], "second reopen must replay nothing"
+        conn.close()
+        return ns
+
+    ns = asyncio.run(reopen())
+    assert ns["x"] == 40, ns.get("x")
+    assert ns["double"](3) == 6
+    assert ns["y"] == 84, ns.get("y")
+    print("session-ok")
+  '';
+  sessionSmoke =
+    pkgs.runCommand "ix-mcp-session-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${sessionTestPy} >stdout 2>stderr || {
+          echo "ix-mcp session smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'session-ok' stdout || {
+          echo "ix-mcp session smoke did not confirm the reopen contract:" >&2
           cat stdout stderr >&2
           exit 1
         }
@@ -1923,6 +2490,251 @@ let
         mkdir -p "$out"
       '';
 
+  # The imessage module: read the Messages/Contacts SQLite databases into polars
+  # and (without sending) validate the AppleScript send path. Hermetic -- it
+  # builds tiny fixture databases with the real schema subset and round-trips an
+  # archived NSAttributedString through Foundation, so the sandbox runs it.
+  imessageTestPy = pkgs.writeText "ix-mcp-imessage-test.py" ''
+
+    import os
+    import sqlite3
+    import tempfile
+    from datetime import datetime, timezone
+
+    import polars as pl
+
+    import imessage
+
+    assert imessage.CHAT_DB.endswith("Library/Messages/chat.db"), imessage.CHAT_DB
+
+    # attributedBody round-trip: archive an NSAttributedString the way macOS does,
+    # then assert our NSUnarchiver-based decoder recovers the exact text (incl.
+    # non-ASCII), and that junk/None decode to None rather than raising.
+    import Foundation
+
+    s = Foundation.NSAttributedString.alloc().initWithString_("héllo 👋 world")
+    blob = bytes(Foundation.NSArchiver.archivedDataWithRootObject_(s))
+    assert imessage._decode_attributed_body(blob) == "héllo 👋 world"
+    assert imessage._decode_attributed_body(b"not an archive") is None
+    assert imessage._decode_attributed_body(None) is None
+
+    # normalization lines up handles with address-book entries.
+    assert imessage._norm("+1 (202) 555-0123") == imessage._norm("2025550123")
+    assert imessage._norm("Me@Example.COM ") == "me@example.com"
+
+    # reply/tapback reference parsing: strip the "p:<part>/" or "bp:" prefix to the
+    # bare GUID, and decode associated_message_type into a tapback label.
+    assert imessage._bare_guid("p:0/ABC") == "ABC"
+    assert imessage._bare_guid("bp:XYZ") == "XYZ"
+    assert imessage._bare_guid("ABC") == "ABC"
+    assert imessage._bare_guid(None) is None
+    assert imessage._tapback(2000) == "loved"
+    assert imessage._tapback(2005) == "questioned"
+    assert imessage._tapback(3003) == "removed-laughed"
+    # base outside 2xxx/3xxx is not a tapback even when the low digit collides
+    # with a reaction offset (1000 is an inline association, not a "loved").
+    assert imessage._tapback(1000) is None
+    assert imessage._tapback(2) is None
+    assert imessage._tapback(0) is None
+    assert imessage._tapback(None) is None
+
+    work = tempfile.mkdtemp()
+    chat = os.path.join(work, "chat.db")
+    con = sqlite3.connect(chat)
+    con.executescript(
+        """
+        CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, display_name TEXT, chat_identifier TEXT, service_name TEXT);
+        CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, text TEXT, attributedBody BLOB, is_from_me INTEGER, is_read INTEGER, service TEXT, handle_id INTEGER, thread_originator_guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER DEFAULT 0, date_edited INTEGER DEFAULT 0, date_retracted INTEGER DEFAULT 0);
+        CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+        CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+        """
+    )
+    apple_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
+
+    def ns(dt):
+        return int((dt - apple_epoch).total_seconds() * 1_000_000_000)
+
+    t1 = datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    t2 = datetime(2024, 1, 2, 3, 5, 5, tzinfo=timezone.utc)
+    con.execute("INSERT INTO handle VALUES (1, '+12025550123')")
+    con.execute("INSERT INTO chat VALUES (1, NULL, '+12025550123', 'iMessage')")
+    con.execute("INSERT INTO message (ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id) VALUES (1, 'm1', ?, 'plain text', NULL, 1, 1, 'iMessage', 1)", (ns(t1),))
+    con.execute("INSERT INTO message (ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id) VALUES (2, 'm2', ?, NULL, ?, 0, 0, 'iMessage', 1)", (ns(t2), blob))
+    con.execute("INSERT INTO chat_message_join VALUES (1, 1), (1, 2)")
+    con.execute("INSERT INTO message_attachment_join VALUES (2, 99)")
+    con.commit()
+    con.close()
+
+    # resolve_names defaults True; with no address book under $HOME it must degrade
+    # to name=None rather than fail.
+    df = imessage.messages(db=chat, limit=10)
+    assert df.height == 2, df
+    assert df.schema["date"] == pl.Datetime("ns", "UTC"), df.schema
+    # newest first; attributedBody is decoded into `text`.
+    assert df["rowid"].to_list() == [2, 1], df
+    assert df["text"].to_list() == ["héllo 👋 world", "plain text"], df["text"].to_list()
+    assert df["is_from_me"].to_list() == [False, True], df
+    assert df["name"].to_list() == [None, None], df
+    # the relational columns default cleanly when a message is none of these.
+    assert df["reply_to_guid"].to_list() == [None, None], df
+    assert df["reply_to_rowid"].to_list() == [None, None], df
+    assert df["tapback"].to_list() == [None, None], df
+    assert df["edited"].to_list() == [False, False], df
+    assert df["unsent"].to_list() == [False, False], df
+
+    row2 = df.filter(pl.col("rowid") == 2)
+    assert row2["date"][0] == t2, (row2["date"][0], t2)
+    assert row2["n_attachments"][0] == 1, row2
+
+    # filters: from_me, contact (by handle, normalized), since, and a no-match.
+    assert imessage.messages(db=chat, from_me=True).height == 1
+    assert imessage.messages(db=chat, contact="(202) 555-0123").height == 2
+    assert imessage.messages(db=chat, contact="+19999999999").height == 0
+    since = imessage.messages(db=chat, since=t2)
+    assert since.height == 1 and since["rowid"][0] == 2, since
+    # a no-match still returns the full, typed (datetime) schema.
+    assert imessage.messages(db=chat, contact="+19999999999").schema["date"] == pl.Datetime("ns", "UTC")
+
+    chats = imessage.chats(db=chat)
+    assert chats.height == 1 and chats["n_messages"][0] == 2, chats
+    assert chats["chat_identifier"][0] == "+12025550123", chats
+    assert chats.schema["last_date"] == pl.Datetime("ns", "UTC"), chats.schema
+
+    # Reads must see un-checkpointed WAL rows: chat.db runs in WAL mode and a
+    # message you just sent sits in the -wal until a checkpoint. A writer keeps a
+    # WAL connection open (no checkpoint) after inserting; messages() must still
+    # see the new row -- it would not under immutable=1. Guards send-then-read-back.
+    writer = sqlite3.connect(chat)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute(
+        "INSERT INTO message (ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id) VALUES (3, 'm3', ?, 'in the wal', NULL, 1, 1, 'iMessage', 1)",
+        (ns(datetime(2024, 1, 2, 3, 6, 5, tzinfo=timezone.utc)),),
+    )
+    writer.execute("INSERT INTO chat_message_join VALUES (1, 3)")
+    writer.commit()
+    assert "in the wal" in imessage.messages(db=chat)["text"].to_list(), "WAL rows must be visible"
+    writer.close()
+
+    # reply threading, tapbacks, edits, and unsends: insert one of each and assert
+    # messages() resolves a threaded reply to its originator and decodes the rest.
+    con = sqlite3.connect(chat)
+    cols2 = "(ROWID, guid, date, text, attributedBody, is_from_me, is_read, service, handle_id, thread_originator_guid, associated_message_guid, associated_message_type, date_edited, date_retracted)"
+    t3 = datetime(2024, 1, 2, 4, 0, 0, tzinfo=timezone.utc)
+    # a threaded reply to message 1 ("plain text"); the originator ref carries a
+    # "p:0/" part prefix that must be stripped back to the bare guid "m1".
+    con.execute("INSERT INTO message " + cols2 + " VALUES (10, 'm10', ?, 'a reply', NULL, 0, 1, 'iMessage', 1, 'p:0/m1', NULL, 0, 0, 0)", (ns(t3),))
+    # a Loved tapback on message 2, and a removed-liked on message 1.
+    con.execute("INSERT INTO message " + cols2 + " VALUES (11, 'm11', ?, 'Loved a message', NULL, 1, 1, 'iMessage', 1, NULL, 'p:0/m2', 2000, 0, 0)", (ns(t3),))
+    con.execute("INSERT INTO message " + cols2 + " VALUES (12, 'm12', ?, 'Removed a like', NULL, 1, 1, 'iMessage', 1, NULL, 'p:0/m1', 3001, 0, 0)", (ns(t3),))
+    # an edited message and an unsent (retracted) message.
+    con.execute("INSERT INTO message " + cols2 + " VALUES (13, 'm13', ?, 'fixed typo', NULL, 1, 1, 'iMessage', 1, NULL, NULL, 0, ?, 0)", (ns(t3), ns(t3)))
+    con.execute("INSERT INTO message " + cols2 + " VALUES (14, 'm14', ?, 'oops', NULL, 1, 1, 'iMessage', 1, NULL, NULL, 0, 0, ?)", (ns(t3), ns(t3)))
+    # associated_message_type 1000 is a non-tapback association: it must not be
+    # mislabeled "loved" just because its low digit is the loved offset.
+    con.execute("INSERT INTO message " + cols2 + " VALUES (15, 'm15', ?, 'inline assoc', NULL, 1, 1, 'iMessage', 1, NULL, 'p:0/m1', 1000, 0, 0)", (ns(t3),))
+    con.execute("INSERT INTO chat_message_join VALUES (1, 10), (1, 11), (1, 12), (1, 13), (1, 14), (1, 15)")
+    con.commit()
+    con.close()
+
+    thr = imessage.messages(db=chat, limit=50)
+    reply = thr.filter(pl.col("rowid") == 10).row(0, named=True)
+    assert reply["reply_to_guid"] == "m1", reply
+    assert reply["reply_to_rowid"] == 1, reply
+    assert reply["reply_to_text"] == "plain text", reply
+    love = thr.filter(pl.col("rowid") == 11).row(0, named=True)
+    assert love["tapback"] == "loved" and love["tapback_target_guid"] == "m2", love
+    removed = thr.filter(pl.col("rowid") == 12).row(0, named=True)
+    assert removed["tapback"] == "removed-liked" and removed["tapback_target_guid"] == "m1", removed
+    assert thr.filter(pl.col("rowid") == 13)["edited"][0] is True
+    assert thr.filter(pl.col("rowid") == 14)["unsent"][0] is True
+    assert thr.filter(pl.col("rowid") == 15)["tapback"][0] is None, thr.filter(pl.col("rowid") == 15)
+    # a plain message carries none of this metadata.
+    plain = thr.filter(pl.col("rowid") == 1).row(0, named=True)
+    assert plain["reply_to_guid"] is None and plain["tapback"] is None, plain
+    assert plain["edited"] is False and plain["unsent"] is False, plain
+
+    # legacy chat.db compatibility: a pre-macOS-13 schema has no
+    # thread_originator_guid / date_edited / date_retracted columns. messages()
+    # must select those only when present and degrade to empty fields, not raise.
+    legacy = os.path.join(work, "legacy.db")
+    con = sqlite3.connect(legacy)
+    con.executescript(
+        """
+        CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, display_name TEXT, chat_identifier TEXT, service_name TEXT);
+        CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, text TEXT, attributedBody BLOB, is_from_me INTEGER, is_read INTEGER, service TEXT, handle_id INTEGER);
+        CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+        CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+        """
+    )
+    con.execute("INSERT INTO handle VALUES (1, '+12025550123')")
+    con.execute("INSERT INTO message (ROWID, guid, date, text, is_from_me, is_read, service, handle_id) VALUES (1, 'g1', ?, 'legacy', 1, 1, 'iMessage', 1)", (ns(t1),))
+    con.execute("INSERT INTO chat_message_join VALUES (1, 1)")
+    con.commit()
+    con.close()
+    leg = imessage.messages(db=legacy, limit=5)
+    assert leg.height == 1 and leg["text"][0] == "legacy", leg
+    assert leg["reply_to_guid"][0] is None and leg["tapback"][0] is None, leg
+    assert leg["edited"][0] is False and leg["unsent"][0] is False, leg
+
+    # contacts: phones/emails aggregate into list columns under one display name.
+    ab = os.path.join(work, "ab.abcddb")
+    con = sqlite3.connect(ab)
+    con.executescript(
+        """
+        CREATE TABLE ZABCDRECORD (Z_PK INTEGER PRIMARY KEY, ZFIRSTNAME TEXT, ZLASTNAME TEXT, ZORGANIZATION TEXT, ZNICKNAME TEXT);
+        CREATE TABLE ZABCDPHONENUMBER (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZFULLNUMBER TEXT);
+        CREATE TABLE ZABCDEMAILADDRESS (Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZADDRESS TEXT);
+        """
+    )
+    con.execute("INSERT INTO ZABCDRECORD VALUES (1, 'Ada', 'Lovelace', NULL, NULL)")
+    con.execute("INSERT INTO ZABCDPHONENUMBER VALUES (1, 1, '+1 (202) 555-0123')")
+    con.execute("INSERT INTO ZABCDPHONENUMBER VALUES (2, 1, '+12025550124')")
+    con.execute("INSERT INTO ZABCDEMAILADDRESS VALUES (1, 1, 'ada@x.com')")
+    con.commit()
+    con.close()
+    co = imessage.contacts(db=ab)
+    assert co.height == 1, co
+    rec = co.row(0, named=True)
+    assert rec["name"] == "Ada Lovelace", rec
+    assert set(rec["phones"]) == {"+1 (202) 555-0123", "+12025550124"}, rec
+    assert rec["emails"] == ["ada@x.com"], rec
+
+    # send: rejects an unknown service and never sends here; the script carries the
+    # service token and takes recipient/body as run-arguments (no injection).
+    try:
+        imessage.send("+12025550123", "nope", service="bogus")
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("send must reject an unknown service")
+    assert "service type = iMessage" in imessage._SEND_SCRIPT.format(service="iMessage")
+
+    print("imessage-ok")
+  '';
+  imessageSmoke =
+    pkgs.runCommand "ix-mcp-imessage-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${imessageTestPy} >stdout 2>stderr || {
+          echo "ix-mcp imessage smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'imessage-ok' stdout || {
+          echo "ix-mcp imessage smoke did not confirm the imessage module:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # The view module: tabular helpers return plain polars DataFrames (so they stay
   # composable), the file helpers return a Code view whose repr is the raw text,
   # and df_html renders the styled table the kernel installs globally. Pure local
@@ -2107,6 +2919,76 @@ let
         assert callable(sh), "sh module is not callable"
         direct = await sh("printf hi", cwd=".")
         assert direct.ok and direct.text == "hi", repr(direct.text)
+
+        # cwd defaults to the current directory: no required-kwarg TypeError.
+        import os
+        here = await sh("pwd")
+        assert here.ok and here.text.strip() == os.path.realpath(os.getcwd()), (
+            here.text, os.getcwd())
+
+        # An Output composes like its text: slice, concat, contains, len, str.
+        assert direct[-1:] == "i" and direct[0] == "h", (direct[-1:], direct[0])
+        assert direct + "!" == "hi!" and "say " + direct == "say hi"
+        assert "hi" in direct and len(direct) == 2 and str(direct) == "hi"
+        assert bool(await sh("true")) is True  # empty but successful: still truthy
+
+        # Output streams to sys.stdout as it arrives (echo=True forces it outside
+        # a kernel job), escape-stripped -- so a long command's log lands in the
+        # job's pageable stdout even if the cell backgrounds before binding it.
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            echoed = await sh(r"printf '\033[31mstreamed\033[0m\n'", echo=True)
+        assert "streamed" in buf.getvalue() and "\x1b" not in buf.getvalue(), repr(buf.getvalue())
+        assert "streamed" in echoed.text, repr(echoed.text)
+        # And echo stays off by default outside a kernel job.
+        quiet = io.StringIO()
+        with contextlib.redirect_stdout(quiet):
+            await sh("printf silent")
+        assert quiet.getvalue() == "", repr(quiet.getvalue())
+
+        # Cancelling the awaiting task kills the child's whole process group:
+        # no orphan keeps running (or holding a lock) after a .cancel().
+        import signal
+        import tempfile
+        pidfile = tempfile.mktemp()
+        task = asyncio.ensure_future(sh(f"echo $$ > {pidfile}; sleep 30", cwd="."))
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            try:
+                pid = int(open(pidfile).read().strip())
+                break
+            except (FileNotFoundError, ValueError):
+                continue
+        else:
+            raise SystemExit("child never wrote its pidfile")
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0.3)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pass  # the group is dead, as required
+        else:
+            os.kill(pid, signal.SIGKILL)
+            raise SystemExit(f"cancel orphaned the child (pid {pid} still alive)")
+
+        # Structured stdout decodes straight to Python (the polars on-ramp).
+        doc = await sh.sh("printf '%s' '{\"a\": 1, \"b\": [2, 3]}'", cwd=".")
+        assert doc.json() == {"a": 1, "b": [2, 3]}, doc.json()
+        rows = await sh.sh("printf '%s\\n%s\\n' '{\"n\": 1}' '{\"n\": 2}'", cwd=".")
+        assert rows.jsonl() == [{"n": 1}, {"n": 2}], rows.jsonl()
+        # A failed command raises ShellError from json(), never a decode error.
+        try:
+            (await sh.sh("echo nope; exit 4", cwd=".")).json()
+        except sh.ShellError as exc:
+            assert exc.output.code == 4, exc.output.code
+        else:
+            raise SystemExit("expected ShellError from json() on a non-zero exit")
 
         print("sh-ok", sh.__version__)
 
@@ -2539,6 +3421,54 @@ let
     libs = {r["name"] for r in rows if r["where"] == "library"}
     assert "playwright" in libs, ("playwright not listed as a bundled library", sorted(libs))
 
+    # shot() cost controls (no browser needed -- _encode_shot is a pure helper):
+    # a model-bound shot caps its longest edge and re-encodes, so a full-res 2x
+    # capture cannot flood context. Build a busy 1746x2406 PNG (the size the
+    # friction report measured) and check each path.
+    import io as _io
+    import os as _os
+
+    from PIL import Image as _Image
+
+    _src = _Image.frombytes("RGB", (1746, 2406), _os.urandom(1746 * 2406 * 3))
+    _buf = _io.BytesIO()
+    _src.save(_buf, format="PNG")
+    _raw = _buf.getvalue()
+
+    # Default model path: JPEG, longest edge -> _SHOT_MAX_DIM (1024).
+    _data, _mime = browser._encode_shot(
+        _raw, max_dim=browser._SHOT_MAX_DIM, fmt="jpeg", quality=72
+    )
+    assert _mime == "image/jpeg", _mime
+    assert max(_Image.open(_io.BytesIO(_data)).size) == browser._SHOT_MAX_DIM, (
+        _Image.open(_io.BytesIO(_data)).size
+    )
+    # A busy screenshot as JPEG is far smaller than the raw full-res PNG.
+    assert len(_data) < len(_raw) // 10, (len(_data), len(_raw))
+
+    # PNG path also downscales the longest edge.
+    _pdata, _pmime = browser._encode_shot(_raw, max_dim=1024, fmt="png", quality=72)
+    assert _pmime == "image/png", _pmime
+    assert max(_Image.open(_io.BytesIO(_pdata)).size) == 1024
+
+    # max_dim=0 + png is an exact passthrough (no needless re-encode).
+    _ndata, _nmime = browser._encode_shot(_raw, max_dim=0, fmt="png", quality=72)
+    assert _ndata is _raw and _nmime == "image/png", (_nmime, _ndata is _raw)
+
+    # Never raises: junk bytes come back untouched rather than blowing up a shot.
+    _gdata, _gmime = browser._encode_shot(b"not an image", max_dim=1024, fmt="jpeg", quality=72)
+    assert _gdata == b"not an image" and _gmime == "image/png", (_gmime, _gdata)
+
+    # shot() validates its enum-ish knobs up front.
+    import asyncio as _aio
+    for _bad in (dict(format="webp"), dict(scale="2x")):
+        try:
+            _aio.run(browser.shot(**_bad))
+        except ValueError:
+            pass
+        else:
+            raise SystemExit(f"shot({_bad}) should raise ValueError")
+
     print("browser-ok", browser.__version__)
   '';
   browserSmoke =
@@ -2672,7 +3602,17 @@ let
         print("vdom-ok", browser.__version__, n_real, "nodes")
 
 
-    asyncio.run(main())
+    # A sandboxed headless chromium occasionally tears down mid-run
+    # (TargetClosedError); that is environment flake, not a vdom regression, so
+    # retry the whole run a couple of times before failing the gate.
+    for attempt in range(3):
+        try:
+            asyncio.run(main())
+            break
+        except Exception as exc:
+            if attempt == 2 or "closed" not in str(exc).lower():
+                raise
+            print(f"retry {attempt + 1}: transient browser teardown: {exc}", file=sys.stderr)
   '';
   browserVdomSmoke =
     pkgs.runCommand "ix-mcp-browser-vdom-smoke"
@@ -2702,6 +3642,9 @@ let
 
   screenBundled = importTest "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
   vmkitBundled = importTest "vmkit" "import vmkit; print('vmkit-ok', callable(vmkit.boot_linux), callable(vmkit.drive), callable(vmkit.screenshot))";
+  imessageBundled = importTest "imessage" "import imessage; print('imessage-ok', all(callable(getattr(imessage, n)) for n in ('messages', 'chats', 'contacts', 'send')))";
+  xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
+  linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'project_create')), linear.__version__)";
 in
 package.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
@@ -2716,16 +3659,20 @@ package.overrideAttrs (old: {
         exaBundled
         googleAuthBundled
         ixGoogleBundled
+        slackBundled
         engineBundled
         serverTools
         evalSmoke
         runtimeSmoke
+        sessionSmoke
         feedSmoke
+        apiSmoke
         wedgeSmoke
         richSmoke
         yieldSmoke
         bindingsSmoke
         bindDefaultSmoke
+        sshAuthSockSmoke
         viewSmoke
         nixSmoke
         fleetSmoke
@@ -2733,11 +3680,19 @@ package.overrideAttrs (old: {
         worktreeSmoke
         browserSmoke
         browserVdomSmoke
+        xBundled
+        linearBundled
         ;
       site = dashboardSite;
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
-      inherit screenBundled vmkitBundled vmkitResourceSmoke;
+      inherit
+        screenBundled
+        vmkitBundled
+        vmkitResourceSmoke
+        imessageBundled
+        imessageSmoke
+        ;
     };
   };
 })

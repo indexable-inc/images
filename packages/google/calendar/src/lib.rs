@@ -87,7 +87,9 @@ impl Client {
             NotABaseUrlSnafu { input: base_url }
         );
         Ok(Self {
-            http: reqwest::Client::builder().build().context(BuildClientSnafu)?,
+            http: reqwest::Client::builder()
+                .build()
+                .context(BuildClientSnafu)?,
             auth,
             base_url: parsed,
         })

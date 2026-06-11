@@ -69,6 +69,20 @@ def _event_type(event: Json) -> str | None:
     return None
 
 
+def _room_event_type(event: Json, pi_type: str | None) -> str:
+    if pi_type == "message_update":
+        nested = event.get("assistantMessageEvent")
+        nested_type = nested.get("type") if isinstance(nested, dict) else None
+        if nested_type == "text_delta":
+            return "text_delta"
+        if nested_type in {"reasoning_delta", "thinking_delta"}:
+            return "reasoning_delta"
+        if nested_type is None and _text_delta(event) is not None:
+            return "text_delta"
+        return "pi_event"
+    return PI_TO_ROOM_EVENTS.get(pi_type or "", "pi_event")
+
+
 def _text_delta(event: Json) -> str | None:
     for key in ("delta", "text", "content"):
         value = event.get(key)
@@ -84,9 +98,22 @@ def _text_delta(event: Json) -> str | None:
     return None
 
 
+def _message_error(event: Json) -> str | None:
+    """Return the provider error message when a message ended with stopReason error."""
+    for container in (event, event.get("message")):
+        if isinstance(container, dict) and container.get("stopReason") == "error":
+            message = container.get("errorMessage")
+            return message if isinstance(message, str) else "unknown provider error"
+    return None
+
+
+def _will_retry(event: Json) -> bool:
+    return bool(event.get("willRetry"))
+
+
 def map_pi_event(event: Json) -> Json:
     pi_type = _event_type(event)
-    room_type = PI_TO_ROOM_EVENTS.get(pi_type or "", "pi_event")
+    room_type = _room_event_type(event, pi_type)
     mapped: Json = {"type": room_type, "source": "pi", "raw": event}
 
     if pi_type is not None:
@@ -102,6 +129,108 @@ def map_pi_event(event: Json) -> Json:
             mapped[key] = event[key]
 
     return mapped
+
+
+class TurnLifecycle:
+    """Coalesce pi's auto-retried attempts into one terminal turn_completed.
+
+    Pi retries provider errors up to three times: each failed attempt emits its
+    own turn_end, then agent_end with willRetry=true and auto_retry_start before
+    the next attempt. Room terminates the turn on the first turn_completed, so a
+    per-attempt mapping ends a retried turn early. This holds each turn_end
+    until agent_end (or the next event) reveals whether the attempt is final,
+    suppresses the retried attempts, and stamps the terminal turn_completed
+    with the provider error when the last attempt also failed. A suppressed
+    attempt is kept as a fallback so a stream that dies between the retry
+    announcement and the next attempt's turn_end still terminates the turn,
+    and usage carried on suppressed turn_ends is preserved on the terminal
+    event under retried_usage (a separate key, so consumers that sum the
+    per-attempt usage events do not double count).
+    """
+
+    def __init__(self, emitter: Emitter) -> None:
+        self._emitter = emitter
+        self._pending_turn_end: Json | None = None
+        self._error: str | None = None
+        self._suppressed: tuple[Json, str] | None = None
+        self._retried_usage: list[Any] = []
+
+    def handle(self, event: Json) -> None:
+        pi_type = _event_type(event)
+        if pi_type in {"turn_start", "turn_started"}:
+            # A new turn in the same agent run: the previous turn really ended.
+            self._flush()
+            self._error = None
+            self._emitter.emit(map_pi_event(event))
+            return
+        if pi_type in {"turn_end", "turn_completed"}:
+            # Defer: only agent_end / auto_retry_start knows whether pi retries.
+            self._flush()
+            self._pending_turn_end = event
+            return
+        if pi_type == "auto_retry_start" or (pi_type == "agent_end" and _will_retry(event)):
+            # The attempt is being retried: suppress its turn_completed, but
+            # keep it so close() can still terminate the turn if the retry
+            # never produces another turn_end.
+            if self._pending_turn_end is not None:
+                if "usage" in self._pending_turn_end:
+                    self._retried_usage.append(self._pending_turn_end["usage"])
+                self._suppressed = (
+                    self._pending_turn_end,
+                    self._error or "provider error: turn interrupted during auto-retry",
+                )
+                self._pending_turn_end = None
+            self._emitter.emit(map_pi_event(event))
+            return
+        if pi_type == "message_end":
+            error = _message_error(event)
+            if error is not None:
+                self._error = error
+            self._emitter.emit(map_pi_event(event))
+            return
+        if pi_type == "agent_end":
+            self._flush()
+            self._emitter.emit(map_pi_event(event))
+            return
+        self._emitter.emit(map_pi_event(event))
+
+    def close(self) -> None:
+        if self._pending_turn_end is not None:
+            self._flush()
+            return
+        if self._suppressed is not None:
+            # The stream died after a retry announcement and before the next
+            # attempt finished: surface the suppressed attempt as the failed
+            # terminal event instead of leaving the turn open.
+            event, error = self._suppressed
+            self._suppressed = None
+            mapped = map_pi_event(event)
+            # The fallback event carries its own usage; retried_usage keeps
+            # only the OTHER suppressed attempts to avoid double counting.
+            retried_usage = self._retried_usage
+            self._retried_usage = []
+            if "usage" in event and retried_usage:
+                retried_usage = retried_usage[:-1]
+            if retried_usage:
+                mapped["retried_usage"] = retried_usage
+            mapped["status"] = "error"
+            mapped["error"] = error
+            self._emitter.emit(mapped)
+
+    def _flush(self) -> None:
+        if self._pending_turn_end is None:
+            return
+        mapped = map_pi_event(self._pending_turn_end)
+        if self._error is not None:
+            mapped["status"] = "error"
+            mapped["error"] = self._error
+        if self._retried_usage:
+            mapped["retried_usage"] = self._retried_usage
+            self._retried_usage = []
+        self._pending_turn_end = None
+        self._error = None
+        self._suppressed = None
+        self._emitter.emit(mapped)
 
 
 def _connect(path: Path) -> sqlite3.Connection | None:
@@ -310,6 +439,7 @@ def _strip_command_separator(command: list[str]) -> list[str]:
 def run(store: Path, interval: float, command: list[str] | None = None) -> int:
     os.environ["IX_MCP_STORE"] = str(store)
     emitter = Emitter()
+    lifecycle = TurnLifecycle(emitter)
     poller = StorePoller(store, interval, emitter)
     poller.start()
 
@@ -340,10 +470,11 @@ def run(store: Path, interval: float, command: list[str] | None = None) -> int:
                 emitter.emit({"type": "error", "source": "pi-harness", "message": str(exc), "line": stripped})
                 continue
             if isinstance(event, dict):
-                emitter.emit(map_pi_event(event))
+                lifecycle.handle(event)
             else:
                 emitter.emit({"type": "pi_event", "source": "pi", "raw": event})
     finally:
+        lifecycle.close()
         poller.stop()
     if process is None:
         return 0

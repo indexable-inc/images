@@ -42,12 +42,6 @@ pub enum Error {
         /// Underlying OS error.
         source: std::io::Error,
     },
-    /// Acquiring the PTY slave failed.
-    #[snafu(display("failed to get PTY slave: {source}"))]
-    Pts {
-        /// Underlying OS error.
-        source: std::io::Error,
-    },
     /// Sizing the PTY failed.
     #[snafu(display("failed to size PTY: {source}"))]
     Resize {
@@ -148,19 +142,16 @@ impl PtySession {
         } = config;
         let (program, args) = command.split_first().context(EmptyCommandSnafu)?;
 
-        let pty = pty_process::Pty::new()
+        // `pty_process::open` allocates the PTY master and its slave together.
+        let (pty, pts) = pty_process::open()
             .map_err(std::io::Error::other)
             .context(OpenPtySnafu)?;
-        let pts = pty
-            .pts()
-            .map_err(std::io::Error::other)
-            .context(PtsSnafu)?;
         pty.resize(pty_process::Size::new(rows, cols))
             .map_err(std::io::Error::other)
             .context(ResizeSnafu)?;
         let child = pty_process::Command::new(program)
             .args(args)
-            .spawn(&pts)
+            .spawn(pts)
             .map_err(std::io::Error::other)
             .context(SpawnSnafu {
                 program: program.clone(),
@@ -174,7 +165,15 @@ impl PtySession {
         let actor_emulator = Arc::clone(&emulator);
         let actor_output = output_tx.clone();
         tokio::spawn(async move {
-            actor(pty, child, actor_emulator, actor_output, command_rx, exit_tx).await;
+            actor(
+                pty,
+                child,
+                actor_emulator,
+                actor_output,
+                command_rx,
+                exit_tx,
+            )
+            .await;
         });
 
         Ok(Self {
@@ -396,7 +395,11 @@ mod tests {
     #[tokio::test]
     async fn late_subscriber_gets_a_snapshot_of_prior_output() {
         let session = PtySession::spawn(SessionConfig {
-            command: vec!["sh".into(), "-c".into(), "printf 'before attach'; sleep 5".into()],
+            command: vec![
+                "sh".into(),
+                "-c".into(),
+                "printf 'before attach'; sleep 5".into(),
+            ],
             rows: 24,
             cols: 80,
             scrollback_lines: 1000,

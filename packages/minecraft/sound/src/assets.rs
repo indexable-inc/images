@@ -412,7 +412,8 @@ mod tests {
 
     #[test]
     fn unknown_name_is_an_error() {
-        let BundledFixture { assets, root } = bundled_with(&["mob/zombie/death", "block/stone/break"]);
+        let BundledFixture { assets, root } =
+            bundled_with(&["mob/zombie/death", "block/stone/break"]);
         let err = assets
             .resolve_sound("this/does/not/exist")
             .expect_err("unknown sound must error");

@@ -20,7 +20,6 @@ let
   yourkit = ix.languages.java.yourkit;
   dataDir = "/var/lib/velocity";
   java = lib.getExe' cfg.javaPackage "java";
-  systemctl = lib.getExe' config.systemd.package "systemctl";
   tomlFormat = pkgs.formats.toml { };
   yamlFormat = pkgs.formats.yaml { };
   jsonFormat = pkgs.formats.json { };
@@ -652,12 +651,7 @@ in
       velocity = {
         from = "guest";
         description = "Velocity systemd unit is active";
-        command = [
-          systemctl
-          "is-active"
-          "--quiet"
-          "velocity.service"
-        ];
+        unit = "velocity";
       };
 
       velocity-status = {

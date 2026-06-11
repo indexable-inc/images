@@ -67,7 +67,10 @@ fn trim_default_tail(row: &[StyledCell]) -> &[StyledCell] {
         .iter()
         .rposition(|cell| cell != &default)
         .map_or(0, |last| last + 1);
-    #[allow(clippy::indexing_slicing, reason = "end is a valid rposition + 1, so <= len")]
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "end is a valid rposition + 1, so <= len"
+    )]
     &row[..end]
 }
 
@@ -216,7 +219,10 @@ mod tests {
             bg: Color::Indexed(200),
             ..StyledCell::default()
         };
-        assert_eq!(encode(&[vec![cell]]), "\x1b[0;38;2;10;20;30;48;5;200mp\x1b[0m");
+        assert_eq!(
+            encode(&[vec![cell]]),
+            "\x1b[0;38;2;10;20;30;48;5;200mp\x1b[0m"
+        );
     }
 
     /// Each row resets its own style; a colored last cell on row 0 does not bleed
@@ -228,6 +234,9 @@ mod tests {
             fg: Color::Indexed(1),
             ..StyledCell::default()
         };
-        assert_eq!(encode(&[vec![red], vec![plain('b')]]), "\x1b[0;31ma\x1b[0m\nb");
+        assert_eq!(
+            encode(&[vec![red], vec![plain('b')]]),
+            "\x1b[0;31ma\x1b[0m\nb"
+        );
     }
 }

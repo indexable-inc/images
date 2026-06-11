@@ -12,9 +12,18 @@
   # packages/claude-code uses `ix.deepMerge.rhs`).
   ix,
 }:
-final: _prev:
+final: prev:
 let
-  packageSystem = final.stdenv.hostPlatform.system;
+  # Read the target system from `prev`, not `final`: this overlay's attribute
+  # *names* are computed by filtering the registry's `overlay` entries by
+  # system (see `overlayEntriesFor`), so forcing the system through `final`
+  # would require applying this overlay to know whether it defines `stdenv` --
+  # a cycle. `prev` is the pre-overlay pkgs (same hostPlatform), so it breaks
+  # the recursion. Without this, any registry entry with a non-null
+  # `overlay.systems` triggers an infinite recursion (a `systems = null` entry
+  # short-circuits before the system is ever forced, which is why it went
+  # unnoticed).
+  packageSystem = prev.stdenv.hostPlatform.system;
   overlayContext = entry: {
     inherit
       entry

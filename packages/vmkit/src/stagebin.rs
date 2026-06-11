@@ -57,9 +57,7 @@ pub enum Error {
         tool: &'static str,
         source: std::io::Error,
     },
-    #[snafu(display(
-        "{tool} exited with status {status}: {stderr}"
-    ))]
+    #[snafu(display("{tool} exited with status {status}: {stderr}"))]
     Tool {
         tool: &'static str,
         status: String,
@@ -67,9 +65,7 @@ pub enum Error {
     },
     #[snafu(display("otool -L output for {path:?} was not valid UTF-8"))]
     OtoolEncoding { path: PathBuf },
-    #[snafu(display(
-        "a /nix/store dependency {dep:?} has no basename, so it cannot be bundled"
-    ))]
+    #[snafu(display("a /nix/store dependency {dep:?} has no basename, so it cannot be bundled"))]
     DepNoBasename { dep: String },
     #[snafu(display(
         "staged binary {path:?} still references /nix/store after rewriting:\n{remaining}"
@@ -85,13 +81,19 @@ pub enum Error {
 /// path (`output`).
 pub fn stage_binary(input: &Path, output: &Path) -> Result<PathBuf, Error> {
     if !input.exists() {
-        return Err(Error::MissingInput { path: input.to_path_buf() });
+        return Err(Error::MissingInput {
+            path: input.to_path_buf(),
+        });
     }
     let out_dir = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
-        .ok_or_else(|| Error::NoOutputParent { path: output.to_path_buf() })?;
-    std::fs::create_dir_all(out_dir).context(CreateOutputDirSnafu { path: out_dir.to_path_buf() })?;
+        .ok_or_else(|| Error::NoOutputParent {
+            path: output.to_path_buf(),
+        })?;
+    std::fs::create_dir_all(out_dir).context(CreateOutputDirSnafu {
+        path: out_dir.to_path_buf(),
+    })?;
 
     copy_writable(input, output)?;
 
@@ -173,7 +175,9 @@ fn copy_writable(from: &Path, to: &Path) -> Result<(), Error> {
         to: to.to_path_buf(),
     })?;
     let mut perms = std::fs::metadata(to)
-        .context(MakeWritableSnafu { path: to.to_path_buf() })?
+        .context(MakeWritableSnafu {
+            path: to.to_path_buf(),
+        })?
         .permissions();
     if perms.readonly() {
         #[cfg(unix)]
@@ -188,8 +192,9 @@ fn copy_writable(from: &Path, to: &Path) -> Result<(), Error> {
             #[allow(clippy::permissions_set_readonly_false)]
             perms.set_readonly(false);
         }
-        std::fs::set_permissions(to, perms)
-            .context(MakeWritableSnafu { path: to.to_path_buf() })?;
+        std::fs::set_permissions(to, perms).context(MakeWritableSnafu {
+            path: to.to_path_buf(),
+        })?;
     }
     Ok(())
 }
@@ -209,8 +214,9 @@ fn nix_store_deps(path: &Path) -> Result<Vec<String>, Error> {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         });
     }
-    let text = String::from_utf8(output.stdout)
-        .map_err(|_| Error::OtoolEncoding { path: path.to_path_buf() })?;
+    let text = String::from_utf8(output.stdout).map_err(|_| Error::OtoolEncoding {
+        path: path.to_path_buf(),
+    })?;
     // `otool -L` prints the file path, then one indented line per dependency:
     //   /path/to/bin:
     //   \t/nix/store/.../libfoo.dylib (compatibility version ...)
@@ -240,8 +246,9 @@ fn install_id(path: &Path) -> Result<Option<String>, Error> {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         });
     }
-    let text = String::from_utf8(output.stdout)
-        .map_err(|_| Error::OtoolEncoding { path: path.to_path_buf() })?;
+    let text = String::from_utf8(output.stdout).map_err(|_| Error::OtoolEncoding {
+        path: path.to_path_buf(),
+    })?;
     // First line is the file path (with a trailing `:`); the id, if any, is the
     // next non-empty line.
     Ok(text
@@ -364,7 +371,10 @@ mod tests {
 
     #[test]
     fn basename_is_final_component() {
-        assert_eq!(basename("/nix/store/abc/lib/libiconv.2.dylib").as_deref(), Some("libiconv.2.dylib"));
+        assert_eq!(
+            basename("/nix/store/abc/lib/libiconv.2.dylib").as_deref(),
+            Some("libiconv.2.dylib")
+        );
         assert_eq!(basename("libfoo.dylib").as_deref(), Some("libfoo.dylib"));
     }
 
@@ -386,6 +396,9 @@ mod tests {
     fn unknown_third_party_lib_is_bundled() {
         // A library the guest does not ship has no system equivalent, so it is
         // bundled (None here).
-        assert_eq!(system_equivalent("/nix/store/x/lib/libwgpu_native.dylib"), None);
+        assert_eq!(
+            system_equivalent("/nix/store/x/lib/libwgpu_native.dylib"),
+            None
+        );
     }
 }

@@ -5,11 +5,11 @@
 //! and `content_hash` from each chunk's metadata.
 
 use mixedbread::Filter;
-use source_meta::{Document, Source};
 use snafu::ResultExt as _;
+use source_meta::{Document, Source};
 
 use crate::backend::{
-    Answer, GrepOptions, SearchHit, SearchOptions, StoreStatus, StoredRecord, Store,
+    Answer, GrepOptions, SearchHit, SearchOptions, Store, StoreStatus, StoredRecord,
 };
 use crate::error::{BackendSnafu, Result};
 
@@ -65,9 +65,10 @@ fn hit_from_chunk(chunk: mixedbread::Chunk) -> SearchHit {
     // Legacy code records (uploaded before the typed envelope) carry `hash`/`path`
     // and no `source`; the old store was code-only, so an absent source means
     // code. A present source tag is preserved verbatim (any corpus, open set).
-    let source = metadata_str(metadata, source_meta::keys::SOURCE)
-        .map_or_else(Source::code, Source::from);
-    let hash = metadata_str(metadata, source_meta::keys::CONTENT_HASH).or_else(|| metadata_str(metadata, "hash"));
+    let source =
+        metadata_str(metadata, source_meta::keys::SOURCE).map_or_else(Source::code, Source::from);
+    let hash = metadata_str(metadata, source_meta::keys::CONTENT_HASH)
+        .or_else(|| metadata_str(metadata, "hash"));
     // Code records carry `path`; record sources carry `title`. Either is the
     // display label.
     let path_meta = metadata_str(metadata, source_meta::keys::PATH)
@@ -129,7 +130,11 @@ impl Store for MixedbreadStore {
             .into_iter()
             .filter_map(|file| {
                 file.external_id.map(|external_id| StoredRecord {
-                    content_hash: metadata_str(file.metadata.as_ref(), source_meta::keys::CONTENT_HASH),
+                    content_hash: metadata_str(
+                        file.metadata.as_ref(),
+                        source_meta::keys::CONTENT_HASH,
+                    ),
+                    source: metadata_str(file.metadata.as_ref(), source_meta::keys::SOURCE),
                     external_id,
                 })
             })

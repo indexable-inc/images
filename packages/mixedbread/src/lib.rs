@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use reqwest::{Client as HttpClient, StatusCode};
 use serde::Deserialize;
 use snafu::{OptionExt as _, ResultExt as _, Snafu};
@@ -32,6 +33,24 @@ const LIST_PAGE_SIZE: u32 = 100;
 /// Environment variable holding the API key.
 pub const API_KEY_ENV: &str = "MXBAI_API_KEY";
 
+/// Bytes percent-encoded when an external id is spliced into a URL path: the
+/// url crate's path-segment set (controls, space, and the URL delimiters) plus
+/// `/` and `%`. External ids may contain `/` (the API supports path-shaped ids
+/// like `github:org/repo`); unencoded, such an id splits the route and the
+/// API answers 404 for a file that exists.
+const PATH_SEGMENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'<')
+    .add(b'>')
+    .add(b'`')
+    .add(b'#')
+    .add(b'?')
+    .add(b'{')
+    .add(b'}')
+    .add(b'/')
+    .add(b'%');
+
 /// Retries for a request that returns a retryable status (`429 Too Many
 /// Requests` or any `5xx`). The fleet runs one indexer per host against a single
 /// shared Mixedbread key with 16 uploads in flight each, so transient 429s are
@@ -48,6 +67,30 @@ const BACKOFF_BASE: Duration = Duration::from_millis(500);
 /// Upper bound on a single backoff sleep, and on a server `Retry-After` we will
 /// honor, so one absurd header value cannot stall a whole sync.
 const BACKOFF_CAP: Duration = Duration::from_secs(30);
+
+/// Bound on establishing a connection. reqwest's default is none, so one
+/// unanswered SYN under load would hold a whole sync hostage.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bound on one whole request, from send through reading the response body.
+/// reqwest's default is no timeout: when Mixedbread sheds a stream under load
+/// the TCP connection stays ESTAB on keepalives and the response never comes,
+/// so the await never resolves and [`Client::send_retrying`]'s transport-retry
+/// arm never runs. This wedged the ix leader's corpus-view reconcile bootstrap
+/// mid-listing for over an hour (2026-06-10). 120s clears the slowest
+/// legitimate requests (a 1 MiB multipart upload, a reranked search under
+/// load); past that the stream is dead and the retry ladder takes over.
+const REQUEST_TIMEOUT: Duration = Duration::from_mins(2);
+
+/// The crate's HTTP client builder, with every request bounded by
+/// [`CONNECT_TIMEOUT`] and [`REQUEST_TIMEOUT`] so a shed stream surfaces as a
+/// retryable transport error instead of an unbounded await. Every client in
+/// this crate (store API here, token exchange in [`auth`]) builds from this.
+pub(crate) fn bounded_http_builder() -> reqwest::ClientBuilder {
+    HttpClient::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+}
 
 /// Failures from the Mixedbread client.
 #[derive(Debug, Snafu)]
@@ -231,6 +274,17 @@ pub struct AnswerResponse {
     pub sources: Vec<Chunk>,
 }
 
+/// One reranked document from [`Client::rerank`]: its position in the submitted
+/// input list and its relevance score, already sorted most-relevant first by
+/// the API.
+#[derive(Debug, Clone, Copy)]
+pub struct RerankHit {
+    /// Index into the `input` slice the caller submitted.
+    pub index: usize,
+    /// Relevance score for the query.
+    pub score: f32,
+}
+
 /// Indexing progress for a store: how many files are still being processed.
 #[derive(Debug, Clone, Copy)]
 pub struct StoreStatus {
@@ -254,7 +308,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP client cannot be built.
     pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Result<Self> {
-        let http = HttpClient::builder().build().context(BuildClientSnafu)?;
+        let http = bounded_http_builder().build().context(BuildClientSnafu)?;
         Ok(Self {
             http,
             base_url: base_url.into(),
@@ -465,7 +519,8 @@ impl Client {
     /// # Errors
     /// Returns an error if the delete request fails.
     pub async fn delete_file(&self, store: &str, external_id: &str) -> Result<()> {
-        let delete_url = self.url(&format!("/v1/stores/{store}/files/{external_id}"));
+        let id = utf8_percent_encode(external_id, PATH_SEGMENT);
+        let delete_url = self.url(&format!("/v1/stores/{store}/files/{id}"));
         let resp = self
             .send_retrying(|| Ok(self.http.delete(delete_url.as_str())))
             .await?;
@@ -564,6 +619,47 @@ impl Client {
             answer: response.answer,
             sources: response.sources.into_iter().map(Chunk::from).collect(),
         })
+    }
+
+    /// Rerank caller-supplied documents against a query on `/v1/reranking`.
+    ///
+    /// Unlike [`search`](Self::search), nothing is read from a store: the
+    /// candidate texts come from the caller (e.g. lines piped into the `search`
+    /// CLI) and only their ranking comes from the API. `model` names the
+    /// reranking model (see [`DEFAULT_RERANK_MODEL`]); `top_k` caps the
+    /// returned hits. The response is already sorted most-relevant first; each
+    /// [`RerankHit::index`] points back into `input`, so the documents
+    /// themselves are never echoed over the wire (`return_input: false`).
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or cannot be decoded.
+    pub async fn rerank(
+        &self,
+        model: &str,
+        query: &str,
+        input: &[String],
+        top_k: usize,
+    ) -> Result<Vec<RerankHit>> {
+        let request = RerankRequest {
+            model,
+            query,
+            input,
+            top_k,
+            return_input: false,
+        };
+        let rerank_url = self.url("/v1/reranking");
+        let resp = self
+            .send_retrying(|| Ok(self.http.post(rerank_url.as_str()).json(&request)))
+            .await?;
+        let response: RerankResponse = decode(resp).await?;
+        Ok(response
+            .data
+            .into_iter()
+            .map(|item| RerankHit {
+                index: item.index,
+                score: item.score,
+            })
+            .collect())
     }
 
     /// Fetch indexing progress for a store (pending and in-progress file
@@ -667,7 +763,12 @@ struct ListRequest<'a> {
     limit: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     after: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // The list endpoint takes its filter as `metadata_filter`, unlike
+    // search/grep/question-answering, which take `filters`. The API silently
+    // drops unknown body keys, so a filter sent as `filters` here returns the
+    // whole store as if no filter was given (verified against the live API,
+    // 2026-06-09).
+    #[serde(rename = "metadata_filter", skip_serializing_if = "Option::is_none")]
     filters: Option<&'a filter::Filter>,
 }
 
@@ -733,6 +834,28 @@ struct GrepRequest<'a> {
 struct SearchResponse {
     #[serde(default)]
     data: Vec<RawChunk>,
+}
+
+#[derive(serde::Serialize)]
+struct RerankRequest<'a> {
+    model: &'a str,
+    query: &'a str,
+    input: &'a [String],
+    top_k: usize,
+    return_input: bool,
+}
+
+#[derive(Deserialize)]
+struct RerankResponse {
+    #[serde(default)]
+    data: Vec<RawRerankItem>,
+}
+
+#[derive(Deserialize)]
+struct RawRerankItem {
+    index: usize,
+    #[serde(default)]
+    score: f32,
 }
 
 // The public `AnswerResponse` is the projected shape; this is the raw wire
@@ -806,10 +929,34 @@ mod tests {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
 
+    use std::time::Duration;
+
     use super::{
-        BACKOFF_BASE, BACKOFF_CAP, Chunk, Client, DEFAULT_RERANK_MODEL, Error, MAX_RETRIES,
-        RawChunk, Rerank, backoff,
+        BACKOFF_BASE, BACKOFF_CAP, Chunk, Client, DEFAULT_RERANK_MODEL, Error, HttpClient,
+        ListRequest, MAX_RETRIES, RawChunk, Rerank, backoff,
     };
+    use crate::Filter;
+
+    #[test]
+    fn list_request_sends_its_filter_as_metadata_filter() {
+        // The list endpoint reads `metadata_filter`, not `filters`, and the API
+        // silently ignores unknown keys: under the wrong name every "scoped"
+        // listing was the whole store, which turned a per-source replace into
+        // deletes of other sources' records. Pin the wire key.
+        let filter = Filter::eq("source", "code");
+        let request = ListRequest {
+            limit: 100,
+            after: None,
+            filters: Some(&filter),
+        };
+        assert_eq!(
+            serde_json::to_value(&request).expect("serialize"),
+            serde_json::json!({
+                "limit": 100,
+                "metadata_filter": { "key": "source", "operator": "eq", "value": "code" }
+            })
+        );
+    }
 
     #[test]
     fn rerank_serializes_as_bool_or_object() {
@@ -874,9 +1021,19 @@ mod tests {
                 .saturating_mul(1u32 << attempt.min(5))
                 .min(BACKOFF_CAP);
             let delay = backoff(attempt);
-            assert!(delay >= exp / 2, "attempt {attempt}: {delay:?} below half {:?}", exp / 2);
-            assert!(delay <= exp, "attempt {attempt}: {delay:?} above exp {exp:?}");
-            assert!(delay <= BACKOFF_CAP, "attempt {attempt}: {delay:?} above cap");
+            assert!(
+                delay >= exp / 2,
+                "attempt {attempt}: {delay:?} below half {:?}",
+                exp / 2
+            );
+            assert!(
+                delay <= exp,
+                "attempt {attempt}: {delay:?} above exp {exp:?}"
+            );
+            assert!(
+                delay <= BACKOFF_CAP,
+                "attempt {attempt}: {delay:?} above cap"
+            );
         }
     }
 
@@ -892,7 +1049,11 @@ mod tests {
                 async move {
                     let n = calls.fetch_add(1, Ordering::SeqCst);
                     if n < fail_times {
-                        (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "0")], "slow down")
+                        (
+                            StatusCode::TOO_MANY_REQUESTS,
+                            [(header::RETRY_AFTER, "0")],
+                            "slow down",
+                        )
                             .into_response()
                     } else {
                         (StatusCode::OK, "{}").into_response()
@@ -907,14 +1068,110 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(listener, app).await.expect("serve");
         });
-        MockServer { base_url: format!("http://{addr}"), calls }
+        MockServer {
+            base_url: format!("http://{addr}"),
+            calls,
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_file_sends_a_slashed_id_as_one_path_segment() {
+        // An external id may contain `/` (e.g. `github:org/repo`). Unencoded it
+        // splits the path and the API 404s; this routes through a real router,
+        // so a regression fails to match the `{file}` segment at all.
+        let captured: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+        let app = Router::new().route(
+            "/v1/stores/{store}/files/{file}",
+            axum::routing::delete({
+                let captured = Arc::clone(&captured);
+                move |axum::extract::Path((_store, file)): axum::extract::Path<(String, String)>| {
+                    *captured.lock().expect("lock") = Some(file);
+                    async { (StatusCode::OK, "{}") }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        client
+            .delete_file("s", "github:indexable-inc/index")
+            .await
+            .expect("delete routes as one segment");
+        assert_eq!(
+            captured.lock().expect("lock").as_deref(),
+            Some("github:indexable-inc/index"),
+            "the router must decode the segment back to the original id"
+        );
+    }
+
+    #[tokio::test]
+    async fn rerank_posts_documents_and_projects_index_score() {
+        // Pins the /v1/reranking wire contract: the request carries the model,
+        // query, documents (`input`), top_k, and `return_input: false`; the
+        // response's `data` items project to (index, score) pairs pointing back
+        // into the submitted slice.
+        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
+        let app = Router::new().route(
+            "/v1/reranking",
+            axum::routing::post({
+                let captured = Arc::clone(&captured);
+                move |axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
+                    *captured.lock().expect("lock") = Some(body);
+                    async {
+                        (
+                            StatusCode::OK,
+                            r#"{"data":[{"index":2,"score":0.91},{"index":0,"score":0.12}]}"#,
+                        )
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let docs = vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()];
+        let hits = client
+            .rerank(DEFAULT_RERANK_MODEL, "which greek letter", &docs, 2)
+            .await
+            .expect("rerank");
+        assert_eq!(
+            hits.iter().map(|h| h.index).collect::<Vec<_>>(),
+            vec![2, 0],
+            "hits keep the API's most-relevant-first order"
+        );
+        assert!((hits[0].score - 0.91).abs() < 1e-6, "{}", hits[0].score);
+        assert_eq!(
+            captured.lock().expect("lock").take().expect("request body"),
+            serde_json::json!({
+                "model": DEFAULT_RERANK_MODEL,
+                "query": "which greek letter",
+                "input": ["alpha", "beta", "gamma"],
+                "top_k": 2,
+                "return_input": false,
+            })
+        );
     }
 
     #[tokio::test]
     async fn retries_429_then_succeeds() {
         let MockServer { base_url, calls } = spawn_mock(2).await;
         let client = Client::new(base_url, "test-key").expect("client");
-        client.ensure_store("store").await.expect("succeeds after retries");
+        client
+            .ensure_store("store")
+            .await
+            .expect("succeeds after retries");
         // 2 rejected + 1 accepted.
         assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
@@ -949,7 +1206,75 @@ mod tests {
                 }
             }
         });
-        MockServer { base_url: format!("http://{addr}"), calls }
+        MockServer {
+            base_url: format!("http://{addr}"),
+            calls,
+        }
+    }
+
+    /// TCP server that accepts and then holds the connection open without ever
+    /// responding for the first `stall_times` connections, then answers `200`.
+    /// This is the wedge [`super::REQUEST_TIMEOUT`] exists for: the connection
+    /// stays ESTAB, no transport error fires on its own, and only a client-side
+    /// timeout can turn the stall into a retryable error. Returns the base URL
+    /// and a counter of accepted connections.
+    async fn spawn_stalling_tcp(stall_times: usize) -> MockServer {
+        use tokio::io::AsyncWriteExt as _;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let calls_task = Arc::clone(&calls);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    continue;
+                };
+                let n = calls_task.fetch_add(1, Ordering::SeqCst);
+                // Each connection gets its own task: a stalled socket must stay
+                // open (dropping it would be a transport error, a different
+                // test) without blocking the accept loop.
+                tokio::spawn(async move {
+                    if n < stall_times {
+                        tokio::time::sleep(Duration::from_hours(1)).await;
+                    } else {
+                        let _ = sock
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                            .await;
+                        let _ = sock.shutdown().await;
+                    }
+                });
+            }
+        });
+        MockServer {
+            base_url: format!("http://{addr}"),
+            calls,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stalled_response_times_out_and_retries() {
+        // Pays real backoff (~1s), like the transport-error test below.
+        let MockServer { base_url, calls } = spawn_stalling_tcp(2).await;
+        // Built directly rather than via `Client::new` so the stall is bounded
+        // by a test-sized timeout instead of the production REQUEST_TIMEOUT;
+        // the retry path under test is identical.
+        let client = Client {
+            http: HttpClient::builder()
+                .timeout(Duration::from_millis(200))
+                .build()
+                .expect("client"),
+            base_url,
+            api_key: "test-key".into(),
+        };
+        client
+            .ensure_store("store")
+            .await
+            .expect("succeeds after stalled attempts time out");
+        // 2 stalled connections + 1 answered.
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
@@ -970,7 +1295,10 @@ mod tests {
     async fn gives_up_after_max_retries() {
         let MockServer { base_url, calls } = spawn_mock(usize::MAX).await;
         let client = Client::new(base_url, "test-key").expect("client");
-        let err = client.ensure_store("store").await.expect_err("never succeeds");
+        let err = client
+            .ensure_store("store")
+            .await
+            .expect_err("never succeeds");
         assert!(matches!(err, Error::Api { status: 429, .. }), "got {err:?}");
         // The initial attempt plus MAX_RETRIES retries.
         assert_eq!(calls.load(Ordering::SeqCst), (MAX_RETRIES + 1) as usize);

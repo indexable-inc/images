@@ -34,6 +34,12 @@ enum Command {
     /// the redirect lands automatically, over SSH pass `--paste` and feed the
     /// redirect URL back on stdin.
     Auth(AuthArgs),
+    /// Sign out: delete this machine's stored Google grant.
+    ///
+    /// Removes the local token file (and any legacy one); the next call needs
+    /// a fresh `gcal auth`. This does not revoke the grant at Google -- do
+    /// that at <https://myaccount.google.com/permissions>.
+    Logout(LogoutArgs),
     /// Print a current OAuth access token minted from the stored grant.
     ///
     /// With `--json`, emits `{access_token, expires_in, scopes}`; this is
@@ -66,6 +72,22 @@ struct AuthArgs {
     /// this machine's `127.0.0.1`.
     #[arg(long)]
     paste: bool,
+
+    /// Drive the flow as newline-delimited JSON instead of prose: first line
+    /// `{"auth_url": "..."}` (flushed before the redirect wait so a caller can
+    /// open a browser), then `{"signed_in": true, "scopes": [...]}` once the
+    /// grant is stored. This is the contract the bundled Python
+    /// `google_auth.login()` helper drives.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct LogoutArgs {
+    /// Emit a JSON confirmation (`{"signed_out", "removed": [...]}`) instead
+    /// of the human lines.
+    #[arg(long)]
+    json: bool,
 }
 
 /// Which calendar to operate on.
@@ -200,6 +222,7 @@ impl From<Notify> for SendUpdates {
 async fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Auth(args) => run_auth(args).await,
+        Command::Logout(args) => run_logout(args.json),
         Command::PrintAccessToken(args) => run_print_access_token(args).await,
         Command::List(args) => run_list(args).await,
         Command::Show(args) => run_show(args).await,
@@ -241,6 +264,8 @@ fn client() -> anyhow::Result<Client> {
 }
 
 async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
     let secrets = ClientSecrets::from_env()?;
     let store = TokenStore::new()?;
     // Consent to every scope the repo knows about so one consent flow
@@ -248,27 +273,39 @@ async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
     // what enforces least privilege.
     let pending = begin_consent(secrets.clone(), ALL_KNOWN_SCOPES).await?;
 
-    println!("Open this URL in your browser:\n\n  {}\n", pending.auth_url);
+    if args.json {
+        // NDJSON line 1: the consent URL. Flush it before blocking on the
+        // redirect so a driver (the Python `login()` helper) can open a
+        // browser while this process waits.
+        println!("{}", serde_json::json!({ "auth_url": pending.auth_url }));
+        std::io::stdout().flush().context("flushing the consent URL")?;
+    } else {
+        println!("Open this URL in your browser:\n\n  {}\n", pending.auth_url);
+    }
+
     let code = if args.paste {
-        println!("After consenting, the browser shows a connection error on the");
-        println!("http://127.0.0.1:… redirect; paste that full URL here and press enter.");
+        if !args.json {
+            println!("After consenting, the browser shows a connection error on the");
+            println!("http://127.0.0.1:… redirect; paste that full URL here and press enter.");
+        }
         let pasted = read_stdin_line()
             .await
             .context("reading the pasted redirect URL from stdin")?;
         pending.code_from_redirect_url(pasted.trim())?
     } else {
-        println!("Waiting for the redirect on this machine's loopback listener.");
-        println!("Over SSH or in a VM, cancel and rerun with --paste.");
+        if !args.json {
+            println!("Waiting for the redirect on this machine's loopback listener.");
+            println!("Over SSH or in a VM, cancel and rerun with --paste.");
+        }
         pending.wait_loopback().await?
     };
 
     let token = pending.exchange(code).await?;
     store.save(&token)?;
-    println!("Token saved to {}", store.path().display());
 
     // Prove the grant end to end with the cheapest real read, so a scope or
     // clock problem surfaces now rather than on the first scripted call.
-    let client = Client::new(Authenticator::new(secrets, store, &[EVENTS_SCOPE])?)?;
+    let client = Client::new(Authenticator::new(secrets, store.clone(), &[EVENTS_SCOPE])?)?;
     let probe = EventQuery {
         time_min: Some(Local::now().fixed_offset()),
         time_max: None,
@@ -276,7 +313,50 @@ async fn run_auth(args: AuthArgs) -> anyhow::Result<()> {
         max_events: 1,
     };
     client.list_events(PRIMARY_CALENDAR, &probe).await?;
-    println!("Verified: the Calendar API answers with this grant.");
+
+    if args.json {
+        // NDJSON line 2: the grant is stored and verified.
+        println!(
+            "{}",
+            serde_json::json!({
+                "signed_in": true,
+                "scopes": token.scopes,
+                "token_path": store.path().display().to_string(),
+            })
+        );
+    } else {
+        println!("Token saved to {}", store.path().display());
+        println!("Verified: the Calendar API answers with this grant.");
+    }
+    Ok(())
+}
+
+/// Delete the stored grant. Idempotent: signing out when already signed out
+/// is a no-op, not an error.
+fn run_logout(json: bool) -> anyhow::Result<()> {
+    let removed = TokenStore::new()?.remove()?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "signed_out": !removed.is_empty(),
+                "removed": removed
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>(),
+            })
+        );
+    } else if removed.is_empty() {
+        println!("Already signed out: no stored Google token.");
+    } else {
+        for path in &removed {
+            println!("Removed {}", path.display());
+        }
+        println!(
+            "Signed out. To fully revoke access, also remove it at \
+             https://myaccount.google.com/permissions"
+        );
+    }
     Ok(())
 }
 

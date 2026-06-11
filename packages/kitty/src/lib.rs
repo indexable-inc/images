@@ -372,9 +372,16 @@ mod tests {
     fn placeholder_row_encodes_id_in_foreground() {
         // id 42 = 0x00002A -> fg color 0;0;42.
         let row = placeholder_row(42, 0, 4);
-        assert!(row.starts_with("\x1b[38;2;0;0;42m"), "fg color must carry the id: {row:?}");
+        assert!(
+            row.starts_with("\x1b[38;2;0;0;42m"),
+            "fg color must carry the id: {row:?}"
+        );
         assert!(row.ends_with("\x1b[39m"), "must reset the foreground");
-        assert_eq!(row.matches(PLACEHOLDER).count(), 4, "one placeholder cell per column");
+        assert_eq!(
+            row.matches(PLACEHOLDER).count(),
+            4,
+            "one placeholder cell per column"
+        );
     }
 
     #[test]
@@ -384,7 +391,10 @@ mod tests {
         // Row 0, two columns: each cell is placeholder + row-mark + col-mark.
         let row = placeholder_row(7, 0, 2);
         let expected = format!("{PLACEHOLDER}{row0}{col0}{PLACEHOLDER}{row0}{col1}");
-        assert!(row.contains(&expected), "cells must tag row 0, cols 0 and 1: {row:?}");
+        assert!(
+            row.contains(&expected),
+            "cells must tag row 0, cols 0 and 1: {row:?}"
+        );
     }
 
     #[test]
@@ -392,8 +402,14 @@ mod tests {
         let table = diacritics();
         // The first two entries are the canonical examples from the kitty docs.
         assert_eq!(table[0], '\u{0305}', "index 0 is COMBINING OVERLINE");
-        assert_eq!(table[1], '\u{030D}', "index 1 is COMBINING VERTICAL LINE ABOVE");
-        assert!(table.len() > 255, "need enough diacritics to index any row/column");
+        assert_eq!(
+            table[1], '\u{030D}',
+            "index 1 is COMBINING VERTICAL LINE ABOVE"
+        );
+        assert!(
+            table.len() > 255,
+            "need enough diacritics to index any row/column"
+        );
     }
 
     #[test]
@@ -410,6 +426,9 @@ mod tests {
         assert!(sequence.ends_with(ST));
         assert!(sequence.contains("a=p"));
         assert!(sequence.contains("i=7"));
-        assert!(!sequence.contains(';'), "a placement of an existing image sends no payload");
+        assert!(
+            !sequence.contains(';'),
+            "a placement of an existing image sends no payload"
+        );
     }
 }

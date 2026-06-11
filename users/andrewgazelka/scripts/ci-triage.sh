@@ -1,5 +1,5 @@
 # Body of the `ci-triage` bash app (see users/andrewgazelka/home.nix).
-# No shebang / `set` line: the mkBashApp wrapper supplies bash + `set -euo
+# No shebang / `set` line: the writeBashApplication wrapper supplies bash + `set -euo
 # pipefail` and bakes gh/jq/claude/coreutils onto PATH.
 #
 # Stage-2 of the pr-watch CI response: a per-run DEEP DIVE into one GitHub

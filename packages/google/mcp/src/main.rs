@@ -21,8 +21,8 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use google_auth::scopes::{CALENDAR_EVENTS, GMAIL_MODIFY, GMAIL_SEND};
 use google_auth::{Authenticator, ClientSecrets, TokenStore};
-use rmcp::transport::stdio;
 use rmcp::ServiceExt as _;
+use rmcp::transport::stdio;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -39,8 +39,8 @@ async fn main() -> anyhow::Result<()> {
 
 fn init_logging() {
     // Log to stderr only; stdout is reserved for the MCP wire protocol.
-    let filter = EnvFilter::try_from_env("IX_GOOGLE_MCP_LOG")
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter =
+        EnvFilter::try_from_env("IX_GOOGLE_MCP_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)

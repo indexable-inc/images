@@ -28,7 +28,8 @@
     color: var(--err);
     border-color: var(--err-line);
   }
-  .cancelled {
+  .cancelled,
+  .interrupted {
     color: var(--muted);
   }
 </style>

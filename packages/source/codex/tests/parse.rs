@@ -39,12 +39,18 @@ fn documents_carry_source_and_tags() {
     let history = CodexHistory::open_with(&fixture(), "host1", "user1").expect("parse");
     assert_eq!(history.source(), Source::new("codex"));
 
-    let docs: Vec<_> = history.documents().map(|doc| doc.expect("document")).collect();
+    let docs: Vec<_> = history
+        .documents()
+        .map(|doc| doc.expect("document"))
+        .collect();
     let first = &docs[0];
     assert_eq!(first.meta_json["source"], "codex");
     assert_eq!(first.meta_json["host"], "host1");
     assert_eq!(first.meta_json["user"], "user1");
-    assert_eq!(first.meta_json["session_id"], "019cfa3f-a908-71b0-98f0-7ecb3874a8db");
+    assert_eq!(
+        first.meta_json["session_id"],
+        "019cfa3f-a908-71b0-98f0-7ecb3874a8db"
+    );
     assert_eq!(first.meta_json["timestamp"], 1_773_725_019_i64);
     assert_eq!(first.content_hash, first.meta_json["content_hash"]);
     assert_eq!(first.body, b"clean up the README and make it succinct");

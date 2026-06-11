@@ -305,7 +305,10 @@ impl Item {
         let mut meta = Map::new();
 
         // Common envelope.
-        meta.insert(keys::SOURCE.to_owned(), json!(Source::new("github").as_str()));
+        meta.insert(
+            keys::SOURCE.to_owned(),
+            json!(Source::new("github").as_str()),
+        );
         meta.insert("external_id".to_owned(), json!(external_id));
         meta.insert(keys::CONTENT_HASH.to_owned(), json!(content_hash));
         meta.insert(keys::TITLE.to_owned(), json!(title));
@@ -450,7 +453,9 @@ impl Item {
             let _ = writeln!(out, "Review threads ({}):", threads.len());
             for thread in threads {
                 let path = thread.path.as_deref().unwrap_or("(unknown path)");
-                let line = thread.line.map_or_else(|| "?".to_owned(), |l| l.to_string());
+                let line = thread
+                    .line
+                    .map_or_else(|| "?".to_owned(), |l| l.to_string());
                 let _ = writeln!(out, "[{path}:{line}]");
                 let mut comments: Vec<&ThreadComment> = thread.comments.iter().collect();
                 comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));

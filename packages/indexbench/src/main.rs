@@ -77,7 +77,12 @@ struct StoreArgs {
     #[arg(long, default_value = GitBranchStore::DEFAULT_BRANCH, global = true)]
     branch: String,
     /// Directory for the local store.
-    #[arg(long, value_name = "PATH", default_value = ".indexbench", global = true)]
+    #[arg(
+        long,
+        value_name = "PATH",
+        default_value = ".indexbench",
+        global = true
+    )]
     local_dir: PathBuf,
 }
 
@@ -85,7 +90,10 @@ impl StoreArgs {
     /// Construct the selected store.
     fn open(&self) -> Result<Box<dyn HistoryStore>> {
         match self.store {
-            StoreKind::Git => Ok(Box::new(GitBranchStore::new(self.repo.clone(), self.branch.clone()))),
+            StoreKind::Git => Ok(Box::new(GitBranchStore::new(
+                self.repo.clone(),
+                self.branch.clone(),
+            ))),
             StoreKind::Local => Ok(Box::new(LocalDirStore::new(&self.local_dir)?)),
         }
     }
@@ -237,18 +245,26 @@ fn run_suite(args: &RunArgs) -> Result<ExitCode> {
                     // NoBaseline) so a first-run JSON consumer still gets values.
                     json_comparisons.push(indexbench::compare::first_run(run));
                 } else {
-                    println!("{}/{}: recorded baseline (no prior run to compare)\n", run.suite, run.bench);
+                    println!(
+                        "{}/{}: recorded baseline (no prior run to compare)\n",
+                        run.suite, run.bench
+                    );
                 }
             }
         }
     }
 
     if args.output_json {
-        let rendered = serde_json::to_string_pretty(&json_comparisons).map_err(|source| indexbench::Error::Serialize { source })?;
+        let rendered = serde_json::to_string_pretty(&json_comparisons)
+            .map_err(|source| indexbench::Error::Serialize { source })?;
         println!("{rendered}");
     }
 
-    Ok(if any_regression { ExitCode::FAILURE } else { ExitCode::SUCCESS })
+    Ok(if any_regression {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 /// Reject an inconsistent `--cmd` / `--cmd-name` pairing before doing any work.
@@ -279,11 +295,15 @@ struct Budget {
 
 /// Parse a `METRIC=VALUE` budget for `assert --max`.
 fn parse_budget(raw: &str) -> std::result::Result<Budget, String> {
-    let (name, value) = raw.split_once('=').ok_or_else(|| format!("`{raw}` is not METRIC=VALUE"))?;
+    let (name, value) = raw
+        .split_once('=')
+        .ok_or_else(|| format!("`{raw}` is not METRIC=VALUE"))?;
     if name.is_empty() {
         return Err(format!("`{raw}` has an empty metric name"));
     }
-    let parsed: f64 = value.parse().map_err(|err| format!("budget `{value}`: {err}"))?;
+    let parsed: f64 = value
+        .parse()
+        .map_err(|err| format!("budget `{value}`: {err}"))?;
     Ok(Budget {
         metric: name.to_owned(),
         limit: parsed,
@@ -310,7 +330,11 @@ fn assert_budgets(args: &AssertArgs) -> Result<ExitCode> {
     let metrics = indexbench::macro_harness::run_command(&program, &cmd_args, args.runs)?;
 
     let mut all_within = true;
-    for Budget { metric: name, limit: budget } in &args.max {
+    for Budget {
+        metric: name,
+        limit: budget,
+    } in &args.max
+    {
         if let Some(metric) = metrics.iter().find(|metric| &metric.name == name) {
             let within = metric.value <= *budget;
             all_within &= within;
@@ -326,7 +350,11 @@ fn assert_budgets(args: &AssertArgs) -> Result<ExitCode> {
         }
     }
 
-    Ok(if all_within { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    Ok(if all_within {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 /// Build the suite the run was asked for: the built-in `self-demo` micro+macro
@@ -341,7 +369,9 @@ fn build_suite(args: &RunArgs) -> BenchSuite<'static> {
             .micro(MicroBench::new("fib", || {
                 std::hint::black_box(fib(std::hint::black_box(20)));
             }))
-            .macro_bench(MacroBench::new("true", "true", Vec::<String>::new()).with_runs(args.runs));
+            .macro_bench(
+                MacroBench::new("true", "true", Vec::<String>::new()).with_runs(args.runs),
+            );
     }
 
     for (index, command) in args.cmd.iter().enumerate() {
@@ -350,7 +380,11 @@ fn build_suite(args: &RunArgs) -> BenchSuite<'static> {
         let cmd_args: Vec<String> = parts.map(str::to_owned).collect();
         // `ensure_cmd_names` has already validated the pairing, so a name is
         // either present for this index or absent for all commands.
-        let name = args.cmd_name.get(index).cloned().unwrap_or_else(|| program.clone());
+        let name = args
+            .cmd_name
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| program.clone());
         suite = suite.macro_bench(MacroBench::new(name, program, cmd_args).with_runs(args.runs));
     }
 
@@ -375,7 +409,11 @@ fn show_history(args: &HistoryArgs) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     for run in &runs {
-        let metrics: Vec<String> = run.metrics.iter().map(|m| format!("{}={:.3}{}", m.name, m.value, m.unit)).collect();
+        let metrics: Vec<String> = run
+            .metrics
+            .iter()
+            .map(|m| format!("{}={:.3}{}", m.name, m.value, m.unit))
+            .collect();
         println!(
             "{ts}  {commit}{dirty}  {machine}  {metrics}",
             ts = run.timestamp_unix,

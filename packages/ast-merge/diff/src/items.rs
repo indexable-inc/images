@@ -51,8 +51,15 @@ pub fn get_name(tree: &Tree, node: tree_sitter::Node<'_>) -> Option<String> {
     let kind = node.kind();
 
     let name_field = match kind {
-        "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item"
-        | "const_item" | "static_item" | "mod_item" | "field_declaration"
+        "function_item"
+        | "struct_item"
+        | "enum_item"
+        | "trait_item"
+        | "type_item"
+        | "const_item"
+        | "static_item"
+        | "mod_item"
+        | "field_declaration"
         | "function_signature_item" => Some("name"),
         "impl_item" => Some("type"),
         "use_declaration" => {

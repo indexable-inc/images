@@ -171,14 +171,21 @@ async fn discover(
                 if path.extension().and_then(|ext| ext.to_str()) != Some("sock") {
                     continue;
                 }
-                if !connected.lock().expect("connected set poisoned").insert(path.clone()) {
+                if !connected
+                    .lock()
+                    .expect("connected set poisoned")
+                    .insert(path.clone())
+                {
                     continue;
                 }
                 let hub = hub.clone();
                 let connected = connected.clone();
                 tokio::spawn(async move {
                     read_producer(&hub, &path).await;
-                    connected.lock().expect("connected set poisoned").remove(&path);
+                    connected
+                        .lock()
+                        .expect("connected set poisoned")
+                        .remove(&path);
                 });
             }
         }
@@ -331,7 +338,10 @@ fn demo_panes(tick: u64) -> Vec<Pane> {
             trace: if running {
                 Vec::new()
             } else {
-                vec![ExecTraceLine { line: 2, text: body }]
+                vec![ExecTraceLine {
+                    line: 2,
+                    text: body,
+                }]
             },
         },
     );

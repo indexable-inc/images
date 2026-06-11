@@ -29,12 +29,12 @@ mod record;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use source_meta::{Document, Source, SourceAdapter};
 use snafu::ResultExt as _;
+use source_meta::{Document, Source, SourceAdapter};
 
 pub use crate::error::Error;
-pub use crate::record::Entry;
 use crate::error::{ReadDirSnafu, ReadFileSnafu, Result};
+pub use crate::record::Entry;
 
 /// The `source` tag every debug-log document carries.
 pub const SOURCE_TAG: &str = "claude_debug";
@@ -65,12 +65,20 @@ impl DebugLogs {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self { entries });
             }
-            Err(error) => return Err(error).context(ReadDirSnafu { path: dir.to_path_buf() }),
+            Err(error) => {
+                return Err(error).context(ReadDirSnafu {
+                    path: dir.to_path_buf(),
+                });
+            }
         };
 
         for entry in read {
-            let entry = entry.context(ReadDirSnafu { path: dir.to_path_buf() })?;
-            let file_type = entry.file_type().context(ReadDirSnafu { path: dir.to_path_buf() })?;
+            let entry = entry.context(ReadDirSnafu {
+                path: dir.to_path_buf(),
+            })?;
+            let file_type = entry.file_type().context(ReadDirSnafu {
+                path: dir.to_path_buf(),
+            })?;
             // Regular files only. `read_dir` reports the `latest` symlink (and any
             // planted symlink) as a symlink, so `is_file()` is false and it is
             // skipped without ever being opened or followed.
@@ -87,7 +95,8 @@ impl DebugLogs {
             if session_id.is_empty() {
                 continue;
             }
-            let body = std::fs::read_to_string(&path).context(ReadFileSnafu { path: path.clone() })?;
+            let body =
+                std::fs::read_to_string(&path).context(ReadFileSnafu { path: path.clone() })?;
             if body.trim().is_empty() {
                 continue;
             }

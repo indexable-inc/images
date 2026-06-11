@@ -115,3 +115,38 @@ export function progressUnit(activityTypeName: string): ProgressUnit {
     ? 'bytes'
     : 'count';
 }
+
+/// A store I/O activity that has been running longer than this reads as slow in
+/// the activity view. Nix reports the local source copy and an inline store add
+/// with no byte progress, and the daemon goes quiet while it hard-links files
+/// (`auto-optimise-store`) or writes the path, so a stalled store step is
+/// otherwise just another row ticking its duration up. The threshold is
+/// deliberately generous: a healthy copy or substitution finishes well under
+/// it, so only the genuinely slow ones light up.
+export const SLOW_STORE_OP_MS = 20_000;
+
+/// Activity kinds that represent store I/O worth flagging when they run long:
+/// the typed copy/substitute/download/optimise/query activities, plus the verb
+/// `activityKind` synthesizes for Nix's untyped "copying … to the store" line.
+/// Build and coordinator rows are excluded on purpose -- a long build is normal
+/// and has its own surface, so flagging it would just add noise.
+const SLOW_STORE_OP_KINDS: ReadonlySet<string> = new Set([
+  'copy_path',
+  'copy_paths',
+  'copying',
+  'substitute',
+  'substituting',
+  'file_transfer',
+  'downloading',
+  'optimise_store',
+  'optimising',
+  'query_path_info',
+  'querying'
+]);
+
+/// Whether a still-running store activity has exceeded the slow threshold. Used
+/// by the activity row to escalate a silently-stalled store step (the exact
+/// blind spot behind a slow "copying to the store").
+export function isSlowStoreOp(kind: string, running: boolean, elapsedMs: number): boolean {
+  return running && elapsedMs >= SLOW_STORE_OP_MS && SLOW_STORE_OP_KINDS.has(kind);
+}

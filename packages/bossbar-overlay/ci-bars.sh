@@ -1,5 +1,5 @@
 # Body of the `ci-bars` bash app (see ci-bars-home-module.nix).
-# No shebang / `set` line: the mkBashApp wrapper supplies bash + `set -euo
+# No shebang / `set` line: the writeBashApplication wrapper supplies bash + `set -euo
 # pipefail` and bakes gh/jq/sqlite/coreutils/perl + the bossbar CLI onto PATH via
 # runtimeInputs. Everything tunable comes from the environment so the script is a
 # plain, testable file with no build-time string baking:

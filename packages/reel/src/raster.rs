@@ -109,11 +109,18 @@ impl Layout {
 /// Render one frame to an RGBA buffer of `layout.width * layout.height * 4`
 /// bytes.
 #[must_use]
-pub fn render_frame(frame: &Frame, palette: &Palette, font: &mut FontSet, layout: &Layout) -> Vec<u8> {
+pub fn render_frame(
+    frame: &Frame,
+    palette: &Palette,
+    font: &mut FontSet,
+    layout: &Layout,
+) -> Vec<u8> {
     let mut canvas = Canvas::filled(layout.width, layout.height, palette.bg);
     draw_chrome(&mut canvas, palette, font, layout);
     match frame {
-        Frame::Terminal { cells, cursor } => draw_terminal(&mut canvas, palette, font, layout, cells, *cursor),
+        Frame::Terminal { cells, cursor } => {
+            draw_terminal(&mut canvas, palette, font, layout, cells, *cursor);
+        }
         Frame::Card(card) => draw_card(&mut canvas, palette, font, layout, card),
     }
     canvas.into_pixels()
@@ -123,19 +130,37 @@ pub fn render_frame(frame: &Frame, palette: &Palette, font: &mut FontSet, layout
 /// and a hairline rule under the bar.
 fn draw_chrome(canvas: &mut Canvas, palette: &Palette, font: &FontSet, layout: &Layout) {
     canvas.rect(0, 0, layout.width, layout.chrome, palette.chrome);
-    canvas.rect(0, layout.chrome, layout.width, layout.chrome + 1, palette.rule);
+    canvas.rect(
+        0,
+        layout.chrome,
+        layout.width,
+        layout.chrome + 1,
+        palette.rule,
+    );
 
     let dot = (font.px() * 0.34).round() as u32;
     let gap = (dot as f32 * 0.7).round() as u32;
     let dot_top = layout.chrome.saturating_sub(dot) / 2;
-    for (slot, color) in [palette.ansi[1], palette.ansi[3], palette.ansi[2]].into_iter().enumerate() {
+    for (slot, color) in [palette.ansi[1], palette.ansi[3], palette.ansi[2]]
+        .into_iter()
+        .enumerate()
+    {
         let left = layout.pad + slot as u32 * (dot + gap);
         canvas.rect(left, dot_top, left + dot, dot_top + dot, color);
     }
 
     let label_px = font.px() * 0.62;
-    let baseline = (layout.chrome as f32 - font.ascent_at(label_px)) / 2.0 + font.ascent_at(label_px);
-    draw_centered(canvas, font, "index", label_px, baseline.round() as i32, 0, palette.dim);
+    let baseline =
+        (layout.chrome as f32 - font.ascent_at(label_px)) / 2.0 + font.ascent_at(label_px);
+    draw_centered(
+        canvas,
+        font,
+        "index",
+        label_px,
+        baseline.round() as i32,
+        0,
+        palette.dim,
+    );
 }
 
 /// Draw a captured terminal screen: per-cell background, glyph, underline, and
@@ -152,7 +177,8 @@ fn draw_terminal(
     let origin_y = layout.chrome + layout.pad;
     let cell_w = layout.cell_w;
     let cell_h = layout.cell_h;
-    let baseline_off = ((cell_h as f32 - (font.ascent - font.descent)) / 2.0 + font.ascent).round() as i32;
+    let baseline_off =
+        ((cell_h as f32 - (font.ascent - font.descent)) / 2.0 + font.ascent).round() as i32;
     let (cell_rows, cell_cols) = cells.dim();
 
     for ((row, col), cell) in cells.indexed_iter() {
@@ -174,8 +200,17 @@ fn draw_terminal(
             let face = FontSet::face_index(cell.bold, cell.italic);
             let glyph = font.glyph(cell.character, face);
             let gx = cell_x as i32 + glyph.metrics.xmin;
-            let gy = cell_y as i32 + baseline_off - glyph.metrics.ymin - glyph.metrics.height as i32;
-            blit(canvas, &glyph.coverage, glyph.metrics.width, glyph.metrics.height, gx, gy, ink);
+            let gy =
+                cell_y as i32 + baseline_off - glyph.metrics.ymin - glyph.metrics.height as i32;
+            blit(
+                canvas,
+                &glyph.coverage,
+                glyph.metrics.width,
+                glyph.metrics.height,
+                gx,
+                gy,
+                ink,
+            );
         }
         if cell.underline {
             let y = cell_y + baseline_off as u32 + 1;
@@ -193,7 +228,15 @@ fn draw_terminal(
             let glyph = font.glyph(cell.character, face);
             let gx = cur_x as i32 + glyph.metrics.xmin;
             let gy = cur_y as i32 + baseline_off - glyph.metrics.ymin - glyph.metrics.height as i32;
-            blit(canvas, &glyph.coverage, glyph.metrics.width, glyph.metrics.height, gx, gy, palette.bg);
+            blit(
+                canvas,
+                &glyph.coverage,
+                glyph.metrics.width,
+                glyph.metrics.height,
+                gx,
+                gy,
+                palette.bg,
+            );
         }
     }
 }
@@ -217,20 +260,52 @@ fn draw_card(canvas: &mut Canvas, palette: &Palette, font: &FontSet, layout: &La
     let area_h = layout.height as f32 - area_top;
     let mut baseline = area_top + (area_h - total) / 2.0 + font.ascent_at(title_px);
 
-    draw_centered(canvas, font, &card.title, title_px, baseline.round() as i32, FontSet::face_index(true, false), palette.fg);
+    draw_centered(
+        canvas,
+        font,
+        &card.title,
+        title_px,
+        baseline.round() as i32,
+        FontSet::face_index(true, false),
+        palette.fg,
+    );
     baseline += line_h(title_px);
     if let Some(subtitle) = &card.subtitle {
-        draw_centered(canvas, font, subtitle, sub_px, baseline.round() as i32, 0, palette.dim);
+        draw_centered(
+            canvas,
+            font,
+            subtitle,
+            sub_px,
+            baseline.round() as i32,
+            0,
+            palette.dim,
+        );
         baseline += line_h(sub_px);
     }
     if let Some(footer) = &card.footer {
         baseline += foot_px;
-        draw_centered(canvas, font, footer, foot_px, baseline.round() as i32, 0, palette.accent);
+        draw_centered(
+            canvas,
+            font,
+            footer,
+            foot_px,
+            baseline.round() as i32,
+            0,
+            palette.accent,
+        );
     }
 }
 
 /// Draw a string centered horizontally at a given baseline and size.
-fn draw_centered(canvas: &mut Canvas, font: &FontSet, text: &str, px: f32, baseline: i32, face: usize, color: Rgb) {
+fn draw_centered(
+    canvas: &mut Canvas,
+    font: &FontSet,
+    text: &str,
+    px: f32,
+    baseline: i32,
+    face: usize,
+    color: Rgb,
+) {
     let advance = font.advance_at(px);
     let count = text.chars().count() as f32;
     let mut pen = advance.mul_add(-count, canvas.width as f32) / 2.0;
@@ -239,14 +314,30 @@ fn draw_centered(canvas: &mut Canvas, font: &FontSet, text: &str, px: f32, basel
             let glyph = font.rasterize_at(ch, px, face);
             let gx = pen.round() as i32 + glyph.metrics.xmin;
             let gy = baseline - glyph.metrics.ymin - glyph.metrics.height as i32;
-            blit(canvas, &glyph.coverage, glyph.metrics.width, glyph.metrics.height, gx, gy, color);
+            blit(
+                canvas,
+                &glyph.coverage,
+                glyph.metrics.width,
+                glyph.metrics.height,
+                gx,
+                gy,
+                color,
+            );
         }
         pen += advance;
     }
 }
 
 /// Blit an 8-bit coverage bitmap onto the canvas in one color.
-fn blit(canvas: &mut Canvas, coverage: &[u8], width: usize, height: usize, x: i32, y: i32, color: Rgb) {
+fn blit(
+    canvas: &mut Canvas,
+    coverage: &[u8],
+    width: usize,
+    height: usize,
+    x: i32,
+    y: i32,
+    color: Rgb,
+) {
     for row in 0..height {
         for col in 0..width {
             let alpha = coverage[row * width + col];

@@ -10,6 +10,17 @@ Repo-owned crates, fixtures, examples, and generated manifests use Rust edition
 2024. Fix compatibility issues directly and document unavoidable upstream
 blockers next to the exception.
 
+Do not run `cargo fmt`. The repo does not enforce `rustfmt`, and running it
+produces diff noise unrelated to the change. Style is enforced by Clippy and
+code review.
+
+To run the same per-unit clippy that CI runs (the `llm-clippy` fork with
+`fallible_int_fallback` and `anonymous_tuple_return_type`):
+
+```sh
+nix build .#ciChecks.x86_64-linux.rust-<crate-name>.clippy
+```
+
 Prefer names that preserve the concept's path. Local aliases may shorten noisy
 source paths only when the shape remains visible at the call site. Keep singular
 names for single values and plural names for bags of constructors, helpers, or

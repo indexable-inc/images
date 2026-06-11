@@ -33,7 +33,10 @@ fn parses_messages_and_tags_them() {
     assert_eq!(user_doc.meta_json["session_id"], "sess1");
     assert_eq!(user_doc.external_id, "claude:sess1:u1");
     // The content_hash is the sha256 of the exact embedded bytes.
-    assert_eq!(user_doc.content_hash, source_meta::hash_body(&user_doc.body));
+    assert_eq!(
+        user_doc.content_hash,
+        source_meta::hash_body(&user_doc.body)
+    );
 
     let assistant_doc = docs
         .iter()
@@ -96,7 +99,14 @@ fn corrupt_line_is_skipped_not_fatal() {
     .expect("write");
 
     let export = ClaudeHistoryExport::open_with(dir.path(), "h", "u").expect("open must not fail");
-    let docs: Vec<_> = export.documents().collect::<Result<_, _>>().expect("documents");
-    assert_eq!(docs.len(), 1, "the one valid message survives the corrupt lines");
+    let docs: Vec<_> = export
+        .documents()
+        .collect::<Result<_, _>>()
+        .expect("documents");
+    assert_eq!(
+        docs.len(),
+        1,
+        "the one valid message survives the corrupt lines"
+    );
     assert!(String::from_utf8_lossy(&docs[0].body).contains("hello world"));
 }

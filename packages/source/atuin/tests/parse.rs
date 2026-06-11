@@ -26,7 +26,13 @@ fn make_db(path: &std::path::Path) {
     };
     insert("id1", 1_773_725_019_000_000_000, 0, "git status", None);
     insert("id2", 1_773_725_120_000_000_000, 1, "cargo build", None);
-    insert("id3", 1_773_725_200_000_000_000, 0, "secret", Some(1_773_725_300_000_000_000));
+    insert(
+        "id3",
+        1_773_725_200_000_000_000,
+        0,
+        "secret",
+        Some(1_773_725_300_000_000_000),
+    );
     insert("id4", 1_773_725_400_000_000_000, 0, "   ", None);
 }
 
@@ -61,7 +67,10 @@ fn uninitialized_db_is_a_typed_skip() {
     Connection::open(&path).expect("create empty db");
 
     let error = AtuinHistory::open(&path).expect_err("uninitialized db must error");
-    assert!(error.is_uninitialized(), "expected UninitializedDb, got {error:?}");
+    assert!(
+        error.is_uninitialized(),
+        "expected UninitializedDb, got {error:?}"
+    );
     assert!(
         error.to_string().contains("uninitialized"),
         "skip message should explain the db is uninitialized: {error}"
@@ -77,7 +86,10 @@ fn corrupt_db_is_not_a_skip() {
     std::fs::write(&path, b"this is not a sqlite database").expect("write garbage");
 
     let error = AtuinHistory::open(&path).expect_err("corrupt db must error");
-    assert!(!error.is_uninitialized(), "a corrupt db must not be treated as a soft skip: {error:?}");
+    assert!(
+        !error.is_uninitialized(),
+        "a corrupt db must not be treated as a soft skip: {error:?}"
+    );
 }
 
 #[test]
@@ -85,7 +97,10 @@ fn documents_carry_shell_source_and_tags() {
     let history = open_fixture("tags");
     assert_eq!(history.source(), Source::new("shell"));
 
-    let docs: Vec<_> = history.documents().map(|doc| doc.expect("document")).collect();
+    let docs: Vec<_> = history
+        .documents()
+        .map(|doc| doc.expect("document"))
+        .collect();
     let first = &docs[0];
     assert_eq!(first.external_id, "atuin:id1");
     assert_eq!(first.meta_json["source"], "shell");

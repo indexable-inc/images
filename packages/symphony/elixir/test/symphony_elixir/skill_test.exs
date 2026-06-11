@@ -6,10 +6,7 @@ defmodule SymphonyElixir.SkillTest do
   # Minimal valid YAML frontmatter shared by all fixture skills.
   @frontmatter """
   ---
-  codex_model: gpt-5-codex
-  reasoning_effort: medium
-  sandbox: workspace-write
-  approval_policy: never
+  description: Fixture skill for parser tests.
   tools: []
   ---
   """
@@ -33,6 +30,52 @@ defmodule SymphonyElixir.SkillTest do
 
   defp write_partial!(partials_dir, name, body) do
     File.write!(Path.join(partials_dir, "#{name}.md"), body)
+  end
+
+  describe "model-agnostic frontmatter" do
+    # The execution envelope (engine, model, effort, permissions) lives on the
+    # workflow `.sym` agent node, not in skill frontmatter. The skill is the
+    # Agent Skills shape: an optional description plus a tools allowlist, never
+    # a model. The loader must not carry the removed codex envelope fields.
+    test "a skill with only a body and empty tools loads; description defaults to nil" do
+      {dir, _partials_dir} = setup_skill_dir()
+
+      path = Path.join(dir, "node_skill.md")
+
+      File.write!(path, """
+      ---
+      tools: []
+      ---
+      Body for a model-agnostic skill.
+      """)
+
+      assert {:ok, skill} = Skill.load(path)
+      assert skill.description == nil
+      assert skill.tools == []
+      assert String.contains?(skill.body, "model-agnostic skill")
+      refute Map.has_key?(skill, :codex_model)
+      refute Map.has_key?(skill, :sandbox)
+      refute Map.has_key?(skill, :approval_policy)
+      refute Map.has_key?(skill, :reasoning_effort)
+    end
+
+    test "description and tools are read from frontmatter" do
+      {dir, _partials_dir} = setup_skill_dir()
+
+      path = Path.join(dir, "described_skill.md")
+
+      File.write!(path, """
+      ---
+      description: Does a specific thing.
+      tools: [linear_graphql]
+      ---
+      Body.
+      """)
+
+      assert {:ok, skill} = Skill.load(path)
+      assert skill.description == "Does a specific thing."
+      assert skill.tools == ["linear_graphql"]
+    end
   end
 
   describe "expand_partials: self-referential partial" do

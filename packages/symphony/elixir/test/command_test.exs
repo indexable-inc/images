@@ -15,6 +15,23 @@ defmodule SymphonyElixir.CommandTest do
     assert {:error, {:timeout, 50, _output}} = Command.run("/bin/sh", ["-c", "sleep 5"], 50)
   end
 
+  test "leaves no stray port messages in the caller's mailbox after a timeout" do
+    # The child traps TERM and prints a goodbye line, the shape of the
+    # `ix` CLI's "Interrupted. Shutting down..." on the timeout kill.
+    # Without the post-close drain that line lands in the caller's
+    # mailbox as a raw `{port, {:data, ...}}` message and crashes a
+    # GenServer caller that has no clause for it.
+    assert {:error, {:timeout, 50, _output}} =
+             Command.run(
+               "/bin/sh",
+               ["-c", "trap 'echo interrupted; exit 0' TERM; sleep 30 & wait"],
+               50
+             )
+
+    refute_receive {_port, {:data, _}}, 200
+    refute_receive {_port, {:exit_status, _}}, 0
+  end
+
   test "kills the spawned process on timeout so it does not orphan" do
     pid_file = Path.join(System.tmp_dir!(), "command_test_#{System.unique_integer([:positive])}.pid")
     on_exit(fn -> File.rm(pid_file) end)

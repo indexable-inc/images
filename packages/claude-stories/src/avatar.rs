@@ -65,7 +65,12 @@ fn initials(name: &str) -> String {
     let pick = |s: &str| s.chars().next().map(|c| c.to_ascii_uppercase());
     let two: String = match words.as_slice() {
         [a, b, ..] => [pick(a), pick(b)].into_iter().flatten().collect(),
-        [a] => a.chars().filter(|c| c.is_alphanumeric()).take(2).collect::<String>().to_uppercase(),
+        [a] => a
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .take(2)
+            .collect::<String>()
+            .to_uppercase(),
         [] => String::new(),
     };
     if two.is_empty() { "??".to_owned() } else { two }

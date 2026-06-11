@@ -92,10 +92,8 @@ async fn prepare(
         // signature means every blob is still present and listing the store to
         // rediscover that is pure latency. This is what turns a repeated search
         // on an already-indexed checkout from "re-list every file" into a no-op.
-        let already_synced = db
-            .synced_signature(query.root, &synced_store)?
-            .as_deref()
-            == Some(signature.as_str());
+        let already_synced =
+            db.synced_signature(query.root, &synced_store)?.as_deref() == Some(signature.as_str());
         (manifest, signature, already_synced)
     };
 

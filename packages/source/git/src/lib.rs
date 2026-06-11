@@ -24,8 +24,8 @@ use std::process::Command;
 use source_meta::{Document, Source, SourceAdapter};
 
 pub use crate::error::Error;
-pub use crate::record::Commit;
 use crate::error::{GitFailedSnafu, ParseSnafu, Result, SpawnSnafu};
+pub use crate::record::Commit;
 use snafu::ResultExt as _;
 
 /// The `source` tag every commit document carries.
@@ -59,7 +59,9 @@ impl GitLog {
             .arg(repo)
             .args(["log", "--no-color", "-z", &format!("--format={FORMAT}")])
             .output()
-            .context(SpawnSnafu { repo: repo.to_path_buf() })?;
+            .context(SpawnSnafu {
+                repo: repo.to_path_buf(),
+            })?;
         if !output.status.success() {
             return GitFailedSnafu {
                 repo: repo.to_path_buf(),
@@ -115,10 +117,12 @@ fn parse_log(bytes: &[u8], repo: &str) -> Result<Vec<Commit>> {
         let at = field(&mut fields, "timestamp")?;
         let subject = field(&mut fields, "subject")?;
         let body = fields.next().unwrap_or("");
-        let timestamp = at
-            .trim()
-            .parse::<i64>()
-            .map_err(|_err| ParseSnafu { detail: format!("bad timestamp {at:?}") }.build())?;
+        let timestamp = at.trim().parse::<i64>().map_err(|_err| {
+            ParseSnafu {
+                detail: format!("bad timestamp {at:?}"),
+            }
+            .build()
+        })?;
         commits.push(Commit {
             repo: repo.to_owned(),
             sha: sha.trim().to_owned(),
@@ -134,7 +138,12 @@ fn parse_log(bytes: &[u8], repo: &str) -> Result<Vec<Commit>> {
 
 /// Take the next US-separated field, or fail with a layout error.
 fn field<'a>(fields: &mut impl Iterator<Item = &'a str>, name: &str) -> Result<&'a str> {
-    fields.next().ok_or_else(|| ParseSnafu { detail: format!("missing field {name}") }.build())
+    fields.next().ok_or_else(|| {
+        ParseSnafu {
+            detail: format!("missing field {name}"),
+        }
+        .build()
+    })
 }
 
 /// Derive a repo slug from the `origin` remote (`org/repo`), falling back to the
@@ -149,7 +158,10 @@ fn slug(repo: &Path) -> String {
         .filter(|output| output.status.success())
         .and_then(|output| slug_from_url(String::from_utf8_lossy(&output.stdout).trim()));
     from_remote.unwrap_or_else(|| {
-        repo.file_name().map_or_else(|| "local".to_owned(), |name| name.to_string_lossy().into_owned())
+        repo.file_name().map_or_else(
+            || "local".to_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        )
     })
 }
 
@@ -157,7 +169,10 @@ fn slug(repo: &Path) -> String {
 /// `https://host/org/repo.git` forms.
 fn slug_from_url(url: &str) -> Option<String> {
     let trimmed = url.trim_end_matches('/').trim_end_matches(".git");
-    let parts: Vec<&str> = trimmed.split(['/', ':']).filter(|part| !part.is_empty()).collect();
+    let parts: Vec<&str> = trimmed
+        .split(['/', ':'])
+        .filter(|part| !part.is_empty())
+        .collect();
     let len = parts.len();
     (len >= 2).then(|| format!("{}/{}", parts[len - 2], parts[len - 1]))
 }
@@ -168,7 +183,8 @@ mod tests {
 
     #[test]
     fn parses_nul_separated_records() {
-        let bytes = b"abc123def\x1fAlice\x1falice@x.com\x1f1700000000\x1fFix bug\x1fLonger\nbody\x00\
+        let bytes =
+            b"abc123def\x1fAlice\x1falice@x.com\x1f1700000000\x1fFix bug\x1fLonger\nbody\x00\
                       fff999000\x1fBob\x1fbob@y.com\x1f1700000100\x1fAdd feature\x1f\x00";
         let commits = parse_log(bytes, "org/repo").expect("parse");
         assert_eq!(commits.len(), 2);
@@ -183,7 +199,10 @@ mod tests {
     #[test]
     fn projects_document_with_git_tags() {
         let bytes = b"abc123def456\x1fAlice\x1falice@x.com\x1f1700000000\x1fFix bug\x1f\x00";
-        let doc = parse_log(bytes, "org/repo").expect("parse")[0].clone().into_document().expect("doc");
+        let doc = parse_log(bytes, "org/repo").expect("parse")[0]
+            .clone()
+            .into_document()
+            .expect("doc");
         assert_eq!(doc.external_id, "git:org/repo:abc123def456");
         assert_eq!(doc.meta_json["source"], "git");
         assert_eq!(doc.meta_json["repo"], "org/repo");
@@ -196,8 +215,17 @@ mod tests {
 
     #[test]
     fn slug_from_both_url_forms() {
-        assert_eq!(slug_from_url("git@github.com:org/repo.git").as_deref(), Some("org/repo"));
-        assert_eq!(slug_from_url("https://github.com/org/repo.git").as_deref(), Some("org/repo"));
-        assert_eq!(slug_from_url("https://github.com/org/repo/").as_deref(), Some("org/repo"));
+        assert_eq!(
+            slug_from_url("git@github.com:org/repo.git").as_deref(),
+            Some("org/repo")
+        );
+        assert_eq!(
+            slug_from_url("https://github.com/org/repo.git").as_deref(),
+            Some("org/repo")
+        );
+        assert_eq!(
+            slug_from_url("https://github.com/org/repo/").as_deref(),
+            Some("org/repo")
+        );
     }
 }

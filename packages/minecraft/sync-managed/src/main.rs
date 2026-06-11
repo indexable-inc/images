@@ -228,7 +228,10 @@ fn sync_tree(
 
 fn managed_target_for(manifest: &Path, rel: &str) -> Result<Option<String>> {
     for line in read_manifest_lines(manifest)? {
-        let ManifestEntry { rel: entry_rel, target } = manifest_entry(&line);
+        let ManifestEntry {
+            rel: entry_rel,
+            target,
+        } = manifest_entry(&line);
         if entry_rel == rel
             && let Some(target) = target
         {
@@ -298,7 +301,8 @@ struct ReloadEntry {
 fn write_plan(plan_path: &Path, plan: &BTreeSet<ReloadEntry>) -> Result<()> {
     let mut lines = String::new();
     for ReloadEntry { action, plugin } in plan {
-        writeln!(&mut lines, "{} {plugin}", action.as_str()).expect("writing to String cannot fail");
+        writeln!(&mut lines, "{} {plugin}", action.as_str())
+            .expect("writing to String cannot fail");
     }
 
     fs::write(plan_path, lines).with_context(|| format!("writing {}", plan_path.display()))

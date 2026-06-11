@@ -149,7 +149,10 @@ fn view_texts(view: &View) -> Vec<TextField> {
         ],
         // A data view's JSON is canonicalized to text so it diffs and replays
         // like any other body; the frontend parses it back.
-        View::Data(d) => vec![field("body", serde_json::to_string(&d.data).unwrap_or_default())],
+        View::Data(d) => vec![field(
+            "body",
+            serde_json::to_string(&d.data).unwrap_or_default(),
+        )],
     }
 }
 
@@ -579,10 +582,25 @@ mod tests {
     #[test]
     fn unchanged_apply_yields_no_delta() {
         let mut state = DocState::new();
-        assert!(state.apply_scope("a", &[terminal("1", "x")]).unwrap().is_some());
-        assert!(state.apply_scope("a", &[terminal("1", "x")]).unwrap().is_none());
+        assert!(
+            state
+                .apply_scope("a", &[terminal("1", "x")])
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            state
+                .apply_scope("a", &[terminal("1", "x")])
+                .unwrap()
+                .is_none()
+        );
         // A screen change does produce a delta.
-        assert!(state.apply_scope("a", &[terminal("1", "y")]).unwrap().is_some());
+        assert!(
+            state
+                .apply_scope("a", &[terminal("1", "y")])
+                .unwrap()
+                .is_some()
+        );
     }
 
     /// A runtime resize must re-write `rows`/`cols` even when the screen text is
@@ -708,18 +726,30 @@ mod tests {
                 running: false,
                 ok: Some(true),
                 duration_ms: Some(4),
-                trace: vec![ExecTraceLine { line: 1, text: "hi\n".to_owned() }],
+                trace: vec![ExecTraceLine {
+                    line: 1,
+                    text: "hi\n".to_owned(),
+                }],
             },
         );
         let finished = std::slice::from_ref(&finished);
         assert!(state.apply_scope("p", finished).unwrap().is_some());
         assert_eq!(state.panes[&key].text("stdout"), "hi\n");
-        assert!(state.panes[&key].meta.get("ok").is_some(), "ok present when done");
+        assert!(
+            state.panes[&key].meta.get("ok").is_some(),
+            "ok present when done"
+        );
         // The inline-trace map round-trips through the doc as JSON text, so the
         // frontend can parse it back (it is dropped if the projection omits it).
         let trace: Vec<ExecTraceLine> =
             serde_json::from_str(&state.panes[&key].text("trace")).expect("trace round-trips");
-        assert_eq!(trace, vec![ExecTraceLine { line: 1, text: "hi\n".to_owned() }]);
+        assert_eq!(
+            trace,
+            vec![ExecTraceLine {
+                line: 1,
+                text: "hi\n".to_owned()
+            }]
+        );
 
         // Re-applying the identical finished view produces nothing.
         assert!(state.apply_scope("p", finished).unwrap().is_none());

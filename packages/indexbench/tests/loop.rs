@@ -31,7 +31,9 @@ fn run_record_compare_report_round_trip() {
     let first_runs = execute(&mut suite, &git_first).expect("first execute");
     assert_eq!(first_runs.len(), 2, "one run per bench");
     for run in &first_runs {
-        let baseline = store.previous_run(&run.suite, &run.bench, &run.machine_id).expect("baseline read");
+        let baseline = store
+            .previous_run(&run.suite, &run.bench, &run.machine_id)
+            .expect("baseline read");
         assert!(baseline.is_none(), "the first run has no baseline");
         store.append(run).expect("record first run");
     }
@@ -54,17 +56,27 @@ fn run_record_compare_report_round_trip() {
             .expect("baseline read")
             .expect("second run has a baseline");
         store.append(run).expect("record second run");
-        assert_eq!(baseline.git_commit, "commit-one", "baseline is the previous run on this machine");
+        assert_eq!(
+            baseline.git_commit, "commit-one",
+            "baseline is the previous run on this machine"
+        );
 
         let comparison = compare(&baseline, run, CompareConfig::default());
         // Every metric must classify into one of the known verdicts; none should
         // be left unclassified.
-        assert!(!comparison.metrics.is_empty(), "comparison carries metrics for {}", run.bench);
+        assert!(
+            !comparison.metrics.is_empty(),
+            "comparison carries metrics for {}",
+            run.bench
+        );
         for metric in &comparison.metrics {
             assert!(
                 matches!(
                     metric.verdict,
-                    Verdict::Improvement | Verdict::Regression | Verdict::Unchanged | Verdict::NoBaseline
+                    Verdict::Improvement
+                        | Verdict::Regression
+                        | Verdict::Unchanged
+                        | Verdict::NoBaseline
                 ),
                 "metric {} classified",
                 metric.name
@@ -72,7 +84,10 @@ fn run_record_compare_report_round_trip() {
         }
 
         let table = human_table(&comparison);
-        assert!(table.contains(&run.bench), "report names the bench: {table}");
+        assert!(
+            table.contains(&run.bench),
+            "report names the bench: {table}"
+        );
         compared += 1;
     }
     assert_eq!(compared, 2, "both benches compared against a baseline");
@@ -99,7 +114,12 @@ fn deterministic_regression_against_history_is_gated() {
     let make = |timestamp: i64, allocations: f64| Run {
         suite: "alloc-suite".to_owned(),
         bench: "build-index".to_owned(),
-        metrics: vec![Metric::deterministic("allocations", allocations, "count", true)],
+        metrics: vec![Metric::deterministic(
+            "allocations",
+            allocations,
+            "count",
+            true,
+        )],
         machine_id: "machine-a".to_owned(),
         git_commit: format!("c{timestamp}"),
         git_dirty: false,
@@ -112,7 +132,10 @@ fn deterministic_regression_against_history_is_gated() {
 
     let baseline = previous_excluding_self(&store, &candidate).expect("baseline present");
     let comparison = compare(&baseline, &candidate, CompareConfig::default());
-    assert!(comparison.has_regression(), "a higher allocation count must gate as a regression");
+    assert!(
+        comparison.has_regression(),
+        "a higher allocation count must gate as a regression"
+    );
 }
 
 /// The suite used by the round-trip test: one micro Rust fn and one trivial
@@ -130,8 +153,13 @@ fn demo_suite() -> BenchSuite<'static> {
 /// Mirrors the CLI's baseline selection (drop the most-recent identical entry,
 /// take the last of what remains) so the test exercises the real comparison
 /// path even when two runs share a whole-second timestamp.
-fn previous_excluding_self(store: &LocalDirStore, current: &indexbench::Run) -> Option<indexbench::Run> {
-    let mut runs = store.runs_for(&current.suite, &current.bench).expect("history read");
+fn previous_excluding_self(
+    store: &LocalDirStore,
+    current: &indexbench::Run,
+) -> Option<indexbench::Run> {
+    let mut runs = store
+        .runs_for(&current.suite, &current.bench)
+        .expect("history read");
     runs.retain(|candidate| candidate.machine_id == current.machine_id);
     if let Some(position) = runs.iter().rposition(|candidate| candidate == current) {
         runs.remove(position);

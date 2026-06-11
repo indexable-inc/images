@@ -179,8 +179,14 @@ pub async fn read_from_store(store: &dyn ObjectStore, prefix: &str) -> Result<Ve
         if !key.ends_with(DATA_SUFFIX) {
             continue;
         }
-        let result = store.get(&meta.location).await.context(GetSnafu { key: key.clone() })?;
-        let bytes = result.bytes().await.context(GetSnafu { key: key.clone() })?;
+        let result = store
+            .get(&meta.location)
+            .await
+            .context(GetSnafu { key: key.clone() })?;
+        let bytes = result
+            .bytes()
+            .await
+            .context(GetSnafu { key: key.clone() })?;
         parse_parquet(bytes, &key, &mut documents)?;
     }
     Ok(documents)
@@ -268,11 +274,22 @@ pub async fn read_slices_from_store(store: &dyn ObjectStore, prefix: &str) -> Re
         let Some(SliceId { host, user, source }) = parse_slice_key(&key) else {
             continue;
         };
-        let result = store.get(&meta.location).await.context(GetSnafu { key: key.clone() })?;
-        let bytes = result.bytes().await.context(GetSnafu { key: key.clone() })?;
+        let result = store
+            .get(&meta.location)
+            .await
+            .context(GetSnafu { key: key.clone() })?;
+        let bytes = result
+            .bytes()
+            .await
+            .context(GetSnafu { key: key.clone() })?;
         let mut documents = Vec::new();
         parse_parquet(bytes, &key, &mut documents)?;
-        slices.push(Slice { host, user, source, documents });
+        slices.push(Slice {
+            host,
+            user,
+            source,
+            documents,
+        });
     }
     Ok(slices)
 }
@@ -280,12 +297,15 @@ pub async fn read_slices_from_store(store: &dyn ObjectStore, prefix: &str) -> Re
 /// Build the S3 client. Credentials come from the environment
 /// (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`).
 fn build_store(config: &Config) -> Result<AmazonS3> {
-    let mut builder =
-        AmazonS3Builder::from_env().with_bucket_name(&config.bucket).with_region(&config.region);
+    let mut builder = AmazonS3Builder::from_env()
+        .with_bucket_name(&config.bucket)
+        .with_region(&config.region);
     if let Some(endpoint) = &config.endpoint {
         builder = builder.with_endpoint(endpoint);
     }
-    builder.build().context(BuildStoreSnafu { bucket: config.bucket.clone() })
+    builder.build().context(BuildStoreSnafu {
+        bucket: config.bucket.clone(),
+    })
 }
 
 /// Parse one parquet object's record batches into documents, appending to `out`.
@@ -335,7 +355,9 @@ fn documents_from_batch(batch: &RecordBatch, key: &str, out: &mut Vec<Document>)
             external_id: non_null_str(external_id, row, COL_EXTERNAL_ID, key)?.to_owned(),
             file_name: non_null_str(external_id, row, COL_EXTERNAL_ID, key)?.to_owned(),
             mime: "text/plain",
-            body: non_null_str(body, row, COL_BODY, key)?.to_owned().into_bytes(),
+            body: non_null_str(body, row, COL_BODY, key)?
+                .to_owned()
+                .into_bytes(),
             meta_json: meta,
             content_hash: non_null_str(content_hash, row, COL_CONTENT_HASH, key)?.to_owned(),
         });
@@ -352,7 +374,10 @@ fn non_null_str<'a>(
     column: &'static str,
     key: &str,
 ) -> Result<&'a str> {
-    array.is_valid(row).then(|| array.value(row)).context(NullValueSnafu { key, column, row })
+    array
+        .is_valid(row)
+        .then(|| array.value(row))
+        .context(NullValueSnafu { key, column, row })
 }
 
 /// Borrow one column as a `StringArray`, erroring (never defaulting) when the
@@ -362,9 +387,13 @@ fn string_column<'a>(
     column: &'static str,
     key: &str,
 ) -> Result<&'a StringArray> {
-    let array =
-        batch.column_by_name(column).context(MissingColumnSnafu { key, column })?;
-    array.as_any().downcast_ref::<StringArray>().context(ColumnTypeSnafu { key, column })
+    let array = batch
+        .column_by_name(column)
+        .context(MissingColumnSnafu { key, column })?;
+    array
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context(ColumnTypeSnafu { key, column })
 }
 
 #[cfg(test)]
@@ -420,7 +449,10 @@ mod tests {
             Arc::new(StringArray::from(vec![None::<&str>, None::<&str>])),
             Arc::new(Int64Array::from(vec![Some(100), Some(200)])),
             Arc::new(StringArray::from(vec!["alpha", "beta"])),
-            Arc::new(StringArray::from(vec![meta_a.to_string(), meta_b.to_string()])),
+            Arc::new(StringArray::from(vec![
+                meta_a.to_string(),
+                meta_b.to_string(),
+            ])),
         ];
         let batch =
             RecordBatch::try_new(Arc::new(sink_schema()), columns).expect("build record batch");
@@ -436,7 +468,10 @@ mod tests {
     async fn reads_data_parquet_and_skips_manifest() {
         let store = InMemory::new();
         store
-            .put(&ObjectPath::from("corpus/source=test/data.parquet"), encode_two_rows().into())
+            .put(
+                &ObjectPath::from("corpus/source=test/data.parquet"),
+                encode_two_rows().into(),
+            )
             .await
             .expect("put data");
         // A sibling manifest must be skipped, not parsed as parquet.
@@ -452,7 +487,11 @@ mod tests {
 
         let mut docs = read_from_store(&store, "corpus").await.expect("read");
         docs.sort_by(|a, b| a.external_id.cmp(&b.external_id));
-        assert_eq!(docs.len(), 2, "exactly the two parquet rows, manifest skipped");
+        assert_eq!(
+            docs.len(),
+            2,
+            "exactly the two parquet rows, manifest skipped"
+        );
 
         let a = &docs[0];
         assert_eq!(a.external_id, "a");
@@ -491,7 +530,11 @@ mod tests {
         // A host-level source has no `user=` segment.
         assert_eq!(
             parse_slice_key("corpus/host=h2/source=git/data.parquet"),
-            Some(SliceId { host: Some("h2".to_owned()), user: None, source: "git".to_owned() })
+            Some(SliceId {
+                host: Some("h2".to_owned()),
+                user: None,
+                source: "git".to_owned()
+            })
         );
         // No `source=` segment: not a corpus slice.
         assert_eq!(parse_slice_key("corpus/host=h2/data.parquet"), None);
@@ -530,9 +573,15 @@ mod tests {
             .await
             .expect("put manifest");
 
-        let mut slices = read_slices_from_store(&store, "corpus").await.expect("read slices");
+        let mut slices = read_slices_from_store(&store, "corpus")
+            .await
+            .expect("read slices");
         slices.sort_by(|a, b| a.source.cmp(&b.source));
-        assert_eq!(slices.len(), 2, "one slice per data.parquet, manifest skipped");
+        assert_eq!(
+            slices.len(),
+            2,
+            "one slice per data.parquet, manifest skipped"
+        );
 
         let git = &slices[0];
         assert_eq!(git.source, "git");
@@ -602,9 +651,18 @@ mod tests {
             .await
             .expect("put data");
 
-        let error = read_from_store(&store, "corpus").await.expect_err("a null must error");
+        let error = read_from_store(&store, "corpus")
+            .await
+            .expect_err("a null must error");
         assert!(
-            matches!(error, Error::NullValue { column: "content_hash", row: 0, .. }),
+            matches!(
+                error,
+                Error::NullValue {
+                    column: "content_hash",
+                    row: 0,
+                    ..
+                }
+            ),
             "a null required column must yield a typed NullValue error, got {error:?}"
         );
     }

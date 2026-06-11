@@ -392,8 +392,8 @@ fn dispatch_linux(command: Command) -> Result<(), linuxkrun::Error> {
             console_file,
             timeout_secs,
         } => {
-            let net = build_net(net, &ports)
-                .map_err(|message| linuxkrun::Error::Setup { message })?;
+            let net =
+                build_net(net, &ports).map_err(|message| linuxkrun::Error::Setup { message })?;
             let timeout = (timeout_secs != 0).then(|| Duration::from_secs(timeout_secs));
             linuxkrun::boot_linux(&linuxkrun::BootLinux {
                 root,
@@ -529,7 +529,8 @@ mod imp {
                 console_file,
                 timeout_secs,
             } => {
-                let net = crate::build_net(net, &ports).map_err(|message| Error::Args { message })?;
+                let net =
+                    crate::build_net(net, &ports).map_err(|message| Error::Args { message })?;
                 let timeout = (timeout_secs != 0).then(|| Duration::from_secs(timeout_secs));
                 crate::linuxkrun::boot_linux(&crate::linuxkrun::BootLinux {
                     disk,

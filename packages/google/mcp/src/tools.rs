@@ -21,9 +21,7 @@ use serde_json::json;
 use google_calendar::{
     AttendeeDraft, EventDraft, EventQuery, EventTime, PRIMARY_CALENDAR, SendUpdates,
 };
-use google_gmail::{
-    Attachment, MessageFormat, MessageQuery, OutgoingMessage,
-};
+use google_gmail::{Attachment, MessageFormat, MessageQuery, OutgoingMessage};
 
 /// The MCP server. Holds the two API clients shared across tool calls.
 #[derive(Clone)]
@@ -150,7 +148,11 @@ impl GoogleMcp {
             .unwrap_or(PRIMARY_CALENDAR)
             .to_owned();
         self.calendar
-            .cancel_event(&calendar, &args.event_id, send_updates(args.notify.as_deref())?)
+            .cancel_event(
+                &calendar,
+                &args.event_id,
+                send_updates(args.notify.as_deref())?,
+            )
             .await
             .map_err(into_tool_error)?;
         Ok(json!({ "cancelled": args.event_id }).to_string())
@@ -160,11 +162,9 @@ impl GoogleMcp {
     // Gmail: search / read
     // -----------------------------------------------------------------
 
-    #[tool(
-        description = "Search Gmail messages with the Gmail query syntax \
+    #[tool(description = "Search Gmail messages with the Gmail query syntax \
                        (e.g. `from:alice newer_than:7d`). Returns ids and \
-                       thread ids; use mail_get_message for headers and body."
-    )]
+                       thread ids; use mail_get_message for headers and body.")]
     async fn mail_search(
         &self,
         Parameters(args): Parameters<MailSearchArgs>,
@@ -183,10 +183,8 @@ impl GoogleMcp {
         json_string(&stubs)
     }
 
-    #[tool(
-        description = "List Gmail messages by filter (no free-text query). \
-                       Returns ids and thread ids."
-    )]
+    #[tool(description = "List Gmail messages by filter (no free-text query). \
+                       Returns ids and thread ids.")]
     async fn mail_list_messages(
         &self,
         Parameters(args): Parameters<MailListMessagesArgs>,
@@ -205,12 +203,10 @@ impl GoogleMcp {
         json_string(&stubs)
     }
 
-    #[tool(
-        description = "Fetch one Gmail message by id. format=full (default) \
+    #[tool(description = "Fetch one Gmail message by id. format=full (default) \
                        returns headers + body; minimal returns just ids and \
                        labels; metadata returns headers without body; raw \
-                       returns the RFC 5322 source as base64url."
-    )]
+                       returns the RFC 5322 source as base64url.")]
     async fn mail_get_message(
         &self,
         Parameters(args): Parameters<MailGetMessageArgs>,
@@ -259,13 +255,11 @@ impl GoogleMcp {
     // Gmail: send and drafts
     // -----------------------------------------------------------------
 
-    #[tool(
-        description = "Compose and send a Gmail message. body_text and \
+    #[tool(description = "Compose and send a Gmail message. body_text and \
                        body_html are alternatives; provide at least one. \
                        attachments are inline (base64-encoded bytes) plus \
                        filename and content_type. thread_id attaches a reply \
-                       to an existing thread."
-    )]
+                       to an existing thread.")]
     async fn mail_send_message(
         &self,
         Parameters(args): Parameters<MailComposeArgs>,
@@ -434,11 +428,7 @@ impl GoogleMcp {
         &self,
         Parameters(_): Parameters<EmptyArgs>,
     ) -> Result<String, ErrorData> {
-        let labels = self
-            .gmail
-            .list_labels()
-            .await
-            .map_err(into_tool_error)?;
+        let labels = self.gmail.list_labels().await.map_err(into_tool_error)?;
         json_string(&labels)
     }
 
@@ -472,11 +462,9 @@ impl GoogleMcp {
     // Gmail: attachments
     // -----------------------------------------------------------------
 
-    #[tool(
-        description = "Fetch a Gmail attachment's bytes. Returns the bytes \
+    #[tool(description = "Fetch a Gmail attachment's bytes. Returns the bytes \
                        as base64 (standard padding) in the `content_base64` \
-                       field plus a `size` field; the agent decodes as needed."
-    )]
+                       field plus a `size` field; the agent decodes as needed.")]
     async fn mail_attachment_get(
         &self,
         Parameters(args): Parameters<MailAttachmentGetArgs>,
@@ -748,13 +736,15 @@ fn parse_event_time(
 /// so convert at this boundary.
 fn parse_event_end(input: &str, all_day: bool) -> Result<EventTime, ErrorData> {
     match parse_event_time(input, all_day, "end")? {
-        EventTime::AllDay { date } => EventTime::all_day_end_from_inclusive(date).ok_or_else(|| {
-            ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                format!("end: no day follows {date}"),
-                None,
-            )
-        }),
+        EventTime::AllDay { date } => {
+            EventTime::all_day_end_from_inclusive(date).ok_or_else(|| {
+                ErrorData::new(
+                    ErrorCode::INVALID_PARAMS,
+                    format!("end: no day follows {date}"),
+                    None,
+                )
+            })
+        }
         timed @ EventTime::Timed { .. } => Ok(timed),
     }
 }
@@ -795,7 +785,10 @@ fn build_outgoing(args: MailComposeArgs) -> Result<OutgoingMessage, ErrorData> {
             .map_err(|err| {
                 ErrorData::new(
                     ErrorCode::INVALID_PARAMS,
-                    format!("attachment {:?}: base64 decode failed: {err}", attachment.filename),
+                    format!(
+                        "attachment {:?}: base64 decode failed: {err}",
+                        attachment.filename
+                    ),
                     None,
                 )
             })?;

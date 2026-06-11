@@ -130,6 +130,53 @@ let
     };
 
   /**
+    Package a Bash script as a standalone executable.
+
+    Nushell (`writeNushellApplication`) is the default for repo commands; this
+    is the one sanctioned escape hatch for scripts that must be bash, such as
+    exec-style toolchain wrappers and POSIX process-control idioms (setsid,
+    flock, `exec "$@"`). The generated script runs under `set -euo pipefail`
+    with `runtimeInputs` prepended to PATH, and the build runs `bash -n` plus
+    shellcheck so a syntax error or a shellcheck-class bug fails the
+    derivation instead of surfacing at runtime.
+
+    Arguments:
+    - `name`: derivation name and `/bin/<name>` executable.
+    - `runtimeInputs`: packages prepended to PATH for the script body.
+    - `text`: the bash script body. No shebang or `set` line; the wrapper
+      supplies both.
+    - `meta`: standard derivation meta, with `mainProgram` defaulted.
+  */
+  writeBashApplication =
+    pkgs:
+    {
+      name,
+      runtimeInputs ? [ ],
+      text,
+      meta ? { },
+    }:
+    pkgs.writeTextFile {
+      inherit name;
+      executable = true;
+      destination = "/bin/${name}";
+      text = ''
+        #!${pkgs.runtimeShell}
+        set -euo pipefail
+      ''
+      + lib.optionalString (runtimeInputs != [ ]) ''
+        export PATH=${lib.makeBinPath runtimeInputs}''${PATH:+:$PATH}
+      ''
+      + text;
+      checkPhase = ''
+        ${lib.getExe' pkgs.bash "bash"} -n "$target"
+        ${lib.getExe pkgs.shellcheck} --shell=bash --severity=warning "$target"
+      '';
+      meta = meta // {
+        mainProgram = meta.mainProgram or name;
+      };
+    };
+
+  /**
     Package a process-compose specification as a `nix run` application.
 
     Generates a checked YAML config from Nix values and wraps
@@ -220,6 +267,7 @@ in
   inherit
     writePythonApplication
     writeNushellApplication
+    writeBashApplication
     writeProcessComposeApplication
     ;
 }

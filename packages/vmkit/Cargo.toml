@@ -23,7 +23,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-snafu = "0.8"
+snafu = "0.9"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # gvproxy lifecycle for the libkrun guest NIC (see src/net.rs): a temp dir for

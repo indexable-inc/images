@@ -33,8 +33,7 @@ pub fn load<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, f64>> {
     let path = path.as_ref();
     let raw = fs::read_to_string(path)
         .with_context(|| format!("read nix-fast-build result file {}", path.display()))?;
-    parse(&raw)
-        .with_context(|| format!("parse nix-fast-build result file {}", path.display()))
+    parse(&raw).with_context(|| format!("parse nix-fast-build result file {}", path.display()))
 }
 
 fn parse(raw: &str) -> Result<BTreeMap<String, f64>> {

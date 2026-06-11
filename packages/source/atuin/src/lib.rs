@@ -21,13 +21,13 @@ mod record;
 
 use std::path::{Path, PathBuf};
 
-use source_meta::{Document, Source, SourceAdapter};
 use rusqlite::{Connection, OpenFlags};
 use snafu::ResultExt as _;
+use source_meta::{Document, Source, SourceAdapter};
 
 pub use crate::error::Error;
-pub use crate::record::Entry;
 use crate::error::{OpenDbSnafu, QuerySnafu, Result, UninitializedDbSnafu};
+pub use crate::record::Entry;
 
 /// The `source` tag every atuin command document carries. atuin records
 /// commands from every shell (nushell, zsh, bash), so one `shell` corpus covers
@@ -80,12 +80,17 @@ impl AtuinHistory {
             &uri,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
         )
-        .context(OpenDbSnafu { path: path.to_path_buf() })?;
+        .context(OpenDbSnafu {
+            path: path.to_path_buf(),
+        })?;
         // Distinguish an uninitialized db (file present, no `history` table) from
         // a genuine query failure. `sqlite_master` always exists, so this probe
         // never itself trips the "no such table" path we are guarding against.
         if !history_table_exists(&conn)? {
-            return UninitializedDbSnafu { path: path.to_path_buf() }.fail();
+            return UninitializedDbSnafu {
+                path: path.to_path_buf(),
+            }
+            .fail();
         }
         let entries = read_entries(&conn)?;
         Ok(Self { entries })
@@ -107,7 +112,8 @@ impl AtuinHistory {
     /// `None` when `HOME` is unset.
     #[must_use]
     pub fn default_path() -> Option<PathBuf> {
-        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share/atuin/history.db"))
+        std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join(".local/share/atuin/history.db"))
     }
 }
 
@@ -190,11 +196,20 @@ struct HostUser {
 /// back to the whole value as the host with no user.
 fn split_host_user(hostname: Option<&str>) -> HostUser {
     let Some(value) = hostname else {
-        return HostUser { host: "unknown".to_owned(), user: None };
+        return HostUser {
+            host: "unknown".to_owned(),
+            user: None,
+        };
     };
     value.split_once(':').map_or_else(
-        || HostUser { host: value.to_owned(), user: None },
-        |(host, user)| HostUser { host: host.to_owned(), user: non_empty(Some(user.to_owned())) },
+        || HostUser {
+            host: value.to_owned(),
+            user: None,
+        },
+        |(host, user)| HostUser {
+            host: host.to_owned(),
+            user: non_empty(Some(user.to_owned())),
+        },
     )
 }
 

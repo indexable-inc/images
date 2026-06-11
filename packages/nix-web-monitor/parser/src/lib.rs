@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snafu::Snafu;
 
+pub mod daemon;
+pub use daemon::{DaemonInfo, DaemonOps, OpClass};
+
 const NIX_JSON_PREFIX: &str = "@nix ";
 
 /// Suffix Nix uses for derivation files. Build-plan lines and closure queries
@@ -89,6 +92,9 @@ pub enum ParseError {
     #[snafu(display("expected two numeric fields"))]
     TwoNumericFields,
 
+    #[snafu(display("expected a byte count and an optional block count"))]
+    FileLinkedFields,
+
     #[snafu(display("expected four numeric progress fields"))]
     ProgressFields,
 
@@ -164,9 +170,17 @@ pub enum FieldValue {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ActivityResult {
+    /// One duplicate store file Nix replaced with a hard link.
+    ///
+    /// Nix emits this per linked file during `actOptimiseStore`, with the
+    /// file's apparent size and (off Windows) its block count -- the space that
+    /// hard-linking reclaims. The state machine folds these into
+    /// [`OptimiseStats`] so the run-wide hard-linking cost is visible;
+    /// auto-optimise-store does this work inline on every store add, which is a
+    /// common reason a "copying ... to the store" step is slow.
     FileLinked {
-        linked: i64,
-        total: i64,
+        bytes: i64,
+        blocks: Option<i64>,
     },
     BuildLogLine {
         line: String,
@@ -201,6 +215,22 @@ pub struct ActivityProgress {
     pub failed: i64,
 }
 
+/// Run-wide store-optimisation totals.
+///
+/// Accumulated from the per-file [`ActivityResult::FileLinked`] events Nix
+/// emits while hard-linking duplicate store files. Nix reports no aggregate, so
+/// the state machine sums one here: `files_linked` counts the events and
+/// `bytes_freed` sums their apparent sizes (the space hard-linking reclaims).
+/// Carried in the snapshot like [`ActivityProgress`] so the UI can show how
+/// much store optimisation a run did -- the otherwise-invisible cost behind a
+/// slow "copying to the store".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimiseStats {
+    pub files_linked: u64,
+    pub bytes_freed: i64,
+}
+
 /// One incremental change to the monitor state, mirroring the snapshot shape.
 ///
 /// The state machine accumulates these as it applies each Nix log line, so the
@@ -210,7 +240,11 @@ pub struct ActivityProgress {
 /// stream of the variants below. The discriminant rides in a `type` field so
 /// the browser can decode it as a tagged union.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Delta {
     /// Full state, used only to seed a new subscriber. Never broadcast.
     Reset { snapshot: MonitorSnapshot },
@@ -223,6 +257,10 @@ pub enum Delta {
     LogsAppend { entries: Vec<LogEntry> },
     /// The aggregate progress line moved.
     ProgressSet { progress: ActivityProgress },
+    /// Run-wide store-optimisation totals moved (a file was hard-linked).
+    OptimiseSet { optimise: OptimiseStats },
+    /// The live nix-daemon syscall view changed (new counts, path, or status).
+    DaemonSet { daemon: DaemonInfo },
     /// The expected count for one activity type was (re)declared.
     ExpectedSet { name: String, value: i64 },
     /// One operator/error message was appended to the errors list.
@@ -241,6 +279,10 @@ pub struct MonitorState {
     pub logs: Vec<LogEntry>,
     pub errors: Vec<String>,
     pub progress: Option<ActivityProgress>,
+    /// Run-wide store-optimisation totals, summed from `FileLinked` events.
+    pub optimise: OptimiseStats,
+    /// Live nix-daemon syscall view, fed out-of-band by the server's tracer.
+    pub daemon: DaemonInfo,
     pub expected: BTreeMap<String, i64>,
     pub exit_code: Option<i32>,
     pub finished: bool,
@@ -307,6 +349,8 @@ impl MonitorState {
             logs: self.logs[log_tail_start..].to_vec(),
             errors: self.errors.clone(),
             progress: self.progress,
+            optimise: self.optimise,
+            daemon: self.daemon.clone(),
             expected: self.expected.clone(),
             dependencies: dependency_edges(&self.closure_deps, &observed),
             exit_code: self.exit_code,
@@ -355,6 +399,22 @@ impl MonitorState {
         };
         activity.size_bytes = Some(size_bytes);
         self.emit_activity(id);
+    }
+
+    /// Replace the live nix-daemon syscall view and broadcast the change.
+    ///
+    /// Called by the server's tracer on its sampling timer. Skips the broadcast
+    /// when nothing changed so an idle daemon (or a tracer that cannot attach)
+    /// does not put a frame on the wire every tick; the snapshot still carries
+    /// the latest value for a freshly-connected client.
+    pub fn set_daemon(&mut self, daemon: DaemonInfo) {
+        if self.daemon == daemon {
+            return;
+        }
+        self.daemon = daemon;
+        self.emit(Delta::DaemonSet {
+            daemon: self.daemon.clone(),
+        });
     }
 
     /// Record the transitive input `.drv` closure of one derivation, learned
@@ -680,7 +740,19 @@ impl MonitorState {
                 let cleaned = strip_ansi(status);
                 self.push_log(Some(action.id), None, &cleaned);
             }
-            ActivityResult::FileLinked { .. } | ActivityResult::Other { .. } => {}
+            ActivityResult::FileLinked { bytes, .. } => {
+                // Each event is one duplicate store file replaced by a hard link;
+                // sum the count and the reclaimed bytes so the run-wide
+                // optimisation cost is visible. `bytes` is an apparent file size
+                // and never negative, but clamp defensively before summing.
+                self.optimise.files_linked = self.optimise.files_linked.saturating_add(1);
+                self.optimise.bytes_freed =
+                    self.optimise.bytes_freed.saturating_add((*bytes).max(0));
+                self.emit(Delta::OptimiseSet {
+                    optimise: self.optimise,
+                });
+            }
+            ActivityResult::Other { .. } => {}
         }
     }
 
@@ -849,14 +921,22 @@ fn planned_derivation(text: &str) -> Option<&str> {
     (path.starts_with("/nix/store/") && path.ends_with(DRV_SUFFIX)).then_some(path)
 }
 
-/// Extract the source path from a Nix "copying <path> to the store" activity.
+/// Extract the local source path from a Nix "copying <path> to the store"
+/// activity, or `None` when the path is not one the server can measure.
 ///
 /// Nix emits this for the local source-tree copy as an unstructured `unknown`
 /// activity carrying no byte progress, so the server measures the path itself to
 /// show how large the copy is (see [`MonitorState::set_activity_size`]). Handles
 /// both quote styles Nix uses (`'…'` for a `git+file` flake, `"…"` for a `path:`
-/// flake) and trims a trailing slash so the returned path stats cleanly. Returns
-/// `None` for any other activity text.
+/// flake) and trims a trailing slash so the returned path stats cleanly.
+///
+/// Only an absolute filesystem path (one starting with `/`) is returned. Nix
+/// also copies individual files out of fetched flake inputs and prints those
+/// with its virtual source-accessor notation, e.g. `copying
+/// '«github:NixOS/nixpkgs#…»/pkgs/…/foo.patch' to the store`. That `«…»` path
+/// has no on-disk location, so measuring it spams one `No such file or
+/// directory` per patch; rejecting non-absolute paths keeps the measurement to
+/// the real local source tree the operator cares about.
 #[must_use]
 pub fn copy_to_store_source(text: &str) -> Option<&str> {
     let rest = text.strip_prefix("copying ")?;
@@ -867,7 +947,7 @@ pub fn copy_to_store_source(text: &str) -> Option<&str> {
     let body = &rest[quote.len_utf8()..];
     let end = body.find(quote)?;
     let path = &body[..end];
-    if path.is_empty() || body[end + quote.len_utf8()..].trim_start() != "to the store" {
+    if !path.starts_with('/') || body[end + quote.len_utf8()..].trim_start() != "to the store" {
         return None;
     }
     Some(path.strip_suffix('/').unwrap_or(path))
@@ -883,6 +963,10 @@ pub struct MonitorSnapshot {
     pub logs: Vec<LogEntry>,
     pub errors: Vec<String>,
     pub progress: Option<ActivityProgress>,
+    /// Run-wide store-optimisation totals, summed from `FileLinked` events.
+    pub optimise: OptimiseStats,
+    /// Live nix-daemon syscall view, fed out-of-band by the server's tracer.
+    pub daemon: DaemonInfo,
     pub expected: BTreeMap<String, i64>,
     /// Minimal dependency DAG over derivations Nix actually built: each edge's
     /// `from` directly requires `to`. Derived from `direct_deps` at snapshot
@@ -1054,11 +1138,8 @@ fn parse_result(raw: &Value) -> Result<ResultAction, ParseError> {
     let fields = fields(raw);
     let result = match result_type {
         result_code::FILE_LINKED => {
-            let NumberPair {
-                first: linked,
-                second: total,
-            } = two_numbers(&fields)?;
-            ActivityResult::FileLinked { linked, total }
+            let LinkedFile { bytes, blocks } = file_linked_fields(&fields)?;
+            ActivityResult::FileLinked { bytes, blocks }
         }
         result_code::BUILD_LOG_LINE => ActivityResult::BuildLogLine {
             line: one_text(&fields)?,
@@ -1138,6 +1219,32 @@ fn two_numbers(fields: &[FieldValue]) -> Result<NumberPair, ParseError> {
             second: *second,
         }),
         _ => Err(ParseError::TwoNumericFields),
+    }
+}
+
+/// The fields of a `resFileLinked` result.
+struct LinkedFile {
+    /// The linked file's apparent size in bytes (the space hard-linking reclaims).
+    bytes: i64,
+    /// The file's block count, present only on platforms that report one.
+    blocks: Option<i64>,
+}
+
+/// Parse a `resFileLinked` result's numeric fields.
+///
+/// Nix omits the block field on Windows (`st_blocks` has no analogue), so it is
+/// optional rather than required.
+fn file_linked_fields(fields: &[FieldValue]) -> Result<LinkedFile, ParseError> {
+    match fields {
+        [FieldValue::Number(bytes)] => Ok(LinkedFile {
+            bytes: *bytes,
+            blocks: None,
+        }),
+        [FieldValue::Number(bytes), FieldValue::Number(blocks)] => Ok(LinkedFile {
+            bytes: *bytes,
+            blocks: Some(*blocks),
+        }),
+        _ => Err(ParseError::FileLinkedFields),
     }
 }
 
@@ -1776,9 +1883,9 @@ mod tests {
             "build start carries the derivation and host on a BuildUpsert"
         );
         assert!(
-            deltas
-                .iter()
-                .any(|delta| matches!(delta, Delta::ActivityUpsert { activity } if activity.id == 7)),
+            deltas.iter().any(
+                |delta| matches!(delta, Delta::ActivityUpsert { activity } if activity.id == 7)
+            ),
             "build start also upserts its activity row"
         );
     }
@@ -1798,7 +1905,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(appends.len(), 1, "one log line yields exactly one LogsAppend");
+        assert_eq!(
+            appends.len(),
+            1,
+            "one log line yields exactly one LogsAppend"
+        );
         assert_eq!(appends[0].len(), 1);
         assert_eq!(appends[0][0].text, "compiling");
     }
@@ -1832,10 +1943,72 @@ mod tests {
     fn drain_clears_the_outbox() {
         let mut state = MonitorState::default();
         state.apply_line(r#"@nix {"action":"start","fields":["/nix/store/abc-demo.drv","local",1,1],"id":7,"level":3,"text":"building","type":105}"#);
-        assert!(!state.drain_deltas().is_empty(), "first drain yields the start deltas");
+        assert!(
+            !state.drain_deltas().is_empty(),
+            "first drain yields the start deltas"
+        );
         assert!(
             state.drain_deltas().is_empty(),
             "a second drain with no intervening mutation is empty"
+        );
+    }
+
+    #[test]
+    fn file_linked_accumulates_optimise_stats() {
+        let mut state = MonitorState::default();
+        // Nix emits one resFileLinked (type 100) per hard-linked file, fields
+        // [apparent_size_bytes, st_blocks].
+        state.apply_line(r#"@nix {"action":"result","fields":[4096,8],"id":1,"type":100}"#);
+        state.apply_line(r#"@nix {"action":"result","fields":[1024,2],"id":1,"type":100}"#);
+
+        let optimise = state.snapshot().optimise;
+        assert_eq!(optimise.files_linked, 2);
+        assert_eq!(optimise.bytes_freed, 5120);
+    }
+
+    #[test]
+    fn file_linked_parses_with_or_without_block_count() {
+        // Off Windows Nix sends [bytes, blocks]; on Windows just [bytes].
+        let two = parse_line(r#"@nix {"action":"result","fields":[4096,8],"id":1,"type":100}"#);
+        assert!(matches!(
+            two,
+            ParsedLine::Event(NixEvent::Result(ResultAction {
+                result: ActivityResult::FileLinked {
+                    bytes: 4096,
+                    blocks: Some(8)
+                },
+                ..
+            }))
+        ));
+        let one = parse_line(r#"@nix {"action":"result","fields":[4096],"id":1,"type":100}"#);
+        assert!(matches!(
+            one,
+            ParsedLine::Event(NixEvent::Result(ResultAction {
+                result: ActivityResult::FileLinked {
+                    bytes: 4096,
+                    blocks: None
+                },
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn file_linked_emits_optimise_delta() {
+        let mut state = MonitorState::default();
+        state.apply_line(r#"@nix {"action":"result","fields":[2048,4],"id":1,"type":100}"#);
+        let deltas = state.drain_deltas();
+        assert!(
+            deltas.iter().any(|delta| matches!(
+                delta,
+                Delta::OptimiseSet {
+                    optimise: OptimiseStats {
+                        files_linked: 1,
+                        bytes_freed: 2048,
+                    }
+                }
+            )),
+            "a hard-linked file should broadcast the updated optimise totals"
         );
     }
 
@@ -1856,10 +2029,21 @@ mod tests {
     #[test]
     fn copy_to_store_source_rejects_other_text() {
         assert_eq!(copy_to_store_source("building '/nix/store/x.drv'"), None);
-        assert_eq!(copy_to_store_source("copying '/tmp/x' to somewhere else"), None);
+        assert_eq!(
+            copy_to_store_source("copying '/tmp/x' to somewhere else"),
+            None
+        );
         assert_eq!(copy_to_store_source("copying /tmp/x to the store"), None);
         // An empty path would make the server walk its own CWD; reject it.
         assert_eq!(copy_to_store_source("copying '' to the store"), None);
+        // Nix's virtual flake-input accessor path has no on-disk location, so
+        // it must be rejected rather than walked (one ENOENT per patch file).
+        assert_eq!(
+            copy_to_store_source(
+                "copying '«github:NixOS/nixpkgs#abc»/pkgs/foo/bar.patch' to the store"
+            ),
+            None
+        );
     }
 
     #[test]
@@ -1873,11 +2057,18 @@ mod tests {
         state.set_activity_size(3, 4_096);
 
         assert_eq!(state.activities[&3].size_bytes, Some(4_096));
-        let upserted = state.drain_deltas().into_iter().find_map(|delta| match delta {
-            Delta::ActivityUpsert { activity } if activity.id == 3 => activity.size_bytes,
-            _ => None,
-        });
-        assert_eq!(upserted, Some(4_096), "the measured size rides an ActivityUpsert");
+        let upserted = state
+            .drain_deltas()
+            .into_iter()
+            .find_map(|delta| match delta {
+                Delta::ActivityUpsert { activity } if activity.id == 3 => activity.size_bytes,
+                _ => None,
+            });
+        assert_eq!(
+            upserted,
+            Some(4_096),
+            "the measured size rides an ActivityUpsert"
+        );
     }
 
     #[test]

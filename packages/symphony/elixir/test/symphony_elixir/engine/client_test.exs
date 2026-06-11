@@ -52,6 +52,15 @@ defmodule SymphonyElixir.Engine.ClientTest do
       refute Map.has_key?(body, "nodeId")
     end
 
+    test "lowers a pi envelope to the room-server wire shape" do
+      # The room-server's EngineKind deserializes lowercase ("pi"); the model
+      # rides through verbatim as the pi-harness alias (PI_HARNESS_MODEL).
+      {:ok, env} = Envelope.validate(%Envelope{engine: :pi, model: "claude", location: :local})
+      assert {:ok, body} = Client.request_body(env, %{prompt: "hi", cwd: "/w"})
+      assert body["engine"] == "pi"
+      assert body["model"] == "claude"
+    end
+
     test "rejects a turn missing the prompt or cwd" do
       {:ok, env} = Envelope.validate(%Envelope{engine: :claude, model: "haiku", location: :local})
       assert {:error, :missing_prompt} = Client.request_body(env, %{cwd: "/w"})

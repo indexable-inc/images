@@ -8,8 +8,9 @@ use crate::error::{
 };
 use snafu::ResultExt;
 use tantivy::{
-    Index, IndexReader, TantivyDocument, doc,
+    Index, IndexReader, TantivyDocument,
     collector::TopDocs,
+    doc,
     query::QueryParser,
     schema::{Field, IndexRecordOption, STORED, Schema, TextFieldIndexing, TextOptions, Value},
 };
@@ -36,7 +37,11 @@ impl EphemeralSearch {
     /// Returns an error if the index, writer, or reader cannot be created,
     /// or if a document cannot be added or committed.
     pub fn from_texts(texts: impl IntoIterator<Item = String>) -> Result<Self> {
-        let EphemeralSchema { schema, id_field, content_field } = build_schema();
+        let EphemeralSchema {
+            schema,
+            id_field,
+            content_field,
+        } = build_schema();
 
         let index = Index::builder()
             .schema(schema)

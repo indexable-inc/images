@@ -146,7 +146,15 @@ async fn resolve_screen(args: &Args) -> Result<u32> {
         return Ok(n);
     }
     let out = Command::new(&args.ffmpeg)
-        .args(["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""])
+        .args([
+            "-hide_banner",
+            "-f",
+            "avfoundation",
+            "-list_devices",
+            "true",
+            "-i",
+            "",
+        ])
         .output()
         .await
         .map_err(|e| eyre!("listing avfoundation devices: {e}"))?;
@@ -206,7 +214,10 @@ async fn preflight(ffmpeg: &str) -> Result<()> {
         .await
         .map_err(|e| eyre!("could not run {ffmpeg:?} (is ffmpeg installed?): {e}"))?;
     if !out.status.success() {
-        bail!("{ffmpeg} -encoders failed: {}", String::from_utf8_lossy(&out.stderr));
+        bail!(
+            "{ffmpeg} -encoders failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     if !String::from_utf8_lossy(&out.stdout).contains("hevc_videotoolbox") {
         bail!(
@@ -223,7 +234,15 @@ async fn list_screens(ffmpeg: &str) -> Result<()> {
     // `-list_devices true` writes the device table to stderr and exits non-zero
     // by design, so the status is ignored and stderr is the payload.
     let out = Command::new(ffmpeg)
-        .args(["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""])
+        .args([
+            "-hide_banner",
+            "-f",
+            "avfoundation",
+            "-list_devices",
+            "true",
+            "-i",
+            "",
+        ])
         .output()
         .await
         .map_err(|e| eyre!("could not run {ffmpeg:?}: {e}"))?;
@@ -234,7 +253,13 @@ async fn list_screens(ffmpeg: &str) -> Result<()> {
 /// Run ffmpeg, restarting it under a fresh session id if it dies, until the
 /// user interrupts with Ctrl-C. Each (re)start is its own server-side session so
 /// a crash never reuses or corrupts an earlier session's segment numbering.
-async fn supervise(args: &Args, server: &str, user: &str, screen: u32, scratch: &Path) -> Result<()> {
+async fn supervise(
+    args: &Args,
+    server: &str,
+    user: &str,
+    screen: u32,
+    scratch: &Path,
+) -> Result<()> {
     let mut backoff = Duration::from_secs(1);
     let mut attempt: u32 = 0;
 

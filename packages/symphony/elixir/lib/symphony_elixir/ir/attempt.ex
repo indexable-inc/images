@@ -28,12 +28,12 @@ defmodule SymphonyElixir.IR.Attempt do
   ]
 
   @typedoc """
-  What executed the attempt. `:codex`/`:claude` are engine turns; `:exec`
-  is a pack shell script; `:subrun` is a child run. A non-agent node has
-  no engine, so its attempt records the executor kind instead of a sham
-  `:codex`.
+  What executed the attempt. `:codex`/`:claude`/`:pi` are engine turns;
+  `:exec` is a pack shell script; `:subrun` is a child run. A non-agent
+  node has no engine, so its attempt records the executor kind instead of
+  a sham `:codex`.
   """
-  @type engine :: :codex | :claude | :exec | :subrun
+  @type engine :: :codex | :claude | :pi | :exec | :subrun
   @type state :: :running | :succeeded | :failed | :timeout | :cancelled | :stranded
 
   @typedoc """
@@ -69,7 +69,7 @@ defmodule SymphonyElixir.IR.Attempt do
         }
 
   @states [:running, :succeeded, :failed, :timeout, :cancelled, :stranded]
-  @engines [:codex, :claude, :exec, :subrun]
+  @engines [:codex, :claude, :pi, :exec, :subrun]
 
   @doc "The attempt states a persisted attempt may hold. Source of truth for safe decode."
   @spec states() :: [state()]

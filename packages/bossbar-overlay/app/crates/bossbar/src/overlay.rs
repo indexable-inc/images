@@ -33,6 +33,7 @@ use overlay_core::{anim, window as ocwin, DragClick, Gpu, HoverAnim, TexHandle};
 use crate::bars::BossBar;
 use crate::db;
 use crate::scene::{self, BarTextures};
+use crate::theme;
 
 /// Top margin and vertical gap (logical points) for bars that have no pinned
 /// position and fall back to the auto-stacked top-center column. `AUTO_TOP`
@@ -108,6 +109,9 @@ struct GpuCore {
     /// rather than every reconcile. `None` records a path that did not exist or
     /// failed to decode, so a broken icon is tried once and then skipped.
     icon_cache: HashMap<String, Option<TexHandle>>,
+    /// Theme name -> uploaded texture set, same memoization story as the
+    /// icons (see `theme::ThemeCache` for the not-yet-imported retry rule).
+    theme_cache: theme::ThemeCache,
 }
 
 impl GpuCore {
@@ -132,6 +136,12 @@ impl GpuCore {
         self.icon_cache.insert(path.to_string(), handle);
         handle
     }
+
+    /// Resolve a bar's `theme` name to its uploaded texture set. Empty,
+    /// unknown, or broken themes yield `None` (the bar draws vanilla).
+    fn theme(&mut self, name: &str) -> Option<theme::ThemeSprites> {
+        self.theme_cache.resolve(&mut self.gpu, name)
+    }
 }
 
 /// One bar's window and its surface.
@@ -144,6 +154,10 @@ struct BarWin {
     /// the bar's icon path changes. `None` when the bar has no icon or it failed
     /// to load.
     icon_tex: Option<TexHandle>,
+    /// Resolved texture set for `bar.theme`, re-resolved when the theme name
+    /// changes (or when a previously missing set may have been imported).
+    /// `None` renders the vanilla color sprites.
+    theme_tex: Option<theme::ThemeSprites>,
     /// Hover target: the pointer is currently over this bar.
     hovered: bool,
     /// Hover amount animated toward `hovered` each frame. Drives the grow +
@@ -238,6 +252,7 @@ impl App {
                 format,
                 alpha_mode,
                 icon_cache: HashMap::new(),
+                theme_cache: theme::ThemeCache::new(),
             });
         }
 
@@ -282,8 +297,10 @@ impl App {
         let (surface, config) = self.make_surface(&window);
         window.request_redraw();
         let has_description = !bar.description.trim().is_empty();
-        // `make_surface` guarantees the GPU core exists, so the icon can upload now.
+        // `make_surface` guarantees the GPU core exists, so the icon and theme
+        // can upload now.
         let icon_tex = self.core.as_mut().and_then(|c| c.icon(&bar.icon));
+        let theme_tex = self.core.as_mut().and_then(|c| c.theme(&bar.theme));
         let now = Instant::now();
         Some(BarWin {
             window,
@@ -291,6 +308,7 @@ impl App {
             config,
             bar,
             icon_tex,
+            theme_tex,
             hovered: false,
             hover_anim: HoverAnim::default(),
             last: now,
@@ -343,6 +361,12 @@ impl App {
                 // so a steady bar does not re-touch the cache each reconcile.
                 if win.bar.icon != b.icon {
                     win.icon_tex = self.core.as_mut().and_then(|c| c.icon(&b.icon));
+                }
+                // Same for the theme; also retry while unresolved, so a theme
+                // directory imported after the bar appeared is picked up (a
+                // cache hit makes the steady-state retry cheap).
+                if win.bar.theme != b.theme || (win.theme_tex.is_none() && !b.theme.is_empty()) {
+                    win.theme_tex = self.core.as_mut().and_then(|c| c.theme(&b.theme));
                 }
                 win.bar = b.clone();
                 // Honor a position set in the DB by something other than our own
@@ -420,6 +444,7 @@ impl App {
             &core.gpu,
             &core.textures,
             win.icon_tex,
+            win.theme_tex.as_ref(),
             self.scale,
             win.config.width,
             win.config.height,

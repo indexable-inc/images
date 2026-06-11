@@ -8,7 +8,6 @@ let
   inherit (builtins)
     attrNames
     elem
-    elemAt
     filter
     genericClosure
     hasAttr
@@ -26,6 +25,34 @@ let
   # prebuilt rlib was compiled with without reconstructing it by hand. The id
   # rule itself lives at the toolchain owner (`rust.toolchainId`).
   defaultToolchainId = rust.toolchainId rust.defaultRustToolchain;
+
+  # Apply the rustflags a normal `cargo build` reads from `.cargo/config.toml`,
+  # which cargoUnit otherwise ignores (it assembles rustc args itself instead of
+  # going through cargo). Parsing the config here is the only route: cargo's
+  # `cargo build --unit-graph` does NOT carry rustflags (each unit records only
+  # dependencies/features/mode/pkg_id/platform/profile/target), because cargo
+  # resolves config rustflags at compile time and applies them when it invokes
+  # rustc, which cargoUnit bypasses by invoking rustc per unit from the graph. So
+  # there is nothing in the graph to pick up automatically; we read the config.
+  # Returns the rustc args for a target triple following cargo precedence:
+  # `target.<triple>.rustflags` wins outright over `build.rustflags` (cargo does
+  # not merge the two). Flags may be a TOML array or a single whitespace-
+  # separated string. `cfg(...)` target sections and the `[env]` table are NOT
+  # honored (cargo evaluates those against the full target cfg set, which this
+  # static parse does not reproduce). A `configPath` that does not exist yields
+  # no flags, so callers may pass the path unconditionally.
+  rustflagsFromCargoConfig =
+    configPath: platform:
+    let
+      config = lib.importTOML configPath;
+      normalize =
+        flags:
+        if builtins.isList flags then flags else filter (flag: flag != "") (lib.splitString " " flags);
+      chosen = config.target.${platform}.rustflags or config.build.rustflags or null;
+    in
+    # Lazy: the `&&` short-circuits, so `config` (hence `importTOML`) is only
+    # forced when the file exists and carries rustflags.
+    if builtins.pathExists configPath && chosen != null then normalize chosen else [ ];
 
   /**
     Build a Rust workspace as one Nix derivation per Cargo rustc unit.
@@ -50,7 +77,11 @@ let
     call that only narrows `cargoTargets` yields byte-identical root
     derivations (pinned by a tests/default.nix assertion) and adds a unit-graph
     plus render IFD; create a separate workspace only when unit identity
-    changes (profile, policy, rustToolchain, env, extraRustcArgs). Top-level
+    changes (profile, policy, rustToolchain, env, extraRustcArgs). `env` folds
+    into every unit, so a value that changes often (a baked git commit) busts the
+    whole dependency closure; scope it with `packageBuildEnv.<package> = { ... }`
+    instead, which only reaches that package's own compile and build-script-run
+    units. Top-level
     `binaries`/`libraries` dedupe by Cargo target name and the first
     `cargoTargets` entry wins, so when one crate roots under several entries,
     select through `targetSets.<set>` instead. Per-case discovery is the
@@ -79,17 +110,31 @@ let
     `policyChecks`, plus the intermediate `unitGraphJson`, `unitsNix`, and `vendorDir`
     derivations for inspection.
 
-    `rust.normalizeArgs` resolves the shared "vendored cargo" context (src,
-    cargoLock, toolchain, policy, vendorDir, vendorSources) once; the two IFD
-    stages and the unit import below all read from that single result. The
-    remaining knobs (`profile`, `target`, `contentAddressed`, `cargoTargets`,
+    `rust.resolveArgs` resolves the shared bundle (context, policy, linker,
+    effects, checks) once; the two IFD stages and the unit import below read the
+    once-resolved values (configScript, toolchainId, cargoLockPath, render flags,
+    mold/clippy args, workspace checks) straight off it. The remaining knobs
+    (`profile`, `target`, `contentAddressed`, `cargoTargets`,
     `extraUnits`/`extraLibraries`, the `test*` forwarding) each have a single
     reader and are read from raw args at that use site.
   */
   buildWorkspace =
     rawArgs:
     let
-      args = rust.normalizeArgs rawArgs;
+      resolved = rust.resolveArgs rawArgs;
+      inherit (resolved)
+        context
+        effects
+        policy
+        checks
+        ;
+      # A flat view of the resolved context for the field readers below; the
+      # once-resolved values (configScript, toolchainId, cargoLockPath, render
+      # flags, mold args, clippy args, checks) are read straight off the bundle.
+      args = context // {
+        inherit policy;
+        inherit (resolved) cargoArgs;
+      };
       inherit (args) vendorDir vendorSources;
 
       workspaceRoot =
@@ -199,9 +244,7 @@ let
             );
           unitGraphFile = targetIndex: "$TMPDIR/unit-graph-${toString targetIndex}.json";
 
-          configScript = rust.vendorConfigScript {
-            inherit (args) vendorDir cargoExtraConfig cargoLock;
-          };
+          inherit (context) configScript;
         in
         pkgs.runCommand "cargo-unit-graph.json"
           (
@@ -240,32 +283,35 @@ let
               wait "$pid"
             done
 
-            nix-cargo-unit merge ${
-              lib.concatStringsSep " " (lib.imap0 (targetIndex: _: unitGraphFile targetIndex) cargoTargets)
-            } > "$out"
+            nix-cargo-unit merge ${lib.concatStringsSep " " (lib.genList unitGraphFile (length cargoTargets))} > "$out"
           '';
+
+      # The workspace's toolchain id, handed to the renderer and baked into
+      # every from-source unit hash. A prebuilt unit must have been compiled
+      # with this exact toolchain, or its hash (hence its key) would not
+      # match. `mkPrebuiltLibraryUnit` asserts against its own `rustToolchain`
+      # arg; the injection guards below cross-check against this id, the one
+      # the graph really used. Sourced from the resolved context so the id is
+      # derived once at the resolution boundary, not re-spelled here.
+      workspaceToolchainId = context.toolchainId;
 
       # Second IFD stage: render `units.nix` from the unit graph above.
       unitsNix =
         let
-          toolchainId = rust.toolchainId args.rustToolchain;
           contentAddressed = rawArgs.contentAddressed or true;
 
-          extraFlags =
-            lib.optional contentAddressed "--content-addressed"
-            ++ lib.optional args.policy.denyUnusedCrateDependencies "--deny-unused-crate-dependencies"
-            ++ lib.optional args.policy.denyPanics "--deny-panics";
+          extraFlags = lib.optional contentAddressed "--content-addressed" ++ effects.renderFlags;
         in
         pkgs.runCommand "cargo-units.nix"
           {
             nativeBuildInputs = [ nixCargoUnit ];
-            cargoLockForRender = rust.cargoLockFile args.cargoLock;
+            cargoLockForRender = context.cargoLockPath;
           }
           ''
             nix-cargo-unit render \
               --workspace-root ${escapeShellArg args.src} \
               --vendor-root ${escapeShellArg args.vendorDir} \
-              --toolchain-id ${escapeShellArg toolchainId} \
+              --toolchain-id ${escapeShellArg workspaceToolchainId} \
               ${lib.escapeShellArgs extraFlags} \
               --cargo-lock "$cargoLockForRender" \
               < ${unitGraphJson} \
@@ -273,26 +319,12 @@ let
           '';
 
       perUnitClippyEnabled = args.policy.clippy.enable;
-      # Per-unit clippy runs `clippy-driver` directly on each non-external
-      # unit. Suppress the legacy workspace-level `cargoClippy` derivation in
-      # that mode so the same lints don't run twice and so a single source
-      # edit doesn't invalidate every other crate's clippy.
-      extraPolicyChecksFromRust = rust.policyChecksFor {
-        # A workspace has no single crate name; name the workspace-level checks
-        # explicitly rather than relying on a fallback (`crateName` requires it).
-        pname = rawArgs.pname or "cargo-unit-workspace";
-        # `args` already carries the resolved vendorDir/policy; only the clippy
-        # flag differs, since per-unit clippy replaces the workspace-level check.
-        args =
-          args
-          // lib.optionalAttrs perUnitClippyEnabled {
-            policy = args.policy // {
-              clippy = args.policy.clippy // {
-                enable = false;
-              };
-            };
-          };
-      };
+      # Workspace-level policy checks: audit + machete only. Clippy is NOT here;
+      # it runs per unit in the renderer (`clippyByPackage`), so a whole-workspace
+      # `cargo clippy` would duplicate it and make one source edit invalidate every
+      # crate's clippy. `workspaceChecks` omits it by construction (no suppression).
+      # A workspace has no single crate name; name the checks explicitly.
+      extraPolicyChecksFromRust = checks.workspace (rawArgs.pname or "cargo-unit-workspace");
       # Import the rendered units.nix with a given prebuilt-injection seam. The
       # generated (pre-seam) set is obtained by importing with empty seam args,
       # so the injection guards below can compare against the real generated keys
@@ -309,13 +341,13 @@ let
             let
               resolvedPlatform = if platform == null then pkgs.stdenv.hostPlatform.config else platform;
             in
-            rust.rustcArgsForPolicyForPlatform args.policy resolvedPlatform
+            effects.rustcArgsForPlatform resolvedPlatform
             ++ (rawArgs.extraRustcArgsForPlatform or (_platform: [ ])) platform
             # Opt-in: apply `.cargo/config.toml` rustflags (per target triple,
             # cargo precedence) so consumers do not hand-copy them into
             # `extraRustcArgs`. Appended last so explicit caller args still win.
             ++ lib.optionals (rawArgs.cargoConfigRustflags or false) (
-              rust.rustflagsFromCargoConfig (workspaceRoot + "/.cargo/config.toml") resolvedPlatform
+              rustflagsFromCargoConfig (workspaceRoot + "/.cargo/config.toml") resolvedPlatform
             );
         in
         import unitsNix (
@@ -327,7 +359,7 @@ let
             # Scanner for the opt-in panic-freedom policy. The rendered check
             # asserts this is non-null when `policy.denyPanics` is set.
             cargoUnit = nixCargoUnit;
-            extraNativeBuildInputs = args.nativeBuildInputs ++ rust.nativeBuildInputsForPolicy args.policy;
+            extraNativeBuildInputs = args.nativeBuildInputs ++ effects.linkerNativeInputs;
             # `clippy-driver` ships in the clippy package; `rustToolchain` only
             # guarantees rustc + cargo. Adding the resolved clippy package keeps
             # version drift impossible because the toolchain pins the rustc that
@@ -338,6 +370,7 @@ let
             testArgsByPackage = rawArgs.testArgsByPackage or { };
             packageTestInputs = rawArgs.packageTestInputs or { };
             packageTestEnv = rawArgs.packageTestEnv or { };
+            packageBuildEnv = rawArgs.packageBuildEnv or { };
             inherit extraRustcArgsForPlatform;
             # Manifest-derived flags come first so per-call `policy.clippy`
             # entries land later in argv and can override them. Cargo's
@@ -345,7 +378,7 @@ let
             # workspaces; `policy.clippy.deniedLints` stays as an escape hatch
             # for callers without a Cargo.toml policy.
             extraClippyLintArgs =
-              rust.clippyLintFlagsFromManifest (args.src + "/Cargo.toml") ++ rust.clippyLintArgs args.policy;
+              rust.clippyLintFlagsFromManifest (args.src + "/Cargo.toml") ++ effects.clippyLintArgs;
             clippyEnabled = perUnitClippyEnabled;
             extraPolicyChecks = extraPolicyChecksFromRust;
           }
@@ -360,14 +393,6 @@ let
       };
       generatedUnitKeys = attrNames generatedView.units;
       generatedLibraryKeys = attrNames generatedView.libraries;
-
-      # The workspace's ACTUAL toolchain id (cargo-unit.nix toolchainId at render
-      # time), which is what every from-source unit hash was computed with. A
-      # prebuilt unit must have been compiled with this exact toolchain, or its
-      # hash (hence its key) would not match. `mkPrebuiltLibraryUnit` asserts
-      # against its own `rustToolchain` arg; this is the workspace-side
-      # cross-check against the toolchain the graph really used.
-      workspaceToolchainId = rust.toolchainId args.rustToolchain;
 
       # C1: a prebuilt injection must OVERRIDE a unit/library the graph already
       # references. A key that is absent silently builds from source, defeating
@@ -469,9 +494,7 @@ let
         else
           lib.genList toString targetCount;
       namedTargetSets = lib.listToAttrs (
-        lib.imap1 (
-          targetIndex: targetName: lib.nameValuePair targetName (elemAt units.targetSets (targetIndex - 1))
-        ) targetSetNames
+        lib.zipListsWith lib.nameValuePair targetSetNames units.targetSets
       );
     in
     units
@@ -481,22 +504,24 @@ let
       inherit (args) policy;
     };
 
+  # One lookup for every selector that picks a root out of a workspace: fail
+  # with the calling selector's name and the full set of available keys, so a
+  # typo'd target name reads as a menu instead of a bare missing-attribute
+  # error.
+  rootOrThrow =
+    caller: kind: roots: name:
+    roots.${name}
+      or (throw "${caller}: no ${kind} `${name}` in workspace; available: ${lib.concatStringsSep ", " (attrNames roots)}");
+
   /**
     Select one binary target from a generated workspace graph.
   */
   buildBinary =
-    {
-      binary,
-      cargoArgs ? [ ],
-      ...
-    }@args:
+    { binary, ... }@args:
     let
       workspace = buildWorkspace (removeAttrs args [ "binary" ]);
     in
-    workspace.binaries.${binary}
-      or (throw "buildBinary: no binary `${binary}` in workspace; available: ${
-        lib.concatStringsSep ", " (attrNames (workspace.binaries or { }))
-      }");
+    rootOrThrow "buildBinary" "binary" (workspace.binaries or { }) binary;
 
   /**
     Pick a binary out of a pre-built `buildWorkspace` plus its test
@@ -521,11 +546,7 @@ let
       passthru ? { },
     }:
     selectRootWithTests workspace {
-      rootDrv =
-        workspace.binaries.${binary}
-          or (throw "selectBinaryWithTests: no binary `${binary}` in workspace; available: ${
-            lib.concatStringsSep ", " (attrNames (workspace.binaries or { }))
-          }");
+      rootDrv = rootOrThrow "selectBinaryWithTests" "binary" (workspace.binaries or { }) binary;
       inherit
         packageName
         includeTestCases
@@ -554,11 +575,7 @@ let
       passthru ? { },
     }:
     selectRootWithTests workspace {
-      rootDrv =
-        workspace.libraries.${library}
-          or (throw "selectLibraryWithTests: no library `${library}` in workspace; available: ${
-            lib.concatStringsSep ", " (attrNames (workspace.libraries or { }))
-          }");
+      rootDrv = rootOrThrow "selectLibraryWithTests" "library" (workspace.libraries or { }) library;
       inherit
         packageName
         includeTestCases
@@ -651,21 +668,11 @@ let
     roots from several Cargo executions, such as build and test graphs.
   */
   buildBinaries =
-    {
-      binaries,
-      cargoArgs ? [ ],
-      ...
-    }@args:
+    { binaries, ... }@args:
     let
       workspace = buildWorkspace (removeAttrs args [ "binaries" ]);
     in
-    lib.genAttrs binaries (
-      binary:
-      workspace.binaries.${binary}
-        or (throw "buildBinaries: no binary `${binary}` in workspace; available: ${
-          lib.concatStringsSep ", " (attrNames (workspace.binaries or { }))
-        }")
-    );
+    lib.genAttrs binaries (rootOrThrow "buildBinaries" "binary" (workspace.binaries or { }));
 
   /**
     Build a library unit derivation from already-compiled artifacts instead of
@@ -821,4 +828,7 @@ in
     defaultToolchainId
     mkPrebuiltLibraryUnit
     ;
+  # Named partial policies (e.g. `policyPresets.pureBuild`) for callers that build
+  # pure artifacts and want to reference one name instead of re-spelling the gates.
+  inherit (rust) policyPresets;
 }

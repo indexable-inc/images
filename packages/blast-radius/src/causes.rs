@@ -303,8 +303,14 @@ mod tests {
             head.insert(hp.clone(), node(check, &["h1-wide.drv"]));
             changed.insert(check.to_owned(), hp);
         }
-        base.insert("h0-rust-solo.drv".into(), node("rust-solo", &["h0-narrow.drv"]));
-        head.insert("h1-rust-solo.drv".into(), node("rust-solo", &["h1-narrow.drv"]));
+        base.insert(
+            "h0-rust-solo.drv".into(),
+            node("rust-solo", &["h0-narrow.drv"]),
+        );
+        head.insert(
+            "h1-rust-solo.drv".into(),
+            node("rust-solo", &["h1-narrow.drv"]),
+        );
         changed.insert("rust-solo".into(), "h1-rust-solo.drv".into());
 
         let causes = root_causes(&base, &head, &changed, caps);

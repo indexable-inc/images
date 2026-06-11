@@ -22,25 +22,17 @@ in
     };
   };
 
-  networking.firewall.allowedTCPPorts = [ httpPort ];
-
   environment.systemPackages = [ pkgs.curl ];
 
-  ix.networking.portClaims.http = {
-    protocol = "tcp";
+  # One declaration opens the firewall, registers the claim, and lets
+  # east-west peers resolve this listener with `ix.endpointOf nodes.service "http"`.
+  ix.networking.expose.http = {
     port = httpPort;
     description = "private HTTP service for east-west group members";
   };
 
   ix.healthChecks = {
-    nginx = {
-      command = [
-        (lib.getExe' config.systemd.package "systemctl")
-        "is-active"
-        "--quiet"
-        "nginx.service"
-      ];
-    };
+    nginx.unit = "nginx";
 
     http-loopback = {
       description = "private HTTP service answers locally";

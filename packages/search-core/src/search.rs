@@ -80,7 +80,10 @@ pub enum CodeScope {
 ///
 /// # Errors
 /// Returns an error if the backend search request fails.
-#[allow(clippy::too_many_arguments, reason = "thin pass-through of the query surface")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "thin pass-through of the query surface"
+)]
 pub async fn semantic(
     store: &(impl Store + Sync),
     store_name: &str,
@@ -104,7 +107,10 @@ pub async fn semantic(
 /// # Errors
 /// Returns an error if the pattern is not a valid regular expression or the
 /// backend grep request fails.
-#[allow(clippy::too_many_arguments, reason = "thin pass-through of the query surface")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "thin pass-through of the query surface"
+)]
 pub async fn grep(
     store: &(impl Store + Sync),
     store_name: &str,
@@ -126,7 +132,10 @@ pub async fn grep(
 ///
 /// # Errors
 /// Returns an error if the backend request fails.
-#[allow(clippy::too_many_arguments, reason = "thin pass-through of the query surface")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "thin pass-through of the query surface"
+)]
 pub async fn ask(
     store: &(impl Store + Sync),
     store_name: &str,
@@ -338,7 +347,13 @@ mod tests {
     #[tokio::test]
     async fn slack_passes_through_without_a_manifest_hash() {
         let store = MemoryStore::new();
-        put_slack(&store, "slack:C0:1.2", "craft: ship it", "needle decision in slack").await;
+        put_slack(
+            &store,
+            "slack:C0:1.2",
+            "craft: ship it",
+            "needle decision in slack",
+        )
+        .await;
         // The manifest knows no code; the Slack thread must still surface, because
         // record sources are scoped by the server filter, not the manifest.
         let manifest = Manifest::default();

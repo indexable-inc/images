@@ -127,10 +127,7 @@ pub(crate) fn start_vm_offscreen(
             eprintln!("vmkit: guest started");
         } else {
             let error = unsafe { &*error };
-            eprintln!(
-                "vmkit: guest failed to start: {}",
-                ns_error_message(error)
-            );
+            eprintln!("vmkit: guest failed to start: {}", ns_error_message(error));
             std::process::exit(1);
         }
     });
@@ -223,8 +220,7 @@ fn frame_contents(view: &VZVirtualMachineView) -> Option<Retained<AnyObject>> {
 pub fn frame_size(view: &VZVirtualMachineView) -> Option<(usize, usize)> {
     let contents = frame_contents(view)?;
     let surface_obj: Retained<IOSurface> = contents.downcast::<IOSurface>().ok()?;
-    let surface: &IOSurfaceRef =
-        unsafe { &*Retained::as_ptr(&surface_obj).cast::<IOSurfaceRef>() };
+    let surface: &IOSurfaceRef = unsafe { &*Retained::as_ptr(&surface_obj).cast::<IOSurfaceRef>() };
     Some((surface.width(), surface.height()))
 }
 
@@ -422,16 +418,16 @@ pub(crate) fn downscale_rgba(
         message: "max_width too large".into(),
     })?;
     // Scale height by the same ratio in u64 to avoid overflow, floored to >= 1.
-    let dst_h = u32::try_from((height as u64 * max_width as u64 / width as u64).max(1)).map_err(
-        |_| Error::CaptureEncode {
-            message: "scaled height too large".into(),
-        },
-    )?;
-    let buffer = image::RgbaImage::from_raw(src_w, src_h, rgba).ok_or_else(|| {
-        Error::CaptureEncode {
+    let dst_h =
+        u32::try_from((height as u64 * max_width as u64 / width as u64).max(1)).map_err(|_| {
+            Error::CaptureEncode {
+                message: "scaled height too large".into(),
+            }
+        })?;
+    let buffer =
+        image::RgbaImage::from_raw(src_w, src_h, rgba).ok_or_else(|| Error::CaptureEncode {
             message: "frame buffer length does not match its dimensions".into(),
-        }
-    })?;
+        })?;
     let scaled =
         image::imageops::resize(&buffer, dst_w, dst_h, image::imageops::FilterType::Triangle);
     Ok((scaled.into_raw(), dst_w, dst_h))

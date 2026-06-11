@@ -290,7 +290,10 @@ mod tests {
         let store = temp_store();
         let id = format!("{PREFIX}1700000000000");
         store.save(&id, b"snapshot-bytes").unwrap();
-        assert_eq!(store.load(&id).as_deref(), Some(b"snapshot-bytes".as_slice()));
+        assert_eq!(
+            store.load(&id).as_deref(),
+            Some(b"snapshot-bytes".as_slice())
+        );
 
         let list = store.list();
         assert_eq!(list.len(), 1);
@@ -306,7 +309,14 @@ mod tests {
     #[test]
     fn rejects_unsafe_ids() {
         let store = temp_store();
-        for bad in ["../secret", "rec-../x", "rec-abc", "evil", "rec-", "rec-1/2"] {
+        for bad in [
+            "../secret",
+            "rec-../x",
+            "rec-abc",
+            "evil",
+            "rec-",
+            "rec-1/2",
+        ] {
             assert!(store.load(bad).is_none(), "load must reject {bad:?}");
             assert!(store.save(bad, b"x").is_err(), "save must reject {bad:?}");
         }
@@ -321,7 +331,11 @@ mod tests {
             store.save(&format!("{PREFIX}{start}"), b"x").unwrap();
         }
         store.prune(2);
-        let kept: Vec<i64> = store.list().into_iter().map(|info| info.started_ms).collect();
+        let kept: Vec<i64> = store
+            .list()
+            .into_iter()
+            .map(|info| info.started_ms)
+            .collect();
         assert_eq!(kept, vec![3000, 2000], "newest two survive, sorted desc");
         let _ = fs::remove_dir_all(store.dir());
     }

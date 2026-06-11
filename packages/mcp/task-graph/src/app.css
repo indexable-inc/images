@@ -1,0 +1,23 @@
+:root {
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #0d1117;
+  color: #e6edf3;
+}
+#app { height: 100%; }
+
+/* force-graph tooltip */
+.graph-tooltip {
+  font-family: ui-sans-serif, system-ui, sans-serif !important;
+  font-size: 12px !important;
+  background: #161b22 !important;
+  border: 1px solid #30363d !important;
+  border-radius: 8px !important;
+  padding: 8px 10px !important;
+  color: #e6edf3 !important;
+}

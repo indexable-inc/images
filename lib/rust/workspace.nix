@@ -156,8 +156,9 @@ let
         else
           null;
       isCross = target != null;
+      cargoUnit = cargoUnitFor workspacePkgs;
     in
-    (cargoUnitFor workspacePkgs).buildWorkspace (
+    cargoUnit.buildWorkspace (
       {
         pname = "ix-rust-workspace${lib.optionalString isCross "-${target}"}";
         inherit src;
@@ -255,12 +256,7 @@ let
         # re-running clippy/audit/machete that the native graph already covers.
         policy =
           if isCross then
-            {
-              denyUnusedCrateDependencies = false;
-              cargoAudit.enable = false;
-              cargoMachete.enable = false;
-              clippy.enable = false;
-            }
+            cargoUnit.policyPresets.pureBuild
           else
             {
               denyUnusedCrateDependencies = true;

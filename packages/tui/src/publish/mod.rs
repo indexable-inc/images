@@ -29,7 +29,11 @@ use crate::{Error, Result, TuiManager};
 ///
 /// Returns [`Error::Publish`] when the discovery directory cannot be created or
 /// the socket cannot be bound.
-pub async fn publish(manager: &Arc<TuiManager>, path: PathBuf, poll: Duration) -> Result<Publisher> {
+pub async fn publish(
+    manager: &Arc<TuiManager>,
+    path: PathBuf,
+    poll: Duration,
+) -> Result<Publisher> {
     let runtime = manager.runtime_handle();
     let mut publisher = Publisher::bind(path, &runtime).map_err(|source| Error::Publish {
         message: source.to_string(),

@@ -33,5 +33,15 @@ _: {
     }
     ```
   */
-  compiler = pkgs: _: pkgs.gleam;
+  compiler =
+    pkgs: _:
+    # gleam 1.17.0's tests::escript_success_with_dependency fetches a hex
+    # dependency, so the package fails to build in the Nix sandbox on pins
+    # that predate the upstream fix (nixpkgs d74ffb2d2d "gleam: fix linux
+    # build by skipping network test"). Mirror that fix here so fleet nodes
+    # build against any consumer's nixpkgs pin; drop once the consumed pins
+    # include it.
+    pkgs.gleam.overrideAttrs (old: {
+      checkFlags = (old.checkFlags or [ ]) ++ [ "--skip=tests::escript_success_with_dependency" ];
+    });
 }
