@@ -678,9 +678,49 @@ let
       tasksModule
       linearModule
       mcpClientModule
+      # pytest + pytest-asyncio so packages/mcp/tests is runnable through the
+      # bundled interpreter, both inside the kernel session and from a flake
+      # check. Cheap closure additions next to the existing test runners
+      # (jupyter-client, ipykernel) and small relative to the data deps above.
+      # See #1045.
+      ps.pytest
+      ps.pytest-asyncio
     ]
     ++ darwinExtraPackages ps
   );
+
+  # `pytest packages/mcp/tests` against the bundled interpreter, exposed as
+  # `passthru.tests.pytest` so it lands as the `rust-mcp-pytest` flake check.
+  # The tests are already pytest-optional in style (plain asserts, `tmp_path`,
+  # `pytest.mark.asyncio` / `pytest.mark.skipif`), and the only deps they reach
+  # for outside the kernel runtime are pytest and pytest-asyncio, which we
+  # added to `mcpPython` above. Closes #1045.
+  pytestSrc = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.intersection (lib.fileset.gitTracked ./.) (
+      lib.fileset.unions [
+        ./tests
+        ./ix_notebook_mcp
+      ]
+    );
+  };
+  mcpPytestCheck =
+    pkgs.runCommand "mcp-pytest"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        src = pytestSrc;
+        # httpx's AsyncClient eagerly resolves SSL_CERT_FILE on init even when
+        # the test only ever talks to 127.0.0.1, so a cacert bundle must be in
+        # the sandbox closure for the loopback oauth tests.
+        SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+        meta.description = "pytest packages/mcp/tests against the bundled ix-mcp interpreter";
+      }
+      ''
+        cp -R $src/. ./mcp
+        cd ./mcp
+        HOME=$TMPDIR python -m pytest tests
+        touch $out
+      '';
 
   # Browser bundle that matches the playwright-driver the python package is
   # patched to use. Exposed to the worker through PLAYWRIGHT_BROWSERS_PATH on the
@@ -3684,6 +3724,7 @@ package.overrideAttrs (old: {
         linearBundled
         ;
       site = dashboardSite;
+      pytest = mcpPytestCheck;
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
       inherit
