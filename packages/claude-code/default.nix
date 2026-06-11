@@ -13,7 +13,16 @@
   nix,
   gnupg,
   formats,
+  claude-hooks,
   binName ? "claude",
+  # Shared hook scripts baked into the flagSettings layer below as the
+  # settings.json `hooks` stanza (claude-hooks.settingsFragment): session
+  # orientation, the modern-tools guard, and the test-output-filtering guard.
+  # The scripts live in the claude-hooks package so every consumer runs the
+  # same copies instead of carrying drifting ones. A consumer's own `hooks`
+  # key in `extraSettings` wins over these (hook event lists are deep-merge
+  # leaves), and `null` bakes no hooks at all.
+  hooks ? claude-hooks,
   # Default posture: bake `--dangerously-skip-permissions` into the wrapper so
   # every session starts with the permission layer skipped. We run a trusted
   # config inside disposable sandboxes (ix guest VMs, the dev image, throwaway
@@ -251,10 +260,16 @@ let
   # The lockdown is active whenever the caller pins an allow-list.
   restrictTools = restrictToTools != null;
 
-  # Caller's extraSettings first, then the computed defaults recursively merged
-  # ON TOP, so the security-relevant `permissions`/bypass keys below always win a
-  # conflict while the caller's other keys (hooks, statusLine, ...) pass through.
-  settingsDefaults = ix.deepMerge.rhs extraSettings (
+  # Precedence, lowest to highest: the baked claude-hooks stanza, then the
+  # caller's extraSettings, then the computed defaults recursively merged ON
+  # TOP, so the security-relevant `permissions`/bypass keys below always win a
+  # conflict while the caller's other keys (hooks, statusLine, ...) pass
+  # through. Hook event lists are deep-merge leaves, so an extraSettings
+  # `hooks.<Event>` replaces the baked list wholesale rather than appending.
+  bakedHooks = lib.optionalAttrs (hooks != null) {
+    hooks = hooks.settingsFragment;
+  };
+  settingsDefaults = ix.deepMerge.rhs (ix.deepMerge.rhs bakedHooks extraSettings) (
     {
       cleanupPeriodDays = 365;
     }
