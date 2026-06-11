@@ -32,7 +32,12 @@ pkgs.stdenvNoCC.mkDerivation (finalAttrs: {
 
     mkdir -p "$out"
     install -m 0755 ${./hooks}/* "$out"/
-    patchShebangs "$out"
+    # --build: under strictDeps the default host mode resolves interpreters
+    # against HOST_PATH, where nativeBuildInputs (python3 here) never appear,
+    # silently leaving `#!/usr/bin/env python3` unpatched. Build mode resolves
+    # against PATH, which is where python3 actually is; for this
+    # run-on-the-host script package the two platforms are the same.
+    patchShebangs --build "$out"
 
     # The shell hooks call jq and git; pin them so the hook works under the
     # minimal PATH of a hook invocation. Prefix (not set) so `hostname`, which
