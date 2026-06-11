@@ -227,6 +227,18 @@ class Output(_ResultBase):
         """
         return self.text
 
+    @property
+    def output(self) -> str:
+        """Alias for ``.text``, matching ``jobs['<id>'].output`` on a live job.
+
+        The docstring above and the kernel instructions teach
+        ``jobs['<id>'].output`` as the way to read a run's stdout; this alias
+        makes the direct ``(await sh(...))`` return symmetric so the same
+        attribute works whether the call ran in the foreground or in a tracked
+        background job.
+        """
+        return self.text
+
     def lines(self) -> list[str]:
         """The escape-stripped output split into lines (trailing newline dropped)."""
         return self.text.splitlines()
