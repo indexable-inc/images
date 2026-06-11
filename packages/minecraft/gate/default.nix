@@ -16,24 +16,27 @@ buildGoModule {
     owner = "minekube";
     repo = "gate";
     rev = "v${version}";
-    # First-build placeholder. Run `nix build .#gate` and replace with the
-    # `got: sha256-...` value from the hash-mismatch error.
-    hash = lib.fakeHash;
+    hash = "sha256-j+RdX2IfP1ILw6/HodRHM2dh5pQfln11EWKZNDrVOqY=";
   };
 
-  # Same placeholder pattern — buildGoModule prints the actual vendor hash
-  # on first build under "got: sha256-...".
-  vendorHash = lib.fakeHash;
+  vendorHash = "sha256-X3B+S2QG2WCsSderL2XwVQjLJDDP+bh6DQqe4kwjEcQ=";
 
-  subPackages = [ "cmd/gate" ];
+  # Upstream's Dockerfile builds the root `gate.go` rather than `cmd/gate`,
+  # and stamps the version into `pkg/version.Version`.
+  subPackages = [ "." ];
 
-  # Strip debug info and stamp the upstream version into the binary so
-  # `gate --version` reports the same string as the source tag.
   ldflags = [
     "-s"
     "-w"
-    "-X go.minekube.com/gate/pkg/internal/buildinfo.Version=${version}"
+    "-X go.minekube.com/gate/pkg/version.Version=${version}"
   ];
+
+  # The `go.minekube.com/geyserlite` transitive dep embeds prebuilt
+  # per-arch binaries that are not in the module tarball, so `go mod vendor`
+  # fails resolving its `assets/geyserlite-*` embed pattern. Use the
+  # module proxy path (no `vendor/` materialization) to fetch dependencies
+  # the way upstream's `go build` does.
+  proxyVendor = true;
 
   doCheck = false;
   strictDeps = true;
