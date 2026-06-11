@@ -42,7 +42,9 @@ fn main() {
         // The counting allocator is not installed, so the count would be a
         // misleading zero. Fail loudly rather than emit `value=0`, which would
         // silently satisfy any budget and turn the gate into a no-op.
-        eprintln!("indexbench-alloc-demo: CountingAllocator not installed; cannot measure allocations");
+        eprintln!(
+            "indexbench-alloc-demo: CountingAllocator not installed; cannot measure allocations"
+        );
         std::process::exit(1);
     };
 

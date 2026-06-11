@@ -18,6 +18,7 @@ mod layer_shell;
 mod overlay;
 mod scene;
 mod snapshot;
+mod theme;
 
 use std::path::PathBuf;
 

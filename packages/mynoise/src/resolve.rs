@@ -32,7 +32,9 @@ fn is_band_file(s: &str) -> bool {
     let Some(rest) = s[digits..].strip_prefix(['a', 'b']) else {
         return false;
     };
-    rest.chars().next().is_none_or(|c| !c.is_ascii_alphanumeric())
+    rest.chars()
+        .next()
+        .is_none_or(|c| !c.is_ascii_alphanumeric())
 }
 
 /// Pull a generator's audio `CODE` out of its page HTML.
@@ -73,9 +75,7 @@ async fn head_ok(client: &reqwest::Client, url: &str) -> bool {
 /// the embedded `Data/<CODE>/`.
 pub async fn resolve_code(client: &reqwest::Client, name: &str) -> Result<String> {
     let upper = name.to_ascii_uppercase();
-    let looks_like_code = name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let looks_like_code = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     // Band 0 is the lowest band and always present for a valid code.
     if looks_like_code && head_ok(client, &format!("{BASE}/Data/{upper}/0a.ogg")).await {
         return Ok(upper);
@@ -104,8 +104,7 @@ pub async fn download_bands(
     cache_dir: &Path,
 ) -> Result<Vec<PathBuf>> {
     let dir = cache_dir.join(code);
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("create cache dir {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("create cache dir {}", dir.display()))?;
 
     let mut bands = Vec::new();
     // Bands are 0-indexed: a generator serves `0a.ogg`..`Na.ogg`. Starting at 1

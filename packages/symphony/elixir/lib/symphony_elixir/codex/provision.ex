@@ -386,11 +386,18 @@ defmodule SymphonyElixir.Codex.Provision do
   end
 
   @doc """
-  Clone every repository in the active catalog into `run_root`, on a
+  Provision every repository in the active catalog into `run_root`, on a
   run-scoped `branch`, stamping the bot identity and (when `token` is
   present) a GitHub Basic auth header so plain `git push` authors as the
-  App. Returns the concatenated `bash` blocks; the caller owns the
-  surrounding `set -euo pipefail` and the `mkdir -p` of `run_root`.
+  App. Each workspace is a linked worktree of a hidden base clone under
+  `run_root/.base`, not a standalone clone: repo-side guards distinguish
+  a human's canonical checkout from an agent worktree by comparing
+  `git-dir` to `git-common-dir`, and a standalone clone is misclassified
+  as the canonical checkout, denying the run's own commits on its
+  sanctioned branch (index#1038). The base clone is `--no-checkout` so a
+  run carries one working tree per repo, not two. Returns the
+  concatenated `bash` blocks; the caller owns the surrounding
+  `set -euo pipefail` and the `mkdir -p` of `run_root`.
   """
   @spec repo_blocks(Config.t(), Path.t(), String.t(), String.t() | nil, [RepositoryCatalog.t()] | nil) :: String.t()
   def repo_blocks(%Config{} = config, run_root, branch, token, repositories \\ nil) do
@@ -402,18 +409,22 @@ defmodule SymphonyElixir.Codex.Provision do
 
   defp clone_repo_block(repo, run_root, branch, basic, config) do
     target = Path.join(run_root, repo.name)
+    base = Path.join([run_root, ".base", repo.name])
     remote = "https://github.com/#{repo.owner_repo}.git"
     clone_auth = if is_binary(basic), do: "-c http.https://github.com/.extraheader=#{sh("Authorization: Basic " <> basic)}", else: ""
 
+    # `git config --local` from a linked worktree writes to the base
+    # clone's shared config, so the header and identity stamped on the
+    # worktree below cover every push and commit made from it.
     extraheader =
       if is_binary(basic),
         do: "git -C #{sh(target)} config --local http.https://github.com/.extraheader #{sh("Authorization: Basic " <> basic)}",
         else: ":"
 
     """
-    rm -rf #{sh(target)}
-    git #{clone_auth} clone --depth 1 --branch #{sh(repo.default_branch)} #{sh(remote)} #{sh(target)}
-    git -C #{sh(target)} checkout -b #{sh(branch)}
+    rm -rf #{sh(target)} #{sh(base)}
+    git #{clone_auth} clone --depth 1 --no-checkout --branch #{sh(repo.default_branch)} #{sh(remote)} #{sh(base)}
+    git -C #{sh(base)} worktree add #{sh(target)} -b #{sh(branch)}
     #{git_identity_lines(target, config)}
     #{extraheader}
     """

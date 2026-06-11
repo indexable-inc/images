@@ -21,10 +21,7 @@ pub struct Context<'a, 'tree> {
     pub base_hashes: &'a FxHashMap<u64, usize>,
 }
 
-pub fn reconcile_all(
-    ctx: &Context<'_, '_>,
-    handled_right: &mut FxHashSet<usize>,
-) -> Vec<Resolved> {
+pub fn reconcile_all(ctx: &Context<'_, '_>, handled_right: &mut FxHashSet<usize>) -> Vec<Resolved> {
     use ast_merge_ast::compute;
 
     let left_tree = ctx.trees.left;

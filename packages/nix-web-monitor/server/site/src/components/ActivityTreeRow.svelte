@@ -1,7 +1,13 @@
 <script lang="ts">
   import type { SvelteSet } from 'svelte/reactivity';
   import Self from '$components/ActivityTreeRow.svelte';
-  import { formatBytes, formatDuration, formatRate, middleTruncate } from '$lib/format';
+  import {
+    formatBytes,
+    formatDuration,
+    formatRate,
+    isSlowStoreOp,
+    middleTruncate
+  } from '$lib/format';
   import type { ActivityRowMeta } from '$lib/activity-tree';
 
   type Props = {
@@ -23,6 +29,12 @@
     $props();
 
   const meta = $derived(rowMeta.get(id));
+  /// A store op (copy/substitute/optimise/query) still running past the slow
+  /// threshold. `now` ticks once a second, so this re-evaluates live and the row
+  /// escalates the moment a store step stalls.
+  const slow = $derived.by(() =>
+    meta === undefined ? false : isSlowStoreOp(meta.kind, meta.stoppedAtMs === null, elapsed(meta))
+  );
   const children = $derived(childrenById.get(id) ?? []);
   const isCollapsed = $derived(collapsed.has(id));
   const childGuideLines = $derived(isRoot ? [] : [...guideLines, !isLast]);
@@ -61,7 +73,7 @@
 </script>
 
 {#if meta !== undefined}
-  <div class="activity-row" class:stopped={meta.state === 'stopped'}>
+  <div class="activity-row" class:stopped={meta.state === 'stopped'} class:slow>
     {#if !isRoot}
       <span class="guides" aria-hidden="true"
         >{#each guideLines as line, level (level)}<span class="guide">{line ? '│' : ' '}</span
@@ -112,6 +124,13 @@
            measured total instead of a bar. -->
       <span class="activity-size" title="{formatBytes(meta.sizeBytes)} copied to the store"
         >{formatBytes(meta.sizeBytes)}</span
+      >
+    {/if}
+    {#if slow}
+      <span
+        class="slow-tag"
+        title="this store step has been running a while; a copy or store add stalls here (e.g. auto-optimise-store hard-linking every file inline)"
+        >slow</span
       >
     {/if}
     <span class="activity-dur">{formatDuration(elapsed(meta))}</span>

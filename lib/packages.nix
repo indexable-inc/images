@@ -38,9 +38,22 @@ let
   buildEntry =
     entry:
     let
-      autoArgs = pkgs // context // { inherit entry; };
+      # `repoPackages` is the package set itself (a lazy fix-point), so an
+      # entry can depend on a sibling by id (e.g. packages/claude-code reads
+      # `repoPackages.mcp`). Threaded under one name rather than merged flat
+      # into autoArgs: a flat merge would let ids that shadow nixpkgs attrs
+      # (`btop`, `kitty`, ...) hijack other packages' arguments, and a
+      # same-named nixpkgs override would resolve to itself.
+      autoArgs =
+        pkgs
+        // context
+        // {
+          inherit entry;
+          repoPackages = packageSet;
+        };
     in
     lib.callPackageWith autoArgs entry.path { };
   packageTreeFor = entry: lib.setAttrByPath entry.packageSet.attrPath (buildEntry entry);
+  packageSet = strictList (map packageTreeFor (packageRegistry.packageSetEntriesFor packageSystem));
 in
-strictList (map packageTreeFor (packageRegistry.packageSetEntriesFor packageSystem))
+packageSet

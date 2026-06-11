@@ -131,39 +131,28 @@ in
     };
   };
 
-  networking.firewall = {
-    allowedTCPPorts = [
-      ports.nodeManager
-      ports.objectManager
-    ];
-    allowedTCPPortRanges = [
-      {
-        from = ports.workerLow;
-        to = ports.workerHigh;
-      }
-    ];
-  };
-
-  ix.networking.portClaims = {
+  ix.networking.expose = {
     ray-node-manager = {
-      protocol = "tcp";
       port = ports.nodeManager;
       description = "Ray node manager (inter-node scheduling)";
     };
     ray-object-manager = {
-      protocol = "tcp";
       port = ports.objectManager;
       description = "Ray object manager (object store transfers)";
     };
   };
 
+  # The worker port range is opened at the firewall directly: `expose` covers a
+  # single named listener, not a range.
+  networking.firewall.allowedTCPPortRanges = [
+    {
+      from = ports.workerLow;
+      to = ports.workerHigh;
+    }
+  ];
+
   ix.healthChecks."ray-${role}-active" = {
     description = "ray-${role} service is active";
-    command = [
-      (lib.getExe' config.systemd.package "systemctl")
-      "is-active"
-      "--quiet"
-      "ray-${role}.service"
-    ];
+    unit = "ray-${role}";
   };
 }

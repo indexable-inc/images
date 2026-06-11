@@ -50,19 +50,12 @@ in
 
   # GCS bootstrap and the Ray Client server are head-only listeners; the shared
   # node-manager, object-manager, and worker ports are opened in cluster-node.
-  networking.firewall.allowedTCPPorts = [
-    gcsPort
-    clientPort
-  ];
-
-  ix.networking.portClaims = {
+  ix.networking.expose = {
     ray-gcs = {
-      protocol = "tcp";
       port = gcsPort;
       description = "Ray GCS (cluster bootstrap)";
     };
     ray-client = {
-      protocol = "tcp";
       port = clientPort;
       description = "Ray Client server";
     };

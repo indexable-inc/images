@@ -37,9 +37,7 @@ const CAPS: Caps = Caps {
 };
 
 #[derive(Parser)]
-#[command(
-    about = "Report how many .#checks.x86_64-linux derivations a PR would rebuild, and why"
-)]
+#[command(about = "Report how many .#checks.x86_64-linux derivations a PR would rebuild, and why")]
 struct Cli {
     /// Base ref to diff against (default: origin/main).
     base: Option<String>,
@@ -132,10 +130,16 @@ fn concurrent_evals(
     let (base, head) = std::thread::scope(|scope| {
         let head_h = scope.spawn(|| {
             let t = Instant::now();
-            (nix::eval_checks(repo, head, catalog), t.elapsed().as_secs_f64())
+            (
+                nix::eval_checks(repo, head, catalog),
+                t.elapsed().as_secs_f64(),
+            )
         });
         let t = Instant::now();
-        let base = (nix::eval_checks(repo, base, catalog), t.elapsed().as_secs_f64());
+        let base = (
+            nix::eval_checks(repo, base, catalog),
+            t.elapsed().as_secs_f64(),
+        );
         let head = head_h
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic));

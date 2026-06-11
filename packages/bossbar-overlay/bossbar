@@ -37,7 +37,8 @@ ensure_db() {
     url         TEXT    NOT NULL DEFAULT '',
     expandable  INTEGER NOT NULL DEFAULT 1,
     eta         INTEGER,
-    icon        TEXT    NOT NULL DEFAULT ''
+    icon        TEXT    NOT NULL DEFAULT '',
+    theme       TEXT    NOT NULL DEFAULT ''
   );"
   # Columns that shipped after the first schema; add each to a pre-existing table
   # so its flag works on a DB created by an older bossbar. SQLite has no
@@ -53,6 +54,7 @@ ensure_db() {
   add_col expandable "INTEGER NOT NULL DEFAULT 1"
   add_col eta "INTEGER"
   add_col icon "TEXT NOT NULL DEFAULT ''"
+  add_col theme "TEXT NOT NULL DEFAULT ''"
 }
 
 die() {
@@ -86,10 +88,11 @@ bossbar - control the Minecraft boss bar overlay (SQLite-backed)
 Usage:
   bossbar add <title> [--description D] [--since EPOCH] [--eta SECS] [--url U]
                       [--icon PATH] [--progress P] [--color C] [--overlay O]
-                      [--position N] [--box 0|1]
+                      [--theme NAME] [--position N] [--box 0|1]
   bossbar set <id|title> [--title T] [--description D] [--since EPOCH] [--eta SECS]
                          [--url U] [--icon PATH] [--progress P] [--color C]
-                         [--overlay O] [--position N] [--visible 0|1] [--box 0|1]
+                         [--overlay O] [--theme NAME] [--position N]
+                         [--visible 0|1] [--box 0|1]
   bossbar rm <id|title>
   bossbar list
   bossbar clear
@@ -109,6 +112,10 @@ Usage:
   P        fill fraction 0.0 .. 1.0
   C        pink | blue | red | green | yellow | purple | white
   O        progress | notched_6 | notched_10 | notched_12 | notched_20
+  NAME     a user-supplied texture set directory under the themes root
+           (BOSSBAR_THEMES, else themes/ next to the database); the bar renders
+           from its background.png/progress.png instead of the vanilla color
+           sprites. Unknown/missing themes draw vanilla; pass '' to clear
   --box    1 (default) lets hover unfold the description panel; 0 keeps the bar
            bar-sized on hover with no pop-down box
 
@@ -162,6 +169,10 @@ parse_fields() {
       --overlay)
         in_list "$val" "$OVERLAYS" || die "overlay must be one of: $OVERLAYS"
         assign="overlay = '$val'" ;;
+      --theme)
+        # One path component, no traversal: same rule the overlay enforces.
+        [[ "$val" =~ ^([A-Za-z0-9_-][A-Za-z0-9._-]*)?$ ]] || die "--theme must be a plain directory name (letters, digits, . _ -)"
+        assign="theme = '$val'" ;;
       *) die "unknown flag: $flag" ;;
     esac
     clause+="$sep$assign"

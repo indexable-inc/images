@@ -23,13 +23,13 @@ mod record;
 
 use std::path::{Path, PathBuf};
 
-use source_meta::{Document, Source, SourceAdapter};
 use serde::Deserialize;
 use snafu::ResultExt as _;
+use source_meta::{Document, Source, SourceAdapter};
 
 pub use crate::error::Error;
-pub use crate::record::Entry;
 use crate::error::{HostNameSnafu, ParseLineSnafu, ReadFileSnafu, Result};
+pub use crate::record::Entry;
 
 /// The `source` tag every Codex prompt document carries.
 pub const SOURCE_TAG: &str = "codex";
@@ -63,7 +63,9 @@ impl CodexHistory {
     /// # Errors
     /// Returns an error if the file cannot be read, or a line is not valid JSON.
     pub fn open_with(path: &Path, host: &str, user: &str) -> Result<Self> {
-        let contents = std::fs::read_to_string(path).context(ReadFileSnafu { path: path.to_path_buf() })?;
+        let contents = std::fs::read_to_string(path).context(ReadFileSnafu {
+            path: path.to_path_buf(),
+        })?;
         let mut entries = Vec::new();
         for (index, line) in contents.lines().enumerate() {
             if line.trim().is_empty() {

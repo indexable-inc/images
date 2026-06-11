@@ -108,8 +108,7 @@ fn run_fix(path: &Path) -> Result<ExitCode> {
         let contents = read_skill(skill)?;
         let outcome = fix::fix_skill(skill, &contents);
         if let Some(fixed) = outcome.contents {
-            fs::write(skill, &fixed)
-                .with_context(|| format!("writing {}", skill.display()))?;
+            fs::write(skill, &fixed).with_context(|| format!("writing {}", skill.display()))?;
             for change in &outcome.changes {
                 println!("fixed {}: {change}", skill.display());
             }

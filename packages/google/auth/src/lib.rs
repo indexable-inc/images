@@ -255,6 +255,36 @@ impl TokenStore {
             path: self.path.clone(),
         })
     }
+
+    /// Delete the stored grant, signing this machine out of Google.
+    ///
+    /// Removes the canonical token file and any legacy file this store knows
+    /// about, returning the paths that existed and were deleted. Idempotent:
+    /// removing when nothing is stored returns an empty list rather than
+    /// failing, so a `logout` after a `logout` is not an error. This only
+    /// drops the local refresh token; it does not revoke the grant at Google
+    /// (do that at <https://myaccount.google.com/permissions>).
+    ///
+    /// # Errors
+    /// Returns an error if a token file exists but cannot be removed.
+    pub fn remove(&self) -> Result<Vec<PathBuf>> {
+        let mut removed = Vec::new();
+        for path in [Some(self.path.as_path()), self.legacy_path.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            match std::fs::remove_file(path) {
+                Ok(()) => removed.push(path.to_path_buf()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(err).context(WriteTokenSnafu {
+                        path: path.to_path_buf(),
+                    });
+                }
+            }
+        }
+        Ok(removed)
+    }
 }
 
 fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
@@ -457,7 +487,10 @@ impl Authenticator {
         Ok(Self {
             token: TokenClient::new(secrets)?,
             store,
-            required_scopes: required_scopes.iter().map(|scope| (*scope).to_owned()).collect(),
+            required_scopes: required_scopes
+                .iter()
+                .map(|scope| (*scope).to_owned())
+                .collect(),
             cache: RwLock::new(None),
         })
     }
@@ -896,5 +929,30 @@ mod tests {
             message.contains("gmail auth") || message.contains("gcal auth"),
             "message must name the fix: {message}"
         );
+    }
+
+    #[test]
+    fn remove_deletes_both_paths_and_is_idempotent() {
+        let dir = TempDir::new().expect("tempdir");
+        let canonical = dir.path().join("google").join("token.json");
+        let legacy = dir.path().join("gcal").join("token.json");
+        let store = TokenStore::at(canonical.clone()).with_legacy_path(legacy.clone());
+        let token = StoredToken {
+            refresh_token: "1//refresh".to_owned(),
+            scopes: vec![crate::scopes::CALENDAR_EVENTS.to_owned()],
+        };
+        store.save(&token).expect("save canonical");
+        std::fs::create_dir_all(legacy.parent().expect("parent")).expect("legacy dir");
+        std::fs::write(&legacy, b"{}").expect("seed legacy");
+
+        let mut removed = store.remove().expect("remove");
+        removed.sort();
+        let mut expected = vec![canonical.clone(), legacy.clone()];
+        expected.sort();
+        assert_eq!(removed, expected, "both files are deleted and reported");
+        assert!(!canonical.exists() && !legacy.exists());
+
+        // A second remove is a no-op, not an error: logout is idempotent.
+        assert!(store.remove().expect("second remove").is_empty());
     }
 }

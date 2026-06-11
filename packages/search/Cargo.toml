@@ -22,5 +22,6 @@ indicatif.workspace = true
 mixedbread.workspace = true
 progress-style.workspace = true
 search-core.workspace = true
+serde_json.workspace = true
 terminal-theme.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

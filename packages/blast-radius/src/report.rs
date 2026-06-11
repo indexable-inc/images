@@ -190,7 +190,10 @@ impl Report {
 
         if !self.changed.is_empty() {
             let total = self.changed.len();
-            let _ = writeln!(out, "\n<details><summary>changed checks ({total})</summary>\n");
+            let _ = writeln!(
+                out,
+                "\n<details><summary>changed checks ({total})</summary>\n"
+            );
             for name in self.changed.iter().take(CHANGED_LIST_CAP) {
                 let _ = writeln!(out, "- {}", label_for(name));
             }
@@ -226,10 +229,22 @@ mod tests {
             added: vec!["mcp-evalSmoke".into()],
             removed: vec![],
             categories: vec![
-                Category { name: "rust".into(), count: 2 },
-                Category { name: "mcp".into(), count: 2 },
-                Category { name: "image".into(), count: 1 },
-                Category { name: "lint".into(), count: 1 },
+                Category {
+                    name: "rust".into(),
+                    count: 2,
+                },
+                Category {
+                    name: "mcp".into(),
+                    count: 2,
+                },
+                Category {
+                    name: "image".into(),
+                    count: 1,
+                },
+                Category {
+                    name: "lint".into(),
+                    count: 1,
+                },
             ],
             causes: vec![
                 CauseJson {

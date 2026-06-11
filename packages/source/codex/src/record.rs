@@ -1,8 +1,8 @@
 //! The typed per-prompt record and its projection to a search [`Document`].
 
-use source_meta::{Document, keys};
 use serde_json::{Map, Value, json};
 use snafu::ResultExt as _;
+use source_meta::{Document, keys};
 
 use crate::SOURCE_TAG;
 use crate::error::{MetadataSnafu, Result};
@@ -35,7 +35,9 @@ impl Entry {
     /// compaction, so a prompt keeps one id for its lifetime.
     #[must_use]
     pub fn external_id(&self, content_hash: &str) -> String {
-        let ts = self.timestamp.map_or_else(|| "na".to_owned(), |ts| ts.to_string());
+        let ts = self
+            .timestamp
+            .map_or_else(|| "na".to_owned(), |ts| ts.to_string());
         format!("codex:{}:{}:{}", self.session_id, ts, content_hash)
     }
 
@@ -64,8 +66,9 @@ impl Entry {
         }
         let meta_json = Value::Object(meta);
 
-        source_meta::check_metadata(&external_id, &meta_json)
-            .context(MetadataSnafu { external_id: external_id.clone() })?;
+        source_meta::check_metadata(&external_id, &meta_json).context(MetadataSnafu {
+            external_id: external_id.clone(),
+        })?;
 
         let file_name = format!("{external_id}.txt");
         Ok(Document {

@@ -73,15 +73,25 @@ ix shell hermes -- sudo systemctl restart hermes-agent
 | `memory` | `"holographic"` (default, local SQLite) / `"mem0"` / `"supermemory"` / `"honcho"` / `"hindsight"` / `"retaindb"` / `"openviking"` / `"byterover"` | Persistent memory backend. |
 | `modelDefault` | model string (default `"anthropic/claude-sonnet-4"`) | Model the agent asks for. |
 | `modelBaseUrl` | URL (default OpenRouter) | Point at `https://api.anthropic.com/v1` or `https://api.openai.com/v1` for direct routing. |
+| `apiServer` | bool (default `false`) | OpenAI-compatible `hermes api-server`. The one INBOUND toggle: claims a TCP port (`apiServerPort`, default `9119`) and opens the in-guest firewall; reachability is scoped by the node's east-west groups. Set `API_SERVER_KEY` in the env file. |
+| `apiServerPort` | port (default `9119`) | Listen port for `apiServer`. |
 
 Per-integration env file overrides (`telegramEnvFile`, `webSearchEnvFile`, etc.) accept a different absolute path when your secret store splits keys across files. They all default to `envFile`, which defaults to `/run/secrets/hermes.env`.
+
+### Sibling presets
+
+Three ready-made shapes build on this composition instead of forking it:
+
+- [`examples/hermes-telegram`](../hermes-telegram/) — Telegram chat companion (`telegram = true`, chat-tuned `SOUL.md`, BotFather walkthrough).
+- [`examples/hermes-minecraft-operator`](../hermes-minecraft-operator/) — the agent operating a Paper Minecraft server through a typed RCON `run_command` MCP tool.
+- [`examples/hermes-api-server`](../hermes-api-server/) — `apiServer = true` in an east-west group, so LobeChat / Open WebUI / LibreChat on sibling VMs use the agent as their OpenAI endpoint.
 
 ## Bad fit if
 
 - You want the agent to install Ubuntu `.deb` packages at runtime. Flip `services.hermes-agent.container.enable = true` upstream-side and accept Docker-in-VM nesting. On ix the agent already has `nix shell nixpkgs#<tool>` against a real NixOS, so the container mode tradeoff usually does not pay off.
 - You want one Hermes daemon serving several personas. The state DB (`state.db`, `memories/`, `skills/`) is single-tenant. Spin up a second node with a different `SOUL.md` instead.
 - You want inbound webhooks from WhatsApp, Microsoft Teams, Slack, SMS, or email. Those need a public hostname and a port claim. Build a gateway-VM preset rather than adding the surface here.
-- You want the OpenAI-compatible `hermes api-server` so LobeChat or Open WebUI can point at this node. That needs a port claim on `9119` and an east-west group, which fits a separate preset.
+- You want the OpenAI-compatible `hermes api-server` so LobeChat or Open WebUI can point at this node. That is the [`examples/hermes-api-server`](../hermes-api-server/) preset (a port claim on `9119` plus an east-west group), not extra surface on this outbound-only shape.
 
 ## What's load-bearing
 

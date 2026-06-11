@@ -4,6 +4,11 @@
 //! plus agent/shell history) and projects the hits. Scope a query with
 //! `--source`, `--repo`, `--user`, `--host`, or `--project`; with no selector it
 //! searches the whole corpus. All ingestion lives in the separate `indexer`.
+//!
+//! Piped stdin switches to pipe-in mode: `ls | search "query"` ranks the piped
+//! lines against the query semantically (via the reranking model) instead of
+//! searching the corpus, so any line-oriented command's output can be searched
+//! by meaning.
 
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
@@ -251,7 +256,7 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
     // query with a clap usage error (stderr, exit 2, no backtrace) rather than
     // an `anyhow` error, whose Debug print carries a stack trace under
     // `RUST_BACKTRACE`.
-    let Some(pattern) = cli.pattern else {
+    let Some(pattern) = cli.pattern.clone() else {
         Cli::command()
             .error(
                 ErrorKind::MissingRequiredArgument,
@@ -259,6 +264,15 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
             )
             .exit();
     };
+
+    // Pipe-in mode: `ls | search "query"` (or `gh issue list | search "..."`)
+    // ranks the piped lines against the query semantically instead of searching
+    // the indexed corpus. An empty or absent pipe (a TTY, `</dev/null`, a
+    // script with stdin closed) falls through to the normal corpus search, so
+    // only real piped content changes behavior.
+    if let Some(docs) = piped_stdin_lines()? {
+        return run_piped(&cli, &pattern, docs).await;
+    }
     let root = resolve_root(cli.path.as_deref())?;
 
     // Color is decided once on stdout, where results print. `anstream` folds in
@@ -319,7 +333,10 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
         if !view.sources.is_empty() {
             println!();
             for (index, hit) in view.sources.iter().enumerate() {
-                println!("{index}: {}", render(hit, cli.content, &palette, &root, theme));
+                println!(
+                    "{index}: {}",
+                    render(hit, cli.content, &palette, &root, theme)
+                );
             }
         }
         Ok(())
@@ -344,7 +361,9 @@ async fn run(cli: SemanticArgs) -> anyhow::Result<()> {
 /// A terminal-only "searching" spinner for the query round-trip; piped output
 /// gets none. There is no upload or embedding phase to report any more.
 fn spinner() -> Option<ProgressBar> {
-    let bar = std::io::stderr().is_terminal().then(ProgressBar::new_spinner)?;
+    let bar = std::io::stderr()
+        .is_terminal()
+        .then(ProgressBar::new_spinner)?;
     bar.set_style(progress_style::spinner());
     bar.set_prefix("searching");
     bar.enable_steady_tick(Duration::from_millis(120));
@@ -397,6 +416,127 @@ async fn run_grep(cli: GrepArgs) -> anyhow::Result<()> {
 
     print_hits(&hits?, cli.json, cli.content, &palette, &root, theme)?;
 
+    Ok(())
+}
+
+/// The piped stdin as candidate documents, or None when there is nothing to
+/// rank: stdin is a TTY (interactive use), or the pipe carried no non-blank
+/// line (`</dev/null`, a script with stdin closed), in which case the normal
+/// corpus search runs.
+fn piped_stdin_lines() -> anyhow::Result<Option<Vec<String>>> {
+    use std::io::Read as _;
+
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return Ok(None);
+    }
+    let mut piped = String::new();
+    stdin.lock().read_to_string(&mut piped)?;
+    let docs = split_documents(&piped);
+    Ok(if docs.is_empty() { None } else { Some(docs) })
+}
+
+/// Split piped text into candidate documents: one per line, whitespace-trimmed,
+/// blanks dropped. Line-oriented input is what a pipe carries (`ls`, `gh issue
+/// list`, a log), so each line ranks as its own candidate.
+fn split_documents(piped: &str) -> Vec<String> {
+    piped
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// True when any scope selector was given. Pipe mode reads no store, so a
+/// scope selector there can only mislead; this powers its rejection.
+const fn scope_is_set(scope: &ScopeArgs) -> bool {
+    !scope.sources.is_empty()
+        || !scope.not_sources.is_empty()
+        || scope.repo.is_some()
+        || !scope.users.is_empty()
+        || scope.mine
+        || !scope.hosts.is_empty()
+        || !scope.projects.is_empty()
+}
+
+/// Rank piped lines against the query with the reranking model and print the
+/// top hits. No store is read: the candidates are the caller's own lines, and
+/// only the ranking comes from the API, so scope/store selectors do not apply.
+async fn run_piped(cli: &SemanticArgs, pattern: &str, docs: Vec<String>) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !cli.answer,
+        "--answer is not supported with piped input; pipe mode ranks the piped lines",
+    );
+    anyhow::ensure!(
+        !cli.no_rerank,
+        "--no-rerank is not supported with piped input; ranking the piped lines IS the rerank",
+    );
+    // The remaining corpus-only knobs are rejected rather than silently
+    // ignored: with piped input nothing is searched but the piped lines, so a
+    // path argument or scope selector would never narrow anything and a user
+    // passing one is asking for a corpus search they are not getting.
+    anyhow::ensure!(
+        cli.path.is_none(),
+        "a path argument is not supported with piped input; pipe mode ranks the piped lines, not a directory",
+    );
+    anyhow::ensure!(
+        !cli.web,
+        "--web is not supported with piped input; pipe mode ranks the piped lines, not the web store",
+    );
+    anyhow::ensure!(
+        !cli.agentic,
+        "--agentic is not supported with piped input; pipe mode runs a single rerank of the piped lines",
+    );
+    anyhow::ensure!(
+        !scope_is_set(&cli.scope),
+        "scope selectors (--source/--not-source/--repo/--user/--mine/--host/--project) are not supported with piped input; pipe mode ranks the piped lines, not the corpus",
+    );
+
+    let palette = Palette::for_stdout();
+    let base_url = cli
+        .base_url
+        .clone()
+        .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
+    let client = mixedbread::Client::from_login(base_url).await?;
+
+    let bar = spinner();
+    let hits = client
+        .rerank(&cli.reranker, pattern, &docs, cli.max_count.max(1))
+        .await;
+    finish(bar);
+    let hits = hits?;
+
+    if cli.json {
+        // Machine-readable mode: one JSON array on stdout. `index` is the
+        // 0-based position of the line in the piped input, so a consumer can
+        // map a hit back to its original row.
+        let items: Vec<serde_json::Value> = hits
+            .iter()
+            .filter_map(|hit| {
+                docs.get(hit.index).map(|text| {
+                    serde_json::json!({
+                        "index": hit.index,
+                        "score": hit.score,
+                        "text": text,
+                    })
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string(&items)?);
+        return Ok(());
+    }
+    for hit in &hits {
+        let Some(text) = docs.get(hit.index) else {
+            continue;
+        };
+        let percent = hit.score * 100.0;
+        let score = paint(
+            palette.score_for(hit.score),
+            &format!("({percent:.2}% match)"),
+        );
+        println!("{text} {score}");
+    }
     Ok(())
 }
 
@@ -665,7 +805,7 @@ mod tests {
 
     use search_core::{DisplayHit, Source};
 
-    use super::{Palette, render_snippet};
+    use super::{Palette, ScopeArgs, render_snippet, scope_is_set, split_documents};
 
     /// A web hit so the snippet path renders the chunk text without reading a
     /// real file, isolating the gutter-vs-`cat -n` decision from the filesystem.
@@ -681,6 +821,53 @@ mod tests {
     }
 
     #[test]
+    fn split_documents_is_per_trimmed_nonblank_line() {
+        // Pipe-in mode ranks one candidate per line: trailing newlines, blank
+        // separator lines, and surrounding whitespace must not produce empty or
+        // padded candidates (the API would happily rank them).
+        assert_eq!(
+            split_documents("  Cargo.toml \n\nsrc/main.rs\n\n\n"),
+            vec!["Cargo.toml".to_owned(), "src/main.rs".to_owned()],
+        );
+        assert!(split_documents("\n  \n").is_empty());
+        assert!(split_documents("").is_empty());
+    }
+
+    #[test]
+    fn scope_is_set_detects_every_selector() {
+        // Pipe mode rejects scope selectors instead of silently ignoring them;
+        // each selector field must trip the check, and the empty scope must not
+        // (or pipe mode would always error).
+        fn empty() -> ScopeArgs {
+            ScopeArgs {
+                sources: vec![],
+                not_sources: vec![],
+                repo: None,
+                users: vec![],
+                mine: false,
+                hosts: vec![],
+                projects: vec![],
+            }
+        }
+        assert!(!scope_is_set(&empty()));
+
+        let set: [fn(&mut ScopeArgs); 7] = [
+            |s| s.sources = vec!["code".to_owned()],
+            |s| s.not_sources = vec!["web".to_owned()],
+            |s| s.repo = Some("indexable-inc/index".to_owned()),
+            |s| s.users = vec!["andrew".to_owned()],
+            |s| s.mine = true,
+            |s| s.hosts = vec!["devbox".to_owned()],
+            |s| s.projects = vec!["index".to_owned()],
+        ];
+        for (which, apply) in set.iter().enumerate() {
+            let mut scope = empty();
+            apply(&mut scope);
+            assert!(scope_is_set(&scope), "selector {which} not detected");
+        }
+    }
+
+    #[test]
     fn piped_content_is_cat_n_style() {
         let out = render_snippet(
             &hit("alpha\nbeta"),
@@ -690,7 +877,10 @@ mod tests {
         )
         .expect("snippet");
         assert_eq!(out, "5\talpha\n6\tbeta");
-        assert!(!out.contains('│'), "machine output must drop the gutter glyph");
+        assert!(
+            !out.contains('│'),
+            "machine output must drop the gutter glyph"
+        );
     }
 
     #[test]
@@ -702,7 +892,13 @@ mod tests {
             code_highlight::Theme::Dark,
         )
         .expect("snippet");
-        assert!(out.contains('│'), "interactive output keeps the aligned gutter");
-        assert!(!out.contains('\t'), "interactive output is not tab-numbered");
+        assert!(
+            out.contains('│'),
+            "interactive output keeps the aligned gutter"
+        );
+        assert!(
+            !out.contains('\t'),
+            "interactive output is not tab-numbered"
+        );
     }
 }

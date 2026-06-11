@@ -1,16 +1,27 @@
 <script lang="ts">
   import type { Binding } from '$lib/types';
 
-  // Highlighted source with live-value affordances. The server marks every
-  // identifier token with `data-ix-name` (dashboard.py); here we join those
-  // anchors with the run's `bindings` by name and underline the bound ones, then
-  // surface the value on demand through one shared hover card with the value's
-  // type, detail, and (for things with source) its definition site. The code HTML
-  // is injected with {@html}, which Svelte does not scope or manage, so the
-  // `.ix-bound` underline is styled globally (style.css) and the hover is driven
-  // by event delegation on the host rather than per-node listeners. Inlay chips
-  // are intentionally not rendered; `strip` still clears any stale ones.
-  let { html, bindings = {} }: { html: string; bindings?: Record<string, Binding> } = $props();
+  // Highlighted source with live-value and live-line affordances. The server
+  // emits one `span.ix-line[data-line]` per source line and marks every
+  // identifier token with `data-ix-name` (dashboard.py). Here we join the
+  // identifier anchors with the run's `bindings` by name (underline + hover
+  // card), and join the line spans with the run's live state: `currentLine` is
+  // the cell line executing right now (running jobs), `errorLine` the line a
+  // failure was raised on. The code HTML is injected with {@html}, which Svelte
+  // does not scope or manage, so the `.ix-line` / `.ix-bound` chrome is styled
+  // globally (style.css) and the hover is driven by event delegation on the
+  // host rather than per-node listeners.
+  let {
+    html,
+    bindings = {},
+    currentLine = null,
+    errorLine = null,
+  }: {
+    html: string;
+    bindings?: Record<string, Binding>;
+    currentLine?: number | null;
+    errorLine?: number | null;
+  } = $props();
 
   let host: HTMLElement;
   let card = $state<{ name: string; b: Binding; x: number; y: number } | null>(null);
@@ -34,13 +45,38 @@
     }
   }
 
-  // Re-decorate whenever the source or the values change. The injected content is
-  // already in `host` when this effect runs (effects fire after DOM updates).
+  // Mark the live / failing line and keep the gutter honest: numbers only when
+  // there is more than one line (a one-liner's "1" is noise).
+  function markLines(): void {
+    if (!host) return;
+    const lines = host.querySelectorAll<HTMLElement>('.ix-line');
+    host.classList.toggle('numbered', lines.length > 1);
+    let current: HTMLElement | null = null;
+    for (const el of lines) {
+      const n = Number(el.dataset.line);
+      const isCurrent = currentLine != null && n === currentLine;
+      el.classList.toggle('cur', isCurrent);
+      el.classList.toggle('errln', errorLine != null && n === errorLine);
+      if (isCurrent) current = el;
+    }
+    // Keep the executing line in view inside the (scrollable) source box; only
+    // the pre's own scroll moves, never the page or the pane.
+    if (current && host.scrollHeight > host.clientHeight) {
+      host.scrollTop = Math.max(0, current.offsetTop - host.clientHeight / 2);
+    }
+  }
+
+  // Re-decorate whenever the source, the values, or the line state change. The
+  // injected content is already in `host` when this effect runs (effects fire
+  // after DOM updates).
   $effect(() => {
     void html;
     void bindings;
+    void currentLine;
+    void errorLine;
     strip();
     decorate();
+    markLines();
     return strip;
   });
 
@@ -87,8 +123,11 @@
 
 <style>
   /* The source block. Matches JobCard's former pre.code: a quiet inset box where
-     the colored tokens (inline-styled by the server) carry the meaning. */
+     the colored tokens (inline-styled by the server) carry the meaning. It is
+     `position: relative` so a line's offsetTop (the autoscroll above) is measured
+     against this box. */
   .ix-code {
+    position: relative;
     margin: 8px 0 0;
     padding: 9px 11px;
     max-height: 70vh;

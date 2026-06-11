@@ -102,8 +102,8 @@ report <- agent {
 ```
 
 A Claude model means `claude-*` or the `opus` / `sonnet` / `haiku` aliases.
-Claude turns are billed against `ANTHROPIC_API_KEY`. The codex-only `sandbox`
-/ `approval_policy` skill fields do not apply to Claude turns.
+Claude turns are billed against `ANTHROPIC_API_KEY`. Engine, model, effort, and
+permissions are node fields on the `.sym` agent node, not skill frontmatter.
 
 ## Production deployment (NixOS)
 

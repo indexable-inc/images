@@ -80,7 +80,10 @@ fn cwd_or(path: Option<PathBuf>) -> Result<PathBuf> {
 fn publish(path: Option<PathBuf>) -> Result<()> {
     let story = story::derive(&cwd_or(path)?)?;
     story::write_state(&story)?;
-    println!("published: {} in {}@{}", story.name, story.repo, story.branch);
+    println!(
+        "published: {} in {}@{}",
+        story.name, story.repo, story.branch
+    );
     Ok(())
 }
 

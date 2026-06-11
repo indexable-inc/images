@@ -9,10 +9,12 @@
   run starts from scratch and an unrelated VM is never left running
   after a test.
 
-  The fleets passed in are rebuilt with a `health-check-` `nodePrefix`
-  applied by `exampleFleetsFor`, so the names this script force-deletes
-  cannot collide with a production VM that happens to share the example's
-  natural name (`nginx`, `factions`, `file-server`, ...).
+  The fleets passed in carry a `health-check-` prefix applied by
+  `withNodePrefix`, so the names this script force-deletes cannot collide
+  with a production VM that happens to share the example's natural name
+  (`nginx`, `factions`, `file-server`, ...). The prefix is a plan-level
+  rename: the VMs boot the same NixOS closures (and base hostnames) as the
+  unprefixed example fleet, so the two surfaces share one evaluation.
 
   Returns an attrset with two front-ends over the same lifecycle scripts:
 

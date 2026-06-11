@@ -222,7 +222,10 @@ fn grammar_query(language: Language) -> Option<GrammarQuery> {
         // grammar here.
         _ => return None,
     };
-    Some(GrammarQuery { ts_language, highlights })
+    Some(GrammarQuery {
+        ts_language,
+        highlights,
+    })
 }
 
 /// A tree-sitter grammar paired with its highlights query source.
@@ -240,7 +243,10 @@ struct GrammarQuery {
 /// language per file and resolves no injections, so the queries would do nothing
 /// and only add per-grammar constant-name fragility.
 fn build_config(language: Language) -> Option<HighlightConfiguration> {
-    let GrammarQuery { ts_language, highlights } = grammar_query(language)?;
+    let GrammarQuery {
+        ts_language,
+        highlights,
+    } = grammar_query(language)?;
     let mut config = HighlightConfiguration::new(ts_language, language.name(), &highlights, "", "")
         .inspect_err(|error| {
             // A query that fails to compile is a grammar-version skew bug, not a
@@ -374,8 +380,9 @@ fn style_for(name: &str, theme: Theme) -> Style {
     let mut current = name;
     loop {
         if let Some(SlotStyle { slot, italic }) = slot_for_name(current) {
-            let style = slot_color(theme, slot)
-                .map_or_else(Style::new, |rgb| Style::new().fg_color(Some(Color::Rgb(rgb))));
+            let style = slot_color(theme, slot).map_or_else(Style::new, |rgb| {
+                Style::new().fg_color(Some(Color::Rgb(rgb)))
+            });
             return if italic { style.italic() } else { style };
         }
         match current.rfind('.') {

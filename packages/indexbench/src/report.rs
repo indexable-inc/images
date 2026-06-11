@@ -22,13 +22,20 @@ pub fn human_table(comparison: &Comparison) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{}/{}", comparison.suite, comparison.bench);
 
-    let header = format!("  {:<16} {:>14} {:>14} {:>9}  {:<4} {}", "metric", "candidate", "baseline", "delta", "sig", "verdict");
+    let header = format!(
+        "  {:<16} {:>14} {:>14} {:>9}  {:<4} {}",
+        "metric", "candidate", "baseline", "delta", "sig", "verdict"
+    );
     let _ = writeln!(out, "{header}");
     let _ = writeln!(out, "  {}", "-".repeat(header.len() - 2));
 
     for metric in &comparison.metrics {
-        let baseline = metric.baseline_value.map_or_else(|| "—".to_owned(), |v| format!("{v:.3}"));
-        let delta = metric.relative_change.map_or_else(|| "—".to_owned(), |rc| format!("{:+.2}%", rc * 100.0));
+        let baseline = metric
+            .baseline_value
+            .map_or_else(|| "—".to_owned(), |v| format!("{v:.3}"));
+        let delta = metric
+            .relative_change
+            .map_or_else(|| "—".to_owned(), |rc| format!("{:+.2}%", rc * 100.0));
         let marker = match (metric.regime, metric.p_value) {
             // `=` exact compare, `~` threshold-only, `***` significant, blank otherwise.
             (Regime::Deterministic, _) => "=",
@@ -102,19 +109,42 @@ mod tests {
 
     #[test]
     fn table_marks_a_regression_and_shows_delta() {
-        let base = run_with(vec![Metric::deterministic("allocations", 10.0, "count", true)]);
-        let cand = run_with(vec![Metric::deterministic("allocations", 12.0, "count", true)]);
+        let base = run_with(vec![Metric::deterministic(
+            "allocations",
+            10.0,
+            "count",
+            true,
+        )]);
+        let cand = run_with(vec![Metric::deterministic(
+            "allocations",
+            12.0,
+            "count",
+            true,
+        )]);
         let comparison = compare(&base, &cand, CompareConfig::default());
         let table = human_table(&comparison);
         assert!(table.contains("allocations"));
         assert!(table.contains("REGRESSION"));
-        assert!(table.contains("+20.00%"), "table should show the percent delta: {table}");
+        assert!(
+            table.contains("+20.00%"),
+            "table should show the percent delta: {table}"
+        );
     }
 
     #[test]
     fn json_round_trips_to_a_value() {
-        let base = run_with(vec![Metric::deterministic("allocations", 10.0, "count", true)]);
-        let cand = run_with(vec![Metric::deterministic("allocations", 10.0, "count", true)]);
+        let base = run_with(vec![Metric::deterministic(
+            "allocations",
+            10.0,
+            "count",
+            true,
+        )]);
+        let cand = run_with(vec![Metric::deterministic(
+            "allocations",
+            10.0,
+            "count",
+            true,
+        )]);
         let comparison = compare(&base, &cand, CompareConfig::default());
         let rendered = json(&comparison).expect("json");
         let value: serde_json::Value = serde_json::from_str(&rendered).expect("parse");

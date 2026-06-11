@@ -46,8 +46,14 @@ impl InputProcessor {
     /// Returns an error if a configured keybind string does not parse.
     pub fn new(config: &Config) -> Result<Self> {
         let binds = vec![
-            (Keybind::parse(&config.keybinds.editor)?, KeybindAction::OpenEditor),
-            (Keybind::parse(&config.keybinds.detach)?, KeybindAction::Detach),
+            (
+                Keybind::parse(&config.keybinds.editor)?,
+                KeybindAction::OpenEditor,
+            ),
+            (
+                Keybind::parse(&config.keybinds.detach)?,
+                KeybindAction::Detach,
+            ),
         ];
         Ok(Self {
             binds,

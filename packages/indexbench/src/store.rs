@@ -56,7 +56,12 @@ pub trait HistoryStore {
     /// # Errors
     ///
     /// Propagates a read failure from [`runs_for`](HistoryStore::runs_for).
-    fn previous_run(&self, suite: &str, bench: &str, machine_id: &str) -> crate::Result<Option<Run>> {
+    fn previous_run(
+        &self,
+        suite: &str,
+        bench: &str,
+        machine_id: &str,
+    ) -> crate::Result<Option<Run>> {
         let mut runs = self.runs_for(suite, bench)?;
         runs.retain(|run| run.machine_id == machine_id);
         Ok(runs.pop())
@@ -69,7 +74,13 @@ pub trait HistoryStore {
     /// # Errors
     ///
     /// Propagates a read failure from [`runs_for`](HistoryStore::runs_for).
-    fn run_at_commit(&self, suite: &str, bench: &str, machine_id: &str, git_commit: &str) -> crate::Result<Option<Run>> {
+    fn run_at_commit(
+        &self,
+        suite: &str,
+        bench: &str,
+        machine_id: &str,
+        git_commit: &str,
+    ) -> crate::Result<Option<Run>> {
         let mut runs = self.runs_for(suite, bench)?;
         runs.retain(|run| run.machine_id == machine_id && run.git_commit == git_commit);
         Ok(runs.pop())
@@ -91,7 +102,9 @@ fn parse_jsonl(contents: &str, source: &Path, suite: &str, bench: &str) -> crate
         if line.trim().is_empty() {
             continue;
         }
-        let run: Run = serde_json::from_str(line).with_context(|_| error::StoreParseSnafu { path: source.to_owned() })?;
+        let run: Run = serde_json::from_str(line).with_context(|_| error::StoreParseSnafu {
+            path: source.to_owned(),
+        })?;
         if run.suite == suite && run.bench == bench {
             runs.push(run);
         }
@@ -119,7 +132,9 @@ impl LocalDirStore {
     /// Returns an error when `dir` cannot be created.
     pub fn new(dir: impl AsRef<Path>) -> crate::Result<Self> {
         let dir = dir.as_ref();
-        std::fs::create_dir_all(dir).with_context(|_| error::StoreWriteSnafu { path: dir.to_owned() })?;
+        std::fs::create_dir_all(dir).with_context(|_| error::StoreWriteSnafu {
+            path: dir.to_owned(),
+        })?;
         Ok(Self {
             path: dir.join("history.jsonl"),
         })
@@ -135,10 +150,17 @@ impl HistoryStore for LocalDirStore {
             .create(true)
             .append(true)
             .open(&self.path)
-            .with_context(|_| error::StoreWriteSnafu { path: self.path.clone() })?;
-        file.write_all(line.as_bytes()).with_context(|_| error::StoreWriteSnafu { path: self.path.clone() })?;
+            .with_context(|_| error::StoreWriteSnafu {
+                path: self.path.clone(),
+            })?;
+        file.write_all(line.as_bytes())
+            .with_context(|_| error::StoreWriteSnafu {
+                path: self.path.clone(),
+            })?;
         // fsync so a crash right after `append` cannot lose a just-recorded run.
-        file.sync_all().with_context(|_| error::StoreWriteSnafu { path: self.path.clone() })?;
+        file.sync_all().with_context(|_| error::StoreWriteSnafu {
+            path: self.path.clone(),
+        })?;
         Ok(())
     }
 
@@ -146,7 +168,11 @@ impl HistoryStore for LocalDirStore {
         let contents = match std::fs::read_to_string(&self.path) {
             Ok(contents) => contents,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(err).with_context(|_| error::StoreReadSnafu { path: self.path.clone() }),
+            Err(err) => {
+                return Err(err).with_context(|_| error::StoreReadSnafu {
+                    path: self.path.clone(),
+                });
+            }
         };
         parse_jsonl(&contents, &self.path, suite, bench)
     }
@@ -233,7 +259,9 @@ impl GitBranchStore {
     /// Like [`git`](Self::git) but returns trimmed UTF-8 stdout as a `String` —
     /// the shape every object-id-producing plumbing call here wants.
     fn git_str(&self, args: &[&str], stdin: Option<&[u8]>) -> crate::Result<String> {
-        Ok(String::from_utf8_lossy(&self.git(args, stdin)?).trim().to_owned())
+        Ok(String::from_utf8_lossy(&self.git(args, stdin)?)
+            .trim()
+            .to_owned())
     }
 
     /// The commit the branch currently points at, or `None` when the branch does
@@ -243,7 +271,10 @@ impl GitBranchStore {
         // `rev-parse --verify --quiet` exits non-zero when the ref is missing;
         // treat that as "no branch yet" rather than an error.
         let mut command = Command::new("git");
-        command.arg("-C").arg(&self.repo).args(["rev-parse", "--verify", "--quiet", &refname]);
+        command
+            .arg("-C")
+            .arg(&self.repo)
+            .args(["rev-parse", "--verify", "--quiet", &refname]);
         let output = command.output().map_err(|err| error::Error::Git {
             operation: "rev-parse".to_owned(),
             detail: err.to_string(),
@@ -251,7 +282,9 @@ impl GitBranchStore {
         if !output.status.success() {
             return Ok(None);
         }
-        Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_owned()))
+        Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        ))
     }
 
     /// Read the current `history.jsonl` blob from the branch tip, or empty when
@@ -283,7 +316,10 @@ impl HistoryStore for GitBranchStore {
         let tree = self.git_str(&["mktree"], Some(tree_entry.as_bytes()))?;
 
         let parent = self.branch_tip()?;
-        let message = format!("bench: {}/{} on {} @ {}", run.suite, run.bench, run.machine_id, run.git_commit);
+        let message = format!(
+            "bench: {}/{} on {} @ {}",
+            run.suite, run.bench, run.machine_id, run.git_commit
+        );
         let mut commit_args = vec!["commit-tree".to_owned(), tree, "-m".to_owned(), message];
         if let Some(parent) = &parent {
             commit_args.push("-p".to_owned());
@@ -304,7 +340,9 @@ impl HistoryStore for GitBranchStore {
 
     fn runs_for(&self, suite: &str, bench: &str) -> crate::Result<Vec<Run>> {
         let contents = self.read_blob()?;
-        let source = self.repo.join(format!("{}:{}", self.branch, self.blob_path));
+        let source = self
+            .repo
+            .join(format!("{}:{}", self.branch, self.blob_path));
         parse_jsonl(&contents, &source, suite, bench)
     }
 }
@@ -332,7 +370,9 @@ mod tests {
         let store = LocalDirStore::new(dir.path()).expect("store");
 
         store.append(&sample_run(200, "bbb")).expect("append later");
-        store.append(&sample_run(100, "aaa")).expect("append earlier");
+        store
+            .append(&sample_run(100, "aaa"))
+            .expect("append earlier");
 
         let runs = store.runs_for("self-demo", "fib").expect("read");
         assert_eq!(runs.len(), 2);
@@ -347,10 +387,14 @@ mod tests {
         store.append(&sample_run(100, "aaa")).expect("append");
         store.append(&sample_run(200, "bbb")).expect("append");
 
-        let previous = store.previous_run("self-demo", "fib", "machine-a").expect("previous");
+        let previous = store
+            .previous_run("self-demo", "fib", "machine-a")
+            .expect("previous");
         assert_eq!(previous.map(|r| r.timestamp_unix), Some(200));
 
-        let other = store.previous_run("self-demo", "fib", "machine-z").expect("previous");
+        let other = store
+            .previous_run("self-demo", "fib", "machine-z")
+            .expect("previous");
         assert!(other.is_none(), "a machine with no runs has no baseline");
     }
 
@@ -361,7 +405,9 @@ mod tests {
         store.append(&sample_run(100, "aaa")).expect("append");
         store.append(&sample_run(200, "bbb")).expect("append");
 
-        let pinned = store.run_at_commit("self-demo", "fib", "machine-a", "aaa").expect("pinned");
+        let pinned = store
+            .run_at_commit("self-demo", "fib", "machine-a", "aaa")
+            .expect("pinned");
         assert_eq!(pinned.map(|r| r.git_commit), Some("aaa".to_owned()));
     }
 
@@ -402,9 +448,14 @@ mod tests {
         run_git(&["config", "user.email", "bench@example.com"]);
         run_git(&["config", "user.name", "bench"]);
 
-        let store = GitBranchStore::new(repo.to_path_buf(), GitBranchStore::DEFAULT_BRANCH.to_owned());
+        let store = GitBranchStore::new(
+            repo.to_path_buf(),
+            GitBranchStore::DEFAULT_BRANCH.to_owned(),
+        );
         store.append(&sample_run(100, "aaa")).expect("append first");
-        store.append(&sample_run(200, "bbb")).expect("append second");
+        store
+            .append(&sample_run(200, "bbb"))
+            .expect("append second");
 
         let runs = store.runs_for("self-demo", "fib").expect("read back");
         assert_eq!(runs.len(), 2, "both runs are recorded on the branch");

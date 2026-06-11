@@ -224,7 +224,8 @@ impl Client {
     /// # Errors
     /// Returns auth, transport, or API errors.
     pub async fn mark_message_read(&self, id: &str) -> Result<Message> {
-        self.modify_labels(id, &[], &[LABEL_UNREAD.to_owned()]).await
+        self.modify_labels(id, &[], &[LABEL_UNREAD.to_owned()])
+            .await
     }
 
     /// Add the `UNREAD` label.
@@ -232,7 +233,8 @@ impl Client {
     /// # Errors
     /// Returns auth, transport, or API errors.
     pub async fn mark_message_unread(&self, id: &str) -> Result<Message> {
-        self.modify_labels(id, &[LABEL_UNREAD.to_owned()], &[]).await
+        self.modify_labels(id, &[LABEL_UNREAD.to_owned()], &[])
+            .await
     }
 }
 

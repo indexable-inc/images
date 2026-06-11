@@ -14,7 +14,9 @@ use std::path::Path;
 use anyhow::{Context as _, Result, bail};
 use tap_protocol::{Request, Response};
 use tap_pty::WinSize;
-use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader, Lines, Stdout};
+use tokio::io::{
+    AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader, Lines, Stdout,
+};
 use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::signal::unix::{SignalKind, signal};
@@ -53,7 +55,10 @@ enum Event {
 // The attach client owns the controlling terminal through a raw-mode guard held
 // across the whole loop, so its future is intentionally thread-bound; it only
 // ever runs on the main thread via the runtime's block_on, never spawned.
-#[allow(clippy::future_not_send, reason = "owns the tty; runs only on the main thread")]
+#[allow(
+    clippy::future_not_send,
+    reason = "owns the tty; runs only on the main thread"
+)]
 pub async fn run(session: Option<String>) -> Result<()> {
     let ResolvedSocket { label, socket } = resolve_socket(session)?;
     let WinSize {
@@ -160,21 +165,37 @@ async fn handshake(
     let (read_half, mut writer) = stream.into_split();
     let mut reader = BufReader::new(read_half).lines();
 
-    send_request(&mut writer, &Request::Attach { rows: my_rows, cols: my_cols }).await?;
+    send_request(
+        &mut writer,
+        &Request::Attach {
+            rows: my_rows,
+            cols: my_cols,
+        },
+    )
+    .await?;
     let first = reader
         .next_line()
         .await?
         .context("session closed before attaching")?;
     let (sess_rows, sess_cols) =
         match serde_json::from_str::<Response>(&first).context("parsing attach response")? {
-            Response::Attached { rows, cols, snapshot } => {
+            Response::Attached {
+                rows,
+                cols,
+                snapshot,
+            } => {
                 paint(stdout, &snapshot).await?;
                 (rows, cols)
             }
             Response::Error { message } => bail!("attach failed: {message}"),
             other => bail!("unexpected attach response: {other:?}"),
         };
-    Ok(AttachConn { reader, writer, sess_rows, sess_cols })
+    Ok(AttachConn {
+        reader,
+        writer,
+        sess_rows,
+        sess_cols,
+    })
 }
 
 /// Render one server frame; report whether the session has ended.
@@ -192,7 +213,11 @@ async fn handle_server_frame(
             stdout.write_all(&data).await?;
             stdout.flush().await?;
         }
-        Response::Resized { rows, cols, snapshot } => {
+        Response::Resized {
+            rows,
+            cols,
+            snapshot,
+        } => {
             *session.0 = rows;
             *session.1 = cols;
             paint(stdout, &snapshot).await?;
@@ -224,19 +249,26 @@ fn draw_size_warning(my_rows: u16, my_cols: u16, sess_rows: u16, sess_cols: u16)
     } else {
         "extra space is unused"
     };
-    let message =
-        format!("[tap] terminal {my_rows}x{my_cols} != session {sess_rows}x{sess_cols} (smallest client wins); {detail}");
+    let message = format!(
+        "[tap] terminal {my_rows}x{my_cols} != session {sess_rows}x{sess_cols} (smallest client wins); {detail}"
+    );
     let message: String = message.chars().take(my_cols as usize).collect();
     // Save cursor, go to the bottom row, dim + clear line, print, restore cursor.
     let mut out = std::io::stdout();
-    let _ = write!(out, "\x1b7\x1b[{my_rows};1H\x1b[2m\x1b[K{message}\x1b[0m\x1b8");
+    let _ = write!(
+        out,
+        "\x1b7\x1b[{my_rows};1H\x1b[2m\x1b[K{message}\x1b[0m\x1b8"
+    );
     let _ = out.flush();
 }
 
 /// Open the scrollback in the editor, then ask the daemon to repaint.
 // Holds the raw-mode guard across the scrollback fetch; like `run`, this is a
 // main-thread-only future by construction.
-#[allow(clippy::future_not_send, reason = "holds the tty guard; runs only on the main thread")]
+#[allow(
+    clippy::future_not_send,
+    reason = "holds the tty guard; runs only on the main thread"
+)]
 async fn open_editor(
     socket: &Path,
     editor_cmd: &str,
@@ -249,7 +281,14 @@ async fn open_editor(
     // The editor owns the tty while it runs; the guard restores raw mode after.
     let _ = editor::open(&content, editor_cmd, guard, None);
     // Reassert our size to make the daemon send a fresh repaint snapshot.
-    let _ = send_request(writer, &Request::Resize { rows: my_rows, cols: my_cols }).await;
+    let _ = send_request(
+        writer,
+        &Request::Resize {
+            rows: my_rows,
+            cols: my_cols,
+        },
+    )
+    .await;
 }
 
 /// Write one newline-delimited JSON request frame.

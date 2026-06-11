@@ -617,8 +617,14 @@ fn read_row(cells: &RowCells, cols: u16) -> Result<Vec<Cell>> {
         // Resolved colors return GHOSTTY_INVALID_VALUE when the cell has no
         // explicit color; that is the documented "use your default" signal, not
         // a hard error, so map it to None.
-        let fg = read_resolved_color(cells, CellData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR)?;
-        let bg = read_resolved_color(cells, CellData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR)?;
+        let fg = read_resolved_color(
+            cells,
+            CellData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR,
+        )?;
+        let bg = read_resolved_color(
+            cells,
+            CellData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR,
+        )?;
 
         row.push(Cell {
             ch,
@@ -672,11 +678,7 @@ fn read_resolved_color(
 ) -> Result<Option<Rgb>> {
     let mut out = std::mem::MaybeUninit::<sys::GhosttyColorRgb>::uninit();
     let result = unsafe {
-        sys::ghostty_render_state_row_cells_get(
-            cells.raw,
-            data,
-            out.as_mut_ptr().cast::<c_void>(),
-        )
+        sys::ghostty_render_state_row_cells_get(cells.raw, data, out.as_mut_ptr().cast::<c_void>())
     };
     match result {
         sys::GhosttyResult::GHOSTTY_SUCCESS => Ok(Some(unsafe { out.assume_init() }.into())),

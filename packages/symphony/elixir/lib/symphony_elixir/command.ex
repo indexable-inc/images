@@ -45,6 +45,25 @@ defmodule SymphonyElixir.Command do
     if Port.info(port) != nil, do: Port.close(port)
   rescue
     _ -> :ok
+  after
+    flush_port(port)
+  end
+
+  # A SIGTERM'd child often writes a final line (for example an
+  # "interrupted, shutting down" notice) between the kill and
+  # Port.close/1, and Port.close does not flush messages the port
+  # already delivered. Without a drain those sit in the caller's
+  # mailbox and surface later as raw `{port, {:data, ...}}` messages;
+  # a GenServer caller with no matching handle_info clause dies with a
+  # FunctionClauseError. Drain everything the port sent before
+  # returning. Once Port.close/1 has returned the port sends nothing
+  # further, so a single non-blocking sweep is complete.
+  defp flush_port(port) do
+    receive do
+      {^port, _message} -> flush_port(port)
+    after
+      0 -> :ok
+    end
   end
 
   # Port.close/1 on a :spawn_executable port closes the stdio pipes but

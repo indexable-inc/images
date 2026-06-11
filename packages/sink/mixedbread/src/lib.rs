@@ -4,8 +4,10 @@
 //! Records are addressed by a source-defined `external_id`, so change detection
 //! compares each document's `content_hash` against the value stored under that
 //! id: upload the new or changed, skip the unchanged. Listing is scoped with a
-//! `source == X` filter, so a reconcile never reads or touches another source's
-//! records.
+//! `source == X` filter, and the scope is verified against each returned
+//! record's own `source` before anything acts on the listing — a backend that
+//! drops the filter aborts the pass instead of feeding a store-wide delete set
+//! into [`MixedbreadReconciler::replace`].
 //!
 //! This is the write half of the corpus, paired with `sink-parquet`. It is built
 //! on `search-core`'s [`Store`] abstraction (so it works against the production
@@ -22,11 +24,11 @@ use std::time::Duration;
 use futures::stream::{self, StreamExt as _};
 use mixedbread::Filter;
 use search_core::{Store, wait_until_indexed};
-use source_meta::{Document, Reconciler, Source, SourceAdapter, keys};
 use snafu::ResultExt as _;
+use source_meta::{Document, Reconciler, Source, SourceAdapter, keys};
 
 pub use crate::error::Error;
-use crate::error::{AdapterSnafu, Result, StoreSnafu};
+use crate::error::{AdapterSnafu, Result, ScopeLeakSnafu, StoreSnafu};
 
 /// Maximum concurrent uploads in flight.
 const UPLOAD_CONCURRENCY: usize = 16;
@@ -124,13 +126,35 @@ impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
     /// the source's remote records, upload the new or changed documents, and
     /// block until new content is embedded.
     async fn sync_source(&self, source: &Source, documents: &[Document]) -> Result<SyncOutcome> {
-        self.store.ensure_store(self.name).await.context(StoreSnafu)?;
+        self.store
+            .ensure_store(self.name)
+            .await
+            .context(StoreSnafu)?;
         let filter = source_filter(source);
-        let remote: HashMap<String, Option<String>> = self
+        let records = self
             .store
             .list_records(self.name, Some(&filter))
             .await
-            .context(StoreSnafu)?
+            .context(StoreSnafu)?;
+
+        // Trust but verify the scope before anything derives from the listing.
+        // A backend that drops the filter hands back the whole store, and a
+        // replace pass would then "delete" every other source's records (it
+        // happened: the API renamed the list filter parameter and ignored the
+        // old name). Refusing here turns that into a loud no-op instead.
+        let mut foreign = records
+            .iter()
+            .filter(|record| record.source.as_deref() != Some(source.as_str()));
+        if let Some(example) = foreign.next() {
+            return ScopeLeakSnafu {
+                scope: source.as_str().to_owned(),
+                count: foreign.count() + 1,
+                example: example.external_id.clone(),
+            }
+            .fail();
+        }
+
+        let remote: HashMap<String, Option<String>> = records
             .into_iter()
             .map(|record| (record.external_id, record.content_hash))
             .collect();
@@ -155,7 +179,10 @@ impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
 
         let results: Vec<Result<()>> = stream::iter(to_upload)
             .map(|document| async move {
-                self.store.upload(self.name, document).await.context(StoreSnafu)?;
+                self.store
+                    .upload(self.name, document)
+                    .await
+                    .context(StoreSnafu)?;
                 Ok(())
             })
             .buffer_unordered(UPLOAD_CONCURRENCY)
@@ -174,7 +201,11 @@ impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
                 .context(StoreSnafu)?;
         }
 
-        Ok(SyncOutcome { remote, uploaded, skipped })
+        Ok(SyncOutcome {
+            remote,
+            uploaded,
+            skipped,
+        })
     }
 
     /// Make the store's records for one source exactly `documents`: upload the
@@ -192,12 +223,17 @@ impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
     /// delete fails.
     pub async fn replace(&self, source: &Source, documents: &[Document]) -> Result<ReplaceReport> {
         let outcome = self.sync_source(source, documents).await?;
-        let desired: HashSet<&str> =
-            documents.iter().map(|document| document.external_id.as_str()).collect();
+        let desired: HashSet<&str> = documents
+            .iter()
+            .map(|document| document.external_id.as_str())
+            .collect();
         let mut deleted = 0;
         for external_id in outcome.remote.keys() {
             if !desired.contains(external_id.as_str()) {
-                self.store.delete(self.name, external_id).await.context(StoreSnafu)?;
+                self.store
+                    .delete(self.name, external_id)
+                    .await
+                    .context(StoreSnafu)?;
                 deleted += 1;
             }
         }
@@ -223,16 +259,18 @@ impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
     /// # Errors
     /// Returns an error if the store cannot be reached, an upload fails, or a
     /// delete of a still-existing record fails.
-    pub async fn apply(
-        &self,
-        upserts: Vec<Document>,
-        deletes: &[String],
-    ) -> Result<ApplyReport> {
-        self.store.ensure_store(self.name).await.context(StoreSnafu)?;
+    pub async fn apply(&self, upserts: Vec<Document>, deletes: &[String]) -> Result<ApplyReport> {
+        self.store
+            .ensure_store(self.name)
+            .await
+            .context(StoreSnafu)?;
 
         let results: Vec<Result<()>> = stream::iter(upserts)
             .map(|document| async move {
-                self.store.upload(self.name, document).await.context(StoreSnafu)?;
+                self.store
+                    .upload(self.name, document)
+                    .await
+                    .context(StoreSnafu)?;
                 Ok(())
             })
             .buffer_unordered(UPLOAD_CONCURRENCY)
@@ -251,17 +289,26 @@ impl<S: Store + Sync> MixedbreadReconciler<'_, S> {
 
         let mut removed = 0;
         if !deletes.is_empty() {
-            let existing: HashSet<String> =
-                self.store.list_external_ids(self.name, None).await.context(StoreSnafu)?;
+            let existing: HashSet<String> = self
+                .store
+                .list_external_ids(self.name, None)
+                .await
+                .context(StoreSnafu)?;
             for external_id in deletes {
                 if existing.contains(external_id) {
-                    self.store.delete(self.name, external_id).await.context(StoreSnafu)?;
+                    self.store
+                        .delete(self.name, external_id)
+                        .await
+                        .context(StoreSnafu)?;
                     removed += 1;
                 }
             }
         }
 
-        Ok(ApplyReport { uploaded, deleted: removed })
+        Ok(ApplyReport {
+            uploaded,
+            deleted: removed,
+        })
     }
 }
 
@@ -310,17 +357,28 @@ where
 
     let mut desired = HashSet::new();
     for item in adapter.documents() {
-        let document = item.map_err(|error| AdapterSnafu { message: error.to_string() }.build())?;
+        let document = item.map_err(|error| {
+            AdapterSnafu {
+                message: error.to_string(),
+            }
+            .build()
+        })?;
         desired.insert(document.external_id);
     }
 
     let stale: Vec<&String> = remote.difference(&desired).collect();
     let deleted = stale.len();
     for external_id in stale {
-        store.delete(store_name, external_id).await.context(StoreSnafu)?;
+        store
+            .delete(store_name, external_id)
+            .await
+            .context(StoreSnafu)?;
     }
 
-    Ok(GcReport { deleted, kept: desired.len() })
+    Ok(GcReport {
+        deleted,
+        kept: desired.len(),
+    })
 }
 
 #[cfg(test)]
@@ -333,8 +391,15 @@ mod tests {
     use super::{MixedbreadReconciler, gc_documents};
 
     /// The reconciler under test, with the embedding wait kept short.
-    fn reconciler<'a>(store: &'a MemoryStore, name: &'a str) -> MixedbreadReconciler<'a, MemoryStore> {
-        MixedbreadReconciler { store, name, index_timeout: Duration::from_secs(1) }
+    fn reconciler<'a>(
+        store: &'a MemoryStore,
+        name: &'a str,
+    ) -> MixedbreadReconciler<'a, MemoryStore> {
+        MixedbreadReconciler {
+            store,
+            name,
+            index_timeout: Duration::from_secs(1),
+        }
     }
 
     // A fake record source for exercising the reconcile and GC without a real
@@ -352,7 +417,9 @@ mod tests {
         fn source(&self) -> source_meta::Source {
             source_meta::Source::new("linear")
         }
-        fn documents(&self) -> impl Iterator<Item = std::result::Result<Document, FakeError>> + Send {
+        fn documents(
+            &self,
+        ) -> impl Iterator<Item = std::result::Result<Document, FakeError>> + Send {
             self.docs.clone().into_iter().map(Ok)
         }
     }
@@ -392,7 +459,10 @@ mod tests {
         assert_eq!(store.upload_count(), 2, "no redundant re-upload");
 
         // A changed body for A re-embeds only A.
-        let changed = vec![linear_doc("A", "alpha body EDITED"), linear_doc("B", "beta body")];
+        let changed = vec![
+            linear_doc("A", "alpha body EDITED"),
+            linear_doc("B", "beta body"),
+        ];
         let third = sink.reconcile(&source, &changed).await.expect("third");
         assert_eq!(third.uploaded, 1);
         assert_eq!(store.upload_count(), 3);
@@ -409,11 +479,16 @@ mod tests {
 
         // A delta: A changed, B tombstoned, C never existed (a replayed delete).
         let delta_upserts = vec![linear_doc("A", "a EDITED")];
-        let deletes =
-            vec!["linear:issue:B".to_owned(), "linear:issue:C".to_owned()];
-        let report = sink.apply(delta_upserts.clone(), &deletes).await.expect("apply");
+        let deletes = vec!["linear:issue:B".to_owned(), "linear:issue:C".to_owned()];
+        let report = sink
+            .apply(delta_upserts.clone(), &deletes)
+            .await
+            .expect("apply");
         assert_eq!(report.uploaded, 1);
-        assert_eq!(report.deleted, 1, "the never-existed id must be skipped, not an error");
+        assert_eq!(
+            report.deleted, 1,
+            "the never-existed id must be skipped, not an error"
+        );
         assert_eq!(store.len(), 1, "only A remains");
 
         // Replaying the same delta (a crash before the cursor write) is safe:
@@ -442,7 +517,10 @@ mod tests {
         // The log fold now holds A (changed) and C; B was tombstoned.
         let desired = vec![linear_doc("A", "a EDITED"), linear_doc("C", "c")];
         let report = sink.replace(&linear, &desired).await.expect("replace");
-        assert_eq!(report.uploaded, 2, "the changed and the new document upload");
+        assert_eq!(
+            report.uploaded, 2,
+            "the changed and the new document upload"
+        );
         assert_eq!(report.skipped, 0);
         assert_eq!(report.deleted, 1, "the absent document is deleted");
         assert_eq!(report.total, 2);
@@ -456,14 +534,121 @@ mod tests {
         // emptiness is authoritative for a replace (unlike reconcile, whose
         // live-scan absences are protective).
         let report = sink.replace(&linear, &[]).await.expect("empty replace");
-        assert_eq!(report.deleted, 2, "an empty fold deletes the source's records");
+        assert_eq!(
+            report.deleted, 2,
+            "an empty fold deletes the source's records"
+        );
         assert_eq!(store.len(), 1, "only the other source's record remains");
+    }
+
+    /// A store whose record listing drops the requested filter, standing in for
+    /// a backend that silently ignores an unrecognized filter parameter (the
+    /// production API did exactly this when the parameter was misnamed).
+    struct UnscopedStore(MemoryStore);
+
+    impl search_core::Store for UnscopedStore {
+        async fn ensure_store(&self, name: &str) -> search_core::Result<()> {
+            self.0.ensure_store(name).await
+        }
+        async fn list_external_ids(
+            &self,
+            store: &str,
+            _filters: Option<&search_core::Filter>,
+        ) -> search_core::Result<std::collections::HashSet<String>> {
+            self.0.list_external_ids(store, None).await
+        }
+        async fn list_records(
+            &self,
+            store: &str,
+            _filters: Option<&search_core::Filter>,
+        ) -> search_core::Result<Vec<search_core::StoredRecord>> {
+            self.0.list_records(store, None).await
+        }
+        async fn upload(&self, store: &str, document: Document) -> search_core::Result<()> {
+            self.0.upload(store, document).await
+        }
+        async fn delete(&self, store: &str, external_id: &str) -> search_core::Result<()> {
+            self.0.delete(store, external_id).await
+        }
+        async fn search(
+            &self,
+            stores: &[String],
+            query: &str,
+            top_k: usize,
+            options: search_core::SearchOptions,
+            filters: Option<&search_core::Filter>,
+        ) -> search_core::Result<Vec<search_core::SearchHit>> {
+            self.0.search(stores, query, top_k, options, filters).await
+        }
+        async fn grep(
+            &self,
+            stores: &[String],
+            pattern: &str,
+            top_k: usize,
+            options: search_core::GrepOptions,
+            filters: Option<&search_core::Filter>,
+        ) -> search_core::Result<Vec<search_core::SearchHit>> {
+            self.0.grep(stores, pattern, top_k, options, filters).await
+        }
+        async fn ask(
+            &self,
+            stores: &[String],
+            query: &str,
+            top_k: usize,
+            options: search_core::SearchOptions,
+            filters: Option<&search_core::Filter>,
+        ) -> search_core::Result<search_core::Answer> {
+            self.0.ask(stores, query, top_k, options, filters).await
+        }
+        async fn store_status(&self, store: &str) -> search_core::Result<search_core::StoreStatus> {
+            self.0.store_status(store).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_listing_that_leaks_other_sources_aborts_before_any_delete() {
+        // Seed two sources through the well-behaved store, then wrap it so
+        // listings come back unscoped, as they did from the production API.
+        let memory = MemoryStore::new();
+        reconciler(&memory, "s")
+            .reconcile(&Source::new("linear"), &[linear_doc("A", "a")])
+            .await
+            .expect("seed linear");
+        let mut other = linear_doc("O", "o");
+        other.meta_json["source"] = serde_json::json!("other");
+        reconciler(&memory, "s")
+            .reconcile(&Source::new("other"), std::slice::from_ref(&other))
+            .await
+            .expect("seed other");
+
+        let store = UnscopedStore(memory);
+        let err = MixedbreadReconciler {
+            store: &store,
+            name: "s",
+            index_timeout: Duration::from_secs(1),
+        }
+        .replace(&Source::new("linear"), &[linear_doc("A", "a")])
+        .await
+        .expect_err("an unscoped listing must abort the replace");
+        assert!(
+            matches!(err, crate::Error::ScopeLeak { .. }),
+            "got {err:?}"
+        );
+        assert_eq!(
+            store.0.len(),
+            2,
+            "nothing may be uploaded or deleted off a leaked listing"
+        );
     }
 
     #[tokio::test]
     async fn gc_deletes_records_absent_from_the_export() {
         let store = MemoryStore::new();
-        let docs = vec![linear_doc("A", "a"), linear_doc("B", "b"), linear_doc("C", "c")];
+        let docs = vec![
+            linear_doc("A", "a"),
+            linear_doc("B", "b"),
+            linear_doc("C", "c"),
+        ];
         reconciler(&store, "s")
             .reconcile(&Source::new("linear"), &docs)
             .await

@@ -1,5 +1,29 @@
 {
   "nodes": {
+    "agent-context": {
+      "flake": false,
+      "locked": {
+        "path": "./agent-context",
+        "type": "path"
+      },
+      "original": {
+        "path": "./agent-context",
+        "type": "path"
+      },
+      "parent": []
+    },
+    "bench-filesystem": {
+      "flake": false,
+      "locked": {
+        "path": "./bench/filesystem",
+        "type": "path"
+      },
+      "original": {
+        "path": "./bench/filesystem",
+        "type": "path"
+      },
+      "parent": []
+    },
     "btop-src": {
       "flake": false,
       "locked": {
@@ -51,6 +75,18 @@
         "type": "git",
         "url": "https://github.com/osandov/drgn"
       }
+    },
+    "examples": {
+      "flake": false,
+      "locked": {
+        "path": "./examples",
+        "type": "path"
+      },
+      "original": {
+        "path": "./examples",
+        "type": "path"
+      },
+      "parent": []
     },
     "fff-src": {
       "flake": false,
@@ -140,11 +176,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1780885330,
-        "narHash": "sha256-aMA5oAq2Iv467U9s8YOb50DYQT9w0WJbyWqwlzHuLMs=",
+        "lastModified": 1781043330,
+        "narHash": "sha256-eApJsGv0lSn8OKqcBQJDFZI6Jg8coS7M8urNo3cVl9U=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "4fe95527cbe952713318ada8a4d122e1a6ab120f",
+        "rev": "bd4277722d215970366a405d280301a796a364fc",
         "type": "github"
       },
       "original": {
@@ -152,6 +188,18 @@
         "repo": "home-manager",
         "type": "github"
       }
+    },
+    "images": {
+      "flake": false,
+      "locked": {
+        "path": "./images",
+        "type": "path"
+      },
+      "original": {
+        "path": "./images",
+        "type": "path"
+      },
+      "parent": []
     },
     "launchk-src": {
       "flake": false,
@@ -297,17 +345,24 @@
     },
     "root": {
       "inputs": {
+        "agent-context": "agent-context",
+        "bench-filesystem": "bench-filesystem",
         "btop-src": "btop-src",
         "clippy-fork": "clippy-fork",
         "drgn-src": "drgn-src",
+        "examples": "examples",
         "fff-src": "fff-src",
         "ghostty": "ghostty",
         "hermes-agent": "hermes-agent",
         "home-manager": "home-manager",
+        "images": "images",
         "launchk-src": "launchk-src",
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay",
-        "snix-src": "snix-src"
+        "site": "site",
+        "skills": "skills",
+        "snix-src": "snix-src",
+        "tests": "tests"
       }
     },
     "rust-overlay": {
@@ -317,11 +372,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1780888890,
-        "narHash": "sha256-MUQPFiskEENaJ2N82TRIqpKlHXGXJJkPfKH6W788oQo=",
+        "lastModified": 1781061510,
+        "narHash": "sha256-tVuGHgt/TsWu1rUAqEL+eWRIJJHtiPE2+yQ63b+/WTU=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "7d5f8d75fc195a236b46633d7679139698aeb35f",
+        "rev": "d286e9691bb03045febbf8304a658eab1487d1b5",
         "type": "github"
       },
       "original": {
@@ -330,14 +385,38 @@
         "type": "github"
       }
     },
+    "site": {
+      "flake": false,
+      "locked": {
+        "path": "./site",
+        "type": "path"
+      },
+      "original": {
+        "path": "./site",
+        "type": "path"
+      },
+      "parent": []
+    },
+    "skills": {
+      "flake": false,
+      "locked": {
+        "path": "./skills",
+        "type": "path"
+      },
+      "original": {
+        "path": "./skills",
+        "type": "path"
+      },
+      "parent": []
+    },
     "snix-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1780855864,
-        "narHash": "sha256-I4jQAPpAxU6GMj/4mr20qfWZJ5enMVzyEpX/fXI6lU0=",
+        "lastModified": 1781048291,
+        "narHash": "sha256-dHs7qAmPzo2oIaSZlppTozCF0WOfvdkW4jc+k+zTzTI=",
         "ref": "canon",
-        "rev": "2272a9fc758e49a7f13a1685de1ebded84a0182e",
-        "revCount": 22436,
+        "rev": "146233821c1fb22da3e863223fcf67d91d056ab4",
+        "revCount": 22446,
         "type": "git",
         "url": "https://git.snix.dev/snix/snix"
       },
@@ -346,6 +425,18 @@
         "type": "git",
         "url": "https://git.snix.dev/snix/snix"
       }
+    },
+    "tests": {
+      "flake": false,
+      "locked": {
+        "path": "./tests",
+        "type": "path"
+      },
+      "original": {
+        "path": "./tests",
+        "type": "path"
+      },
+      "parent": []
     },
     "uv2nix": {
       "inputs": {

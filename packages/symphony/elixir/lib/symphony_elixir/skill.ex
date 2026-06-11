@@ -1,16 +1,14 @@
 defmodule SymphonyElixir.Skill do
   @moduledoc """
-  A skill is a markdown file under `skills/` whose YAML frontmatter declares
-  the codex runtime envelope (model, reasoning effort, sandbox, approval
-  policy, tools) and whose body is the system prompt for that node type.
+  A skill is a markdown file under `skills/` whose body is the system
+  prompt for a workflow node. Its YAML frontmatter is the model-agnostic
+  Agent Skills shape: an optional one-line `description` and an optional
+  `tools` allowlist. The skill carries no model or engine.
 
   Example `skills/implement.md`:
 
       ---
-      codex_model: gpt-5-codex
-      reasoning_effort: medium
-      sandbox: workspace-write
-      approval_policy: never
+      description: Land the Linear ticket in $INPUT and open a PR.
       tools: [linear_graphql]
       ---
 
@@ -19,6 +17,14 @@ defmodule SymphonyElixir.Skill do
       exit.
 
   The body is the lever for improving the agent without code changes.
+
+  ## Execution envelope vs. frontmatter
+
+  The execution envelope (which engine, model, reasoning effort, and
+  permission level run the node) lives on the workflow `.sym` agent node,
+  not here: see `SymphonyElixir.Engine.Envelope`. A node selects its
+  engine and model with the node's `engine:` / `model:` fields, so the
+  skill file is model-agnostic and never restates them.
 
   ## Partials
 
@@ -63,22 +69,23 @@ defmodule SymphonyElixir.Skill do
   re-scanned and hard-errored on. The fixpoint + seen-set makes the
   catalog body genuinely token-free regardless of partial prose content.
 
-  ## Reasoning effort
+  ## Frontmatter fields
 
-  Optional. Accepts `none`, `minimal`, `low`, `medium`, `high`, or
-  `xhigh`, mirroring the codex app-server `ReasoningEffort` enum. When
-  set, the runtime passes it as the `effort` parameter on `turn/start`
-  so the codex session uses that reasoning budget. When absent, codex
-  falls back to its built-in default for the model.
+  All optional. Mirrors the model-agnostic Agent Skills shape:
+
+  - `description` - one line on what the skill does, shown on the skills
+    dashboard. The `name` is the filename, so it is not repeated here.
+  - `tools` - dynamic-tool allowlist the host executes on the engine's
+    behalf (for example `linear_graphql`). Empty for engines that
+    self-execute their tools.
+
+  Reasoning effort, model, engine, and permissions are NOT skill fields:
+  they are the workflow node's execution envelope (see the moduledoc).
   """
 
   @enforce_keys [
     :name,
     :path,
-    :codex_model,
-    :reasoning_effort,
-    :sandbox,
-    :approval_policy,
     :tools,
     :body,
     :body_hash
@@ -86,29 +93,20 @@ defmodule SymphonyElixir.Skill do
   defstruct [
     :name,
     :path,
-    :codex_model,
-    :reasoning_effort,
-    :sandbox,
-    :approval_policy,
+    :description,
     :tools,
     :body,
     :body_hash
   ]
 
-  @type reasoning_effort :: nil | String.t()
   @type t :: %__MODULE__{
           name: String.t(),
           path: Path.t(),
-          codex_model: String.t(),
-          reasoning_effort: reasoning_effort(),
-          sandbox: String.t(),
-          approval_policy: String.t(),
+          description: String.t() | nil,
           tools: [String.t()],
           body: String.t(),
           body_hash: binary()
         }
-
-  @reasoning_efforts ~w(none minimal low medium high xhigh)
 
   @spec load(Path.t()) :: {:ok, t()} | {:error, term()}
   def load(path) when is_binary(path) do
@@ -124,11 +122,7 @@ defmodule SymphonyElixir.Skill do
   @spec from_parts(map(), String.t(), Path.t()) :: {:ok, t()} | {:error, term()}
   defp from_parts(frontmatter, body, path)
        when is_map(frontmatter) and is_binary(body) and is_binary(path) do
-    with {:ok, codex_model} <- fetch_string(frontmatter, "codex_model"),
-         {:ok, reasoning_effort} <- fetch_reasoning_effort(frontmatter),
-         {:ok, sandbox} <- fetch_string(frontmatter, "sandbox"),
-         {:ok, approval_policy} <- fetch_string(frontmatter, "approval_policy"),
-         {:ok, tools} <- fetch_string_list(frontmatter, "tools") do
+    with {:ok, tools} <- fetch_string_list(frontmatter, "tools") do
       name =
         path
         |> Path.basename(".md")
@@ -137,10 +131,7 @@ defmodule SymphonyElixir.Skill do
        %__MODULE__{
          name: name,
          path: path,
-         codex_model: codex_model,
-         reasoning_effort: reasoning_effort,
-         sandbox: sandbox,
-         approval_policy: approval_policy,
+         description: optional_string(frontmatter, "description"),
          tools: tools,
          body: body,
          body_hash: <<>>
@@ -163,16 +154,17 @@ defmodule SymphonyElixir.Skill do
     end
   end
 
-  defp fetch_string(map, key) do
+  # Optional frontmatter string: a present non-blank value, else nil.
+  defp optional_string(map, key) do
     case Map.get(map, key) do
       value when is_binary(value) ->
         case String.trim(value) do
-          "" -> {:error, {:missing_field, key}}
-          trimmed -> {:ok, trimmed}
+          "" -> nil
+          trimmed -> trimmed
         end
 
       _ ->
-        {:error, {:missing_field, key}}
+        nil
     end
   end
 
@@ -187,25 +179,6 @@ defmodule SymphonyElixir.Skill do
 
       _ ->
         {:error, {:invalid_field, key}}
-    end
-  end
-
-  defp fetch_reasoning_effort(map) do
-    case Map.get(map, "reasoning_effort") do
-      nil ->
-        {:ok, nil}
-
-      value when is_binary(value) ->
-        normalized = value |> String.trim() |> String.downcase()
-
-        cond do
-          normalized == "" -> {:ok, nil}
-          normalized in @reasoning_efforts -> {:ok, normalized}
-          true -> {:error, {:invalid_reasoning_effort, value}}
-        end
-
-      other ->
-        {:error, {:invalid_reasoning_effort, other}}
     end
   end
 

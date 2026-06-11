@@ -22,11 +22,7 @@ const INITIAL_OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 /// Polls the viewport through the actor mailbox rather than the engine directly:
 /// `read_viewport` drops trailing blank rows, so a non-empty result means the
 /// child has painted something.
-fn wait_for_initial_output(
-    runtime: &Runtime,
-    id: Uuid,
-    command_tx: &mpsc::Sender<PtyCommand>,
-) {
+fn wait_for_initial_output(runtime: &Runtime, id: Uuid, command_tx: &mpsc::Sender<PtyCommand>) {
     let start = Instant::now();
     runtime.block_on(async {
         loop {
@@ -66,27 +62,22 @@ pub(super) fn spawn_tui(
     let display = format!("{command} {}", args.join(" "));
 
     let (pty, child) = runtime.block_on(async {
-        let pty = pty_process::Pty::new().map_err(|e| process_spawn_error(&display, e))?;
-
-        let pty_slave = pty
-            .pts()
-            .map_err(|e| process_spawn_error("get PTY slave", e))?;
+        // `pty_process::open` allocates the PTY master and its slave together.
+        let (pty, pty_slave) = pty_process::open().map_err(|e| process_spawn_error(&display, e))?;
 
         pty.resize(pty_process::Size::new(rows, cols))
             .map_err(|e| process_spawn_error("resize PTY", e))?;
 
-        let mut cmd = pty_process::Command::new(&command);
-        cmd.args(&args);
         // A PTY-backed emulator is only as useful as the TERM the child thinks
         // it is driving. With no TERM the child inherits the host's, so curses
         // and terminfo capabilities (e.g. `curs_set`) silently fail or differ
         // by machine. ix-vt implements an xterm-256color superset, so advertise
         // that plus truecolor for a consistent, capable default.
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
-
-        let child = cmd
-            .spawn(&pty_slave)
+        let child = pty_process::Command::new(&command)
+            .args(&args)
+            .env("TERM", "xterm-256color")
+            .env("COLORTERM", "truecolor")
+            .spawn(pty_slave)
             .map_err(|e| process_spawn_error(&display, e))?;
 
         Ok::<_, Error>((pty, child))
@@ -115,7 +106,16 @@ pub(super) fn spawn_tui(
     // zombie), publishes the exit code through `exit_tx`, and can signal it on
     // a kill request. It forwards bytes and reads to the engine thread.
     runtime.spawn(async move {
-        pty_actor(id, pty, child, command_rx, engine_tx, exit_tx, app_cursor_keys).await;
+        pty_actor(
+            id,
+            pty,
+            child,
+            command_rx,
+            engine_tx,
+            exit_tx,
+            app_cursor_keys,
+        )
+        .await;
     });
 
     let instance = TuiInstance {

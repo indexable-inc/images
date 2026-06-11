@@ -19,7 +19,8 @@ struct MainRepo {
 fn init_on_main() -> MainRepo {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = Repository::init(dir.path()).expect("init repo");
-    repo.set_head("refs/heads/main").expect("point HEAD at main");
+    repo.set_head("refs/heads/main")
+        .expect("point HEAD at main");
 
     let sig = signature();
     std::fs::write(dir.path().join("README.md"), "hello\n").unwrap();
@@ -43,12 +44,20 @@ fn repo_ahead_of_main() -> TempDir {
     let sig = signature();
 
     let main_commit = repo.find_commit(main_oid).unwrap();
-    repo.branch("feature", &main_commit, false).expect("create feature");
-    repo.set_head("refs/heads/feature").expect("checkout feature");
+    repo.branch("feature", &main_commit, false)
+        .expect("create feature");
+    repo.set_head("refs/heads/feature")
+        .expect("checkout feature");
 
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
     std::fs::write(dir.path().join("src/lib.rs"), "// code\n").unwrap();
-    commit(&repo, &sig, &["src/lib.rs"], "feat(core): add lib", &[main_oid]);
+    commit(
+        &repo,
+        &sig,
+        &["src/lib.rs"],
+        "feat(core): add lib",
+        &[main_oid],
+    );
 
     dir
 }
@@ -74,8 +83,10 @@ fn commit(
     index.write().unwrap();
     let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
 
-    let parent_commits: Vec<git2::Commit> =
-        parents.iter().map(|oid| repo.find_commit(*oid).unwrap()).collect();
+    let parent_commits: Vec<git2::Commit> = parents
+        .iter()
+        .map(|oid| repo.find_commit(*oid).unwrap())
+        .collect();
     let parent_refs: Vec<&git2::Commit> = parent_commits.iter().collect();
 
     repo.commit(Some("HEAD"), sig, sig, message, &tree, &parent_refs)
@@ -101,7 +112,9 @@ fn plain(bytes: &[u8]) -> String {
 /// files are struck through without depending on the exact byte layout.
 fn has_strikethrough(bytes: &[u8]) -> bool {
     let text = String::from_utf8_lossy(bytes);
-    ["[9m", "[9;", ";9m", ";9;"].iter().any(|needle| text.contains(needle))
+    ["[9m", "[9;", ";9m", ";9;"]
+        .iter()
+        .any(|needle| text.contains(needle))
 }
 
 #[test]
@@ -140,7 +153,10 @@ fn log_shows_recent_history_on_main() {
 
     let stdout = plain(&output.stdout);
     assert!(stdout.contains("Recent commits on main"), "got: {stdout}");
-    assert!(stdout.contains("initial commit"), "missing commit: {stdout}");
+    assert!(
+        stdout.contains("initial commit"),
+        "missing commit: {stdout}"
+    );
 }
 
 #[test]
@@ -153,8 +169,10 @@ fn log_reports_caught_up_off_main_when_level_with_main() {
         main_oid,
     } = init_on_main();
     let main_commit = repo.find_commit(main_oid).unwrap();
-    repo.branch("feature", &main_commit, false).expect("create feature");
-    repo.set_head("refs/heads/feature").expect("checkout feature");
+    repo.branch("feature", &main_commit, false)
+        .expect("create feature");
+    repo.set_head("refs/heads/feature")
+        .expect("checkout feature");
 
     let output = run(dir.path(), &[]);
     assert!(output.status.success(), "stderr: {}", plain(&output.stderr));
@@ -173,30 +191,50 @@ fn diff_uses_merge_base_after_main_advances() {
     let sig = signature();
 
     let main_commit = repo.find_commit(main_oid).unwrap();
-    repo.branch("feature", &main_commit, false).expect("create feature");
+    repo.branch("feature", &main_commit, false)
+        .expect("create feature");
 
     // One commit on main after the fork point, touching a file the branch never
     // sees.
     std::fs::write(dir.path().join("main-only.md"), "main\n").unwrap();
-    commit(&repo, &sig, &["main-only.md"], "docs: main only", &[main_oid]);
+    commit(
+        &repo,
+        &sig,
+        &["main-only.md"],
+        "docs: main only",
+        &[main_oid],
+    );
 
     // The feature branch diverges with its own file. Reset the shared index to
     // the fork-point tree first; otherwise main-only.md staged above would leak
     // into the feature commit's tree.
-    repo.set_head("refs/heads/feature").expect("checkout feature");
+    repo.set_head("refs/heads/feature")
+        .expect("checkout feature");
     let mut index = repo.index().unwrap();
     index.read_tree(&main_commit.tree().unwrap()).unwrap();
     index.write().unwrap();
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
     std::fs::write(dir.path().join("src/lib.rs"), "// code\n").unwrap();
-    commit(&repo, &sig, &["src/lib.rs"], "feat(core): add lib", &[main_oid]);
+    commit(
+        &repo,
+        &sig,
+        &["src/lib.rs"],
+        "feat(core): add lib",
+        &[main_oid],
+    );
 
     let output = run(dir.path(), &["diff", "main", "HEAD"]);
     assert!(output.status.success(), "stderr: {}", plain(&output.stderr));
 
     let stdout = plain(&output.stdout);
-    assert!(stdout.contains("src/lib.rs"), "missing branch file: {stdout}");
-    assert!(!stdout.contains("main-only.md"), "leaked main-only file: {stdout}");
+    assert!(
+        stdout.contains("src/lib.rs"),
+        "missing branch file: {stdout}"
+    );
+    assert!(
+        !stdout.contains("main-only.md"),
+        "leaked main-only file: {stdout}"
+    );
 }
 
 #[test]
@@ -206,7 +244,10 @@ fn diff_subcommand_renders_changed_file_tree() {
     assert!(output.status.success(), "stderr: {}", plain(&output.stderr));
 
     let stdout = plain(&output.stdout);
-    assert!(stdout.contains("files changed in main...HEAD"), "got: {stdout}");
+    assert!(
+        stdout.contains("files changed in main...HEAD"),
+        "got: {stdout}"
+    );
     assert!(stdout.contains("src/lib.rs"), "got: {stdout}");
 }
 
@@ -222,22 +263,37 @@ fn diff_strikes_through_deleted_files() {
     let sig = signature();
 
     let main_commit = repo.find_commit(main_oid).unwrap();
-    repo.branch("feature", &main_commit, false).expect("create feature");
-    repo.set_head("refs/heads/feature").expect("checkout feature");
+    repo.branch("feature", &main_commit, false)
+        .expect("create feature");
+    repo.set_head("refs/heads/feature")
+        .expect("checkout feature");
 
     // Drop README.md (committed on main) on the feature branch.
     std::fs::remove_file(dir.path().join("README.md")).unwrap();
     let mut index = repo.index().unwrap();
-    index.remove_path(std::path::Path::new("README.md")).unwrap();
+    index
+        .remove_path(std::path::Path::new("README.md"))
+        .unwrap();
     index.write().unwrap();
     let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
-    repo.commit(Some("HEAD"), &sig, &sig, "chore: drop readme", &tree, &[&main_commit])
-        .unwrap();
+    repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        "chore: drop readme",
+        &tree,
+        &[&main_commit],
+    )
+    .unwrap();
 
     let output = run(dir.path(), &["diff", "main", "HEAD"]);
     assert!(output.status.success(), "stderr: {}", plain(&output.stderr));
 
-    assert!(plain(&output.stdout).contains("README.md"), "got: {}", plain(&output.stdout));
+    assert!(
+        plain(&output.stdout).contains("README.md"),
+        "got: {}",
+        plain(&output.stdout)
+    );
     assert!(
         has_strikethrough(&output.stdout),
         "deleted file not struck through: {:?}",

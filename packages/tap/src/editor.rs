@@ -82,15 +82,17 @@ pub fn build_args(editor_cmd: &str, file_path: &Path, pos: Option<Position>) -> 
             (vec!["-g".to_string()], format!("{file}:{}:{col}", pos.line))
         }
         EditorKind::Nano => {
-            let arg = pos
-                .col
-                .map_or_else(|| format!("+{}", pos.line), |col| format!("+{},{col}", pos.line));
+            let arg = pos.col.map_or_else(
+                || format!("+{}", pos.line),
+                |col| format!("+{},{col}", pos.line),
+            );
             (vec![arg], file)
         }
         EditorKind::Emacs => {
-            let arg = pos
-                .col
-                .map_or_else(|| format!("+{}", pos.line), |col| format!("+{}:{col}", pos.line));
+            let arg = pos.col.map_or_else(
+                || format!("+{}", pos.line),
+                |col| format!("+{}:{col}", pos.line),
+            );
             (vec![arg], file)
         }
         EditorKind::Helix => (vec![], format!("{file}:{}", pos.line)),
@@ -153,15 +155,24 @@ mod tests {
 
     #[test]
     fn builds_position_args_per_editor() {
-        let EditorArgs { pos_args, file_arg } =
-            build_args("vim", Path::new("/t.txt"), Some(Position { line: 42, col: None }));
+        let EditorArgs { pos_args, file_arg } = build_args(
+            "vim",
+            Path::new("/t.txt"),
+            Some(Position {
+                line: 42,
+                col: None,
+            }),
+        );
         assert_eq!(pos_args, vec!["+42"]);
         assert_eq!(file_arg, "/t.txt");
 
         let EditorArgs { pos_args, file_arg } = build_args(
             "cursor",
             Path::new("/t.txt"),
-            Some(Position { line: 42, col: Some(10) }),
+            Some(Position {
+                line: 42,
+                col: Some(10),
+            }),
         );
         assert_eq!(pos_args, vec!["-g"]);
         assert_eq!(file_arg, "/t.txt:42:10");

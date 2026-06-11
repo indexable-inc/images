@@ -25,7 +25,10 @@ const DAEMON_STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// attach fails.
 // Awaits the attach client, whose future is thread-bound by design; this runs
 // only on the main thread via the runtime's block_on.
-#[allow(clippy::future_not_send, reason = "delegates to the main-thread attach loop")]
+#[allow(
+    clippy::future_not_send,
+    reason = "delegates to the main-thread attach loop"
+)]
 pub async fn start(command: Vec<String>, detached: bool, id: Option<String>) -> Result<()> {
     let session_id = id.unwrap_or_else(names::generate);
     let argv = resolve_command(command);
@@ -116,8 +119,8 @@ pub struct ResolvedSocket {
 /// Returns an error if the named session is missing or there are no sessions.
 pub fn resolve_socket(session: Option<String>) -> Result<ResolvedSocket> {
     let Some(id) = session else {
-        let latest =
-            index::latest_live().ok_or_else(|| anyhow!("no active sessions; start one with `tap`"))?;
+        let latest = index::latest_live()
+            .ok_or_else(|| anyhow!("no active sessions; start one with `tap`"))?;
         return Ok(ResolvedSocket {
             label: latest.id,
             socket: latest.socket,

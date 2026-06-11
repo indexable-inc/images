@@ -83,6 +83,25 @@ matching the `superhuman-mail` surface 1:1 first per #599); the token
 file and env credentials must exist on the host running the MCP server.
 From Python: `await ix_google.gmail.Client().search("from:alice")`.
 
+## From the ix-mcp kernel
+
+In an ix-mcp session, `import google_auth` exposes this same grant over the
+official `googleapiclient`, with self-service sign-in (no host setup file):
+
+```python
+import google_auth
+
+await google_auth.login()            # opens your browser to consent, once
+google_auth.status()                 # {"signed_in", "email", "scopes"}
+google_auth.gmail().users().messages().send(userId="me", body=msg).execute()
+google_auth.calendar().events().list(calendarId="primary").execute()
+google_auth.logout()                 # forget this machine's grant
+```
+
+`login()` runs the same OAuth flow as `gcal auth` under the hood and stores the
+same token file, so a CLI sign-in and a kernel sign-in are interchangeable.
+Gmail/Calendar are confined to incognito sessions (never a shared room).
+
 ## Layout
 
 - [`src/lib.rs`](./src/lib.rs): the `Client` (HTTP, error envelope

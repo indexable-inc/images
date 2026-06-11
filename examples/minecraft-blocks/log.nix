@@ -86,14 +86,13 @@ in
     };
   };
 
-  ix.networking.portClaims.kafka = {
-    protocol = "tcp";
+  # One declaration: registers the claim, opens the in-guest firewall, and makes
+  # the broker resolvable from sibling nodes via `ix.endpointOf nodes.log "kafka"`.
+  ix.networking.expose.kafka = {
     port = brokerPort;
     address = "0.0.0.0";
     description = "Kafka broker (block_events log)";
   };
-
-  networking.firewall.allowedTCPPorts = [ brokerPort ];
 
   ix.healthChecks.kafka-topic = {
     description = "Kafka broker is up and the block_events topic exists";

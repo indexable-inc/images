@@ -196,8 +196,18 @@ impl DaemonState {
         if sizes.is_empty() {
             return;
         }
-        let rows = sizes.iter().map(|s| s.0).min().unwrap_or(DEFAULT_ROWS).max(1);
-        let cols = sizes.iter().map(|s| s.1).min().unwrap_or(DEFAULT_COLS).max(1);
+        let rows = sizes
+            .iter()
+            .map(|s| s.0)
+            .min()
+            .unwrap_or(DEFAULT_ROWS)
+            .max(1);
+        let cols = sizes
+            .iter()
+            .map(|s| s.1)
+            .min()
+            .unwrap_or(DEFAULT_COLS)
+            .max(1);
         let new = WinSize { rows, cols };
         if new == inner.session_size {
             return;
@@ -258,8 +268,8 @@ pub async fn run(id: String, socket: PathBuf, command: Vec<String>) -> Result<()
     .context("recording session in index")?;
 
     let _ = std::fs::remove_file(&socket);
-    let listener =
-        UnixListener::bind(&socket).with_context(|| format!("binding socket {}", socket.display()))?;
+    let listener = UnixListener::bind(&socket)
+        .with_context(|| format!("binding socket {}", socket.display()))?;
 
     let state = Arc::new(DaemonState::new(
         session,

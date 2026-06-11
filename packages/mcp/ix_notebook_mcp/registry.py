@@ -41,7 +41,8 @@ class Builtin:
 MODULES: tuple[Module, ...] = (
     Module(
         "fff",
-        "typo-tolerant file find + SIMD content grep; every result's `.df` is a polars frame",
+        "file tree listing (`tree`), typo-tolerant find, SIMD content grep; every result's "
+        "`.df` is a polars frame",
         preimport=True,
     ),
     Module(
@@ -59,6 +60,32 @@ MODULES: tuple[Module, ...] = (
     Module("search", "meaning-based semantic recall across an indexed corpus"),
     Module("tui", "drive and snapshot a terminal program; renders as HTML"),
     Module(
+        "screen",
+        "native macOS desktop control: capture the screen, a region, or one app's window "
+        "(`screen.capture(app=...)`), move/click the mouse, type, and manage apps (macOS only)",
+    ),
+    Module(
+        "vmkit",
+        "boot and drive a macOS/Linux guest VM fully off-screen and screenshot its display "
+        "(macOS only)",
+    ),
+    Module(
+        "imessage",
+        "read Messages and Contacts into polars and send iMessages "
+        "(`imessage.messages()` / `chats()` / `send()`) (macOS only)",
+    ),
+    Module(
+        "tasks",
+        "generate and read the task-graph demo's SQLite DAG (`tasks.seed` / `load` / `frame`)",
+    ),
+    Module(
+        "mcp_client",
+        "call any MCP server's tools from Python: `await mcp_client.connect(url_or_command)` "
+        "returns a live server whose `.tools` is a polars frame and whose `await srv.call(tool, "
+        "**args)` runs a tool (stdio or streamable-HTTP; bearer-token / header auth, plus "
+        "interactive OAuth + PKCE with cached, auto-refreshed tokens for remote servers)",
+    ),
+    Module(
         "worktree",
         "do risky or parallel work on a throwaway branch in its own checkout, leaving the main "
         "tree untouched",
@@ -71,6 +98,32 @@ MODULES: tuple[Module, ...] = (
         "CSS selector) -- so you can act without a screenshot; `browser.read()` is a lighter "
         "text-first readout and `browser.shot()` renders a screenshot inline",
     ),
+    Module(
+        "google_auth",
+        "Google for your own account: read and send Gmail, and manage Calendar, over the "
+        "official googleapiclient (`google_auth.gmail()` / `.calendar()`); "
+        "`await google_auth.login()` signs in through your browser and `status()` / `logout()` "
+        "manage the grant. Incognito sessions only (a personal mailbox never reaches a shared room)",
+    ),
+    Module(
+        "x",
+        "read recent X (Twitter) posts into polars by driving your logged-in browser: "
+        "`await x.posts(\"@handle\")` / `await x.posts(\"home\")` / `await x.posts(\"#tag\")` / a thread URL, "
+        "scrolled until it has `limit` tweets (one row each, with author, time, text and counts). Reads the signed-in account's personal feed, so incognito sessions only (a shared room never sees your timeline)",
+    ),
+    Module(
+        "slack",
+        "read Slack channels, messages, and threads into polars, send messages, and search "
+        "(`await slack.channels()` / `messages(channel)` / `thread(channel, ts)` / `send(channel, text)` / `search(query)`); "
+        "`slack.login(token)` stores your user token (mode 0600); `status()` / `logout()` manage it. "
+        "Incognito sessions only (personal Slack data never reaches a shared room)",
+    ),
+    Module(
+        "linear",
+        "Linear issue tracker over GraphQL using LINEAR_API_KEY: "
+        "`await linear.issue(id)` / `issue_update(id, **fields)` / "
+        "`issue_create(team, title, **fields)` / `project_create(name, teams, **fields)`",
+    ),
 )
 
 # Always-present namespace builtins (installed by runtime.install; no import).
@@ -82,8 +135,16 @@ BUILTINS: tuple[Builtin, ...] = (
     Builtin("doc", "the signature + docstring of any object, returned as a Result (help() only prints and returns None)"),
     Builtin("resources", "the live, self-updating views (a terminal, a widget)"),
     Builtin("register_resource", "publish a live Resource to the dashboard"),
-    Builtin("sh", "shell out on the loop; the Output IS a Result (ANSI as HTML for the human, `.text`/`.code`/`.ok` for you)"),
+    Builtin(
+        "sh",
+        "shell out on the loop; the Output IS a Result (ANSI as HTML for the human, "
+        "`.text`/`.code`/`.ok` for you), and `.json()`/`.jsonl()`/`.df()` parse a JSON-mode "
+        "CLI straight to data / a polars frame: ask the tool for --json, never scrape TSV",
+    ),
     Builtin("api", "the live catalog of every helper, as a polars frame (`api('grep')` to filter)"),
+    Builtin("asyncio", "stdlib asyncio, pre-bound: `asyncio.ensure_future` / `sleep` with no import"),
+    Builtin("json", "stdlib json, pre-bound: parse a CLI's --json output with no import"),
+    Builtin("pl", "polars, pre-bound: build/transform DataFrames with no import"),
     Builtin("DASHBOARD_URL", "this session's live dashboard URL"),
 )
 
@@ -98,7 +159,6 @@ LIBRARIES: tuple[str, ...] = (
     "matplotlib",
     "playwright",
     "exa_py",
-    "google_auth",
 )
 
 

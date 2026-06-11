@@ -274,14 +274,20 @@ fn parse_fraction_pair(
     verb: &str,
 ) -> Result<(f64, f64), String> {
     let (Some(fx), Some(fy)) = (parts.next(), parts.next()) else {
-        return Err(format!("err {verb} needs two fractions 0..1 (from top-left)"));
+        return Err(format!(
+            "err {verb} needs two fractions 0..1 (from top-left)"
+        ));
     };
     let (Ok(fx), Ok(fy)) = (fx.parse::<f64>(), fy.parse::<f64>()) else {
-        return Err(format!("err {verb} fractions must be numbers 0..1 (from top-left)"));
+        return Err(format!(
+            "err {verb} fractions must be numbers 0..1 (from top-left)"
+        ));
     };
     let in_range = |f: f64| f.is_finite() && (0.0..=1.0).contains(&f);
     if !in_range(fx) || !in_range(fy) {
-        return Err(format!("err {verb} fractions must be within 0..1 (from top-left)"));
+        return Err(format!(
+            "err {verb} fractions must be within 0..1 (from top-left)"
+        ));
     }
     Ok((fx, fy))
 }

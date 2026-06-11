@@ -57,7 +57,7 @@ impl Resolver {
         let origin = repo
             .find_remote("origin")
             .ok()
-            .and_then(|remote| remote.url().and_then(github_avatar::parse_remote));
+            .and_then(|remote| remote.url().ok().and_then(github_avatar::parse_remote));
 
         let cache_dir = avatar_cache_dir();
         let login_cache = cache_dir
@@ -176,7 +176,13 @@ impl Resolver {
     fn disk_path(&self, login: &str) -> Option<PathBuf> {
         let sanitized: String = login
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         Some(
             self.cache_dir
@@ -207,13 +213,21 @@ impl Resolver {
         if email.contains(['\t', '\n']) || login.contains(['\t', '\n']) {
             return;
         }
-        let Some(path) = self.cache_dir.as_ref().map(|dir| dir.join(LOGIN_CACHE_FILE)) else {
+        let Some(path) = self
+            .cache_dir
+            .as_ref()
+            .map(|dir| dir.join(LOGIN_CACHE_FILE))
+        else {
             return;
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             use std::io::Write;
             let _ = writeln!(file, "{email}\t{login}");
         }
@@ -232,7 +246,10 @@ fn discover_token() -> Option<String> {
             }
         }
     }
-    let output = std::process::Command::new("gh").args(["auth", "token"]).output().ok()?;
+    let output = std::process::Command::new("gh")
+        .args(["auth", "token"])
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -253,7 +270,8 @@ fn load_identities(repo: &Repository) -> HashMap<String, String> {
     // it so it matches only `githublogin.map` and not other keys.
     if let Ok(entries) = config.entries(Some("^githublogin\\.map$")) {
         let _ = entries.for_each(|entry| {
-            if let Some((email, login)) = entry.value().and_then(|value| value.split_once('=')) {
+            if let Some((email, login)) = entry.value().ok().and_then(|value| value.split_once('='))
+            {
                 let (email, login) = (email.trim(), login.trim());
                 if !email.is_empty() && !login.is_empty() {
                     map.insert(email.to_string(), login.to_string());

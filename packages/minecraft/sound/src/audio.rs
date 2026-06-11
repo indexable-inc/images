@@ -3,7 +3,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use rodio::source::Source as _;
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, DeviceSinkBuilder, Player};
 use snafu::{ResultExt as _, Snafu};
 
 /// Minimum playback pitch/speed factor, matching Minecraft's clamp.
@@ -15,7 +15,7 @@ pub const MAX_PITCH: f32 = 2.0;
 #[derive(Debug, Snafu)]
 pub enum PlayError {
     #[snafu(display("Failed to open audio output device"))]
-    OpenDevice { source: rodio::StreamError },
+    OpenDevice { source: rodio::DeviceSinkError },
 
     #[snafu(display("Failed to open sound file: {}", path.display()))]
     OpenFile {
@@ -28,9 +28,6 @@ pub enum PlayError {
         path: PathBuf,
         source: rodio::decoder::DecoderError,
     },
-
-    #[snafu(display("Failed to create audio sink"))]
-    CreateSink { source: rodio::PlayError },
 }
 
 /// How to play a sound: Minecraft-style pitch and a linear volume multiplier.
@@ -73,19 +70,22 @@ impl PlaybackOptions {
 /// Returns an error if the audio output device cannot be opened, the file
 /// cannot be read, or the stream cannot be decoded.
 pub fn play_ogg(path: &Path, options: PlaybackOptions) -> Result<(), PlayError> {
-    let (_stream, handle) = OutputStream::try_default().context(OpenDeviceSnafu)?;
+    // The device sink prints a notice to stderr when dropped; this CLI opens
+    // the device once per invocation, so that notice is just noise.
+    let mut device = DeviceSinkBuilder::open_default_sink().context(OpenDeviceSnafu)?;
+    device.log_on_drop(false);
 
     let file = File::open(path).context(OpenFileSnafu { path })?;
     let source = Decoder::new(BufReader::new(file)).context(DecodeSnafu { path })?;
 
-    let sink = Sink::try_new(&handle).context(CreateSinkSnafu)?;
+    let player = Player::connect_new(device.mixer());
     // `speed` changes play rate without resampling, so pitch and tempo move
-    // together — the same effect Minecraft's pitch parameter produces.
+    // together, the same effect Minecraft's pitch parameter produces.
     let source = source
         .speed(options.clamped_pitch())
         .amplify(options.clamped_volume());
-    sink.append(source);
-    sink.sleep_until_end();
+    player.append(source);
+    player.sleep_until_end();
 
     Ok(())
 }

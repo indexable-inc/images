@@ -1,5 +1,5 @@
 # Body of the `say-detached` bash app (see users/andrewgazelka/home.nix).
-# No shebang / `set` line: the mkBashApp wrapper supplies bash + `set -euo
+# No shebang / `set` line: the writeBashApplication wrapper supplies bash + `set -euo
 # pipefail` and bakes minecraft-sound + the speaker onto PATH via runtimeInputs.
 #
 # Play an optional Minecraft sound, then speak text aloud, in a NEW session

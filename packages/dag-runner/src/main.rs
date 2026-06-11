@@ -384,8 +384,11 @@ async fn run(
 
             report_started(&name_owned, started, mode, pb.as_ref());
             let node_started = Instant::now();
-            let CommandOutput { outcome, stdout, stderr } =
-                run_command(&node, pb.as_ref(), cancel_for_task).await;
+            let CommandOutput {
+                outcome,
+                stdout,
+                stderr,
+            } = run_command(&node, pb.as_ref(), cancel_for_task).await;
             let duration = node_started.elapsed();
             report_finished(&name_owned, &outcome, duration, started, mode, pb.as_ref());
 
@@ -520,7 +523,11 @@ async fn run_command(
     let stdout = stdout_task.await.unwrap_or_default();
     let mut stderr = stderr_task.await.unwrap_or_default();
     stderr.push_str(&extra_stderr);
-    CommandOutput { outcome, stdout, stderr }
+    CommandOutput {
+        outcome,
+        stdout,
+        stderr,
+    }
 }
 
 enum Completion {

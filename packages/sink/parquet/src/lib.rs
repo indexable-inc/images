@@ -24,13 +24,13 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use source_meta::{Document, Reconciler, Source, keys};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path as ObjectPath;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 use parquet::arrow::ArrowWriter;
 use sha2::{Digest as _, Sha256};
 use snafu::{IntoError as _, ResultExt as _, Snafu};
+use source_meta::{Document, Reconciler, Source, keys};
 
 /// Connection and layout for the S3/R2 parquet sink.
 #[derive(Debug, Clone)]
@@ -132,7 +132,10 @@ impl Config {
     /// Returns an error if the S3 client cannot be built from the config and
     /// environment.
     pub fn connect(&self) -> Result<ParquetReconciler> {
-        Ok(ParquetReconciler { store: build_store(self)?, prefix: self.prefix.clone() })
+        Ok(ParquetReconciler {
+            store: build_store(self)?,
+            prefix: self.prefix.clone(),
+        })
     }
 }
 
@@ -141,7 +144,10 @@ impl<S: Clone> ParquetReconciler<S> {
     /// per-user prefixes from one connected reconciler this way).
     #[must_use]
     pub fn with_prefix(&self, prefix: impl Into<String>) -> Self {
-        Self { store: self.store.clone(), prefix: prefix.into() }
+        Self {
+            store: self.store.clone(),
+            prefix: prefix.into(),
+        }
     }
 }
 
@@ -156,7 +162,10 @@ impl<S: ObjectStore> Reconciler for ParquetReconciler<S> {
     /// vanishes with the rewrite.
     async fn reconcile(&self, source: &Source, documents: &[Document]) -> Result<Report> {
         if documents.is_empty() {
-            return Ok(Report { rows: 0, skipped: true });
+            return Ok(Report {
+                rows: 0,
+                skipped: true,
+            });
         }
 
         let prefix = &self.prefix;
@@ -164,7 +173,10 @@ impl<S: ObjectStore> Reconciler for ParquetReconciler<S> {
         let manifest_path = ObjectPath::from(format!("{prefix}/source={source}/_manifest.json"));
         let hash = corpus_hash(documents);
         if load_manifest(&self.store, &manifest_path).await? == Some(hash.clone()) {
-            return Ok(Report { rows: 0, skipped: true });
+            return Ok(Report {
+                rows: 0,
+                skipped: true,
+            });
         }
 
         let batch = record_batch(documents)?;
@@ -172,9 +184,14 @@ impl<S: ObjectStore> Reconciler for ParquetReconciler<S> {
         self.store
             .put(&data_path, PutPayload::from(bytes))
             .await
-            .context(PutSnafu { path: data_path.to_string() })?;
+            .context(PutSnafu {
+                path: data_path.to_string(),
+            })?;
         save_manifest(&self.store, &manifest_path, &hash).await?;
-        Ok(Report { rows: documents.len(), skipped: false })
+        Ok(Report {
+            rows: documents.len(),
+            skipped: false,
+        })
     }
 }
 
@@ -187,9 +204,9 @@ fn build_store(config: &Config) -> Result<AmazonS3> {
     if let Some(endpoint) = &config.endpoint {
         builder = builder.with_endpoint(endpoint);
     }
-    builder
-        .build()
-        .context(BuildStoreSnafu { bucket: config.bucket.clone() })
+    builder.build().context(BuildStoreSnafu {
+        bucket: config.bucket.clone(),
+    })
 }
 
 /// The flat corpus schema: identity, the common header fields, the embedded
@@ -213,19 +230,56 @@ fn schema() -> Schema {
 /// fields out of each document's flat metadata.
 fn record_batch(documents: &[Document]) -> Result<RecordBatch> {
     let meta_str = |doc: &Document, key: &str| {
-        doc.meta_json.get(key).and_then(serde_json::Value::as_str).map(str::to_owned)
+        doc.meta_json
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
     };
     let columns: Vec<ArrayRef> = vec![
-        Arc::new(documents.iter().map(|d| Some(d.external_id.as_str())).collect::<StringArray>()),
-        Arc::new(documents.iter().map(|d| meta_str(d, keys::SOURCE)).collect::<StringArray>()),
-        Arc::new(documents.iter().map(|d| Some(d.content_hash.as_str())).collect::<StringArray>()),
-        Arc::new(documents.iter().map(|d| meta_str(d, keys::TITLE)).collect::<StringArray>()),
-        Arc::new(documents.iter().map(|d| meta_str(d, "url")).collect::<StringArray>()),
-        Arc::new(documents.iter().map(|d| meta_str(d, keys::HOST)).collect::<StringArray>()),
         Arc::new(
             documents
                 .iter()
-                .map(|d| d.meta_json.get(keys::TIMESTAMP).and_then(serde_json::Value::as_i64))
+                .map(|d| Some(d.external_id.as_str()))
+                .collect::<StringArray>(),
+        ),
+        Arc::new(
+            documents
+                .iter()
+                .map(|d| meta_str(d, keys::SOURCE))
+                .collect::<StringArray>(),
+        ),
+        Arc::new(
+            documents
+                .iter()
+                .map(|d| Some(d.content_hash.as_str()))
+                .collect::<StringArray>(),
+        ),
+        Arc::new(
+            documents
+                .iter()
+                .map(|d| meta_str(d, keys::TITLE))
+                .collect::<StringArray>(),
+        ),
+        Arc::new(
+            documents
+                .iter()
+                .map(|d| meta_str(d, "url"))
+                .collect::<StringArray>(),
+        ),
+        Arc::new(
+            documents
+                .iter()
+                .map(|d| meta_str(d, keys::HOST))
+                .collect::<StringArray>(),
+        ),
+        Arc::new(
+            documents
+                .iter()
+                .map(|d| {
+                    d.meta_json
+                        .get(keys::TIMESTAMP)
+                        .and_then(serde_json::Value::as_i64)
+                })
                 .collect::<Int64Array>(),
         ),
         Arc::new(
@@ -234,7 +288,12 @@ fn record_batch(documents: &[Document]) -> Result<RecordBatch> {
                 .map(|d| Some(String::from_utf8_lossy(&d.body).into_owned()))
                 .collect::<StringArray>(),
         ),
-        Arc::new(documents.iter().map(|d| Some(d.meta_json.to_string())).collect::<StringArray>()),
+        Arc::new(
+            documents
+                .iter()
+                .map(|d| Some(d.meta_json.to_string()))
+                .collect::<StringArray>(),
+        ),
     ];
     RecordBatch::try_new(Arc::new(schema()), columns).context(BatchSnafu)
 }
@@ -242,7 +301,8 @@ fn record_batch(documents: &[Document]) -> Result<RecordBatch> {
 /// Encode a record batch to parquet bytes in memory.
 fn encode_parquet(batch: &RecordBatch) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
-    let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).context(EncodeSnafu)?;
+    let mut writer =
+        ArrowWriter::try_new(&mut buffer, batch.schema(), None).context(EncodeSnafu)?;
     writer.write(batch).context(EncodeSnafu)?;
     writer.close().context(EncodeSnafu)?;
     Ok(buffer)
@@ -255,7 +315,10 @@ fn encode_parquet(batch: &RecordBatch) -> Result<Vec<u8>> {
 fn corpus_hash(documents: &[Document]) -> String {
     let mut pairs: BTreeSet<(&str, &str)> = BTreeSet::new();
     for document in documents {
-        pairs.insert((document.external_id.as_str(), document.content_hash.as_str()));
+        pairs.insert((
+            document.external_id.as_str(),
+            document.content_hash.as_str(),
+        ));
     }
     let mut digest = Sha256::new();
     for (external_id, content_hash) in pairs {
@@ -264,7 +327,7 @@ fn corpus_hash(documents: &[Document]) -> String {
         digest.update(content_hash.as_bytes());
         digest.update([0]);
     }
-    format!("{:x}", digest.finalize())
+    hex::encode(digest.finalize())
 }
 
 /// Load the per-source manifest's corpus hash, or `None` when it does not exist
@@ -273,12 +336,23 @@ async fn load_manifest(store: &dyn ObjectStore, path: &ObjectPath) -> Result<Opt
     let result = match store.get(path).await {
         Ok(result) => result,
         Err(object_store::Error::NotFound { .. }) => return Ok(None),
-        Err(source) => return Err(GetSnafu { path: path.to_string() }.into_error(source)),
+        Err(source) => {
+            return Err(GetSnafu {
+                path: path.to_string(),
+            }
+            .into_error(source));
+        }
     };
-    let bytes = result.bytes().await.context(GetSnafu { path: path.to_string() })?;
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&bytes).context(ManifestSnafu { path: path.to_string() })?;
-    Ok(manifest.get("content_hash").and_then(serde_json::Value::as_str).map(str::to_owned))
+    let bytes = result.bytes().await.context(GetSnafu {
+        path: path.to_string(),
+    })?;
+    let manifest: serde_json::Value = serde_json::from_slice(&bytes).context(ManifestSnafu {
+        path: path.to_string(),
+    })?;
+    Ok(manifest
+        .get("content_hash")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned))
 }
 
 /// Write the per-source manifest with the current corpus hash.
@@ -288,18 +362,20 @@ async fn save_manifest(store: &dyn ObjectStore, path: &ObjectPath, hash: &str) -
     store
         .put(path, PutPayload::from(bytes))
         .await
-        .context(PutSnafu { path: path.to_string() })?;
+        .context(PutSnafu {
+            path: path.to_string(),
+        })?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{ParquetReconciler, Report};
-    use source_meta::{Document, Reconciler as _, Source};
     use object_store::ObjectStoreExt;
     use object_store::memory::InMemory;
     use object_store::path::Path as ObjectPath;
     use serde_json::json;
+    use source_meta::{Document, Reconciler as _, Source};
 
     fn doc(id: &str, body: &str) -> Document {
         let content_hash = source_meta::hash_body(body.as_bytes());
@@ -321,12 +397,17 @@ mod tests {
 
     #[tokio::test]
     async fn writes_parquet_and_manifest_then_skips_unchanged() {
-        let reconciler =
-            ParquetReconciler { store: InMemory::new(), prefix: "corpus".to_owned() };
+        let reconciler = ParquetReconciler {
+            store: InMemory::new(),
+            prefix: "corpus".to_owned(),
+        };
         let source = Source::new("test");
         let docs = vec![doc("a", "alpha"), doc("b", "beta")];
 
-        let first: Report = reconciler.reconcile(&source, &docs).await.expect("first sync");
+        let first: Report = reconciler
+            .reconcile(&source, &docs)
+            .await
+            .expect("first sync");
         assert_eq!(first.rows, 2);
         assert!(!first.skipped);
 
@@ -337,17 +418,24 @@ mod tests {
         assert!(reconciler.store.get(&manifest).await.is_ok());
 
         // A second identical run is a no-op (corpus hash unchanged).
-        let second = reconciler.reconcile(&source, &docs).await.expect("second sync");
+        let second = reconciler
+            .reconcile(&source, &docs)
+            .await
+            .expect("second sync");
         assert!(second.skipped);
         assert_eq!(second.rows, 0);
     }
 
     #[tokio::test]
     async fn empty_source_writes_nothing() {
-        let reconciler =
-            ParquetReconciler { store: InMemory::new(), prefix: "corpus".to_owned() };
-        let report =
-            reconciler.reconcile(&Source::new("test"), &[]).await.expect("sync");
+        let reconciler = ParquetReconciler {
+            store: InMemory::new(),
+            prefix: "corpus".to_owned(),
+        };
+        let report = reconciler
+            .reconcile(&Source::new("test"), &[])
+            .await
+            .expect("sync");
         assert!(report.skipped);
         assert_eq!(report.rows, 0);
     }
@@ -357,13 +445,22 @@ mod tests {
         // `with_prefix` derives the per-user reconciler in the fleet path; the
         // derived writer must land objects under the new prefix, not the base.
         let store = std::sync::Arc::new(InMemory::new());
-        let base = ParquetReconciler { store: std::sync::Arc::clone(&store), prefix: "corpus/host=h".to_owned() };
+        let base = ParquetReconciler {
+            store: std::sync::Arc::clone(&store),
+            prefix: "corpus/host=h".to_owned(),
+        };
         let scoped = base.with_prefix("corpus/host=h/user=alice");
 
-        scoped.reconcile(&Source::new("test"), &[doc("a", "alpha")]).await.expect("sync");
+        scoped
+            .reconcile(&Source::new("test"), &[doc("a", "alpha")])
+            .await
+            .expect("sync");
         let scoped_path = ObjectPath::from("corpus/host=h/user=alice/source=test/data.parquet");
         let base_path = ObjectPath::from("corpus/host=h/source=test/data.parquet");
         assert!(store.get(&scoped_path).await.is_ok());
-        assert!(store.get(&base_path).await.is_err(), "base prefix must stay untouched");
+        assert!(
+            store.get(&base_path).await.is_err(),
+            "base prefix must stay untouched"
+        );
     }
 }

@@ -180,9 +180,7 @@ pub struct BootLinux {
 
 #[cfg(have_libkrun)]
 fn cstr(s: &str) -> Result<CString, Error> {
-    CString::new(s).map_err(|_| Error::Nul {
-        path: s.to_owned(),
-    })
+    CString::new(s).map_err(|_| Error::Nul { path: s.to_owned() })
 }
 
 /// Write the embedded firmware to a per-user cache file (once) and return its
@@ -260,7 +258,10 @@ fn set_payload(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
     let block_id = cstr("root")?;
     // Safety: pointers are valid for the call; krun copies what it needs.
     unsafe {
-        check("krun_set_firmware", krun_set_firmware(ctx, firmware_c.as_ptr()))?;
+        check(
+            "krun_set_firmware",
+            krun_set_firmware(ctx, firmware_c.as_ptr()),
+        )?;
         check(
             "krun_add_disk2",
             krun_add_disk2(
@@ -323,10 +324,18 @@ fn set_payload(ctx: u32, boot: &BootLinux) -> Result<Vec<CString>, Error> {
     // pointer arrays and their backing CStrings are returned to outlive the call.
     unsafe {
         check("krun_set_root", krun_set_root(ctx, root_c.as_ptr()))?;
-        check("krun_set_workdir", krun_set_workdir(ctx, workdir_c.as_ptr()))?;
+        check(
+            "krun_set_workdir",
+            krun_set_workdir(ctx, workdir_c.as_ptr()),
+        )?;
         check(
             "krun_set_exec",
-            krun_set_exec(ctx, exec_path_c.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr()),
+            krun_set_exec(
+                ctx,
+                exec_path_c.as_ptr(),
+                argv_ptrs.as_ptr(),
+                env_ptrs.as_ptr(),
+            ),
         )?;
     }
     // Keep every CString alive past the calls above (the pointer arrays borrow

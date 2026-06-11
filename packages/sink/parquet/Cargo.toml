@@ -14,6 +14,7 @@ arrow.workspace = true
 parquet = { workspace = true, features = ["arrow"] }
 object_store = { workspace = true, features = ["aws"] }
 serde_json.workspace = true
+hex.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 

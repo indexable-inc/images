@@ -136,7 +136,10 @@ impl GmailClient {
             max_results,
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let stubs = client.list_messages(&q).await.map_err(into_py_runtime_error)?;
+            let stubs = client
+                .list_messages(&q)
+                .await
+                .map_err(into_py_runtime_error)?;
             pythonize_owned(&stubs)
         })
     }
@@ -159,7 +162,10 @@ impl GmailClient {
             max_results,
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let stubs = client.list_messages(&q).await.map_err(into_py_runtime_error)?;
+            let stubs = client
+                .list_messages(&q)
+                .await
+                .map_err(into_py_runtime_error)?;
             pythonize_owned(&stubs)
         })
     }
@@ -202,7 +208,10 @@ impl GmailClient {
             max_results,
         };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let threads = client.list_threads(&q).await.map_err(into_py_runtime_error)?;
+            let threads = client
+                .list_threads(&q)
+                .await
+                .map_err(into_py_runtime_error)?;
             pythonize_owned(&threads)
         })
     }
@@ -319,11 +328,7 @@ impl GmailClient {
     }
 
     /// Send a previously saved draft.
-    fn send_draft<'py>(
-        &self,
-        py: Python<'py>,
-        draft_id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn send_draft<'py>(&self, py: Python<'py>, draft_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let sent = client
@@ -336,11 +341,7 @@ impl GmailClient {
 
     /// List drafts.
     #[pyo3(signature = (max_results = 20))]
-    fn list_drafts<'py>(
-        &self,
-        py: Python<'py>,
-        max_results: usize,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn list_drafts<'py>(&self, py: Python<'py>, max_results: usize) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let drafts = client
@@ -352,11 +353,7 @@ impl GmailClient {
     }
 
     /// Delete a draft.
-    fn delete_draft<'py>(
-        &self,
-        py: Python<'py>,
-        draft_id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn delete_draft<'py>(&self, py: Python<'py>, draft_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             client
@@ -389,11 +386,7 @@ impl GmailClient {
     }
 
     /// Archive a message (remove the INBOX label).
-    fn archive<'py>(
-        &self,
-        py: Python<'py>,
-        message_id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn archive<'py>(&self, py: Python<'py>, message_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let message = client
@@ -429,11 +422,7 @@ impl GmailClient {
     }
 
     /// Mark a message read (remove UNREAD).
-    fn mark_read<'py>(
-        &self,
-        py: Python<'py>,
-        message_id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn mark_read<'py>(&self, py: Python<'py>, message_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let message = client
@@ -445,11 +434,7 @@ impl GmailClient {
     }
 
     /// Mark a message unread (add UNREAD).
-    fn mark_unread<'py>(
-        &self,
-        py: Python<'py>,
-        message_id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn mark_unread<'py>(&self, py: Python<'py>, message_id: String) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let message = client
@@ -562,18 +547,17 @@ impl CalendarClient {
         calendar_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
-        let calendar = calendar_id
-            .unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
+        let calendar = calendar_id.unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
         let time_min = match time_min {
-            Some(input) => Some(
-                chrono::DateTime::parse_from_rfc3339(&input).map_err(into_py_value_error)?,
-            ),
+            Some(input) => {
+                Some(chrono::DateTime::parse_from_rfc3339(&input).map_err(into_py_value_error)?)
+            }
             None => None,
         };
         let time_max = match time_max {
-            Some(input) => Some(
-                chrono::DateTime::parse_from_rfc3339(&input).map_err(into_py_value_error)?,
-            ),
+            Some(input) => {
+                Some(chrono::DateTime::parse_from_rfc3339(&input).map_err(into_py_value_error)?)
+            }
             None => None,
         };
         let query = EventQuery {
@@ -600,8 +584,7 @@ impl CalendarClient {
         calendar_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
-        let calendar = calendar_id
-            .unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
+        let calendar = calendar_id.unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let event = client
                 .get_event(&calendar, &event_id)
@@ -654,8 +637,7 @@ impl CalendarClient {
                 .map(|email| AttendeeDraft { email })
                 .collect(),
         };
-        let calendar = calendar_id
-            .unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
+        let calendar = calendar_id.unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
         let send_updates = parse_send_updates(notify.as_deref())?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let event = client
@@ -676,8 +658,7 @@ impl CalendarClient {
         notify: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = Arc::clone(&self.inner);
-        let calendar = calendar_id
-            .unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
+        let calendar = calendar_id.unwrap_or_else(|| google_calendar::PRIMARY_CALENDAR.to_owned());
         let send_updates = parse_send_updates(notify.as_deref())?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             client

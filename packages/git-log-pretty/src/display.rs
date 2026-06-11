@@ -75,10 +75,18 @@ struct CommitBlock {
 
 /// Build a commit's two rendered pieces: the `shorthash summary • when` header
 /// line and the (possibly empty) indented changed-file tree.
-fn commit_block(ahead: &git::AheadCommit<'_>, theme: Theme) -> color_eyre::eyre::Result<CommitBlock> {
+fn commit_block(
+    ahead: &git::AheadCommit<'_>,
+    theme: Theme,
+) -> color_eyre::eyre::Result<CommitBlock> {
     let commit = &ahead.commit;
     let short = commit.id().to_string().chars().take(7).collect::<String>();
-    let summary = commit.summary().unwrap_or("<no message>").trim();
+    let summary = commit
+        .summary()
+        .ok()
+        .flatten()
+        .unwrap_or("<no message>")
+        .trim();
     let when = time::relative(commit.time().seconds())?;
 
     let yellow = palette::fg(Color::Ansi(AnsiColor::Yellow));
@@ -92,11 +100,18 @@ fn commit_block(ahead: &git::AheadCommit<'_>, theme: Theme) -> color_eyre::eyre:
         when = palette::paint(dim, &when),
     );
     let icons = tree::render(&ahead.changed_files, theme);
-    Ok(CommitBlock { header, tree: icons })
+    Ok(CommitBlock {
+        header,
+        tree: icons,
+    })
 }
 
 /// Write the plain header / tree / blank-line form (no avatar).
-fn write_plain(out: &mut dyn std::io::Write, header: &str, icons: &str) -> color_eyre::eyre::Result<()> {
+fn write_plain(
+    out: &mut dyn std::io::Write,
+    header: &str,
+    icons: &str,
+) -> color_eyre::eyre::Result<()> {
     writeln!(out, "{header}")?;
     if !icons.is_empty() {
         writeln!(out, "{icons}")?;
@@ -112,7 +127,10 @@ pub fn print_commit(
     ahead: &git::AheadCommit<'_>,
     theme: Theme,
 ) -> color_eyre::eyre::Result<()> {
-    let CommitBlock { header, tree: icons } = commit_block(ahead, theme)?;
+    let CommitBlock {
+        header,
+        tree: icons,
+    } = commit_block(ahead, theme)?;
     write_plain(out, &header, &icons)
 }
 
@@ -141,7 +159,10 @@ pub fn print_commit_with_avatar(
     avatar: Option<&Avatar>,
     rows: u32,
 ) -> color_eyre::eyre::Result<()> {
-    let CommitBlock { header, tree: icons } = commit_block(ahead, theme)?;
+    let CommitBlock {
+        header,
+        tree: icons,
+    } = commit_block(ahead, theme)?;
 
     let Some(avatar) = avatar.filter(|_| rows > 0) else {
         return write_plain(out, &header, &icons);
@@ -177,7 +198,11 @@ fn compose_avatar_block(lines: &[&str], avatar_id: u32, rows: u32) -> String {
             && row < rows
         {
             // Placeholder cells, a one-column gap, then the text.
-            let _ = writeln!(buf, "{} {content}", kitty::placeholder_row(avatar_id, row, cols));
+            let _ = writeln!(
+                buf,
+                "{} {content}",
+                kitty::placeholder_row(avatar_id, row, cols)
+            );
         } else {
             // Past the image: pad the gutter with spaces so the text stays aligned.
             let _ = writeln!(buf, "{:gutter$}{content}", "");
@@ -218,7 +243,10 @@ mod tests {
 
     #[test]
     fn non_conventional_summary_passes_through_plain() {
-        assert_eq!(format_summary("plain message", Theme::Dark), "plain message");
+        assert_eq!(
+            format_summary("plain message", Theme::Dark),
+            "plain message"
+        );
     }
 
     #[test]
@@ -232,10 +260,20 @@ mod tests {
         let block = compose_avatar_block(&["header", "tree"], 42, 2);
         let lines: Vec<&str> = block.lines().collect();
         // Two image rows beside the two content lines, then a blank separator.
-        assert!(lines[0].contains(kitty::PLACEHOLDER), "row 0 needs placeholder cells");
-        assert!(lines[1].contains(kitty::PLACEHOLDER), "row 1 needs placeholder cells");
+        assert!(
+            lines[0].contains(kitty::PLACEHOLDER),
+            "row 0 needs placeholder cells"
+        );
+        assert!(
+            lines[1].contains(kitty::PLACEHOLDER),
+            "row 1 needs placeholder cells"
+        );
         assert!(lines[0].contains("header") && lines[1].contains("tree"));
-        assert_eq!(block.lines().last(), Some(""), "block ends with a blank line");
+        assert_eq!(
+            block.lines().last(),
+            Some(""),
+            "block ends with a blank line"
+        );
     }
 
     #[test]
@@ -245,17 +283,26 @@ mod tests {
         let block = compose_avatar_block(&["header", "extra"], 7, 1);
         let lines: Vec<&str> = block.lines().collect();
         assert!(lines[0].contains(kitty::PLACEHOLDER));
-        assert!(!lines[1].contains(kitty::PLACEHOLDER), "padded line has no placeholder");
+        assert!(
+            !lines[1].contains(kitty::PLACEHOLDER),
+            "padded line has no placeholder"
+        );
         // gutter = avatar_cols(1) + 1 = 3 spaces before the text.
-        assert!(lines[1].starts_with("   extra"), "misaligned pad: {:?}", lines[1]);
+        assert!(
+            lines[1].starts_with("   extra"),
+            "misaligned pad: {:?}",
+            lines[1]
+        );
     }
 
     #[test]
     fn avatar_block_never_clips_image_vertically() {
         // A single content line still emits two rows so a 2-row image fits.
         let block = compose_avatar_block(&["only"], 9, 2);
-        let placeholder_rows =
-            block.lines().filter(|line| line.contains(kitty::PLACEHOLDER)).count();
+        let placeholder_rows = block
+            .lines()
+            .filter(|line| line.contains(kitty::PLACEHOLDER))
+            .count();
         assert_eq!(placeholder_rows, 2, "both image rows must be drawn");
     }
 }

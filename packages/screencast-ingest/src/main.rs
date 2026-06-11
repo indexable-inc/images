@@ -141,7 +141,8 @@ fn safe_component(s: &str) -> bool {
         && s.len() <= 128
         && s != "."
         && s != ".."
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
 /// Map a stored file's extension to its HLS content type.
@@ -177,7 +178,12 @@ struct ResolvedPath {
 
 /// Resolve `{user}/{session}/{file}` to an on-disk path, rejecting any segment
 /// that is not a safe plain name. Returns the validated directory and full path.
-fn resolve(root: &FsPath, user: &str, session: &str, file: &str) -> Result<ResolvedPath, HttpError> {
+fn resolve(
+    root: &FsPath,
+    user: &str,
+    session: &str,
+    file: &str,
+) -> Result<ResolvedPath, HttpError> {
     if !(safe_component(user) && safe_component(session) && safe_component(file)) {
         return Err(HttpError {
             status: StatusCode::BAD_REQUEST,
@@ -327,7 +333,10 @@ struct SessionInfo {
 /// entries are skipped rather than failing the whole listing, so one unreadable
 /// folder cannot blank the dashboard.
 async fn scan_sessions(root: &FsPath) -> Vec<SessionInfo> {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let mut out = Vec::new();
 
     let Ok(mut users) = tokio::fs::read_dir(root).await else {
@@ -370,7 +379,9 @@ async fn summarize(dir: PathBuf, user: &str, session: &str, now: u64) -> Option<
         if name.starts_with('.') {
             continue; // in-flight temp file
         }
-        let Ok(meta) = ent.metadata().await else { continue };
+        let Ok(meta) = ent.metadata().await else {
+            continue;
+        };
         if !meta.is_file() {
             continue;
         }
@@ -402,7 +413,11 @@ async fn summarize(dir: PathBuf, user: &str, session: &str, now: u64) -> Option<
         user: user.to_owned(),
         session: session.to_owned(),
         playlist: format!("/ingest/{user}/{session}/index.m3u8"),
-        started: if started == u64::MAX { updated } else { started },
+        started: if started == u64::MAX {
+            updated
+        } else {
+            started
+        },
         updated,
         segments,
         bytes,

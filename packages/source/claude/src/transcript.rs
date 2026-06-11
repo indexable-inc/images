@@ -29,7 +29,9 @@ use crate::record::{Message, MessageOrigin};
 /// Returns [`Error::ReadFile`](crate::Error::ReadFile) if the file cannot be
 /// read.
 pub fn parse(path: &Path, origin: &MessageOrigin) -> Result<Vec<Message>> {
-    let raw = std::fs::read_to_string(path).context(ReadFileSnafu { path: path.to_path_buf() })?;
+    let raw = std::fs::read_to_string(path).context(ReadFileSnafu {
+        path: path.to_path_buf(),
+    })?;
 
     // Parse every line first, then fold each `tool_result` into the `tool_use`
     // that produced it (the result arrives on a later line, as its own `user`
@@ -237,8 +239,14 @@ struct Rendered {
 /// thinking, and tool calls with their results folded in.
 fn render_content(content: Option<Content>, tools: &ToolIndex) -> Rendered {
     match content {
-        None => Rendered { body: String::new(), tool_name: None },
-        Some(Content::Text(text)) => Rendered { body: text, tool_name: None },
+        None => Rendered {
+            body: String::new(),
+            tool_name: None,
+        },
+        Some(Content::Text(text)) => Rendered {
+            body: text,
+            tool_name: None,
+        },
         Some(Content::Blocks(blocks)) => render_blocks(blocks, tools),
     }
 }
@@ -274,7 +282,10 @@ fn render_blocks(blocks: Vec<Block>, tools: &ToolIndex) -> Rendered {
                 // Normally folded into its `tool_use` above, so skip it here. But
                 // if the matching call is absent (a truncated or corrupt
                 // transcript), render it standalone rather than drop its content.
-                let folded = block.tool_use_id.as_deref().is_some_and(|id| tools.calls.contains(id));
+                let folded = block
+                    .tool_use_id
+                    .as_deref()
+                    .is_some_and(|id| tools.calls.contains(id));
                 if !folded {
                     let rendered = block.content.map_or_else(String::new, render_value);
                     push_section(&mut body, Some(&format!("[tool_result] {rendered}")));
@@ -374,12 +385,19 @@ mod tests {
         ]);
 
         let messages = parse(file.path(), &origin()).expect("parse");
-        assert_eq!(messages.len(), 1, "the standalone tool_result line is not its own document");
+        assert_eq!(
+            messages.len(),
+            1,
+            "the standalone tool_result line is not its own document"
+        );
         let body = &messages[0].body;
         assert_eq!(messages[0].uuid, "a1");
         assert!(body.contains("[tool_use Bash]"), "call present: {body}");
         assert!(body.contains("ls"), "call input present: {body}");
-        assert!(body.contains("[tool_result] OUTPUT-MARKER"), "result folded in: {body}");
+        assert!(
+            body.contains("[tool_result] OUTPUT-MARKER"),
+            "result folded in: {body}"
+        );
     }
 
     #[test]
@@ -390,7 +408,11 @@ mod tests {
             r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"MISSING","content":"ORPHAN-OUTPUT"}]}}"#,
         ]);
         let messages = parse(file.path(), &origin()).expect("parse");
-        assert_eq!(messages.len(), 1, "an orphan tool_result still yields a document");
+        assert_eq!(
+            messages.len(),
+            1,
+            "an orphan tool_result still yields a document"
+        );
         assert!(
             messages[0].body.contains("[tool_result] ORPHAN-OUTPUT"),
             "{}",
@@ -405,7 +427,11 @@ mod tests {
         ]);
         let messages = parse(file.path(), &origin()).expect("parse");
         assert_eq!(messages.len(), 1);
-        assert!(messages[0].body.contains("[tool_use Read]"), "{}", messages[0].body);
+        assert!(
+            messages[0].body.contains("[tool_use Read]"),
+            "{}",
+            messages[0].body
+        );
         assert!(!messages[0].body.contains("[tool_result]"));
     }
 }

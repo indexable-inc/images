@@ -36,7 +36,10 @@ const MAX_COMMITS: usize = 15;
 const AVATAR_SIZE_PX: u32 = 128;
 
 #[derive(Parser)]
-#[command(name = "git-log-pretty", about = "A pretty git log viewer with file-icon trees")]
+#[command(
+    name = "git-log-pretty",
+    about = "A pretty git log viewer with file-icon trees"
+)]
 struct Cli {
     /// Write directly to stdout instead of piping through a pager.
     #[arg(long, global = true)]
@@ -96,11 +99,17 @@ fn run_log(allow_pager: bool, want_avatars: bool, avatar_rows: u32) -> Result<()
     // On `main` there is nothing to be ahead of, so an ahead-of-main diff would
     // always be empty. Show recent history instead of "All caught up".
     let (header, commits) = if git::head_branch_name(&repo).as_deref() == Some("main") {
-        ("Recent commits on main".to_string(), git::recent_commits(&repo, MAX_COMMITS)?)
+        (
+            "Recent commits on main".to_string(),
+            git::recent_commits(&repo, MAX_COMMITS)?,
+        )
     } else {
         let mut ahead = git::commits_ahead(&repo, "main")?;
         if ahead.is_empty() {
-            println!("{}", paint(fg(Color::Ansi(AnsiColor::Green)), "All caught up with main"));
+            println!(
+                "{}",
+                paint(fg(Color::Ansi(AnsiColor::Green)), "All caught up with main")
+            );
             return Ok(());
         }
 
@@ -112,7 +121,11 @@ fn run_log(allow_pager: bool, want_avatars: bool, avatar_rows: u32) -> Result<()
             );
             format!("{count} commits ahead of main{detail}", count = ahead.len())
         } else {
-            let label = if ahead.len() == 1 { "commit" } else { "commits" };
+            let label = if ahead.len() == 1 {
+                "commit"
+            } else {
+                "commits"
+            };
             format!("{count} {label} ahead of main", count = ahead.len())
         };
 
@@ -120,16 +133,32 @@ fn run_log(allow_pager: bool, want_avatars: bool, avatar_rows: u32) -> Result<()
         (header, ahead)
     };
 
-    emit_log(&repo, &header, &commits, theme, allow_pager, want_avatars, avatar_rows)
+    emit_log(
+        &repo,
+        &header,
+        &commits,
+        theme,
+        allow_pager,
+        want_avatars,
+        avatar_rows,
+    )
 }
 
-/// Render the header and commit blocks, paging like `git log`.
+/// Render the header and commit blocks, paging like `git log` unless avatars
+/// are drawn.
 ///
 /// When avatars are enabled (a graphics terminal, a real TTY, and not opted
 /// out), each unique author image is transmitted to the terminal once, up
-/// front, as a kitty Unicode-placeholder virtual placement. The paged text then
-/// only carries placeholder cells, which are ordinary characters, so the log
-/// pages and scrolls with the avatars in place instead of bypassing the pager.
+/// front, as a kitty Unicode-placeholder virtual placement, and the commit
+/// gutter is rendered with placeholder cells that resolve to it.
+///
+/// Those cells must reach the terminal verbatim, so a graphics log bypasses the
+/// pager and writes straight to stdout, leaning on the terminal's own
+/// scrollback. A screen-repainting pager (`less`) redraws each line with its own
+/// cursor and SGR state, which severs a placeholder cell from the foreground
+/// color that carries its image id (and its alternate screen keeps a separate,
+/// empty image store), so the avatars collapse into replacement glyphs. Without
+/// avatars there are no such cells, so the plain log pages like `git log`.
 fn emit_log(
     repo: &git2::Repository,
     header: &str,
@@ -139,18 +168,18 @@ fn emit_log(
     want_avatars: bool,
     avatar_rows: u32,
 ) -> Result<()> {
-    let avatars_enabled = want_avatars
-        && avatar_rows > 0
-        && kitty::is_supported()
-        && std::io::stdout().is_terminal();
+    let avatars_enabled =
+        want_avatars && avatar_rows > 0 && kitty::is_supported() && std::io::stdout().is_terminal();
 
     // A fetch or runtime-build failure shouldn't sink the whole log; fall back
     // to the plain, still-paged renderer.
-    let mut fetched = avatars_enabled.then(|| fetch_avatars(repo, commits).ok()).flatten();
+    let mut fetched = avatars_enabled
+        .then(|| fetch_avatars(repo, commits).ok())
+        .flatten();
 
-    // Transmit the pixels before the pager starts drawing, so the placeholder
-    // cells it later prints have an image to resolve against. If that write to
-    // the terminal fails, drop the avatars and page the plain log rather than
+    // Transmit the pixels before any output is drawn, so the placeholder cells
+    // printed later have an image to resolve against. If that write to the
+    // terminal fails, drop the avatars and render the plain log rather than
     // erroring out, matching the fetch-failure fallback above.
     if let Some(images) = &fetched
         && transmit_avatars(images, avatar_rows).is_err()
@@ -158,12 +187,25 @@ fn emit_log(
         fetched = None;
     }
 
-    pager::paged(allow_pager, |out| {
+    // Graphics bypass the pager: placeholder cells only survive when written to
+    // the terminal verbatim, so once we are actually drawing an avatar we skip
+    // the pager (see this function's docs). A plain log still pages.
+    let drawing_avatars = fetched
+        .as_ref()
+        .is_some_and(|fetched| fetched.iter().any(Option::is_some));
+
+    pager::paged(allow_pager && !drawing_avatars, |out| {
         writeln!(out, "{}\n", paint(fg(Color::Ansi(AnsiColor::Cyan)), header))?;
         for (index, commit) in commits.iter().enumerate() {
             match fetched.as_ref().and_then(|fetched| fetched.get(index)) {
                 Some(avatar) => {
-                    display::print_commit_with_avatar(out, commit, theme, avatar.as_ref(), avatar_rows)?;
+                    display::print_commit_with_avatar(
+                        out,
+                        commit,
+                        theme,
+                        avatar.as_ref(),
+                        avatar_rows,
+                    )?;
                 }
                 None => display::print_commit(out, commit, theme)?,
             }
@@ -174,18 +216,20 @@ fn emit_log(
 
 /// Transmit each unique avatar's pixels to the terminal as a kitty virtual
 /// placement, sized to the avatar box. Writes straight to stdout (the TTY) and
-/// flushes, so the images are stored before the pager prints any placeholders.
+/// flushes, so the images are stored before any placeholder cell is printed.
 fn transmit_avatars(fetched: &[Option<avatar::Avatar>], rows: u32) -> Result<()> {
     let cols = display::avatar_cols(rows);
     let mut out = std::io::stdout().lock();
     let mut sent = HashSet::new();
     for avatar in fetched.iter().flatten() {
         if sent.insert(avatar.id) {
-            let sequence = kitty::transmit_virtual(&kitty::Image::Png(&avatar.png), avatar.id, cols, rows);
+            let sequence =
+                kitty::transmit_virtual(&kitty::Image::Png(&avatar.png), avatar.id, cols, rows);
             out.write_all(sequence.as_bytes())?;
         }
     }
-    out.flush().wrap_err("failed to flush avatar images to the terminal")
+    out.flush()
+        .wrap_err("failed to flush avatar images to the terminal")
 }
 
 /// Resolve and download each commit author's avatar, one slot per commit.
@@ -204,7 +248,12 @@ fn fetch_avatars(
     let fetched = runtime.block_on(async {
         let mut fetched = Vec::with_capacity(commits.len());
         for ahead in commits {
-            let email = ahead.commit.author().email().unwrap_or_default().to_string();
+            let email = ahead
+                .commit
+                .author()
+                .email()
+                .unwrap_or_default()
+                .to_string();
             let sha = ahead.commit.id().to_string();
             fetched.push(resolver.avatar_for(&email, &sha).await);
         }
@@ -219,7 +268,10 @@ fn run_diff(base: &str, head: &str, allow_pager: bool) -> Result<()> {
     let files = git::diff_stat_files(&repo, base, head)?;
 
     if files.is_empty() {
-        println!("{}", paint(fg(Color::Ansi(AnsiColor::Green)), "No changes found"));
+        println!(
+            "{}",
+            paint(fg(Color::Ansi(AnsiColor::Green)), "No changes found")
+        );
         return Ok(());
     }
 
@@ -230,7 +282,11 @@ fn run_diff(base: &str, head: &str, allow_pager: bool) -> Result<()> {
     );
 
     pager::paged(allow_pager, |out| {
-        writeln!(out, "{}\n", paint(fg(Color::Ansi(AnsiColor::Cyan)), &header))?;
+        writeln!(
+            out,
+            "{}\n",
+            paint(fg(Color::Ansi(AnsiColor::Cyan)), &header)
+        )?;
         writeln!(out, "{}", tree::render(&files, theme))?;
         writeln!(out)?;
         Ok(())

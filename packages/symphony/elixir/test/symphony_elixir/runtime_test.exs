@@ -230,6 +230,26 @@ defmodule SymphonyElixir.RuntimeTest do
     assert final.nodes["b"].state == :succeeded
   end
 
+  test "a stray message does not crash the run", %{dir: dir} do
+    g = graph("run-stray-message", [node("a", state: :pending)])
+    FakeEngine.program("a", {:sleep_then, {:ok, %{v: 1}}})
+
+    {:ok, pid} = Runtime.start_link(g, opts(dir))
+
+    # The shape a timed-out Command.run child used to leak: a raw port
+    # line dequeued by the GenServer long after collect/4 gave up.
+    # Without the catch-all clause this was a FunctionClauseError that
+    # killed the run mid-flight (and the transient restart then
+    # double-submitted the in-flight turn).
+    send(pid, {self(), {:data, "Interrupted. Shutting down...\n"}})
+
+    wait_for_exit(pid)
+
+    {:ok, final} = Store.load("run-stray-message", dir: dir)
+    assert final.status == :succeeded
+    assert final.nodes["a"].state == :succeeded
+  end
+
   test "threads the resolved placement cwd into an agent turn", %{dir: dir} do
     # A `{:host, _}` location makes the runtime acquire a placement, so the
     # agent run_opts must carry the checkout cwd the engine turn needs.

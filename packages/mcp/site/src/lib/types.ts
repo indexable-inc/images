@@ -21,7 +21,9 @@ export interface LlmView {
   images: { mime: string; data: string }[];
 }
 
-export type JobStatus = 'running' | 'done' | 'error' | 'cancelled';
+// 'interrupted' marks a run that was still going when its server died; set when
+// the session file is reopened (store.mark_interrupted).
+export type JobStatus = 'running' | 'done' | 'error' | 'cancelled' | 'interrupted';
 
 // The live value one of a cell's identifiers was bound to when the run finished
 // (ix_notebook_mcp/introspect.py). `summary` is the inlay chip shown after the
@@ -47,8 +49,16 @@ export interface Job {
   output: string;
   result: string | null;
   error: string | null;
+  // The cell line currently executing (running jobs only; sampled off the
+  // kernel's suspended coroutine chain) and the cell line a failure was raised
+  // on. Both 1-based, matching the data-line spans in `code_html`.
+  line: number | null;
+  error_line: number | null;
   outputs: RichOutput[];
   bindings: Record<string, Binding>;
+  // 'cell' for a normal execution; 'replay' for a re-run performed while
+  // reopening a session file.
+  kind: 'cell' | 'replay';
 }
 
 export interface Resource {

@@ -1,8 +1,5 @@
 ---
-codex_model: gpt-5.3-codex
-reasoning_effort: medium
-sandbox: workspace-write
-approval_policy: never
+description: Sample skill that inspects the checked-out workspace and reports, without mutating anything.
 tools: []
 ---
 

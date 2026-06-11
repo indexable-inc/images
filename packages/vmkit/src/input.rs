@@ -6,7 +6,7 @@
 //! map and technique from github.com/thecrypticace/vzautomation.
 
 use objc2::rc::Retained;
-use objc2::{msg_send, ClassType};
+use objc2::{ClassType, msg_send};
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_foundation::{NSPoint, NSString};
 use objc2_virtualization::VZVirtualMachineView;
@@ -134,7 +134,8 @@ pub fn scroll(view: &VZVirtualMachineView, dx: f64, dy: f64) {
     }
     // SAFETY: `+[NSEvent eventWithCGEvent:]` wraps the CGEvent (it does not take
     // ownership), returning an autoreleased NSEvent that `msg_send!` retains.
-    let event: Option<Retained<NSEvent>> = unsafe { msg_send![NSEvent::class(), eventWithCGEvent: cg] };
+    let event: Option<Retained<NSEvent>> =
+        unsafe { msg_send![NSEvent::class(), eventWithCGEvent: cg] };
     if let Some(event) = event {
         view.scrollWheel(&event);
     }
@@ -223,7 +224,10 @@ const fn letter_code(lower: char) -> Option<u16> {
 pub fn char_to_stroke(c: char) -> Option<KeyStroke> {
     if c.is_ascii_alphabetic() {
         let code = letter_code(c.to_ascii_lowercase())?;
-        return Some(KeyStroke { code, shift: c.is_ascii_uppercase() });
+        return Some(KeyStroke {
+            code,
+            shift: c.is_ascii_uppercase(),
+        });
     }
     let (code, shift) = match c {
         '1' => (0x12, false),

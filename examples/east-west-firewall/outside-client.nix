@@ -1,14 +1,12 @@
 {
+  ix,
   lib,
   nodes,
   pkgs,
   ...
 }:
 let
-  service = {
-    host = nodes.service.config.ix.networking.eastWest.hostName;
-    port = 8080;
-  };
+  service = ix.endpointOf nodes.service "http";
 in
 {
   environment.systemPackages = [ pkgs.curl ];
@@ -24,8 +22,8 @@ in
       "pipefail"
       "-c"
       ''
-        if ${lib.getExe pkgs.curl} --fail --silent --show-error --connect-timeout 2 http://${service.host}:${toString service.port}/; then
-          echo "unexpectedly reached http://${service.host}:${toString service.port}/" >&2
+        if ${lib.getExe pkgs.curl} --fail --silent --show-error --connect-timeout 2 http://${service}/; then
+          echo "unexpectedly reached http://${service}/" >&2
           exit 1
         fi
       ''

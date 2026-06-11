@@ -297,7 +297,10 @@ pub enum MetadataError {
 /// # Errors
 /// Returns [`MetadataError`] if the metadata is too large, has too many keys, or
 /// cannot be serialized.
-pub fn check_metadata(external_id: &str, meta: &serde_json::Value) -> Result<Vec<u8>, MetadataError> {
+pub fn check_metadata(
+    external_id: &str,
+    meta: &serde_json::Value,
+) -> Result<Vec<u8>, MetadataError> {
     if let Some(object) = meta.as_object() {
         ensure!(
             object.len() <= MAX_METADATA_KEYS,
@@ -324,7 +327,14 @@ mod tests {
 
     #[test]
     fn source_round_trips_through_str() {
-        for tag in ["code", "slack", "linear", "claude_history", "web", "anything-new"] {
+        for tag in [
+            "code",
+            "slack",
+            "linear",
+            "claude_history",
+            "web",
+            "anything-new",
+        ] {
             let source = Source::new(tag);
             let parsed: Source = source.as_str().parse().expect("infallible");
             assert_eq!(parsed, source);
@@ -342,7 +352,10 @@ mod tests {
 
     #[test]
     fn source_serializes_as_bare_string() {
-        assert_eq!(serde_json::to_string(&Source::new("linear")).expect("ser"), "\"linear\"");
+        assert_eq!(
+            serde_json::to_string(&Source::new("linear")).expect("ser"),
+            "\"linear\""
+        );
         let parsed: Source = serde_json::from_str("\"slack\"").expect("de");
         assert_eq!(parsed, Source::new("slack"));
     }

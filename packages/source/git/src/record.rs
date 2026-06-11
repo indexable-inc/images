@@ -1,8 +1,8 @@
 //! The typed per-commit record and its projection to a search [`Document`].
 
-use source_meta::{Document, keys};
 use serde_json::{Map, Value, json};
 use snafu::ResultExt as _;
+use source_meta::{Document, keys};
 
 use crate::SOURCE_TAG;
 use crate::error::{MetadataSnafu, Result};
@@ -65,8 +65,9 @@ impl Commit {
         meta.insert(keys::TIMESTAMP.to_owned(), json!(self.timestamp));
         let meta_json = Value::Object(meta);
 
-        source_meta::check_metadata(&external_id, &meta_json)
-            .context(MetadataSnafu { external_id: external_id.clone() })?;
+        source_meta::check_metadata(&external_id, &meta_json).context(MetadataSnafu {
+            external_id: external_id.clone(),
+        })?;
 
         Ok(Document {
             external_id,

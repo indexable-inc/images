@@ -19,16 +19,17 @@ pub fn repo_slug(root: &Path) -> RepoSlug {
     if let Some(slug) = origin_slug(root) {
         return RepoSlug::Remote(slug);
     }
-    let name = root
-        .file_name()
-        .map_or_else(|| root.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+    let name = root.file_name().map_or_else(
+        || root.to_string_lossy().into_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    );
     RepoSlug::Local(name)
 }
 
 fn origin_slug(root: &Path) -> Option<String> {
     let repo = git2::Repository::discover(root).ok()?;
     let remote = repo.find_remote("origin").ok()?;
-    slug_from_url(remote.url()?)
+    slug_from_url(remote.url().ok()?)
 }
 
 /// Extract `owner/repo` from a git remote URL, dropping a trailing `.git`.

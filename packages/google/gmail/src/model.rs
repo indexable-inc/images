@@ -228,7 +228,11 @@ where
         .parse()
         .map_err(|err| D::Error::custom(format!("internalDate is not an integer: {err}")))?;
     Utc.timestamp_millis_opt(millis).single().map_or_else(
-        || Err(D::Error::custom("internalDate is out of the representable range")),
+        || {
+            Err(D::Error::custom(
+                "internalDate is out of the representable range",
+            ))
+        },
         |dt| Ok(Some(dt)),
     )
 }
@@ -236,7 +240,10 @@ where
 // serde's `serialize_with` calls this with `&Option<T>` because the field
 // is `Option<T>`; we cannot widen the param to `Option<&T>` without a
 // wrapper. The match here reads the inner value by reference.
-#[allow(clippy::ref_option, reason = "shape dictated by serde's serialize_with")]
+#[allow(
+    clippy::ref_option,
+    reason = "shape dictated by serde's serialize_with"
+)]
 fn serialize_internal_date<S>(
     instant: &Option<DateTime<Utc>>,
     serializer: S,

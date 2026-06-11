@@ -178,7 +178,12 @@ pub fn bench_fn<F: FnMut()>(config: TimingConfig, mut body: F) -> Vec<Metric> {
     let timing = time_fn(config, &mut body);
     let mut metrics = vec![timing];
     if let Some(allocs) = count_allocations(&mut body) {
-        metrics.push(Metric::deterministic(ALLOCATIONS, allocs as f64, "count", true));
+        metrics.push(Metric::deterministic(
+            ALLOCATIONS,
+            allocs as f64,
+            "count",
+            true,
+        ));
     }
     metrics
 }

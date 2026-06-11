@@ -35,10 +35,7 @@ pub enum Error {
     /// A request failed to send, returned a non-success status, or its body
     /// could not be decoded.
     #[snafu(display("github request to {url} failed"))]
-    Request {
-        url: String,
-        source: reqwest::Error,
-    },
+    Request { url: String, source: reqwest::Error },
     /// A login failed validation, so no request was made.
     #[snafu(display("{login:?} is not a valid github login"))]
     InvalidLogin { login: String },
@@ -95,7 +92,9 @@ pub fn is_valid_login(login: &str) -> bool {
         && login.len() <= 39
         && login.bytes().next() != Some(b'-')
         && login.bytes().next_back() != Some(b'-')
-        && login.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && login
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 /// An `owner/repo` pair identifying a GitHub repository.
@@ -121,8 +120,10 @@ pub fn parse_remote(url: &str) -> Option<RepoSlug> {
         .or_else(|| url.strip_prefix("ssh://git@github.com/"))
         .or_else(|| url.strip_prefix("git@github.com:"))?;
     let (owner, repo) = rest.split_once('/')?;
-    (!owner.is_empty() && !repo.is_empty())
-        .then(|| RepoSlug { owner: owner.to_string(), repo: repo.to_string() })
+    (!owner.is_empty() && !repo.is_empty()).then(|| RepoSlug {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    })
 }
 
 /// Authenticated response for `GET /repos/{owner}/{repo}/commits/{sha}`; only
@@ -176,12 +177,19 @@ impl Client {
         let url = format!("https://api.github.com/repos/{owner}/{repo}/commits/{sha}");
         let response = self.api_get(&url).await?;
         // A missing commit or unprocessable ref is "no answer", not an error.
-        if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY) {
+        if matches!(
+            response.status(),
+            StatusCode::NOT_FOUND | StatusCode::UNPROCESSABLE_ENTITY
+        ) {
             return Ok(None);
         }
-        let response = response.error_for_status().context(RequestSnafu { url: url.clone() })?;
+        let response = response
+            .error_for_status()
+            .context(RequestSnafu { url: url.clone() })?;
         let parsed: CommitResponse = response.json().await.context(RequestSnafu { url })?;
-        Ok(parsed.author.map(|account| User { login: account.login }))
+        Ok(parsed.author.map(|account| User {
+            login: account.login,
+        }))
     }
 
     /// Download `login`'s avatar and return it as `PNG` bytes, a `size_px`
@@ -233,7 +241,9 @@ impl Client {
         if let Some(token) = &self.token {
             request = request.bearer_auth(token);
         }
-        request.send().await.context(RequestSnafu { url: url.to_string() })
+        request.send().await.context(RequestSnafu {
+            url: url.to_string(),
+        })
     }
 }
 
@@ -243,8 +253,13 @@ mod tests {
 
     #[test]
     fn noreply_with_and_without_id() {
-        let want = Some(User { login: "octocat".to_string() });
-        assert_eq!(parse_noreply("49699333+octocat@users.noreply.github.com"), want);
+        let want = Some(User {
+            login: "octocat".to_string(),
+        });
+        assert_eq!(
+            parse_noreply("49699333+octocat@users.noreply.github.com"),
+            want
+        );
         assert_eq!(parse_noreply("octocat@users.noreply.github.com"), want);
         assert_eq!(parse_noreply("Octocat@Users.Noreply.GitHub.com"), want);
     }
@@ -256,7 +271,10 @@ mod tests {
         // A crafted local part must not yield a URL-injecting login.
         assert_eq!(parse_noreply("a/b@users.noreply.github.com"), None);
         assert_eq!(parse_noreply("a?b@users.noreply.github.com"), None);
-        assert_eq!(parse_noreply("dependabot[bot]@users.noreply.github.com"), None);
+        assert_eq!(
+            parse_noreply("dependabot[bot]@users.noreply.github.com"),
+            None
+        );
     }
 
     #[test]
@@ -274,11 +292,20 @@ mod tests {
 
     #[test]
     fn remote_https_and_ssh() {
-        let want = Some(RepoSlug { owner: "indexable-inc".to_string(), repo: "index".to_string() });
-        assert_eq!(parse_remote("https://github.com/indexable-inc/index.git"), want);
+        let want = Some(RepoSlug {
+            owner: "indexable-inc".to_string(),
+            repo: "index".to_string(),
+        });
+        assert_eq!(
+            parse_remote("https://github.com/indexable-inc/index.git"),
+            want
+        );
         assert_eq!(parse_remote("https://github.com/indexable-inc/index"), want);
         assert_eq!(parse_remote("git@github.com:indexable-inc/index.git"), want);
-        assert_eq!(parse_remote("ssh://git@github.com/indexable-inc/index.git"), want);
+        assert_eq!(
+            parse_remote("ssh://git@github.com/indexable-inc/index.git"),
+            want
+        );
         assert_eq!(parse_remote("https://gitlab.com/foo/bar.git"), None);
     }
 }

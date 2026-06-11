@@ -40,12 +40,14 @@ mod users;
 
 use std::{collections::HashMap, fs, path::Path};
 
-use source_meta::{Document, Source, SourceAdapter};
 use snafu::ResultExt as _;
+use source_meta::{Document, Source, SourceAdapter};
 
 pub use crate::error::Error;
 use crate::{
-    channel::{ChannelDir, ChannelInfo, discover_channel_dirs, read_channel_messages, resolve_channel},
+    channel::{
+        ChannelDir, ChannelInfo, discover_channel_dirs, read_channel_messages, resolve_channel,
+    },
     error::{ParseSnafu, ReadSnafu},
     model::{ChannelEntry, UserEntry},
     thread::documents_for_channel,
@@ -87,7 +89,9 @@ impl SlackExport {
         let mut by_id = HashMap::with_capacity(channels.len());
         let mut by_name = HashMap::with_capacity(channels.len());
         for entry in channels {
-            by_name.entry(entry.name.clone()).or_insert_with(|| entry.clone());
+            by_name
+                .entry(entry.name.clone())
+                .or_insert_with(|| entry.clone());
             by_id.insert(entry.id.clone(), entry);
         }
 
@@ -157,8 +161,12 @@ impl Iterator for DocumentBatch {
 
 /// Read and parse `channels.json`.
 fn read_channels(path: &Path) -> Result<Vec<ChannelEntry>, Error> {
-    let bytes = fs::read(path).context(ReadSnafu { path: path.to_path_buf() })?;
-    serde_json::from_slice(&bytes).context(ParseSnafu { path: path.to_path_buf() })
+    let bytes = fs::read(path).context(ReadSnafu {
+        path: path.to_path_buf(),
+    })?;
+    serde_json::from_slice(&bytes).context(ParseSnafu {
+        path: path.to_path_buf(),
+    })
 }
 
 /// Read and parse the users map, returning an empty map when the file is
@@ -169,8 +177,14 @@ fn read_users(path: &Path) -> Result<UserMap, Error> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(UserMap::default());
         }
-        Err(error) => return Err(error).context(ReadSnafu { path: path.to_path_buf() }),
+        Err(error) => {
+            return Err(error).context(ReadSnafu {
+                path: path.to_path_buf(),
+            });
+        }
     };
-    let entries: Vec<UserEntry> = serde_json::from_slice(&bytes).context(ParseSnafu { path: path.to_path_buf() })?;
+    let entries: Vec<UserEntry> = serde_json::from_slice(&bytes).context(ParseSnafu {
+        path: path.to_path_buf(),
+    })?;
     Ok(UserMap::from_entries(entries))
 }

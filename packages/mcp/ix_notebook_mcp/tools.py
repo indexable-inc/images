@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import webbrowser
 from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
@@ -40,19 +42,26 @@ from . import guide, outputs
 from .config import config
 from .kernel import current_kernel
 
+# Order matters: clients truncate long instruction blocks from the tail, and a
+# 2026-06-10 session showed exactly that failure: the cut landed inside JOBS, so
+# NO_SHELL and POLARS never reached the model and it shelled out ls/grep and
+# scraped TSV all session. The rules that shape every single call (what to reach
+# for, what shape to return) come first; operational mechanics (job paging,
+# blocking, rendering details) follow; the module index and dashboard niceties
+# close. Losing the tail degrades gracefully; losing the head does not.
 _KERNEL_GUIDE = guide.compose(
     guide.INTRO,
     guide.NAMESPACE,
     guide.DISCOVER,
+    guide.NO_SHELL,
+    guide.POLARS,
+    guide.RESULT_CONTRACT,
     guide.JOBS,
     guide.PAGING,
     guide.BLOCKING,
     guide.modules_index(),
-    guide.NO_SHELL,
     guide.HTML,
     guide.VERIFY,
-    guide.POLARS,
-    guide.RESULT_CONTRACT,
     guide.RESULT_SPLIT,
     guide.RESULT_VARIANTS,
     guide.READABLE,
@@ -99,8 +108,48 @@ def set_dashboard_url(url: str) -> None:
     it straight out of the ``initialize`` response -- the agent has the URL from
     the first message, with no tool call to look it up. The CLI calls this once
     the dashboard has bound its port, before the transport serves ``initialize``.
+    The URL is also stashed so the first tool call can pop it in a browser.
     """
+    global _dashboard_url
+    _dashboard_url = url
     mcp._mcp_server.instructions = _compose_instructions(url)
+
+
+# The live dashboard URL (set by `set_dashboard_url`) and a once-latch for the
+# browser pop below. Module-level because the tool functions are module-level.
+_dashboard_url: str | None = None
+_browser_opened = False
+
+
+def _open_dashboard_once() -> None:
+    """Open the live dashboard in the human's browser on the FIRST tool call.
+
+    The server is launched eagerly when a client session starts, so opening at
+    startup would pop a window for sessions that never touch index; the first
+    tool call is the moment work actually begins. ``webbrowser`` is the
+    platform-independent opener (macOS ``open``, Linux ``xdg-open``, Windows
+    ``start``) and degrades to a no-op where no browser is reachable (headless,
+    SSH); failures are swallowed because the pop is a courtesy, never worth
+    failing a tool call over. The call runs on a daemon thread since spawning
+    the opener is synchronous and must not block the event loop. An embedder
+    that drives this server programmatically (no human at this machine's
+    display) disables it with ``IX_MCP_NO_BROWSER=1``.
+    """
+    global _browser_opened
+    if _browser_opened:
+        return
+    _browser_opened = True
+    url = _dashboard_url
+    if not url or os.environ.get("IX_MCP_NO_BROWSER"):
+        return
+
+    def _open() -> None:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+
+    threading.Thread(target=_open, name="ix-mcp-open-dashboard", daemon=True).start()
 
 # Report the build's source revision as the MCP `serverInfo.version` so a client
 # can see exactly which commit of the server it is talking to. The nix wrapper
@@ -124,9 +173,10 @@ Content = list[outputs.Content]
 )
 async def python_exec(
     code: Annotated[str, Field(description="Python source to run on the shared kernel")],
-    budget: Annotated[float, Field(description="Seconds to wait before backgrounding the run")] = 15.0,
+    budget: Annotated[float, Field(description="Seconds to wait before backgrounding the run (server-side cap: 120s; larger values are clamped and a notice is appended to the reply)")] = 15.0,
     name: Annotated[str | None, Field(description="Optional label for the job in the dashboard")] = None,
 ) -> Content:
+    _open_dashboard_once()
     # A foreground budget is how long the run holds the one shared shell channel
     # before it backgrounds, so cap it: a giant budget (a 15-minute `await
     # jobs[...]`) would block every other call behind it. The clamp is surfaced
@@ -200,6 +250,7 @@ async def read(
     start: Annotated[int | None, Field(description="1-based first line to include")] = None,
     end: Annotated[int | None, Field(description="Last line to include (inclusive)")] = None,
 ) -> Content:
+    _open_dashboard_once()
     code = f"await __ix_read({target!r}, {start!r}, {end!r})"
     cell_outputs, summary = await current_kernel().python_exec(code, budget=30.0)
     if summary is not None and summary.get("status") == "error" and summary.get("error"):
@@ -211,6 +262,7 @@ async def read(
 
 @mcp.tool(description=guide.TRACE)
 async def kernel_trace() -> str:
+    _open_dashboard_once()
     return await current_kernel().dump_trace()
 
 

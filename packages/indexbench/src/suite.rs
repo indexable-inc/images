@@ -62,7 +62,11 @@ impl MacroBench {
     /// [`DEFAULT_MACRO_RUNS`](crate::compare::DEFAULT_MACRO_RUNS), which clears
     /// the comparator's `MIN_SAMPLES` floor so the built-in timing/RSS metrics
     /// land in the distributional regime by default.
-    pub fn new(name: impl Into<String>, program: impl Into<String>, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        program: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
         Self {
             name: name.into(),
             program: program.into(),

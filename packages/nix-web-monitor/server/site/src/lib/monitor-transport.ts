@@ -37,6 +37,8 @@ type Working = {
   logs: LogEntry[];
   errors: string[];
   progress: MonitorSnapshot['progress'];
+  optimise: MonitorSnapshot['optimise'];
+  daemon: MonitorSnapshot['daemon'];
   expected: Record<string, number>;
   dependencies: DerivationEdge[];
   exitCode: number | null;
@@ -51,6 +53,15 @@ function createWorking(): Working {
     logs: [],
     errors: [],
     progress: null,
+    optimise: { filesLinked: 0, bytesFreed: 0 },
+    daemon: {
+      tracing: false,
+      status: '',
+      workers: [],
+      ops: { link: 0, rename: 0, open: 0, write: 0, fsync: 0, stat: 0, unlink: 0, other: 0 },
+      opsPerSec: 0,
+      currentPath: null
+    },
     expected: {},
     dependencies: [],
     exitCode: null,
@@ -81,6 +92,12 @@ export function applyDelta(working: Working, delta: Delta): Working {
     case 'progressSet':
       working.progress = delta.progress;
       return working;
+    case 'optimiseSet':
+      working.optimise = delta.optimise;
+      return working;
+    case 'daemonSet':
+      working.daemon = delta.daemon;
+      return working;
     case 'expectedSet':
       working.expected = { ...working.expected, [delta.name]: delta.value };
       return working;
@@ -106,6 +123,8 @@ function fromSnapshot(snapshot: MonitorSnapshot): Working {
     logs: [...snapshot.logs],
     errors: [...snapshot.errors],
     progress: snapshot.progress,
+    optimise: snapshot.optimise,
+    daemon: snapshot.daemon,
     expected: { ...snapshot.expected },
     dependencies: snapshot.dependencies,
     exitCode: snapshot.exitCode,
@@ -141,6 +160,8 @@ export function projectSnapshot(working: Working): MonitorSnapshot {
     logs: [...working.logs],
     errors: [...working.errors],
     progress: working.progress,
+    optimise: working.optimise,
+    daemon: working.daemon,
     expected: { ...working.expected },
     dependencies: working.dependencies,
     exitCode: working.exitCode,

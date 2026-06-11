@@ -49,8 +49,16 @@ pub const OP_DELETE: &str = "delete";
 /// the slice and version fold keys, the change-detection hash, and the
 /// cross-slice freshness arbiter. Enough to diff a slice's live state against
 /// desired state or to judge global liveness, without hauling bodies.
-pub const STATE_COLUMNS: [&str; 8] =
-    ["external_id", "source", "content_hash", "host", "user", "op", "observed_at", "version"];
+pub const STATE_COLUMNS: [&str; 8] = [
+    "external_id",
+    "source",
+    "content_hash",
+    "host",
+    "user",
+    "op",
+    "observed_at",
+    "version",
+];
 
 /// [`STATE_COLUMNS`] plus the payload a [`Document`] is reconstructed from
 /// (`body`, `meta_json`); the rest of the schema is a projection out of
@@ -71,10 +79,12 @@ pub const CODEC_COLUMNS: [&str; 10] = [
 /// The lake's Iceberg schema. Field ids are stable and append-only: the first
 /// nine are `sink-parquet`'s columns in its order, then the log's additions.
 pub fn table_schema() -> Result<Schema> {
-    let optional =
-        |id: i32, name: &str| NestedField::optional(id, name, Type::Primitive(PrimitiveType::String));
-    let required =
-        |id: i32, name: &str| NestedField::required(id, name, Type::Primitive(PrimitiveType::String));
+    let optional = |id: i32, name: &str| {
+        NestedField::optional(id, name, Type::Primitive(PrimitiveType::String))
+    };
+    let required = |id: i32, name: &str| {
+        NestedField::required(id, name, Type::Primitive(PrimitiveType::String))
+    };
     Schema::builder()
         .with_schema_id(0)
         .with_fields(vec![
@@ -124,7 +134,10 @@ pub fn encode_batch(
     let n = upserts.len() + deletes.len();
     let up = upserts.len();
     let meta_str = |doc: &Document, key: &str| {
-        doc.meta_json.get(key).and_then(serde_json::Value::as_str).map(str::to_owned)
+        doc.meta_json
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
     };
     // Upsert rows first, tombstones after; per-column closures keep each
     // column a single pass over both halves.
@@ -133,11 +146,19 @@ pub fn encode_batch(
     };
     let columns: Vec<ArrayRef> = vec![
         string_col(&|i| {
-            Some(if i < up { upserts[i].external_id.clone() } else { deletes[i - up].to_owned() })
+            Some(if i < up {
+                upserts[i].external_id.clone()
+            } else {
+                deletes[i - up].to_owned()
+            })
         }),
         string_col(&|_| Some(source.as_str().to_owned())),
         string_col(&|i| (i < up).then(|| upserts[i].content_hash.clone())),
-        string_col(&|i| (i < up).then(|| meta_str(upserts[i], keys::TITLE)).flatten()),
+        string_col(&|i| {
+            (i < up)
+                .then(|| meta_str(upserts[i], keys::TITLE))
+                .flatten()
+        }),
         string_col(&|i| (i < up).then(|| meta_str(upserts[i], "url")).flatten()),
         string_col(&|_| Some(slice.host.to_owned())),
         Arc::new(
@@ -218,7 +239,10 @@ pub fn rows_from_batch(
     let observed_at = long_column(batch, "observed_at")?;
     let version = long_column(batch, "version")?;
     let payload = if with_payload {
-        Some((string_column(batch, "body")?, string_column(batch, "meta_json")?))
+        Some((
+            string_column(batch, "body")?,
+            string_column(batch, "meta_json")?,
+        ))
     } else {
         None
     };
@@ -228,7 +252,13 @@ pub fn rows_from_batch(
         let op = match non_null_str(op_col, row, "op")? {
             OP_UPSERT => Op::Upsert,
             OP_DELETE => Op::Delete,
-            other => return BadOpSnafu { value: other.to_owned(), row }.fail(),
+            other => {
+                return BadOpSnafu {
+                    value: other.to_owned(),
+                    row,
+                }
+                .fail();
+            }
         };
         let opt = |array: &StringArray| array.is_valid(row).then(|| array.value(row).to_owned());
         let (body, meta_json) = match &payload {
@@ -239,13 +269,25 @@ pub fn rows_from_batch(
         // typed error rather than reconstructed from defaults.
         if op == Op::Upsert {
             if content_hash.is_null(row) {
-                return NullValueSnafu { column: "content_hash", row }.fail();
+                return NullValueSnafu {
+                    column: "content_hash",
+                    row,
+                }
+                .fail();
             }
             if with_payload && body.is_none() {
-                return NullValueSnafu { column: "body", row }.fail();
+                return NullValueSnafu {
+                    column: "body",
+                    row,
+                }
+                .fail();
             }
             if with_payload && meta_json.is_none() {
-                return NullValueSnafu { column: "meta_json", row }.fail();
+                return NullValueSnafu {
+                    column: "meta_json",
+                    row,
+                }
+                .fail();
             }
         }
         let long = |array: &Int64Array, column: &'static str| {
@@ -317,7 +359,10 @@ pub fn fold_slices(rows: Vec<LakeRow>) -> HashMap<String, Vec<LakeRow>> {
             }
         }
     }
-    latest.into_iter().map(|(id, slices)| (id, slices.into_values().collect())).collect()
+    latest
+        .into_iter()
+        .map(|(id, slices)| (id, slices.into_values().collect()))
+        .collect()
 }
 
 /// The row representing one id's live state, given its slice-latest rows from
@@ -337,17 +382,30 @@ pub fn live_winner(rows: Vec<LakeRow>) -> Option<LakeRow> {
 /// Borrow one column as a `StringArray`, erroring (never defaulting) when the
 /// column is absent or mis-typed.
 fn string_column<'a>(batch: &'a RecordBatch, column: &'static str) -> Result<&'a StringArray> {
-    let array = batch.column_by_name(column).context(MissingColumnSnafu { column })?;
-    array.as_any().downcast_ref::<StringArray>().context(ColumnTypeSnafu { column })
+    let array = batch
+        .column_by_name(column)
+        .context(MissingColumnSnafu { column })?;
+    array
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context(ColumnTypeSnafu { column })
 }
 
 /// Borrow one column as an `Int64Array`, erroring like [`string_column`].
 fn long_column<'a>(batch: &'a RecordBatch, column: &'static str) -> Result<&'a Int64Array> {
-    let array = batch.column_by_name(column).context(MissingColumnSnafu { column })?;
-    array.as_any().downcast_ref::<Int64Array>().context(ColumnTypeSnafu { column })
+    let array = batch
+        .column_by_name(column)
+        .context(MissingColumnSnafu { column })?;
+    array
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .context(ColumnTypeSnafu { column })
 }
 
 /// Read one row of a required string column, erroring on a null cell.
 fn non_null_str<'a>(array: &'a StringArray, row: usize, column: &'static str) -> Result<&'a str> {
-    array.is_valid(row).then(|| array.value(row)).context(NullValueSnafu { column, row })
+    array
+        .is_valid(row)
+        .then(|| array.value(row))
+        .context(NullValueSnafu { column, row })
 }

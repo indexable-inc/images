@@ -78,8 +78,8 @@ use source_meta::{Document, Reconciler, Source};
 use crate::codec::{LakeRow, Op, Slice};
 use crate::error::{
     ClockBeforeEpochSnafu, ClockSnafu, CommitSnafu, ConnectSnafu, CursorNotFoundSnafu,
-    DecodeFileSnafu, EnsureTableSnafu, LoadTableSnafu, ParseFileSnafu, ReadFileSnafu, SchemaSnafu,
-    ScanSnafu, WriteSnafu,
+    DecodeFileSnafu, EnsureTableSnafu, LoadTableSnafu, ParseFileSnafu, ReadFileSnafu, ScanSnafu,
+    SchemaSnafu, WriteSnafu,
 };
 
 /// The lake's Iceberg namespace.
@@ -117,7 +117,10 @@ impl Config {
     pub async fn connect(&self) -> Result<Arc<dyn Catalog>> {
         let mut props = HashMap::from([
             (REST_CATALOG_PROP_URI.to_owned(), self.uri.clone()),
-            (REST_CATALOG_PROP_WAREHOUSE.to_owned(), self.warehouse.clone()),
+            (
+                REST_CATALOG_PROP_WAREHOUSE.to_owned(),
+                self.warehouse.clone(),
+            ),
             (iceberg::io::S3_REGION.to_owned(), self.s3_region.clone()),
         ]);
         if let Some(token) = &self.token {
@@ -141,31 +144,54 @@ impl Config {
             }))
             .load("lake", props)
             .await
-            .context(ConnectSnafu { uri: self.uri.clone() })?;
+            .context(ConnectSnafu {
+                uri: self.uri.clone(),
+            })?;
         Ok(Arc::new(catalog))
     }
 }
 
 /// Create the `corpus.documents` table if absent and return its identifier.
-/// Race-safe: a concurrent host winning the create is fine (`AlreadyExists`
-/// from either step is success).
+///
+/// Race-safe: a concurrent host winning the create is fine (a classified
+/// `AlreadyExists`, or a conflict confirmed by probing, is success).
 ///
 /// # Errors
 /// Returns an error if the namespace or table cannot be created or checked.
 pub async fn ensure_table(catalog: &dyn Catalog) -> Result<TableIdent> {
     let ns = NamespaceIdent::new(NAMESPACE.to_owned());
     let ident = TableIdent::new(ns.clone(), TABLE.to_owned());
-    match catalog.create_namespace(&ns, HashMap::new()).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == ErrorKind::NamespaceAlreadyExists => {}
-        Err(error) => return Err(error).context(EnsureTableSnafu { table: ident.to_string() }),
+    if let Err(error) = catalog.create_namespace(&ns, HashMap::new()).await {
+        // Not every catalog classifies its conflict: Lakekeeper's 409 reaches
+        // the REST client as `ErrorKind::Unexpected`, so the AlreadyExists
+        // kind alone broke every fold after the first. Probe for the
+        // namespace rather than matching messages; the create error stands
+        // when the probe cannot confirm it exists.
+        let exists = error.kind() == ErrorKind::NamespaceAlreadyExists
+            || catalog.namespace_exists(&ns).await.unwrap_or(false);
+        if !exists {
+            return Err(error).context(EnsureTableSnafu {
+                table: ident.to_string(),
+            });
+        }
     }
-    let creation =
-        TableCreation::builder().name(TABLE.to_owned()).schema(codec::table_schema()?).build();
+    let creation = TableCreation::builder()
+        .name(TABLE.to_owned())
+        .schema(codec::table_schema()?)
+        .build();
     match catalog.create_table(&ns, creation).await {
         Ok(_) => Ok(ident),
-        Err(error) if error.kind() == ErrorKind::TableAlreadyExists => Ok(ident),
-        Err(error) => Err(error).context(EnsureTableSnafu { table: ident.to_string() }),
+        Err(error) => {
+            let exists = error.kind() == ErrorKind::TableAlreadyExists
+                || catalog.table_exists(&ident).await.unwrap_or(false);
+            if exists {
+                Ok(ident)
+            } else {
+                Err(error).context(EnsureTableSnafu {
+                    table: ident.to_string(),
+                })
+            }
+        }
     }
 }
 
@@ -203,7 +229,12 @@ impl IcebergReconciler {
     /// A reconciler writing host-level observations (no `user` scope).
     #[must_use]
     pub fn new(catalog: Arc<dyn Catalog>, ident: TableIdent, host: impl Into<String>) -> Self {
-        Self { catalog, ident, host: host.into(), user: None }
+        Self {
+            catalog,
+            ident,
+            host: host.into(),
+            user: None,
+        }
     }
 
     /// The same connection, scoped to one account's slice.
@@ -240,15 +271,23 @@ impl Reconciler for IcebergReconciler {
     /// `documents` is a skip, never a mass tombstone.
     async fn reconcile(&self, source: &Source, documents: &[Document]) -> Result<Report> {
         if documents.is_empty() {
-            return Ok(Report { upserts: 0, deletes: 0, skipped: true });
+            return Ok(Report {
+                upserts: 0,
+                deletes: 0,
+                skipped: true,
+            });
         }
         let table = load_table(self.catalog.as_ref(), &self.ident).await?;
 
         // The slice's live state: latest observation per id, minus tombstones.
         // The filter pins one slice, so each id folds to exactly one row.
-        let rows =
-            scan_rows(&table, Some(self.slice_filter(source)), &codec::STATE_COLUMNS, false)
-                .await?;
+        let rows = scan_rows(
+            &table,
+            Some(self.slice_filter(source)),
+            &codec::STATE_COLUMNS,
+            false,
+        )
+        .await?;
         // The slice's next committed revision: its previous maximum plus one.
         // `version`, not wall clock, is what orders this slice's operations in
         // the fold, so a clock step between runs cannot reorder them.
@@ -271,15 +310,21 @@ impl Reconciler for IcebergReconciler {
                 )
             })
             .collect();
-        let desired: BTreeSet<&str> =
-            documents.iter().map(|document| document.external_id.as_str()).collect();
+        let desired: BTreeSet<&str> = documents
+            .iter()
+            .map(|document| document.external_id.as_str())
+            .collect();
         let deletes: BTreeSet<&str> = live
             .keys()
             .map(String::as_str)
             .filter(|id| !desired.contains(id))
             .collect();
         if upserts.is_empty() && deletes.is_empty() {
-            return Ok(Report { upserts: 0, deletes: 0, skipped: true });
+            return Ok(Report {
+                upserts: 0,
+                deletes: 0,
+                skipped: true,
+            });
         }
         let deletes: Vec<&str> = deletes.into_iter().collect();
 
@@ -290,7 +335,10 @@ impl Reconciler for IcebergReconciler {
         let batch = codec::encode_batch(
             &arrow_schema,
             source,
-            Slice { host: &self.host, user: self.user.as_deref() },
+            Slice {
+                host: &self.host,
+                user: self.user.as_deref(),
+            },
             now_ms()?,
             version,
             &upserts,
@@ -298,7 +346,11 @@ impl Reconciler for IcebergReconciler {
         )?;
         let files = write_batch(&table, batch).await?;
         commit_files(self.catalog.as_ref(), &self.ident, files).await?;
-        Ok(Report { upserts: upserts.len(), deletes: deletes.len(), skipped: false })
+        Ok(Report {
+            upserts: upserts.len(),
+            deletes: deletes.len(),
+            skipped: false,
+        })
     }
 }
 
@@ -349,7 +401,10 @@ pub async fn read_state(catalog: &dyn Catalog, ident: &TableIdent) -> Result<Lak
 /// Returns an error if the table cannot be loaded.
 pub async fn current_snapshot_id(catalog: &dyn Catalog, ident: &TableIdent) -> Result<Option<i64>> {
     let table = load_table(catalog, ident).await?;
-    Ok(table.metadata().current_snapshot().map(|snapshot| snapshot.snapshot_id()))
+    Ok(table
+        .metadata()
+        .current_snapshot()
+        .map(|snapshot| snapshot.snapshot_id()))
 }
 
 /// The changes a cursor has not seen, folded per slice (a slice's later op on
@@ -389,11 +444,7 @@ pub struct Delta {
 /// Returns [`Error::CursorNotFound`] when `cursor` is no longer in table
 /// metadata (snapshot expiration) — the caller falls back to [`read_state`] —
 /// and other errors when the walk or a data file read fails.
-pub async fn added_since(
-    catalog: &dyn Catalog,
-    ident: &TableIdent,
-    cursor: i64,
-) -> Result<Delta> {
+pub async fn added_since(catalog: &dyn Catalog, ident: &TableIdent, cursor: i64) -> Result<Delta> {
     let table = load_table(catalog, ident).await?;
     let meta = table.metadata();
     let cursor_seq = meta
@@ -404,14 +455,15 @@ pub async fn added_since(
 
     let mut rows = Vec::new();
     let appends = meta.snapshots().filter(|snapshot| {
-        snapshot.sequence_number() > cursor_seq
-            && snapshot.summary().operation == Operation::Append
+        snapshot.sequence_number() > cursor_seq && snapshot.summary().operation == Operation::Append
     });
     for snapshot in appends {
         let list = snapshot
             .load_manifest_list(table.file_io(), meta)
             .await
-            .context(ScanSnafu { stage: "manifest list" })?;
+            .context(ScanSnafu {
+                stage: "manifest list",
+            })?;
         for manifest_file in list.entries() {
             if manifest_file.content != ManifestContentType::Data
                 || manifest_file.added_snapshot_id != snapshot.snapshot_id()
@@ -462,7 +514,11 @@ pub async fn added_since(
 
     upserts.sort_by(|a, b| a.external_id.cmp(&b.external_id));
     deletes.sort();
-    Ok(Delta { upserts, deletes, to_snapshot: meta.current_snapshot().map(|s| s.snapshot_id()) })
+    Ok(Delta {
+        upserts,
+        deletes,
+        to_snapshot: meta.current_snapshot().map(|s| s.snapshot_id()),
+    })
 }
 
 /// Read the current live document of each id — the survivor fetch: ids whose
@@ -487,7 +543,9 @@ async fn read_documents_by_id(table: &Table, ids: &[String]) -> Result<Vec<Docum
 
 /// Load the lake table, with a typed error naming it.
 async fn load_table(catalog: &dyn Catalog, ident: &TableIdent) -> Result<Table> {
-    catalog.load_table(ident).await.context(LoadTableSnafu { table: ident.to_string() })
+    catalog.load_table(ident).await.context(LoadTableSnafu {
+        table: ident.to_string(),
+    })
 }
 
 /// Scan rows with an optional filter and a column projection, decoding into
@@ -513,8 +571,10 @@ async fn scan_rows(
         .to_arrow()
         .await
         .context(ScanSnafu { stage: "open" })?;
-    let batches: Vec<arrow_array::RecordBatch> =
-        stream.try_collect().await.context(ScanSnafu { stage: "read" })?;
+    let batches: Vec<arrow_array::RecordBatch> = stream
+        .try_collect()
+        .await
+        .context(ScanSnafu { stage: "read" })?;
     let mut rows = Vec::new();
     for batch in &batches {
         codec::rows_from_batch(batch, with_payload, &mut rows)?;
@@ -540,10 +600,7 @@ async fn read_data_file(file_io: &FileIO, path: &str, out: &mut Vec<LakeRow>) ->
 
 /// Write one record batch as data files, named uniquely per pass (a reused
 /// name is rejected by the table as already-referenced).
-async fn write_batch(
-    table: &Table,
-    batch: arrow_array::RecordBatch,
-) -> Result<Vec<DataFile>> {
+async fn write_batch(table: &Table, batch: arrow_array::RecordBatch) -> Result<Vec<DataFile>> {
     let location_gen = DefaultLocationGenerator::new(table.metadata().clone())
         .context(WriteSnafu { stage: "location" })?;
     let name_gen = DefaultFileNameGenerator::new(
@@ -565,7 +622,10 @@ async fn write_batch(
         .build(None)
         .await
         .context(WriteSnafu { stage: "build" })?;
-    writer.write(batch).await.context(WriteSnafu { stage: "write" })?;
+    writer
+        .write(batch)
+        .await
+        .context(WriteSnafu { stage: "write" })?;
     writer.close().await.context(WriteSnafu { stage: "close" })
 }
 
@@ -583,7 +643,9 @@ async fn commit_files(
         let table = load_table(catalog, ident).await?;
         let tx = Transaction::new(&table);
         let action = tx.fast_append().add_data_files(files.clone());
-        let tx = action.apply(tx).context(CommitSnafu { attempts: attempt })?;
+        let tx = action
+            .apply(tx)
+            .context(CommitSnafu { attempts: attempt })?;
         match tx.commit(catalog).await {
             Ok(_) => return Ok(()),
             Err(error)
@@ -601,11 +663,14 @@ async fn commit_files(
 /// so two passes in the same millisecond still order correctly in the fold.
 fn now_ms() -> Result<i64> {
     static LAST: Mutex<i64> = Mutex::new(0);
-    let elapsed =
-        SystemTime::now().duration_since(UNIX_EPOCH).context(ClockBeforeEpochSnafu)?;
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context(ClockBeforeEpochSnafu)?;
     let now = i64::try_from(elapsed.as_millis()).context(ClockSnafu)?;
     let stamped = {
-        let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut last = LAST
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let stamped = now.max(*last + 1);
         *last = stamped;
         stamped
@@ -642,12 +707,19 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let warehouse = format!("file://{}", dir.path().display());
         let catalog = MemoryCatalogBuilder::default()
-            .load("lake", HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_owned(), warehouse)]))
+            .load(
+                "lake",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_owned(), warehouse)]),
+            )
             .await
             .expect("memory catalog");
         let catalog: Arc<dyn Catalog> = Arc::new(catalog);
         let ident = ensure_table(catalog.as_ref()).await.expect("ensure table");
-        TestLake { catalog, ident, _dir: dir }
+        TestLake {
+            catalog,
+            ident,
+            _dir: dir,
+        }
     }
 
     fn doc_in(source: &str, id: &str, body: &str) -> Document {
@@ -680,7 +752,11 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_appends_then_skips_then_reads_back() {
-        let TestLake { catalog, ident, _dir } = lake().await;
+        let TestLake {
+            catalog,
+            ident,
+            _dir,
+        } = lake().await;
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
         let docs = vec![doc("a", "alpha"), doc("b", "beta")];
@@ -696,14 +772,20 @@ mod tests {
         let second = sink.reconcile(&source, &docs).await.expect("second");
         assert!(second.skipped);
         assert_eq!(
-            current_snapshot_id(catalog.as_ref(), &ident).await.expect("snapshot"),
+            current_snapshot_id(catalog.as_ref(), &ident)
+                .await
+                .expect("snapshot"),
             Some(snapshot),
             "a skipped pass must not commit"
         );
 
         // Full read-back round-trips the documents (source-parquet parity:
         // file_name = external_id, plain-text mime, meta_json intact).
-        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        let all = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].external_id, "a");
         assert_eq!(all[0].body, b"alpha");
@@ -715,17 +797,29 @@ mod tests {
 
     #[tokio::test]
     async fn change_and_vanish_append_upsert_and_tombstone() {
-        let TestLake { catalog, ident, _dir } = lake().await;
+        let TestLake {
+            catalog,
+            ident,
+            _dir,
+        } = lake().await;
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
-        sink.reconcile(&source, &[doc("a", "alpha"), doc("b", "beta")]).await.expect("seed");
+        sink.reconcile(&source, &[doc("a", "alpha"), doc("b", "beta")])
+            .await
+            .expect("seed");
 
         // `a` changes, `b` vanishes from the desired state.
-        let report =
-            sink.reconcile(&source, &[doc("a", "alpha EDITED")]).await.expect("delta");
+        let report = sink
+            .reconcile(&source, &[doc("a", "alpha EDITED")])
+            .await
+            .expect("delta");
         assert_eq!((report.upserts, report.deletes), (1, 1));
 
-        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        let all = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
         assert_eq!(all.len(), 1, "the tombstoned document must fold away");
         assert_eq!(all[0].external_id, "a");
         assert_eq!(all[0].body, b"alpha EDITED");
@@ -733,39 +827,76 @@ mod tests {
 
     #[tokio::test]
     async fn empty_desired_state_never_mass_tombstones() {
-        let TestLake { catalog, ident, _dir } = lake().await;
+        let TestLake {
+            catalog,
+            ident,
+            _dir,
+        } = lake().await;
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
-        sink.reconcile(&source, &[doc("a", "alpha")]).await.expect("seed");
+        sink.reconcile(&source, &[doc("a", "alpha")])
+            .await
+            .expect("seed");
 
         // A transiently empty read (unreadable export, fresh account) must be
         // a skip, not a corpus wipe.
         let report = sink.reconcile(&source, &[]).await.expect("empty");
         assert!(report.skipped);
-        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        let all = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
         assert_eq!(all.len(), 1, "the document must survive an empty pass");
     }
 
     #[tokio::test]
     async fn slices_tombstone_independently() {
-        let TestLake { catalog, ident, _dir } = lake().await;
+        let TestLake {
+            catalog,
+            ident,
+            _dir,
+        } = lake().await;
         let source = Source::new("test");
         let host1 = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let host2 = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-2");
-        host1.reconcile(&source, &[doc("one", "from host 1")]).await.expect("host1 seed");
-        host2.reconcile(&source, &[doc("two", "from host 2")]).await.expect("host2 seed");
+        host1
+            .reconcile(&source, &[doc("one", "from host 1")])
+            .await
+            .expect("host1 seed");
+        host2
+            .reconcile(&source, &[doc("two", "from host 2")])
+            .await
+            .expect("host2 seed");
 
         // host-1's document vanishes; host-2's slice must be untouched.
-        let report = host1.reconcile(&source, &[doc("one-b", "new")]).await.expect("host1 delta");
+        let report = host1
+            .reconcile(&source, &[doc("one-b", "new")])
+            .await
+            .expect("host1 delta");
         assert_eq!(report.deletes, 1);
-        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        let all = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
         let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
-        assert_eq!(ids, ["one-b", "two"], "host-2's document must survive host-1's tombstone");
+        assert_eq!(
+            ids,
+            ["one-b", "two"],
+            "host-2's document must survive host-1's tombstone"
+        );
 
         // The per-user derivation scopes the same way.
         let alice = host1.with_user("alice");
-        alice.reconcile(&source, &[doc("alice-1", "hers")]).await.expect("alice seed");
-        let report = host1.reconcile(&source, &[doc("one-b", "new")]).await.expect("host1 again");
+        alice
+            .reconcile(&source, &[doc("alice-1", "hers")])
+            .await
+            .expect("alice seed");
+        let report = host1
+            .reconcile(&source, &[doc("one-b", "new")])
+            .await
+            .expect("host1 again");
         assert!(report.skipped, "host-level slice must not see alice's rows");
     }
 
@@ -790,7 +921,10 @@ mod tests {
         let batch = crate::codec::encode_batch(
             &schema,
             source,
-            crate::codec::Slice { host: "host-1", user: None },
+            crate::codec::Slice {
+                host: "host-1",
+                user: None,
+            },
             observed_at,
             version,
             upserts,
@@ -799,22 +933,35 @@ mod tests {
         .expect("batch");
         let files = super::write_batch(table, batch).await.expect("write files");
         let tx = Transaction::new(table);
-        let tx = tx.fast_append().add_data_files(files).apply(tx).expect("apply");
-        tx.commit(catalog).await.map(|_| ()).map_err(|error| {
-            super::error::CommitSnafu { attempts: 1_u32 }.into_error(error)
-        })
+        let tx = tx
+            .fast_append()
+            .add_data_files(files)
+            .apply(tx)
+            .expect("apply");
+        tx.commit(catalog)
+            .await
+            .map(|_| ())
+            .map_err(|error| super::error::CommitSnafu { attempts: 1_u32 }.into_error(error))
     }
 
     #[tokio::test]
     async fn stale_base_append_merges_without_losing_either_commit() {
-        let TestLake { catalog, ident, _dir } = lake().await;
+        let TestLake {
+            catalog,
+            ident,
+            _dir,
+        } = lake().await;
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
-        sink.reconcile(&source, &[doc("a", "alpha")]).await.expect("seed");
+        sink.reconcile(&source, &[doc("a", "alpha")])
+            .await
+            .expect("seed");
 
         // Hold a stale handle while another commit advances the table.
         let stale = catalog.load_table(&ident).await.expect("stale handle");
-        sink.reconcile(&source, &[doc("a", "alpha"), doc("b", "beta")]).await.expect("advance");
+        sink.reconcile(&source, &[doc("a", "alpha"), doc("b", "beta")])
+            .await
+            .expect("advance");
 
         // Appends carry no snapshot-ref requirement, so a commit from the
         // stale base MERGES rather than conflicts: that is the lost-update
@@ -826,14 +973,22 @@ mod tests {
         commit_on(catalog.as_ref(), &stale, &source, 1, 1, &[&gamma], &[])
             .await
             .expect("a stale-base append must merge");
-        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        let all = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
         let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
         assert_eq!(ids, ["a", "b", "c"], "no commit may be lost to the race");
     }
 
     #[tokio::test]
     async fn concurrent_writers_all_land() {
-        let TestLake { catalog, ident, _dir } = lake().await;
+        let TestLake {
+            catalog,
+            ident,
+            _dir,
+        } = lake().await;
         let source = Source::new("test");
         let mut handles = Vec::new();
         for i in 0..4 {
@@ -842,14 +997,19 @@ mod tests {
             let source = source.clone();
             handles.push(tokio::spawn(async move {
                 let sink = IcebergReconciler::new(catalog, ident, format!("host-{i}"));
-                sink.reconcile(&source, &[doc(&format!("doc-{i}"), "body")]).await
+                sink.reconcile(&source, &[doc(&format!("doc-{i}"), "body")])
+                    .await
             }));
         }
         for handle in handles {
             let report = handle.await.expect("join").expect("reconcile");
             assert!(!report.skipped);
         }
-        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        let all = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
         assert_eq!(all.len(), 4, "every concurrent writer's document must land");
     }
 
@@ -881,10 +1041,18 @@ mod tests {
 
         // Reconcile, converge, change + tombstone — the memory-catalog suite's
         // arc, through the production REST + S3 wiring.
-        let seed = vec![doc_in(&tag, &id("r1"), "one"), doc_in(&tag, &id("r2"), "two")];
+        let seed = vec![
+            doc_in(&tag, &id("r1"), "one"),
+            doc_in(&tag, &id("r2"), "two"),
+        ];
         let first = sink.reconcile(&source, &seed).await.expect("seed");
         assert_eq!((first.upserts, first.deletes, first.skipped), (2, 0, false));
-        assert!(sink.reconcile(&source, &seed).await.expect("converged").skipped);
+        assert!(
+            sink.reconcile(&source, &seed)
+                .await
+                .expect("converged")
+                .skipped
+        );
 
         let cursor = current_snapshot_id(catalog.as_ref(), &ident)
             .await
@@ -895,7 +1063,9 @@ mod tests {
         assert_eq!((delta_report.upserts, delta_report.deletes), (1, 1));
 
         let mine: Vec<Document> = live_docs(
-            read_state(catalog.as_ref(), &ident).await.expect("read_state"),
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
         )
         .into_iter()
         .filter(|d| d.meta_json["source"] == tag.as_str())
@@ -903,8 +1073,13 @@ mod tests {
         assert_eq!(mine.len(), 1);
         assert_eq!(mine[0].body, b"one EDITED");
 
-        let delta = added_since(catalog.as_ref(), &ident, cursor).await.expect("added_since");
-        assert!(delta.deletes.contains(&id("r2")), "the tombstone must arrive via the cursor");
+        let delta = added_since(catalog.as_ref(), &ident, cursor)
+            .await
+            .expect("added_since");
+        assert!(
+            delta.deletes.contains(&id("r2")),
+            "the tombstone must arrive via the cursor"
+        );
 
         // The stale-base leg, against a real server. Two acceptable behaviors
         // exist, and which one a backend exhibits is exactly what this records:
@@ -913,13 +1088,17 @@ mod tests {
         // which must map to the kind commit_files retries on. Anything else
         // is a contract break.
         let stale = catalog.load_table(&ident).await.expect("stale handle");
-        sink.reconcile(&source, &[doc_in(&tag, &id("r3"), "three")]).await.expect("advance");
+        sink.reconcile(&source, &[doc_in(&tag, &id("r3"), "three")])
+            .await
+            .expect("advance");
         let c1 = doc_in(&tag, &id("c1"), "x");
         match commit_on(catalog.as_ref(), &stale, &source, 1, 1, &[&c1], &[]).await {
             Ok(()) => {
                 eprintln!("[rest_round_trip] stale-base append: backend MERGES (no retry needed)");
                 let mine: Vec<Document> = live_docs(
-                    read_state(catalog.as_ref(), &ident).await.expect("read_state after merge"),
+                    read_state(catalog.as_ref(), &ident)
+                        .await
+                        .expect("read_state after merge"),
                 )
                 .into_iter()
                 .filter(|d| d.meta_json["source"] == tag.as_str())
@@ -943,45 +1122,75 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_cursor_sees_only_later_appends() {
-        let TestLake { catalog, ident, _dir } = lake().await;
+        let TestLake {
+            catalog,
+            ident,
+            _dir,
+        } = lake().await;
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
-        sink.reconcile(&source, &[doc("a", "alpha")]).await.expect("first");
+        sink.reconcile(&source, &[doc("a", "alpha")])
+            .await
+            .expect("first");
         let cursor = current_snapshot_id(catalog.as_ref(), &ident)
             .await
             .expect("snapshot")
             .expect("one commit");
 
-        sink.reconcile(&source, &[doc("a", "alpha"), doc("b", "beta")]).await.expect("second");
-        sink.reconcile(&source, &[doc("b", "beta")]).await.expect("third tombstones a");
+        sink.reconcile(&source, &[doc("a", "alpha"), doc("b", "beta")])
+            .await
+            .expect("second");
+        sink.reconcile(&source, &[doc("b", "beta")])
+            .await
+            .expect("third tombstones a");
 
-        let delta = added_since(catalog.as_ref(), &ident, cursor).await.expect("delta");
-        let upsert_ids: Vec<&str> =
-            delta.upserts.iter().map(|d| d.external_id.as_str()).collect();
+        let delta = added_since(catalog.as_ref(), &ident, cursor)
+            .await
+            .expect("delta");
+        let upsert_ids: Vec<&str> = delta
+            .upserts
+            .iter()
+            .map(|d| d.external_id.as_str())
+            .collect();
         assert_eq!(upsert_ids, ["b"], "only the post-cursor document arrives");
-        assert_eq!(delta.deletes, ["a"], "the later tombstone wins over a's earlier upsert");
+        assert_eq!(
+            delta.deletes,
+            ["a"],
+            "the later tombstone wins over a's earlier upsert"
+        );
         assert_eq!(
             delta.to_snapshot,
-            current_snapshot_id(catalog.as_ref(), &ident).await.expect("snapshot"),
+            current_snapshot_id(catalog.as_ref(), &ident)
+                .await
+                .expect("snapshot"),
             "the delta reports the cursor to store next"
         );
 
         // A caught-up cursor yields an empty delta.
         let caught_up = delta.to_snapshot.expect("snapshot");
-        let empty = added_since(catalog.as_ref(), &ident, caught_up).await.expect("empty delta");
+        let empty = added_since(catalog.as_ref(), &ident, caught_up)
+            .await
+            .expect("empty delta");
         assert!(empty.upserts.is_empty() && empty.deletes.is_empty());
 
         // An expired/unknown cursor is the typed full-rescan signal.
         let missing = added_since(catalog.as_ref(), &ident, 0).await;
         assert!(
-            matches!(missing, Err(super::Error::CursorNotFound { snapshot: 0, .. })),
+            matches!(
+                missing,
+                Err(super::Error::CursorNotFound { snapshot: 0, .. })
+            ),
             "an unknown cursor must demand a full rescan, got {missing:?}"
         );
     }
 
     #[tokio::test]
     async fn version_orders_a_slice_not_wall_clock() {
-        let TestLake { catalog, ident, _dir } = lake().await;
+        let TestLake {
+            catalog,
+            ident,
+            _dir,
+        } = lake().await;
         let source = Source::new("test");
         let alpha = doc("a", "alpha");
 
@@ -1001,10 +1210,23 @@ mod tests {
             .await
             .expect("tombstone");
 
-        let docs = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
-        assert!(docs.is_empty(), "the version-2 tombstone must win over the older wall clock");
-        let delta = added_since(catalog.as_ref(), &ident, cursor).await.expect("delta");
-        assert_eq!(delta.deletes, ["a"], "the cursor read must apply the same order");
+        let docs = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
+        assert!(
+            docs.is_empty(),
+            "the version-2 tombstone must win over the older wall clock"
+        );
+        let delta = added_since(catalog.as_ref(), &ident, cursor)
+            .await
+            .expect("delta");
+        assert_eq!(
+            delta.deletes,
+            ["a"],
+            "the cursor read must apply the same order"
+        );
 
         // And back: a later re-observation with an even older clock revives it.
         let table = catalog.load_table(&ident).await.expect("reload");
@@ -1012,57 +1234,107 @@ mod tests {
         commit_on(catalog.as_ref(), &table, &source, 5, 3, &[&revived], &[])
             .await
             .expect("revive");
-        let docs = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        let docs = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].body, b"alpha revived");
     }
 
     #[tokio::test]
     async fn cross_slice_tombstone_keeps_the_other_slices_record() {
-        let TestLake { catalog, ident, _dir } = lake().await;
+        let TestLake {
+            catalog,
+            ident,
+            _dir,
+        } = lake().await;
         let source = Source::new("test");
         let host1 = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let host2 = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-2");
         // The same record observed by two slices (synced shell history, the
         // same repo indexed on two hosts).
-        host1.reconcile(&source, &[doc("x", "shared")]).await.expect("host1 seed");
-        host2.reconcile(&source, &[doc("x", "shared")]).await.expect("host2 seed");
+        host1
+            .reconcile(&source, &[doc("x", "shared")])
+            .await
+            .expect("host1 seed");
+        host2
+            .reconcile(&source, &[doc("x", "shared")])
+            .await
+            .expect("host2 seed");
         let cursor = current_snapshot_id(catalog.as_ref(), &ident)
             .await
             .expect("snapshot")
             .expect("committed");
 
         // host-1 lets go of x; host-2 still observes it.
-        host1.reconcile(&source, &[doc("y", "new")]).await.expect("host1 delta");
-        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        host1
+            .reconcile(&source, &[doc("y", "new")])
+            .await
+            .expect("host1 delta");
+        let all = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
         let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
         assert_eq!(ids, ["x", "y"], "host-2's replica must keep x alive");
 
-        let delta = added_since(catalog.as_ref(), &ident, cursor).await.expect("delta");
+        let delta = added_since(catalog.as_ref(), &ident, cursor)
+            .await
+            .expect("delta");
         assert_eq!(
             delta.deletes,
             Vec::<String>::new(),
             "a slice-scoped tombstone must not delete a record live in another slice"
         );
-        let upsert_ids: Vec<&str> = delta.upserts.iter().map(|d| d.external_id.as_str()).collect();
-        assert_eq!(upsert_ids, ["x", "y"], "the surviving replica is re-emitted to converge");
+        let upsert_ids: Vec<&str> = delta
+            .upserts
+            .iter()
+            .map(|d| d.external_id.as_str())
+            .collect();
+        assert_eq!(
+            upsert_ids,
+            ["x", "y"],
+            "the surviving replica is re-emitted to converge"
+        );
 
         // Once the last holder lets go, the delete goes through.
         let cursor = delta.to_snapshot.expect("snapshot");
-        host2.reconcile(&source, &[doc("z", "other")]).await.expect("host2 delta");
-        let delta = added_since(catalog.as_ref(), &ident, cursor).await.expect("second delta");
-        assert_eq!(delta.deletes, ["x"], "the last holder's tombstone must delete");
-        let all = live_docs(read_state(catalog.as_ref(), &ident).await.expect("read_state"));
+        host2
+            .reconcile(&source, &[doc("z", "other")])
+            .await
+            .expect("host2 delta");
+        let delta = added_since(catalog.as_ref(), &ident, cursor)
+            .await
+            .expect("second delta");
+        assert_eq!(
+            delta.deletes,
+            ["x"],
+            "the last holder's tombstone must delete"
+        );
+        let all = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
         let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
         assert_eq!(ids, ["y", "z"]);
     }
 
     #[tokio::test]
     async fn read_state_keeps_fully_tombstoned_sources_for_gc() {
-        let TestLake { catalog, ident, _dir } = lake().await;
+        let TestLake {
+            catalog,
+            ident,
+            _dir,
+        } = lake().await;
         let source = Source::new("test");
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
-        sink.reconcile(&source, &[doc("a", "alpha")]).await.expect("seed");
+        sink.reconcile(&source, &[doc("a", "alpha")])
+            .await
+            .expect("seed");
         // Tombstone the source's only record (crafted directly: the reconciler
         // never appends a bare tombstone, but manual surgery can leave a
         // source fully dead, and the rebuild must still GC its view records).
@@ -1071,7 +1343,9 @@ mod tests {
             .await
             .expect("tombstone");
 
-        let state = read_state(catalog.as_ref(), &ident).await.expect("read_state");
+        let state = read_state(catalog.as_ref(), &ident)
+            .await
+            .expect("read_state");
         assert_eq!(
             state.sources.get("test").map(Vec::len),
             Some(0),

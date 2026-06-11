@@ -278,9 +278,7 @@ fn path_looks_like_file(path: &Path, document: &Document) -> bool {
 }
 
 fn existing_path_is_file(path: &Path) -> Option<bool> {
-    fs::metadata(path)
-        .map(|metadata| !metadata.is_dir())
-        .ok()
+    fs::metadata(path).map(|metadata| !metadata.is_dir()).ok()
 }
 
 fn generated_text(document: &Document) -> Result<String> {

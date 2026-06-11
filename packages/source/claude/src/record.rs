@@ -1,8 +1,8 @@
 //! The typed per-message record and its projection to a search [`Document`].
 
-use source_meta::{Document, keys};
 use serde_json::{Map, Value, json};
 use snafu::ResultExt as _;
+use source_meta::{Document, keys};
 
 use crate::error::{MetadataSnafu, Result};
 
@@ -90,18 +90,35 @@ impl Message {
         meta.insert(keys::MESSAGE_UUID.to_owned(), json!(self.uuid));
         meta.insert(keys::ROLE.to_owned(), json!(self.role));
         meta.insert(keys::RECORD_TYPE.to_owned(), json!(self.record_type));
-        insert_some(&mut meta, keys::PARENT_UUID, self.parent_uuid.map(Value::from));
+        insert_some(
+            &mut meta,
+            keys::PARENT_UUID,
+            self.parent_uuid.map(Value::from),
+        );
         insert_some(&mut meta, keys::MODEL, self.model.map(Value::from));
         insert_some(&mut meta, keys::CWD, self.cwd.map(Value::from));
-        insert_some(&mut meta, keys::GIT_BRANCH, self.git_branch.map(Value::from));
+        insert_some(
+            &mut meta,
+            keys::GIT_BRANCH,
+            self.git_branch.map(Value::from),
+        );
         insert_some(&mut meta, keys::TOOL_NAME, self.tool_name.map(Value::from));
-        insert_some(&mut meta, keys::INPUT_TOKENS, self.input_tokens.map(Value::from));
-        insert_some(&mut meta, keys::OUTPUT_TOKENS, self.output_tokens.map(Value::from));
+        insert_some(
+            &mut meta,
+            keys::INPUT_TOKENS,
+            self.input_tokens.map(Value::from),
+        );
+        insert_some(
+            &mut meta,
+            keys::OUTPUT_TOKENS,
+            self.output_tokens.map(Value::from),
+        );
         insert_some(&mut meta, keys::TIMESTAMP, self.timestamp.map(Value::from));
         let meta_json = Value::Object(meta);
 
-        source_meta::check_metadata(&external_id, &meta_json)
-            .context(MetadataSnafu { external_id: external_id.clone() })?;
+        source_meta::check_metadata(&external_id, &meta_json).context(MetadataSnafu {
+            external_id: external_id.clone(),
+        })?;
 
         Ok(Document {
             external_id,

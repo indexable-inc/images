@@ -136,7 +136,9 @@ impl Message {
     /// Whether this message originates from a bot or integration.
     #[must_use]
     pub fn is_bot(&self) -> bool {
-        self.bot_id.is_some() || self.app_id.is_some() || self.subtype.as_deref() == Some("bot_message")
+        self.bot_id.is_some()
+            || self.app_id.is_some()
+            || self.subtype.as_deref() == Some("bot_message")
     }
 }
 
@@ -192,7 +194,11 @@ impl FileRef {
     #[must_use]
     pub fn type_str(&self) -> &str {
         let pretty = self.pretty_type.trim();
-        if pretty.is_empty() { self.filetype.trim() } else { pretty }
+        if pretty.is_empty() {
+            self.filetype.trim()
+        } else {
+            pretty
+        }
     }
 }
 

@@ -22,7 +22,11 @@ use clap::{Parser, Subcommand};
 
 /// Terminal session manager for tiling-WM users.
 #[derive(Parser)]
-#[command(name = "tap", version, about = "Terminal session manager for tiling-WM users")]
+#[command(
+    name = "tap",
+    version,
+    about = "Terminal session manager for tiling-WM users"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -114,7 +118,11 @@ async fn main() -> Result<()> {
     });
 
     match command {
-        Command::Start { command, detached, id } => client::start(command, detached, id).await,
+        Command::Start {
+            command,
+            detached,
+            id,
+        } => client::start(command, detached, id).await,
         Command::Attach { session } => attach::run(session).await,
         Command::List => {
             client::list();
@@ -126,6 +134,10 @@ async fn main() -> Result<()> {
         Command::Inject { session, text } => client::inject(session, text).await,
         Command::Subscribe { session } => client::subscribe(session).await,
         Command::Kill { session } => client::kill(session).await,
-        Command::Daemon { id, socket, command } => daemon::run(id, socket, command).await,
+        Command::Daemon {
+            id,
+            socket,
+            command,
+        } => daemon::run(id, socket, command).await,
     }
 }

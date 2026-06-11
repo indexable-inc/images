@@ -11,9 +11,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use dashboard_core::{
-    ExecView, Hub, Pane, ProducerSnapshot, Publisher, RecordingStore, serve_hub,
-};
+use dashboard_core::{ExecView, Hub, Pane, ProducerSnapshot, Publisher, RecordingStore, serve_hub};
 use loro::LoroDoc;
 
 fn exec_pane() -> Pane {
@@ -88,12 +86,18 @@ fn hub_snapshot_decodes_exec_pane_with_history() {
     // once-stamped creation time, and the source behind it.
     let dump = format!("{:?}", doc.get_deep_value());
     for needle in ["exec", "hi-from-echo", "created_at", "import subprocess"] {
-        assert!(dump.contains(needle), "decoded doc missing {needle:?}: {dump}");
+        assert!(
+            dump.contains(needle),
+            "decoded doc missing {needle:?}: {dump}"
+        );
     }
 
     // The snapshot carries the full oplog, not a shallow/gc'd one, so the browser
     // can check out and replay any past version rather than only the latest state.
-    assert!(!doc.is_shallow(), "snapshot must retain full history for replay");
+    assert!(
+        !doc.is_shallow(),
+        "snapshot must retain full history for replay"
+    );
 }
 
 /// A recording saved to disk reloads to a document that still replays the exec
@@ -112,7 +116,10 @@ fn recording_round_trips_through_disk() {
     let doc = LoroDoc::new();
     doc.import(&bytes).expect("import reloaded recording");
     let dump = format!("{:?}", doc.get_deep_value());
-    assert!(dump.contains("hi-from-echo"), "reloaded recording must replay output");
+    assert!(
+        dump.contains("hi-from-echo"),
+        "reloaded recording must replay output"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -157,7 +164,9 @@ fn http_get(addr: std::net::SocketAddr, path: &str) -> String {
             Err(error) => panic!("connect {addr}: {error}"),
         }
     };
-    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     write!(
         stream,
         "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
