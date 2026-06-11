@@ -1,5 +1,5 @@
 # Body of the `ix-downtime` bash app (see users/andrewgazelka/home.nix).
-# No shebang / `set` line: the mkBashApp wrapper supplies bash + `set -euo
+# No shebang / `set` line: the writeBashApplication wrapper supplies bash + `set -euo
 # pipefail` and bakes curl/jaq/sqlite/minecraft-sound/claude/coreutils + the
 # bossbar CLI + say-detached onto PATH via runtimeInputs.
 #

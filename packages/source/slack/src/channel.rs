@@ -65,10 +65,16 @@ const NON_CHANNEL_DIRS: &[&str] = &["__files__", "agent-traces"];
 /// Returns [`Error::ListDir`] if the export root cannot be listed.
 pub fn discover_channel_dirs(root: &Path) -> Result<Vec<ChannelDir>, Error> {
     let mut dirs = Vec::new();
-    let entries = fs::read_dir(root).context(ListDirSnafu { path: root.to_path_buf() })?;
+    let entries = fs::read_dir(root).context(ListDirSnafu {
+        path: root.to_path_buf(),
+    })?;
     for entry in entries {
-        let entry = entry.context(ListDirSnafu { path: root.to_path_buf() })?;
-        let file_type = entry.file_type().context(ListDirSnafu { path: root.to_path_buf() })?;
+        let entry = entry.context(ListDirSnafu {
+            path: root.to_path_buf(),
+        })?;
+        let file_type = entry.file_type().context(ListDirSnafu {
+            path: root.to_path_buf(),
+        })?;
         if !file_type.is_dir() {
             continue;
         }
@@ -76,7 +82,10 @@ pub fn discover_channel_dirs(root: &Path) -> Result<Vec<ChannelDir>, Error> {
         if NON_CHANNEL_DIRS.contains(&raw.as_str()) {
             continue;
         }
-        let SplitName { id: id_from_prefix, name: display_name } = split_id_prefix(&raw);
+        let SplitName {
+            id: id_from_prefix,
+            name: display_name,
+        } = split_id_prefix(&raw);
         dirs.push(ChannelDir {
             id_from_prefix,
             display_name,
@@ -105,7 +114,10 @@ struct SplitName {
 #[must_use]
 fn split_id_prefix(raw: &str) -> SplitName {
     if !raw.starts_with('C') {
-        return SplitName { id: None, name: raw.to_owned() };
+        return SplitName {
+            id: None,
+            name: raw.to_owned(),
+        };
     }
     let id_len = raw
         .char_indices()
@@ -115,15 +127,24 @@ fn split_id_prefix(raw: &str) -> SplitName {
         .unwrap_or(0);
     // A real id is more than just "C"; require at least a few chars.
     if id_len < 4 {
-        return SplitName { id: None, name: raw.to_owned() };
+        return SplitName {
+            id: None,
+            name: raw.to_owned(),
+        };
     }
     let (id, rest) = raw.split_at(id_len);
     let name = rest.trim_start_matches('-');
     if name.is_empty() {
         // Directory was just the id; use the id as the display name.
-        SplitName { id: Some(id.to_owned()), name: id.to_owned() }
+        SplitName {
+            id: Some(id.to_owned()),
+            name: id.to_owned(),
+        }
     } else {
-        SplitName { id: Some(id.to_owned()), name: name.to_owned() }
+        SplitName {
+            id: Some(id.to_owned()),
+            name: name.to_owned(),
+        }
     }
 }
 
@@ -147,7 +168,11 @@ pub fn is_external_name(name: &str) -> bool {
 /// display name in `channels.json`, else a synthetic id derived from the name
 /// (so a channel with no metadata entry still gets a stable `external_id`).
 #[must_use]
-pub fn resolve_channel(dir: &ChannelDir, by_id: &HashMap<String, ChannelEntry>, by_name: &HashMap<String, ChannelEntry>) -> ChannelInfo {
+pub fn resolve_channel(
+    dir: &ChannelDir,
+    by_id: &HashMap<String, ChannelEntry>,
+    by_name: &HashMap<String, ChannelEntry>,
+) -> ChannelInfo {
     let entry = dir
         .id_from_prefix
         .as_deref()
@@ -162,7 +187,9 @@ pub fn resolve_channel(dir: &ChannelDir, by_id: &HashMap<String, ChannelEntry>, 
 
     let name = dir.display_name.clone();
     let is_archived = entry.is_some_and(|entry| entry.is_archived);
-    let topic = entry.map(|entry| entry.topic.value.clone()).unwrap_or_default();
+    let topic = entry
+        .map(|entry| entry.topic.value.clone())
+        .unwrap_or_default();
     let is_external = is_external_name(&name) || is_external_name(&dir.raw_dir_name);
 
     ChannelInfo {
@@ -187,9 +214,13 @@ pub fn resolve_channel(dir: &ChannelDir, by_id: &HashMap<String, ChannelEntry>, 
 /// directory cannot be listed or a day file cannot be read or parsed.
 pub fn read_channel_messages(dir: &Path) -> Result<Vec<Message>, Error> {
     let mut day_files: Vec<PathBuf> = Vec::new();
-    let entries = fs::read_dir(dir).context(ListDirSnafu { path: dir.to_path_buf() })?;
+    let entries = fs::read_dir(dir).context(ListDirSnafu {
+        path: dir.to_path_buf(),
+    })?;
     for entry in entries {
-        let entry = entry.context(ListDirSnafu { path: dir.to_path_buf() })?;
+        let entry = entry.context(ListDirSnafu {
+            path: dir.to_path_buf(),
+        })?;
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
             day_files.push(path);
@@ -200,7 +231,8 @@ pub fn read_channel_messages(dir: &Path) -> Result<Vec<Message>, Error> {
     let mut messages = Vec::new();
     for path in day_files {
         let bytes = fs::read(&path).context(ReadSnafu { path: path.clone() })?;
-        let day: Vec<Message> = serde_json::from_slice(&bytes).context(ParseSnafu { path: path.clone() })?;
+        let day: Vec<Message> =
+            serde_json::from_slice(&bytes).context(ParseSnafu { path: path.clone() })?;
         messages.extend(day);
     }
     Ok(messages)

@@ -64,7 +64,7 @@ pub fn mgrep_token_path() -> Option<PathBuf> {
 }
 
 async fn exchange_for_jwt(platform_url: &str, access_token: &str) -> Result<String> {
-    let client = reqwest::Client::builder()
+    let client = crate::bounded_http_builder()
         .build()
         .context(BuildClientSnafu)?;
     let resp = client

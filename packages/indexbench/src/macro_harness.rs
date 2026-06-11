@@ -74,13 +74,22 @@ pub fn parse_custom_metric(line: &str) -> Result<Option<CustomMetric>, String> {
     let mut lower_is_better = true;
 
     for token in rest.split_whitespace() {
-        let (key, raw) = token.split_once('=').ok_or_else(|| format!("`{token}` is not key=value"))?;
+        let (key, raw) = token
+            .split_once('=')
+            .ok_or_else(|| format!("`{token}` is not key=value"))?;
         match key {
             "name" => name = Some(raw.to_owned()),
-            "value" => value = Some(raw.parse::<f64>().map_err(|err| format!("value `{raw}`: {err}"))?),
+            "value" => {
+                value = Some(
+                    raw.parse::<f64>()
+                        .map_err(|err| format!("value `{raw}`: {err}"))?,
+                );
+            }
             "unit" => raw.clone_into(&mut unit),
             "lower_is_better" => {
-                lower_is_better = raw.parse::<bool>().map_err(|err| format!("lower_is_better `{raw}`: {err}"))?;
+                lower_is_better = raw
+                    .parse::<bool>()
+                    .map_err(|err| format!("lower_is_better `{raw}`: {err}"))?;
             }
             other => return Err(format!("unknown key `{other}`")),
         }
@@ -133,7 +142,9 @@ fn run_once(program: &str, args: &[String]) -> crate::Result<RunSample> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .with_context(|_| error::SpawnSnafu { command: program.to_owned() })?;
+        .with_context(|_| error::SpawnSnafu {
+            command: program.to_owned(),
+        })?;
 
     let start = Instant::now();
 
@@ -156,7 +167,10 @@ fn run_once(program: &str, args: &[String]) -> crate::Result<RunSample> {
     }
     let stderr_buf = stderr_reader.join().unwrap_or_default();
 
-    let Reaped { raw_status, max_rss } = wait4(child.id() as i32, program)?;
+    let Reaped {
+        raw_status,
+        max_rss,
+    } = wait4(child.id() as i32, program)?;
     let wall_clock_ns = start.elapsed().as_nanos() as f64;
     let max_rss_bytes = maxrss_to_bytes(max_rss);
 
@@ -216,14 +230,20 @@ fn wait4(pid: i32, program: &str) -> crate::Result<Reaped> {
 /// `cfg` picks the right unit with no runtime branch; an unconditional `* 1024`
 /// would inflate every `max_rss` 1024x on macOS.
 #[cfg(target_os = "macos")]
-#[expect(clippy::cast_precision_loss, reason = "byte counts at bench magnitudes are far below 2^52, so the f64 is exact")]
-fn maxrss_to_bytes(ru_maxrss_bytes: i64) -> f64 {
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "byte counts at bench magnitudes are far below 2^52, so the f64 is exact"
+)]
+const fn maxrss_to_bytes(ru_maxrss_bytes: i64) -> f64 {
     ru_maxrss_bytes as f64
 }
 
 /// See the macOS variant above; on Linux `ru_maxrss` is kibibytes.
 #[cfg(not(target_os = "macos"))]
-#[expect(clippy::cast_precision_loss, reason = "kibibyte counts at bench magnitudes are far below 2^52, so the f64 is exact")]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "kibibyte counts at bench magnitudes are far below 2^52, so the f64 is exact"
+)]
 fn maxrss_to_bytes(ru_maxrss_kib: i64) -> f64 {
     ru_maxrss_kib as f64 * 1024.0
 }
@@ -259,7 +279,11 @@ fn check_exit_status(status: libc::c_int, program: &str) -> crate::Result<()> {
 }
 
 /// Parse `@bench` lines out of a child's captured stdout and stderr.
-fn collect_custom_metrics(program: &str, stdout: &str, stderr: &str) -> crate::Result<Vec<CustomMetric>> {
+fn collect_custom_metrics(
+    program: &str,
+    stdout: &str,
+    stderr: &str,
+) -> crate::Result<Vec<CustomMetric>> {
     let mut metrics = Vec::new();
     for line in stdout.lines().chain(stderr.lines()) {
         match parse_custom_metric(line) {
@@ -351,10 +375,20 @@ fn fold_custom(samples: &[RunSample]) -> Vec<Metric> {
             let first = entries.first()?;
             if entries.len() == samples.len() && samples.len() > 1 {
                 let values: Vec<f64> = entries.iter().map(|m| m.value).collect();
-                Some(Metric::distribution(name, first.unit.clone(), first.lower_is_better, values))
+                Some(Metric::distribution(
+                    name,
+                    first.unit.clone(),
+                    first.lower_is_better,
+                    values,
+                ))
             } else {
                 let last = entries.last()?;
-                Some(Metric::deterministic(name, last.value, first.unit.clone(), first.lower_is_better))
+                Some(Metric::deterministic(
+                    name,
+                    last.value,
+                    first.unit.clone(),
+                    first.lower_is_better,
+                ))
             }
         })
         .collect()
@@ -366,9 +400,11 @@ mod tests {
 
     #[test]
     fn parses_a_full_custom_metric_line() {
-        let parsed = parse_custom_metric("noise @bench name=match_rate value=0.91 unit=ratio lower_is_better=false")
-            .expect("well-formed line parses")
-            .expect("line carries a metric");
+        let parsed = parse_custom_metric(
+            "noise @bench name=match_rate value=0.91 unit=ratio lower_is_better=false",
+        )
+        .expect("well-formed line parses")
+        .expect("line carries a metric");
         assert_eq!(
             parsed,
             CustomMetric {
@@ -382,7 +418,9 @@ mod tests {
 
     #[test]
     fn applies_unit_and_direction_defaults() {
-        let parsed = parse_custom_metric("@bench name=force_steps value=42").unwrap().unwrap();
+        let parsed = parse_custom_metric("@bench name=force_steps value=42")
+            .unwrap()
+            .unwrap();
         assert_eq!(parsed.unit, "count");
         assert!(parsed.lower_is_better);
         assert!((parsed.value - 42.0).abs() < 1e-9);
@@ -396,12 +434,30 @@ mod tests {
 
     #[test]
     fn rejects_malformed_marked_lines() {
-        assert!(parse_custom_metric("@bench value=1").is_err(), "missing name must error");
-        assert!(parse_custom_metric("@bench name=x").is_err(), "missing value must error");
-        assert!(parse_custom_metric("@bench name=x value=notanumber").is_err(), "bad float must error");
-        assert!(parse_custom_metric("@bench name=x value=1 lower_is_better=maybe").is_err(), "bad bool must error");
-        assert!(parse_custom_metric("@bench name=x value=1 bogus=2").is_err(), "unknown key must error");
-        assert!(parse_custom_metric("@bench name=x value=1 stray").is_err(), "non key=value token must error");
+        assert!(
+            parse_custom_metric("@bench value=1").is_err(),
+            "missing name must error"
+        );
+        assert!(
+            parse_custom_metric("@bench name=x").is_err(),
+            "missing value must error"
+        );
+        assert!(
+            parse_custom_metric("@bench name=x value=notanumber").is_err(),
+            "bad float must error"
+        );
+        assert!(
+            parse_custom_metric("@bench name=x value=1 lower_is_better=maybe").is_err(),
+            "bad bool must error"
+        );
+        assert!(
+            parse_custom_metric("@bench name=x value=1 bogus=2").is_err(),
+            "unknown key must error"
+        );
+        assert!(
+            parse_custom_metric("@bench name=x value=1 stray").is_err(),
+            "non key=value token must error"
+        );
     }
 
     #[test]
@@ -429,7 +485,10 @@ mod tests {
             },
         ];
         let metrics = aggregate(&samples);
-        let rate = metrics.iter().find(|m| m.name == "rate").expect("custom metric present");
+        let rate = metrics
+            .iter()
+            .find(|m| m.name == "rate")
+            .expect("custom metric present");
         assert_eq!(rate.samples.as_deref(), Some([1.0, 3.0].as_slice()));
         assert!(!rate.lower_is_better);
     }
@@ -448,6 +507,9 @@ mod tests {
 
     #[test]
     fn nonzero_exit_is_an_error() {
-        assert!(run_command("false", &[], 1).is_err(), "a non-zero exit must surface as an error");
+        assert!(
+            run_command("false", &[], 1).is_err(),
+            "a non-zero exit must surface as an error"
+        );
     }
 }

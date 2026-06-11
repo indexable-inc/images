@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 dirs.workspace = true
+percent-encoding.workspace = true
 reqwest = { workspace = true, features = ["json", "rustls-tls", "multipart"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

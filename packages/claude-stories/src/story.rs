@@ -61,20 +61,25 @@ pub fn derive(path: &Path) -> Result<Story> {
     let commit = head
         .peel_to_commit()
         .wrap_err("HEAD does not point at a commit")?;
-    let subject = commit.summary().unwrap_or("(no commit message)").to_owned();
+    let subject = commit
+        .summary()
+        .ok()
+        .flatten()
+        .unwrap_or("(no commit message)")
+        .to_owned();
 
     // Prefer the configured user.name; fall back to the latest commit's author.
     let name = repo
         .config()
         .ok()
         .and_then(|c| c.get_string("user.name").ok())
-        .or_else(|| commit.author().name().map(str::to_owned))
+        .or_else(|| commit.author().name().ok().map(str::to_owned))
         .unwrap_or_else(|| "anonymous".to_owned());
 
     let origin = repo
         .find_remote("origin")
         .ok()
-        .and_then(|r| r.url().map(str::to_owned));
+        .and_then(|r| r.url().ok().map(str::to_owned));
     let repo_name = origin
         .as_deref()
         .and_then(repo_basename)

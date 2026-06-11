@@ -9,9 +9,9 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use source_meta::{Document, hash_body, keys};
 use serde_json::{Map, Value, json};
 use snafu::ResultExt as _;
+use source_meta::{Document, hash_body, keys};
 
 use crate::{
     channel::ChannelInfo,
@@ -111,7 +111,10 @@ pub fn documents_for_channel(
             continue;
         }
         let key = message.thread_key().to_owned();
-        threads.entry(key).or_default().insert(message.ts.clone(), message);
+        threads
+            .entry(key)
+            .or_default()
+            .insert(message.ts.clone(), message);
     }
 
     let mut documents = Vec::with_capacity(threads.len());
@@ -299,7 +302,11 @@ fn author_name<'a>(message: &'a Message, users: &'a UserMap) -> &'a str {
     {
         return name;
     }
-    if let Some(name) = message.user_profile.as_ref().and_then(crate::model::UserProfile::best_name) {
+    if let Some(name) = message
+        .user_profile
+        .as_ref()
+        .and_then(crate::model::UserProfile::best_name)
+    {
         return name;
     }
     "bot"
@@ -348,7 +355,10 @@ struct BuildMeta<'a> {
 /// extras. Every key is top-level so each is a filter key.
 fn build_meta(args: &BuildMeta<'_>) -> Value {
     let mut map = Map::new();
-    map.insert(keys::SOURCE.to_owned(), json!(source_meta::Source::new("slack").as_str()));
+    map.insert(
+        keys::SOURCE.to_owned(),
+        json!(source_meta::Source::new("slack").as_str()),
+    );
     map.insert("external_id".to_owned(), json!(args.external_id));
     map.insert(keys::CONTENT_HASH.to_owned(), json!(args.content_hash));
     map.insert(keys::TITLE.to_owned(), json!(args.title));
@@ -358,8 +368,14 @@ fn build_meta(args: &BuildMeta<'_>) -> Value {
     map.insert(keys::CHANNEL_ID.to_owned(), json!(args.channel.id));
     map.insert(keys::CHANNEL_NAME.to_owned(), json!(args.channel.name));
     map.insert(keys::AUTHORS.to_owned(), json!(args.authors));
-    map.insert(keys::IS_ARCHIVED.to_owned(), json!(args.channel.is_archived));
-    map.insert(keys::IS_EXTERNAL.to_owned(), json!(args.channel.is_external));
+    map.insert(
+        keys::IS_ARCHIVED.to_owned(),
+        json!(args.channel.is_archived),
+    );
+    map.insert(
+        keys::IS_EXTERNAL.to_owned(),
+        json!(args.channel.is_external),
+    );
     map.insert(keys::IS_BOT_THREAD.to_owned(), json!(args.is_bot_thread));
     map.insert("message_count".to_owned(), json!(args.message_count));
     map.insert("has_files".to_owned(), json!(args.has_files));

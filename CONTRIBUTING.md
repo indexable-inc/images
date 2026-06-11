@@ -1,16 +1,16 @@
 # Contributing
 
-Bug reports and enhancement requests go to [GitHub Issues](https://github.com/indexable-inc/index/issues). Security reports follow [SECURITY.md](SECURITY.md) instead. Code changes land through pull requests against the `main` branch.
+Bug reports and enhancement requests go to [GitHub Issues](https://github.com/indexable-inc/index/issues). Security reports follow [SECURITY.md](SECURITY.md) instead. Code changes land directly on `main` after local verification; a pull request is the optional path when a change wants human or AI review (see [Workflow](AGENTS.md#workflow)).
 
 ## Local setup
 
-Run the repo lint before pushing:
+Local verification is the gate that decides whether a change is safe to land, not CI. A single shared runner node serves the whole team, so routing routine validation through it overloads the node and slows everyone down; verify locally, then push. Run the repo lint before pushing:
 
 ```sh
 nix run .#lint
 ```
 
-It checks Nix formatting (nixfmt), Statix, Deadnix, and the repo's ast-grep rules. CI runs the same derivation as a flake check.
+It checks Nix formatting (nixfmt), Statix, Deadnix, and the repo's ast-grep rules. CI runs the same derivation as a flake check, but treat that run as advisory signal rather than a landing gate.
 
 The repo ships a tracked git pre-commit hook at `.githooks/pre-commit` that calls the lint app. To activate it locally, `direnv allow` in the repo root: `.envrc` exports `core.hooksPath` so git uses the tracked hook. No additional shell or framework is needed.
 
@@ -30,7 +30,7 @@ case derivations, and coverage runs.
 
 ## Cargo Unit Benchmarks
 
-[`ix.cargoUnit.buildWorkspace`](lib/cargo-unit.nix) exposes Cargo `[[bench]]`
+[`ix.cargoUnit.buildWorkspace`](lib/rust/cargo-unit.nix) exposes Cargo `[[bench]]`
 roots under `benchmarks` when a target set includes `--benches` or a specific
 `--bench <name>`. Tango benches work as Nix artifacts, including the usual
 Linux/macOS `cargo:rustc-link-arg-benches=-rdynamic` build-script line.
@@ -125,6 +125,41 @@ the package owns that hardening, hardware, ABI, kernel, or realtime constraint.
 Rust's upstream target matrix and flag details live in the
 [Unstable Book sanitizer chapter](https://doc.rust-lang.org/unstable-book/compiler-flags/sanitizer.html).
 
+## Rust formatting
+
+The repo does not enforce `rustfmt`. Running `cargo fmt` will reflow lines
+unrelated to your change (attribute macros, `assert_eq!` call wrapping, etc.)
+and produce noise in the diff. Do not run `cargo fmt` before committing.
+
+Rust style is enforced through Clippy (the repo's `llm-clippy` fork) and code
+review. See [Rust style](AGENTS.md#rust-style) for the house conventions.
+
+## Running the fork Clippy locally
+
+CI uses a custom `clippy-driver` from the
+[`indexable-inc/clippy`](https://github.com/indexable-inc/clippy) fork that adds
+two workspace-level lints (`fallible_int_fallback`, `anonymous_tuple_return_type`)
+denied across the workspace. A plain `cargo clippy` will not catch these.
+
+To run the same check CI runs, build the per-unit clippy derivation for the
+crate you are editing:
+
+```sh
+nix build .#ciChecks.x86_64-linux.rust-<crate-name>.clippy
+```
+
+Replace `<crate-name>` with the kebab-case package name, e.g.:
+
+```sh
+nix build .#ciChecks.x86_64-linux.rust-git-log-pretty.clippy
+```
+
+To list every available clippy derivation:
+
+```sh
+nix eval --json .#ciChecks.x86_64-linux --apply 'cs: builtins.attrNames cs' | jq '.[] | select(test("clippy"))'
+```
+
 ## Coding standards
 
 The full style guide lives in [AGENTS.md](AGENTS.md). Skim the section that matches what you're touching:
@@ -151,4 +186,4 @@ One logical change per commit; see the [Workflow](AGENTS.md#workflow) section fo
 
 ## Pull requests
 
-PRs target `main` and need passing required status checks, currently `flake-check` and `ai review approved`. Repositories migrating an older review gate can set `AI_REVIEW_REQUIRED_CHECK_NAME` until branch protection uses the model-neutral check name. The PR description should answer the same "why" question the commit body answers, plus anything reviewer-only: rollout plan, known follow-ups, and reviewer-specific context.
+PRs are the optional review path, not the default way to land a change; verified changes push directly to `main`. When you do open one, it targets `main`. Required status checks (currently `flake-check` and `ai review approved`) on a PR are signal, not a queue you are required to babysit once local gates pass. Repositories migrating an older review gate can set `AI_REVIEW_REQUIRED_CHECK_NAME` until branch protection uses the model-neutral check name. The PR description should answer the same "why" question the commit body answers, plus anything reviewer-only: rollout plan, known follow-ups, and reviewer-specific context.

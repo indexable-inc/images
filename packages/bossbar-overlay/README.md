@@ -98,7 +98,8 @@ CREATE TABLE bossbars (
   x           REAL,                          -- pinned location (logical points)
   y           REAL,                          -- NULL/NULL = auto-stacked
   since       INTEGER,                       -- Unix epoch; live elapsed timer in the title
-  url         TEXT    NOT NULL DEFAULT ''    -- opened with the system opener on click
+  url         TEXT    NOT NULL DEFAULT '',   -- opened with the system opener on click
+  theme       TEXT    NOT NULL DEFAULT ''    -- user-supplied texture set; '' = vanilla
 );
 ```
 
@@ -106,10 +107,52 @@ CREATE TABLE bossbars (
   values fall back to `purple`.
 - **overlay**: `progress` (smooth) or `notched_6` / `notched_10` / `notched_12` /
   `notched_20` (segmented).
+- **theme**: name of a texture-set directory under the themes root (below). The
+  bar renders from that set instead of the vanilla `color` sprites; an unknown
+  or broken theme falls back to vanilla, same as a color typo.
 
 Default DB: `~/Library/Application Support/bossbar-overlay/bossbars.db` on macOS
 (`$XDG_DATA_HOME/bossbar-overlay/bossbars.db` on Linux). Override with
 `BOSSBAR_DB=/path/to.db`.
+
+### Themed / custom bar textures
+
+A bar with a non-empty `theme` renders from a user-supplied texture set on disk
+rather than the vanilla color sprites. Each theme is one directory under the
+themes root (`$BOSSBAR_THEMES`, else `themes/` next to the database):
+
+```text
+themes/wither/
+  background.png            # required: the empty track (vanilla art is 182x5)
+  progress.png              # required: the filled track, cropped to the fill
+  notched_6_background.png  # optional: per-notch overlay overrides; without a
+  notched_6_progress.png    #   pair the vanilla notch sprites layer on top
+  ...                       #   (notched_10 / notched_12 / notched_20 likewise)
+```
+
+Themed sets slot into the same four-layer renderer as vanilla (background,
+progress cropped to the fill, notch background, notch progress); any PNG size
+works and is drawn into the bar's 182:5 box. Drop the files in, then:
+
+```sh
+./bossbar set "Wither" --theme wither      # back to vanilla: --theme ''
+```
+
+To slice a set out of a resource pack you own (`.zip`/`.mcpack` or an unpacked
+directory), [`app/scripts/import-theme.sh`](app/scripts/import-theme.sh) copies
+the `boss_bar` sprites into a theme directory:
+
+```sh
+bash app/scripts/import-theme.sh ~/Downloads/my-pack.zip wither --color pink
+```
+
+**Bring your own art.** Themes are strictly user-supplied: this repo ships no
+themed textures, fetches none, and mirrors none. In particular, third-party
+packs such as Better Bossbars (All Rights Reserved) are NOT bundled and must
+not be committed here; buy/download the pack yourself and import it locally if
+its license lets you. The fallback art remains Mojang's vanilla sprites,
+extracted at build time under the same personal-use carve-out as the rest of
+the overlay's assets.
 
 ## Book
 

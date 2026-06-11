@@ -11,7 +11,7 @@ hands you a live Playwright ``Page``. The Playwright driver and the CDP connecti
 are started once and cached, so successive calls reuse the same session.
 
     import browser
-    await browser.get_or_create_browser()        # connect, or launch a visible Dia
+    await browser.get_or_create_browser()        # connect, or launch a visible Chrome
     await browser.goto("https://example.com")     # navigate the front tab
     await browser.shot()                          # screenshot -> a Result (image)
     await browser.read()                          # cheap text+elements readout (no vision tokens)
@@ -91,9 +91,14 @@ __version__ = "0.2.0"
 # argument at all.
 DEFAULT_ENDPOINT = "http://127.0.0.1:9222"
 
-# The browser to launch when none is running. Dia is the default on this fleet; a
-# caller can pass any Chromium-family app name (macOS) or executable path.
-DEFAULT_APP = "Dia"
+# The browser to launch when none is running: a stock Chromium-family browser
+# whose UI actually renders CDP-created tabs, so the "visible, never headless"
+# promise holds -- you can SEE and click the tab `goto` opened. Dia (Arc engine)
+# manages its tab strip in its own layer and never shows CDP-created tabs, so a
+# page driven in Dia is live but invisible in its UI; pass `app="Dia"` only if
+# you know you want that. Any Chromium-family app name (macOS) or executable
+# path works.
+DEFAULT_APP = "Google Chrome"
 
 # Started once per kernel and reused: the Playwright driver process and one CDP
 # connection per endpoint. Module-level so the live browser session survives across
@@ -172,9 +177,14 @@ async def get_or_create_browser(
     Playwright ``Browser``.
 
     ``app`` is the browser to launch when none is running (a macOS application name
-    like ``"Dia"`` / ``"Google Chrome"``, or an executable path elsewhere);
+    like ``"Google Chrome"`` / ``"Dia"``, or an executable path elsewhere);
     ``user_data_dir`` is the profile to launch with (defaults to a dedicated
-    ``~/.cdp-<app>-profile`` so it never disturbs your everyday session)."""
+    ``~/.cdp-<app>-profile`` so it never disturbs your everyday session).
+
+    A LAUNCH (as opposed to a reuse) is announced on stdout: the launched browser
+    is a separate instance on a fresh, logged-out profile, possibly behind other
+    windows -- without the note, "it worked" is indistinguishable from "nothing
+    happened" to the human looking for the window."""
     try:
         return await connect(endpoint)
     except Exception:
@@ -196,6 +206,11 @@ async def get_or_create_browser(
             f"launched {app!r} but no CDP endpoint came up at {endpoint} within {timeout}s "
             f"(argv: {argv})"
         )
+    print(
+        f"browser: launched a NEW visible {app} instance on {endpoint} with its own "
+        f"profile {udd} (a fresh, logged-out session, separate from your everyday "
+        f"{app}; its window may be behind others). Future calls reuse it."
+    )
     return await connect(endpoint)
 
 
@@ -253,35 +268,123 @@ async def goto(
     return pg
 
 
-async def shot(target=None, *, endpoint: str = DEFAULT_ENDPOINT, full_page: bool = False):
+# Default longest-edge cap for a model-bound shot. A "did the action work?"
+# check reads fine at ~1024px, and capping the longest side here (at the source,
+# before the bytes ever leave the helper) keeps both the human dashboard copy
+# and the model copy small -- the kernel's own llm_images budget only ever sees
+# the model copy and runs *after* this. Pass ``max_dim=0`` for no downscale.
+_SHOT_MAX_DIM = 1024
+
+
+def _encode_shot(png: bytes, *, max_dim: int, fmt: str, quality: int) -> tuple[bytes, str]:
+    """Downscale a raw screenshot's longest edge to ``max_dim`` (aspect preserved;
+    ``max_dim<=0`` disables it) and re-encode as ``fmt`` (``"png"`` or ``"jpeg"``,
+    the latter at ``quality``). Returns ``(bytes, mime)``. Pure and never raises:
+    if Pillow is missing or anything fails it returns the original PNG untouched,
+    so a shot can only ever get smaller, never break. JPEG flattens alpha onto
+    white (JPEG has no alpha) so transparency does not render black."""
+    try:
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(png))
+        img.load()
+        width, height = img.size
+        longest = max(width, height)
+        if max_dim > 0 and longest > max_dim:
+            s = max_dim / longest
+            img = img.resize((max(1, round(width * s)), max(1, round(height * s))))
+        elif fmt == "png":
+            # No resize and PNG requested: the original bytes are already a fine,
+            # lossless PNG -- avoid a needless re-encode.
+            return png, "image/png"
+        buf = io.BytesIO()
+        if fmt == "jpeg":
+            if img.mode != "RGB":
+                rgba = img.convert("RGBA")
+                flat = Image.new("RGB", rgba.size, (255, 255, 255))
+                flat.paste(rgba, mask=rgba.split()[-1])
+                img = flat
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            return buf.getvalue(), "image/jpeg"
+        if img.mode not in ("RGB", "RGBA", "L"):
+            img = img.convert("RGBA")
+        img.save(buf, format="PNG", optimize=True)
+        return buf.getvalue(), "image/png"
+    except Exception:
+        return png, "image/png"
+
+
+async def shot(
+    target=None,
+    *,
+    endpoint: str = DEFAULT_ENDPOINT,
+    full_page: bool = False,
+    to_model: bool = True,
+    scale: str = "css",
+    max_dim: int | None = None,
+    format: str = "jpeg",
+    quality: int = 72,
+):
     """Screenshot a ``Page`` (or the front tab when ``target`` is None) and return a
-    :class:`Result`: the human sees the image, the model gets the PNG plus the page's
-    title and url. End a cell with it to render the screenshot."""
+    :class:`Result`: the human sees the image, the model gets the image plus the
+    page's title and url. End a cell with it to render the screenshot.
+
+    A screenshot used to confirm "did the UI action work?" should be cheap in
+    context, so the defaults are tuned for that, capping cost at the source:
+
+    - ``scale="css"`` captures at CSS-pixel resolution, ignoring the display's
+      ``devicePixelRatio`` -- on a 2x (Retina) screen this alone is a 4x pixel
+      cut for zero agent benefit. Pass ``scale="device"`` for native-resolution
+      pixels when they genuinely matter.
+    - ``max_dim`` caps the longest edge (default ``1024``; ``0`` disables). This
+      runs *before* the kernel's own ``IX_MCP_IMAGE_MAX_DIM`` model-image budget,
+      and unlike that budget it also shrinks the human's dashboard copy.
+    - ``format`` / ``quality`` default to JPEG at 72 -- a fraction of a PNG's size
+      for a photographic screenshot. Pass ``format="png"`` for a crisp lossless
+      shot of UI / diagrams / text.
+
+    Pass ``to_model=False`` for a dashboard-only screenshot: the human sees the
+    image, the model gets just the title/url note and zero vision tokens.
+
+    For "did the action work?" verification, prefer the far cheaper :func:`read`
+    or :func:`vdom` (page text + interactive elements, no vision tokens) and
+    reserve :func:`shot` for when the pixels themselves are what you need to see.
+    """
+    if max_dim is None:
+        max_dim = _SHOT_MAX_DIM
+    if format not in ("png", "jpeg"):
+        raise ValueError(f"format must be 'png' or 'jpeg', got {format!r}")
+    if scale not in ("css", "device"):
+        raise ValueError(f"scale must be 'css' or 'device', got {scale!r}")
     pg = target if target is not None else await page(endpoint=endpoint)
     try:
         await pg.bring_to_front()
     except Exception:
         pass
     try:
-        png = await pg.screenshot(full_page=full_page)
+        png = await pg.screenshot(full_page=full_page, scale=scale)
     except Exception as exc:
         # A just-launched browser window can report a 0-size viewport over CDP;
         # force a sensible viewport and retry once so a screenshot always succeeds.
         if "width" in str(exc).lower() or "height" in str(exc).lower():
             await pg.set_viewport_size({"width": 1280, "height": 800})
-            png = await pg.screenshot(full_page=full_page)
+            png = await pg.screenshot(full_page=full_page, scale=scale)
         else:
             raise
+    data, mime = _encode_shot(png, max_dim=max_dim, fmt=format, quality=quality)
     note = f"{await pg.title()} \u2014 {pg.url}"
     try:
         from ix_notebook_mcp.runtime import Result
 
-        data_uri = "data:image/png;base64," + _base64.b64encode(png).decode("ascii")
+        data_uri = f"data:{mime};base64," + _base64.b64encode(data).decode("ascii")
         user_html = f'<img alt="{_html.escape(note)}" src="{data_uri}" style="max-width:100%" />'
-        return Result(user_html=user_html, llm_result=note, llm_images=[png])
+        images = [data] if to_model else []
+        return Result(user_html=user_html, llm_result=note, llm_images=images)
     except Exception:
-        # Outside the kernel (no runtime): hand back the raw PNG bytes.
-        return png
+        # Outside the kernel (no runtime): hand back the re-encoded image bytes.
+        return data
 
 
 async def read(target=None, *, endpoint: str = DEFAULT_ENDPOINT, max_chars: int = 8000):
@@ -740,16 +843,33 @@ async def vdom(
     ``viewport_only=True`` to keep only what is currently on screen, so the snapshot
     stays small. ``max_text`` bounds each accessible name's length.
     """
+    opts = {
+        "interactiveOnly": interactive_only,
+        "viewportOnly": viewport_only,
+        "maxText": max_text,
+    }
     pg = target if target is not None else await page(endpoint=endpoint)
-    raw = await pg.evaluate(
-        _VDOM_JS,
-        {
-            "interactiveOnly": interactive_only,
-            "viewportOnly": viewport_only,
-            "maxText": max_text,
-        },
-    )
+    try:
+        raw = await pg.evaluate(_VDOM_JS, opts)
+    except Exception as exc:
+        # The front tab can be torn down underneath the evaluate (the user closed
+        # it, the browser swapped contexts). When WE picked the page, re-resolve
+        # the front tab once and retry; a caller-supplied page is theirs to own,
+        # so its closure propagates.
+        if target is not None or not _target_closed(exc):
+            raise
+        pg = await page(endpoint=endpoint)
+        raw = await pg.evaluate(_VDOM_JS, opts)
     return Vdom(raw)
+
+
+def _target_closed(exc: Exception) -> bool:
+    """True when ``exc`` is Playwright's page/context/browser-closed error."""
+    try:
+        from playwright._impl._errors import TargetClosedError
+    except Exception:
+        return "has been closed" in str(exc)
+    return isinstance(exc, TargetClosedError) or "has been closed" in str(exc)
 
 
 async def close(endpoint: str | None = None):

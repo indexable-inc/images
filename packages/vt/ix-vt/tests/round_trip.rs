@@ -21,7 +21,11 @@ fn sgr_cursor_and_cell_round_trip() {
     let snap = term.render().expect("render snapshot");
 
     // Cursor: bar shape, viewport position (col 9, row 4) zero-indexed.
-    assert_eq!(snap.cursor.visual_style, CursorVisualStyle::Bar, "cursor is a bar");
+    assert_eq!(
+        snap.cursor.visual_style,
+        CursorVisualStyle::Bar,
+        "cursor is a bar"
+    );
     assert!(snap.cursor.visible, "cursor visible");
     assert_eq!(
         snap.cursor.viewport,
@@ -55,11 +59,7 @@ fn sgr_cursor_and_cell_round_trip() {
     // spike's PROOF-OK.
     println!(
         "PROOF-OK cursor={:?} pos={:?} cell0={:?} fg={:?} cell4_underline={:?}",
-        snap.cursor.visual_style,
-        snap.cursor.viewport,
-        cell0.ch,
-        cell0.fg,
-        cell4.style.underline,
+        snap.cursor.visual_style, snap.cursor.viewport, cell0.ch, cell0.fg, cell4.style.underline,
     );
 }
 
@@ -88,7 +88,8 @@ fn decckm_tracks_application_cursor_keys() {
     // ESC[?1h sets DECCKM (what ncurses/vim emit via `smkx` on entry).
     term.vt_write(b"\x1b[?1h");
     assert!(
-        term.application_cursor_keys().expect("query DECCKM after set"),
+        term.application_cursor_keys()
+            .expect("query DECCKM after set"),
         "ESC[?1h enables application cursor keys"
     );
 

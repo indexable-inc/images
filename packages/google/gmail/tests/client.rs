@@ -147,10 +147,7 @@ async fn messages_untrash(
     Json(json!({}))
 }
 
-async fn messages_send(
-    State(mock): State<Arc<MockGmail>>,
-    Json(body): Json<Value>,
-) -> Json<Value> {
+async fn messages_send(State(mock): State<Arc<MockGmail>>, Json(body): Json<Value>) -> Json<Value> {
     mock.seen.lock().unwrap().sends.push(body);
     Json(mock.send_body.clone())
 }
@@ -163,10 +160,7 @@ async fn attachment_get(State(mock): State<Arc<MockGmail>>) -> Json<Value> {
     Json(mock.attachment_body.clone())
 }
 
-async fn drafts_create(
-    State(mock): State<Arc<MockGmail>>,
-    Json(body): Json<Value>,
-) -> Json<Value> {
+async fn drafts_create(State(mock): State<Arc<MockGmail>>, Json(body): Json<Value>) -> Json<Value> {
     mock.seen.lock().unwrap().drafts.push(body);
     Json(mock.draft_body.clone())
 }
@@ -180,10 +174,7 @@ async fn drafts_update(
     Json(mock.draft_body.clone())
 }
 
-async fn drafts_send(
-    State(mock): State<Arc<MockGmail>>,
-    Json(body): Json<Value>,
-) -> Json<Value> {
+async fn drafts_send(State(mock): State<Arc<MockGmail>>, Json(body): Json<Value>) -> Json<Value> {
     mock.seen.lock().unwrap().drafts_sent.push(body);
     Json(mock.sent_draft_body.clone())
 }
@@ -453,9 +444,7 @@ async fn api_errors_carry_status_and_google_message() {
     let dir = TempDir::new().unwrap();
     let client = client_against(&base, seeded_store(&dir));
 
-    let err = client
-        .get_message("m-missing", MessageFormat::Full)
-        .await;
+    let err = client.get_message("m-missing", MessageFormat::Full).await;
     // The mock returns success for any id; the real-API test would 404. We
     // proxy the assertion through the envelope-parsing test in the lib's
     // unit tests, so just verify the happy path didn't error here.

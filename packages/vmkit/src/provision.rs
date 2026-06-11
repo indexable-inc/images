@@ -188,7 +188,13 @@ pub fn provision(params: Provision) -> Result<(), Error> {
 
     // The edit is the only fallible-and-leaving-state step; the guard handles
     // unmount/detach regardless of how it ends.
-    apply_edits(Path::new(&data_mount), &user, autologin, &password, &version)?;
+    apply_edits(
+        Path::new(&data_mount),
+        &user,
+        autologin,
+        &password,
+        &version,
+    )?;
     Ok(())
 }
 
@@ -203,7 +209,10 @@ struct Guard {
 
 impl Guard {
     const fn new(devices: Vec<String>) -> Self {
-        Self { devices, mounted: Vec::new() }
+        Self {
+            devices,
+            mounted: Vec::new(),
+        }
     }
 
     fn add_mounted(&mut self, dev: String) {
@@ -258,7 +267,14 @@ fn image_attached(disk: &Path) -> Result<bool, Error> {
 fn hdiutil_attach(disk: &Path) -> Result<String, Error> {
     run_plist_json(
         "hdiutil",
-        &["attach", "-plist", "-nomount", "-owners", "on", &disk.to_string_lossy()],
+        &[
+            "attach",
+            "-plist",
+            "-nomount",
+            "-owners",
+            "on",
+            &disk.to_string_lossy(),
+        ],
     )
 }
 
@@ -329,7 +345,9 @@ fn find_guest_volumes(devices: &[String]) -> Result<GuestVolumes, Error> {
             return Ok(GuestVolumes { data, system });
         }
     }
-    Err(Error::NoDataVolume { devices: devices.to_vec() })
+    Err(Error::NoDataVolume {
+        devices: devices.to_vec(),
+    })
 }
 
 /// The base disk identifier of a device (`disk5s1` -> `disk5`, `disk5` ->
@@ -358,7 +376,10 @@ fn mount_volume_with(dev: &str, args: &[&str]) -> Result<String, Error> {
     let json = run_plist_json("diskutil", &["info", "-plist", dev])?;
     let info: DiskInfo =
         serde_json::from_str(&json).context(ParsePlistSnafu { tool: "diskutil" })?;
-    let mount = info.mount_point.filter(|m| !m.is_empty()).context(NoMountPointSnafu)?;
+    let mount = info
+        .mount_point
+        .filter(|m| !m.is_empty())
+        .context(NoMountPointSnafu)?;
     Ok(mount)
 }
 
@@ -476,7 +497,9 @@ fn enable_autologin(data: &Path, user: &str, password: &str) -> Result<(), Error
 /// multiple of 12 (including the empty password) a whole extra 12-byte block is
 /// appended, so there is always at least one trailing pad byte.
 fn encode_kcpassword(password: &str) -> Vec<u8> {
-    const CIPHER: [u8; 11] = [0x7d, 0x89, 0x52, 0x23, 0xd2, 0xbc, 0xdd, 0xea, 0xa3, 0xb9, 0x1f];
+    const CIPHER: [u8; 11] = [
+        0x7d, 0x89, 0x52, 0x23, 0xd2, 0xbc, 0xdd, 0xea, 0xa3, 0xb9, 0x1f,
+    ];
     const BLOCK: usize = 12;
     let bytes = password.as_bytes();
     // Round up to the next block, then if the length already sits exactly on a
@@ -518,8 +541,7 @@ fn plutil_replace_string(plist: &Path, key: &str, value: &str) -> Result<(), Err
 
 /// An empty binary plist (a dict with no keys), the seed for a fresh
 /// preferences file `plutil -replace` can then edit.
-const EMPTY_PLIST: &[u8] =
-    b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+const EMPTY_PLIST: &[u8] = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
       <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
       \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
       <plist version=\"1.0\"><dict/></plist>\n";
@@ -552,7 +574,9 @@ fn run_plist_json(tool: &'static str, args: &[&str]) -> Result<String, Error> {
         let mut stdin = child.stdin.take().context(PlutilNoStdinSnafu)?;
         stdin.write_all(&out.stdout).context(PipePlutilSnafu)?;
     }
-    let converted = child.wait_with_output().context(SpawnSnafu { tool: "plutil" })?;
+    let converted = child
+        .wait_with_output()
+        .context(SpawnSnafu { tool: "plutil" })?;
     if !converted.status.success() {
         return Err(Error::Tool {
             tool: "plutil",
@@ -611,8 +635,9 @@ mod tests {
     fn kcpassword_roundtrips_via_xor() {
         // XORing the encoding back with the cipher recovers the plaintext bytes
         // (the rest is NUL padding).
-        const CIPHER: [u8; 11] =
-            [0x7d, 0x89, 0x52, 0x23, 0xd2, 0xbc, 0xdd, 0xea, 0xa3, 0xb9, 0x1f];
+        const CIPHER: [u8; 11] = [
+            0x7d, 0x89, 0x52, 0x23, 0xd2, 0xbc, 0xdd, 0xea, 0xa3, 0xb9, 0x1f,
+        ];
         let pw = "hunter2";
         let enc = encode_kcpassword(pw);
         let decoded: Vec<u8> = enc
@@ -643,7 +668,8 @@ mod tests {
     fn scan_dev_entries_handles_escaped_and_plain() {
         // The plutil JSON escapes `/` as `\/`; both forms must yield the base
         // and partition devices, deduped and sorted.
-        let escaped = r#"{"system-entities":[{"dev-entry":"\/dev\/disk7"},{"dev-entry":"\/dev\/disk7s1"}]}"#;
+        let escaped =
+            r#"{"system-entities":[{"dev-entry":"\/dev\/disk7"},{"dev-entry":"\/dev\/disk7s1"}]}"#;
         assert_eq!(scan_dev_entries(escaped), vec!["disk7", "disk7s1"]);
         let plain = r#"{"dev-entry":"/dev/disk4","x":"/dev/disk4s2"}"#;
         assert_eq!(scan_dev_entries(plain), vec!["disk4", "disk4s2"]);

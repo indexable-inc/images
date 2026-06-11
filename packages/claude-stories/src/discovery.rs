@@ -54,7 +54,11 @@ fn story_url(peer: &str, port: u16) -> String {
     } else {
         format!("http://{peer}:{port}")
     };
-    if base.ends_with("/story") { base } else { format!("{base}/story") }
+    if base.ends_with("/story") {
+        base
+    } else {
+        format!("{base}/story")
+    }
 }
 
 // Subset of `tailscale status --json` we need.
@@ -108,7 +112,10 @@ mod tests {
     #[test]
     fn story_url_normalizes() {
         assert_eq!(story_url("host", 4810), "http://host:4810/story");
-        assert_eq!(story_url("100.1.2.3:9000", 4810), "http://100.1.2.3:9000/story");
+        assert_eq!(
+            story_url("100.1.2.3:9000", 4810),
+            "http://100.1.2.3:9000/story"
+        );
         assert_eq!(story_url("http://x:1/story", 4810), "http://x:1/story");
         assert_eq!(story_url("https://x/", 4810), "https://x/story");
     }

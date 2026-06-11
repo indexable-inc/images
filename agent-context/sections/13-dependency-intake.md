@@ -42,6 +42,13 @@ runs it hourly and opens one PR. Do not add a per-package update workflow. See
 [`packages/claude-code`](packages/claude-code) and [`packages/yc`](packages/yc)
 for the worked shape: `nix run .#claude-code.updateScript -- <version>`.
 
+Ecosystem lockfiles get their own hourly updater rather than joining
+`nix run .#update`: the Rust workspace `Cargo.lock` is refreshed by
+`update-cargo.yml` (a plain `cargo update` plus a per-crate
+`cargo update --breaking` for the major bumps) and `flake.lock` by
+`update-flake-lock.yml`. Each opens its own PR gated by `flake-check`; do not
+fold them into the content updater.
+
 When upstream signs its release manifest, the updater verifies that signature
 against a pinned key and fails closed before writing hashes (claude-code). When
 upstream publishes no signature (yc), there is no provenance check: the updater

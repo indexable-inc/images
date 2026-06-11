@@ -95,7 +95,9 @@ impl Client {
             NotABaseUrlSnafu { input: base_url }
         );
         Ok(Self {
-            http: reqwest::Client::builder().build().context(BuildClientSnafu)?,
+            http: reqwest::Client::builder()
+                .build()
+                .context(BuildClientSnafu)?,
             auth,
             base_url: parsed,
             user_id: USER_ME.to_owned(),
@@ -211,8 +213,7 @@ mod tests {
 
     #[test]
     fn api_message_prefers_the_error_envelope() {
-        let body =
-            r#"{"error":{"code":403,"message":"Insufficient Permission","status":"PERMISSION_DENIED"}}"#;
+        let body = r#"{"error":{"code":403,"message":"Insufficient Permission","status":"PERMISSION_DENIED"}}"#;
         assert_eq!(api_message(body), "Insufficient Permission");
     }
 

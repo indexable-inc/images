@@ -22,6 +22,47 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    # Relative-path ("subflake") inputs for the repo's independent data
+    # subtrees. With lazy source trees a flake that reaches its whole tree via
+    # `self` gives every package the entire repo as its source identity: any
+    # file change anywhere re-hashes and re-copies the full tree per eval and
+    # invalidates every dependent. Declaring each pure-data subtree as its own
+    # `flake = false` path input scopes a consumer's source to just the subtree
+    # it reads, so an edit under `site/` no longer perturbs an `agent-context`
+    # package's drvPath. nix and nox both resolve these as lock nodes
+    # `{ type = "path"; path = "./<dir>"; parent = []; }` against the parent
+    # tree, with no separate fetch. Nix-code roots the flake itself imports
+    # (`modules`, `packages`) stay ordinary relative paths: they are
+    # import-time, not source identity. See ENG-2362.
+    agent-context = {
+      url = "path:./agent-context";
+      flake = false;
+    };
+    skills = {
+      url = "path:./skills";
+      flake = false;
+    };
+    images = {
+      url = "path:./images";
+      flake = false;
+    };
+    examples = {
+      url = "path:./examples";
+      flake = false;
+    };
+    tests = {
+      url = "path:./tests";
+      flake = false;
+    };
+    bench-filesystem = {
+      url = "path:./bench/filesystem";
+      flake = false;
+    };
+    site = {
+      url = "path:./site";
+      flake = false;
+    };
+
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -122,6 +163,13 @@
       snix-src,
       clippy-fork,
       ghostty,
+      agent-context,
+      skills,
+      images,
+      examples,
+      tests,
+      bench-filesystem,
+      site,
       ...
     }:
     let
@@ -143,24 +191,36 @@
 
       # All path literals the flake exposes. Centralized so lib/ and
       # lib/per-system.nix have a single source of truth.
+      #
+      # The data-subtree entries below resolve to the `outPath` of a
+      # relative-path input (declared `flake = false` above) instead of a
+      # bare `./<dir>` literal, so each consumer's source identity is scoped to
+      # just that subtree. The shape and names of `paths` are unchanged, so no
+      # downstream lib code needs editing. Nix-code roots the flake imports
+      # directly (`modules`, `packagesRoot`) and the whole-repo `root` (the lint
+      # source intentionally covers the entire tree) stay ordinary relative
+      # paths: those are import-time / whole-repo by design, not per-subtree
+      # source identity. The minecraft sub-paths are projections of the `images`
+      # subtree, so they ride the same `images` input rather than each opening a
+      # new whole-repo dependency.
       paths = {
         root = ./.;
-        agentContext = ./agent-context;
-        skills = ./skills;
-        images = ./images;
+        agentContext = agent-context.outPath;
+        skills = skills.outPath;
+        images = images.outPath;
         modules = ./modules;
-        examples = ./examples;
-        tests = ./tests;
-        bench.filesystem = ./bench/filesystem;
-        site = ./site;
+        examples = examples.outPath;
+        tests = tests.outPath;
+        bench.filesystem = bench-filesystem.outPath;
+        site = site.outPath;
         packagesRoot = ./packages;
-        minecraftMods = ./images/games/minecraft/mods;
-        minecraftPaperPlugins = ./images/games/minecraft/plugins/paper;
-        minecraftVelocityPlugins = ./images/games/minecraft/plugins/velocity;
+        minecraftMods = images.outPath + "/games/minecraft/mods";
+        minecraftPaperPlugins = images.outPath + "/games/minecraft/plugins/paper";
+        minecraftVelocityPlugins = images.outPath + "/games/minecraft/plugins/velocity";
         minecraftLoaders = {
-          paper = ./images/games/minecraft/loaders/paper;
-          velocity = ./images/games/minecraft/loaders/velocity;
-          fabric = ./images/games/minecraft/loaders/fabric;
+          paper = images.outPath + "/games/minecraft/loaders/paper";
+          velocity = images.outPath + "/games/minecraft/loaders/velocity";
+          fabric = images.outPath + "/games/minecraft/loaders/fabric";
         };
         tools = {
           ixShellSyncIgnored = ./tools/ix-shell-sync-ignored.py;

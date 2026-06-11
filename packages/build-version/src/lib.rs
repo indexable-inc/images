@@ -50,7 +50,10 @@ pub fn version_static(crate_version: &str) -> &'static str {
                     let epoch = std::env::var(EPOCH_ENV)
                         .ok()
                         .and_then(|raw| raw.parse::<i64>().ok());
-                    format!("{crate_version} ({})", stamp(&rev, epoch, SystemTime::now()))
+                    format!(
+                        "{crate_version} ({})",
+                        stamp(&rev, epoch, SystemTime::now())
+                    )
                 },
             )
     })

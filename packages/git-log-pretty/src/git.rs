@@ -22,7 +22,7 @@ impl ChangeKind {
     /// Map git's per-delta [`git2::Delta`] onto the coarser set the display
     /// cares about. Unmodified and unreadable deltas never reach us (a diff only
     /// yields touched files), so they collapse into `Modified`.
-    fn from_delta(status: git2::Delta) -> Self {
+    const fn from_delta(status: git2::Delta) -> Self {
         match status {
             git2::Delta::Added | git2::Delta::Copied | git2::Delta::Untracked => Self::Added,
             git2::Delta::Deleted => Self::Deleted,
@@ -48,7 +48,8 @@ pub struct AheadCommit<'repo> {
 
 /// Open the repository containing the current directory.
 pub fn discover() -> Result<Repository> {
-    Repository::discover(".").wrap_err("failed to discover a git repository from the current directory")
+    Repository::discover(".")
+        .wrap_err("failed to discover a git repository from the current directory")
 }
 
 /// The short name of the branch HEAD points at, or `None` when HEAD is detached
@@ -56,7 +57,8 @@ pub fn discover() -> Result<Repository> {
 /// (on `main`) or the ahead-of-`main` diff (anywhere else).
 pub fn head_branch_name(repo: &Repository) -> Option<String> {
     let head = repo.head().ok()?;
-    head.is_branch().then(|| head.shorthand().map(str::to_string))?
+    head.is_branch()
+        .then(|| head.shorthand().ok().map(str::to_string))?
 }
 
 /// Pair a commit with the files it changed, the shape the display layer expects.
@@ -76,7 +78,9 @@ pub fn recent_commits(repo: &Repository, limit: usize) -> Result<Vec<AheadCommit
     revwalk
         .set_sorting(git2::Sort::TIME)
         .wrap_err("failed to set revwalk sorting")?;
-    revwalk.push_head().wrap_err("failed to seed the revwalk from HEAD")?;
+    revwalk
+        .push_head()
+        .wrap_err("failed to seed the revwalk from HEAD")?;
 
     revwalk
         .take(limit)
@@ -150,7 +154,10 @@ pub fn changed_files(repo: &Repository, commit: &Commit) -> Result<Vec<ChangedFi
 
 /// Commits reachable from HEAD but not from `base`, newest-first, each paired
 /// with its changed files. An empty vec means HEAD is not ahead of `base`.
-pub fn commits_ahead<'repo>(repo: &'repo Repository, base: &str) -> Result<Vec<AheadCommit<'repo>>> {
+pub fn commits_ahead<'repo>(
+    repo: &'repo Repository,
+    base: &str,
+) -> Result<Vec<AheadCommit<'repo>>> {
     let base_oid = target_oid(&resolve_ref(repo, base)?, base)?;
     let head_oid = target_oid(&repo.head().wrap_err("failed to resolve HEAD")?, "HEAD")?;
 
@@ -163,12 +170,18 @@ pub fn commits_ahead<'repo>(repo: &'repo Repository, base: &str) -> Result<Vec<A
 
     let mut ahead: Vec<Commit<'repo>> = head_set
         .difference(&base_set)
-        .map(|oid| repo.find_commit(*oid).wrap_err("failed to load an ahead commit"))
+        .map(|oid| {
+            repo.find_commit(*oid)
+                .wrap_err("failed to load an ahead commit")
+        })
         .collect::<Result<_>>()?;
 
     ahead.sort_by_key(|commit| std::cmp::Reverse(commit.time().seconds()));
 
-    ahead.into_iter().map(|commit| into_ahead(repo, commit)).collect()
+    ahead
+        .into_iter()
+        .map(|commit| into_ahead(repo, commit))
+        .collect()
 }
 
 /// Paths `head` changed relative to where it forked from `base`, used by the
@@ -190,7 +203,9 @@ pub fn diff_stat_files(repo: &Repository, base: &str, head: &str) -> Result<Vec<
         .find_commit(head_oid)
         .wrap_err("failed to load the head commit")?;
 
-    let base_tree = merge_base_commit.tree().wrap_err("failed to read merge-base tree")?;
+    let base_tree = merge_base_commit
+        .tree()
+        .wrap_err("failed to read merge-base tree")?;
     let head_tree = head_commit.tree().wrap_err("failed to read head tree")?;
 
     let mut options = DiffOptions::new();

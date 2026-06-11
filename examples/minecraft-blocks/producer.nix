@@ -28,17 +28,19 @@ let
   packages = import ./packages.nix { inherit ix pkgs; };
 
   blockLog = "/var/lib/minecraft/block-events.jsonl";
-  brokerPort = 9092;
   kafkaBin = "${pkgs.apacheKafka}/bin";
 
-  log = {
-    host = nodes.log.config.ix.networking.eastWest.hostName;
-  };
+  # The log node declares the broker via `ix.networking.expose.kafka`, so we
+  # resolve its reachable `host:port` by name instead of reaching into its
+  # option tree. `kafka` renders to "log:9092" in string context.
+  kafka = ix.endpointOf nodes.log "kafka";
+
   # The view node runs the shared observability stack, so it is also the
-  # telemetry sink. One ClickHouse, two legs.
-  observability = {
+  # telemetry sink. One ClickHouse, two legs. The collector port is an upstream
+  # module option (not an `expose`), so build the endpoint directly.
+  collector = ix.endpoint {
     host = nodes.view.config.ix.networking.eastWest.hostName;
-    otlpGrpcPort = nodes.view.config.services.ix-observability.collector.grpcPort;
+    port = nodes.view.config.services.ix-observability.collector.grpcPort;
   };
 
   # Transport leg: follow the plugin's append-only file and produce each new
@@ -53,12 +55,12 @@ let
   shipToKafka = pkgs.writeShellScript "mc-blocks-ship" ''
     set -eu
     touch ${blockLog}
-    until ${kafkaBin}/kafka-broker-api-versions.sh --bootstrap-server ${log.host}:${toString brokerPort} >/dev/null 2>/tmp/kafka-probe.err; do
+    until ${kafkaBin}/kafka-broker-api-versions.sh --bootstrap-server ${kafka} >/dev/null 2>/tmp/kafka-probe.err; do
       sleep 2
     done
     exec ${pkgs.coreutils}/bin/tail -F -n +1 ${blockLog} \
       | ${kafkaBin}/kafka-console-producer.sh \
-          --bootstrap-server ${log.host}:${toString brokerPort} \
+          --bootstrap-server ${kafka} \
           --topic ${schema.topic}
   '';
 in
@@ -123,7 +125,7 @@ in
     stack.enable = false;
     agent = {
       enable = true;
-      endpoint = "${observability.host}:${toString observability.otlpGrpcPort}";
+      endpoint = "${collector}";
       journal.enable = true;
     };
     environment = "example";
@@ -136,11 +138,6 @@ in
   # transport service is running.
   ix.healthChecks.mc-blocks-producer = {
     description = "block-events plugin installed and Kafka shipper active";
-    command = [
-      (lib.getExe' config.systemd.package "systemctl")
-      "is-active"
-      "--quiet"
-      "mc-blocks-ship.service"
-    ];
+    unit = "mc-blocks-ship";
   };
 }

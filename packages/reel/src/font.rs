@@ -42,7 +42,8 @@ impl FontSet {
     /// `px` used for the cell height.
     pub fn new(px: f32, line_height: f32) -> Result<Self> {
         let load = |bytes: &[u8]| {
-            Font::from_bytes(bytes, FontSettings::default()).map_err(|err| eyre!("load font: {err}"))
+            Font::from_bytes(bytes, FontSettings::default())
+                .map_err(|err| eyre!("load font: {err}"))
         };
         let faces = [
             load(REGULAR)?,

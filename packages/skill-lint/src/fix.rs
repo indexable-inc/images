@@ -17,8 +17,10 @@ pub struct FixOutcome {
 pub fn fix_skill(path: &Path, contents: &str) -> FixOutcome {
     // Refuse to touch a file with missing or unparseable frontmatter; surface
     // it through the linter instead so we never corrupt a broken document.
-    let Some(Frontmatter { mapping: yaml, is_mapping: yaml_is_mapping }) =
-        parse_frontmatter(contents)
+    let Some(Frontmatter {
+        mapping: yaml,
+        is_mapping: yaml_is_mapping,
+    }) = parse_frontmatter(contents)
     else {
         return FixOutcome {
             contents: None,
@@ -67,7 +69,10 @@ fn parse_frontmatter(contents: &str) -> Option<Frontmatter> {
     let frontmatter = crate::lint::split_frontmatter(contents)?;
     let value: serde_norway::Value = serde_norway::from_str(frontmatter.yaml).ok()?;
     match value {
-        serde_norway::Value::Mapping(mapping) => Some(Frontmatter { mapping, is_mapping: true }),
+        serde_norway::Value::Mapping(mapping) => Some(Frontmatter {
+            mapping,
+            is_mapping: true,
+        }),
         _ => Some(Frontmatter {
             mapping: serde_norway::Mapping::new(),
             is_mapping: false,
@@ -147,8 +152,7 @@ mod tests {
 
     #[test]
     fn refuses_to_touch_malformed_yaml() {
-        let contents =
-            "---\ndescription: it does not block: it launches more work\n---\nBody.\n";
+        let contents = "---\ndescription: it does not block: it launches more work\n---\nBody.\n";
         let outcome = fix_skill(&skill_path(), contents);
         assert!(outcome.contents.is_none(), "must not rewrite broken YAML");
         assert!(outcome.changes.is_empty());

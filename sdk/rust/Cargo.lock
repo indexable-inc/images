@@ -11,6 +11,12 @@ version = 4
 
 [[package]]
 name = "heck"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
+
+[[package]]
+name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
@@ -50,18 +56,18 @@ dependencies = [
 
 [[package]]
 name = "snafu"
-version = "0.9.0"
-source = "git+https://github.com/shepmaster/snafu.git#1f8e75f56390c421a198871916100c6316d23d4f"
+version = "0.9.1"
+source = "git+https://github.com/shepmaster/snafu.git#ff50133848f39de1b1fd40c74daa9d781fdda544"
 dependencies = [
  "snafu-derive",
 ]
 
 [[package]]
 name = "snafu-derive"
-version = "0.9.0"
-source = "git+https://github.com/shepmaster/snafu.git#1f8e75f56390c421a198871916100c6316d23d4f"
+version = "0.9.1"
+source = "git+https://github.com/shepmaster/snafu.git#ff50133848f39de1b1fd40c74daa9d781fdda544"
 dependencies = [
- "heck",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn",
@@ -82,7 +88,7 @@ version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn",

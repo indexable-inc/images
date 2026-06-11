@@ -41,12 +41,32 @@ impl Codec {
     const fn encoder_args(self) -> &'static [&'static str] {
         match self {
             Self::Avif => &[
-                "-c:v", "libsvtav1", "-crf", "30", "-preset", "7", "-pix_fmt", "yuv420p", "-loop",
-                "0", "-an",
+                "-c:v",
+                "libsvtav1",
+                "-crf",
+                "30",
+                "-preset",
+                "7",
+                "-pix_fmt",
+                "yuv420p",
+                "-loop",
+                "0",
+                "-an",
             ],
             Self::Webp => &[
-                "-c:v", "libwebp", "-lossless", "0", "-q:v", "50", "-compression_level", "6",
-                "-preset", "picture", "-loop", "0", "-an",
+                "-c:v",
+                "libwebp",
+                "-lossless",
+                "0",
+                "-q:v",
+                "50",
+                "-compression_level",
+                "6",
+                "-preset",
+                "picture",
+                "-loop",
+                "0",
+                "-an",
             ],
         }
     }
@@ -82,8 +102,19 @@ pub fn encode(
 
     let mut child = Command::new("ffmpeg")
         .args([
-            "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &size, "-r",
-            &render_rate, "-i", "-",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-s",
+            &size,
+            "-r",
+            &render_rate,
+            "-i",
+            "-",
         ])
         .args(["-vf", &scale, "-r", &output_rate])
         .args(encoding.codec.encoder_args())

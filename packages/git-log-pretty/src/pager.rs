@@ -28,7 +28,8 @@ pub fn paged<F>(allow: bool, render: F) -> Result<()>
 where
     F: FnOnce(&mut dyn Write) -> Result<()>,
 {
-    if allow && io::stdout().is_terminal()
+    if allow
+        && io::stdout().is_terminal()
         && let Some(mut child) = spawn()
     {
         let result = {

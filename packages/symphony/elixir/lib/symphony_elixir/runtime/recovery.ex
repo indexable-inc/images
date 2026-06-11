@@ -204,7 +204,9 @@ defmodule SymphonyElixir.Runtime.Recovery do
     Enum.map(attempts, fn a -> if a.n == current.n, do: finished, else: a end)
   end
 
-  defp attempt_engine(%Node{envelope: %{engine: engine}}) when engine in [:codex, :claude], do: engine
+  defp attempt_engine(%Node{envelope: %{engine: engine}}) when engine in [:codex, :claude, :pi],
+    do: engine
+
   defp attempt_engine(_node), do: :codex
 
   defp attempt_state_for({:ok, _}), do: :succeeded

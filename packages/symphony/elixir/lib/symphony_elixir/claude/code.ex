@@ -1,9 +1,9 @@
 defmodule SymphonyElixir.Claude.Code do
   @moduledoc """
   Runs one workflow node as a headless Claude Code session in the run's
-  workspace, used when a skill's `codex_model` names a Claude model
-  (`claude-*`, or the `opus` / `sonnet` / `haiku` aliases); every other
-  model goes to Codex.
+  workspace, used when a node's model is a Claude model (`claude-*`, or
+  the `opus` / `sonnet` / `haiku` aliases); every other model goes to
+  Codex.
 
   This is the in-process Claude runner the YAML/DAG `NodeExecutor` used.
   The `.sym`/IR engine path runs Claude turns through the room-server's
@@ -26,7 +26,7 @@ defmodule SymphonyElixir.Claude.Code do
     there is no per-tool gate the way codex has `approval_policy`.
   - `--output-format json` emits one result object on stdout whose
     `result`, `session_id`, and `is_error` fields we surface.
-  - `--model` is the skill's `codex_model` value, passed through verbatim.
+  - `--model` is the node's model value, passed through verbatim.
 
   The agent uses Claude Code's own tools (Bash, Edit, Read, ...) plus
   whatever CLIs are on PATH inside the workspace (`git`, `gh`). The

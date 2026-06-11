@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt as _};
 use mixedbread::Filter;
-use source_meta::{Document, RepoSlug, keys};
 use snafu::ResultExt as _;
+use source_meta::{Document, RepoSlug, keys};
 use tokio::time::sleep;
 
 use crate::backend::{Store, StoreStatus};
@@ -177,7 +177,10 @@ async fn upload_entry<S: Store + Sync, P: Fn(usize, usize) + Send + Sync>(
         .context(ReadFileSnafu { path: abs })?;
     let document = code_document(ctx.repo, &entry, content)?;
     ctx.store.upload(ctx.store_name, document).await?;
-    (ctx.on_progress)(ctx.done.fetch_add(1, Ordering::Relaxed) + 1, ctx.upload_target);
+    (ctx.on_progress)(
+        ctx.done.fetch_add(1, Ordering::Relaxed) + 1,
+        ctx.upload_target,
+    );
     Ok(())
 }
 
@@ -242,7 +245,6 @@ fn file_name_of(rel_path: &str) -> &str {
 #[cfg(test)]
 mod tests {
 
-
     use source_meta::RepoSlug;
 
     use super::sync;
@@ -289,15 +291,31 @@ mod tests {
         let store = MemoryStore::new();
 
         let manifest_a = Manifest::build(dir_a.path(), None, 1024 * 1024).expect("a");
-        sync(&store, "s", dir_a.path(), &manifest_a, &repo(), 1000, |_, _| {})
-            .await
-            .expect("sync a");
+        sync(
+            &store,
+            "s",
+            dir_a.path(),
+            &manifest_a,
+            &repo(),
+            1000,
+            |_, _| {},
+        )
+        .await
+        .expect("sync a");
         assert_eq!(store.upload_count(), 2);
 
         let manifest_b = Manifest::build(dir_b.path(), None, 1024 * 1024).expect("b");
-        let report_b = sync(&store, "s", dir_b.path(), &manifest_b, &repo(), 1000, |_, _| {})
-            .await
-            .expect("sync b");
+        let report_b = sync(
+            &store,
+            "s",
+            dir_b.path(),
+            &manifest_b,
+            &repo(),
+            1000,
+            |_, _| {},
+        )
+        .await
+        .expect("sync b");
 
         assert_eq!(report_b.uploaded, 0, "identical worktree embeds nothing");
         assert_eq!(store.upload_count(), 2, "store still holds one copy");

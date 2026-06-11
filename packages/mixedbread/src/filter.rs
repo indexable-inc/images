@@ -3,10 +3,10 @@
 //!
 //! The wire shape mirrors the Mixedbread API's recursive filter: a leaf
 //! [`Condition`] (`{key, operator, value}`) or a [`Group`] combining nested
-//! filters with `all` (AND), `any` (OR), or `none` (NOT). The same `filters`
-//! field is accepted by `/v1/stores/search`, `/v1/stores/grep`,
-//! `/v1/stores/question-answering`, and the file-list endpoint, so one type
-//! serves them all.
+//! filters with `all` (AND), `any` (OR), or `none` (NOT). The same shape is
+//! accepted by `/v1/stores/search`, `/v1/stores/grep`, and
+//! `/v1/stores/question-answering` under a `filters` field, and by the
+//! file-list endpoint under `metadata_filter`, so one type serves them all.
 //!
 //! The client only ever sends filters, but the type is also `Deserialize` so a
 //! caller that hands the API a filter as JSON (e.g. the `polars-mixedbread`
@@ -95,7 +95,11 @@ impl Filter {
     /// A leaf condition `key <op> value`. `value` is anything serializable
     /// (string, number, bool, or array for `in`/`not_in`).
     #[must_use]
-    pub fn condition(key: impl Into<String>, operator: Operator, value: impl Into<serde_json::Value>) -> Self {
+    pub fn condition(
+        key: impl Into<String>,
+        operator: Operator,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
         Self::Condition(Condition {
             key: key.into(),
             operator,

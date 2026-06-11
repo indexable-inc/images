@@ -1,14 +1,13 @@
 {
+  ix,
   lib,
   nodes,
   pkgs,
   ...
 }:
 let
-  service = {
-    host = nodes.service.config.ix.networking.eastWest.hostName;
-    port = 8080;
-  };
+  # Resolve the service node's listener by the name it exposes it under.
+  service = ix.endpointOf nodes.service "http";
 in
 {
   environment.systemPackages = [ pkgs.curl ];
@@ -20,7 +19,7 @@ in
       "--fail"
       "--silent"
       "--show-error"
-      "http://${service.host}:${toString service.port}/"
+      "http://${service}/"
     ];
   };
 }

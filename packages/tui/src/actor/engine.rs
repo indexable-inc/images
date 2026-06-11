@@ -90,12 +90,10 @@ pub fn spawn(
 
     // Propagate the terminal-creation result before handing back the channel, so
     // a failed init is observable rather than a channel into a dead thread.
-    init_rx
-        .recv()
-        .map_err(|e| Error::VtEngine {
-            id,
-            message: format!("VT engine thread exited before init: {e}"),
-        })??;
+    init_rx.recv().map_err(|e| Error::VtEngine {
+        id,
+        message: format!("VT engine thread exited before init: {e}"),
+    })??;
 
     Ok(tx)
 }
@@ -160,7 +158,9 @@ fn engine_loop(
                 }
             }
             EngineRequest::Resize { rows, cols, reply } => {
-                let result = terminal.resize(rows, cols).map_err(|e| vt_engine_error(id, e));
+                let result = terminal
+                    .resize(rows, cols)
+                    .map_err(|e| vt_engine_error(id, e));
                 let _ = reply.send(result);
             }
             EngineRequest::Snapshot { reply } => {
@@ -218,7 +218,11 @@ fn row_to_string(row: &[ix_vt::Cell]) -> String {
 /// An all-blank screen yields an empty `Vec`, matching the old vt100
 /// `screen().contents().lines()` behavior that callers poll on for first paint.
 pub fn snapshot_to_viewport_lines(snapshot: &ix_vt::Snapshot) -> Vec<String> {
-    let mut lines: Vec<String> = snapshot.viewport.iter().map(|row| row_to_string(row)).collect();
+    let mut lines: Vec<String> = snapshot
+        .viewport
+        .iter()
+        .map(|row| row_to_string(row))
+        .collect();
     let last_non_empty = lines.iter().rposition(|line| !line.is_empty());
     match last_non_empty {
         Some(index) => lines.truncate(index + 1),

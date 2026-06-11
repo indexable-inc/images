@@ -61,7 +61,8 @@ PAGING = (
     "jobs['<id>'].tail(n) / .head(n) / .slice(a, b) / .grep('pat') / .lines(a, b), or read "
     "jobs['<id>'].output (stdout) and, once it has finished, jobs['<id>'].result (the value — "
     "it raises while the job is still running rather than return a misleading None, so `await "
-    "jobs['<id>']` to wait for it); history() lists recent runs."
+    "jobs['<id>']` to wait for it; `.result` and `.result()` both work, and a finished Result's "
+    "`.text` is its rendered text); history() lists recent runs."
 )
 
 BLOCKING = (
@@ -69,8 +70,10 @@ BLOCKING = (
     "event loop. Any synchronous wait (`subprocess.run`, `time.sleep`, `requests`, a long "
     "CPU-bound numpy op) freezes the WHOLE kernel: every other job and even your own next "
     "status-check cell stall behind it until it returns. So a blocking call MUST be made "
-    "non-blocking: wrap it in `await asyncio.to_thread(...)`, or prefer the async API (`fff`, "
-    "`httpx`, and the bundled `sh(cmd, cwd=...)` to shell out instead of `subprocess.run`), and run "
+    "non-blocking: wrap it in `await asyncio.to_thread(...)`, or prefer an async API (`httpx`, "
+    "and the bundled `sh(cmd)` to shell out instead of `subprocess.run`; note `fff.grep`/"
+    "`fff.find`/`fff.tree` are sync-but-fast, so call them WITHOUT `await` — for a long scan use "
+    "the async `fff.agrep`/`fff.afind`/`fff.atree`), and run "
     "anything slow as a background job you "
     "poll, never inline. To shell out, reach for `sh()` rather than a hand-rolled "
     "`asyncio.create_subprocess_exec/_shell` + `communicate()`: `sh()` runs the child in its own "
@@ -113,15 +116,25 @@ NO_SHELL = (
     "runs synchronously on the kernel's one event loop and freezes every other job until it "
     "returns, and its piped output arrives corrupted (ANSI color codes get interleaved into the "
     "matched text, silently mangling and truncating the very tokens you searched for). `fff` finds "
-    "files and greps content, `view` lists directories and shows files; both run off the loop, "
-    "reuse a cached content index so they are faster than re-walking the tree each call, and "
+    "files and greps content, `view` lists directories and shows files; both are sync and fast "
+    "(call them WITHOUT `await`), reuse a cached content index so they are faster than re-walking the tree each call, and "
     "return polars frames you compose `.filter`/`.sort`/`.group_by`/`.head` on (or "
     "syntax-highlighted views), so the human gets a styled table and you get a clean, uncorrupted "
     "frame rather than an unstyled text dump. To list a directory use `view.ls`/`view.tree`, never "
     "`os.walk` or `ls`; to edit, `view.edit(path, old, new)`, never blind. For meaning-based "
     "recall across a corpus, `import search`. When you genuinely must shell out, use the async "
-    "`sh` (it runs off the loop and preserves clean color) and pass it a `cwd=` (`cwd=\".\"` for "
-    "here), never a `cd X && ...` prefix."
+    "`sh` (it runs off the loop, streams into the job's pageable output, and preserves clean "
+    "color); to run elsewhere pass `cwd=`, never a `cd X && ...` prefix. And shell out for "
+    "DATA, not text: when the CLI has a JSON mode (`gh --json`, `cargo metadata`, `nix "
+    "--json`) use it and parse with `.json()` / `.jsonl()` / `.df()` on the Output (`.df()` "
+    "is a polars frame ready to filter and render), one command per `sh()` call -- never "
+    "`cmd1; echo ===; cmd2` chains scraped apart with string splitting. Never pass prose "
+    "through shell quoting: backticks in a string command run as command substitution even "
+    "inside Python repr'd strings (this is how a commit message once executed `ix-mcp "
+    "dashboard` and spliced its URL into the message), and a repr'd multi-line string loses "
+    "its newlines. For any argument that contains prose -- a commit message, a PR body -- "
+    "use the argv-list form `sh(['git', 'commit', '-m', msg])` so the argument bypasses "
+    "shell parsing entirely, or write the text to a temp file and use `git commit -F <file>`."
 )
 
 VERIFY = (
@@ -217,7 +230,8 @@ READ = (
     "cell's result streams to BOTH audiences, so it would flood the dashboard. `target` is read "
     "as a file when it names an existing file, otherwise it is evaluated as a Python expression "
     "in the kernel namespace (e.g. `jobs['ab12'].output` to page a job, or a variable you bound "
-    "earlier). Pass `start` / `end` for a 1-based inclusive line range."
+    "earlier); an expression whose value is a string naming an existing file reads that file "
+    "too. Pass `start` / `end` for a 1-based inclusive line range."
 )
 
 TRACE = (

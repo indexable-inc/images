@@ -41,7 +41,9 @@ fn reindexing_removes_old_chunks() {
 
     {
         let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
-        index.index_directory(workdir.path(), false).expect("index v1");
+        index
+            .index_directory(workdir.path(), false)
+            .expect("index v1");
         let hits = index.search("alpha", 5, None).expect("search v1");
         assert!(!hits.is_empty(), "v1 should match `alpha`");
     }
@@ -49,7 +51,9 @@ fn reindexing_removes_old_chunks() {
     fs::write(&file, "delta echo foxtrot").expect("write v2");
     {
         let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
-        index.index_directory(workdir.path(), false).expect("index v2");
+        index
+            .index_directory(workdir.path(), false)
+            .expect("index v2");
         let alpha_hits = index.search("alpha", 5, None).expect("search alpha");
         assert!(
             alpha_hits.is_empty(),
@@ -76,8 +80,13 @@ fn directory_filter_matches_subdirectory() {
     let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
     index.index_directory(workdir.path(), false).expect("index");
 
-    let hits = index.search("target", 10, Some(inside.as_path())).expect("search filtered");
-    assert!(!hits.is_empty(), "subdirectory filter should match indexed files");
+    let hits = index
+        .search("target", 10, Some(inside.as_path()))
+        .expect("search filtered");
+    assert!(
+        !hits.is_empty(),
+        "subdirectory filter should match indexed files"
+    );
     for hit in &hits {
         assert!(
             hit.path.contains("/inside/"),
@@ -98,7 +107,9 @@ fn reindex_removes_deleted_file_chunks() {
 
     {
         let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
-        index.index_directory(workdir.path(), false).expect("index v1");
+        index
+            .index_directory(workdir.path(), false)
+            .expect("index v1");
         let hits = index.search("charlie", 5, None).expect("search v1");
         assert!(!hits.is_empty(), "removed file should be searchable in v1");
     }
@@ -106,7 +117,9 @@ fn reindex_removes_deleted_file_chunks() {
     fs::remove_file(&removed).expect("rm removed");
     {
         let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
-        index.index_directory(workdir.path(), false).expect("index v2");
+        index
+            .index_directory(workdir.path(), false)
+            .expect("index v2");
         let hits = index.search("charlie", 5, None).expect("search v2");
         assert!(
             hits.is_empty(),
@@ -132,7 +145,9 @@ fn directory_filter_excludes_same_prefix_siblings() {
     let mut index = SearchIndex::open_or_create(index_dir.path()).expect("open");
     index.index_directory(workdir.path(), false).expect("index");
 
-    let hits = index.search("target", 10, Some(src.as_path())).expect("filter src");
+    let hits = index
+        .search("target", 10, Some(src.as_path()))
+        .expect("filter src");
     assert!(!hits.is_empty(), "filter for /src should match kept.rs");
     for hit in &hits {
         assert!(

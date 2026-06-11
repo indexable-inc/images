@@ -266,7 +266,10 @@ mod tests {
     fn valid_skill_has_no_diagnostics() {
         let contents = "---\nname: example\ndescription: A short, valid description.\n---\nBody.\n";
         let diagnostics = lint_skill(&skill_path(), contents);
-        assert!(diagnostics.is_empty(), "expected clean, got {diagnostics:?}");
+        assert!(
+            diagnostics.is_empty(),
+            "expected clean, got {diagnostics:?}"
+        );
     }
 
     #[test]

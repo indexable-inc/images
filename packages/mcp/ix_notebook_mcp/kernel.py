@@ -129,8 +129,15 @@ class Kernel:
             "the faulthandler registered (older build) or cannot service signals."
         )
 
-    async def _execute(self, code: str, timeout: float) -> tuple[list[dict], dict | None]:
+    async def _execute(
+        self, code: str, timeout: float, on_locked=None
+    ) -> tuple[list[dict], dict | None]:
         async with self._lock:
+            # `on_locked` fires once the shell channel is held: a caller that
+            # must run BEFORE any later request (session restore) signals here,
+            # and everything submitted afterwards queues behind this lock.
+            if on_locked is not None:
+                on_locked()
             outputs: list[dict] = []
             summary: dict | None = None
 
@@ -213,6 +220,25 @@ class Kernel:
         except ProcessLookupError:
             return False
         return True
+
+    async def restore_session(self, on_locked=None, timeout: float = 1800.0) -> str:
+        """Reopen a session in the kernel: load the latest checkpoint and replay
+        the gap (``__ix_restore`` in the runtime). Returns the printed summary.
+        ``on_locked`` fires once the request holds the shell channel, so the
+        caller can start serving tools immediately -- they queue behind this."""
+        outputs, _ = await self._execute("await __ix_restore()", timeout=timeout, on_locked=on_locked)
+        texts = [o.get("text", "") for o in outputs if isinstance(o, dict)]
+        return "".join(t for t in texts if isinstance(t, str)).strip()
+
+    async def snapshot_session(self) -> None:
+        """Best-effort final checkpoint at shutdown, so the last cells' state is
+        in the file even if the debounced checkpoint had not fired yet."""
+        try:
+            await self._execute("await __ix_snapshot()", timeout=60.0)
+        except Exception:
+            # Shutdown must proceed; the periodic checkpoint plus replay already
+            # guarantee a correct (if slower) reopen.
+            pass
 
     async def restart(self) -> None:
         if self._km is not None:

@@ -90,7 +90,9 @@ fn render_broadcast(rest: &str) -> String {
 /// Order matters: `&amp;` is decoded last so an escaped `&lt;` cannot be
 /// double-decoded into a real `<`.
 fn unescape_html(text: &str) -> String {
-    text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 /// Collapse any run of three or more consecutive newlines down to two, so a
@@ -137,24 +139,38 @@ mod tests {
     #[test]
     fn falls_back_to_real_name_then_id() {
         assert_eq!(render_text("<@U0AH08A8V5G>", &user_map(), None), "@wyatt");
-        assert_eq!(render_text("<@U0UNKNOWN1>", &user_map(), None), "@U0UNKNOWN1");
+        assert_eq!(
+            render_text("<@U0UNKNOWN1>", &user_map(), None),
+            "@U0UNKNOWN1"
+        );
     }
 
     #[test]
     fn renders_channel_and_link_and_broadcast() {
-        let out = render_text("see <#C0X|craft> at <https://ix.dev|ix> <!here>", &user_map(), None);
+        let out = render_text(
+            "see <#C0X|craft> at <https://ix.dev|ix> <!here>",
+            &user_map(),
+            None,
+        );
         assert_eq!(out, "see #craft at ix @here");
     }
 
     #[test]
     fn keeps_bare_link_and_markup_literals() {
-        let out = render_text("read <https://ix.dev> with *bold* `code`", &user_map(), None);
+        let out = render_text(
+            "read <https://ix.dev> with *bold* `code`",
+            &user_map(),
+            None,
+        );
         assert_eq!(out, "read https://ix.dev with *bold* `code`");
     }
 
     #[test]
     fn unescapes_html_entities() {
-        assert_eq!(render_text("sdk &gt;&gt;&gt; cli &amp; more", &user_map(), None), "sdk >>> cli & more");
+        assert_eq!(
+            render_text("sdk &gt;&gt;&gt; cli &amp; more", &user_map(), None),
+            "sdk >>> cli & more"
+        );
     }
 
     #[test]

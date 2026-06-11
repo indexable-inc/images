@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS bossbars (
   url         TEXT    NOT NULL DEFAULT '',
   expandable  INTEGER NOT NULL DEFAULT 1,
   eta         INTEGER,
-  icon        TEXT    NOT NULL DEFAULT ''
+  icon        TEXT    NOT NULL DEFAULT '',
+  theme       TEXT    NOT NULL DEFAULT ''
 );";
 
 /// Columns added after the initial schema shipped. `ALTER TABLE ADD COLUMN` is
@@ -51,6 +52,7 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("expandable", "INTEGER NOT NULL DEFAULT 1"),
     ("eta", "INTEGER"),
     ("icon", "TEXT NOT NULL DEFAULT ''"),
+    ("theme", "TEXT NOT NULL DEFAULT ''"),
 ];
 
 /// Rows inserted only when the DB file is created for the first time, so a
@@ -126,7 +128,7 @@ pub fn set_position(path: &Path, id: i64, pos: glam::DVec2) -> rusqlite::Result<
 
 fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, progress, color, overlay, position, x, y, description, since, url, expandable, eta, icon
+        "SELECT id, title, progress, color, overlay, position, x, y, description, since, url, expandable, eta, icon, theme
          FROM bossbars
          WHERE visible != 0
          ORDER BY position ASC, id ASC",
@@ -156,6 +158,7 @@ fn read(conn: &Connection) -> rusqlite::Result<Vec<BossBar>> {
             // falls back to auto-stacking rather than placing it at an edge.
             pos: x.zip(y).map(|(x, y)| glam::DVec2::new(x, y)),
             icon: r.get(13)?,
+            theme: r.get(14)?,
         })
     })?;
     rows.collect()
@@ -368,6 +371,64 @@ mod tests {
         .unwrap();
         let bars = read(&conn).unwrap();
         assert_eq!(bars[0].description, "line one\n\nline two");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn theme_round_trips_and_defaults_empty() {
+        let path = temp_db("theme");
+        let conn = open(&path).unwrap();
+        conn.execute("DELETE FROM bossbars", []).unwrap();
+        conn.execute(
+            "INSERT INTO bossbars (title, theme) VALUES ('skinned', 'wither'), ('vanilla', '')",
+            [],
+        )
+        .unwrap();
+        // A row that never set the column reads as the vanilla renderer (empty).
+        conn.execute("INSERT INTO bossbars (title) VALUES ('default')", [])
+            .unwrap();
+        let bars = read(&conn).unwrap();
+        let by = |t: &str| bars.iter().find(|b| b.title == t).unwrap();
+        assert_eq!(by("skinned").theme, "wither");
+        assert_eq!(by("vanilla").theme, "");
+        assert_eq!(by("default").theme, "", "missing value defaults to vanilla");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn legacy_db_without_theme_is_migrated() {
+        // A database created before `theme` shipped must gain the column on
+        // open (the ADDED_COLUMNS migration) and read back as vanilla.
+        let path = temp_db("legacy-theme");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        {
+            let legacy = Connection::open(&path).unwrap();
+            legacy
+                .execute_batch(
+                    "CREATE TABLE bossbars (
+                       id       INTEGER PRIMARY KEY,
+                       title    TEXT    NOT NULL DEFAULT '',
+                       progress REAL    NOT NULL DEFAULT 1.0,
+                       color    TEXT    NOT NULL DEFAULT 'purple',
+                       overlay  TEXT    NOT NULL DEFAULT 'progress',
+                       visible  INTEGER NOT NULL DEFAULT 1,
+                       position INTEGER NOT NULL DEFAULT 0
+                     );
+                     INSERT INTO bossbars (title) VALUES ('old');",
+                )
+                .unwrap();
+        }
+
+        let conn = open(&path).unwrap();
+        let bars = read(&conn).unwrap();
+        assert_eq!(bars[0].theme, "", "migrated column defaults to vanilla");
+        conn.execute(
+            "UPDATE bossbars SET theme = 'dragon' WHERE id = ?1",
+            rusqlite::params![bars[0].id],
+        )
+        .unwrap();
+        let bars = read(&conn).unwrap();
+        assert_eq!(bars[0].theme, "dragon");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

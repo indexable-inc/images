@@ -31,10 +31,10 @@ impl UserMap {
     pub fn from_entries(entries: Vec<UserEntry>) -> Self {
         let mut by_id = HashMap::with_capacity(entries.len());
         for entry in entries {
-            let name = entry
-                .profile
-                .best_name()
-                .map_or_else(|| fallback_name(&entry.name, &entry.id).to_owned(), str::to_owned);
+            let name = entry.profile.best_name().map_or_else(
+                || fallback_name(&entry.name, &entry.id).to_owned(),
+                str::to_owned,
+            );
             by_id.insert(
                 entry.id,
                 ResolvedUser {

@@ -145,7 +145,7 @@ impl Manifest {
             digest.update(value.as_bytes());
             digest.update(b"\n");
         }
-        format!("{:x}", digest.finalize())
+        hex::encode(digest.finalize())
     }
 
     /// The first relative path that maps to `hash`, if any. Identical content

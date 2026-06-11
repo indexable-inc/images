@@ -5,7 +5,9 @@
 # The `_module.args.hermes` surface keeps the on-disk options short for
 # a downstream deployer: pick the integrations you want, point at the
 # env file paths your secret-store wrote, ix-rebuild. Everything is
-# outbound-only on this preset; no port claims, no inbound gateway VM.
+# outbound-only on this preset by default; the one inbound toggle is
+# `apiServer`, which claims a port for the OpenAI-compatible
+# `hermes api-server` (see examples/hermes-api-server).
 {
   config,
   lib,
@@ -29,6 +31,7 @@ let
   homeAssistantEnvFile = hermes.homeAssistantEnvFile or defaultEnvFile;
   imageGenEnvFile = hermes.imageGenEnvFile or defaultEnvFile;
   memoryEnvFile = hermes.memoryEnvFile or defaultEnvFile;
+  apiServerEnvFile = hermes.apiServerEnvFile or defaultEnvFile;
 
   # Feature toggles. All default off so a fresh `ix up` boots the agent
   # with just the model provider key; turning anything else on is a one
@@ -37,6 +40,16 @@ let
   discord = hermes.discord or false;
   homeAssistant = hermes.homeAssistant or false;
   imageGen = hermes.imageGen or false;
+
+  # The OpenAI-compatible `hermes api-server` platform. Unlike every
+  # other toggle this one is INBOUND: it claims a TCP port and opens the
+  # in-guest firewall, so chat frontends (LobeChat, Open WebUI,
+  # LibreChat) on sibling VMs can use this node as their model endpoint.
+  # Reachability stays scoped by the fleet's east-west groups: a VM
+  # outside the node's group has no route to the port. The
+  # `examples/hermes-api-server` preset is the canonical consumer.
+  apiServer = hermes.apiServer or false;
+  apiServerPort = hermes.apiServerPort or 9119;
 
   # `null` leaves the corresponding integration off entirely. Strings
   # are validated against the known backend set; a typo fails the eval
@@ -99,6 +112,7 @@ let
     ++ lib.optional homeAssistant homeAssistantEnvFile
     ++ lib.optional imageGen imageGenEnvFile
     ++ lib.optional (validMemory != "holographic") memoryEnvFile
+    ++ lib.optional apiServer apiServerEnvFile
   );
 in
 {
@@ -120,6 +134,18 @@ in
 
     environmentFiles = envFiles;
 
+    # The api-server platform is enabled through the gateway's env knobs
+    # (the upstream YAML block is equivalent; env keeps this composable
+    # with the toggle bag). Binding 0.0.0.0 is what makes the listener
+    # reachable over the east-west network; the port is only routable
+    # from VMs sharing a group with this node. API_SERVER_KEY is a
+    # secret, so it stays in the env file, never here.
+    environment = lib.optionalAttrs apiServer {
+      API_SERVER_ENABLED = "true";
+      API_SERVER_HOST = "0.0.0.0";
+      API_SERVER_PORT = toString apiServerPort;
+    };
+
     extraPackages = builtins.attrValues {
       inherit (pkgs)
         # Github CLI is the most common "the agent needs to read or
@@ -129,9 +155,11 @@ in
         ;
     };
 
+    # mkDefault so a sibling preset (hermes-telegram, hermes-minecraft-
+    # operator, ...) can swap the persona with a plain assignment.
     documents = {
-      "USER.md" = ./documents/USER.md;
-      "SOUL.md" = ./documents/SOUL.md;
+      "USER.md" = lib.mkDefault ./documents/USER.md;
+      "SOUL.md" = lib.mkDefault ./documents/SOUL.md;
     };
 
     settings = {
@@ -187,13 +215,18 @@ in
   # Surface the daemon health to fleet-wide health checks. The unit is
   # forking with `Restart=always`, so `is-active` is the right probe.
   ix.healthChecks.hermes-agent = {
-    from = "guest";
     description = "Hermes agent gateway is active";
-    command = [
-      (lib.getExe' config.systemd.package "systemctl")
-      "is-active"
-      "--quiet"
-      "hermes-agent.service"
-    ];
+    unit = "hermes-agent";
+  };
+
+  # One source of truth for the api-server port: registers the port
+  # claim (eval-time collision check), opens the in-guest firewall, and
+  # makes the listener discoverable from sibling nodes via
+  # `ix.endpointOf nodes.<node> "hermes-api"`.
+  ix.networking.expose = lib.optionalAttrs apiServer {
+    hermes-api = {
+      port = apiServerPort;
+      description = "Hermes OpenAI-compatible api-server";
+    };
   };
 }

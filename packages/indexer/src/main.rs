@@ -189,16 +189,26 @@ async fn main() -> anyhow::Result<()> {
 
     let store = match &cli.mixedbread_store {
         Some(_) => {
-            let base_url =
-                cli.base_url.clone().unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
-            Some(MixedbreadStore::from_login(base_url).await.context("connecting to Mixedbread")?)
+            let base_url = cli
+                .base_url
+                .clone()
+                .unwrap_or_else(|| mixedbread::DEFAULT_BASE_URL.to_owned());
+            Some(
+                MixedbreadStore::from_login(base_url)
+                    .await
+                    .context("connecting to Mixedbread")?,
+            )
         }
         None => None,
     };
     let mixedbread = store
         .as_ref()
         .zip(cli.mixedbread_store.as_deref())
-        .map(|(store, name)| Mixedbread { store, name, index_timeout: INDEX_TIMEOUT });
+        .map(|(store, name)| Mixedbread {
+            store,
+            name,
+            index_timeout: INDEX_TIMEOUT,
+        });
 
     // The consume modes replay a log into Mixedbread instead of scanning local
     // sources; exactly one log (and one read discipline) per invocation.
@@ -211,71 +221,11 @@ async fn main() -> anyhow::Result<()> {
         "--from-parquet-prefix, --from-iceberg, --from-snapshot, and --cursor-file are mutually exclusive consume modes"
     );
 
-    // Consume mode (Iceberg corpus lake, full): fold the lake's revision log
-    // into its current per-source document sets and REPLACE each source's
-    // Mixedbread records with them — the lake's replay/rebuild path. Replace,
-    // not reconcile: the fold's absences are explicit tombstones, so the
-    // rebuild also deletes view records the lake has let go of, including a
-    // source whose records are all tombstoned. Like the parquet consume below,
-    // emit and consume run as separate invocations of this binary.
-    if cli.from_iceberg {
-        let mixedbread =
-            mixedbread.context("--from-iceberg requires --mixedbread-store (the replace target)")?;
-        let Lake { catalog, ident } = connect_lake(&cli).await?;
-        let state =
-            lake_iceberg::read_state(catalog.as_ref(), &ident).await.context("reading the lake")?;
-        return finish(run_replace(state, mixedbread).await);
-    }
-
-    // Consume mode (Iceberg corpus lake, incremental): apply the changes since
-    // an explicit cursor. Stateless — the caller owns the cursor.
-    if let Some(cursor) = cli.from_snapshot {
-        let mixedbread =
-            mixedbread.context("--from-snapshot requires --mixedbread-store (the apply target)")?;
-        let Lake { catalog, ident } = connect_lake(&cli).await?;
-        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
-        let result =
-            run_lake_delta(catalog.as_ref(), &ident, cursor, mixedbread).await.map(|_| ());
-        record("lake-delta", result, &mut counts);
-        return finish(counts);
-    }
-
-    // Consume mode (Iceberg corpus lake, steady state): the cursor lives in a
-    // file; absent or expired falls back to a full rebuild. This is the
-    // deployed view-catch-up invocation.
-    if let Some(path) = cli.cursor_file.clone() {
-        let mixedbread =
-            mixedbread.context("--cursor-file requires --mixedbread-store (the apply target)")?;
-        let Lake { catalog, ident } = connect_lake(&cli).await?;
-        return finish(run_cursor_consume(catalog.as_ref(), &ident, &path, mixedbread).await);
-    }
-
-    // Consume mode (parquet corpus log): read the per-source `data.parquet` files
-    // `sink-parquet` wrote at this prefix under `--bucket` and reconcile them back
-    // into Mixedbread. Uses the SAME bucket/endpoint/region the parquet sink uses,
-    // so it reads exactly what was written. Emit (scan local sources, write the
-    // log) and consume (replay the log into Mixedbread) run as separate
-    // invocations of this binary; consume reconciles the log rather than scanning.
-    if let Some(prefix) = cli.from_parquet_prefix.clone() {
-        let bucket = cli.bucket.clone().context("--from-parquet-prefix requires --bucket")?;
-        let config = source_parquet::Config {
-            bucket,
-            endpoint: cli.endpoint.clone(),
-            region: cli.region.clone(),
-            prefix,
-        };
-        // With --catalog-uri this folds the parquet archive INTO the lake (the
-        // leader's parquet->lake step under leader-funnel, issue #752);
-        // otherwise it replays the archive into Mixedbread. The lake fold keeps
-        // each (host, user, source) slice separate, so it cannot share
-        // consume_parquet's host-flattened read.
-        if cli.catalog_uri.is_some() {
-            let Lake { catalog, ident } = connect_lake(&cli).await?;
-            return finish(fold_parquet_into_lake(&config, catalog, &ident).await);
-        }
-        let mixedbread = mixedbread
-            .context("--from-parquet-prefix requires --mixedbread-store or --catalog-uri")?;
-        return finish(consume_parquet(&config, mixedbread).await);
+    // Consume modes replay a corpus log into Mixedbread/the lake instead of
+    // scanning local sources; dispatched in `run_consume_mode` to keep `main`
+    // a thin top-level. Exactly one is set here (guarded by the check above).
+    if consume_modes == 1 {
+        return run_consume_mode(&cli, mixedbread).await;
     }
 
     let parquet = match cli.bucket.as_ref() {
@@ -291,14 +241,19 @@ async fn main() -> anyhow::Result<()> {
         // misconfigured endpoint or missing credentials at startup instead of
         // as a per-source failure.
         Some(bucket) => {
-            let host = resolve_host(&cli).context("resolving host for the parquet archive prefix")?;
+            let host =
+                resolve_host(&cli).context("resolving host for the parquet archive prefix")?;
             let config = sink_parquet::Config {
                 bucket: bucket.clone(),
                 endpoint: cli.endpoint.clone(),
                 region: cli.region.clone(),
                 prefix: archive_prefix(&cli.prefix, &host),
             };
-            Some(config.connect().context("building the S3 client for the parquet archive")?)
+            Some(
+                config
+                    .connect()
+                    .context("building the S3 client for the parquet archive")?,
+            )
         }
         None => None,
     };
@@ -325,12 +280,103 @@ async fn main() -> anyhow::Result<()> {
     finish(run_sources(&cli, mixedbread, parquet.as_ref(), lake.as_ref()).await)
 }
 
+/// Dispatch the consume modes: replay a corpus log (the Iceberg lake or the
+/// parquet archive) into Mixedbread/the lake instead of scanning local
+/// sources. Split out of [`main`] to keep the entry point readable.
+/// Precondition: exactly one consume flag is set (the caller guards on
+/// `consume_modes == 1`).
+async fn run_consume_mode(cli: &Cli, mixedbread: Option<Mixedbread<'_>>) -> anyhow::Result<()> {
+    // Consume mode (Iceberg corpus lake, full): fold the lake's revision log
+    // into its current per-source document sets and REPLACE each source's
+    // Mixedbread records with them — the lake's replay/rebuild path. Replace,
+    // not reconcile: the fold's absences are explicit tombstones, so the
+    // rebuild also deletes view records the lake has let go of, including a
+    // source whose records are all tombstoned. Like the parquet consume below,
+    // emit and consume run as separate invocations of this binary.
+    if cli.from_iceberg {
+        let mixedbread = mixedbread
+            .context("--from-iceberg requires --mixedbread-store (the replace target)")?;
+        let Lake { catalog, ident } = connect_lake(cli).await?;
+        let state = lake_iceberg::read_state(catalog.as_ref(), &ident)
+            .await
+            .context("reading the lake")?;
+        return finish(run_replace(state, mixedbread).await);
+    }
+
+    // Consume mode (Iceberg corpus lake, incremental): apply the changes since
+    // an explicit cursor. Stateless — the caller owns the cursor.
+    if let Some(cursor) = cli.from_snapshot {
+        let mixedbread =
+            mixedbread.context("--from-snapshot requires --mixedbread-store (the apply target)")?;
+        let Lake { catalog, ident } = connect_lake(cli).await?;
+        let mut counts = Counts {
+            indexed: 0,
+            skipped: 0,
+            failures: 0,
+        };
+        let result = run_lake_delta(catalog.as_ref(), &ident, cursor, mixedbread)
+            .await
+            .map(|_| ());
+        record("lake-delta", result, &mut counts);
+        return finish(counts);
+    }
+
+    // Consume mode (Iceberg corpus lake, steady state): the cursor lives in a
+    // file; absent or expired falls back to a full rebuild. This is the
+    // deployed view-catch-up invocation.
+    if let Some(path) = cli.cursor_file.clone() {
+        let mixedbread =
+            mixedbread.context("--cursor-file requires --mixedbread-store (the apply target)")?;
+        let Lake { catalog, ident } = connect_lake(cli).await?;
+        return finish(run_cursor_consume(catalog.as_ref(), &ident, &path, mixedbread).await);
+    }
+
+    // Consume mode (parquet corpus log): read the per-source `data.parquet` files
+    // `sink-parquet` wrote at this prefix under `--bucket` and reconcile them back
+    // into Mixedbread. Uses the SAME bucket/endpoint/region the parquet sink uses,
+    // so it reads exactly what was written. Emit (scan local sources, write the
+    // log) and consume (replay the log into Mixedbread) run as separate
+    // invocations of this binary; consume reconciles the log rather than scanning.
+    if let Some(prefix) = cli.from_parquet_prefix.clone() {
+        let bucket = cli
+            .bucket
+            .clone()
+            .context("--from-parquet-prefix requires --bucket")?;
+        let config = source_parquet::Config {
+            bucket,
+            endpoint: cli.endpoint.clone(),
+            region: cli.region.clone(),
+            prefix,
+        };
+        // With --catalog-uri this folds the parquet archive INTO the lake (the
+        // leader's parquet->lake step under leader-funnel, issue #752);
+        // otherwise it replays the archive into Mixedbread. The lake fold keeps
+        // each (host, user, source) slice separate, so it cannot share
+        // consume_parquet's host-flattened read.
+        if cli.catalog_uri.is_some() {
+            let Lake { catalog, ident } = connect_lake(cli).await?;
+            return finish(fold_parquet_into_lake(&config, catalog, &ident).await);
+        }
+        let mixedbread = mixedbread
+            .context("--from-parquet-prefix requires --mixedbread-store or --catalog-uri")?;
+        return finish(consume_parquet(&config, mixedbread).await);
+    }
+
+    unreachable!("run_consume_mode requires exactly one consume flag set")
+}
+
 /// Build the lake's catalog config from the CLI: the catalog flags plus the
 /// shared S3 endpoint/region (the lake's data plane is the same account the
 /// parquet archive uses during the migration).
 fn lake_config(cli: &Cli) -> anyhow::Result<lake_iceberg::Config> {
-    let uri = cli.catalog_uri.clone().context("--catalog-uri is required for the Iceberg lake")?;
-    let warehouse = cli.warehouse.clone().context("--warehouse is required with --catalog-uri")?;
+    let uri = cli
+        .catalog_uri
+        .clone()
+        .context("--catalog-uri is required for the Iceberg lake")?;
+    let warehouse = cli
+        .warehouse
+        .clone()
+        .context("--warehouse is required with --catalog-uri")?;
     Ok(lake_iceberg::Config {
         uri,
         warehouse,
@@ -351,9 +397,13 @@ struct Lake {
 /// startup.
 async fn connect_lake(cli: &Cli) -> anyhow::Result<Lake> {
     let config = lake_config(cli)?;
-    let catalog = config.connect().await.context("connecting the Iceberg catalog")?;
-    let ident =
-        lake_iceberg::ensure_table(catalog.as_ref()).await.context("ensuring the lake table")?;
+    let catalog = config
+        .connect()
+        .await
+        .context("connecting the Iceberg catalog")?;
+    let ident = lake_iceberg::ensure_table(catalog.as_ref())
+        .await
+        .context("ensuring the lake table")?;
     Ok(Lake { catalog, ident })
 }
 
@@ -390,7 +440,11 @@ async fn run_cursor_consume<S: Store + Sync>(
     path: &Path,
     mixedbread: MixedbreadReconciler<'_, S>,
 ) -> Counts {
-    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+    let mut counts = Counts {
+        indexed: 0,
+        skipped: 0,
+        failures: 0,
+    };
     let cursor = match read_cursor(path) {
         Ok(cursor) => cursor,
         Err(error) => {
@@ -405,8 +459,8 @@ async fn run_cursor_consume<S: Store + Sync>(
         match run_lake_delta(catalog, ident, cursor, mixedbread).await {
             Ok(to_snapshot) => {
                 // An empty table has no snapshot to store; keep the old cursor.
-                let result = to_snapshot
-                    .map_or_else(|| Ok(()), |snapshot| write_cursor(path, snapshot));
+                let result =
+                    to_snapshot.map_or_else(|| Ok(()), |snapshot| write_cursor(path, snapshot));
                 record("lake-cursor", result, &mut counts);
                 return counts;
             }
@@ -436,7 +490,9 @@ async fn run_cursor_consume<S: Store + Sync>(
         let to_snapshot = lake_iceberg::current_snapshot_id(catalog, ident)
             .await
             .context("reading the lake snapshot")?;
-        let state = lake_iceberg::read_state(catalog, ident).await.context("reading the lake")?;
+        let state = lake_iceberg::read_state(catalog, ident)
+            .await
+            .context("reading the lake")?;
         anyhow::Ok((to_snapshot, state))
     }
     .await;
@@ -497,7 +553,10 @@ fn write_cursor(path: &Path, snapshot: i64) -> anyhow::Result<()> {
 /// has no `history` table cannot degrade the whole indexing unit.
 fn finish(counts: Counts) -> anyhow::Result<()> {
     if counts.skipped > 0 {
-        eprintln!("[indexer] {} source(s) soft-skipped (uninitialized/empty)", counts.skipped);
+        eprintln!(
+            "[indexer] {} source(s) soft-skipped (uninitialized/empty)",
+            counts.skipped
+        );
     }
     if counts.failures > 0 {
         anyhow::bail!(
@@ -536,11 +595,25 @@ async fn run_sources(
 ) -> Counts {
     let home = dirs::home_dir();
     let default = |suffix: &str| home.as_ref().map(|h| h.join(suffix));
-    let claude = cli.claude_dir.clone().or_else(|| cli.local.then(|| default(".claude/projects")).flatten());
-    let codex = cli.codex_file.clone().or_else(|| cli.local.then(|| default(".codex/history.jsonl")).flatten());
-    let atuin = cli.atuin_db.clone().or_else(|| cli.local.then(|| default(".local/share/atuin/history.db")).flatten());
+    let claude = cli
+        .claude_dir
+        .clone()
+        .or_else(|| cli.local.then(|| default(".claude/projects")).flatten());
+    let codex = cli
+        .codex_file
+        .clone()
+        .or_else(|| cli.local.then(|| default(".codex/history.jsonl")).flatten());
+    let atuin = cli.atuin_db.clone().or_else(|| {
+        cli.local
+            .then(|| default(".local/share/atuin/history.db"))
+            .flatten()
+    });
 
-    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+    let mut counts = Counts {
+        indexed: 0,
+        skipped: 0,
+        failures: 0,
+    };
     if let Some(dir) = claude {
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open(&dir)
@@ -575,33 +648,7 @@ async fn run_sources(
             Err(error) => record("shell", Err(error), &mut counts),
         }
     }
-    if let Some(dir) = &cli.slack_export {
-        let result = async {
-            let adapter = source_slack::SlackExport::open(dir)
-                .with_context(|| format!("reading Slack export at {}", dir.display()))?;
-            run_source("slack", &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record("slack", result, &mut counts);
-    }
-    if let Some(dir) = &cli.linear_export {
-        let result = async {
-            let adapter = source_linear::LinearExport::open(dir)
-                .with_context(|| format!("reading Linear export at {}", dir.display()))?;
-            run_source("linear", &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record("linear", result, &mut counts);
-    }
-    if let Some(dir) = &cli.github_export {
-        let result = async {
-            let adapter = source_github::GithubExport::open(dir)
-                .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
-            run_source("github", &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record("github", result, &mut counts);
-    }
+    run_static_exports(cli, mixedbread, parquet, lake, &mut counts).await;
     for repo in &cli.git_repos {
         let label = format!("git:{}", repo.display());
         let result = async {
@@ -621,6 +668,45 @@ async fn run_sources(
         run_users(cli, mixedbread, parquet, lake, &mut counts).await;
     }
     counts
+}
+
+/// Run the directory-based export sources (Slack, Linear, GitHub), each
+/// independent (a failure never aborts the others), accumulating into the
+/// shared counters. Split out of [`run_sources`] to keep each function focused.
+async fn run_static_exports(
+    cli: &Cli,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
+    counts: &mut Counts,
+) {
+    if let Some(dir) = &cli.slack_export {
+        let result = async {
+            let adapter = source_slack::SlackExport::open(dir)
+                .with_context(|| format!("reading Slack export at {}", dir.display()))?;
+            run_source("slack", &adapter, mixedbread, parquet, lake).await
+        }
+        .await;
+        record("slack", result, counts);
+    }
+    if let Some(dir) = &cli.linear_export {
+        let result = async {
+            let adapter = source_linear::LinearExport::open(dir)
+                .with_context(|| format!("reading Linear export at {}", dir.display()))?;
+            run_source("linear", &adapter, mixedbread, parquet, lake).await
+        }
+        .await;
+        record("linear", result, counts);
+    }
+    if let Some(dir) = &cli.github_export {
+        let result = async {
+            let adapter = source_github::GithubExport::open(dir)
+                .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
+            run_source("github", &adapter, mixedbread, parquet, lake).await
+        }
+        .await;
+        record("github", result, counts);
+    }
 }
 
 /// Run the `--user NAME:HOME` multi-user phase, accumulating into the shared
@@ -661,7 +747,11 @@ async fn consume_parquet(config: &source_parquet::Config, mixedbread: Mixedbread
         Ok(documents) => documents,
         Err(error) => {
             eprintln!("[consume] failed to read the parquet corpus log: {error:#}");
-            return Counts { indexed: 0, skipped: 0, failures: 1 };
+            return Counts {
+                indexed: 0,
+                skipped: 0,
+                failures: 1,
+            };
         }
     };
     run_consume(documents, mixedbread).await
@@ -683,12 +773,25 @@ async fn fold_parquet_into_lake(
         Ok(slices) => slices,
         Err(error) => {
             eprintln!("[fold] failed to read the parquet corpus log: {error:#}");
-            return Counts { indexed: 0, skipped: 0, failures: 1 };
+            return Counts {
+                indexed: 0,
+                skipped: 0,
+                failures: 1,
+            };
         }
     };
-    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+    let mut counts = Counts {
+        indexed: 0,
+        skipped: 0,
+        failures: 0,
+    };
     for slice in slices {
-        let source_parquet::Slice { host, user, source, documents } = slice;
+        let source_parquet::Slice {
+            host,
+            user,
+            source,
+            documents,
+        } = slice;
         let Some(host) = host else {
             eprintln!("[fold:{source}] skipping a slice whose key has no host= segment");
             counts.failures += 1;
@@ -736,7 +839,11 @@ async fn run_replace<S: Store + Sync>(
     state: lake_iceberg::LakeState,
     mixedbread: MixedbreadReconciler<'_, S>,
 ) -> Counts {
-    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+    let mut counts = Counts {
+        indexed: 0,
+        skipped: 0,
+        failures: 0,
+    };
     for (source, documents) in state.sources {
         let label = format!("replace:{source}");
         let result = mixedbread
@@ -762,7 +869,11 @@ async fn run_replace<S: Store + Sync>(
 /// documents first, then shares this reconcile (the lake paths replace instead;
 /// see [`run_replace`]).
 async fn run_consume(documents: Vec<Document>, mixedbread: Mixedbread<'_>) -> Counts {
-    let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+    let mut counts = Counts {
+        indexed: 0,
+        skipped: 0,
+        failures: 0,
+    };
     let mut by_source: BTreeMap<String, Vec<Document>> = BTreeMap::new();
     for document in documents {
         let source = document
@@ -826,7 +937,12 @@ async fn index_user(
         let label = format!("claude:{name}");
         let result = async {
             let adapter = source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name)
-                .with_context(|| format!("parsing Claude transcripts for {name} at {}", claude_dir.display()))?;
+                .with_context(|| {
+                    format!(
+                        "parsing Claude transcripts for {name} at {}",
+                        claude_dir.display()
+                    )
+                })?;
             run_source(&label, &adapter, mixedbread, parquet, lake).await
         }
         .await;
@@ -837,7 +953,12 @@ async fn index_user(
         let label = format!("codex:{name}");
         let result = async {
             let adapter = source_codex::CodexHistory::open_with(&codex_file, host, name)
-                .with_context(|| format!("parsing Codex history for {name} at {}", codex_file.display()))?;
+                .with_context(|| {
+                    format!(
+                        "parsing Codex history for {name} at {}",
+                        codex_file.display()
+                    )
+                })?;
             run_source(&label, &adapter, mixedbread, parquet, lake).await
         }
         .await;
@@ -848,7 +969,9 @@ async fn index_user(
     // regardless of who runs the process. An account whose db file exists but
     // was never initialized by atuin (no `history` table) is a soft skip, so one
     // such account cannot fail the whole fleet run (ENG-2141).
-    if let Some(atuin_db) = safe_path_under(home, &[".local", "share", "atuin", "history.db"], false) {
+    if let Some(atuin_db) =
+        safe_path_under(home, &[".local", "share", "atuin", "history.db"], false)
+    {
         let label = format!("shell:{name}");
         match open_atuin(
             &label,
@@ -871,8 +994,13 @@ async fn index_user(
     if let Some(debug_dir) = safe_path_under(home, &[".claude", "debug"], true) {
         let label = format!("debug:{name}");
         let result = async {
-            let adapter = source_debug::DebugLogs::open_with(&debug_dir, host, name)
-                .with_context(|| format!("reading Claude debug logs for {name} at {}", debug_dir.display()))?;
+            let adapter =
+                source_debug::DebugLogs::open_with(&debug_dir, host, name).with_context(|| {
+                    format!(
+                        "reading Claude debug logs for {name} at {}",
+                        debug_dir.display()
+                    )
+                })?;
             run_source(&label, &adapter, mixedbread, parquet, lake).await
         }
         .await;
@@ -883,17 +1011,28 @@ async fn index_user(
 /// Parse a `NAME:HOME` user spec. The name is everything before the first colon;
 /// both parts must be non-empty.
 fn parse_user(spec: &str) -> anyhow::Result<User> {
-    let (name, home) =
-        spec.split_once(':').with_context(|| format!("--user must be NAME:HOME, got {spec:?}"))?;
-    anyhow::ensure!(!name.is_empty(), "--user NAME must be non-empty in {spec:?}");
-    anyhow::ensure!(!home.is_empty(), "--user HOME must be non-empty in {spec:?}");
+    let (name, home) = spec
+        .split_once(':')
+        .with_context(|| format!("--user must be NAME:HOME, got {spec:?}"))?;
+    anyhow::ensure!(
+        !name.is_empty(),
+        "--user NAME must be non-empty in {spec:?}"
+    );
+    anyhow::ensure!(
+        !home.is_empty(),
+        "--user HOME must be non-empty in {spec:?}"
+    );
     // NAME becomes a metadata tag and a `user=<name>` parquet partition segment,
     // so keep it to a safe charset (no `/` or `=` that could cross partitions).
     anyhow::ensure!(
-        name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')),
+        name.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')),
         "--user NAME must be ascii alphanumeric plus `.`/`_`/`-`, got {name:?}"
     );
-    Ok(User { name: name.to_owned(), home: PathBuf::from(home) })
+    Ok(User {
+        name: name.to_owned(),
+        home: PathBuf::from(home),
+    })
 }
 
 /// Host-scope the parquet archive prefix: `<base>/host=<host>`. Every fleet host
@@ -942,7 +1081,11 @@ fn safe_path_under(home: &Path, rel: &[&str], want_dir: bool) -> Option<PathBuf>
             return None;
         }
         let ok = if index == last {
-            if want_dir { meta.is_dir() } else { meta.is_file() }
+            if want_dir {
+                meta.is_dir()
+            } else {
+                meta.is_file()
+            }
         } else {
             meta.is_dir()
         };
@@ -978,9 +1121,17 @@ async fn index_code(
     let manifest = search_core::Manifest::build(repo_dir, None, MAX_FILE_BYTES)
         .with_context(|| format!("building manifest for {}", repo_dir.display()))?;
     let repo = search_core::repo_slug(repo_dir);
-    let report = search_core::sync(store, name, repo_dir, &manifest, &repo, MAX_FILES, |_, _| {})
-        .await
-        .with_context(|| format!("[{label}] code sync"))?;
+    let report = search_core::sync(
+        store,
+        name,
+        repo_dir,
+        &manifest,
+        &repo,
+        MAX_FILES,
+        |_, _| {},
+    )
+    .await
+    .with_context(|| format!("[{label}] code sync"))?;
     if report.uploaded > 0 {
         search_core::wait_until_indexed(store, name, INDEX_TIMEOUT, |_| {})
             .await
@@ -1045,8 +1196,10 @@ fn open_atuin(
             counts.skipped += 1;
             Ok(Atuin::Skipped)
         }
-        Err(error) => Err(anyhow::Error::new(error)
-            .context(format!("reading atuin history at {}", db.display()))),
+        Err(error) => {
+            Err(anyhow::Error::new(error)
+                .context(format!("reading atuin history at {}", db.display())))
+        }
     }
 }
 
@@ -1116,7 +1269,8 @@ async fn run_source<A: SourceAdapter + Sync>(
                 report.uploaded, report.skipped, report.total
             ),
             Err(error) => {
-                errors.push(anyhow::Error::new(error).context(format!("[{label}] Mixedbread sync")));
+                errors
+                    .push(anyhow::Error::new(error).context(format!("[{label}] Mixedbread sync")));
             }
         }
     }
@@ -1127,16 +1281,24 @@ async fn run_source<A: SourceAdapter + Sync>(
         0 => Ok(()),
         1 => Err(errors.into_iter().next().expect("len checked")),
         _ => {
-            let combined =
-                errors.iter().map(|error| format!("{error:#}")).collect::<Vec<_>>().join("; ");
-            Err(anyhow::anyhow!("[{label}] multiple sinks failed: {combined}"))
+            let combined = errors
+                .iter()
+                .map(|error| format!("{error:#}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            Err(anyhow::anyhow!(
+                "[{label}] multiple sinks failed: {combined}"
+            ))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::expect_used, reason = "tests assert observable filesystem outcomes")]
+    #![expect(
+        clippy::expect_used,
+        reason = "tests assert observable filesystem outcomes"
+    )]
 
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -1170,15 +1332,28 @@ mod tests {
         let db = temp.path().join("history.db");
         make_uninitialized_db(&db);
 
-        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        let mut counts = Counts {
+            indexed: 0,
+            skipped: 0,
+            failures: 0,
+        };
         let outcome = open_atuin("shell:tester", &db, true, &mut counts)
             .expect("uninitialized db is not an error");
 
-        assert!(matches!(outcome, Atuin::Skipped), "uninitialized db must be skipped");
+        assert!(
+            matches!(outcome, Atuin::Skipped),
+            "uninitialized db must be skipped"
+        );
         assert_eq!(counts.skipped, 1, "the skip must be tallied");
-        assert_eq!(counts.failures, 0, "an uninitialized db must not count as a failure");
+        assert_eq!(
+            counts.failures, 0,
+            "an uninitialized db must not count as a failure"
+        );
         // The run as a whole still succeeds: no failures means a zero exit.
-        assert!(finish(counts).is_ok(), "a soft-skipped source must not fail the run");
+        assert!(
+            finish(counts).is_ok(),
+            "a soft-skipped source must not fail the run"
+        );
     }
 
     #[test]
@@ -1188,12 +1363,19 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let db = temp.path().join("does-not-exist.db");
 
-        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        let mut counts = Counts {
+            indexed: 0,
+            skipped: 0,
+            failures: 0,
+        };
         assert!(
             open_atuin("shell:tester", &db, true, &mut counts).is_err(),
             "a missing db file must remain a real error, not a soft skip"
         );
-        assert_eq!(counts.skipped, 0, "a real error must not be tallied as a skip");
+        assert_eq!(
+            counts.skipped, 0,
+            "a real error must not be tallied as a skip"
+        );
     }
 
     #[test]
@@ -1206,12 +1388,19 @@ mod tests {
         let db = temp.path().join("history.db");
         make_uninitialized_db(&db);
 
-        let mut counts = Counts { indexed: 0, skipped: 0, failures: 0 };
+        let mut counts = Counts {
+            indexed: 0,
+            skipped: 0,
+            failures: 0,
+        };
         assert!(
             open_atuin("shell:tester", &db, false, &mut counts).is_err(),
             "an uninitialized db with no sink must error, not silently skip"
         );
-        assert_eq!(counts.skipped, 0, "a misconfiguration must not be tallied as a skip");
+        assert_eq!(
+            counts.skipped, 0,
+            "a misconfiguration must not be tallied as a skip"
+        );
     }
 
     #[test]
@@ -1228,7 +1417,8 @@ mod tests {
         std::fs::create_dir_all(home.join(".codex")).expect("mkdir");
         let secret = home.join("secret");
         std::fs::write(&secret, b"x").expect("write");
-        std::os::unix::fs::symlink(&secret, home.join(".codex").join("history.jsonl")).expect("symlink");
+        std::os::unix::fs::symlink(&secret, home.join(".codex").join("history.jsonl"))
+            .expect("symlink");
         assert!(safe_path_under(home, &[".codex", "history.jsonl"], false).is_none());
     }
 
@@ -1278,7 +1468,10 @@ mod tests {
     fn archive_prefix_is_host_scoped() {
         // Bulk exports still host-scope their parquet keys, so two hosts writing
         // the same bucket never clobber each other.
-        assert_eq!(archive_prefix("corpus", "hil-compute-1"), "corpus/host=hil-compute-1");
+        assert_eq!(
+            archive_prefix("corpus", "hil-compute-1"),
+            "corpus/host=hil-compute-1"
+        );
         assert_ne!(archive_prefix("corpus", "a"), archive_prefix("corpus", "b"));
     }
 
@@ -1292,7 +1485,10 @@ mod tests {
         assert_eq!(read_cursor(&path).expect("read back"), Some(42));
         write_cursor(&path, 43).expect("overwrite");
         assert_eq!(read_cursor(&path).expect("read back"), Some(43));
-        assert!(!path.with_extension("json.tmp").exists(), "the temp file must not linger");
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "the temp file must not linger"
+        );
     }
 
     #[test]
@@ -1300,9 +1496,15 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("cursor.json");
         std::fs::write(&path, "not json").expect("write garbage");
-        assert!(read_cursor(&path).is_err(), "garbage must surface, not bootstrap");
+        assert!(
+            read_cursor(&path).is_err(),
+            "garbage must surface, not bootstrap"
+        );
         std::fs::write(&path, "{}").expect("write empty object");
-        assert!(read_cursor(&path).is_err(), "a missing `snapshot` key must surface");
+        assert!(
+            read_cursor(&path).is_err(),
+            "a missing `snapshot` key must surface"
+        );
     }
 
     #[test]
@@ -1311,7 +1513,10 @@ mod tests {
         // per-user parquet log must add a `user=` segment under the host prefix or
         // they clobber each other in the full-file-overwrite sink.
         let base = archive_prefix("corpus", "hil-compute-1");
-        assert_eq!(user_prefix(&base, "alice"), "corpus/host=hil-compute-1/user=alice");
+        assert_eq!(
+            user_prefix(&base, "alice"),
+            "corpus/host=hil-compute-1/user=alice"
+        );
         assert_ne!(
             user_prefix(&base, "alice"),
             user_prefix(&base, "bob"),
@@ -1339,8 +1544,12 @@ mod tests {
 
     /// The store's current external ids, for asserting view state.
     async fn stored_ids(store: &MemoryStore) -> Vec<String> {
-        let mut ids: Vec<String> =
-            store.list_external_ids("s", None).await.expect("list").into_iter().collect();
+        let mut ids: Vec<String> = store
+            .list_external_ids("s", None)
+            .await
+            .expect("list")
+            .into_iter()
+            .collect();
         ids.sort();
         ids
     }
@@ -1357,29 +1566,43 @@ mod tests {
         let catalog = iceberg::memory::MemoryCatalogBuilder::default()
             .load(
                 "lake",
-                HashMap::from([(iceberg::memory::MEMORY_CATALOG_WAREHOUSE.to_owned(), warehouse)]),
+                HashMap::from([(
+                    iceberg::memory::MEMORY_CATALOG_WAREHOUSE.to_owned(),
+                    warehouse,
+                )]),
             )
             .await
             .expect("memory catalog");
         let catalog: Arc<dyn lake_iceberg::Catalog> = Arc::new(catalog);
-        let ident = lake_iceberg::ensure_table(catalog.as_ref()).await.expect("ensure table");
+        let ident = lake_iceberg::ensure_table(catalog.as_ref())
+            .await
+            .expect("ensure table");
         let sink = IcebergReconciler::new(Arc::clone(&catalog), ident.clone(), "host-1");
         let source = Source::new("test");
         let store = MemoryStore::new();
-        let mixedbread =
-            MixedbreadReconciler { store: &store, name: "s", index_timeout: Duration::from_secs(1) };
+        let mixedbread = MixedbreadReconciler {
+            store: &store,
+            name: "s",
+            index_timeout: Duration::from_secs(1),
+        };
         let cursor = dir.path().join("cursor.json");
 
         // Bootstrap (absent cursor file): a full rebuild lands both documents.
-        sink.reconcile(&source, &[lake_doc("a"), lake_doc("b")]).await.expect("seed");
+        sink.reconcile(&source, &[lake_doc("a"), lake_doc("b")])
+            .await
+            .expect("seed");
         let counts = run_cursor_consume(catalog.as_ref(), &ident, &cursor, mixedbread).await;
         assert_eq!(counts.failures, 0);
         assert_eq!(stored_ids(&store).await, ["a", "b"]);
-        read_cursor(&cursor).expect("cursor readable").expect("cursor written");
+        read_cursor(&cursor)
+            .expect("cursor readable")
+            .expect("cursor written");
 
         // While no consumer watches, `a` is tombstoned — then the cursor
         // expires (an unknown snapshot id is exactly what expiry surfaces as).
-        sink.reconcile(&source, &[lake_doc("b")]).await.expect("tombstone a");
+        sink.reconcile(&source, &[lake_doc("b")])
+            .await
+            .expect("tombstone a");
         write_cursor(&cursor, 0).expect("plant an expired cursor");
         let counts = run_cursor_consume(catalog.as_ref(), &ident, &cursor, mixedbread).await;
         assert_eq!(counts.failures, 0);
@@ -1388,13 +1611,21 @@ mod tests {
             ["b"],
             "the rebuild must GC the record tombstoned while the cursor was gone"
         );
-        let rebuilt = read_cursor(&cursor).expect("cursor readable").expect("cursor rewritten");
+        let rebuilt = read_cursor(&cursor)
+            .expect("cursor readable")
+            .expect("cursor rewritten");
         assert_ne!(rebuilt, 0, "the rebuild must store the snapshot it read");
 
         // Steady state after the rebuild: the next change arrives as a delta.
-        sink.reconcile(&source, &[lake_doc("c")]).await.expect("replace b with c");
+        sink.reconcile(&source, &[lake_doc("c")])
+            .await
+            .expect("replace b with c");
         let counts = run_cursor_consume(catalog.as_ref(), &ident, &cursor, mixedbread).await;
         assert_eq!(counts.failures, 0);
-        assert_eq!(stored_ids(&store).await, ["c"], "the delta applies b's tombstone and c");
+        assert_eq!(
+            stored_ids(&store).await,
+            ["c"],
+            "the delta applies b's tombstone and c"
+        );
     }
 }

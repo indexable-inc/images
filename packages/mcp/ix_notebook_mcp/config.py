@@ -33,7 +33,16 @@ class Config:
     # Path to the SQLite execution store the kernel writes and the dashboard reads.
     store_path: Path | None = None
 
-    # "stdio" (the default; what an MCP client launches) or "http".
+    # Session mode (`serve --session FILE` / `notebook FILE`): the store IS the
+    # session file -- kept across restarts instead of wiped, checkpointed by the
+    # kernel runtime, restored on reopen. None for an ephemeral server.
+    session_path: Path | None = None
+    # True when the session file already existed at launch, so the server must
+    # restore (load the checkpoint, replay the gap) before running new cells.
+    session_resume: bool = False
+
+    # "stdio" (the default; what an MCP client launches), "http", or "none"
+    # (the standalone notebook engine: kernel + dashboard, no MCP transport).
     transport: str = "stdio"
     mcp_http_host: str = "127.0.0.1"
     mcp_http_port: int = 8000

@@ -22,10 +22,10 @@
 use std::path::{Path, PathBuf};
 
 use chrono::DateTime;
-use source_meta::{Document, Source, SourceAdapter, keys};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use snafu::{ResultExt as _, Snafu};
+use source_meta::{Document, Source, SourceAdapter, keys};
 
 /// All failures surfaced by this crate.
 #[derive(Debug, Snafu)]
@@ -335,7 +335,10 @@ impl Issue {
         let mut meta = Map::new();
 
         // Common envelope.
-        meta.insert(keys::SOURCE.to_owned(), json!(Source::new("linear").as_str()));
+        meta.insert(
+            keys::SOURCE.to_owned(),
+            json!(Source::new("linear").as_str()),
+        );
         meta.insert("external_id".to_owned(), json!(external_id));
         meta.insert(keys::CONTENT_HASH.to_owned(), json!(content_hash));
         meta.insert(keys::TITLE.to_owned(), json!(title));

@@ -82,7 +82,7 @@ defmodule SymphonyElixir.Config do
                               "none" leaves the run to fail against the
                               missing placement with no fallback.
 
-  Claude models (any skill whose codex_model names a Claude model, e.g.
+  Claude models (any node whose model is a Claude model, e.g.
   claude-opus-4-8, runs through Claude Code instead of codex):
 
       ANTHROPIC_API_KEY       Anthropic API key billed for Claude Code turns.

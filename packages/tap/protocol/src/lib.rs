@@ -221,7 +221,10 @@ mod tests {
         // Safe in a single-threaded unit test; documents the test-isolation hook.
         unsafe { std::env::set_var(RUNTIME_DIR_ENV, "/tmp/tap-test-xyz") };
         assert_eq!(runtime_dir(), PathBuf::from("/tmp/tap-test-xyz"));
-        assert_eq!(socket_path("s1"), PathBuf::from("/tmp/tap-test-xyz/s1.sock"));
+        assert_eq!(
+            socket_path("s1"),
+            PathBuf::from("/tmp/tap-test-xyz/s1.sock")
+        );
         unsafe { std::env::remove_var(RUNTIME_DIR_ENV) };
     }
 }

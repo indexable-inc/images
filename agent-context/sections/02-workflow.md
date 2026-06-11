@@ -6,26 +6,48 @@ description: "Branch, worktree, and PR workflow: starting work, opening a PR to 
 
 ## Workflow
 
-Pull `main` before starting. Always make changes on a short-lived branch in a
-separate worktree by default, including small docs edits. Keep the shared `main`
-checkout as the clean landing zone for pulls, branch bases, and final syncs.
+Pull `main` before starting. Always make changes in a separate worktree by
+default, including small docs edits. Keep the shared `main` checkout as the clean
+landing zone for pulls, branch bases, and final syncs.
 
-Create the branch and worktree from the updated `main` checkout. Use the
-`codex/` branch prefix unless the user asks for a different name:
+The default path to land a change is: verify locally, then push directly to
+`main`. Run the repo gates on your change first (`nix run .#lint`, plus
+`cargo check` / `cargo nextest run` on the affected packages, or a targeted `nix
+build .#<pkg>` when the change touches a packaged artifact), then push. Do not
+wait on CI to land a change. CI is advisory: a single shared runner node serves
+the whole team, so routing routine validation through it overloads the node and
+slows everyone down. Local verification is the gate that decides whether a change
+is safe to push.
+
+Push with a rebase loop, never force-push: if the push is rejected because `main`
+moved, `git pull --rebase origin main` and push again.
+
+Open a PR only when you want human or AI review on a change, not as the default
+path to land. When you do, create the branch and worktree from the updated `main`
+checkout. Use the `codex/` branch prefix unless the user asks for a different
+name. Place the worktree as a sibling of the repo root (the `../` prefix) so it
+stays outside the flake source tree and does not slow down Nix source-copy or
+lint walks:
 
 ```sh
 git worktree add ../<short-name>-<branch> -b codex/<branch> main
 ```
 
+Never place worktrees under the repo root (e.g. `.claude/worktrees/` or
+`.worktrees/`). A nested checkout adds tens of thousands of files to the flake
+source set, which makes every `nix run .#...` re-ingest slow.
+
 If the shared checkout already has unrelated edits, name the paths and the one
 line summary of what they appear to be doing before creating the new worktree.
 Avoid stashing operator work out of the way.
 
-After local checks pass, push the branch and open a PR targeting `main`. Enable
-auto-merge as soon as required checks and review state allow it. Watch required
-checks with `gh pr checks --watch --fail-fast`; if a check fails, inspect the
-run logs, fix the branch, push again, and restart the watcher. Keep that loop
-going until GitHub reports the PR merged or a human explicitly asks you to stop.
+When you open a PR (the optional review path, not the default): after local
+checks pass, push the branch and open a PR targeting `main`. CI checks on the PR
+are signal, not a gate you are required to babysit, since local verification is
+what decides a change is safe. Watch required checks with `gh pr checks --watch
+--fail-fast` when you care about the result; if a check fails, inspect the run
+logs, fix the branch, and push again. Do not block landing on a shared-runner CI
+queue once local gates pass.
 
 `gh pr checks` may show stale failed runs next to newer passing reruns for the
 same check name. When the output is mixed, inspect

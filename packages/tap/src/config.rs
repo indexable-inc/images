@@ -115,9 +115,9 @@ impl Keybind {
         if s.eq_ignore_ascii_case("ctrl-\\") {
             return Ok(Self::Ctrl('\\'));
         }
-        let (modifier, key) = s
-            .split_once('-')
-            .with_context(|| format!("invalid keybind '{s}'; expected 'Alt-<key>' or 'Ctrl-<key>'"))?;
+        let (modifier, key) = s.split_once('-').with_context(|| {
+            format!("invalid keybind '{s}'; expected 'Alt-<key>' or 'Ctrl-<key>'")
+        })?;
         let key = key
             .chars()
             .next()

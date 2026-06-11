@@ -1,12 +1,15 @@
 id: no-path-flake-ref
 language: nix
 severity: error
-message: "`path:` flake refs copy the entire working tree byte-for-byte. Use `.#...`, `git+file:///abs/path`, or a proper flake input."
+message: "Whole-tree `path:` flake refs copy the working tree byte-for-byte. Use `.#...`, `git+file:///abs/path`, a relative `path:./<subtree>` input, or a proper flake input."
 note: |
   WHY: `path:/abs/path` and `path:.` tell Nix to copy the entire tree — including
   gitignored files like target/ (hundreds of GB), sockets, FIFOs, and other
   non-regular files. This either hangs the fetch or fails with "unsupported type"
   errors. Dirty trees also disable the eval cache.
+  EXCEPTION: relative `path:./<subtree>` inputs in flake.nix are fine: they
+  resolve as lock nodes against the parent tree with no separate fetch, and
+  scope a consumer's source identity to just that subtree (ENG-2362, #1018).
   NIXPKGS: Not an anti-pattern there (nixpkgs doesn't write flake refs), but this is
   an IX-specific trap: our target/ directory is ~400 GB, and sockets appear in it
   during development.
@@ -16,4 +19,4 @@ note: |
     - flake inputs in `flake.nix`
 rule:
   pattern: '"$X"'
-  regex: '^"path:(/|\.)'
+  regex: '^"path:(/|\.[^/])'

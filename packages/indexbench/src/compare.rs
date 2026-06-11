@@ -130,7 +130,9 @@ impl Comparison {
     /// this is true — used by the perf job, where timing and RSS are in scope.
     #[must_use]
     pub fn has_regression(&self) -> bool {
-        self.metrics.iter().any(|m| m.verdict == Verdict::Regression)
+        self.metrics
+            .iter()
+            .any(|m| m.verdict == Verdict::Regression)
     }
 
     /// Whether any *deterministic* metric regressed. This is the reproducible
@@ -204,7 +206,11 @@ pub fn first_run(run: &Run) -> Comparison {
 }
 
 /// Classify one candidate metric against its (optional) baseline counterpart.
-fn compare_metric(baseline: Option<&Metric>, candidate: &Metric, config: CompareConfig) -> MetricComparison {
+fn compare_metric(
+    baseline: Option<&Metric>,
+    candidate: &Metric,
+    config: CompareConfig,
+) -> MetricComparison {
     let Some(baseline) = baseline else {
         return MetricComparison {
             name: candidate.name.clone(),
@@ -218,7 +224,8 @@ fn compare_metric(baseline: Option<&Metric>, candidate: &Metric, config: Compare
         };
     };
 
-    let relative_change = relative_change(baseline.value, candidate.value, candidate.lower_is_better);
+    let relative_change =
+        relative_change(baseline.value, candidate.value, candidate.lower_is_better);
     let regime = regime_for(Some(baseline), candidate);
 
     let (p_value, verdict) = match regime {
@@ -494,19 +501,37 @@ mod tests {
     fn distributional_clear_slowdown_is_a_regression() {
         // A baseline tightly around 100 vs a candidate tightly around 130: a
         // large, significant, beyond-threshold slowdown.
-        let base = Metric::distribution("wall_clock", "ns", true, (0..12).map(|i| 100.0 + f64::from(i % 3)).collect());
-        let cand = Metric::distribution("wall_clock", "ns", true, (0..12).map(|i| 130.0 + f64::from(i % 3)).collect());
+        let base = Metric::distribution(
+            "wall_clock",
+            "ns",
+            true,
+            (0..12).map(|i| 100.0 + f64::from(i % 3)).collect(),
+        );
+        let cand = Metric::distribution(
+            "wall_clock",
+            "ns",
+            true,
+            (0..12).map(|i| 130.0 + f64::from(i % 3)).collect(),
+        );
         let result = compare(&run_with(base), &run_with(cand), CompareConfig::default());
         let m = &result.metrics[0];
         assert_eq!(m.regime, Regime::Distributional);
-        assert_eq!(m.verdict, Verdict::Regression, "p={:?} rc={:?}", m.p_value, m.relative_change);
+        assert_eq!(
+            m.verdict,
+            Verdict::Regression,
+            "p={:?} rc={:?}",
+            m.p_value,
+            m.relative_change
+        );
     }
 
     #[test]
     fn distributional_overlapping_noise_is_unchanged() {
         // Two samples drawn from the same spread: large overlap, no significant
         // difference, so the gate must not fire.
-        let pattern = [100.0, 102.0, 98.0, 101.0, 99.0, 103.0, 97.0, 100.0, 101.0, 99.0, 102.0, 98.0];
+        let pattern = [
+            100.0, 102.0, 98.0, 101.0, 99.0, 103.0, 97.0, 100.0, 101.0, 99.0, 102.0, 98.0,
+        ];
         let base = Metric::distribution("wall_clock", "ns", true, pattern.to_vec());
         let mut shifted = pattern;
         shifted.reverse();
@@ -520,20 +545,53 @@ mod tests {
     fn distributional_tiny_but_significant_change_is_below_threshold() {
         // A perfectly separated but ~1% shift: Mann-Whitney sees significance,
         // yet the 2% effect-size threshold keeps it from being a regression.
-        let base = Metric::distribution("wall_clock", "ns", true, (0..12).map(|i| f64::from(i).mul_add(0.01, 1000.0)).collect());
-        let cand = Metric::distribution("wall_clock", "ns", true, (0..12).map(|i| f64::from(i).mul_add(0.01, 1009.0)).collect());
+        let base = Metric::distribution(
+            "wall_clock",
+            "ns",
+            true,
+            (0..12)
+                .map(|i| f64::from(i).mul_add(0.01, 1000.0))
+                .collect(),
+        );
+        let cand = Metric::distribution(
+            "wall_clock",
+            "ns",
+            true,
+            (0..12)
+                .map(|i| f64::from(i).mul_add(0.01, 1009.0))
+                .collect(),
+        );
         let result = compare(&run_with(base), &run_with(cand), CompareConfig::default());
         let m = &result.metrics[0];
-        assert!(m.p_value.is_some_and(|p| p < DEFAULT_ALPHA), "expected significance, p={:?}", m.p_value);
-        assert!(m.relative_change.is_some_and(|rc| rc.abs() < DEFAULT_THRESHOLD), "expected sub-threshold, rc={:?}", m.relative_change);
+        assert!(
+            m.p_value.is_some_and(|p| p < DEFAULT_ALPHA),
+            "expected significance, p={:?}",
+            m.p_value
+        );
+        assert!(
+            m.relative_change
+                .is_some_and(|rc| rc.abs() < DEFAULT_THRESHOLD),
+            "expected sub-threshold, rc={:?}",
+            m.relative_change
+        );
         assert_eq!(m.verdict, Verdict::Unchanged);
     }
 
     #[test]
     fn higher_is_better_drop_is_a_regression() {
         // match_rate is higher-is-better; a drop must regress.
-        let base = Metric::distribution("match_rate", "ratio", false, (0..12).map(|i| 0.90 + f64::from(i % 2) * 0.001).collect());
-        let cand = Metric::distribution("match_rate", "ratio", false, (0..12).map(|i| 0.70 + f64::from(i % 2) * 0.001).collect());
+        let base = Metric::distribution(
+            "match_rate",
+            "ratio",
+            false,
+            (0..12).map(|i| 0.90 + f64::from(i % 2) * 0.001).collect(),
+        );
+        let cand = Metric::distribution(
+            "match_rate",
+            "ratio",
+            false,
+            (0..12).map(|i| 0.70 + f64::from(i % 2) * 0.001).collect(),
+        );
         let result = compare(&run_with(base), &run_with(cand), CompareConfig::default());
         assert_eq!(result.metrics[0].verdict, Verdict::Regression);
     }
@@ -563,7 +621,10 @@ mod tests {
             ..base.clone()
         };
         let result = compare(&base, &cand, CompareConfig::default());
-        assert!(result.has_regression(), "the 2x timing slowdown is a perf regression");
+        assert!(
+            result.has_regression(),
+            "the 2x timing slowdown is a perf regression"
+        );
         assert!(
             !result.has_deterministic_regression(),
             "the unchanged alloc count means no reproducible regression"
@@ -586,7 +647,10 @@ mod tests {
             ..base.clone()
         };
         let result = compare(&base, &cand, CompareConfig::default());
-        assert!(result.has_deterministic_regression(), "a worsened alloc count is a reproducible regression");
+        assert!(
+            result.has_deterministic_regression(),
+            "a worsened alloc count is a reproducible regression"
+        );
     }
 
     #[test]
@@ -607,11 +671,32 @@ mod tests {
             timestamp_unix: 0,
         };
         let comparison = first_run(&run);
-        assert_eq!(comparison.metrics.len(), 2, "every measured metric surfaces");
-        assert!(comparison.metrics.iter().all(|m| m.verdict == Verdict::NoBaseline));
-        assert!(comparison.metrics.iter().all(|m| m.baseline_value.is_none()));
-        let allocations = comparison.metrics.iter().find(|m| m.name == "allocations").expect("allocations present");
-        assert!((allocations.candidate_value - 42.0).abs() < 1e-9, "the measured value is preserved");
+        assert_eq!(
+            comparison.metrics.len(),
+            2,
+            "every measured metric surfaces"
+        );
+        assert!(
+            comparison
+                .metrics
+                .iter()
+                .all(|m| m.verdict == Verdict::NoBaseline)
+        );
+        assert!(
+            comparison
+                .metrics
+                .iter()
+                .all(|m| m.baseline_value.is_none())
+        );
+        let allocations = comparison
+            .metrics
+            .iter()
+            .find(|m| m.name == "allocations")
+            .expect("allocations present");
+        assert!(
+            (allocations.candidate_value - 42.0).abs() < 1e-9,
+            "the measured value is preserved"
+        );
         assert!(!comparison.has_regression(), "a first run never regresses");
     }
 
@@ -634,7 +719,10 @@ mod tests {
         let result = compare(&run_with(base), &run_with(cand), CompareConfig::default());
         assert_eq!(result.metrics[0].regime, Regime::Thresholded);
         assert_eq!(result.metrics[0].verdict, Verdict::Regression);
-        assert!(result.metrics[0].p_value.is_none(), "thresholded regime makes no significance claim");
+        assert!(
+            result.metrics[0].p_value.is_none(),
+            "thresholded regime makes no significance claim"
+        );
     }
 
     #[test]
@@ -646,12 +734,24 @@ mod tests {
         let small = Metric::distribution("max_rss", "bytes", true, vec![1010.0; 10]);
         let big = Metric::distribution("max_rss", "bytes", true, vec![1100.0; 10]);
 
-        let unchanged = compare(&run_with(base.clone()), &run_with(small), CompareConfig::default());
+        let unchanged = compare(
+            &run_with(base.clone()),
+            &run_with(small),
+            CompareConfig::default(),
+        );
         assert_eq!(unchanged.metrics[0].regime, Regime::Thresholded);
-        assert_eq!(unchanged.metrics[0].verdict, Verdict::Unchanged, "1% RSS wobble is below the 2% threshold");
+        assert_eq!(
+            unchanged.metrics[0].verdict,
+            Verdict::Unchanged,
+            "1% RSS wobble is below the 2% threshold"
+        );
 
         let regressed = compare(&run_with(base), &run_with(big), CompareConfig::default());
-        assert_eq!(regressed.metrics[0].verdict, Verdict::Regression, "10% RSS growth clears the threshold");
+        assert_eq!(
+            regressed.metrics[0].verdict,
+            Verdict::Regression,
+            "10% RSS growth clears the threshold"
+        );
     }
 
     #[test]

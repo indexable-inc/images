@@ -1,5 +1,6 @@
 {
   config,
+  ix,
   lib,
   nodes,
   pkgs,
@@ -8,9 +9,14 @@
 let
   observability = {
     host = nodes.observability.config.ix.networking.eastWest.hostName;
-    otlpGrpcPort = nodes.observability.config.services.ix-observability.collector.grpcPort;
     clickhousePort = nodes.observability.config.services.ix-observability.clickhouse.nativePort;
     database = nodes.observability.config.services.ix-observability.clickhouse.database;
+  };
+  # The collector's OTLP/gRPC port is an upstream module option, so build the
+  # endpoint directly. Renders to "observability:<port>" in string context.
+  collector = ix.endpoint {
+    inherit (observability) host;
+    port = nodes.observability.config.services.ix-observability.collector.grpcPort;
   };
   logDir = "/var/log/ix-observability-demo";
   logPath = "${logDir}/app.log";
@@ -43,7 +49,7 @@ in
     stack.enable = false;
     agent = {
       enable = true;
-      endpoint = "${observability.host}:${toString observability.otlpGrpcPort}";
+      endpoint = "${collector}";
       filelog.paths = [ logPath ];
     };
     environment = "example";
@@ -77,12 +83,7 @@ in
   ix.healthChecks = {
     observability-demo = {
       description = "demo telemetry emitter ran";
-      command = [
-        (lib.getExe' config.systemd.package "systemctl")
-        "is-active"
-        "--quiet"
-        "ix-observability-demo.service"
-      ];
+      unit = "ix-observability-demo";
     };
 
     observability-ingested = {

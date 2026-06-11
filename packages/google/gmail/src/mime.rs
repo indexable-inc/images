@@ -20,9 +20,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD as BASE64_STD, URL_SAFE_NO_PAD};
 use uuid::Uuid;
 
+use crate::Result;
 use crate::error::UnsafeHeaderSnafu;
 use crate::model::{Attachment, OutgoingMessage};
-use crate::Result;
 
 /// Build a Gmail-ready raw payload (URL-safe base64, no padding) for
 /// `message`.
@@ -82,7 +82,10 @@ impl Layout {
                     html: false,
                     body: text,
                 },
-                (None, Some(html)) => Self::LeafText { html: true, body: html },
+                (None, Some(html)) => Self::LeafText {
+                    html: true,
+                    body: html,
+                },
                 // Empty body is allowed by the wire; default to an empty
                 // text/plain so the call still produces a valid message.
                 (None, None) => Self::LeafText {
@@ -98,7 +101,10 @@ impl Layout {
                 html: false,
                 body: text,
             },
-            (None, Some(html)) => PrimaryPart::LeafText { html: true, body: html },
+            (None, Some(html)) => PrimaryPart::LeafText {
+                html: true,
+                body: html,
+            },
             (None, None) => PrimaryPart::LeafText {
                 html: false,
                 body: String::new(),
@@ -289,10 +295,7 @@ fn write_address_list(out: &mut Vec<u8>, name: &'static str, list: &[String]) ->
 /// Reject header values that would let a caller smuggle additional headers
 /// into the message: bare CR/LF, NUL, or any other ASCII control character.
 fn check_safe(name: &'static str, value: &str) -> Result<()> {
-    if value
-        .bytes()
-        .any(|byte| byte < 0x20 || byte == 0x7f)
-    {
+    if value.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
         return UnsafeHeaderSnafu { header: name }.fail();
     }
     Ok(())
@@ -380,7 +383,10 @@ mod tests {
             ..OutgoingMessage::default()
         })
         .expect_err("rejects");
-        assert!(matches!(err, Error::UnsafeHeader { header: "Subject" }), "got {err:?}");
+        assert!(
+            matches!(err, Error::UnsafeHeader { header: "Subject" }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -392,7 +398,10 @@ mod tests {
             ..OutgoingMessage::default()
         })
         .expect_err("rejects");
-        assert!(matches!(err, Error::UnsafeHeader { header: "To" }), "got {err:?}");
+        assert!(
+            matches!(err, Error::UnsafeHeader { header: "To" }),
+            "got {err:?}"
+        );
     }
 
     #[test]

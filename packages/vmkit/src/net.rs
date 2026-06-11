@@ -49,10 +49,7 @@ mod macos {
     #[derive(Debug, Snafu)]
     pub enum Error {
         #[snafu(display("spawn gvproxy ({bin:?}): {source}"))]
-        Spawn {
-            bin: String,
-            source: std::io::Error,
-        },
+        Spawn { bin: String, source: std::io::Error },
         #[snafu(display(
             "gvproxy did not create its sockets within {}s (it may have exited; check its stderr)",
             timeout.as_secs()
@@ -175,13 +172,19 @@ mod macos {
                 len = body.len(),
             );
 
-            let mut stream = std::os::unix::net::UnixStream::connect(control)
-                .with_context(|_| ControlConnectSnafu {
-                    path: control.display().to_string(),
+            let mut stream =
+                std::os::unix::net::UnixStream::connect(control).with_context(|_| {
+                    ControlConnectSnafu {
+                        path: control.display().to_string(),
+                    }
                 })?;
-            stream.write_all(request.as_bytes()).context(ControlIoSnafu)?;
+            stream
+                .write_all(request.as_bytes())
+                .context(ControlIoSnafu)?;
             let mut response = String::new();
-            stream.read_to_string(&mut response).context(ControlIoSnafu)?;
+            stream
+                .read_to_string(&mut response)
+                .context(ControlIoSnafu)?;
 
             let ok = response
                 .lines()
@@ -193,7 +196,11 @@ mod macos {
                 Err(Error::ExposeRejected {
                     host: forward.host,
                     guest: forward.guest,
-                    response: response.lines().next().unwrap_or("<no response>").to_owned(),
+                    response: response
+                        .lines()
+                        .next()
+                        .unwrap_or("<no response>")
+                        .to_owned(),
                 })
             }
         }

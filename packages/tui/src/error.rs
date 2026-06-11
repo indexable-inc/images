@@ -90,9 +90,9 @@ impl From<Error> for pyo3::PyErr {
             | Error::ReadFromTui { .. }
             | Error::SignalTui { .. }
             | Error::ResizeTui { .. } => PyIOError::new_err(msg),
-            Error::ArrayConversion { .. }
-            | Error::Dashboard { .. }
-            | Error::VtEngine { .. } => PyRuntimeError::new_err(msg),
+            Error::ArrayConversion { .. } | Error::Dashboard { .. } | Error::VtEngine { .. } => {
+                PyRuntimeError::new_err(msg)
+            }
             #[cfg(feature = "publish")]
             Error::Publish { .. } => PyRuntimeError::new_err(msg),
         }

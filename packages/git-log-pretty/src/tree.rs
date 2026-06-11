@@ -81,7 +81,8 @@ fn collapse(node: &mut Node) {
         let Some(grandchild) = dir_node.children.into_values().next() else {
             continue;
         };
-        node.children.insert(format!("{dir_name}/{child_name}"), grandchild);
+        node.children
+            .insert(format!("{dir_name}/{child_name}"), grandchild);
     }
 }
 
@@ -215,21 +216,34 @@ mod tests {
     /// The strikethrough SGR prefix (`\x1b[9m`) the deleted style emits, used to
     /// assert styling without depending on the surrounding color parameters.
     fn strike_prefix() -> String {
-        palette::fg(Color::Rgb(GRAY)).strikethrough().render().to_string()
+        palette::fg(Color::Rgb(GRAY))
+            .strikethrough()
+            .render()
+            .to_string()
     }
 
     #[test]
     fn deleted_file_is_struck_through_but_keeps_its_name() {
         let styled = render(&[deleted("src/gone.rs")], Theme::Dark);
         // The path still reads plainly once SGR is stripped...
-        assert!(plain(&styled).contains("gone.rs"), "got: {}", plain(&styled));
+        assert!(
+            plain(&styled).contains("gone.rs"),
+            "got: {}",
+            plain(&styled)
+        );
         // ...but the styled output carries the strikethrough effect.
-        assert!(styled.contains(&strike_prefix()), "deleted file not struck through");
+        assert!(
+            styled.contains(&strike_prefix()),
+            "deleted file not struck through"
+        );
     }
 
     #[test]
     fn surviving_file_is_not_struck_through() {
         let styled = render(&[modified("src/stays.rs")], Theme::Dark);
-        assert!(!styled.contains(&strike_prefix()), "modified file should not be struck through");
+        assert!(
+            !styled.contains(&strike_prefix()),
+            "modified file should not be struck through"
+        );
     }
 }

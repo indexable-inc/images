@@ -41,7 +41,14 @@ pub fn run(
                         .and_then(|bytes| gpu.register_image_scaled(&bytes, scene::ICON_MAX_PX))
                 })
                 .collect();
-            scene::build_all(gpu, &tex, &icons, scale, width, now_unix, bars, None)
+            // Same for each bar's theme, through the same cache the live
+            // overlay uses, so a themed bar snapshots exactly as it renders.
+            let mut theme_cache = crate::theme::ThemeCache::new();
+            let themes: Vec<Option<crate::theme::ThemeSprites>> = bars
+                .iter()
+                .map(|b| theme_cache.resolve(gpu, &b.theme))
+                .collect();
+            scene::build_all(gpu, &tex, &icons, &themes, scale, width, now_unix, bars, None)
         },
         out,
     )

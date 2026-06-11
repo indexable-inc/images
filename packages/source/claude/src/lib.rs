@@ -27,12 +27,12 @@ mod transcript;
 
 use std::path::{Path, PathBuf};
 
-use source_meta::{Document, Source, SourceAdapter};
 use snafu::ResultExt as _;
+use source_meta::{Document, Source, SourceAdapter};
 
 pub use crate::error::Error;
-pub use crate::record::Message;
 use crate::error::{HostNameSnafu, ReadDirSnafu, Result};
+pub use crate::record::Message;
 use crate::record::MessageOrigin;
 
 /// The `source` tag every Claude transcript document carries.
@@ -117,7 +117,10 @@ impl SourceAdapter for ClaudeHistoryExport {
     fn documents(&self) -> impl Iterator<Item = Result<Document, Error>> + Send {
         // Clone into an owned iterator so the result is `'static + Send`,
         // independent of `&self` (mirrors the slack/linear adapters).
-        self.messages.clone().into_iter().map(Message::into_document)
+        self.messages
+            .clone()
+            .into_iter()
+            .map(Message::into_document)
     }
 }
 
@@ -147,11 +150,19 @@ fn collect_transcripts(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error).context(ReadDirSnafu { path: dir.to_path_buf() }),
+        Err(error) => {
+            return Err(error).context(ReadDirSnafu {
+                path: dir.to_path_buf(),
+            });
+        }
     };
     for entry in entries {
-        let entry = entry.context(ReadDirSnafu { path: dir.to_path_buf() })?;
-        let file_type = entry.file_type().context(ReadDirSnafu { path: dir.to_path_buf() })?;
+        let entry = entry.context(ReadDirSnafu {
+            path: dir.to_path_buf(),
+        })?;
+        let file_type = entry.file_type().context(ReadDirSnafu {
+            path: dir.to_path_buf(),
+        })?;
         if file_type.is_symlink() {
             continue;
         }
@@ -203,7 +214,10 @@ fn os_user() -> String {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::expect_used, reason = "tests assert observable filesystem outcomes")]
+    #![expect(
+        clippy::expect_used,
+        reason = "tests assert observable filesystem outcomes"
+    )]
 
     use std::path::{Path, PathBuf};
 
@@ -232,7 +246,11 @@ mod tests {
 
         let found = collect(temp.path());
         assert_eq!(found.len(), 2, "only .jsonl files, collected recursively");
-        assert!(found.iter().all(|path| path.extension().is_some_and(|ext| ext == "jsonl")));
+        assert!(
+            found
+                .iter()
+                .all(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        );
     }
 
     #[test]
@@ -245,8 +263,15 @@ mod tests {
         std::fs::write(temp.path().join("real.jsonl"), b"{}").expect("write real");
 
         let found = collect(temp.path());
-        assert_eq!(found.len(), 1, "the symlinked transcript must not be collected");
-        assert_eq!(found[0].file_name().and_then(|name| name.to_str()), Some("real.jsonl"));
+        assert_eq!(
+            found.len(),
+            1,
+            "the symlinked transcript must not be collected"
+        );
+        assert_eq!(
+            found[0].file_name().and_then(|name| name.to_str()),
+            Some("real.jsonl")
+        );
     }
 
     #[test]
@@ -264,8 +289,15 @@ mod tests {
         std::fs::write(root.join("real.jsonl"), b"{}").expect("write real");
 
         let found = collect(&root);
-        assert_eq!(found.len(), 1, "files under a symlinked subdir must not be collected");
-        assert_eq!(found[0].file_name().and_then(|name| name.to_str()), Some("real.jsonl"));
+        assert_eq!(
+            found.len(),
+            1,
+            "files under a symlinked subdir must not be collected"
+        );
+        assert_eq!(
+            found[0].file_name().and_then(|name| name.to_str()),
+            Some("real.jsonl")
+        );
     }
 
     #[test]

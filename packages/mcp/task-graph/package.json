@@ -1,0 +1,27 @@
+{
+  "name": "ix-task-graph",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "d3-force": "^3.0.0",
+    "force-graph": "^1.51.4",
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@tsconfig/svelte": "^5.0.4",
+    "@types/d3-force": "^3.0.10",
+    "@types/sql.js": "^1.4.9",
+    "svelte": "^5.55.7",
+    "svelte-check": "^4.3.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7"
+  }
+}

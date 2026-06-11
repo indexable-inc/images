@@ -1622,7 +1622,7 @@ impl<W: Write> HashingWriter<W> {
     }
 
     fn finalize(self) -> HashedBytes {
-        let checksum = format!("{:x}", self.hasher.finalize());
+        let checksum = hex::encode(self.hasher.finalize());
         HashedBytes {
             size: self.size,
             checksum,
@@ -1644,7 +1644,7 @@ impl<W: Write> Write for HashingWriter<W> {
 }
 
 fn sha256_bytes(data: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(data))
+    hex::encode(Sha256::digest(data))
 }
 
 #[cfg(test)]

@@ -64,40 +64,18 @@ let
   # say-detached body via the @SAY_CMD@ placeholder.
   sayCommand = if isDarwin then "/usr/bin/say" else cfg.sound.linuxSayCommand;
 
-  # Checked replacement for the lint-banned writeShellApplication: writeTextFile
-  # gives us a real bash script, runtimeInputs are prepended to PATH like
-  # writeShellApplication does, and `bash -n` + shellcheck run in the build so a
-  # syntax error or a shellcheck-class bug fails the derivation instead of
-  # surfacing at runtime. The script body assumes `set -euo pipefail` and the
-  # runtimeInputs on PATH, exactly as writeShellApplication would supply. Same
-  # escape hatch as lib/darwin/apple-sdk-toolchain.nix's `mkScript`.
-  mkBashApp =
-    {
-      name,
-      text,
-      runtimeInputs ? [ ],
-    }:
-    pkgs.writeTextFile {
-      inherit name;
-      executable = true;
-      destination = "/bin/${name}";
-      text = ''
-        #!${pkgs.runtimeShell}
-        set -euo pipefail
-        export PATH=${lib.makeBinPath runtimeInputs}''${PATH:+:$PATH}
-        ${text}
-      '';
-      checkPhase = ''
-        ${lib.getExe' pkgs.bash "bash"} -n "$out/bin/${name}"
-        ${lib.getExe pkgs.shellcheck} --shell=bash --severity=warning "$out/bin/${name}"
-      '';
-    };
+  # The repo's checked-bash writer (lib/util/writers.nix): these watchers lean
+  # on POSIX process control (the perl setsid/flock detach idioms) that is
+  # native bash territory, so they use the shared escape hatch instead of
+  # Nushell. The script body gets `set -euo pipefail` and runtimeInputs on
+  # PATH, and `bash -n` + shellcheck run in the build.
+  inherit (import ../../lib/util/writers.nix { inherit lib; }) writeBashApplication;
 
   # Shared announcement helper: plays an optional Minecraft sound then speaks
   # text, detached into its own session (POSIX setsid via perl) so a switch
   # reloading the calling agent never clips an in-flight speech. The @SAY_CMD@
   # placeholder is baked to the per-OS speech command at build time.
-  sayDetached = mkBashApp {
+  sayDetached = writeBashApplication pkgs {
     name = "say-detached";
     runtimeInputs = [ indexPkgs.minecraft-sound ];
     text = builtins.replaceStrings [ "@SAY_CMD@" ] [ sayCommand ] (
@@ -108,7 +86,7 @@ let
   # The ix.dev downtime watcher itself. bossbar raises/clears the per-service
   # outage bar; say-detached carries the growl + spoken summary; claude-code
   # writes the one-sentence root cause; coreutils provides `timeout`/`date`.
-  ixDowntime = mkBashApp {
+  ixDowntime = writeBashApplication pkgs {
     name = "ix-downtime";
     runtimeInputs = [
       pkgs.curl
@@ -131,7 +109,7 @@ let
   # so it needs no say-detached. The Linear API key is read at runtime from the
   # login Keychain (service `pr-watch-linear`); see the script header.
   # CI_TRIAGE_DRY_RUN makes it non-destructive for testing.
-  ciTriage = mkBashApp {
+  ciTriage = writeBashApplication pkgs {
     name = "ci-triage";
     runtimeInputs = [
       pkgs.gh
@@ -148,7 +126,7 @@ let
   # ci-triage is the detached stage-2 deep dive; coreutils provides
   # `timeout`/`date`; perl supplies the intrinsic flock guard and the setsid
   # detach. The @PLACEHOLDERS@ are baked from the options.
-  prWatch = mkBashApp {
+  prWatch = writeBashApplication pkgs {
     name = "pr-watch";
     runtimeInputs = [
       pkgs.gh

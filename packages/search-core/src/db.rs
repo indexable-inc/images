@@ -107,11 +107,16 @@ impl Db {
             .query_map([root.as_ref()], |row| {
                 let rel_path: String = row.get(0)?;
                 let hash: String = row.get(1)?;
-                // Read the INTEGER columns straight into `u64`: rusqlite errors
-                // (rather than silently clamping) if a stored value is negative,
-                // so DB corruption surfaces instead of being zeroed.
-                let mtime_ms: u64 = row.get(2)?;
-                let size: u64 = row.get(3)?;
+                // SQLite stores these as signed INTEGER; rusqlite 0.40 dropped
+                // its `u64` column readers, so read `i64` and convert. A negative
+                // value is impossible for an mtime/size, so reject it (surfacing
+                // DB corruption) instead of wrapping it into a huge `u64`.
+                let mtime_raw: i64 = row.get(2)?;
+                let size_raw: i64 = row.get(3)?;
+                let mtime_ms = u64::try_from(mtime_raw)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, mtime_raw))?;
+                let size = u64::try_from(size_raw)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(3, size_raw))?;
                 Ok(FileEntry {
                     rel_path,
                     hash: ContentHash::from_raw(hash),
@@ -148,15 +153,21 @@ impl Db {
                 )
                 .context(DbSnafu)?;
             for entry in &manifest.entries {
-                // Bind the `u64` fields directly: rusqlite's `ToSql` errors if a
-                // value exceeds `i64::MAX` rather than silently saturating, so an
-                // impossible mtime/size fails the write instead of corrupting it.
+                // SQLite columns are signed INTEGER and rusqlite 0.40 dropped its
+                // `u64` binders, so convert. An mtime/size past `i64::MAX` cannot
+                // occur in practice; fail the write rather than wrap it negative.
+                let mtime_ms = i64::try_from(entry.mtime_ms)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+                    .context(DbSnafu)?;
+                let size = i64::try_from(entry.size)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+                    .context(DbSnafu)?;
                 stmt.execute(params![
                     root.as_ref(),
                     entry.rel_path,
                     entry.hash.as_str(),
-                    entry.mtime_ms,
-                    entry.size,
+                    mtime_ms,
+                    size,
                 ])
                 .context(DbSnafu)?;
             }

@@ -32,7 +32,8 @@ which sets IX_DASHBOARD_SITE_HTML to the Vite output.</p></body></html>";
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-env-changed={SITE_HTML_ENV}");
 
-    let out = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR not set")?).join("dashboard.html");
+    let out =
+        PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR not set")?).join("dashboard.html");
 
     match env::var_os(SITE_HTML_ENV) {
         Some(path) if !path.is_empty() => {

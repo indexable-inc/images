@@ -236,19 +236,11 @@ let
     registry edits.
   */
   exampleFleetsFor =
-    {
-      hostSystem,
-      # Prepend this to every example node name. The health-checks runner
-      # uses "health-check-" so its lifecycle scripts cannot collide with
-      # real production VMs that share the natural names (`nginx`,
-      # `factions`, ...). Default empty so the regular
-      # `packages.<example>-*` wrappers see no change.
-      nodePrefix ? "",
-    }:
+    { hostSystem }:
     let
       indexShim = {
         lib = ixReturn // {
-          mkFleet = spec: (mkFleetFor hostSystem) (spec // { inherit nodePrefix; });
+          mkFleet = mkFleetFor hostSystem;
         };
       };
 

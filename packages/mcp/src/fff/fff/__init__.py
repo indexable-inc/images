@@ -69,6 +69,8 @@ __all__ = [
     "find",
     "finder",
     "grep",
+    "tree",
+    "atree",
     "map",
     "amap",
     "CodeMap",
@@ -82,7 +84,7 @@ __version__ = "0.9.2"
 _OPTIONS_VERSION = 1
 
 # fff_live_grep mode byte: 0 plain (SIMD literal), 1 regex, 2 fuzzy.
-_GREP_MODES = {"plain": 0, "text": 0, "regex": 1, "fuzzy": 2}
+_GREP_MODES = {"plain": 0, "literal": 0, "text": 0, "regex": 1, "fuzzy": 2}
 
 
 class FffError(RuntimeError):
@@ -394,6 +396,7 @@ class SearchResult:
                     "path": h.path,
                     "name": h.name,
                     "size": h.size,
+                    "modified": h.modified,
                     "frecency": h.frecency,
                     "git": h.git_status,
                     "binary": h.is_binary,
@@ -404,11 +407,12 @@ class SearchResult:
                 "path": pl.Utf8,
                 "name": pl.Utf8,
                 "size": pl.Int64,
+                "modified": pl.Int64,
                 "frecency": pl.Int64,
                 "git": pl.Utf8,
                 "binary": pl.Boolean,
             },
-        )
+        ).with_columns(pl.from_epoch("modified", time_unit="s"))
 
     def _ix_to_frame_(self):
         """Kernel table protocol: render as this polars frame for both the human
@@ -737,7 +741,7 @@ class FileFinder:
         self,
         *,
         query: str,
-        mode: str,
+        mode: str = "plain",
         limit: int = 50,
         max_matches_per_file: int = 0,
         smart_case: bool = True,
@@ -750,12 +754,15 @@ class FileFinder:
     ) -> GrepResult:
         """Content search across indexed files.
 
-        ``mode`` is required (no default): ``"plain"`` (fast SIMD literal),
-        ``"regex"``, or ``"fuzzy"``.
+        ``mode`` defaults to ``"plain"`` (fast SIMD literal; aliases
+        ``"literal"`` and ``"text"``); pass ``"regex"`` or ``"fuzzy"`` when
+        needed.
         """
         self._check_open()
         if mode not in _GREP_MODES:
-            raise ValueError(f"unknown grep mode {mode!r}; use 'plain', 'regex', or 'fuzzy'")
+            raise ValueError(
+                f"unknown grep mode {mode!r}; use 'plain' (aliases 'literal'/'text'), 'regex', or 'fuzzy'"
+            )
         mode_byte = _GREP_MODES[mode]
         _validate_grep_args(
             limit,
@@ -1017,8 +1024,8 @@ def _isolated_file_finder(abspath: str, tmp: str, *, content_indexing: bool) -> 
     return ff
 
 
-def find(*, query: str, path, limit: int = 100) -> SearchResult:
-    """Fuzzy file search over `path`, reusing a cached watched index.
+def find(query: str, path=".", *, limit: int = 100) -> SearchResult:
+    """Fuzzy file search over `path=` (root directory or file), reusing a cached watched index.
 
     `path` may be a directory (searched whole) or a single file (searched on its
     own, in an isolated one-file index so even a dotfile or a file directly under
@@ -1037,16 +1044,71 @@ def find(*, query: str, path, limit: int = 100) -> SearchResult:
     return SearchResult(hits=hits, total_matched=len(hits), total_files=len(hits))
 
 
-def grep(*, query: str | list[str], path, mode: str, limit: int = 50) -> GrepResult:
-    """Content grep over `path`, reusing a cached watched (content-indexed) index.
+def tree(path=".", *, glob: str = "**", limit: int = 10_000) -> SearchResult:
+    """The file tree under `path=` as data: every (gitignore-aware) file with its
+    size and mtime, reusing a cached watched index.
 
+    This is the primitive for "what is in this directory?" -- reach for it
+    instead of hand-rolling `os.walk` with ad-hoc ignore lists. The result's
+    ``.df`` is a polars frame (``path``, ``name``, ``size``, ``modified``, ...),
+    so shaping is a polars expression, not a loop::
+
+        fff.tree("packages/mcp").df.sort("size", descending=True).head(20)
+        fff.tree(".").df.filter(pl.col("path").str.contains("site/"))
+
+    ``glob`` narrows the listing natively (e.g. ``"src/**"``, ``"*.rs"``); the
+    default ``"**"`` lists everything. Honors the same ignore rules as `find`/
+    `grep` (gitignore, hidden files), and refuses a bare `~`/`/` root with
+    guidance toward a scoped subdirectory.
+    """
+    root, only = _split_path(path)
+    if only is not None:
+        # A single file is a one-row tree; stat it directly rather than spinning
+        # up an isolated index.
+        stat = os.stat(os.path.join(root, only))
+        hit = FileHit(
+            path=only,
+            name=only,
+            size=stat.st_size,
+            modified=int(stat.st_mtime),
+            frecency=0,
+            is_binary=False,
+            root=root,
+        )
+        return SearchResult(hits=[hit], total_matched=1, total_files=1)
+    if _is_unindexable_root(root):
+        raise _refuse_unindexable_dir(root)
+    return _cached(root).glob(pattern=glob, limit=limit)
+
+
+async def atree(path=".", *, glob: str = "**", limit: int = 10_000) -> SearchResult:
+    """Async file-tree listing: runs off the event loop (non-blocking)."""
+    return await asyncio.to_thread(tree, path=path, glob=glob, limit=limit)
+
+
+def grep(query: str | list[str], path=".", *, mode: str = "plain", limit: int = 50, glob: str | None = None) -> GrepResult:
+    """Content grep over `path=` (root directory or file), reusing a cached watched (content-indexed) index.
+
+    `query` and `path` are positional like the shell's `grep PATTERN PATH`
+    (path defaults to the current directory); the options stay keyword-only.
     `query` is one pattern, or a list of patterns matched as literals in a single
     OR pass (Aho-Corasick) -- the one call for "where does any of these appear?",
-    so you never loop grep over a list. `mode` is required (no default), so each
-    call states its intent:
-      - one string: ``"plain"`` (fast SIMD literal), ``"regex"``, or ``"fuzzy"``;
-      - a list: matched literally, so pass ``"plain"`` (for a regex, pass one
-        string like ``"a|b"`` with ``"regex"``).
+    so you never loop grep over a list. `mode` defaults to ``"plain"``; pass
+    ``"regex"`` or ``"fuzzy"`` when needed:
+      - one string: ``"plain"`` (fast SIMD literal; aliases ``"literal"`` and
+        ``"text"``), ``"regex"``, or ``"fuzzy"``;
+      - a list: matched literally, so pass ``"plain"`` or ``"literal"`` (for a
+        regex, pass one string like ``"a|b"`` with ``"regex"``).
+
+    `glob` is an optional file-name filter applied before matching, e.g.
+    ``glob="*.rs"`` to restrict a content search to Rust files in a mixed-language
+    repo. For a list query the glob is applied at the native level (inside the
+    Aho-Corasick pass, so only matching-extension files are searched and the
+    ``limit`` is not wasted on excluded files). For a single-pattern query the glob
+    is applied as a post-filter on the returned matches, since the native single-
+    pattern engine has no per-file selector; in that case `limit` applies before the
+    glob, so very tight limits may appear to return fewer results than expected --
+    raise `limit` if you see this.
 
     `path` may be a directory (grepped whole) or a single file. A single file is
     grepped in an isolated one-file index, so it works even for a dotfile (which
@@ -1054,19 +1116,29 @@ def grep(*, query: str | list[str], path, mode: str, limit: int = 50) -> GrepRes
     won't index whole). A bare `~`/`/` *directory* is refused with guidance
     toward a file or a scoped subdirectory.
     """
+    import fnmatch as _fnmatch
+
     multi = not isinstance(query, str)
-    if multi and mode != "plain":
+    if multi and _GREP_MODES.get(mode) != 0:
         raise ValueError(
             'a list of patterns is matched literally (OR across them); pass '
-            'mode="plain". For a regex, pass a single pattern string with '
-            'mode="regex" (e.g. "a|b").'
+            'mode="plain" (or alias "literal"/"text"). For a regex, pass a '
+            'single pattern string with mode="regex" (e.g. "a|b").'
         )
 
     def _run(ff: "FileFinder") -> GrepResult:
-        return (
-            ff.multi_grep(patterns=query, limit=limit)
-            if multi
-            else ff.grep(query=query, mode=mode, limit=limit)
+        if multi:
+            return ff.multi_grep(patterns=query, constraints=glob, limit=limit)
+        result = ff.grep(query=query, mode=mode, limit=limit)
+        if glob is None:
+            return result
+        # Post-filter by glob for single-pattern mode (no native file selector).
+        filtered = [m for m in result.matches if _fnmatch.fnmatch(m.name, glob)]
+        return GrepResult(
+            matches=filtered,
+            total_matched=len(filtered),
+            total_files_searched=result.total_files_searched,
+            next_file_offset=result.next_file_offset,
         )
 
     root, only = _split_path(path)
@@ -1086,14 +1158,14 @@ def grep(*, query: str | list[str], path, mode: str, limit: int = 50) -> GrepRes
     )
 
 
-async def afind(*, query: str, path, limit: int = 100) -> SearchResult:
+async def afind(query: str, path=".", *, limit: int = 100) -> SearchResult:
     """Async fuzzy file search: runs off the event loop (non-blocking)."""
     return await asyncio.to_thread(find, query=query, path=path, limit=limit)
 
 
-async def agrep(*, query: str | list[str], path, mode: str, limit: int = 50) -> GrepResult:
+async def agrep(query: str | list[str], path=".", *, mode: str = "plain", limit: int = 50, glob: str | None = None) -> GrepResult:
     """Async content grep: runs off the event loop (non-blocking)."""
-    return await asyncio.to_thread(grep, query=query, path=path, mode=mode, limit=limit)
+    return await asyncio.to_thread(grep, query=query, path=path, mode=mode, limit=limit, glob=glob)
 
 
 class CodeMap:
@@ -1223,14 +1295,15 @@ class CodeMap:
         )
 
 
-def map(*, query: str | list[str], path, mode: str, limit: int = 200) -> CodeMap:
+def map(*, query: str | list[str], path, mode: str = "plain", limit: int = 200, glob: str | None = None) -> CodeMap:
     """Content grep grouped into a :class:`CodeMap`: hits per file with
     definitions ranked first. A glanceable answer to "where is X defined and
-    used?" built straight on :func:`grep`."""
-    return CodeMap(query=query, matches=grep(query=query, path=path, mode=mode, limit=limit).matches)
+    used?" built straight on :func:`grep`. Accepts the same ``glob`` filter as
+    :func:`grep` to scope results to files matching a pattern (e.g. ``"*.rs"``)."""
+    return CodeMap(query=query, matches=grep(query=query, path=path, mode=mode, limit=limit, glob=glob).matches)
 
 
-async def amap(*, query: str | list[str], path, mode: str, limit: int = 200) -> CodeMap:
+async def amap(*, query: str | list[str], path, mode: str = "plain", limit: int = 200, glob: str | None = None) -> CodeMap:
     """Async :func:`map`: the same code map, off the event loop."""
-    res = await agrep(query=query, path=path, mode=mode, limit=limit)
+    res = await agrep(query=query, path=path, mode=mode, limit=limit, glob=glob)
     return CodeMap(query=query, matches=res.matches)

@@ -206,7 +206,9 @@ fn multiplayer_shares_output_and_sizes_to_smallest_client() {
     );
 
     // Output typed in one client reaches both.
-    small.write("echo SHARED-OUTPUT\n").expect("type in small client");
+    small
+        .write("echo SHARED-OUTPUT\n")
+        .expect("type in small client");
     assert!(
         wait_for(&small, "SHARED-OUTPUT", Duration::from_secs(10)),
         "originating client missing shared output"
@@ -218,7 +220,11 @@ fn multiplayer_shares_output_and_sizes_to_smallest_client() {
 
     // The negotiated size is the element-wise min of both clients.
     assert!(
-        wait_for_command(&["size", "--session", &id], "24x80", Duration::from_secs(10)),
+        wait_for_command(
+            &["size", "--session", &id],
+            "24x80",
+            Duration::from_secs(10)
+        ),
         "session not sized to the smallest client; got {:?}",
         tap_command(&["size", "--session", &id])
     );
@@ -245,7 +251,11 @@ fn resize_while_attached_reaches_the_session() {
     // resizes from an attached client entirely).
     client.resize(40, 100).expect("resize client terminal");
     assert!(
-        wait_for_command(&["size", "--session", &id], "40x100", Duration::from_secs(10)),
+        wait_for_command(
+            &["size", "--session", &id],
+            "40x100",
+            Duration::from_secs(10)
+        ),
         "resize while attached never reached the session; got {:?}",
         tap_command(&["size", "--session", &id])
     );

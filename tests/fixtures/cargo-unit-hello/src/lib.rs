@@ -23,6 +23,18 @@ mod tests {
     }
 
     #[test]
+    fn package_build_env_reaches_build_script() {
+        // build.rs re-exposed CARGO_UNIT_BUILD_ENV (from packageBuildEnv) as this
+        // compile-time var. Only enforce when the workspace opts in by setting the
+        // expected value at test runtime (via packageTestEnv); otherwise the build
+        // script saw nothing and this is a no-op.
+        const FROM_BUILD: &str = env!("CARGO_UNIT_HELLO_BUILD_ENV");
+        if let Ok(expected) = std::env::var("CARGO_UNIT_BUILD_ENV_EXPECTED") {
+            assert_eq!(FROM_BUILD, expected);
+        }
+    }
+
+    #[test]
     fn package_test_env_and_path_are_available() {
         assert_eq!(
             std::env::var("CARGO_UNIT_FIXTURE_ENV").as_deref(),

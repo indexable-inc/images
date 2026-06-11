@@ -188,21 +188,24 @@ async fn index() -> Html<&'static str> {
 /// List saved recordings as JSON, newest first. Without a store (the in-process
 /// dashboard) the list is empty, so the frontend simply offers no recordings.
 async fn list_recordings(State(state): State<AppState>) -> impl IntoResponse {
-    let recordings = state.recordings.map(|store| store.list()).unwrap_or_default();
+    let recordings = state
+        .recordings
+        .map(|store| store.list())
+        .unwrap_or_default();
     Json(recordings)
 }
 
 /// Serve one recording's snapshot bytes for the frontend to import into a
 /// detached document and replay. The id is validated by the store, so a bad or
 /// traversing id is a 404 rather than a path escape.
-async fn get_recording(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    state.recordings.and_then(|store| store.load(&id)).map_or_else(
-        || (StatusCode::NOT_FOUND, "no such recording").into_response(),
-        |bytes| ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
-    )
+async fn get_recording(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    state
+        .recordings
+        .and_then(|store| store.load(&id))
+        .map_or_else(
+            || (StatusCode::NOT_FOUND, "no such recording").into_response(),
+            |bytes| ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response(),
+        )
 }
 
 async fn events(State(state): State<AppState>) -> impl IntoResponse {

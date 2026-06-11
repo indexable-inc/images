@@ -138,6 +138,13 @@ pub struct BossBar {
     /// not exist or fails to decode is simply skipped (the bar still draws).
     /// Persisted to the `icon` DB column.
     pub icon: String,
+    /// Name of a user-supplied texture set to render this bar from instead of
+    /// the vanilla `color` sprites (see `theme.rs` for the on-disk layout under
+    /// the themes directory). Empty means vanilla. A theme that is missing or
+    /// fails to load falls back to the vanilla `color`/`overlay` sprites, the
+    /// same "a typo still draws a bar" policy as `Color::parse`. Persisted to
+    /// the `theme` DB column.
+    pub theme: String,
 }
 
 #[cfg(test)]

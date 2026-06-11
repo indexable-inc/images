@@ -27,7 +27,10 @@ fn collect_documents() -> Vec<Document> {
 
 /// Index documents by external id for targeted assertions.
 fn by_external_id(documents: &[Document]) -> HashMap<&str, &Document> {
-    documents.iter().map(|doc| (doc.external_id.as_str(), doc)).collect()
+    documents
+        .iter()
+        .map(|doc| (doc.external_id.as_str(), doc))
+        .collect()
 }
 
 /// The cross-file thread (root in day 1, reply in day 2) must assemble into one
@@ -43,7 +46,10 @@ fn cross_file_thread_assembled_into_one_document() {
         .expect("cross-file thread document present");
 
     // Root + the day-2 reply == 2 messages.
-    assert_eq!(thread.meta_json["message_count"], 2, "root + cross-file reply");
+    assert_eq!(
+        thread.meta_json["message_count"], 2,
+        "root + cross-file reply"
+    );
 
     // external_id == slack:<cid>:<thread_ts>.
     assert_eq!(thread.external_id, "slack:C0SYNTH001:1735689700.000200");
@@ -52,28 +58,48 @@ fn cross_file_thread_assembled_into_one_document() {
     let body = String::from_utf8(thread.body.clone()).expect("body is utf-8");
 
     // Mention <@U0SYNTHBBB> resolved to a display/real name, never left as raw id.
-    assert!(body.contains("@Bob Builder"), "mention resolved to name, body:\n{body}");
-    assert!(!body.contains("U0SYNTHBBB"), "raw mention id must not survive, body:\n{body}");
+    assert!(
+        body.contains("@Bob Builder"),
+        "mention resolved to name, body:\n{body}"
+    );
+    assert!(
+        !body.contains("U0SYNTHBBB"),
+        "raw mention id must not survive, body:\n{body}"
+    );
 
     // Both messages present, in ascending ts order (root question before reply).
     let root_pos = body.find("what docker image").expect("root text present");
-    let reply_pos = body.find("itzg/minecraft-server").expect("reply text present");
+    let reply_pos = body
+        .find("itzg/minecraft-server")
+        .expect("reply text present");
     assert!(root_pos < reply_pos, "messages ordered by ts");
 
     // HTML entity unescaped and link label rendered.
-    assert!(body.contains("& the demo"), "&amp; unescaped, body:\n{body}");
+    assert!(
+        body.contains("& the demo"),
+        "&amp; unescaped, body:\n{body}"
+    );
 
     // Header carries channel, date, participants, topic.
     assert!(body.contains("Channel: #craft"));
     assert!(body.contains("Topic: where the building happens"));
-    assert!(body.contains("Date: 2025-01-01"), "root-date header, body:\n{body}");
+    assert!(
+        body.contains("Date: 2025-01-01"),
+        "root-date header, body:\n{body}"
+    );
 
     // File indexed by name+type, sets has_files.
-    assert!(body.contains("attached: diagram.png (PNG)"), "file rendered, body:\n{body}");
+    assert!(
+        body.contains("attached: diagram.png (PNG)"),
+        "file rendered, body:\n{body}"
+    );
     assert_eq!(thread.meta_json["has_files"], true);
 
     // Reactions rendered.
-    assert!(body.contains("reactions: eyes×2"), "reactions rendered, body:\n{body}");
+    assert!(
+        body.contains("reactions: eyes×2"),
+        "reactions rendered, body:\n{body}"
+    );
 
     // source == slack and content_hash == hash_body(body) == meta content_hash.
     assert_eq!(thread.meta_json["source"], "slack");
@@ -81,7 +107,9 @@ fn cross_file_thread_assembled_into_one_document() {
     assert_eq!(thread.meta_json["content_hash"], thread.content_hash);
 
     // Authors metadata holds both resolved names.
-    let authors = thread.meta_json["authors"].as_array().expect("authors array");
+    let authors = thread.meta_json["authors"]
+        .as_array()
+        .expect("authors array");
     let names: Vec<&str> = authors.iter().filter_map(|value| value.as_str()).collect();
     assert!(names.contains(&"ada"));
     assert!(names.contains(&"Bob Builder"));
@@ -128,8 +156,14 @@ fn bot_message_marked_and_prose_from_attachment() {
     assert_eq!(bot.meta_json["is_bot_thread"], true);
 
     let body = String::from_utf8(bot.body.clone()).expect("utf-8");
-    assert!(body.contains("[Better Stack (bot)]"), "bot author labelled, body:\n{body}");
-    assert!(body.contains("Monitor *ix.dev* recovered"), "attachment prose, body:\n{body}");
+    assert!(
+        body.contains("[Better Stack (bot)]"),
+        "bot author labelled, body:\n{body}"
+    );
+    assert!(
+        body.contains("Monitor *ix.dev* recovered"),
+        "attachment prose, body:\n{body}"
+    );
 }
 
 /// `channel_join` / `channel_leave` system messages are never emitted.
@@ -139,13 +173,27 @@ fn join_and_leave_messages_dropped() {
     let index = by_external_id(&documents);
 
     // Join/leave ts values must not appear as their own documents.
-    assert!(!index.contains_key("slack:C0SYNTH001:1735689600.000100"), "join not a document");
-    assert!(!index.contains_key("slack:C0SYNTH001:1735776100.000600"), "leave not a document");
+    assert!(
+        !index.contains_key("slack:C0SYNTH001:1735689600.000100"),
+        "join not a document"
+    );
+    assert!(
+        !index.contains_key("slack:C0SYNTH001:1735776100.000600"),
+        "leave not a document"
+    );
 
     for doc in &documents {
         let body = String::from_utf8(doc.body.clone()).expect("utf-8");
-        assert!(!body.contains("has joined the channel"), "no join text in {}", doc.external_id);
-        assert!(!body.contains("has left the channel"), "no leave text in {}", doc.external_id);
+        assert!(
+            !body.contains("has joined the channel"),
+            "no join text in {}",
+            doc.external_id
+        );
+        assert!(
+            !body.contains("has left the channel"),
+            "no leave text in {}",
+            doc.external_id
+        );
     }
 
     // craft has exactly three real threads: cross-file thread, standalone, bot.
@@ -166,8 +214,14 @@ fn output_is_deterministic_across_runs() {
 
     let first_index = by_external_id(&first);
     for doc in &second {
-        let prior = first_index.get(doc.external_id.as_str()).expect("same ids on re-run");
-        assert_eq!(prior.content_hash, doc.content_hash, "stable hash for {}", doc.external_id);
+        let prior = first_index
+            .get(doc.external_id.as_str())
+            .expect("same ids on re-run");
+        assert_eq!(
+            prior.content_hash, doc.content_hash,
+            "stable hash for {}",
+            doc.external_id
+        );
         assert_eq!(prior.body, doc.body, "stable body for {}", doc.external_id);
     }
 }
@@ -180,6 +234,8 @@ fn empty_channel_produces_no_documents_without_error() {
     // old-stuff (C0SYNTH002) has no day files in the fixture, so it contributes
     // nothing; the iteration must still succeed and ignore it.
     let documents = collect_documents();
-    let from_old = documents.iter().any(|doc| doc.meta_json["channel_id"] == "C0SYNTH002");
+    let from_old = documents
+        .iter()
+        .any(|doc| doc.meta_json["channel_id"] == "C0SYNTH002");
     assert!(!from_old, "empty channel yields nothing");
 }

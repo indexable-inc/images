@@ -166,8 +166,12 @@ fn renders_reviews_and_review_threads() {
     assert!(body.contains("Review threads (1):"));
     assert!(body.contains("[src/lib.rs:10]"));
     // Thread comments are oldest-first, and a null thread author is "unknown".
-    let cap = body.find("Cap the backoff here.").expect("first thread comment");
-    let fixed = body.find("Good catch, fixed.").expect("second thread comment");
+    let cap = body
+        .find("Cap the backoff here.")
+        .expect("first thread comment");
+    let fixed = body
+        .find("Good catch, fixed.")
+        .expect("second thread comment");
     assert!(cap < fixed, "thread comments render oldest-first");
 }
 
@@ -191,7 +195,9 @@ fn author_and_assignees_metadata() {
     let docs = collect_docs();
     let issue = doc_for(&docs, "github:acme/widgets:1");
     assert_eq!(meta_str(&issue, "author_name"), "alex");
-    let assignees = meta(&issue, "assignees").as_array().expect("assignees array");
+    let assignees = meta(&issue, "assignees")
+        .as_array()
+        .expect("assignees array");
     assert_eq!(assignees.len(), 1);
     assert_eq!(assignees.first().and_then(Value::as_str), Some("alex"));
     let labels = meta(&issue, "labels").as_array().expect("labels array");

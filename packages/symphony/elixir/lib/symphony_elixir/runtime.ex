@@ -290,6 +290,17 @@ defmodule SymphonyElixir.Runtime do
     end
   end
 
+  @impl true
+  def handle_info(message, state) do
+    # Defense in depth: a stray message (for example a late port line
+    # leaked by a timed-out Command.run child) must not crash the run.
+    # A FunctionClauseError here kills the GenServer; the supervisor's
+    # transient restart then replays the run from its persisted graph
+    # and can double-submit in-flight turns. Log and drop instead.
+    Logger.warning("Runtime #{state.graph.run_id} ignoring unexpected message: #{inspect(message)}")
+    {:noreply, state}
+  end
+
   # Re-expand the AST after a successful node so a resolved gate or
   # fan-out emits its children. Only runs on `{:ok, _}`: a failure does not
   # produce an output a gate can read. The new children land `:pending`
@@ -789,7 +800,9 @@ defmodule SymphonyElixir.Runtime do
   # An attempt records what executed it. Agent attempts carry the engine;
   # exec/subrun carry the executor kind so the run record is honest about a
   # node that never touched an engine.
-  defp attempt_engine(%Node{kind: :agent, envelope: %{engine: engine}}) when engine in [:codex, :claude], do: engine
+  defp attempt_engine(%Node{kind: :agent, envelope: %{engine: engine}}) when engine in [:codex, :claude, :pi],
+    do: engine
+
   defp attempt_engine(%Node{kind: :exec}), do: :exec
   defp attempt_engine(%Node{kind: :subrun}), do: :subrun
   defp attempt_engine(_node), do: :codex

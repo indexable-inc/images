@@ -88,8 +88,8 @@ pub fn index_directory(
     // `[<root>/, <root>0)` range is the same trick `search::search` uses,
     // and only matches files actually under this root — sibling roots like
     // `<root>-old` stay untouched.
-    let canonical_root = std::fs::canonicalize(directory)
-        .context(error::CanonicalizeSnafu { path: directory })?;
+    let canonical_root =
+        std::fs::canonicalize(directory).context(error::CanonicalizeSnafu { path: directory })?;
     let root_lower = directory_term(&canonical_root);
     let mut root_upper = root_lower.clone();
     root_upper.pop();
@@ -169,8 +169,8 @@ fn index_file(writer: &IndexWriter, schema: &IndexSchema, file_path: &Path) -> R
     // vs absolute, with or without `.`, through a symlinked ancestor) lines
     // up with the previous run's `path_exact` term and the parent-directory
     // facet. Without this, the delete misses and stale chunks pile up.
-    let canonical_file = std::fs::canonicalize(file_path)
-        .context(error::CanonicalizeSnafu { path: file_path })?;
+    let canonical_file =
+        std::fs::canonicalize(file_path).context(error::CanonicalizeSnafu { path: file_path })?;
     let canonical_parent =
         canonical_file
             .parent()

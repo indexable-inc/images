@@ -46,6 +46,23 @@ defmodule SymphonyElixir.Engine.EnvelopeTest do
                Envelope.from_map(%{"engine" => "claude", "model" => "gpt-5.3-codex"})
     end
 
+    test "builds a valid pi envelope and defaults permissions and location" do
+      assert {:ok, env} = Envelope.from_map(%{"engine" => "pi", "model" => "claude"})
+
+      assert env.engine == :pi
+      assert env.model == "claude"
+      assert env.permissions == :workspace_write
+      assert env.location == :local
+    end
+
+    test "pi accepts any model alias (the harness's model table resolves it)" do
+      # Pi fronts multiple providers, so a claude-looking alias under :pi is
+      # correct, not an engine/model mismatch.
+      assert {:ok, %{engine: :pi}} = Envelope.from_map(%{"engine" => "pi", "model" => "claude"})
+      assert {:ok, %{engine: :pi}} = Envelope.from_map(%{"engine" => "pi", "model" => "codex"})
+      assert {:ok, %{engine: :pi}} = Envelope.from_map(%{"engine" => "pi", "model" => "opus"})
+    end
+
     test "rejects unknown keys instead of silently ignoring them" do
       assert {:error, {:unknown_envelope_keys, ["sandbox"]}} =
                Envelope.from_map(%{"engine" => "claude", "model" => "opus", "sandbox" => "workspace-write"})

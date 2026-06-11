@@ -11,8 +11,11 @@ use source_meta::SourceAdapter;
 #[test]
 fn indexes_real_txt_logs_only() {
     let dir = tempfile::tempdir().expect("tempdir");
-    fs::write(dir.path().join("sess-1.txt"), b"2026-06-02T17:20:01.816Z [DEBUG] hello\n")
-        .expect("write log");
+    fs::write(
+        dir.path().join("sess-1.txt"),
+        b"2026-06-02T17:20:01.816Z [DEBUG] hello\n",
+    )
+    .expect("write log");
     fs::write(dir.path().join("empty.txt"), b"   \n").expect("write empty");
     fs::write(dir.path().join("notes.md"), b"not a debug log").expect("write md");
 
@@ -48,8 +51,17 @@ fn skips_symlinked_logs() {
     std::os::unix::fs::symlink(&secret, dir.path().join("planted.txt")).expect("symlink");
 
     let logs = DebugLogs::open_with(dir.path(), "h", "u").expect("open");
-    assert_eq!(logs.len(), 0, "a symlinked .txt must be skipped, not followed");
-    let bodies: Vec<_> =
-        logs.documents().map(|d| String::from_utf8_lossy(&d.expect("doc").body).into_owned()).collect();
-    assert!(!bodies.iter().any(|b| b.contains("SECRET")), "secret target must not be read");
+    assert_eq!(
+        logs.len(),
+        0,
+        "a symlinked .txt must be skipped, not followed"
+    );
+    let bodies: Vec<_> = logs
+        .documents()
+        .map(|d| String::from_utf8_lossy(&d.expect("doc").body).into_owned())
+        .collect();
+    assert!(
+        !bodies.iter().any(|b| b.contains("SECRET")),
+        "secret target must not be read"
+    );
 }

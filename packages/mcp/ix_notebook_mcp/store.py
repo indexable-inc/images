@@ -33,10 +33,25 @@ CREATE TABLE IF NOT EXISTS executions (
     output      TEXT NOT NULL DEFAULT '',
     result      TEXT,
     error       TEXT,
+    line        INTEGER,
+    error_line  INTEGER,
     outputs     TEXT NOT NULL DEFAULT '[]',
-    bindings    TEXT NOT NULL DEFAULT '{}'
+    bindings    TEXT NOT NULL DEFAULT '{}',
+    kind        TEXT NOT NULL DEFAULT 'cell'
 );
 CREATE INDEX IF NOT EXISTS executions_started ON executions (started_at);
+
+-- Session checkpoints: the kernel's user namespace, serialized (dill) after
+-- executions finish, so reopening this file restores state instantly instead of
+-- re-running every cell. Only the newest row is kept (save_snapshot prunes), so
+-- a long session never grows the file by stale checkpoints.
+CREATE TABLE IF NOT EXISTS snapshots (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  REAL NOT NULL,
+    blob        BLOB NOT NULL,
+    names       TEXT NOT NULL DEFAULT '[]',
+    skipped     TEXT NOT NULL DEFAULT '[]'
+);
 
 CREATE TABLE IF NOT EXISTS cells (
     id          TEXT PRIMARY KEY,
@@ -89,26 +104,62 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE executions ADD COLUMN budget REAL NOT NULL DEFAULT 15")
         except sqlite3.OperationalError:
             pass
+    for column in ("line", "error_line"):
+        if column not in have:
+            try:
+                conn.execute(f"ALTER TABLE executions ADD COLUMN {column} INTEGER")
+            except sqlite3.OperationalError:
+                pass
+    if "kind" not in have:
+        try:
+            conn.execute("ALTER TABLE executions ADD COLUMN kind TEXT NOT NULL DEFAULT 'cell'")
+        except sqlite3.OperationalError:
+            pass
 
 
-def start(conn: sqlite3.Connection, *, id: str, name: str, code: str, started_at: float, budget: float = 15.0) -> None:
+def start(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    name: str,
+    code: str,
+    started_at: float,
+    budget: float = 15.0,
+    kind: str = "cell",
+) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO executions (id, name, code, status, started_at, budget, output) "
-        "VALUES (?, ?, ?, 'running', ?, ?, '')",
-        (id, name, code, started_at, budget),
+        "INSERT OR REPLACE INTO executions (id, name, code, status, started_at, budget, output, kind) "
+        "VALUES (?, ?, ?, 'running', ?, ?, '', ?)",
+        (id, name, code, started_at, budget, kind),
     )
 
 
-def update_output(conn: sqlite3.Connection, id: str, output: str, outputs: list | None = None) -> None:
-    """Persist a running job's live output. When ``outputs`` is given (rich display
-    bundles captured so far), update that column too so the dashboard can show a
-    long job's in-progress tables/images, not only its text."""
+def rename(conn: sqlite3.Connection, *, id: str, name: str) -> None:
+    """Update the display name for an execution already in the store."""
+    conn.execute("UPDATE executions SET name = ? WHERE id = ?", (name, id))
+
+
+def update_output(
+    conn: sqlite3.Connection,
+    id: str,
+    output: str,
+    outputs: list | None = None,
+    *,
+    line: int | None = None,
+) -> None:
+    """Persist a running job's live output and the cell ``line`` it is executing
+    right now (the dashboard's live line highlight; None clears it). When
+    ``outputs`` is given (rich display bundles captured so far), update that
+    column too so the dashboard can show a long job's in-progress tables/images,
+    not only its text."""
     if outputs is None:
-        conn.execute("UPDATE executions SET output = ? WHERE id = ?", (output, id))
+        conn.execute(
+            "UPDATE executions SET output = ?, line = ? WHERE id = ?", (output, line, id)
+        )
     else:
         conn.execute(
-            "UPDATE executions SET output = ?, outputs = ? WHERE id = ?",
-            (output, json.dumps(outputs), id),
+            "UPDATE executions SET output = ?, line = ?, outputs = ? WHERE id = ?",
+            (output, line, json.dumps(outputs), id),
         )
 
 
@@ -121,20 +172,34 @@ def finish(
     output: str,
     result: str | None,
     error: str | None,
+    error_line: int | None = None,
     outputs: list | None = None,
     bindings: dict | None = None,
 ) -> None:
+    # `line` (the live executing line) is cleared: a finished job has no current
+    # line, only -- when it failed -- the `error_line` it failed on.
     conn.execute(
         "UPDATE executions SET status = ?, ended_at = ?, output = ?, result = ?, error = ?, "
-        "outputs = ?, bindings = ? WHERE id = ?",
-        (status, ended_at, output, result, error, json.dumps(outputs or []), json.dumps(bindings or {}), id),
+        "error_line = ?, line = NULL, outputs = ?, bindings = ? WHERE id = ?",
+        (
+            status,
+            ended_at,
+            output,
+            result,
+            error,
+            error_line,
+            json.dumps(outputs or []),
+            json.dumps(bindings or {}),
+            id,
+        ),
     )
 
 
 # The execution columns every reader projects, in one place so `recent` and
 # `get` return the identical shape (the embed contract in feed.py depends on it).
 _EXEC_COLUMNS = (
-    "id, name, code, status, started_at, ended_at, budget, output, result, error, outputs, bindings"
+    "id, name, code, status, started_at, ended_at, budget, output, result, error, "
+    "line, error_line, outputs, bindings, kind"
 )
 
 
@@ -256,6 +321,98 @@ def close_resource(conn: sqlite3.Connection, *, id: str, updated_at: float) -> N
         "UPDATE resources SET status = 'closed', updated_at = ? WHERE id = ?",
         (updated_at, id),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Sessions: the pieces that make one store file a reopenable notebook.
+#
+# A session file carries three things: the execution log (the cells and their
+# outputs, already above), the latest namespace snapshot (instant state on
+# reopen), and the bookkeeping to catch up the gap -- cells that finished after
+# the snapshot was taken are re-run on open, ordered by start time.
+# --------------------------------------------------------------------------- #
+
+
+def save_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    created_at: float,
+    blob: bytes,
+    names: list[str],
+    skipped: list[dict],
+) -> None:
+    """Persist a namespace checkpoint and prune older ones in the same
+    transaction, so the file holds exactly one snapshot and a reader never sees
+    zero or two."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            "INSERT INTO snapshots (created_at, blob, names, skipped) VALUES (?, ?, ?, ?)",
+            (created_at, blob, json.dumps(names), json.dumps(skipped)),
+        )
+        conn.execute(
+            "DELETE FROM snapshots WHERE id != (SELECT MAX(id) FROM snapshots)"
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def latest_snapshot(conn: sqlite3.Connection) -> dict | None:
+    """The newest namespace checkpoint, or None for a fresh session file."""
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT created_at, blob, names, skipped FROM snapshots ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    d = dict(row)
+    d["names"] = json.loads(d.get("names") or "[]")
+    d["skipped"] = json.loads(d.get("skipped") or "[]")
+    return d
+
+
+def mark_interrupted(conn: sqlite3.Connection, *, ended_at: float) -> int:
+    """Close out rows left 'running' by a previous server (it died or was
+    killed mid-cell), so a reopened session reads honestly: those cells did not
+    finish and their effects are not in any snapshot."""
+    cur = conn.execute(
+        "UPDATE executions SET status = 'interrupted', ended_at = ?, line = NULL "
+        "WHERE status = 'running'",
+        (ended_at,),
+    )
+    # A live resource (a Tui screen, a widget) is a view over an object in the
+    # dead kernel; nothing can re-render it, so close it rather than show a
+    # frozen pane as live.
+    conn.execute(
+        "UPDATE resources SET status = 'closed', updated_at = ? WHERE status != 'closed'",
+        (ended_at,),
+    )
+    return cur.rowcount
+
+
+def replayable(conn: sqlite3.Connection, since: float | None) -> list[dict]:
+    """The cells a reopened session re-runs to catch the namespace up: original
+    (kind='cell') successful executions that finished after ``since`` (the latest
+    snapshot's timestamp; None replays the whole log, the no-snapshot fallback).
+    Replay rows themselves are excluded -- their effects are captured by the
+    snapshot taken right after a restore, so including them would double-run
+    every cell on the next reopen.
+
+    The anchor is ``ended_at``, not ``started_at``: a cell still running when the
+    snapshot was written has only partial effects in it, and re-running the cell
+    (it finished later, so ``ended_at`` > ``since``) overwrites the partial state
+    with the full result."""
+    conn.row_factory = sqlite3.Row
+    anchor = "" if since is None else " AND ended_at > ?"
+    params = () if since is None else (since,)
+    rows = conn.execute(
+        "SELECT id, name, code FROM executions "
+        f"WHERE status = 'done' AND kind = 'cell'{anchor} ORDER BY started_at ASC",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def live_resources(conn: sqlite3.Connection) -> list[dict]:

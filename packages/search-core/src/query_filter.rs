@@ -48,7 +48,10 @@ pub fn build_filter(spec: &FilterSpec) -> Option<Filter> {
     if !spec.sources.is_empty() {
         let values: Vec<serde_json::Value> =
             spec.sources.iter().map(|s| s.as_str().into()).collect();
-        clauses.push(Filter::any_of(keys::SOURCE, serde_json::Value::Array(values)));
+        clauses.push(Filter::any_of(
+            keys::SOURCE,
+            serde_json::Value::Array(values),
+        ));
     }
     if !spec.exclude_sources.is_empty() {
         let excluded: Vec<Filter> = spec

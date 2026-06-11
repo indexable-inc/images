@@ -14,9 +14,8 @@ in
   # `cifs.ko` from the host kernel.
   services.samba = {
     enable = true;
-    # We claim and open TCP 445 explicitly below so the firewall rule and
-    # the `ix.networking.portClaims` registry stay co-located with the
-    # rest of the listener policy.
+    # `ix.networking.expose.samba` below claims the port and opens the
+    # in-guest firewall, so the listener policy stays in one place.
     openFirewall = false;
 
     settings = {
@@ -67,21 +66,14 @@ in
     "d ${shareDir} 0770 nobody nogroup -"
   ];
 
-  networking.firewall.allowedTCPPorts = [ sambaPort ];
-
-  ix.networking.portClaims.samba = {
-    protocol = "tcp";
+  # One declaration registers the claim and opens the firewall for SMB.
+  ix.networking.expose.samba = {
     port = sambaPort;
     description = "Samba SMB3 share for east-west clients";
   };
 
   ix.healthChecks.smbd = {
     description = "smbd is active";
-    command = [
-      (lib.getExe' config.systemd.package "systemctl")
-      "is-active"
-      "--quiet"
-      "samba-smbd.service"
-    ];
+    unit = "samba-smbd";
   };
 }

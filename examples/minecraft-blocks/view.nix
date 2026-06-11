@@ -31,10 +31,8 @@ let
   clickhouseHost = obs.clickhouse.host;
   clickhousePort = obs.clickhouse.nativePort;
 
-  log = {
-    host = nodes.log.config.ix.networking.eastWest.hostName;
-    brokerPort = 9092;
-  };
+  # Resolve the log node's broker by the name it exposes it under.
+  kafka = ix.endpointOf nodes.log "kafka";
 
   columnList = lib.concatStringsSep ", " schema.columnNames;
 
@@ -47,7 +45,7 @@ let
     )
     ENGINE = Kafka
     SETTINGS
-      kafka_broker_list = '${log.host}:${toString log.brokerPort}',
+      kafka_broker_list = '${kafka}',
       kafka_topic_list = '${schema.topic}',
       kafka_group_name = 'clickhouse-${schema.database}',
       kafka_format = 'JSONEachRow',
