@@ -373,16 +373,10 @@ in
       }
     ];
 
-    nixpkgs.hostPlatform.system = "x86_64-linux";
-
-    # YourKit is the only unfree we currently allow into images, and only
-    # because `ix.languages.java.yourkit` is an opt-in profiler agent that
-    # an operator turns on for performance work. The predicate keeps every
-    # other unfree (Oracle JDK, Adobe runtimes, NVIDIA blobs) failing at
-    # eval until the platform decides to allow it explicitly.
-    #
-    # Refs: https://www.yourkit.com/docs/java/help/agent.jsp
-    nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "yourkit-java" ];
+    # The host platform (x86_64-linux) and the YourKit-only unfree predicate
+    # live on the shared `imagePkgs` instantiation in `default.nix`: every
+    # image shares ONE nixpkgs instance via `nixpkgs.pkgs`, and the nixpkgs
+    # module ignores `hostPlatform`/`config` once `pkgs` is set.
 
     boot = {
       isContainer = true;
