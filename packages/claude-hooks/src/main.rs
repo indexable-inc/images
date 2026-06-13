@@ -18,8 +18,8 @@ use chrono::{DateTime, SecondsFormat};
 use serde::Serialize;
 use serde_json::Value;
 
-/// SessionStart digest cap (~1500 tokens), inside the 10,000-char
-/// additionalContext limit.
+/// `SessionStart` digest cap (~1500 tokens), inside the 10,000-char
+/// `additionalContext` limit.
 const DIGEST_CAP: usize = 6000;
 /// Prompt-priors cap (~1200 tokens).
 const PRIORS_CAP: usize = 4800;
@@ -84,9 +84,7 @@ fn flag_set(name: &str) -> bool {
 }
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/var/empty"))
+    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/var/empty"), PathBuf::from)
 }
 
 fn read_stdin() -> Option<String> {

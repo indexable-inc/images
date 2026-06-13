@@ -265,10 +265,23 @@ fn env_always_set_and_defaults_only_when_unset() {
     assert!(!lines2.contains(&"DEF=d".to_owned()), "got: {lines2:?}");
 }
 
+/// A stub that prints only `PATH=<value>` using the shell builtin `echo`, so it
+/// does not depend on any external command being resolvable on the (rewritten)
+/// PATH. `env`/`printf`-via-PATH would fail in the build sandbox once PATH is
+/// replaced with dirs that hold no coreutils.
+fn write_path_stub(dir: &TempDir) -> std::path::PathBuf {
+    let path = dir.path().join("path-stub");
+    let mut f = fs::File::create(&path).expect("create path stub");
+    f.write_all(b"#!/bin/sh\necho \"PATH=$PATH\"\n")
+        .expect("write path stub");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod path stub");
+    path
+}
+
 #[test]
 fn path_prepend_rides_ahead_of_caller_path() {
     let tmp = TempDir::new().unwrap();
-    let stub = write_env_stub(&tmp);
+    let stub = write_path_stub(&tmp);
     let spec = write_json_spec(
         &tmp,
         &serde_json::json!({
