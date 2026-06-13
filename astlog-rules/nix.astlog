@@ -648,6 +648,19 @@
 (lint no-write-shell-application error
   "writeShellApplication is banned; use ix.writeNushellApplication instead")
 
+;; no-write-shell-script: writeShellScript hand-rolls an UNCHECKED shell script
+;; (no shellcheck, no declared runtime deps, the same gap that bans
+;; writeShellApplication / writeShellScriptBin). Prefer a compiled Rust
+;; launcher/tool (ix.rustWorkspace, see packages/config-launch and
+;; packages/claude-hooks), or ix.writeNushellApplication /
+;; ix.writePythonApplication for logic; for a genuine POSIX-process script that
+;; must be bash, use ix.writeBashApplication (checked: bash -n + shellcheck).
+(rule (no-write-shell-script n)
+  (match nix "(identifier) @n")
+  (text n "writeShellScript"))
+(lint no-write-shell-script error
+  "writeShellScript is unchecked (no shellcheck, no declared deps); prefer a compiled Rust launcher/tool (ix.rustWorkspace, see packages/config-launch / packages/claude-hooks), else ix.writeNushellApplication / ix.writePythonApplication for logic, else ix.writeBashApplication (checked) for must-be-bash")
+
 ;; no-write-shell-script-bin: writeShellScriptBin is banned. Use
 ;; ix.writeNushellApplication instead.
 (rule (no-write-shell-script-bin n)

@@ -4,8 +4,8 @@
   stdenv,
   fetchurl,
   runtimeShell,
-  writeText,
-  writeShellScript,
+  makeBinaryWrapper,
+  runCommand,
   autoPatchelfHook,
   procps,
   ripgrep,
@@ -17,8 +17,6 @@
   gnupg,
   formats,
   jq,
-  gnugrep,
-  coreutils,
   binName ? "claude",
 
   # Default posture: bake `--dangerously-skip-permissions` into the wrapper so
@@ -44,7 +42,7 @@
   extraSettings ? { },
 
   # Shell glob patterns for the durable primary checkouts the PreToolUse
-  # worktree guard protects (see `worktreeGuardHook`): a file-edit tool call
+  # worktree guard protects (the claude-hooks `worktree-guard` subcommand): a file-edit tool call
   # whose target resolves into a PRIMARY checkout (git-dir == git-common-dir,
   # i.e. not a linked worktree) whose toplevel matches one of these globs is
   # denied, regardless of the session's cwd. The list deliberately names the
@@ -166,10 +164,11 @@ let
   manifest = lib.importJSON ./manifest.json;
   inherit (manifest) version;
 
-  # Env defaults applied through the wrapper, declared as data (single source)
-  # and derived into flags below rather than hand-written into the install phase.
-  # Exported by the wrapper only when unset (the old `--set-default`), so an
-  # explicit env or settings.json `env` value still overrides per machine. Three groups:
+  # Env defaults applied through the launcher, declared as data (single source)
+  # and rendered into the spec's `env_defaults` below rather than hand-written
+  # into the install phase. Set by the launcher only when unset (the old
+  # `--set-default`), so an explicit env or settings.json `env` value still
+  # overrides per machine. Three groups:
   #  - Output-truncation caps raised to the CLI's built-in maxima: we run a
   #    trusted config (our own CLAUDE.md / AGENTS.md / hooks / MCP servers), so
   #    prefer full output over pruning. BASH_MAX_OUTPUT_LENGTH default 30000
@@ -187,14 +186,9 @@ let
     # Re-enable 1M per machine: `export CLAUDE_CODE_DISABLE_1M_CONTEXT=`.
     CLAUDE_CODE_DISABLE_1M_CONTEXT = 1;
   };
-  # Rendered as `export NAME="${NAME-default}"` lines: assign only when the
-  # variable is UNSET. No colon in the expansion, so an explicit empty value
-  # survives (e.g. `export CLAUDE_CODE_DISABLE_1M_CONTEXT=` re-enables 1M).
-  envDefaultExports = lib.concatStringsSep "\n" (
-    lib.mapAttrsToList (
-      name: value: "export ${name}=\"\${${name}-${toString value}}\""
-    ) wrapperEnvDefaults
-  );
+  # Rendered into the launcher spec as `env_defaults` (set only when unset), so
+  # an explicit env value still overrides per machine (e.g.
+  # `export CLAUDE_CODE_DISABLE_1M_CONTEXT=` re-enables 1M).
 
   # Settings-key defaults that have no env knob, shipped as a JSON the wrapper
   # injects via `--settings`. The package wraps the binary, so it can carry env
@@ -206,8 +200,8 @@ let
   #
   # IMPORTANT: between two `--settings` *flags* the CLI is first-wins (they do
   # NOT merge with each other), so the wrapper injects this file only when the
-  # caller passed no `--settings` of their own (see the argv scan in
-  # `wrapperScript`): a user's CLI `--settings` applies untouched, and ours
+  # caller passed no `--settings` of their own (the launcher's `conditional_flags`
+  # in `launchSpec`): a user's CLI `--settings` applies untouched, and ours
   # applies only when they pass none. Injecting ours unconditionally up front
   # would silently shadow theirs, and the old approach of appending it after the
   # user argv put it inside subcommand argv, where a parser that does not define
@@ -222,12 +216,12 @@ let
   #     layer. The dev image (images/dev/development-base) enforces the same
   #     posture via managed settings; see its comment for the full rationale.
   #   hooks.UserPromptSubmit (only when the `search` sibling is in scope):
-  #     the score-gated ambient-priors hook; see `promptPriorsHook` below for
-  #     the full design and its measured rationale.
-  #   hooks.SessionStart: the context-digest hook; see `sessionDigestHook`
-  #     below.
-  #   hooks.PreToolUse: the worktree isolation guard for file-edit tools; see
-  #     `worktreeGuardHook` below. Shipped from this layer (not a project
+  #     the score-gated ambient-priors hook (claude-hooks `prompt-priors`); see
+  #     `claudeHooks` below and packages/claude-hooks for the design.
+  #   hooks.SessionStart: the context-digest hook (claude-hooks `session-digest`);
+  #     see `claudeHooks` below.
+  #   hooks.PreToolUse: the worktree isolation guard for file-edit tools
+  #     (claude-hooks `worktree-guard`). Shipped from this layer (not a project
   #     .claude/settings.json) on purpose: project hooks only load for
   #     sessions started inside that project, which is exactly the bypass the
   #     guard closes (ENG-2692).
@@ -248,199 +242,34 @@ let
   #     exa` so a consumer who overrides the server set away gets the
   #     built-ins back instead of no web access at all.
 
-  # UserPromptSubmit hook: score-gated ambient priors from the shared corpus
-  # store ("push a small hint, pull details on demand"; ENG-2707). Measured on
-  # the live store (2026-06-12 audit): un-gated ambient injection is net
-  # negative (3/5 casual prompts pulled 0.3-9k tokens of pure noise at scores
-  # 0.64-0.67) while fleet-specific task prompts hit gold at 0.70+, so this
-  # hook is triple-gated and every miss path fails OPEN and SILENT (exit 0, no
-  # output): a noisy or broken hook is strictly worse than no hook.
-  #  - Pre-flight gates, no network and well under 50ms: skip prompts under 8
-  #    words (ambient recall measures net negative on simple tasks) and prompts
-  #    with no fleet-specific noun (generic refactor verbs embed near
-  #    everything and pull vendored-code noise). The noun list is a dumb,
-  #    cheap allowlist of repo/tool names, deliberately not clever.
-  #  - The query is single-shot (rerank off; measured ~1.3s live, never the
-  #    10-23s agentic path), compact, top 3, scoped to the three sources whose
-  #    hits carry conventions and decisions (claude_history, shell, github),
-  #    under a 2s hard timeout.
-  #  - Only hits scoring >= 0.70 are injected, capped at ~1200 tokens (4800
-  #    chars, comfortably inside Claude Code's 10,000-char additionalContext
-  #    limit), each prefixed with provenance (source, user, date, score) so
-  #    the model can discount stale or cross-user content.
-  # Kill switch: export CLAUDE_CODE_DISABLE_PROMPT_PRIORS=1. Tools the hook
-  # needs ride as absolute store paths so it works under any user PATH; the
-  # `search` CLI is a flake-package-set sibling, so like the index MCP server
-  # the hook ships only there, not from the overlay (see `repoPackages`).
-  promptPriorsHook = writeShellScript "claude-prompt-priors-hook" ''
-    # Generated by packages/claude-code/default.nix (promptPriorsHook).
-    # Fail open and silent: every miss/error path is `exit 0` with no output.
-    set -f # `set -- $prompt` below word-splits; never glob
-    [ -z "''${CLAUDE_CODE_DISABLE_PROMPT_PRIORS-}" ] || exit 0
-
-    # Hook stdin is the UserPromptSubmit event JSON; only .prompt matters.
-    prompt=$(${lib.getExe jq} -r '.prompt // empty' 2>/dev/null) || exit 0
-    [ -n "$prompt" ] || exit 0
-
-    # Gate 1: short prompts are conversation or trivial edits; ambient recall
-    # on simple tasks is measured pure overhead.
-    set -- $prompt
-    [ "$#" -ge 8 ] || exit 0
-
-    # Gate 2: no fleet-specific noun, no query. Whole-word, case-insensitive,
-    # entries all >= 4 chars; built from this monorepo's repo/tool names.
-    printf '%s' "$prompt" | ${lib.getExe gnugrep} -qiwE \
-      'index|indexer|colmena|mixedbread|mgrep|flake|flakes|nixos|fleet|deploy|claude|codex|kernel|iceberg|parquet|atuin|graphite|worktree|worktrees|rebase|linear|slack|github|tailscale|cargo|clippy|nushell|symphony|vmkit|cachix' ||
-      exit 0
-
-    # Gate 3: no credential, no query. `search` resolves MXBAI_API_KEY or the
-    # mgrep login token; checking here keeps the unauthenticated path instant.
-    [ -n "''${MXBAI_API_KEY-}" ] || [ -r "''${HOME-/var/empty}/.mgrep/token.json" ] || exit 0
-
-    # Single-shot compact query under a hard 2s budget; a slow store, a dead
-    # network, or zero hits must never stall or pollute the prompt.
-    hits=$(${coreutils}/bin/timeout 2 ${lib.getExe repoPackages.search} "$prompt" \
-      --json --compact --no-rerank --max-count 3 \
-      --source claude_history,shell,github 2>/dev/null) || exit 0
-    [ -n "$hits" ] || exit 0
-
-    # Score gate + projection: provenance-prefixed snippets for hits >= 0.70.
-    # Empty selection produces no output, which the -n test turns into a
-    # silent exit.
-    context=$(${lib.getExe jq} -r '
-      def prov:
-        [ (.source // "corpus"),
-          (if .user then "by " + .user else empty end),
-          (if .timestamp then (.timestamp | todate) else empty end),
-          "score " + ((.score // 0) * 100 | floor / 100 | tostring)
-        ] | join(" ");
-      [ .[]
-        | select((.score // 0) >= 0.70)
-        | "[" + prov + "] " + (.path // "") + "\n" + (.text // "")
-      ]
-      | select(length > 0)
-      | "Possibly relevant fleet history (ambient, score-gated; may be stale or from another user, verify before relying on it):\n\n"
-        + join("\n\n")
-    ' <<<"$hits" 2>/dev/null) || exit 0
-    [ -n "$context" ] || exit 0
-
-    # Hard cap ~1200 tokens (4800 chars), inside the 10,000-char
-    # additionalContext limit even after JSON escaping.
-    context=''${context:0:4800}
-
-    ${lib.getExe jq} -cn --arg context "$context" \
-      '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $context}}' 2>/dev/null
-    exit 0
+  # The three hooks are subcommands of one compiled binary (packages/claude-hooks)
+  # rather than hand-rolled shell scripts. Each fails OPEN and SILENT (any
+  # missing input, parse error, or kill-switch exits with no stdout: a noisy or
+  # broken hook is strictly worse than no hook). See that crate for the full
+  # design and its measured rationale:
+  #  - session-digest (SessionStart): cat the pre-rendered fleet context digest
+  #    (`~/.cache/ix/context-digest.md`, ENG-2708), capped ~1500 tokens. Kill
+  #    switch: CLAUDE_CODE_DISABLE_CONTEXT_DIGEST=1.
+  #  - worktree-guard (PreToolUse): deny edits whose TARGET path resolves into a
+  #    protected primary checkout, judging the target not the session (ENG-2692).
+  #    Kill switch: CLAUDE_CODE_DISABLE_WORKTREE_GUARD=1.
+  #  - prompt-priors (UserPromptSubmit): triple-gated, score-gated ambient priors
+  #    from the corpus store (ENG-2707), capped ~1200 tokens. Kill switch:
+  #    CLAUDE_CODE_DISABLE_PROMPT_PRIORS=1.
+  # Tool paths and the baked primary-checkout default ride as env on a thin
+  # makeBinaryWrapper so the hook is self-contained under any user PATH, while
+  # user knobs keep their CLAUDE_CODE_* names. IX_SEARCH (and the prompt-priors
+  # hook itself) is wired only when the `search` sibling is in scope: like the
+  # index MCP server it ships from the flake package set, not the overlay (see
+  # `repoPackages`).
+  claudeHooks = runCommand "claude-hooks-wrapped" { nativeBuildInputs = [ makeBinaryWrapper ]; } ''
+    makeBinaryWrapper ${ix.rustWorkspace.units.binaries."claude-hooks"}/bin/claude-hooks \
+      $out/bin/claude-hooks \
+      --set IX_GIT ${lib.getExe git} \
+      --set IX_DEFAULT_PRIMARY_CHECKOUTS ${lib.escapeShellArg (lib.concatStringsSep ":" primaryCheckouts)} \
+      ${lib.optionalString (repoPackages ? search) "--set IX_SEARCH ${lib.getExe repoPackages.search}"}
   '';
-
-  # PreToolUse hook: worktree isolation for the durable primary checkouts
-  # (ENG-2692). The predecessor guard (ix `.agents/hooks/enforce-worktree.sh`)
-  # keyed "primary checkout" off the session-start project dir, so an agent
-  # that session-started elsewhere or cd'd around bypassed it, and agents
-  # learned to. This guard ignores the session entirely and judges only the
-  # TARGET path of the edit:
-  #  - resolve the tool call's file path (relative paths against the payload
-  #    cwd), walking unbuilt parents up to the nearest existing ancestor so
-  #    new-file Writes are judged by their containing repo;
-  #  - ask git whether that ancestor sits in a PRIMARY checkout: in one,
-  #    `--git-dir` and `--git-common-dir` resolve to the same path, while a
-  #    linked worktree's private git-dir differs from the shared common dir
-  #    (git resolves the physical path, so a symlinked alias of the checkout
-  #    cannot dodge the match);
-  #  - deny when that primary checkout's toplevel matches a protected glob
-  #    (`primaryCheckouts` above). Everything else (linked worktrees, scratch
-  #    clones, non-repo paths) passes through, and every error path fails
-  #    open: a guard that bricks all edits is worse than no guard.
-  # Escape hatch, consistent with promptPriorsHook's kill switch: export
-  # CLAUDE_CODE_DISABLE_WORKTREE_GUARD=1. Tools ride as absolute store paths
-  # so the hook works under any user PATH.
-  worktreeGuardHook = writeShellScript "claude-worktree-guard-hook" ''
-    # Generated by packages/claude-code/default.nix (worktreeGuardHook).
-    [ -z "''${CLAUDE_CODE_DISABLE_WORKTREE_GUARD-}" ] || exit 0
-
-    input=$(cat) || exit 0
-    file=$(${lib.getExe jq} -r \
-      '.tool_input.file_path // .tool_input.notebook_path // empty' \
-      <<<"$input" 2>/dev/null) || exit 0
-    [ -n "$file" ] || exit 0
-
-    # Judge the target, never the session: a relative path resolves against
-    # the payload cwd, an absolute one stands alone, so neither a cd nor a
-    # session started outside the repo changes what gets inspected.
-    case "$file" in
-    /*) ;;
-    *)
-      cwd=$(${lib.getExe jq} -r '.cwd // empty' <<<"$input" 2>/dev/null) || cwd=
-      file="''${cwd:-$PWD}/$file"
-      ;;
-    esac
-
-    # A new file's parent may not exist yet; the nearest existing ancestor's
-    # repo decides.
-    dir=$(dirname -- "$file")
-    while [ "$dir" != / ] && [ ! -d "$dir" ]; do
-      dir=$(dirname -- "$dir")
-    done
-
-    gitdir=$(${lib.getExe git} -C "$dir" rev-parse --path-format=absolute \
-      --git-dir 2>/dev/null) || exit 0
-    common=$(${lib.getExe git} -C "$dir" rev-parse --path-format=absolute \
-      --git-common-dir 2>/dev/null) || exit 0
-    # Linked worktree: private git-dir differs from the shared common dir.
-    [ "$gitdir" = "$common" ] || exit 0
-
-    toplevel=$(${lib.getExe git} -C "$dir" rev-parse --show-toplevel 2>/dev/null) ||
-      exit 0
-
-    # set -f: the IFS split below must word-split the glob list without
-    # expanding the globs against the filesystem; `case` matches them as
-    # patterns.
-    set -f
-    IFS=:
-    for pattern in ''${CLAUDE_CODE_PRIMARY_CHECKOUTS-${lib.concatStringsSep ":" primaryCheckouts}}; do
-      case "$toplevel" in
-      $pattern)
-        ${lib.getExe jq} -nc --arg toplevel "$toplevel" '{
-          hookSpecificOutput: {
-            hookEventName: "PreToolUse",
-            permissionDecision: "deny",
-            permissionDecisionReason: ("Refusing to edit \($toplevel): it is a primary checkout, not a worktree, and other work may be in flight there. Create a dedicated worktree (`git -C \($toplevel) worktree add <dir> -b <branch> origin/main`) and edit the file there instead. Reads are always fine.")
-          }
-        }'
-        exit 0
-        ;;
-      esac
-    done
-    exit 0
-  '';
-
-  # SessionStart hook: cat the pre-rendered fleet context digest (ENG-2708).
-  # The fleet's `ix-context-digest` timer materializes
-  # `~/.cache/ix/context-digest.md` every few hours from the corpus lake's
-  # distilled_facts slices (top distilled lessons + a corpus-freshness line).
-  # Session start deliberately reads a static file instead of querying the
-  # store live: ambient live queries measured net-negative (see
-  # promptPriorsHook's rationale), while distilled lessons are pre-curated
-  # signal and a local read costs no latency and fails open by absence. Every
-  # miss path is silent `exit 0`; output is hard-capped at ~1500 tokens (6000
-  # chars, inside the 10,000-char additionalContext limit). Kill switch:
-  # export CLAUDE_CODE_DISABLE_CONTEXT_DIGEST=1.
-  sessionDigestHook = writeShellScript "claude-session-digest-hook" ''
-    # Generated by packages/claude-code/default.nix (sessionDigestHook).
-    # Fail open and silent: every miss/error path is `exit 0` with no output.
-    [ -z "''${CLAUDE_CODE_DISABLE_CONTEXT_DIGEST-}" ] || exit 0
-    digest="''${HOME-/var/empty}/.cache/ix/context-digest.md"
-    [ -r "$digest" ] || exit 0
-
-    # The renderer already targets the same cap; head -c is the hook-side
-    # guarantee so a corrupt or hand-edited file cannot flood the context.
-    context=$(${coreutils}/bin/head -c 6000 "$digest" 2>/dev/null) || exit 0
-    [ -n "$context" ] || exit 0
-
-    ${lib.getExe jq} -cn --arg context "$context" \
-      '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $context}}' 2>/dev/null
-    exit 0
-  '';
+  hookCmd = sub: "${claudeHooks}/bin/claude-hooks ${sub}";
 
   # Caller's extraSettings first, then the computed defaults recursively merged
   # ON TOP, so the keys below always win a conflict while the caller's other
@@ -466,7 +295,7 @@ let
             hooks = [
               {
                 type = "command";
-                command = toString sessionDigestHook;
+                command = hookCmd "session-digest";
                 # A local file read; generous next to the CLI's 60s default.
                 timeout = 5;
               }
@@ -478,7 +307,7 @@ let
           hooks = [
             {
               type = "command";
-              command = toString worktreeGuardHook;
+              command = hookCmd "worktree-guard";
               # The hook runs a handful of local `git rev-parse` calls; well
               # past that something is wedged and failing open beats stalling
               # every edit.
@@ -493,7 +322,7 @@ let
             hooks = [
               {
                 type = "command";
-                command = toString promptPriorsHook;
+                command = hookCmd "prompt-priors";
                 # Generous ceiling over the script's own 2s search budget; the
                 # CLI default is 60s, far past fail-open.
                 timeout = 5;
@@ -515,10 +344,11 @@ let
     inherit mcpServers;
   };
 
-  # PATH additions the CLI expects at runtime (prepended, like the old
-  # `--prefix PATH :`): ps for process checks, the pinned ripgrep, the house
-  # minecraft-sound chime, and the Linux sandbox helpers.
-  wrapperPath = lib.makeBinPath (
+  # Dirs prepended to PATH at launch (the old `--prefix PATH :`): ps for process
+  # checks, the pinned ripgrep, the house minecraft-sound chime, and the Linux
+  # sandbox helpers. Passed to the launcher as `path_prepend` (it joins them
+  # ahead of the caller's PATH).
+  pathPrepend = map (p: "${lib.getBin p}/bin") (
     [
       procps
       ripgrep
@@ -578,51 +408,35 @@ let
       "--append-system-prompt-file=${builtins.toFile "claude-code-append-system-prompt.txt" appendSystemPrompt}"
   ++ lib.optional (mcpServers != { }) "--mcp-config=${mcpConfigFile}";
 
-  # The wrapper itself: a plain shell script rather than a compiled
-  # makeBinaryWrapper, because the one thing a static wrapper cannot express is
-  # the conditional `--settings` injection below, and a readable script beats
-  # `strings`-ing a Mach-O when debugging argv anyway. `@helper@` is substituted
-  # with the real binary's path at install time (it lives under $out, which is
-  # unknowable here). The store output is read-only, so the bundled self-updater
-  # could never write; DISABLE_AUTOUPDATER turns it off cleanly, the install
-  # checks are skipped, and USE_BUILTIN_RIPGREP=0 pins search to the Nix ripgrep
-  # on PATH so the wrapper owns the version pin.
-  # Hot-path launch wrapper that needs install-time `@helper@` substitution (the
-  # helper lives under $out, unknowable to the house writers) and an argv0-
-  # preserving exec; covered by the installCheck argv tests below.
-  # astlog-ignore: no-handrolled-shell-script
-  wrapperScript = writeText "claude-wrapper.sh" ''
-    #!${runtimeShell}
-    # Generated by packages/claude-code/default.nix; see wrapperFlags there.
-    export DISABLE_AUTOUPDATER=1
-    export DISABLE_INSTALLATION_CHECKS=1
-    export USE_BUILTIN_RIPGREP=0
-    ${envDefaultExports}
-    export PATH=${wrapperPath}''${PATH:+:$PATH}
+  envEntries = attrs: lib.mapAttrsToList (key: value: { inherit key value; }) attrs;
 
-    flags=(${lib.escapeShellArgs wrapperFlags})
-
-    # --settings is first-wins between two flags (they never merge), so inject
-    # the package defaults only when the caller passed none; see the
-    # settingsDefaults comment.
-    inject_settings=1
-    for arg in "$@"; do
-      case "$arg" in
-      --settings | --settings=*)
-        inject_settings=0
-        break
-        ;;
-      --)
-        break
-        ;;
-      esac
-    done
-    if ((inject_settings)); then
-      flags+=(--settings=${settingsDefaultsFile})
-    fi
-
-    exec -a "$0" "@helper@" "''${flags[@]}" "$@"
-  '';
+  # The launch spec consumed by the shared Rust launcher (packages/config-launch):
+  # it sets env/PATH, prepends `wrapperFlags`, injects `--settings` only when the
+  # caller passed none (the CLI is first-wins between two `--settings` flags),
+  # then execs the real binary preserving argv0. The store output is read-only so
+  # the bundled self-updater could never write: DISABLE_AUTOUPDATER turns it off,
+  # the install checks are skipped, and USE_BUILTIN_RIPGREP=0 pins search to the
+  # Nix ripgrep on PATH so the wrapper owns the version pin. `target` is an
+  # `@helper@` placeholder substituted at install time (the real binary lives
+  # under `$out/libexec`, unknowable here). Covered by the installCheck argv
+  # tests below.
+  launchSpec = (formats.json { }).generate "claude-code-launch-spec.json" {
+    target = "@helper@";
+    env = envEntries {
+      DISABLE_AUTOUPDATER = "1";
+      DISABLE_INSTALLATION_CHECKS = "1";
+      USE_BUILTIN_RIPGREP = "0";
+    };
+    env_defaults = envEntries (lib.mapAttrs (_: toString) wrapperEnvDefaults);
+    path_prepend = pathPrepend;
+    flags = wrapperFlags;
+    conditional_flags = [
+      {
+        unless_present = [ "--settings" ];
+        flags = [ "--settings=${settingsDefaultsFile}" ];
+      }
+    ];
+  };
 
   inherit (stdenv.hostPlatform) system;
   target =
@@ -720,11 +534,14 @@ stdenv.mkDerivation {
   dontStrip = true;
   strictDeps = true;
 
-  nativeBuildInputs = lib.optional stdenv.hostPlatform.isElf autoPatchelfHook;
+  nativeBuildInputs = [
+    makeBinaryWrapper
+  ]
+  ++ lib.optional stdenv.hostPlatform.isElf autoPatchelfHook;
 
   installPhase = ''
     runHook preInstall
-    mkdir -p $out/bin $out/libexec
+    mkdir -p $out/bin $out/libexec $out/share
 
     # 1Password's "CLI access requested" prompt labels the request with the
     # basename of the process that spawns `op`, which is this real binary rather
@@ -738,38 +555,45 @@ stdenv.mkDerivation {
     helper="$out/libexec/Claude Code"
     install -m755 ${nativeBinary} "$helper"
 
-    # All flag and env injection lives in `wrapperScript` (see its let-binding
-    # and `wrapperFlags` for the per-flag rationale); here it only learns the
-    # helper's real path.
-    install -m755 ${wrapperScript} $out/bin/${binName}
-    substituteInPlace $out/bin/${binName} --subst-var-by helper "$helper"
+    # All flag/env/PATH injection lives in `launchSpec` (see its let-binding and
+    # `wrapperFlags` for the per-flag rationale); bake the helper's real path
+    # into the @helper@ placeholder, then point the launcher at the spec.
+    install -m644 ${launchSpec} $out/share/claude-code-launch-spec.json
+    substituteInPlace $out/share/claude-code-launch-spec.json --subst-var-by helper "$helper"
+    makeBinaryWrapper ${ix.rustWorkspace.units.binaries."config-launch"}/bin/config-launch \
+      $out/bin/${binName} \
+      --inherit-argv0 \
+      --set IX_LAUNCH_SPEC $out/share/claude-code-launch-spec.json
 
     runHook postInstall
   '';
 
-  # Argv regression net for the wrapper, run against a stub helper so it is
+  # Argv regression net for the launcher spec, run against a stub target so it is
   # offline and instant. Guards the properties the wrapper exists for: injected
   # flags ride BEFORE the user argv (subcommands keep parsing), every injected
   # option-argument is one `=` token (nothing can swallow a positional), and
   # `--settings` defers to a caller-provided one (the CLI is first-wins between
-  # two `--settings` flags).
+  # two `--settings` flags). Drives the real generated spec with its `@helper@`
+  # target swapped for the stub, through the actual launcher binary (the built
+  # `$out/bin/${binName}` forces IX_LAUNCH_SPEC via makeBinaryWrapper `--set`, so
+  # the launcher is exercised directly here).
   doInstallCheck = true;
   installCheckPhase = ''
     runHook preInstallCheck
 
+    launcher=${ix.rustWorkspace.units.binaries."config-launch"}/bin/config-launch
     stub="$PWD/stub"
     printf '%s\n' '#!${runtimeShell}' 'printf "%s\n" "$@"' > "$stub"
     chmod +x "$stub"
-    sed "s|$helper|$stub|" $out/bin/${binName} > test-wrapper
-    chmod +x test-wrapper
+    sed "s|@helper@|$stub|" ${launchSpec} > "$PWD/test-spec.json"
 
     check() {
       local desc="$1" expected="$2"
       shift 2
       local got
-      got="$(./test-wrapper "$@")"
+      got="$(IX_LAUNCH_SPEC="$PWD/test-spec.json" "$launcher" "$@")"
       if [ "$got" != "$expected" ]; then
-        printf 'claude wrapper argv check failed: %s\nexpected:\n%s\ngot:\n%s\n' \
+        printf 'claude launcher argv check failed: %s\nexpected:\n%s\ngot:\n%s\n' \
           "$desc" "$expected" "$got" >&2
         exit 1
       fi
@@ -810,19 +634,19 @@ stdenv.mkDerivation {
     # present digest rides additionalContext verbatim, and an oversized digest
     # is hard-capped at 6000 chars.
     mkdir -p digest-home/.cache/ix
-    if got="$(HOME="$PWD/no-such-home" ${sessionDigestHook} </dev/null)" && [ -z "$got" ]; then :; else
+    if got="$(HOME="$PWD/no-such-home" ${claudeHooks}/bin/claude-hooks session-digest </dev/null)" && [ -z "$got" ]; then :; else
       printf 'session-digest hook check failed (missing digest): expected silent exit 0, got:\n%s\n' "$got" >&2
       exit 1
     fi
     printf 'Distilled lesson: prefer rg over grep.' > digest-home/.cache/ix/context-digest.md
-    got="$(HOME="$PWD/digest-home" ${sessionDigestHook} </dev/null)"
+    got="$(HOME="$PWD/digest-home" ${claudeHooks}/bin/claude-hooks session-digest </dev/null)"
     want='{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Distilled lesson: prefer rg over grep."}}'
     if [ "$got" != "$want" ]; then
       printf 'session-digest hook check failed (digest present)\nexpected:\n%s\ngot:\n%s\n' "$want" "$got" >&2
       exit 1
     fi
     printf 'x%.0s' $(seq 9000) > digest-home/.cache/ix/context-digest.md
-    cap="$(HOME="$PWD/digest-home" ${sessionDigestHook} </dev/null \
+    cap="$(HOME="$PWD/digest-home" ${claudeHooks}/bin/claude-hooks session-digest </dev/null \
       | ${lib.getExe jq} -r '.hookSpecificOutput.additionalContext | length')"
     if [ "$cap" != 6000 ]; then
       printf 'session-digest hook check failed (cap): expected 6000 chars, got %s\n' "$cap" >&2
@@ -839,7 +663,7 @@ stdenv.mkDerivation {
       mkdir -p no-home
       hook_silent() {
         local desc="$1" input="$2" got
-        if ! got="$(printf '%s' "$input" | HOME="$PWD/no-home" ${promptPriorsHook})" \
+        if ! got="$(printf '%s' "$input" | HOME="$PWD/no-home" ${claudeHooks}/bin/claude-hooks prompt-priors)" \
           || [ -n "$got" ]; then
           printf 'prompt-priors hook check failed (%s): expected silent exit 0, got:\n%s\n' \
             "$desc" "$got" >&2
@@ -872,7 +696,7 @@ stdenv.mkDerivation {
     guard() {
       local desc="$1" expect="$2" input="$3" got verdict
       got="$(printf '%s' "$input" \
-        | CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" ${worktreeGuardHook})"
+        | CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" ${claudeHooks}/bin/claude-hooks worktree-guard)"
       case "$got" in
       ''') verdict=allow ;;
       *'"permissionDecision":"deny"'*) verdict=deny ;;
@@ -902,7 +726,7 @@ stdenv.mkDerivation {
     guard "malformed payload fails open" allow 'not json'
     if [ -n "$(printf '%s' "{\"tool_input\":{\"file_path\":\"$primary/a.txt\"}}" \
       | CLAUDE_CODE_DISABLE_WORKTREE_GUARD=1 \
-        CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" ${worktreeGuardHook})" ]; then
+        CLAUDE_CODE_PRIMARY_CHECKOUTS="$primary" ${claudeHooks}/bin/claude-hooks worktree-guard)" ]; then
       printf 'worktree guard check failed: kill switch must allow silently\n' >&2
       exit 1
     fi

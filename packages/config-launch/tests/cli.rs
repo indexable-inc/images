@@ -208,6 +208,144 @@ fn argv_passthrough() {
     assert!(lines.contains(&"o3"), "expected 'o3' in passthrough");
 }
 
+/// A stub that prints its full environment (one `KEY=VALUE` per line).
+fn write_env_stub(dir: &TempDir) -> std::path::PathBuf {
+    let path = dir.path().join("env-stub");
+    let mut f = fs::File::create(&path).expect("create env stub");
+    f.write_all(b"#!/bin/sh\nenv\n").expect("write env stub");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod env stub");
+    path
+}
+
+fn write_json_spec(dir: &TempDir, spec: &serde_json::Value) -> std::path::PathBuf {
+    let path = dir.path().join("spec.json");
+    fs::write(&path, spec.to_string()).expect("write spec");
+    path
+}
+
+#[test]
+fn env_always_set_and_defaults_only_when_unset() {
+    let tmp = TempDir::new().unwrap();
+    let stub = write_env_stub(&tmp);
+    let spec = write_json_spec(
+        &tmp,
+        &serde_json::json!({
+            "target": stub.to_str().unwrap(),
+            "env": [{ "key": "ALWAYS", "value": "a" }],
+            "env_defaults": [{ "key": "DEF", "value": "d" }],
+        }),
+    );
+
+    // DEF unset in the caller env -> the default is injected.
+    let out = Command::new(BIN)
+        .env("IX_LAUNCH_SPEC", &spec)
+        .env_remove("DEF")
+        .output()
+        .expect("run");
+    let lines: Vec<String> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert!(lines.contains(&"ALWAYS=a".to_owned()), "got: {lines:?}");
+    assert!(lines.contains(&"DEF=d".to_owned()), "got: {lines:?}");
+
+    // DEF already set -> the caller value is preserved, default withheld.
+    let out2 = Command::new(BIN)
+        .env("IX_LAUNCH_SPEC", &spec)
+        .env("DEF", "preset")
+        .output()
+        .expect("run");
+    let lines2: Vec<String> = String::from_utf8(out2.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert!(lines2.contains(&"DEF=preset".to_owned()), "got: {lines2:?}");
+    assert!(!lines2.contains(&"DEF=d".to_owned()), "got: {lines2:?}");
+}
+
+#[test]
+fn path_prepend_rides_ahead_of_caller_path() {
+    let tmp = TempDir::new().unwrap();
+    let stub = write_env_stub(&tmp);
+    let spec = write_json_spec(
+        &tmp,
+        &serde_json::json!({
+            "target": stub.to_str().unwrap(),
+            "path_prepend": ["/ix/bin"],
+        }),
+    );
+    let out = Command::new(BIN)
+        .env("IX_LAUNCH_SPEC", &spec)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("run");
+    let path_line = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .find(|l| l.starts_with("PATH="))
+        .expect("PATH line")
+        .to_owned();
+    assert_eq!(path_line, "PATH=/ix/bin:/usr/bin:/bin", "got: {path_line}");
+}
+
+#[test]
+fn static_and_conditional_flags_prepend_before_argv() {
+    let tmp = TempDir::new().unwrap();
+    let stub = write_stub(&tmp);
+    let spec = write_json_spec(
+        &tmp,
+        &serde_json::json!({
+            "target": stub.to_str().unwrap(),
+            "flags": ["--debug", "--thinking-display=summarized"],
+            "conditional_flags": [
+                { "unless_present": ["--settings"], "flags": ["--settings=/def.json"] }
+            ],
+        }),
+    );
+
+    // No user --settings: defaults inject, before the subcommand argv.
+    let out = Command::new(BIN)
+        .env("IX_LAUNCH_SPEC", &spec)
+        .args(["mcp", "list"])
+        .output()
+        .expect("run");
+    let lines: Vec<String> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "--debug",
+            "--thinking-display=summarized",
+            "--settings=/def.json",
+            "mcp",
+            "list"
+        ],
+        "flags must prepend before the user argv"
+    );
+
+    // User passes their own --settings: the conditional block is withheld.
+    let out2 = Command::new(BIN)
+        .env("IX_LAUNCH_SPEC", &spec)
+        .args(["--settings=/user.json", "-p", "hi"])
+        .output()
+        .expect("run");
+    let lines2: Vec<String> = String::from_utf8(out2.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        !lines2.iter().any(|l| l == "--settings=/def.json"),
+        "package --settings must defer to the caller's; got: {lines2:?}"
+    );
+    assert!(lines2.contains(&"--settings=/user.json".to_owned()));
+}
+
 #[test]
 fn missing_spec_env_exits_78() {
     let output = Command::new(BIN)

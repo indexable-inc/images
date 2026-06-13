@@ -4,6 +4,7 @@ members = [
   "packages/agents-md",
   "packages/blast-radius",
   "packages/build-version",
+  "packages/claude-hooks",
   "packages/claude-stories",
   "packages/ast-merge/ast",
   "packages/ast-merge/cli",

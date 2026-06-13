@@ -26,6 +26,13 @@ let
   #      scope.
   # No external binaries: `[`, `printf`, `read`, `case`, and `$(<file)` are all
   # bash builtins, so the helper has no runtime PATH requirement.
+  #
+  # Kept as raw bash, not migrated to a checked writer: this is a perf-sensitive
+  # git credential helper invoked per git operation, deliberately NOT `set -e`
+  # (its control flow is built on intentional nonzero `|| exit 0` fall-throughs),
+  # builtins-only with no PATH. A nushell rewrite adds startup latency and the
+  # bash writer's `set -euo pipefail` would change its semantics.
+  # astlog-ignore: no-write-shell-script
   credentialHelper = pkgs.writeShellScript "github-token-credential-helper" ''
     [ "$1" = get ] || exit 0
     [ -r ${lib.escapeShellArg tokenPath} ] || exit 0
@@ -57,6 +64,12 @@ let
   # delivered; the stdout redirect is belt-and-suspenders against a token
   # reaching the health-check log). Passes in CI and on a fresh boot with no
   # token.
+  #
+  # Kept as raw bash: the `git config --get-all | grep -qxF` probe relies on
+  # `grep -q` exiting early, which under the bash writer's `set -o pipefail`
+  # would surface git's SIGPIPE as a failure on a successful match. Pairs with
+  # the credential helper above.
+  # astlog-ignore: no-write-shell-script
   credentialHelperCheck = pkgs.writeShellScript "check-github-credential-helper" ''
     set -eu
     ${lib.getExe pkgs.git} config --get-all 'credential.https://github.com.helper' \

@@ -56,12 +56,16 @@ let
       AS SELECT ${columnList} FROM ${schema.database}.${schema.table}_queue;
   '';
 
-  applyInit = pkgs.writeShellScript "mc-blocks-apply-init" ''
-    set -eu
-    ch() { ${lib.getExe pkgs.clickhouse} client --host ${clickhouseHost} --port ${toString clickhousePort} "$@"; }
-    until ch --query "SELECT 1" >/dev/null 2>/tmp/ch-probe.err; do sleep 1; done
-    ch --multiquery < ${initSql}
-  '';
+  applyInit = lib.getExe (
+    ix.writeNushellApplication pkgs {
+      name = "mc-blocks-apply-init";
+      text = ''
+        let base = [ "client" "--host" "${clickhouseHost}" "--port" "${toString clickhousePort}" ]
+        while (^${lib.getExe pkgs.clickhouse} ...$base --query "SELECT 1" | complete).exit_code != 0 { sleep 1sec }
+        open --raw "${initSql}" | ^${lib.getExe pkgs.clickhouse} ...$base --multiquery
+      '';
+    }
+  );
 in
 {
   # The shared observability stack: ONE ClickHouse holds both the `otel_*`
