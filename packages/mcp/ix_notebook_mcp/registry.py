@@ -233,6 +233,7 @@ LIBRARIES: tuple[Library, ...] = (
     Library("duckdb"),
     Library("httpx"),
     Library("matplotlib"),
+    Library("pypdf"),
     Library("playwright"),
     Library(
         "exa_py",

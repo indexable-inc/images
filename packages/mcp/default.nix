@@ -742,6 +742,10 @@ let
       # (runtime.__ix_snapshot / __ix_restore) depend on it to bring an agent's
       # helpers back instantly when a session file is reopened.
       ps.dill
+      # pypdf: extract text from a PDF in-kernel, so a downloaded file can be
+      # read/searched without shelling out or falling back to a host tool. Pure
+      # Python, small (`from pypdf import PdfReader`).
+      ps.pypdf
       tuiModule
       searchModule
       astlogModule
@@ -1034,6 +1038,7 @@ let
   dataLibsBundled = importTest "data-libs" (
     "import psycopg, sqlalchemy, duckdb, httpx; "
     + "from sqlalchemy import create_engine; create_engine('postgresql+psycopg://u@h/db'); "
+    + "from pypdf import PdfReader; "
     + "print('data-libs-ok')"
   );
   gmailLibsBundled = importTest "gmail-libs" (
@@ -1118,6 +1123,7 @@ let
     import asyncio as _asyncio
 
     assert _asyncio.iscoroutinefunction(slack.channels)
+    assert _asyncio.iscoroutinefunction(slack.dms)
     assert _asyncio.iscoroutinefunction(slack.messages)
     assert _asyncio.iscoroutinefunction(slack.thread)
     assert _asyncio.iscoroutinefunction(slack.send)
