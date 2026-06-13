@@ -39,5 +39,5 @@ ix shell client -- curl -fsS http://api:8080/
 Group slugs are scoped to the deploying user (`UNIQUE (owner_id, slug)` on
 the server), so a common name like `declared-groups` in a published image
 never collides with another user's group of the same name. Slugs are
-`[a-z0-9_-]`, max 64 chars; the fleet eval rejects anything else before any
-RPC runs.
+`[a-z0-9_-]`, max 63 chars (the DNS label limit); the fleet eval rejects
+anything else before any RPC runs.

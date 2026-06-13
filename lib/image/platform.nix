@@ -338,8 +338,9 @@ in
           slug reach each other privately as `<eastWest.hostName>.ix.internal`;
           a VM outside the group has no route in.
 
-          Slugs are scoped per owner and limited to `[a-z0-9_-]`, max 64
-          chars; the fleet eval rejects anything else before any RPC runs.
+          Slugs are scoped per owner and limited to `[a-z0-9_-]`, max 63
+          chars (the DNS label limit); the fleet eval rejects anything else
+          before any RPC runs.
         '';
       };
     };
