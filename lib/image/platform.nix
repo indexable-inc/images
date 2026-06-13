@@ -323,6 +323,25 @@ in
         type = lib.types.str;
         default = config.networking.hostName;
       };
+
+      groups = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = lib.literalExpression ''[ "shared-db" ]'';
+        description = ''
+          East-west group slugs this image's VM joins at creation.
+
+          Declared in the image so the network identity travels with the
+          definition: the fleet plan unions these with the fleet-level
+          `nodes.<name>.groups`, and the create path get-or-creates each
+          slug under the deploying user before first boot. VMs sharing a
+          slug reach each other privately as `<eastWest.hostName>.ix.internal`;
+          a VM outside the group has no route in.
+
+          Slugs are scoped per owner and limited to `[a-z0-9_-]`, max 64
+          chars; the fleet eval rejects anything else before any RPC runs.
+        '';
+      };
     };
   };
 

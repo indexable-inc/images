@@ -244,9 +244,18 @@ let
         else
           config.system.build.toplevel.drvPath
       );
+      # Image-declared membership (`ix.networking.groups`) unions with the
+      # fleet-level `nodes.<name>.groups`: the image carries its own network
+      # identity, the fleet adds deployment-specific memberships on top.
+      nodeGroups = lib.unique (spec.groups ++ config.ix.networking.groups);
+      # Mirrors the server's validate_group_slug rule so a bad slug fails the
+      # eval, not the create RPC mid-deploy.
+      invalidGroups = filter (slug: builtins.match "[a-z0-9_-]{1,64}" slug == null) nodeGroups;
     in
     assert lib.assertMsg (deploy.ipv4 || ipv4HealthChecks == { })
       "fleet node '${name}' has health checks that require deployment.ipv4 = true: ${lib.concatStringsSep ", " (lib.attrNames ipv4HealthChecks)}";
+    assert lib.assertMsg (invalidGroups == [ ])
+      "fleet node '${name}' has invalid east-west group slug(s) (allowed: [a-z0-9_-], max 64 chars): ${lib.concatStringsSep ", " invalidGroups}";
     {
       inherit
         name
@@ -276,7 +285,7 @@ let
       inherit (deploy) snapshot;
       recreateOnUp = deploy.recreateOnUp or false;
       inherit (spec) tags;
-      inherit (spec) groups;
+      groups = nodeGroups;
       inherit (deploy) env;
       inherit (deploy) l7ProxyPorts;
       dependsOn = expandedDependencies.${name};
