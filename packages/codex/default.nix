@@ -45,7 +45,12 @@ let
   # and soft defaults), performs per-key TOML presence detection against the
   # user's config.toml, then exec's the target preserving argv0.
   launcher = ix.rustWorkspace.units.binaries."config-launch";
-  entriesOf = flat: lib.mapAttrsToList (key: v: { inherit key; value = ix.toml.scalar v; }) flat;
+  entriesOf =
+    flat:
+    lib.mapAttrsToList (key: v: {
+      inherit key;
+      value = ix.toml.scalar v;
+    }) flat;
   spec = (formats.json { }).generate "codex-launch-spec.json" {
     target = lib.getExe codex;
     config_dir_env = "CODEX_HOME";
