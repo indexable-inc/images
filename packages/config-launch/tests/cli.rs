@@ -201,7 +201,10 @@ fn argv_passthrough() {
     let lines: Vec<&str> = stdout.lines().collect();
     assert!(lines.contains(&"exec"), "expected 'exec' in passthrough");
     assert!(lines.contains(&"hi"), "expected 'hi' in passthrough");
-    assert!(lines.contains(&"--model"), "expected '--model' in passthrough");
+    assert!(
+        lines.contains(&"--model"),
+        "expected '--model' in passthrough"
+    );
     assert!(lines.contains(&"o3"), "expected 'o3' in passthrough");
 }
 

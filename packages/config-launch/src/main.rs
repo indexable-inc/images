@@ -117,11 +117,11 @@ mod tests {
         }
     }
 
-    fn flags_to_pairs(flags: &[String]) -> Vec<(&str, &str)> {
+    /// True if `flags` contains a `--config <expected>` pair.
+    fn has_config(flags: &[String], expected: &str) -> bool {
         flags
-            .chunks(2)
-            .map(|c| (c[0].as_str(), c[1].as_str()))
-            .collect()
+            .windows(2)
+            .any(|w| w[0] == "--config" && w[1] == expected)
     }
 
     fn parse_toml(s: &str) -> toml::Value {
@@ -132,9 +132,8 @@ mod tests {
     fn forced_always_injected_no_config() {
         let spec = make_spec(vec![("check_for_update_on_startup", "false")], vec![]);
         let flags = build_flags(&spec, None);
-        let pairs = flags_to_pairs(&flags);
         assert!(
-            pairs.contains(&("--config", "check_for_update_on_startup=false")),
+            has_config(&flags, "check_for_update_on_startup=false"),
             "forced flag should always be injected; got: {flags:?}"
         );
     }
@@ -144,9 +143,8 @@ mod tests {
         let spec = make_spec(vec![("check_for_update_on_startup", "false")], vec![]);
         let cfg = parse_toml("check_for_update_on_startup = true\n");
         let flags = build_flags(&spec, Some(&cfg));
-        let pairs = flags_to_pairs(&flags);
         assert!(
-            pairs.contains(&("--config", "check_for_update_on_startup=false")),
+            has_config(&flags, "check_for_update_on_startup=false"),
             "forced flag must override even when user config sets the key; got: {flags:?}"
         );
     }
@@ -165,20 +163,19 @@ mod tests {
             ],
         );
         let flags = build_flags(&spec, None);
-        let pairs = flags_to_pairs(&flags);
         assert!(
-            pairs.contains(&("--config", "features.multi_agent_v2.enabled=true")),
+            has_config(&flags, "features.multi_agent_v2.enabled=true"),
             "soft flag should be injected when config absent; got: {flags:?}"
         );
         assert!(
-            pairs.contains(&(
-                "--config",
+            has_config(
+                &flags,
                 "features.multi_agent_v2.max_concurrent_threads_per_session=16"
-            )),
+            ),
             "soft flag should be injected when config absent; got: {flags:?}"
         );
         assert!(
-            pairs.contains(&("--config", "agents.max_depth=3")),
+            has_config(&flags, "agents.max_depth=3"),
             "soft flag should be injected when config absent; got: {flags:?}"
         );
     }
@@ -204,23 +201,22 @@ mod tests {
         );
         let cfg = parse_toml("[features.multi_agent_v2]\nenabled = false\n");
         let flags = build_flags(&spec, Some(&cfg));
-        let pairs = flags_to_pairs(&flags);
 
         assert!(
-            !pairs.contains(&("--config", "features.multi_agent_v2.enabled=true")),
+            !has_config(&flags, "features.multi_agent_v2.enabled=true"),
             "enabled soft key should be withheld because config sets it; got: {flags:?}"
         );
         // max_concurrent_threads_per_session is NOT set in config, so it IS injected
         assert!(
-            pairs.contains(&(
-                "--config",
+            has_config(
+                &flags,
                 "features.multi_agent_v2.max_concurrent_threads_per_session=16"
-            )),
+            ),
             "threads soft key should be injected because config does not set it; got: {flags:?}"
         );
         // agents.max_depth is a different subtree, should be injected
         assert!(
-            pairs.contains(&("--config", "agents.max_depth=3")),
+            has_config(&flags, "agents.max_depth=3"),
             "max_depth should be injected when only v2.enabled is set; got: {flags:?}"
         );
     }
