@@ -497,13 +497,19 @@ async def dms(*, limit: int = 100) -> pl.DataFrame:
     ``real_name``. Read one with ``await slack.messages("@<user>")`` or
     ``await slack.messages(id)``.
 
-    Listing DMs needs the ``im:read`` scope (resolving names also uses
-    ``users:read``). Raises :exc:`SlackError` when no token is configured, the
-    scope is missing (the error names it), or in a shared room.
+    Listing DMs needs the ``im:read`` scope. Names are resolved with
+    ``users:read`` when available; without it ``user``/``real_name`` come back
+    blank rather than failing the call. Raises :exc:`SlackError` when no token is
+    configured, ``im:read`` is missing (the error names it), or in a shared room.
     """
     _require_incognito()
     token = _token()
-    umap = _users_map(token)
+    # Listing IMs needs only im:read; resolving names needs users:read. Degrade
+    # to blank names rather than failing the whole call when users:read is absent.
+    try:
+        umap = _users_map(token)
+    except SlackError:
+        umap = {}
 
     rows: list[dict] = []
     cursor: str | None = None
@@ -553,9 +559,11 @@ async def messages(
     as empty. Pass ``include_noise=True`` to keep those too.
 
     Reading needs the matching history scope (``channels:history`` /
-    ``groups:history`` / ``im:history`` / ``mpim:history``). Raises
-    :exc:`SlackError` when no token is configured, the conversation is not found,
-    or in a shared room.
+    ``groups:history`` / ``im:history`` / ``mpim:history``). Resolving a
+    ``@user``/user-id to a DM uses ``conversations.open`` (needs ``im:write``);
+    pass a ``D…`` id or use :func:`dms` to avoid that. Raises :exc:`SlackError`
+    when no token is configured, the conversation is not found, or in a shared
+    room.
     """
     _require_incognito()
     token = _token()
@@ -620,6 +628,8 @@ async def thread(
         {"channel": channel_id, "ts": ts, "limit": min(limit, 1000)},
     )
     rows: list[dict] = []
+    # No noise filter here (unlike messages()): a thread's replies are content by
+    # definition and rarely carry channel-membership subtypes, so keep them all.
     for msg in data.get("messages", []):
         rows.append(
             {
