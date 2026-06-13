@@ -1,0 +1,21 @@
+[package]
+name = "config-launch"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Config-driven exec launcher: inject CLI --config flags (forced always, soft only when absent from a config file) then exec a target, preserving argv0"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+toml = { workspace = true, features = ["parse", "serde"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "config-launch"
+path = "src/main.rs"

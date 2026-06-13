@@ -25,6 +25,7 @@ members = [
   "packages/clone-detect/hash",
   "packages/clone-detect/pragma",
   "packages/clone-detect/scanner",
+  "packages/config-launch",
   "packages/code-highlight",
   "packages/code-tokenizer",
   "packages/dag-runner",

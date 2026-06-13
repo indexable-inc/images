@@ -1,0 +1,1 @@
+{ writeText }: writeText "wrap.sh" "echo hi"

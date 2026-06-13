@@ -273,6 +273,26 @@
 (lint no-getflake-tostring error
   "`builtins.getFlake (toString ./...)` uses path-flake semantics, copying the entire tree including non-regular files; use `\"git+file:///...\"` instead")
 
+;; no-handrolled-shell-script: `writeText "*.sh" ...` hand-rolls a shell script
+;; with no shellcheck and no declared runtime deps (the same gap that bans
+;; writeShellApplication / writeShellScriptBin). Prefer a compiled wrapper: a
+;; small Rust launcher built via ix.rustWorkspace (see packages/config-launch,
+;; used by packages/codex) for argv0-preserving exec, or
+;; ix.writeNushellApplication / ix.writePythonApplication for logic scripts. A
+;; launch wrapper that needs install-time `@placeholder@` substitution the
+;; writers cannot express may keep writeText with an
+;; `astlog-ignore: no-handrolled-shell-script` comment plus a reason.
+(rule (no-handrolled-shell-script n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: [(variable_expression) (select_expression)] @f
+        argument: (string_expression) @s)) @n")
+  (text-match f "^(pkgs\\.)?writeText$")
+  (text-match s "\\.sh\"$"))
+(lint no-handrolled-shell-script warning
+  "`writeText \"*.sh\"` hand-rolls an unchecked shell script; prefer a compiled Rust launcher (ix.rustWorkspace, see packages/config-launch / packages/codex) or ix.writeNushellApplication / ix.writePythonApplication, or keep it with an `astlog-ignore: no-handrolled-shell-script` comment + reason")
+
 ;; no-handrolled-toml-scalar: a local `toToml` binding re-rolls the scalar ->
 ;; TOML literal encoder used to render `key = value` config flags. Use
 ;; ix.toml.scalar from `lib/util/toml.nix` (and ix.attrs.flattenToDotted from
