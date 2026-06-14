@@ -34,7 +34,7 @@ jobs:
       # `accept-flake-config` lets the job consume the flake's indexable-inc
       # Cachix substituter without a prompt.
       - name: Install Determinate Nix
-        uses: DeterminateSystems/determinate-nix-action@bafaa638b9d5ec0e7e3ac1a7fc80453ef1fd265f # v3
+        uses: DeterminateSystems/determinate-nix-action@9adf02b41cfdac2632e1c16f0480ff5bf3b05dd6 # v3
         with:
           extra-conf: |
             accept-flake-config = true
