@@ -1,29 +1,46 @@
 <script lang="ts">
-  // One namespace row, rendered recursively: a container (dict/list/object) shows a
-  // caret and expands its `children` inline, each child the same row one level
-  // deeper. Leaves have no caret. Open state is local, so expanding one branch
-  // never disturbs another.
+  // One namespace line. Selection and expansion are owned by the view (so the
+  // keyboard can walk the whole tree), so this is purely presentational: it draws
+  // the caret/icon/name/detail/size for one row and reports clicks. Children are
+  // rendered by the parent as their own flattened lines, not nested here. A
+  // top-level row may also carry provenance — the runs that set/used it — shown as
+  // clickable chips below the line.
   import { fmtSize, detail, type NsRow as Row } from '$lib/namespace';
   import { focusPane } from '$lib/ui.svelte';
   import { store, SCOPE_SEP } from '$lib/stream.svelte';
   import KindIcon from './KindIcon.svelte';
-  // Svelte 5 expresses recursion by importing the component itself rather than the
-  // old <svelte:self>.
-  import Self from './NsRow.svelte';
 
-  // `scope` is the namespace pane's producer scope, threaded down so a reference
-  // chip can build the target exec pane's key (`scope<0x1f>runId`) and focus it.
-  let { row, depth = 0, scope = '' }: { row: Row; depth?: number; scope?: string } = $props();
+  let {
+    row,
+    depth = 0,
+    path,
+    scope = '',
+    open = false,
+    selected = false,
+    onSelect,
+    onToggle,
+  }: {
+    row: Row;
+    depth?: number;
+    path: string;
+    // The namespace pane's producer scope, so a reference chip can build the target
+    // exec pane's key (`scope<0x1f>runId`) and focus it.
+    scope?: string;
+    open?: boolean;
+    selected?: boolean;
+    onSelect: (path: string) => void;
+    onToggle: (path: string) => void;
+  } = $props();
 
   const hasChildren = $derived(!!row.children && row.children.length > 0);
   // References live only on top-level rows; show them when present.
   const assignedIn = $derived(row.assigned_in ?? []);
   const usedIn = $derived(row.used_in ?? []);
   const hasRefs = $derived(assignedIn.length > 0 || usedIn.length > 0);
-  let open = $state(false);
 
-  function toggle(): void {
-    if (hasChildren) open = !open;
+  function onClick(): void {
+    onSelect(path);
+    if (hasChildren) onToggle(path);
   }
 
   // Jump to the run behind a reference: focus its exec pane. The exec pane's id is
@@ -37,7 +54,7 @@
   // span the whole session, so an old id can dangle — render those non-clickable
   // rather than focus a key that resolves to the "not in the feed" placeholder.
   function runPresent(runId: string): boolean {
-    return (scope + SCOPE_SEP + runId) in store.panes;
+    return scope + SCOPE_SEP + runId in store.panes;
   }
 </script>
 
@@ -45,8 +62,10 @@
   <button
     class="nsrow-line"
     class:has-children={hasChildren}
+    class:sel={selected}
     style="padding-left: {12 + depth * 15}px"
-    onclick={toggle}
+    data-path={path}
+    onclick={onClick}
     aria-expanded={hasChildren ? open : undefined}
   >
     <span class="nsrow-caret" class:open class:hidden={!hasChildren}>›</span>
@@ -83,12 +102,6 @@
       {/if}
     </div>
   {/if}
-
-  {#if open && row.children}
-    {#each row.children as child, i (child.name + ':' + i)}
-      <Self row={child} depth={depth + 1} {scope} />
-    {/each}
-  {/if}
 </div>
 
 <style>
@@ -116,8 +129,12 @@
   .nsrow-line.has-children:hover {
     background: var(--panel);
   }
+  /* Keyboard / click selection: the Raycast-style soft accent fill, no left bar. */
+  .nsrow-line.sel {
+    background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  }
   /* The caret: a quiet chevron that rotates open. Hidden (but space-preserving) on
-     leaves so every row's chip/name column stays aligned. */
+     leaves so every row's icon/name column stays aligned. */
   .nsrow-caret {
     justify-self: center;
     color: var(--ink-faint);

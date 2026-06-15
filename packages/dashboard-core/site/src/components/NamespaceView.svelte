@@ -2,8 +2,10 @@
   // The Namespace rail view: the kernel's live globals, browsable on their own
   // surface instead of interleaved into the run feed. Collects every namespace
   // `data` pane (one per Python session) and renders each as an expandable tree.
+  import { onMount } from 'svelte';
   import { store, SCOPE_SEP } from '$lib/stream.svelte';
-  import { parseRows } from '$lib/namespace';
+  import { buildNsItems, parseRows, nsParent, type NsRow as Row } from '$lib/namespace';
+  import { setListNav } from '$lib/keys.svelte';
   import type { Pane } from '$lib/types';
   import NamespaceBody from './NamespaceBody.svelte';
 
@@ -22,6 +24,90 @@
 
   // Total top-level names across sessions, for the header count.
   const total = $derived(sessions.reduce((n, s) => n + parseRows(s.pane.body).length, 0));
+
+  // Selection + expansion are owned here so the keyboard can walk the whole tree
+  // across sessions. Each session renders with the same `s<index>` path prefix the
+  // flat nav list uses, so paths line up between rendering and navigation.
+  let selected = $state<string | null>(null);
+  let expanded = $state<Record<string, boolean>>({});
+  const prefixOf = (si: number): string => `s${si}`;
+
+  // The flattened, currently-visible rows in render order — what j/k walk.
+  const flat = $derived.by(() => {
+    const out: { path: string; row: Row }[] = [];
+    sessions.forEach((s, si) => {
+      for (const it of buildNsItems(parseRows(s.pane.body), expanded, prefixOf(si))) {
+        if (it.kind === 'row') out.push({ path: it.path, row: it.row });
+      }
+    });
+    return out;
+  });
+
+  function scrollTo(path: string | null): void {
+    if (!path) return;
+    queueMicrotask(() =>
+      document
+        .querySelector(`.nsrow-line[data-path="${CSS.escape(path)}"]`)
+        ?.scrollIntoView({ block: 'nearest' }),
+    );
+  }
+  function selectIndex(i: number): void {
+    if (!flat.length) return;
+    const n = Math.max(0, Math.min(flat.length - 1, i));
+    selected = flat[n].path;
+    scrollTo(selected);
+  }
+  function move(delta: number): void {
+    const i = flat.findIndex((f) => f.path === selected);
+    selectIndex((i < 0 ? 0 : i) + delta);
+  }
+  function onSelect(path: string): void {
+    selected = path;
+  }
+  function onToggle(path: string): void {
+    expanded[path] = !expanded[path];
+  }
+  // `l`/`o`/Enter: expand a closed container, or descend into an open one.
+  function open(): void {
+    const cur = flat.find((f) => f.path === selected);
+    if (!cur?.row.children?.length) return;
+    if (!expanded[cur.path]) {
+      expanded[cur.path] = true;
+    } else {
+      selectIndex(flat.findIndex((f) => f.path === cur.path) + 1);
+    }
+  }
+  // `h`: collapse an open container, else step out to the parent row.
+  function back(): void {
+    const cur = flat.find((f) => f.path === selected);
+    if (!cur) return;
+    if (cur.row.children?.length && expanded[cur.path]) {
+      expanded[cur.path] = false;
+      return;
+    }
+    const parent = nsParent(cur.path);
+    if (parent) {
+      selected = parent;
+      scrollTo(selected);
+    }
+  }
+
+  // Keep the selection valid as the namespace changes; default to the first row.
+  $effect(() => {
+    if (flat.length === 0) selected = null;
+    else if (!flat.some((f) => f.path === selected)) selected = flat[0].path;
+  });
+
+  onMount(() => {
+    setListNav({
+      move,
+      top: () => selectIndex(0),
+      bottom: () => selectIndex(flat.length - 1),
+      open,
+      back,
+    });
+    return () => setListNav(null);
+  });
 </script>
 
 <div class="nsview">
@@ -34,11 +120,18 @@
     {#if sessions.length === 0}
       <div class="view-empty">{store.live ? 'no live namespace' : 'connecting…'}</div>
     {:else}
-      {#each sessions as s (s.key)}
+      {#each sessions as s, si (s.key)}
         {#if sessions.length > 1}
           <div class="nsview-session">{s.pane.subtitle || s.pane.scope || 'session'}</div>
         {/if}
-        <NamespaceBody pane={s.pane} />
+        <NamespaceBody
+          pane={s.pane}
+          prefix={prefixOf(si)}
+          {expanded}
+          {selected}
+          {onSelect}
+          {onToggle}
+        />
       {/each}
     {/if}
   </div>

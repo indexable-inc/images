@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { stripAnsi } from '$lib/ansi';
   import { store, timeline, SCOPE_SEP } from '$lib/stream.svelte';
   import { ui, focusPane, humanAge, humanDuration } from '$lib/ui.svelte';
+  import { setListNav } from '$lib/keys.svelte';
   import { rendererFor } from '$lib/renderers';
   import CodeBlock from './CodeBlock.svelte';
   import ExecBody from './ExecBody.svelte';
@@ -135,11 +137,28 @@
   // How many runs are currently executing, for the header's active badge.
   const activeCount = $derived(items.filter((it) => ledRun(it.pane)).length);
 
-  // Vim navigation: `j`/`k` move the selection down/up; the detail panel follows.
-  // `o` (or Enter) toggles the source inside the detail. Selection follows clicks
-  // too, so mouse and keyboard agree.
+  // `/` filter: a case-insensitive substring match over the title, id and tag, so
+  // a long feed narrows to the run you mean. Empty query shows everything.
+  let query = $state('');
+  let filterEl: HTMLInputElement | undefined;
+  const filtered = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((it) => {
+      const p = it.pane;
+      return (
+        (p.title ?? '').toLowerCase().includes(q) ||
+        shortId(it.key).toLowerCase().includes(q) ||
+        tag(p).toLowerCase().includes(q)
+      );
+    });
+  });
+
+  // Vim navigation lives in the central keymap (lib/keys.svelte); this view just
+  // registers what j/k/gg/G/o do here. `o` (or Enter / l) toggles the source in the
+  // detail. Selection follows clicks too, so mouse and keyboard agree.
   let selectedKey: string | null = $state(null);
-  const selected = $derived(items.find((it) => it.key === selectedKey) ?? null);
+  const selected = $derived(filtered.find((it) => it.key === selectedKey) ?? null);
   // The selected run's rich-output attachment, if any: the `<key>/out` html pane
   // published beside the exec (a table/plot/image). Rendered inside the detail so
   // the run is one entry, not two.
@@ -148,68 +167,81 @@
     const rec = store.panes[selected.key + '/out'];
     return rec ? ({ ...rec, key: selected.key + '/out', scope: selected.pane.scope } as Pane) : null;
   });
+  function scrollSelected(): void {
+    const key = selectedKey;
+    if (key == null) return;
+    queueMicrotask(() =>
+      document
+        .querySelector(`li.entry[data-key="${CSS.escape(key)}"]`)
+        ?.scrollIntoView({ block: 'nearest' }),
+    );
+  }
   $effect(() => {
-    // Keep the selection valid as panes come and go; default to the newest row
-    // (now the last, since the list grows downward) and scroll it into view.
-    if (items.length === 0) {
+    // Keep the selection valid as panes come and go (or the filter narrows the
+    // list); default to the newest row (the last, since the list grows downward)
+    // and scroll it into view.
+    if (filtered.length === 0) {
       selectedKey = null;
-    } else if (!items.some((it) => it.key === selectedKey)) {
-      selectedKey = items[items.length - 1].key;
-      const key = selectedKey;
-      queueMicrotask(() =>
-        document
-          .querySelector(`li.entry[data-key="${CSS.escape(key)}"]`)
-          ?.scrollIntoView({ block: 'nearest' }),
-      );
+    } else if (!filtered.some((it) => it.key === selectedKey)) {
+      selectedKey = filtered[filtered.length - 1].key;
+      scrollSelected();
     }
   });
+  function selectIndex(i: number): void {
+    if (!filtered.length) return;
+    const n = Math.max(0, Math.min(filtered.length - 1, i));
+    selectedKey = filtered[n].key;
+    scrollSelected();
+  }
   function move(delta: number): void {
-    if (!items.length) return;
-    const i = items.findIndex((it) => it.key === selectedKey);
-    const next = Math.max(0, Math.min(items.length - 1, (i < 0 ? 0 : i) + delta));
-    selectedKey = items[next].key;
-    // Defer until the class lands so the freshly-selected row is the scroll target.
-    queueMicrotask(() => {
-      if (selectedKey == null) return;
-      document
-        .querySelector(`li.entry[data-key="${CSS.escape(selectedKey)}"]`)
-        ?.scrollIntoView({ block: 'nearest' });
-    });
+    const i = filtered.findIndex((it) => it.key === selectedKey);
+    selectIndex((i < 0 ? 0 : i) + delta);
   }
-  function onKeydown(e: KeyboardEvent): void {
-    const t = e.target as HTMLElement | null;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-    if (e.key === 'j') {
-      e.preventDefault();
-      move(1);
-    } else if (e.key === 'k') {
-      e.preventDefault();
-      move(-1);
-    } else if (e.key === 'o' || e.key === 'Enter') {
-      if (!selectedKey) return;
-      e.preventDefault();
-      showCode[selectedKey] = !showCode[selectedKey];
-    }
+  function openSelected(): void {
+    if (selectedKey) showCode[selectedKey] = !showCode[selectedKey];
   }
-</script>
 
-<svelte:window onkeydown={onKeydown} />
+  // Register this view's motions with the global keymap while it is mounted.
+  onMount(() => {
+    setListNav({
+      move,
+      top: () => selectIndex(0),
+      bottom: () => selectIndex(filtered.length - 1),
+      open: openSelected,
+      filter: () => filterEl?.focus(),
+    });
+    return () => setListNav(null);
+  });
+</script>
 
 <div class="feedview">
   <header class="view-head">
     <h1 class="view-title">Jobs</h1>
     {#if items.length}<span class="view-meta">{items.length} {items.length === 1 ? 'run' : 'runs'}</span>{/if}
     {#if activeCount}<span class="view-active"><i></i>{activeCount} active</span>{/if}
+    <span class="view-spacer"></span>
+    <!-- The `/` filter. Esc (handled by the keymap) blurs it back to navigation. -->
+    <input
+      class="view-filter"
+      type="text"
+      placeholder="/ filter"
+      bind:value={query}
+      bind:this={filterEl}
+      spellcheck="false"
+      autocomplete="off"
+      aria-label="filter runs"
+    />
   </header>
   <div class="feed feed-split">
   {#if items.length === 0}
     <div class="feed-empty">{store.live ? 'no panes yet' : 'connecting…'}</div>
+  {:else if filtered.length === 0}
+    <div class="feed-empty">no runs match “{query}”</div>
   {:else}
     <!-- Left: the timeline list. One quiet line per run; the rail threads the
          dots. Selecting a row drives the detail panel; it never expands inline. -->
     <ol class="feed-list">
-      {#each items as it (it.key)}
+      {#each filtered as it (it.key)}
         {@const p = it.pane}
         {@const running = ledRun(p)}
         {@const isErr = ledErr(p)}

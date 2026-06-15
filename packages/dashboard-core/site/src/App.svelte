@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { store, connect } from '$lib/stream.svelte';
   import { ui, setView, startClock } from '$lib/ui.svelte';
+  import { installKeymap } from '$lib/keys.svelte';
   import { refreshRatio, bumpTheme } from '$lib/metrics.svelte';
   import { onThemeChange } from '$lib/ansi';
   import { seedDemo } from '$lib/demo';
@@ -9,11 +10,15 @@
   import FeedView from '$components/FeedView.svelte';
   import NamespaceView from '$components/NamespaceView.svelte';
   import FocusView from '$components/FocusView.svelte';
+  import KeyHelp from '$components/KeyHelp.svelte';
   import Timeline from '$components/Timeline.svelte';
 
   onMount(() => {
     refreshRatio();
     startClock();
+    // The whole app is keyboard-first; one capture-phase listener owns the vim
+    // keymap (and keeps a page-level vim extension from double-firing our keys).
+    const teardownKeys = installKeymap();
     // `?demo` seeds front-end-only sample panes (no hub needed) to explore the UI;
     // otherwise connect to the live aggregator.
     if (new URLSearchParams(location.search).has('demo')) {
@@ -24,7 +29,11 @@
     // Remeasure once Berkeley Mono (if present) loads, and repaint on a theme
     // flip so chrome and terminal palette stay in sync.
     if (document.fonts?.ready) document.fonts.ready.then(refreshRatio);
-    return onThemeChange(bumpTheme);
+    const teardownTheme = onThemeChange(bumpTheme);
+    return () => {
+      teardownKeys();
+      teardownTheme();
+    };
   });
 
   // The icon rail's tabs, in order. Each drives the top-level view; the SVG is a
@@ -85,3 +94,6 @@
     <Timeline />
   </div>
 </div>
+
+<!-- The keyboard cheatsheet (press ?), a global overlay above every view. -->
+<KeyHelp />

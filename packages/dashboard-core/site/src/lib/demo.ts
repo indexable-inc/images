@@ -85,6 +85,40 @@ export function seedDemo(): void {
       cursor_visible: false,
       created_at: now - 30000,
     },
+    // The board only tiles live *resources* — TUIs and browsers. A second TUI and
+    // a browser resource (an `html` pane keyed `resource/<id>`, subtitle = its
+    // kind) exercise the tiling layout.
+    'demo-term2': {
+      kind: 'terminal',
+      title: 'btop',
+      subtitle: 'tui',
+      rows: 6,
+      cols: 44,
+      alive: true,
+      body:
+        'cpu \x1b[32m▁▂▃▅▇▆▄▂\x1b[0m  41%\n' +
+        'mem \x1b[36m████████░░░░\x1b[0m 63%\n' +
+        'net \x1b[33m↑ 1.2M  ↓ 8.4M\x1b[0m\n' +
+        '\x1b[90mpid   cmd          cpu\x1b[0m\n' +
+        '1042  python        22%\n' +
+        '  77  node           9%',
+      cursor_visible: false,
+      created_at: now - 26000,
+    },
+    [`demo${SEP}resource/browser`]: {
+      kind: 'html',
+      title: 'localhost:5173',
+      subtitle: 'browser',
+      body:
+        '<div style="font:13px ui-sans-serif,system-ui;height:100%;display:flex;flex-direction:column;background:#fff;color:#111">' +
+        '<div style="display:flex;gap:6px;align-items:center;padding:8px 10px;border-bottom:1px solid #e5e5e5;background:#f6f6f7">' +
+        '<span style="color:#bbb">←  →  ⟳</span>' +
+        '<span style="flex:1;background:#fff;border:1px solid #e0e0e0;border-radius:6px;padding:3px 9px;color:#555">localhost:5173</span></div>' +
+        '<div style="flex:1;display:grid;place-content:center;text-align:center;gap:6px">' +
+        '<div style="font-size:34px">🌐</div><div style="font-weight:600">ix dashboard</div>' +
+        '<div style="color:#888">a live browser resource</div></div></div>',
+      created_at: now - 18000,
+    },
     'demo-data': {
       kind: 'data',
       title: 'data pane',
@@ -164,5 +198,5 @@ export function seedDemo(): void {
     },
   };
   store.live = true;
-  store.status = '7 panes · demo';
+  store.status = 'demo';
 }

@@ -24,14 +24,8 @@
     timeline.source === 'live' && timeline.following ? Date.now() : timeline.position || timeline.maxTs,
   );
   const age = $derived(pane ? humanAge(pane.created_at, refMs) : '');
-
-  $effect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') clearFocus();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
+  // Escape (close) is handled centrally by the global keymap (lib/keys.svelte),
+  // which clears the focus when an overlay is open.
 </script>
 
 <div class="focus">

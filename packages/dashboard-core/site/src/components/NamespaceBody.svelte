@@ -1,36 +1,66 @@
 <script lang="ts">
-  // The namespace renderer: a `data` pane whose body is a JSON array of variable
-  // rows produced by the kernel (`introspect.namespace_rows`) — one Python
-  // session's live globals. Rows are bucketed into Data / Modules / Functions and
-  // rendered as an expandable tree (containers drill into their members), heaviest
-  // first within each group, so the eye lands on what holds the memory.
+  // The namespace renderer for one Python session: a `data` pane whose body is a
+  // JSON array of variable rows (`introspect.namespace_rows`). Rows are bucketed
+  // into Data / Modules / Functions and rendered as an expandable tree, heaviest
+  // first within each group. Selection and expansion are owned by the parent view
+  // (so the keyboard can walk the whole tree across sessions); this component just
+  // renders the flattened item list the shared builder produces.
   import type { Pane } from '$lib/types';
-  import { groupOf, NS_GROUPS, parseRows, type NsGroup, type NsRow as Row } from '$lib/namespace';
+  import { buildNsItems, parseRows } from '$lib/namespace';
   import NsRow from './NsRow.svelte';
 
-  let { pane }: { pane: Pane } = $props();
+  // Controlled by the Namespace view (selection + expansion lifted out for
+  // keyboard nav), or uncontrolled when used as the generic `namespace` renderer
+  // — in which case it keeps its own expand state and ignores selection.
+  let {
+    pane,
+    prefix = 'r',
+    expanded,
+    selected = null,
+    onSelect,
+    onToggle,
+  }: {
+    pane: Pane;
+    prefix?: string;
+    expanded?: Record<string, boolean>;
+    selected?: string | null;
+    onSelect?: (path: string) => void;
+    onToggle?: (path: string) => void;
+  } = $props();
 
-  const rows = $derived(parseRows(pane.body));
+  // Fallback expand state for uncontrolled use.
+  let localExpanded = $state<Record<string, boolean>>({});
+  const exp = $derived(expanded ?? localExpanded);
+  const select = $derived(onSelect ?? (() => {}));
+  const toggle = $derived(
+    onToggle ??
+      ((path: string) => {
+        localExpanded[path] = !localExpanded[path];
+      }),
+  );
 
-  // Group preserving the producer's heaviest-first order within each bucket.
-  const groups = $derived.by<{ name: NsGroup; rows: Row[] }[]>(() => {
-    const by: Record<NsGroup, Row[]> = { Data: [], Modules: [], Functions: [] };
-    for (const row of rows) by[groupOf(row)].push(row);
-    return NS_GROUPS.map((name) => ({ name, rows: by[name] })).filter((g) => g.rows.length > 0);
-  });
+  const items = $derived(buildNsItems(parseRows(pane.body), exp, prefix));
 </script>
 
 <div class="ns">
-  {#if rows.length === 0}
+  {#if items.length === 0}
     <div class="ns-empty">no variables</div>
   {:else}
-    {#each groups as group (group.name)}
-      <div class="ns-group">
-        <div class="ns-grouphead">{group.name}<span class="ns-groupn">{group.rows.length}</span></div>
-        {#each group.rows as row, i (row.name + ':' + i)}
-          <NsRow {row} scope={pane.scope} />
-        {/each}
-      </div>
+    {#each items as it (it.kind === 'group' ? 'g:' + it.name : it.path)}
+      {#if it.kind === 'group'}
+        <div class="ns-grouphead">{it.name}<span class="ns-groupn">{it.count}</span></div>
+      {:else}
+        <NsRow
+          row={it.row}
+          depth={it.depth}
+          path={it.path}
+          scope={pane.scope}
+          open={!!exp[it.path]}
+          selected={selected === it.path}
+          onSelect={select}
+          onToggle={toggle}
+        />
+      {/if}
     {/each}
   {/if}
 </div>
@@ -46,9 +76,6 @@
     font-size: 12px;
     font-style: italic;
   }
-  .ns-group + .ns-group {
-    margin-top: 6px;
-  }
   /* A quiet section label, the same uppercase micro-heading the rest of the app
      uses for groups. */
   .ns-grouphead {
@@ -61,6 +88,9 @@
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--ink-faint);
+  }
+  .ns-grouphead:not(:first-child) {
+    margin-top: 6px;
   }
   .ns-groupn {
     color: var(--ink-faint);

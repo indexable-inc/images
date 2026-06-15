@@ -58,3 +58,55 @@ export function parseRows(body: string | undefined): NsRow[] {
     return [];
   }
 }
+
+// The rendered namespace list, flattened to one item per visible line: either a
+// group heading or a row at some indent depth. Building it once (and reading it
+// for both rendering and keyboard navigation) guarantees that what `j`/`k` walk is
+// exactly what the eye sees — group order, heaviest-first within a group, and only
+// the children of expanded rows.
+export type NsItem =
+  | { kind: 'group'; name: NsGroup; count: number }
+  | { kind: 'row'; path: string; row: NsRow; depth: number };
+
+// A row's stable path: the caller's prefix, then `<group>_<index>` at the top
+// level and an element index at each deeper level (`s0.1_4.2`). Paths are the key
+// for selection and expansion and survive re-renders.
+function pushRow(
+  out: NsItem[],
+  row: NsRow,
+  path: string,
+  depth: number,
+  expanded: Record<string, boolean>,
+): void {
+  out.push({ kind: 'row', path, row, depth });
+  if (row.children?.length && expanded[path]) {
+    row.children.forEach((child, i) => pushRow(out, child, `${path}.${i}`, depth + 1, expanded));
+  }
+}
+
+export function buildNsItems(
+  rows: NsRow[],
+  expanded: Record<string, boolean>,
+  prefix: string,
+): NsItem[] {
+  const by: Record<NsGroup, NsRow[]> = { Data: [], Modules: [], Functions: [] };
+  for (const row of rows) by[groupOf(row)].push(row);
+  const out: NsItem[] = [];
+  NS_GROUPS.forEach((name, gi) => {
+    const group = by[name];
+    if (!group.length) return;
+    out.push({ kind: 'group', name, count: group.length });
+    group.forEach((row, ri) => pushRow(out, row, `${prefix}.${gi}_${ri}`, 0, expanded));
+  });
+  return out;
+}
+
+// The path of a row's parent, or null for a top-level row (whose parent is the
+// group, not a navigable row). A path keeps a parent only while the trimmed result
+// still names a row (i.e. still contains a level separator).
+export function nsParent(path: string): string | null {
+  const i = path.lastIndexOf('.');
+  if (i < 0) return null;
+  const p = path.slice(0, i);
+  return p.includes('.') ? p : null;
+}
