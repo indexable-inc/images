@@ -16,6 +16,7 @@ socket cannot bind, the MCP keeps working with no dashboard panes.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 from pathlib import Path
 
@@ -37,6 +38,41 @@ def _ok(status: str) -> bool | None:
     if status == "running":
         return None
     return status == "done"
+
+
+def _output_html(out: dict) -> str:
+    """One captured rich output (an nbformat-style mime bundle) as HTML for the
+    hub's sandboxed frame: an image, else producer HTML/SVG, else plain text."""
+    data = out.get("data") if isinstance(out, dict) else None
+    if not isinstance(data, dict):
+        return ""
+    for mime in ("image/png", "image/jpeg"):
+        b64 = data.get(mime)
+        if isinstance(b64, str) and b64:
+            return f'<img src="data:{mime};base64,{b64}" style="max-width:100%">'
+    for mime in ("image/svg+xml", "text/html"):
+        markup = data.get(mime)
+        if isinstance(markup, str) and markup:
+            return markup
+    text = data.get("text/plain")
+    return f"<pre>{html.escape(text)}</pre>" if isinstance(text, str) and text else ""
+
+
+def _render_outputs(outputs: list) -> str:
+    """A list of mime bundles as one HTML fragment, each output in its own block."""
+    blocks = [rendered for out in (outputs or []) if (rendered := _output_html(out))]
+    return "".join(f'<div style="margin:6px 0">{b}</div>' for b in blocks)
+
+
+def _is_rich(out: dict) -> bool:
+    """Whether an output deserves its own pane: a table/plot/HTML, not the plain
+    text (and the internal ix mime bundles) the exec pane already shows."""
+    data = out.get("data") if isinstance(out, dict) else None
+    if not isinstance(data, dict):
+        return False
+    return any(
+        mime != "text/plain" and not mime.startswith("application/x-ix") for mime in data
+    )
 
 
 def _panes(conn) -> list[dict]:
@@ -62,6 +98,21 @@ def _panes(conn) -> list[dict]:
                 title=row.get("name") or None,
             )
         )
+        # Rich outputs (tables, plots, images) get their own html pane beside the
+        # exec text -- the parity with the retired UI the exec pane alone lacks.
+        outputs = row.get("outputs") or []
+        if any(_is_rich(out) for out in outputs) and (rendered := _render_outputs(outputs)):
+            panes.append(
+                html_pane(f"{row['id']}/out", row.get("name") or "output", rendered, subtitle="output")
+            )
+    # The agent's curated presentation cells (the highlight reel the old UI's
+    # cells pane showed), each rendered as an html pane in position order.
+    for cell in store.cells(conn):
+        rendered = _render_outputs(cell.get("outputs") or [])
+        if rendered:
+            panes.append(
+                html_pane(f"cell/{cell['id']}", cell.get("title") or "cell", rendered, subtitle="cell")
+            )
     for res in store.live_resources(conn):
         panes.append(
             html_pane(

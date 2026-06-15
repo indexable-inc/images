@@ -453,8 +453,13 @@ def _spawn_hub(cfg: Config) -> subprocess.Popen | None:
         )
         return None
     try:
+        # `--record-ms 0`: do NOT persist the board to disk. The hub aggregates
+        # every producer's panes (this kernel's namespace values, captured
+        # outputs, terminals) -- recording them to a replay file is surprising,
+        # potentially-sensitive persistence for an ephemeral MCP session. Live
+        # replay within the open browser session still works.
         return subprocess.Popen(
-            [hub_bin, "--host", cfg.host, "--port", str(cfg.hub_port)],
+            [hub_bin, "--host", cfg.host, "--port", str(cfg.hub_port), "--record-ms", "0"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -501,12 +506,15 @@ async def _run(cfg: Config) -> None:
     # keeps serving embedders either way.
     hub = _spawn_hub(cfg)
     bridge_task = asyncio.ensure_future(pane_bridge.run(cfg.store_path))
-    url = cfg.hub_url()
+    # Advertise the hub UI only if it actually started; otherwise point at the
+    # live data API rather than a dead hub port.
+    url = cfg.hub_url() if hub is not None else cfg.dashboard_url()
     (runtime_dir() / "dashboard-url").write_text(url)
     # Bake the live URL into the MCP instructions before serving, so the client
     # gets it in the `initialize` response -- no tool call to discover it.
     tools.set_dashboard_url(url)
-    print(f"[ix-mcp] dashboard (all running things + output): {url}", file=sys.stderr, flush=True)
+    label = "dashboard (all running things + output)" if hub is not None else "data API (UI unavailable)"
+    print(f"[ix-mcp] {label}: {url}", file=sys.stderr, flush=True)
     if cfg.session_path is not None:
         print(f"[ix-mcp] session file: {cfg.session_path}", file=sys.stderr, flush=True)
 
