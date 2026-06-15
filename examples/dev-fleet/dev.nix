@@ -1,41 +1,30 @@
-# The forkable dev spec (RFC 0007). This is the one file a user edits after
-# `ix dev init`. It is a plain attrset, not a NixOS module: `env` is the
-# per-VM environment (a module), while `fleet` / `shared` / `selfSource` are
-# fleet-level and must not be re-evaluated per node.
+# A forkable dev environment (RFC 0007). This is an ordinary NixOS module: write
+# your environment at the top level, and use `ix.dev.*` for the fleet and the
+# shared volume. After `ix dev init` this is the one file you edit.
+{ pkgs, ... }:
 {
-  # 1) ENVIRONMENT — layered on the base image on every node (single or fleet).
-  env =
-    { pkgs, ... }:
-    {
-      environment.systemPackages = [
-        pkgs.ripgrep
-        pkgs.jq
-      ];
-      programs.git.enable = true;
-    };
+  # Your environment - applied to every VM (single or fleet).
+  environment.systemPackages = [
+    pkgs.ripgrep
+    pkgs.jq
+  ];
+  programs.git.enable = true;
 
-  # Base image. development-base already ships our wrapped claude-code + codex,
-  # so a fork gets the agents from a plain flake import. (Default; shown here
-  # for the example.)
-  baseImage = "development-base";
+  # Claude Code + Codex are installed by default; toggle either off here.
+  # ix.dev.agents.codex = false;
 
-  # 2) FLEET — omit for a single default VM. Two interchangeable agents plus a
-  # builder that opts out of the shared volume below.
-  fleet.nodes = {
+  # A fleet: two interchangeable agents plus a builder that opts out of the
+  # shared volume below. Drop `ix.dev.fleet` entirely for a single VM.
+  ix.dev.fleet = {
     agent.replicas = 2;
     builder.dependsOn = [ "agent" ];
   };
 
-  # 3) SHARED SMB IDENTITY VOLUME — one Claude (and ix) login for the fleet.
-  shared = {
+  # One shared Claude (and ix) login for the fleet, over an SMB volume. The
+  # first `claude login` on any agent logs in every agent; `builder` opts out.
+  ix.dev.shared = {
     enable = true;
-    mountPoint = "/shared";
-    claudeAuth = true; # bind ~/.claude onto the share: one login, all agents
-    ixAuth = true; # bind ~/.n onto the share: agents can spawn more VMs
-    excludeNodes = [ "builder" ]; # per-VM opt-out; default is every node in
+    ix = true; # also share ~/.n so a node can spawn more VMs (claude is shared by default)
+    excludeNodes = [ "builder" ];
   };
-
-  # Materialize /ix (this source) on every node so a VM can `ix up` more VMs
-  # from the same spec. On the share when sharing is on, else a local copy.
-  selfSource = true;
 }

@@ -133,7 +133,12 @@ let
   # system.
   inherit
     (import ./dev.nix {
-      inherit lib paths mkFleetFor;
+      inherit
+        lib
+        paths
+        mkFleetFor
+        evalImageConfig
+        ;
     })
     mkDevFor
     ;

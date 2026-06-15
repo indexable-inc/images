@@ -1,0 +1,131 @@
+/**
+  The `ix.dev.*` option surface (RFC 0007).
+
+  This is what lets a forked `dev.nix` read like an ordinary NixOS module: you
+  write `environment.systemPackages` and `programs.git.enable` at the top level
+  as usual, and reach for `ix.dev.*` only to describe the agents, the fleet
+  shape, and the shared identity volume. `mkDev` reads these options to plan the
+  fleet; the per-node build consumes `ix.dev.agents` to install the agent CLIs.
+
+  Declared in `lib/dev/` (not `modules/`) so it is only in scope where a dev
+  image pulls it in - it must not add `claude-code` to every image in the repo.
+*/
+{ lib, ... }:
+let
+  inherit (lib)
+    mkOption
+    mkEnableOption
+    types
+    literalExpression
+    ;
+in
+{
+  options.ix.dev = {
+    agents = {
+      claude = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Install Claude Code (our sandbox-wrapped build) with the managed-settings policy.";
+      };
+      codex = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Install the Codex CLI.";
+      };
+    };
+
+    baseImage = mkOption {
+      type = types.str;
+      default = "development-base";
+      description = ''
+        Image under `images/dev/` every node is built on. The default,
+        `development-base`, carries the build toolchain and the agent CLIs.
+      '';
+    };
+
+    selfSource = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Materialize the dev source at `/ix` on every node so a VM can bring up
+        more VMs from the same spec. On the shared volume when one exists, else
+        a local writable copy.
+      '';
+    };
+
+    fleet = mkOption {
+      type = types.attrsOf types.anything;
+      default = { };
+      example = literalExpression ''
+        {
+          agent.replicas = 3;
+          builder.dependsOn = [ "agent" ];
+        }
+      '';
+      description = ''
+        Fleet topology: an attrset of node name to spec. Each spec accepts
+        `replicas`, `dependsOn`, `groups`, and `modules`, exactly as
+        `mkFleet` nodes do. Leave empty for a single VM named `dev`.
+      '';
+    };
+
+    shared = {
+      enable = mkEnableOption "a shared SMB identity volume across the fleet";
+
+      mountPoint = mkOption {
+        type = types.str;
+        default = "/shared";
+        description = "Where the shared volume is mounted on each node.";
+      };
+
+      claude = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Bind `~/.claude` onto the volume so the whole fleet shares one Claude
+          login: the first `claude login` on any node logs in every node.
+        '';
+      };
+
+      ix = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Bind `~/.n` (the ix CLI credentials) onto the volume so any node can
+          create more VMs. Sharper than `claude`: it hands out the ability to
+          spawn VMs, so it is off by default.
+        '';
+      };
+
+      excludeNodes = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = literalExpression ''[ "builder" ]'';
+        description = "Nodes that opt out of the volume entirely (no mount, no shared identity).";
+      };
+
+      server = mkOption {
+        type = types.str;
+        default = "file-server";
+        description = "Name of the dedicated node that runs `smbd` and holds the canonical files.";
+      };
+
+      group = mkOption {
+        type = types.str;
+        default = "ix-dev-shared";
+        description = "Private east-west group the volume is reachable on, so it is never public.";
+      };
+
+      guestOk = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Serve the share without authentication. The default keeps `ix up`
+          working with no secrets plumbing (the share is still private to the
+          group). Set false and add a Samba user for a production identity
+          volume - see RFC 0007.
+        '';
+      };
+    };
+  };
+}

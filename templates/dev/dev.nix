@@ -1,44 +1,45 @@
-# Your ix dev environment (RFC 0007). This is the one file you edit; commit it
-# to your own repo and fork it however you like. It is a plain attrset:
-# `env` is the per-VM environment (a NixOS module); `fleet` / `shared` /
-# `selfSource` are fleet-level.
+# Your ix dev environment (RFC 0007).
+#
+# This is an ordinary NixOS module. Write your environment at the top level the
+# way you would any NixOS config; reach for `ix.dev.*` only to describe the
+# agents, an optional fleet, and an optional shared login. Edit freely and
+# commit it to your own repo - this is the one file you own.
+{ pkgs, ... }:
 {
-  # Packages, dotfiles, languages, services — applied to every VM this spec
-  # builds (single VM or fleet).
-  env =
-    { pkgs, ... }:
-    {
-      environment.systemPackages = [
-        pkgs.ripgrep
-        pkgs.jq
-      ];
-      programs.git.enable = true;
-    };
+  # ---- Your environment (every VM this builds) -------------------------------
 
-  # development-base ships our wrapped claude-code + codex, so you get the
-  # agents from a plain flake import. (This is the default; shown for clarity.)
-  baseImage = "development-base";
+  environment.systemPackages = [
+    pkgs.ripgrep
+    pkgs.jq
+  ];
 
-  # Turn this into a fleet instead of a single VM by declaring nodes:
+  programs.git.enable = true;
+
+  # ---- Agents ----------------------------------------------------------------
+  # Claude Code and Codex are installed by default. Turn one off if you want:
   #
-  # fleet.nodes = {
-  #   agent.replicas = 3;
-  #   builder.dependsOn = [ "agent" ];
-  # };
+  #   ix.dev.agents.codex = false;
 
-  # Give the fleet ONE shared Claude (and ix) login over an SMB volume. Off by
-  # default: a plain fleet has no shared mount. When enabled it is on for every
-  # node; list nodes in `excludeNodes` to opt them out.
+  # ---- Fleet (optional) ------------------------------------------------------
+  # With nothing here you get one VM named `dev`. Declare nodes to make it a
+  # fleet that comes up with a single `nix run .#up`:
   #
-  # shared = {
-  #   enable = true;
-  #   mountPoint = "/shared";
-  #   claudeAuth = true;   # bind ~/.claude onto the share: one login, all VMs
-  #   ixAuth = true;       # bind ~/.n onto the share: VMs can spawn more VMs
-  #   # excludeNodes = [ "builder" ];
-  # };
+  #   ix.dev.fleet = {
+  #     agent.replicas = 3;
+  #     builder.dependsOn = [ "agent" ];
+  #   };
 
-  # Materialize /ix (this source) on every node so a VM can `ix up` more VMs
-  # from the same spec.
-  selfSource = true;
+  # ---- Shared login (optional) -----------------------------------------------
+  # Give the whole fleet ONE Claude login over a private SMB volume: the first
+  # `claude login` on any node logs in every node, and a new replica needs no
+  # extra auth. Off by default. `claude` is shared when enabled; set `ix = true`
+  # to also share the ix credentials so a node can spawn more VMs.
+  #
+  #   ix.dev.shared = {
+  #     enable = true;
+  #     ix = true;
+  #     # excludeNodes = [ "builder" ];   # opt specific nodes out
+  #   };
+
+  # See the full option reference: `ix.dev.*` in lib/dev/options.nix (RFC 0007).
 }

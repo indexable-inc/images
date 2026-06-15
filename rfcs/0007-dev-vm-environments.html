@@ -110,57 +110,42 @@
 <h3>The forkable repo</h3>
 <p>The unit a user owns is a small flake. <code>ix dev init</code> scaffolds it; thereafter the user edits <code>dev.nix</code> and commits to their own git remote.</p>
 <pre><code>my-ix-dev/                  # user-owned flake, in their git
-├── flake.nix               # boilerplate: inputs.index + outputs = index.lib.mkDev (import ./dev.nix);
+├── flake.nix               # boilerplate: inputs.index + outputs = index.lib.mkDev { module = ./dev.nix; src = self; }
 ├── dev.nix                 # the only file normally edited
 └── README.md</code></pre>
-<p><code>flake.nix</code> is fixed boilerplate:</p>
-<pre><code>{
-  inputs.index.url = "github:indexable-inc/index";
-  outputs = { index, ... }: index.lib.mkDev (import ./dev.nix);
-}</code></pre>
+<p><code>flake.nix</code> is fixed boilerplate; it maps the <code>mkDev</code> result under <code>packages.&lt;system&gt;</code> and threads the flake <code>self</code> in as <code>src</code> (what gets materialized at <code>/ix</code>). The user's <code>dev.nix</code> never mentions <code>src</code>.</p>
 
-<h3><code>dev.nix</code>: the spec</h3>
-<p><code>dev.nix</code> is a plain spec attrset, <em>not</em> a per-node NixOS module, because fleet topology and mount config are fleet-level and must not be re-evaluated per node. The environment is one field (a NixOS module); fleet, sharing, and recursion are siblings.</p>
+<h3><code>dev.nix</code>: an ordinary NixOS module</h3>
+<p><code>dev.nix</code> is a plain NixOS module. The environment is written at the top level the way any NixOS config is; <code>ix.dev.*</code> (declared in <code>lib/dev/options.nix</code>) describes the agents, the fleet, and the shared volume. This is the key DevEx property: a fork reads like a hand-authored config, not a framework struct. <code>mkDev</code> reads <code>ix.dev</code> once via a probe eval to plan the fleet (so the fleet/shared topology is not re-derived per node), then builds each node with the same module.</p>
 <pre><code>{ pkgs, ... }:
 {
-  # 1) ENVIRONMENT — applied to every VM (single or fleet). Normal NixOS config.
-  env = {
-    environment.systemPackages = [ pkgs.ripgrep pkgs.jq ];
-    programs.git.enable = true;
-    # dotfiles, ix.languages.*, services, etc.
-  };
+  # Your environment — applied to every VM (single or fleet). Normal NixOS config.
+  environment.systemPackages = [ pkgs.ripgrep pkgs.jq ];
+  programs.git.enable = true;
 
-  # Base image. Defaults to development-base, which ships our wrapped
-  # claude-code + codex. mkDev also injects both directly, so they are
-  # present even on a leaner base.
-  baseImage = "development-base";
+  # Claude Code + Codex are installed by default; toggle either off:
+  # ix.dev.agents.codex = false;
 
-  # 2) FLEET — omit for the single default-VM case.
-  fleet.nodes = {
+  # A fleet (omit for a single VM named `dev`):
+  ix.dev.fleet = {
     agent.replicas = 3;
     builder.dependsOn = [ "agent" ];
   };
 
-  # 3) SHARED SMB IDENTITY VOLUME — opt-in. Absent => plain fleet, no mount.
-  shared = {
-    enable      = true;
-    mountPoint  = "/shared";
-    claudeAuth  = true;             # bind ~/.claude onto the share: one login, all VMs
-    ixAuth      = true;             # bind ~/.n onto the share: VMs can spawn VMs
-    server      = "file-server";    # dedicated node name that runs smbd (see below)
-    excludeNodes = [ "builder" ];   # per-VM opt-out; default is every node in
+  # One shared Claude (and ix) login for the fleet over SMB (opt-in):
+  ix.dev.shared = {
+    enable = true;
+    ix = true;                    # also share ~/.n (claude is shared by default)
+    excludeNodes = [ "builder" ]; # per-VM opt-out; default is every node in
   };
-
-  selfSource = true;   # materialize /ix on every VM (recursion); default true
 }</code></pre>
 
 <h3><code>index.lib.mkDev</code></h3>
-<p>A new helper at <code>lib/image/dev.nix</code>, exported from <code>lib/default.nix</code> next to <code>mkFleet</code>, layered <em>on top of</em> <code>mkFleet</code> (it does not modify it). It performs four transforms and returns the <code>mkFleet</code> result shape (<code>.up</code>, <code>.health</code>, <code>.diff</code>, <code>.down</code>, …) augmented with the single-VM installable.</p>
+<p>A helper at <code>lib/image/dev.nix</code>, exported from <code>lib/default.nix</code> next to <code>mkFleet</code>, layered <em>on top of</em> <code>mkFleet</code> (it does not modify it). It takes <code>{ module, src }</code>, reads <code>ix.dev</code> from <code>module</code> via a probe <code>evalImageConfig</code>, and returns the <code>mkFleet</code> result shape (<code>.up</code>, <code>.health</code>, <code>.diff</code>, <code>.down</code>, <code>withNodePrefix</code>, …).</p>
 <ul>
-  <li><strong>env → <code>defaults</code>.</strong> The <code>env</code> module, the base image, and a module that injects <code>claude-code</code> + <code>codex</code> become <code>mkFleet</code>'s <code>defaults</code>, so every node is the user's environment.</li>
-  <li><strong>fleet → <code>nodes</code>.</strong> If <code>fleet</code> is omitted, <code>mkDev</code> synthesizes a single node named <code>dev</code>. The single-VM default and the fleet are the same code path with a one-node degenerate case.</li>
-  <li><strong>shared → a dedicated server node + injected client module.</strong> When <code>shared.enable</code>, <code>mkDev</code> adds a dedicated <code>file-server</code> node (the generalized <a href="https://github.com/indexable-inc/index/blob/main/examples/multi-client-file-sharing/server.nix"><code>server.nix</code></a>) and injects the client mount module (the generalized <a href="https://github.com/indexable-inc/index/blob/main/examples/multi-client-file-sharing/client.nix"><code>client.nix</code></a>) into every node not in <code>excludeNodes</code>. It auto-joins the fleet to a private east-west <code>group</code> so the share is reachable as <code>//file-server/dev</code> by hostname and is never publicly exposed.</li>
-  <li><strong>returns mkFleet outputs + <code>nixosConfigurations.dev</code></strong> for the "default new VM" path.</li>
+  <li><strong>module + base + agents → <code>defaults</code>.</strong> The user's module, <code>ix.dev.baseImage</code>, and the agent layer (<code>lib/dev/agents.nix</code>) become <code>mkFleet</code>'s <code>defaults</code>, so every node is the user's environment and ships the agents.</li>
+  <li><strong><code>ix.dev.fleet</code> → <code>nodes</code>.</strong> Empty <code>fleet</code> synthesizes a single node named <code>dev</code>. The single-VM default and the fleet are the same code path with a one-node degenerate case.</li>
+  <li><strong><code>ix.dev.shared.enable</code> → a dedicated server node + injected client/identity modules.</strong> <code>mkDev</code> adds a dedicated <code>file-server</code> node (the generalized <a href="https://github.com/indexable-inc/index/blob/main/examples/multi-client-file-sharing/server.nix"><code>server.nix</code></a>) and injects the CIFS client mount plus the <code>~/.claude</code>/<code>~/.n</code> binds into every node not in <code>excludeNodes</code>. It auto-joins the fleet to a private east-west <code>group</code> so the share is reachable as <code>//file-server/dev</code> by hostname and is never publicly exposed.</li>
 </ul>
 <p>A dedicated <code>file-server</code> is the default (not co-locating <code>smbd</code> on a workload node) so the canonical credentials' lifecycle is decoupled from the workload VMs: an <code>ix up</code> that recreates a workload node never blips the share. Co-locating <code>smbd</code> on an existing node stays available as an option for cost-sensitive single-replica fleets.</p>
 
@@ -173,8 +158,8 @@
 <h3>Mode 3 — shared SMB identity volume</h3>
 <p>The share is an <em>identity volume</em>, not a general scratch disk. On each participating node, <code>mkDev</code> binds:</p>
 <ul>
-  <li><code>~/.claude</code> → <code>&lt;mount&gt;/claude</code> when <code>claudeAuth</code> — one Claude login for the whole fleet; the first node to run <code>claude login</code> seeds it, every other node sees it immediately.</li>
-  <li><code>~/.n</code> → <code>&lt;mount&gt;/n</code> when <code>ixAuth</code> — the ix CLI credentials, so a VM with the shared identity can itself create VMs (see recursion below).</li>
+  <li><code>~/.claude</code> → <code>&lt;mount&gt;/claude</code> when <code>ix.dev.shared.claude</code> (default on) — one Claude login for the whole fleet; the first node to run <code>claude login</code> seeds it, every other node sees it immediately.</li>
+  <li><code>~/.n</code> → <code>&lt;mount&gt;/n</code> when <code>ix.dev.shared.ix</code> — the ix CLI credentials, so a VM with the shared identity can itself create VMs (see recursion below).</li>
 </ul>
 <p>We share only <code>~/.claude</code> and <code>~/.n</code>, never the whole <code>~/.config</code> — directly answering the warning in the <code>synced-github-auth</code> README about blast radius. The image's <code>/etc/claude-code/managed-settings.json</code> policy layer is untouched and stays in the image; only Claude's app-owned credential/state under <code>~/.claude</code> lives on the share, so there is no collision with the managed layer.</p>
 <p>The SMB server reuses the example's locking knobs verbatim (<code>strict locking</code>, <code>posix locking</code>, <code>strict sync = yes</code>), which is what keeps <code>~/.claude/.credentials.json</code> honest when one node's token refresh writes while another reads. Unlike the example's demo share, the volume is <strong>not guest-writable</strong>: it is served behind a Samba user whose credentials reach the clients through a systemd <code>LoadCredential</code> (the same shape <a href="https://github.com/indexable-inc/index/tree/main/examples/python-daily-scraper"><code>python-daily-scraper</code></a> uses), and it is only reachable on the fleet's private east-west group.</p>
@@ -183,9 +168,12 @@
 <p>When <code>selfSource</code> (default on), every VM gets <code>/ix</code> containing the <code>dev.nix</code> repo source plus the <code>ix</code> CLI on <code>PATH</code>, so a VM can <code>cd /ix &amp;&amp; ix up</code> and bring up its own fleet from the <em>same</em> config. Two mechanics:</p>
 <ul>
   <li><strong>Editability.</strong> A <code>/nix/store</code> copy is read-only. When <code>shared.enable</code>, <code>/ix</code> lives on the share, so it is writable and edits propagate fleet-wide. Without a share, first-boot activation copies the source into <code>/ix</code> as a writable working tree (optionally <code>git init</code>) seeded from a read-only store copy.</li>
-  <li><strong>Credentials for recursion.</strong> Creating VMs needs real ix credentials; <code>shared.ixAuth</code> binding <code>~/.n</code> onto the share is what makes a guest able to do it. This is a separate opt-in from <code>claudeAuth</code> precisely because it widens blast radius.</li>
+  <li><strong>Credentials for recursion.</strong> Creating VMs needs real ix credentials; <code>ix.dev.shared.ix</code> binding <code>~/.n</code> onto the share is what makes a guest able to do it. This is a separate opt-in from <code>ix.dev.shared.claude</code> precisely because it widens blast radius.</li>
 </ul>
 <p>The <code>ix</code> CLI is <em>not</em> in dev images today (<code>development-base</code> ships <code>claude-code</code>, <code>codex</code>, and a build toolchain only). Adding it to the dev base is a required piece of this RFC.</p>
+
+<h3>The agent layer</h3>
+<p>Our wrapped <code>claude-code</code> (the <code>IS_SANDBOX=1</code> wrapper plus the read-only <code>/etc/claude-code/managed-settings.json</code> policy) and <code>codex</code> live in one reusable module, <code>lib/dev/agents.nix</code>, gated on <code>ix.dev.agents.{claude,codex}</code> (default on). Both <code>development-base</code> and <code>mkDev</code> import it, so the agents are defined once and cannot drift; importing it twice (mkDev on top of <code>development-base</code>) is idempotent, so there is exactly one wrapped <code>claude</code> binary and no <code>bin/claude</code> collision. This is what makes "ships with our claude and codex" both <em>visible</em> in <code>dev.nix</code> (the <code>ix.dev.agents</code> toggles) and <em>correct</em>. It lives in <code>lib/dev/</code>, not <code>modules/</code>, so it never adds <code>claude-code</code> to every image in the repo.</p>
 
 <h3>CLI surface</h3>
 <ul>
@@ -198,11 +186,12 @@
 <h3>What gets built, and where</h3>
 <p><strong>In <code>index</code> (this repo):</strong></p>
 <ol>
-  <li><code>lib/image/dev.nix</code> — the <code>mkDev</code> helper; export from <code>lib/default.nix</code>.</li>
+  <li><code>lib/image/dev.nix</code> — the <code>mkDev</code> helper; export from <code>lib/default.nix</code>, add to the example shim in <code>lib/discovery.nix</code>.</li>
+  <li><code>lib/dev/options.nix</code> — the <code>ix.dev.*</code> option surface.</li>
+  <li><code>lib/dev/agents.nix</code> — the wrapped claude-code + codex + managed-settings layer, gated on <code>ix.dev.agents</code>; also consumed by <code>development-base</code>.</li>
   <li><code>lib/dev/shared-mount.nix</code> — generalized SMB server + client modules (from the example).</li>
-  <li><code>lib/dev/shared-auth.nix</code> — bind <code>~/.claude</code> / <code>~/.n</code> onto the share.</li>
-  <li><code>lib/dev/self-source.nix</code> — materialize <code>/ix</code> and put <code>ix</code> on <code>PATH</code>.</li>
-  <li><code>templates/dev/</code> — the forkable <code>flake.nix</code> + <code>dev.nix</code> template.</li>
+  <li><code>lib/dev/identity.nix</code> — bind <code>~/.claude</code> / <code>~/.n</code> onto the share and materialize <code>/ix</code>.</li>
+  <li><code>templates/dev/</code> — the forkable <code>flake.nix</code> + <code>dev.nix</code> template, registered as <code>templates.dev</code>.</li>
   <li><code>examples/dev-fleet/</code> — a runnable demo of all three modes.</li>
   <li>Add the <code>ix</code> CLI to the dev base image (for recursion).</li>
 </ol>
@@ -214,7 +203,7 @@
 
 <h2>Drawbacks</h2>
 <ul>
-  <li><strong>Shared auth = shared blast radius.</strong> Every VM in the fleet can read the fleet's <code>~/.claude</code> and (with <code>ixAuth</code>) <code>~/.n</code>. This is inherent to "one login for all VMs." It is bounded to a single user's own fleet on a private network, but a compromise of any node exposes the shared credentials. <code>ixAuth</code> is worse than <code>claudeAuth</code>: it hands out the ability to create more VMs, so it is a distinct opt-in.</li>
+  <li><strong>Shared auth = shared blast radius.</strong> Every VM in the fleet can read the fleet's <code>~/.claude</code> and (with <code>ix.dev.shared.ix</code>) <code>~/.n</code>. This is inherent to "one login for all VMs." It is bounded to a single user's own fleet on a private network, but a compromise of any node exposes the shared credentials. <code>ix.dev.shared.ix</code> is worse than <code>ix.dev.shared.claude</code>: it hands out the ability to create more VMs, so it is a distinct opt-in.</li>
   <li><strong>Token-refresh races over SMB.</strong> Concurrent writes to <code>~/.claude/.credentials.json</code> during refresh rely on the SMB locking config; this is a real edge even if the locking knobs are correct.</li>
   <li><strong>Extra VM.</strong> The dedicated <code>file-server</code> is one more VM to pay for and keep alive; it is also where the canonical creds live, so its availability matters more than a workload node's.</li>
   <li><strong>Surface area.</strong> A new helper, new lib modules, a flake template, and two new <code>ix</code> CLI verbs. <code>mkDev</code> is opinionated sugar over <code>mkFleet</code>; two ways to define a fleet now exist.</li>
