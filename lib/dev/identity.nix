@@ -16,6 +16,17 @@
   Returns module builders; `mkDev` chooses which to apply per node.
 */
 { lib }:
+let
+  # Bind-mount options for a path living under the SMB volume:
+  # `requires-mounts-for` orders the bind after the CIFS mount so the source
+  # exists first (the server pre-creates the subdir); `nofail` keeps boot moving
+  # if the volume is still coming up.
+  bindOptions = mountPoint: [
+    "bind"
+    "nofail"
+    "x-systemd.requires-mounts-for=${mountPoint}"
+  ];
+in
 {
   /**
     Bind identity dirs onto the volume.
@@ -23,10 +34,6 @@
     - `mountPoint`: where the SMB volume is mounted.
     - `binds`: list of `{ localPath, shareSubdir }`; each `localPath` (e.g.
       `/root/.claude`) is bound onto `<mountPoint>/<shareSubdir>`.
-
-    `requires-mounts-for` orders each bind after the CIFS mount so the source
-    exists first (the server pre-creates the subdir); `nofail` keeps boot moving
-    if the volume is still coming up.
   */
   bindModule =
     { mountPoint, binds }:
@@ -38,11 +45,7 @@
           lib.nameValuePair bind.localPath {
             device = "${mountPoint}/${bind.shareSubdir}";
             fsType = "none";
-            options = [
-              "bind"
-              "nofail"
-              "x-systemd.requires-mounts-for=${mountPoint}"
-            ];
+            options = bindOptions mountPoint;
           }
         ) binds
       );
@@ -67,11 +70,7 @@
         fileSystems."/ix" = {
           device = "${mountPoint}/ix";
           fsType = "none";
-          options = [
-            "bind"
-            "nofail"
-            "x-systemd.requires-mounts-for=${mountPoint}"
-          ];
+          options = bindOptions mountPoint;
         };
       }
     else
