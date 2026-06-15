@@ -377,11 +377,16 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         for suffix in ("", "-wal", "-shm"):
             (store_path.parent / (store_path.name + suffix)).unlink(missing_ok=True)
 
+    # The Loro hub (human UI) binds its own port; the aiohttp data API keeps
+    # dashboard_port. A pinned IX_MCP_HUB_PORT lets an embedder reach a known hub.
+    hub_port = int(os.environ.get("IX_MCP_HUB_PORT") or _free_port())
+
     cfg = Config(
         workdir=workdir,
         host=bind_host,
         advertised_host=advertised_host,
         dashboard_port=dashboard_port,
+        hub_port=hub_port,
         store_path=store_path,
         session_path=session_path,
         session_resume=session_resume,
@@ -400,8 +405,9 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     # before the kernel starts.
     os.environ["IX_MCP_STORE"] = str(store_path)
     # Surface the dashboard URL to the kernel so `DASHBOARD_URL` is one lookup
-    # away (the agent should not have to spelunk the runtime dir to find it).
-    os.environ["IX_MCP_DASHBOARD_URL"] = cfg.dashboard_url()
+    # away (the agent should not have to spelunk the runtime dir to find it). The
+    # human-facing dashboard is the Loro hub, not the read-only data API.
+    os.environ["IX_MCP_DASHBOARD_URL"] = cfg.hub_url()
     os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(dashboard_port))
 
     # On macOS the process env inherits the empty Apple launchd SSH agent
@@ -427,6 +433,34 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
 
     asyncio.run(_run(cfg))
     return 0
+
+
+def _spawn_hub(cfg: Config) -> subprocess.Popen | None:
+    """Spawn the Loro dashboard hub (the `dashboard` aggregator) the human opens.
+
+    It watches the shared discovery directory the pane bridge publishes into, so
+    it renders this server's panes alongside every other producer (a TUI's
+    terminals, a VM's screen). Best-effort: if the binary is absent (a bare run
+    outside nix, which bundles it on PATH), log and skip -- the read-only data
+    API still serves embedders, there is just no UI."""
+    hub_bin = os.environ.get("IX_DASHBOARD_BIN") or shutil.which("dashboard")
+    if not hub_bin:
+        print(
+            "[ix-mcp] dashboard hub binary not found; UI disabled "
+            "(build via nix, which bundles `dashboard`, or run it yourself)",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    try:
+        return subprocess.Popen(
+            [hub_bin, "--host", cfg.host, "--port", str(cfg.hub_port)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as error:
+        print(f"[ix-mcp] failed to start dashboard hub: {error}", file=sys.stderr, flush=True)
+        return None
 
 
 async def _run(cfg: Config) -> None:
@@ -460,12 +494,14 @@ async def _run(cfg: Config) -> None:
         await locked.wait()
 
     runner = await dashboard.start(cfg)
-    # Also publish every run/resource/namespace as Loro panes to the shared
-    # dashboard hub (a separate `dashboard` process aggregates all producers).
-    # Best-effort: if the producer socket cannot bind, this is silent and the
-    # read-only API dashboard still works.
+    # The human-facing dashboard is the Loro hub: spawn it, and publish this
+    # server's runs/resources/namespace as panes to the shared discovery dir it
+    # (and every other producer) feeds. Both are best-effort -- a missing hub
+    # binary or an unbindable producer socket just means no UI; the data API
+    # keeps serving embedders either way.
+    hub = _spawn_hub(cfg)
     bridge_task = asyncio.ensure_future(pane_bridge.run(cfg.store_path))
-    url = cfg.dashboard_url()
+    url = cfg.hub_url()
     (runtime_dir() / "dashboard-url").write_text(url)
     # Bake the live URL into the MCP instructions before serving, so the client
     # gets it in the `initialize` response -- no tool call to discover it.
@@ -483,6 +519,8 @@ async def _run(cfg: Config) -> None:
             await transport.serve()
     finally:
         bridge_task.cancel()
+        if hub is not None:
+            hub.terminate()
         if restore_task is not None and not restore_task.done():
             restore_task.cancel()
         if cfg.session_path is not None:
