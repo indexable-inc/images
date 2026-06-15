@@ -121,6 +121,27 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _bindable(host: str, port: int) -> bool:
+    """Whether ``host:port`` can actually be bound right now. A configured host
+    can be 'assigned' yet unbindable -- e.g. a Tailscale IP whose interface is
+    down because the backend is stopped -- so the CLI probes before committing
+    the dashboard (and the kernel's inherited URL) to it. Mirrors what
+    ``loop.create_server`` does: resolve, then try each address family."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    for family, socktype, proto, _canon, sockaddr in infos:
+        try:
+            with socket.socket(family, socktype, proto) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(sockaddr)
+            return True
+        except OSError:
+            continue
+    return False
+
+
 def _dashboard_port() -> int:
     """The port the read-only data API / dashboard binds. An embedder (the room
     server runs ``ix-mcp`` as its agent's tool and reads results back over HTTP)
@@ -171,6 +192,11 @@ def _tailscale_dns_name() -> str | None:
 def _tailscale_ip() -> str | None:
     status = _tailscale_status()
     if not status:
+        return None
+    # A stopped backend still reports its assigned IPs, but they are not bound to
+    # any interface, so binding the dashboard to one fails. Only treat the IP as
+    # usable when Tailscale is actually up.
+    if status.get("BackendState") != "Running":
         return None
     for ip in status.get("Self", {}).get("TailscaleIPs", []) or []:
         if isinstance(ip, str) and "." in ip and ":" not in ip:
@@ -262,9 +288,6 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     workdir = Path(wd).resolve() if wd else Path.cwd()
     workdir.mkdir(parents=True, exist_ok=True)
 
-    bind_host = os.environ.get("IX_MCP_HOST") or _tailscale_ip() or "127.0.0.1"
-    advertised_host = _advertised_host(bind_host)
-
     http = getattr(args, "http", None)
     stdin_fd = stdout_fd = None
     mcp_http_host, mcp_http_port = "127.0.0.1", 8000
@@ -287,6 +310,29 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         mcp_http_host, mcp_http_port = host or "127.0.0.1", int(port) if port else 8000
 
     dashboard_port = _dashboard_port()
+
+    # Resolve the dashboard bind host once, here, before the kernel spawns (it
+    # inherits IX_MCP_DASHBOARD_URL) and before the Config is built, so every
+    # derived value stays consistent. A tailnet IP can be 'assigned' yet
+    # unbindable (Tailscale stopped -> interface down); probing and falling back
+    # to loopback keeps the read-only dashboard, hence the whole MCP, from
+    # crashing on startup. _tailscale_ip() already returns None unless the
+    # backend is running, so this only catches the rarer races.
+    bind_host = os.environ.get("IX_MCP_HOST") or _tailscale_ip() or "127.0.0.1"
+    # Probe everything except the fallback target itself. "127.0.0.1" is the host
+    # we fall back *to* and is effectively always bindable; every other spelling
+    # (a tailnet IP, but also "::1"/"localhost", which can be down when IPv6 is
+    # disabled) must be probed so we degrade to working loopback instead of it.
+    if bind_host != "127.0.0.1" and not _bindable(bind_host, dashboard_port):
+        print(
+            f"[ix-mcp] dashboard host {bind_host}:{dashboard_port} is not bindable; "
+            "falling back to 127.0.0.1",
+            file=sys.stderr,
+            flush=True,
+        )
+        bind_host = "127.0.0.1"
+    advertised_host = _advertised_host(bind_host)
+
     session = getattr(args, "session", None)
     session_path: Path | None = None
     session_resume = False
@@ -331,11 +377,16 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         for suffix in ("", "-wal", "-shm"):
             (store_path.parent / (store_path.name + suffix)).unlink(missing_ok=True)
 
+    # The Loro hub (human UI) binds its own port; the aiohttp data API keeps
+    # dashboard_port. A pinned IX_MCP_HUB_PORT lets an embedder reach a known hub.
+    hub_port = int(os.environ.get("IX_MCP_HUB_PORT") or _free_port())
+
     cfg = Config(
         workdir=workdir,
         host=bind_host,
         advertised_host=advertised_host,
         dashboard_port=dashboard_port,
+        hub_port=hub_port,
         store_path=store_path,
         session_path=session_path,
         session_resume=session_resume,
@@ -354,8 +405,9 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     # before the kernel starts.
     os.environ["IX_MCP_STORE"] = str(store_path)
     # Surface the dashboard URL to the kernel so `DASHBOARD_URL` is one lookup
-    # away (the agent should not have to spelunk the runtime dir to find it).
-    os.environ["IX_MCP_DASHBOARD_URL"] = cfg.dashboard_url()
+    # away (the agent should not have to spelunk the runtime dir to find it). The
+    # human-facing dashboard is the Loro hub, not the read-only data API.
+    os.environ["IX_MCP_DASHBOARD_URL"] = cfg.hub_url()
     os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(dashboard_port))
 
     # On macOS the process env inherits the empty Apple launchd SSH agent
@@ -383,8 +435,41 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     return 0
 
 
+def _spawn_hub(cfg: Config) -> subprocess.Popen | None:
+    """Spawn the Loro dashboard hub (the `dashboard` aggregator) the human opens.
+
+    It watches the shared discovery directory the pane bridge publishes into, so
+    it renders this server's panes alongside every other producer (a TUI's
+    terminals, a VM's screen). Best-effort: if the binary is absent (a bare run
+    outside nix, which bundles it on PATH), log and skip -- the read-only data
+    API still serves embedders, there is just no UI."""
+    hub_bin = os.environ.get("IX_DASHBOARD_BIN") or shutil.which("dashboard")
+    if not hub_bin:
+        print(
+            "[ix-mcp] dashboard hub binary not found; UI disabled "
+            "(build via nix, which bundles `dashboard`, or run it yourself)",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    try:
+        # `--record-ms 0`: do NOT persist the board to disk. The hub aggregates
+        # every producer's panes (this kernel's namespace values, captured
+        # outputs, terminals) -- recording them to a replay file is surprising,
+        # potentially-sensitive persistence for an ephemeral MCP session. Live
+        # replay within the open browser session still works.
+        return subprocess.Popen(
+            [hub_bin, "--host", cfg.host, "--port", str(cfg.hub_port), "--record-ms", "0"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as error:
+        print(f"[ix-mcp] failed to start dashboard hub: {error}", file=sys.stderr, flush=True)
+        return None
+
+
 async def _run(cfg: Config) -> None:
-    from . import dashboard, tools, transport
+    from . import dashboard, pane_bridge, tools, transport
     from .kernel import Kernel, set_kernel
 
     kernel = Kernel(cfg)
@@ -414,12 +499,22 @@ async def _run(cfg: Config) -> None:
         await locked.wait()
 
     runner = await dashboard.start(cfg)
-    url = cfg.dashboard_url()
+    # The human-facing dashboard is the Loro hub: spawn it, and publish this
+    # server's runs/resources/namespace as panes to the shared discovery dir it
+    # (and every other producer) feeds. Both are best-effort -- a missing hub
+    # binary or an unbindable producer socket just means no UI; the data API
+    # keeps serving embedders either way.
+    hub = _spawn_hub(cfg)
+    bridge_task = asyncio.ensure_future(pane_bridge.run(cfg.store_path))
+    # Advertise the hub UI only if it actually started; otherwise point at the
+    # live data API rather than a dead hub port.
+    url = cfg.hub_url() if hub is not None else cfg.dashboard_url()
     (runtime_dir() / "dashboard-url").write_text(url)
     # Bake the live URL into the MCP instructions before serving, so the client
     # gets it in the `initialize` response -- no tool call to discover it.
     tools.set_dashboard_url(url)
-    print(f"[ix-mcp] dashboard (all running things + output): {url}", file=sys.stderr, flush=True)
+    label = "dashboard (all running things + output)" if hub is not None else "data API (UI unavailable)"
+    print(f"[ix-mcp] {label}: {url}", file=sys.stderr, flush=True)
     if cfg.session_path is not None:
         print(f"[ix-mcp] session file: {cfg.session_path}", file=sys.stderr, flush=True)
 
@@ -431,6 +526,13 @@ async def _run(cfg: Config) -> None:
         else:
             await transport.serve()
     finally:
+        bridge_task.cancel()
+        if hub is not None:
+            hub.terminate()
+            try:
+                hub.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                hub.kill()
         if restore_task is not None and not restore_task.done():
             restore_task.cancel()
         if cfg.session_path is not None:

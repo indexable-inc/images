@@ -15,6 +15,25 @@ from ix_notebook_mcp import runtime, store
 # --------------------------------------------------------------------------- #
 
 
+def test_latest_namespace_is_not_stale_after_clear(tmp_path) -> None:
+    # The dashboard namespace pane reads the newest *finished* run's globals,
+    # empty or not, so clearing the namespace drops the pane instead of pinning
+    # the last non-empty snapshot as stale data. A running job has no namespace
+    # yet and must not clobber the last finished value.
+    conn = store.connect(tmp_path / "ns.db")
+    x = [{"name": "x", "type": "int", "kind": "scalar", "repr": "4", "size": 28, "shape": ""}]
+    store.start(conn, id="j1", name="", code="x = 4", started_at=100.0)
+    store.finish(conn, id="j1", status="done", ended_at=100.1, output="", result="4", error=None, namespace=x)
+    assert store.latest_namespace(conn) == x
+    # A later run clears the namespace: the pane must go empty, not stay on `x`.
+    store.start(conn, id="j2", name="", code="reset", started_at=101.0)
+    store.finish(conn, id="j2", status="done", ended_at=101.1, output="", result=None, error=None, namespace=[])
+    assert store.latest_namespace(conn) == []
+    # A running job (no ended_at) is excluded; the last finished value still holds.
+    store.start(conn, id="j3", name="", code="while True:\n    pass", started_at=102.0)
+    assert store.latest_namespace(conn) == []
+
+
 def test_snapshot_roundtrip_keeps_only_the_newest(tmp_path) -> None:
     conn = store.connect(tmp_path / "s.ixnb")
     store.save_snapshot(conn, created_at=1.0, blob=b"one", names=["a"], skipped=[])

@@ -26,7 +26,9 @@ def modules_index() -> str:
     the registry lists it here for free."""
     preimported = ", ".join(f"`{name}`" for name in registry.preimport_names())
     mods = "; ".join(f"`{m.name}` \u2014 {m.tagline}" for m in registry.MODULES)
-    libs = ", ".join(f"`{lib.name}`" for lib in registry.LIBRARIES)
+    libs = ", ".join(
+        f"`{lib.name}`" + (f" ({lib.note})" if lib.note else "") for lib in registry.LIBRARIES
+    )
     return (
         f"Bundled tooling, no install step: {preimported} are pre-bound in the namespace (use them "
         "with no import; an explicit `import` returns the same object), the others you `import` "
@@ -154,10 +156,15 @@ VERIFY = (
     "Verify a change by its actual effect, not by a proxy: when you change "
     "something whose result a static check cannot see — an interactive UI, a "
     "rendered page, a runtime behaviour — exercise it and observe the outcome "
-    "(screenshot it with the bundled `playwright`, run the path, diff the live "
-    "state) BEFORE reporting it done. A green type-check or linter is necessary "
-    "but not sufficient: 'it compiles' is not 'it works', and 'the tab switches "
-    "in the source' is not 'the tab switches on screen'."
+    "(drive a real browser with the bundled `browser` module — `await "
+    "browser.goto(url)`, then `browser.shot()` / `browser.vdom()` — run the path, "
+    "diff the live state) BEFORE reporting it done. Reach for `browser`, not raw "
+    "`playwright`: it keeps one cached connection on the kernel loop, opens a "
+    "VISIBLE window the human can watch, and publishes the page as a live "
+    "dashboard resource; calling `async_playwright().start()` yourself gets none "
+    "of that. A green type-check or linter is necessary but not sufficient: 'it "
+    "compiles' is not 'it works', and 'the tab switches in the source' is not "
+    "'the tab switches on screen'."
 )
 
 HTML = (

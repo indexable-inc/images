@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import inspect
 import reprlib
+import sys
 import types
 from itertools import islice
 
@@ -141,6 +142,82 @@ def describe(value) -> dict:
         }
 
     return {"kind": "object", "type": type_name, "summary": type_name, "detail": _repr.repr(value)}
+
+
+# Map a `describe` kind onto the short kind the dashboard's namespace renderer
+# chips on. Most pass through unchanged; the frame/array/function aliases keep the
+# UI vocabulary small (one chip per family).
+_NS_KIND = {
+    "dataframe": "frame",
+    "lazyframe": "frame",
+    "ndarray": "array",
+    "callable": "function",
+}
+
+
+# Kinds with no meaningful in-memory footprint to a user: a module/function/class
+# is shared machinery, not data the session "holds". Reported as size 0 so they
+# sort below real data and show no size chip.
+_SIZELESS_KINDS = frozenset({"module", "function", "class"})
+
+
+def namespace_rows(ns: dict, *, max_names: int = _MAX_NAMES) -> list[dict]:
+    """Describe values in ``ns`` as namespace-view rows.
+
+    ``ns`` is the already-filtered set of user names (the caller drops baseline
+    helpers, dunders, and history machinery). Each row is
+    ``{name, type, kind, repr, size, shape}``: ``kind`` drives the chip, ``repr``
+    a one-line preview (empty for frames/arrays, which describe themselves by
+    ``shape``), ``size`` the shallow byte size (``getsizeof``, O(1) per name), and
+    ``shape`` the dims for arrays/frames. Sorted heaviest-first so the eye lands on
+    what holds the memory. Capped at ``max_names`` (like :func:`cell_bindings`) so a
+    session with thousands of globals cannot stall the kernel's event loop on a
+    job finish. Reuses :func:`describe`, so it is bounded and side-effect-free; a
+    value whose introspection raises is skipped, not fatal."""
+    rows: list[dict] = []
+    for name, value in islice(ns.items(), max_names):
+        try:
+            described = describe(value)
+        except Exception:
+            continue
+        kind = _NS_KIND.get(described["kind"], described["kind"])
+        if kind in _SIZELESS_KINDS:
+            size = 0
+        else:
+            try:
+                size = int(sys.getsizeof(value))
+            except Exception:
+                size = 0
+        shape = _ns_shape(value, kind)
+        rows.append(
+            {
+                "name": name,
+                "type": described["type"],
+                "kind": kind,
+                # Frames/arrays carry their weight in `shape`; everything else
+                # shows the `describe` summary as a one-line preview.
+                "repr": "" if kind in ("frame", "array") else described.get("summary", ""),
+                "size": size,
+                "shape": shape,
+            }
+        )
+    rows.sort(key=lambda row: (-row["size"], row["name"]))
+    return rows
+
+
+def _ns_shape(value, kind: str) -> str:
+    """Dims for an array (``50000×784``) or frame (``rows×cols``), else empty."""
+    if kind == "array":
+        try:
+            return "×".join(str(int(dim)) for dim in value.shape)
+        except Exception:
+            return ""
+    if kind == "frame":
+        try:
+            return f"{int(value.height)}×{int(value.width)}"
+        except Exception:
+            return ""
+    return ""
 
 
 def _describe_text(value, type_name: str) -> dict:

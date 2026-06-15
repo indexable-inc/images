@@ -877,30 +877,23 @@ let
   # wrapper below so launched browsers resolve without a network download.
   playwrightBrowsers = pkgs.playwright-driver.browsers;
 
+  # Headless Chromium fatally aborts the moment it needs a font but cannot load
+  # any fontconfig config: Skia's FontConfigInterface backend hits a
+  # `Not implemented` path (SkFontMgr_FontConfigInterface.cpp) and the renderer
+  # dies, surfacing to Playwright as `TargetClosedError`. The Nix build sandbox
+  # has no /etc/fonts and no fonts on disk, so the smoke tests below that launch
+  # a real (headless) browser must point fontconfig at a generated config
+  # carrying at least one real font family.
+  fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
+
   # `ix-mcp` is just the pinned interpreter invoked on the bundled package's CLI.
-  # Everything (the entrypoint, the one shared kernel, the dashboard) runs in this
+  # Everything (the entrypoint, the one shared kernel, the data API) runs in this
   # one interpreter, so the bundled modules are all importable with no install step.
-  # The dashboard UI is a Svelte/Vite app under ./site, built by nix to one
-  # self-contained index.html (viteSingleFile). The aiohttp dashboard server
-  # (ix_notebook_mcp/dashboard.py) serves that file and feeds it the live
-  # execution log over its REST API, so there is no committed build artifact and
-  # no runtime asset dependency (the same shape as dashboard-core's embedded UI,
-  # but read at runtime via IX_MCP_DASHBOARD_HTML since the server is Python).
-  dashboardSiteSrc = lib.fileset.toSource {
-    root = ./site;
-    fileset = lib.fileset.intersection (lib.fileset.gitTracked ./.) ./site;
-  };
-  dashboardSite = ix.buildSvelteSite pkgs {
-    pname = "ix-mcp-site";
-    version = "0.1.0";
-    src = dashboardSiteSrc;
-    serve.enable = false;
-    devServer = {
-      name = "ix-mcp-site-dev";
-      checkoutSubdir = "packages/mcp/site";
-    };
-  };
-  dashboardHtml = "${dashboardSite}/share/ix-mcp-site/index.html";
+  # The human-facing dashboard is the shared Loro hub (the `dashboard` aggregator):
+  # `ix-mcp serve` spawns it (IX_DASHBOARD_BIN) and publishes its runs/resources/
+  # namespace to it as panes; the aiohttp server keeps only the read-only /api the
+  # embedders poll. So there is no committed UI artifact and no Svelte build here.
+  dashboardHubBin = ix.rustWorkspace.units.binaries."dashboard";
 
   package =
     pkgs.runCommand "ix-mcp"
@@ -919,7 +912,7 @@ let
           --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
-          --set IX_MCP_DASHBOARD_HTML ${lib.escapeShellArg dashboardHtml} \
+          --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
         # The notebook engine alone (kernel + dashboard + session file, no MCP
@@ -930,7 +923,7 @@ let
           --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
-          --set IX_MCP_DASHBOARD_HTML ${lib.escapeShellArg dashboardHtml} \
+          --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
       '';
@@ -1095,19 +1088,12 @@ let
     except fff.FffError as exc:
         assert "subdirectory" in str(exc), f"unhelpful home-dir error: {exc}"
 
-    # Every public arg is keyword-only and `path`/`mode` are required (no hidden
-    # default): a positional call, or a missing path/mode, is a TypeError, so each
-    # call states exactly what it searches, where, and how.
-    for bad in (
-        lambda: fff.grep("greetings", path=root, mode="plain"),  # positional query
-        lambda: fff.grep(query="greetings", mode="plain"),       # missing path
-        lambda: fff.grep(query="greetings", path=root),          # missing mode
-    ):
-        try:
-            bad()
-            raise AssertionError("expected a TypeError for an under-specified grep")
-        except TypeError:
-            pass
+    # Ergonomic by design: `query` is positional, `path` defaults to the cwd, and
+    # `mode` defaults to a fast literal search, so `grep("pattern")` just works
+    # (the shell-grep ergonomics added with mode="plain"). Mode beyond the default
+    # is still explicit -- there is no "smart" auto-detect (rejected below).
+    assert fff.grep("greetings", path=root).matches, "positional query + default mode should search"
+    assert fff.grep("greetings", path=root, mode="plain").matches, "explicit plain mode should search"
 
     # mode="regex" runs the query as a regex and mode="plain" as a fast literal,
     # so an alternation matches under regex but not under plain. There is no
@@ -1426,6 +1412,7 @@ let
     from ix_notebook_mcp import cli
 
     status = {
+        "BackendState": "Running",
         "Self": {
             "TailscaleIPs": ["100.64.0.7", "fd7a::1"],
             "DNSName": "node.tail-x.ts.net.",
@@ -1438,6 +1425,14 @@ let
         assert cli._tailscale_ip() == "100.64.0.7", f"got {cli._tailscale_ip()!r}"
         assert cli._tailscale_dns_name() == "node.tail-x.ts.net", f"got {cli._tailscale_dns_name()!r}"
 
+    # Tailscale installed but stopped (or needs login): it still reports its
+    # assigned IPs, but they are not bound to any interface, so the helper must
+    # treat them as unusable and fall back to loopback.
+    for state in ("Stopped", "NeedsLogin", "NoState"):
+        stopped = {**status, "BackendState": state}
+        with patch.object(cli, "_tailscale_status", return_value=stopped):
+            assert cli._tailscale_ip() is None, f"{state}: expected None, got {cli._tailscale_ip()!r}"
+
     # No tailscale: the helpers return None so the CLI falls back to loopback.
     # Stubbing the inner _tailscale_status is more robust than juggling PATH or
     # the absolute fallback paths the real helper probes (which exist on hydra
@@ -1447,8 +1442,18 @@ let
         assert cli._tailscale_dns_name() is None, "expected None when tailscale is unavailable"
 
     # IPv6-only or empty IP list: still None (the bind expects IPv4).
-    with patch.object(cli, "_tailscale_status", return_value={"Self": {"TailscaleIPs": ["fd7a::1"]}}):
+    with patch.object(
+        cli,
+        "_tailscale_status",
+        return_value={"BackendState": "Running", "Self": {"TailscaleIPs": ["fd7a::1"]}},
+    ):
         assert cli._tailscale_ip() is None, "IPv6-only TailscaleIPs should yield None"
+
+    # _bindable: loopback is bindable; a reserved/unassigned address is not, so
+    # the CLI falls back to loopback instead of crashing the dashboard.
+    free = cli._free_port()
+    assert cli._bindable("127.0.0.1", free) is True, "loopback must be bindable"
+    assert cli._bindable("240.0.0.1", free) is False, "reserved address must be unbindable"
 
     print("bind-default-ok")
   '';
@@ -1963,7 +1968,6 @@ let
                     jobs = await resp.json()
                 assert len(jobs) == 1 and jobs[0]["id"] == "job1", jobs
                 assert jobs[0]["outputs"] == rich, jobs[0]["outputs"]
-                assert jobs[0].get("code_html"), "expected highlighted code"
 
                 async with session.get(base + "/api/jobs/job1") as resp:
                     assert resp.status == 200, resp.status
@@ -2603,16 +2607,6 @@ let
     bound = introspect.cell_bindings("rows = df.height\ntotal = n + 1\n", ns)
     assert set(bound) == {"df", "n"}, bound
     assert bound["df"]["kind"] == "dataframe" and bound["n"]["summary"] == "7", bound
-
-    # The highlighter marks each identifier token with data-ix-name, the anchor the
-    # browser joins with bindings; attribute parts (head) are not names so the
-    # frontend never lights them up, but the token is still present in the markup.
-    from ix_notebook_mcp import dashboard
-
-    highlighted = dashboard._code_html("rows = df.head()\ntotal = n + 1\n")
-    assert 'data-ix-name="df"' in highlighted, highlighted
-    assert 'data-ix-name="rows"' in highlighted, highlighted
-    assert 'data-ix-name="total"' in highlighted, highlighted
 
     # Opening a pre-bindings store migrates it, and a second open (the kernel and
     # dashboard each open the store) is a no-op rather than an error.
@@ -3815,6 +3809,94 @@ let
         else:
             raise SystemExit(f"shot({_bad}) should raise ValueError")
 
+    # --- live dashboard resource -------------------------------------------
+    # A connected browser publishes itself as a live resource: a throttled
+    # screenshot of the front tab. No real Chromium needed -- fake the context.
+    EP = "http://127.0.0.1:9222"
+
+    class _FakePage:
+        url = "https://example.com/"
+
+        async def title(self):
+            return "Example"
+
+        async def screenshot(self, **_kw):
+            return b"NOT-A-REAL-PNG"  # _encode_shot tolerates non-images
+
+    class _FakeCtx:
+        def __init__(self, pages):
+            self.pages = pages
+
+    class _FakeBrowser:
+        def __init__(self):
+            self.connected = True
+
+        def is_connected(self):
+            return self.connected
+
+    _orig_context = browser.context
+    _pages = [_FakePage()]
+
+    async def _fake_context(endpoint=EP):
+        return _FakeCtx(_pages)
+
+    browser.context = _fake_context
+
+    # A page renders to an inline <img> with its title/url.
+    browser._resource_html_cache.clear()
+    _h = _aio.run(browser._resource_html(EP))
+    assert "<img" in _h and "example.com" in _h, _h[:200]
+
+    # Throttled: a call within the TTL reuses the cache even though the tab list
+    # changed underneath it (the screenshot is the expensive part).
+    _pages.clear()
+    assert _aio.run(browser._resource_html(EP)) == _h
+
+    # No open tabs: a passive placeholder, and never creates a tab.
+    browser._resource_html_cache.clear()
+    assert "no open tabs" in _aio.run(browser._resource_html(EP))
+
+    # Render never raises: a failing capture becomes an error card.
+    async def _boom(endpoint=EP):
+        raise RuntimeError("kaboom")
+
+    browser.context = _boom
+    browser._resource_html_cache.clear()
+    _e = _aio.run(browser._resource_html(EP))
+    assert "render failed" in _e and "kaboom" in _e, _e[:200]
+
+    # connect() publishes the resource on a fresh connection; mimic that here.
+    browser.context = _fake_context
+    _pages[:] = [_FakePage()]
+    runtime.resources.clear()
+    browser._browsers.clear()
+    _fb = _FakeBrowser()
+    browser._browsers[EP] = _fb
+    _res = browser._register_resource(EP)
+    _rid = "browser:" + EP
+    assert _res is not None and _rid in runtime.resources, list(runtime.resources)
+    assert _res.kind == "browser" and _res.title == "browser · " + EP, (_res.kind, _res.title)
+    assert _res.alive() is True
+    browser._resource_html_cache.clear()
+    assert "<img" in _aio.run(_res.render_html())
+
+    # Keyed by endpoint: a reconnect refreshes the one card, never stacks.
+    browser._register_resource(EP)
+    assert sum(1 for k in runtime.resources if k == _rid) == 1
+
+    # alive() drops the card once the connection is gone (the sweep then closes it).
+    _fb.connected = False
+    assert _res.alive() is False
+    _fb.connected = True
+    browser._browsers.pop(EP)
+    assert _res.alive() is False
+
+    # Leave the module clean for any later assertions.
+    browser.context = _orig_context
+    browser._browsers.clear()
+    runtime.resources.clear()
+    browser._resource_html_cache.clear()
+
     print("browser-ok", browser.__version__)
   '';
   browserSmoke =
@@ -3973,6 +4055,7 @@ let
         # browser bundle -- the bare mcpPython has no wrapper to set this (only the
         # `ix-mcp` entrypoint does).
         export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
+        export FONTCONFIG_FILE=${fontsConf}
         ${lib.getExe mcpPython} ${browserVdomTestPy} >stdout 2>stderr || {
           echo "ix-mcp browser vdom smoke failed:" >&2
           cat stdout stderr >&2
@@ -4019,6 +4102,7 @@ let
         # `vdom()` launches a (headless) browser; point Playwright at the bundled
         # browser bundle (no wrapper sets it for the bare interpreter).
         export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
+        export FONTCONFIG_FILE=${fontsConf}
         # Copy the test into a writable dir so pytest collects it as a plain file
         # (a bare store path of a single .py is read by pytest as a directory).
         cp ${vdomPropertiesSource} "$TMPDIR/test_vdom_properties.py"
@@ -4078,7 +4162,6 @@ package.overrideAttrs (old: {
         xBundled
         linearBundled
         ;
-      site = dashboardSite;
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
       inherit

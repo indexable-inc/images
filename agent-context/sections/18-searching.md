@@ -41,7 +41,9 @@ past.
 
 The shared store also indexes the whole fleet's history, not just code. From
 the index kernel: `import search`, then `await search.semantic("<task
-phrasing>", source=["claude_history"], top_k=5)`. Route by question type:
+phrasing>", source=["claude_history"], top_k=5)` — each verb is async and
+returns a polars frame (one row per hit; `.filter`/`.group_by`/`.head` it).
+Route by question type:
 `shell` answers "what is the command" for a few hundred tokens, `github`
 answers "why is it this way" with PR bodies and URLs, `claude_history` answers
 "how did someone do this". Pass `agentic=True` only for failure-shaped queries

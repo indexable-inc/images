@@ -24,7 +24,12 @@ class Config:
     # default bind is this node's Tailscale IPv4 when Tailscale is up (tailnet is
     # the trust boundary) and loopback otherwise. IX_MCP_HOST overrides.
     host: str = "127.0.0.1"
+    # The aiohttp read-only data API (/api/jobs|resources|cells|snapshot|exec)
+    # embedders poll. No longer serves a human UI -- that is the Loro hub below.
     dashboard_port: int = 0
+    # The Loro dashboard hub (the `dashboard` aggregator the CLI spawns) the human
+    # opens: it renders this server's panes -- and every other producer's -- live.
+    hub_port: int = 0
 
     # Host advertised in the dashboard URL (distinct from the bind: a wildcard
     # bind is not a usable URL host, so the CLI resolves a reachable name).
@@ -81,7 +86,12 @@ class Config:
     max_budget: float = 120.0
 
     def dashboard_url(self) -> str:
+        """The read-only data API base (embedders poll /api/* here)."""
         return f"http://{self.advertised_host}:{self.dashboard_port}/"
+
+    def hub_url(self) -> str:
+        """The human-facing Loro dashboard the CLI spawns and advertises."""
+        return f"http://{self.advertised_host}:{self.hub_port}/"
 
     def resolve(self, rel_path: str) -> Path:
         candidate = (self.workdir / rel_path).resolve()

@@ -12,26 +12,27 @@ boundary.
 ```python
 import search
 
-hits = await search.semantic("where is retry backoff configured")
-for hit in hits:
-    print(hit["path"], hit["score"], hit.get("timestamp"))
+df = await search.semantic("where is retry backoff configured")
+df.select("path", "score", "timestamp").head()
+df.group_by("source").len().sort("len", descending=True)
 
 # only Claude history, only my records, last two weeks, token-frugal
-hits = await search.semantic(
+df = await search.semantic(
     "deploy steps", source=["claude_history"], user=["andrew"],
     since="2w", compact=True,
 )
 
 # my shell commands of the last six hours, newest first
-rows = await search.recent(source=["shell"], user=["andrew"], since="6h")
+df = await search.recent(source=["shell"], user=["andrew"], since="6h")
 
-hits = await search.grep(r"fn \w+\(", source=["code"], repo="indexable-inc/index")
-for hit in hits:
-    print(hit["path"], hit["text"])
+df = await search.grep(r"fn \w+\(", source=["code"], repo="indexable-inc/index")
+df.select("path", "text")
 ```
 
-Each verb returns a native asyncio coroutine, so `await` it on your own event
-loop.
+Each verb is an `async def` coroutine returning a [polars](https://pola.rs)
+`DataFrame` (one row per hit), so `await` it on your own event loop and then
+compose `.filter` / `.group_by` / `.sort` / `.head` on the result — the same
+shape `fff` and `view` return.
 
 ## `semantic(query, ...)`
 
@@ -80,9 +81,8 @@ fast; the `score` value in each hit is the API's placeholder, not relevance.
   `since`, `until`.
 
 ```python
-rows = await search.recent(source=["shell"], since="6h")
-for row in rows:
-    print(row["timestamp"], row["text"])
+df = await search.recent(source=["shell"], since="6h")
+df.select("timestamp", "text")
 ```
 
 ## Scope selectors
@@ -102,10 +102,14 @@ repeated values and comma-joined strings (`source=["code", "slack,linear"]`):
   `timestamp`. Each accepts an `int` (epoch seconds) or a `str` holding epoch
   seconds or a relative span: `"90s"`, `"30m"`, `"24h"`, `"7d"`, `"2w"`.
 
-## Hit shape
+## Result frame
 
-Each hit is a dict with `path`, `score`, `start_line`, `num_lines`, `text`,
-and `source`, plus provenance keys set only when the record carries them:
+Every verb returns a polars `DataFrame` with one row per hit and a stable
+column schema, so `df["timestamp"]` and `df.group_by("source")` work even when
+the result is empty or a provenance field is absent from every row (missing
+values are null). The six always-present columns are `path`, `score`,
+`start_line`, `num_lines`, `text`, and `source`; the provenance columns are set
+only when the record carries them:
 
 - `timestamp`: epoch seconds (the recency axis; every history record has one).
 - `user`, `host`: who recorded it, where.

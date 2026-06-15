@@ -23,16 +23,27 @@ let
     modules used to set: the repo overlay (previously a `nixpkgs.overlays`
     module) and the platform config from `platform.nix`.
 
-    YourKit is the only unfree we currently allow into images, and only
-    because `ix.languages.java.yourkit` is an opt-in profiler agent that
-    an operator turns on for performance work. The predicate keeps every
-    other unfree (Oracle JDK, Adobe runtimes, NVIDIA blobs) failing at
-    eval until the platform decides to allow it explicitly.
-    Refs: https://www.yourkit.com/docs/java/help/agent.jsp
+    Unfree packages enter images only by explicit name here, never by
+    flipping `allowUnfree`. Every image shares this one instance via
+    `nixpkgs.pkgs`, and the nixpkgs module then ignores a per-image
+    `nixpkgs.config` (setting one even fails an assertion), so an image's
+    unfree exception has to be added to this predicate, not to the image.
+      - `yourkit-java`: the opt-in `ix.languages.java.yourkit` profiler agent
+        an operator turns on for performance work.
+        Refs: https://www.yourkit.com/docs/java/help/agent.jsp
+      - `claude-code`: Anthropic's agent CLI baked into the agent dev images
+        (development-base, symphony-codex); ships under commercial terms.
+    The predicate keeps every other unfree (Oracle JDK, Adobe runtimes,
+    NVIDIA blobs) failing at eval until the platform allows it explicitly.
   */
   imagePkgs = import nixpkgs {
     inherit system overlays;
-    config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "yourkit-java" ];
+    config.allowUnfreePredicate =
+      pkg:
+      builtins.elem (lib.getName pkg) [
+        "yourkit-java"
+        "claude-code"
+      ];
   };
 
   /**

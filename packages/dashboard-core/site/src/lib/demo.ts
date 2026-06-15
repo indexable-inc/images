@@ -79,6 +79,24 @@ export function seedDemo(): void {
       body: JSON.stringify({ tick: 42, status: 'even', load: 0.42, nested: { a: 1, b: [1, 2, 3] } }),
       created_at: now - 30000,
     },
+    // A `data` pane with the `namespace` renderer: a Python session's live globals,
+    // exercising the named-renderer dispatch (renderer → NamespaceBody, else tree).
+    [`demo${SEP}ns`]: {
+      kind: 'data',
+      title: 'Namespace',
+      subtitle: 'default',
+      renderer: 'namespace',
+      body: JSON.stringify([
+        { name: 'X_train', type: 'ndarray', kind: 'array', repr: '', size: 156_800_000, shape: '50000×784' },
+        { name: 'df', type: 'DataFrame', kind: 'frame', repr: '', size: 84_000_000, shape: '1204853×8' },
+        { name: 'model', type: 'Sequential', kind: 'object', repr: '<Sequential: 4 layers>', size: 4_800_000, shape: '' },
+        { name: 'results', type: 'list', kind: 'sequence', repr: '[{...}, {...}, ...]', size: 31_700, shape: 'len 20' },
+        { name: 'result', type: 'int', kind: 'scalar', repr: '4', size: 28, shape: '' },
+        { name: 'pl', type: 'module', kind: 'module', repr: 'polars 1.12.0', size: 0, shape: '' },
+        { name: 'embed', type: 'function', kind: 'function', repr: '<function embed>', size: 0, shape: '' },
+      ]),
+      created_at: now - 15000,
+    },
     'demo-html': {
       kind: 'html',
       title: 'html pane',
@@ -90,5 +108,5 @@ export function seedDemo(): void {
     },
   };
   store.live = true;
-  store.status = '6 panes · demo';
+  store.status = '7 panes · demo';
 }

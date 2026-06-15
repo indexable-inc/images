@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS executions (
     error_line  INTEGER,
     outputs     TEXT NOT NULL DEFAULT '[]',
     bindings    TEXT NOT NULL DEFAULT '{}',
-    kind        TEXT NOT NULL DEFAULT 'cell'
+    kind        TEXT NOT NULL DEFAULT 'cell',
+    namespace   TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS executions_started ON executions (started_at);
 
@@ -77,6 +78,12 @@ def connect(path: str | Path) -> sqlite3.Connection:
     """Open (creating if needed) the store. WAL so a reader never blocks the
     writer and sees committed in-flight rows; ``busy_timeout`` so the rare
     writer/writer overlap waits rather than raising ``database is locked``."""
+    # The store is shared across processes (kernel writes, dashboard reads), so a
+    # real file path is required. Guard None explicitly: sqlite3.connect(str(None))
+    # would otherwise silently create a database in a file literally named "None"
+    # in the cwd instead of failing. See indexable-inc/index#1100.
+    if path is None:
+        raise ValueError("store path is required (got None)")
     conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
@@ -113,6 +120,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "kind" not in have:
         try:
             conn.execute("ALTER TABLE executions ADD COLUMN kind TEXT NOT NULL DEFAULT 'cell'")
+        except sqlite3.OperationalError:
+            pass
+    if "namespace" not in have:
+        try:
+            conn.execute("ALTER TABLE executions ADD COLUMN namespace TEXT NOT NULL DEFAULT '[]'")
         except sqlite3.OperationalError:
             pass
 
@@ -175,12 +187,15 @@ def finish(
     error_line: int | None = None,
     outputs: list | None = None,
     bindings: dict | None = None,
+    namespace: list | None = None,
 ) -> None:
     # `line` (the live executing line) is cleared: a finished job has no current
-    # line, only -- when it failed -- the `error_line` it failed on.
+    # line, only -- when it failed -- the `error_line` it failed on. `namespace`
+    # is the kernel's user globals as of this finish; the newest one is the live
+    # namespace the dashboard's namespace pane shows.
     conn.execute(
         "UPDATE executions SET status = ?, ended_at = ?, output = ?, result = ?, error = ?, "
-        "error_line = ?, line = NULL, outputs = ?, bindings = ? WHERE id = ?",
+        "error_line = ?, line = NULL, outputs = ?, bindings = ?, namespace = ? WHERE id = ?",
         (
             status,
             ended_at,
@@ -190,6 +205,7 @@ def finish(
             error_line,
             json.dumps(outputs or []),
             json.dumps(bindings or {}),
+            json.dumps(namespace or []),
             id,
         ),
     )
@@ -222,6 +238,31 @@ def recent(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
         (limit,),
     ).fetchall()
     return [_exec_row(r) for r in rows]
+
+
+def latest_namespace(conn: sqlite3.Connection) -> list[dict]:
+    """The kernel's user globals as of the most recently *finished* run — the live
+    namespace the dashboard's namespace pane shows.
+
+    Reads the newest execution with an ``ended_at`` (a running job has not written
+    its namespace yet, so it is excluded), regardless of whether that namespace is
+    empty. Reading the newest finished run rather than the newest *non-empty* one
+    is what keeps the pane honest: after a run clears the namespace (a reset, or
+    `del`-ing the last variable) the latest finished run records ``[]`` and the
+    pane drops, instead of pinning the last non-empty snapshot as stale data.
+    Empty before any run finishes."""
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT namespace FROM executions "
+        "WHERE ended_at IS NOT NULL "
+        "ORDER BY ended_at DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return []
+    try:
+        return json.loads(row["namespace"] or "[]")
+    except (ValueError, TypeError):
+        return []
 
 
 def get(conn: sqlite3.Connection, id: str) -> dict | None:

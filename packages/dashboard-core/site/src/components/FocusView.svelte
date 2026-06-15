@@ -18,7 +18,7 @@
 
   const kind = $derived(pane?.kind ?? 'data');
   const isExec = $derived(kind === 'exec');
-  const Body = $derived(rendererFor(kind));
+  const Body = $derived(rendererFor(kind, pane?.renderer));
 
   const refMs = $derived(
     timeline.source === 'live' && timeline.following ? Date.now() : timeline.position || timeline.maxTs,

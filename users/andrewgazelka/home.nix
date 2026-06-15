@@ -61,6 +61,13 @@
 let
   cfg = config.users.andrewgazelka;
 
+  # The index flake's package set for the *host* system. Use this (not the
+  # `pkgs.<name>` overlay attrs) for any index-built rust package: the overlay's
+  # `pkgs.claude-code` carries an x86_64-linux `config-launch` even on an
+  # aarch64-darwin host, so its install-check drags the whole x86_64-linux cargo
+  # unit graph (alsa-sys et al.) into a Mac home build, which real nix cannot
+  # place. `indexPkgs.claude-code` is the correctly host-targeted build.
+  # See indexable-inc/index#1085.
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
 
   isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
@@ -99,7 +106,7 @@ let
       pkgs.jaq
       pkgs.sqlite
       sayDetached
-      pkgs.claude-code
+      indexPkgs.claude-code
       pkgs.coreutils
       pkgs.perl # the intrinsic non-overlap flock guard at the top of the script
       indexPkgs.bossbar
@@ -120,7 +127,7 @@ let
     runtimeInputs = [
       pkgs.gh
       pkgs.jq
-      pkgs.claude-code
+      indexPkgs.claude-code
       pkgs.coreutils
     ];
     text = builtins.readFile ./scripts/ci-triage.sh;

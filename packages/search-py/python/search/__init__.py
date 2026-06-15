@@ -8,36 +8,40 @@ agent/shell history across the fleet):
 * ``recent()`` lists the newest records (descending timestamp), no semantic
   scoring -- a deterministic "what happened lately" feed.
 
+Each is a coroutine returning a :class:`polars.DataFrame` (one row per hit), so
+``await`` it and compose ``.filter`` / ``.group_by`` / ``.sort`` / ``.head`` on
+the result, exactly like ``fff`` and ``view``::
+
+    df = await search.semantic("where is retry backoff configured")
+    df.select("path", "score", "timestamp").head()
+    df.group_by("source").len().sort("len", descending=True)
+
 None of them indexes: this is a pure query surface, so importing ``search``
 never uploads the local checkout. Scope a query server-side with any of
 ``source``, ``not_source``, ``repo``, ``user``, ``host``, ``project``, and a
 time window ``since``/``until`` (epoch seconds or relative spans like
 ``"24h"``/``"7d"``); with no selector the whole corpus is searched.
 
-    hits = await search.semantic("where is retry backoff configured")
-    for hit in hits:
-        print(hit["path"], hit["score"], hit.get("timestamp"))
-
     # only Claude history, only my records, last two weeks, token-frugal
-    hits = await search.semantic(
+    df = await search.semantic(
         "deploy steps", source=["claude_history"], user=["andrew"],
         since="2w", compact=True,
     )
 
     # my shell commands of the last six hours, newest first
-    rows = await search.recent(source=["shell"], user=["andrew"], since="6h")
+    df = await search.recent(source=["shell"], user=["andrew"], since="6h")
 
-    hits = await search.grep(r"fn \\w+\\(", source=["code"], repo="indexable-inc/index")
+    df = await search.grep(r"fn \\w+\\(", source=["code"], repo="indexable-inc/index")
 
-Each awaitable is a native asyncio coroutine bridged from Rust via
-pyo3-async-runtimes, so ``await`` it on your own event loop. Each hit is a dict
-with keys ``path``, ``score``, ``start_line``, ``num_lines``, ``text``, and
-``source``, plus provenance keys when the record carries them: ``timestamp``
-(epoch seconds), ``user``, ``host``, ``session_id``, ``external_id``, ``url``,
-``repo``, ``project``. Valid sources: ``claude_history``, ``codex``, ``shell``,
-``claude_debug``, ``git``, ``github``, ``slack``, ``linear``, ``code``,
-``web`` -- an unknown source raises ``ValueError`` instead of silently
-returning zero hits.
+Every frame has the same stable schema (so ``df["timestamp"]`` and
+``df.group_by("source")`` work even on an empty result): the six always-present
+columns ``path``, ``score``, ``start_line``, ``num_lines``, ``text``,
+``source``, then provenance columns ``timestamp`` (epoch seconds), ``user``,
+``host``, ``session_id``, ``external_id``, ``url``, ``repo``, ``project`` --
+null where a record does not carry them. Valid sources: ``claude_history``,
+``codex``, ``shell``, ``claude_debug``, ``git``, ``github``, ``slack``,
+``linear``, ``code``, ``web`` -- an unknown source raises ``ValueError``
+instead of silently returning zero hits.
 
 ``compact=True`` collapses repeated chunks of one document and caps snippets
 at 400 chars (a default ``top_k=10`` full response measured ~20k tokens).
@@ -50,6 +54,109 @@ written by ``mgrep login``.
 
 from __future__ import annotations
 
-from ._search import __version__, grep, recent, semantic
+import functools
+from typing import TYPE_CHECKING
+
+from ._search import __version__
+from ._search import grep as _grep
+from ._search import recent as _recent
+from ._search import semantic as _semantic
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    import polars as pl
+
+    _Raw = Callable[..., Awaitable[list[dict[str, object]]]]
+    _Framed = Callable[..., Awaitable[pl.DataFrame]]
 
 __all__ = ["__version__", "grep", "recent", "semantic"]
+
+# The stable column set, in display order: the six fields every hit carries,
+# then the provenance fields a record may or may not carry. Enforced on every
+# result so callers can rely on the schema even when the result is empty or a
+# provenance key is absent from every row.
+_COLUMNS: tuple[str, ...] = (
+    "path",
+    "score",
+    "start_line",
+    "num_lines",
+    "text",
+    "source",
+    "timestamp",
+    "user",
+    "host",
+    "session_id",
+    "external_id",
+    "url",
+    "repo",
+    "project",
+)
+
+
+def _dtypes() -> dict[str, object]:
+    import polars as pl
+
+    return {
+        "path": pl.Utf8,
+        "score": pl.Float64,
+        "start_line": pl.Int64,
+        "num_lines": pl.Int64,
+        "text": pl.Utf8,
+        "source": pl.Utf8,
+        "timestamp": pl.Int64,
+        "user": pl.Utf8,
+        "host": pl.Utf8,
+        "session_id": pl.Utf8,
+        "external_id": pl.Utf8,
+        "url": pl.Utf8,
+        "repo": pl.Utf8,
+        "project": pl.Utf8,
+    }
+
+
+def _to_frame(rows: "list[dict[str, object]]") -> "pl.DataFrame":
+    try:
+        import polars as pl
+    except ModuleNotFoundError as exc:  # pragma: no cover - env always has polars
+        raise ModuleNotFoundError(
+            "search.semantic/grep/recent return polars DataFrames; "
+            "install polars to use them."
+        ) from exc
+
+    dtypes = _dtypes()
+    if not rows:
+        return pl.DataFrame(schema=dtypes)
+    df = pl.DataFrame(rows)
+    missing = [c for c in _COLUMNS if c not in df.columns]
+    if missing:
+        df = df.with_columns([pl.lit(None).cast(dtypes[c]).alias(c) for c in missing])
+    df = df.with_columns([pl.col(c).cast(dtypes[c]) for c in _COLUMNS])
+    # Standard columns first, in order; any unexpected key kept after them so a
+    # new provenance field is surfaced rather than silently dropped.
+    extra = [c for c in df.columns if c not in _COLUMNS]
+    return df.select([*_COLUMNS, *extra])
+
+
+def _framed(raw: "_Raw") -> "_Framed":
+    """Wrap a native PyO3 coroutine so awaiting it yields a polars DataFrame.
+
+    ``functools.wraps`` copies the binding's signature and docstring, so
+    ``help()`` and ``inspect.signature`` show the real parameters while
+    ``inspect.iscoroutinefunction`` reports ``True``.
+    """
+
+    @functools.wraps(raw)
+    async def wrapper(*args: object, **kwargs: object) -> "pl.DataFrame":
+        return _to_frame(await raw(*args, **kwargs))
+
+    wrapper.__doc__ = (raw.__doc__ or "") + (
+        "\n\nReturns a polars DataFrame (one row per hit) with the stable "
+        "schema documented on the `search` module."
+    )
+    return wrapper
+
+
+semantic = _framed(_semantic)
+grep = _framed(_grep)
+recent = _framed(_recent)

@@ -46,11 +46,11 @@ in
     ];
   };
 
-  # Claude Code ships under Anthropic's commercial terms (unfree in nixpkgs).
-  # Keep the exception scoped to that package; mcp and codex are repo/open
-  # packages.
-  nixpkgs.config.allowUnfreePredicate =
-    pkg: builtins.elem (pkg.pname or (lib.getName pkg)) [ "claude-code" ];
+  # Claude Code ships under Anthropic's commercial terms (unfree in nixpkgs);
+  # its allow-by-name exception lives on the shared image nixpkgs instance
+  # (lib/image/default.nix), since every image shares ONE instance via
+  # `nixpkgs.pkgs` and a per-image `nixpkgs.config` is ignored (and errors).
+  # mcp and codex are repo/open packages.
 
   environment.systemPackages = [
     pkgs.ast-grep

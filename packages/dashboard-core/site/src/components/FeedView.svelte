@@ -239,7 +239,7 @@
               {/if}
             {/if}
           {:else}
-            {@const Body = rendererFor(k)}
+            {@const Body = rendererFor(k, p.renderer)}
             <div class="entry-box pane entry-body" class:term={k === 'terminal'} style={k === 'terminal' ? 'font-size: 13px;' : ''}>
               <div class="body" class:term-body={k === 'terminal'} class:html-body={k === 'html'}>
                 <Body pane={p} />
