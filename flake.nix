@@ -323,6 +323,10 @@
         };
       };
       overlays.default = ix.overlay;
+      templates.dev = {
+        path = ./templates/dev;
+        description = "Forkable ix dev environment: one dev.nix for a default VM, a fleet, and shared Claude/ix auth (RFC 0007)";
+      };
       packages = collect "packages";
       checks = collect "checks";
       # Sharded keying of the same check derivations for the memory-bounded CI

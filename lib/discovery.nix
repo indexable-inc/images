@@ -4,6 +4,7 @@
   artifacts,
   mkImage,
   mkFleetFor,
+  mkDevFor,
   ixReturn,
 }:
 let
@@ -241,6 +242,7 @@ let
       indexShim = {
         lib = ixReturn // {
           mkFleet = mkFleetFor hostSystem;
+          mkDev = mkDevFor hostSystem;
         };
       };
 

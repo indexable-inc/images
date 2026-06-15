@@ -463,6 +463,8 @@ let
     mkNonNixImage
     mkFleetFor
     mkFleet
+    mkDevFor
+    mkDev
     ;
 
   inherit
@@ -473,6 +475,7 @@ let
         artifacts
         mkImage
         mkFleetFor
+        mkDevFor
         ixReturn
         ;
     })
@@ -498,6 +501,8 @@ let
       exampleFleetsFor
       goUnitFor
       macosSdk
+      mkDev
+      mkDevFor
       mkFleet
       mkFleetFor
       mkImage

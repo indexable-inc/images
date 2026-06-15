@@ -128,6 +128,17 @@ let
 
   mkFleet = mkFleetFor system;
 
+  # Dev-fleet layer over `mkFleet` (RFC 0007): consumes the forkable `dev.nix`
+  # spec. Curried like `mkFleetFor` so example/flake eval can target a host
+  # system.
+  inherit
+    (import ./dev.nix {
+      inherit lib paths mkFleetFor;
+    })
+    mkDevFor
+    ;
+  mkDev = mkDevFor system;
+
   # Non-NixOS OCI images are built standalone (no `nixosSystem`), so they need a
   # plain package set carrying the ix overlay for `oci-image-builder`. Reusing
   # the same overlays the image evaluation applies keeps both builders on one
@@ -152,5 +163,7 @@ in
     bootstrapImage
     mkFleetFor
     mkFleet
+    mkDevFor
+    mkDev
     ;
 }
