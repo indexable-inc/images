@@ -183,11 +183,16 @@ class Kernel:
                 raise
             return outputs, summary
 
-    async def python_exec(self, code: str, budget: float, name: str | None = None) -> tuple[list[dict], dict | None]:
+    async def python_exec(
+        self, code: str, budget: float, name: str | None = None, session: str | None = None
+    ) -> tuple[list[dict], dict | None]:
         """Run user ``code`` with a foreground budget; return (outputs, summary).
 
         ``code`` is passed as a repr-encoded string literal so any quoting is
-        safe. A healthy cell completes within ``budget`` (the runtime backgrounds
+        safe. ``session`` is the caller's MCP session id; the kernel runtime runs
+        the code in that session's own namespace (None: the shared one), so
+        parallel clients of one kernel do not clobber each other's variables. A
+        healthy cell completes within ``budget`` (the runtime backgrounds
         the job and returns the summary right after the budget elapses). If the
         kernel does not report idle within ``budget + wedge_grace`` the cell is
         blocking the kernel's single event loop with a synchronous call: interrupt
@@ -195,7 +200,11 @@ class Kernel:
         of letting an opaque ``Timeout waiting for output`` escape to the caller.
         """
         name_arg = "None" if name is None else repr(name)
-        wrapper = f"await __ix_exec({code!r}, budget={float(budget)!r}, name={name_arg})"
+        session_arg = "None" if session is None else repr(session)
+        wrapper = (
+            f"await __ix_exec({code!r}, budget={float(budget)!r}, "
+            f"name={name_arg}, session={session_arg})"
+        )
         grace = self._config.wedge_grace
         deadline = float(budget) + grace
         try:

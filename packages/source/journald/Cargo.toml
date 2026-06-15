@@ -1,0 +1,17 @@
+[package]
+name = "source-journald"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Adapter turning journald unit warnings/errors into embeddable, tagged search documents"
+
+[lints]
+workspace = true
+
+[dependencies]
+source-meta.workspace = true
+serde_json.workspace = true
+snafu.workspace = true
+# The workspace pins chrono with `default-features = false`; `alloc` re-enables
+# the formatting used for the per-day grain and per-line times.
+chrono = { workspace = true, features = ["alloc"] }

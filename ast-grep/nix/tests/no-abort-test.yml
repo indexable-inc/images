@@ -1,7 +1,0 @@
-id: no-abort
-valid:
-  - 'a: throw "ix.area: boom"'
-  - 'a: lib.assertMsg (x == 1) "must be one"'
-invalid:
-  - 'a: abort "boom"'
-  - 'a: builtins.abort "boom"'

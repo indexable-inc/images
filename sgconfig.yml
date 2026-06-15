@@ -1,4 +1,0 @@
-ruleDirs: ["./ast-grep/nix/rules", "./ast-grep/rust/rules"]
-testConfigs:
-  - testDir: ./ast-grep/nix/tests
-  - testDir: ./ast-grep/rust/tests

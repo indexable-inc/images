@@ -1,7 +1,0 @@
-id: no-bare-assert
-valid:
-  - 'a: assert lib.assertMsg (x == 1) "must be one"; a'
-  - 'a: assert lib.assertOneOf "field" x xs; a'
-invalid:
-  - 'a: assert x == 1; a'
-  - 'a: assert builtins.elem x xs; a'

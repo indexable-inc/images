@@ -1,9 +1,0 @@
-id: no-path-flake-ref
-valid:
-  - '{ url = "path:./agent-context"; flake = false; }'
-  - '{ url = "path:./bench/filesystem"; flake = false; }'
-  - '"git+file:///home/andrew/ix?submodules=1#pkg"'
-invalid:
-  - '{ url = "path:."; }'
-  - '{ url = "path:.."; }'
-  - '{ url = "path:/home/andrew/ix"; }'

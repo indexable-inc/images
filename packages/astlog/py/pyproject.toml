@@ -1,0 +1,27 @@
+# No PEP 517 backend on purpose: the PyO3 cdylib is built by the shared
+# cargo-unit workspace graph and bundled into the ix-mcp interpreter by
+# packages/mcp/default.nix (the same shape as search-py and tui-py).
+# This file is project metadata plus the pyright config; `pip install .`
+# is not a supported path.
+
+[project]
+name = "ix-astlog"
+version = "0.1.0"
+description = "Datalog over tree-sitter ASTs. Imported as `astlog`."
+readme = "../README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "indexable" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Rust",
+  "Operating System :: POSIX",
+]
+
+[tool.pyright]
+include = ["python"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+useLibraryCodeForTypes = false
+reportMissingModuleSource = "none"

@@ -31,7 +31,7 @@
   // Right-aligned meta: a terminal shows its geometry, other kinds show the kind
   // as a small badge so the canvas reads as heterogeneous at a glance.
   const meta = $derived(isTerm ? `${pane.rows ?? '?'}×${pane.cols ?? '?'}` : kind);
-  const Body = $derived(rendererFor(kind));
+  const Body = $derived(rendererFor(kind, pane.renderer));
 
   // The LED reflects each kind's liveness: a terminal's alive flag, an exec's
   // running/ok status, otherwise just "present".

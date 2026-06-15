@@ -1,0 +1,24 @@
+;; Rust lint rules, ported from the ast-grep YAML rules that used to live in
+;; ast-grep/rust/rules/ (see #1060 for the Nix port that preceded this). One
+;; relation per rule, named exactly after the original rule id, each carrying a
+;; (lint <rule> error "message") declaration so `astlog scan` turns every
+;; derived row into a located finding and gates CI on it. A legitimate
+;; exception is silenced in place with an `astlog-ignore: <rule>` comment.
+;;
+;; The lint stage scopes these to the corpus/search crates (the `files:` scope
+;; the rules carried under ast-grep); see the `astlog-rust` stage in
+;; lib/per-system.nix. Fixtures live in astlog-rules/tests/<rule-id>/ and are
+;; exercised by the `astlog-rules` flake check.
+
+;; no-anon-tuple: an anonymous tuple *type* with 3+ fields carries several
+;; distinct domain values positionally, so every call site re-derives what
+;; .0/.1/.2 mean and a reorder is a silent bug. Promote it to a named struct.
+;; Two-field pairs (key/value, a parse split) stay idiomatic and are allowed;
+;; `(_) (_) (_)` matches a tuple_type with three or more named element types
+;; (commas/parens are anonymous, so they don't count). Targets tuple *types*
+;; only: tuple expressions `(1, 2, 3)` and patterns `let (a, b, c)` are other
+;; node kinds and never match.
+(rule (no-anon-tuple n)
+  (match rust "(tuple_type (_) (_) (_)) @n"))
+(lint no-anon-tuple error
+  "anonymous tuple with 3+ fields; promote it to a named struct so each field has a name (2-field pairs are fine)")

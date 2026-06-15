@@ -1,0 +1,1 @@
+x: if x then 1 else throw "ix.example: x must be set"

@@ -13,7 +13,7 @@ use crate::db::Db;
 use crate::error::Result;
 use crate::manifest::Manifest;
 use crate::repo::repo_slug;
-use crate::search::{AnswerView, CodeScope, DisplayHit, ask, grep, semantic};
+use crate::search::{AnswerView, CodeScope, DisplayHit, RenderMode, ask, grep, semantic};
 use crate::sync::{sync, wait_until_indexed};
 
 /// What to query and how, independent of the backend and progress reporting.
@@ -110,7 +110,14 @@ async fn prepare(
         )
         .await?;
         if report.uploaded > 0 {
-            wait_until_indexed(store, query.store_name, query.index_timeout, on_poll).await?;
+            wait_until_indexed(
+                store,
+                query.store_name,
+                &report.uploaded_ids,
+                query.index_timeout,
+                on_poll,
+            )
+            .await?;
         }
         // Record success once the uploads are accepted, not once embedding
         // finishes. Upload acceptance is the durable fact the gate cares about
@@ -149,6 +156,7 @@ pub async fn index_and_semantic(
         query.include_web,
         query.filters,
         query.code_scope,
+        RenderMode::Full,
     )
     .await
 }
@@ -180,6 +188,7 @@ pub async fn index_and_grep(
         options,
         query.filters,
         query.code_scope,
+        RenderMode::Full,
     )
     .await
 }
@@ -203,7 +212,9 @@ pub async fn index_and_answer(
         &manifest,
         query.text,
         query.top_k,
-        query.options.clone(),
+        // Backend-default answering behavior; the pipeline query carries
+        // retrieval knobs only.
+        query.options.clone().into(),
         query.include_web,
         query.filters,
         query.code_scope,

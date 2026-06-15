@@ -300,6 +300,72 @@ mod tests {
         );
     }
 
+    /// End-to-end hygiene proof: a transcript whose tool output carries a fake
+    /// credential (constructed at test time — never a real key), ANSI escapes,
+    /// a base64-ish blob, and a giant CI log comes out of the adapter's
+    /// [`Document`](source_meta::Document) body sanitized, and the
+    /// `content_hash` is computed over the sanitized bytes (so a re-sync sees
+    /// previously ingested raw bodies as changed and re-uploads them clean).
+    #[test]
+    fn fake_secret_in_transcript_is_redacted_end_to_end() {
+        use source_meta::SourceAdapter as _;
+
+        let fake_key = format!("lin_api_{}", "Ab0".repeat(13));
+        let big_output = format!(
+            "\u{1b}[1mLOG-HEAD\u{1b}[0m {}\ncurl -H \"Authorization: {fake_key}\"\n{}LOG-TAIL",
+            "QUJD+/=a".repeat(40),
+            "one line of CI output\n".repeat(600),
+        );
+        let call = serde_json::json!({
+            "type": "assistant", "uuid": "a1", "sessionId": "s1",
+            "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_1", "name": "Bash",
+                 "input": {"command": "./ci.sh"}}
+            ]}
+        });
+        let result = serde_json::json!({
+            "type": "user", "uuid": "u1", "sessionId": "s1",
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": big_output}
+            ]}
+        });
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let proj = temp.path().join("proj");
+        std::fs::create_dir_all(&proj).expect("mkdir");
+        std::fs::write(proj.join("s1.jsonl"), format!("{call}\n{result}\n")).expect("write");
+
+        let export =
+            super::ClaudeHistoryExport::open_with(temp.path(), "test-host", "test-user")
+                .expect("open");
+        let documents: Vec<_> = export
+            .documents()
+            .collect::<Result<_, _>>()
+            .expect("documents");
+        assert_eq!(documents.len(), 1, "call and result fold into one document");
+        let document = &documents[0];
+        let body = String::from_utf8(document.body.clone()).expect("utf8 body");
+
+        assert!(
+            !body.contains(&fake_key),
+            "the raw key must never be embedded: {body}"
+        );
+        assert!(body.contains("[redacted:linear_api_key]"), "{body}");
+        assert!(!body.contains('\u{1b}'), "ANSI escapes stripped: {body}");
+        assert!(body.contains("[blob 320 chars]"), "{body}");
+        assert!(
+            body.contains("[truncated"),
+            "the giant tool_result is capped: {} chars",
+            body.chars().count()
+        );
+        assert!(body.contains("LOG-TAIL"), "the tail survives the cap");
+        assert_eq!(
+            document.content_hash,
+            source_meta::hash_body(&document.body),
+            "content_hash is computed AFTER sanitation, over the embedded bytes"
+        );
+    }
+
     #[test]
     fn top_level_symlinked_root_is_followed() {
         // The user's own ~/.claude/projects is a symlink to the real store, so

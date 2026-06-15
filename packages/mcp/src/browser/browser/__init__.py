@@ -37,6 +37,20 @@ and take over. If a browser is already on the port, its profile is used as-is;
 when launching, a dedicated CDP profile (``~/.cdp-<app>-profile``) is used so it
 runs as its own instance without disturbing your everyday browser session.
 
+Once connected, the browser also shows up as a live card in the dashboard's
+**resources** pane: a throttled screenshot of the front tab that follows your
+navigation and clicks on its own, and drops off when the connection ends. (A
+one-shot ``shot()`` lands in the executions reel; the resource is the always-on
+view.)
+
+Always drive the browser THROUGH this module (``connect`` /
+``get_or_create_browser`` / ``goto`` / ``page``), never raw
+``async_playwright().start()``: the module keeps one cached connection on the
+kernel loop (so it never blocks other jobs), opens a *visible* window, and only
+this path registers the live dashboard resource. A hand-rolled Playwright launch
+gets none of that -- and a headless ``chromium.launch()`` has no debug port for
+the module to attach to, so it stays invisible to both the human and the card.
+
 ``shot()`` returns a :class:`Result`, so ending a cell with it shows the screenshot
 to the human and hands the model the same image. Every other call returns the raw
 Playwright object (``Browser`` / ``BrowserContext`` / ``Page``), so the full async
@@ -67,6 +81,7 @@ import base64 as _base64
 import html as _html
 import os as _os
 import sys as _sys
+import time as _time
 import urllib.parse as _urlparse
 
 __all__ = [
@@ -153,7 +168,13 @@ async def _cdp_ready(endpoint: str, *, timeout: float) -> bool:
     import httpx
 
     deadline = _asyncio.get_running_loop().time() + timeout
-    async with httpx.AsyncClient() as client:
+    # verify=False: this only ever probes a local http:// CDP endpoint, so TLS
+    # never applies. A verifying client (the default) eagerly builds an SSL
+    # context at construction, loading the CA bundle named by $SSL_CERT_FILE; in
+    # a minimal sandbox like the Nix build sandbox that variable points at a path
+    # that does not exist, so construction aborts with FileNotFoundError before
+    # the probe ever runs.
+    async with httpx.AsyncClient(verify=False) as client:
         while _asyncio.get_running_loop().time() < deadline:
             try:
                 resp = await client.get(f"{endpoint}/json/version", timeout=1.0)
@@ -187,7 +208,10 @@ async def get_or_create_browser(
     happened" to the human looking for the window."""
     try:
         return await connect(endpoint)
-    except Exception:
+    except ConnectionError:
+        # Nothing on the port: fall through and launch. Any OTHER failure (a
+        # live endpoint whose handshake failed) propagates -- launching a second
+        # instance over an occupied port cannot succeed and hides the real error.
         pass
     port = _port_of(endpoint)
     udd = user_data_dir or _default_user_data_dir(app)
@@ -219,8 +243,10 @@ async def connect(endpoint: str = DEFAULT_ENDPOINT):
     and return the Playwright ``Browser``. ``endpoint`` is the DevTools HTTP URL
     ``http://host:port`` -- the default is the standard CDP port 9222.
 
-    Raises ``ConnectionError`` if nothing is listening; use
-    :func:`get_or_create_browser` to launch one automatically instead."""
+    Raises ``ConnectionError`` if nothing is listening (use
+    :func:`get_or_create_browser` to launch one automatically), or
+    ``RuntimeError`` if a browser answers on the endpoint but the Playwright
+    handshake with it fails (version skew -- launching another cannot help)."""
     existing = _browsers.get(endpoint)
     if existing is not None and existing.is_connected():
         return existing
@@ -228,12 +254,97 @@ async def connect(endpoint: str = DEFAULT_ENDPOINT):
     try:
         browser = await pw.chromium.connect_over_cdp(endpoint)
     except Exception as exc:
+        # Two very different failures hide behind connect_over_cdp, and blaming
+        # "no browser" for both once sent an agent on a wild goose chase while a
+        # perfectly alive Chrome sat on the port: probe the HTTP side to tell
+        # them apart and report the one that actually happened.
+        if await _cdp_ready(endpoint, timeout=1.0):
+            raise RuntimeError(
+                f"a browser IS listening at {endpoint}, but Playwright's CDP "
+                f"handshake with it failed: {exc}. This is usually a Playwright/"
+                f"browser version skew (the browser is newer than the bundled "
+                f"driver), not a missing browser -- launching another instance "
+                f"will not help. The endpoint itself still works: drive it over "
+                f"raw CDP ({endpoint}/json + a websocket), or align the versions."
+            ) from exc
         raise ConnectionError(
-            f"no browser reachable at {endpoint} over CDP ({exc}). Use "
+            f"nothing is listening at {endpoint} ({exc}). Use "
             f"await browser.get_or_create_browser() to launch a visible one automatically."
         ) from exc
     _browsers[endpoint] = browser
+    # Publish this browser as a live dashboard resource. Only on a fresh
+    # connection: the cached early-return above means an already-connected
+    # browser keeps its existing card instead of re-registering every call.
+    _register_resource(endpoint)
     return browser
+
+
+# A live dashboard resource re-renders on every flush tick (~2/s). A full CDP
+# screenshot that often is wasteful, so cache the rendered HTML briefly and reuse
+# it between ticks: the sidebar still tracks navigation and clicks within a
+# second, at a fraction of the capture cost.
+_RESOURCE_TTL = 1.5
+_RESOURCE_MAX_DIM = 900
+_resource_html_cache: dict = {}
+
+
+async def _resource_html(endpoint: str = DEFAULT_ENDPOINT) -> str:
+    """Current HTML for the live dashboard resource of the browser at ``endpoint``:
+    a JPEG of the front tab with its title/url. Never raises (any failure renders as
+    a small error card) and never creates a tab -- a passive view must not change the
+    browser it watches. Throttled to one capture per ``_RESOURCE_TTL`` seconds."""
+    now = _time.monotonic()
+    cached = _resource_html_cache.get(endpoint)
+    if cached is not None and now - cached[0] < _RESOURCE_TTL:
+        return cached[1]
+    try:
+        ctx = await context(endpoint)
+        pages = ctx.pages
+        if not pages:
+            html = (
+                '<div style="font:12px ui-monospace,monospace;opacity:.7">'
+                "browser connected · no open tabs</div>"
+            )
+        else:
+            pg = pages[-1]
+            png = await pg.screenshot(scale="css")
+            data, mime = _encode_shot(png, max_dim=_RESOURCE_MAX_DIM, fmt="jpeg", quality=55)
+            note = f"{await pg.title()} \u2014 {pg.url}"
+            data_uri = f"data:{mime};base64," + _base64.b64encode(data).decode("ascii")
+            html = (
+                '<div style="font:12px ui-monospace,monospace">'
+                f'<div style="opacity:.7;margin-bottom:4px">{_html.escape(note)}</div>'
+                f'<img alt="{_html.escape(note)}" src="{data_uri}" style="max-width:100%" /></div>'
+            )
+    except Exception as exc:
+        html = (
+            '<pre style="color:#f7768e;margin:0">browser resource render failed:\n'
+            f"{_html.escape(str(exc))}</pre>"
+        )
+    _resource_html_cache[endpoint] = (now, html)
+    return html
+
+
+def _register_resource(endpoint: str = DEFAULT_ENDPOINT):
+    """Publish the browser at ``endpoint`` as a live dashboard resource, when running
+    inside the kernel. Decoupled on purpose: outside the kernel (a test, a plain
+    interpreter) the runtime is absent and this is a silent no-op, so ``connect``
+    stays pure. Keyed by endpoint so a reconnect refreshes the one card instead of
+    stacking duplicates; the ``alive`` predicate drops the card once the connection
+    is gone (the flush sweep then closes it)."""
+    try:
+        from ix_notebook_mcp.runtime import register_resource
+    except Exception:
+        return None
+    return register_resource(
+        render=lambda ep=endpoint: _resource_html(ep),
+        id=f"browser:{endpoint}",
+        kind="browser",
+        title=f"browser · {endpoint}",
+        alive=lambda ep=endpoint: (
+            _browsers.get(ep) is not None and _browsers[ep].is_connected()
+        ),
+    )
 
 
 async def context(endpoint: str = DEFAULT_ENDPOINT):

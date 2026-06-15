@@ -1,0 +1,43 @@
+[
+  {
+    "repo": "acme/widgets",
+    "run_id": 91001,
+    "run_number": 412,
+    "workflow": "CI",
+    "branch": "main",
+    "head_sha": "0123abcd0123abcd0123abcd0123abcd0123abcd",
+    "conclusion": "failure",
+    "event": "push",
+    "created_at": "2026-01-10T08:00:00Z",
+    "updated_at": "2026-01-10T08:20:00Z",
+    "url": "https://github.com/acme/widgets/actions/runs/91001",
+    "failed_jobs": [
+      {
+        "name": "test-linux",
+        "conclusion": "failure",
+        "url": "https://github.com/acme/widgets/actions/runs/91001/job/1",
+        "failed_steps": ["cargo test -p widgets", "Upload junit"]
+      },
+      {
+        "name": "clippy",
+        "conclusion": "failure",
+        "url": null,
+        "failed_steps": ["cargo clippy"]
+      }
+    ]
+  },
+  {
+    "repo": "acme/gadgets",
+    "run_id": 91002,
+    "run_number": 77,
+    "workflow": "nightly",
+    "branch": null,
+    "head_sha": "fedcba98fedcba98fedcba98fedcba98fedcba98",
+    "conclusion": "timed_out",
+    "event": null,
+    "created_at": "2026-01-11T02:00:00Z",
+    "updated_at": "2026-01-11T08:00:00Z",
+    "url": "https://github.com/acme/gadgets/actions/runs/91002",
+    "failed_jobs": []
+  }
+]

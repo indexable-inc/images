@@ -108,7 +108,7 @@ let
       };
 
       # `unit` sugar lives here, not in `command`'s default: a public option's
-      # default must be a self-contained literal (repo ast-grep rule), so the
+      # default must be a self-contained literal (repo astlog rule), so the
       # `unit` -> command branch is seeded in config as an mkDefault a real
       # `command` (priority 100) still overrides.
       config = lib.mkIf (config.unit != null) {
@@ -323,6 +323,26 @@ in
         type = lib.types.str;
         default = config.networking.hostName;
       };
+
+      groups = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = lib.literalExpression ''[ "shared-db" ]'';
+        description = ''
+          East-west group slugs this image's VM joins at creation.
+
+          Declared in the image so the network identity travels with the
+          definition: the fleet plan unions these with the fleet-level
+          `nodes.<name>.groups`, and the create path get-or-creates each
+          slug under the deploying user before first boot. VMs sharing a
+          slug reach each other privately as `<eastWest.hostName>.ix.internal`;
+          a VM outside the group has no route in.
+
+          Slugs are scoped per owner and limited to `[a-z0-9_-]`, max 63
+          chars (the DNS label limit); the fleet eval rejects anything else
+          before any RPC runs.
+        '';
+      };
     };
   };
 
@@ -373,16 +393,10 @@ in
       }
     ];
 
-    nixpkgs.hostPlatform.system = "x86_64-linux";
-
-    # YourKit is the only unfree we currently allow into images, and only
-    # because `ix.languages.java.yourkit` is an opt-in profiler agent that
-    # an operator turns on for performance work. The predicate keeps every
-    # other unfree (Oracle JDK, Adobe runtimes, NVIDIA blobs) failing at
-    # eval until the platform decides to allow it explicitly.
-    #
-    # Refs: https://www.yourkit.com/docs/java/help/agent.jsp
-    nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "yourkit-java" ];
+    # The host platform (x86_64-linux) and the YourKit-only unfree predicate
+    # live on the shared `imagePkgs` instantiation in `default.nix`: every
+    # image shares ONE nixpkgs instance via `nixpkgs.pkgs`, and the nixpkgs
+    # module ignores `hostPlatform`/`config` once `pkgs` is set.
 
     boot = {
       isContainer = true;

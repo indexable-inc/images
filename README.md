@@ -57,7 +57,7 @@ nix run .#reel          # writes docs/demo-{dark,light}.{avif,webp}
 
 ```sh
 nix flake show          # list every package, module, and check
-nix run .#lint          # nixfmt, statix, deadnix, ast-grep
+nix run .#lint          # nixfmt, statix, deadnix, astlog (nix + rust)
 nix build .#minecraft   # realize one image closure
 ```
 

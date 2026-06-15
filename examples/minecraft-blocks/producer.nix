@@ -52,17 +52,20 @@ let
   # honest pattern is at-least-once transport feeding an idempotent view, which
   # is effectively-once end to end; the log, not the transport, is the source of
   # truth, and duplicate delivery never corrupts a count.
-  shipToKafka = pkgs.writeShellScript "mc-blocks-ship" ''
-    set -eu
-    touch ${blockLog}
-    until ${kafkaBin}/kafka-broker-api-versions.sh --bootstrap-server ${kafka} >/dev/null 2>/tmp/kafka-probe.err; do
-      sleep 2
-    done
-    exec ${pkgs.coreutils}/bin/tail -F -n +1 ${blockLog} \
-      | ${kafkaBin}/kafka-console-producer.sh \
-          --bootstrap-server ${kafka} \
-          --topic ${schema.topic}
-  '';
+  shipToKafka = lib.getExe (
+    ix.writeNushellApplication pkgs {
+      name = "mc-blocks-ship";
+      text = ''
+        touch "${blockLog}"
+        while (^${kafkaBin}/kafka-broker-api-versions.sh --bootstrap-server "${kafka}" | complete).exit_code != 0 {
+          sleep 2sec
+        }
+        # Stream the append-only file into the topic (at-least-once; the view is
+        # idempotent). nushell keeps the pipe as the long-running service body.
+        ^${pkgs.coreutils}/bin/tail -F -n +1 "${blockLog}" | ^${kafkaBin}/kafka-console-producer.sh --bootstrap-server "${kafka}" --topic "${schema.topic}"
+      '';
+    }
+  );
 in
 {
   # The Minecraft server with the custom block-events plugin.

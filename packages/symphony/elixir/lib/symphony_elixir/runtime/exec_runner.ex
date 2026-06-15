@@ -6,9 +6,24 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
 
   The node carries its script path and optional timeout as literal inputs
   (`inputs["script"]`, `inputs["timeout"]`), set by the interpreter from
-  `exec "<path>" [timeout <seconds>]`. The path is resolved relative to
-  the active pack directory so a pack references its own scripts without
-  carrying absolute deployment paths.
+  `exec "<path>" [timeout <seconds>] [{ ... }]`. The path is resolved
+  relative to the active pack directory so a pack references its own
+  scripts without carrying absolute deployment paths.
+
+  Declared inputs reach the script as environment variables: each key of
+  `run_opts.resolved_inputs` (the runtime resolves `{ name: value }` DSL
+  inputs, including `${node.path}` references, before the attempt) is
+  exported as `SYMPHONY_INPUT_<UPCASED_NAME>`. String values pass through
+  verbatim; everything else is JSON-encoded so a script never has to guess
+  the encoding.
+
+  Structured results: the runner exports `SYMPHONY_OUTPUT_FILE` pointing at
+  a fresh temp file. A script that writes a JSON document there gets that
+  decoded value as its node output, which is what makes `when
+  ${node.output.field}` gating and `map ${node.output.items}` fan-out work
+  over exec nodes. A script that writes nothing keeps today's behavior (the
+  combined stdout/stderr tail as `output`); a non-empty file that is not
+  valid JSON fails the node loudly rather than guessing.
 
   The return shape matches `Runtime.EngineClient.run_node/2`
   (`{:ok, output, thread_id}` / `{:error, reason, thread_id}`) so the
@@ -43,7 +58,13 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
          :ok <- check_executable(absolute, rel_path) do
       run_id = Map.get(run_opts, :run_id)
       timeout_seconds = fetch_timeout(inputs)
+      output_file = output_file_path(run_id, node_id)
       Logger.info("ExecRunner run=#{run_id} node=#{node_id} cmd=#{rel_path} timeout=#{timeout_seconds}s")
+
+      env =
+        exec_env_with_bot_identity() ++
+          input_env(run_opts) ++
+          [{~c"SYMPHONY_OUTPUT_FILE", String.to_charlist(output_file)}]
 
       port =
         Port.open({:spawn_executable, absolute}, [
@@ -51,11 +72,18 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
           :binary,
           :stderr_to_stdout,
           {:cd, pack_dir},
-          {:env, exec_env_with_bot_identity()}
+          {:env, env}
         ])
 
       deadline = System.monotonic_time(:millisecond) + timeout_seconds * 1_000
-      collect(port, [], 0, deadline, run_id, node_id, timeout_seconds)
+
+      try do
+        port
+        |> collect([], 0, deadline, run_id, node_id, timeout_seconds)
+        |> apply_structured_output(output_file)
+      after
+        File.rm(output_file)
+      end
     else
       {:error, reason} -> {:error, reason, nil}
     end
@@ -83,6 +111,51 @@ defmodule SymphonyElixir.Runtime.ExecRunner do
       _ -> Config.get().pack_dir
     end
   end
+
+  # One fresh file per attempt: a retry must not read a stale result from
+  # the previous attempt, so the path carries a unique integer.
+  defp output_file_path(run_id, node_id) do
+    unique = System.unique_integer([:positive])
+    Path.join(System.tmp_dir!(), "symphony-exec-#{run_id}-#{node_id}-#{unique}.json")
+  end
+
+  # The DSL inputs the runtime resolved for this attempt, minus the two
+  # runner-reserved keys, as SYMPHONY_INPUT_* environment entries. DSL
+  # input names are identifiers, so upcasing yields a valid env var name.
+  defp input_env(run_opts) do
+    run_opts
+    |> Map.get(:resolved_inputs, %{})
+    |> Map.drop(["script", "timeout"])
+    |> Enum.map(fn {name, value} ->
+      {String.to_charlist("SYMPHONY_INPUT_" <> String.upcase(name)), String.to_charlist(env_value(value))}
+    end)
+  end
+
+  defp env_value(value) when is_binary(value), do: value
+  defp env_value(value), do: Jason.encode!(value)
+
+  # A successful exec that wrote SYMPHONY_OUTPUT_FILE returns the decoded
+  # JSON as its output (the stream tail moves to `log`); an empty or absent
+  # file keeps the stream tail as output. A non-empty file that does not
+  # decode is a loud failure: the script claimed a structured result and
+  # broke the contract, so guessing would hide the defect.
+  defp apply_structured_output({:ok, %{output: log} = output_map, nil}, output_file) do
+    case File.read(output_file) do
+      {:ok, raw} when raw != "" ->
+        case Jason.decode(raw) do
+          {:ok, decoded} ->
+            {:ok, Map.put(%{output_map | output: decoded}, :log, log), nil}
+
+          {:error, decode_error} ->
+            {:error, {:exec_output_invalid_json, Exception.message(decode_error), raw}, nil}
+        end
+
+      _ ->
+        {:ok, output_map, nil}
+    end
+  end
+
+  defp apply_structured_output(result, _output_file), do: result
 
   defp check_exists(absolute, rel_path) do
     if File.exists?(absolute), do: :ok, else: {:error, {:exec_not_found, rel_path}}

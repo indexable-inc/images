@@ -1,5 +1,0 @@
-id: no-import-in-imports
-valid:
-  - '{ imports = [ ./foo.nix ]; }'
-invalid:
-  - '{ imports = [ (import ./foo.nix) ]; }'

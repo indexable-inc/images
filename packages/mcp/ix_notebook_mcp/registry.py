@@ -20,12 +20,32 @@ import dataclasses
 
 
 @dataclasses.dataclass(frozen=True)
+class Credential:
+    """An external credential a module's (or library's) calls need to succeed.
+
+    Declarative and probe-only: :mod:`.requirements` checks the env vars and the
+    token file locally (existence only -- no file reads, no network, never a
+    secret's value), so the report is free and safe to run anywhere. The module
+    itself still owns resolution at call time; these fields mirror that module's
+    documented sources so the report can say where a credential WOULD come from
+    and exactly how to get one.
+    """
+
+    service: str  # how the service reads in messages ("Mixedbread")
+    env: tuple[str, ...] = ()  # env vars that satisfy it, in resolution order
+    token_path: str | None = None  # "~/..." token file a login flow writes
+    login: str | None = None  # full clause for the login route ("run `mgrep login`")
+    url: str | None = None  # where a human gets a key
+
+
+@dataclasses.dataclass(frozen=True)
 class Module:
     """A first-party bundled module that ``api()`` catalogs by introspection."""
 
     name: str
     tagline: str
     preimport: bool = False  # bound into the namespace at startup (no import needed)
+    credential: Credential | None = None  # external service its calls depend on
 
 
 @dataclasses.dataclass(frozen=True)
@@ -57,7 +77,37 @@ MODULES: tuple[Module, ...] = (
         "build DAG; `nix.attrs()` catalogs the flake's buildable attrs",
     ),
     Module("fleet", "async polars SSH fan-out across hosts (`read_ndjson` / `scan`)"),
-    Module("search", "meaning-based semantic recall across an indexed corpus"),
+    Module(
+        "search",
+        "meaning-based recall across the fleet corpus (code + agent/shell history): "
+        "`await search.semantic(q, since='7d', compact=True)` / `grep(pattern)` / "
+        "`recent(source=['shell'], since='6h')` newest-first. Each is async and "
+        "returns a polars frame (one row per hit, compose `.filter`/`.group_by`/"
+        "`.head`) with timestamp/user/host/session_id provenance columns",
+        # Mirrors the resolution order owned by packages/mixedbread/src/auth.rs
+        # (env key, else the `mgrep login` token), which the bundled module
+        # reaches through search-py.
+        credential=Credential(
+            service="Mixedbread",
+            env=("MXBAI_API_KEY",),
+            token_path="~/.mgrep/token.json",
+            login="run `mgrep login`",
+            url="https://www.mixedbread.com",
+        ),
+    ),
+    Module(
+        "astlog",
+        "Datalog over tree-sitter ASTs: tree-sitter query matches become relations, rules join "
+        "them (position, text, recursion), `(lint ...)` rows become findings, rewrites turn rows "
+        "into edits. Results come back as polars DataFrames: `astlog.query` (dict of frames), "
+        "`scan` (lint findings), `suppressed` (what `astlog-ignore` hides + the comment), "
+        "`fixes`; `fix` returns a diff",
+    ),
+    Module(
+        "flecs_query",
+        "parse the Flecs Query Language without a flecs world: expression to AST dicts, "
+        "canonical form, syntax verdicts (`flecs_query.parse` / `canonicalize` / `validate`)",
+    ),
     Module("tui", "drive and snapshot a terminal program; renders as HTML"),
     Module(
         "screen",
@@ -104,6 +154,13 @@ MODULES: tuple[Module, ...] = (
         "official googleapiclient (`google_auth.gmail()` / `.calendar()`); "
         "`await google_auth.login()` signs in through your browser and `status()` / `logout()` "
         "manage the grant. Incognito sessions only (a personal mailbox never reaches a shared room)",
+        # The bundled `gcal` binary owns the grant; the stored refresh token
+        # lives at this documented path (mode 0600).
+        credential=Credential(
+            service="Google",
+            token_path="~/.config/google/token.json",
+            login="call `await google_auth.login()` in a cell",
+        ),
     ),
     Module(
         "x",
@@ -117,12 +174,26 @@ MODULES: tuple[Module, ...] = (
         "(`await slack.channels()` / `messages(channel)` / `thread(channel, ts)` / `send(channel, text)` / `search(query)`); "
         "`slack.login(token)` stores your user token (mode 0600); `status()` / `logout()` manage it. "
         "Incognito sessions only (personal Slack data never reaches a shared room)",
+        # Mirrors slack._token()'s documented resolution order; the smoke test
+        # pins these against the module's own constants so they cannot drift.
+        credential=Credential(
+            service="Slack",
+            env=("SLACK_USER_TOKEN", "SLACK_TOKEN"),
+            token_path="~/.config/slack/token",
+            login="call `slack.login(token)` in a cell",
+            url="https://api.slack.com/authentication/token-types#user",
+        ),
     ),
     Module(
         "linear",
         "Linear issue tracker over GraphQL using LINEAR_API_KEY: "
         "`await linear.issue(id)` / `issue_update(id, **fields)` / "
         "`issue_create(team, title, **fields)` / `project_create(name, teams, **fields)`",
+        credential=Credential(
+            service="Linear",
+            env=("LINEAR_API_KEY",),
+            url="https://linear.app/settings/account/security",
+        ),
     ),
 )
 
@@ -148,17 +219,44 @@ BUILTINS: tuple[Builtin, ...] = (
     Builtin("DASHBOARD_URL", "this session's live dashboard URL"),
 )
 
+@dataclasses.dataclass(frozen=True)
+class Library:
+    """A bundled third-party library with no first-party ``api()`` surface."""
+
+    name: str
+    credential: Credential | None = None  # external service its calls depend on
+    note: str | None = None  # one-line steer shown in the instructions' library list
+
+
 # Standard third-party libraries that are bundled and import-ready. They have no
 # first-party ``api()`` surface (use ``help()`` / their own docs); named here so
 # the instructions list them in one place.
-LIBRARIES: tuple[str, ...] = (
-    "numpy",
-    "polars",
-    "duckdb",
-    "httpx",
-    "matplotlib",
-    "playwright",
-    "exa_py",
+LIBRARIES: tuple[Library, ...] = (
+    Library("numpy"),
+    Library("polars"),
+    Library("duckdb"),
+    Library("httpx"),
+    Library("matplotlib"),
+    Library("pypdf"),
+    Library(
+        "playwright",
+        # Agents reach for raw `async_playwright().start()`; steer them to the
+        # `browser` module, which manages the connection on the kernel loop and
+        # publishes the live dashboard resource.
+        note="prefer the `browser` module — `browser.goto`/`shot`/`vdom` drive a "
+        "visible browser on the kernel loop and publish a live dashboard resource; "
+        "don't call `async_playwright().start()` yourself",
+    ),
+    Library(
+        "exa_py",
+        # The SDK is a thin client over the Exa REST API; no key is bundled,
+        # the caller constructs `Exa(os.environ["EXA_API_KEY"])`.
+        credential=Credential(
+            service="Exa",
+            env=("EXA_API_KEY",),
+            url="https://dashboard.exa.ai/api-keys",
+        ),
+    ),
 )
 
 
@@ -172,3 +270,17 @@ def preimport_names() -> tuple[str, ...]:
 
 def builtin_names() -> tuple[str, ...]:
     return tuple(b.name for b in BUILTINS)
+
+
+def credentialed() -> tuple[tuple[str, Credential], ...]:
+    """Every (module-or-library name, credential) pair, registry order.
+
+    The single iteration the requirements report, the instructions sentence,
+    and the startup yelling all build from, so a new credentialed service is
+    declared in exactly one place.
+    """
+    return tuple(
+        (entry.name, entry.credential)
+        for entry in (*MODULES, *LIBRARIES)
+        if entry.credential is not None
+    )

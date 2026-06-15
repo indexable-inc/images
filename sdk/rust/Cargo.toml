@@ -42,7 +42,7 @@ overflow-checks = false
 # Profile under which the R2-hosted `ix-sdk-wire` rlib was compiled in the ix
 # repo. The cargo-unit hash folds in the profile, so the public SDK workspace
 # MUST build under this exact profile for the stub's generated unit key to equal
-# the prebuilt's (`134ac8c636bf38ee`). Byte-faithful to ix's `[profile.public-rlib]`
+# the prebuilt's (`a95096d6b0ee69a6`). Byte-faithful to ix's `[profile.public-rlib]`
 # (indexable-inc/ix Cargo.toml): a clean, consumer-linkable rlib (lto off so no
 # LLVM bitcode is embedded; panic unwind to match the consumer) with every
 # no-source-leak guarantee (strip, no debuginfo, no split sidecar, location

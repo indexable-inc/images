@@ -10,7 +10,7 @@ Local verification is the gate that decides whether a change is safe to land, no
 nix run .#lint
 ```
 
-It checks Nix formatting (nixfmt), Statix, Deadnix, and the repo's ast-grep rules. CI runs the same derivation as a flake check, but treat that run as advisory signal rather than a landing gate.
+It checks Nix formatting (nixfmt), Statix, Deadnix, and the repo's astlog rules (`astlog-rules/nix.astlog` for Nix, `astlog-rules/rust.astlog` for the corpus/search Rust crates). CI runs the same derivation as a flake check, but treat that run as advisory signal rather than a landing gate.
 
 The repo ships a tracked git pre-commit hook at `.githooks/pre-commit` that calls the lint app. To activate it locally, `direnv allow` in the repo root: `.envrc` exports `core.hooksPath` so git uses the tracked hook. No additional shell or framework is needed.
 
@@ -168,7 +168,7 @@ The full style guide lives in [AGENTS.md](AGENTS.md). Skim the section that matc
 - [Inline comments](AGENTS.md#inline-comments) — when a comment earns its place and when to delete it.
 - [Rust style](AGENTS.md#rust-style) — naming, module layout, type annotations.
 - [Python style](AGENTS.md#python-style) — uv project shape, `ty` defaults.
-- [Nix style (ast-grep enforced)](AGENTS.md#nix-style-ast-grep-enforced) — the hard rules `nix run .#lint` checks.
+- [Nix style (astlog enforced)](AGENTS.md#nix-style-astlog-enforced) — the hard rules `nix run .#lint` checks.
 - [Module conventions](AGENTS.md#module-conventions) and [Image conventions](AGENTS.md#image-conventions) — option shape, registry placement, no `..` paths.
 - [Dependency intake](AGENTS.md#dependency-intake) — how new external artifacts enter the repo (lockfiles, generated catalogs, fetcher choice).
 

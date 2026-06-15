@@ -18,6 +18,15 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// A sessions directory could not be listed.
+    #[snafu(display("failed to list codex sessions under {}", path.display()))]
+    ReadDir {
+        /// Directory that could not be listed.
+        path: PathBuf,
+        /// Underlying I/O error.
+        source: std::io::Error,
+    },
+
     /// A history line was not valid JSON.
     #[snafu(display("codex history {} line {line} is not valid JSON", path.display()))]
     ParseLine {

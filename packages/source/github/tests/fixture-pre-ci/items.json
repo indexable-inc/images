@@ -1,0 +1,18 @@
+[
+  {
+    "kind": "issue",
+    "repo": "acme/widgets",
+    "number": 3,
+    "title": "Exported before the CI pass existed",
+    "body": "This export has no ci_runs.json.",
+    "state": "open",
+    "author": "alex",
+    "labels": [],
+    "assignees": [],
+    "created_at": "2025-11-20T08:00:00Z",
+    "updated_at": "2025-11-21T09:00:00Z",
+    "closed_at": null,
+    "url": "https://github.com/acme/widgets/issues/3",
+    "comments": []
+  }
+]

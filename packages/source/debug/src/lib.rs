@@ -95,8 +95,13 @@ impl DebugLogs {
             if session_id.is_empty() {
                 continue;
             }
-            let body =
+            let raw =
                 std::fs::read_to_string(&path).context(ReadFileSnafu { path: path.clone() })?;
+            // Sanitize before the body is hashed in `Entry::into_document`:
+            // strip ANSI escapes, redact credential shapes, collapse blob
+            // tokens. Debug logs capture raw API/MCP traffic, so they are a
+            // direct secret-leak path into the store.
+            let body = source_meta::sanitize::sanitize(&raw);
             if body.trim().is_empty() {
                 continue;
             }

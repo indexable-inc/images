@@ -1,0 +1,515 @@
+//! Bottom-up Datalog evaluation over the corpus.
+//!
+//! `match` atoms are materialized once into extensional rows (one row per
+//! tree-sitter query match, columns named by `@capture`), then rules run to a
+//! fixpoint with naive iteration: every value is a syntax node or a piece of
+//! text derived from one, so the universe is finite and iteration terminates.
+//! Rule bodies evaluate left to right as nested-loop joins; builtins act as
+//! filters or generators and need their input arguments bound by the atoms to
+//! their left.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
+
+use ast_merge_langs::Lang;
+use snafu::ResultExt as _;
+use tree_sitter::StreamingIterator as _;
+
+use crate::corpus::{Corpus, NodeRef, Value};
+use crate::error::{
+    BuiltinNotNodeSnafu, CaptureIndexSnafu, Error, InternalSnafu, PredicateUnsupportedSnafu,
+    QuerySnafu, RegexSnafu, UnboundBuiltinArgSnafu, UnboundHeadVarSnafu, UnknownRelationSnafu,
+};
+use crate::program::{AppAtom, BodyAtom, MatchAtom, Program, Term, builtin_arity};
+
+pub type Row = Vec<Value>;
+type Env = HashMap<String, Value>;
+type Binding = Vec<(String, Value)>;
+
+/// A derived relation: named columns plus deduplicated rows in derivation
+/// order.
+#[derive(Debug)]
+pub struct Relation {
+    pub columns: Vec<String>,
+    rows: Vec<Row>,
+    seen: HashSet<Row>,
+}
+
+impl Relation {
+    fn new(columns: Vec<String>) -> Self {
+        Self {
+            columns,
+            rows: Vec::new(),
+            seen: HashSet::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    fn insert(&mut self, row: Row) -> bool {
+        if self.seen.contains(&row) {
+            return false;
+        }
+        self.seen.insert(row.clone());
+        self.rows.push(row);
+        true
+    }
+}
+
+/// Every relation derived by the program, keyed by name.
+#[derive(Debug)]
+pub struct Database {
+    pub relations: BTreeMap<String, Relation>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct MatchKey {
+    lang: Lang,
+    query: String,
+}
+
+pub struct Evaluator<'a> {
+    program: &'a Program,
+    corpus: &'a Corpus,
+    matches: HashMap<MatchKey, Vec<Binding>>,
+    /// `text-match` patterns compiled once at setup, keyed by pattern source.
+    regexes: HashMap<String, regex::Regex>,
+}
+
+impl<'a> Evaluator<'a> {
+    /// Compile and run every distinct `match` query in the program, and
+    /// compile every distinct `text-match` regex.
+    ///
+    /// # Errors
+    ///
+    /// Fails on an invalid tree-sitter query, a query using `#` predicates,
+    /// a capture index the compiled query does not know, or an invalid
+    /// `text-match` regex.
+    pub fn new(program: &'a Program, corpus: &'a Corpus) -> Result<Self, Error> {
+        let mut matches = HashMap::new();
+        let mut regexes = HashMap::new();
+        let rule_atoms = program.rules.iter().flat_map(|rule| &rule.body);
+        let rewrite_atoms = program.rewrites.iter().flat_map(|rewrite| &rewrite.body);
+        for atom in rule_atoms.chain(rewrite_atoms) {
+            match atom {
+                BodyAtom::Match(m) => {
+                    let key = MatchKey {
+                        lang: m.lang,
+                        query: m.query.clone(),
+                    };
+                    if let std::collections::hash_map::Entry::Vacant(entry) = matches.entry(key) {
+                        entry.insert(materialize(corpus, m)?);
+                    }
+                }
+                BodyAtom::App(app) if app.name == "text-match" => {
+                    // Program checking guarantees the pattern is a literal.
+                    let Some(Term::Text(pattern)) = app.args.get(1) else {
+                        return InternalSnafu {
+                            what: format!(
+                                "text-match at line {} survived checking without a literal pattern",
+                                app.line
+                            ),
+                        }
+                        .fail();
+                    };
+                    if !regexes.contains_key(pattern) {
+                        let compiled = regex::Regex::new(pattern).context(RegexSnafu {
+                            line: app.line,
+                            pattern: pattern.clone(),
+                        })?;
+                        regexes.insert(pattern.clone(), compiled);
+                    }
+                }
+                BodyAtom::App(_) => {}
+            }
+        }
+        Ok(Self {
+            program,
+            corpus,
+            matches,
+            regexes,
+        })
+    }
+
+    /// Run all rules to a fixpoint.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a rule head variable is never bound by its body or a
+    /// builtin is invoked with required arguments unbound.
+    pub fn fixpoint(&self) -> Result<Database, Error> {
+        let mut db = Database {
+            relations: BTreeMap::new(),
+        };
+        for rule in &self.program.rules {
+            db.relations
+                .entry(rule.name.clone())
+                .or_insert_with(|| Relation::new(rule.head_vars.clone()));
+        }
+        loop {
+            let mut staged: Vec<(&str, Row)> = Vec::new();
+            for rule in &self.program.rules {
+                let mut envs = Vec::new();
+                self.solve(&db, &rule.body, Env::new(), &mut envs)?;
+                for env in envs {
+                    let row = rule
+                        .head_vars
+                        .iter()
+                        .map(|var| {
+                            env.get(var).cloned().ok_or_else(|| {
+                                UnboundHeadVarSnafu {
+                                    line: rule.line,
+                                    var: var.clone(),
+                                }
+                                .build()
+                            })
+                        })
+                        .collect::<Result<Row, _>>()?;
+                    staged.push((&rule.name, row));
+                }
+            }
+            let mut grew = false;
+            for (name, row) in staged {
+                let relation = db.relations.get_mut(name).ok_or_else(|| {
+                    InternalSnafu {
+                        what: format!("relation `{name}` missing from database"),
+                    }
+                    .build()
+                })?;
+                grew |= relation.insert(row);
+            }
+            if !grew {
+                return Ok(db);
+            }
+        }
+    }
+
+    /// All variable bindings satisfying `atoms` against a finished database.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as rule bodies during [`Self::fixpoint`].
+    pub fn bindings(&self, db: &Database, atoms: &[BodyAtom]) -> Result<Vec<Env>, Error> {
+        let mut envs = Vec::new();
+        self.solve(db, atoms, Env::new(), &mut envs)?;
+        Ok(envs)
+    }
+
+    fn solve(
+        &self,
+        db: &Database,
+        atoms: &[BodyAtom],
+        env: Env,
+        out: &mut Vec<Env>,
+    ) -> Result<(), Error> {
+        let Some((first, rest)) = atoms.split_first() else {
+            out.push(env);
+            return Ok(());
+        };
+        match first {
+            BodyAtom::Match(m) => {
+                let key = MatchKey {
+                    lang: m.lang,
+                    query: m.query.clone(),
+                };
+                let bindings = self.matches.get(&key).ok_or_else(|| {
+                    InternalSnafu {
+                        what: format!("match query at line {} was not materialized", m.line),
+                    }
+                    .build()
+                })?;
+                for binding in bindings {
+                    let mut next = Some(env.clone());
+                    for (var, value) in binding {
+                        next = next.and_then(|e| unify_var(&e, var, value));
+                    }
+                    if let Some(next) = next {
+                        self.solve(db, rest, next, out)?;
+                    }
+                }
+            }
+            BodyAtom::App(app) if builtin_arity(&app.name).is_some() => {
+                for next in self.builtin(app, &env)? {
+                    self.solve(db, rest, next, out)?;
+                }
+            }
+            BodyAtom::App(app) => {
+                let relation = db.relations.get(&app.name).ok_or_else(|| {
+                    UnknownRelationSnafu {
+                        name: app.name.clone(),
+                        line: app.line,
+                    }
+                    .build()
+                })?;
+                for row in relation.rows() {
+                    let mut next = Some(env.clone());
+                    for (term, value) in app.args.iter().zip(row) {
+                        next = next.and_then(|e| unify_term(&e, term, value));
+                    }
+                    if let Some(next) = next {
+                        self.solve(db, rest, next, out)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn builtin(&self, app: &AppAtom, env: &Env) -> Result<Vec<Env>, Error> {
+        match app.name.as_str() {
+            "parent" => {
+                let child = bound_node(app, env, 1)?;
+                let parent = self.corpus.node_info(child).parent;
+                Ok(parent
+                    .and_then(|node| {
+                        let parent_ref = NodeRef {
+                            file: child.file,
+                            node,
+                        };
+                        unify_term(env, &app.args[0], &Value::Node(parent_ref))
+                    })
+                    .into_iter()
+                    .collect())
+            }
+            "ancestor" => {
+                let descendant = bound_node(app, env, 1)?;
+                let mut envs = Vec::new();
+                let mut current = self.corpus.node_info(descendant).parent;
+                while let Some(node) = current {
+                    let ancestor = NodeRef {
+                        file: descendant.file,
+                        node,
+                    };
+                    if let Some(next) = unify_term(env, &app.args[0], &Value::Node(ancestor)) {
+                        envs.push(next);
+                    }
+                    current = self.corpus.node_info(ancestor).parent;
+                }
+                Ok(envs)
+            }
+            "text" => {
+                let node = bound_node(app, env, 0)?;
+                let text = Value::Text(Arc::from(self.corpus.node_text(node)));
+                Ok(unify_term(env, &app.args[1], &text).into_iter().collect())
+            }
+            "kind" => {
+                let node = bound_node(app, env, 0)?;
+                let kind = Value::Text(Arc::from(self.corpus.node_info(node).kind));
+                Ok(unify_term(env, &app.args[1], &kind).into_iter().collect())
+            }
+            "same-text" => {
+                let first = bound_value(app, env, 0)?;
+                let second = bound_value(app, env, 1)?;
+                let equal = self.corpus.value_text(&first) == self.corpus.value_text(&second);
+                Ok(equal.then(|| env.clone()).into_iter().collect())
+            }
+            "same-file" => {
+                let first = bound_node(app, env, 0)?;
+                let second = bound_node(app, env, 1)?;
+                let equal = first.file == second.file;
+                Ok(equal.then(|| env.clone()).into_iter().collect())
+            }
+            "text-match" => {
+                let value = bound_value(app, env, 0)?;
+                let Term::Text(pattern) = &app.args[1] else {
+                    return InternalSnafu {
+                        what: format!("text-match at line {} has a non-literal pattern", app.line),
+                    }
+                    .fail();
+                };
+                let regex = self.regexes.get(pattern).ok_or_else(|| {
+                    InternalSnafu {
+                        what: format!("regex `{pattern}` was not compiled at setup"),
+                    }
+                    .build()
+                })?;
+                let matched = regex.is_match(self.corpus.value_text(&value));
+                Ok(matched.then(|| env.clone()).into_iter().collect())
+            }
+            "no-descendant" => {
+                let root = bound_node(app, env, 0)?;
+                let kind = bound_value(app, env, 1)?;
+                let text = bound_value(app, env, 2)?;
+                let absent = !self.has_descendant(
+                    root,
+                    self.corpus.value_text(&kind),
+                    self.corpus.value_text(&text),
+                );
+                Ok(absent.then(|| env.clone()).into_iter().collect())
+            }
+            other => InternalSnafu {
+                what: format!("builtin `{other}` has no evaluator"),
+            }
+            .fail(),
+        }
+    }
+
+    /// Whether `root` has a strict descendant with this kind and exact source
+    /// text. Candidates are filtered by kind and text first (both cheap), so
+    /// the parent-chain walk only runs for the rare textual matches.
+    fn has_descendant(&self, root: NodeRef, kind: &str, text: &str) -> bool {
+        let file = &self.corpus.files[root.file];
+        file.nodes.iter().enumerate().any(|(index, info)| {
+            index != root.node
+                && info.kind == kind
+                && &file.text[info.start..info.end] == text
+                && {
+                    let mut current = info.parent;
+                    loop {
+                        match current {
+                            Some(parent) if parent == root.node => break true,
+                            Some(parent) => current = file.nodes[parent].parent,
+                            None => break false,
+                        }
+                    }
+                }
+        })
+    }
+}
+
+fn bound_value(app: &AppAtom, env: &Env, arg: usize) -> Result<Value, Error> {
+    match &app.args[arg] {
+        Term::Text(text) => Ok(Value::Text(Arc::from(text.as_str()))),
+        Term::Var(var) => env.get(var).cloned().ok_or_else(|| {
+            UnboundBuiltinArgSnafu {
+                line: app.line,
+                name: app.name.clone(),
+                arg: var.clone(),
+            }
+            .build()
+        }),
+    }
+}
+
+fn bound_node(app: &AppAtom, env: &Env, arg: usize) -> Result<NodeRef, Error> {
+    match bound_value(app, env, arg)? {
+        Value::Node(node) => Ok(node),
+        Value::Text(_) => BuiltinNotNodeSnafu {
+            line: app.line,
+            name: app.name.clone(),
+            arg: term_display(&app.args[arg]),
+        }
+        .fail(),
+    }
+}
+
+fn term_display(term: &Term) -> String {
+    match term {
+        Term::Var(var) => var.clone(),
+        Term::Text(text) => format!("\"{text}\""),
+    }
+}
+
+fn unify_var(env: &Env, var: &str, value: &Value) -> Option<Env> {
+    match env.get(var) {
+        Some(bound) if bound == value => Some(env.clone()),
+        Some(_) => None,
+        None => {
+            let mut next = env.clone();
+            next.insert(var.to_owned(), value.clone());
+            Some(next)
+        }
+    }
+}
+
+fn unify_term(env: &Env, term: &Term, value: &Value) -> Option<Env> {
+    match term {
+        Term::Var(var) => unify_var(env, var, value),
+        Term::Text(lit) => match value {
+            Value::Text(text) if text.as_ref() == lit.as_str() => Some(env.clone()),
+            Value::Text(_) | Value::Node(_) => None,
+        },
+    }
+}
+
+/// Run one `match` query over every file of its language.
+fn materialize(corpus: &Corpus, m: &MatchAtom) -> Result<Vec<Binding>, Error> {
+    if has_predicate(&m.query) {
+        return PredicateUnsupportedSnafu { line: m.line }.fail();
+    }
+    let language = m.lang.to_tree_sitter();
+    let query =
+        tree_sitter::Query::new(&language, &m.query).context(QuerySnafu { line: m.line })?;
+    let names = query.capture_names();
+    let mut bindings = Vec::new();
+    for (file_index, file) in corpus.files.iter().enumerate() {
+        if file.lang != m.lang {
+            continue;
+        }
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, file.root(), file.text.as_bytes());
+        while let Some(found) = matches.next() {
+            bindings.push(binding_of(file_index, names, found, m.line, |id| {
+                file.node_index(id)
+            })?);
+        }
+    }
+    Ok(bindings)
+}
+
+/// One relation row from one query match. When a quantified capture matched
+/// several nodes, the first occurrence wins (documented v0 limitation).
+fn binding_of(
+    file: usize,
+    names: &[&str],
+    found: &tree_sitter::QueryMatch<'_, '_>,
+    line: usize,
+    node_index: impl Fn(usize) -> Option<usize>,
+) -> Result<Binding, Error> {
+    let mut binding: Binding = Vec::new();
+    for capture in found.captures {
+        let Ok(index) = usize::try_from(capture.index) else {
+            return CaptureIndexSnafu {
+                line,
+                index: capture.index,
+            }
+            .fail();
+        };
+        let Some(name) = names.get(index) else {
+            return CaptureIndexSnafu {
+                line,
+                index: capture.index,
+            }
+            .fail();
+        };
+        if binding.iter().any(|(bound, _)| bound == name) {
+            continue;
+        }
+        let node = node_index(capture.node.id()).ok_or_else(|| {
+            InternalSnafu {
+                what: format!("query capture `{name}` missing from the node table"),
+            }
+            .build()
+        })?;
+        binding.push(((*name).to_owned(), Value::Node(NodeRef { file, node })));
+    }
+    Ok(binding)
+}
+
+/// Detect `#` predicate syntax outside string literals and `;` comments
+/// (tree-sitter query comments run to end of line).
+fn has_predicate(query: &str) -> bool {
+    let mut in_string = false;
+    let mut chars = query.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => in_string = !in_string,
+            '\\' if in_string => {
+                chars.next();
+            }
+            ';' if !in_string => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+            }
+            '#' if !in_string => return true,
+            _ => {}
+        }
+    }
+    false
+}

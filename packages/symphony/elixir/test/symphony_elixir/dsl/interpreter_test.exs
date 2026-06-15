@@ -151,6 +151,45 @@ defmodule SymphonyElixir.DSL.InterpreterTest do
       refute Enum.any?(delta, &(&1.kind == :exec))
       assert [%{observed: %{gate: :when, opened: false}}] = log
     end
+
+    # An exec node's structured result (ExecRunner decodes SYMPHONY_OUTPUT_FILE
+    # JSON into `output`) gates a downstream agent: the dig walks the
+    # atom-keyed result map, then the string-keyed decoded JSON.
+    test "opens on a truthy field of an exec node's structured output" do
+      ast =
+        parse!("""
+        workflow "w" {
+          gate <- exec "scripts/gate.sh" { title_prefix: "idiomatic:" }
+          when ${gate.output.proceed} {
+            n <- agent { engine: codex, model: "m", prompt: inline "go" }
+          }
+        }
+        """)
+
+      known = %{"exec-0" => %{kind: :exec, exit_code: 0, output: %{"proceed" => true}, log: ""}}
+      {delta, _pending, log} = Interpreter.expand(ast, known, [])
+
+      assert Enum.any?(delta, &(&1.kind == :agent))
+      assert [%{observed: %{gate: :when, opened: true}}] = log
+    end
+
+    test "stays closed on a falsy field of an exec node's structured output" do
+      ast =
+        parse!("""
+        workflow "w" {
+          gate <- exec "scripts/gate.sh" { title_prefix: "idiomatic:" }
+          when ${gate.output.proceed} {
+            n <- agent { engine: codex, model: "m", prompt: inline "go" }
+          }
+        }
+        """)
+
+      known = %{"exec-0" => %{kind: :exec, exit_code: 0, output: %{"proceed" => false}, log: ""}}
+      {delta, _pending, log} = Interpreter.expand(ast, known, [])
+
+      refute Enum.any?(delta, &(&1.kind == :agent))
+      assert [%{observed: %{gate: :when, opened: false}}] = log
+    end
   end
 
   describe "every_nth gate" do

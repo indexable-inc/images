@@ -102,29 +102,10 @@ _IMAGE_MIMES = frozenset({"image/png", "image/jpeg"})
 _MAX_TEXT_BUNDLE = 400_000
 _MAX_IMAGE_BUNDLE = 4_000_000
 
-_RESULT_REQUIRED = (
-    "python_exec: a cell must declare its result. Either END with a Result(...), "
-    "or `yield Result(...)` one or more times to stream results as you go. This "
-    "cell's last expression was not a Result and it did not yield, so nothing was "
-    "returned. Wrap your final value (or yield each result):\n"
-    "  Result.text('done')                       # same text to human and model\n"
-    "  Result.ok('what happened')                # a quiet confirmation for a side effect\n"
-    "  Result.of(value)                          # render any value richly for the human\n"
-    "  Result(user_html='<b>hi</b>', llm_result='hi', llm_images=[fig])\n"
-    "  yield Result.ok('step 1'); ...; yield Result.of(df)   # stream as you go\n"
-    "Print is not a channel: stdout is not returned to the model and is hidden in "
-    "the dashboard by default, so surface anything worth seeing as a Result."
-)
-
-_YIELD_REQUIRED = (
-    "python_exec: this cell uses `yield` but yielded no Result(...). Yield at "
-    "least one Result(...) so the run declares what the human and model receive."
-)
-
-_YIELD_NOT_RESULT = (
-    "python_exec: a yielded value was not a Result(...). Every top-level `yield` "
-    "in a cell must yield a Result (Result.text/ok/of or Result(user_html=...))."
-)
+# Cell semantics are Jupyter's: the last expression is the result, whatever its
+# type, and stdout travels with it. `Result` survives as the OPT-IN way to split
+# the human view from the model view (rich HTML vs concise text/images); a cell
+# that never mentions it still returns exactly what a notebook would show.
 
 # Opened lazily in install(); None when no store path is configured (the
 # one-shot eval/exec paths, or a bare kernel started outside the server).
@@ -181,6 +162,18 @@ class _Tee:
         return getattr(self._original, name)
 
 
+class _CallableBool(int):
+    """A bool that also answers ``()``: ``job.running`` and ``job.running()``
+    both work. ``bool`` cannot be subclassed, so this is an int restricted to
+    0/1; truthiness, comparison, and repr all behave like the bool it wraps."""
+
+    def __call__(self) -> bool:
+        return bool(self)
+
+    def __repr__(self) -> str:
+        return repr(bool(self))
+
+
 class JobStillRunning(RuntimeError):
     """Raised by ``Job.result`` when the job has not finished yet.
 
@@ -233,6 +226,10 @@ class Job:
         # Set by the SIGUSR2 wedge watchdog so _runner can tell its interrupt from
         # a KeyboardInterrupt the user's own code raised.
         self.interrupted_by_watchdog = False
+        # The globals dict this job's code ran in (the shared user namespace, or
+        # a per-session namespace -- see _session_ns). Set by __ix_run so the
+        # bindings snapshot reads the namespace the cell actually wrote to.
+        self._ns: dict | None = None
 
     def _append(self, s: str) -> None:
         """Append output, trimming to the most recent _MAX_OUTPUT_CHARS so a
@@ -324,13 +321,20 @@ class Job:
             body += f"\n... [stopped at {max_matches} matches; narrow the pattern]"
         return body or f"(no lines match {pattern!r} in {len(src)} lines)"
 
-    def running(self) -> bool:
-        return self.status == "running"
+    @property
+    def running(self) -> "_CallableBool":
+        """True while the job runs. Works as an attribute (``job.running``) and
+        as the historical method call (``job.running()``): both spellings are
+        natural guesses, and the attribute form returning a bound method was a
+        truthiness trap (every finished job looked "running" to ``getattr``)."""
+        return _CallableBool(self.status == "running")
 
-    def done(self) -> bool:
-        """True once the job has finished (done, error, or cancelled). Pair it
-        with `.result`, which only yields a value once the job is done."""
-        return self.status != "running"
+    @property
+    def done(self) -> "_CallableBool":
+        """True once the job has finished (done, error, or cancelled), as an
+        attribute or a call. Pair it with `.result`, which only yields a value
+        once the job is done."""
+        return _CallableBool(self.status != "running")
 
     @property
     def ok(self) -> bool:
@@ -438,13 +442,14 @@ class _TextDescriptor:
 class Result:
     """Split a cell's final value into a human view and a model view.
 
-    Every ``python_exec`` cell must END with one of these (the kernel rejects a
-    cell whose last expression is not a Result, so a run always declares what the
-    human sees and what the model gets back). The dashboard renders
-    ``user_html`` (a rich HTML view for the human watching); the model's tool
-    result receives ``llm_result`` (concise text) plus any ``llm_images``. The
-    two never cross: the human is not shown the model's text, and the model does
-    not pay tokens for the HTML render.
+    Entirely optional: a cell's last expression is its result, Jupyter-style,
+    whatever its type, and the kernel renders it (rich types richly, plain
+    values as their natural text) with the cell's stdout alongside. Reach for
+    Result only when the two audiences should see DIFFERENT things. The
+    dashboard renders ``user_html`` (a rich HTML view for the human watching);
+    the model's tool result receives ``llm_result`` (concise text) plus any
+    ``llm_images``. The two never cross: the human is not shown the model's
+    text, and the model does not pay tokens for the HTML render.
 
     Construct it directly for full control, or use the shortcuts for the common
     cases::
@@ -1020,21 +1025,53 @@ def _compile_generator(code: str, filename: str) -> "types.CodeType":
     return compile(shell, filename, "exec")
 
 
-def _stdout_hint(job: "Job") -> str:
-    """A suffix for the Result-contract error when the cell also printed: stdout
-    never reaches the model, so the bare "you must return a Result" message leaves
-    a printing agent unsure what happened to its output. Show a preview of what
-    was printed and the one-line fix, turning a silent dead-end into a nudge."""
-    printed = job.output.strip()
-    if not printed:
-        return ""
-    limit = 1500
-    if len(printed) > limit:
-        printed = f"{printed[:limit]}\n... [+{len(printed) - limit} more chars in jobs['{job.id}'].output]"
-    return (
-        "\n\nThis cell printed to stdout, which the model never receives. To send "
-        f"this text, return it (e.g. `Result.text(...)`) or page jobs['{job.id}'].output. "
-        f"What the cell printed:\n{printed}"
+def _merge_stdout(job: "Job", result: "Result") -> "Result":
+    """Jupyter shows a cell's stdout AND its final value; so do we. When a cell
+    both printed and ended with a bare (non-Result) expression, prepend the
+    captured stdout to the model text and the human view, clipped like any other
+    large output (the full capture stays pageable as ``jobs['<id>'].output``).
+    Explicit Results are exempt: the author already declared both views."""
+    printed = job.output
+    if not printed.strip():
+        return result
+    body = printed
+    if len(body) > _AUTO_RESULT_CHARS:
+        body = body[-_AUTO_RESULT_CHARS:] + (
+            f"\n... [stdout clipped to the last {_AUTO_RESULT_CHARS} of "
+            f"{len(printed)} chars; page jobs['{job.id}'].output]"
+        )
+    text = _strip_ansi(body)
+    if not text.endswith("\n"):
+        text += "\n"
+    return Result(
+        user_html=f'<pre class="ix-result">{_ansi_to_html(body)}</pre>' + result.user_html,
+        llm_result=text + (result.llm_result or ""),
+        llm_images=result.llm_images,
+    )
+
+
+# Cap on the stdout an auto-returned Result (see _auto_result) hands the model.
+# A chatty print-only cell keeps its most recent slice inline; the full capture
+# stays pageable as jobs['<id>'].output, exactly like any other large output.
+_AUTO_RESULT_CHARS = 20_000
+
+
+def _auto_result(job: "Job") -> "Result":
+    """The Result for a cell whose last statement evaluated to None (an
+    assignment, a bare ``print()``, a side-effecting call): its captured stdout,
+    or a quiet ok when it printed nothing -- the same thing a notebook shows."""
+    printed = job.output
+    if not printed.strip():
+        return Result.ok("done (cell returned no value)")
+    body = printed
+    if len(body) > _AUTO_RESULT_CHARS:
+        body = body[-_AUTO_RESULT_CHARS:] + (
+            f"\n... [stdout clipped to the last {_AUTO_RESULT_CHARS} of "
+            f"{len(printed)} chars; page jobs['{job.id}'].output]"
+        )
+    return Result(
+        user_html=f'<pre class="ix-result">{_ansi_to_html(body)}</pre>',
+        llm_result=_strip_ansi(body),
     )
 
 
@@ -1053,16 +1090,11 @@ def _display_result(result: "Result") -> None:
 
 
 def _is_displayable(value) -> bool:
-    """True if a bare final expression value is rich enough to auto-wrap in
-    ``Result.of`` (so ``df`` on the last line just works), False if returning it
-    is the print-like anti-pattern the Result contract nudges away from.
-
-    Displayable = it already knows how to render itself: an IPython rich repr
+    """True if a value carries its own rich rendering: an IPython rich repr
     (a polars DataFrame, a ``view.Code``, ...), an htpy-style ``__html__``, or a
     figure/image that renders through a registered formatter. Plain scalars,
-    ``str``/``bytes``, and the container types (dict/list/tuple/set) are NOT --
-    those still fail the contract, to keep pushing key/value data toward a
-    DataFrame and confirmations toward ``Result.ok``.
+    ``str``/``bytes``, and the container types (dict/list/tuple/set) are not
+    (they render through ``Result.of``'s text paths instead).
     """
     if _image_bytes_mime(value) is not None:
         # Raw image bytes (a screenshot) know how to render: as an inline image.
@@ -1177,29 +1209,22 @@ async def _runner(job: Job, ns: dict) -> None:
         ns.pop("__ix_result", None)
         if mode == "gen":
             # A yielding cell streams results: drain the async generator and
-            # display each yielded Result so it reaches the human (the job's
-            # captured outputs) and the model (iopub) as it is produced. The
-            # yields ARE the results, so there is no trailing-Result requirement.
+            # display each yielded value as it is produced, so it reaches the
+            # human (the job's captured outputs) and the model (iopub). Any
+            # value can be yielded; a non-Result renders through Result.of,
+            # exactly like a trailing expression.
             exec(code_obj, ns)
             agen = ns.pop("__ix_cell__")()
             job._aobj = agen  # sampled by _current_line while suspended
             emitted = 0
             async for item in agen:
-                if not isinstance(item, Result):
-                    job.status = "error"
-                    job.error = _YIELD_NOT_RESULT
-                    job._append(job.error)
-                    break
-                _display_result(item)
+                _display_result(item if isinstance(item, Result) else Result.of(item))
                 emitted += 1
-            else:
-                # Loop ran to completion (no non-Result break).
-                if emitted == 0:
-                    job.status = "error"
-                    job.error = _YIELD_REQUIRED + _stdout_hint(job)
-                    job._append(job.error)
-                else:
-                    job.status = "done"
+            if emitted == 0:
+                # A generator cell that yielded nothing still ran: report it
+                # like a None-valued cell (its stdout, or a quiet ok).
+                _display_result(_auto_result(job))
+            job.status = "done"
             # The results were displayed as they streamed; there is no single
             # trailing value to return.
             job._result = None
@@ -1209,25 +1234,24 @@ async def _runner(job: Job, ns: dict) -> None:
                 job._aobj = maybe  # sampled by _current_line while suspended
                 await maybe
             value = ns.pop("__ix_result", None)
-            if not isinstance(value, Result) and _is_displayable(value):
-                # A bare final value that already knows how to render itself (a
-                # DataFrame, a figure, a view.Code, an htpy element) is wrapped
-                # in Result.of, so `df` on the last line just works. Plain
-                # scalars / dicts / None fall through to the contract error below.
-                value = Result.of(value)
-            job._result = value
-            if isinstance(value, Result):
-                job.status = "done"
+            if value is None:
+                # A cell whose last statement evaluated to None -- an assignment,
+                # a bare print(), a side-effecting call -- returns its captured
+                # stdout (or a quiet ok), so a print-only cell reports what it
+                # printed.
+                value = _auto_result(job)
+            elif isinstance(value, Result):
+                # An explicit Result is the author's full statement of both
+                # views; stdout stays out of it (page jobs['<id>'].output).
+                pass
             else:
-                # Enforce the Result contract: a non-yielding cell must END with a
-                # Result (or a value that renders as one) so a run always declares
-                # what the human sees and what the model gets. A bare scalar (or a
-                # side-effecting cell returning None) is a failed run with an
-                # instructive message, not a silent pass.
-                job.status = "error"
-                job.error = _RESULT_REQUIRED + _stdout_hint(job)
-                job._append(job.error)
-                job._result = None
+                # Jupyter semantics: the last expression IS the result, whatever
+                # its type. Result.of renders any value (rich types richly,
+                # scalars/strings/containers as their natural text), and stdout
+                # the cell printed along the way rides with it.
+                value = _merge_stdout(job, Result.of(value))
+            job._result = value
+            job.status = "done"
     except asyncio.CancelledError:
         job.status = "cancelled"
         raise
@@ -1287,6 +1311,7 @@ def _persist_final(job: Job) -> None:
             error_line=job.error_line,
             outputs=_job_outputs(job),
             bindings=_cell_bindings(job),
+            namespace=_namespace_snapshot(job),
         )
     except Exception:
         # Best-effort logging: persisting the final status must not raise during cleanup.
@@ -1295,16 +1320,30 @@ def _persist_final(job: Job) -> None:
 
 def _cell_bindings(job: Job) -> dict:
     """The live value each of the cell's identifiers is bound to, snapshotted now
-    that the job has finished. Read off the shared user namespace (the same one
-    the code ran in), so the dashboard can show inlay hints and hover values that
-    reflect the actual objects. Best-effort: a failure here just means no hints."""
-    ns = _user_ns if _user_ns is not None else globals()
+    that the job has finished. Read off the namespace the code actually ran in
+    (the job's own -- per-session or shared), so the dashboard can show inlay
+    hints and hover values that reflect the actual objects. Best-effort: a
+    failure here just means no hints."""
+    ns = job._ns if job._ns is not None else _shared_ns()
     try:
         from .introspect import cell_bindings
 
         return cell_bindings(job.code, ns)
     except Exception:
         return {}
+
+
+def _namespace_snapshot(job: Job) -> list:
+    """Every user-bound name in the job's namespace, described for the dashboard's
+    namespace pane. Stored with each finished run; the newest is the live
+    namespace. Best-effort: a failure here just means no namespace pane."""
+    ns = job._ns if job._ns is not None else _shared_ns()
+    try:
+        from .introspect import namespace_rows
+
+        return namespace_rows(_namespace_candidates(ns))
+    except Exception:
+        return []
 
 
 def _safe_repr(value) -> str:
@@ -1810,7 +1849,7 @@ def _api_rows() -> list[dict]:
     # the source of truth concludes they are absent (the exact trap that made a
     # bundled `playwright` look like it needed a `pip install`). Always emit a row
     # for each declared library; enrich with its version/summary when importable.
-    for lib_name in registry.LIBRARIES:
+    for lib_name in (lib.name for lib in registry.LIBRARIES):
         sig = lib_name
         summary = "bundled library -- import and use it directly (help() / its own docs)"
         try:
@@ -2106,6 +2145,20 @@ def _snapshot_candidates(ns: dict) -> dict:
     }
 
 
+def _namespace_candidates(ns: dict) -> dict:
+    """The user-bound names the dashboard's namespace pane shows: like
+    :func:`_snapshot_candidates` (drop baseline helpers, dunders, IPython history
+    machinery) but keep modules — an imported ``pl`` is worth seeing in the
+    namespace even though it is not checkpointed."""
+    return {
+        name: value
+        for name, value in ns.items()
+        if name not in _baseline_names
+        and not name.startswith("__")
+        and not _IPYTHON_MACHINERY.fullmatch(name)
+    }
+
+
 def _store_file() -> str | None:
     """The on-disk path behind ``_store_conn`` (PRAGMA database_list), so a
     worker thread can open its own connection to the same file. None for a
@@ -2271,11 +2324,56 @@ async def _restore_body() -> None:
     print("session restore: " + "; ".join(parts))
 
 
-async def __ix_run(code: str, budget: float = 15.0, name: str | None = None, kind: str = "cell") -> Job:
+# Per-MCP-session namespaces, keyed by the session id the server passes through
+# ``__ix_exec``. One kernel serves every client of the HTTP transport, and with a
+# single shared namespace parallel agents clobber each other's variables (observed
+# in production). Each session therefore gets its own module-level globals dict,
+# created lazily and seeded from the shared read-only area: the runtime surface
+# plus the bundled helpers, i.e. exactly the names ``install()`` captured in
+# ``_baseline_names``. The helper OBJECTS stay shared (jobs/cells/resources are
+# one registry, so the dashboard and cross-session job paging keep working); only
+# the name bindings are per-session, so one session's assignments never shadow
+# another's. Within one session the dict persists across calls -- the kernel's
+# persistent-namespace contract, unchanged. No session id (the stdio transport,
+# replay, the in-process tests) keeps today's single shared namespace, which is
+# also what session checkpoint/restore covers.
+_session_namespaces: dict[str, dict] = {}
+
+
+def _shared_ns() -> dict:
+    return _user_ns if _user_ns is not None else globals()
+
+
+def _session_ns(session: str | None) -> dict:
+    """The globals dict for ``session``: the shared user namespace when no
+    session id is given, else that session's own dict (created on first use)."""
+    if not session:
+        return _shared_ns()
+    ns = _session_namespaces.get(session)
+    if ns is None:
+        shared = _shared_ns()
+        # install() ran: seed exactly the helper surface. A bare runtime where it
+        # did not (one-shot eval paths) falls back to forking the whole shared
+        # namespace, so the session still sees Result and friends.
+        names = _baseline_names or frozenset(shared)
+        ns = {name: shared[name] for name in names if name in shared}
+        _session_namespaces[session] = ns
+    return ns
+
+
+async def __ix_run(
+    code: str,
+    budget: float = 15.0,
+    name: str | None = None,
+    kind: str = "cell",
+    session: str | None = None,
+) -> Job:
     """Run ``code`` as a task; wait up to ``budget`` for it; return the Job either
-    way (done, or still running in the background)."""
-    ns = _user_ns if _user_ns is not None else globals()
+    way (done, or still running in the background). ``session`` selects the
+    namespace the code runs in (see :func:`_session_ns`)."""
+    ns = _session_ns(session)
     job = Job(code, name, budget=budget, kind=kind)
+    job._ns = ns
     jobs[job.id] = job
     job.task = asyncio.ensure_future(_runner(job, ns))
     await asyncio.wait({job.task}, timeout=budget)
@@ -2362,9 +2460,13 @@ def _emit(job: Job) -> None:
             pass
 
 
-async def __ix_exec(code: str, budget: float = 15.0, name: str | None = None) -> None:
-    """The MCP server's per-call entrypoint: run with a budget, emit the summary."""
-    job = await __ix_run(code, budget=budget, name=name)
+async def __ix_exec(
+    code: str, budget: float = 15.0, name: str | None = None, session: str | None = None
+) -> None:
+    """The MCP server's per-call entrypoint: run with a budget, emit the summary.
+    ``session`` is the caller's MCP session id (per-session namespace; None for
+    the shared one)."""
+    job = await __ix_run(code, budget=budget, name=name, session=session)
     _emit(job)
 
 
@@ -2453,7 +2555,7 @@ def _value_icon_svg(*, px: int = 16) -> str:
     )
 
 
-async def __ix_read(target, start=None, end=None) -> "Result":
+async def __ix_read(target, start=None, end=None, session=None) -> "Result":
     """Read a file (or evaluate a kernel value) FOR THE MODEL, quietly.
 
     Returns a Result whose ``llm_result`` is the full text the model receives and
@@ -2461,9 +2563,11 @@ async def __ix_read(target, start=None, end=None) -> "Result":
     the model without flooding the dashboard. ``target`` is read as a file when it
     names an existing file, otherwise evaluated as a Python expression in the user
     namespace (e.g. ``jobs['ab12'].output``, a variable you bound). ``start`` and
-    ``end`` select a 1-based inclusive line range. Backs the ``read`` MCP tool.
+    ``end`` select a 1-based inclusive line range. ``session`` evaluates the
+    expression in that MCP session's namespace (the same one its ``python_exec``
+    cells run in), so a variable bound there resolves. Backs the ``read`` MCP tool.
     """
-    ns = _user_ns if _user_ns is not None else globals()
+    ns = _session_ns(session)
     value = None
     path = _existing_file(target)
     if path is None:

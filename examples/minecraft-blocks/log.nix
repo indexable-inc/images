@@ -13,6 +13,7 @@
 */
 {
   config,
+  ix,
   lib,
   pkgs,
   ...
@@ -26,17 +27,18 @@ let
   # requires a fixed base64 UUID; this one is constant for the example.
   clusterId = "mc-blocks-kraft-000001";
 
-  createTopic = pkgs.writeShellScript "mc-blocks-create-topic" ''
-    set -eu
-    until ${kafkaBin}/kafka-broker-api-versions.sh --bootstrap-server 127.0.0.1:${toString brokerPort} >/dev/null 2>/tmp/kafka-probe.err; do
-      sleep 1
-    done
-    ${kafkaBin}/kafka-topics.sh \
-      --bootstrap-server 127.0.0.1:${toString brokerPort} \
-      --create --if-not-exists \
-      --topic ${schema.topic} \
-      --partitions 3 --replication-factor 1
-  '';
+  createTopic = lib.getExe (
+    ix.writeNushellApplication pkgs {
+      name = "mc-blocks-create-topic";
+      text = ''
+        # Wait for the broker to answer, then create the one topic (idempotent).
+        while (^${kafkaBin}/kafka-broker-api-versions.sh --bootstrap-server "127.0.0.1:${toString brokerPort}" | complete).exit_code != 0 {
+          sleep 1sec
+        }
+        ^${kafkaBin}/kafka-topics.sh --bootstrap-server "127.0.0.1:${toString brokerPort}" --create --if-not-exists --topic "${schema.topic}" --partitions 3 --replication-factor 1
+      '';
+    }
+  );
 in
 {
   services.apache-kafka = {

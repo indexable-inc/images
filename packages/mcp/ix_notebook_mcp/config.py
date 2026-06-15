@@ -52,6 +52,21 @@ class Config:
     stdin_fd: int | None = None
     stdout_fd: int | None = None
 
+    # Shared bearer token gating the dashboard's `/api/exec` write path (a peer's
+    # `fleet.in_kernel` runs code in this node's live kernel). None disables the
+    # endpoint entirely; set, it must match the request's `Authorization: Bearer`.
+    # Sourced from IX_MCP_EXEC_TOKEN(_FILE) by the CLI; the fleet service hands
+    # every node the same secret.
+    exec_token: str | None = None
+
+    # Trust the bound network (the tailnet) as the `/api/exec` auth boundary, so
+    # `fleet.in_kernel` works without a token -- the same model Ray's own data
+    # plane relies on. The endpoint honors this only when `host` is non-loopback
+    # (a tailnet/LAN bind, not 127.0.0.1). A set `exec_token` still wins (it is
+    # then additionally required). With neither, the endpoint stays disabled.
+    # Sourced from IX_MCP_EXEC_TRUST_NETWORK by the CLI; the fleet service sets it.
+    exec_trust_network: bool = False
+
     # Seconds past a cell's own ``budget`` that the server waits for the kernel to
     # report idle before treating it as wedged by a synchronous call, interrupting
     # the kernel, and returning an actionable summary. See ``kernel.python_exec``.

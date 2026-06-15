@@ -86,11 +86,14 @@ fn search_mixedbread(
     };
     let options = SearchOptions {
         rerank,
-        agentic,
+        agentic: mixedbread::Agentic::Toggle(agentic),
         score_threshold,
         // Always ask for file metadata: the wrapper flattens it into columns, and
         // group-by/filter on those columns is the whole point.
         return_metadata: Some(true),
+        // Defaults (no rewrite, rules applied): the keys stay off the wire.
+        rewrite_query: None,
+        apply_search_rules: None,
     };
 
     // Release the GIL for the blocking network round-trip: a current-thread
@@ -107,7 +110,7 @@ fn search_mixedbread(
                     .await
                     .map_err(|error| format!("authenticate: {error}"))?;
                 client
-                    .search(&stores, &query, top_k, options, filter.as_ref())
+                    .search(&stores, &query, top_k, options, filter.as_ref(), None)
                     .await
                     .map_err(|error| format!("search: {error}"))
             })

@@ -1,0 +1,1 @@
+{ lib, f, xs }: lib.imap0 (i: x: f i x) xs

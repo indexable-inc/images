@@ -1,0 +1,1 @@
+{ pkgs, value }: (pkgs.formats.json { }).generate "data.json" value

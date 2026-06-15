@@ -25,7 +25,13 @@
 #     (red/yellow/blue) so the two never read alike. This module just imports that
 #     component and turns it on with our repos;
 #   * the shared "play a gentle sound, then speak it detached" helper
-#     (`say-detached`), now used only by the ix-downtime watcher.
+#     (`say-detached`), now used only by the ix-downtime watcher;
+#   * the lifelog recorder (`services.portable.lifelog`): the
+#     github:andrewgazelka/lifelog daemon sampling the frontmost app, idle and
+#     lock state, ingesting macOS Screen Time (knowledgeC.db), and accepting
+#     phone events over a local HTTP API, all into one queryable SQLite db.
+#     The package comes from the consuming config (the lifelog flake is not an
+#     index input), so this module only carries the wiring.
 #
 # Each is declared as `services.portable.<name>` so they render to a native
 # launchd agent on macOS and a native systemd user unit on Linux from one spec
@@ -55,6 +61,13 @@
 let
   cfg = config.users.andrewgazelka;
 
+  # The index flake's package set for the *host* system. Use this (not the
+  # `pkgs.<name>` overlay attrs) for any index-built rust package: the overlay's
+  # `pkgs.claude-code` carries an x86_64-linux `config-launch` even on an
+  # aarch64-darwin host, so its install-check drags the whole x86_64-linux cargo
+  # unit graph (alsa-sys et al.) into a Mac home build, which real nix cannot
+  # place. `indexPkgs.claude-code` is the correctly host-targeted build.
+  # See indexable-inc/index#1085.
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
 
   isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
@@ -93,7 +106,7 @@ let
       pkgs.jaq
       pkgs.sqlite
       sayDetached
-      pkgs.claude-code
+      indexPkgs.claude-code
       pkgs.coreutils
       pkgs.perl # the intrinsic non-overlap flock guard at the top of the script
       indexPkgs.bossbar
@@ -114,7 +127,7 @@ let
     runtimeInputs = [
       pkgs.gh
       pkgs.jq
-      pkgs.claude-code
+      indexPkgs.claude-code
       pkgs.coreutils
     ];
     text = builtins.readFile ./scripts/ci-triage.sh;
@@ -262,6 +275,59 @@ in
       };
     };
 
+    lifelog = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Run the lifelog recorder (github:andrewgazelka/lifelog): samples the
+          frontmost app / idle / lock state into SQLite, ingests macOS Screen
+          Time data from knowledgeC.db (that part needs Full Disk Access for
+          the binary), and accepts phone events over a local HTTP API.
+          Requires `lifelog.package`.
+        '';
+      };
+
+      package = lib.mkOption {
+        type = lib.types.nullOr lib.types.package;
+        default = null;
+        description = ''
+          The lifelog package. Supplied by the consuming config (e.g.
+          `inputs.lifelog.packages.''${system}.lifelog`); the lifelog flake is
+          deliberately not an index input.
+        '';
+      };
+
+      listen = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = "127.0.0.1:5599";
+        description = ''
+          Bind address for the phone-event ingest API; null disables it. Put a
+          bearer token in LIFELOG_TOKEN (via `lifelog.environment`, or a
+          wrapper that reads the Keychain) before binding beyond localhost.
+        '';
+      };
+
+      environment = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        description = ''
+          Extra environment for the recorder (e.g. LIFELOG_TOKEN). Rendered
+          into the world-readable Nix store, so do not inline real secrets.
+        '';
+      };
+
+      extraArgs = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [
+          "--interval-secs"
+          "10"
+        ];
+        description = "Extra arguments appended to `lifelog record`.";
+      };
+    };
+
     # CI progress bars are configured through the reusable `services.ciBars`
     # module (imported above); this module just turns it on with our repos in
     # `config`. No personal options needed here.
@@ -304,6 +370,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.lifelog.enable -> cfg.lifelog.package != null;
+        message = "users.andrewgazelka.lifelog: set lifelog.package (the lifelog flake's package) when enabling.";
+      }
+    ];
+
     # Expose the shared speaker on PATH so the user can announce by hand too.
     home.packages = [ sayDetached ];
 
@@ -344,6 +417,32 @@ in
           restart = "always";
           standardOutPath = "${cfg.logDir}/bossbar-overlay.log";
           standardErrorPath = "${cfg.logDir}/bossbar-overlay.log";
+          # Label defaults to the space-free home convention; no escape hatch.
+        };
+      })
+      (lib.mkIf cfg.lifelog.enable {
+        lifelog = {
+          description = "lifelog activity recorder";
+          command = [
+            (lib.getExe cfg.lifelog.package)
+            "record"
+          ]
+          ++ (
+            if cfg.lifelog.listen == null then
+              [ "--no-listen" ]
+            else
+              [
+                "--listen"
+                cfg.lifelog.listen
+              ]
+          )
+          ++ cfg.lifelog.extraArgs;
+          # Long-lived daemon: relaunch on any exit so recording survives
+          # crashes; the recorder's gap-aware span logic absorbs the restart.
+          restart = "always";
+          environment = cfg.lifelog.environment;
+          standardOutPath = "${cfg.logDir}/lifelog.log";
+          standardErrorPath = "${cfg.logDir}/lifelog.log";
           # Label defaults to the space-free home convention; no escape hatch.
         };
       })

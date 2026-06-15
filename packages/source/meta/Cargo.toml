@@ -9,6 +9,7 @@ description = "Shared typed metadata envelope and source-adapter trait for multi
 workspace = true
 
 [dependencies]
+lazy-regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true

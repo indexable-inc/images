@@ -45,6 +45,8 @@ body {
   background: var(--bg);
   color: var(--ink);
   font: 13px/1.5 var(--ui);
+  /* A hair of negative tracking reads as more refined at UI sizes. */
+  letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
   /* The board owns panning; the page itself never scrolls. */
   overflow: hidden;
@@ -393,10 +395,19 @@ body {
   display: grid; grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: baseline; column-gap: 10px; width: 100%;
   font: inherit; text-align: left; color: var(--ink);
-  background: none; border: 0; cursor: pointer; padding: 7px 8px;
+  background: none; border: 0; cursor: pointer; padding: 8px 10px;
+  /* Hover and selection read as soft pills rather than full-bleed bands, so the
+     list feels lighter; the threaded rail still runs behind them. */
+  border-radius: 6px;
+  transition: background 0.1s ease;
 }
 .entry-row:hover { background: light-dark(rgba(0, 0, 0, 0.045), rgba(255, 255, 255, 0.05)); }
-.entry.selected > .entry-row { background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.09)); }
+/* The selected row: a quiet fill plus a thin accent edge — the one place the
+   accent appears in the list, so the current selection is unambiguous. */
+.entry.selected > .entry-row {
+  background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.09));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .entry.selected > .entry-row .entry-title { color: var(--ink); }
 
 /* Only failure (red) and the transient running pulse (amber) get a dot. Success

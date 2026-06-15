@@ -65,3 +65,40 @@ fn skips_symlinked_logs() {
         "secret target must not be read"
     );
 }
+
+/// A debug log carrying terminal noise, a credential-shaped token, and a hex
+/// blob (all constructed at test time — never a real secret) is sanitized
+/// before hashing and embedding, and `content_hash` covers the sanitized bytes
+/// so a re-sync replaces previously ingested raw bodies.
+#[test]
+fn debug_log_body_is_sanitized_and_redacted() {
+    let fake_token = format!("ghp_{}", "Ab1".repeat(12));
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("sess-2.txt"),
+        format!(
+            "2026-06-02T17:20:01.816Z [DEBUG] \u{1b}[1mauth\u{1b}[0m token={fake_token}\n\
+             2026-06-02T17:20:02.000Z [DEBUG] payload {}\n",
+            "deadbeef".repeat(40),
+        ),
+    )
+    .expect("write log");
+
+    let logs = DebugLogs::open_with(dir.path(), "h", "u").expect("open");
+    let docs: Vec<_> = logs.documents().map(|d| d.expect("doc")).collect();
+    assert_eq!(docs.len(), 1);
+    let body = String::from_utf8(docs[0].body.clone()).expect("utf8 body");
+
+    assert!(
+        !body.contains(&fake_token),
+        "the raw token must never be embedded: {body}"
+    );
+    assert!(body.contains("[redacted:github_token]"), "{body}");
+    assert!(!body.contains('\u{1b}'), "ANSI escapes stripped: {body}");
+    assert!(body.contains("[blob 320 chars]"), "{body}");
+    assert_eq!(
+        docs[0].content_hash,
+        source_meta::hash_body(&docs[0].body),
+        "content_hash is computed AFTER sanitation"
+    );
+}

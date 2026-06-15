@@ -1,7 +1,7 @@
 ---
 name: searching
 disclosure: progressive
-description: "Searching this codebase and external repos: semantic (mgrep) vs exact (rg/fd), cloning upstreams to /tmp. Use when locating code or researching an API or pattern."
+description: "Searching this codebase, external repos, and fleet history: semantic (mgrep, search.semantic) vs exact (rg/fd), cloning upstreams to /tmp. Use when locating code, researching an API or pattern, or checking what prior agents already did."
 ---
 
 ## Searching
@@ -36,6 +36,34 @@ with `/tmp` clones of the maintained upstreams so the subagent can read real
 call sites and recent release notes, then report back a short summary. Cheap
 research up front beats shipping a pattern that the ecosystem has already moved
 past.
+
+## Fleet priors
+
+The shared store also indexes the whole fleet's history, not just code. From
+the index kernel: `import search`, then `await search.semantic("<task
+phrasing>", source=["claude_history"], top_k=5)` — each verb is async and
+returns a polars frame (one row per hit; `.filter`/`.group_by`/`.head` it).
+Route by question type:
+`shell` answers "what is the command" for a few hundred tokens, `github`
+answers "why is it this way" with PR bodies and URLs, `claude_history` answers
+"how did someone do this". Pass `agentic=True` only for failure-shaped queries
+(slower, but it rescues them). The corpus knows prior decisions, known
+pitfalls, and whether the thing is already built; finding a prior "this is
+~90% built on main" beats reimplementing it.
+
+The canonical source tags are `claude_history`, `codex`, `shell`,
+`claude_debug`, `github`, and `code`. Nothing else exists: a wrong tag
+(`atuin`, `slack`, `linear`, `git_log`) returns 0 hits silently instead of
+erroring, so treat an empty result as a possible typo before concluding the
+corpus is empty. Narrow with `user=["<name>"]`, `host=[...]`,
+`project=[...]`, or `repo=` when you know whose history holds the answer.
+
+Skip the prior search for trivial, local-only edits (a rename, a typo, a
+small refactor): generic phrasings retrieve noise and the round trip costs
+more than it saves. Reach for it when the task touches infra, deploy, CI,
+conventions, debugging, or anything another agent has plausibly done before,
+and prefer a cheap-model subagent for broad prior research so raw hits never
+flood the main context.
 
 Search before claiming external facts, API behavior, flags, versions, or current
 ownership. Live state beats docs when the task is about a running system; if

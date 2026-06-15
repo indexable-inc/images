@@ -7,9 +7,13 @@ fn fixture() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.jsonl")
 }
 
+fn open_fixture() -> CodexHistory {
+    CodexHistory::open_with(Some(&fixture()), None, "host1", "user1").expect("parse")
+}
+
 #[test]
 fn parses_every_prompt_skipping_blank_lines() {
-    let history = CodexHistory::open_with(&fixture(), "host1", "user1").expect("parse");
+    let history = open_fixture();
     // Four prompt lines, one blank line skipped.
     assert_eq!(history.len(), 4);
     assert!(!history.is_empty());
@@ -17,7 +21,7 @@ fn parses_every_prompt_skipping_blank_lines() {
 
 #[test]
 fn external_ids_are_content_stable_not_positional() {
-    let history = CodexHistory::open_with(&fixture(), "host1", "user1").expect("parse");
+    let history = open_fixture();
     let ids: Vec<String> = history
         .documents()
         .map(|doc| doc.expect("document").external_id)
@@ -36,7 +40,7 @@ fn external_ids_are_content_stable_not_positional() {
 
 #[test]
 fn documents_carry_source_and_tags() {
-    let history = CodexHistory::open_with(&fixture(), "host1", "user1").expect("parse");
+    let history = open_fixture();
     assert_eq!(history.source(), Source::new("codex"));
 
     let docs: Vec<_> = history
@@ -58,4 +62,11 @@ fn documents_carry_source_and_tags() {
     // The last prompt had no `ts`, so the timestamp tag is omitted, not null.
     let last = &docs[3];
     assert!(last.meta_json.get("timestamp").is_none());
+}
+
+#[test]
+fn absent_sources_yield_nothing() {
+    let history = CodexHistory::open_with(None, None, "host1", "user1").expect("open");
+    assert!(history.is_empty());
+    assert_eq!(history.documents().count(), 0);
 }

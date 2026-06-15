@@ -69,6 +69,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     notebook.add_argument("--workdir", help="Directory the kernel runs in (default: cwd)")
     sub.add_parser("dashboard", help="Open the running server's dashboard URL")
+    sub.add_parser(
+        "requirements",
+        help="Report each external credential the bundled tooling needs: present "
+        "(and from where) or missing (and the remedy); exits non-zero when "
+        "anything is missing, so setup scripts can gate on it",
+    )
     ev = sub.add_parser("eval", help="Evaluate one expression on a throwaway kernel")
     ev.add_argument("code")
     ex = sub.add_parser("exec", help="Run statements on a throwaway kernel")
@@ -80,6 +86,10 @@ def main(argv: list[str] | None = None) -> int:
         return _serve(args, engine_only=command == "notebook")
     if command == "dashboard":
         return _dashboard()
+    if command == "requirements":
+        from . import requirements
+
+        return 0 if requirements.report(print) else 1
     if command in ("eval", "exec"):
         return _one_shot(args.code)
     parser.error(f"unknown command {command!r}")
@@ -109,6 +119,27 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def _bindable(host: str, port: int) -> bool:
+    """Whether ``host:port`` can actually be bound right now. A configured host
+    can be 'assigned' yet unbindable -- e.g. a Tailscale IP whose interface is
+    down because the backend is stopped -- so the CLI probes before committing
+    the dashboard (and the kernel's inherited URL) to it. Mirrors what
+    ``loop.create_server`` does: resolve, then try each address family."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    for family, socktype, proto, _canon, sockaddr in infos:
+        try:
+            with socket.socket(family, socktype, proto) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(sockaddr)
+            return True
+        except OSError:
+            continue
+    return False
 
 
 def _dashboard_port() -> int:
@@ -161,6 +192,11 @@ def _tailscale_dns_name() -> str | None:
 def _tailscale_ip() -> str | None:
     status = _tailscale_status()
     if not status:
+        return None
+    # A stopped backend still reports its assigned IPs, but they are not bound to
+    # any interface, so binding the dashboard to one fails. Only treat the IP as
+    # usable when Tailscale is actually up.
+    if status.get("BackendState") != "Running":
         return None
     for ip in status.get("Self", {}).get("TailscaleIPs", []) or []:
         if isinstance(ip, str) and "." in ip and ":" not in ip:
@@ -216,13 +252,41 @@ def _resolve_ssh_auth_sock(
     return op_sock
 
 
+def _exec_token() -> str | None:
+    """The shared secret gating `/api/exec` (a peer's `fleet.in_kernel`).
+
+    From ``IX_MCP_EXEC_TOKEN`` directly, or a file named by
+    ``IX_MCP_EXEC_TOKEN_FILE`` (the fleet service keeps the secret in a file and
+    points every node at it). Unset, the exec endpoint stays disabled.
+    """
+    token = os.environ.get("IX_MCP_EXEC_TOKEN")
+    if token:
+        return token.strip()
+    path = os.environ.get("IX_MCP_EXEC_TOKEN_FILE")
+    if path and os.path.exists(path):
+        return Path(path).read_text().strip()
+    return None
+
+
+def _exec_trust_network() -> bool:
+    """Whether to trust the bound network (the tailnet) as the `/api/exec` auth
+    boundary, so a peer's `fleet.in_kernel` works without a shared token -- the
+    same trust model Ray's own data plane relies on. Off unless
+    ``IX_MCP_EXEC_TRUST_NETWORK`` is set truthy; the dashboard additionally
+    requires a non-loopback bind before honoring it.
+    """
+    return os.environ.get("IX_MCP_EXEC_TRUST_NETWORK", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     wd = getattr(args, "workdir", None)
     workdir = Path(wd).resolve() if wd else Path.cwd()
     workdir.mkdir(parents=True, exist_ok=True)
-
-    bind_host = os.environ.get("IX_MCP_HOST") or _tailscale_ip() or "127.0.0.1"
-    advertised_host = _advertised_host(bind_host)
 
     http = getattr(args, "http", None)
     stdin_fd = stdout_fd = None
@@ -246,6 +310,29 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         mcp_http_host, mcp_http_port = host or "127.0.0.1", int(port) if port else 8000
 
     dashboard_port = _dashboard_port()
+
+    # Resolve the dashboard bind host once, here, before the kernel spawns (it
+    # inherits IX_MCP_DASHBOARD_URL) and before the Config is built, so every
+    # derived value stays consistent. A tailnet IP can be 'assigned' yet
+    # unbindable (Tailscale stopped -> interface down); probing and falling back
+    # to loopback keeps the read-only dashboard, hence the whole MCP, from
+    # crashing on startup. _tailscale_ip() already returns None unless the
+    # backend is running, so this only catches the rarer races.
+    bind_host = os.environ.get("IX_MCP_HOST") or _tailscale_ip() or "127.0.0.1"
+    # Probe everything except the fallback target itself. "127.0.0.1" is the host
+    # we fall back *to* and is effectively always bindable; every other spelling
+    # (a tailnet IP, but also "::1"/"localhost", which can be down when IPv6 is
+    # disabled) must be probed so we degrade to working loopback instead of it.
+    if bind_host != "127.0.0.1" and not _bindable(bind_host, dashboard_port):
+        print(
+            f"[ix-mcp] dashboard host {bind_host}:{dashboard_port} is not bindable; "
+            "falling back to 127.0.0.1",
+            file=sys.stderr,
+            flush=True,
+        )
+        bind_host = "127.0.0.1"
+    advertised_host = _advertised_host(bind_host)
+
     session = getattr(args, "session", None)
     session_path: Path | None = None
     session_resume = False
@@ -303,6 +390,8 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         mcp_http_port=mcp_http_port,
         stdin_fd=stdin_fd,
         stdout_fd=stdout_fd,
+        exec_token=_exec_token(),
+        exec_trust_network=_exec_trust_network(),
     )
     set_config(cfg)
 
@@ -329,12 +418,19 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         os.environ["SSH_AUTH_SOCK"] = _op_sock
         print(f"[ix-mcp] SSH_AUTH_SOCK -> 1Password agent ({_op_sock})", file=sys.stderr, flush=True)
 
+    # Yell about missing credentials once, up front, on the channel MCP clients
+    # surface in their logs. Each module still fails clearly per call; this is
+    # the advance warning so the gap is visible before the first call hits it.
+    from . import requirements
+
+    requirements.report(lambda line: print(f"[ix-mcp] {line}", file=sys.stderr, flush=True))
+
     asyncio.run(_run(cfg))
     return 0
 
 
 async def _run(cfg: Config) -> None:
-    from . import dashboard, tools, transport
+    from . import dashboard, pane_bridge, tools, transport
     from .kernel import Kernel, set_kernel
 
     kernel = Kernel(cfg)
@@ -364,6 +460,11 @@ async def _run(cfg: Config) -> None:
         await locked.wait()
 
     runner = await dashboard.start(cfg)
+    # Also publish every run/resource/namespace as Loro panes to the shared
+    # dashboard hub (a separate `dashboard` process aggregates all producers).
+    # Best-effort: if the producer socket cannot bind, this is silent and the
+    # read-only API dashboard still works.
+    bridge_task = asyncio.ensure_future(pane_bridge.run(cfg.store_path))
     url = cfg.dashboard_url()
     (runtime_dir() / "dashboard-url").write_text(url)
     # Bake the live URL into the MCP instructions before serving, so the client
@@ -381,6 +482,7 @@ async def _run(cfg: Config) -> None:
         else:
             await transport.serve()
     finally:
+        bridge_task.cancel()
         if restore_task is not None and not restore_task.done():
             restore_task.cancel()
         if cfg.session_path is not None:

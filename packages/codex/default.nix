@@ -1,61 +1,107 @@
 {
   lib,
+  ix,
   codex,
   makeBinaryWrapper,
   symlinkJoin,
+  formats,
   binName ? "codex",
-  # Config-key defaults, applied as highest-precedence runtime `-c key=value`
-  # overrides (codex's `--config` layer wins over every file layer, so a baked
-  # value here cannot be silently dropped by a churned ~/.codex/config.toml).
-  # Declared as data so the flags below derive from one source; a consumer adds
-  # or replaces keys with `codex.override { settings = { ... }; }`.
-  #
-  # We run a trusted config (our own AGENTS.md / hooks / MCP servers), so the
-  # one default we bake fleet-wide is turning off the startup update check: the
-  # store binary is read-only and the wrapper owns the version pin, so the check
-  # only ever costs a network round-trip it can never act on. Anything
-  # security-shaped (sandbox mode, approval policy) is left to the user's config
-  # and codex's own requirements layer, since a bare host is genuinely not a
-  # sandbox.
-  settings ? {
+
+  # Sibling repo packages from the flake package set (threaded by
+  # lib/packages.nix), used to locate the `ix-mcp` entrypoint for the baked
+  # `index` MCP server. `{ }` in the overlay package set, where the `mcp`
+  # sibling is out of scope, so the wrapper bakes no MCP server there (the same
+  # fallback the claude-code wrapper uses).
+  repoPackages ? { },
+
+  # Forced config: codex `-c key=value` overrides applied on EVERY invocation.
+  # `-c` is codex's highest-precedence layer (above ~/.codex/config.toml), so use
+  # this ONLY for wrapper INVARIANTS the user must not silently lose. The one we
+  # bake: turn off the startup update check, since the store binary is read-only
+  # and the wrapper owns the version pin, so the check only ever costs a network
+  # round-trip it can never act on. Anything security-shaped (sandbox mode,
+  # approval policy) is left to the user's config and codex's requirements layer.
+  forcedSettings ? {
     check_for_update_on_startup = false;
+  },
+
+  # Soft defaults: codex `-c key=value` flags injected ONLY when the user's
+  # config.toml does not already configure that exact dotted-key path, so an
+  # explicit user value always wins. Detection is per-leaf (exact TOML path
+  # lookup via the compiled Rust launcher, not substring grep): a config that
+  # sets `features.multi_agent_v2.enabled` keeps only that key out of the
+  # wrapper defaults, while sibling keys (like max_concurrent_threads_per_session)
+  # are still injected if unset. A user's own later `-c` still wins over both.
+  #
+  # Default: a much higher multi-agent fan-out than stock. Run the v2 runtime
+  # (stock default 4 = root + 3 subagents); 16 => root + 15 concurrent subagents.
+  # v2 REJECTS `agents.max_threads` ("cannot be set when multi_agent_v2 is
+  # enabled"), so the cap lives under the v2 feature; only `agents.max_depth` is
+  # still read under v2 (3 => parent -> child -> grandchild -> great-grandchild).
+  settings ? {
+    features.multi_agent_v2 = {
+      enabled = true;
+      max_concurrent_threads_per_session = 16;
+    };
+    agents.max_depth = 3;
   },
 }:
 let
-  # Render an attrset of config defaults into the repeated `--config key=value`
-  # flags codex accepts. Each value is encoded as TOML (booleans bare, strings
-  # quoted, tables inline) so structured defaults round-trip through the runtime
-  # override layer exactly as a config.toml entry would. Inline tables are
-  # emitted WITHOUT spaces so the whole flag survives makeBinaryWrapper's
-  # space-splitting of `--add-flags`.
-  toToml =
-    value:
-    if builtins.isBool value then
-      (lib.boolToString value)
-    else if builtins.isString value then
-      builtins.toJSON value
-    else if builtins.isInt value || builtins.isFloat value then
-      toString value
-    else if builtins.isAttrs value then
-      "{${lib.concatMapAttrsStringSep "," (k: v: "${k}=${toToml v}") value}}"
-    else
-      throw "codex: unsupported config value type for ${builtins.toJSON value}";
-  configFlags = lib.mapAttrsToList (key: value: "--config ${key}=${toToml value}") settings;
+  # The compiled Rust launcher (packages/config-launch): reads IX_LAUNCH_SPEC
+  # (a baked JSON file describing the target binary, config path, forced flags,
+  # and soft defaults), performs per-key TOML presence detection against the
+  # user's config.toml, then exec's the target preserving argv0.
+  launcher = ix.rustWorkspace.units.binaries."config-launch";
+  entriesOf =
+    flat:
+    lib.mapAttrsToList (key: v: {
+      inherit key;
+      value = ix.toml.scalar v;
+    }) flat;
+
+  # The `index` MCP server, baked as soft `-c mcp_servers.index.*` defaults from
+  # the same `ix.mcp` registry the claude-code wrapper renders, so the kernel is
+  # declared once for both tools. Soft, so a user's own `[mcp_servers.index]` in
+  # config.toml wins per the per-leaf presence check. Only stdio servers are
+  # baked: codex's streamable-HTTP MCP support is gated behind version-specific
+  # keys, so the keyless `exa` server stays claude-only rather than baking an
+  # unverified HTTP config into every codex session.
+  mcpStdioServers = lib.filterAttrs (_: def: (def.transport or "stdio") == "stdio") (
+    ix.mcp.houseServers {
+      indexCommand = if repoPackages ? mcp then lib.getExe repoPackages.mcp else null;
+    }
+  );
+  spec = (formats.json { }).generate "codex-launch-spec.json" {
+    target = lib.getExe codex;
+    config_dir_env = "CODEX_HOME";
+    config_dir_default = "~/.codex";
+    config_file = "config.toml";
+    forced = entriesOf (ix.attrs.flattenToDotted forcedSettings);
+    soft = entriesOf (ix.attrs.flattenToDotted settings) ++ ix.mcp.toCodexEntries mcpStdioServers;
+  };
 in
+# These baked defaults also reach the Codex GUI app's remote-SSH sessions, not
+# just terminal use. The desktop app does NOT ship its own binary to the remote
+# (unlike VS Code Remote SSH): it bootstraps the host through the remote user's
+# login shell and runs `codex app-server` from the remote PATH (then connects via
+# `codex app-server proxy`). So whenever THIS wrapper is the `codex` first on the
+# remote's login-shell PATH, it intercepts that `app-server` launch and injects
+# the same `-c` flags, and every GUI/phone session against that host inherits the
+# defaults. Caveats: the wrapper must win the remote *login* shell PATH (the probe
+# uses `$SHELL -lc`, which skips ~/.bashrc/~/.zshrc), and a stale already-running
+# `codex app-server` is reused without re-injecting, so kill it once after a bump.
 symlinkJoin {
   name = "codex-${codex.version}";
   paths = [ codex ];
-  nativeBuildInputs = [ makeBinaryWrapper ];
   # symlinkJoin links the whole codex output (libexec, completions, ...); we only
-  # re-wrap the entrypoint so our baked `-c` defaults ride every invocation while
-  # everything else stays pristine. `--add-flags` (prepended) keeps a user's
-  # explicit `-c` on the CLI winning, since codex is last-wins within the runtime
-  # layer.
+  # replace the entrypoint with our wrapper so the baked defaults ride every
+  # invocation while everything else stays pristine.
+  nativeBuildInputs = [ makeBinaryWrapper ];
   postBuild = ''
     rm -f $out/bin/${binName}
-    makeBinaryWrapper ${lib.getExe codex} $out/bin/${binName} \
+    makeBinaryWrapper ${launcher}/bin/config-launch $out/bin/${binName} \
       --inherit-argv0 \
-      --add-flags ${lib.escapeShellArg (lib.concatStringsSep " " configFlags)}
+      --set IX_LAUNCH_SPEC ${spec}
   '';
   meta = codex.meta // {
     description = "${codex.meta.description or "OpenAI Codex CLI"} (index wrapper with baked defaults)";

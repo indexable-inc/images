@@ -19,7 +19,9 @@
 //! `data.parquet` files `sink-parquet` wrote (the consumer half of that log) and
 //! replays every record into Mixedbread.
 
-use std::collections::BTreeMap;
+mod scan_cursor;
+
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -29,6 +31,8 @@ use lake_iceberg::IcebergReconciler;
 use search_core::{MixedbreadStore, Store};
 use sink_mixedbread::MixedbreadReconciler;
 use sink_parquet::ParquetReconciler;
+
+use crate::scan_cursor::ScanCursor;
 
 /// Manifest limits for code repos, matching `search-core`'s defaults.
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -108,6 +112,16 @@ struct Cli {
     #[arg(long, env = "INDEXER_CURSOR_FILE")]
     cursor_file: Option<PathBuf>,
 
+    /// Directory holding per-(user, source) input-file cursors for the scan
+    /// path: a history source whose input files (size + mtime) are unchanged
+    /// since its last successful run is skipped without re-parsing a single
+    /// transcript (ENG-2698). Defaults to systemd's `$STATE_DIRECTORY` for the
+    /// fleet's multi-user shape (`--user`), so the production unit
+    /// (StateDirectory=ix-indexer) is incremental with no extra flag; `--local`
+    /// and single-source runs stay full re-parses unless this is passed.
+    #[arg(long, env = "INDEXER_CURSOR_DIR")]
+    cursor_dir: Option<PathBuf>,
+
     /// Index local agent/shell history (claude, codex, atuin) at their default
     /// paths, in addition to any explicit `--*` overrides below.
     #[arg(long)]
@@ -120,6 +134,12 @@ struct Cli {
     /// Codex history file (default with `--local`: `~/.codex/history.jsonl`).
     #[arg(long)]
     codex_file: Option<PathBuf>,
+
+    /// Codex session-rollout directory (default with `--local`:
+    /// `~/.codex/sessions`). Rollouts carry the full sessions — assistant
+    /// turns and tool calls — where the history file has user prompts only.
+    #[arg(long)]
+    codex_sessions: Option<PathBuf>,
 
     /// atuin history db (default with `--local`: `~/.local/share/atuin/history.db`).
     #[arg(long)]
@@ -141,6 +161,13 @@ struct Cli {
     #[arg(long = "git-repo")]
     git_repos: Vec<PathBuf>,
 
+    /// Index journald unit logs (priority <= 4, one document per unit per day)
+    /// since this systemd timespec (`2026-06-01`, `yesterday`; a bare duration
+    /// like `2d` is normalized to `-2d`). Off by default; reading the full
+    /// system journal needs root (the fleet unit has it).
+    #[arg(long = "journald-since", value_name = "TIMESPEC")]
+    journald_since: Option<String>,
+
     /// Code checkout to index (content-addressed, like a bare `search`).
     /// Mixedbread only (code lives in git, not the parquet archive); repeatable.
     #[arg(long = "code-repo")]
@@ -157,6 +184,22 @@ struct Cli {
     /// the fleet module passes the NixOS `networking.hostName`.
     #[arg(long)]
     host: Option<String>,
+
+    /// After a successful sync, garbage-collect each export-complete source's
+    /// Mixedbread records (slack, linear, github, git): delete records whose
+    /// `external_id` vanished from this run's complete input, and
+    /// exact-duplicate (`external_id`, `content_hash`) file objects left
+    /// behind by retried uploads, keeping the newest. With the Iceberg lake
+    /// sink active, the same vanished set is appended to the lake as explicit
+    /// tombstone records — the ONLY way lake rows are ever deleted; the lake
+    /// fold itself never infers deletion from absence (ENG-2696). Off by
+    /// default. Only a source that
+    /// ran this invocation is touched, and the append-only history sources
+    /// (claude, codex, shell, debug) are never GC'd: their scans are
+    /// incremental windows, not complete snapshots, so absence there proves
+    /// nothing. Requires --mixedbread-store.
+    #[arg(long, env = "INDEXER_GC")]
+    gc: bool,
 }
 
 /// The Mixedbread view for a run: the connected store, the store name, and the
@@ -166,10 +209,12 @@ type Mixedbread<'a> = MixedbreadReconciler<'a, MixedbreadStore>;
 /// Per-run tally of how many sources were indexed, soft-skipped, or failed.
 ///
 /// `skipped` counts sources that were deliberately and visibly passed over for a
-/// benign reason (e.g. an atuin db file that exists but has no `history` table
-/// because that account never ran atuin). A soft skip is logged but never gates
-/// the run's exit code — only `failures` does — so one uninitialized per-user
-/// history db cannot degrade the whole indexing unit.
+/// benign reason: an atuin db file that exists but has no `history` table
+/// because that account never ran atuin, or a history source whose input files
+/// are unchanged since its last successful run (the scan cursor, ENG-2698). A
+/// soft skip is logged but never gates the run's exit code — only `failures`
+/// does — so one uninitialized per-user history db cannot degrade the whole
+/// indexing unit.
 #[derive(Clone, Copy)]
 struct Counts {
     indexed: usize,
@@ -220,6 +265,23 @@ async fn main() -> anyhow::Result<()> {
         consume_modes <= 1,
         "--from-parquet-prefix, --from-iceberg, --from-snapshot, and --cursor-file are mutually exclusive consume modes"
     );
+
+    // GC diffs the store against a freshly scanned complete input, so it only
+    // makes sense on the scan path (the consume modes have their own
+    // replace/tombstone delete semantics) and requires the Mixedbread sink
+    // (the view it prunes). When the lake sink is also active, the vanished
+    // set is additionally appended to the lake as explicit tombstone records
+    // (ENG-2696): the lake's one deletion path.
+    if cli.gc {
+        anyhow::ensure!(
+            consume_modes == 0,
+            "--gc applies to the source-scan path; the consume modes already delete via replace/tombstones"
+        );
+        anyhow::ensure!(
+            mixedbread.is_some(),
+            "--gc requires --mixedbread-store (it prunes the Mixedbread view)"
+        );
+    }
 
     // Consume modes replay a corpus log into Mixedbread/the lake instead of
     // scanning local sources; dispatched in `run_consume_mode` to keep `main`
@@ -273,7 +335,7 @@ async fn main() -> anyhow::Result<()> {
     }
     if !any_source_selected(&cli) {
         anyhow::bail!(
-            "no sources selected: pass --local, --user NAME:HOME, --claude-dir/--codex-file/--atuin-db/--slack-export/--linear-export/--github-export/--git-repo, or --code-repo"
+            "no sources selected: pass --local, --user NAME:HOME, --claude-dir/--codex-file/--codex-sessions/--atuin-db/--slack-export/--linear-export/--github-export/--git-repo/--journald-since, or --code-repo"
         );
     }
 
@@ -554,7 +616,7 @@ fn write_cursor(path: &Path, snapshot: i64) -> anyhow::Result<()> {
 fn finish(counts: Counts) -> anyhow::Result<()> {
     if counts.skipped > 0 {
         eprintln!(
-            "[indexer] {} source(s) soft-skipped (uninitialized/empty)",
+            "[indexer] {} source(s) soft-skipped (unchanged/uninitialized/empty)",
             counts.skipped
         );
     }
@@ -576,13 +638,156 @@ const fn any_source_selected(cli: &Cli) -> bool {
     cli.local
         || cli.claude_dir.is_some()
         || cli.codex_file.is_some()
+        || cli.codex_sessions.is_some()
         || cli.atuin_db.is_some()
         || cli.slack_export.is_some()
         || cli.linear_export.is_some()
         || cli.github_export.is_some()
         || !cli.git_repos.is_empty()
+        || cli.journald_since.is_some()
         || !cli.code_repos.is_empty()
         || !cli.users.is_empty()
+}
+
+/// The scan-cursor directory for this run: the explicit `--cursor-dir` /
+/// `INDEXER_CURSOR_DIR`, else — for the fleet's multi-user `--user` shape only
+/// — systemd's `$STATE_DIRECTORY` (the production unit runs with
+/// `StateDirectory=ix-indexer`, so the hourly run is incremental with no flag
+/// change). `--local` and single-source runs are interactive one-offs, so they
+/// opt in explicitly rather than leaving cursor state behind.
+fn resolve_cursor_dir(cli: &Cli) -> Option<PathBuf> {
+    if let Some(dir) = &cli.cursor_dir {
+        return Some(dir.clone());
+    }
+    if cli.users.is_empty() {
+        return None;
+    }
+    std::env::var_os("STATE_DIRECTORY").map(PathBuf::from)
+}
+
+/// Evaluate the scan cursor for one history source BEFORE anything is opened
+/// or parsed. `None` means the source's input files are unchanged since its
+/// last successful run: the skip was logged and tallied, and the caller must
+/// not run the source. `Some(gate)` means run it and call
+/// [`SourceGate::commit`] once every sink succeeded.
+///
+/// No configured cursor — and a snapshot that cannot be taken (the gate must
+/// never mask the adapter's own error reporting) — both yield a pass-through
+/// gate whose commit is a no-op.
+fn gate_source<'a>(
+    cursor: Option<&'a ScanCursor>,
+    user: Option<&str>,
+    source: &'static str,
+    inputs: &[&Path],
+    label: &str,
+    counts: &mut Counts,
+) -> Option<SourceGate<'a>> {
+    let Some(cursor) = cursor else {
+        return Some(SourceGate { target: None });
+    };
+    let snapshot = match scan_cursor::snapshot(inputs) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("[{label}] cursor snapshot failed; running ungated: {error:#}");
+            return Some(SourceGate { target: None });
+        }
+    };
+    if cursor.unchanged(user, source, &snapshot) {
+        eprintln!(
+            "[{label}] skipped ({} input file(s) unchanged since the last successful run)",
+            snapshot.len()
+        );
+        counts.skipped += 1;
+        return None;
+    }
+    Some(SourceGate {
+        target: Some(GateTarget {
+            cursor,
+            user: user.map(str::to_owned),
+            source,
+            snapshot,
+        }),
+    })
+}
+
+/// A pending scan-cursor commit for one source run; see [`gate_source`].
+struct SourceGate<'a> {
+    /// `None` when no cursor is configured for this run (commit is a no-op).
+    target: Option<GateTarget<'a>>,
+}
+
+/// Where a [`SourceGate`] commits: the cursor store, the `(user, source)` key,
+/// and the pre-parse snapshot to persist.
+struct GateTarget<'a> {
+    cursor: &'a ScanCursor,
+    user: Option<String>,
+    source: &'static str,
+    snapshot: scan_cursor::Snapshot,
+}
+
+impl SourceGate<'_> {
+    /// Persist the pre-parse snapshot after a fully successful run. A write
+    /// failure only costs a reparse next run, so it is logged, never fatal.
+    fn commit(self, label: &str) {
+        let Some(GateTarget {
+            cursor,
+            user,
+            source,
+            snapshot,
+        }) = self.target
+        else {
+            return;
+        };
+        if let Err(error) = cursor.store(user.as_deref(), source, &snapshot) {
+            eprintln!("[{label}] failed to store the scan cursor: {error:#}");
+        }
+    }
+}
+
+/// One gated source's identity: its log label, the cursor key (scope user +
+/// source), and the input files whose signatures gate it.
+struct GatedSource<'a> {
+    label: &'a str,
+    user: Option<&'a str>,
+    source: &'static str,
+    inputs: &'a [&'a Path],
+}
+
+/// Run one cursor-gated, file-backed history source end to end: evaluate the
+/// scan cursor (skipping the source when its inputs are unchanged), open the
+/// adapter, fan out to every sink, and commit the cursor only after every sink
+/// succeeded. The atuin path gates explicitly instead because its open has a
+/// third, soft-skip outcome.
+async fn run_gated_source<A, F>(
+    spec: GatedSource<'_>,
+    scan: Option<&ScanCursor>,
+    open: F,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
+    counts: &mut Counts,
+) where
+    A: SourceAdapter + Sync,
+    F: FnOnce() -> anyhow::Result<A>,
+{
+    let GatedSource {
+        label,
+        user,
+        source,
+        inputs,
+    } = spec;
+    let Some(gate) = gate_source(scan, user, source, inputs, label, counts) else {
+        return;
+    };
+    let result = async {
+        let adapter = open()?;
+        run_source(label, &adapter, mixedbread, parquet, lake).await
+    }
+    .await;
+    if result.is_ok() {
+        gate.commit(label);
+    }
+    record(label, result.map(|_| ()), counts);
 }
 
 /// Resolve the selected sources and run each one independently (a failure never
@@ -603,6 +808,10 @@ async fn run_sources(
         .codex_file
         .clone()
         .or_else(|| cli.local.then(|| default(".codex/history.jsonl")).flatten());
+    let codex_sessions = cli
+        .codex_sessions
+        .clone()
+        .or_else(|| cli.local.then(|| default(".codex/sessions")).flatten());
     let atuin = cli.atuin_db.clone().or_else(|| {
         cli.local
             .then(|| default(".local/share/atuin/history.db"))
@@ -614,25 +823,42 @@ async fn run_sources(
         skipped: 0,
         failures: 0,
     };
+    // The scan cursor gates only the history sources (claude, codex, shell
+    // here; debug on the per-user path): those are the per-home trees the
+    // hourly fleet run re-parses in full (ENG-2698). Exports, git logs, and
+    // code repos have their own change detection downstream.
+    let scan = resolve_cursor_dir(cli).map(ScanCursor::new);
+    let scan = scan.as_ref();
     if let Some(dir) = claude {
-        let result = async {
-            let adapter = source_claude::ClaudeHistoryExport::open(&dir)
-                .with_context(|| format!("parsing Claude transcripts at {}", dir.display()))?;
-            run_source("claude", &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record("claude", result, &mut counts);
+        let spec = GatedSource { label: "claude", user: None, source: "claude", inputs: &[dir.as_path()] };
+        let open = || {
+            source_claude::ClaudeHistoryExport::open(&dir)
+                .with_context(|| format!("parsing Claude transcripts at {}", dir.display()))
+        };
+        run_gated_source(spec, scan, open, mixedbread, parquet, lake, &mut counts).await;
     }
-    if let Some(file) = codex {
-        let result = async {
-            let adapter = source_codex::CodexHistory::open(&file)
-                .with_context(|| format!("parsing Codex history at {}", file.display()))?;
-            run_source("codex", &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record("codex", result, &mut counts);
+    if codex.is_some() || codex_sessions.is_some() {
+        // One adapter (and one `run_source`) covers both codex inputs: the
+        // parquet sink overwrites `source=codex/data.parquet` in full per
+        // reconcile, so two separate runs would clobber each other's rows.
+        // Both inputs feed the one scan cursor for the same reason.
+        let inputs: Vec<&Path> = codex
+            .iter()
+            .chain(codex_sessions.iter())
+            .map(PathBuf::as_path)
+            .collect();
+        let spec = GatedSource { label: "codex", user: None, source: "codex", inputs: &inputs };
+        let open = || {
+            source_codex::CodexHistory::open(codex.as_deref(), codex_sessions.as_deref())
+                .with_context(|| {
+                    format!("parsing Codex history at {codex:?} / sessions at {codex_sessions:?}")
+                })
+        };
+        run_gated_source(spec, scan, open, mixedbread, parquet, lake, &mut counts).await;
     }
-    if let Some(db) = atuin {
+    if let Some(db) = atuin
+        && let Some(gate) = gate_source(scan, None, "shell", &[db.as_path()], "shell", &mut counts)
+    {
         match open_atuin(
             "shell",
             &db,
@@ -641,38 +867,67 @@ async fn run_sources(
         ) {
             Ok(Atuin::Ready(adapter)) => {
                 let result = run_source("shell", &adapter, mixedbread, parquet, lake).await;
-                record("shell", result, &mut counts);
+                if result.is_ok() {
+                    gate.commit("shell");
+                }
+                record("shell", result.map(|_| ()), &mut counts);
             }
-            // An uninitialized db is already logged and tallied as a soft skip.
+            // An uninitialized db is already logged and tallied as a soft skip
+            // (no cursor commit: only a fully ingested source buries its gate).
             Ok(Atuin::Skipped) => {}
             Err(error) => record("shell", Err(error), &mut counts),
         }
     }
     run_static_exports(cli, mixedbread, parquet, lake, &mut counts).await;
-    for repo in &cli.git_repos {
-        let label = format!("git:{}", repo.display());
-        let result = async {
-            let adapter = source_git::GitLog::open(repo)
-                .with_context(|| format!("reading git history at {}", repo.display()))?;
-            run_source("git", &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record(&label, result, &mut counts);
-    }
+    run_git_repos(cli, mixedbread, parquet, lake, &mut counts).await;
+    run_journald(cli, mixedbread, parquet, lake, &mut counts).await;
     for repo_dir in &cli.code_repos {
         let label = format!("code:{}", repo_dir.display());
         let result = index_code(&label, repo_dir, mixedbread).await;
         record(&label, result, &mut counts);
     }
     if !cli.users.is_empty() {
-        run_users(cli, mixedbread, parquet, lake, &mut counts).await;
+        run_users(cli, scan, mixedbread, parquet, lake, &mut counts).await;
     }
     counts
+}
+
+/// Run the journald unit-log source when `--journald-since` is set,
+/// accumulating into the shared counters. Host-level, not per-user: the
+/// journal belongs to the machine, and the documents are tagged (and
+/// externally id'd) by host + unit. No scan-cursor gate: there is no input
+/// file to sign, and `journalctl` bounds each read to the `--since` window;
+/// unchanged (unit, day) documents dedup on their content hash downstream.
+async fn run_journald(
+    cli: &Cli,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
+    counts: &mut Counts,
+) {
+    let Some(since) = &cli.journald_since else {
+        return;
+    };
+    let result = async {
+        let host = resolve_host(cli).context("resolving host for journald")?;
+        let adapter = source_journald::JournaldLog::read(since, &host)
+            .with_context(|| format!("reading journald entries since {since}"))?;
+        run_source("journald", &adapter, mixedbread, parquet, lake).await
+    }
+    .await;
+    // A journald read is a `--since` window, never a complete snapshot, so it
+    // is not GC-eligible and its produced ids are dropped.
+    record("journald", result.map(|_| ()), counts);
 }
 
 /// Run the directory-based export sources (Slack, Linear, GitHub), each
 /// independent (a failure never aborts the others), accumulating into the
 /// shared counters. Split out of [`run_sources`] to keep each function focused.
+///
+/// These are the export-complete sources: their input directory holds the
+/// whole corpus by construction, so under `--gc` each one that fully succeeds
+/// is followed by a GC pass diffing the store against exactly what it
+/// produced (ENG-2697/ENG-2702).
 async fn run_static_exports(
     cli: &Cli,
     mixedbread: Option<Mixedbread<'_>>,
@@ -684,7 +939,8 @@ async fn run_static_exports(
         let result = async {
             let adapter = source_slack::SlackExport::open(dir)
                 .with_context(|| format!("reading Slack export at {}", dir.display()))?;
-            run_source("slack", &adapter, mixedbread, parquet, lake).await
+            let produced = run_source("slack", &adapter, mixedbread, parquet, lake).await?;
+            gc_source("slack", &adapter.source(), &produced, cli.gc, mixedbread, lake).await
         }
         .await;
         record("slack", result, counts);
@@ -693,7 +949,8 @@ async fn run_static_exports(
         let result = async {
             let adapter = source_linear::LinearExport::open(dir)
                 .with_context(|| format!("reading Linear export at {}", dir.display()))?;
-            run_source("linear", &adapter, mixedbread, parquet, lake).await
+            let produced = run_source("linear", &adapter, mixedbread, parquet, lake).await?;
+            gc_source("linear", &adapter.source(), &produced, cli.gc, mixedbread, lake).await
         }
         .await;
         record("linear", result, counts);
@@ -702,17 +959,125 @@ async fn run_static_exports(
         let result = async {
             let adapter = source_github::GithubExport::open(dir)
                 .with_context(|| format!("reading GitHub export at {}", dir.display()))?;
-            run_source("github", &adapter, mixedbread, parquet, lake).await
+            let produced = run_source("github", &adapter, mixedbread, parquet, lake).await?;
+            gc_source("github", &adapter.source(), &produced, cli.gc, mixedbread, lake).await
         }
         .await;
         record("github", result, counts);
     }
 }
 
+/// Run every `--git-repo` source, accumulating into the shared counters.
+/// Split out of [`run_sources`] to keep each function focused.
+///
+/// Every repo shares the one `git` source tag, so the `--gc` pass must diff
+/// against the UNION of every repo's commits — a per-repo pass would treat
+/// the other repos' records as vanished — and only runs when every repo
+/// synced, or the union is partial and GC would delete the failed repo's
+/// records.
+async fn run_git_repos(
+    cli: &Cli,
+    mixedbread: Option<Mixedbread<'_>>,
+    parquet: Option<&ParquetReconciler>,
+    lake: Option<&IcebergReconciler>,
+    counts: &mut Counts,
+) {
+    let mut produced_union: HashSet<String> = HashSet::new();
+    let mut any_failed = false;
+    for repo in &cli.git_repos {
+        let label = format!("git:{}", repo.display());
+        let result = async {
+            let adapter = source_git::GitLog::open(repo)
+                .with_context(|| format!("reading git history at {}", repo.display()))?;
+            run_source("git", &adapter, mixedbread, parquet, lake).await
+        }
+        .await;
+        match result {
+            Ok(produced) => {
+                produced_union.extend(produced);
+                record(&label, Ok(()), counts);
+            }
+            Err(error) => {
+                any_failed = true;
+                record(&label, Err(error), counts);
+            }
+        }
+    }
+    if cli.gc && !cli.git_repos.is_empty() {
+        if any_failed {
+            eprintln!("[git] gc skipped: a repo failed, so the produced set is incomplete");
+        } else if let Err(error) = gc_source(
+            "git",
+            &Source::new(source_git::SOURCE_TAG),
+            &produced_union,
+            true,
+            mixedbread,
+            lake,
+        )
+        .await
+        {
+            // The syncs above already counted as indexed; the GC pass failing
+            // is its own failure so the unit's exit code surfaces it.
+            record("git:gc", Err(error), counts);
+        }
+    }
+}
+
+/// Garbage-collect one export-complete source after a fully successful sync,
+/// when `--gc` is set (a no-op otherwise): prune the Mixedbread view, and —
+/// when the lake sink is active — append the vanished set to the lake as
+/// explicit tombstone records, the lake's ONLY deletion path (its fold never
+/// infers deletion from absence; ENG-2696).
+///
+/// `produced` must be the COMPLETE external-id set the source emitted this
+/// run — an export directory (or the union of every `--git-repo` log) is
+/// complete by construction, which is why only those sources ever reach here.
+/// The append-only history sources must not: their incremental scans make
+/// absence meaningless, and GC against a partial set deletes records the
+/// input simply did not include.
+async fn gc_source(
+    label: &str,
+    source: &Source,
+    produced: &HashSet<String>,
+    gc: bool,
+    mixedbread: Option<Mixedbread<'_>>,
+    lake: Option<&IcebergReconciler>,
+) -> anyhow::Result<()> {
+    if !gc {
+        return Ok(());
+    }
+    // The durable log first, matching run_source's sink order.
+    if let Some(reconciler) = lake {
+        let report = reconciler
+            .gc(source, produced)
+            .await
+            .with_context(|| format!("[{label}] lake gc"))?;
+        if !report.skipped {
+            eprintln!(
+                "[{label}] lake gc: appended {} tombstone(s)",
+                report.deletes
+            );
+        }
+    }
+    // Startup validation guarantees the store whenever --gc is set; a missing
+    // one here is a wiring bug, surfaced rather than silently skipped.
+    let reconciler = mixedbread.context("--gc requires --mixedbread-store")?;
+    let report = reconciler
+        .gc(source, produced)
+        .await
+        .with_context(|| format!("[{label}] Mixedbread gc"))?;
+    eprintln!(
+        "[{label}] gc: deleted {} vanished record(s) and {} duplicate file object(s); kept {}",
+        report.deleted, report.deduped, report.kept
+    );
+    Ok(())
+}
+
 /// Run the `--user NAME:HOME` multi-user phase, accumulating into the shared
 /// counters. Split out of [`run_sources`] to keep each function focused.
 async fn run_users(
     cli: &Cli,
+    scan: Option<&ScanCursor>,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&ParquetReconciler>,
     lake: Option<&IcebergReconciler>,
@@ -731,7 +1096,7 @@ async fn run_users(
     };
     for spec in &cli.users {
         match parse_user(spec) {
-            Ok(user) => index_user(&user, &host, mixedbread, parquet, lake, counts).await,
+            Ok(user) => index_user(&user, &host, scan, mixedbread, parquet, lake, counts).await,
             Err(error) => {
                 eprintln!("[users] bad --user spec: {error:#}");
                 counts.failures += 1;
@@ -762,8 +1127,11 @@ async fn consume_parquet(config: &source_parquet::Config, mixedbread: Mixedbread
 ///
 /// Each slice reconciles scoped to its origin host and user, so a shared
 /// `external_id` on two hosts stays two rows instead of one host silently
-/// clobbering the other (issue #752). A slice failure is logged and tallied but
-/// never aborts the rest, matching [`run_source`].
+/// clobbering the other (issue #752). The fold is append/merge only: a
+/// document absent from a newer slice (pruned local transcripts, a reimaged
+/// host) stays live in the lake, deduped by `external_id` to its newest
+/// `content_hash` — absence never tombstones (ENG-2696). A slice failure is
+/// logged and tallied but never aborts the rest, matching [`run_source`].
 async fn fold_parquet_into_lake(
     config: &source_parquet::Config,
     catalog: std::sync::Arc<dyn lake_iceberg::Catalog>,
@@ -809,12 +1177,7 @@ async fn fold_parquet_into_lake(
                 counts.skipped += 1;
             }
             Ok(report) => {
-                eprintln!(
-                    "[fold:{}] appended {} upserts, {} tombstones",
-                    source.as_str(),
-                    report.upserts,
-                    report.deletes
-                );
+                eprintln!("[fold:{}] appended {} upserts", source.as_str(), report.upserts);
                 counts.indexed += 1;
             }
             Err(error) => {
@@ -914,6 +1277,7 @@ async fn run_consume(documents: Vec<Document>, mixedbread: Mixedbread<'_>) -> Co
 async fn index_user(
     user: &User,
     host: &str,
+    scan: Option<&ScanCursor>,
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&ParquetReconciler>,
     lake: Option<&IcebergReconciler>,
@@ -924,8 +1288,8 @@ async fn index_user(
     // User-scope the parquet log so several accounts on one host do not clobber
     // each other's `source=<source>/data.parquet` (the sink overwrites that file
     // in full per run, and every account produces the same `source=claude` etc.).
-    // The lake scopes the same way: its slice (and so its tombstones) must be
-    // per-account, or one user's reconcile would delete another's documents.
+    // The lake scopes the same way: its slice must be per-account so each
+    // user's observations (and version counters) stay distinct in the fold.
     // The Mixedbread sink needs no such scoping: its `external_id`s already carry
     // the per-message uuid, so records never collide across users there.
     let user_parquet =
@@ -935,34 +1299,37 @@ async fn index_user(
     let lake = user_lake.as_ref();
     if let Some(claude_dir) = safe_path_under(home, &[".claude", "projects"], true) {
         let label = format!("claude:{name}");
-        let result = async {
-            let adapter = source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name)
-                .with_context(|| {
-                    format!(
-                        "parsing Claude transcripts for {name} at {}",
-                        claude_dir.display()
-                    )
-                })?;
-            run_source(&label, &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record(&label, result, counts);
+        let spec = GatedSource { label: &label, user: Some(name), source: "claude", inputs: &[claude_dir.as_path()] };
+        let open = || {
+            source_claude::ClaudeHistoryExport::open_with(&claude_dir, host, name).with_context(
+                || format!("parsing Claude transcripts for {name} at {}", claude_dir.display()),
+            )
+        };
+        run_gated_source(spec, scan, open, mixedbread, parquet, lake, counts).await;
     }
 
-    if let Some(codex_file) = safe_path_under(home, &[".codex", "history.jsonl"], false) {
+    // Codex: the flat prompt log plus the full session rollouts, one adapter
+    // (and one parquet overwrite) for both, like the `--local` path.
+    let codex_file = safe_path_under(home, &[".codex", "history.jsonl"], false);
+    let codex_sessions = safe_path_under(home, &[".codex", "sessions"], true);
+    if codex_file.is_some() || codex_sessions.is_some() {
         let label = format!("codex:{name}");
-        let result = async {
-            let adapter = source_codex::CodexHistory::open_with(&codex_file, host, name)
-                .with_context(|| {
-                    format!(
-                        "parsing Codex history for {name} at {}",
-                        codex_file.display()
-                    )
-                })?;
-            run_source(&label, &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record(&label, result, counts);
+        let inputs: Vec<&Path> = codex_file
+            .iter()
+            .chain(codex_sessions.iter())
+            .map(PathBuf::as_path)
+            .collect();
+        let spec = GatedSource { label: &label, user: Some(name), source: "codex", inputs: &inputs };
+        let open = || {
+            source_codex::CodexHistory::open_with(
+                codex_file.as_deref(),
+                codex_sessions.as_deref(),
+                host,
+                name,
+            )
+            .with_context(|| format!("parsing Codex history for {name} under {}", home.display()))
+        };
+        run_gated_source(spec, scan, open, mixedbread, parquet, lake, counts).await;
     }
 
     // atuin records its own `host`/`user` in each row, so it self-tags per user
@@ -973,18 +1340,32 @@ async fn index_user(
         safe_path_under(home, &[".local", "share", "atuin", "history.db"], false)
     {
         let label = format!("shell:{name}");
-        match open_atuin(
+        if let Some(gate) = gate_source(
+            scan,
+            Some(name),
+            "shell",
+            &[atuin_db.as_path()],
             &label,
-            &atuin_db,
-            mixedbread.is_some() || parquet.is_some() || lake.is_some(),
             counts,
         ) {
-            Ok(Atuin::Ready(adapter)) => {
-                let result = run_source(&label, &adapter, mixedbread, parquet, lake).await;
-                record(&label, result, counts);
+            match open_atuin(
+                &label,
+                &atuin_db,
+                mixedbread.is_some() || parquet.is_some() || lake.is_some(),
+                counts,
+            ) {
+                Ok(Atuin::Ready(adapter)) => {
+                    let result = run_source(&label, &adapter, mixedbread, parquet, lake).await;
+                    if result.is_ok() {
+                        gate.commit(&label);
+                    }
+                    record(&label, result.map(|_| ()), counts);
+                }
+                // No cursor commit for the soft skip: only a fully ingested
+                // source buries its gate.
+                Ok(Atuin::Skipped) => {}
+                Err(error) => record(&label, Err(error), counts),
             }
-            Ok(Atuin::Skipped) => {}
-            Err(error) => record(&label, Err(error), counts),
         }
     }
 
@@ -993,18 +1374,13 @@ async fn index_user(
     // planted symlink in the debug dir is skipped rather than followed.
     if let Some(debug_dir) = safe_path_under(home, &[".claude", "debug"], true) {
         let label = format!("debug:{name}");
-        let result = async {
-            let adapter =
-                source_debug::DebugLogs::open_with(&debug_dir, host, name).with_context(|| {
-                    format!(
-                        "reading Claude debug logs for {name} at {}",
-                        debug_dir.display()
-                    )
-                })?;
-            run_source(&label, &adapter, mixedbread, parquet, lake).await
-        }
-        .await;
-        record(&label, result, counts);
+        let spec = GatedSource { label: &label, user: Some(name), source: "debug", inputs: &[debug_dir.as_path()] };
+        let open = || {
+            source_debug::DebugLogs::open_with(&debug_dir, host, name).with_context(
+                || format!("reading Claude debug logs for {name} at {}", debug_dir.display()),
+            )
+        };
+        run_gated_source(spec, scan, open, mixedbread, parquet, lake, counts).await;
     }
 }
 
@@ -1133,7 +1509,7 @@ async fn index_code(
     .await
     .with_context(|| format!("[{label}] code sync"))?;
     if report.uploaded > 0 {
-        search_core::wait_until_indexed(store, name, INDEX_TIMEOUT, |_| {})
+        search_core::wait_until_indexed(store, name, &report.uploaded_ids, INDEX_TIMEOUT, |_| {})
             .await
             .with_context(|| format!("[{label}] waiting for indexing"))?;
     }
@@ -1203,7 +1579,9 @@ fn open_atuin(
     }
 }
 
-/// Fan one source out to every enabled sink.
+/// Fan one source out to every enabled sink. Returns the `external_id`s the
+/// adapter produced, so an export-complete caller can feed them to the GC pass
+/// without re-reading the source.
 ///
 /// The durable logs run FIRST (parquet, then the Iceberg lake) and every sink
 /// is INDEPENDENT: a slow or failing Mixedbread upload must not gate or skip a
@@ -1218,7 +1596,7 @@ async fn run_source<A: SourceAdapter + Sync>(
     mixedbread: Option<Mixedbread<'_>>,
     parquet: Option<&ParquetReconciler>,
     lake: Option<&IcebergReconciler>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<HashSet<String>> {
     // A selected source with no sink is a misconfiguration, not a no-op: a missing
     // `--mixedbread-store`/`--bucket`/`--catalog-uri` would otherwise drop the
     // source silently while still counting as a success.
@@ -1252,10 +1630,7 @@ async fn run_source<A: SourceAdapter + Sync>(
     if let Some(reconciler) = lake {
         match reconciler.reconcile(&source, &documents).await {
             Ok(report) if report.skipped => eprintln!("[{label}] lake: skipped (unchanged)"),
-            Ok(report) => eprintln!(
-                "[{label}] lake: appended {} upserts, {} tombstones",
-                report.upserts, report.deletes
-            ),
+            Ok(report) => eprintln!("[{label}] lake: appended {} upserts", report.upserts),
             Err(error) => {
                 errors.push(anyhow::Error::new(error).context(format!("[{label}] lake sync")));
             }
@@ -1278,7 +1653,10 @@ async fn run_source<A: SourceAdapter + Sync>(
     // Surface every sink failure; a single combined error keeps the per-source
     // failure accounting in `record` intact while not hiding the second sink.
     match errors.len() {
-        0 => Ok(()),
+        0 => Ok(documents
+            .iter()
+            .map(|document| document.external_id.clone())
+            .collect()),
         1 => Err(errors.into_iter().next().expect("len checked")),
         _ => {
             let combined = errors
@@ -1300,7 +1678,7 @@ mod tests {
         reason = "tests assert observable filesystem outcomes"
     )]
 
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1598,9 +1976,10 @@ mod tests {
             .expect("cursor readable")
             .expect("cursor written");
 
-        // While no consumer watches, `a` is tombstoned — then the cursor
-        // expires (an unknown snapshot id is exactly what expiry surfaces as).
-        sink.reconcile(&source, &[lake_doc("b")])
+        // While no consumer watches, `a` is explicitly gc'd (absence alone
+        // never tombstones the lake, ENG-2696) — then the cursor expires (an
+        // unknown snapshot id is exactly what expiry surfaces as).
+        sink.gc(&source, &HashSet::from(["b".to_owned()]))
             .await
             .expect("tombstone a");
         write_cursor(&cursor, 0).expect("plant an expired cursor");
@@ -1616,10 +1995,14 @@ mod tests {
             .expect("cursor rewritten");
         assert_ne!(rebuilt, 0, "the rebuild must store the snapshot it read");
 
-        // Steady state after the rebuild: the next change arrives as a delta.
+        // Steady state after the rebuild: the next change — c appears, b is
+        // explicitly gc'd — arrives as a delta.
         sink.reconcile(&source, &[lake_doc("c")])
             .await
-            .expect("replace b with c");
+            .expect("add c");
+        sink.gc(&source, &HashSet::from(["c".to_owned()]))
+            .await
+            .expect("tombstone b");
         let counts = run_cursor_consume(catalog.as_ref(), &ident, &cursor, mixedbread).await;
         assert_eq!(counts.failures, 0);
         assert_eq!(

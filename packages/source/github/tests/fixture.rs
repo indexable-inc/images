@@ -50,11 +50,12 @@ fn doc_for(docs: &[Document], external_id: &str) -> Document {
         .unwrap_or_else(|| panic!("a document for {external_id}"))
 }
 
-/// The fixture has four items, so the adapter yields four documents.
+/// The fixture has four items and two CI runs, so the adapter yields six
+/// documents.
 #[test]
-fn yields_one_document_per_item() {
+fn yields_one_document_per_record() {
     let docs = collect_docs();
-    assert_eq!(docs.len(), 4, "one document per fixture item");
+    assert_eq!(docs.len(), 6, "one document per fixture item and CI run");
 }
 
 /// The adapter reports the GitHub source and the repos from `metadata.json`.
@@ -63,7 +64,7 @@ fn reports_source_and_repos() {
     let export = GithubExport::open(&fixture_dir()).expect("open fixture export");
     assert_eq!(export.source(), Source::new("github"));
     assert_eq!(export.repos(), ["acme/widgets", "acme/gadgets"]);
-    assert_eq!(export.len(), 4);
+    assert_eq!(export.len(), 6);
     assert!(!export.is_empty());
 }
 
@@ -83,9 +84,19 @@ fn documents_have_stable_identity_and_envelope() {
         assert_eq!(meta_str(&doc, "external_id"), doc.external_id);
         assert_eq!(meta_str(&doc, "content_hash"), doc.content_hash);
         assert!(doc.meta_json.get("repo").is_some(), "repo present");
-        assert!(doc.meta_json.get("number").is_some(), "number present");
-        assert!(doc.meta_json.get("state").is_some(), "state present");
         assert!(doc.meta_json.get("title").is_some());
+        if doc.external_id.starts_with("github:ci:") {
+            assert_eq!(meta_str(&doc, "kind"), "ci_run");
+            assert!(doc.meta_json.get("workflow").is_some(), "workflow present");
+            assert!(
+                doc.meta_json.get("conclusion").is_some(),
+                "conclusion present"
+            );
+        } else {
+            assert!(doc.meta_json.get("number").is_some(), "number present");
+            assert!(doc.meta_json.get("state").is_some(), "state present");
+            assert!(doc.meta_json.get("kind").is_none(), "items carry no kind");
+        }
 
         // content_hash is the hash of the exact embedded bytes.
         assert_eq!(doc.content_hash, hash_body(&doc.body));
@@ -202,6 +213,98 @@ fn author_and_assignees_metadata() {
     assert_eq!(assignees.first().and_then(Value::as_str), Some("alex"));
     let labels = meta(&issue, "labels").as_array().expect("labels array");
     assert_eq!(labels.first().and_then(Value::as_str), Some("bug"));
+}
+
+/// A failed CI run projects into a `kind=ci_run` document: namespaced id, the
+/// `<repo> CI failure: <workflow> #<run_number> (<branch>)` title, and metadata
+/// that lets a filter target workflow, branch, conclusion, or head SHA.
+#[test]
+fn ci_run_identity_and_metadata() {
+    let docs = collect_docs();
+    let run = doc_for(&docs, "github:ci:acme/widgets:91001");
+
+    assert_eq!(
+        meta_str(&run, "title"),
+        "acme/widgets CI failure: CI #412 (main)"
+    );
+    assert_eq!(meta_str(&run, "kind"), "ci_run");
+    assert_eq!(meta_str(&run, "repo"), "acme/widgets");
+    assert_eq!(meta_str(&run, "workflow"), "CI");
+    assert_eq!(meta(&run, "run_number"), &Value::from(412));
+    assert_eq!(meta_str(&run, "conclusion"), "failure");
+    assert_eq!(meta_str(&run, "branch"), "main");
+    assert_eq!(
+        meta_str(&run, "commit"),
+        "0123abcd0123abcd0123abcd0123abcd0123abcd"
+    );
+    assert_eq!(
+        meta_str(&run, "url"),
+        "https://github.com/acme/widgets/actions/runs/91001"
+    );
+    // timestamp is the run's completion time (updated_at), epoch seconds.
+    assert_eq!(meta(&run, "timestamp"), &Value::from(1_768_033_200_i64));
+}
+
+/// The CI-run body carries the run facts and each failed job's failed steps,
+/// with jobs sorted by name so the content hash is order-independent.
+#[test]
+fn ci_run_body_renders_failed_jobs_and_steps() {
+    let docs = collect_docs();
+    let run = doc_for(&docs, "github:ci:acme/widgets:91001");
+    let body = body_text(&run);
+
+    assert!(body.contains("acme/widgets CI failure: CI #412 (main)"));
+    assert!(body.contains("Conclusion: failure"));
+    assert!(body.contains("Branch: main"));
+    assert!(body.contains("Head SHA: 0123abcd0123abcd0123abcd0123abcd0123abcd"));
+    assert!(body.contains("Event: push"));
+    assert!(body.contains("URL: https://github.com/acme/widgets/actions/runs/91001"));
+
+    assert!(body.contains("Failed jobs (2):"));
+    assert!(body.contains("[test-linux] failure"));
+    assert!(body.contains("Failed steps: cargo test -p widgets; Upload junit"));
+    assert!(body.contains("[clippy] failure"));
+    assert!(body.contains("Failed steps: cargo clippy"));
+    // The export lists test-linux first; rendering sorts jobs by name.
+    let clippy = body.find("[clippy]").expect("clippy job");
+    let test_linux = body.find("[test-linux]").expect("test-linux job");
+    assert!(clippy < test_linux, "jobs render sorted by name");
+}
+
+/// A run with a null branch and no failed jobs (e.g. timed out before any job
+/// concluded) still projects, with the branch rendered as `unknown` and no
+/// `branch` metadata key.
+#[test]
+fn ci_run_without_branch_or_jobs() {
+    let docs = collect_docs();
+    let run = doc_for(&docs, "github:ci:acme/gadgets:91002");
+
+    assert_eq!(
+        meta_str(&run, "title"),
+        "acme/gadgets CI failure: nightly #77 (unknown)"
+    );
+    assert!(run.meta_json.get("branch").is_none(), "no branch key");
+    assert_eq!(meta_str(&run, "conclusion"), "timed_out");
+
+    let body = body_text(&run);
+    assert!(body.contains("Branch: unknown"));
+    assert!(body.contains("Failed jobs (0):"));
+    assert!(!body.contains("Event:"), "null event renders no event line");
+}
+
+/// An export written before the CI pass existed (no `ci_runs.json`) still
+/// opens and yields its item documents — old exports stay readable.
+#[test]
+fn export_without_ci_runs_file_still_opens() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture-pre-ci");
+    let export = GithubExport::open(&dir).expect("open pre-CI export");
+    assert_eq!(export.len(), 1);
+    let docs: Vec<Document> = export
+        .documents()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("project pre-CI items");
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].external_id, "github:acme/widgets:3");
 }
 
 /// Re-running the adapter over the same export yields identical content hashes.

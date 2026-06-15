@@ -2,12 +2,15 @@
 //!
 //! A GitHub export is a directory of JSON written by the bundled `export.sh`
 //! (which drives the `gh` CLI): `metadata.json` (export provenance and the set
-//! of repos covered) and `items.json` (a single combined array of issues and
-//! pull requests). Each array element is self-describing: it carries its own
-//! `repo` (`owner/name`) and a `kind` discriminator, so one export can span many
-//! repositories. The export script does the joins the GitHub API splits across
-//! endpoints, nesting each PR's reviews and inline review threads under the PR
-//! item, so this crate stays a pure reader with no join logic.
+//! of repos covered), `items.json` (a single combined array of issues and
+//! pull requests), and `ci_runs.json` (recent failed CI runs with their failed
+//! jobs and step names; optional, so exports written before the CI pass still
+//! open). Each array element is self-describing: it carries its own
+//! `repo` (`owner/name`) and (for items) a `kind` discriminator, so one export
+//! can span many repositories. The export script does the joins the GitHub API
+//! splits across endpoints, nesting each PR's reviews and inline review threads
+//! under the PR item and each CI run's failed jobs under the run, so this crate
+//! stays a pure reader with no join logic.
 //!
 //! This crate projects each item into one [`source_meta::Document`]: the
 //! embedded body is a human-readable rendering (title, status line, body, then
@@ -15,7 +18,10 @@
 //! is the common [`source_meta`] envelope merged with GitHub-specific filter
 //! keys (`repo`, `number`, `state`, `is_pr`, labels, ...).
 //!
-//! Grain is one document per issue and one per pull request. The `external_id`
+//! Grain is one document per issue, one per pull request, and one per failed
+//! CI run (`kind=ci_run` in the flat metadata, `external_id`
+//! `github:ci:<owner>/<repo>:<run_id>`), so agents can recall a known flaky
+//! test instead of re-diagnosing it. The item `external_id`
 //! is `github:<owner>/<repo>:<number>` (a `:` separator, not `#`: the sink's
 //! delete path puts the id in a URL path, where a `#` would be parsed as a
 //! fragment and silently truncate the id, like `git:<repo>:<sha>`), stable
@@ -26,8 +32,9 @@
 //! export, so a closed or removed item keeps its last-exported version
 //! searchable until a separate garbage-collection pass runs.
 //!
-//! The crate is pure: it reads two files in [`GithubExport::open`] and otherwise
-//! does no I/O. It depends only on [`source_meta`], serde, snafu, and chrono.
+//! The crate is pure: it reads three files in [`GithubExport::open`] and
+//! otherwise does no I/O. It depends only on [`source_meta`], serde, snafu, and
+//! chrono.
 
 #![forbid(unsafe_code)]
 
@@ -84,19 +91,23 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct GithubExport {
     repos: Vec<String>,
     items: Vec<Item>,
+    ci_runs: Vec<CiRun>,
 }
 
 impl GithubExport {
     /// Open an export directory: read `metadata.json` for provenance and eagerly
-    /// parse `items.json` into owned items.
+    /// parse `items.json` (and `ci_runs.json` when present) into owned records.
     ///
     /// A GitHub export is export-driven and repo-scale (low tens of thousands of
     /// items), so parsing eagerly keeps [`SourceAdapter::documents`] cheap and
     /// infallible to start iterating.
     ///
+    /// A missing `ci_runs.json` is an empty CI pass, not an error: exports
+    /// written before the CI pass existed stay readable.
+    ///
     /// # Errors
-    /// Returns [`Error::ReadFile`] if either file cannot be read and
-    /// [`Error::ParseJson`] if either does not match the expected JSON shape.
+    /// Returns [`Error::ReadFile`] if a file cannot be read and
+    /// [`Error::ParseJson`] if one does not match the expected JSON shape.
     pub fn open(dir: &Path) -> Result<Self> {
         let metadata_path = dir.join("metadata.json");
         let metadata_bytes = std::fs::read(&metadata_path).context(ReadFileSnafu {
@@ -114,9 +125,24 @@ impl GithubExport {
         let items: Vec<Item> =
             serde_json::from_slice(&items_bytes).context(ParseJsonSnafu { path: items_path })?;
 
+        let ci_runs_path = dir.join("ci_runs.json");
+        let ci_runs: Vec<CiRun> = match std::fs::read(&ci_runs_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context(ParseJsonSnafu {
+                path: ci_runs_path,
+            })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(source) => {
+                return Err(Error::ReadFile {
+                    path: ci_runs_path,
+                    source,
+                });
+            }
+        };
+
         Ok(Self {
             repos: metadata.repos,
             items,
+            ci_runs,
         })
     }
 
@@ -126,16 +152,17 @@ impl GithubExport {
         &self.repos
     }
 
-    /// Number of items (issues + pull requests) parsed from the export.
+    /// Number of records (issues + pull requests + CI runs) parsed from the
+    /// export, i.e. how many documents [`SourceAdapter::documents`] will yield.
     #[must_use]
     pub const fn len(&self) -> usize {
-        self.items.len()
+        self.items.len() + self.ci_runs.len()
     }
 
-    /// Whether the export contained no items.
+    /// Whether the export contained no records.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.items.is_empty() && self.ci_runs.is_empty()
     }
 }
 
@@ -147,9 +174,13 @@ impl SourceAdapter for GithubExport {
     }
 
     fn documents(&self) -> impl Iterator<Item = Result<Document, Error>> + Send {
-        // Clone the parsed items into an owned `Vec` so the returned iterator is
+        // Clone the parsed records into owned `Vec`s so the returned iterator is
         // `'static` and `Send`, independent of `&self`'s lifetime.
-        self.items.clone().into_iter().map(Item::into_document)
+        self.items
+            .clone()
+            .into_iter()
+            .map(Item::into_document)
+            .chain(self.ci_runs.clone().into_iter().map(CiRun::into_document))
     }
 }
 
@@ -255,6 +286,40 @@ struct ThreadComment {
     #[serde(default)]
     body: Option<String>,
     created_at: String,
+}
+
+/// One failed workflow run from `ci_runs.json`: the run header plus its failed
+/// jobs (the export script joins `actions/runs/<id>/jobs` in place).
+#[derive(Debug, Clone, Deserialize)]
+struct CiRun {
+    repo: String,
+    run_id: i64,
+    run_number: i64,
+    workflow: String,
+    /// `head_branch` is null for some triggers (e.g. a run on a bare SHA).
+    #[serde(default)]
+    branch: Option<String>,
+    head_sha: String,
+    conclusion: String,
+    #[serde(default)]
+    event: Option<String>,
+    created_at: String,
+    updated_at: String,
+    url: String,
+    #[serde(default)]
+    failed_jobs: Vec<CiJob>,
+}
+
+/// One failed (or timed-out/cancelled) job inside a failed workflow run.
+#[derive(Debug, Clone, Deserialize)]
+struct CiJob {
+    name: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    failed_steps: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +532,132 @@ impl Item {
                 }
                 let _ = writeln!(out, "---");
             }
+        }
+
+        out
+    }
+}
+
+impl CiRun {
+    /// Render this failed CI run into a [`Document`]: build the body, the flat
+    /// metadata, validate the metadata against the store limits, then assemble.
+    fn into_document(self) -> Result<Document> {
+        // `github:ci:` namespaces run ids away from issue/PR numbers, which
+        // share the `github:<repo>:` prefix. `:` not `#`, same as items.
+        let external_id = format!("github:ci:{}:{}", self.repo, self.run_id);
+        let body = self.render_body().into_bytes();
+        let content_hash = source_meta::hash_body(&body);
+        let branch = self.branch.as_deref().unwrap_or("unknown");
+        let title = format!(
+            "{} CI failure: {} #{} ({branch})",
+            self.repo, self.workflow, self.run_number,
+        );
+
+        // `updated_at` is when the run completed, the recency axis a "have we
+        // seen this flake lately" query wants.
+        let timestamp = parse_epoch_seconds(&self.updated_at);
+        let meta_json = self.build_meta(&external_id, &content_hash, &title, timestamp);
+
+        source_meta::check_metadata(&external_id, &meta_json).context(MetadataSnafu {
+            external_id: external_id.clone(),
+        })?;
+
+        Ok(Document {
+            external_id,
+            file_name: format!("{}-ci-{}.txt", self.repo.replace('/', "_"), self.run_id),
+            mime: "text/plain",
+            body,
+            meta_json,
+            content_hash,
+        })
+    }
+
+    /// Build the flat metadata object: common envelope + CI-run extras.
+    fn build_meta(
+        &self,
+        external_id: &str,
+        content_hash: &str,
+        title: &str,
+        timestamp: Option<i64>,
+    ) -> Value {
+        let mut meta = Map::new();
+
+        // Common envelope.
+        meta.insert(
+            keys::SOURCE.to_owned(),
+            json!(Source::new("github").as_str()),
+        );
+        meta.insert(keys::EXTERNAL_ID.to_owned(), json!(external_id));
+        meta.insert(keys::CONTENT_HASH.to_owned(), json!(content_hash));
+        meta.insert(keys::TITLE.to_owned(), json!(title));
+        meta.insert(keys::URL.to_owned(), json!(self.url));
+        if let Some(ts) = timestamp {
+            meta.insert(keys::TIMESTAMP.to_owned(), json!(ts));
+        }
+
+        // CI-run extras. `kind` separates this grain from issues/PRs within the
+        // shared `github` source.
+        meta.insert(keys::KIND.to_owned(), json!("ci_run"));
+        meta.insert(keys::REPO.to_owned(), json!(self.repo));
+        meta.insert(keys::WORKFLOW.to_owned(), json!(self.workflow));
+        meta.insert(keys::RUN_NUMBER.to_owned(), json!(self.run_number));
+        meta.insert(keys::CONCLUSION.to_owned(), json!(self.conclusion));
+        meta.insert(keys::COMMIT.to_owned(), json!(self.head_sha));
+        if let Some(branch) = self.branch.as_deref() {
+            meta.insert(keys::BRANCH.to_owned(), json!(branch));
+        }
+
+        Value::Object(meta)
+    }
+
+    /// Render the human-readable body that gets embedded: the run header, then
+    /// each failed job with its failed step names.
+    ///
+    /// Failed jobs are sorted by name before rendering so an unchanged run
+    /// produces identical bytes (a stable `content_hash`) regardless of export
+    /// order; each job's failed steps keep their execution order.
+    fn render_body(&self) -> String {
+        use std::fmt::Write as _;
+
+        let mut out = String::new();
+        let branch = self.branch.as_deref().unwrap_or("unknown");
+
+        // Header and run facts: enough for an agent to match a failure it is
+        // looking at (workflow, branch, sha) to a failure already diagnosed.
+        let _ = writeln!(
+            out,
+            "{} CI failure: {} #{} ({branch})",
+            self.repo, self.workflow, self.run_number,
+        );
+        let _ = writeln!(out, "Conclusion: {}", self.conclusion);
+        let _ = writeln!(out, "Workflow: {}", self.workflow);
+        let _ = writeln!(out, "Branch: {branch}");
+        let _ = writeln!(out, "Head SHA: {}", self.head_sha);
+        if let Some(event) = self.event.as_deref() {
+            let _ = writeln!(out, "Event: {event}");
+        }
+        let _ = writeln!(
+            out,
+            "Created {} | Completed {}",
+            self.created_at, self.updated_at,
+        );
+        let _ = writeln!(out, "URL: {}", self.url);
+
+        // Failed jobs block. A cancelled run can have no failed jobs at all.
+        let mut jobs: Vec<&CiJob> = self.failed_jobs.iter().collect();
+        jobs.sort_by_key(|job| &job.name);
+        out.push('\n');
+        let _ = writeln!(out, "Failed jobs ({}):", jobs.len());
+        for job in jobs {
+            let conclusion = job.conclusion.as_deref().unwrap_or("failure");
+            let _ = writeln!(out, "[{}] {conclusion}", job.name);
+            if !job.failed_steps.is_empty() {
+                let _ = writeln!(out, "  Failed steps: {}", job.failed_steps.join("; "));
+            }
+            if let Some(url) = job.url.as_deref() {
+                let _ = writeln!(out, "  {url}");
+            }
+            let _ = writeln!(out, "---");
         }
 
         out

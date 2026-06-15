@@ -7,12 +7,6 @@ use snafu::Snafu;
 #[snafu(visibility(pub(crate)))]
 #[non_exhaustive]
 pub enum Error {
-    /// A source adapter failed while producing documents.
-    #[snafu(display("source adapter failed: {message}"))]
-    Adapter {
-        /// The adapter's error, rendered.
-        message: String,
-    },
     /// A store operation (ensure, list, upload, delete, or index-wait) failed.
     #[snafu(display("store operation failed"))]
     Store {

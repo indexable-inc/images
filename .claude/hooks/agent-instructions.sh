@@ -59,6 +59,21 @@ if [ -n "$skills_store" ]; then
   chmod -R u+w "$dest"
 fi
 
+# Claude Code also discovers subagents from .claude/agents/*.md. Codex's
+# subagent model is config-driven (features.multi_agent_v2), not markdown
+# files, so materialize the rendered agents only for Claude. Same best-effort
+# guard and symlink-free copy as the skills block above.
+if [ "$package" != codex-md ]; then
+  agents_store=$(nix build --no-link --print-out-paths "$root#agents" 2>/dev/null || true)
+  if [ -n "$agents_store" ]; then
+    dest="$root/.claude/agents"
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    cp -R "$agents_store"/. "$dest"/
+    chmod -R u+w "$dest"
+  fi
+fi
+
 # Codex: emit the document as one value, no reloadSkills field its parser might
 # reject.
 if [ "$package" = codex-md ]; then

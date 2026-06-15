@@ -1,5 +1,0 @@
-id: no-fixup-phase-override
-valid:
-  - '{ preFixup = "patchShebangs ."; postFixup = "echo done"; }'
-invalid:
-  - '{ fixupPhase = "patchShebangs ."; }'

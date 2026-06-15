@@ -1,0 +1,18 @@
+[package]
+name = "flecs-query-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Pure-Rust parser for the Flecs Query Language: string expressions to a typed, world-independent AST"
+
+[lints]
+workspace = true
+
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true

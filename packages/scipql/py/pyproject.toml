@@ -1,0 +1,26 @@
+# No PEP 517 backend on purpose: the PyO3 cdylib is built by the shared
+# cargo-unit workspace graph and bundled into the ix-mcp interpreter by
+# packages/mcp/default.nix (the same shape as astlog / search-py / tui-py).
+# `pip install .` is not a supported path.
+
+[project]
+name = "ix-scipql"
+version = "0.1.0"
+description = "Soufflé datalog + find/replace over a SCIP semantic index. Imported as `scipql`."
+readme = "../README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "indexable" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Rust",
+  "Operating System :: POSIX",
+]
+
+[tool.pyright]
+include = ["python"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+useLibraryCodeForTypes = false
+reportMissingModuleSource = "none"

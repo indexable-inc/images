@@ -176,11 +176,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1781043330,
-        "narHash": "sha256-eApJsGv0lSn8OKqcBQJDFZI6Jg8coS7M8urNo3cVl9U=",
+        "lastModified": 1781189114,
+        "narHash": "sha256-5inaamLgUMWy+MOBE9ChF9QAF1o/74LFuHkI0W/9rqc=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "bd4277722d215970366a405d280301a796a364fc",
+        "rev": "486595d2cf49cfcd649b58a284fa11ac0e34da22",
         "type": "github"
       },
       "original": {
@@ -372,11 +372,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1781061510,
-        "narHash": "sha256-tVuGHgt/TsWu1rUAqEL+eWRIJJHtiPE2+yQ63b+/WTU=",
+        "lastModified": 1781147846,
+        "narHash": "sha256-hBdiQYd40xRtBWBiXHUxuQYWmJBiK19YO1FiYgrmEo0=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "d286e9691bb03045febbf8304a658eab1487d1b5",
+        "rev": "107c334f141854f563f8adf1db781dc453d92639",
         "type": "github"
       },
       "original": {
@@ -412,11 +412,11 @@
     "snix-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1781048291,
-        "narHash": "sha256-dHs7qAmPzo2oIaSZlppTozCF0WOfvdkW4jc+k+zTzTI=",
+        "lastModified": 1781214841,
+        "narHash": "sha256-NKP/1lgKRne7+nW8MaTQbPtfVPa4mqZuvIBcai4neDM=",
         "ref": "canon",
-        "rev": "146233821c1fb22da3e863223fcf67d91d056ab4",
-        "revCount": 22446,
+        "rev": "3251a55da2c9ebdf7392e281d959eb70ed5b6054",
+        "revCount": 22462,
         "type": "git",
         "url": "https://git.snix.dev/snix/snix"
       },
