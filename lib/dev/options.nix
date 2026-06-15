@@ -54,8 +54,35 @@ in
     };
 
     fleet = mkOption {
-      type = types.attrsOf types.anything;
-      default = { };
+      type = types.attrsOf (
+        types.submodule {
+          options = {
+            replicas = mkOption {
+              type = types.ints.positive;
+              default = 1;
+              description = "Number of interchangeable copies of this node.";
+            };
+            dependsOn = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+              description = "Node names that must be up before this node.";
+            };
+            groups = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+              description = "Extra private east-west groups this node joins.";
+            };
+            modules = mkOption {
+              type = types.listOf types.raw;
+              default = [ ];
+              description = "Extra NixOS modules applied to this node only.";
+            };
+          };
+        }
+      );
+      default = {
+        dev = { };
+      };
       example = literalExpression ''
         {
           agent.replicas = 3;
@@ -63,9 +90,8 @@ in
         }
       '';
       description = ''
-        Fleet topology: an attrset of node name to spec. Each spec accepts
-        `replicas`, `dependsOn`, `groups`, and `modules`, exactly as
-        `mkFleet` nodes do. Leave empty for a single VM named `dev`.
+        Fleet topology: node name to spec, mirroring `mkFleet` nodes. The
+        default is a single VM named `dev`; declaring nodes here replaces it.
       '';
     };
 

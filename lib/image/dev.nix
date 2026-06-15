@@ -36,7 +36,10 @@ let
   inherit (import ../dev/shared-mount.nix { inherit lib; }) serverModule clientModule;
   inherit (import ../dev/identity.nix { inherit lib; }) bindModule sourceNode sourceServerSeed;
 
-  # Plain option/agent modules (paths, resolved relative to this file).
+  # Plain option/agent modules (paths, resolved relative to this file). The
+  # probe needs only the `ix.dev` declarations (`optionsModule`); the agent
+  # layer is added to per-node `defaults`.
+  optionsModule = ../dev/options.nix;
   agentsModule = ../dev/agents.nix;
 
   # On-disk export path on the elected server, and the internal SMB share name.
@@ -51,14 +54,13 @@ let
     }:
     let
       # Read `ix.dev` without forcing the per-node environment. Reuses the real
-      # eval path (the agent layer pulls in the option declarations), so the
-      # topology is read the same way it will later be built. Forcing `ix.dev`
-      # is cheap: it does not evaluate `environment.systemPackages` or build the
-      # agent wrapper.
+      # eval path so the topology is read the same way it will later be built.
+      # Forcing `ix.dev` is cheap: it does not evaluate `environment.systemPackages`
+      # or build the agent wrapper.
       dev =
         (evalImageConfig {
           modules = [
-            agentsModule
+            optionsModule
             module
           ];
         }).ix.dev;
@@ -72,8 +74,6 @@ let
         guestOk
         ;
       serverNode = shared.server;
-
-      fleetNodes = if dev.fleet == { } then { dev = { }; } else dev.fleet;
 
       binds =
         (lib.optional shared.claude {
@@ -106,43 +106,42 @@ let
         module
       ];
 
-      nodeIncluded = name: !(builtins.elem name excludeNodes);
+      # A node "shares" when the volume is on and it is not opted out. Computed
+      # once per node and threaded into the modules, group, and dependsOn below.
+      shares = name: sharedEnable && !(builtins.elem name excludeNodes);
 
-      # Per-workload-node dev modules. Applied to the base node spec, so every
-      # replica inherits them.
-      workloadModules =
-        name:
-        lib.optionals (sharedEnable && nodeIncluded name) (
-          [
-            (clientModule {
-              inherit serverNode shareName mountPoint;
-              guest = guestOk;
-            })
-          ]
-          ++ lib.optional (binds != [ ]) (bindModule {
-            inherit mountPoint binds;
-          })
-        )
-        ++ lib.optional haveSource (sourceNode {
-          inherit src mountPoint;
-          onShare = onShare && nodeIncluded name;
-        });
-
-      asNodeSpec = value: if builtins.isAttrs value then value else { modules = [ value ]; };
-
-      augmentedNodes = lib.mapAttrs (
-        name: value:
+      # `dev.fleet` is a typed submodule (replicas/dependsOn/groups/modules),
+      # so each spec is normalized with defaults already — no re-shaping here,
+      # just append the dev-fleet additions and let `mkFleet` own the rest.
+      mkNode =
+        name: spec:
         let
-          nspec = asNodeSpec value;
+          sharing = shares name;
         in
-        nspec
-        // {
-          modules = (nspec.modules or [ ]) ++ workloadModules name;
-          groups = (nspec.groups or [ ]) ++ lib.optional (sharedEnable && nodeIncluded name) group;
-          # Only nodes that actually mount the share wait for the server.
-          dependsOn = (nspec.dependsOn or [ ]) ++ lib.optional (sharedEnable && nodeIncluded name) serverNode;
-        }
-      ) fleetNodes;
+        {
+          inherit (spec) replicas;
+          dependsOn = spec.dependsOn ++ lib.optional sharing serverNode;
+          groups = spec.groups ++ lib.optional sharing group;
+          modules =
+            spec.modules
+            ++ lib.optionals sharing (
+              [
+                (clientModule {
+                  inherit serverNode shareName mountPoint;
+                  guest = guestOk;
+                })
+              ]
+              ++ lib.optional (binds != [ ]) (bindModule {
+                inherit mountPoint binds;
+              })
+            )
+            ++ lib.optional haveSource (sourceNode {
+              inherit src mountPoint;
+              onShare = sharing && haveSource;
+            });
+        };
+
+      workloadNodes = lib.mapAttrs mkNode dev.fleet;
 
       serverSpec.${serverNode} = {
         groups = [ group ];
@@ -157,7 +156,7 @@ let
         });
       };
 
-      nodes = augmentedNodes // lib.optionalAttrs sharedEnable serverSpec;
+      nodes = workloadNodes // lib.optionalAttrs sharedEnable serverSpec;
     in
     (mkFleetFor hostSystem) { inherit defaults nodes; };
 in
