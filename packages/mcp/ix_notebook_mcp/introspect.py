@@ -155,8 +155,14 @@ _NS_KIND = {
 }
 
 
-def namespace_rows(ns: dict) -> list[dict]:
-    """Describe every value in ``ns`` as a namespace-view row.
+# Kinds with no meaningful in-memory footprint to a user: a module/function/class
+# is shared machinery, not data the session "holds". Reported as size 0 so they
+# sort below real data and show no size chip.
+_SIZELESS_KINDS = frozenset({"module", "function", "class"})
+
+
+def namespace_rows(ns: dict, *, max_names: int = _MAX_NAMES) -> list[dict]:
+    """Describe values in ``ns`` as namespace-view rows.
 
     ``ns`` is the already-filtered set of user names (the caller drops baseline
     helpers, dunders, and history machinery). Each row is
@@ -164,19 +170,24 @@ def namespace_rows(ns: dict) -> list[dict]:
     a one-line preview (empty for frames/arrays, which describe themselves by
     ``shape``), ``size`` the shallow byte size (``getsizeof``, O(1) per name), and
     ``shape`` the dims for arrays/frames. Sorted heaviest-first so the eye lands on
-    what holds the memory. Reuses :func:`describe`, so it is bounded and
-    side-effect-free; a value whose introspection raises is skipped, not fatal."""
+    what holds the memory. Capped at ``max_names`` (like :func:`cell_bindings`) so a
+    session with thousands of globals cannot stall the kernel's event loop on a
+    job finish. Reuses :func:`describe`, so it is bounded and side-effect-free; a
+    value whose introspection raises is skipped, not fatal."""
     rows: list[dict] = []
-    for name, value in ns.items():
+    for name, value in islice(ns.items(), max_names):
         try:
             described = describe(value)
         except Exception:
             continue
         kind = _NS_KIND.get(described["kind"], described["kind"])
-        try:
-            size = int(sys.getsizeof(value))
-        except Exception:
+        if kind in _SIZELESS_KINDS:
             size = 0
+        else:
+            try:
+                size = int(sys.getsizeof(value))
+            except Exception:
+                size = 0
         shape = _ns_shape(value, kind)
         rows.append(
             {

@@ -57,7 +57,8 @@ def _exec_title(source: str) -> str:
     """The card title for an execution: the first non-empty source line, trimmed
     and length-capped. Mirrors ``exec_title`` in pane.rs."""
     line = next((s for s in (ln.strip() for ln in source.splitlines()) if s), "python")
-    return f"{line[: _TITLE_MAX - 1]}…" if len(line) > _TITLE_MAX else line
+    # Match exec_title in pane.rs: first MAX chars, then an ellipsis.
+    return f"{line[:_TITLE_MAX]}…" if len(line) > _TITLE_MAX else line
 
 
 def exec_pane(
@@ -138,6 +139,10 @@ class PaneProducer:
         self._cond = asyncio.Condition()
         self._server: asyncio.AbstractServer | None = None
         self._path: Path | None = None
+        # Active per-connection writer tasks, so stop() can cancel the ones parked
+        # waiting for the next snapshot — since CPython 3.12 `wait_closed()` blocks
+        # on them, and they never wake on their own.
+        self._handlers: set[asyncio.Task] = set()
 
     def _encode(self, panes: list[dict]) -> bytes:
         snapshot = {"producer": self.producer_id, "panes": panes}
@@ -170,6 +175,9 @@ class PaneProducer:
     async def _handle(self, _reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Feed one reader: write the current snapshot, then each new one as it
         lands, until the reader hangs up."""
+        task = asyncio.current_task()
+        if task is not None:
+            self._handlers.add(task)
         last = None
         try:
             while True:
@@ -181,6 +189,8 @@ class PaneProducer:
         except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
             pass
         finally:
+            if task is not None:
+                self._handlers.discard(task)
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
@@ -189,6 +199,11 @@ class PaneProducer:
         """Stop accepting readers and unlink the socket. Idempotent."""
         if self._server is not None:
             self._server.close()
+            # Cancel the parked writer tasks first: `wait_closed()` waits for
+            # active handlers, and ours block on the snapshot Condition with no
+            # other wakeup, so without this it would hang forever.
+            for task in list(self._handlers):
+                task.cancel()
             with contextlib.suppress(Exception):
                 await self._server.wait_closed()
             self._server = None

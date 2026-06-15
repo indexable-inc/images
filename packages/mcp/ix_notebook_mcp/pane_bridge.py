@@ -85,6 +85,7 @@ async def run(store_path: str | Path, *, interval: float = _POLL_SECONDS) -> Non
         return
     conn = store.connect(store_path)
     last: str | None = None
+    logged_error = False
     try:
         while True:
             try:
@@ -94,9 +95,13 @@ async def run(store_path: str | Path, *, interval: float = _POLL_SECONDS) -> Non
                 if fingerprint != last:
                     await producer.publish(panes)
                     last = fingerprint
-            except Exception:
+            except Exception as error:
                 # A transient read error must not kill the bridge; try next tick.
-                pass
+                # Log the first one so a persistent failure (e.g. a schema
+                # mismatch) is diagnosable instead of a silently empty dashboard.
+                if not logged_error:
+                    print(f"[ix-mcp] dashboard pane bridge error: {error!r}", flush=True)
+                    logged_error = True
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
         pass
