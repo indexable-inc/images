@@ -1095,19 +1095,12 @@ let
     except fff.FffError as exc:
         assert "subdirectory" in str(exc), f"unhelpful home-dir error: {exc}"
 
-    # Every public arg is keyword-only and `path`/`mode` are required (no hidden
-    # default): a positional call, or a missing path/mode, is a TypeError, so each
-    # call states exactly what it searches, where, and how.
-    for bad in (
-        lambda: fff.grep("greetings", path=root, mode="plain"),  # positional query
-        lambda: fff.grep(query="greetings", mode="plain"),       # missing path
-        lambda: fff.grep(query="greetings", path=root),          # missing mode
-    ):
-        try:
-            bad()
-            raise AssertionError("expected a TypeError for an under-specified grep")
-        except TypeError:
-            pass
+    # Ergonomic by design: `query` is positional, `path` defaults to the cwd, and
+    # `mode` defaults to a fast literal search, so `grep("pattern")` just works
+    # (the shell-grep ergonomics added with mode="plain"). Mode beyond the default
+    # is still explicit -- there is no "smart" auto-detect (rejected below).
+    assert fff.grep("greetings", path=root).matches, "positional query + default mode should search"
+    assert fff.grep("greetings", path=root, mode="plain").matches, "explicit plain mode should search"
 
     # mode="regex" runs the query as a regex and mode="plain" as a fast literal,
     # so an alternation matches under regex but not under plain. There is no
@@ -1462,6 +1455,12 @@ let
         return_value={"BackendState": "Running", "Self": {"TailscaleIPs": ["fd7a::1"]}},
     ):
         assert cli._tailscale_ip() is None, "IPv6-only TailscaleIPs should yield None"
+
+    # _bindable: loopback is bindable; a reserved/unassigned address is not, so
+    # the CLI falls back to loopback instead of crashing the dashboard.
+    free = cli._free_port()
+    assert cli._bindable("127.0.0.1", free) is True, "loopback must be bindable"
+    assert cli._bindable("240.0.0.1", free) is False, "reserved address must be unbindable"
 
     print("bind-default-ok")
   '';
@@ -1968,7 +1967,7 @@ let
     set_config(cfg)
 
     async def main():
-        runner = await dashboard.start(cfg)
+        runner, _bound_host = await dashboard.start(cfg)
         base = f"http://127.0.0.1:{cfg.dashboard_port}"
         try:
             async with aiohttp.ClientSession() as session:
