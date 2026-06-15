@@ -81,8 +81,9 @@ MODULES: tuple[Module, ...] = (
         "search",
         "meaning-based recall across the fleet corpus (code + agent/shell history): "
         "`await search.semantic(q, since='7d', compact=True)` / `grep(pattern)` / "
-        "`recent(source=['shell'], since='6h')` newest-first; hits carry timestamp/"
-        "user/host/session_id provenance",
+        "`recent(source=['shell'], since='6h')` newest-first. Each is async and "
+        "returns a polars frame (one row per hit, compose `.filter`/`.group_by`/"
+        "`.head`) with timestamp/user/host/session_id provenance columns",
         # Mirrors the resolution order owned by packages/mixedbread/src/auth.rs
         # (env key, else the `mgrep login` token), which the bundled module
         # reaches through search-py.
