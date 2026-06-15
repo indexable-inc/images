@@ -1426,6 +1426,7 @@ let
     from ix_notebook_mcp import cli
 
     status = {
+        "BackendState": "Running",
         "Self": {
             "TailscaleIPs": ["100.64.0.7", "fd7a::1"],
             "DNSName": "node.tail-x.ts.net.",
@@ -1438,6 +1439,14 @@ let
         assert cli._tailscale_ip() == "100.64.0.7", f"got {cli._tailscale_ip()!r}"
         assert cli._tailscale_dns_name() == "node.tail-x.ts.net", f"got {cli._tailscale_dns_name()!r}"
 
+    # Tailscale installed but stopped (or needs login): it still reports its
+    # assigned IPs, but they are not bound to any interface, so the helper must
+    # treat them as unusable and fall back to loopback.
+    for state in ("Stopped", "NeedsLogin", "NoState"):
+        stopped = {**status, "BackendState": state}
+        with patch.object(cli, "_tailscale_status", return_value=stopped):
+            assert cli._tailscale_ip() is None, f"{state}: expected None, got {cli._tailscale_ip()!r}"
+
     # No tailscale: the helpers return None so the CLI falls back to loopback.
     # Stubbing the inner _tailscale_status is more robust than juggling PATH or
     # the absolute fallback paths the real helper probes (which exist on hydra
@@ -1447,7 +1456,11 @@ let
         assert cli._tailscale_dns_name() is None, "expected None when tailscale is unavailable"
 
     # IPv6-only or empty IP list: still None (the bind expects IPv4).
-    with patch.object(cli, "_tailscale_status", return_value={"Self": {"TailscaleIPs": ["fd7a::1"]}}):
+    with patch.object(
+        cli,
+        "_tailscale_status",
+        return_value={"BackendState": "Running", "Self": {"TailscaleIPs": ["fd7a::1"]}},
+    ):
         assert cli._tailscale_ip() is None, "IPv6-only TailscaleIPs should yield None"
 
     print("bind-default-ok")

@@ -19,6 +19,7 @@ import functools
 import hmac
 import html
 import os
+import sys
 from pathlib import Path
 
 from aiohttp import web
@@ -313,11 +314,33 @@ def build_app(config: Config, conn) -> web.Application:
     return app
 
 
-async def start(config: Config) -> web.AppRunner:
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+async def start(config: Config) -> tuple[web.AppRunner, str]:
+    """Bind the dashboard and return the runner plus the host it actually bound.
+
+    The read-only dashboard is a non-critical subsystem, so a failed bind must
+    never take down the kernel MCP. If the configured host is unbindable (e.g. a
+    Tailscale IP whose interface is down), fall back to loopback. The returned
+    host lets the caller correct the advertised URL.
+    """
     conn = store.connect(config.store_path)
     app = build_app(config, conn)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, config.host, config.dashboard_port)
-    await site.start()
-    return runner
+    host = config.host
+    try:
+        await web.TCPSite(runner, host, config.dashboard_port).start()
+    except OSError as exc:
+        if host in _LOOPBACK_HOSTS:
+            raise
+        print(
+            f"[ix-mcp] dashboard bind to {host}:{config.dashboard_port} failed "
+            f"({exc}); falling back to 127.0.0.1",
+            file=sys.stderr,
+            flush=True,
+        )
+        host = "127.0.0.1"
+        await web.TCPSite(runner, host, config.dashboard_port).start()
+    return runner, host

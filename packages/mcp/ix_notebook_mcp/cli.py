@@ -34,6 +34,7 @@ import subprocess
 import sys
 import time
 import webbrowser
+from dataclasses import replace
 from pathlib import Path
 
 from .config import Config, runtime_dir, set_config
@@ -171,6 +172,11 @@ def _tailscale_dns_name() -> str | None:
 def _tailscale_ip() -> str | None:
     status = _tailscale_status()
     if not status:
+        return None
+    # A stopped backend still reports its assigned IPs, but they are not bound to
+    # any interface, so binding the dashboard to one fails. Only treat the IP as
+    # usable when Tailscale is actually up.
+    if status.get("BackendState") != "Running":
         return None
     for ip in status.get("Self", {}).get("TailscaleIPs", []) or []:
         if isinstance(ip, str) and "." in ip and ":" not in ip:
@@ -413,7 +419,10 @@ async def _run(cfg: Config) -> None:
         restore_task = asyncio.ensure_future(_restore())
         await locked.wait()
 
-    runner = await dashboard.start(cfg)
+    runner, bound_host = await dashboard.start(cfg)
+    if bound_host != cfg.host:
+        cfg = replace(cfg, host=bound_host, advertised_host=_advertised_host(bound_host))
+        set_config(cfg)
     # Also publish every run/resource/namespace as Loro panes to the shared
     # dashboard hub (a separate `dashboard` process aggregates all producers).
     # Best-effort: if the producer socket cannot bind, this is silent and the
