@@ -235,15 +235,21 @@ def recent(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
 
 
 def latest_namespace(conn: sqlite3.Connection) -> list[dict]:
-    """The kernel's user globals as of the most recent finished run — the live
-    namespace the dashboard's namespace pane shows. Empty before any run finishes.
-    Reads the newest execution that recorded a namespace (a running job has not
-    written one yet), ordered by when it ended."""
+    """The kernel's user globals as of the most recently *finished* run — the live
+    namespace the dashboard's namespace pane shows.
+
+    Reads the newest execution with an ``ended_at`` (a running job has not written
+    its namespace yet, so it is excluded), regardless of whether that namespace is
+    empty. Reading the newest finished run rather than the newest *non-empty* one
+    is what keeps the pane honest: after a run clears the namespace (a reset, or
+    `del`-ing the last variable) the latest finished run records ``[]`` and the
+    pane drops, instead of pinning the last non-empty snapshot as stale data.
+    Empty before any run finishes."""
     conn.row_factory = sqlite3.Row
     row = conn.execute(
         "SELECT namespace FROM executions "
-        "WHERE namespace IS NOT NULL AND namespace != '[]' "
-        "ORDER BY COALESCE(ended_at, started_at) DESC LIMIT 1"
+        "WHERE ended_at IS NOT NULL "
+        "ORDER BY ended_at DESC LIMIT 1"
     ).fetchone()
     if row is None:
         return []
