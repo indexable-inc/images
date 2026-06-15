@@ -3,7 +3,8 @@
   // caret and expands its `children` inline, each child the same row one level
   // deeper. Leaves have no caret. Open state is local, so expanding one branch
   // never disturbs another.
-  import { chip, fmtSize, detail, type NsRow as Row } from '$lib/namespace';
+  import { fmtSize, detail, type NsRow as Row } from '$lib/namespace';
+  import KindIcon from './KindIcon.svelte';
   // Svelte 5 expresses recursion by importing the component itself rather than the
   // old <svelte:self>.
   import Self from './NsRow.svelte';
@@ -27,7 +28,7 @@
     aria-expanded={hasChildren ? open : undefined}
   >
     <span class="nsrow-caret" class:open class:hidden={!hasChildren}>›</span>
-    <span class="ns-chip" data-kind={row.kind}>{chip(row.kind)}</span>
+    <KindIcon kind={row.kind} />
     <span class="nsrow-name" title={row.type}>{row.name}</span>
     <span class="nsrow-detail" title={detail(row)}>{detail(row)}</span>
     <span class="nsrow-size">{fmtSize(row.size)}</span>
@@ -43,8 +44,8 @@
 <style>
   .nsrow-line {
     display: grid;
-    grid-template-columns: 14px 2.6em minmax(0, auto) minmax(0, 1fr) auto;
-    align-items: baseline;
+    grid-template-columns: 14px 16px minmax(0, auto) minmax(0, 1fr) auto;
+    align-items: center;
     column-gap: 10px;
     width: 100%;
     padding: 5px 12px;

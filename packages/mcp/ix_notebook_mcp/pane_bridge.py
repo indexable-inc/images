@@ -85,6 +85,11 @@ def _panes(conn) -> list[dict]:
         started = row.get("started_at")
         ended = row.get("ended_at")
         duration_ms = round((ended - started) * 1000) if ended and started else None
+        # The run's intent (its human title). The kernel defaults a nameless job's
+        # `name` to the run id, so treat name==id as "no intent" and pass None —
+        # exec_pane then titles the run by its first source line, never a bare id.
+        name = row.get("name")
+        intent = name if name and name != row["id"] else None
         panes.append(
             exec_pane(
                 row["id"],
@@ -95,7 +100,7 @@ def _panes(conn) -> list[dict]:
                 result=row.get("result") or "",
                 ok=_ok(status),
                 duration_ms=duration_ms,
-                title=row.get("name") or None,
+                title=intent,
             )
         )
         # Rich outputs (tables, plots, images) get their own html pane beside the
@@ -103,7 +108,7 @@ def _panes(conn) -> list[dict]:
         outputs = row.get("outputs") or []
         if any(_is_rich(out) for out in outputs) and (rendered := _render_outputs(outputs)):
             panes.append(
-                html_pane(f"{row['id']}/out", row.get("name") or "output", rendered, subtitle="output")
+                html_pane(f"{row['id']}/out", intent or "output", rendered, subtitle="output")
             )
     # The agent's curated presentation cells (the highlight reel the old UI's
     # cells pane showed), each rendered as an html pane in position order.

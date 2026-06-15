@@ -70,7 +70,7 @@ body {
    surface + the shared timeline at its foot). The workspace owns all scrolling
    and panning within its own box. */
 #app { height: 100%; display: flex; flex-direction: row; }
-.workspace { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.workspace { position: relative; flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 ::selection { background: var(--accent-soft); }
 
 /* ----- icon rail -------------------------------------------------------- */
@@ -258,24 +258,29 @@ body {
 .json-empty { color: var(--ink-faint); }
 .json-raw { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--ink); }
 
-/* ----- namespace chip --------------------------------------------------- */
-/* The lead chip on a namespace row, shared by NsRow (its own component) and the
-   body, so it lives here in global scope. A quiet outlined tag; the data-bearing
-   kinds (frame/array) and containers get a faint tint in their hue. */
-.ns-chip {
-  display: inline-block; min-width: 2.6em; box-sizing: border-box;
-  padding: 1px 5px; text-align: center;
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.02em;
-  color: var(--ink-faint); border: 1px solid var(--edge-strong); border-radius: 5px;
+/* ----- namespace kind icon ---------------------------------------------- */
+/* The lead glyph on a namespace row (KindIcon), an IDE-autocomplete-style icon
+   tinted by kind. Lives in global scope because KindIcon is its own component.
+   currentColor drives the SVG, so the data-kind rules below just set the hue. */
+.ns-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; color: var(--ink-dim);
 }
-.ns-chip[data-kind='frame'],
-.ns-chip[data-kind='array'] { color: var(--k-blue); border-color: color-mix(in srgb, var(--k-blue) 45%, transparent); }
-.ns-chip[data-kind='mapping'],
-.ns-chip[data-kind='sequence'] { color: var(--k-green); border-color: color-mix(in srgb, var(--k-green) 40%, transparent); }
-.ns-chip[data-kind='module'] { color: var(--k-pink); border-color: color-mix(in srgb, var(--k-pink) 38%, transparent); }
-.ns-chip[data-kind='function'],
-.ns-chip[data-kind='class'] { color: var(--k-amber); border-color: color-mix(in srgb, var(--k-amber) 40%, transparent); }
-.ns-chip[data-kind='scalar'] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.ns-icon svg { width: 16px; height: 16px; display: block; }
+.ns-icon[data-kind='frame'],
+.ns-icon[data-kind='array'] { color: var(--k-blue); }
+.ns-icon[data-kind='mapping'],
+.ns-icon[data-kind='sequence'] { color: var(--k-green); }
+.ns-icon[data-kind='object'] { color: var(--ink-dim); }
+.ns-icon[data-kind='module'] { color: var(--k-pink); }
+.ns-icon[data-kind='function'],
+.ns-icon[data-kind='class'] { color: var(--k-amber); }
+.ns-icon[data-kind='scalar'] { color: var(--accent); }
+.ns-icon[data-kind='text'] { color: var(--ink-dim); }
+
+/* The rich-output pane folded into a run's detail (no longer a duplicate feed
+   row), set apart from the text output above it. */
+.detail-out { margin-top: 10px; }
 
 /* ----- stage (board + focus overlay) ------------------------------------ */
 /* Holds the board and, when a pane is focused, the fullscreen view over it. The
@@ -375,26 +380,48 @@ body {
 .focus-pane .exec { max-height: none; }
 .focus-absent { color: var(--ink-faint); font-family: var(--mono); align-self: center; }
 
-/* ----- timeline bar ----------------------------------------------------- */
-/* The replay scrubber, shared by the board and the focus view. Fixed at the
-   foot of the window so it controls whichever surface is showing. */
-.timeline {
-  flex: none; z-index: 30;
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px clamp(12px, 2vw, 24px);
-  background: var(--bg); border-top: 1px solid var(--edge);
-  font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim);
+/* ----- timeline (auto-hiding overlay) ----------------------------------- */
+/* The replay scrubber floats over the foot of the workspace and stays hidden
+   until reached for, so an idle session (no recording — just 0:00 / 0:00) shows
+   no permanent bar. A thin hover strip along the bottom edge, hovering the pill,
+   or focusing a control reveals it. */
+.timeline-dock {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 30;
+  display: flex; justify-content: center; align-items: flex-end;
+  height: 26px; padding-bottom: 8px; pointer-events: none;
 }
+/* Invisible catch strip along the very bottom that triggers the reveal. */
+.timeline-dock::before {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 16px;
+  pointer-events: auto;
+}
+.timeline {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 8px;
+  width: max-content; max-width: min(880px, calc(100% - 24px));
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  border: 1px solid var(--edge); border-radius: 12px;
+  box-shadow: 0 8px 28px -10px rgba(0, 0, 0, 0.5);
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim);
+  opacity: 0; transform: translateY(14px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.timeline-dock:hover .timeline,
+.timeline:hover,
+.timeline:focus-within { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .timeline { transition: none; } }
 .tl-btn {
   font: inherit; color: var(--ink-dim);
-  background: var(--panel); border: 1px solid var(--edge);
+  background: var(--panel); border: 1px solid var(--edge); border-radius: 7px;
   padding: 3px 9px; cursor: pointer; min-width: 28px;
 }
 .tl-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--edge-strong); }
 .tl-btn:disabled { opacity: 0.4; cursor: default; }
 .tl-btn.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 .tl-btn.live.on { background: var(--live); border-color: var(--live); }
-.tl-range { flex: 1 1 auto; min-width: 80px; accent-color: var(--accent); cursor: pointer; }
+.tl-range { flex: 1 1 auto; min-width: 120px; accent-color: var(--accent); cursor: pointer; }
 .tl-time { font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 76px; text-align: center; }
 .tl-speed { display: flex; gap: 3px; }
 .tl-rec {
@@ -468,11 +495,14 @@ body {
   transition: background 0.12s ease;
 }
 .entry-row:hover { background: var(--panel); }
-/* The selected row: a quiet raised fill plus a thin accent edge — the one place
-   the accent appears in the list, so the current selection is unambiguous. */
+/* The selected row: a modern Raycast-style filled pill — a soft accent-tinted
+   fill across the whole rounded row, no left bar. The fill alone reads as
+   "selected" against the plain hover. */
 .entry.selected > .entry-row {
-  background: var(--elev);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+}
+.entry.selected > .entry-row:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
 }
 
 /* Only failure (red) and the transient running pulse (amber) get a filled dot;

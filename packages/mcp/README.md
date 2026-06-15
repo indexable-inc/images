@@ -49,7 +49,7 @@ client of that engine; the dashboard and the room feed are others.
 
 ## The main tool
 
-`python_exec(code, budget=15, name=None)` runs `code` on the shared kernel and
+`python_exec(code, budget=15, intent=None)` runs `code` on the shared kernel and
 waits up to `budget` seconds. If the code finishes in time you get its output and
 result. If it is still running, it keeps going in the background as an entry in
 the in-kernel `jobs` dict and the call returns a job handle.

@@ -103,11 +103,23 @@
     return (p.kind ?? 'data') === 'data' && p.renderer === 'namespace';
   }
 
+  // A run's rich output (a table/plot/image) is published as a separate
+  // `<id>/out` html pane beside its exec pane. It is an *attachment* to the run,
+  // not its own entry, so it must not appear as a duplicate feed row — it is folded
+  // into the run's detail panel instead (see `outPane` below).
+  function isOutputAttachment(key: string): boolean {
+    const sep = key.indexOf(SCOPE_SEP);
+    const id = sep === -1 ? key : key.slice(sep + 1);
+    return id.endsWith('/out');
+  }
+
   // Panes oldest-first, so the newest run lands at the bottom and the list reads
   // as a live log that grows downward. created_at is the stamp; ties break by key
-  // for stability. Namespace panes are excluded — they belong to the Namespace view.
+  // for stability. Namespace panes and per-run output attachments are excluded —
+  // the former has its own view, the latter folds into its run's detail.
   const items = $derived(
     Object.keys(store.panes)
+      .filter((key) => !isOutputAttachment(key))
       .map((key) => {
         const sep = key.indexOf(SCOPE_SEP);
         const scope = sep === -1 ? '' : key.slice(0, sep);
@@ -128,6 +140,14 @@
   // too, so mouse and keyboard agree.
   let selectedKey: string | null = $state(null);
   const selected = $derived(items.find((it) => it.key === selectedKey) ?? null);
+  // The selected run's rich-output attachment, if any: the `<key>/out` html pane
+  // published beside the exec (a table/plot/image). Rendered inside the detail so
+  // the run is one entry, not two.
+  const selectedOut = $derived.by<Pane | null>(() => {
+    if (!selected) return null;
+    const rec = store.panes[selected.key + '/out'];
+    return rec ? ({ ...rec, key: selected.key + '/out', scope: selected.pane.scope } as Pane) : null;
+  });
   $effect(() => {
     // Keep the selection valid as panes come and go; default to the newest row
     // (now the last, since the list grows downward) and scroll it into view.
@@ -248,6 +268,12 @@
               </div>
             {/if}
             <div class="entry-box cell cell-out"><ExecBody pane={p} chrome={false} expanded /></div>
+            {#if selectedOut}
+              {@const OutBody = rendererFor(selectedOut.kind, selectedOut.renderer)}
+              <div class="entry-box pane entry-body detail-out">
+                <div class="body html-body"><OutBody pane={selectedOut} /></div>
+              </div>
+            {/if}
             {#if hasSource}
               <button
                 class="entry-code-toggle"

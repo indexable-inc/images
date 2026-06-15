@@ -78,5 +78,10 @@
     {#if ui.focusKey}<FocusView />{/if}
   </div>
 
-  <Timeline />
+  <!-- The replay scrubber is hidden until you reach for it: a thin hover zone at
+       the foot reveals it as a floating overlay, so an idle session (no recording,
+       just 0:00 / 0:00) isn't paying for a permanent bar. -->
+  <div class="timeline-dock">
+    <Timeline />
+  </div>
 </div>

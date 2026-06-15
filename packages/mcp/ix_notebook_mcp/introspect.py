@@ -34,8 +34,16 @@ _MAX_NAMES = 64
 # container contributes at most ``_BREADTH`` real children plus a single elision
 # marker. Mirrors the spirit of ``_MAX_NAMES`` — a session with a million-entry
 # dict must not turn one job-finish into a million-row payload.
-_MAX_DEPTH = 2
+#
+# Depth is generous so genuinely nested data (config trees, parsed JSON) expands
+# all the way; what actually keeps the payload bounded is ``_MAX_TOTAL_CHILDREN``,
+# a single ceiling on the *total* child rows emitted across the whole tree in one
+# ``namespace_rows`` call. Without it, ``_BREADTH ** _MAX_DEPTH`` is astronomical;
+# with it, deep nesting is free until the global budget runs out (then deeper
+# branches simply stop expanding).
+_MAX_DEPTH = 6
 _BREADTH = 32
+_MAX_TOTAL_CHILDREN = 2000
 
 # Bounded repr for previews: never walk a giant container or stringify megabytes.
 _repr = reprlib.Repr()
@@ -200,9 +208,13 @@ def namespace_rows(
     kernel's event loop on a job finish. Reuses :func:`describe`, so it is bounded
     and side-effect-free; a value whose introspection raises is skipped, not
     fatal."""
+    # One shared budget for the whole call: a mutable [remaining] cell decremented
+    # as child rows are emitted, so the total tree (across every top-level name) is
+    # bounded regardless of how deep or wide any one branch goes.
+    budget = [_MAX_TOTAL_CHILDREN]
     rows: list[dict] = []
     for name, value in islice(ns.items(), max_names):
-        row = _row(name, value, depth=0, max_depth=max_depth, breadth=breadth)
+        row = _row(name, value, depth=0, max_depth=max_depth, breadth=breadth, budget=budget)
         if row is not None:
             rows.append(row)
     # Only the top level sorts heaviest-first; children keep natural (dict/list)
@@ -211,7 +223,7 @@ def namespace_rows(
     return rows
 
 
-def _row(name, value, *, depth: int, max_depth: int, breadth: int) -> dict | None:
+def _row(name, value, *, depth: int, max_depth: int, breadth: int, budget: list[int]) -> dict | None:
     """Build one namespace row for ``name``/``value``, the single construction
     path shared by the top level and the recursion.
 
@@ -244,10 +256,11 @@ def _row(name, value, *, depth: int, max_depth: int, breadth: int) -> dict | Non
         "size": size,
         "shape": _ns_shape(value, kind),
     }
-    # Descend only into expandable kinds, and only while we have depth budget left.
-    # Children live one level deeper, so stop once depth would reach max_depth.
-    if kind in _EXPANDABLE_KINDS and depth < max_depth:
-        children = _children(value, kind, depth=depth + 1, max_depth=max_depth, breadth=breadth)
+    # Descend only into expandable kinds, while we have depth budget left, and while
+    # the global row budget is not yet spent. Children live one level deeper, so
+    # stop once depth would reach max_depth.
+    if kind in _EXPANDABLE_KINDS and depth < max_depth and budget[0] > 0:
+        children = _children(value, kind, depth=depth + 1, max_depth=max_depth, breadth=breadth, budget=budget)
         if children:
             row["children"] = children
     return row
@@ -260,7 +273,7 @@ def _elision_row(extra: int) -> dict:
     return {"name": "…", "type": "", "kind": "object", "repr": f"+{extra} more", "size": 0, "shape": ""}
 
 
-def _children(value, kind: str, *, depth: int, max_depth: int, breadth: int) -> list[dict]:
+def _children(value, kind: str, *, depth: int, max_depth: int, breadth: int, budget: list[int]) -> list[dict]:
     """Rows for the entries of an expandable container, in natural order.
 
     Bounded to ``breadth`` real children plus at most one elision marker, and it
@@ -268,19 +281,19 @@ def _children(value, kind: str, *, depth: int, max_depth: int, breadth: int) -> 
     billion-entry dict costs the same as a small one). Decides what to expand from
     the live ``value``: a mapping yields ``key -> value`` rows, a sequence yields
     indexed (or, for sets, repr-named) element rows, and a plain object yields its
-    public instance attributes. Any failure degrades to no children, never a
-    raise."""
+    public instance attributes. ``budget`` is the shared global row ceiling. Any
+    failure degrades to no children, never a raise."""
     try:
         if isinstance(value, dict):
-            return _mapping_children(value, depth=depth, max_depth=max_depth, breadth=breadth)
+            return _mapping_children(value, depth=depth, max_depth=max_depth, breadth=breadth, budget=budget)
         if isinstance(value, (list, tuple)):
-            return _sequence_children(value, depth=depth, max_depth=max_depth, breadth=breadth, indexed=True)
+            return _sequence_children(value, depth=depth, max_depth=max_depth, breadth=breadth, budget=budget, indexed=True)
         if isinstance(value, (set, frozenset)):
             # Sets are unordered, so an index name would be meaningless; name each
             # child by its bounded element repr instead.
-            return _sequence_children(value, depth=depth, max_depth=max_depth, breadth=breadth, indexed=False)
+            return _sequence_children(value, depth=depth, max_depth=max_depth, breadth=breadth, budget=budget, indexed=False)
         if kind == "object":
-            return _object_children(value, depth=depth, max_depth=max_depth, breadth=breadth)
+            return _object_children(value, depth=depth, max_depth=max_depth, breadth=breadth, budget=budget)
     except Exception:
         # Introspecting the container itself misbehaved (a dict-like whose
         # iteration raises, a __len__ that lies): show it as a leaf, not a crash.
@@ -288,7 +301,7 @@ def _children(value, kind: str, *, depth: int, max_depth: int, breadth: int) -> 
     return []
 
 
-def _mapping_children(value, *, depth: int, max_depth: int, breadth: int) -> list[dict]:
+def _mapping_children(value, *, depth: int, max_depth: int, breadth: int, budget: list[int]) -> list[dict]:
     """``key -> value`` rows for a dict, keyed by a short rendering of the key.
 
     ``islice`` over ``value.items()`` so we touch at most ``breadth + 1`` pairs of
@@ -296,6 +309,8 @@ def _mapping_children(value, *, depth: int, max_depth: int, breadth: int) -> lis
     the elision marker."""
     rows: list[dict] = []
     for k, v in islice(value.items(), breadth + 1):
+        if budget[0] <= 0:
+            break
         if len(rows) == breadth:
             # We pulled one entry past the cap purely to detect overflow. Count
             # the remainder via len() (O(1)) rather than walking the rest.
@@ -308,17 +323,20 @@ def _mapping_children(value, *, depth: int, max_depth: int, breadth: int) -> lis
         # str keys read cleanest unquoted-but-short; other keys go through the
         # bounded repr so a giant key cannot blow up the child name.
         name = k if isinstance(k, str) and len(k) <= 60 else _repr.repr(k)
-        child = _row(name, v, depth=depth, max_depth=max_depth, breadth=breadth)
+        budget[0] -= 1
+        child = _row(name, v, depth=depth, max_depth=max_depth, breadth=breadth, budget=budget)
         if child is not None:
             rows.append(child)
     return rows
 
 
-def _sequence_children(value, *, depth: int, max_depth: int, breadth: int, indexed: bool) -> list[dict]:
+def _sequence_children(value, *, depth: int, max_depth: int, breadth: int, budget: list[int], indexed: bool) -> list[dict]:
     """Element rows for a list/tuple/set, ``indexed`` choosing ``"[i]"`` names
     (ordered sequences) versus the element repr (unordered sets)."""
     rows: list[dict] = []
     for i, v in enumerate(islice(value, breadth + 1)):
+        if budget[0] <= 0:
+            break
         if len(rows) == breadth:
             try:
                 extra = len(value) - breadth
@@ -327,13 +345,14 @@ def _sequence_children(value, *, depth: int, max_depth: int, breadth: int, index
             rows.append(_elision_row(max(extra, 1)))
             break
         name = f"[{i}]" if indexed else _repr.repr(v)
-        child = _row(name, v, depth=depth, max_depth=max_depth, breadth=breadth)
+        budget[0] -= 1
+        child = _row(name, v, depth=depth, max_depth=max_depth, breadth=breadth, budget=budget)
         if child is not None:
             rows.append(child)
     return rows
 
 
-def _object_children(value, *, depth: int, max_depth: int, breadth: int) -> list[dict]:
+def _object_children(value, *, depth: int, max_depth: int, breadth: int, budget: list[int]) -> list[dict]:
     """Rows for a plain object's public instance attributes.
 
     Conservative on purpose: only the instance ``__dict__`` (via ``vars``), never
@@ -346,13 +365,15 @@ def _object_children(value, *, depth: int, max_depth: int, breadth: int) -> list
     except TypeError:
         # No instance __dict__ (slots-only, or a C type): nothing browsable.
         return []
-    rows: list[dict] = []
-    for attr in islice(members, breadth + 1):
+    # Collect the *eligible* attributes (public, str-named, data not behavior)
+    # first, then bound — so dunders and methods never consume a breadth slot nor
+    # inflate the `+N more` count. Unlike a dict/list (which can be enormous, so we
+    # cap iteration at breadth+1), an instance __dict__ is modest, so scanning it in
+    # full to filter correctly is cheap.
+    eligible: list[tuple[str, object]] = []
+    for attr in members:
         if not isinstance(attr, str) or attr.startswith("__"):
             continue
-        if len(rows) == breadth:
-            rows.append(_elision_row(max(len(members) - breadth, 1)))
-            break
         try:
             member = members[attr]
         except Exception:
@@ -363,9 +384,18 @@ def _object_children(value, *, depth: int, max_depth: int, breadth: int) -> list
             member, (types.FunctionType, types.MethodType, types.BuiltinFunctionType, type)
         ):
             continue
-        child = _row(attr, member, depth=depth, max_depth=max_depth, breadth=breadth)
+        eligible.append((attr, member))
+    rows: list[dict] = []
+    for attr, member in eligible[:breadth]:
+        if budget[0] <= 0:
+            break
+        budget[0] -= 1
+        child = _row(attr, member, depth=depth, max_depth=max_depth, breadth=breadth, budget=budget)
         if child is not None:
             rows.append(child)
+    extra = len(eligible) - breadth
+    if extra > 0:
+        rows.append(_elision_row(extra))
     return rows
 
 

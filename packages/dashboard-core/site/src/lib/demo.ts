@@ -45,6 +45,19 @@ export function seedDemo(): void {
       duration_ms: 38,
       created_at: now - 9000,
     },
+    // A run's rich output (a table/plot/image) arrives as a `<id>/out` html pane
+    // beside its exec. The feed folds it into the run's detail rather than showing
+    // it as a duplicate row.
+    [`demo${SEP}json/out`]: {
+      kind: 'html',
+      title: 'checking dashboard status',
+      subtitle: 'output',
+      body:
+        '<table style="border-collapse:collapse;font:12px ui-monospace,monospace">' +
+        '<tr><th style="text-align:left;padding:3px 12px 3px 0">service</th><th style="text-align:left;padding:3px 0">ok</th></tr>' +
+        '<tr><td style="padding:3px 12px 3px 0">dashboard</td><td style="padding:3px 0;color:#52c98e">true</td></tr></table>',
+      created_at: now - 9000,
+    },
     // An error: prints before failing, traceback below the trace; red LED.
     [`demo${SEP}boom`]: {
       kind: 'exec',

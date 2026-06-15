@@ -15,24 +15,6 @@ export interface NsRow {
   children?: NsRow[];
 }
 
-// A short chip per kind so the lead column stays narrow and scannable.
-const CHIP: Record<string, string> = {
-  module: 'mod',
-  class: 'cls',
-  function: 'fn',
-  scalar: 'num',
-  text: 'str',
-  sequence: 'seq',
-  mapping: 'map',
-  array: 'arr',
-  frame: 'df',
-  object: 'obj',
-};
-
-export function chip(kind: string): string {
-  return CHIP[kind] ?? kind.slice(0, 3);
-}
-
 // Human byte size; empty for the sizeless (modules, functions report 0).
 export function fmtSize(n: number): string {
   if (!n) return '';

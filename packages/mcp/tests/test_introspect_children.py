@@ -157,6 +157,37 @@ def test_object_without_vars_has_no_children() -> None:
     assert "children" not in row
 
 
+def test_object_dunder_attrs_do_not_consume_breadth_or_hide_public_attrs() -> None:
+    # Regression: dunder instance attrs sitting in __dict__ must be filtered
+    # *before* the breadth window is applied. A naive islice(__dict__, breadth+1)
+    # lets dunders eat slots, silently dropping real public attrs (and skipping the
+    # elision marker), and inflates the `+N more` count with the hidden members.
+    class _C:
+        pass
+
+    obj = _C()
+    # Two leading dunder instance attrs, then four public ones (insertion order is
+    # preserved, so the dunders fall inside a naive window).
+    obj.__dict__["__hidden1"] = 1
+    obj.__dict__["__hidden2"] = 2
+    obj.a = 10
+    obj.b = 20
+    obj.c = 30
+    obj.d = 40
+
+    row = _only_row(obj, breadth=2)
+    children = row["children"]
+    # Exactly breadth real public attrs survive, then one elision marker — the
+    # dunders neither appear nor consume a slot.
+    assert [c["name"] for c in children[:2]] == ["a", "b"]
+    marker = children[-1]
+    assert marker["name"] == "…"
+    # The count reflects only the unrendered *eligible* attrs (c, d) — not the
+    # hidden dunders.
+    assert marker["repr"] == "+2 more"
+    assert len(children) == 3
+
+
 # --------------------------------------------------------------------------- #
 # leaf kinds: never carry children
 # --------------------------------------------------------------------------- #
@@ -208,3 +239,39 @@ def test_value_whose_describe_raises_degrades_to_no_row() -> None:
     names = {row["name"] for row in rows}
     assert "ok" in names
     assert "bad" not in names
+
+
+# --------------------------------------------------------------------------- #
+# deep nesting + the global row budget
+# --------------------------------------------------------------------------- #
+
+
+def _count_rows(rows: list[dict]) -> int:
+    """Total rows in a tree, including elision markers."""
+    return sum(1 + _count_rows(r.get("children") or []) for r in rows)
+
+
+def test_deep_nesting_expands_past_the_old_depth_two_limit() -> None:
+    # {"a": {"b": {"c": {"d": 1}}}} with the default depth: 'c' lives at depth 3
+    # and still expands to 'd' at depth 4 — impossible under the old _MAX_DEPTH=2.
+    row = _only_row({"a": {"b": {"c": {"d": 1}}}})
+    cur = row
+    for key in ("a", "b", "c"):
+        cur = {child["name"]: child for child in cur["children"]}[key]
+    assert "children" in cur
+    assert cur["children"][0]["name"] == "d"
+
+
+def test_global_budget_bounds_total_rows() -> None:
+    # A structure that, unbounded, is exponential (40-wide x 6 deep ≈ 4e9 nodes).
+    # The shared budget must cap the total emitted rows regardless of depth/breadth,
+    # proving the tree can never become a runaway payload.
+    nested: object = 1
+    for _ in range(6):
+        nested = {f"k{i}": nested for i in range(40)}
+    rows = introspect.namespace_rows({"v": nested})
+    total = _count_rows(rows)
+    # Real children are capped at _MAX_TOTAL_CHILDREN; elision markers (one per
+    # over-breadth container) add at most as many again. Far below the exponential
+    # blowup the budget prevents.
+    assert total <= 2 * introspect._MAX_TOTAL_CHILDREN + 100
