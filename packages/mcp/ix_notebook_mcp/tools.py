@@ -219,7 +219,7 @@ Content = list[outputs.Content]
 async def python_exec(
     code: Annotated[str, Field(description="Python source to run on the shared kernel")],
     budget: Annotated[float, Field(description="Seconds to wait before backgrounding the run (server-side cap: 120s; larger values are clamped and a notice is appended to the reply)")] = 15.0,
-    name: Annotated[str | None, Field(description="Optional label for the job in the dashboard")] = None,
+    intent: Annotated[str | None, Field(description="A short plain-language description of what this run does, e.g. 'count rows per host' or 'fetch and parse the open PR list'. Shown as the run's title in the dashboard feed so a human watching can follow your work; without it the feed falls back to the first line of code. Strongly recommended on every call — keep it under ~8 words.")] = None,
     ctx: Context | None = None,
 ) -> Content:
     _open_dashboard_once()
@@ -229,8 +229,10 @@ async def python_exec(
     # below so the caller knows to poll the job rather than silently lose the wait.
     cap = config().max_budget
     effective_budget = min(budget, cap)
+    # `intent` is the run's human label (the dashboard feed's title); it flows to
+    # the kernel as the job name and lands in the store's `name` column.
     cell_outputs, summary = await current_kernel().python_exec(
-        code, effective_budget, name, session=_session_id(ctx)
+        code, effective_budget, intent, session=_session_id(ctx)
     )
     rendered = outputs.to_mcp(cell_outputs)
     if summary is None:

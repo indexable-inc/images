@@ -88,9 +88,24 @@
     showCode[key] = !showCode[key];
   }
 
+  // The short run id from a pane key (`scope<0x1f>id`): the trailing id, shown as
+  // quiet meta so a human can still correlate a row to a `jobs['<id>']` without it
+  // being the headline (the title/intent is).
+  function shortId(key: string): string {
+    const sep = key.indexOf(SCOPE_SEP);
+    const id = sep === -1 ? key : key.slice(sep + 1);
+    return id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;
+  }
+
+  // A namespace pane (the kernel's live globals) is not a run — it has its own
+  // rail view, so it must never appear interleaved in the chronological feed.
+  function isNamespace(p: Pane): boolean {
+    return (p.kind ?? 'data') === 'data' && p.renderer === 'namespace';
+  }
+
   // Panes oldest-first, so the newest run lands at the bottom and the list reads
   // as a live log that grows downward. created_at is the stamp; ties break by key
-  // for stability.
+  // for stability. Namespace panes are excluded — they belong to the Namespace view.
   const items = $derived(
     Object.keys(store.panes)
       .map((key) => {
@@ -98,11 +113,15 @@
         const scope = sep === -1 ? '' : key.slice(0, sep);
         return { key, pane: { ...store.panes[key], key, scope } as Pane };
       })
+      .filter((it) => !isNamespace(it.pane))
       .sort(
         (a, b) =>
           (a.pane.created_at ?? 0) - (b.pane.created_at ?? 0) || (a.key < b.key ? -1 : 1),
       ),
   );
+
+  // How many runs are currently executing, for the header's active badge.
+  const activeCount = $derived(items.filter((it) => ledRun(it.pane)).length);
 
   // Vim navigation: `j`/`k` move the selection down/up; the detail panel follows.
   // `o` (or Enter) toggles the source inside the detail. Selection follows clicks
@@ -157,7 +176,13 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="feed feed-split">
+<div class="feedview">
+  <header class="view-head">
+    <h1 class="view-title">Jobs</h1>
+    {#if items.length}<span class="view-meta">{items.length} {items.length === 1 ? 'run' : 'runs'}</span>{/if}
+    {#if activeCount}<span class="view-active"><i></i>{activeCount} active</span>{/if}
+  </header>
+  <div class="feed feed-split">
   {#if items.length === 0}
     <div class="feed-empty">{store.live ? 'no panes yet' : 'connecting…'}</div>
   {:else}
@@ -171,7 +196,10 @@
         <li class="entry" class:err={isErr} class:selected={selectedKey === it.key} data-key={it.key}>
           <button class="entry-row" onclick={() => (selectedKey = it.key)} title={`${tag(p)}${p.subtitle ? ' · ' + p.subtitle : ''}`}>
             <span class="entry-dot" class:live={ledLive(p)} class:run={running} class:err={isErr}></span>
-            <span class="entry-title" title={p.title}>{p.title || '(pane)'}</span>
+            <span class="entry-main">
+              <span class="entry-title" title={p.title}>{p.title || '(pane)'}</span>
+              <span class="entry-sub">{shortId(it.key)}<span class="entry-sub-tag"> · {tag(p)}</span></span>
+            </span>
             {#if running}
               <span class="entry-now">running</span>
             {:else if p.duration_ms != null}
@@ -252,4 +280,5 @@
       {/if}
     </div>
   {/if}
+  </div>
 </div>

@@ -1,25 +1,35 @@
 :root {
   color-scheme: light dark;
 
-  /* Each token carries both schemes via light-dark(): the light value is taken
-     from the user's ghostty ~/.config/nix/ghostty/themes/custom-light, the dark
-     value from custom-dark. Each card is a ghostty surface (--panel) on a
-     slightly darker board. */
-  --bg: light-dark(#ececec, #151515);
-  --panel: light-dark(#f9f9f9, #1e1e1e);
-  --edge: light-dark(#dcdcdc, #2a2a2a);
-  --edge-strong: light-dark(#c4c4c4, #3a3a3a);
-  --ink: light-dark(#2a2c33, #d4d4d4);
-  --ink-dim: light-dark(#6a6c72, #808080);
-  --ink-faint: light-dark(#8f9096, #585b70);
-  --live: light-dark(#42933e, #a6e3a1);
-  --dead: light-dark(#db3f39, #f38ba8);
-  --accent: light-dark(#325eee, #89b4fa);
-  --cursor: light-dark(#bbbbbb, #f5e0dc);
-  --sel: light-dark(#e9e9e9, #313244);
+  /* The "Obsidian" palette: dark is near-black, flat, with one periwinkle accent;
+     light is a calm near-monochrome paper. Each token carries both schemes via
+     light-dark(). Surfaces step bg -> panel -> elev (board, card, raised); the
+     only saturated colors are the accent and the status/kind hues below. */
+  --bg:          light-dark(#f4f4f5, #08080a);
+  --panel:       light-dark(#fbfbfc, #0d0d10);
+  --elev:        light-dark(#ffffff, #141417);
+  --edge:        light-dark(#e6e6e9, #18181b);
+  --edge-strong: light-dark(#d3d3d8, #242429);
+  --ink:         light-dark(#1b1c21, #ececef);
+  --ink-dim:     light-dark(#5c5e66, #82828c);
+  --ink-faint:   light-dark(#9a9ba2, #4a4a53);
+  --live:        light-dark(#3f9a52, #52c98e);
+  --dead:        light-dark(#cf4b46, #e0635b);
+  --accent:      light-dark(#5358e0, #a8b0ff);
+  /* A faint accent wash for selected fills and text selection. */
+  --accent-soft: light-dark(rgba(83, 88, 224, 0.10), rgba(168, 176, 255, 0.13));
+  --cursor:      light-dark(#9a9ba2, #a8b0ff);
+  --sel:         light-dark(#ededf0, #18181c);
   /* Faint dot grid on the board, so panning a mostly-empty canvas still reads
      as motion. */
-  --grid-dot: light-dark(#d7d7d7, #262626);
+  --grid-dot:    light-dark(#e2e2e5, #19191c);
+
+  /* Kind/status hues for namespace badges and chips — used sparingly, tinted. */
+  --k-green: light-dark(#3f9a52, #52c98e);
+  --k-amber: light-dark(#b4801f, #d6a44a);
+  --k-red:   light-dark(#cf4b46, #e0635b);
+  --k-blue:  light-dark(#3a6fd0, #7fb4ff);
+  --k-pink:  light-dark(#b85a9c, #e08fc7);
 
   --ui: ui-sans-serif, system-ui, -apple-system, 'SF Pro Text', Segoe UI, sans-serif;
   --mono: 'Berkeley Mono', ui-monospace, 'SF Mono', SFMono-Regular, 'JetBrains Mono', Menlo, Consolas, monospace;
@@ -30,10 +40,12 @@
 @supports not (color: light-dark(#000, #fff)) {
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #151515; --panel: #1e1e1e; --edge: #2a2a2a; --edge-strong: #3a3a3a;
-      --ink: #d4d4d4; --ink-dim: #808080; --ink-faint: #585b70;
-      --live: #a6e3a1; --dead: #f38ba8; --accent: #89b4fa; --cursor: #f5e0dc;
-      --sel: #313244; --grid-dot: #262626;
+      --bg: #08080a; --panel: #0d0d10; --elev: #141417; --edge: #18181b; --edge-strong: #242429;
+      --ink: #ececef; --ink-dim: #82828c; --ink-faint: #4a4a53;
+      --live: #52c98e; --dead: #e0635b; --accent: #a8b0ff;
+      --accent-soft: rgba(168, 176, 255, 0.13); --cursor: #a8b0ff;
+      --sel: #18181c; --grid-dot: #19191c;
+      --k-green: #52c98e; --k-amber: #d6a44a; --k-red: #e0635b; --k-blue: #7fb4ff; --k-pink: #e08fc7;
     }
   }
 }
@@ -54,41 +66,59 @@ body {
      board can use wheel events for panning. */
   overscroll-behavior: none;
 }
-/* Column layout so the header and the board never overlap: the board takes the
-   remaining height and owns all panning within its own box. */
-#app { height: 100%; display: flex; flex-direction: column; }
-::selection { background: var(--sel); }
+/* The shell is a row: a fixed icon rail, then the workspace column (active
+   surface + the shared timeline at its foot). The workspace owns all scrolling
+   and panning within its own box. */
+#app { height: 100%; display: flex; flex-direction: row; }
+.workspace { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+::selection { background: var(--accent-soft); }
 
-/* ----- header ----------------------------------------------------------- */
-.topbar {
-  flex: none;
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px clamp(16px, 3vw, 32px);
-  background: var(--bg);
-  border-bottom: 1px solid var(--edge);
+/* ----- icon rail -------------------------------------------------------- */
+/* The one piece of persistent chrome: a thin column that drives the top-level
+   view. A logo, the view tabs (each a quiet glyph that lights up when active),
+   then a pulsing health dot pinned to the foot. */
+.rail {
+  flex: none; width: 56px;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px; padding: 14px 0;
+  background: var(--bg); border-right: 1px solid var(--edge);
 }
-.topbar .mark {
-  font-family: var(--mono); font-weight: 600; font-size: 13.5px;
-  letter-spacing: 0.3px; color: var(--ink);
+.rail-logo {
+  width: 28px; height: 28px; margin-bottom: 10px;
+  display: grid; place-items: center;
+  background: var(--ink); color: var(--bg);
+  font-family: var(--mono); font-weight: 700; font-size: 12px; letter-spacing: 0.2px;
+  border-radius: 8px;
 }
-.topbar .mark .accent { color: var(--ink-faint); font-weight: 500; }
-.topbar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); }
-.topbar .dot.live { background: var(--live); }
-.topbar .spacer { flex: 1; }
-.topbar .stat {
-  color: var(--ink-dim); font-variant-numeric: tabular-nums;
-  font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.2px;
+.rail-btn {
+  position: relative; width: 36px; height: 36px;
+  display: grid; place-items: center;
+  background: none; border: 0; border-radius: 9px;
+  color: var(--ink-faint); cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
 }
-/* Flat, square segmented toggle between the stream and board views. */
-.viewseg { display: flex; margin-left: 4px; }
-.viewseg button {
-  font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
-  background: var(--bg); border: 1px solid var(--edge); border-right-width: 0;
-  padding: 3px 10px; cursor: pointer;
+.rail-btn svg { width: 18px; height: 18px; }
+.rail-btn:hover { color: var(--ink-dim); background: var(--panel); }
+.rail-btn.on { color: var(--ink); }
+/* The active tab is marked by a short accent bar on the rail's edge, the one
+   place the accent appears in the chrome. */
+.rail-btn.on::before {
+  content: ""; position: absolute; left: -14px; top: 9px; bottom: 9px;
+  width: 2px; border-radius: 0 2px 2px 0; background: var(--accent);
 }
-.viewseg button:last-child { border-right-width: 1px; }
-.viewseg button:hover { color: var(--ink); }
-.viewseg button.on { color: var(--ink); background: var(--panel); border-color: var(--edge-strong); }
+.rail-spacer { flex: 1; }
+.rail-health { display: grid; place-items: center; padding-bottom: 2px; }
+.rail-pulse {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint);
+}
+.rail-pulse.live { background: var(--live); animation: rail-breathe 2.6s ease-in-out infinite; }
+@keyframes rail-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 45%, transparent); }
+  70% { box-shadow: 0 0 0 5px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-pulse.live { animation: none; }
+}
 
 /* ----- board ------------------------------------------------------------ */
 .board {
@@ -227,6 +257,25 @@ body {
 .json-null { color: var(--ink-faint); font-style: italic; }
 .json-empty { color: var(--ink-faint); }
 .json-raw { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--ink); }
+
+/* ----- namespace chip --------------------------------------------------- */
+/* The lead chip on a namespace row, shared by NsRow (its own component) and the
+   body, so it lives here in global scope. A quiet outlined tag; the data-bearing
+   kinds (frame/array) and containers get a faint tint in their hue. */
+.ns-chip {
+  display: inline-block; min-width: 2.6em; box-sizing: border-box;
+  padding: 1px 5px; text-align: center;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.02em;
+  color: var(--ink-faint); border: 1px solid var(--edge-strong); border-radius: 5px;
+}
+.ns-chip[data-kind='frame'],
+.ns-chip[data-kind='array'] { color: var(--k-blue); border-color: color-mix(in srgb, var(--k-blue) 45%, transparent); }
+.ns-chip[data-kind='mapping'],
+.ns-chip[data-kind='sequence'] { color: var(--k-green); border-color: color-mix(in srgb, var(--k-green) 40%, transparent); }
+.ns-chip[data-kind='module'] { color: var(--k-pink); border-color: color-mix(in srgb, var(--k-pink) 38%, transparent); }
+.ns-chip[data-kind='function'],
+.ns-chip[data-kind='class'] { color: var(--k-amber); border-color: color-mix(in srgb, var(--k-amber) 40%, transparent); }
+.ns-chip[data-kind='scalar'] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 
 /* ----- stage (board + focus overlay) ------------------------------------ */
 /* Holds the board and, when a pane is focused, the fullscreen view over it. The
@@ -367,6 +416,31 @@ body {
 /* min-width:0 lets the split shrink to the viewport so a long, unwrapped output
    line scrolls inside its own box (.cell has overflow:auto) instead of widening
    the whole page. Without it the flex row sizes to the longest line's content. */
+/* A view's slim header strip: the view name, a quiet count, optional active
+   badge. Shared by the feed and the namespace view so both read as one app. */
+.view-head {
+  flex: none; display: flex; align-items: baseline; gap: 12px;
+  height: 52px; padding: 0 clamp(14px, 2vw, 22px);
+  border-bottom: 1px solid var(--edge);
+}
+.view-title { font-size: 14.5px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); margin: 0; }
+.view-meta { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.view-active {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim);
+}
+.view-active i {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--k-amber);
+  animation: led-pulse 1.1s ease-in-out infinite;
+}
+.view-empty {
+  flex: 1 1 auto; display: grid; place-content: center;
+  color: var(--ink-faint); font-family: var(--mono); font-size: 13px;
+}
+@media (prefers-reduced-motion: reduce) { .view-active i { animation: none; } }
+
+/* The feed view fills the stage as a column: the header, then the split below. */
+.feedview { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .feed { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; background: var(--bg); }
 .feed-empty {
   flex: 1 1 auto; display: grid; place-content: center;
@@ -381,57 +455,57 @@ body {
   list-style: none; margin: 0; padding: 8px 6px 40px;
 }
 
-/* The dot column is 10px wide after 8px of row padding, so its centre (and the
-   rail) sit at 13px from the entry's left edge. */
+/* Each row: a status dot, a two-line main column (the intent/title headline over a
+   quiet `id · tag` sub-line), and the duration/age on the right. */
 .entry { position: relative; }
-.entry::before {
-  content: ""; position: absolute; left: 13px; top: 0; bottom: 0;
-  width: 1px; background: var(--edge);
-}
-.entry:first-child::before { top: 16px; }
-.entry:last-child::before { bottom: auto; height: 16px; }
-
 .entry-row {
-  display: grid; grid-template-columns: 10px minmax(0, 1fr) auto;
-  align-items: baseline; column-gap: 10px; width: 100%;
+  display: grid; grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: center; column-gap: 12px; width: 100%;
   font: inherit; text-align: left; color: var(--ink);
-  background: none; border: 0; cursor: pointer; padding: 8px 10px;
-  /* Hover and selection read as soft pills rather than full-bleed bands, so the
-     list feels lighter; the threaded rail still runs behind them. */
-  border-radius: 6px;
-  transition: background 0.1s ease;
+  background: none; border: 0; cursor: pointer; padding: 9px 12px;
+  /* Hover and selection read as soft pills rather than full-bleed bands. */
+  border-radius: 9px;
+  transition: background 0.12s ease;
 }
-.entry-row:hover { background: light-dark(rgba(0, 0, 0, 0.045), rgba(255, 255, 255, 0.05)); }
-/* The selected row: a quiet fill plus a thin accent edge — the one place the
-   accent appears in the list, so the current selection is unambiguous. */
+.entry-row:hover { background: var(--panel); }
+/* The selected row: a quiet raised fill plus a thin accent edge — the one place
+   the accent appears in the list, so the current selection is unambiguous. */
 .entry.selected > .entry-row {
-  background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.09));
+  background: var(--elev);
   box-shadow: inset 2px 0 0 var(--accent);
 }
-.entry.selected > .entry-row .entry-title { color: var(--ink); }
 
-/* Only failure (red) and the transient running pulse (amber) get a dot. Success
-   and idle panes show nothing — the rail threads them, so a green column of "fine"
-   doesn't compete with the few states that actually want the eye. */
+/* Only failure (red) and the transient running pulse (amber) get a filled dot;
+   success and idle stay a faint ring, so a column of "fine" doesn't compete with
+   the few states that actually want the eye. */
 .entry-dot {
-  grid-column: 1; align-self: center; justify-self: center; z-index: 1;
-  width: 9px; height: 9px; border-radius: 50%; background: transparent;
+  grid-column: 1; align-self: center; justify-self: center;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: transparent; box-shadow: inset 0 0 0 1px var(--edge-strong);
 }
-.entry-dot.err { background: var(--dead); }
-.entry-dot.run { background: light-dark(#d68a00, #e5c07b); animation: led-pulse 1.1s ease-in-out infinite; }
+.entry-dot.err { background: var(--dead); box-shadow: none; }
+.entry-dot.run { background: var(--k-amber); box-shadow: none; animation: led-pulse 1.1s ease-in-out infinite; }
 
+.entry-main { grid-column: 2; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .entry-title {
-  grid-column: 2; min-width: 0; font-size: 13px; color: var(--ink-dim);
+  min-width: 0; font-size: 13px; color: var(--ink); letter-spacing: -0.012em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .entry.err .entry-title { color: light-dark(#c4314b, #f0a0ad); }
+.entry-sub {
+  min-width: 0; font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.entry-sub-tag { color: var(--ink-faint); opacity: 0.7; }
 
 .entry-now {
-  grid-column: 3; font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
-  color: light-dark(#d68a00, #e5c07b); text-transform: uppercase;
+  grid-column: 3; align-self: center;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+  color: var(--k-amber); text-transform: uppercase;
 }
 .entry-age {
-  grid-column: 3; font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint);
+  grid-column: 3; align-self: center;
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
 }
 

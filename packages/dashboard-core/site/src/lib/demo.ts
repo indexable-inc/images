@@ -90,7 +90,50 @@ export function seedDemo(): void {
         { name: 'X_train', type: 'ndarray', kind: 'array', repr: '', size: 156_800_000, shape: '50000×784' },
         { name: 'df', type: 'DataFrame', kind: 'frame', repr: '', size: 84_000_000, shape: '1204853×8' },
         { name: 'model', type: 'Sequential', kind: 'object', repr: '<Sequential: 4 layers>', size: 4_800_000, shape: '' },
-        { name: 'results', type: 'list', kind: 'sequence', repr: '[{...}, {...}, ...]', size: 31_700, shape: 'len 20' },
+        // A mapping with nested children, to exercise the recursive tree: `config`
+        // holds a nested `paths` dict (expandable two levels deep).
+        {
+          name: 'config',
+          type: 'dict',
+          kind: 'mapping',
+          repr: "{'lr': 0.001, 'paths': {...}, ...}",
+          size: 1_240,
+          shape: 'len 4',
+          children: [
+            { name: "'lr'", type: 'float', kind: 'scalar', repr: '0.001', size: 24, shape: '' },
+            { name: "'epochs'", type: 'int', kind: 'scalar', repr: '10', size: 28, shape: '' },
+            {
+              name: "'paths'",
+              type: 'dict',
+              kind: 'mapping',
+              repr: "{'data': '/mnt/data', 'ckpt': '/mnt/ckpt'}",
+              size: 320,
+              shape: 'len 2',
+              children: [
+                { name: "'data'", type: 'str', kind: 'text', repr: "'/mnt/data'", size: 58, shape: '' },
+                { name: "'ckpt'", type: 'str', kind: 'text', repr: "'/mnt/ckpt'", size: 58, shape: '' },
+              ],
+            },
+            { name: "'tags'", type: 'list', kind: 'sequence', repr: "['a', 'b']", size: 120, shape: 'len 2',
+              children: [
+                { name: '[0]', type: 'str', kind: 'text', repr: "'a'", size: 50, shape: '' },
+                { name: '[1]', type: 'str', kind: 'text', repr: "'b'", size: 50, shape: '' },
+              ] },
+          ],
+        },
+        {
+          name: 'results',
+          type: 'list',
+          kind: 'sequence',
+          repr: '[{...}, {...}, ...]',
+          size: 31_700,
+          shape: 'len 20',
+          children: [
+            { name: '[0]', type: 'dict', kind: 'mapping', repr: "{'id': 0, 'score': 0.91}", size: 232, shape: 'len 2' },
+            { name: '[1]', type: 'dict', kind: 'mapping', repr: "{'id': 1, 'score': 0.88}", size: 232, shape: 'len 2' },
+            { name: '…', type: '', kind: 'object', repr: '+18 more', size: 0, shape: '' },
+          ],
+        },
         { name: 'result', type: 'int', kind: 'scalar', repr: '4', size: 28, shape: '' },
         { name: 'pl', type: 'module', kind: 'module', repr: 'polars 1.12.0', size: 0, shape: '' },
         { name: 'embed', type: 'function', kind: 'function', repr: '<function embed>', size: 0, shape: '' },

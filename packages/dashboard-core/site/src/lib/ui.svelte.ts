@@ -2,15 +2,18 @@
 // view) and a once-a-second clock so every card's age stays current without each
 // card holding its own timer.
 
-// The feed (a single chronological column of output) or the board (free canvas).
-// Feed is the default: most of the time you just want to read the stream of
-// outputs top to bottom, with nothing competing for attention. Persisted.
-export type View = 'feed' | 'board';
+// The top-level surface: the run feed (a chronological master-detail of runs),
+// the namespace browser (the kernel's live globals, recursively expandable), or
+// the board (free canvas). Feed is the default: most of the time you just want to
+// read the stream of runs, with nothing competing for attention. Persisted.
+export type View = 'feed' | 'namespace' | 'board';
 const VIEW_KEY = 'dash-view-v1';
+const VIEWS: readonly View[] = ['feed', 'namespace', 'board'];
 
 function loadView(): View {
   try {
-    return localStorage.getItem(VIEW_KEY) === 'board' ? 'board' : 'feed';
+    const saved = localStorage.getItem(VIEW_KEY) as View | null;
+    return saved && VIEWS.includes(saved) ? saved : 'feed';
   } catch {
     return 'feed';
   }

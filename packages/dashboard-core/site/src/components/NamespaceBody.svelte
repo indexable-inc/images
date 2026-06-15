@@ -1,145 +1,70 @@
 <script lang="ts">
-  import type { Pane } from '$lib/types';
-
   // The namespace renderer: a `data` pane whose body is a JSON array of variable
-  // rows produced by the kernel — one Python session's live globals. Each row is
-  // {name, type, kind, repr, size, shape}; we render them as a compact table, the
-  // heaviest first (the producer sorts), so the eye lands on what holds the memory.
-  type Row = {
-    name: string;
-    type: string;
-    kind: string;
-    repr: string;
-    size: number;
-    shape: string;
-  };
+  // rows produced by the kernel (`introspect.namespace_rows`) — one Python
+  // session's live globals. Rows are bucketed into Data / Modules / Functions and
+  // rendered as an expandable tree (containers drill into their members), heaviest
+  // first within each group, so the eye lands on what holds the memory.
+  import type { Pane } from '$lib/types';
+  import { groupOf, NS_GROUPS, parseRows, type NsGroup, type NsRow as Row } from '$lib/namespace';
+  import NsRow from './NsRow.svelte';
 
   let { pane }: { pane: Pane } = $props();
 
-  const rows = $derived.by<Row[]>(() => {
-    try {
-      const parsed = JSON.parse(pane.body ?? '[]');
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
+  const rows = $derived(parseRows(pane.body));
+
+  // Group preserving the producer's heaviest-first order within each bucket.
+  const groups = $derived.by<{ name: NsGroup; rows: Row[] }[]>(() => {
+    const by: Record<NsGroup, Row[]> = { Data: [], Modules: [], Functions: [] };
+    for (const row of rows) by[groupOf(row)].push(row);
+    return NS_GROUPS.map((name) => ({ name, rows: by[name] })).filter((g) => g.rows.length > 0);
   });
-
-  // A short chip per kind so the lead column stays narrow and scannable.
-  const CHIP: Record<string, string> = {
-    module: 'mod',
-    class: 'cls',
-    function: 'fn',
-    scalar: 'num',
-    text: 'str',
-    sequence: 'seq',
-    mapping: 'map',
-    array: 'arr',
-    frame: 'df',
-    object: 'obj',
-  };
-  function chip(kind: string): string {
-    return CHIP[kind] ?? kind.slice(0, 3);
-  }
-
-  // Human byte size; empty for the sizeless (modules, functions report 0).
-  function fmtSize(n: number): string {
-    if (!n) return '';
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
-    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-  }
-
-  // The middle column: a frame/array describes itself by shape; everything else
-  // shows its repr, falling back to a shape (a container's length).
-  function detail(row: Row): string {
-    if (row.shape && (row.kind === 'frame' || row.kind === 'array')) return row.shape;
-    return row.repr || row.shape;
-  }
 </script>
 
 <div class="ns">
   {#if rows.length === 0}
     <div class="ns-empty">no variables</div>
   {:else}
-    <table class="ns-table">
-      <tbody>
-        {#each rows as row (row.name)}
-          <tr>
-            <td class="ns-kind">
-              <span class="ns-chip" data-kind={row.kind}>{chip(row.kind)}</span>
-            </td>
-            <td class="ns-name" title={row.type}>{row.name}</td>
-            <td class="ns-detail" title={detail(row)}>{detail(row)}</td>
-            <td class="ns-size">{fmtSize(row.size)}</td>
-          </tr>
+    {#each groups as group (group.name)}
+      <div class="ns-group">
+        <div class="ns-grouphead">{group.name}<span class="ns-groupn">{group.rows.length}</span></div>
+        {#each group.rows as row, i (row.name + ':' + i)}
+          <NsRow {row} />
         {/each}
-      </tbody>
-    </table>
+      </div>
+    {/each}
   {/if}
 </div>
 
 <style>
   .ns {
-    padding: 4px 0;
-    font-family: var(--mono);
-    font-size: 12px;
-    line-height: 1.5;
+    padding: 4px 0 8px;
   }
   .ns-empty {
-    padding: 8px 12px;
+    padding: 10px 14px;
     color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 12px;
     font-style: italic;
   }
-  .ns-table {
-    width: 100%;
-    border-collapse: collapse;
+  .ns-group + .ns-group {
+    margin-top: 6px;
   }
-  .ns-table td {
-    padding: 5px 12px;
-    vertical-align: baseline;
-    border-bottom: 1px solid var(--edge);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .ns-table tr:last-child td {
-    border-bottom: 0;
-  }
-  /* A quiet, square chip — flat like the rest of the canvas. */
-  .ns-kind {
-    width: 1%;
-  }
-  .ns-chip {
-    display: inline-block;
-    min-width: 2.6em;
-    text-align: center;
+  /* A quiet section label, the same uppercase micro-heading the rest of the app
+     uses for groups. */
+  .ns-grouphead {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 10px 14px 6px;
     font-size: 10px;
-    letter-spacing: 0.02em;
-    color: var(--ink-faint);
-    border: 1px solid var(--edge-strong);
-    padding: 0 4px;
-  }
-  /* Frames and arrays carry the data weight; tint them with the accent. */
-  .ns-chip[data-kind='frame'],
-  .ns-chip[data-kind='array'] {
-    color: var(--accent);
-    border-color: var(--accent);
-  }
-  .ns-name {
-    width: 1%;
-    color: var(--ink);
-  }
-  .ns-detail {
-    width: 100%;
-    max-width: 0;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
     color: var(--ink-faint);
   }
-  .ns-size {
-    width: 1%;
-    text-align: right;
-    color: var(--ink-dim);
+  .ns-groupn {
+    color: var(--ink-faint);
+    opacity: 0.6;
     font-variant-numeric: tabular-nums;
   }
 </style>
