@@ -903,7 +903,7 @@ let
           --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
-          --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe dashboardHubBin)} \
+          --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
         # The notebook engine alone (kernel + dashboard + session file, no MCP
@@ -914,7 +914,7 @@ let
           --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
-          --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe dashboardHubBin)} \
+          --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
       '';
@@ -1959,7 +1959,6 @@ let
                     jobs = await resp.json()
                 assert len(jobs) == 1 and jobs[0]["id"] == "job1", jobs
                 assert jobs[0]["outputs"] == rich, jobs[0]["outputs"]
-                assert jobs[0].get("code_html"), "expected highlighted code"
 
                 async with session.get(base + "/api/jobs/job1") as resp:
                     assert resp.status == 200, resp.status

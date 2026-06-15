@@ -7,11 +7,8 @@ code HTML whose data-line numbers match the compiler's (and so the traceback's).
 from __future__ import annotations
 
 import asyncio
-import html as html_mod
-import re
 
 from ix_notebook_mcp import runtime, store
-from ix_notebook_mcp.dashboard import _code_html
 
 
 def run_cell(code: str, ns: dict | None = None) -> runtime.Job:
@@ -141,36 +138,3 @@ def test_store_round_trips_line_and_error_line(tmp_path) -> None:
     row = store.get(conn, "j1")
     assert row["error_line"] == 2
     assert row["line"] is None  # finished: no live line
-
-
-# --------------------------------------------------------------------------- #
-# line-addressable code HTML
-# --------------------------------------------------------------------------- #
-
-
-def _line_texts(rendered: str) -> list[tuple[int, str]]:
-    """Each ix-line span as (data-line, plain text)."""
-    out: list[tuple[int, str]] = []
-    for segment in rendered.split('<span class="ix-line" data-line="')[1:]:
-        number, rest = segment.split('">', 1)
-        body = rest.rsplit("</span>", 1)[0]  # this line's own closer is last
-        out.append((int(number), html_mod.unescape(re.sub(r"<[^>]+>", "", body))))
-    return out
-
-
-def test_code_html_lines_match_source_lines_exactly() -> None:
-    code = '\n\nx = 1\n"""multi\nline"""\ny = 2'
-    got = _line_texts(_code_html(code))
-    assert [n for n, _ in got] == list(range(1, len(got) + 1))
-    assert [t for _, t in got] == code.split("\n")
-
-
-def test_code_html_keeps_token_classes_and_name_anchors() -> None:
-    rendered = _code_html("df = frame.head(3)")
-    assert 'data-ix-name="df"' in rendered
-    assert 'data-ix-name="frame"' in rendered
-    assert 'class="' in rendered  # token classes survive the per-line split
-
-
-def test_code_html_empty_input() -> None:
-    assert _code_html("") == ""

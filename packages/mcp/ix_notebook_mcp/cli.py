@@ -521,6 +521,10 @@ async def _run(cfg: Config) -> None:
         bridge_task.cancel()
         if hub is not None:
             hub.terminate()
+            try:
+                hub.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                hub.kill()
         if restore_task is not None and not restore_task.done():
             restore_task.cancel()
         if cfg.session_path is not None:
