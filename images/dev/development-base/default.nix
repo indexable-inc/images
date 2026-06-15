@@ -34,12 +34,10 @@ in
   ix.image.name = "development-base";
 
   # `pkgs.claude-code` ships under Anthropic's commercial terms (unfree in
-  # nixpkgs). Allow it by name so the exception is auditable and narrow;
-  # codex is Apache-2.0 and does not need a predicate entry. Do not flip
-  # `allowUnfree` to `true` globally: every other unfree package would slip
-  # into this image unreviewed.
-  nixpkgs.config.allowUnfreePredicate =
-    pkg: builtins.elem (pkg.pname or (lib.getName pkg)) [ "claude-code" ];
+  # nixpkgs). The allow-by-name exception lives on the shared image nixpkgs
+  # instance (lib/image/default.nix): every image shares ONE instance via
+  # `nixpkgs.pkgs`, so a per-image `nixpkgs.config` is ignored here and in fact
+  # fails an assertion. codex is Apache-2.0 and needs no exception.
 
   environment.systemPackages =
     builtins.attrValues {

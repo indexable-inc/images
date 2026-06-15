@@ -1,0 +1,1 @@
+{ lib, xs }: lib.sort (a: b: a.priority < b.priority) xs

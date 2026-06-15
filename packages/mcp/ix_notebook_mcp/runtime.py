@@ -102,29 +102,10 @@ _IMAGE_MIMES = frozenset({"image/png", "image/jpeg"})
 _MAX_TEXT_BUNDLE = 400_000
 _MAX_IMAGE_BUNDLE = 4_000_000
 
-_RESULT_REQUIRED = (
-    "python_exec: a cell must declare its result. Either END with a Result(...), "
-    "or `yield Result(...)` one or more times to stream results as you go. This "
-    "cell's last expression was not a Result and it did not yield, so nothing was "
-    "returned. Wrap your final value (or yield each result):\n"
-    "  Result.text('done')                       # same text to human and model\n"
-    "  Result.ok('what happened')                # a quiet confirmation for a side effect\n"
-    "  Result.of(value)                          # render any value richly for the human\n"
-    "  Result(user_html='<b>hi</b>', llm_result='hi', llm_images=[fig])\n"
-    "  yield Result.ok('step 1'); ...; yield Result.of(df)   # stream as you go\n"
-    "Print is not a channel: stdout is not returned to the model and is hidden in "
-    "the dashboard by default, so surface anything worth seeing as a Result."
-)
-
-_YIELD_REQUIRED = (
-    "python_exec: this cell uses `yield` but yielded no Result(...). Yield at "
-    "least one Result(...) so the run declares what the human and model receive."
-)
-
-_YIELD_NOT_RESULT = (
-    "python_exec: a yielded value was not a Result(...). Every top-level `yield` "
-    "in a cell must yield a Result (Result.text/ok/of or Result(user_html=...))."
-)
+# Cell semantics are Jupyter's: the last expression is the result, whatever its
+# type, and stdout travels with it. `Result` survives as the OPT-IN way to split
+# the human view from the model view (rich HTML vs concise text/images); a cell
+# that never mentions it still returns exactly what a notebook would show.
 
 # Opened lazily in install(); None when no store path is configured (the
 # one-shot eval/exec paths, or a bare kernel started outside the server).
@@ -181,6 +162,18 @@ class _Tee:
         return getattr(self._original, name)
 
 
+class _CallableBool(int):
+    """A bool that also answers ``()``: ``job.running`` and ``job.running()``
+    both work. ``bool`` cannot be subclassed, so this is an int restricted to
+    0/1; truthiness, comparison, and repr all behave like the bool it wraps."""
+
+    def __call__(self) -> bool:
+        return bool(self)
+
+    def __repr__(self) -> str:
+        return repr(bool(self))
+
+
 class JobStillRunning(RuntimeError):
     """Raised by ``Job.result`` when the job has not finished yet.
 
@@ -195,16 +188,31 @@ class Job:
     """A single ``python_exec`` execution: an awaitable handle over the asyncio
     task running the code, with its captured output, result, and status."""
 
-    def __init__(self, code: str, name: str | None = None, budget: float = 15.0):
+    def __init__(self, code: str, name: str | None = None, budget: float = 15.0, kind: str = "cell"):
         self.id = uuid.uuid4().hex[:8]
         self.code = code
         self.name = name or self.id
+        # 'cell' for a normal execution; 'replay' for a re-run performed while
+        # reopening a session file. Replays never feed future replays
+        # (store.replayable filters on this), so a session cannot double-run
+        # its history.
+        self.kind = kind
         self.status = "running"
         self.started = time.time()
         # The foreground budget (seconds) this run was given before it backgrounds;
         # the dashboard draws a progress bar of elapsed-vs-budget while it runs.
         self.budget = float(budget)
         self.ended: float | None = None
+        # The cell line currently executing, sampled off the suspended coroutine
+        # chain by the flusher (see _current_line); None for a cell with no live
+        # async frame. The dashboard highlights this line while the job runs.
+        self.line: int | None = None
+        # The cell line a failure was raised on (the deepest user frame of the
+        # traceback, or a SyntaxError's reported line). None until/unless it fails.
+        self.error_line: int | None = None
+        # The cell's own coroutine / async generator, kept so _current_line can
+        # read its suspended frame chain while the job runs.
+        self._aobj = None
         # The cell's final value (a Result), exposed through the `result`
         # property; stored privately so an access while running can raise rather
         # than hand back a misleading None.
@@ -218,6 +226,10 @@ class Job:
         # Set by the SIGUSR2 wedge watchdog so _runner can tell its interrupt from
         # a KeyboardInterrupt the user's own code raised.
         self.interrupted_by_watchdog = False
+        # The globals dict this job's code ran in (the shared user namespace, or
+        # a per-session namespace -- see _session_ns). Set by __ix_run so the
+        # bindings snapshot reads the namespace the cell actually wrote to.
+        self._ns: dict | None = None
 
     def _append(self, s: str) -> None:
         """Append output, trimming to the most recent _MAX_OUTPUT_CHARS so a
@@ -309,13 +321,20 @@ class Job:
             body += f"\n... [stopped at {max_matches} matches; narrow the pattern]"
         return body or f"(no lines match {pattern!r} in {len(src)} lines)"
 
-    def running(self) -> bool:
-        return self.status == "running"
+    @property
+    def running(self) -> "_CallableBool":
+        """True while the job runs. Works as an attribute (``job.running``) and
+        as the historical method call (``job.running()``): both spellings are
+        natural guesses, and the attribute form returning a bound method was a
+        truthiness trap (every finished job looked "running" to ``getattr``)."""
+        return _CallableBool(self.status == "running")
 
-    def done(self) -> bool:
-        """True once the job has finished (done, error, or cancelled). Pair it
-        with `.result`, which only yields a value once the job is done."""
-        return self.status != "running"
+    @property
+    def done(self) -> "_CallableBool":
+        """True once the job has finished (done, error, or cancelled), as an
+        attribute or a call. Pair it with `.result`, which only yields a value
+        once the job is done."""
+        return _CallableBool(self.status != "running")
 
     @property
     def ok(self) -> bool:
@@ -371,7 +390,8 @@ class Job:
 
     def __repr__(self) -> str:
         dur = (self.ended or time.time()) - self.started
-        head = f"<Job {self.id} ({self.name}) [{self.status}] {dur:.2f}s>"
+        at = f" L{line}" if self.running() and (line := _current_line(self)) else ""
+        head = f"<Job {self.id} ({self.name}) [{self.status}{at}] {dur:.2f}s>"
         out = self.tail(800)
         return head + ("\n" + out if out else "")
 
@@ -422,13 +442,14 @@ class _TextDescriptor:
 class Result:
     """Split a cell's final value into a human view and a model view.
 
-    Every ``python_exec`` cell must END with one of these (the kernel rejects a
-    cell whose last expression is not a Result, so a run always declares what the
-    human sees and what the model gets back). The dashboard renders
-    ``user_html`` (a rich HTML view for the human watching); the model's tool
-    result receives ``llm_result`` (concise text) plus any ``llm_images``. The
-    two never cross: the human is not shown the model's text, and the model does
-    not pay tokens for the HTML render.
+    Entirely optional: a cell's last expression is its result, Jupyter-style,
+    whatever its type, and the kernel renders it (rich types richly, plain
+    values as their natural text) with the cell's stdout alongside. Reach for
+    Result only when the two audiences should see DIFFERENT things. The
+    dashboard renders ``user_html`` (a rich HTML view for the human watching);
+    the model's tool result receives ``llm_result`` (concise text) plus any
+    ``llm_images``. The two never cross: the human is not shown the model's
+    text, and the model does not pay tokens for the HTML render.
 
     Construct it directly for full control, or use the shortcuts for the common
     cases::
@@ -1004,21 +1025,53 @@ def _compile_generator(code: str, filename: str) -> "types.CodeType":
     return compile(shell, filename, "exec")
 
 
-def _stdout_hint(job: "Job") -> str:
-    """A suffix for the Result-contract error when the cell also printed: stdout
-    never reaches the model, so the bare "you must return a Result" message leaves
-    a printing agent unsure what happened to its output. Show a preview of what
-    was printed and the one-line fix, turning a silent dead-end into a nudge."""
-    printed = job.output.strip()
-    if not printed:
-        return ""
-    limit = 1500
-    if len(printed) > limit:
-        printed = f"{printed[:limit]}\n... [+{len(printed) - limit} more chars in jobs['{job.id}'].output]"
-    return (
-        "\n\nThis cell printed to stdout, which the model never receives. To send "
-        f"this text, return it (e.g. `Result.text(...)`) or page jobs['{job.id}'].output. "
-        f"What the cell printed:\n{printed}"
+def _merge_stdout(job: "Job", result: "Result") -> "Result":
+    """Jupyter shows a cell's stdout AND its final value; so do we. When a cell
+    both printed and ended with a bare (non-Result) expression, prepend the
+    captured stdout to the model text and the human view, clipped like any other
+    large output (the full capture stays pageable as ``jobs['<id>'].output``).
+    Explicit Results are exempt: the author already declared both views."""
+    printed = job.output
+    if not printed.strip():
+        return result
+    body = printed
+    if len(body) > _AUTO_RESULT_CHARS:
+        body = body[-_AUTO_RESULT_CHARS:] + (
+            f"\n... [stdout clipped to the last {_AUTO_RESULT_CHARS} of "
+            f"{len(printed)} chars; page jobs['{job.id}'].output]"
+        )
+    text = _strip_ansi(body)
+    if not text.endswith("\n"):
+        text += "\n"
+    return Result(
+        user_html=f'<pre class="ix-result">{_ansi_to_html(body)}</pre>' + result.user_html,
+        llm_result=text + (result.llm_result or ""),
+        llm_images=result.llm_images,
+    )
+
+
+# Cap on the stdout an auto-returned Result (see _auto_result) hands the model.
+# A chatty print-only cell keeps its most recent slice inline; the full capture
+# stays pageable as jobs['<id>'].output, exactly like any other large output.
+_AUTO_RESULT_CHARS = 20_000
+
+
+def _auto_result(job: "Job") -> "Result":
+    """The Result for a cell whose last statement evaluated to None (an
+    assignment, a bare ``print()``, a side-effecting call): its captured stdout,
+    or a quiet ok when it printed nothing -- the same thing a notebook shows."""
+    printed = job.output
+    if not printed.strip():
+        return Result.ok("done (cell returned no value)")
+    body = printed
+    if len(body) > _AUTO_RESULT_CHARS:
+        body = body[-_AUTO_RESULT_CHARS:] + (
+            f"\n... [stdout clipped to the last {_AUTO_RESULT_CHARS} of "
+            f"{len(printed)} chars; page jobs['{job.id}'].output]"
+        )
+    return Result(
+        user_html=f'<pre class="ix-result">{_ansi_to_html(body)}</pre>',
+        llm_result=_strip_ansi(body),
     )
 
 
@@ -1037,16 +1090,11 @@ def _display_result(result: "Result") -> None:
 
 
 def _is_displayable(value) -> bool:
-    """True if a bare final expression value is rich enough to auto-wrap in
-    ``Result.of`` (so ``df`` on the last line just works), False if returning it
-    is the print-like anti-pattern the Result contract nudges away from.
-
-    Displayable = it already knows how to render itself: an IPython rich repr
+    """True if a value carries its own rich rendering: an IPython rich repr
     (a polars DataFrame, a ``view.Code``, ...), an htpy-style ``__html__``, or a
     figure/image that renders through a registered formatter. Plain scalars,
-    ``str``/``bytes``, and the container types (dict/list/tuple/set) are NOT --
-    those still fail the contract, to keep pushing key/value data toward a
-    DataFrame and confirmations toward ``Result.ok``.
+    ``str``/``bytes``, and the container types (dict/list/tuple/set) are not
+    (they render through ``Result.of``'s text paths instead).
     """
     if _image_bytes_mime(value) is not None:
         # Raw image bytes (a screenshot) know how to render: as an inline image.
@@ -1066,11 +1114,91 @@ def _is_displayable(value) -> bool:
     return module.startswith("matplotlib") or module.startswith("PIL")
 
 
+def _current_line(job: "Job") -> int | None:
+    """The cell line ``job`` is executing right now, or None.
+
+    Read off the suspended coroutine chain: starting from the cell's own
+    coroutine (or async generator), follow what each frame is awaiting and keep
+    the deepest frame that belongs to this job's pseudo-file (``<job id>``).
+    That is exactly the line a human would point at: the cell line whose await
+    is in flight, even when the wait itself is deep inside a library. Costs one
+    attribute walk (no tracing), so the flusher can sample it every tick. None
+    for a purely synchronous cell (it has no suspended frame to read; it also
+    holds the loop, so nothing could repaint anyway)."""
+    obj = job._aobj
+    if obj is None or not job.running():
+        return None
+    target = f"<job {job.id}>"
+    line = None
+    for _ in range(128):  # defensive bound; await chains are short in practice
+        frame = (
+            getattr(obj, "cr_frame", None)
+            or getattr(obj, "ag_frame", None)
+            or getattr(obj, "gi_frame", None)
+        )
+        if frame is None:
+            break
+        if frame.f_code.co_filename == target:
+            line = frame.f_lineno
+        obj = (
+            getattr(obj, "cr_await", None)
+            or getattr(obj, "ag_await", None)
+            or getattr(obj, "gi_yieldfrom", None)
+        )
+        if obj is None:
+            break
+    return line
+
+
+def _user_traceback(exc: BaseException) -> str:
+    """``exc`` formatted with the kernel's own plumbing frames cut off.
+
+    The frames above the cell (``_runner``, the ``exec``/``eval`` trampoline)
+    are noise to both audiences, so the traceback starts at the first frame in
+    a ``<job ...>`` pseudo-file -- the cell itself -- like a notebook's. A
+    SyntaxError never enters the cell's frame, so it falls back to the
+    exception-only form, which already carries the offending line and caret;
+    anything else without a user frame keeps the full traceback."""
+    tb = exc.__traceback__
+    while tb is not None and not tb.tb_frame.f_code.co_filename.startswith("<job "):
+        tb = tb.tb_next
+    if tb is not None:
+        return "".join(traceback.format_exception(type(exc), exc, tb))
+    if isinstance(exc, SyntaxError):
+        return "".join(traceback.format_exception_only(type(exc), exc))
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+
+def _error_line(exc: BaseException, job: "Job") -> int | None:
+    """The cell line the failure was raised on: a SyntaxError's reported line,
+    else the deepest traceback frame inside this job's own pseudo-file (the
+    cell line whose statement failed, even when the raise happened in a
+    library below it)."""
+    target = f"<job {job.id}>"
+    if isinstance(exc, SyntaxError) and exc.filename == target:
+        return exc.lineno
+    line = None
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code.co_filename == target:
+            line = tb.tb_lineno
+        tb = tb.tb_next
+    return line
+
+
 async def _runner(job: Job, ns: dict) -> None:
     token = _ix_current.set(job)
     if _store is not None and _store_conn is not None:
         try:
-            _store.start(_store_conn, id=job.id, name=job.name, code=job.code, started_at=job.started, budget=job.budget)
+            _store.start(
+                _store_conn,
+                id=job.id,
+                name=job.name,
+                code=job.code,
+                started_at=job.started,
+                budget=job.budget,
+                kind=job.kind,
+            )
         except Exception:
             # Best-effort logging: a store write must never abort the job.
             pass
@@ -1081,59 +1209,53 @@ async def _runner(job: Job, ns: dict) -> None:
         ns.pop("__ix_result", None)
         if mode == "gen":
             # A yielding cell streams results: drain the async generator and
-            # display each yielded Result so it reaches the human (the job's
-            # captured outputs) and the model (iopub) as it is produced. The
-            # yields ARE the results, so there is no trailing-Result requirement.
+            # display each yielded value as it is produced, so it reaches the
+            # human (the job's captured outputs) and the model (iopub). Any
+            # value can be yielded; a non-Result renders through Result.of,
+            # exactly like a trailing expression.
             exec(code_obj, ns)
             agen = ns.pop("__ix_cell__")()
+            job._aobj = agen  # sampled by _current_line while suspended
             emitted = 0
             async for item in agen:
-                if not isinstance(item, Result):
-                    job.status = "error"
-                    job.error = _YIELD_NOT_RESULT
-                    job._append(job.error)
-                    break
-                _display_result(item)
+                _display_result(item if isinstance(item, Result) else Result.of(item))
                 emitted += 1
-            else:
-                # Loop ran to completion (no non-Result break).
-                if emitted == 0:
-                    job.status = "error"
-                    job.error = _YIELD_REQUIRED + _stdout_hint(job)
-                    job._append(job.error)
-                else:
-                    job.status = "done"
+            if emitted == 0:
+                # A generator cell that yielded nothing still ran: report it
+                # like a None-valued cell (its stdout, or a quiet ok).
+                _display_result(_auto_result(job))
+            job.status = "done"
             # The results were displayed as they streamed; there is no single
             # trailing value to return.
             job._result = None
         else:
             maybe = eval(code_obj, ns)
             if inspect.iscoroutine(maybe):
+                job._aobj = maybe  # sampled by _current_line while suspended
                 await maybe
             value = ns.pop("__ix_result", None)
-            if not isinstance(value, Result) and _is_displayable(value):
-                # A bare final value that already knows how to render itself (a
-                # DataFrame, a figure, a view.Code, an htpy element) is wrapped
-                # in Result.of, so `df` on the last line just works. Plain
-                # scalars / dicts / None fall through to the contract error below.
-                value = Result.of(value)
-            job._result = value
-            if isinstance(value, Result):
-                job.status = "done"
+            if value is None:
+                # A cell whose last statement evaluated to None -- an assignment,
+                # a bare print(), a side-effecting call -- returns its captured
+                # stdout (or a quiet ok), so a print-only cell reports what it
+                # printed.
+                value = _auto_result(job)
+            elif isinstance(value, Result):
+                # An explicit Result is the author's full statement of both
+                # views; stdout stays out of it (page jobs['<id>'].output).
+                pass
             else:
-                # Enforce the Result contract: a non-yielding cell must END with a
-                # Result (or a value that renders as one) so a run always declares
-                # what the human sees and what the model gets. A bare scalar (or a
-                # side-effecting cell returning None) is a failed run with an
-                # instructive message, not a silent pass.
-                job.status = "error"
-                job.error = _RESULT_REQUIRED + _stdout_hint(job)
-                job._append(job.error)
-                job._result = None
+                # Jupyter semantics: the last expression IS the result, whatever
+                # its type. Result.of renders any value (rich types richly,
+                # scalars/strings/containers as their natural text), and stdout
+                # the cell printed along the way rides with it.
+                value = _merge_stdout(job, Result.of(value))
+            job._result = value
+            job.status = "done"
     except asyncio.CancelledError:
         job.status = "cancelled"
         raise
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as _kexc:
         job.status = "error"
         if job.interrupted_by_watchdog:
             # The server's wedge watchdog (SIGUSR2, fired after config.wedge_grace)
@@ -1147,8 +1269,10 @@ async def _runner(job: Job, ns: dict) -> None:
                 "anything slow as a background job."
             )
         else:
-            # The user's own code raised KeyboardInterrupt; keep its real traceback.
-            job.error = traceback.format_exc()
+            # The user's own code raised KeyboardInterrupt; keep its real
+            # traceback (trimmed to the cell's frames) and the failing line.
+            job.error = _user_traceback(_kexc)
+            job.error_line = _error_line(_kexc, job)
         job._append(job.error)
     except (Exception, SystemExit) as _exc:
         # Isolate user code from the kernel: a job's SyntaxError, exception, or
@@ -1157,7 +1281,10 @@ async def _runner(job: Job, ns: dict) -> None:
         # asyncio.CancelledError is BaseException, not caught here, so cooperative
         # cancellation (handled above) still propagates.
         job.status = "error"
-        tb = traceback.format_exc()
+        # Trim the kernel's plumbing frames so the traceback starts at the cell,
+        # and record the failing cell line for the dashboard's error highlight.
+        tb = _user_traceback(_exc)
+        job.error_line = _error_line(_exc, job)
         hint = _type_error_hint(_exc) if isinstance(_exc, TypeError) else ""
         job.error = tb + hint
         job._append(job.error)
@@ -1165,6 +1292,7 @@ async def _runner(job: Job, ns: dict) -> None:
         job.ended = time.time()
         _ix_current.reset(token)
         _persist_final(job)
+        _mark_snapshot_dirty()
 
 
 def _persist_final(job: Job) -> None:
@@ -1180,8 +1308,10 @@ def _persist_final(job: Job) -> None:
             output=job.output,
             result=result_repr,
             error=job.error,
+            error_line=job.error_line,
             outputs=_job_outputs(job),
             bindings=_cell_bindings(job),
+            namespace=_namespace_snapshot(job),
         )
     except Exception:
         # Best-effort logging: persisting the final status must not raise during cleanup.
@@ -1190,16 +1320,30 @@ def _persist_final(job: Job) -> None:
 
 def _cell_bindings(job: Job) -> dict:
     """The live value each of the cell's identifiers is bound to, snapshotted now
-    that the job has finished. Read off the shared user namespace (the same one
-    the code ran in), so the dashboard can show inlay hints and hover values that
-    reflect the actual objects. Best-effort: a failure here just means no hints."""
-    ns = _user_ns if _user_ns is not None else globals()
+    that the job has finished. Read off the namespace the code actually ran in
+    (the job's own -- per-session or shared), so the dashboard can show inlay
+    hints and hover values that reflect the actual objects. Best-effort: a
+    failure here just means no hints."""
+    ns = job._ns if job._ns is not None else _shared_ns()
     try:
         from .introspect import cell_bindings
 
         return cell_bindings(job.code, ns)
     except Exception:
         return {}
+
+
+def _namespace_snapshot(job: Job) -> list:
+    """Every user-bound name in the job's namespace, described for the dashboard's
+    namespace pane. Stored with each finished run; the newest is the live
+    namespace. Best-effort: a failure here just means no namespace pane."""
+    ns = job._ns if job._ns is not None else _shared_ns()
+    try:
+        from .introspect import namespace_rows
+
+        return namespace_rows(_namespace_candidates(ns))
+    except Exception:
+        return []
 
 
 def _safe_repr(value) -> str:
@@ -1705,7 +1849,7 @@ def _api_rows() -> list[dict]:
     # the source of truth concludes they are absent (the exact trap that made a
     # bundled `playwright` look like it needed a `pip install`). Always emit a row
     # for each declared library; enrich with its version/summary when importable.
-    for lib_name in registry.LIBRARIES:
+    for lib_name in (lib.name for lib in registry.LIBRARIES):
         sig = lib_name
         summary = "bundled library -- import and use it directly (help() / its own docs)"
         try:
@@ -1868,20 +2012,368 @@ async def _flusher() -> None:
         await asyncio.sleep(0.5)
         for job in list(jobs.values()):
             if job.running():
+                job.line = _current_line(job)
                 try:
-                    _store.update_output(_store_conn, job.id, job.output, job._displays or None)
+                    _store.update_output(
+                        _store_conn, job.id, job.output, job._displays or None, line=job.line
+                    )
                 except Exception:
                     # Best-effort live output: a store write must not kill the loop.
                     pass
         await _sweep_resources()
         cells._sync()
+        if _SESSION and _snapshot_dirty and not _snapshot_busy and not _restoring:
+            # Fire-and-forget so a multi-second dump of a big namespace never
+            # stalls the live-output mirroring this loop exists for.
+            asyncio.ensure_future(_snapshot_tick())
 
 
-async def __ix_run(code: str, budget: float = 15.0, name: str | None = None) -> Job:
-    """Run ``code`` as a task; wait up to ``budget`` for it; return the Job either
-    way (done, or still running in the background)."""
+# --------------------------------------------------------------------------- #
+# Session persistence: make the store file a reopenable notebook.
+#
+# With IX_MCP_SESSION=1 (set by `serve --session FILE`) the runtime checkpoints
+# the user namespace into the store after cells finish, and `__ix_restore`
+# (sent by the server when it reopens an existing file) loads the latest
+# checkpoint back -- instant state -- then re-runs only the successful cells
+# that finished after it. The failure mode is self-healing by construction: a
+# checkpoint that fails to save simply leaves the previous one in place, and
+# replay covers everything since it, so a reopen can be slower but never wrong.
+#
+# What a checkpoint holds: every name the USER bound (anything added to the
+# namespace after install()), serialized per-name with dill so functions and
+# classes defined in cells survive. Modules, underscore names, and values dill
+# cannot serialize (sockets, running jobs, live handles) are skipped and
+# reported -- no serializer can resurrect a live socket; the cell that made it
+# is in the log and replays or re-runs on demand.
+# --------------------------------------------------------------------------- #
+
+_SESSION = bool(os.environ.get("IX_MCP_SESSION"))
+_snapshot_dirty = False
+_snapshot_busy = False
+_snapshot_last = 0.0
+_baseline_names: frozenset[str] = frozenset()
+# True while __ix_restore is replaying. The debounced checkpoint must not fire
+# then: replayed cells' source rows carry ended_at from the PREVIOUS run, so a
+# mid-restore checkpoint would advance the anchor past the cells not yet
+# replayed -- a crash right after it would lose them. The restore takes one
+# explicit checkpoint when it completes instead.
+_restoring = False
+
+# At most one checkpoint per this many seconds: a burst of short cells costs one
+# dump, not one per cell.
+_SNAPSHOT_MIN_INTERVAL = 5.0
+
+# Per-value ceiling on a serialized binding. A frame this large makes every
+# checkpoint write (and the session file) balloon; past it the value is skipped
+# and the cell that built it replays on reopen instead.
+_SNAPSHOT_MAX_VALUE_BYTES = 64_000_000
+
+
+def _mark_snapshot_dirty() -> None:
+    global _snapshot_dirty
+    if _SESSION:
+        _snapshot_dirty = True
+
+
+def _dill():
+    """The serializer for checkpoints: dill (handles functions/classes defined
+    in cells, the common case for an agent session), else stdlib pickle so a
+    bare interpreter without dill still checkpoints plain data."""
+    try:
+        import dill
+
+        return dill
+    except Exception:
+        import pickle
+
+        return pickle
+
+
+def _snapshot_payload(candidates: dict) -> tuple[bytes, list[str], list[dict]]:
+    """Serialize ``candidates`` per-name (one unpicklable value must not void the
+    whole checkpoint). Returns (blob, kept names, skipped). Runs off the loop --
+    dumping a big namespace is CPU-bound."""
+    import pickle
+
+    dumper = _dill()
+    # recurse=True makes dill pickle only the globals a function actually
+    # references, instead of its entire ``__globals__`` (the whole user
+    # namespace, which drags every unpicklable live object into every helper).
+    # The restored function gets its own copy of those referenced globals; a
+    # helper that mutates module-level state through them is the one shape this
+    # cannot preserve, and the cell that defined it is in the log to re-run.
+    kwargs = {"recurse": True} if getattr(dumper, "__name__", "") == "dill" else {}
+    named: dict[str, bytes] = {}
+    skipped: list[dict] = []
+    for name, value in candidates.items():
+        try:
+            payload = dumper.dumps(value, **kwargs)
+        except Exception as exc:
+            skipped.append({"name": name, "reason": f"{type(exc).__name__}: {exc}"[:200]})
+            continue
+        if len(payload) > _SNAPSHOT_MAX_VALUE_BYTES:
+            skipped.append({"name": name, "reason": f"too large ({len(payload)} bytes)"})
+            continue
+        named[name] = payload
+    # The outer envelope is stdlib pickle (a dict of str -> bytes always
+    # pickles), so restore can open it even when dill versions drift; each inner
+    # value is tried independently there too.
+    return pickle.dumps(named), sorted(named), skipped
+
+
+# IPython's own underscore bindings, created lazily as cells run (so they are
+# NOT in the baseline): the result caches (`_`, `__`, `___`, `_1`, ...), the
+# input caches (`_i`, `_ii`, `_iii`, `_i1`, ...), and the history/state dicts.
+# These are kernel machinery, not user state; everything else a user binds --
+# including a single-underscore name like `_cfg` -- is real state and must be
+# checkpointed, not silently dropped.
+_IPYTHON_MACHINERY = re.compile(r"_+|_i+|_i\d+|_\d+|_oh|_dh|_ih|_exit_code")
+
+
+def _snapshot_candidates(ns: dict) -> dict:
+    """The names a checkpoint covers: bound after install() (so the runtime's own
+    surface and the preamble never bloat the file), not dunders or IPython's
+    history machinery, not modules (an import is one cheap replayed line; module
+    objects pickle poorly)."""
+    return {
+        name: value
+        for name, value in ns.items()
+        if name not in _baseline_names
+        and not name.startswith("__")
+        and not _IPYTHON_MACHINERY.fullmatch(name)
+        and not isinstance(value, types.ModuleType)
+    }
+
+
+def _namespace_candidates(ns: dict) -> dict:
+    """The user-bound names the dashboard's namespace pane shows: like
+    :func:`_snapshot_candidates` (drop baseline helpers, dunders, IPython history
+    machinery) but keep modules — an imported ``pl`` is worth seeing in the
+    namespace even though it is not checkpointed."""
+    return {
+        name: value
+        for name, value in ns.items()
+        if name not in _baseline_names
+        and not name.startswith("__")
+        and not _IPYTHON_MACHINERY.fullmatch(name)
+    }
+
+
+def _store_file() -> str | None:
+    """The on-disk path behind ``_store_conn`` (PRAGMA database_list), so a
+    worker thread can open its own connection to the same file. None for a
+    non-file store (in-memory test connections)."""
+    if _store_conn is None:
+        return None
+    try:
+        row = _store_conn.execute("PRAGMA database_list").fetchone()
+        return row[2] or None
+    except Exception:
+        return None
+
+
+async def _snapshot_now() -> dict:
+    """Take one checkpoint now. The timestamp is taken BEFORE the namespace is
+    copied: a cell finishing mid-dump may or may not be captured, and an earlier
+    stamp errs toward replaying it -- re-running a captured cell overwrites equal
+    state, while the reverse (assuming an uncaptured cell was captured) would
+    lose it.
+
+    Both the serialization AND the SQLite write run in the worker thread: a
+    multi-hundred-MB blob INSERT on the event loop stalls every queued cell and
+    the live-output mirroring for the write's duration. ``_store_conn`` is bound
+    to the loop thread (check_same_thread), so the thread opens its own
+    connection to the same file; WAL + busy_timeout serialize it against the
+    kernel's writer."""
+    if _store is None or _store_conn is None:
+        return {"names": [], "skipped": []}
     ns = _user_ns if _user_ns is not None else globals()
-    job = Job(code, name, budget=budget)
+    created = time.time()
+    candidates = _snapshot_candidates(dict(ns))
+    path = _store_file()
+
+    def _dump_and_save() -> tuple[list[str], list[dict]]:
+        blob, names, skipped = _snapshot_payload(candidates)
+        conn = _store.connect(path)
+        try:
+            _store.save_snapshot(conn, created_at=created, blob=blob, names=names, skipped=skipped)
+        finally:
+            conn.close()
+        return names, skipped
+
+    if path is not None:
+        names, skipped = await asyncio.to_thread(_dump_and_save)
+    else:
+        # A non-file store (in-memory test connection): the write must use the
+        # loop's own connection, and such a store is small by construction.
+        blob, names, skipped = await asyncio.to_thread(_snapshot_payload, candidates)
+        _store.save_snapshot(
+            _store_conn, created_at=created, blob=blob, names=names, skipped=skipped
+        )
+    return {"names": names, "skipped": skipped}
+
+
+async def _snapshot_tick() -> None:
+    global _snapshot_busy, _snapshot_dirty, _snapshot_last
+    if _snapshot_busy or time.time() - _snapshot_last < _SNAPSHOT_MIN_INTERVAL:
+        return
+    _snapshot_busy = True
+    _snapshot_dirty = False
+    try:
+        await _snapshot_now()
+    except Exception:
+        # Leave the previous checkpoint in place; replay covers the gap on
+        # reopen. The next finished cell re-marks dirty, so this also cannot
+        # spin on a persistently failing dump.
+        pass
+    finally:
+        _snapshot_last = time.time()
+        _snapshot_busy = False
+
+
+async def __ix_snapshot() -> "Result":
+    """Checkpoint the namespace to the session store right now (the server sends
+    this on shutdown; callable any time)."""
+    info = await _snapshot_now()
+    kept, skipped = len(info["names"]), info["skipped"]
+    note = f"session checkpoint: {kept} names saved"
+    if skipped:
+        note += f", {len(skipped)} skipped ({', '.join(s['name'] for s in skipped[:10])})"
+    return Result.ok(note)
+
+
+# Ceiling on one replayed cell. Everything in the replay set completed once, so
+# this only trips on a cell whose duration is environment-dependent (it waited
+# on something external); such a cell is cancelled and reported, not allowed to
+# wedge the reopen forever.
+_REPLAY_BUDGET = 600.0
+
+
+async def __ix_restore() -> None:
+    """Reopen a session: load the latest checkpoint into the namespace (instant
+    state), then re-run the successful cells that finished after it, oldest
+    first. Prints its summary -- this runs as a raw execute outside any job, so
+    the prints reach the server's log, not a job buffer."""
+    global _restoring
+    if _store is None or _store_conn is None:
+        print("session restore: no store configured")
+        return
+    _restoring = True
+    try:
+        await _restore_body()
+    finally:
+        _restoring = False
+
+
+async def _restore_body() -> None:
+    ns = _user_ns if _user_ns is not None else globals()
+    import pickle
+
+    loader = _dill()
+    snap = None
+    try:
+        snap = _store.latest_snapshot(_store_conn)
+    except Exception as exc:
+        print(f"session restore: checkpoint read failed ({exc}); replaying the full log")
+    restored: list[str] = []
+    load_failed: list[str] = []
+    if snap is not None:
+        try:
+            named = pickle.loads(snap["blob"])
+        except Exception as exc:
+            print(f"session restore: checkpoint decode failed ({exc}); replaying the full log")
+            named, snap = {}, None
+        else:
+            for name, payload in named.items():
+                try:
+                    ns[name] = loader.loads(payload)
+                    restored.append(name)
+                except Exception:
+                    load_failed.append(name)
+    since = snap["created_at"] if snap is not None else None
+    rows: list[dict] = []
+    try:
+        rows = _store.replayable(_store_conn, since)
+    except Exception as exc:
+        print(f"session restore: could not read the replay set ({exc})")
+    replay_failed: list[str] = []
+    for row in rows:
+        job = await __ix_run(
+            row["code"], budget=_REPLAY_BUDGET, name=f"replay:{row['name'] or row['id']}", kind="replay"
+        )
+        if job.running():
+            job.cancel()
+            replay_failed.append(f"{row['id']} (exceeded {_REPLAY_BUDGET:.0f}s)")
+        elif job.status != "done":
+            replay_failed.append(row["id"])
+    if _SESSION:
+        # Fold the replayed state into a fresh checkpoint so the NEXT reopen is
+        # all-instant (and replays never feed future replays).
+        try:
+            await _snapshot_now()
+        except Exception:
+            pass
+    parts = [f"{len(restored)} names restored instantly"]
+    if snap is not None and snap.get("skipped"):
+        parts.append(f"{len(snap['skipped'])} not in checkpoint ({', '.join(s['name'] for s in snap['skipped'][:10])})")
+    if load_failed:
+        parts.append(f"{len(load_failed)} failed to load ({', '.join(load_failed[:10])})")
+    parts.append(f"{len(rows)} cells replayed")
+    if replay_failed:
+        parts.append(f"{len(replay_failed)} replays failed ({', '.join(replay_failed[:10])})")
+    print("session restore: " + "; ".join(parts))
+
+
+# Per-MCP-session namespaces, keyed by the session id the server passes through
+# ``__ix_exec``. One kernel serves every client of the HTTP transport, and with a
+# single shared namespace parallel agents clobber each other's variables (observed
+# in production). Each session therefore gets its own module-level globals dict,
+# created lazily and seeded from the shared read-only area: the runtime surface
+# plus the bundled helpers, i.e. exactly the names ``install()`` captured in
+# ``_baseline_names``. The helper OBJECTS stay shared (jobs/cells/resources are
+# one registry, so the dashboard and cross-session job paging keep working); only
+# the name bindings are per-session, so one session's assignments never shadow
+# another's. Within one session the dict persists across calls -- the kernel's
+# persistent-namespace contract, unchanged. No session id (the stdio transport,
+# replay, the in-process tests) keeps today's single shared namespace, which is
+# also what session checkpoint/restore covers.
+_session_namespaces: dict[str, dict] = {}
+
+
+def _shared_ns() -> dict:
+    return _user_ns if _user_ns is not None else globals()
+
+
+def _session_ns(session: str | None) -> dict:
+    """The globals dict for ``session``: the shared user namespace when no
+    session id is given, else that session's own dict (created on first use)."""
+    if not session:
+        return _shared_ns()
+    ns = _session_namespaces.get(session)
+    if ns is None:
+        shared = _shared_ns()
+        # install() ran: seed exactly the helper surface. A bare runtime where it
+        # did not (one-shot eval paths) falls back to forking the whole shared
+        # namespace, so the session still sees Result and friends.
+        names = _baseline_names or frozenset(shared)
+        ns = {name: shared[name] for name in names if name in shared}
+        _session_namespaces[session] = ns
+    return ns
+
+
+async def __ix_run(
+    code: str,
+    budget: float = 15.0,
+    name: str | None = None,
+    kind: str = "cell",
+    session: str | None = None,
+) -> Job:
+    """Run ``code`` as a task; wait up to ``budget`` for it; return the Job either
+    way (done, or still running in the background). ``session`` selects the
+    namespace the code runs in (see :func:`_session_ns`)."""
+    ns = _session_ns(session)
+    job = Job(code, name, budget=budget, kind=kind)
+    job._ns = ns
     jobs[job.id] = job
     job.task = asyncio.ensure_future(_runner(job, ns))
     await asyncio.wait({job.task}, timeout=budget)
@@ -1924,6 +2416,9 @@ def _job_summary(job: Job) -> dict:
         "result": None if job._result is None else _safe_repr(job._result),
         "result_chars": len(_result_text(job)),
         "error": job.error,
+        # Where a still-running job is right now (cell line), so a budget-expired
+        # reply can say not just "running" but "running, on line N".
+        "line": _current_line(job) if job.running() else None,
     }
 
 
@@ -1965,9 +2460,13 @@ def _emit(job: Job) -> None:
             pass
 
 
-async def __ix_exec(code: str, budget: float = 15.0, name: str | None = None) -> None:
-    """The MCP server's per-call entrypoint: run with a budget, emit the summary."""
-    job = await __ix_run(code, budget=budget, name=name)
+async def __ix_exec(
+    code: str, budget: float = 15.0, name: str | None = None, session: str | None = None
+) -> None:
+    """The MCP server's per-call entrypoint: run with a budget, emit the summary.
+    ``session`` is the caller's MCP session id (per-session namespace; None for
+    the shared one)."""
+    job = await __ix_run(code, budget=budget, name=name, session=session)
     _emit(job)
 
 
@@ -2056,7 +2555,7 @@ def _value_icon_svg(*, px: int = 16) -> str:
     )
 
 
-async def __ix_read(target, start=None, end=None) -> "Result":
+async def __ix_read(target, start=None, end=None, session=None) -> "Result":
     """Read a file (or evaluate a kernel value) FOR THE MODEL, quietly.
 
     Returns a Result whose ``llm_result`` is the full text the model receives and
@@ -2064,9 +2563,11 @@ async def __ix_read(target, start=None, end=None) -> "Result":
     the model without flooding the dashboard. ``target`` is read as a file when it
     names an existing file, otherwise evaluated as a Python expression in the user
     namespace (e.g. ``jobs['ab12'].output``, a variable you bound). ``start`` and
-    ``end`` select a 1-based inclusive line range. Backs the ``read`` MCP tool.
+    ``end`` select a 1-based inclusive line range. ``session`` evaluates the
+    expression in that MCP session's namespace (the same one its ``python_exec``
+    cells run in), so a variable bound there resolves. Backs the ``read`` MCP tool.
     """
-    ns = _user_ns if _user_ns is not None else globals()
+    ns = _session_ns(session)
     value = None
     path = _existing_file(target)
     if path is None:
@@ -2255,6 +2756,8 @@ def install(user_ns: dict | None = None) -> None:
     target["__ix_run"] = __ix_run
     target["__ix_exec"] = __ix_exec
     target["__ix_read"] = __ix_read
+    target["__ix_snapshot"] = __ix_snapshot
+    target["__ix_restore"] = __ix_restore
     target["DASHBOARD_URL"] = os.environ.get("IX_MCP_DASHBOARD_URL", "")
     # `sh` is a bundled, callable module (see packages/mcp/src/sh). Bind it here
     # so `await sh(cmd)` works with no import, the way Result/cells/jobs do; an
@@ -2290,6 +2793,12 @@ def install(user_ns: dict | None = None) -> None:
     except Exception:
         pass
     target["api"] = api
+
+    # Everything in the namespace up to here is the runtime's own surface plus
+    # the kernel preamble -- not user state. Session checkpoints cover only the
+    # names bound after this line (see _snapshot_candidates).
+    global _baseline_names
+    _baseline_names = frozenset(target)
 
     try:
         asyncio.get_event_loop().create_task(_flusher())

@@ -16,6 +16,10 @@ path = "src/main.rs"
 anstream.workspace = true
 anstyle.workspace = true
 anyhow.workspace = true
+# The workspace pins chrono with `default-features = false`; `alloc` re-enables
+# the formatting used to print hit timestamps. No clock feature: "now" comes
+# from SystemTime.
+chrono = { workspace = true, features = ["alloc"] }
 clap = { workspace = true, features = ["derive", "env"] }
 code-highlight.workspace = true
 indicatif.workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "astlog"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Datalog over tree-sitter ASTs: query relations, join them, apply rewrites"
+
+[[bin]]
+name = "astlog"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+astlog-core.workspace = true
+clap = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+snafu.workspace = true

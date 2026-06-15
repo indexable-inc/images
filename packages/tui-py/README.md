@@ -337,6 +337,67 @@ directory (`socket_dir()`) and drops a producer's terminals when it disconnects.
 No process owns the server, so there is no port collision and one URL shows them
 all. Pass `path=` to `publish()` to choose the socket path.
 
+## Agent harnesses (Playwright-style)
+
+`tui.harness` drives interactive coding agents (Claude Code, Codex) the way
+Playwright drives a browser. `Tui` is the raw page; a harness is `launch()` /
+`keyboard` / `wait_for_load_state` / `content()` / `expect()` for an agent REPL.
+It is the layer every agent test rig ends up re-inventing: submit a prompt, wait
+for the turn to finish, read the reply.
+
+```python
+from tui.harness import Claude, expect
+
+async def main() -> None:
+    async with await Claude.launch(cwd="/repo") as agent:
+        # one-liner: submit, wait for the turn to end, return the reply
+        answer = await agent.run("What does packages/foo do?", timeout=180)
+        print(answer)
+
+        # or step by step, with auto-retrying assertions
+        await agent.prompt("now write a one-line summary")
+        await expect(agent).to_be_idle(timeout=120)
+        await expect(agent).to_contain_text("summary")
+        print(await agent.last_reply())
+```
+
+The vocabulary maps straight onto Playwright:
+
+| Playwright (browser)              | `tui.harness` (agent TUI)            |
+| --------------------------------- | ------------------------------------ |
+| `await chromium.launch()`         | `await Claude.launch()`              |
+| `page.keyboard.type(text)`        | `agent.keyboard.type(text)`         |
+| `page.keyboard.press("Enter")`    | `agent.keyboard.press(Key.ENTER)`   |
+| `page.wait_for_selector(sel)`     | `agent.wait_for(pattern)`           |
+| `page.wait_for_load_state("idle")`| `agent.wait_for_idle()`             |
+| `page.content()` / `inner_text()` | `agent.content()` / `agent.text()`  |
+| `page.screenshot()`               | `agent.screenshot()` (a `Snapshot`) |
+| `page.on("dialog", dismiss)`      | onboarding `gates` cleared on launch |
+| `expect(loc).to_contain_text(s)`  | `await expect(agent).to_contain_text(s)` |
+
+**Why drive the real TUI, not `claude -p`?** A headless `-p` run is invisible and
+uninterruptible. A harness drives the actual TUI in a PTY, so the session shows
+up live on the web dashboard (`nix run .#tui-dashboard`) exactly like a human's:
+you watch the current state, attach, interrupt. For an experiment, observability
+beats a black box you can only diff.
+
+**Auto-waiting.** Like Playwright, actions wait for actionability and assertions
+retry: `prompt` waits for the input box to accept the text before submitting,
+`run` waits for the turn to finish, and `expect(...)` retries until its deadline.
+
+**Idle detection is quiescence-first.** A PTY has no "done" event and the obvious
+signals are brittle (spinners animate, footers reword between releases, a
+submitted prompt stays on screen). So a turn is "done" when the viewport stops
+changing for `settle` seconds *and* a `busy_marker` substring (Claude Code's
+"esc to interrupt") is absent. Quiescence is the version-independent backstop;
+the marker is the precise fast-path. Tune `settle` up for agents that pause
+mid-turn on a long tool call.
+
+`Claude` is grounded against Claude Code 2.1.x (auto-accepts the "trust this
+folder?" gate, parses the `⏺` answer block). `Codex` ships marker-less
+(quiescence only); pass `busy_marker=` / `ready=` / `gates=` once you confirm
+your build's indicators. Subclass `Agent` for any other agent REPL.
+
 ## Public surface
 
 | Name           | Purpose                                                |
@@ -355,5 +416,16 @@ all. Pass `path=` to `publish()` to choose the socket path.
 | `publish`      | Await to expose this process's terminals on a socket.  |
 | `Publisher`    | Handle to a running producer: `path`, `producer_id`, `stop`. |
 | `socket_dir`   | The discovery directory producers and the aggregator share. |
+
+From `tui.harness` (also re-exported at top level):
+
+| Name           | Purpose                                                |
+| -------------- | ------------------------------------------------------ |
+| `Claude`       | Claude Code harness: `launch`, `prompt`, `run`, `expect`. Grounded. |
+| `Codex`        | Codex harness (quiescence-only; tune markers per build). |
+| `Agent`        | Base class: subclass for any other agent REPL.        |
+| `expect`       | `await expect(agent).to_contain_text(...)` / `.to_be_idle()`. Auto-retries. |
+| `Keyboard`     | `agent.keyboard`: `type(text)`, `press(*keys)`.       |
+| `Gate`         | An onboarding screen (trust prompt, changelog) cleared on launch. |
 
 [pyo3-async-runtimes]: https://docs.rs/pyo3-async-runtimes/

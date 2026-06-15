@@ -15,6 +15,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 use snafu::ResultExt as _;
+use source_meta::sanitize;
 
 use crate::error::{ReadFileSnafu, Result};
 use crate::record::{Message, MessageOrigin};
@@ -106,7 +107,10 @@ fn collect_tool_index(lines: &[RawLine]) -> ToolIndex {
                 Some("tool_result") => {
                     if let Some(id) = &block.tool_use_id {
                         let rendered = block.content.clone().map_or_else(String::new, render_value);
-                        results.insert(id.clone(), rendered);
+                        // Tool output is the hostile-input path (CI logs, curl
+                        // responses, cat'ed config files): sanitize and cap it
+                        // before it is folded into a document body.
+                        results.insert(id.clone(), sanitize::sanitize_tool_result(&rendered));
                     }
                 }
                 _ => {}
@@ -147,6 +151,12 @@ impl RawLine {
         let role = message.role.clone().or_else(|| record_type.clone())?;
 
         let Rendered { body, tool_name } = render_content(message.content, tools);
+        // Sanitize the whole rendered body (prose, thinking, and tool inputs,
+        // not just tool results): strip ANSI escapes, redact credential
+        // shapes, collapse blob tokens. This runs BEFORE the body is hashed in
+        // `Message::into_document`, so `content_hash` is the hash of the clean
+        // text and a re-sync sees previously ingested raw bodies as changed.
+        let body = sanitize::sanitize(&body);
         if body.trim().is_empty() {
             return None;
         }
@@ -288,6 +298,7 @@ fn render_blocks(blocks: Vec<Block>, tools: &ToolIndex) -> Rendered {
                     .is_some_and(|id| tools.calls.contains(id));
                 if !folded {
                     let rendered = block.content.map_or_else(String::new, render_value);
+                    let rendered = sanitize::sanitize_tool_result(&rendered);
                     push_section(&mut body, Some(&format!("[tool_result] {rendered}")));
                 }
             }

@@ -23,26 +23,28 @@ let
   serviceName = "ix-observability-demo";
   spanName = "demo.lifecycle";
   marker = "ix-observability-demo log line";
-  emitTelemetry = pkgs.writeShellScript "ix-observability-demo-emit" ''
-    set -eu
-    mkdir -p ${lib.escapeShellArg logDir}
-    printf '%s service=%s event=started\n' ${lib.escapeShellArg marker} ${lib.escapeShellArg serviceName} >> ${lib.escapeShellArg logPath}
-    ${lib.getExe pkgs.otel-cli} span \
-      --service ${lib.escapeShellArg serviceName} \
-      --name ${lib.escapeShellArg spanName} \
-      --endpoint 127.0.0.1:${toString config.services.ix-observability.collector.grpcPort} \
-      --protocol grpc \
-      --insecure \
-      --fail \
-      --attrs ix.example=observability-stack,ix.node=${lib.escapeShellArg config.networking.hostName}
-  '';
-  checkTelemetry = pkgs.writeShellScript "ix-observability-demo-check" ''
-    set -eu
-    trace_count="$(${lib.getExe pkgs.clickhouse} client --host ${lib.escapeShellArg observability.host} --port ${toString observability.clickhousePort} --database ${lib.escapeShellArg observability.database} --query "SELECT count() FROM otel_traces WHERE ServiceName = '${serviceName}' AND SpanName = '${spanName}' AND Timestamp >= now() - INTERVAL 1 DAY")"
-    log_count="$(${lib.getExe pkgs.clickhouse} client --host ${lib.escapeShellArg observability.host} --port ${toString observability.clickhousePort} --database ${lib.escapeShellArg observability.database} --query "SELECT count() FROM otel_logs WHERE Body LIKE '%${marker}%' AND Timestamp >= now() - INTERVAL 1 DAY")"
-    test "$trace_count" -gt 0
-    test "$log_count" -gt 0
-  '';
+  emitTelemetry = lib.getExe (
+    ix.writeNushellApplication pkgs {
+      name = "ix-observability-demo-emit";
+      text = ''
+        mkdir "${logDir}"
+        "${marker} service=${serviceName} event=started\n" | save --append "${logPath}"
+        ^${lib.getExe pkgs.otel-cli} span --service "${serviceName}" --name "${spanName}" --endpoint "127.0.0.1:${toString config.services.ix-observability.collector.grpcPort}" --protocol grpc --insecure --fail --attrs "ix.example=observability-stack,ix.node=${config.networking.hostName}"
+      '';
+    }
+  );
+  checkTelemetry = lib.getExe (
+    ix.writeNushellApplication pkgs {
+      name = "ix-observability-demo-check";
+      text = ''
+        let base = [ "client" "--host" "${observability.host}" "--port" "${toString observability.clickhousePort}" "--database" "${observability.database}" ]
+        let traces = (^${lib.getExe pkgs.clickhouse} ...$base --query "SELECT count() FROM otel_traces WHERE ServiceName = '${serviceName}' AND SpanName = '${spanName}' AND Timestamp >= now() - INTERVAL 1 DAY" | str trim | into int)
+        let logs = (^${lib.getExe pkgs.clickhouse} ...$base --query "SELECT count() FROM otel_logs WHERE Body LIKE '%${marker}%' AND Timestamp >= now() - INTERVAL 1 DAY" | str trim | into int)
+        if $traces <= 0 { exit 1 }
+        if $logs <= 0 { exit 1 }
+      '';
+    }
+  );
 in
 {
   services.ix-observability = {

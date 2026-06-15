@@ -200,7 +200,7 @@ let
                 # below. Switching to `hash = <SRI>` would make `outputHash` an SRI
                 # string and break cargo's check, so the registry tarball stays on
                 # the hex-valued `sha256` attr.
-                # ast-grep-ignore: prefer-sri-hash
+                # astlog-ignore: prefer-sri-hash
                 sha256 = pkg.checksum;
               };
             in

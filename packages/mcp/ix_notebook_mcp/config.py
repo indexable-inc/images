@@ -33,7 +33,16 @@ class Config:
     # Path to the SQLite execution store the kernel writes and the dashboard reads.
     store_path: Path | None = None
 
-    # "stdio" (the default; what an MCP client launches) or "http".
+    # Session mode (`serve --session FILE` / `notebook FILE`): the store IS the
+    # session file -- kept across restarts instead of wiped, checkpointed by the
+    # kernel runtime, restored on reopen. None for an ephemeral server.
+    session_path: Path | None = None
+    # True when the session file already existed at launch, so the server must
+    # restore (load the checkpoint, replay the gap) before running new cells.
+    session_resume: bool = False
+
+    # "stdio" (the default; what an MCP client launches), "http", or "none"
+    # (the standalone notebook engine: kernel + dashboard, no MCP transport).
     transport: str = "stdio"
     mcp_http_host: str = "127.0.0.1"
     mcp_http_port: int = 8000
@@ -42,6 +51,21 @@ class Config:
     # library can write to fd 1, so the MCP protocol owns them exclusively.
     stdin_fd: int | None = None
     stdout_fd: int | None = None
+
+    # Shared bearer token gating the dashboard's `/api/exec` write path (a peer's
+    # `fleet.in_kernel` runs code in this node's live kernel). None disables the
+    # endpoint entirely; set, it must match the request's `Authorization: Bearer`.
+    # Sourced from IX_MCP_EXEC_TOKEN(_FILE) by the CLI; the fleet service hands
+    # every node the same secret.
+    exec_token: str | None = None
+
+    # Trust the bound network (the tailnet) as the `/api/exec` auth boundary, so
+    # `fleet.in_kernel` works without a token -- the same model Ray's own data
+    # plane relies on. The endpoint honors this only when `host` is non-loopback
+    # (a tailnet/LAN bind, not 127.0.0.1). A set `exec_token` still wins (it is
+    # then additionally required). With neither, the endpoint stays disabled.
+    # Sourced from IX_MCP_EXEC_TRUST_NETWORK by the CLI; the fleet service sets it.
+    exec_trust_network: bool = False
 
     # Seconds past a cell's own ``budget`` that the server waits for the kernel to
     # report idle before treating it as wedged by a synchronous call, interrupting

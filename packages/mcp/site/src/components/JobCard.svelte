@@ -1,12 +1,14 @@
 <script lang="ts">
   import type { Job } from '$lib/types';
   import { now } from '$lib/now.svelte';
-  import { duration, jobTitle } from '$lib/format';
+  import { duration, jobTitle, jobTokens, tokens } from '$lib/format';
   import StatusChip from './StatusChip.svelte';
   import RichOutput from './RichOutput.svelte';
   import CodeView from './CodeView.svelte';
 
-  let { job }: { job: Job } = $props();
+  // `latest` marks the most recent run in the feed: it opens its source by
+  // default so the thing you just ran reads in full without a click.
+  let { job, latest = false }: { job: Job; latest?: boolean } = $props();
 
   // Only an explicit caller name labels the card; the source is shown below.
   const title = $derived(jobTitle(job.name, job.id));
@@ -20,13 +22,48 @@
   const frac = $derived(job.budget > 0 ? Math.min(1, elapsedSec / job.budget) : 0);
   const overBudget = $derived(elapsedSec >= job.budget);
   const hasRich = $derived(job.outputs.length > 0);
-  // Don't repeat the error if it's already in the captured stdout tail.
-  const showError = $derived(!!job.error && !(job.output ?? '').includes(job.error));
-  // A run reads as its results by default: the source and the captured stdout are
-  // one click away, not in the way (stdout is not the channel — a run reports
-  // through Results). Only runs that carry source or stdout get a reveal toggle.
   const hasDetails = $derived(!!(job.code_html || job.code || job.output));
-  let showDetails = $state(false);
+
+  // Estimated token cost of this tool call: what went up to the kernel (the
+  // code) and what came back to the model (the result text). A running job's
+  // output count climbs as its captured output grows.
+  const tk = $derived(jobTokens(job));
+  const tokTitle = $derived(
+    `≈ ${tk.inTok} tokens in (${tk.inChars} chars) · ≈ ${tk.outTok} tokens out ` +
+      `(${tk.outChars} chars). Estimated at ~4 chars/token.`,
+  );
+
+  // A run reads as its results by default, but some states open themselves: a
+  // running job shows its source with the executing line highlighted live, a
+  // failed one shows the line it failed on, and the most recent run opens so the
+  // thing you just ran is expanded without a click. A user click takes over from
+  // the automatic behaviour for this card.
+  let userToggled = $state<boolean | null>(null);
+  const autoOpen = $derived(latest || job.status === 'running' || job.status === 'error');
+  const showDetails = $derived(hasDetails && (userToggled ?? autoOpen));
+
+  // The kernel appends the error text to the captured stdout (so the model can
+  // page it); the card shows the error in its own panel, so strip that trailing
+  // copy from the stdout block rather than printing it twice.
+  const outText = $derived.by(() => {
+    const out = job.output ?? '';
+    if (job.error && out.endsWith(job.error)) return out.slice(0, out.length - job.error.length).trimEnd();
+    return out;
+  });
+
+  // Error presentation: a Python traceback gets a headline (the exception line,
+  // e.g. "ValueError: boom") and a "line N" badge above the full text; a plain
+  // contract message (no frames) renders as-is.
+  const isTraceback = $derived(!!job.error && /^\s*(Traceback \(most recent call last\):|File ")/.test(job.error));
+  const errHeadline = $derived.by(() => {
+    if (!job.error || !isTraceback) return '';
+    const lines = job.error.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      // The exception line of a traceback: "TypeError: ...", "fff.FffError: ...".
+      if (/^[A-Za-z_][\w.]*(?::\s|$)/.test(lines[i])) return lines[i].trim();
+    }
+    return '';
+  });
 </script>
 
 <article class="job {job.status}">
@@ -38,11 +75,18 @@
     aria-expanded={showDetails}
     disabled={!hasDetails}
     title={hasDetails ? (showDetails ? 'Hide source & output' : 'Show source & output') : undefined}
-    onclick={() => (showDetails = !showDetails)}
+    onclick={() => (userToggled = !showDetails)}
   >
     {#if hasDetails}<span class="caret" aria-hidden="true">{showDetails ? '▾' : '▸'}</span>{/if}
     <StatusChip status={job.status} />
-    {#if title}<span class="name">{title}</span>{/if}
+    {#if title}<span class="name">{title}</span>{:else}<span class="name"></span>{/if}
+    {#if job.status === 'running' && job.line != null}
+      <span class="at" title="executing line {job.line} of this cell">line {job.line}</span>
+    {/if}
+    <span class="toks" title={tokTitle}>
+      <span class="tok">{tokens(tk.inTok)}<i>in</i></span>
+      <span class="tok">{tokens(tk.outTok)}<i>out</i></span>
+    </span>
     <span class="dur">{elapsed}</span>
   </button>
 
@@ -61,12 +105,17 @@
 
   {#if showDetails}
     {#if job.code_html}
-      <CodeView html={job.code_html} bindings={job.bindings} />
+      <CodeView
+        html={job.code_html}
+        bindings={job.bindings}
+        currentLine={job.status === 'running' ? job.line : null}
+        errorLine={job.status === 'error' ? job.error_line : null}
+      />
     {:else if job.code}
       <pre class="code">{job.code}</pre>
     {/if}
-    {#if job.output}
-      <pre class="out">{job.output}</pre>
+    {#if outText}
+      <pre class="out">{outText}</pre>
     {/if}
   {/if}
 
@@ -78,8 +127,19 @@
     <pre class="res">{job.result}</pre>
   {/if}
 
-  {#if showError}
-    <pre class="err">{job.error}</pre>
+  {#if job.error}
+    <div class="errbox">
+      {#if errHeadline || job.error_line != null}
+        <div class="errhd">
+          <span class="errmark" aria-hidden="true">✕</span>
+          <span class="errname">{errHeadline || 'error'}</span>
+          {#if job.error_line != null}
+            <span class="errat" title="raised on line {job.error_line} of this cell">line {job.error_line}</span>
+          {/if}
+        </div>
+      {/if}
+      <pre class="err">{job.error}</pre>
+    </div>
   {/if}
 </article>
 
@@ -140,12 +200,39 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The live "line N" readout: where the running cell is right now. Quiet and
+     tabular so the number ticking up does not jitter the header. */
+  .at {
+    flex: none;
+    color: var(--accent);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+  }
   .dur {
     flex: none;
-    margin-left: auto;
+    margin-left: 9px;
     color: var(--faint);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
+  }
+  /* Estimated token cost, in and out. Pushed to the right edge (the name's flex
+     eats the slack) and kept faint and tabular so the numbers ticking up on a
+     running job sit quietly beside the duration rather than drawing the eye. */
+  .toks {
+    flex: none;
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+    color: var(--faint);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tok i {
+    margin-left: 3px;
+    font-style: normal;
+    font-size: 9px;
+    letter-spacing: 0.04em;
+    color: var(--line-2);
   }
   /* A blue bar tracking elapsed-vs-budget for a running job: how much of the
      foreground "total timeout" has been spent before the call backgrounds. */
@@ -219,7 +306,48 @@
   pre.res {
     color: var(--text);
   }
+
+  /* The error panel: the exception headline and the failing line up front, the
+     full (cell-trimmed) traceback beneath. */
+  .errbox {
+    margin: 8px 0 0;
+    border: 1px solid var(--err-line);
+    background: color-mix(in srgb, var(--err) 5%, var(--inset));
+  }
+  .errhd {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    min-width: 0;
+    padding: 6px 9px;
+    border-bottom: 1px solid var(--err-line);
+  }
+  .errmark {
+    flex: none;
+    color: var(--err);
+    font-size: 10px;
+  }
+  .errname {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--err);
+    font-size: 12px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .errat {
+    flex: none;
+    padding: 1px 6px;
+    border: 1px solid var(--err-line);
+    color: var(--err);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
   pre.err {
+    margin: 0;
+    padding: 7px 9px;
     color: var(--err);
   }
 </style>

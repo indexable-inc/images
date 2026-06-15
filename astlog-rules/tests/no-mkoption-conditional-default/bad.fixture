@@ -1,0 +1,1 @@
+{ lib, config }: lib.mkOption { default = if config.foo then 1 else 2; }

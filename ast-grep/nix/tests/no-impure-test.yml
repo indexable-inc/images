@@ -1,5 +1,0 @@
-id: no-impure
-valid:
-  - '{ name = "x"; builder = "/bin/sh"; }'
-invalid:
-  - '{ __impure = true; }'

@@ -123,6 +123,13 @@ pub enum Error {
         /// Underlying regex compilation error.
         source: regex::Error,
     },
+
+    /// A context lookup id matched no stored record and no session.
+    #[snafu(display("no record or session found for {id:?}"))]
+    ContextNotFound {
+        /// The id (external id or session id) that matched nothing.
+        id: String,
+    },
 }
 
 /// Convenient result alias defaulting to this crate's [`Error`].

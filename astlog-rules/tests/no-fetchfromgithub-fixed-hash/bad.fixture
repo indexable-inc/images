@@ -1,0 +1,1 @@
+{ fetchFromGitHub }: fetchFromGitHub { owner = "o"; repo = "r"; rev = "v1.0"; hash = "sha256-2vBmJBzPyVcEMrAQUegW2BIvBI0Ld38d5fjLnVZQNN0="; }

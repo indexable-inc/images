@@ -733,6 +733,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "astlog"
+version = "0.1.0"
+dependencies = [
+ "astlog-core",
+ "clap",
+ "serde_json",
+ "snafu",
+]
+
+[[package]]
+name = "astlog-core"
+version = "0.1.0"
+dependencies = [
+ "ast-merge-langs",
+ "edit-applier",
+ "ignore",
+ "regex",
+ "snafu",
+ "tempfile",
+ "tree-sitter",
+]
+
+[[package]]
+name = "astlog-py"
+version = "0.1.0"
+dependencies = [
+ "astlog-core",
+ "pyo3",
+]
+
+[[package]]
 name = "async-lock"
 version = "3.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -942,9 +973,9 @@ dependencies = [
 
 [[package]]
 name = "block-buffer"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdd35008169921d80bc60d3d0ab416eecb028c4cd653352907921d95084790be"
+checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
 ]
@@ -970,9 +1001,9 @@ dependencies = [
 
 [[package]]
 name = "bon"
-version = "3.9.1"
+version = "3.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f47dbe92550676ee653353c310dfb9cf6ba17ee70396e1f7cf0a2020ad49b2fe"
+checksum = "b2f04f6fef12d70d42a77b1433c9e0f065238479a6cefc4f5bab105e9873a3c3"
 dependencies = [
  "bon-macros",
  "rustversion",
@@ -980,9 +1011,9 @@ dependencies = [
 
 [[package]]
 name = "bon-macros"
-version = "3.9.1"
+version = "3.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "519bd3116aeeb42d5372c29d982d16d0170d3d4a5ed85fc7dd91642ffff3c67c"
+checksum = "7d0bd4c2f75335ad98052a37efb54f428b492f64340257143b3429c8a508fa7b"
 dependencies = [
  "darling 0.23.0",
  "ident_case",
@@ -1199,6 +1230,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "claude-hooks"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "glob",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "claude-stories"
 version = "0.1.0"
 dependencies = [
@@ -1396,6 +1437,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
+]
+
+[[package]]
+name = "config-launch"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]
@@ -1951,7 +2002,7 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
- "block-buffer 0.12.0",
+ "block-buffer 0.12.1",
  "const-oid 0.10.2",
  "crypto-common 0.2.2",
 ]
@@ -2035,6 +2086,14 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
+name = "edit-applier"
+version = "0.1.0"
+dependencies = [
+ "similar",
+ "snafu",
+]
 
 [[package]]
 name = "either"
@@ -2199,9 +2258,9 @@ checksum = "9afc2bd4d5a73106dd53d10d73d3401c2f32730ba2c0b93ddb888a8983680471"
 
 [[package]]
 name = "fastnum"
-version = "0.7.4"
+version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4089ab2dfd45d8ddc92febb5ca80644389d5ebb954f40231274a3f18341762e2"
+checksum = "020d1b59a944bc239d79903fbac2eda2365138b44890c27979562f6592059dcd"
 dependencies = [
  "bnum",
  "num-integer",
@@ -2276,6 +2335,36 @@ dependencies = [
  "crc32fast",
  "miniz_oxide",
  "zlib-rs",
+]
+
+[[package]]
+name = "flecs-query-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "flecs-query-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flecs-query-core",
+ "rmcp",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "flecs-query-py"
+version = "0.1.0"
+dependencies = [
+ "flecs-query-core",
+ "pyo3",
+ "pythonize",
 ]
 
 [[package]]
@@ -3352,6 +3441,7 @@ dependencies = [
  "nix 0.31.3",
  "rusqlite",
  "search-core",
+ "serde",
  "serde_json",
  "sink-mixedbread",
  "sink-parquet",
@@ -3361,6 +3451,7 @@ dependencies = [
  "source-debug",
  "source-git",
  "source-github",
+ "source-journald",
  "source-linear",
  "source-meta",
  "source-parquet",
@@ -4283,9 +4374,9 @@ dependencies = [
 
 [[package]]
 name = "napi"
-version = "3.9.0"
+version = "3.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d395473824516f38dd1071a1a37bc57daa7be65b293ebba4ead5f7abb017a2"
+checksum = "ad513ff22558f1830b595ea6eb4091da48145d09a222ce157e781896f78be0b9"
 dependencies = [
  "bitflags 2.13.0",
  "ctor",
@@ -4332,9 +4423,9 @@ dependencies = [
 
 [[package]]
 name = "napi-sys"
-version = "3.2.1"
+version = "3.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8eb602b84d7c1edae45e50bbf1374696548f36ae179dfa667f577e384bb90c2b"
+checksum = "1f5bcdf71abd3a50d00b49c1c2c75251cb3c913777d6139cd37dabc093a5e400"
 dependencies = [
  "libloading 0.9.0",
 ]
@@ -5315,6 +5406,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "protobuf"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d65a1d4ddae7d8b5de68153b48f6aa3bba8cb002b243dbdbc55a5afbc98f99f4"
+dependencies = [
+ "once_cell",
+ "protobuf-support",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "protobuf-support"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "pty-process"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6143,6 +6254,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "scip"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e46becf967b98a434bf7f19c8be30ca74bff57702ea7ef6af3628cbf52f57be0"
+dependencies = [
+ "protobuf",
+]
+
+[[package]]
+name = "scipql"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "scipql-core",
+]
+
+[[package]]
+name = "scipql-core"
+version = "0.1.0"
+dependencies = [
+ "edit-applier",
+ "protobuf",
+ "scip",
+ "snafu",
+ "tempfile",
+]
+
+[[package]]
+name = "scipql-py"
+version = "0.1.0"
+dependencies = [
+ "pyo3",
+ "scipql-core",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6209,6 +6356,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "anyhow",
+ "chrono",
  "clap",
  "code-highlight",
  "indicatif",
@@ -6641,9 +6789,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.15.1"
+version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 dependencies = [
  "serde",
 ]
@@ -6712,11 +6860,13 @@ dependencies = [
 name = "source-codex"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "nix 0.31.3",
  "serde",
  "serde_json",
  "snafu",
  "source-meta",
+ "tempfile",
 ]
 
 [[package]]
@@ -6750,6 +6900,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "source-journald"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde_json",
+ "snafu",
+ "source-meta",
+]
+
+[[package]]
 name = "source-linear"
 version = "0.1.0"
 dependencies = [
@@ -6764,6 +6924,7 @@ dependencies = [
 name = "source-meta"
 version = "0.1.0"
 dependencies = [
+ "lazy-regex",
  "serde",
  "serde_json",
  "sha2 0.11.0",

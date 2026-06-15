@@ -10,6 +10,7 @@ import type { Component } from 'svelte';
 import DataBody from '$components/DataBody.svelte';
 import ExecBody from '$components/ExecBody.svelte';
 import HtmlBody from '$components/HtmlBody.svelte';
+import NamespaceBody from '$components/NamespaceBody.svelte';
 import TermBody from '$components/TermBody.svelte';
 import type { Pane } from './types';
 
@@ -20,8 +21,21 @@ export const renderers: Record<string, Component<{ pane: Pane }>> = {
   data: DataBody,
 };
 
+// Named renderers for `data` panes. A producer publishes a `data` pane with a
+// `renderer` name and the frontend routes to a matching component; an unknown
+// name falls back to the generic JSON tree (DataBody). This is the generative-UI
+// seam: a new structured view is one entry here plus its component — no wire or
+// aggregator change. `namespace` (a Python session's live globals) is the first.
+const dataRenderers: Record<string, Component<{ pane: Pane }>> = {
+  namespace: NamespaceBody,
+};
+
 export const fallback: Component<{ pane: Pane }> = DataBody;
 
-export function rendererFor(kind: string | undefined): Component<{ pane: Pane }> {
+export function rendererFor(
+  kind: string | undefined,
+  renderer?: string,
+): Component<{ pane: Pane }> {
+  if (kind === 'data' && renderer && dataRenderers[renderer]) return dataRenderers[renderer];
   return (kind && renderers[kind]) || fallback;
 }

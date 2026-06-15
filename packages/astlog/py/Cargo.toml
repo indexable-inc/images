@@ -1,0 +1,17 @@
+[package]
+name = "astlog-py"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Python bindings for astlog-core: Datalog queries and rewrites over tree-sitter ASTs"
+
+[lib]
+name = "astlog_py"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+astlog-core.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }

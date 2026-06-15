@@ -1,19 +1,21 @@
-"""Slack for the kernel: read channels, messages, and threads; send messages; search.
+"""Slack for the kernel: read channels, DMs, messages, and threads; send; search.
 
 Bundled into the ix-mcp interpreter so a session can ``import slack`` with no
-install step. Credentials are per-user and never shared: a Slack user token is
-read from the ``SLACK_USER_TOKEN`` or ``SLACK_TOKEN`` environment variable, or
-from a user-only file at ``~/.config/slack/token`` (written mode 0600 by
-:func:`login`). No token is baked into the repo.
+install step. Credentials are per-user and never shared: a Slack token is read
+from the ``SLACK_USER_TOKEN`` or ``SLACK_TOKEN`` environment variable, or from a
+user-only file at ``~/.config/slack/token`` (written mode 0600 by :func:`login`).
+No token is baked into the repo.
 
     import slack
 
-    slack.login("xoxp-...")          # store your token (written mode 0600)
-    slack.status()                   # {"configured": True, "team": ..., "user": ...}
-    slack.logout()                   # remove the stored token file
+    slack.login("xoxp-...")           # store your token (written mode 0600)
+    slack.status()                    # {"configured": True, "team": ..., "user": ...}
+    slack.logout()                    # remove the stored token file
 
-    await slack.channels()           # all channels you can see, as a polars frame
-    await slack.messages("general")  # recent messages in #general
+    await slack.channels()            # channels you can see, as a polars frame
+    await slack.dms()                 # your direct-message conversations
+    await slack.messages("general")   # recent messages in #general (incl. bots)
+    await slack.messages("@hari")     # recent messages in your DM with @hari
     await slack.thread("general", "1234567890.123456")  # a single thread
     await slack.send("general", "hello from ix")        # post a message
     await slack.search("deploy staging")                # search across Slack
@@ -21,6 +23,12 @@ from a user-only file at ``~/.config/slack/token`` (written mode 0600 by
 Each call returns a polars DataFrame with a fixed schema so empty results stay
 typed. Raises :exc:`SlackError` when no token is configured; the message names
 the next step (``slack.login(token)``).
+
+The token's reach is whatever OAuth scopes the Slack app was granted, so a
+search or DM read can fail with ``missing_scope``; the error names the scope to
+add to the app (then re-mint the token). Common scopes: ``channels:history`` /
+``groups:history`` / ``im:history`` (read messages), ``im:read`` (list DMs),
+``search:read`` (search), ``chat:write`` (post).
 
 Slack messages carry the signed-in user's personal data (DMs, private channels),
 so this module is confined to **incognito sessions**: in a shared (multiplayer)
@@ -33,7 +41,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import stat
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,6 +51,7 @@ import polars as pl
 __all__ = [
     "SlackError",
     "channels",
+    "dms",
     "login",
     "logout",
     "messages",
@@ -53,7 +61,7 @@ __all__ = [
     "thread",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # The env var a shared (multiplayer) room sets on the one MCP it replicates
 # across participants. Incognito is the default: an unset (or empty) value means
@@ -70,6 +78,36 @@ _TOKEN_FILE = pathlib.Path.home() / ".config" / "slack" / "token"
 # Slack Web API base URL.
 _API_BASE = "https://slack.com/api"
 
+# Message subtypes that are pure channel-membership / housekeeping noise. These
+# are dropped from `messages()` by default; everything else -- including
+# `bot_message` (CI/deploy/webhook posts), `me_message`, `thread_broadcast`, and
+# file shares -- is kept, so a bot-only channel no longer reads as empty. (The
+# old code dropped every message with any subtype, which silently emptied
+# channels whose traffic is all bots.)
+_NOISE_SUBTYPES = frozenset(
+    {
+        "channel_join",
+        "channel_leave",
+        "channel_topic",
+        "channel_purpose",
+        "channel_name",
+        "channel_archive",
+        "channel_unarchive",
+        "group_join",
+        "group_leave",
+        "group_topic",
+        "group_purpose",
+        "group_name",
+        "group_archive",
+        "group_unarchive",
+        "pinned_item",
+        "unpinned_item",
+        "bot_add",
+        "bot_remove",
+        "reminder_add",
+    }
+)
+
 # Fixed schemas so empty results stay typed.
 _CHANNELS_SCHEMA: dict[str, pl.DataType] = {
     "id": pl.Utf8,
@@ -81,10 +119,18 @@ _CHANNELS_SCHEMA: dict[str, pl.DataType] = {
     "purpose": pl.Utf8,
 }
 
+_DMS_SCHEMA: dict[str, pl.DataType] = {
+    "id": pl.Utf8,
+    "user_id": pl.Utf8,
+    "user": pl.Utf8,
+    "real_name": pl.Utf8,
+}
+
 _MESSAGES_SCHEMA: dict[str, pl.DataType] = {
     "ts": pl.Utf8,
     "user": pl.Utf8,
     "text": pl.Utf8,
+    "subtype": pl.Utf8,
     "reply_count": pl.Int64,
     "reactions": pl.Int64,
 }
@@ -93,6 +139,7 @@ _THREAD_SCHEMA: dict[str, pl.DataType] = {
     "ts": pl.Utf8,
     "user": pl.Utf8,
     "text": pl.Utf8,
+    "subtype": pl.Utf8,
     "reply_count": pl.Int64,
 }
 
@@ -110,8 +157,9 @@ class SlackError(RuntimeError):
     """Raised when Slack cannot be reached for this session.
 
     Usually means "not configured": call ``slack.login(token)`` to store a
-    Slack user token. Also raised in a shared room (where personal Slack access
-    is refused) and on API errors from the Slack Web API.
+    Slack token. Also raised in a shared room (where personal Slack access is
+    refused) and on API errors from the Slack Web API (a ``missing_scope`` error
+    names the OAuth scope to add).
     """
 
 
@@ -132,12 +180,10 @@ def _require_incognito() -> None:
 
 
 def _token() -> str:
-    """Return the Slack user token, or raise SlackError if none is configured.
+    """Return the Slack token, or raise SlackError if none is configured.
 
-    Resolution order:
-    1. ``SLACK_USER_TOKEN`` env var
-    2. ``SLACK_TOKEN`` env var
-    3. ``~/.config/slack/token`` (written by :func:`login`)
+    Resolution order: ``SLACK_USER_TOKEN`` env, ``SLACK_TOKEN`` env, then
+    ``~/.config/slack/token`` (written by :func:`login`).
     """
     for var in _TOKEN_ENV_VARS:
         val = os.environ.get(var, "").strip()
@@ -158,31 +204,33 @@ def _token() -> str:
 def _api_call(method: str, token: str, params: dict[str, Any] | None = None) -> dict:
     """Call a Slack Web API method and return the decoded JSON response.
 
-    Raises :exc:`SlackError` on HTTP errors or when Slack returns ``ok=false``.
-    The token is passed as a Bearer header and never placed in the URL or query
-    string so it stays out of server logs.
-    """
-    url = f"{_API_BASE}/{method}"
-    qs = urllib.parse.urlencode(params or {})
-    if qs:
-        url = f"{url}?{qs}"
+    Every call is a form POST with the token in an ``Authorization: Bearer``
+    header (never in the URL or query string, so it stays out of server logs).
+    A form POST also unifies reads, ``search``, and ``chat.postMessage`` through
+    one path.
 
+    Raises :exc:`SlackError` on HTTP errors or when Slack returns ``ok=false``;
+    a ``missing_scope`` error is rewritten to name the scope to add.
+    """
+    body = urllib.parse.urlencode(params or {}).encode("utf-8")
     req = urllib.request.Request(
-        url,
+        f"{_API_BASE}/{method}",
+        data=body,
         headers={
             "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
+            "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
         },
+        method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-            body = resp.read().decode("utf-8")
+            raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         raise SlackError(f"Slack API HTTP {exc.code} for {method}") from exc
     except urllib.error.URLError as exc:
         raise SlackError(f"Slack API request failed for {method}: {exc.reason}") from exc
 
-    data = json.loads(body)
+    data = json.loads(raw)
     if not data.get("ok"):
         error = data.get("error", "unknown_error")
         if error in ("invalid_auth", "not_authed", "token_revoked", "token_expired"):
@@ -190,16 +238,29 @@ def _api_call(method: str, token: str, params: dict[str, Any] | None = None) -> 
                 f"Slack token is invalid or expired ({error}). "
                 "Call `slack.login(token)` with a fresh token."
             )
+        if error == "missing_scope":
+            # Slack returns the exact scope it wanted and what the token has, so
+            # surface both instead of a bare "missing_scope". (Granular scopes
+            # like search:read.public do NOT satisfy search:read -- this names
+            # the difference.)
+            needed = data.get("needed") or "?"
+            have = data.get("provided") or "?"
+            raise SlackError(
+                f"Slack API `{method}` needs the `{needed}` OAuth scope "
+                f"(token has: {have}). Add `{needed}` to the Slack app's user "
+                "scopes and re-mint the token."
+            )
         raise SlackError(f"Slack API error for {method}: {error}")
     return data
 
 
 def login(token: str) -> dict:
-    """Store a Slack user token for this user.
+    """Store a Slack token for this user.
 
     Writes ``token`` to ``~/.config/slack/token`` with mode 0600 so only this
-    user can read it. The token must be a Slack user token (starts with
-    ``xoxp-``). Returns ``{"configured": True, "path": str}`` on success.
+    user can read it. ``token`` is normally a user token (``xoxp-``); a bot
+    token (``xoxb-``) also works for the methods its scopes allow. Returns
+    ``{"configured": True, "path": str}``.
 
     Call ``slack.status()`` afterwards to confirm the token is valid.
     """
@@ -223,12 +284,11 @@ def login(token: str) -> dict:
 def logout() -> dict:
     """Remove the stored Slack token file.
 
-    Idempotent: returns ``{"signed_out": True}`` whether or not the file
-    existed. Does not revoke the token at Slack.
+    Idempotent: returns ``{"signed_out": True, "removed": bool}`` whether or not
+    the file existed. Does not revoke the token at Slack.
     """
     removed = _TOKEN_FILE.exists()
-    if removed:
-        _TOKEN_FILE.unlink()
+    _TOKEN_FILE.unlink(missing_ok=True)
     return {"signed_out": True, "removed": removed}
 
 
@@ -240,8 +300,8 @@ def status() -> dict:
     ``configured=False``, not an exception. Call ``slack.login(token)`` to
     configure.
 
-    Note: this function does not check the shared-room guard (it only reads
-    configuration, never personal data), so it is safe to call in any session.
+    Does not check the shared-room guard (it only reads configuration, never
+    personal data), so it is safe to call in any session.
     """
     try:
         tok = _token()
@@ -258,19 +318,70 @@ def status() -> dict:
         return {"configured": False, "team": None, "user": None}
 
 
-def _resolve_channel(channel: str, token: str) -> str:
-    """Return the channel ID for ``channel``.
+def _users_map(token: str) -> dict[str, dict[str, str]]:
+    """Return ``{user_id: {"name": ..., "real_name": ...}}`` for the workspace."""
+    out: dict[str, dict[str, str]] = {}
+    cursor: str | None = None
+    while True:
+        params: dict[str, Any] = {"limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        data = _api_call("users.list", token, params)
+        for u in data.get("members", []):
+            prof = u.get("profile") or {}
+            out[u.get("id", "")] = {
+                "name": u.get("name", "") or "",
+                "real_name": (prof.get("real_name") or u.get("real_name") or ""),
+            }
+        cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            break
+    return out
 
-    Accepts an existing channel ID (starts with ``C`` or ``D`` or ``G``),
-    or a channel name (with or without a leading ``#``). On a name miss, tries
-    the conversations.list API to resolve it. Returns the ID unchanged if it
-    already looks like one, or raises ``SlackError`` if not found.
+
+def _resolve_user(name_or_id: str, token: str) -> str:
+    """Return the user ID for ``name_or_id`` (a ``U…``/``W…`` id, or a username).
+
+    A username is matched (case-insensitively) against the handle, display name,
+    and real name. Raises :exc:`SlackError` if no user matches.
     """
-    # Already looks like a Slack ID.
-    if channel.upper().startswith(("C", "D", "G")) and len(channel) >= 9:
-        return channel
+    s = name_or_id.lstrip("@").strip()
+    if s[:1] in ("U", "W") and len(s) >= 9 and s == s.upper():
+        return s
+    want = s.lower()
+    cursor: str | None = None
+    while True:
+        params: dict[str, Any] = {"limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        data = _api_call("users.list", token, params)
+        for u in data.get("members", []):
+            prof = u.get("profile") or {}
+            names = {
+                (u.get("name") or "").lower(),
+                (prof.get("display_name") or "").lower(),
+                (prof.get("real_name") or "").lower(),
+            }
+            if want and want in names:
+                return u["id"]
+        cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            break
+    raise SlackError(
+        f"No Slack user matched {name_or_id!r}. "
+        "Use `await slack.dms()` to list your direct messages."
+    )
 
-    name = channel.lstrip("#").lower()
+
+def _open_im(user_id: str, token: str) -> str:
+    """Return the DM channel ID for ``user_id`` (opening it if needed)."""
+    data = _api_call("conversations.open", token, {"users": user_id})
+    return (data.get("channel") or {}).get("id", "")
+
+
+def _resolve_channel_by_name(name: str, token: str) -> str | None:
+    """Return the channel ID for a ``#name`` / ``name``, or None if not found."""
+    want = name.lstrip("#").lower()
     cursor: str | None = None
     while True:
         params: dict[str, Any] = {
@@ -282,15 +393,47 @@ def _resolve_channel(channel: str, token: str) -> str:
             params["cursor"] = cursor
         data = _api_call("conversations.list", token, params)
         for ch in data.get("channels", []):
-            if ch.get("name", "").lower() == name:
+            if ch.get("name", "").lower() == want:
                 return ch["id"]
         cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
         if not cursor:
             break
-    raise SlackError(
-        f"Channel {channel!r} not found. "
-        "Use `await slack.channels()` to list channels you can see."
-    )
+    return None
+
+
+def _resolve_channel(channel: str, token: str) -> str:
+    """Resolve ``channel`` to a conversation ID.
+
+    Accepts a channel/group/DM ID, a ``#channel`` or bare channel name, a
+    ``@username`` or user ID (resolved to the DM with that user), or a bare name
+    that is a username when it is not a channel. Raises :exc:`SlackError` when
+    nothing matches.
+    """
+    c = channel.strip()
+    if not c:
+        raise SlackError("channel must not be empty")
+
+    # Explicit @user -> the DM with that user.
+    if c.startswith("@"):
+        return _open_im(_resolve_user(c, token), token)
+
+    up = c.upper()
+    if up[:1] in ("C", "G", "D") and len(c) >= 9 and c == up:
+        return c  # already a channel / group / DM id
+    if up[:1] in ("U", "W") and len(c) >= 9 and c == up:
+        return _open_im(c, token)  # a user id -> the DM with that user
+
+    # A bare name: try a channel first, then fall back to a username (DM).
+    found = _resolve_channel_by_name(c, token)
+    if found:
+        return found
+    try:
+        return _open_im(_resolve_user(c, token), token)
+    except SlackError:
+        raise SlackError(
+            f"No channel or user matched {channel!r}. Use `await slack.channels()` "
+            "or `await slack.dms()` to list what you can see."
+        ) from None
 
 
 async def channels(
@@ -305,7 +448,8 @@ async def channels(
 
     Pass ``types`` to narrow to ``"public_channel"``, ``"private_channel"``,
     ``"mpim"``, or ``"im"`` (comma-separated). ``limit`` caps the total rows
-    returned (Slack paginates automatically).
+    returned (Slack paginates automatically). For direct messages prefer
+    :func:`dms`, which also resolves the other person's name.
 
     Raises :exc:`SlackError` when no token is configured or in a shared room.
     """
@@ -346,19 +490,80 @@ async def channels(
     )
 
 
+async def dms(*, limit: int = 100) -> pl.DataFrame:
+    """Your direct-message conversations, as a polars DataFrame.
+
+    Columns: ``id`` (the ``D…`` channel id), ``user_id``, ``user`` (handle),
+    ``real_name``. Read one with ``await slack.messages("@<user>")`` or
+    ``await slack.messages(id)``.
+
+    Listing DMs needs the ``im:read`` scope. Names are resolved with
+    ``users:read`` when available; without it ``user``/``real_name`` come back
+    blank rather than failing the call. Raises :exc:`SlackError` when no token is
+    configured, ``im:read`` is missing (the error names it), or in a shared room.
+    """
+    _require_incognito()
+    token = _token()
+    # Listing IMs needs only im:read; resolving names needs users:read. Degrade
+    # to blank names rather than failing the whole call when users:read is absent.
+    try:
+        umap = _users_map(token)
+    except SlackError:
+        umap = {}
+
+    rows: list[dict] = []
+    cursor: str | None = None
+    while len(rows) < limit:
+        params: dict[str, Any] = {"types": "im", "limit": min(200, limit - len(rows))}
+        if cursor:
+            params["cursor"] = cursor
+        data = _api_call("conversations.list", token, params)
+        for ch in data.get("channels", []):
+            uid = ch.get("user", "") or ""
+            info = umap.get(uid, {})
+            rows.append(
+                {
+                    "id": ch.get("id", ""),
+                    "user_id": uid,
+                    "user": info.get("name", ""),
+                    "real_name": info.get("real_name", ""),
+                }
+            )
+        cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            break
+
+    if not rows:
+        return pl.DataFrame(schema=_DMS_SCHEMA)
+    return pl.DataFrame(rows, schema_overrides=_DMS_SCHEMA).select(list(_DMS_SCHEMA))
+
+
 async def messages(
     channel: str,
     *,
     limit: int = 50,
+    include_noise: bool = False,
 ) -> pl.DataFrame:
     """Recent messages in ``channel`` as a polars DataFrame.
 
-    ``channel`` may be a channel ID or a name (``"general"`` or ``"#general"``).
-    Columns: ``ts`` (Slack timestamp string), ``user``, ``text``,
-    ``reply_count``, ``reactions`` (total reaction count).
+    ``channel`` may be a channel ID or name (``"general"`` / ``"#general"``), a
+    ``@username`` or user ID (the DM with that user), or a ``D…`` DM id.
 
-    Raises :exc:`SlackError` when no token is configured, the channel is not
-    found, or in a shared room.
+    Columns: ``ts`` (Slack timestamp string), ``user`` (or the bot's name/id for
+    bot posts), ``text``, ``subtype`` (empty for ordinary messages,
+    ``"bot_message"`` for CI/deploy/webhook posts, etc.), ``reply_count``,
+    ``reactions`` (total reaction count).
+
+    Bot and other content-bearing messages are **kept**; only channel-membership
+    and housekeeping subtypes are dropped, so a bot-only channel no longer reads
+    as empty. Pass ``include_noise=True`` to keep those too.
+
+    Reading needs the matching history scope (``channels:history`` /
+    ``groups:history`` / ``im:history`` / ``mpim:history``). Resolving a
+    ``@user``/user-id to a DM uses ``conversations.open`` (needs ``im:write``);
+    pass a ``D…`` id or use :func:`dms` to avoid that. Raises :exc:`SlackError`
+    when no token is configured, the conversation is not found, or in a shared
+    room.
     """
     _require_incognito()
     token = _token()
@@ -371,14 +576,18 @@ async def messages(
     )
     rows: list[dict] = []
     for msg in data.get("messages", []):
-        if msg.get("subtype"):
+        sub = msg.get("subtype") or ""
+        if not include_noise and sub in _NOISE_SUBTYPES:
             continue
         reactions = sum(r.get("count", 0) for r in msg.get("reactions", []))
         rows.append(
             {
                 "ts": msg.get("ts", ""),
-                "user": msg.get("user", "") or msg.get("bot_id", ""),
+                # Ordinary messages carry `user`; bot posts carry `username` /
+                # `bot_id` instead, so fall back rather than emit a blank.
+                "user": msg.get("user") or msg.get("username") or msg.get("bot_id") or "",
                 "text": msg.get("text", ""),
+                "subtype": sub,
                 "reply_count": int(msg.get("reply_count") or 0),
                 "reactions": int(reactions),
             }
@@ -401,11 +610,12 @@ async def thread(
 ) -> pl.DataFrame:
     """Messages in a single thread as a polars DataFrame.
 
-    ``channel`` may be a channel ID or name; ``ts`` is the Slack timestamp of
-    the parent message (e.g. ``"1234567890.123456"``). Columns: ``ts``,
-    ``user``, ``text``, ``reply_count``.
+    ``channel`` is resolved like :func:`messages` (channel, ``@user``, or id);
+    ``ts`` is the Slack timestamp of the parent message (e.g.
+    ``"1234567890.123456"``). Columns: ``ts``, ``user``, ``text``, ``subtype``,
+    ``reply_count``.
 
-    Raises :exc:`SlackError` when no token is configured, the channel is not
+    Raises :exc:`SlackError` when no token is configured, the conversation is not
     found, or in a shared room.
     """
     _require_incognito()
@@ -418,12 +628,15 @@ async def thread(
         {"channel": channel_id, "ts": ts, "limit": min(limit, 1000)},
     )
     rows: list[dict] = []
+    # No noise filter here (unlike messages()): a thread's replies are content by
+    # definition and rarely carry channel-membership subtypes, so keep them all.
     for msg in data.get("messages", []):
         rows.append(
             {
                 "ts": msg.get("ts", ""),
-                "user": msg.get("user", "") or msg.get("bot_id", ""),
+                "user": msg.get("user") or msg.get("username") or msg.get("bot_id") or "",
                 "text": msg.get("text", ""),
+                "subtype": msg.get("subtype") or "",
                 "reply_count": int(msg.get("reply_count") or 0),
             }
         )
@@ -440,42 +653,16 @@ async def thread(
 async def send(channel: str, text: str) -> dict:
     """Post ``text`` to ``channel`` and return Slack's response metadata.
 
-    ``channel`` may be a channel ID or name (``"general"`` or ``"#general"``).
-    Returns ``{"ok": True, "ts": "<timestamp>", "channel": "<id>"}`` on
-    success. Raises :exc:`SlackError` on failure or in a shared room.
+    ``channel`` is resolved like :func:`messages` (channel, ``@user``, or id).
+    Returns ``{"ok": True, "ts": "<timestamp>", "channel": "<id>"}`` on success.
+    Needs ``chat:write``. Raises :exc:`SlackError` on failure or in a shared
+    room.
     """
     _require_incognito()
     token = _token()
     channel_id = _resolve_channel(channel, token)
 
-    req = urllib.request.Request(
-        f"{_API_BASE}/chat.postMessage",
-        data=json.dumps({"channel": channel_id, "text": text}).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-            body = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        raise SlackError(f"Slack API HTTP {exc.code} for chat.postMessage") from exc
-    except urllib.error.URLError as exc:
-        raise SlackError(
-            f"Slack API request failed for chat.postMessage: {exc.reason}"
-        ) from exc
-
-    data = json.loads(body)
-    if not data.get("ok"):
-        error = data.get("error", "unknown_error")
-        if error in ("invalid_auth", "not_authed", "token_revoked", "token_expired"):
-            raise SlackError(
-                f"Slack token is invalid or expired ({error}). "
-                "Call `slack.login(token)` with a fresh token."
-            )
-        raise SlackError(f"Slack API error for chat.postMessage: {error}")
+    data = _api_call("chat.postMessage", token, {"channel": channel_id, "text": text})
     return {"ok": True, "ts": data.get("ts", ""), "channel": data.get("channel", "")}
 
 
@@ -489,8 +676,10 @@ async def search(
     Columns: ``ts``, ``channel_id``, ``channel_name``, ``user``, ``text``,
     ``permalink``.
 
-    Raises :exc:`SlackError` when no token is configured or in a shared room.
-    Note: search requires a user token (``xoxp-``); bot tokens cannot search.
+    Search needs the ``search:read`` scope on a user token (bot tokens cannot
+    search; the granular ``search:read.*`` scopes do **not** satisfy
+    ``search.messages``). Raises :exc:`SlackError` when no token is configured,
+    the scope is missing (the error names it), or in a shared room.
     """
     _require_incognito()
     token = _token()
@@ -504,11 +693,12 @@ async def search(
     rows: list[dict] = []
     for msg in matches:
         channel = msg.get("channel") or {}
+        is_dict = isinstance(channel, dict)
         rows.append(
             {
                 "ts": msg.get("ts", ""),
-                "channel_id": channel.get("id", "") if isinstance(channel, dict) else "",
-                "channel_name": channel.get("name", "") if isinstance(channel, dict) else "",
+                "channel_id": channel.get("id", "") if is_dict else "",
+                "channel_name": channel.get("name", "") if is_dict else "",
                 "user": msg.get("user", "") or msg.get("username", ""),
                 "text": msg.get("text", ""),
                 "permalink": msg.get("permalink", ""),

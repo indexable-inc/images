@@ -119,6 +119,7 @@ let
   };
   agentContext = import ./agent-context { inherit lib paths; };
   skills = import ./agent-context/skills.nix { inherit lib paths; };
+  agents = import ./agent-context/agents.nix { inherit lib; };
   # Shared JetBrains Islands palette (both variants), the single source of truth
   # for syntax color across the repo: the code-highlight crate embeds this JSON
   # for the search `-c` output, and the base profile generates its
@@ -203,6 +204,32 @@ let
     See [`lib/util/lists.nix`](lib/util/lists.nix).
   */
   lists = import ./util/lists.nix { inherit lib; };
+
+  /**
+    General attrset helpers beyond `nixpkgs.lib`: `flattenToDotted` collapses a
+    nested attrset to a flat one keyed by dotted paths (a config tree ->
+    `key.path=value` flags or dotted env names). See
+    [`lib/util/attrs.nix`](lib/util/attrs.nix).
+  */
+  attrs = import ./util/attrs.nix { inherit lib; };
+
+  /**
+    TOML value encoding. `scalar` renders one Nix scalar as the TOML literal a
+    `key = value` pair expects (codex `--config a.b=1` flags). Scalars only;
+    for whole TOML files use `pkgs.formats.toml`. See
+    [`lib/util/toml.nix`](lib/util/toml.nix).
+  */
+  toml = import ./util/toml.nix { inherit lib; };
+
+  /**
+    Single source of truth for the MCP servers baked into the house wrappers.
+    Define a server once in a neutral shape and render it to each tool's native
+    config with `mcp.toClaudeJson` (Claude Code's `mcpServers` JSON) and
+    `mcp.toCodexEntries` (dotted `mcp_servers.*` codex `-c` flags), so `index`
+    is declared in one place rather than copied into both wrappers. See
+    [`lib/util/mcp.nix`](lib/util/mcp.nix).
+  */
+  mcp = import ./util/mcp.nix { inherit lib; };
 
   mkMinecraftLoader = import ./minecraft/loader.nix;
 
@@ -364,7 +391,9 @@ let
       rev
       revEpoch
       agentContext
+      agents
       artifacts
+      attrs
       buildGradleFatJar
       buildJsSite
       buildLibghosttyVt
@@ -377,6 +406,7 @@ let
       goUnit
       languages
       lists
+      mcp
       minecraft
       mkBenchSuite
       mkMinecraftLoader
@@ -389,6 +419,7 @@ let
       secrets
       skills
       systemdHardening
+      toml
       writeBashApplication
       writeNushellApplication
       writeProcessComposeApplication

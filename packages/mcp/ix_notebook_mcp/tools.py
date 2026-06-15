@@ -32,10 +32,12 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
+import weakref
 import webbrowser
 from typing import Annotated
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
 from . import guide, outputs
@@ -60,6 +62,7 @@ _KERNEL_GUIDE = guide.compose(
     guide.PAGING,
     guide.BLOCKING,
     guide.modules_index(),
+    guide.credentials_note(),
     guide.HTML,
     guide.VERIFY,
     guide.RESULT_SPLIT,
@@ -70,6 +73,41 @@ _KERNEL_GUIDE = guide.compose(
 
 
 mcp = FastMCP("ix-mcp")
+
+# One short id per live MCP session, keyed weakly by the session object so an id
+# is stable for a client's whole session and the map never pins a closed one.
+_session_ids: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def _session_id(ctx: Context | None) -> str | None:
+    """The kernel-side namespace key for this call's MCP session, or None.
+
+    Only the HTTP transport multiplexes several client sessions onto the one
+    shared kernel, so only there does each session get its own namespace (the
+    kernel runtime keys per-session globals on this id -- see
+    ``runtime._session_ns``). The stdio transport serves exactly one client per
+    process: its state stays in the shared user namespace, which is also what
+    session checkpoint/restore (``serve --session FILE``) covers, so that
+    contract is untouched.
+    """
+    try:
+        if config().transport != "http":
+            return None
+    except RuntimeError:
+        # No config (an embedder driving the tools directly): single client.
+        return None
+    try:
+        session = ctx.session if ctx is not None else None
+    except ValueError:
+        # No request context on this call.
+        session = None
+    if session is None:
+        return None
+    sid = _session_ids.get(session)
+    if sid is None:
+        sid = uuid.uuid4().hex[:8]
+        _session_ids[session] = sid
+    return sid
 
 
 def _first_sentence(text: str) -> str:
@@ -161,7 +199,14 @@ mcp._mcp_server.version = os.environ.get("IX_MCP_VERSION") or "dev"
 Content = list[outputs.Content]
 
 
+# Every tool sets structured_output=False: FastMCP otherwise derives an output
+# schema from the return annotation and DUPLICATES the entire reply as
+# `structuredContent` JSON, so each image block went to the client twice (once
+# as a real image, once as a wall of base64-in-text), which is what kept
+# blowing the host's per-result token cap. The content blocks ARE the reply;
+# there is no structured consumer.
 @mcp.tool(
+    structured_output=False,
     description=guide.compose(
         guide.PYEXEC_INTRO,
         guide.PAGING,
@@ -169,12 +214,13 @@ Content = list[outputs.Content]
         guide.BLOCKING,
         guide.RESULT_CONTRACT,
         guide.SEE_INSTRUCTIONS,
-    )
+    ),
 )
 async def python_exec(
     code: Annotated[str, Field(description="Python source to run on the shared kernel")],
     budget: Annotated[float, Field(description="Seconds to wait before backgrounding the run (server-side cap: 120s; larger values are clamped and a notice is appended to the reply)")] = 15.0,
     name: Annotated[str | None, Field(description="Optional label for the job in the dashboard")] = None,
+    ctx: Context | None = None,
 ) -> Content:
     _open_dashboard_once()
     # A foreground budget is how long the run holds the one shared shell channel
@@ -183,7 +229,9 @@ async def python_exec(
     # below so the caller knows to poll the job rather than silently lose the wait.
     cap = config().max_budget
     effective_budget = min(budget, cap)
-    cell_outputs, summary = await current_kernel().python_exec(code, effective_budget, name)
+    cell_outputs, summary = await current_kernel().python_exec(
+        code, effective_budget, name, session=_session_id(ctx)
+    )
     rendered = outputs.to_mcp(cell_outputs)
     if summary is None:
         return rendered
@@ -191,10 +239,10 @@ async def python_exec(
         json.dumps({"job": summary.get("id"), "status": summary.get("status"), "running": summary.get("running")})
     )
     parts: Content = [header]
-    # Print is not a channel back to the model: a job's stdout is captured for the
-    # dashboard (collapsed) and for paging via jobs['<id>'].output, but it is not
-    # returned here \u2014 results come from Result/yield. A failing run is the
-    # exception: its traceback IS the result, so surface that.
+    # The kernel folds a cell's stdout into its result (Jupyter semantics; see
+    # runtime._merge_stdout/_auto_result), so the rendered blocks below already
+    # carry what the cell printed. A failing run's traceback IS its result, so
+    # surface that here.
     if summary.get("status") == "error" and summary.get("error"):
         parts.append(outputs.text(summary["error"]))
     # Rich result blocks (images / HTML / the result repr, including every yielded
@@ -236,7 +284,7 @@ async def python_exec(
     return parts
 
 
-@mcp.tool(description=guide.READ)
+@mcp.tool(structured_output=False, description=guide.READ)
 async def read(
     target: Annotated[
         str,
@@ -249,10 +297,12 @@ async def read(
     ],
     start: Annotated[int | None, Field(description="1-based first line to include")] = None,
     end: Annotated[int | None, Field(description="Last line to include (inclusive)")] = None,
+    ctx: Context | None = None,
 ) -> Content:
     _open_dashboard_once()
-    code = f"await __ix_read({target!r}, {start!r}, {end!r})"
-    cell_outputs, summary = await current_kernel().python_exec(code, budget=30.0)
+    sid = _session_id(ctx)
+    code = f"await __ix_read({target!r}, {start!r}, {end!r}, session={sid!r})"
+    cell_outputs, summary = await current_kernel().python_exec(code, budget=30.0, session=sid)
     if summary is not None and summary.get("status") == "error" and summary.get("error"):
         return [outputs.text(summary["error"])]
     rendered = outputs.to_mcp(cell_outputs)
@@ -260,7 +310,7 @@ async def read(
     return content or rendered
 
 
-@mcp.tool(description=guide.TRACE)
+@mcp.tool(structured_output=False, description=guide.TRACE)
 async def kernel_trace() -> str:
     _open_dashboard_once()
     return await current_kernel().dump_trace()

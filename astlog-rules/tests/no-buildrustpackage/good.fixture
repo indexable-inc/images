@@ -1,0 +1,1 @@
+{ rustPlatform }: rustPlatform.buildRustPackage { pname = "x"; }

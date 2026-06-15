@@ -1,0 +1,17 @@
+[package]
+name = "scipql"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Soufflé datalog + find/replace over a SCIP semantic index"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "scipql"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+scipql-core.workspace = true

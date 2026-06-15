@@ -66,6 +66,10 @@ CLAUDE.local.md
 /.claude/skills
 /.agents/
 
+# Subagents are rendered into the `agents` flake package and copied here by the
+# hook for Claude Code (Codex's subagents are config-driven, not files).
+/.claude/agents
+
 # macOS
 .DS_Store
 

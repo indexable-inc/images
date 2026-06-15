@@ -179,3 +179,50 @@ body {
 .ix-inlay::after {
   content: '›';
 }
+
+/* Line-addressable source. dashboard.py wraps every source line in a
+   `span.ix-line[data-line]` (1-based, matching traceback line numbers); they are
+   injected with {@html}, so this chrome is global like the token palette. Each
+   line is a block so a highlight paints the full row, and `min-height` keeps an
+   empty line one row tall. */
+.ix-code .ix-line {
+  display: block;
+  min-height: 1.55em; /* fallback: body line-height */
+  min-height: 1lh;
+}
+/* A gutter of line numbers, drawn from data-line so the markup stays plain
+   text-shaped. CodeView adds `.numbered` only for multi-line cells; a
+   one-liner's "1" is noise. */
+.ix-code.numbered .ix-line {
+  position: relative;
+  padding-left: 38px;
+}
+.ix-code.numbered .ix-line::before {
+  content: attr(data-line);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 26px;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.86; /* optically centers the smaller digits on the code line */
+  text-align: right;
+  user-select: none;
+}
+/* The line executing right now (running jobs): an accent wash plus a solid edge
+   bar, the dashboard's "program counter". */
+.ix-code .ix-line.cur {
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.ix-code.numbered .ix-line.cur::before {
+  color: var(--accent);
+}
+/* The line a failure was raised on (errored jobs). */
+.ix-code .ix-line.errln {
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--err);
+}
+.ix-code.numbered .ix-line.errln::before {
+  color: var(--err);
+}

@@ -54,9 +54,28 @@ from typing import Any
 import asyncssh
 import polars as pl
 
+# The cluster surface (discovery, Ray distributed exec, live-kernel peek) lives
+# in `cluster.py` so the SSH fan-out below stays a self-contained unit; both are
+# re-exported here, so `import fleet` gives the whole API in one namespace.
+from .cluster import (
+    EXEC_PORT,
+    SPARK_CONNECT_PORT,
+    ClusterError,
+    connect,
+    get,
+    in_kernel,
+    nodes,
+    put,
+    run,
+    spark,
+    submit,
+    up,
+)
+
 __version__ = "0.1.0"
 
 __all__ = [
+    # SSH shell fan-out (this module)
     "scan",
     "read_ndjson",
     "read_csv",
@@ -68,6 +87,19 @@ __all__ = [
     "text_parser",
     "FleetError",
     "HostSpec",
+    # Cluster surface (cluster.py)
+    "connect",
+    "nodes",
+    "run",
+    "submit",
+    "get",
+    "put",
+    "in_kernel",
+    "spark",
+    "up",
+    "ClusterError",
+    "EXEC_PORT",
+    "SPARK_CONNECT_PORT",
 ]
 
 # A parser turns one host's raw stdout bytes into a DataFrame. Kept as a plain

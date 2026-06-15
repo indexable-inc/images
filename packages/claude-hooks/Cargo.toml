@@ -1,0 +1,19 @@
+[package]
+name = "claude-hooks"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Claude Code hook commands (session-digest, worktree-guard, prompt-priors) as one compiled binary"
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["alloc"] }
+glob.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[[bin]]
+name = "claude-hooks"
+path = "src/main.rs"

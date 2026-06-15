@@ -1,6 +1,0 @@
-id: no-stringly-flags
-valid:
-  - '{ configureFlags = [ "--enable-foo" "--disable-bar" ]; }'
-invalid:
-  - '{ configureFlags = "--enable-foo --disable-bar"; }'
-  - '{ mesonFlags = "-Dfoo=bar"; }'

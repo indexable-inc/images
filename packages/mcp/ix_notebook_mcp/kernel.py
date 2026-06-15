@@ -129,8 +129,15 @@ class Kernel:
             "the faulthandler registered (older build) or cannot service signals."
         )
 
-    async def _execute(self, code: str, timeout: float) -> tuple[list[dict], dict | None]:
+    async def _execute(
+        self, code: str, timeout: float, on_locked=None
+    ) -> tuple[list[dict], dict | None]:
         async with self._lock:
+            # `on_locked` fires once the shell channel is held: a caller that
+            # must run BEFORE any later request (session restore) signals here,
+            # and everything submitted afterwards queues behind this lock.
+            if on_locked is not None:
+                on_locked()
             outputs: list[dict] = []
             summary: dict | None = None
 
@@ -176,11 +183,16 @@ class Kernel:
                 raise
             return outputs, summary
 
-    async def python_exec(self, code: str, budget: float, name: str | None = None) -> tuple[list[dict], dict | None]:
+    async def python_exec(
+        self, code: str, budget: float, name: str | None = None, session: str | None = None
+    ) -> tuple[list[dict], dict | None]:
         """Run user ``code`` with a foreground budget; return (outputs, summary).
 
         ``code`` is passed as a repr-encoded string literal so any quoting is
-        safe. A healthy cell completes within ``budget`` (the runtime backgrounds
+        safe. ``session`` is the caller's MCP session id; the kernel runtime runs
+        the code in that session's own namespace (None: the shared one), so
+        parallel clients of one kernel do not clobber each other's variables. A
+        healthy cell completes within ``budget`` (the runtime backgrounds
         the job and returns the summary right after the budget elapses). If the
         kernel does not report idle within ``budget + wedge_grace`` the cell is
         blocking the kernel's single event loop with a synchronous call: interrupt
@@ -188,7 +200,11 @@ class Kernel:
         of letting an opaque ``Timeout waiting for output`` escape to the caller.
         """
         name_arg = "None" if name is None else repr(name)
-        wrapper = f"await __ix_exec({code!r}, budget={float(budget)!r}, name={name_arg})"
+        session_arg = "None" if session is None else repr(session)
+        wrapper = (
+            f"await __ix_exec({code!r}, budget={float(budget)!r}, "
+            f"name={name_arg}, session={session_arg})"
+        )
         grace = self._config.wedge_grace
         deadline = float(budget) + grace
         try:
@@ -213,6 +229,25 @@ class Kernel:
         except ProcessLookupError:
             return False
         return True
+
+    async def restore_session(self, on_locked=None, timeout: float = 1800.0) -> str:
+        """Reopen a session in the kernel: load the latest checkpoint and replay
+        the gap (``__ix_restore`` in the runtime). Returns the printed summary.
+        ``on_locked`` fires once the request holds the shell channel, so the
+        caller can start serving tools immediately -- they queue behind this."""
+        outputs, _ = await self._execute("await __ix_restore()", timeout=timeout, on_locked=on_locked)
+        texts = [o.get("text", "") for o in outputs if isinstance(o, dict)]
+        return "".join(t for t in texts if isinstance(t, str)).strip()
+
+    async def snapshot_session(self) -> None:
+        """Best-effort final checkpoint at shutdown, so the last cells' state is
+        in the file even if the debounced checkpoint had not fired yet."""
+        try:
+            await self._execute("await __ix_snapshot()", timeout=60.0)
+        except Exception:
+            # Shutdown must proceed; the periodic checkpoint plus replay already
+            # guarantee a correct (if slower) reopen.
+            pass
 
     async def restart(self) -> None:
         if self._km is not None:

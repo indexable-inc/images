@@ -4,6 +4,7 @@ members = [
   "packages/agents-md",
   "packages/blast-radius",
   "packages/build-version",
+  "packages/claude-hooks",
   "packages/claude-stories",
   "packages/ast-merge/ast",
   "packages/ast-merge/cli",
@@ -11,21 +12,33 @@ members = [
   "packages/ast-merge/git",
   "packages/ast-merge/langs",
   "packages/ast-merge/matcher",
+  "packages/astlog/core",
+  "packages/astlog/cli",
+  "packages/astlog/py",
   "packages/source/atuin",
   "packages/source/claude",
   "packages/source/codex",
   "packages/source/debug",
   "packages/source/git",
+  "packages/source/journald",
   "packages/clone-detect/cli",
   "packages/clone-detect/detect",
   "packages/clone-detect/hash",
   "packages/clone-detect/pragma",
   "packages/clone-detect/scanner",
+  "packages/config-launch",
   "packages/code-highlight",
   "packages/code-tokenizer",
   "packages/dag-runner",
+  "packages/edit-applier",
   "packages/file-language",
   "packages/file-search",
+  "packages/scipql/core",
+  "packages/scipql/cli",
+  "packages/scipql/py",
+  "packages/flecs-query/core",
+  "packages/flecs-query/mcp",
+  "packages/flecs-query/py",
   "packages/git-log-pretty",
   "packages/github-avatar",
   "packages/google/auth",
@@ -125,6 +138,7 @@ ast-merge-diff = { path = "packages/ast-merge/diff" }
 ast-merge-git = { path = "packages/ast-merge/git" }
 ast-merge-langs = { path = "packages/ast-merge/langs" }
 ast-merge-matcher = { path = "packages/ast-merge/matcher" }
+astlog-core = { path = "packages/astlog/core" }
 axum = "0.8"
 base64 = "0.22"
 build-version = { path = "packages/build-version" }
@@ -136,6 +150,7 @@ source-claude = { path = "packages/source/claude" }
 source-codex = { path = "packages/source/codex" }
 source-debug = { path = "packages/source/debug" }
 source-git = { path = "packages/source/git" }
+source-journald = { path = "packages/source/journald" }
 clone-detect = { path = "packages/clone-detect/detect" }
 clone-hash = { path = "packages/clone-detect/hash" }
 clone-pragma = { path = "packages/clone-detect/pragma" }
@@ -153,7 +168,9 @@ color-eyre = "0.6"
 dashboard-core = { path = "packages/dashboard-core" }
 devicons = "0.6"
 dirs = "6"
+edit-applier = { path = "packages/edit-applier" }
 file-language = { path = "packages/file-language" }
+flecs-query-core = { path = "packages/flecs-query/core" }
 fontdue = "0.9"
 futures = "0.3"
 git2 = { version = "0.21", default-features = false }
@@ -187,6 +204,7 @@ parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
 percent-encoding = "2"
 progress-style = { path = "packages/progress-style" }
+protobuf = "3"
 pty-process = { version = "0.5", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
@@ -207,6 +225,8 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 rustc-hash = "2.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
+scip = "0.8"
+scipql-core = { path = "packages/scipql/core" }
 search-core = { path = "packages/search-core" }
 source-meta = { path = "packages/source/meta" }
 serde = "1"

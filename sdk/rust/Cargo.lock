@@ -50,16 +50,16 @@ dependencies = [
 
 [[package]]
 name = "snafu"
-version = "0.9.0"
-source = "git+https://github.com/shepmaster/snafu.git#1f8e75f56390c421a198871916100c6316d23d4f"
+version = "0.9.1"
+source = "git+https://github.com/shepmaster/snafu.git#ff50133848f39de1b1fd40c74daa9d781fdda544"
 dependencies = [
  "snafu-derive",
 ]
 
 [[package]]
 name = "snafu-derive"
-version = "0.9.0"
-source = "git+https://github.com/shepmaster/snafu.git#1f8e75f56390c421a198871916100c6316d23d4f"
+version = "0.9.1"
+source = "git+https://github.com/shepmaster/snafu.git#ff50133848f39de1b1fd40c74daa9d781fdda544"
 dependencies = [
  "heck",
  "proc-macro2",

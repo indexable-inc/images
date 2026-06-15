@@ -3,13 +3,17 @@
 //!
 //! One table (`corpus.documents`) holds an **append-only revision log** of
 //! [`Document`] observations: each reconcile pass appends only the documents
-//! that are new or changed (`op = upsert`) plus tombstones for the ones that
-//! left the writer's desired state (`op = delete`). Current state is a
-//! per-slice fold ordered by each slice's committed `version` counter: an
-//! `external_id` is live while any slice's latest op for it is an upsert, so
-//! one host's tombstone cannot erase a record another slice still observes,
-//! and a wall-clock step on a writer cannot reorder its operations. Replay
-//! and incremental catch-up share one discipline, the **snapshot cursor**
+//! that are new or changed (`op = upsert`). Deletion is never inferred from
+//! absence — a record missing from a newer pass stays live, so pruned local
+//! transcripts or a reimaged host cannot erase already-folded history
+//! (ENG-2696). The only deletes are the explicit tombstones (`op = delete`)
+//! [`IcebergReconciler::gc`] appends for export-complete sources whose
+//! complete input proves a record vanished. Current state is a per-slice fold
+//! ordered by each slice's committed `version` counter: an `external_id` is
+//! live while any slice's latest op for it is an upsert, so one host's
+//! tombstone cannot erase a record another slice still observes, and a
+//! wall-clock step on a writer cannot reorder its operations. Replay and
+//! incremental catch-up share one discipline, the **snapshot cursor**
 //! ([`added_since`]).
 //!
 //! Both halves live in this one crate — unlike the `sink-parquet` /
@@ -19,10 +23,10 @@
 //!
 //! - **Write half**: [`IcebergReconciler`] implements
 //!   [`source_meta::Reconciler`]. Each pass diffs the writer's *slice* (its
-//!   `host`, optional `user`) against the desired set and appends the delta.
-//!   An empty desired set is treated as "source absent", never as "delete
-//!   everything" (matching `sink-parquet`), so a transiently empty read cannot
-//!   tombstone a corpus.
+//!   `host`, optional `user`) against the desired set and appends only the
+//!   new or changed documents — per id, the fold keeps the newest
+//!   `content_hash`, and ids absent from the pass simply remain.
+//!   [`IcebergReconciler::gc`] is the explicit deletion path.
 //! - **Read half**: [`read_state`] folds the whole log into the current
 //!   per-source document sets (full rebuilds, including sources whose records
 //!   are all tombstoned, so a rebuild can also garbage-collect); [`added_since`]
@@ -40,7 +44,7 @@
 mod codec;
 mod error;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -195,25 +199,38 @@ pub async fn ensure_table(catalog: &dyn Catalog) -> Result<TableIdent> {
     }
 }
 
-/// Outcome of one lake reconcile pass for a source.
+/// Outcome of one lake write pass ([`IcebergReconciler::reconcile`] or
+/// [`IcebergReconciler::gc`]) for a source.
 #[derive(Debug, Clone, Copy)]
 pub struct Report {
     /// Documents appended as new or changed observations.
     pub upserts: usize,
-    /// Tombstones appended for documents that left the slice's desired state.
+    /// Tombstones appended. Only the explicit [`IcebergReconciler::gc`] pass
+    /// appends these; `reconcile` never infers deletion from absence
+    /// (ENG-2696), so it always reports zero.
     pub deletes: usize,
     /// Whether the pass appended nothing (desired state already converged, or
     /// the desired set was empty).
     pub skipped: bool,
 }
 
+/// One slice's live state for a source, scanned by
+/// [`IcebergReconciler::slice_live`].
+struct SliceLive {
+    /// The slice's next committed revision: its previous maximum plus one.
+    version: i64,
+    /// Live ids mapped to their stored content hash (`None` cannot happen
+    /// from this writer but is re-observed rather than trusted).
+    live: HashMap<String, Option<String>>,
+}
+
 /// Reconciles a source's documents into the lake as an appended delta.
 ///
-/// Holds the writer's *slice* identity: tombstones are computed against this
-/// `host`/`user`'s own previous observations only, so host A never deletes
-/// what host B still observes (the per-user fleet path derives per-account
-/// reconcilers via [`IcebergReconciler::with_user`], mirroring the parquet
-/// sink's per-user prefixes).
+/// Holds the writer's *slice* identity: a [`Self::gc`] pass tombstones
+/// against this `host`/`user`'s own previous observations only, so host A
+/// never deletes what host B still observes (the per-user fleet path derives
+/// per-account reconcilers via [`IcebergReconciler::with_user`], mirroring
+/// the parquet sink's per-user prefixes).
 pub struct IcebergReconciler {
     /// The connected catalog.
     catalog: Arc<dyn Catalog>,
@@ -259,16 +276,99 @@ impl IcebergReconciler {
             .and(Reference::new("host").equal_to(Datum::string(&self.host)))
             .and(user)
     }
+
+    /// The slice's live state for one source — its latest observation per id,
+    /// minus tombstones — plus the slice's next committed revision (`version`,
+    /// not wall clock, orders a slice's operations in the fold, so a clock
+    /// step between runs cannot reorder them). The filter pins one slice, so
+    /// each id folds to exactly one row.
+    async fn slice_live(&self, table: &Table, source: &Source) -> Result<SliceLive> {
+        let rows = scan_rows(
+            table,
+            Some(self.slice_filter(source)),
+            &codec::STATE_COLUMNS,
+            false,
+        )
+        .await?;
+        let version = rows.iter().map(|row| row.version).max().unwrap_or(0) + 1;
+        let mut live: HashMap<String, Option<String>> = HashMap::new();
+        for (id, slice_rows) in codec::fold_slices(rows) {
+            if let Some(row) = codec::live_winner(slice_rows) {
+                live.insert(id, row.content_hash);
+            }
+        }
+        Ok(SliceLive { version, live })
+    }
+
+    /// Append explicit tombstones for this slice's live ids that are absent
+    /// from `produced` — the lake's ONLY deletion path (ENG-2696). Returns a
+    /// skipped report when nothing vanished.
+    ///
+    /// `produced` must be the COMPLETE external-id set the source emitted
+    /// this run: an export directory (or the union of every `--git-repo` log)
+    /// is complete by construction, so absence there is a real deletion in
+    /// the upstream system, recorded as an `op = delete` row. The append-only
+    /// history sources must never reach here — their incremental scans make
+    /// absence meaningless, and [`Reconciler::reconcile`] alone (which never
+    /// deletes) is their whole contract.
+    ///
+    /// # Errors
+    /// Returns an error if the table cannot be loaded, scanned, or committed.
+    pub async fn gc(&self, source: &Source, produced: &HashSet<String>) -> Result<Report> {
+        let table = load_table(self.catalog.as_ref(), &self.ident).await?;
+        let SliceLive { version, live } = self.slice_live(&table, source).await?;
+
+        let mut deletes: Vec<&str> = live
+            .keys()
+            .map(String::as_str)
+            .filter(|id| !produced.contains(*id))
+            .collect();
+        if deletes.is_empty() {
+            return Ok(Report {
+                upserts: 0,
+                deletes: 0,
+                skipped: true,
+            });
+        }
+        deletes.sort_unstable();
+
+        let arrow_schema = Arc::new(
+            iceberg::arrow::schema_to_arrow_schema(table.metadata().current_schema())
+                .context(SchemaSnafu)?,
+        );
+        let batch = codec::encode_batch(
+            &arrow_schema,
+            source,
+            Slice {
+                host: &self.host,
+                user: self.user.as_deref(),
+            },
+            now_ms()?,
+            version,
+            &[],
+            &deletes,
+        )?;
+        let files = write_batch(&table, batch).await?;
+        commit_files(self.catalog.as_ref(), &self.ident, files).await?;
+        Ok(Report {
+            upserts: 0,
+            deletes: deletes.len(),
+            skipped: false,
+        })
+    }
 }
 
 impl Reconciler for IcebergReconciler {
     type Report = Report;
     type Error = Error;
 
-    /// Diff `documents` against this slice's live state and append the delta:
-    /// upserts for new or changed documents, tombstones for vanished ones.
-    /// Converged state appends nothing (no empty snapshots). An empty
-    /// `documents` is a skip, never a mass tombstone.
+    /// Diff `documents` against this slice's live state and append upserts
+    /// for the new or changed ones (per id, the fold keeps the newest
+    /// `content_hash`). Absence is NEVER deletion (ENG-2696): a live id
+    /// missing from `documents` — pruned local transcripts, a reimaged host,
+    /// a shrunk hourly slice — simply stays live, keeping folded history
+    /// durable. Explicit deletion is [`Self::gc`]. Converged state appends
+    /// nothing (no empty snapshots).
     async fn reconcile(&self, source: &Source, documents: &[Document]) -> Result<Report> {
         if documents.is_empty() {
             return Ok(Report {
@@ -278,26 +378,7 @@ impl Reconciler for IcebergReconciler {
             });
         }
         let table = load_table(self.catalog.as_ref(), &self.ident).await?;
-
-        // The slice's live state: latest observation per id, minus tombstones.
-        // The filter pins one slice, so each id folds to exactly one row.
-        let rows = scan_rows(
-            &table,
-            Some(self.slice_filter(source)),
-            &codec::STATE_COLUMNS,
-            false,
-        )
-        .await?;
-        // The slice's next committed revision: its previous maximum plus one.
-        // `version`, not wall clock, is what orders this slice's operations in
-        // the fold, so a clock step between runs cannot reorder them.
-        let version = rows.iter().map(|row| row.version).max().unwrap_or(0) + 1;
-        let mut live: HashMap<String, Option<String>> = HashMap::new();
-        for (id, slice_rows) in codec::fold_slices(rows) {
-            if let Some(row) = codec::live_winner(slice_rows) {
-                live.insert(id, row.content_hash);
-            }
-        }
+        let SliceLive { version, live } = self.slice_live(&table, source).await?;
 
         // The delta. A live record with no stored hash cannot happen from this
         // writer, but is treated as changed (re-observe) rather than trusted.
@@ -310,23 +391,13 @@ impl Reconciler for IcebergReconciler {
                 )
             })
             .collect();
-        let desired: BTreeSet<&str> = documents
-            .iter()
-            .map(|document| document.external_id.as_str())
-            .collect();
-        let deletes: BTreeSet<&str> = live
-            .keys()
-            .map(String::as_str)
-            .filter(|id| !desired.contains(id))
-            .collect();
-        if upserts.is_empty() && deletes.is_empty() {
+        if upserts.is_empty() {
             return Ok(Report {
                 upserts: 0,
                 deletes: 0,
                 skipped: true,
             });
         }
-        let deletes: Vec<&str> = deletes.into_iter().collect();
 
         let arrow_schema = Arc::new(
             iceberg::arrow::schema_to_arrow_schema(table.metadata().current_schema())
@@ -342,13 +413,13 @@ impl Reconciler for IcebergReconciler {
             now_ms()?,
             version,
             &upserts,
-            &deletes,
+            &[],
         )?;
         let files = write_batch(&table, batch).await?;
         commit_files(self.catalog.as_ref(), &self.ident, files).await?;
         Ok(Report {
             upserts: upserts.len(),
-            deletes: deletes.len(),
+            deletes: 0,
             skipped: false,
         })
     }
@@ -682,7 +753,7 @@ fn now_ms() -> Result<i64> {
 mod tests {
     #![expect(clippy::expect_used, reason = "tests assert observable lake outcomes")]
 
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
@@ -796,7 +867,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn change_and_vanish_append_upsert_and_tombstone() {
+    async fn absence_in_a_newer_slice_preserves_folded_history() {
+        // ENG-2696: the lake is append/merge only. Slice 1 (an hourly fold)
+        // holds {a, b}; slice 2 — emitted after the user pruned local
+        // transcripts (or the host reimaged) — lacks b entirely and edits a.
+        // The folded table must keep BOTH: b's already-folded history
+        // survives, and a dedupes by external_id to its newest content_hash.
         let TestLake {
             catalog,
             ident,
@@ -806,23 +882,39 @@ mod tests {
         let source = Source::new("test");
         sink.reconcile(&source, &[doc("a", "alpha"), doc("b", "beta")])
             .await
-            .expect("seed");
+            .expect("slice 1");
 
-        // `a` changes, `b` vanishes from the desired state.
+        // A pure subset (b unchanged, a gone) converges: nothing to append,
+        // and crucially nothing to delete.
+        let report = sink
+            .reconcile(&source, &[doc("b", "beta")])
+            .await
+            .expect("subset slice");
+        assert!(report.skipped, "an unchanged subset must append nothing");
+
+        // `a` changes, `b` is absent: one upsert, zero tombstones.
         let report = sink
             .reconcile(&source, &[doc("a", "alpha EDITED")])
             .await
-            .expect("delta");
-        assert_eq!((report.upserts, report.deletes), (1, 1));
+            .expect("slice 2");
+        assert_eq!(
+            (report.upserts, report.deletes, report.skipped),
+            (1, 0, false),
+            "absence must never tombstone"
+        );
 
         let all = live_docs(
             read_state(catalog.as_ref(), &ident)
                 .await
                 .expect("read_state"),
         );
-        assert_eq!(all.len(), 1, "the tombstoned document must fold away");
-        assert_eq!(all[0].external_id, "a");
-        assert_eq!(all[0].body, b"alpha EDITED");
+        let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"], "the absent document must remain folded");
+        assert_eq!(
+            all[0].body, b"alpha EDITED",
+            "the present document dedupes to its newest content"
+        );
+        assert_eq!(all[1].body, b"beta");
     }
 
     #[tokio::test]
@@ -851,7 +943,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn slices_tombstone_independently() {
+    async fn explicit_gc_tombstones_are_slice_scoped() {
         let TestLake {
             catalog,
             ident,
@@ -869,12 +961,17 @@ mod tests {
             .await
             .expect("host2 seed");
 
-        // host-1's document vanishes; host-2's slice must be untouched.
-        let report = host1
+        // host-1's complete export no longer carries `one`: the explicit gc
+        // pass tombstones it; host-2's slice must be untouched.
+        host1
             .reconcile(&source, &[doc("one-b", "new")])
             .await
             .expect("host1 delta");
-        assert_eq!(report.deletes, 1);
+        let report = host1
+            .gc(&source, &HashSet::from(["one-b".to_owned()]))
+            .await
+            .expect("host1 gc");
+        assert_eq!((report.upserts, report.deletes), (0, 1));
         let all = live_docs(
             read_state(catalog.as_ref(), &ident)
                 .await
@@ -884,20 +981,28 @@ mod tests {
         assert_eq!(
             ids,
             ["one-b", "two"],
-            "host-2's document must survive host-1's tombstone"
+            "host-2's document must survive host-1's gc tombstone"
         );
 
-        // The per-user derivation scopes the same way.
+        // The per-user derivation scopes the same way: a host-level gc must
+        // not see (or condemn) alice's rows, and a converged gc is a skip.
         let alice = host1.with_user("alice");
         alice
             .reconcile(&source, &[doc("alice-1", "hers")])
             .await
             .expect("alice seed");
         let report = host1
-            .reconcile(&source, &[doc("one-b", "new")])
+            .gc(&source, &HashSet::from(["one-b".to_owned()]))
             .await
-            .expect("host1 again");
+            .expect("host1 gc again");
         assert!(report.skipped, "host-level slice must not see alice's rows");
+        let all = live_docs(
+            read_state(catalog.as_ref(), &ident)
+                .await
+                .expect("read_state"),
+        );
+        let ids: Vec<&str> = all.iter().map(|d| d.external_id.as_str()).collect();
+        assert_eq!(ids, ["alice-1", "one-b", "two"]);
     }
 
     /// Commit one crafted batch onto an explicit (possibly stale) table
@@ -1060,7 +1165,12 @@ mod tests {
             .expect("committed");
         let changed = vec![doc_in(&tag, &id("r1"), "one EDITED")];
         let delta_report = sink.reconcile(&source, &changed).await.expect("delta");
-        assert_eq!((delta_report.upserts, delta_report.deletes), (1, 1));
+        assert_eq!((delta_report.upserts, delta_report.deletes), (1, 0));
+        let gc_report = sink
+            .gc(&source, &HashSet::from([id("r1")]))
+            .await
+            .expect("gc");
+        assert_eq!((gc_report.upserts, gc_report.deletes), (0, 1));
 
         let mine: Vec<Document> = live_docs(
             read_state(catalog.as_ref(), &ident)
@@ -1140,7 +1250,7 @@ mod tests {
         sink.reconcile(&source, &[doc("a", "alpha"), doc("b", "beta")])
             .await
             .expect("second");
-        sink.reconcile(&source, &[doc("b", "beta")])
+        sink.gc(&source, &HashSet::from(["b".to_owned()]))
             .await
             .expect("third tombstones a");
 
@@ -1268,11 +1378,16 @@ mod tests {
             .expect("snapshot")
             .expect("committed");
 
-        // host-1 lets go of x; host-2 still observes it.
+        // host-1 lets go of x (an explicit gc over its complete export);
+        // host-2 still observes it.
         host1
             .reconcile(&source, &[doc("y", "new")])
             .await
             .expect("host1 delta");
+        host1
+            .gc(&source, &HashSet::from(["y".to_owned()]))
+            .await
+            .expect("host1 gc");
         let all = live_docs(
             read_state(catalog.as_ref(), &ident)
                 .await
@@ -1306,6 +1421,10 @@ mod tests {
             .reconcile(&source, &[doc("z", "other")])
             .await
             .expect("host2 delta");
+        host2
+            .gc(&source, &HashSet::from(["z".to_owned()]))
+            .await
+            .expect("host2 gc");
         let delta = added_since(catalog.as_ref(), &ident, cursor)
             .await
             .expect("second delta");
@@ -1335,13 +1454,10 @@ mod tests {
         sink.reconcile(&source, &[doc("a", "alpha")])
             .await
             .expect("seed");
-        // Tombstone the source's only record (crafted directly: the reconciler
-        // never appends a bare tombstone, but manual surgery can leave a
-        // source fully dead, and the rebuild must still GC its view records).
-        let table = catalog.load_table(&ident).await.expect("table");
-        commit_on(catalog.as_ref(), &table, &source, 2, 2, &[], &["a"])
-            .await
-            .expect("tombstone");
+        // An explicit gc against an emptied (but complete) export tombstones
+        // the source's only record; the rebuild must still GC its view records.
+        let report = sink.gc(&source, &HashSet::new()).await.expect("gc");
+        assert_eq!((report.deletes, report.skipped), (1, false));
 
         let state = read_state(catalog.as_ref(), &ident)
             .await

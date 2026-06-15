@@ -34,13 +34,13 @@ let
   # up in the `lint` derivation build, not at `nix run` time.
   lintStage = ix.writeNushellApplication pkgs {
     name = "lint-stage";
-    meta.description = "One lint stage (nixfmt | statix | deadnix | ast-grep | ast-grep-test); driven by `lint`";
+    meta.description = "One lint stage (nixfmt | statix | deadnix | astlog | astlog-rust); driven by `lint`";
     runtimeInputs = [
-      pkgs.ast-grep
       pkgs.deadnix
       pkgs.fd
       pkgs.nixfmt
       pkgs.statix
+      repoPackages.astlog
     ];
     text = ''
       def "main nixfmt" [] {
@@ -49,15 +49,40 @@ let
       }
       def "main statix" [] { statix check . }
       def "main deadnix" [] { deadnix --fail --no-lambda-pattern-names . }
-      def "main ast-grep" [] { ast-grep scan --error . }
-      # Rule self-test: every fixture under ast-grep/nix/tests must flag its
-      # invalid cases and ignore its valid ones. Catches rules whose pattern
-      # silently stops matching (e.g. a bare `attr = val` that parses as an
-      # expression, not a binding). --skip-snapshot-tests keeps it to match
-      # presence/absence without baseline snapshot files.
-      def "main ast-grep-test" [] { ast-grep test --skip-snapshot-tests }
+      # The Nix style rules as astlog lint declarations
+      # (astlog-rules/nix.astlog, #1060/#1062). `astlog scan` emits one
+      # finding per lint-declared relation row and exits nonzero on any
+      # error-severity finding, so adding a (lint ...) extends the gate
+      # without touching this invocation. Legitimate exceptions are
+      # suppressed in place with `astlog-ignore: <rule>` comments. Only
+      # .nix files are handed to the corpus: astlog would otherwise parse
+      # every known-grammar file in the repo to run nix-only rules.
+      def "main astlog" [] {
+        let nix_files = (fd --extension nix | lines)
+        astlog scan astlog-rules/nix.astlog ...$nix_files
+      }
+      # The Rust style rules (astlog-rules/rust.astlog), the successor to the
+      # ast-grep rust rules (#1060 ported the nix rules first). Scoped to the
+      # corpus/search crates, the `files:` scope those rules carried under
+      # ast-grep; astlog walks each directory and runs the rust rules over its
+      # .rs files. Both rulesets share the `astlog-rules` flake-check self-test.
+      def "main astlog-rust" [] {
+        let dirs = (
+          [
+            packages/indexer
+            packages/search
+            packages/search-core
+            packages/search-py
+            packages/source
+            packages/sink
+          ]
+          | where {|d| $d | path exists}
+        )
+        if ($dirs | is-empty) { return }
+        astlog scan astlog-rules/rust.astlog ...$dirs
+      }
       def main [] {
-        error make { msg: "specify a stage: nixfmt | statix | deadnix | ast-grep | ast-grep-test" }
+        error make { msg: "specify a stage: nixfmt | statix | deadnix | astlog | astlog-rust" }
       }
     '';
   };
@@ -76,13 +101,13 @@ let
         (lib.getExe lintStage)
         "deadnix"
       ];
-      "ast-grep".command = [
+      astlog.command = [
         (lib.getExe lintStage)
-        "ast-grep"
+        "astlog"
       ];
-      "ast-grep-test".command = [
+      "astlog-rust".command = [
         (lib.getExe lintStage)
-        "ast-grep-test"
+        "astlog-rust"
       ];
     };
   };
@@ -308,6 +333,37 @@ let
       inherit pkgs;
       extraSkills = agentContextProgressiveSkills;
     };
+
+  # Declarative subagents rendered to a symlink-free `.claude/agents` directory.
+  # index-action-runner offloads a long, image- or step-heavy loop into its own
+  # context and returns only the conclusion (ENG-2792). Its frontmatter bakes a
+  # FRESH inline `index` server from the shared `ix.mcp` registry, so each
+  # spawned subagent gets its own kernel and browser rather than sharing the
+  # parent's; the server is declared from the same source the wrappers render.
+  agentContextAgents = ix.agents.mkAgentsDir {
+    inherit pkgs;
+    agents = {
+      index-action-runner = {
+        frontmatter = {
+          name = "index-action-runner";
+          description =
+            "Offload a long, image-heavy or many-step loop (browser automation, "
+            + "scanning many images or PDFs, multi-step web flows) into an isolated "
+            + "context. Give it an outcome plus the exact fields to return; it drives "
+            + "the whole loop in its own index kernel and returns only the distilled "
+            + "result, keeping screenshots and DOM dumps out of the main thread.";
+          mcpServers = ix.mcp.toAgentMcpServers {
+            index = {
+              transport = "stdio";
+              command = lib.getExe repoPackages.mcp;
+              args = [ "serve" ];
+            };
+          };
+        };
+        body = builtins.readFile (paths.agentContext + "/agents/index-action-runner.md");
+      };
+    };
+  };
 
   mcSource = ix.writeNushellApplication pkgs {
     name = "mc-source";
@@ -568,6 +624,14 @@ let
     fileset = fs.gitTracked paths.root;
   };
 
+  # Just the astlog rules file plus its fixture pairs, so the rules self-test
+  # below only rebuilds when the rules or fixtures change, not on every
+  # tracked-file edit the way `lintSource` does.
+  astlogRulesSource = fs.toSource {
+    inherit (paths) root;
+    fileset = fs.intersection (fs.gitTracked paths.root) (paths.root + "/astlog-rules");
+  };
+
   tests = import paths.tests { inherit nixpkgs ix; };
 
   exampleFleets = ix.exampleFleetsFor { hostSystem = system; };
@@ -689,6 +753,7 @@ let
             test -s ${agentContextClaudeMd}
             test -s ${agentContextCodexMd}
             test -d ${agentContextSkills}
+            test -d ${agentContextAgents}
             mkdir -p "$out"
           '';
           # Pins the last-applied 3-way merge behind homeModules.mutable-json:
@@ -737,6 +802,153 @@ let
             pkgs.runCommand "loader-manifests-check" { } ''
               printf '%s\n' '${forced}' > "$out"
             '';
+          # Rule self-test for the astlog lint rules (nix.astlog + rust.astlog):
+          # every (lint ...) declaration must have a committed fixture pair and
+          # fire exactly on the violating one, driven through the same `astlog
+          # scan --json` surface the lint gate uses. A lint that never fires in
+          # tests is unproven (its query may have silently stopped matching), so
+          # a missing or non-firing fixture fails the build, as does a rule
+          # without a lint declaration (it would silently drop out of the gate).
+          # Fixtures are stored as `.fixture` (not `.nix`/`.rs`) so the repo lint
+          # stages (nixfmt / statix / deadnix / astlog itself) never scan the
+          # deliberately-violating snippets; the check stages each back to its
+          # ruleset's extension (`.nix` for nix.astlog, `.rs` for rust.astlog —
+          # astlog selects the grammar by file extension) before running the
+          # binary. `scan` exits nonzero on the violating fixture by design, so
+          # the jq pipelines deliberately take the JSON regardless of exit code.
+          astlog-rules =
+            pkgs.runCommand "astlog-rules-check"
+              {
+                nativeBuildInputs = [
+                  repoPackages.astlog
+                  pkgs.jq
+                ];
+              }
+              ''
+                root=${astlogRulesSource}/astlog-rules
+                tests="$root/tests"
+                fail=0
+                # Each ruleset paired with the source extension its fixtures take.
+                check_ruleset() {
+                  rules="$1"
+                  ext="$2"
+                  for rule in $(sed -n 's/^(rule (\([a-z0-9-]*\).*/\1/p' "$rules" | sort -u); do
+                    if ! grep -q "^(lint $rule " "$rules"; then
+                      echo "rule $rule has no (lint ...) declaration, so the scan gate skips it" >&2
+                      fail=1
+                    fi
+                  done
+                  for rule in $(sed -n 's/^(lint \([a-z0-9-]*\).*/\1/p' "$rules" | sort -u); do
+                    dir="$tests/$rule"
+                    if [ ! -f "$dir/bad.fixture" ] || [ ! -f "$dir/good.fixture" ]; then
+                      echo "lint $rule has no fixture pair under astlog-rules/tests/$rule" >&2
+                      fail=1
+                      continue
+                    fi
+                    work=$(mktemp -d)
+                    cp "$dir/bad.fixture" "$work/bad.$ext"
+                    cp "$dir/good.fixture" "$work/good.$ext"
+                    # `astlog scan` exits nonzero on a violating fixture by
+                    # design; capture its JSON (`|| true` so the by-design exit
+                    # does not abort the `set -o pipefail` build) and count
+                    # separately, rather than piping straight into jq.
+                    bad_json=$(astlog scan "$rules" "$work/bad.$ext" --json || true)
+                    good_json=$(astlog scan "$rules" "$work/good.$ext" --json || true)
+                    bad=$(jq --arg r "$rule" '[.[] | select(.rule == $r)] | length' <<<"$bad_json")
+                    good=$(jq --arg r "$rule" '[.[] | select(.rule == $r)] | length' <<<"$good_json")
+                    if [ "$bad" = 0 ]; then
+                      echo "lint $rule did not fire on its violating fixture" >&2
+                      fail=1
+                    fi
+                    if [ "$good" != 0 ]; then
+                      echo "lint $rule fired $good finding(s) on its valid fixture" >&2
+                      fail=1
+                    fi
+                  done
+                }
+                check_ruleset "$root/nix.astlog" nix
+                check_ruleset "$root/rust.astlog" rs
+                # Every fixture dir must back a lint in one of the rulesets.
+                for dir in "$tests"/*/; do
+                  rule=$(basename "$dir")
+                  if ! grep -q "^(lint $rule " "$root/nix.astlog" "$root/rust.astlog"; then
+                    echo "fixture dir astlog-rules/tests/$rule matches no lint" >&2
+                    fail=1
+                  fi
+                done
+                if [ "$fail" != 0 ]; then
+                  exit 1
+                fi
+                mkdir -p "$out"
+              '';
+          # End-to-end proof that scipql resolves SCIP monikers and acts only on
+          # the right symbol, exercising all three surfaces (query / fix /
+          # rename) of the real pipeline. The wrapped CLI bakes rust-analyzer +
+          # the pinned toolchain + souffle; the fixture is a dependency-free
+          # crate with a `net::Socket` and a same-named `mock::Socket`, so
+          # rust-analyzer's `cargo metadata` needs no network. Tree-sitter
+          # (astlog) could not tell the two `Socket`s apart; this is the
+          # semantic-disambiguation guarantee.
+          scipql-e2e =
+            pkgs.runCommand "scipql-e2e-check"
+              {
+                nativeBuildInputs = [ repoPackages.scipql ];
+              }
+              ''
+                export HOME="$TMPDIR/home"
+                mkdir -p "$HOME"
+                cp -r ${
+                  builtins.path {
+                    name = "scipql-two-sockets-fixture";
+                    path = paths.packagesRoot + "/scipql/tests/fixtures/two-sockets";
+                  }
+                } work
+                chmod -R u+w work
+                cd work
+                fail=0
+
+                scipql index . -o index.scip
+
+                # query: the two same-named structs resolve to distinct monikers.
+                # (printf, not a heredoc: a heredoc terminator would not sit at
+                # column 0 after Nix strips the indented string's indentation.)
+                printf '%s\n' \
+                  '.decl sockets(sym:symbol)' \
+                  '.output sockets' \
+                  'sockets(s) :- occurrence(s, _, _, _, "definition"), symbol_info(s, _, "Socket").' \
+                  > sockets.dl
+                q=$(scipql query index.scip sockets.dl)
+                echo "$q" | grep -q 'net/Socket#' || { echo "query: missing net/Socket# definition" >&2; fail=1; }
+                echo "$q" | grep -q 'mock/Socket#' || { echo "query: missing mock/Socket# definition" >&2; fail=1; }
+
+                # fix: the replacement text is COMPUTED in datalog (cat + a join to
+                # the display name), not a constant, and still scoped to net by moniker.
+                printf '%s\n' \
+                  'edit(path, start, end, cat("Net", name)) :-' \
+                  '  occurrence(sym, path, start, end, _),' \
+                  '  symbol_info(sym, _, name),' \
+                  '  substr(sym, strlen(sym) - strlen("net/Socket#"), strlen("net/Socket#")) = "net/Socket#".' \
+                  > netname.dl
+                d=$(scipql fix index.scip netname.dl)
+                echo "$d" | grep -q 'NetSocket' || { echo "fix: datalog-computed replacement (cat) did not apply" >&2; fail=1; }
+                echo "$d" | grep -q 'src/mock.rs' && { echo "fix: computed edit wrongly touched mock.rs" >&2; fail=1; }
+
+                # rename: apply to disk, then assert the net struct + its reference
+                # changed while mock::Socket and the net struct's own fd field did not.
+                scipql rename index.scip 'net/Socket#' Stream --write
+                grep -q 'pub struct Stream' src/net.rs || { echo "rename: net::Socket was not renamed" >&2; fail=1; }
+                grep -q 'net::Stream' src/lib.rs || { echo "rename: the net::Socket reference was not renamed" >&2; fail=1; }
+                grep -q 'pub struct Socket' src/mock.rs || { echo "rename: mock::Socket was wrongly changed" >&2; fail=1; }
+                grep -q 'pub fd: i32' src/net.rs || { echo "rename: the struct's own fd field was wrongly renamed" >&2; fail=1; }
+
+                if [ "$fail" != 0 ]; then
+                  echo "--- net.rs ---" >&2; cat src/net.rs >&2
+                  echo "--- mock.rs ---" >&2; cat src/mock.rs >&2
+                  echo "--- lib.rs ---" >&2; cat src/lib.rs >&2
+                  exit 1
+                fi
+                mkdir -p "$out"
+              '';
           run-records-session = repoPackages.run.passthru.tests.recordsSession;
           # Symphony's required quality lane (compile -Werror, mix format,
           # credo, mix test) as a sandboxed derivation; see
@@ -863,6 +1075,7 @@ in
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
       update-sounds = updateSounds;
+      agents = agentContextAgents;
       claude-md = agentContextClaudeMd;
       codex-md = agentContextCodexMd;
       skills = agentContextSkills;
@@ -906,7 +1119,7 @@ in
   devShells = {
     default = pkgs.mkShellNoCC {
       packages = [
-        pkgs.ast-grep
+        repoPackages.astlog
         pkgs.nixfmt
       ];
     };

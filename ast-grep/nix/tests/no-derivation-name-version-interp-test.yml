@@ -1,6 +1,0 @@
-id: no-derivation-name-version-interp
-valid:
-  - '{ pname = "foo"; version = "1.0"; }'
-invalid:
-  - '{ name = "${pname}-${version}"; }'
-  - '{ name = "${finalAttrs.pname}-${finalAttrs.version}"; }'

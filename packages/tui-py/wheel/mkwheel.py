@@ -22,7 +22,7 @@ DIST = "ix_tui"
 DIST_NAME = "ix-tui"
 SO_NAME = "_tui.abi3.so"
 # Files copied verbatim from the Python source tree into the wheel.
-SOURCE_FILES = ["__init__.py", "_tui.pyi", "py.typed"]
+SOURCE_FILES = ["__init__.py", "harness.py", "_tui.pyi", "py.typed"]
 
 
 def sha256_b64(data: bytes) -> str:

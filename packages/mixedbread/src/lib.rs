@@ -3,9 +3,13 @@
 //! it can back a search tool or any other consumer.
 //!
 //! Endpoints covered: store create/get (`/v1/stores`), the two-step file upload
-//! (`/v1/files` then `/v1/stores/{store}/files`), file listing and deletion,
-//! search (`/v1/stores/search`), regex grep (`/v1/stores/grep`), and
-//! question-answering (`/v1/stores/question-answering`).
+//! (`/v1/files` then `/v1/stores/{store}/files`), file listing, per-file status,
+//! and deletion, search (`/v1/stores/search`), regex grep (`/v1/stores/grep`),
+//! metadata-only chunk listing (`/v1/stores/list-chunks`),
+//! question-answering (`/v1/stores/question-answering`), query
+//! enhancement (`/v1/stores/queries/enhance`), metadata facets
+//! (`/v1/stores/metadata-facets`), and the per-store event histogram
+//! (`/v1/stores/{store}/events/histogram`).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -16,8 +20,10 @@ use serde::Deserialize;
 use snafu::{OptionExt as _, ResultExt as _, Snafu};
 
 pub mod auth;
+pub mod enhance;
 pub mod filter;
 
+pub use enhance::{EnhancedQuery, FilterMode, SortDirection};
 pub use filter::{Condition, Filter, Group, Operator};
 
 /// Default API base URL.
@@ -160,6 +166,13 @@ pub enum Error {
     /// The platform returned an empty token during exchange.
     #[snafu(display("platform returned no API token; run `mgrep login` again"))]
     EmptyJwt,
+
+    /// The query-enhance endpoint answered success but carried no items. The
+    /// schema promises exactly one, so an empty list is a server contract
+    /// violation, not a "no filters extracted" result (that arrives as a query
+    /// item with empty filters).
+    #[snafu(display("queries/enhance returned no items"))]
+    EnhanceEmpty,
 }
 
 /// Result alias defaulting to this crate's [`Error`].
@@ -177,7 +190,8 @@ pub const DEFAULT_RERANK_MODEL: &str = "mixedbread-ai/mxbai-rerank-v3-listwise";
 /// Serialized as the API's `rerank` field, which is `boolean | object`:
 /// [`Rerank::Toggle`] serializes to a bare bool (so the legacy "just turn it
 /// on/off" wire body is byte-for-byte unchanged), while [`Rerank::Model`]
-/// serializes to `{ "model": "..." }` to pin a specific reranking model.
+/// serializes to the `RerankConfig` object form (`{ "model": "...", "top_k":
+/// N }`, optional fields omitted) to pin a model and cap the reranked list.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(untagged)]
 pub enum Rerank {
@@ -188,6 +202,11 @@ pub enum Rerank {
     Model {
         /// Reranking model name forwarded to the API.
         model: String,
+        /// Cap the result list after reranking. `None` keeps every reranked
+        /// hit (the API default), so the legacy `{ "model": ... }` wire body
+        /// is unchanged when unset.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        top_k: Option<usize>,
     },
 }
 
@@ -207,7 +226,10 @@ impl Rerank {
     /// Pin a specific reranking model.
     #[must_use]
     pub fn model(name: impl Into<String>) -> Self {
-        Self::Model { model: name.into() }
+        Self::Model {
+            model: name.into(),
+            top_k: None,
+        }
     }
 
     /// The listwise reranker ([`DEFAULT_RERANK_MODEL`]).
@@ -217,16 +239,120 @@ impl Rerank {
     }
 }
 
-/// Search tuning forwarded to the API.
+/// Agentic search selection.
 ///
-/// `score_threshold` and `return_metadata` are skipped when unset, so a caller
-/// that only sets `rerank`/`agentic` produces the same wire body as before.
+/// Serialized as the API's `agentic` field, which is `boolean | object`:
+/// [`Agentic::Toggle`] serializes to a bare bool (the legacy wire body),
+/// while [`Agentic::Config`] serializes to the `AgenticSearchConfig` object
+/// form to tune the agent. When agentic search is enabled the server ignores
+/// `rewrite_query` and `rerank` (the agent owns decomposition and ranking).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(untagged)]
+pub enum Agentic {
+    /// Toggle agentic search with the server's default configuration.
+    Toggle(bool),
+    /// Agentic search with explicit tuning.
+    Config(AgenticConfig),
+}
+
+impl Agentic {
+    /// Agentic search disabled (wire `false`).
+    #[must_use]
+    pub const fn off() -> Self {
+        Self::Toggle(false)
+    }
+
+    /// Agentic search with the server's defaults (wire `true`).
+    #[must_use]
+    pub const fn on() -> Self {
+        Self::Toggle(true)
+    }
+
+    /// Whether agentic search is enabled in any form. A config object always
+    /// enables it; only the bare `false` toggle disables it.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        !matches!(self, Self::Toggle(false))
+    }
+}
+
+/// Tuning for agentic multi-query search (the API's `AgenticSearchConfig`).
+///
+/// Every field is optional and omitted from the wire when unset, so the
+/// server default applies. `media_content` and `verbose` are deliberately not
+/// modeled: the corpus holds no image chunks, and `verbose` is documented by
+/// the API schema as internal to the Mixedbread playground.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct AgenticConfig {
+    /// Maximum number of search rounds (API default 3, max 10).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_rounds: Option<u32>,
+    /// Maximum queries per round (API default 4, max 10).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queries_per_round: Option<u32>,
+    /// Require exactly `top_k` ranked chunks in the final list. Off by
+    /// default: the agent gates results on its own judged relevance and may
+    /// return fewer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict_top_k: Option<bool>,
+    /// Extra instructions for the search agent (followed only when not in
+    /// conflict with the server's own rules; capped at 5000 chars by the API).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+}
+
+/// Sort order for [`Client::list_chunks`]: a metadata field path and direction.
+///
+/// Serializes to the API's `[field_path, ascending]` tuple form. An unprefixed
+/// dot path targets file metadata (e.g. `timestamp`); `generated_metadata.*`
+/// targets chunk metadata.
+#[derive(Debug, Clone)]
+pub struct SortBy {
+    /// Metadata field path to sort on.
+    pub field: String,
+    /// Ascending (`true`) or descending (`false`).
+    pub ascending: bool,
+}
+
+impl SortBy {
+    /// Sort ascending on `field`.
+    #[must_use]
+    pub fn asc(field: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            ascending: true,
+        }
+    }
+
+    /// Sort descending on `field` (e.g. newest-first on a timestamp).
+    #[must_use]
+    pub fn desc(field: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            ascending: false,
+        }
+    }
+}
+
+impl serde::Serialize for SortBy {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // The API accepts `string | [field_path, ascending]`; always emit the
+        // tuple so the direction is explicit on the wire.
+        (&self.field, self.ascending).serialize(serializer)
+    }
+}
+
+/// Search tuning forwarded to the API (the `search_options` body field).
+///
+/// Every optional field is skipped when unset, so a caller that only sets
+/// `rerank`/`agentic` produces the same wire body as before.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchOptions {
-    /// Apply the second-stage reranker (toggle or a pinned model).
+    /// Apply the second-stage reranker (toggle or a pinned model). Ignored by
+    /// the server when agentic search is enabled.
     pub rerank: Rerank,
-    /// Let the API plan and run multiple searches.
-    pub agentic: bool,
+    /// Let the API plan and run multiple searches (toggle or tuned config).
+    pub agentic: Agentic,
     /// Drop hits scoring below this threshold (`0.0..=1.0`). Used to keep a
     /// low-relevance source from crowding a multi-source result list.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -235,15 +361,88 @@ pub struct SearchOptions {
     /// mapped back to its source. Skipped when `None` (API default applies).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub return_metadata: Option<bool>,
+    /// Rewrite the query server-side before embedding it. Skipped when `None`
+    /// (API default `false`); ignored by the server when agentic search is
+    /// enabled (the agent owns query decomposition).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rewrite_query: Option<bool>,
+    /// Apply the store's server-side search rules. Skipped when `None` (API
+    /// default `true`); `Some(false)` bypasses the rules for one query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apply_search_rules: Option<bool>,
+}
+
+/// Question-answering tuning forwarded to the API alongside the search
+/// options: the `qa_options` body object plus the request-level
+/// `instructions` field.
+///
+/// Every field is optional and omitted from the wire when unset, so a caller
+/// passing `QaOptions::default()` produces the same wire body as before the
+/// type existed. The endpoint also accepts `stream: true` for a streamed
+/// answer; the live API answers `500 internal_error` to it in every
+/// combination tried (verified 2026-06-12, four attempts, with and without
+/// `qa_options` and an SSE `Accept` header), so this client does not expose
+/// streaming until the server-side feature works.
+#[derive(Debug, Clone, Default)]
+pub struct QaOptions {
+    /// Whether the answer cites its sources with `<cite i="N"/>` markers
+    /// indexing the returned source list. `None` applies the API default
+    /// (`true`).
+    pub cite: Option<bool>,
+    /// Whether the answer may draw on multimodal (image/audio/video) context.
+    /// `None` applies the API default (`true`); the shared corpus is text-only,
+    /// so `Some(false)` only matters as an explicit opt-out.
+    pub multimodal: Option<bool>,
+    /// Extra instructions for the answering model (followed only when not in
+    /// conflict with existing rules; capped at 8000 chars by the API).
+    pub instructions: Option<String>,
+}
+
+/// File-id scoping for search and question-answering.
+///
+/// Restricts matching chunks to (or excludes) a set of store file UUIDs,
+/// `AND`ed with any metadata `filters`. Serialized as the API's request-level
+/// `file_ids` field, which is `[id, ...] | [operator, [id, ...]]`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(untagged)]
+pub enum FileIds {
+    /// Bare inclusion list (wire `["id", ...]`).
+    Include(Vec<String>),
+    /// Operator form (wire `["in" | "not_in", ["id", ...]]`). Only
+    /// [`Operator::In`] and [`Operator::NotIn`] are meaningful here; the API
+    /// rejects other operators.
+    Scoped(Operator, Vec<String>),
+}
+
+impl FileIds {
+    /// Keep only chunks from these store files.
+    #[must_use]
+    pub const fn include(ids: Vec<String>) -> Self {
+        Self::Include(ids)
+    }
+
+    /// Exclude chunks from these store files.
+    #[must_use]
+    pub const fn exclude(ids: Vec<String>) -> Self {
+        Self::Scoped(Operator::NotIn, ids)
+    }
 }
 
 /// A file as reported by the store's file listing.
 #[derive(Debug, Clone)]
 pub struct StoredFile {
+    /// The store file object's own id. Unlike `external_id` it is unique per
+    /// file object, so it is the only unambiguous delete handle when a retried
+    /// upload has left several file objects under one external id.
+    pub id: Option<String>,
     /// Caller-assigned external id, if any.
     pub external_id: Option<String>,
     /// Arbitrary metadata attached at upload time.
     pub metadata: Option<serde_json::Value>,
+    /// Creation timestamp (RFC 3339, UTC) as reported by the API. RFC 3339 in
+    /// one zone orders lexicographically, so callers compare these as strings
+    /// to find the newest among duplicates.
+    pub created_at: Option<String>,
 }
 
 /// One scored chunk returned by search or question-answering.
@@ -285,6 +484,68 @@ pub struct RerankHit {
     pub score: f32,
 }
 
+/// Distinct values and their file counts, per metadata key.
+///
+/// Returned by [`Client::metadata_facets`]: `facets["source"]["shell"]` is the
+/// number of store files whose `source` metadata equals `shell`. Keys are
+/// stringified by the server, so numeric metadata values arrive as digit
+/// strings.
+pub type Facets = std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>>;
+
+/// Hard ceiling on [`FacetLimits::max_files`] (the API rejects a larger scan
+/// bound with HTTP 422).
+///
+/// A store holding more files than the scan bound reports truncated counts —
+/// verified live on a >100k-file store, whose per-source counts summed to
+/// exactly this cap (2026-06-12).
+pub const FACETS_MAX_FILES: u32 = 100_000;
+
+/// Caps for a metadata-facet computation. Every field is optional and omitted
+/// from the wire when unset, so the API defaults apply.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FacetLimits {
+    /// Maximum number of distinct metadata fields (keys) returned (API
+    /// default 64, max 256). Irrelevant when the request names its facets.
+    pub max_fields: Option<u32>,
+    /// Maximum number of distinct values returned per field, ranked by count
+    /// (API default 32, max 256).
+    pub max_values_per_field: Option<u32>,
+    /// Maximum number of store files scanned to compute the counts (API
+    /// default 10 000, max [`FACETS_MAX_FILES`]).
+    pub max_files: Option<u32>,
+}
+
+/// Event families accepted by the store telemetry endpoints' `event_types`
+/// filter ([`Client::events_histogram`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventType {
+    /// File ingestion (upload through embedding).
+    Ingestion,
+    /// Semantic search requests.
+    Search,
+    /// Agentic (multi-round) search requests.
+    AgenticSearch,
+    /// Regex grep requests.
+    Grep,
+}
+
+/// One event type's count within one time bucket, as returned by
+/// [`Client::events_histogram`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct HistogramBucket {
+    /// Bucket start, RFC 3339.
+    pub bucket_start: String,
+    /// Bucket end, RFC 3339.
+    pub bucket_end: String,
+    /// Dotted event name (e.g. `store.file.completed`, `store.search`). An
+    /// open set server-side, so it stays a string rather than an enum.
+    #[serde(rename = "type")]
+    pub event_type: String,
+    /// Number of events of this type in the bucket.
+    pub event_count: u64,
+}
+
 /// Indexing progress for a store: how many files are still being processed.
 #[derive(Debug, Clone, Copy)]
 pub struct StoreStatus {
@@ -292,6 +553,38 @@ pub struct StoreStatus {
     pub pending: u64,
     /// Files currently being embedded.
     pub in_progress: u64,
+}
+
+/// One store file's indexing status: the `status` field of the store-file
+/// object (`GET /v1/stores/{store}/files/{id}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStatus {
+    /// Queued but not yet processed.
+    Pending,
+    /// Currently being parsed and embedded.
+    InProgress,
+    /// Embedded and searchable.
+    Completed,
+    /// Processing failed; the store retries on its own schedule, not the
+    /// caller's.
+    Failed,
+    /// Processing was cancelled.
+    Cancelled,
+    /// A status string this client does not know. [`FileStatus::is_settled`]
+    /// treats it as settled so a new server-side state can never wedge a
+    /// caller's wait loop; the wait's own timeout still bounds the worst case.
+    #[serde(other)]
+    Unknown,
+}
+
+impl FileStatus {
+    /// Whether the store has stopped working on this file (embedded, failed,
+    /// cancelled, or unrecognized), i.e. polling longer cannot change anything.
+    #[must_use]
+    pub const fn is_settled(self) -> bool {
+        !matches!(self, Self::Pending | Self::InProgress)
+    }
 }
 
 /// Async client bound to a base URL and API key.
@@ -449,8 +742,10 @@ impl Client {
             let page: ListResponse = decode(resp).await?;
             for item in page.data {
                 files.push(StoredFile {
+                    id: item.id,
                     external_id: item.external_id,
                     metadata: item.metadata,
+                    created_at: item.created_at,
                 });
             }
             match page.pagination {
@@ -514,6 +809,24 @@ impl Client {
         expect_ok(resp).await
     }
 
+    /// Fetch one store file's indexing status by external id (or store file
+    /// id). `Ok(None)` when the store holds no such file.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or cannot be decoded.
+    pub async fn file_status(&self, store: &str, external_id: &str) -> Result<Option<FileStatus>> {
+        let id = utf8_percent_encode(external_id, PATH_SEGMENT);
+        let status_url = self.url(&format!("/v1/stores/{store}/files/{id}"));
+        let resp = self
+            .send_retrying(|| Ok(self.http.get(status_url.as_str())))
+            .await?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let object: FileObject = decode(resp).await?;
+        Ok(Some(object.status))
+    }
+
     /// Delete one file by external id (or store file id).
     ///
     /// # Errors
@@ -527,7 +840,8 @@ impl Client {
         expect_ok(resp).await
     }
 
-    /// Search one or more stores.
+    /// Search one or more stores. `file_ids` further scopes matching chunks to
+    /// (or away from) specific store files, `AND`ed with `filters`.
     ///
     /// # Errors
     /// Returns an error if the request fails or cannot be decoded.
@@ -538,6 +852,7 @@ impl Client {
         top_k: usize,
         options: SearchOptions,
         filters: Option<&filter::Filter>,
+        file_ids: Option<&FileIds>,
     ) -> Result<Vec<Chunk>> {
         let request = SearchRequest {
             query,
@@ -545,6 +860,7 @@ impl Client {
             top_k,
             search_options: options,
             filters,
+            file_ids,
         };
         let search_url = self.url("/v1/stores/search");
         let resp = self
@@ -591,24 +907,74 @@ impl Client {
         Ok(response.data.into_iter().map(Chunk::from).collect())
     }
 
-    /// Ask a natural-language question against one or more stores.
+    /// List chunks from one or more stores purely by metadata filters — no
+    /// embeddings, no semantic similarity, no reranking — on the server's
+    /// `/v1/stores/list-chunks` endpoint.
+    ///
+    /// This is the API for deterministic ranked retrieval over numeric
+    /// metadata: combined with a `timestamp` range filter and
+    /// `sort_by = SortBy::desc("timestamp")` it answers "what happened in the
+    /// last N hours, newest first". `top_k` caps the returned chunks (the
+    /// endpoint has no cursor; ask for more to get more). The response decodes
+    /// the same way [`search`](Self::search) does, so a listed chunk and a
+    /// search hit share the [`Chunk`] shape (`score` is meaningless here and
+    /// arrives as the API's placeholder).
     ///
     /// # Errors
     /// Returns an error if the request fails or cannot be decoded.
+    pub async fn list_chunks(
+        &self,
+        stores: &[String],
+        top_k: usize,
+        filters: Option<&filter::Filter>,
+        sort_by: Option<&SortBy>,
+    ) -> Result<Vec<Chunk>> {
+        let request = ListChunksRequest {
+            store_identifiers: stores,
+            top_k,
+            filters,
+            sort_by,
+        };
+        let list_url = self.url("/v1/stores/list-chunks");
+        let resp = self
+            .send_retrying(|| Ok(self.http.post(list_url.as_str()).json(&request)))
+            .await?;
+        let response: SearchResponse = decode(resp).await?;
+        Ok(response.data.into_iter().map(Chunk::from).collect())
+    }
+
+    /// Ask a natural-language question against one or more stores. `file_ids`
+    /// scopes the answering context like [`search`](Self::search); `qa` tunes
+    /// the answering stage itself (citations, multimodal context,
+    /// instructions — see [`QaOptions`]).
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or cannot be decoded.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "thin pass-through of the endpoint's request surface"
+    )]
     pub async fn ask(
         &self,
         stores: &[String],
         query: &str,
         top_k: usize,
         options: SearchOptions,
+        qa: QaOptions,
         filters: Option<&filter::Filter>,
+        file_ids: Option<&FileIds>,
     ) -> Result<AnswerResponse> {
-        let request = SearchRequest {
-            query,
-            store_identifiers: stores,
-            top_k,
-            search_options: options,
-            filters,
+        let request = QaRequest {
+            search: SearchRequest {
+                query,
+                store_identifiers: stores,
+                top_k,
+                search_options: options,
+                filters,
+                file_ids,
+            },
+            qa_options: QaOptionsWire::from_options(&qa),
+            instructions: qa.instructions.as_deref(),
         };
         let ask_url = self.url("/v1/stores/question-answering");
         let resp = self
@@ -619,6 +985,36 @@ impl Client {
             answer: response.answer,
             sources: response.sources.into_iter().map(Chunk::from).collect(),
         })
+    }
+
+    /// Enhance a natural-language query against one or more stores on
+    /// `/v1/stores/queries/enhance`: extract metadata filter conditions (and,
+    /// for ranking-shaped queries like "newest shell commands", a metadata
+    /// sort) from the query text. `instructions` optionally steers the
+    /// extraction. The response's single item comes back as an
+    /// [`EnhancedQuery`]; run the returned query/filter/sort yourself —
+    /// enhancement performs no search.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails, cannot be decoded, or carries no
+    /// item.
+    pub async fn enhance_query(
+        &self,
+        stores: &[String],
+        query: &str,
+        instructions: Option<&str>,
+    ) -> Result<EnhancedQuery> {
+        let request = EnhanceRequest {
+            query,
+            store_identifiers: stores,
+            instructions,
+        };
+        let enhance_url = self.url("/v1/stores/queries/enhance");
+        let resp = self
+            .send_retrying(|| Ok(self.http.post(enhance_url.as_str()).json(&request)))
+            .await?;
+        let response: EnhanceResponse = decode(resp).await?;
+        response.items.into_iter().next().context(EnhanceEmptySnafu)
     }
 
     /// Rerank caller-supplied documents against a query on `/v1/reranking`.
@@ -677,6 +1073,77 @@ impl Client {
             pending: object.file_counts.pending,
             in_progress: object.file_counts.in_progress,
         })
+    }
+
+    /// Count distinct metadata values across one or more stores on
+    /// `/v1/stores/metadata-facets`. `facets` names the metadata keys to
+    /// count (dot paths reach nested fields; an empty slice asks the server
+    /// for every key, up to `limits.max_fields`); the result maps each key to
+    /// its distinct values and the number of store files carrying each, and
+    /// `filters` scopes which files are counted.
+    ///
+    /// Counts come from a bounded scan of at most `limits.max_files` store
+    /// files, so a store larger than the bound reports truncated counts (see
+    /// [`FACETS_MAX_FILES`]). This is the census primitive: one request
+    /// answers "how many documents per source".
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or cannot be decoded.
+    pub async fn metadata_facets(
+        &self,
+        stores: &[String],
+        facets: &[&str],
+        filters: Option<&filter::Filter>,
+        limits: FacetLimits,
+    ) -> Result<Facets> {
+        let request = FacetsRequest {
+            store_identifiers: stores,
+            facets,
+            filters,
+            max_fields: limits.max_fields,
+            max_values_per_field: limits.max_values_per_field,
+            max_files: limits.max_files,
+        };
+        let facets_url = self.url("/v1/stores/metadata-facets");
+        let resp = self
+            .send_retrying(|| Ok(self.http.post(facets_url.as_str()).json(&request)))
+            .await?;
+        let response: FacetsResponse = decode(resp).await?;
+        Ok(response.facets)
+    }
+
+    /// Fetch a store's event histogram on
+    /// `/v1/stores/{store}/events/histogram`: per-`bucket_seconds` bucket and
+    /// per event type, how many events the store recorded between
+    /// `start_time` and `end_time` (both RFC 3339). `event_types` restricts
+    /// the histogram to those families; `None` includes ingestion, search,
+    /// agentic search, and grep. This is the fleet-telemetry primitive: an
+    /// empty ingestion bucket where uploads were expected is a stalled
+    /// indexer.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or cannot be decoded.
+    pub async fn events_histogram(
+        &self,
+        store: &str,
+        start_time: &str,
+        end_time: &str,
+        bucket_seconds: u32,
+        event_types: Option<&[EventType]>,
+    ) -> Result<Vec<HistogramBucket>> {
+        let request = HistogramRequest {
+            start_time,
+            end_time,
+            bucket_seconds,
+            event_types,
+        };
+        let id = utf8_percent_encode(store, PATH_SEGMENT);
+        let histogram_url = self.url(&format!("/v1/stores/{id}/events/histogram"));
+        let resp = self
+            .send_retrying(|| Ok(self.http.post(histogram_url.as_str()).json(&request)))
+            .await?;
+        let response: HistogramResponse = decode(resp).await?;
+        Ok(response.data)
     }
 }
 
@@ -783,9 +1250,13 @@ struct ListResponse {
 #[derive(Deserialize)]
 struct ListItem {
     #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
     external_id: Option<String>,
     #[serde(default)]
     metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    created_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -809,6 +1280,12 @@ struct CreatedFile {
     id: String,
 }
 
+/// The slice of the store-file object [`Client::file_status`] reads.
+#[derive(Deserialize)]
+struct FileObject {
+    status: FileStatus,
+}
+
 #[derive(serde::Serialize)]
 struct SearchRequest<'a> {
     query: &'a str,
@@ -817,6 +1294,71 @@ struct SearchRequest<'a> {
     search_options: SearchOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
     filters: Option<&'a filter::Filter>,
+    // Request-level, not part of `search_options`: the API scopes by file ids
+    // alongside (ANDed with) the metadata filter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_ids: Option<&'a FileIds>,
+}
+
+/// The `/v1/stores/question-answering` body: the shared search surface plus
+/// the QA-only fields. The endpoint also defines `stream` (an SSE answer);
+/// it is deliberately not modeled — see [`QaOptions`] for the live evidence.
+#[derive(serde::Serialize)]
+struct QaRequest<'a> {
+    #[serde(flatten)]
+    search: SearchRequest<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qa_options: Option<QaOptionsWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<&'a str>,
+}
+
+/// The `qa_options` body object (the API's `QuestionAnsweringOptions`).
+/// Instructions are a sibling request-level field, not part of this object.
+#[derive(serde::Serialize)]
+struct QaOptionsWire {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cite: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    multimodal: Option<bool>,
+}
+
+impl QaOptionsWire {
+    /// The wire object for `qa` — `None` when every toggle is unset, so the
+    /// legacy body carries no `qa_options` key at all (the API treats absent
+    /// and null differently for some fields).
+    fn from_options(qa: &QaOptions) -> Option<Self> {
+        (qa.cite.is_some() || qa.multimodal.is_some()).then_some(Self {
+            cite: qa.cite,
+            multimodal: qa.multimodal,
+        })
+    }
+}
+
+#[derive(serde::Serialize)]
+struct EnhanceRequest<'a> {
+    query: &'a str,
+    store_identifiers: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+struct EnhanceResponse {
+    // The schema promises exactly one item; default-empty so a malformed empty
+    // body surfaces as `Error::EnhanceEmpty` rather than a decode error.
+    #[serde(default)]
+    items: Vec<EnhancedQuery>,
+}
+
+#[derive(serde::Serialize)]
+struct ListChunksRequest<'a> {
+    store_identifiers: &'a [String],
+    top_k: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filters: Option<&'a filter::Filter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sort_by: Option<&'a SortBy>,
 }
 
 #[derive(serde::Serialize)]
@@ -834,6 +1376,46 @@ struct GrepRequest<'a> {
 struct SearchResponse {
     #[serde(default)]
     data: Vec<RawChunk>,
+}
+
+#[derive(serde::Serialize)]
+struct FacetsRequest<'a> {
+    store_identifiers: &'a [String],
+    // An empty facet list is omitted, which asks the server for every key.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    facets: &'a [&'a str],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filters: Option<&'a filter::Filter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_fields: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_values_per_field: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_files: Option<u32>,
+}
+
+// The live response is `{"facets": {key: {value: count}}}` (verified
+// 2026-06-12); the OpenAPI example shows a different `{count, value}` object
+// per key, but the deployed server does not.
+#[derive(Deserialize)]
+struct FacetsResponse {
+    #[serde(default)]
+    facets: Facets,
+}
+
+#[derive(serde::Serialize)]
+struct HistogramRequest<'a> {
+    start_time: &'a str,
+    end_time: &'a str,
+    bucket_seconds: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_types: Option<&'a [EventType]>,
+}
+
+#[derive(Deserialize)]
+struct HistogramResponse {
+    #[serde(default)]
+    data: Vec<HistogramBucket>,
 }
 
 #[derive(serde::Serialize)]
@@ -932,10 +1514,12 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        BACKOFF_BASE, BACKOFF_CAP, Chunk, Client, DEFAULT_RERANK_MODEL, Error, HttpClient,
-        ListRequest, MAX_RETRIES, RawChunk, Rerank, backoff,
+        Agentic, AgenticConfig, BACKOFF_BASE, BACKOFF_CAP, Chunk, Client, DEFAULT_RERANK_MODEL,
+        EnhancedQuery, Error, EventType, FACETS_MAX_FILES, FacetLimits, FileIds, FileStatus,
+        HttpClient, ListChunksRequest, ListRequest, MAX_RETRIES, QaOptions, QaOptionsWire,
+        QaRequest, RawChunk, Rerank, SearchOptions, SearchRequest, SortBy, backoff,
     };
-    use crate::Filter;
+    use crate::{Filter, Operator};
 
     #[test]
     fn list_request_sends_its_filter_as_metadata_filter() {
@@ -959,6 +1543,111 @@ mod tests {
     }
 
     #[test]
+    fn sort_by_serializes_to_the_field_ascending_tuple() {
+        // The API accepts `string | [field_path, ascending]`; we always emit
+        // the tuple so the direction is explicit. Pin both directions.
+        assert_eq!(
+            serde_json::to_value(SortBy::desc("timestamp")).expect("serialize"),
+            serde_json::json!(["timestamp", false])
+        );
+        assert_eq!(
+            serde_json::to_value(SortBy::asc("generated_metadata.start_line")).expect("serialize"),
+            serde_json::json!(["generated_metadata.start_line", true])
+        );
+    }
+
+    #[test]
+    fn list_chunks_request_matches_the_documented_wire_shape() {
+        // Pins the `/v1/stores/list-chunks` body: store_identifiers, top_k, the
+        // shared recursive `filters` (NOT `metadata_filter` — that is the
+        // file-list endpoint's quirk), and the `[field, ascending]` sort tuple.
+        let filter = Filter::condition("timestamp", Operator::Gte, 1_780_000_000_i64);
+        let sort = SortBy::desc("timestamp");
+        let request = ListChunksRequest {
+            store_identifiers: &["index".to_owned()],
+            top_k: 20,
+            filters: Some(&filter),
+            sort_by: Some(&sort),
+        };
+        assert_eq!(
+            serde_json::to_value(&request).expect("serialize"),
+            serde_json::json!({
+                "store_identifiers": ["index"],
+                "top_k": 20,
+                "filters": { "key": "timestamp", "operator": "gte", "value": 1_780_000_000_i64 },
+                "sort_by": ["timestamp", false],
+            })
+        );
+        // Unset filter/sort are omitted entirely (the API treats absent and
+        // null differently for some fields; never send nulls).
+        let bare = ListChunksRequest {
+            store_identifiers: &["index".to_owned()],
+            top_k: 5,
+            filters: None,
+            sort_by: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&bare).expect("serialize"),
+            serde_json::json!({ "store_identifiers": ["index"], "top_k": 5 })
+        );
+    }
+
+    #[tokio::test]
+    async fn list_chunks_posts_the_endpoint_and_decodes_chunks() {
+        // Round-trip through a real router: the request must hit
+        // `/v1/stores/list-chunks` and the response decodes through the same
+        // RawChunk -> Chunk projection search uses.
+        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
+        let app = Router::new().route(
+            "/v1/stores/list-chunks",
+            axum::routing::post({
+                let captured = Arc::clone(&captured);
+                move |axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
+                    *captured.lock().expect("lock") = Some(body);
+                    async {
+                        (
+                            StatusCode::OK,
+                            r#"{"data":[{"text":"gt sync","score":1.0,"metadata":{"source":"shell","timestamp":1781248268}}]}"#,
+                        )
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let sort = SortBy::desc("timestamp");
+        let chunks = client
+            .list_chunks(&["index".to_owned()], 1, None, Some(&sort))
+            .await
+            .expect("list chunks");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text.as_deref(), Some("gt sync"));
+        assert_eq!(
+            chunks[0]
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("timestamp"))
+                .and_then(serde_json::Value::as_i64),
+            Some(1_781_248_268)
+        );
+        assert_eq!(
+            captured.lock().expect("lock").take().expect("request body"),
+            serde_json::json!({
+                "store_identifiers": ["index"],
+                "top_k": 1,
+                "sort_by": ["timestamp", false],
+            })
+        );
+    }
+
+    #[test]
     fn rerank_serializes_as_bool_or_object() {
         // The toggle keeps the legacy bare-bool wire body byte-for-byte.
         assert_eq!(
@@ -969,10 +1658,447 @@ mod tests {
             serde_json::to_value(Rerank::server_default()).expect("serialize"),
             serde_json::json!(true)
         );
-        // A pinned model serializes to the `{ "model": ... }` object form.
+        // A pinned model serializes to the `{ "model": ... }` object form,
+        // with no `top_k` key when unset.
         assert_eq!(
             serde_json::to_value(Rerank::listwise()).expect("serialize"),
             serde_json::json!({ "model": DEFAULT_RERANK_MODEL })
+        );
+        // A capped rerank adds `top_k` (the API's RerankConfig).
+        assert_eq!(
+            serde_json::to_value(Rerank::Model {
+                model: DEFAULT_RERANK_MODEL.to_owned(),
+                top_k: Some(5),
+            })
+            .expect("serialize"),
+            serde_json::json!({ "model": DEFAULT_RERANK_MODEL, "top_k": 5 })
+        );
+    }
+
+    #[test]
+    fn agentic_serializes_as_bool_or_config_object() {
+        // The toggle keeps the legacy bare-bool body; a config serializes to
+        // the AgenticSearchConfig object with unset fields omitted (the API
+        // treats absent and null differently for some fields).
+        assert_eq!(
+            serde_json::to_value(Agentic::off()).expect("serialize"),
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            serde_json::to_value(Agentic::on()).expect("serialize"),
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            serde_json::to_value(Agentic::Config(AgenticConfig {
+                max_rounds: Some(2),
+                instructions: Some("prefer recent records".to_owned()),
+                ..AgenticConfig::default()
+            }))
+            .expect("serialize"),
+            serde_json::json!({ "max_rounds": 2, "instructions": "prefer recent records" })
+        );
+
+        assert!(!Agentic::off().is_enabled());
+        assert!(Agentic::on().is_enabled());
+        assert!(Agentic::Config(AgenticConfig::default()).is_enabled());
+    }
+
+    #[test]
+    fn search_request_matches_the_documented_wire_shape() {
+        // Pins the `/v1/stores/search` body across every option this client
+        // models: the StoreChunkSearchOptions fields live under
+        // `search_options`, while `file_ids` is a sibling of `filters` at the
+        // request level (verified against the live API, 2026-06-12).
+        let filter = Filter::eq("source", "code");
+        let file_ids = FileIds::exclude(vec!["2b5d7a52".to_owned()]);
+        let request = SearchRequest {
+            query: "upload",
+            store_identifiers: &["index".to_owned()],
+            top_k: 3,
+            search_options: SearchOptions {
+                rerank: Rerank::Model {
+                    model: DEFAULT_RERANK_MODEL.to_owned(),
+                    top_k: Some(2),
+                },
+                agentic: Agentic::off(),
+                score_threshold: None,
+                return_metadata: Some(true),
+                rewrite_query: Some(true),
+                apply_search_rules: Some(false),
+            },
+            filters: Some(&filter),
+            file_ids: Some(&file_ids),
+        };
+        assert_eq!(
+            serde_json::to_value(&request).expect("serialize"),
+            serde_json::json!({
+                "query": "upload",
+                "store_identifiers": ["index"],
+                "top_k": 3,
+                "search_options": {
+                    "rerank": { "model": DEFAULT_RERANK_MODEL, "top_k": 2 },
+                    "agentic": false,
+                    "return_metadata": true,
+                    "rewrite_query": true,
+                    "apply_search_rules": false,
+                },
+                "filters": { "key": "source", "operator": "eq", "value": "code" },
+                "file_ids": ["not_in", ["2b5d7a52"]],
+            })
+        );
+
+        // With every new knob unset the legacy wire body is unchanged: no
+        // rewrite_query/apply_search_rules/file_ids keys at all.
+        let legacy = SearchRequest {
+            query: "upload",
+            store_identifiers: &["index".to_owned()],
+            top_k: 3,
+            search_options: SearchOptions {
+                rerank: Rerank::off(),
+                agentic: Agentic::off(),
+                score_threshold: None,
+                return_metadata: None,
+                rewrite_query: None,
+                apply_search_rules: None,
+            },
+            filters: None,
+            file_ids: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&legacy).expect("serialize"),
+            serde_json::json!({
+                "query": "upload",
+                "store_identifiers": ["index"],
+                "top_k": 3,
+                "search_options": { "rerank": false, "agentic": false },
+            })
+        );
+    }
+
+    #[test]
+    fn qa_request_matches_the_documented_wire_shape() {
+        // Pins the `/v1/stores/question-answering` body: the flattened search
+        // surface plus `qa_options` (the API's QuestionAnsweringOptions) and
+        // the request-level `instructions` (verified against the live API,
+        // 2026-06-12).
+        let request = QaRequest {
+            search: SearchRequest {
+                query: "what bucket does the indexer use",
+                store_identifiers: &["index".to_owned()],
+                top_k: 3,
+                search_options: SearchOptions {
+                    rerank: Rerank::server_default(),
+                    agentic: Agentic::off(),
+                    score_threshold: None,
+                    return_metadata: Some(true),
+                    rewrite_query: None,
+                    apply_search_rules: None,
+                },
+                filters: None,
+                file_ids: None,
+            },
+            qa_options: QaOptionsWire::from_options(&QaOptions {
+                cite: Some(true),
+                multimodal: Some(false),
+                instructions: None,
+            }),
+            instructions: Some("answer in one sentence"),
+        };
+        assert_eq!(
+            serde_json::to_value(&request).expect("serialize"),
+            serde_json::json!({
+                "query": "what bucket does the indexer use",
+                "store_identifiers": ["index"],
+                "top_k": 3,
+                "search_options": { "rerank": true, "agentic": false, "return_metadata": true },
+                "qa_options": { "cite": true, "multimodal": false },
+                "instructions": "answer in one sentence",
+            })
+        );
+
+        // Default QA options leave the legacy wire body untouched: no
+        // `qa_options` or `instructions` keys at all.
+        let legacy = QaRequest {
+            search: SearchRequest {
+                query: "q",
+                store_identifiers: &["index".to_owned()],
+                top_k: 1,
+                search_options: SearchOptions {
+                    rerank: Rerank::off(),
+                    agentic: Agentic::off(),
+                    score_threshold: None,
+                    return_metadata: None,
+                    rewrite_query: None,
+                    apply_search_rules: None,
+                },
+                filters: None,
+                file_ids: None,
+            },
+            qa_options: QaOptionsWire::from_options(&QaOptions::default()),
+            instructions: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&legacy).expect("serialize"),
+            serde_json::json!({
+                "query": "q",
+                "store_identifiers": ["index"],
+                "top_k": 1,
+                "search_options": { "rerank": false, "agentic": false },
+            })
+        );
+
+        // One set toggle is enough to carry the object, without a null for
+        // the unset sibling.
+        assert_eq!(
+            serde_json::to_value(QaOptionsWire::from_options(&QaOptions {
+                cite: Some(false),
+                multimodal: None,
+                instructions: None,
+            }))
+            .expect("serialize"),
+            serde_json::json!({ "cite": false })
+        );
+    }
+
+    #[test]
+    fn file_ids_serialize_as_bare_list_or_operator_tuple() {
+        assert_eq!(
+            serde_json::to_value(FileIds::include(vec!["a".to_owned(), "b".to_owned()]))
+                .expect("serialize"),
+            serde_json::json!(["a", "b"])
+        );
+        assert_eq!(
+            serde_json::to_value(FileIds::Scoped(Operator::In, vec!["a".to_owned()]))
+                .expect("serialize"),
+            serde_json::json!(["in", ["a"]])
+        );
+        assert_eq!(
+            serde_json::to_value(FileIds::exclude(vec!["a".to_owned()])).expect("serialize"),
+            serde_json::json!(["not_in", ["a"]])
+        );
+    }
+
+    #[tokio::test]
+    async fn list_files_decodes_id_external_id_metadata_and_created_at() {
+        // Pins the slice of the store-file listing the GC pass depends on: the
+        // file object's own `id` (the only unambiguous delete handle when two
+        // objects share an external id) and `created_at` (what "keep the
+        // newest" orders by) must survive the projection into StoredFile, and
+        // a sparse item (no id, no timestamp) must decode rather than error.
+        let app = Router::new().route(
+            "/v1/stores/{store}/files/list",
+            axum::routing::post(|| async {
+                (
+                    StatusCode::OK,
+                    r#"{"data":[
+                        {"id":"f-1","external_id":"linear:issue:A",
+                         "metadata":{"source":"linear","content_hash":"sha256:aa"},
+                         "created_at":"2026-06-11T00:00:00Z"},
+                        {"external_id":"legacy"}
+                    ]}"#,
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let files = client.list_files("s", None).await.expect("list");
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].id.as_deref(), Some("f-1"));
+        assert_eq!(files[0].external_id.as_deref(), Some("linear:issue:A"));
+        assert_eq!(
+            files[0].created_at.as_deref(),
+            Some("2026-06-11T00:00:00Z")
+        );
+        assert_eq!(
+            files[0]
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("content_hash"))
+                .and_then(serde_json::Value::as_str),
+            Some("sha256:aa")
+        );
+        assert_eq!(files[1].id, None);
+        assert_eq!(files[1].created_at, None);
+    }
+
+    #[tokio::test]
+    async fn enhance_posts_the_endpoint_and_decodes_the_single_item() {
+        // Round-trip through a real router: the request must hit
+        // `/v1/stores/queries/enhance` with the documented body, and the
+        // response's one item decodes through the tagged EnhancedQuery enum.
+        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
+        let app = Router::new().route(
+            "/v1/stores/queries/enhance",
+            axum::routing::post({
+                let captured = Arc::clone(&captured);
+                move |axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
+                    *captured.lock().expect("lock") = Some(body);
+                    async {
+                        (
+                            StatusCode::OK,
+                            r#"{"items":[{"type":"query","query":"indexer slack messages","metadata_filters":[{"key":"source","operator":"eq","value":"slack"}],"filter_mode":"all","rank_by":null,"direction":null}]}"#,
+                        )
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let enhanced = client
+            .enhance_query(
+                &["index".to_owned()],
+                "slack messages about the indexer",
+                Some("prefer source filters"),
+            )
+            .await
+            .expect("enhance");
+        let EnhancedQuery::Query { query, .. } = &enhanced else {
+            panic!("expected query item, got {enhanced:?}");
+        };
+        assert_eq!(query, "indexer slack messages");
+        assert_eq!(
+            serde_json::to_value(enhanced.filter().expect("filter")).expect("serialize"),
+            serde_json::json!({ "key": "source", "operator": "eq", "value": "slack" })
+        );
+        assert_eq!(
+            captured.lock().expect("lock").take().expect("request body"),
+            serde_json::json!({
+                "query": "slack messages about the indexer",
+                "store_identifiers": ["index"],
+                "instructions": "prefer source filters",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_facets_posts_the_endpoint_and_decodes_value_counts() {
+        // Round-trip through a real router: the request must hit
+        // `/v1/stores/metadata-facets` with the documented body (facet keys,
+        // scan caps, no nulls for unset caps) and the response decodes the
+        // live `{key: {value: count}}` shape.
+        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
+        let app = Router::new().route(
+            "/v1/stores/metadata-facets",
+            axum::routing::post({
+                let captured = Arc::clone(&captured);
+                move |axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
+                    *captured.lock().expect("lock") = Some(body);
+                    async {
+                        (
+                            StatusCode::OK,
+                            r#"{"facets":{"source":{"shell":1154,"code":9644}}}"#,
+                        )
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let facets = client
+            .metadata_facets(
+                &["index".to_owned()],
+                &["source"],
+                None,
+                FacetLimits {
+                    max_values_per_field: Some(256),
+                    max_files: Some(FACETS_MAX_FILES),
+                    ..FacetLimits::default()
+                },
+            )
+            .await
+            .expect("facets");
+        assert_eq!(facets["source"]["shell"], 1_154);
+        assert_eq!(facets["source"]["code"], 9_644);
+        assert_eq!(
+            captured.lock().expect("lock").take().expect("request body"),
+            serde_json::json!({
+                "store_identifiers": ["index"],
+                "facets": ["source"],
+                "max_values_per_field": 256,
+                "max_files": 100_000,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn events_histogram_posts_the_store_path_and_decodes_buckets() {
+        // Round-trip through a real router: the store name must land as one
+        // path segment of `/v1/stores/{store}/events/histogram`, the body
+        // must carry the window/bucket/types, and the buckets decode with
+        // `type` mapped onto `event_type`.
+        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> = Arc::default();
+        let app = Router::new().route(
+            "/v1/stores/{store}/events/histogram",
+            axum::routing::post({
+                let captured = Arc::clone(&captured);
+                move |axum::extract::Path(store): axum::extract::Path<String>,
+                      axum::extract::Json(body): axum::extract::Json<serde_json::Value>| {
+                    *captured.lock().expect("lock") =
+                        Some(serde_json::json!({ "store": store, "body": body }));
+                    async {
+                        (
+                            StatusCode::OK,
+                            r#"{"object":"store.histogram","data":[{"bucket_start":"2026-06-12T00:00:00Z","bucket_end":"2026-06-12T12:00:00Z","type":"store.file.completed","event_count":6407}]}"#,
+                        )
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let buckets = client
+            .events_histogram(
+                "index",
+                "2026-06-12T00:00:00Z",
+                "2026-06-13T00:00:00Z",
+                43_200,
+                Some(&[EventType::Ingestion, EventType::AgenticSearch]),
+            )
+            .await
+            .expect("histogram");
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].event_type, "store.file.completed");
+        assert_eq!(buckets[0].event_count, 6_407);
+        assert_eq!(buckets[0].bucket_start, "2026-06-12T00:00:00Z");
+        assert_eq!(
+            captured.lock().expect("lock").take().expect("request"),
+            serde_json::json!({
+                "store": "index",
+                "body": {
+                    "start_time": "2026-06-12T00:00:00Z",
+                    "end_time": "2026-06-13T00:00:00Z",
+                    "bucket_seconds": 43_200,
+                    "event_types": ["ingestion", "agentic_search"],
+                },
+            })
         );
     }
 
@@ -1108,6 +2234,53 @@ mod tests {
             Some("github:indexable-inc/index"),
             "the router must decode the segment back to the original id"
         );
+    }
+
+    #[tokio::test]
+    async fn file_status_reads_the_status_field_and_maps_404_to_none() {
+        // Pins the per-file status wire contract: GET the store-file object,
+        // read its `status` string (including one this client has never heard
+        // of), and fold a 404 into `None` rather than an error — a file deleted
+        // out from under a waiting caller is settled, not a failure.
+        let app = Router::new().route(
+            "/v1/stores/{store}/files/{file}",
+            axum::routing::get(
+                |axum::extract::Path((_store, file)): axum::extract::Path<(String, String)>| async move {
+                    match file.as_str() {
+                        "queued" => (StatusCode::OK, r#"{"status":"pending"}"#),
+                        "embedding" => (StatusCode::OK, r#"{"status":"in_progress"}"#),
+                        "done" => (StatusCode::OK, r#"{"status":"completed"}"#),
+                        "novel" => (StatusCode::OK, r#"{"status":"some_future_state"}"#),
+                        _ => (StatusCode::NOT_FOUND, r#"{"error":"not found"}"#),
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let client = Client::new(format!("http://{addr}"), "test-key").expect("client");
+        let status = |id: &'static str| client.file_status("s", id);
+        assert_eq!(status("queued").await.expect("get"), Some(FileStatus::Pending));
+        assert_eq!(
+            status("embedding").await.expect("get"),
+            Some(FileStatus::InProgress)
+        );
+        assert_eq!(status("done").await.expect("get"), Some(FileStatus::Completed));
+        assert_eq!(status("novel").await.expect("get"), Some(FileStatus::Unknown));
+        assert_eq!(status("gone").await.expect("get"), None);
+
+        // The waiting contract: only the two live states keep a poll loop going.
+        assert!(!FileStatus::Pending.is_settled());
+        assert!(!FileStatus::InProgress.is_settled());
+        assert!(FileStatus::Completed.is_settled());
+        assert!(FileStatus::Failed.is_settled());
+        assert!(FileStatus::Unknown.is_settled());
     }
 
     #[tokio::test]

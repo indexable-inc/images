@@ -11,6 +11,11 @@ pub const SOURCE: &str = "source";
 pub const CONTENT_HASH: &str = "content_hash";
 /// Human display label for a record.
 pub const TITLE: &str = "title";
+/// The record's caller-assigned external id (e.g. `claude:{session}:{uuid}`).
+pub const EXTERNAL_ID: &str = "external_id";
+/// Canonical web URL of a record, when it has one (GitHub items, Linear
+/// issues).
+pub const URL: &str = "url";
 
 // Code.
 /// Repository slug (git remote, or directory name when there is no remote).
@@ -77,6 +82,10 @@ pub const OUTPUT_TOKENS: &str = "output_tokens";
 /// Process exit status of a recorded shell command.
 pub const EXIT_STATUS: &str = "exit_status";
 
+// journald unit logs. `host` and `timestamp` above are reused.
+/// systemd unit name (e.g. `nginx.service`) a journald document covers.
+pub const UNIT: &str = "unit";
+
 // Linear.
 /// Linear issue identifier, e.g. `ENG-1885`.
 pub const IDENTIFIER: &str = "identifier";
@@ -98,3 +107,16 @@ pub const NUMBER: &str = "number";
 pub const STATE: &str = "state";
 /// Whether the GitHub item is a pull request (vs an issue).
 pub const IS_PR: &str = "is_pr";
+
+// GitHub CI runs. `repo`, `commit`, `url`, and `timestamp` above are reused.
+/// Document grain within a source (`ci_run` for GitHub CI failures); absent on
+/// a source's default grain (issues/PRs for GitHub).
+pub const KIND: &str = "kind";
+/// GitHub Actions workflow name.
+pub const WORKFLOW: &str = "workflow";
+/// Branch a CI run ran against.
+pub const BRANCH: &str = "branch";
+/// CI run conclusion (`failure`/`timed_out`/`cancelled`).
+pub const CONCLUSION: &str = "conclusion";
+/// GitHub Actions run number (per workflow, the `#N` in the UI).
+pub const RUN_NUMBER: &str = "run_number";

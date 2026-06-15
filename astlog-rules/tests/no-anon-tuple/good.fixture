@@ -1,0 +1,22 @@
+// Two-field pairs are idiomatic (key/value, a parse split) and allowed.
+fn split(s: &str) -> (String, Option<String>) {
+    todo!()
+}
+// A named struct is the desired shape for 3+ fields.
+struct Counts {
+    indexed: usize,
+    failures: usize,
+    skipped: usize,
+}
+// Boundary cases the rule must NOT flag: unit and one-element tuple types,
+// and tuple *expressions* / *patterns* (the rule targets tuple *types* only).
+fn unit() -> () {}
+fn single() -> (i32,) {
+    (0,)
+}
+fn expr() {
+    let _ = (1, 2, 3);
+}
+fn pat<P>(p: P) {
+    let (a, b, c) = p;
+}

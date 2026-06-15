@@ -26,12 +26,26 @@ def modules_index() -> str:
     the registry lists it here for free."""
     preimported = ", ".join(f"`{name}`" for name in registry.preimport_names())
     mods = "; ".join(f"`{m.name}` \u2014 {m.tagline}" for m in registry.MODULES)
-    libs = ", ".join(f"`{name}`" for name in registry.LIBRARIES)
+    libs = ", ".join(
+        f"`{lib.name}`" + (f" ({lib.note})" if lib.note else "") for lib in registry.LIBRARIES
+    )
     return (
         f"Bundled tooling, no install step: {preimported} are pre-bound in the namespace (use them "
         "with no import; an explicit `import` returns the same object), the others you `import` "
         "once and reuse. Each module's exact signatures come from `api('<name>')` / "
         f"`help(<name>.<fn>)`, never from here. Modules: {mods}. Also import-ready: {libs}."
+    )
+
+
+def credentials_note() -> str:
+    """The external-credential sentence for the instructions, generated from
+    `registry.credentialed()` so a credentialed service is declared in exactly
+    one place (the registry) and this list can never drift from the probes."""
+    needs = "; ".join(f"`{name}` ({cred.service})" for name, cred in registry.credentialed())
+    return (
+        f"Some bundled tooling calls an external service and needs a credential: {needs}. "
+        "A call with a missing credential fails immediately with the remedy; check them all at "
+        "once with `ix-mcp requirements` (the server also reports each one on stderr at startup)."
     )
 
 
@@ -72,8 +86,8 @@ BLOCKING = (
     "status-check cell stall behind it until it returns. So a blocking call MUST be made "
     "non-blocking: wrap it in `await asyncio.to_thread(...)`, or prefer an async API (`httpx`, "
     "and the bundled `sh(cmd)` to shell out instead of `subprocess.run`; note `fff.grep`/"
-    "`fff.find` are sync-but-fast, so call them WITHOUT `await` — for a long scan use the async "
-    "`fff.agrep`/`fff.afind`), and run "
+    "`fff.find`/`fff.tree` are sync-but-fast, so call them WITHOUT `await` — for a long scan use "
+    "the async `fff.agrep`/`fff.afind`/`fff.atree`), and run "
     "anything slow as a background job you "
     "poll, never inline. To shell out, reach for `sh()` rather than a hand-rolled "
     "`asyncio.create_subprocess_exec/_shell` + `communicate()`: `sh()` runs the child in its own "
@@ -83,15 +97,16 @@ BLOCKING = (
 )
 
 RESULT_CONTRACT = (
-    "Return results through `Result`, never `print`: a cell's stdout is NOT sent to you and is "
-    "hidden in the dashboard by default (it is kept only for paging via jobs['<id>'].output), so "
-    "surface anything worth seeing as a Result. A cell must either END with a `Result(...)` or "
-    "`yield Result(...)` one or more times — each yielded Result streams to both the human and "
-    "you the moment it is produced, so prefer yielding as you go to report progress and partial "
-    "results. The kernel rejects a cell that neither ends with nor yields a Result — except that "
-    "a bare final value which already renders richly (a polars DataFrame, a matplotlib figure, a "
-    "view/fff render, an htpy element) is auto-wrapped in `Result.of` for you, so `df` on the "
-    "last line just works; a plain scalar, dict, list, or None still needs an explicit Result."
+    "Cells behave like a notebook: the last expression is the result, whatever its type (`2+2` "
+    "returns 4, `df` returns the styled table with compact CSV to you, a string returns "
+    "verbatim, a dict/list renders as a table), and anything the cell printed comes back with "
+    "it. A cell whose last statement is None (an assignment, a side-effecting call) returns its "
+    "stdout, or a quiet ok. `yield` streams: each yielded value reaches both the human and you "
+    "the moment it is produced, so yield as you go to report progress and partial results. "
+    "`Result` is the opt-in for splitting the two views, `Result(user_html=..., llm_result=..., "
+    "llm_images=...)`, when the human should see something rich that you should not pay tokens "
+    "for (note: an explicit Result suppresses the automatic stdout echo; page "
+    "jobs['<id>'].output instead)."
 )
 
 # --- kernel guide only ---
@@ -141,10 +156,15 @@ VERIFY = (
     "Verify a change by its actual effect, not by a proxy: when you change "
     "something whose result a static check cannot see — an interactive UI, a "
     "rendered page, a runtime behaviour — exercise it and observe the outcome "
-    "(screenshot it with the bundled `playwright`, run the path, diff the live "
-    "state) BEFORE reporting it done. A green type-check or linter is necessary "
-    "but not sufficient: 'it compiles' is not 'it works', and 'the tab switches "
-    "in the source' is not 'the tab switches on screen'."
+    "(drive a real browser with the bundled `browser` module — `await "
+    "browser.goto(url)`, then `browser.shot()` / `browser.vdom()` — run the path, "
+    "diff the live state) BEFORE reporting it done. Reach for `browser`, not raw "
+    "`playwright`: it keeps one cached connection on the kernel loop, opens a "
+    "VISIBLE window the human can watch, and publishes the page as a live "
+    "dashboard resource; calling `async_playwright().start()` yourself gets none "
+    "of that. A green type-check or linter is necessary but not sufficient: 'it "
+    "compiles' is not 'it works', and 'the tab switches in the source' is not "
+    "'the tab switches on screen'."
 )
 
 HTML = (

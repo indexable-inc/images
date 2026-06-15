@@ -1,0 +1,1 @@
+{ lib, f, xs }: lib.listToAttrs (map f xs)

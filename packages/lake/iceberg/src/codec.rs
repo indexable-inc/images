@@ -2,10 +2,11 @@
 //!
 //! One row is one *observation*: a source's document as seen by one writer
 //! slice (`host`, optional `user`), tagged `op = upsert`, or a tombstone
-//! (`op = delete`) recording that the document left that slice's desired
-//! state. The table is an append-only revision log; current state is a
-//! per-slice fold ordered by `version` (see [`fold_slices`]): an id is live
-//! while any slice's latest op for it is an upsert.
+//! (`op = delete`) recording that the slice's writer EXPLICITLY deleted it —
+//! a gc pass over an export-complete source, never mere absence from a newer
+//! pass (ENG-2696). The table is an append-only revision log; current state
+//! is a per-slice fold ordered by `version` (see [`fold_slices`]): an id is
+//! live while any slice's latest op for it is an upsert.
 //!
 //! `version` is the slice's revision counter, assigned by the writer as its
 //! slice's previous maximum plus one. It is committed data, so it survives
@@ -42,7 +43,8 @@ use crate::error::{
 
 /// `op` value for a document observation.
 pub const OP_UPSERT: &str = "upsert";
-/// `op` value for a tombstone (the document left the writer's desired state).
+/// `op` value for a tombstone (an explicit gc deletion; absence from a newer
+/// pass never tombstones — ENG-2696).
 pub const OP_DELETE: &str = "delete";
 
 /// The non-payload columns every read needs: identity, grouping (`source`),
@@ -118,10 +120,10 @@ pub struct Slice<'a> {
     pub user: Option<&'a str>,
 }
 
-/// Encode one reconcile pass — upserts plus tombstones — as a single record
-/// batch against the table's arrow schema (which carries the parquet field-id
-/// metadata the writer requires). `version` is the slice's revision counter
-/// for this pass (its previous maximum plus one).
+/// Encode one write pass — a reconcile's upserts or a gc's tombstones — as a
+/// single record batch against the table's arrow schema (which carries the
+/// parquet field-id metadata the writer requires). `version` is the slice's
+/// revision counter for this pass (its previous maximum plus one).
 pub fn encode_batch(
     arrow_schema: &Arc<ArrowSchema>,
     source: &Source,
@@ -190,7 +192,8 @@ pub fn encode_batch(
 pub enum Op {
     /// The document was observed in the writer's desired state.
     Upsert,
-    /// The document left the writer's desired state.
+    /// The writer explicitly deleted the document (a gc pass over an
+    /// export-complete source; never inferred from absence — ENG-2696).
     Delete,
 }
 

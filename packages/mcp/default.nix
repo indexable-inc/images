@@ -90,6 +90,128 @@ let
       ''
   );
 
+  # The astlog package, baked into the pinned interpreter so every session can
+  # `import astlog` and run Datalog queries/rewrites over tree-sitter ASTs with
+  # no setup. Same shape as `searchModule`: the PyO3 cdylib comes from the
+  # shared workspace graph, so it works on Linux and macOS dev alike.
+  astlogPythonSource = builtins.path {
+    name = "astlog-py-python-source";
+    path = ../astlog/py/python;
+  };
+  astlogModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-astlog-python-module"
+      {
+        strictDeps = true;
+        meta.description = "astlog PyO3 module bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/astlog"
+        mkdir -p "$site"
+        cp -r ${astlogPythonSource}/astlog/. "$site/"
+
+        cdylib=""
+        for candidate in \
+          ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py.so \
+          ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py-*.so \
+          ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py.dylib \
+          ${ix.rustWorkspace.units.libraries.astlog_py}/lib/libastlog_py-*.dylib
+        do
+          if [ -f "$candidate" ]; then
+            cdylib="$candidate"
+            break
+          fi
+        done
+        if [ -z "$cdylib" ]; then
+          echo "ix-astlog module: no cdylib under ${ix.rustWorkspace.units.libraries.astlog_py}/lib" >&2
+          ls -la ${ix.rustWorkspace.units.libraries.astlog_py}/lib >&2 || true
+          exit 1
+        fi
+        install -m555 "$cdylib" "$site/_astlog.abi3.so"
+      ''
+  );
+
+  # The scipql package, baked into the pinned interpreter so every session can
+  # `import scipql` and run Soufflé datalog + find/replace over a SCIP semantic
+  # index. Same shape as `astlogModule`: the PyO3 cdylib comes from the shared
+  # workspace graph. (The CLI bakes in rust-analyzer/souffle; the kernel module
+  # exposes facts/query/fix/rename over an already-built index.scip.)
+  scipqlPythonSource = builtins.path {
+    name = "scipql-py-python-source";
+    path = ../scipql/py/python;
+  };
+  scipqlModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-scipql-python-module"
+      {
+        strictDeps = true;
+        meta.description = "scipql PyO3 module bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/scipql"
+        mkdir -p "$site"
+        cp -r ${scipqlPythonSource}/scipql/. "$site/"
+
+        cdylib=""
+        for candidate in \
+          ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py.so \
+          ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py-*.so \
+          ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py.dylib \
+          ${ix.rustWorkspace.units.libraries.scipql_py}/lib/libscipql_py-*.dylib
+        do
+          if [ -f "$candidate" ]; then
+            cdylib="$candidate"
+            break
+          fi
+        done
+        if [ -z "$cdylib" ]; then
+          echo "ix-scipql module: no cdylib under ${ix.rustWorkspace.units.libraries.scipql_py}/lib" >&2
+          ls -la ${ix.rustWorkspace.units.libraries.scipql_py}/lib >&2 || true
+          exit 1
+        fi
+        install -m555 "$cdylib" "$site/_scipql.abi3.so"
+      ''
+  );
+
+  # The flecs-query package, baked into the pinned interpreter so every
+  # session can `import flecs_query` and parse/validate Flecs Query Language
+  # expressions with no setup. Same shape as `astlogModule`: the PyO3 cdylib
+  # comes from the shared workspace graph, so it works on Linux and macOS dev
+  # alike.
+  flecsQueryPythonSource = builtins.path {
+    name = "flecs-query-py-python-source";
+    path = ../flecs-query/py/python;
+  };
+  flecsQueryModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-flecs-query-python-module"
+      {
+        strictDeps = true;
+        meta.description = "flecs-query PyO3 module bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/flecs_query"
+        mkdir -p "$site"
+        cp -r ${flecsQueryPythonSource}/flecs_query/. "$site/"
+
+        cdylib=""
+        for candidate in \
+          ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py.so \
+          ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py-*.so \
+          ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py.dylib \
+          ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib/libflecs_query_py-*.dylib
+        do
+          if [ -f "$candidate" ]; then
+            cdylib="$candidate"
+            break
+          fi
+        done
+        if [ -z "$cdylib" ]; then
+          echo "ix-flecs-query module: no cdylib under ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib" >&2
+          ls -la ${ix.rustWorkspace.units.libraries.flecs_query_py}/lib >&2 || true
+          exit 1
+        fi
+        install -m555 "$cdylib" "$site/_flecs_query.abi3.so"
+      ''
+  );
+
   # The `fff` fast file-search package, baked into the interpreter so every
   # session can `import fff` and run fuzzy file search / SIMD grep over a repo
   # with no setup. Unlike `tui`/`search`, fff has no PyO3 binding: it ships a
@@ -498,9 +620,10 @@ let
   # Native macOS iMessage access, bundled like `screen`/`vmkit` so every session
   # can `import imessage` on Darwin. Pure Python over the bundled sqlite3/polars
   # (plus Foundation's NSUnarchiver to decode the archived message text): it reads
-  # the Messages and Contacts SQLite databases into polars frames and sends new
-  # messages through the Messages app over AppleScript. macOS-only; the module
-  # raises off Darwin.
+  # the Messages and Contacts SQLite databases into polars frames, sends new
+  # messages through the Messages app over AppleScript, and edits contacts
+  # through the Contacts app over JXA (so edits sync to iCloud). macOS-only; the
+  # module raises off Darwin.
   imessagePythonSource = builtins.path {
     name = "ix-mcp-imessage-python-source";
     path = ./src/imessage;
@@ -575,12 +698,56 @@ let
       doCheck = false;
     };
 
+  # The Spark Connect client `fleet.spark()` drives, pinned to the cluster's Spark
+  # version (3.5.x, via spark-hive + spark-gluten in services.ix-spark). A Connect
+  # client MUST match the server's minor, and nixpkgs' default pyspark is 4.x, so
+  # we pin our own 3.5.5. py4j stays the nixpkgs 0.10.9.9 (pyspark 3.5.5 pins
+  # 0.10.9.7, but py4j is patch-stable and pinning a second copy would duplicate
+  # it in the closure). The bundled JVM jars are stripped -- the Connect path is
+  # pure gRPC and never starts a local JVM, so ~300 MB of jars would be dead
+  # weight. pyarrow IS required (the client materializes results as Arrow), so it
+  # is bundled here, with Spark, rather than for the whole interpreter's sake.
+  pysparkConnect = pkgs.python3.pkgs.pyspark.overridePythonAttrs (old: {
+    version = "3.5.5";
+    src = pkgs.python3.pkgs.fetchPypi {
+      pname = "pyspark";
+      version = "3.5.5";
+      hash = "sha256-bv/Jzpjt8jH01oP9FPcnBim/hFjGKNaiYg3tS7NPPLk=";
+    };
+    # pyspark 3.5.5 pins py4j==0.10.9.7 exactly; relax it so the patch-newer
+    # nixpkgs py4j 0.10.9.9 satisfies the runtime-deps check.
+    pythonRelaxDeps = [ "py4j" ];
+    # Keep pyspark's own deps (py4j) and add the Spark Connect client stack.
+    propagatedBuildInputs = (old.propagatedBuildInputs or [ ]) ++ [
+      pkgs.python3.pkgs.grpcio
+      pkgs.python3.pkgs.grpcio-status
+      pkgs.python3.pkgs.googleapis-common-protos
+      pkgs.python3.pkgs.protobuf
+      pkgs.python3.pkgs.pandas
+      pkgs.python3.pkgs.pyarrow
+      pkgs.python3.pkgs.numpy
+    ];
+    # Strip the bundled Spark/JVM jars: fleet.spark uses only the gRPC Connect
+    # client, so the jars (and the local-JVM code paths that need them) are unused.
+    postInstall = (old.postInstall or "") + ''
+      rm -rf "$out/${pkgs.python3.sitePackages}/pyspark/jars"
+    '';
+    doCheck = false;
+    pythonImportsCheck = [
+      "pyspark"
+      "pyspark.sql.connect"
+    ];
+  });
+
   # The interpreter the wrapper pins. Sessions build their venv from this with
   # `--system-site-packages`, so `tui`, `search`, `fff`, `exa_py`, numpy, polars
   # (incl. Postgres via psycopg + SQLAlchemy), duckdb, httpx, htpy, and playwright
   # are importable by default while an in-session `pip install` still writes to
   # the per-session venv.
-  mcpPython = pkgs.python3.withPackages (
+  # The bundled-package set the pinned interpreter carries. Named so a sibling
+  # interpreter (the vdom property-test runner below) can reuse the exact same
+  # modules and only add its test deps, instead of duplicating the long list.
+  mcpPythonPackages =
     ps:
     [
       ps.asyncssh
@@ -655,8 +822,37 @@ let
       ps.nbformat
       ps.aiohttp
       ps.mcp
+      # dill: serializes functions and classes defined in cells, which stdlib
+      # pickle cannot -- the session-file namespace checkpoints
+      # (runtime.__ix_snapshot / __ix_restore) depend on it to bring an agent's
+      # helpers back instantly when a session file is reopened.
+      ps.dill
+      # ray: the distributed-execution engine the `fleet` module drives. One Ray
+      # cluster spans the tailnet (a head node holds the GCS, the rest join as
+      # workers, all bound to their Tailscale IPv4); `fleet.run`/`fleet.submit`
+      # ship cloudpickled callables to it and the shared object store (Plasma,
+      # zero-copy on-node, peer-to-peer transfer between nodes, spill-to-disk
+      # under memory pressure) carries args and results. We use Ray rather than
+      # reinvent Plasma/Arrow/refcount-GC. It bundles its own cloudpickle, so a
+      # function defined in a cell ships by value without a separate serializer.
+      # nixpkgs ray builds on aarch64-darwin + {aarch64,x86_64}-linux, the exact
+      # platforms the fleet and dev boxes run, so it joins the pinned interpreter
+      # like any other module.
+      ps.ray
+      # The Spark Connect client `fleet.spark()` drives (defined above): a 3.5.5
+      # pyspark pinned to the services.ix-spark cluster's Spark, jars stripped,
+      # carrying its Arrow/gRPC connect deps. Lets a cell open a SparkSession on
+      # the cluster master with no local JVM.
+      pysparkConnect
+      # pypdf: extract text from a PDF in-kernel, so a downloaded file can be
+      # read/searched without shelling out or falling back to a host tool. Pure
+      # Python, small (`from pypdf import PdfReader`).
+      ps.pypdf
       tuiModule
       searchModule
+      astlogModule
+      scipqlModule
+      flecsQueryModule
       fffModule
       googleAuthModule
       ixGoogleModule
@@ -673,13 +869,22 @@ let
       linearModule
       mcpClientModule
     ]
-    ++ darwinExtraPackages ps
-  );
+    ++ darwinExtraPackages ps;
+  mcpPython = pkgs.python3.withPackages mcpPythonPackages;
 
   # Browser bundle that matches the playwright-driver the python package is
   # patched to use. Exposed to the worker through PLAYWRIGHT_BROWSERS_PATH on the
   # wrapper below so launched browsers resolve without a network download.
   playwrightBrowsers = pkgs.playwright-driver.browsers;
+
+  # Headless Chromium fatally aborts the moment it needs a font but cannot load
+  # any fontconfig config: Skia's FontConfigInterface backend hits a
+  # `Not implemented` path (SkFontMgr_FontConfigInterface.cpp) and the renderer
+  # dies, surfacing to Playwright as `TargetClosedError`. The Nix build sandbox
+  # has no /etc/fonts and no fonts on disk, so the smoke tests below that launch
+  # a real (headless) browser must point fontconfig at a generated config
+  # carrying at least one real font family.
+  fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
 
   # `ix-mcp` is just the pinned interpreter invoked on the bundled package's CLI.
   # Everything (the entrypoint, the one shared kernel, the dashboard) runs in this
@@ -724,6 +929,18 @@ let
           --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           --set IX_MCP_DASHBOARD_HTML ${lib.escapeShellArg dashboardHtml} \
+          --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
+          ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
+        # The notebook engine alone (kernel + dashboard + session file, no MCP
+        # transport): the same interpreter and env, entered at the `notebook`
+        # subcommand. Our jupyter-shaped serve; the MCP server is one client of it.
+        makeWrapper ${lib.getExe mcpPython} $out/bin/ix-notebook \
+          --add-flags "-m ix_notebook_mcp notebook" \
+          --set IX_MCP_VERSION ${lib.escapeShellArg ix.rev} \
+          --set PLAYWRIGHT_BROWSERS_PATH ${lib.escapeShellArg playwrightBrowsers} \
+          --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
+          --set IX_MCP_DASHBOARD_HTML ${lib.escapeShellArg dashboardHtml} \
+          --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
       '';
 
@@ -756,6 +973,38 @@ let
   # htpy must import and auto-escape: a `<` in a text node comes out as `&lt;`.
   htpyBundled = importTest "htpy" "import htpy; print('htpy-ok' if '&lt;' in str(htpy.div['<']) else 'htpy-bad')";
   searchBundled = importTest "search" "import search; print('search-ok', search.__version__)";
+  # The astlog surface is callable and its public API returns polars frames:
+  # `scan`/`fixes`/`suppressed` are DataFrames and `query` a dict of them. A
+  # trivial inline rules string against one temp file keeps it fast and offline;
+  # an `astlog-ignore` comment exercises the suppression-listing path end to end.
+  astlogBundled = importTest "astlog" ''
+    import os, tempfile
+    import polars as pl
+    import astlog
+
+    assert all(
+        callable(getattr(astlog, n)) for n in ("query", "scan", "suppressed", "fixes", "fix")
+    ), "astlog public functions must be callable"
+
+    rules = '(rule (id x) (match rust "(identifier) @x"))\n(lint id warning "an identifier {x}")\n'
+    work = tempfile.mkdtemp()
+    with open(os.path.join(work, "s.rs"), "w") as fh:
+        fh.write("fn main() { let v = ignored; } // astlog-ignore\n")
+
+    relations = astlog.query(rules, [work])
+    findings = astlog.scan(rules, [work])
+    edits = astlog.fixes(rules, [work])
+    suppressed = astlog.suppressed(rules, [work])
+    assert isinstance(relations, dict) and all(
+        isinstance(frame, pl.DataFrame) for frame in relations.values()
+    ), "query must return a dict of DataFrames"
+    assert isinstance(findings, pl.DataFrame), "scan must return a DataFrame"
+    assert isinstance(edits, pl.DataFrame), "fixes must return a DataFrame"
+    assert isinstance(suppressed, pl.DataFrame), "suppressed must return a DataFrame"
+    assert {"commentLine", "commentText"} <= set(suppressed.columns), suppressed.columns
+    assert suppressed.height > 0, "the astlog-ignore line must be reported as suppressed"
+    print("astlog-ok", astlog.__version__)
+  '';
 
   # End-to-end through the bundled `fff` ctypes module: index a temp tree, wait
   # for the scan, then prove fuzzy file search and content grep both return the
@@ -855,19 +1104,12 @@ let
     except fff.FffError as exc:
         assert "subdirectory" in str(exc), f"unhelpful home-dir error: {exc}"
 
-    # Every public arg is keyword-only and `path`/`mode` are required (no hidden
-    # default): a positional call, or a missing path/mode, is a TypeError, so each
-    # call states exactly what it searches, where, and how.
-    for bad in (
-        lambda: fff.grep("greetings", path=root, mode="plain"),  # positional query
-        lambda: fff.grep(query="greetings", mode="plain"),       # missing path
-        lambda: fff.grep(query="greetings", path=root),          # missing mode
-    ):
-        try:
-            bad()
-            raise AssertionError("expected a TypeError for an under-specified grep")
-        except TypeError:
-            pass
+    # Ergonomic by design: `query` is positional, `path` defaults to the cwd, and
+    # `mode` defaults to a fast literal search, so `grep("pattern")` just works
+    # (the shell-grep ergonomics added with mode="plain"). Mode beyond the default
+    # is still explicit -- there is no "smart" auto-detect (rejected below).
+    assert fff.grep("greetings", path=root).matches, "positional query + default mode should search"
+    assert fff.grep("greetings", path=root, mode="plain").matches, "explicit plain mode should search"
 
     # mode="regex" runs the query as a regex and mode="plain" as a fast literal,
     # so an alternation matches under regex but not under plain. There is no
@@ -934,6 +1176,7 @@ let
   dataLibsBundled = importTest "data-libs" (
     "import psycopg, sqlalchemy, duckdb, httpx; "
     + "from sqlalchemy import create_engine; create_engine('postgresql+psycopg://u@h/db'); "
+    + "from pypdf import PdfReader; "
     + "print('data-libs-ok')"
   );
   gmailLibsBundled = importTest "gmail-libs" (
@@ -1018,6 +1261,7 @@ let
     import asyncio as _asyncio
 
     assert _asyncio.iscoroutinefunction(slack.channels)
+    assert _asyncio.iscoroutinefunction(slack.dms)
     assert _asyncio.iscoroutinefunction(slack.messages)
     assert _asyncio.iscoroutinefunction(slack.thread)
     assert _asyncio.iscoroutinefunction(slack.send)
@@ -1052,6 +1296,81 @@ let
     assert state["configured"] is False, state
     print("slack-ok")
   '';
+
+  # The requirements surface: local-only probes of every credential declared in
+  # the registry. In the credential-less sandbox every probe must miss and the
+  # remedies must be complete; planting a credential (env key, or the mgrep
+  # token file) flips its line to naming the source. Also pins the registry's
+  # slack declaration against the slack module's own constants, so the declared
+  # probe can never drift from the resolution order the module actually uses.
+  requirementsTestPy = pkgs.writeText "ix-mcp-requirements-test.py" ''
+    import os
+    from pathlib import Path
+
+    import slack
+    from ix_notebook_mcp import registry, requirements
+
+    creds = dict(registry.credentialed())
+    assert creds["slack"].env == tuple(slack._TOKEN_ENV_VARS), creds["slack"].env
+    assert Path(creds["slack"].token_path).expanduser() == slack._TOKEN_FILE, creds["slack"].token_path
+
+    by_name = {s.name: s for s in requirements.statuses()}
+    assert set(by_name) == set(creds), sorted(by_name)
+    for name, status in by_name.items():
+        assert status.satisfied_via is None, f"{name} unexpectedly satisfied via {status.satisfied_via}"
+    for needle in ("MXBAI_API_KEY", "mixedbread.com", "mgrep login"):
+        assert needle in by_name["search"].line, by_name["search"].line
+
+    os.environ["EXA_API_KEY"] = "dummy-key-for-probe"
+    token = Path.home() / ".mgrep" / "token.json"
+    token.parent.mkdir(parents=True, exist_ok=True)
+    token.write_text("{}")
+    by_name = {s.name: s for s in requirements.statuses()}
+    assert by_name["exa_py"].satisfied_via == "EXA_API_KEY", by_name["exa_py"]
+    assert by_name["search"].satisfied_via == "token at ~/.mgrep/token.json", by_name["search"]
+    assert "dummy-key-for-probe" not in by_name["exa_py"].line, by_name["exa_py"].line
+    print("requirements-ok")
+  '';
+  requirementsSmoke =
+    pkgs.runCommand "ix-mcp-requirements-smoke"
+      {
+        nativeBuildInputs = [
+          package
+          mcpPython
+        ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+
+        # CLI contract in the credential-less sandbox: non-zero exit so setup
+        # scripts can gate on it, with every remedy named on stdout.
+        if ix-mcp requirements >stdout 2>stderr; then
+          echo "ix-mcp requirements exited 0 without any credential:" >&2
+          cat stdout stderr >&2
+          exit 1
+        fi
+        for needle in MXBAI_API_KEY EXA_API_KEY LINEAR_API_KEY 'mgrep login'; do
+          if ! grep -qF "$needle" stdout; then
+            echo "requirements report is missing $needle:" >&2
+            cat stdout stderr >&2
+            exit 1
+          fi
+        done
+
+        ${lib.getExe mcpPython} ${requirementsTestPy} >py-stdout 2>py-stderr || {
+          echo "ix-mcp requirements smoke failed:" >&2
+          cat py-stdout py-stderr >&2
+          exit 1
+        }
+        grep -qx 'requirements-ok' py-stdout || {
+          echo "requirements smoke did not print its ok marker:" >&2
+          cat py-stdout py-stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
   engineBundled = importTest "engine" "import ipykernel, jupyter_client, nbformat, aiohttp, mcp; print('engine-ok')";
 
   # The server package imports and registers its full tool surface. Exercises the
@@ -1109,6 +1428,7 @@ let
     from ix_notebook_mcp import cli
 
     status = {
+        "BackendState": "Running",
         "Self": {
             "TailscaleIPs": ["100.64.0.7", "fd7a::1"],
             "DNSName": "node.tail-x.ts.net.",
@@ -1121,6 +1441,14 @@ let
         assert cli._tailscale_ip() == "100.64.0.7", f"got {cli._tailscale_ip()!r}"
         assert cli._tailscale_dns_name() == "node.tail-x.ts.net", f"got {cli._tailscale_dns_name()!r}"
 
+    # Tailscale installed but stopped (or needs login): it still reports its
+    # assigned IPs, but they are not bound to any interface, so the helper must
+    # treat them as unusable and fall back to loopback.
+    for state in ("Stopped", "NeedsLogin", "NoState"):
+        stopped = {**status, "BackendState": state}
+        with patch.object(cli, "_tailscale_status", return_value=stopped):
+            assert cli._tailscale_ip() is None, f"{state}: expected None, got {cli._tailscale_ip()!r}"
+
     # No tailscale: the helpers return None so the CLI falls back to loopback.
     # Stubbing the inner _tailscale_status is more robust than juggling PATH or
     # the absolute fallback paths the real helper probes (which exist on hydra
@@ -1130,8 +1458,18 @@ let
         assert cli._tailscale_dns_name() is None, "expected None when tailscale is unavailable"
 
     # IPv6-only or empty IP list: still None (the bind expects IPv4).
-    with patch.object(cli, "_tailscale_status", return_value={"Self": {"TailscaleIPs": ["fd7a::1"]}}):
+    with patch.object(
+        cli,
+        "_tailscale_status",
+        return_value={"BackendState": "Running", "Self": {"TailscaleIPs": ["fd7a::1"]}},
+    ):
         assert cli._tailscale_ip() is None, "IPv6-only TailscaleIPs should yield None"
+
+    # _bindable: loopback is bindable; a reserved/unassigned address is not, so
+    # the CLI falls back to loopback instead of crashing the dashboard.
+    free = cli._free_port()
+    assert cli._bindable("127.0.0.1", free) is True, "loopback must be bindable"
+    assert cli._bindable("240.0.0.1", free) is False, "reserved address must be unbindable"
 
     print("bind-default-ok")
   '';
@@ -1284,22 +1622,32 @@ let
         assert w.status == "error", w.status
         assert "asyncio.to_thread" in w.error and "Traceback" not in w.error, w.error
 
-        # A cell that prints but returns no Result fails the Result contract, and
-        # the error now shows what it printed (stdout never reaches the model), so
-        # a printing agent gets an actionable nudge instead of a silent dead end.
+        # A print-only cell (last statement is None) returns its captured stdout,
+        # so what it printed reaches the model -- a notebook's behavior.
         p = await run("print('hello-from-stdout')", budget=1.0, name="printed")
-        assert p.status == "error", p.status
-        assert "printed to stdout" in p.error, p.error
-        assert "hello-from-stdout" in p.error, p.error
+        assert p.status == "done", (p.status, p.error)
+        assert isinstance(p.result, runtime.Result), type(p.result)
+        assert "hello-from-stdout" in p.result.llm_result, p.result.llm_result
+        # A silent side-effecting cell returns a quiet confirmation.
+        q = await run("x_side_effect = 1", budget=1.0, name="silent")
+        assert q.status == "done", (q.status, q.error)
+        assert "done" in q.result.llm_result, q.result.llm_result
 
         # A bare final value that already renders richly is auto-wrapped in
         # Result.of, so `df` on the last line just works without an explicit Result.
         d = await run("import polars as pl\npl.DataFrame({'x': [1, 2]})", budget=2.0, name="auto-df")
         assert d.status == "done", (d.status, d.error)
         assert isinstance(d.result, runtime.Result), type(d.result)
-        # A plain scalar is not displayable, so the contract still rejects it.
+        # Jupyter semantics: the last expression IS the result, whatever its type.
         sc = await run("1 + 1", budget=2.0, name="scalar")
-        assert sc.status == "error", sc.status
+        assert sc.status == "done", (sc.status, sc.error)
+        assert "2" in sc.result.llm_result, sc.result.llm_result
+        # ...and stdout printed along the way rides with a bare final value.
+        both = await run("print('logged')\n40 + 2", budget=2.0, name="print-and-value")
+        assert both.status == "done", (both.status, both.error)
+        assert "logged" in both.result.llm_result and "42" in both.result.llm_result, (
+            both.result.llm_result
+        )
 
         # .result raises while the job runs (a misleading None would read as
         # "finished with no value"); .done()/.ok track the lifecycle.
@@ -1710,6 +2058,86 @@ let
         mkdir -p "$out"
       '';
 
+  # The session-file contract: run cells against a session store, checkpoint,
+  # "restart" into a fresh namespace, and reopen -- the checkpoint restores the
+  # state instantly (including a function defined in a cell, which needs the
+  # bundled dill), the one cell newer than the checkpoint replays, a row left
+  # 'running' by the dead server is marked interrupted, and a second reopen has
+  # nothing to replay (the restore folds everything into a fresh checkpoint).
+  sessionTestPy = pkgs.writeText "ix-mcp-session-test.py" ''
+    import asyncio
+    import tempfile
+
+    import dill  # the checkpoint serializer must be bundled in this interpreter
+
+    from ix_notebook_mcp import runtime, store
+
+    path = tempfile.mktemp(suffix=".ixnb")
+
+    def wire(conn, ns):
+        runtime._store = store
+        runtime._store_conn = conn
+        runtime._user_ns = ns
+        runtime._SESSION = True
+        runtime._baseline_names = frozenset(ns)
+
+    async def first_run():
+        conn = store.connect(path)
+        ns = {"Result": runtime.Result}
+        wire(conn, ns)
+        a = await runtime.__ix_run("x = 40\ndef double(n):\n    return n * 2\nResult.ok('a')")
+        assert a.status == "done", (a.status, a.error)
+        await runtime._snapshot_now()
+        b = await runtime.__ix_run("y = double(x) + 4\nResult.ok('b')")
+        assert b.status == "done", (b.status, b.error)
+        # A row left 'running' by a server that died mid-cell.
+        store.start(conn, id="dead", name="dead", code="zz", started_at=1.0)
+        conn.close()
+
+    asyncio.run(first_run())
+
+    async def reopen():
+        conn = store.connect(path)
+        assert store.mark_interrupted(conn, ended_at=2.0) == 1
+        assert store.get(conn, "dead")["status"] == "interrupted"
+        ns = {"Result": runtime.Result}
+        wire(conn, ns)
+        runtime.jobs.clear()
+        await runtime.__ix_restore()
+        snap = store.latest_snapshot(conn)
+        assert snap is not None, "restore must fold a fresh checkpoint"
+        assert store.replayable(conn, since=snap["created_at"]) == [], "second reopen must replay nothing"
+        conn.close()
+        return ns
+
+    ns = asyncio.run(reopen())
+    assert ns["x"] == 40, ns.get("x")
+    assert ns["double"](3) == 6
+    assert ns["y"] == 84, ns.get("y")
+    print("session-ok")
+  '';
+  sessionSmoke =
+    pkgs.runCommand "ix-mcp-session-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${sessionTestPy} >stdout 2>stderr || {
+          echo "ix-mcp session smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'session-ok' stdout || {
+          echo "ix-mcp session smoke did not confirm the reopen contract:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # Boots a real kernel and proves the two signal-driven recoveries for a cell
   # that blocks the kernel's event loop with a synchronous call:
   #   1. kernel_trace (SIGUSR1 -> faulthandler) returns the kernel's stack WHILE
@@ -2025,11 +2453,12 @@ let
     asyncio.run(main())
     print("rich-ok")
   '';
-  # Proves the yielding-cell contract end to end: a cell that `yield Result(...)`
-  # streams every yielded Result to the store (the dashboard) and to the model
-  # (to_mcp), keeps its top-level names in the namespace like a normal cell, and a
-  # non-Result yield fails the run. A plain (non-yielding) cell is unchanged. In
-  # process (a shell, the store), no kernel boot or network, so the sandbox runs it.
+  # Proves the yielding-cell behavior end to end: a cell that `yield`s streams
+  # every yielded value to the store (the dashboard) and to the model (to_mcp),
+  # keeps its top-level names in the namespace like a normal cell, and a
+  # non-Result yield renders through Result.of. A plain (non-yielding) cell is
+  # unchanged. In process (a shell, the store), no kernel boot or network, so
+  # the sandbox runs it.
   yieldTestPy = pkgs.writeText "ix-mcp-yield-test.py" ''
     import asyncio
     import json
@@ -2081,13 +2510,21 @@ let
         texts = [c.text for c in mcp if getattr(c, "text", None) is not None]
         assert "step 0" in texts and "3" in texts, texts
 
-        # A non-Result yield fails the run with the contract message.
-        bad = await run("yield 123", budget=3.0, name="bad")
-        await bad.task
-        assert bad.status == "error", bad.status
-        assert "was not a Result" in (bad.error or ""), bad.error
+        # A non-Result yield streams too: any value renders through Result.of,
+        # exactly like a trailing expression.
+        bare = await run("yield 123", budget=3.0, name="bare")
+        await bare.task
+        assert bare.status == "done", (bare.status, bare.error)
+        bare_outs = json.loads(
+            conn.execute("SELECT outputs FROM executions WHERE id = ?", (bare.id,)).fetchone()[0]
+        )
+        bare_mcp = outputs.to_mcp(
+            [{"output_type": "display_data", "data": o["data"], "metadata": {}} for o in bare_outs]
+        )
+        bare_texts = [c.text for c in bare_mcp if getattr(c, "text", None) is not None]
+        assert any("123" in t for t in bare_texts), bare_texts
 
-        # A normal (non-yielding) cell is unchanged: it must still end with a Result.
+        # A normal (non-yielding) cell is unchanged.
         plain = await run("Result.ok('plain')", budget=3.0, name="plain")
         await plain.task
         assert plain.status == "done", (plain.status, plain.error)
@@ -3040,6 +3477,32 @@ let
         mkdir -p "$out"
       '';
 
+  # The cluster surface (discovery merge, Ray submit return-shape, /api/exec
+  # auth) with the two discovery sources, the Ray remote, and the kernel all
+  # stubbed -- no live cluster or network. mcpPython carries both `fleet` and
+  # `ix_notebook_mcp`, so the script imports them with no PYTHONPATH.
+  fleetClusterSmoke =
+    pkgs.runCommand "ix-mcp-fleet-cluster-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${lib.getExe mcpPython} ${./tests/fleet_cluster_check.py} >stdout 2>stderr || {
+          echo "ix-mcp fleet cluster smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -q '^fleet-cluster-ok' stdout || {
+          echo "ix-mcp fleet cluster smoke did not confirm the cluster surface:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # macOS-only modules (`screen`, `vmkit`) are only bundled on Darwin; their
   # import tests only exist there.
   # The `nix` module: parse a captured internal-json stream (no subprocess, no
@@ -3288,21 +3751,21 @@ let
     # Standard CDP port + a persistent, module-owned profile, so repeat launches
     # reuse one instance instead of spawning a new window each time.
     assert browser.DEFAULT_ENDPOINT == "http://127.0.0.1:9222", browser.DEFAULT_ENDPOINT
-    assert browser.DEFAULT_APP == "Dia", browser.DEFAULT_APP
+    assert browser.DEFAULT_APP == "Google Chrome", browser.DEFAULT_APP
     for fn in ("get_or_create_browser", "connect", "context", "page", "goto", "shot", "read", "vdom", "close"):
         assert callable(getattr(browser, fn)), fn
     # `vdom()` returns a Vdom: a clean, filtered, machine-readable map of the page.
     assert isinstance(browser.Vdom, type), browser.Vdom
 
-    udd = browser._default_user_data_dir("Dia")
-    assert udd.endswith(".cdp-dia-profile"), udd
-    argv = browser._launch_argv("Dia", 9222, udd)
+    udd = browser._default_user_data_dir(browser.DEFAULT_APP)
+    assert udd.endswith(".cdp-google-chrome-profile"), udd
+    argv = browser._launch_argv(browser.DEFAULT_APP, 9222, udd)
     # The launched browser is ALWAYS a visible window -- never headless.
     assert not any("headless" in a for a in argv), ("launch must never be headless", argv)
     assert "--remote-debugging-port=9222" in argv, argv
     assert ("--user-data-dir=" + udd) in argv, argv
     if sys.platform == "darwin":
-        assert argv[:3] == ["open", "-na", "Dia"], argv
+        assert argv[:3] == ["open", "-na", "Google Chrome"], argv
     assert browser._port_of("http://127.0.0.1:9222") == 9222
 
     async def _dead():
@@ -3372,6 +3835,94 @@ let
             pass
         else:
             raise SystemExit(f"shot({_bad}) should raise ValueError")
+
+    # --- live dashboard resource -------------------------------------------
+    # A connected browser publishes itself as a live resource: a throttled
+    # screenshot of the front tab. No real Chromium needed -- fake the context.
+    EP = "http://127.0.0.1:9222"
+
+    class _FakePage:
+        url = "https://example.com/"
+
+        async def title(self):
+            return "Example"
+
+        async def screenshot(self, **_kw):
+            return b"NOT-A-REAL-PNG"  # _encode_shot tolerates non-images
+
+    class _FakeCtx:
+        def __init__(self, pages):
+            self.pages = pages
+
+    class _FakeBrowser:
+        def __init__(self):
+            self.connected = True
+
+        def is_connected(self):
+            return self.connected
+
+    _orig_context = browser.context
+    _pages = [_FakePage()]
+
+    async def _fake_context(endpoint=EP):
+        return _FakeCtx(_pages)
+
+    browser.context = _fake_context
+
+    # A page renders to an inline <img> with its title/url.
+    browser._resource_html_cache.clear()
+    _h = _aio.run(browser._resource_html(EP))
+    assert "<img" in _h and "example.com" in _h, _h[:200]
+
+    # Throttled: a call within the TTL reuses the cache even though the tab list
+    # changed underneath it (the screenshot is the expensive part).
+    _pages.clear()
+    assert _aio.run(browser._resource_html(EP)) == _h
+
+    # No open tabs: a passive placeholder, and never creates a tab.
+    browser._resource_html_cache.clear()
+    assert "no open tabs" in _aio.run(browser._resource_html(EP))
+
+    # Render never raises: a failing capture becomes an error card.
+    async def _boom(endpoint=EP):
+        raise RuntimeError("kaboom")
+
+    browser.context = _boom
+    browser._resource_html_cache.clear()
+    _e = _aio.run(browser._resource_html(EP))
+    assert "render failed" in _e and "kaboom" in _e, _e[:200]
+
+    # connect() publishes the resource on a fresh connection; mimic that here.
+    browser.context = _fake_context
+    _pages[:] = [_FakePage()]
+    runtime.resources.clear()
+    browser._browsers.clear()
+    _fb = _FakeBrowser()
+    browser._browsers[EP] = _fb
+    _res = browser._register_resource(EP)
+    _rid = "browser:" + EP
+    assert _res is not None and _rid in runtime.resources, list(runtime.resources)
+    assert _res.kind == "browser" and _res.title == "browser · " + EP, (_res.kind, _res.title)
+    assert _res.alive() is True
+    browser._resource_html_cache.clear()
+    assert "<img" in _aio.run(_res.render_html())
+
+    # Keyed by endpoint: a reconnect refreshes the one card, never stacks.
+    browser._register_resource(EP)
+    assert sum(1 for k in runtime.resources if k == _rid) == 1
+
+    # alive() drops the card once the connection is gone (the sweep then closes it).
+    _fb.connected = False
+    assert _res.alive() is False
+    _fb.connected = True
+    browser._browsers.pop(EP)
+    assert _res.alive() is False
+
+    # Leave the module clean for any later assertions.
+    browser.context = _orig_context
+    browser._browsers.clear()
+    runtime.resources.clear()
+    browser._resource_html_cache.clear()
 
     print("browser-ok", browser.__version__)
   '';
@@ -3531,6 +4082,7 @@ let
         # browser bundle -- the bare mcpPython has no wrapper to set this (only the
         # `ix-mcp` entrypoint does).
         export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
+        export FONTCONFIG_FILE=${fontsConf}
         ${lib.getExe mcpPython} ${browserVdomTestPy} >stdout 2>stderr || {
           echo "ix-mcp browser vdom smoke failed:" >&2
           cat stdout stderr >&2
@@ -3541,6 +4093,52 @@ let
           cat stdout stderr >&2
           exit 1
         }
+        mkdir -p "$out"
+      '';
+
+  # Property-based (Hypothesis) tests for the vdom()/read() snapshot helpers
+  # (packages/mcp/tests/test_vdom_properties.py): they generate random HTML
+  # bodies and assert selector integrity, exclusion of hidden/script/style
+  # subtrees, name clamping, ref contiguity, determinism, the interactive_only
+  # subset relation, geometry, and read()/vdom() agreement against a real
+  # headless Chromium. Like browserVdomSmoke, vdom() only reads the DOM, so it
+  # runs headless on set_content fixtures in the sandbox with no display or
+  # network. The interpreter is mcpPython (the bundled browser module +
+  # playwright) plus pytest and hypothesis, which the bare mcpPython omits.
+  vdomTestPython = pkgs.python3.withPackages (
+    ps:
+    mcpPythonPackages ps
+    ++ [
+      ps.pytest
+      ps.hypothesis
+    ]
+  );
+  vdomPropertiesSource = builtins.path {
+    name = "ix-mcp-vdom-properties-test";
+    path = ./tests/test_vdom_properties.py;
+  };
+  vdomPropertiesSmoke =
+    pkgs.runCommand "ix-mcp-vdom-properties-smoke"
+      {
+        nativeBuildInputs = [ vdomTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        # `vdom()` launches a (headless) browser; point Playwright at the bundled
+        # browser bundle (no wrapper sets it for the bare interpreter).
+        export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
+        export FONTCONFIG_FILE=${fontsConf}
+        # Copy the test into a writable dir so pytest collects it as a plain file
+        # (a bare store path of a single .py is read by pytest as a directory).
+        cp ${vdomPropertiesSource} "$TMPDIR/test_vdom_properties.py"
+        ${lib.getExe vdomTestPython} -m pytest "$TMPDIR/test_vdom_properties.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp vdom property tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
         mkdir -p "$out"
       '';
 
@@ -3557,6 +4155,7 @@ package.overrideAttrs (old: {
         tuiBundled
         htpyBundled
         searchBundled
+        astlogBundled
         fffBundled
         dataLibsBundled
         gmailLibsBundled
@@ -3564,10 +4163,12 @@ package.overrideAttrs (old: {
         googleAuthBundled
         ixGoogleBundled
         slackBundled
+        requirementsSmoke
         engineBundled
         serverTools
         evalSmoke
         runtimeSmoke
+        sessionSmoke
         feedSmoke
         apiSmoke
         wedgeSmoke
@@ -3579,10 +4180,12 @@ package.overrideAttrs (old: {
         viewSmoke
         nixSmoke
         fleetSmoke
+        fleetClusterSmoke
         shSmoke
         worktreeSmoke
         browserSmoke
         browserVdomSmoke
+        vdomPropertiesSmoke
         xBundled
         linearBundled
         ;

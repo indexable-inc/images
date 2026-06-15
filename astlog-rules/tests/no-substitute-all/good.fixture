@@ -1,0 +1,1 @@
+{ pkgs, foo }: pkgs.replaceVars ./template.sh { inherit foo; }

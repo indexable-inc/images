@@ -464,6 +464,17 @@ defmodule SymphonyElixir.Runtime do
     }
   end
 
+  # An exec node's `{ name: value }` DSL inputs, resolved against upstream
+  # outputs; ExecRunner exports them as SYMPHONY_INPUT_* environment
+  # variables so pack scripts are parameterizable.
+  defp run_opts(state, %Node{kind: :exec} = node, attempt_n) do
+    %{
+      run_id: state.graph.run_id,
+      attempt: attempt_n,
+      resolved_inputs: resolve_inputs(state.graph, node)
+    }
+  end
+
   # An agent node carries the placement module so `Engine.Client` can
   # resolve an `:ixvm` envelope to the run's own provisioned room-server
   # by `run_id`. `ensure_placement/2` already ran before this node was

@@ -13,6 +13,40 @@
 }:
 let
   /**
+    One nixpkgs instance shared by every image evaluation. `lib.nixosSystem`
+    otherwise instantiates a fresh nixpkgs PER node, and a consumer that
+    evaluates many images in one evaluation (the ix fleet's regional-status
+    canary evaluates every example fleet x 2 regions inside one NixOS host
+    config) pays that instantiation 20-30 times over: 656M thunks / 5.5min
+    of nix CPU for one host, and an OOM-killed deploy under nox (ix
+    ENG-2728/ENG-2729). The parameters fold in exactly what the per-node
+    modules used to set: the repo overlay (previously a `nixpkgs.overlays`
+    module) and the platform config from `platform.nix`.
+
+    Unfree packages enter images only by explicit name here, never by
+    flipping `allowUnfree`. Every image shares this one instance via
+    `nixpkgs.pkgs`, and the nixpkgs module then ignores a per-image
+    `nixpkgs.config` (setting one even fails an assertion), so an image's
+    unfree exception has to be added to this predicate, not to the image.
+      - `yourkit-java`: the opt-in `ix.languages.java.yourkit` profiler agent
+        an operator turns on for performance work.
+        Refs: https://www.yourkit.com/docs/java/help/agent.jsp
+      - `claude-code`: Anthropic's agent CLI baked into the agent dev images
+        (development-base, symphony-codex); ships under commercial terms.
+    The predicate keeps every other unfree (Oracle JDK, Adobe runtimes,
+    NVIDIA blobs) failing at eval until the platform allows it explicitly.
+  */
+  imagePkgs = import nixpkgs {
+    inherit system overlays;
+    config.allowUnfreePredicate =
+      pkg:
+      builtins.elem (lib.getName pkg) [
+        "yourkit-java"
+        "claude-code"
+      ];
+  };
+
+  /**
     Run the platform config, OCI packaging, base profile, the full module
     registry, and the caller's `modules` through `lib.nixosSystem`, then
     return the evaluated `config`. This is the evaluation path every
@@ -30,7 +64,7 @@ let
       inherit system;
       specialArgs.ix = ixSpecialArgs;
       modules = [
-        { nixpkgs.overlays = overlays; }
+        { nixpkgs.pkgs = imagePkgs; }
         ./platform.nix
         ./oci-layer.nix
         # Home Manager as a NixOS module. Per-tool XDG config (Nushell,

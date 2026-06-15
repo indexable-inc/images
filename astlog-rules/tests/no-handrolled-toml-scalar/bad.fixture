@@ -1,0 +1,1 @@
+let toToml = v: toString v; in toToml 1
