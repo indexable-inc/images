@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS executions (
     error_line  INTEGER,
     outputs     TEXT NOT NULL DEFAULT '[]',
     bindings    TEXT NOT NULL DEFAULT '{}',
-    kind        TEXT NOT NULL DEFAULT 'cell'
+    kind        TEXT NOT NULL DEFAULT 'cell',
+    namespace   TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS executions_started ON executions (started_at);
 
@@ -115,6 +116,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE executions ADD COLUMN kind TEXT NOT NULL DEFAULT 'cell'")
         except sqlite3.OperationalError:
             pass
+    if "namespace" not in have:
+        try:
+            conn.execute("ALTER TABLE executions ADD COLUMN namespace TEXT NOT NULL DEFAULT '[]'")
+        except sqlite3.OperationalError:
+            pass
 
 
 def start(
@@ -175,12 +181,15 @@ def finish(
     error_line: int | None = None,
     outputs: list | None = None,
     bindings: dict | None = None,
+    namespace: list | None = None,
 ) -> None:
     # `line` (the live executing line) is cleared: a finished job has no current
-    # line, only -- when it failed -- the `error_line` it failed on.
+    # line, only -- when it failed -- the `error_line` it failed on. `namespace`
+    # is the kernel's user globals as of this finish; the newest one is the live
+    # namespace the dashboard's namespace pane shows.
     conn.execute(
         "UPDATE executions SET status = ?, ended_at = ?, output = ?, result = ?, error = ?, "
-        "error_line = ?, line = NULL, outputs = ?, bindings = ? WHERE id = ?",
+        "error_line = ?, line = NULL, outputs = ?, bindings = ?, namespace = ? WHERE id = ?",
         (
             status,
             ended_at,
@@ -190,6 +199,7 @@ def finish(
             error_line,
             json.dumps(outputs or []),
             json.dumps(bindings or {}),
+            json.dumps(namespace or []),
             id,
         ),
     )
@@ -222,6 +232,25 @@ def recent(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
         (limit,),
     ).fetchall()
     return [_exec_row(r) for r in rows]
+
+
+def latest_namespace(conn: sqlite3.Connection) -> list[dict]:
+    """The kernel's user globals as of the most recent finished run — the live
+    namespace the dashboard's namespace pane shows. Empty before any run finishes.
+    Reads the newest execution that recorded a namespace (a running job has not
+    written one yet), ordered by when it ended."""
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT namespace FROM executions "
+        "WHERE namespace IS NOT NULL AND namespace != '[]' "
+        "ORDER BY COALESCE(ended_at, started_at) DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return []
+    try:
+        return json.loads(row["namespace"] or "[]")
+    except (ValueError, TypeError):
+        return []
 
 
 def get(conn: sqlite3.Connection, id: str) -> dict | None:

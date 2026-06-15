@@ -1311,6 +1311,7 @@ def _persist_final(job: Job) -> None:
             error_line=job.error_line,
             outputs=_job_outputs(job),
             bindings=_cell_bindings(job),
+            namespace=_namespace_snapshot(job),
         )
     except Exception:
         # Best-effort logging: persisting the final status must not raise during cleanup.
@@ -1330,6 +1331,19 @@ def _cell_bindings(job: Job) -> dict:
         return cell_bindings(job.code, ns)
     except Exception:
         return {}
+
+
+def _namespace_snapshot(job: Job) -> list:
+    """Every user-bound name in the job's namespace, described for the dashboard's
+    namespace pane. Stored with each finished run; the newest is the live
+    namespace. Best-effort: a failure here just means no namespace pane."""
+    ns = job._ns if job._ns is not None else _shared_ns()
+    try:
+        from .introspect import namespace_rows
+
+        return namespace_rows(_namespace_candidates(ns))
+    except Exception:
+        return []
 
 
 def _safe_repr(value) -> str:
@@ -2128,6 +2142,20 @@ def _snapshot_candidates(ns: dict) -> dict:
         and not name.startswith("__")
         and not _IPYTHON_MACHINERY.fullmatch(name)
         and not isinstance(value, types.ModuleType)
+    }
+
+
+def _namespace_candidates(ns: dict) -> dict:
+    """The user-bound names the dashboard's namespace pane shows: like
+    :func:`_snapshot_candidates` (drop baseline helpers, dunders, IPython history
+    machinery) but keep modules — an imported ``pl`` is worth seeing in the
+    namespace even though it is not checkpointed."""
+    return {
+        name: value
+        for name, value in ns.items()
+        if name not in _baseline_names
+        and not name.startswith("__")
+        and not _IPYTHON_MACHINERY.fullmatch(name)
     }
 
 

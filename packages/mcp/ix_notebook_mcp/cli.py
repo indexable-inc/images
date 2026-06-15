@@ -384,7 +384,7 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
 
 
 async def _run(cfg: Config) -> None:
-    from . import dashboard, tools, transport
+    from . import dashboard, pane_bridge, tools, transport
     from .kernel import Kernel, set_kernel
 
     kernel = Kernel(cfg)
@@ -414,6 +414,11 @@ async def _run(cfg: Config) -> None:
         await locked.wait()
 
     runner = await dashboard.start(cfg)
+    # Also publish every run/resource/namespace as Loro panes to the shared
+    # dashboard hub (a separate `dashboard` process aggregates all producers).
+    # Best-effort: if the producer socket cannot bind, this is silent and the
+    # read-only API dashboard still works.
+    bridge_task = asyncio.ensure_future(pane_bridge.run(cfg.store_path))
     url = cfg.dashboard_url()
     (runtime_dir() / "dashboard-url").write_text(url)
     # Bake the live URL into the MCP instructions before serving, so the client
@@ -431,6 +436,7 @@ async def _run(cfg: Config) -> None:
         else:
             await transport.serve()
     finally:
+        bridge_task.cancel()
         if restore_task is not None and not restore_task.done():
             restore_task.cancel()
         if cfg.session_path is not None:
