@@ -20,9 +20,6 @@
   --accent-soft: light-dark(rgba(83, 88, 224, 0.10), rgba(168, 176, 255, 0.13));
   --cursor:      light-dark(#9a9ba2, #a8b0ff);
   --sel:         light-dark(#ededf0, #18181c);
-  /* Faint dot grid on the board, so panning a mostly-empty canvas still reads
-     as motion. */
-  --grid-dot:    light-dark(#e2e2e5, #19191c);
 
   /* Kind/status hues for namespace badges and chips — used sparingly, tinted. */
   --k-green: light-dark(#3f9a52, #52c98e);
@@ -44,7 +41,7 @@
       --ink: #ececef; --ink-dim: #82828c; --ink-faint: #4a4a53;
       --live: #52c98e; --dead: #e0635b; --accent: #a8b0ff;
       --accent-soft: rgba(168, 176, 255, 0.13); --cursor: #a8b0ff;
-      --sel: #18181c; --grid-dot: #19191c;
+      --sel: #18181c;
       --k-green: #52c98e; --k-amber: #d6a44a; --k-red: #e0635b; --k-blue: #7fb4ff; --k-pink: #e08fc7;
     }
   }

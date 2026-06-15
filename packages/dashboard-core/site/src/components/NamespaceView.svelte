@@ -22,9 +22,6 @@
       .sort((a, b) => (a.key < b.key ? -1 : 1)),
   );
 
-  // Total top-level names across sessions, for the header count.
-  const total = $derived(sessions.reduce((n, s) => n + parseRows(s.pane.body).length, 0));
-
   // Selection + expansion are owned here so the keyboard can walk the whole tree
   // across sessions. Each session renders with the same `s<index>` path prefix the
   // flat nav list uses, so paths line up between rendering and navigation.
@@ -32,14 +29,31 @@
   let expanded = $state<Record<string, boolean>>({});
   const prefixOf = (si: number): string => `s${si}`;
 
+  // Parse + flatten each session once. `store.panes` is reassigned on every live
+  // frame, so every body-derived value re-runs each frame; building the item list
+  // here and feeding it to the header count, the nav list, and each NamespaceBody
+  // keeps it to a single parse + flatten per session per frame instead of 2–3×.
+  const sessionItems = $derived(
+    sessions.map((s, si) => ({
+      ...s,
+      items: buildNsItems(parseRows(s.pane.body), expanded, prefixOf(si)),
+    })),
+  );
+
+  // Total top-level names across sessions, for the header count.
+  const total = $derived(
+    sessionItems.reduce(
+      (n, s) => n + s.items.filter((it) => it.kind === 'row' && it.depth === 0).length,
+      0,
+    ),
+  );
+
   // The flattened, currently-visible rows in render order — what j/k walk.
   const flat = $derived.by(() => {
     const out: { path: string; row: Row }[] = [];
-    sessions.forEach((s, si) => {
-      for (const it of buildNsItems(parseRows(s.pane.body), expanded, prefixOf(si))) {
-        if (it.kind === 'row') out.push({ path: it.path, row: it.row });
-      }
-    });
+    for (const s of sessionItems) {
+      for (const it of s.items) if (it.kind === 'row') out.push({ path: it.path, row: it.row });
+    }
     return out;
   });
 
@@ -117,16 +131,16 @@
   </header>
 
   <div class="nsview-body">
-    {#if sessions.length === 0}
+    {#if sessionItems.length === 0}
       <div class="view-empty">{store.live ? 'no live namespace' : 'connecting…'}</div>
     {:else}
-      {#each sessions as s, si (s.key)}
-        {#if sessions.length > 1}
+      {#each sessionItems as s (s.key)}
+        {#if sessionItems.length > 1}
           <div class="nsview-session">{s.pane.subtitle || s.pane.scope || 'session'}</div>
         {/if}
         <NamespaceBody
           pane={s.pane}
-          prefix={prefixOf(si)}
+          items={s.items}
           {expanded}
           {selected}
           {onSelect}

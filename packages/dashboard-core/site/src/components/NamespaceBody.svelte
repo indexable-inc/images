@@ -6,14 +6,16 @@
   // (so the keyboard can walk the whole tree across sessions); this component just
   // renders the flattened item list the shared builder produces.
   import type { Pane } from '$lib/types';
-  import { buildNsItems, parseRows } from '$lib/namespace';
+  import { buildNsItems, parseRows, type NsItem } from '$lib/namespace';
   import NsRow from './NsRow.svelte';
 
   // Controlled by the Namespace view (selection + expansion lifted out for
-  // keyboard nav), or uncontrolled when used as the generic `namespace` renderer
-  // — in which case it keeps its own expand state and ignores selection.
+  // keyboard nav, and the flattened `items` built once there so the body never
+  // re-parses), or uncontrolled when used as the generic `namespace` renderer —
+  // in which case it parses its own body and keeps its own expand state.
   let {
     pane,
+    items: itemsProp,
     prefix = 'r',
     expanded,
     selected = null,
@@ -21,6 +23,7 @@
     onToggle,
   }: {
     pane: Pane;
+    items?: NsItem[];
     prefix?: string;
     expanded?: Record<string, boolean>;
     selected?: string | null;
@@ -39,7 +42,8 @@
       }),
   );
 
-  const items = $derived(buildNsItems(parseRows(pane.body), exp, prefix));
+  // Prefer the parent's precomputed list; only parse/flatten here when standalone.
+  const items = $derived(itemsProp ?? buildNsItems(parseRows(pane.body), exp, prefix));
 </script>
 
 <div class="ns">

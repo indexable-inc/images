@@ -50,8 +50,3 @@ export interface Pane extends PaneRecord {
   key: string;
   scope: string;
 }
-
-export interface Point {
-  x: number;
-  y: number;
-}
