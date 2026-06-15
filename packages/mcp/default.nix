@@ -1967,7 +1967,7 @@ let
     set_config(cfg)
 
     async def main():
-        runner, _bound_host = await dashboard.start(cfg)
+        runner = await dashboard.start(cfg)
         base = f"http://127.0.0.1:{cfg.dashboard_port}"
         try:
             async with aiohttp.ClientSession() as session:

@@ -34,7 +34,6 @@ import subprocess
 import sys
 import time
 import webbrowser
-from dataclasses import replace
 from pathlib import Path
 
 from .config import Config, runtime_dir, set_config
@@ -120,6 +119,27 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def _bindable(host: str, port: int) -> bool:
+    """Whether ``host:port`` can actually be bound right now. A configured host
+    can be 'assigned' yet unbindable -- e.g. a Tailscale IP whose interface is
+    down because the backend is stopped -- so the CLI probes before committing
+    the dashboard (and the kernel's inherited URL) to it. Mirrors what
+    ``loop.create_server`` does: resolve, then try each address family."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    for family, socktype, proto, _canon, sockaddr in infos:
+        try:
+            with socket.socket(family, socktype, proto) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(sockaddr)
+            return True
+        except OSError:
+            continue
+    return False
 
 
 def _dashboard_port() -> int:
@@ -268,9 +288,6 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     workdir = Path(wd).resolve() if wd else Path.cwd()
     workdir.mkdir(parents=True, exist_ok=True)
 
-    bind_host = os.environ.get("IX_MCP_HOST") or _tailscale_ip() or "127.0.0.1"
-    advertised_host = _advertised_host(bind_host)
-
     http = getattr(args, "http", None)
     stdin_fd = stdout_fd = None
     mcp_http_host, mcp_http_port = "127.0.0.1", 8000
@@ -293,6 +310,29 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
         mcp_http_host, mcp_http_port = host or "127.0.0.1", int(port) if port else 8000
 
     dashboard_port = _dashboard_port()
+
+    # Resolve the dashboard bind host once, here, before the kernel spawns (it
+    # inherits IX_MCP_DASHBOARD_URL) and before the Config is built, so every
+    # derived value stays consistent. A tailnet IP can be 'assigned' yet
+    # unbindable (Tailscale stopped -> interface down); probing and falling back
+    # to loopback keeps the read-only dashboard, hence the whole MCP, from
+    # crashing on startup. _tailscale_ip() already returns None unless the
+    # backend is running, so this only catches the rarer races.
+    bind_host = os.environ.get("IX_MCP_HOST") or _tailscale_ip() or "127.0.0.1"
+    # Probe everything except the fallback target itself. "127.0.0.1" is the host
+    # we fall back *to* and is effectively always bindable; every other spelling
+    # (a tailnet IP, but also "::1"/"localhost", which can be down when IPv6 is
+    # disabled) must be probed so we degrade to working loopback instead of it.
+    if bind_host != "127.0.0.1" and not _bindable(bind_host, dashboard_port):
+        print(
+            f"[ix-mcp] dashboard host {bind_host}:{dashboard_port} is not bindable; "
+            "falling back to 127.0.0.1",
+            file=sys.stderr,
+            flush=True,
+        )
+        bind_host = "127.0.0.1"
+    advertised_host = _advertised_host(bind_host)
+
     session = getattr(args, "session", None)
     session_path: Path | None = None
     session_resume = False
@@ -419,10 +459,7 @@ async def _run(cfg: Config) -> None:
         restore_task = asyncio.ensure_future(_restore())
         await locked.wait()
 
-    runner, bound_host = await dashboard.start(cfg)
-    if bound_host != cfg.host:
-        cfg = replace(cfg, host=bound_host, advertised_host=_advertised_host(bound_host))
-        set_config(cfg)
+    runner = await dashboard.start(cfg)
     # Also publish every run/resource/namespace as Loro panes to the shared
     # dashboard hub (a separate `dashboard` process aggregates all producers).
     # Best-effort: if the producer socket cannot bind, this is silent and the
