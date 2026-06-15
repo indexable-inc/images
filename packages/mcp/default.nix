@@ -1095,19 +1095,12 @@ let
     except fff.FffError as exc:
         assert "subdirectory" in str(exc), f"unhelpful home-dir error: {exc}"
 
-    # Every public arg is keyword-only and `path`/`mode` are required (no hidden
-    # default): a positional call, or a missing path/mode, is a TypeError, so each
-    # call states exactly what it searches, where, and how.
-    for bad in (
-        lambda: fff.grep("greetings", path=root, mode="plain"),  # positional query
-        lambda: fff.grep(query="greetings", mode="plain"),       # missing path
-        lambda: fff.grep(query="greetings", path=root),          # missing mode
-    ):
-        try:
-            bad()
-            raise AssertionError("expected a TypeError for an under-specified grep")
-        except TypeError:
-            pass
+    # Ergonomic by design: `query` is positional, `path` defaults to the cwd, and
+    # `mode` defaults to a fast literal search, so `grep("pattern")` just works
+    # (the shell-grep ergonomics added with mode="plain"). Mode beyond the default
+    # is still explicit -- there is no "smart" auto-detect (rejected below).
+    assert fff.grep("greetings", path=root).matches, "positional query + default mode should search"
+    assert fff.grep("greetings", path=root, mode="plain").matches, "explicit plain mode should search"
 
     # mode="regex" runs the query as a regex and mode="plain" as a fast literal,
     # so an alternation matches under regex but not under plain. There is no
