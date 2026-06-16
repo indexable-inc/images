@@ -82,6 +82,14 @@ class FleetNode(BaseModel):
     tags: list[str] = Field(default_factory=empty_str_list)
     groups: list[str] = Field(default_factory=empty_str_list)
     env: dict[str, str] = Field(default_factory=empty_str_dict)
+    # Names of secrets in the per-user store (`ix secret set NAME`) to attach to
+    # this VM at create time. Resolved server-side and injected as env vars or
+    # files exactly like `ix new --secret NAME`. References only, never values:
+    # plaintext belongs in the store, not the fleet plan.
+    secrets: list[str] = Field(default_factory=empty_str_list)
+    # Skip auto-attach of secrets marked `--default` in the store, matching
+    # `ix new --no-default-secrets`.
+    noDefaultSecrets: bool = False
     l7ProxyPorts: list[int] = Field(default_factory=empty_int_list)
     dependsOn: list[str] = Field(default_factory=empty_str_list)
     healthChecks: dict[str, HealthCheck] = Field(default_factory=dict)
@@ -363,11 +371,44 @@ def find_node(rows: list[ix_sdk.BranchInfo], name: str) -> ix_sdk.BranchInfo | N
     return next((row for row in rows if row.name == name), None)
 
 
+async def verify_secrets_available(plan: FleetPlan, selectors: list[str], *, dry_run: bool) -> None:
+    """Fail before doing any work if a selected node references a secret that is
+    not in the user store, mirroring the `ix secret check` deploy-time bridge.
+
+    Only explicitly named references are validated: secrets marked `--default`
+    attach server-side and are not declared in the plan. Skipped on dry runs,
+    which make no live calls.
+    """
+    referenced: set[str] = set()
+    for node in selected_nodes(plan, selectors):
+        referenced.update(node.secrets)
+    if dry_run or not referenced:
+        return
+    stored = {secret.name for secret in await client().list_secrets()}
+    missing = sorted(referenced - stored)
+    if missing:
+        raise RuntimeError(
+            "missing secret(s) in the store: "
+            + ", ".join(missing)
+            + "; store them first with `ix secret set NAME`"
+        )
+
+
+def secrets_note(node: FleetNode) -> str:
+    parts: list[str] = []
+    if node.secrets:
+        parts.append(f"secrets={sorted(node.secrets)}")
+    if node.noDefaultSecrets:
+        parts.append("no-default-secrets")
+    return f", {', '.join(parts)}" if parts else ""
+
+
 async def create_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
     if dry_run:
         step(
             f"+ create {node.name} from {image} "
-            f"(region={node.region}, ipv4={node.ipv4}, l7={list(node.l7ProxyPorts)})"
+            f"(region={node.region}, ipv4={node.ipv4}, l7={list(node.l7ProxyPorts)}"
+            f"{secrets_note(node)})"
         )
         return
     await client().create(
@@ -377,6 +418,8 @@ async def create_node(node: FleetNode, image: str, *, dry_run: bool) -> None:
         env=dict(sorted(node.env.items())),
         l7_proxy_ports=list(node.l7ProxyPorts),
         ipv4=node.ipv4,
+        secrets=sorted(node.secrets),
+        no_default_secrets=node.noDefaultSecrets,
     )
 
 
@@ -821,6 +864,7 @@ async def cmd_switch(plan: FleetPlan, args: argparse.Namespace) -> None:
             await run_switch_node_workflow(node, args)
         return
 
+    await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
     extra_args: list[str] = []
     if args.no_snapshot:
         extra_args.append("--no-snapshot")
@@ -839,6 +883,7 @@ async def cmd_replace(plan: FleetPlan, args: argparse.Namespace) -> None:
             await run_replace_node_workflow(node, args)
         return
 
+    await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
     extra_args: list[str] = []
     if args.skip_push:
         extra_args.append("--skip-push")
@@ -853,6 +898,7 @@ async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
             await run_up_node_workflow(node, args)
         return
 
+    await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
     extra_args: list[str] = []
     if args.skip_push:
         extra_args.append("--skip-push")
@@ -879,6 +925,7 @@ async def cmd_health(plan: FleetPlan, args: argparse.Namespace) -> None:
 
 
 async def cmd_bootstrap(plan: FleetPlan, args: argparse.Namespace) -> None:
+    await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
     for batch in dependency_batches(plan, args.on):
         await asyncio.gather(*(bootstrap_node(node, dry_run=args.dry_run) for node in batch))
 

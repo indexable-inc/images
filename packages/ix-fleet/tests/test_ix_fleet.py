@@ -90,6 +90,64 @@ class FleetPlanValidationTests(unittest.TestCase):
         self.assertEqual(plan.secrets.values["sessionKey"].path, "/run/secrets/fleet/sessionKey")
         self.assertEqual(plan.secrets.values["sessionKey"].model_extra, {"generate": True})
 
+    def test_per_vm_secret_refs_default_empty_and_round_trip(self) -> None:
+        bare = ix_fleet.FleetNode.model_validate(fleet_node("web"))
+        self.assertEqual(bare.secrets, [])
+        self.assertFalse(bare.noDefaultSecrets)
+
+        node = fleet_node("api")
+        node["secrets"] = ["GH_TOKEN", "DATABASE_URL"]
+        node["noDefaultSecrets"] = True
+        parsed = ix_fleet.FleetNode.model_validate(node)
+        self.assertEqual(parsed.secrets, ["GH_TOKEN", "DATABASE_URL"])
+        self.assertTrue(parsed.noDefaultSecrets)
+
+
+class VerifySecretsAvailableTests(unittest.TestCase):
+    @staticmethod
+    def _fake_client(names: list[str]) -> typing.Any:
+        stored = [type("UserSecret", (), {"name": name})() for name in names]
+
+        class FakeClient:
+            async def list_secrets(self) -> list[typing.Any]:
+                return stored
+
+        return lambda: FakeClient()
+
+    def _plan(self, secrets: list[str]) -> typing.Any:
+        node = fleet_node("web")
+        node["secrets"] = secrets
+        return ix_fleet.FleetPlan.model_validate(fleet_plan(["web"], [node]))
+
+    def test_passes_when_every_referenced_secret_exists(self) -> None:
+        plan = self._plan(["GH_TOKEN"])
+        with patch.object(ix_fleet, "client", self._fake_client(["GH_TOKEN", "OTHER"])):
+            asyncio.run(ix_fleet.verify_secrets_available(plan, [], dry_run=False))
+
+    def test_raises_listing_missing_secrets(self) -> None:
+        plan = self._plan(["GH_TOKEN", "DATABASE_URL"])
+        with patch.object(ix_fleet, "client", self._fake_client(["GH_TOKEN"])):
+            with self.assertRaisesRegex(RuntimeError, "missing secret\\(s\\) in the store: DATABASE_URL"):
+                asyncio.run(ix_fleet.verify_secrets_available(plan, [], dry_run=False))
+
+    def test_dry_run_makes_no_live_call(self) -> None:
+        plan = self._plan(["MISSING"])
+
+        def fail_client() -> typing.Any:
+            raise AssertionError("dry-run preflight must not touch the store")
+
+        with patch.object(ix_fleet, "client", fail_client):
+            asyncio.run(ix_fleet.verify_secrets_available(plan, [], dry_run=True))
+
+    def test_no_references_makes_no_live_call(self) -> None:
+        plan = self._plan([])
+
+        def fail_client() -> typing.Any:
+            raise AssertionError("preflight must not query the store with no references")
+
+        with patch.object(ix_fleet, "client", fail_client):
+            asyncio.run(ix_fleet.verify_secrets_available(plan, [], dry_run=False))
+
 
 class PushReplacementImageTests(unittest.TestCase):
     def test_uses_image_subcommand(self) -> None:

@@ -53,6 +53,9 @@ let
     // {
       env = lib.mergeAttrsList (map (part: part.env or { }) parts);
       l7ProxyPorts = lib.unique (lib.concatMap (part: part.l7ProxyPorts or [ ]) parts);
+      # User-store secret names union across defaults/fleet/node layers (like
+      # l7ProxyPorts), so a fleet-wide default attaches alongside per-node refs.
+      secrets = lib.unique (lib.concatMap (part: part.secrets or [ ]) parts);
     };
 
   # Every deployment key the plan consumes. `deployment` is a plain attrset
@@ -69,8 +72,10 @@ let
     "env"
     "ipv4"
     "l7ProxyPorts"
+    "noDefaultSecrets"
     "recreateOnUp"
     "region"
+    "secrets"
     "snapshot"
     "switch"
   ];
@@ -289,6 +294,10 @@ let
       groups = nodeGroups;
       inherit (deploy) env;
       inherit (deploy) l7ProxyPorts;
+      # Per-VM user-store secret references, attached at create like
+      # `ix new --secret NAME`; `ix-fleet` verifies they exist before deploying.
+      secrets = deploy.secrets or [ ];
+      noDefaultSecrets = deploy.noDefaultSecrets or false;
       dependsOn = expandedDependencies.${name};
       healthChecks = planHealthChecks config;
     }

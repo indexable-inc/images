@@ -38,6 +38,10 @@ let
       region = "us-west-1";
       ipv4 = false;
       snapshot = false;
+      # Exercise the declarative per-VM secret refs through the dry-run create
+      # path (no live call, so the names need not exist in any store here).
+      secrets = [ "GH_TOKEN" ];
+      noDefaultSecrets = true;
     };
   };
 

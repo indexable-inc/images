@@ -1607,6 +1607,8 @@ let
 
   fleet = ix.mkFleet {
     deployment.region = "us-west-1";
+    # Fleet-wide per-VM user-store secret default; unions with per-node refs.
+    deployment.secrets = [ "FLEET_DEFAULT" ];
     secrets = {
       provider = {
         type = "vaultwarden";
@@ -1630,6 +1632,8 @@ let
         deployment = {
           destination = "fleet-web:latest";
           ipv4 = true;
+          secrets = [ "GH_TOKEN" ];
+          noDefaultSecrets = true;
         };
         modules = [
           (
@@ -4574,6 +4578,17 @@ let
           && fleet.planValue.secrets.values.sessionKey.path == "/run/secrets/fleet/sessionKey"
           && fleet.planValue.secrets.values.sessionKey.generate;
         message = "fleet plans should carry declarative secret specs";
+      }
+      {
+        assertion =
+          fleetPlan.web.secrets == [
+            "FLEET_DEFAULT"
+            "GH_TOKEN"
+          ]
+          && fleetPlan.web.noDefaultSecrets
+          && fleetPlan.db.secrets == [ "FLEET_DEFAULT" ]
+          && !fleetPlan.db.noDefaultSecrets;
+        message = "per-VM secret refs should union fleet-wide and node-level names and carry the default opt-out";
       }
       {
         assertion = fleetPlan."worker-0".baseName == "worker" && fleetPlan."worker-1".replicaIndex == 1;
