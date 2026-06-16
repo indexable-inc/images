@@ -33,6 +33,20 @@
 (lint no-abort error
   "`abort` is a hard abort with no recovery; use `throw` (catchable) or `lib.assertMsg` (typed assertion) instead")
 
+;; no-allow-builtin-fetch-git: `allowBuiltinFetchGit = true` lets
+;; `builtins.fetchGit` run while Nix evaluates the package, so ordinary NixOS
+;; evaluation can hit the network and block on Git clones. Pin each Cargo git
+;; dependency under `rustPlatform.importCargoLock` `outputHashes` instead.
+(rule (no-allow-builtin-fetch-git n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (variable_expression) @v) @n")
+  (text p "allowBuiltinFetchGit")
+  (text v "true"))
+(lint no-allow-builtin-fetch-git error
+  "allowBuiltinFetchGit fetches Cargo git dependencies during evaluation; pin rustPlatform.importCargoLock outputHashes instead")
+
 ;; no-ambiguous-gpl-license: Ambiguous GPL/AGPL/LGPL license identifier. Use
 ;; the `-Only` / `-Plus` flavor: `gpl2Only`, `gpl3Plus`, `agpl3Only`, etc.
 (rule (no-ambiguous-gpl-license n)
@@ -423,6 +437,22 @@
   (text-match v "^(true|false)$"))
 (lint no-negate-bool-literal error
   "`!true` / `!false` is the opposite literal; use the literal directly")
+
+;; no-nix-in-generated-shell: a `writeShellApplication` whose body shells out to
+;; `nix run/build/flake check` hides dependencies from the evaluator and cache,
+;; repeats evaluation, and moves failures into runtime logs. Pass realized store
+;; paths into the script, or move orchestration into the outer workflow. Largely
+;; subsumed by `no-write-shell-application` (writeShellApplication is banned
+;; outright), but kept as a distinct rule for any suppressed use.
+(rule (no-nix-in-generated-shell n)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f
+      argument: (attrset_expression) @attrs) @n")
+  (text-match f "^(pkgs\\.)?writeShellApplication$")
+  (text-match attrs "\\bnix (run|build|flake check)\\b"))
+(lint no-nix-in-generated-shell error
+  "Nix-generated shell applications must not call nix again; pass realized store paths into the script instead")
 
 ;; no-nixpkgs-channel-ref: '<nixpkgs>' channel reference is banned. Use flake
 ;; inputs.
@@ -969,3 +999,21 @@
   (text-match p "^(sha256|[a-zA-Z][a-zA-Z0-9]*Sha256)$"))
 (lint prefer-sri-hash error
   "legacy `sha256`-flavored hash attr; use the SRI `hash` slot: `hash` in fetchers, `cargoHash` / `vendorHash` / `npmDepsHash` in the language builders (or the typed `cargoLock` block for Rust)")
+
+;; runcommand-missing-structured-attrs: `pkgs.runCommand name {} body` passes an
+;; empty attrset, so the derivation gets no `__structuredAttrs = true`. Add
+;; `{ __structuredAttrs = true; }` for consistent derivation behavior (attrs
+;; passed as JSON: no env-var length limits, preserved list/nested types).
+;; Warning severity: a large pre-existing tail still carries `{}`.
+(rule (runcommand-missing-structured-attrs n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: (apply_expression
+          function: (select_expression) @f
+          argument: (_))
+        argument: (attrset_expression) @attrs)) @n")
+  (text f "pkgs.runCommand")
+  (text-match attrs "^\\{\\s*\\}$"))
+(lint runcommand-missing-structured-attrs warning
+  "runCommand with empty attrs {{}}; add {{ __structuredAttrs = true; }} for consistent derivation behavior")

@@ -1,0 +1,6 @@
+{
+  cargoLock = {
+    lockFile = ./Cargo.lock;
+    outputHashes = { };
+  };
+}
