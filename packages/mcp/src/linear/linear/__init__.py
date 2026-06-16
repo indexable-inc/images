@@ -108,28 +108,57 @@ def _client(**kwargs: Any):  # noqa: ANN201
     return httpx.AsyncClient(headers=headers, **kwargs)
 
 
+# Retry transient failures so an unattended cron sweep is not killed by a
+# Linear blip. Scope: HTTP 5xx and the GraphQL "Internal server error" message
+# observed in production -- both have been seen to recover on an immediate
+# retry. 4xx and other GraphQL errors are caller bugs and must not retry.
+_GQL_RETRY_BACKOFFS_S: tuple[float, ...] = (0.5, 1.5)
+
+
+def _is_internal_server_error(errors: list[dict[str, Any]]) -> bool:
+    return any(
+        "internal server error" in str(e.get("message", "")).lower() for e in errors
+    )
+
+
 async def _gql(
     query: str,
     variables: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute one GraphQL operation and return the ``data`` dict.
 
-    Raises :class:`LinearError` if the response contains ``errors``.
+    Transient failures (HTTP 5xx, GraphQL "Internal server error") are retried
+    with exponential backoff up to :data:`_GQL_RETRY_BACKOFFS_S` plus one. Any
+    other failure raises immediately: :class:`LinearError` for GraphQL errors,
+    ``httpx.HTTPStatusError`` for non-transient HTTP errors.
     """
+    import asyncio
+
     import httpx
 
     payload: dict[str, Any] = {"query": query}
     if variables:
         payload["variables"] = variables
 
-    async with _client() as client:
-        resp = await client.post(_ENDPOINT, json=payload)
-        resp.raise_for_status()
-        body = resp.json()
+    total_attempts = len(_GQL_RETRY_BACKOFFS_S) + 1
+    for attempt in range(total_attempts):
+        last = attempt == total_attempts - 1
+        async with _client() as client:
+            resp = await client.post(_ENDPOINT, json=payload)
+            if 500 <= resp.status_code < 600 and not last:
+                await asyncio.sleep(_GQL_RETRY_BACKOFFS_S[attempt])
+                continue
+            resp.raise_for_status()
+            body = resp.json()
 
-    if body.get("errors"):
-        raise LinearError(body["errors"])
-    return body.get("data", {})
+        if body.get("errors"):
+            if not last and _is_internal_server_error(body["errors"]):
+                await asyncio.sleep(_GQL_RETRY_BACKOFFS_S[attempt])
+                continue
+            raise LinearError(body["errors"])
+        return body.get("data", {})
+
+    raise RuntimeError("unreachable: _gql retry loop exited without return or raise")
 
 
 # A Linear UUID: 8-4-4-4-12 lowercase hex. Team keys ("ENG") never match this,

@@ -374,7 +374,12 @@ async def triage(
         marker = marker_line(fp)
 
         # --- Step 2: marker-based search ---
-        hits = await port.search(marker)
+        # Search the bare 16-hex fingerprint (a distinctive token) rather than
+        # the full marker line. Linear's search is fuzzy and capped at
+        # ``first``; the bare fingerprint ranks the marker-bearing issue at the
+        # top of the window. The exact-substring check against ``marker`` is
+        # preserved so a noise hit can never cause a false dedup.
+        hits = await port.search(fp)
         marker_match: dict[str, Any] | None = None
         for hit in hits:
             desc = hit.get("description") or ""

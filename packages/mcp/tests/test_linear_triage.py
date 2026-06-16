@@ -300,13 +300,13 @@ class TestIdempotency:
         assert len(port.created) == 3
 
         # Inject the created issues into the fake port so the second pass finds them.
+        # triage() searches by the bare 16-hex fingerprint, so key results by fp.
         for created_issue in port.created:
             desc = created_issue["description"]
-            # Extract the marker from the description.
             for line in desc.splitlines():
                 if line.startswith(MARKER_KEY):
-                    marker = line.strip()
-                    port.search_results[marker] = [created_issue]
+                    fp = line.strip().split(": ", 1)[1]
+                    port.search_results[fp] = [created_issue]
 
         # Second pass.
         result2 = run(triage(findings, _cfg(), port, dry_run=False))
@@ -424,7 +424,8 @@ class TestResolvedIssue:
             "description": f"Some body\n\n{marker}",
             "state": {"id": "s-done", "name": "Done", "type": "completed"},
         }
-        port.search_results[marker] = [closed_issue]
+        # triage() searches by the bare fingerprint, not the full marker line.
+        port.search_results[fp] = [closed_issue]
         result = run(triage([f], _cfg(), port, dry_run=False))
         assert result.updated == ["k1"]
         assert len(port.commented) == 1
@@ -635,3 +636,191 @@ class TestTeamResolution:
 
         team_ids = [b["variables"]["input"]["teamIds"] for b in received if "ProjectCreate" in b["query"]]
         assert team_ids == [["uuid-ENG", "uuid-ADM"]]
+
+
+# ---------------------------------------------------------------------------
+# _gql transient-failure retry
+# ---------------------------------------------------------------------------
+
+
+class TestGqlRetry:
+    """Transient Linear failures must not kill an unattended triage run.
+
+    Scope: HTTP 5xx and the GraphQL ``"Internal server error"`` message.
+    Everything else (4xx, other GraphQL errors) must raise immediately.
+    """
+
+    @staticmethod
+    def _wire(handler, *, sleep_calls: list[float] | None = None):
+        """Install MockTransport, fake api key, and stub asyncio.sleep."""
+        import httpx
+
+        orig_client, orig_key = linear._client, linear._api_key
+        linear._client = lambda **kw: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), **kw
+        )
+        linear._api_key = lambda: "test-key"
+
+        # Stub sleep so tests do not actually wait the backoff.
+        import asyncio as _asyncio
+
+        orig_sleep = _asyncio.sleep
+
+        async def fake_sleep(s: float) -> None:
+            if sleep_calls is not None:
+                sleep_calls.append(s)
+
+        _asyncio.sleep = fake_sleep  # type: ignore[assignment]
+
+        def restore() -> None:
+            linear._client, linear._api_key = orig_client, orig_key
+            _asyncio.sleep = orig_sleep  # type: ignore[assignment]
+
+        return restore
+
+    def test_retries_on_transient_5xx(self):
+        """A 500 followed by 200 succeeds and is observable as a single retry."""
+        import httpx
+
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(500, text="Internal Server Error")
+            return httpx.Response(
+                200, json={"data": {"searchIssues": {"nodes": []}}}
+            )
+
+        sleeps: list[float] = []
+        restore = self._wire(handler, sleep_calls=sleeps)
+        try:
+            result = run(linear.issue_search("t"))
+        finally:
+            restore()
+
+        assert result == []
+        assert calls["n"] == 2
+        assert sleeps == [0.5]
+
+    def test_retries_on_graphql_internal_server_error(self):
+        """A GraphQL ``Internal server error`` is retried and then succeeds."""
+        import httpx
+
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(
+                    200, json={"errors": [{"message": "Internal server error"}]}
+                )
+            return httpx.Response(
+                200, json={"data": {"searchIssues": {"nodes": []}}}
+            )
+
+        sleeps: list[float] = []
+        restore = self._wire(handler, sleep_calls=sleeps)
+        try:
+            result = run(linear.issue_search("t"))
+        finally:
+            restore()
+
+        assert result == []
+        assert calls["n"] == 2
+        assert sleeps == [0.5]
+
+    def test_exhausts_retries_then_raises(self):
+        """Three consecutive 500s exhaust the retry budget and raise."""
+        import httpx
+
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(500, text="Internal Server Error")
+
+        sleeps: list[float] = []
+        restore = self._wire(handler, sleep_calls=sleeps)
+        try:
+            with pytest.raises(httpx.HTTPStatusError):
+                run(linear.issue_search("t"))
+        finally:
+            restore()
+
+        assert calls["n"] == 3
+        assert sleeps == [0.5, 1.5]
+
+    def test_does_not_retry_on_4xx(self):
+        """4xx is a caller bug and must raise on the first attempt."""
+        import httpx
+
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(400, text="Bad Request")
+
+        sleeps: list[float] = []
+        restore = self._wire(handler, sleep_calls=sleeps)
+        try:
+            with pytest.raises(httpx.HTTPStatusError):
+                run(linear.issue_search("t"))
+        finally:
+            restore()
+
+        assert calls["n"] == 1
+        assert sleeps == []
+
+    def test_does_not_retry_on_other_graphql_errors(self):
+        """A non-transient GraphQL error must surface immediately as LinearError."""
+        import httpx
+
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(
+                200,
+                json={"errors": [{"message": "Argument 'term' is invalid"}]},
+            )
+
+        sleeps: list[float] = []
+        restore = self._wire(handler, sleep_calls=sleeps)
+        try:
+            with pytest.raises(linear.LinearError):
+                run(linear.issue_search("t"))
+        finally:
+            restore()
+
+        assert calls["n"] == 1
+        assert sleeps == []
+
+
+# ---------------------------------------------------------------------------
+# Dedup search uses the bare fingerprint, not the full marker line
+# ---------------------------------------------------------------------------
+
+
+class TestDedupSearchTerm:
+    def test_search_is_called_with_bare_fingerprint(self):
+        """``triage`` must search the 16-hex fingerprint to ride above Linear's
+        fuzzy ranking; a hit keyed only by the bare fingerprint must dedup."""
+        port = FakeLinearPort()
+        f = _finding(key="k1")
+        fp = fingerprint(f)
+        marker = marker_line(fp)
+        existing = {
+            "id": "existing-id",
+            "title": f.title,
+            "description": f"Body\n\n{marker}",
+            "state": {"id": "s1", "name": "Todo", "type": "unstarted"},
+        }
+        # Keyed by the bare fingerprint, NOT the full marker line.
+        port.search_results[fp] = [existing]
+
+        result = run(triage([f], _cfg(), port, dry_run=False))
+
+        assert result.filed == []
+        assert result.updated == ["k1"]
+        assert len(port.created) == 0
