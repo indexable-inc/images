@@ -112,6 +112,13 @@ def _client(**kwargs: Any):  # noqa: ANN201
 # Linear blip. Scope: HTTP 5xx and the GraphQL "Internal server error" message
 # observed in production -- both have been seen to recover on an immediate
 # retry. 4xx and other GraphQL errors are caller bugs and must not retry.
+#
+# CRITICAL: retries are restricted to GraphQL *queries*. Mutations
+# (issueCreate, issueUpdate, commentCreate, projectCreate) are not safe to
+# replay -- Linear may have committed the write before the transient error,
+# so a retry would produce a duplicate. The Linear API does not accept an
+# idempotency key, so the only safe option is to fail fast and let the next
+# triage pass dedup via the marker fingerprint.
 _GQL_RETRY_BACKOFFS_S: tuple[float, ...] = (0.5, 1.5)
 
 
@@ -121,15 +128,27 @@ def _is_internal_server_error(errors: list[dict[str, Any]]) -> bool:
     )
 
 
+def _is_query(operation: str) -> bool:
+    """True iff ``operation`` is a read-only GraphQL ``query`` (vs ``mutation``).
+
+    All operations in this module are constants beginning with ``query`` or
+    ``mutation`` after optional leading whitespace. Anything that does not
+    parse cleanly as a ``query`` is treated as a mutation -- safe-by-default.
+    """
+    return operation.lstrip().startswith("query")
+
+
 async def _gql(
     query: str,
     variables: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute one GraphQL operation and return the ``data`` dict.
 
-    Transient failures (HTTP 5xx, GraphQL "Internal server error") are retried
-    with exponential backoff up to :data:`_GQL_RETRY_BACKOFFS_S` plus one. Any
-    other failure raises immediately: :class:`LinearError` for GraphQL errors,
+    For ``query`` operations, transient failures (HTTP 5xx, GraphQL
+    "Internal server error") are retried with exponential backoff up to
+    :data:`_GQL_RETRY_BACKOFFS_S` plus one. ``mutation`` operations are not
+    retried -- see the comment on :data:`_GQL_RETRY_BACKOFFS_S`. Any other
+    failure raises immediately: :class:`LinearError` for GraphQL errors,
     ``httpx.HTTPStatusError`` for non-transient HTTP errors.
     """
     import asyncio
@@ -140,7 +159,7 @@ async def _gql(
     if variables:
         payload["variables"] = variables
 
-    total_attempts = len(_GQL_RETRY_BACKOFFS_S) + 1
+    total_attempts = len(_GQL_RETRY_BACKOFFS_S) + 1 if _is_query(query) else 1
     for attempt in range(total_attempts):
         last = attempt == total_attempts - 1
         async with _client() as client:

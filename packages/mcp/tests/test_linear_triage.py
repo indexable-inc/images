@@ -796,6 +796,52 @@ class TestGqlRetry:
         assert calls["n"] == 1
         assert sleeps == []
 
+    def test_mutations_do_not_retry_on_5xx(self):
+        """Mutations must fail fast on 5xx -- the server may have committed
+        the write, so a retry would duplicate (no idempotency key in the API)."""
+        import httpx
+
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(500, text="Internal Server Error")
+
+        sleeps: list[float] = []
+        restore = self._wire(handler, sleep_calls=sleeps)
+        try:
+            with pytest.raises(httpx.HTTPStatusError):
+                run(linear.comment_create("issue-uuid", "hello"))
+        finally:
+            restore()
+
+        assert calls["n"] == 1
+        assert sleeps == []
+
+    def test_mutations_do_not_retry_on_internal_server_error(self):
+        """Mutations must fail fast on GraphQL 'Internal server error' too --
+        the write may have committed before the error was returned."""
+        import httpx
+
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(
+                200, json={"errors": [{"message": "Internal server error"}]}
+            )
+
+        sleeps: list[float] = []
+        restore = self._wire(handler, sleep_calls=sleeps)
+        try:
+            with pytest.raises(linear.LinearError):
+                run(linear.comment_create("issue-uuid", "hello"))
+        finally:
+            restore()
+
+        assert calls["n"] == 1
+        assert sleeps == []
+
 
 # ---------------------------------------------------------------------------
 # Dedup search uses the bare fingerprint, not the full marker line
