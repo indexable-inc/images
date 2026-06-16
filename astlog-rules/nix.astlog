@@ -1010,10 +1010,10 @@
     (apply_expression
       function: (apply_expression
         function: (apply_expression
-          function: (select_expression) @f
+          function: [(variable_expression) (select_expression)] @f
           argument: (_))
         argument: (attrset_expression) @attrs)) @n")
-  (text f "pkgs.runCommand")
+  (text-match f "^(pkgs\\.)?runCommand$")
   (text-match attrs "^\\{\\s*\\}$"))
 (lint runcommand-missing-structured-attrs warning
   "runCommand with empty attrs {{}}; add {{ __structuredAttrs = true; }} for consistent derivation behavior")
