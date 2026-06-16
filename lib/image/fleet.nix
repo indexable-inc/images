@@ -37,6 +37,14 @@ let
 
   moduleList = spec: toList (spec.modules or spec.module or [ ]);
 
+  # Default `switch.sourceInstallable`. The remote path goes through `ix up`,
+  # which rewrites a bare `.#<node>` to `nixosConfigurations.<node>...` and (for
+  # the native multi-VM switch) derives the VM name from that attr. The local
+  # path runs a plain `nix build <installable>` with no such rewrite, so it must
+  # name the `.#<node>-system` package alias that resolves to the toplevel.
+  defaultSourceInstallable =
+    nodeName: buildOn: if buildOn == "local" then ".#${nodeName}-system" else ".#${nodeName}";
+
   deploymentDefaults = {
     bootstrapImage = "registry.ix.dev/${bootstrapImage.name}:${bootstrapImage.tag}";
     region = "us-west-1";
@@ -273,12 +281,11 @@ let
         target = switchTarget;
         buildOn = switchBuildOn;
         buildVm = deploy.switch.buildVm or null;
-        # Bare node name, not `.#${name}-system`: the native multi-VM `ix up`
-        # (`ix up .#a .#b --build-vm <builder>`) derives each VM name from the
-        # installable's simple attr and rejects `--name`, so the attr must equal
-        # the node name. `nixosConfigurations.<node>` (below) resolves this to the
-        # node's toplevel; the `<name>-system` package stays as a build alias.
-        sourceInstallable = deploy.switch.sourceInstallable or ".#${name}";
+        # Remote switches default to the bare `.#<node>` so the native multi-VM
+        # `ix up` can derive each VM name from the attr; local switches keep the
+        # `.#<node>-system` package alias (see `defaultSourceInstallable`).
+        sourceInstallable =
+          deploy.switch.sourceInstallable or (defaultSourceInstallable name switchBuildOn);
         overrideInputs = deploy.switch.overrideInputs or { };
       };
       inherit (deploy) bootstrapImage;
@@ -349,12 +356,15 @@ let
             replacementImage = node.replacementImage // {
               destination = prefixName node.replacementImage.destination;
             };
-            # Only the default `.#${name}` installable is re-derived to the
-            # prefixed attr; a user-set `sourceInstallable` is left untouched.
+            # Re-derive only the default installable to the prefixed attr, keyed
+            # on whether the user set `switch.sourceInstallable` in the spec (not
+            # on the rendered string, which an explicit `.#<node>` override would
+            # match). An explicit installable points at a real flake attr and is
+            # left untouched.
             switch =
               node.switch
-              // lib.optionalAttrs (node.switch.sourceInstallable == ".#${name}") {
-                sourceInstallable = ".#${prefixName name}";
+              // lib.optionalAttrs (!((checkedNodeSpecs.${name}.deployment.switch or { }) ? sourceInstallable)) {
+                sourceInstallable = defaultSourceInstallable (prefixName name) node.switch.buildOn;
               };
           }
         )

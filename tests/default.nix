@@ -1684,6 +1684,26 @@ let
 
   prefixedFleet = prefixedFleetBase.withNodePrefix "tprefix-";
 
+  # A local-build node: its source switch runs a plain `nix build`, so the
+  # default installable must be the `.#<node>-system` package alias, not the
+  # bare `.#<node>` (which only `ix up`'s resolver expands).
+  localBuildFleet = ix.mkFleet {
+    nodes.svc = {
+      deployment.switch.buildOn = "local";
+      modules = [ { } ];
+    };
+  };
+
+  # An explicit `sourceInstallable` that happens to equal the bare default must
+  # survive `withNodePrefix` unchanged: prefixing keys on provenance (user-set
+  # vs defaulted), not on the rendered string.
+  explicitInstallableFleet = ix.mkFleet {
+    nodes.svc = {
+      deployment.switch.sourceInstallable = ".#svc";
+      modules = [ { } ];
+    };
+  };
+
   fleetIpv4HealthCheckEval = builtins.tryEval (
     builtins.deepSeq
       (ix.mkFleet {
@@ -4650,6 +4670,16 @@ let
           prefixedFleet.nixosConfigurations."tprefix-api".config.system.build.toplevel
           == prefixedFleetBase.nixosConfigurations.api.config.system.build.toplevel;
         message = "withNodePrefix should expose nixosConfigurations under the prefixed name while reusing the base closure (no second eval)";
+      }
+      {
+        assertion = localBuildFleet.planValue.nodes.svc.switch.sourceInstallable == ".#svc-system";
+        message = "a local-build node should default to the `.#<node>-system` package alias, since its plain `nix build` has no `ix up` rewrite";
+      }
+      {
+        assertion =
+          (explicitInstallableFleet.withNodePrefix "tprefix-")
+          .planValue.nodes."tprefix-svc".switch.sourceInstallable == ".#svc";
+        message = "an explicit sourceInstallable equal to the default must survive withNodePrefix unchanged (prefixing keys on provenance, not the rendered string)";
       }
     ];
   };
