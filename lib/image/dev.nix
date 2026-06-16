@@ -90,16 +90,16 @@ let
       shareSubdirs = map (b: b.shareSubdir) binds ++ lib.optional onShare "ix";
 
       # `defaults` apply to EVERY node (workload and server): the base image, the
-      # ix.dev options + agent layer, and the user's module. The base dev image
-      # provides only a default image name, so each node's replacement image is
-      # named after the node.
+      # ix.dev options + agent layer, and the user's module. Dev base images
+      # provide option defaults; this node default is stronger than those but
+      # still weaker than a user-supplied plain `ix.image.name` definition.
       defaults = [
         (paths.images + "/dev/${dev.baseImage}")
         agentsModule
         (
           { name, ... }:
           {
-            ix.image.name = name;
+            ix.image.name = lib.mkDefault name;
             ix.image.tag = lib.mkDefault "ix-dev";
           }
         )

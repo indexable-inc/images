@@ -2,7 +2,7 @@
 # /src/linux. The base profile already brings ripgrep, fd, neovim, gdb, perf.
 { lib, pkgs, ... }:
 {
-  ix.image.name = lib.mkDefault "linux-kernel-dev";
+  ix.image.name = lib.mkOptionDefault "linux-kernel-dev";
 
   environment.systemPackages = [
     pkgs.gnumake

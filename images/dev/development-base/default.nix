@@ -15,7 +15,7 @@
   # both. See lib/dev/agents.nix for the wrapper and policy rationale.
   imports = [ ../../../lib/dev/agents.nix ];
 
-  ix.image.name = lib.mkDefault "development-base";
+  ix.image.name = lib.mkOptionDefault "development-base";
 
   # `pkgs.claude-code` ships under Anthropic's commercial terms (unfree in
   # nixpkgs). The allow-by-name exception lives on the shared image nixpkgs

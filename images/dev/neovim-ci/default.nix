@@ -6,7 +6,7 @@ let
   ]);
 in
 {
-  ix.image.name = lib.mkDefault "neovim-ci";
+  ix.image.name = lib.mkOptionDefault "neovim-ci";
 
   environment.systemPackages = [
     pkgs.attr
