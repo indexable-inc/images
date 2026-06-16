@@ -92,13 +92,20 @@ else
     # The surface ix-fleet depends on, asserted once so a bad wheel fails the
     # check rather than ix-fleet at runtime.
     assertSurface = ''
+      import inspect
       import ix_sdk
       assert ix_sdk.__version__, "missing __version__"
       for name in ("Client", "Group", "GroupMember"):
           assert hasattr(ix_sdk, name), f"missing ix_sdk.{name}"
-      for method in ("create_group", "add_group_member", "create", "branches"):
+      for method in ("create_group", "add_group_member", "create", "branches", "list_secrets"):
           assert hasattr(ix_sdk.Client, method), f"missing Client.{method}"
-      print("ix_sdk", ix_sdk.__version__, "imported; group + lifecycle surface present")
+      # ix-fleet declares per-VM secrets through these create kwargs; assert the
+      # packaged wheel accepts them so a stale wheel fails here, not at deploy.
+      for kwarg in ("secrets", "no_default_secrets"):
+          for method in ("create", "create_with_progress"):
+              params = inspect.signature(getattr(ix_sdk.Client, method)).parameters
+              assert kwarg in params, f"Client.{method} missing {kwarg} kwarg"
+      print("ix_sdk", ix_sdk.__version__, "imported; group + lifecycle + secret surface present")
     '';
 
     # Import through a real `withPackages` environment, the way consumers use it,
