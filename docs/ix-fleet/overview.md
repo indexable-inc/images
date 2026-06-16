@@ -44,15 +44,16 @@ subcommand would run without calling the API.
 | `bootstrap` | Create selected nodes from their `bootstrapImage`, wait for guest readiness, and ensure east-west group membership. Runs in dependency batches concurrently (`cmd_bootstrap`, `:881`). |
 | `up` | Push each node's replacement image and create-or-replace the node on it, then groups + health. Fans out via dag-runner (`cmd_up`, `:850`). |
 | `replace` | Like `up` but always delete-then-create the node on the pushed image (`cmd_replace`, `:836`). |
-| `switch` | In-place NixOS system switch of running nodes (target or build-from-source), snapshotting first. Fans out via dag-runner (`cmd_switch`, `:818`). |
+| `switch` | In-place NixOS system switch of running nodes (target or build-from-source), snapshotting first. Remote source builds go through the platform's native multi-VM `ix up` in dependency layers (`cmd_switch`). |
 | `health` | Run each selected node's health checks (`cmd_health`, `:876`). |
 | `down` | Remove selected nodes in reverse plan order, collecting failures (`cmd_down`, `:886`). |
 
 `switch` flags: `--no-snapshot`, `--skip-health`, `--source-root`,
 `--source-workdir`. `up`/`replace` flags: `--skip-push`, `--skip-health`. The
-hidden `_switch-node`/`_replace-node`/`_up-node` subparsers
-(`help=argparse.SUPPRESS`, `:943-959`) take a single node positional plus the
-forwarded flags; they are what dag-runner invokes per node, not for direct use.
+hidden `_replace-node`/`_up-node` subparsers (`help=argparse.SUPPRESS`) take a
+single node positional plus the forwarded flags; they are what dag-runner
+invokes per node for `up`/`replace`, not for direct use. `switch` no longer has
+a per-node subparser: it batches the switch in-process (see below).
 
 ## The plan schema (pydantic, `__init__.py:34-146`)
 
@@ -107,29 +108,40 @@ are what `switch` is for.
   the selected nodes with each node's `dependsOn` emitted before it (a DFS over
   plan order), and `dependency_batches` (`:489`) groups them into parallel
   batches for `bootstrap`.
-- **`up`/`replace`/`switch` fan out through dag-runner.** `run_node_workflow_dag`
-  (`:774`) builds a spec `{"nodes": {name: {command, depends_on}}}` where each
-  command re-invokes `ix-fleet ... _<verb>-node <name>` with the forwarded flags;
-  it also adds a serialization edge between nodes that share a
+- **`up`/`replace` fan out through dag-runner.** `run_node_workflow_dag`
+  builds a spec `{"nodes": {name: {command, depends_on}}}` where each command
+  re-invokes `ix-fleet ... _<verb>-node <name>` with the forwarded flags; it also
+  adds a serialization edge between nodes that share a
   `replacementImage.destination` so the same image tag is not pushed twice
-  concurrently. `run_dag_runner` (`:804`) resolves the runner from
-  `IX_FLEET_DAG_RUNNER` or `dag-runner` on `PATH`, writes a temp spec, execs it,
-  and turns a nonzero exit into the process exit status. `--dry-run` runs the
-  per-node workflows inline instead (so child output is visible).
-- **Per-node workflows.** `run_up_node_workflow` (`:764`): push image (unless
+  concurrently. `run_dag_runner` resolves the runner from `IX_FLEET_DAG_RUNNER`
+  or `dag-runner` on `PATH`, writes a temp spec, execs it, and turns a nonzero
+  exit into the process exit status. `--dry-run` runs the per-node workflows
+  inline instead (so child output is visible).
+- **`switch` batches in-process through the native multi-VM `ix up`.**
+  `cmd_switch` walks `dependency_batches` layers in order (so `dependsOn` still
+  gates the switch) and, within each layer, groups the batchable nodes by
+  `(buildVm, overrideInputs)` and runs one `ix up .#a .#b --build-vm <builder>`
+  per group (`switch_nodes_from_source`); the platform builds every closure on
+  the one warm builder and activates each on its own VM. Each group's VMs are
+  pre-created with their full fleet config and snapshotted first
+  (`switch_group_workflow`), then the batch only switches existing VMs. Groups
+  and single-node fallbacks within a layer run concurrently via `asyncio.gather`.
+- **Per-node workflows.** `run_up_node_workflow`: push image (unless
   `--skip-push`) -> `up_node` (create if absent, else recreate on the uploaded
   image) -> ensure groups -> health (unless `--skip-health`).
-  `run_replace_node_workflow` (`:754`) is the same with an unconditional recreate.
-  `run_switch_node_workflow` (`:734`): ensure the node exists -> ensure groups ->
-  snapshot (if `node.snapshot` and not `--no-snapshot` and the node was not just
-  created) -> switch -> health.
-- **Switch has two modes.** `buildOn == "remote"` builds from source by shelling
-  `ix up <sourceInstallable> --name <node> --workdir <rel>` from the source root
-  (`switch_node_from_source`, `:651`), with up to `MAX_SWITCH_RETRIES` retries on
-  a transient `stream framing error`; otherwise it calls the SDK
-  `switch_system`, bounded by `SWITCH_TIMEOUT_SECS = 1800`
-  (`switch_node`, `:430-458`). `buildOn == "local"` first runs a host-side
-  `nix build` of the installable.
+  `run_replace_node_workflow` is the same with an unconditional recreate.
+  `run_switch_node_workflow` (the single-node fallback): ensure the node exists
+  -> ensure groups -> snapshot (if `node.snapshot` and not `--no-snapshot` and
+  the node was not just created) -> switch -> health.
+- **Switch picks a path per node.** A node is batched into the native multi-VM
+  `ix up` only when it builds remotely, names a `buildVm`, and its installable is
+  exactly `.#<node-name>` (`is_batchable_switch`); the multi `ix up` derives each
+  VM name from that attr and rejects `--name`. Anything else falls back to the
+  single-target `ix up <installable> --name <node>` (`switch_node_from_source`,
+  `buildOn == "remote"` without a build VM or with a custom installable) or the
+  SDK `switch_system` (`switch_node`, `buildOn` `local`/`auto`), bounded by
+  `SWITCH_TIMEOUT_SECS = 1800`. Both source paths retry a transient
+  `stream framing error` up to `MAX_SWITCH_RETRIES` (`run_source_switch`).
 
 ## Health checks (`__init__.py:540-624`)
 

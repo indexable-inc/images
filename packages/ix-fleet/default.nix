@@ -62,6 +62,54 @@ let
         mkdir -p "$out"
       '';
 
+  # Two remote-source nodes that share a build VM, so `switch --dry-run` exercises
+  # the native multi-VM batch path: both must land in one `ix up .#web .#worker
+  # --build-vm builder` command.
+  dryRunSwitchPlan = jsonFormat.generate "ix-fleet-dry-run-switch-plan.json" {
+    order = [
+      "web"
+      "worker"
+    ];
+    nodes = lib.genAttrs [ "web" "worker" ] (name: {
+      inherit name;
+      baseName = name;
+      system = "/nix/store/${name}-system";
+      switch = {
+        target = "/nix/store/${name}-system.drv";
+        buildOn = "remote";
+        buildVm = "builder";
+        sourceInstallable = ".#${name}";
+      };
+      bootstrapImage = "registry.ix.dev/ix/base:latest";
+      replacementImage = {
+        imageName = name;
+        imageTag = "latest";
+        destination = "registry.ix.dev/example/${name}:latest";
+        source = "/nix/store/${name}-image.tar";
+        sourceDrv = "/nix/store/${name}-image.drv";
+      };
+      region = "us-west-1";
+      ipv4 = false;
+      snapshot = false;
+    });
+  };
+
+  # Walks the `switch` command's --dry-run control flow and asserts the two
+  # batchable nodes collapse into one native multi-VM `ix up` invocation rather
+  # than one per node. No API calls or network, so it runs in the sandbox.
+  dryRunSwitch =
+    pkgs.runCommand "ix-fleet-dry-run-switch"
+      {
+        nativeBuildInputs = [ package ];
+        strictDeps = true;
+      }
+      ''
+        ix-fleet --plan ${dryRunSwitchPlan} switch --skip-health --no-snapshot --dry-run | tee switch.log
+        grep -qE '\+ ix up \.#web \.#worker --build-vm builder' switch.log \
+          || { echo "expected a single batched 'ix up .#web .#worker --build-vm builder'" >&2; exit 1; }
+        mkdir -p "$out"
+      '';
+
   package = unwrapped.overrideAttrs (old: {
     postInstall = ''
       ${old.postInstall or ""}
@@ -76,7 +124,7 @@ let
 
     passthru = (old.passthru or { }) // {
       tests = (old.passthru.tests or { }) // {
-        inherit dryRunUp;
+        inherit dryRunUp dryRunSwitch;
       };
     };
   });

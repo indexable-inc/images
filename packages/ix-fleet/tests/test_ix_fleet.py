@@ -471,39 +471,6 @@ class NodeWorkflowDagTests(unittest.TestCase):
 
         self.assertEqual(spec["nodes"]["worker"]["depends_on"], ["api"])
 
-    def test_switch_dag_forwards_switch_flags(self) -> None:
-        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
-        spec = captured_dag(
-            ix_fleet.cmd_switch,
-            plan,
-            argparse_namespace(
-                plan=Path("/plans/fleet.json"),
-                on=["api"],
-                dry_run=False,
-                no_snapshot=True,
-                skip_health=True,
-                source_root=Path("/source"),
-                source_workdir=Path("subdir"),
-            ),
-        )
-
-        self.assertEqual(
-            spec["nodes"]["api"]["command"],
-            [
-                "/bin/ix-fleet",
-                "--plan",
-                "/plans/fleet.json",
-                "_switch-node",
-                "api",
-                "--no-snapshot",
-                "--skip-health",
-                "--source-root",
-                "/source",
-                "--source-workdir",
-                "subdir",
-            ],
-        )
-
     def test_dag_runner_exit_status_becomes_process_exit_status(self) -> None:
         plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api"], [fleet_node("api")]))
         args = argparse_namespace(
@@ -614,7 +581,7 @@ class SingleNodeWorkflowTests(unittest.TestCase):
             patch.object(ix_fleet, "switch_node", async_recorder(calls, "switch")),
             patch.object(ix_fleet, "run_node_health_checks", async_recorder(calls, "health")),
         ):
-            asyncio.run(ix_fleet.cmd_switch_node(plan, args))
+            asyncio.run(ix_fleet.run_switch_node_workflow(plan.nodes["api"], args))
 
         self.assertEqual(calls, ["ensure", "groups", "snapshot", "switch", "health"])
 
@@ -738,6 +705,180 @@ class SwitchSourceTests(unittest.TestCase):
                         dry_run=False,
                     )
                 )
+
+
+def remote_node(
+    name: str,
+    *,
+    build_vm: str = "builder",
+    depends_on: list[str] | None = None,
+) -> dict[str, typing.Any]:
+    node = fleet_node(name, depends_on=depends_on)
+    node["switch"]["buildOn"] = "remote"
+    node["switch"]["buildVm"] = build_vm
+    return node
+
+
+class SwitchBatchTests(unittest.TestCase):
+    def _node(self, data: dict[str, typing.Any]) -> ix_fleet.FleetNode:
+        return ix_fleet.FleetNode.model_validate(data)
+
+    def test_is_batchable_switch(self) -> None:
+        self.assertTrue(ix_fleet.is_batchable_switch(self._node(remote_node("api"))))
+        # local build: no shared builder to batch on.
+        local = fleet_node("api")
+        local["switch"]["buildOn"] = "local"
+        self.assertFalse(ix_fleet.is_batchable_switch(self._node(local)))
+        # remote but no build VM: multi `ix up` requires --build-vm.
+        no_vm = fleet_node("api")
+        no_vm["switch"]["buildOn"] = "remote"
+        self.assertFalse(ix_fleet.is_batchable_switch(self._node(no_vm)))
+        # installable attr must equal the node name (multi derives the VM name
+        # from it and rejects --name).
+        custom = remote_node("api")
+        custom["switch"]["sourceInstallable"] = ".#api-system"
+        self.assertFalse(ix_fleet.is_batchable_switch(self._node(custom)))
+
+    def test_batch_groups_split_by_build_vm_and_overrides(self) -> None:
+        a = self._node(remote_node("a", build_vm="b1"))
+        b = self._node(remote_node("b", build_vm="b1"))
+        c = self._node(remote_node("c", build_vm="b2"))
+        d = remote_node("d", build_vm="b1")
+        d["switch"]["overrideInputs"] = {"ix": "github:indexable-inc/ix"}
+        d_node = self._node(d)
+
+        groups = ix_fleet.batch_groups([a, b, c, d_node])
+        names = [[node.name for node in group] for group in groups]
+        self.assertEqual(names, [["a", "b"], ["c"], ["d"]])
+
+    def test_switch_nodes_from_source_builds_one_multi_ix_up(self) -> None:
+        nodes = [self._node(remote_node("web")), self._node(remote_node("worker"))]
+        calls: list[list[str]] = []
+        cwds: list[Path | None] = []
+
+        async def fake_run_cli(
+            command: list[str],
+            *,
+            dry_run: bool,
+            timeout: int | None = None,
+            cwd: Path | None = None,
+        ) -> str:
+            del timeout
+            self.assertFalse(dry_run)
+            calls.append(command)
+            cwds.append(cwd)
+            return ""
+
+        with patch.object(ix_fleet, "run_cli", fake_run_cli):
+            asyncio.run(
+                ix_fleet.switch_nodes_from_source(
+                    nodes,
+                    Path("/source"),
+                    Path("/source/subdir"),
+                    dry_run=False,
+                )
+            )
+
+        # One native multi-VM `ix up`: every installable, one shared --build-vm,
+        # and no --name (multi derives each VM name from its installable attr).
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "ix",
+                    "up",
+                    ".#web",
+                    ".#worker",
+                    "--build-vm",
+                    "builder",
+                    "--workdir",
+                    "subdir",
+                ]
+            ],
+        )
+        self.assertNotIn("--name", calls[0])
+        self.assertEqual(cwds, [Path("/source")])
+
+    def test_cmd_switch_batches_remote_nodes_and_runs_singles(self) -> None:
+        api = remote_node("api")
+        web = remote_node("web")
+        cache = fleet_node("cache")  # buildOn defaults to auto -> single fallback
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api", "web", "cache"], [api, web, cache]))
+        groups: list[list[str]] = []
+        singles: list[str] = []
+
+        async def record_group(
+            group: list[ix_fleet.FleetNode],
+            source_root: Path,
+            source_workdir: Path,
+            args: typing.Any,
+        ) -> None:
+            del source_root, source_workdir, args
+            groups.append([node.name for node in group])
+
+        async def record_single(node: ix_fleet.FleetNode, args: typing.Any) -> None:
+            del args
+            singles.append(node.name)
+
+        async def no_verify(*args: typing.Any, **kwargs: typing.Any) -> None:
+            del args, kwargs
+
+        with (
+            patch.object(ix_fleet, "verify_secrets_available", no_verify),
+            patch.object(ix_fleet, "switch_group_workflow", record_group),
+            patch.object(ix_fleet, "run_switch_node_workflow", record_single),
+        ):
+            asyncio.run(
+                ix_fleet.cmd_switch(
+                    plan,
+                    argparse_namespace(
+                        on=[],
+                        dry_run=False,
+                        no_snapshot=False,
+                        skip_health=False,
+                        source_root=Path("/source"),
+                        source_workdir=Path("subdir"),
+                    ),
+                )
+            )
+
+        self.assertEqual(groups, [["api", "web"]])
+        self.assertEqual(singles, ["cache"])
+
+    def test_cmd_switch_respects_dependency_layers(self) -> None:
+        api = remote_node("api")
+        worker = remote_node("worker", depends_on=["api"])
+        plan = ix_fleet.FleetPlan.model_validate(fleet_plan(["api", "worker"], [api, worker]))
+        switched: list[list[str]] = []
+
+        async def record_group(
+            group: list[ix_fleet.FleetNode],
+            source_root: Path,
+            source_workdir: Path,
+            args: typing.Any,
+        ) -> None:
+            del source_root, source_workdir, args
+            switched.append([node.name for node in group])
+
+        with (
+            patch.object(ix_fleet, "switch_group_workflow", record_group),
+        ):
+            asyncio.run(
+                ix_fleet.cmd_switch(
+                    plan,
+                    argparse_namespace(
+                        on=[],
+                        dry_run=True,
+                        no_snapshot=False,
+                        skip_health=False,
+                        source_root=Path("/source"),
+                        source_workdir=Path("subdir"),
+                    ),
+                )
+            )
+
+        # `dependsOn` keeps the switch layered: api's batch runs before worker's.
+        self.assertEqual(switched, [["api"], ["worker"]])
 
 
 def argparse_namespace(**kwargs: typing.Any) -> typing.Any:

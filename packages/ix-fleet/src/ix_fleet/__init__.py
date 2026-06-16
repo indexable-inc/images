@@ -691,6 +691,39 @@ MAX_SWITCH_RETRIES = 3
 RETRY_DELAY_SECS = 10
 
 
+def relative_source_workdir(source_root: Path, source_workdir: Path) -> Path:
+    # `ix up --workdir` is resolved relative to the uploaded source root, so an
+    # absolute workdir outside that root has no valid mapping. Reject it instead
+    # of forwarding a path `ix up` cannot interpret.
+    workdir = source_workdir
+    if workdir.is_absolute():
+        try:
+            workdir = workdir.relative_to(source_root)
+        except ValueError:
+            raise ValueError(
+                f"source workdir {source_workdir} is outside source root {source_root}"
+            ) from None
+    return workdir
+
+
+async def run_source_switch(command: list[str], source_root: Path, label: str, *, dry_run: bool) -> None:
+    # `ix up` auto-uploads its working directory as the build source, so it runs
+    # from `source_root`. A `stream framing error` is a transient upload/transport
+    # hiccup, so retry it; anything else fails the switch.
+    for attempt in range(1, MAX_SWITCH_RETRIES + 1):
+        try:
+            step(f"switching {label} from source (attempt {attempt}/{MAX_SWITCH_RETRIES})")
+            await run_cli(command, dry_run=dry_run, timeout=3600, cwd=source_root)
+            return
+        except (CliError, CliTimeoutError) as e:
+            error_msg = e.output or str(e)
+            if "stream framing error" in error_msg and attempt < MAX_SWITCH_RETRIES:
+                step(f"transient error, retrying in {RETRY_DELAY_SECS}s: {error_msg[:100]}")
+                await asyncio.sleep(RETRY_DELAY_SECS)
+            else:
+                raise
+
+
 async def switch_node_from_source(
     node: FleetNode,
     source_root: Path,
@@ -699,21 +732,9 @@ async def switch_node_from_source(
     dry_run: bool,
 ) -> None:
     # `ix switch` was folded into `ix up` (indexable-inc/ix#4442): `ix up
-    # <installable> --name <vm>` is the converge path. `ix up` auto-uploads its
-    # working directory as the build source, so run it from `source_root` instead
-    # of passing the removed `--source`; `--workdir` selects the eval subdir
-    # relative to that root.
-    workdir = source_workdir
-    if workdir.is_absolute():
-        try:
-            workdir = workdir.relative_to(source_root)
-        except ValueError:
-            # `ix up --workdir` is resolved relative to the uploaded source root,
-            # so an absolute workdir outside that root has no valid mapping.
-            # Reject it instead of forwarding a path `ix up` cannot interpret.
-            raise ValueError(
-                f"source workdir {source_workdir} is outside source root {source_root}"
-            ) from None
+    # <installable> --name <vm>` is the single-target converge path, used for a
+    # node that cannot join a native multi-VM batch (see `switch_nodes_from_source`).
+    workdir = relative_source_workdir(source_root, source_workdir)
     command = [
         "ix",
         "up",
@@ -727,19 +748,66 @@ async def switch_node_from_source(
         command.extend(["--build-vm", node.switch.buildVm])
     for name, path in sorted(node.switch.overrideInputs.items()):
         command.extend(["--override-input", f"{name}={path}"])
+    await run_source_switch(command, source_root, node.name, dry_run=dry_run)
 
-    for attempt in range(1, MAX_SWITCH_RETRIES + 1):
-        try:
-            step(f"switching {node.name} from source (attempt {attempt}/{MAX_SWITCH_RETRIES})")
-            await run_cli(command, dry_run=dry_run, timeout=3600, cwd=source_root)
-            return
-        except (CliError, CliTimeoutError) as e:
-            error_msg = e.output or str(e)
-            if "stream framing error" in error_msg and attempt < MAX_SWITCH_RETRIES:
-                step(f"transient error, retrying in {RETRY_DELAY_SECS}s: {error_msg[:100]}")
-                await asyncio.sleep(RETRY_DELAY_SECS)
-            else:
-                raise
+
+async def switch_nodes_from_source(
+    nodes: list[FleetNode],
+    source_root: Path,
+    source_workdir: Path,
+    *,
+    dry_run: bool,
+) -> None:
+    # The native multi-VM switch: `ix up .#a .#b .#c --build-vm <builder>` builds
+    # every closure on one warm builder and activates each on its own VM. The CLI
+    # rejects `--name` and derives each VM name from the installable's simple attr,
+    # and shares one `--build-vm`/`--workdir`/`--override-input` set across the
+    # batch, so `batch_groups` only ever passes nodes that agree on those.
+    workdir = relative_source_workdir(source_root, source_workdir)
+    build_vm = nodes[0].switch.buildVm
+    assert build_vm is not None, "batched switch requires a shared build VM"
+    command = [
+        "ix",
+        "up",
+        *[node.switch.sourceInstallable for node in nodes],
+        "--build-vm",
+        build_vm,
+        "--workdir",
+        str(workdir),
+    ]
+    for name, path in sorted(nodes[0].switch.overrideInputs.items()):
+        command.extend(["--override-input", f"{name}={path}"])
+    await run_source_switch(command, source_root, ", ".join(node.name for node in nodes), dry_run=dry_run)
+
+
+def is_batchable_switch(node: FleetNode) -> bool:
+    # The native multi-VM `ix up` builds on one shared `--build-vm` and names each
+    # VM from the installable's simple attr, so a node joins a batch only when it
+    # builds remotely, names a build VM, and its installable is exactly
+    # `.#<node-name>`. Anything else (local build, no build VM, a custom or dotted
+    # installable) falls back to the single-target `ix up --name` path.
+    switch = node.switch
+    return (
+        switch.buildOn == "remote"
+        and switch.buildVm is not None
+        and switch.sourceInstallable == f".#{node.name}"
+    )
+
+
+def batch_groups(nodes: list[FleetNode]) -> list[list[FleetNode]]:
+    # One native multi-VM `ix up` per (build VM, override-input set): those are the
+    # inputs the CLI shares across every target in a single invocation, so nodes
+    # that disagree on them cannot ride the same command.
+    groups: dict[tuple[str, tuple[tuple[str, str], ...]], list[FleetNode]] = {}
+    order: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+    for node in nodes:
+        assert node.switch.buildVm is not None
+        key = (node.switch.buildVm, tuple(sorted(node.switch.overrideInputs.items())))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(node)
+    return [groups[key] for key in order]
 
 
 # Replacing a node's image is delete-then-create (see recreate_node): a new
@@ -858,23 +926,44 @@ async def run_dag_runner(spec: dict[str, typing.Any]) -> None:
         raise SystemExit(returncode)
 
 
-async def cmd_switch(plan: FleetPlan, args: argparse.Namespace) -> None:
-    if args.dry_run:
-        for node in selected_nodes(plan, args.on):
-            await run_switch_node_workflow(node, args)
-        return
+async def switch_group_workflow(
+    group: list[FleetNode],
+    source_root: Path,
+    source_workdir: Path,
+    args: argparse.Namespace,
+) -> None:
+    # Pre-create every VM with its full fleet config (groups, region, secrets,
+    # ...) and snapshot it first, so the native multi-VM `ix up` only switches
+    # existing VMs instead of creating them with bare defaults.
+    for node in group:
+        created = await ensure_node(node, dry_run=args.dry_run)
+        await ensure_node_groups(node, dry_run=args.dry_run)
+        if not created and node.snapshot and not args.no_snapshot:
+            await snapshot_node(node, dry_run=args.dry_run)
+    await switch_nodes_from_source(group, source_root, source_workdir, dry_run=args.dry_run)
+    if not args.skip_health:
+        for node in group:
+            await run_node_health_checks(node, dry_run=args.dry_run)
 
-    await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
-    extra_args: list[str] = []
-    if args.no_snapshot:
-        extra_args.append("--no-snapshot")
-    if args.skip_health:
-        extra_args.append("--skip-health")
-    if args.source_root is not None:
-        extra_args.extend(["--source-root", str(args.source_root)])
-    if args.source_workdir is not None:
-        extra_args.extend(["--source-workdir", str(args.source_workdir)])
-    await run_node_workflow_dag(plan, args, "_switch-node", extra_args)
+
+async def cmd_switch(plan: FleetPlan, args: argparse.Namespace) -> None:
+    if not args.dry_run:
+        await verify_secrets_available(plan, args.on, dry_run=args.dry_run)
+    source_root = (args.source_root or default_source_root(Path.cwd())).resolve()
+    source_workdir = args.source_workdir or default_source_workdir(Path.cwd(), source_root)
+    # `dependency_batches` yields dependency-ordered layers; switch them in order
+    # so `dependsOn` still gates the switch. Within a layer the nodes are
+    # independent, so each native multi-VM batch (one `ix up` per build VM /
+    # override set) and each single-node fallback run concurrently.
+    for layer in dependency_batches(plan, args.on):
+        batchable = [node for node in layer if is_batchable_switch(node)]
+        singles = [node for node in layer if not is_batchable_switch(node)]
+        tasks = [
+            switch_group_workflow(group, source_root, source_workdir, args)
+            for group in batch_groups(batchable)
+        ]
+        tasks.extend(run_switch_node_workflow(node, args) for node in singles)
+        await asyncio.gather(*tasks)
 
 
 async def cmd_replace(plan: FleetPlan, args: argparse.Namespace) -> None:
@@ -905,10 +994,6 @@ async def cmd_up(plan: FleetPlan, args: argparse.Namespace) -> None:
     if args.skip_health:
         extra_args.append("--skip-health")
     await run_node_workflow_dag(plan, args, "_up-node", extra_args)
-
-
-async def cmd_switch_node(plan: FleetPlan, args: argparse.Namespace) -> None:
-    await run_switch_node_workflow(plan.nodes[args.node], args)
 
 
 async def cmd_replace_node(plan: FleetPlan, args: argparse.Namespace) -> None:
@@ -987,13 +1072,6 @@ def parser() -> argparse.ArgumentParser:
     add_common_options(up, defaults=False)
     up.add_argument("--skip-push", action="store_true")
     up.add_argument("--skip-health", action="store_true")
-    switch_node_parser = sub.add_parser("_switch-node", help=argparse.SUPPRESS)
-    switch_node_parser.add_argument("node")
-    add_dry_run_option(switch_node_parser)
-    switch_node_parser.add_argument("--no-snapshot", action="store_true")
-    switch_node_parser.add_argument("--skip-health", action="store_true")
-    switch_node_parser.add_argument("--source-root", type=Path)
-    switch_node_parser.add_argument("--source-workdir", type=Path)
     replace_node_parser = sub.add_parser("_replace-node", help=argparse.SUPPRESS)
     replace_node_parser.add_argument("node")
     add_dry_run_option(replace_node_parser)
@@ -1027,8 +1105,6 @@ async def main() -> None:
         await cmd_replace(plan, args)
     elif args.command == "up":
         await cmd_up(plan, args)
-    elif args.command == "_switch-node":
-        await cmd_switch_node(plan, args)
     elif args.command == "_replace-node":
         await cmd_replace_node(plan, args)
     elif args.command == "_up-node":
