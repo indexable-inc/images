@@ -46,5 +46,16 @@
         }
         // dev.systemPackages
       );
+
+      # Each node's NixOS system under its bare name, so `ix up .#<node>` and the
+      # native multi-VM switch (`ix up .#a .#b --build-vm <builder>`) resolve it.
+      # ix VM closures are x86_64-linux, so the configs come from that builder.
+      inherit
+        (index.lib.mkDevFor "x86_64-linux" {
+          module = ./dev.nix;
+          src = self;
+        })
+        nixosConfigurations
+        ;
     };
 }

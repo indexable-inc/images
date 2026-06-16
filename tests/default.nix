@@ -4496,6 +4496,11 @@ let
         message = "fleet system package outputs should match default source switch installables";
       }
       {
+        assertion =
+          fleet.nixosConfigurations.web.config.system.build.toplevel == fleet.nodes.web.system.build.toplevel;
+        message = "fleet should expose nixosConfigurations.<node> so `ix up .#<node>` (native multi-VM switch) resolves the node toplevel";
+      }
+      {
         assertion = fleet.packages.web == fleet.nodes.web.ix.build.ociImage;
         message = "fleet replacement package outputs should keep node names";
       }
@@ -4505,7 +4510,7 @@ let
             target = builtins.unsafeDiscardStringContext fleet.nodes.web.system.build.toplevel.drvPath;
             buildOn = "remote";
             buildVm = null;
-            sourceInstallable = ".#web-system";
+            sourceInstallable = ".#web";
             overrideInputs = { };
           };
         message = "fleet plans should default to local eval and remote build switch metadata";
@@ -4635,6 +4640,16 @@ let
       {
         assertion = prefixedFleet.nodes."tprefix-worker".environment.etc."api-host".text == "api";
         message = "nodes module-arg should resolve by the example's base name even when prefixed";
+      }
+      {
+        assertion = prefixedFleet.planValue.nodes."tprefix-api".switch.sourceInstallable == ".#tprefix-api";
+        message = "withNodePrefix should re-derive the default `.#<node>` installable to the prefixed attr so the native multi-VM `ix up` names the prefixed VM";
+      }
+      {
+        assertion =
+          prefixedFleet.nixosConfigurations."tprefix-api".config.system.build.toplevel
+          == prefixedFleetBase.nixosConfigurations.api.config.system.build.toplevel;
+        message = "withNodePrefix should expose nixosConfigurations under the prefixed name while reusing the base closure (no second eval)";
       }
     ];
   };
