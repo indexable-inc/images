@@ -42,7 +42,7 @@
     (binding
       attrpath: (attrpath) @p
       expression: (variable_expression) @v) @n")
-  (text p "allowBuiltinFetchGit")
+  (text-match p "(^|\\.)allowBuiltinFetchGit$")
   (text v "true"))
 (lint no-allow-builtin-fetch-git error
   "allowBuiltinFetchGit fetches Cargo git dependencies during evaluation; pin rustPlatform.importCargoLock outputHashes instead")
