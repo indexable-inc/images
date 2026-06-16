@@ -65,7 +65,7 @@ The kernel namespace also exposes modules the registry lists but `packages/mcp`
 does not own; they are baked into the same interpreter from their home packages:
 `tui` (PTY driver, `packages/tui-py`), `search` (semantic recall over the fleet
 corpus, `packages/search-py`; credential: Mixedbread), and `astlog`/`scipql`/
-`flecs_query` (the [code-intel](../../code-intel/astlog/overview.md) family). The
+`flecs_query` (the [code-intel](../../astlog/overview.md) family). The
 third-party libraries `numpy`/`polars`/`duckdb`/`httpx`/`matplotlib`/`pypdf`/
 `playwright`/`exa_py` (credential: Exa) are import-ready too. These are documented
 in their own domains; this page owns only the `packages/mcp/src` providers above.
@@ -77,7 +77,7 @@ in their own domains; this page owns only the `packages/mcp/src` providers above
   composable polars frames and syntax-highlighted views.
 - Distributed: `fleet` is the one cluster surface (Ray for distributed Python,
   Spark Connect for big-data SQL, SSH fan-out, peer live-kernel peek). See the
-  fleet deployment note in [common](../common.md).
+  fleet deployment note in [common](../overview.md).
 - Workflow: `sh`, `worktree`, `mcp_client` run shells, isolate risky work on a
   throwaway branch, and call other MCP servers.
 - Accounts (incognito only): `google_auth`, `slack`, `x`.

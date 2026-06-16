@@ -4,7 +4,7 @@ The MCP server is a data producer, not a UI owner. Three modules turn the SQLite
 [store](../sessions/overview.md) into something a human or an embedder can read:
 `feed.py` defines the presentation as structured data, `dashboard.py` serves it
 read-only over HTTP, and `pane_bridge.py`/`produce.py` republish it as panes into
-the shared Loro `dashboard` hub (the [dashboard](../../dashboard/common.md) domain),
+the shared Loro `dashboard` hub (the dashboard domain),
 which renders the human-facing UI alongside every other producer. The store is
 read-only here; the kernel owns all writes (see [runtime](../runtime/overview.md)).
 
