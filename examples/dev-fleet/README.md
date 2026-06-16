@@ -11,6 +11,11 @@ topology, and an opt-in shared SMB volume that gives the whole fleet one Claude
 ix up
 ```
 
+This example declares a multi-node `ix.dev.fleet`. Omit that block and the same
+`dev.nix` is a **single VM named `dev`** that `ix up` (or `nix run .#up` in the
+forkable [template](../../templates/dev)) builds and creates - the simplest way
+to consume a `dev.nix` for one new VM. The fleet below is the scale-up.
+
 ## Shape
 
 - [`dev.nix`](dev.nix) is the module a user edits after `ix dev init`. Top-level

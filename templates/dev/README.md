@@ -17,11 +17,21 @@ fork it freely. `flake.nix` is boilerplate you should not need to touch.
 
 ## Use
 
-```sh
-# Bring up the fleet (or the single `dev` VM if no fleet is declared):
-nix run .#up
+Out of the box (no `ix.dev.fleet` declared) this config is a **single VM named
+`dev`**. One command builds `dev.nix` into an OCI image and creates that VM:
 
-# Mirror the other fleet verbs:
+```sh
+nix run .#up
+```
+
+That is the "consume my `dev.nix` for a new VM" path: `nix run .#up` realises
+the image from your config and creates the VM through the same call `ix new`
+uses. Re-run it after editing `dev.nix` to roll the VM forward.
+
+Declare nodes under `ix.dev.fleet` and the same command brings up the whole
+fleet instead. The other verbs mirror `ix fleet <sub>`:
+
+```sh
 nix run .#health
 nix run .#diff
 nix run .#down
