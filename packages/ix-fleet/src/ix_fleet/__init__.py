@@ -801,12 +801,11 @@ def batch_groups(nodes: list[FleetNode]) -> list[list[FleetNode]]:
     # region (CAS chunks are region-scoped). Grouping on region keeps a
     # cross-region fleet from failing a whole batch instead of just the
     # wrong-region nodes.
-    BatchKey = tuple[str, str, tuple[tuple[str, str], ...]]
-    groups: dict[BatchKey, list[FleetNode]] = {}
-    order: list[BatchKey] = []
+    groups: dict[tuple[str, str, tuple[tuple[str, str], ...]], list[FleetNode]] = {}
+    order: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
     for node in nodes:
         assert node.switch.buildVm is not None
-        key: BatchKey = (
+        key = (
             node.switch.buildVm,
             node.region,
             tuple(sorted(node.switch.overrideInputs.items())),
