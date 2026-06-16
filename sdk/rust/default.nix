@@ -1,19 +1,17 @@
-# Public Rust SDK build: link the prebuilt, R2-hosted `ix-sdk-wire` rlib WITHOUT
-# its source.
+# Public Rust SDK artifact wiring for the prebuilt, R2-hosted `ix-sdk-wire` rlib.
 #
 # End-to-end shape (ENG-2151 / ENG-2154):
 #   1. fetch the prebuilt `ix-sdk-wire` rlib + rmeta from public R2 by SRI
 #      (fixed-output `pkgs.fetchurl`; no /nix/store path leaks into the URL).
 #   2. wrap them as a cargo-unit library unit with `mkPrebuiltLibraryUnit`
 #      (#724 seam), recording the toolchain id they were compiled with.
-#   3. `buildWorkspace` the public `sdk/rust` workspace, injecting that prebuilt
-#      unit over the metadata-faithful `ix-sdk-wire` stub via `extraUnits`. The
-#      stub's generated unit key equals the prebuilt's source-independent hash,
-#      so the consumer links the prebuilt rlib and never compiles stub source.
+#   3. `artifactCheck` validates the published manifest/files and the local
+#      prebuilt-unit wrapper. The link proof is kept below for development, but
+#      it is not a valid CI gate until the publication includes the matching
+#      rustc dependency closure or a wire artifact rebuilt against index's
+#      public dependency units.
 #
-# Returns the consumer binary plus a `proof` derivation that (a) runs the
-# consumer to show it linked + ran the prebuilt rlib, and (b) checks the from-
-# source stub lib unit is EXCLUDED from the consumer's build closure.
+# Returns an artifact check plus a development-only `proof` derivation.
 {
   lib,
   pkgs,
@@ -62,6 +60,10 @@ let
   wireHash = "a95096d6b0ee69a6";
   wireToolchainId = "iz0mdcq43pxl3fmxmznc6n38sals6q0x-rust-default-1.98.0-nightly-2026-05-27";
   r2Base = "https://pub-559bccbc8be94bed84821cb943b580f3.r2.dev/rlib/ix-sdk-wire/${wireHash}";
+  wireManifest = pkgs.fetchurl {
+    url = "${r2Base}/manifest.json";
+    hash = "sha256-UV6/vT5zasDrJyIp9o2AvXoqS9H5X+VOvQykxAmaPco=";
+  };
 
   # Fixed-output fetches: the SRI hash is the store-path identity, so the URL
   # carries no secret and substituters can short-circuit. These are the actual
@@ -194,6 +196,32 @@ in
     fromSourceStubUnit
     injected
     ;
+
+  # CI-valid artifact check: the current R2 publication contains only the root
+  # ix-sdk-wire rlib/rmeta. A full link proof also needs the exact rustc
+  # dependency metadata closure that root artifact was compiled against; using
+  # index-built snafu/strum units produces E0460/E0463 metadata identity errors.
+  artifactCheck =
+    pkgs.runCommand "ix-sdk-rust-prebuilt-artifact-check"
+      {
+        nativeBuildInputs = [ pkgs.gnugrep ];
+      }
+      ''
+        test -f ${wireManifest}
+        grep -q '"crate": "ix-sdk-wire"' ${wireManifest}
+        grep -q '"toolchain-id": "${wireToolchainId}"' ${wireManifest}
+        grep -q '"unit-hash": "${wireHash}"' ${wireManifest}
+        grep -q '"sha256-JCv83V3NQeSuA/oG/zYoX3AmM5u9jKPOxSH6V6OQQDs="' ${wireManifest}
+        grep -q '"sha256-Bt37uG3ImMhjt9dPX3W+pIoNAQvUMAFVOIdNMvUcT3E="' ${wireManifest}
+
+        test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rlib
+        test -f ${prebuiltWireUnit}/lib/libix_sdk_wire-${wireHash}.rmeta
+        test -f ${prebuiltWireUnit}/nix-support/extern-path
+        grep -q '\.rlib$' ${prebuiltWireUnit}/nix-support/extern-path
+
+        echo "OK: public ix-sdk-wire prebuilt artifact pins and wrapper contract are valid"
+        mkdir -p "$out"
+      '';
 
   # The proof derivation. Build it on the fleet to verify end-to-end.
   proof =

@@ -132,6 +132,22 @@ let
       # does not drag Linux audio inputs into a Darwin graph.
       targetIsLinux =
         if target == null then workspacePkgs.stdenv.hostPlatform.isLinux else lib.hasInfix "-linux-" target;
+      targetSystem =
+        if target == null then
+          workspacePkgs.stdenv.hostPlatform.system
+        else if lib.hasSuffix "-apple-darwin" target then
+          if lib.hasPrefix "aarch64-" target then "aarch64-darwin" else "x86_64-darwin"
+        else if lib.hasPrefix "aarch64-" target then
+          "aarch64-linux"
+        else
+          "x86_64-linux";
+      excludedWorkspaceMembers = lib.filter (
+        entry: !(builtins.elem entry (packageRegistry.rustWorkspaceEntriesFor targetSystem))
+      ) packageRegistry.rustWorkspaceEntries;
+      cargoWorkspaceExcludes = lib.concatMap (entry: [
+        "--exclude"
+        entry.id
+      ]) excludedWorkspaceMembers;
       # A build script's `rustc-link-search` does not reach the final per-unit link
       # in this graph, so a linked native lib's directory is added to the link search
       # here directly, plus an rpath entry so the resulting binary resolves the shared
@@ -164,22 +180,28 @@ let
         inherit src;
         cargoLock.lockFile = cargoLock;
         workspaceRoot = root;
-        cargoArgs = [ "--workspace" ];
+        cargoArgs = [ "--workspace" ] ++ cargoWorkspaceExcludes;
         # Cross test/bench binaries can't execute on the build host, so a cross
         # graph builds only the `--workspace` root set; the native graph keeps
         # the test and bench roots for `passthru.tests`.
         cargoTargets = [
-          [ "--workspace" ]
+          ([ "--workspace" ] ++ cargoWorkspaceExcludes)
         ]
         ++ lib.optionals (!isCross) [
-          [
-            "--workspace"
-            "--tests"
-          ]
-          [
-            "--workspace"
-            "--benches"
-          ]
+          (
+            [
+              "--workspace"
+              "--tests"
+            ]
+            ++ cargoWorkspaceExcludes
+          )
+          (
+            [
+              "--workspace"
+              "--benches"
+            ]
+            ++ cargoWorkspaceExcludes
+          )
         ];
         cargoTargetNames = [
           "build"

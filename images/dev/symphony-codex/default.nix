@@ -18,7 +18,7 @@ let
 in
 {
   ix.image = {
-    name = "ix/symphony-codex";
+    name = lib.mkDefault "ix/symphony-codex";
     tag = "2026-05-31";
   };
 

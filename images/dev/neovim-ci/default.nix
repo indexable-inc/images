@@ -1,12 +1,12 @@
 # Neovim Linux CI image: toolchain and test dependencies for ix-backed jobs.
-{ pkgs, ... }:
+{ lib, pkgs, ... }:
 let
   python = pkgs.python3.withPackages (ps: [
     ps.pynvim
   ]);
 in
 {
-  ix.image.name = "neovim-ci";
+  ix.image.name = lib.mkDefault "neovim-ci";
 
   environment.systemPackages = [
     pkgs.attr

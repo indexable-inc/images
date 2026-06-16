@@ -65,9 +65,9 @@ let
           ];
         }).ix.dev;
 
-      shared = dev.shared;
-      sharedEnable = shared.enable;
+      inherit (dev) shared;
       inherit (shared)
+        enable
         mountPoint
         excludeNodes
         group
@@ -86,20 +86,20 @@ let
         });
 
       haveSource = dev.selfSource && src != null;
-      onShare = sharedEnable && haveSource;
+      onShare = enable && haveSource;
       shareSubdirs = map (b: b.shareSubdir) binds ++ lib.optional onShare "ix";
 
       # `defaults` apply to EVERY node (workload and server): the base image, the
-      # ix.dev options + agent layer, and the user's module. The mkForce on the
-      # image name overrides the base image's own plain `ix.image.name` so each
-      # node's replacement image is named after the node, not the base.
+      # ix.dev options + agent layer, and the user's module. The base dev image
+      # provides only a default image name, so each node's replacement image is
+      # named after the node.
       defaults = [
         (paths.images + "/dev/${dev.baseImage}")
         agentsModule
         (
           { name, ... }:
           {
-            ix.image.name = lib.mkForce name;
+            ix.image.name = name;
             ix.image.tag = lib.mkDefault "ix-dev";
           }
         )
@@ -108,7 +108,7 @@ let
 
       # A node "shares" when the volume is on and it is not opted out. Computed
       # once per node and threaded into the modules, group, and dependsOn below.
-      shares = name: sharedEnable && !(builtins.elem name excludeNodes);
+      shares = name: enable && !(builtins.elem name excludeNodes);
 
       # `dev.fleet` is a typed submodule (replicas/dependsOn/groups/modules),
       # so each spec is normalized with defaults already — no re-shaping here,
@@ -156,7 +156,7 @@ let
         });
       };
 
-      nodes = workloadNodes // lib.optionalAttrs sharedEnable serverSpec;
+      nodes = workloadNodes // lib.optionalAttrs enable serverSpec;
     in
     (mkFleetFor hostSystem) { inherit defaults nodes; };
 in

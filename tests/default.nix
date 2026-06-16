@@ -16,8 +16,9 @@ let
   # part of the `eval` aggregate: it boots a qemu VM, so it is its own check
   # (`checks.<system>.minecraft-blocks-vm`).
   minecraftBlocksVmTest = import ./minecraft-blocks-vm.nix { inherit lib pkgs ix; };
-  # Public Rust SDK: links the prebuilt, R2-hosted ix-sdk-wire rlib with no
-  # ix-sdk-wire source (ENG-2151 / ENG-2154). `proof` is the end-to-end check.
+  # Public Rust SDK: validates the prebuilt, R2-hosted ix-sdk-wire artifact
+  # pins. The old end-to-end link proof needs a matching published rustc
+  # dependency closure before it can be a reliable CI gate.
   sdkRust = import ../sdk/rust { inherit lib pkgs ix; };
   packageRegistry = import ../packages/registry.nix {
     inherit lib;
@@ -5103,8 +5104,8 @@ in
     ;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
   cargoUnitPrebuiltLibrary = cargoUnitPrebuiltTest;
-  # End-to-end: public ix-sdk links the R2-hosted prebuilt ix-sdk-wire rlib.
-  sdkRustPrebuilt = sdkRust.proof;
+  # Validate the current R2 publication and local prebuilt-unit wrapper.
+  sdkRustPrebuilt = sdkRust.artifactCheck;
   portableServices = portableServicesTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
 

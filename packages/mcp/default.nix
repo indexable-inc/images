@@ -2230,7 +2230,7 @@ let
             set_kernel(kernel)
             started = loop.time()
             clamped = await tools.python_exec(
-                "await asyncio.sleep(30)\nResult.ok('done')", budget=600.0, name="bigbudget"
+                "await asyncio.sleep(30)\nResult.ok('done')", budget=600.0, intent="bigbudget"
             )
             elapsed = loop.time() - started
             assert elapsed < 10, ("budget was not clamped", elapsed)
@@ -4149,14 +4149,11 @@ let
   xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
   linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
   noxAutotriageBundled = importTest "nox-autotriage" "import nox_autotriage; print('nox-autotriage-ok', callable(nox_autotriage.findings_from_conformance))";
-  linearTriageTestPython = pkgs.python3.withPackages (
-    ps:
-    [
-      ps.pytest
-      ps.httpx
-      linearModule
-    ]
-  );
+  linearTriageTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.httpx
+    linearModule
+  ]);
   linearTriageTestSource = builtins.path {
     name = "ix-mcp-linear-triage-test";
     path = ./tests/test_linear_triage.py;
@@ -4179,15 +4176,12 @@ let
         cat stdout
         mkdir -p "$out"
       '';
-  noxAutotriageTestPython = pkgs.python3.withPackages (
-    ps:
-    [
-      ps.pytest
-      ps.httpx
-      linearModule
-      noxAutotriageModule
-    ]
-  );
+  noxAutotriageTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.httpx
+    linearModule
+    noxAutotriageModule
+  ]);
   noxAutotriageTestSource = builtins.path {
     name = "ix-mcp-nox-autotriage-test";
     path = ./tests/test_nox_autotriage.py;

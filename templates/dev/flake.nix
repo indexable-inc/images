@@ -2,9 +2,15 @@
   description = "My ix dev environment (RFC 0007)";
 
   inputs.index.url = "github:indexable-inc/index";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
-    { self, index, ... }:
+    {
+      self,
+      index,
+      nixpkgs,
+      ...
+    }:
     let
       # Systems you build VMs from. ix VM closures are linux; add darwin only if
       # you evaluate from a Mac.
@@ -12,14 +18,7 @@
         "x86_64-linux"
         "aarch64-linux"
       ];
-      forEach =
-        f:
-        builtins.listToAttrs (
-          map (system: {
-            name = system;
-            value = f system;
-          }) systems
-        );
+      forEach = f: nixpkgs.lib.genAttrs systems f;
     in
     {
       # `nix run .#up` brings up the fleet (or the single `dev` VM if no fleet is

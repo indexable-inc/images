@@ -113,6 +113,20 @@ let
         prefix = value.prefix or "rust-${id}";
       };
 
+  normalizeRustWorkspace =
+    label: value:
+    if value == null || value == false then
+      null
+    else if value == true then
+      {
+        systems = null;
+      }
+    else
+      assertKnownKeys "${label}: inRustWorkspace" [ "systems" ] value
+      // {
+        systems = value.systems or null;
+      };
+
   importMetadata =
     dir:
     let
@@ -131,7 +145,7 @@ let
       packageSet = normalizePackageSet label id (raw.packageSet or null);
       flake = normalizeFlake label id (raw.flake or null);
       overlay = normalizeOverlay label id (raw.overlay or null);
-      inRustWorkspace = raw.inRustWorkspace or false;
+      inRustWorkspace = normalizeRustWorkspace label (raw.inRustWorkspace or null);
       passthruTests = normalizePassthruTests label id (raw.passthruTests or null);
       # `updateScript = true` marks a package that exposes a
       # `passthru.updateScript` (e.g. a pinned prebuilt binary that tracks an
@@ -167,11 +181,17 @@ let
       entry:
       entry.passthruTests != null
       && (
-        if entry.packageSet != null then enabledForSystem system entry.packageSet else entry.inRustWorkspace
+        if entry.packageSet != null then
+          enabledForSystem system entry.packageSet
+        else
+          enabledForSystem system entry.inRustWorkspace
       )
     ) entries;
 
-  rustWorkspaceEntries = lib.filter (entry: entry.inRustWorkspace) entries;
+  rustWorkspaceEntries = lib.filter (entry: entry.inRustWorkspace != null) entries;
+
+  rustWorkspaceEntriesFor =
+    system: lib.filter (entry: enabledForSystem system entry.inRustWorkspace) rustWorkspaceEntries;
 in
 assert lib.assertMsg (
   duplicateIds == [ ]
@@ -187,5 +207,6 @@ assert lib.assertMsg (
     updateScriptEntriesFor
     passthruTestEntriesFor
     rustWorkspaceEntries
+    rustWorkspaceEntriesFor
     ;
 }

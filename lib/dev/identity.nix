@@ -37,17 +37,14 @@ in
   */
   bindModule =
     { mountPoint, binds }:
-    { ... }:
-    {
-      fileSystems = lib.listToAttrs (
-        map (
-          bind:
-          lib.nameValuePair bind.localPath {
-            device = "${mountPoint}/${bind.shareSubdir}";
-            fsType = "none";
-            options = bindOptions mountPoint;
-          }
-        ) binds
+    _: {
+      fileSystems = lib.genAttrs' binds (
+        bind:
+        lib.nameValuePair bind.localPath {
+          device = "${mountPoint}/${bind.shareSubdir}";
+          fsType = "none";
+          options = bindOptions mountPoint;
+        }
       );
     };
 
@@ -64,7 +61,7 @@ in
       onShare ? false,
       mountPoint ? null,
     }:
-    { ... }:
+    _:
     if onShare then
       {
         fileSystems."/ix" = {
@@ -86,8 +83,7 @@ in
   */
   sourceServerSeed =
     { src, shareDir }:
-    { ... }:
-    {
+    _: {
       systemd.tmpfiles.rules = [ "C ${shareDir}/ix 0770 nobody nogroup - ${src}" ];
     };
 }

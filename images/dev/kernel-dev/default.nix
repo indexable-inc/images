@@ -1,8 +1,8 @@
 # Linux kernel dev image: build toolchain and a shallow Linus tree at
 # /src/linux. The base profile already brings ripgrep, fd, neovim, gdb, perf.
-{ pkgs, ... }:
+{ lib, pkgs, ... }:
 {
-  ix.image.name = "linux-kernel-dev";
+  ix.image.name = lib.mkDefault "linux-kernel-dev";
 
   environment.systemPackages = [
     pkgs.gnumake

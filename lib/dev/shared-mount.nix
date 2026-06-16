@@ -44,8 +44,7 @@ in
       guestOk ? true,
       subdirs ? [ ],
     }:
-    { ... }:
-    {
+    _: {
       services.samba = {
         enable = true;
         # `ix.networking.expose.samba` below claims the port and opens the
