@@ -739,17 +739,22 @@ class SwitchBatchTests(unittest.TestCase):
         custom["switch"]["sourceInstallable"] = ".#api-system"
         self.assertFalse(ix_fleet.is_batchable_switch(self._node(custom)))
 
-    def test_batch_groups_split_by_build_vm_and_overrides(self) -> None:
+    def test_batch_groups_split_by_build_vm_region_and_overrides(self) -> None:
         a = self._node(remote_node("a", build_vm="b1"))
         b = self._node(remote_node("b", build_vm="b1"))
         c = self._node(remote_node("c", build_vm="b2"))
         d = remote_node("d", build_vm="b1")
         d["switch"]["overrideInputs"] = {"ix": "github:indexable-inc/ix"}
         d_node = self._node(d)
+        # Same build VM as a/b, but a different region: the server's multi-switch
+        # requires every target to share the builder's region, so it splits off.
+        e = remote_node("e", build_vm="b1")
+        e["region"] = "us-east-1"
+        e_node = self._node(e)
 
-        groups = ix_fleet.batch_groups([a, b, c, d_node])
+        groups = ix_fleet.batch_groups([a, b, c, d_node, e_node])
         names = [[node.name for node in group] for group in groups]
-        self.assertEqual(names, [["a", "b"], ["c"], ["d"]])
+        self.assertEqual(names, [["a", "b"], ["c"], ["d"], ["e"]])
 
     def test_switch_nodes_from_source_builds_one_multi_ix_up(self) -> None:
         nodes = [self._node(remote_node("web")), self._node(remote_node("worker"))]

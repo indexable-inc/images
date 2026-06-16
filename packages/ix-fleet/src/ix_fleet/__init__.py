@@ -795,14 +795,22 @@ def is_batchable_switch(node: FleetNode) -> bool:
 
 
 def batch_groups(nodes: list[FleetNode]) -> list[list[FleetNode]]:
-    # One native multi-VM `ix up` per (build VM, override-input set): those are the
-    # inputs the CLI shares across every target in a single invocation, so nodes
-    # that disagree on them cannot ride the same command.
-    groups: dict[tuple[str, tuple[tuple[str, str], ...]], list[FleetNode]] = {}
-    order: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+    # One native multi-VM `ix up` per (build VM, region, override-input set). The
+    # CLI shares one `--build-vm` and `--override-input` set across the batch, and
+    # the server's multi-switch requires every target to share the builder's
+    # region (CAS chunks are region-scoped). Grouping on region keeps a
+    # cross-region fleet from failing a whole batch instead of just the
+    # wrong-region nodes.
+    BatchKey = tuple[str, str, tuple[tuple[str, str], ...]]
+    groups: dict[BatchKey, list[FleetNode]] = {}
+    order: list[BatchKey] = []
     for node in nodes:
         assert node.switch.buildVm is not None
-        key = (node.switch.buildVm, tuple(sorted(node.switch.overrideInputs.items())))
+        key: BatchKey = (
+            node.switch.buildVm,
+            node.region,
+            tuple(sorted(node.switch.overrideInputs.items())),
+        )
         if key not in groups:
             groups[key] = []
             order.append(key)
