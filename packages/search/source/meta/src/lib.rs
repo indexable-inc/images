@@ -71,6 +71,8 @@ pub const KNOWN_SOURCE_TAGS: &[&str] = &[
     "linear",         // packages/search/source/linear
     "code",           // checkout sync (search-core)
     "web",            // hosted web-search store
+    "distilled_facts",  // packages/agent/distiller (ReasoningBank-style lessons)
+    "session_outcomes", // packages/agent/distiller (per-session verdicts)
 ];
 
 impl Source {

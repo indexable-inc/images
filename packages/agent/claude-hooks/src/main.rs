@@ -313,8 +313,13 @@ fn run_search(prompt: &str) -> Option<Vec<Value>> {
             "--no-rerank",
             "--max-count",
             "3",
+            // distilled_facts = ReasoningBank-style lessons distilled from past
+            // sessions (packages/agent/distiller). Including them here makes
+            // every prompt a pull point so relevant lessons resurface mid-run,
+            // not just in the SessionStart digest. They share the score gate and
+            // max-count with history priors.
             "--source",
-            "claude_history,shell,github",
+            "claude_history,shell,github,distilled_facts",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
