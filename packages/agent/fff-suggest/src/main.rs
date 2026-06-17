@@ -89,11 +89,17 @@ fn socket_path(root: &Path) -> PathBuf {
 }
 
 /// Create `dir` as a user-private 0700 directory, or accept it only if it
-/// already is one owned by us. Returns `false` (caller must fail open, leaving
-/// no socket server) when the path exists but is not a directory, is owned by
-/// another user, or grants any group/other access: the markers of a hijack
-/// attempt under a shared `/tmp`. `$XDG_RUNTIME_DIR` already satisfies this, so
-/// this only ever rejects a poisoned fallback directory.
+/// already is a real directory owned by us. Returns `false` (caller must fail
+/// open, leaving no socket server) when the path exists but is not a directory,
+/// is a symlink, or is owned by another user: the markers of a hijack attempt
+/// under a shared `/tmp`.
+///
+/// An existing dir we own but with group/other bits is *repaired* to 0700 rather
+/// than rejected: earlier builds created `<runtime>/ix-fff-suggest` with plain
+/// `create_dir_all`, which leaves it 0755 under the usual 022 umask, so rejecting
+/// it would silently disable completions across an in-session upgrade. Since the
+/// dir is already ours (and, under `$XDG_RUNTIME_DIR`, inside a 0700 parent),
+/// tightening it back to 0700 restores the invariant without that regression.
 fn ensure_private_dir(dir: &Path) -> bool {
     use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
     // create_new-style: succeeds only if we make it, so the 0700 mode is ours.
@@ -109,11 +115,15 @@ fn ensure_private_dir(dir: &Path) -> bool {
         return false;
     };
     // SAFETY: `getuid` just reads the process's real uid.
+    if !meta.is_dir() || meta.uid() != unsafe { libc::getuid() } {
+        return false;
+    }
     // No group/other permission bits set: the low 6 bits of the mode are zero,
-    // i.e. at least 6 trailing zero bits.
-    meta.is_dir()
-        && meta.uid() == unsafe { libc::getuid() }
-        && meta.permissions().mode().trailing_zeros() >= 6
+    // i.e. at least 6 trailing zero bits. Repair a loose-but-owned dir in place.
+    if meta.permissions().mode().trailing_zeros() >= 6 {
+        return true;
+    }
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).is_ok()
 }
 
 // ── client ───────────────────────────────────────────────────────────────────
