@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from . import corpus, distill, markdown, state, transcripts
-from .types import Item, SessionRecord, State
+from .types import Item, Row, SessionRecord, State
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -175,21 +175,21 @@ def run(args: argparse.Namespace) -> int:
     # emitted under the synthetic ``__global__`` project so it surfaces in any
     # repo. The global copy has a distinct external_id (project differs), so both
     # coexist; the digest/pull can target tier=repo, tier=global, or both.
-    item_rows: list[corpus.Row] = []
-    global_rows: list[corpus.Row] = []
+    item_rows: list[Row] = []
+    global_rows: list[Row] = []
     for project, items in sorted(all_items_by_project.items()):
-        labels = {
+        label_map = {
             sid: rec.label
             for sid, rec in all_outcomes_by_project.get(project, {}).items()
         }
         for item in items:
             item_rows.append(
-                corpus.item_row(item, project, args.host, args.user, session_labels=labels)
+                corpus.item_row(item, project, args.host, args.user, session_labels=label_map)
             )
             if item.scope == "shared":
                 global_rows.append(
                     corpus.item_row(
-                        item, corpus.GLOBAL_PROJECT, args.host, args.user, session_labels=labels
+                        item, corpus.GLOBAL_PROJECT, args.host, args.user, session_labels=label_map
                     )
                 )
     item_rows.extend(global_rows)
