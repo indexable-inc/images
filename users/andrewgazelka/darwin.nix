@@ -17,7 +17,7 @@
 {
   homebrew = {
     casks = [
-      "1password-cli"
+      "1password-cli@beta"
       "beeper"
       "chatgpt"
       "chatgpt-atlas"
@@ -25,19 +25,19 @@
       # Cloudflare WARP: tunnels IPv4+IPv6 to Cloudflare, so an IPv6-only or
       # broken-IPv4 network (e.g. hotel wifi with dead DHCPv4) can still reach
       # IPv4-only hosts like github and Apple's APNs. Needs UDP egress to work.
-      "cloudflare-warp"
+      "cloudflare-warp@beta"
       "codex-app"
       "contexts"
       "cursor"
-      "emacs-app"
-      "ghostty"
+      "emacs-app@nightly"
+      "ghostty@tip"
       "google-chrome"
       "helium-browser"
       "linear"
       "lm-studio"
-      "mullvad-vpn"
+      "mullvad-vpn@beta"
       "notion"
-      "obs"
+      "obs@beta"
       "obsidian"
       "orbstack"
       "postico"
@@ -45,10 +45,10 @@
       "raycast"
       "screen-studio"
       "setapp"
-      "signal"
+      "signal@beta"
       "skim"
       "slack@beta"
-      "stremio"
+      "stremio@beta"
       "superhuman"
       "superwhisper"
       "tailscale-app"
@@ -61,7 +61,7 @@
       # refuses no-auth servers, so a third-party client is required to reach
       # `vnc://<host>.tail368802.ts.net:5900`. See ix nix/modules/desktop/remote-desktop.nix.
       "vnc-viewer"
-      "zed"
+      "zed@preview"
       "zoom"
     ];
 
