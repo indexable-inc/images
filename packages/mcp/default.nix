@@ -669,14 +669,34 @@ let
   # carries no calendar logic of its own (RFC 0003).
   gcalBin = ix.rustWorkspace.units.binaries."gcal";
 
+  # `import CoreLocation` on Darwin: the pyobjc binding for Apple's Core Location
+  # framework, so a session can read the Mac's current location with no install
+  # step. nixpkgs ships only a curated subset of the pyobjc framework bindings and
+  # CoreLocation is not one of them, but every binding lives in pyobjc-core's
+  # monorepo src as a sibling subdir built by identical glue. So rather than
+  # duplicate that glue, derive it from the packaged `pyobjc-framework-Quartz`
+  # (same src, same version, same build/patch steps, same pyobjc-core + Cocoa
+  # deps) and only retarget the source subdir and the import check. This tracks
+  # any nixpkgs build fixes to Quartz automatically.
+  coreLocationModule = pkgs.python3.pkgs.pyobjc-framework-Quartz.overridePythonAttrs (old: {
+    pname = "pyobjc-framework-CoreLocation";
+    sourceRoot = "${old.src.name}/pyobjc-framework-CoreLocation";
+    pythonImportsCheck = [ "CoreLocation" ];
+    meta = old.meta // {
+      description = "PyObjC wrappers for the Core Location framework on macOS";
+    };
+  });
+
   # The `screen` helper is macOS-only, so its dependencies join the interpreter
   # only on Darwin. `pyobjc-framework-Quartz` is the maintained CoreGraphics
   # binding the helper wraps; Pillow (already transitive via matplotlib) carries
-  # the PIL image type capture returns.
+  # the PIL image type capture returns. `coreLocationModule` adds the Core
+  # Location binding so location reads work out of the box.
   darwinExtraPackages =
     ps:
     lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
       ps.pyobjc-framework-Quartz
+      coreLocationModule
       screenModule
       vmkitModule
       imessageModule
@@ -4291,6 +4311,7 @@ let
       '';
 
   screenBundled = importTest "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
+  coreLocationBundled = importTest "corelocation" "import CoreLocation; print('corelocation-ok', callable(CoreLocation.CLLocationManager.alloc))";
   vmkitBundled = importTest "vmkit" "import vmkit; print('vmkit-ok', callable(vmkit.boot_linux), callable(vmkit.drive), callable(vmkit.screenshot))";
   imessageBundled = importTest "imessage" "import imessage; print('imessage-ok', all(callable(getattr(imessage, n)) for n in ('messages', 'chats', 'contacts', 'send')))";
   xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
@@ -4410,6 +4431,7 @@ package.overrideAttrs (old: {
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
       inherit
         screenBundled
+        coreLocationBundled
         vmkitBundled
         vmkitResourceSmoke
         imessageBundled
