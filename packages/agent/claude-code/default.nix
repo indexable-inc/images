@@ -207,6 +207,20 @@ let
   #     the baked `--dangerously-skip-permissions`. Scoped to `mcpServers ?
   #     exa` so a consumer who overrides the server set away gets the
   #     built-ins back instead of no web access at all.
+  #   permissions.deny Bash (only while the index kernel server `mcp` is in
+  #     `repoPackages`): the kernel's `python_exec`/`sh()` IS the shell, so the
+  #     Bash tool is denied to force every shell call onto the kernel (one async
+  #     event loop, live on the dashboard, clean output instead of the raw-pipe
+  #     ANSI-mangling path). Like the pair above, deny is the ONE wall the
+  #     dangerous-mode posture cannot punch through: it holds under the baked
+  #     `--dangerously-skip-permissions` (verified two ways — a headless run with
+  #     `--disallowedTools Bash` under the skip-flag is refused with "No such
+  #     tool available: Bash", and the WebSearch/WebFetch deny above is already
+  #     live under the same flag, which is why the model uses exa, not the
+  #     built-ins). It is not an `ask`, which the flag WOULD auto-approve. Gated
+  #     on the kernel so a consumer without it keeps a shell. TRADEOFF: removes
+  #     the "Bash only when kernel wedged" fallback; a wedged kernel is recovered
+  #     with `kernel_trace` / fresh `python_exec` / restart, never Bash.
   #   fileSuggestion (only when the `fff-suggest` sibling is in scope): routes
   #     `@`-mention file completion through fff's frecency-ranked fuzzy finder
   #     instead of the CLI's built-in index, via the statusLine-shaped custom
@@ -231,6 +245,16 @@ let
   };
   hookCmd = sub: "${claudeHooks}/bin/claude-hooks ${sub}";
 
+  # Tools denied via the flagSettings `permissions.deny` layer; see the
+  # `permissions.deny` bullets in the doc block above for why each, and why deny
+  # (unlike ask/allow) holds under the baked `--dangerously-skip-permissions`.
+  denyTools =
+    lib.optionals (mcpServers ? exa) [
+      "WebSearch"
+      "WebFetch"
+    ]
+    ++ lib.optional (repoPackages ? mcp) "Bash";
+
   # Caller's extraSettings first, then the computed defaults recursively merged
   # ON TOP, so the keys below always win a conflict while the caller's other
   # keys (hooks, statusLine, ...) pass through.
@@ -243,11 +267,8 @@ let
           "Bash(gh pr merge*--force*)"
         ];
       }
-      // lib.optionalAttrs (mcpServers ? exa) {
-        deny = [
-          "WebSearch"
-          "WebFetch"
-        ];
+      // lib.optionalAttrs (denyTools != [ ]) {
+        deny = denyTools;
       };
       hooks = {
         SessionStart = [
