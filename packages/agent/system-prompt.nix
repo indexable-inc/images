@@ -57,6 +57,11 @@ let
 
   structuredPrimitives = "Prefer structured primitive over text munging: `view.ls`/`view.tree`/`view.cat` for filesystem (polars frames, pre-imported), `fff.grep`/`fff.find` for search, and CLI JSON mode (`gh --json`, `cargo metadata`, `nix --json`) parsed with `.json()`/`.jsonl()`/`.df()` on `sh` Output. Never awk/sed/string splitting. ONE command per `sh()` call, combine result in Python. Return tabular answer as polars DataFrame.";
 
+  # ENG-3347 (https://linear.app/indexable/issue/ENG-3347): agent reported "no
+  # iPhone plugged in" because `idevice_id 2>/dev/null` hid exit 127 from an
+  # uninstalled CLI and empty stdout was read as a negative.
+  probeByExitCode = "Probe presence/absence by exit code, never by empty output. Empty stdout mean three different thing: tool absent (code 127), tool present but nothing found (code 0, empty), tool present with result (code 0, data). Never suppress stderr (`2>/dev/null`) on probe, never read empty stdout as negative. Prefer index `sh()` (`Output.ok`/`.code`/`.stderr` split from `.stdout`) over Bash so exit 127 cannot hide. Check authoritative source first (e.g. `ioreg` for macOS USB) before third-party CLI that may not be installed.";
+
   experiments = "Change value uncertain? Run experiment, not guess: state observable, measure baseline, change one thing, run several rollout, keep only if it measurably win. Reach for `experiment` skill, exactly this loop (pairs with `prompt-eval`, which check prompt change merely took effect). Measured keep-or-revert beat unverified \"looks better\".";
 
   agentTesting = "Test Claude or agent behavior? Drive real agent through index TUI Python harness (`tui.harness.Claude`/`Codex` in packages/tui-py), never headless `claude -p` or `tmux` rig. It run real TUI in PTY, stream live to web dashboard (`nix run .#tui-dashboard`), so user watch current state and intervene, and give Playwright-style `launch`/`prompt`/`run`/`wait_for_idle`/`expect` for clean scriptable rollout.";
@@ -111,6 +116,7 @@ let
     indexKernel
     fleetHistory
     structuredPrimitives
+    probeByExitCode
     experiments
     agentTesting
     autonomy
