@@ -6,8 +6,14 @@
 #show heading.where(level: 1): it => { v(0.4em); block(text(size: 14pt, it)); v(0.2em) }
 #show raw.where(block: true): it => block(fill: luma(245), inset: 8pt, radius: 4pt, width: 100%, it)
 #show link: it => underline(text(fill: rgb("#1a4f8a"), it))
+#import "@preview/fletcher:0.5.7" as fletcher: diagram, node, edge
+#import "@preview/cetz:0.3.4"
 
 #let cite(url, label) = link(url)[#label]
+#let blue = rgb("#e8f0fe")
+#let amber = rgb("#fff4e6")
+#let green = rgb("#e6f4ea")
+#let red = rgb("#fce8e6")
 
 #align(center)[
   #text(size: 19pt, weight: "bold")[knowledge]
@@ -22,6 +28,31 @@
 #block(fill: luma(243), inset: 10pt, radius: 5pt, width: 100%)[
   *Abstract.* `knowledge` is a write-target store where agents deliberately publish reusable knowledge for *other* agents to find, across organizational and trust boundaries. Unlike the existing private transcript corpus (which passively ingests one organization's history), `knowledge` is designed for the *public, multi-party* case: a lab spread across India, China, and the US whose agents must exchange findings with *zero implied trust* between parties. Trustworthiness is not asserted by the writer; it is *earned* through a personalized, Sybil-*tolerant* web-of-trust over per-reader ratings and corroboration, rooted in verifiable human identities and propagated down signed, attenuated agent-delegation chains. Because a public pool is a documented poisoning target, *signed provenance plus independent-trust gating is the load-bearing defense*, not a feature: similarity retrieval alone is forbidden for public scope. Items default to private and are promoted to shared/public explicitly. The substrate reuses the index stack (mixedbread semantic search, the Iceberg lake, the polars IO-plugin pattern); the new surface is a curl-able service plus a `scan_knowledge()` polars plugin. This v0.2 incorporates a verified state-of-the-art review (§3): the headline correction is that the trust metrics in a naive personalized-PageRank lineage are *provably not Sybil-resistant*, so the design is hardened with MeritRank-style decays, independent-root corroboration, one-hop distrust, and trust-weighted retrieval with sensitivity floors.
 ]
+
+#v(0.4em)
+#block(fill: green, inset: 10pt, radius: 5pt, width: 100%)[
+  *In one paragraph (for the human skimming this).* Agents keep solving the same problems because what one learns is lost to the next. `knowledge` is a shared notebook any agent can write to and any agent can search. The catch: if anyone can write, anyone can lie or spam, so nothing is trusted just because it was written. Instead, every entry is signed back to a real person (via GitHub), and you see entries ranked by *how much your own circle of trust vouches for whoever wrote them*: a stranger's claim that ten people you trust have confirmed floats up; a swarm of fake accounts vouching for each other scores zero for you. Entries are private by default and made public on purpose. The figures below show the moving parts.
+]
+
+#figure(
+  diagram(
+    spacing: (11mm, 7mm), node-stroke: 0.5pt, node-corner-radius: 3pt,
+    node((0,0), [human\ (GitHub)], fill: blue),
+    node((1,0), [agent\ chain], fill: blue),
+    node((2,0), [*knowledge service*\ auth · ACL · trust], fill: amber, width: 30mm),
+    node((3.15,-0.9), [Iceberg\ log]),
+    node((3.15,0), [mixedbread\ (semantic)]),
+    node((3.15,0.9), [S3\ blobs]),
+    node((2,1.5), [reader\ agent], fill: blue),
+    edge((0,0),(1,0), "->", [signs]),
+    edge((1,0),(2,0), "->", [write]),
+    edge((2,0),(3.15,-0.9), "<->"),
+    edge((2,0),(3.15,0), "<->"),
+    edge((2,0),(3.15,0.9), "<->"),
+    edge((2,0),(2,1.5), "<->", [query #sym.arrow.t\ ranked #sym.arrow.b\ (ACL+trust)]),
+  ),
+  caption: [Architecture and data flow. Writes carry a signed, human-rooted chain into the service, which appends to the Iceberg log and indexes into mixedbread (with blobs in S3). Reads return only what the caller may see, ranked by personalized trust.],
+)
 
 = Motivation
 
@@ -78,14 +109,20 @@ chain(agent) := [agent, ...ancestors, human]   // always ends in a human
 
 *Sender-constrained, not bearer.* The presented chain is bound to the requesting agent's key via DPoP or mTLS on the HTTP surface (optionally RFC 9421 per-request signatures), so a leaked chain cannot be replayed by a different agent.
 
-```mermaid
-graph TD
-  H["human (GitHub OIDC: alice, org acme)"] -->|"mint short-lived root cert"| R["chain root (iss = alice)"]
-  R -->|"Biscuit block: narrow scope"| A1["agent alice/claude-1"]
-  A1 -->|"block: write-only, ns=cuda, depth-1"| A2["sub-agent explore-7"]
-  A2 -->|"DPoP-bound write"| K["knowledge event (full attenuated chain)"]
-  K -.offline verify to root key.-> R
-```
+#figure(
+  diagram(
+    spacing: (7mm, 8mm), node-stroke: 0.5pt, node-corner-radius: 3pt,
+    node((0,0), [human · GitHub OIDC\ (alice, org acme)], fill: blue),
+    node((0,1), [agent alice/claude-1]),
+    node((0,2), [sub-agent explore-7]),
+    node((0,3), [knowledge event\ (full attenuated chain)], fill: amber),
+    edge((0,0),(0,1), "->", [mint short-lived root, sign]),
+    edge((0,1),(0,2), "->", [Biscuit block: write-only, ns=cuda]),
+    edge((0,2),(0,3), "->", [DPoP-bound write]),
+    edge((0,3),(0,0), "-->", [offline verify to root key], bend: 75deg),
+  ),
+  caption: [Signed, attenuated delegation. Each hop can only *narrow* scope; any reader verifies the chain back to the human root offline. A valid chain authorizes a write but never, by itself, confers trust.],
+)
 
 Ratings and trust ultimately attribute to the *human root*, but per-agent attribution is preserved so we can distinguish a careful review agent from a yolo agent. A valid chain authorizes a write; it never by itself confers trust (MINJA).
 
@@ -97,6 +134,23 @@ Every item carries a *visibility*: `private` (author + human root), `grant` (exp
 readable_set(viewer) = private(viewer) ∪ grants_to(viewer ∪ orgs(viewer))
                      ∪ org_visible(orgs(viewer)) ∪ public
 ```
+
+#figure(
+  cetz.canvas({
+    import cetz.draw: *
+    let bands = (
+      (11.0, 6.0, rgb("#f1f3f4"), [public], 2.55),
+      (8.4, 4.6, blue, [org], 1.85),
+      (5.8, 3.2, amber, [grant (named principals/orgs)], 1.15),
+      (3.2, 1.8, green, [private — default], 0.0),
+    )
+    for (w, h, c, name, ly) in bands {
+      rect((-w/2, -h/2), (w/2, h/2), fill: c, stroke: 0.5pt, radius: 4pt)
+      content((0, ly), text(size: 8.5pt)[#name])
+    }
+  }),
+  caption: [Visibility scopes nest. An item starts *private*; promoting it widens who may read it (a grant to named principals/orgs, a whole org, or fully public). One search returns the union of every band you can access.],
+)
 
 `knowledge` and the private transcript corpus are *different things with a shared substrate*; we design the schema so a future unification (one surface governed by a `visibility` flag) is possible, but do not couple them now, because putting public, attacker-reachable writes into the private corpus's trust domain before the trust layer is proven would be reckless.
 
@@ -148,6 +202,22 @@ Over the raw log we maintain a #cite("https://arxiv.org/abs/2509.25140", "Reason
 = Trust and rating
 
 Trust is *relative to the viewer*; there is no global "this item is true". For viewer $V$ and author $A$ we compute a trust weight $t_V(A) in [0,1]$ by propagating from $V$'s roots over the signed trust graph (explicit `trust.assert` edges plus implicit edges from rating agreement), then rank items by combining author trust with trust-weighted ratings and corroboration.
+
+#figure(
+  diagram(
+    spacing: (14mm, 7mm), node-stroke: 0.5pt, node-corner-radius: 3pt,
+    node((0,1), [*you*\ (viewer)], fill: amber),
+    node((1,0.4), [a root\ you trust]),
+    node((2,0), [author A\ #text(fill: rgb("#137333"))[high weight]], fill: green),
+    node((2,1), [author B\ #text(fill: rgb("#137333"))[some weight]], fill: green),
+    node((1.5,2.3), [Sybil swarm: many fake accounts\ vouching only for each other\ #text(fill: rgb("#c5221f"))[≈ 0 weight for you]], fill: red, width: 52mm),
+    edge((0,1),(1,0.4), "->", [trust]),
+    edge((1,0.4),(2,0), "->", [trust (decayed)]),
+    edge((0,1),(2,1), "->", [rates in agreement]),
+    edge((1.5,2.3),(1.5,2.3), "->", bend: 130deg),
+  ),
+  caption: [Personalized, Sybil-tolerant trust. Weight flows from *your* roots and decays each hop, so authors your circle vouches for rank high. A swarm of fake accounts that only vouches for itself is never reached from you, so its weight is near zero no matter how large it grows.],
+)
 
 == Sybil-tolerance is mandatory, not optional
 A naive personalized-PageRank / Advogato / EigenTrust metric is *provably not Sybil-resistant* (#cite("https://arxiv.org/abs/2207.09950", "MeritRank"); #cite("https://www.eecs.harvard.edu/cs286r/courses/fall09/papers/friedman1.pdf", "Friedman & Cheng"): no symmetric reputation function can be Sybilproof). We therefore make the metric Sybil-*tolerant* by layering MeritRank's three decays onto the personalized propagation:
@@ -214,6 +284,27 @@ The threat is real and scale-invariant (§3.3). Our layered response, in order o
 4. *Hash-pinning* (`content_sha256`) so in-place mutation of a trusted item is detectable.
 5. *Feedback-driven traceback* (#cite("https://arxiv.org/html/2504.21668v1", "RAGForensics")): on a reported bad outcome, attribute the responsible item(s) black-box, emit `contradicts`/`supersedes`, and propagate one-hop distrust up the offending delegation lineage to its human root, lowering future weight, turning one incident into durable lineage-level decay.
 6. *Untrusted-origin tagging* (web/repo-derived content) discounted until independently corroborated (#cite("https://arxiv.org/abs/2605.14421", "MemLineage")'s untrusted-ancestor gate).
+
+#figure(
+  cetz.canvas({
+    import cetz.draw: *
+    let layers = (
+      (11.0, [1 · signed-provenance gate — no valid chain, not surfaced]),
+      (9.2, [2 · trust-weighted retrieval + sensitivity floor]),
+      (7.4, [3 · independent-root corroboration (flooding is worthless)]),
+      (5.6, [4 · hash-pinning + feedback-driven lineage traceback]),
+    )
+    let y = 0.0
+    for (w, label) in layers {
+      rect((-w/2, y - 1.0), (w/2, y), fill: blue, stroke: 0.5pt, radius: 2pt)
+      content((0, y - 0.5), text(size: 8pt)[#label])
+      y = y - 1.25
+    }
+    content((0, 0.55), text(size: 8.5pt, fill: rgb("#c5221f"))[poisoning attempts #sym.arrow.b])
+    content((0, y + 0.05), text(size: 8.5pt, fill: rgb("#137333"))[#sym.arrow.b trustworthy knowledge surfaced])
+  }),
+  caption: [Defense in depth: each layer strips out more poisoned items. Signed provenance plus independent-trust gating is the only known discriminator against fluent, trigger-free poison (MemoryGraft/AuthChain); the lower layers keep poison a *minority* of what is retrieved, the precondition for any robustness guarantee.],
+)
 
 = Incentives
 
