@@ -99,7 +99,6 @@ defmodule SymphonyElixir.GithubApp do
     is_binary(id) and id != "" and is_binary(pem) and pem != ""
   end
 
-  # astlog-ignore: public-def-needs-spec
   def configured?(_), do: false
 
   @impl true

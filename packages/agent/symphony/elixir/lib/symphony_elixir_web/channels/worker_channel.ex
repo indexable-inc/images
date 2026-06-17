@@ -48,7 +48,6 @@ defmodule SymphonyElixirWeb.WorkerChannel do
 
   @impl true
   def handle_in("provision_result", payload, socket), do: settle(socket, payload)
-  # astlog-ignore: public-def-needs-spec
   def handle_in("teardown_result", payload, socket), do: settle(socket, payload)
 
   @impl true

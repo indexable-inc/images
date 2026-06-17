@@ -221,7 +221,6 @@ defmodule SymphonyElixir.Codex.Provision do
     Path.join(dir, run_id)
   end
 
-  # astlog-ignore: public-def-needs-spec
   def host_run_root(%Config{}, home, run_id) when is_binary(home) do
     Path.join([home, @host_default_workspaces_subdir, run_id])
   end
@@ -496,7 +495,6 @@ defmodule SymphonyElixir.Codex.Provision do
   @spec env_export_lines([{String.t(), String.t()}]) :: String.t()
   def env_export_lines([]), do: ":"
 
-  # astlog-ignore: public-def-needs-spec
   def env_export_lines(env) do
     Enum.map_join(env, "\n", fn {key, value} -> "export #{key}=#{sh(value)}" end)
   end
@@ -514,9 +512,7 @@ defmodule SymphonyElixir.Codex.Provision do
     "#{id}: #{title} / #{node_id}"
   end
 
-  # astlog-ignore: public-def-needs-spec
   def backend_name(%{identifier: id}, _run_id, node_id) when is_binary(id), do: "#{id} / #{node_id}"
-  # astlog-ignore: public-def-needs-spec
   def backend_name(_context, run_id, node_id), do: "#{run_id} / #{node_id}"
 
   @doc """

@@ -182,17 +182,13 @@ defmodule SymphonyElixir.DSL.AST do
   @doc "True when an AST expression is an effectful constructor (emits a node)."
   @spec effect?(term()) :: boolean()
   def effect?(%{kind: kind}) when kind in @effect_kinds, do: true
-  # astlog-ignore: public-def-needs-spec
   def effect?(_), do: false
 
   @doc "True when an AST expression is a pure value (evaluated, never a node)."
   @spec pure?(term()) :: boolean()
   def pure?({tag, _}) when tag in [:literal, :var], do: true
-  # astlog-ignore: public-def-needs-spec
   def pure?({tag, _, _}) when tag in [:field], do: true
-  # astlog-ignore: public-def-needs-spec
   def pure?({tag, list}) when tag in [:concat, :list] and is_list(list), do: true
-  # astlog-ignore: public-def-needs-spec
   def pure?(_), do: false
 
   # --- constructors -------------------------------------------------------

@@ -61,7 +61,6 @@ defmodule SymphonyElixirWeb.IRRunsLive do
     {:noreply, assign(socket, live_action: :show, run_id: run_id, detail: detail)}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_params(params, uri, socket) do
     socket = resubscribe_run(socket, nil)
 
@@ -90,7 +89,6 @@ defmodule SymphonyElixirWeb.IRRunsLive do
     {:noreply, assign(socket, detail: detail)}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_info({:ir_run_event, _run_id, _summary}, %{assigns: %{live_action: :index}} = socket) do
     # Any run transitioned: refresh the index table. Re-reading the store
     # rather than splicing the one summary keeps sort order and the
@@ -100,7 +98,6 @@ defmodule SymphonyElixirWeb.IRRunsLive do
     {:noreply, assign(socket, runs: load_runs(), workflow_errors: load_workflow_errors())}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_info({:ir_run_event, _run_id, _summary}, socket), do: {:noreply, socket}
 
   @impl true
@@ -114,12 +111,10 @@ defmodule SymphonyElixirWeb.IRRunsLive do
     end
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_event("run", _params, socket) do
     {:noreply, assign(socket, form_error: "pick a workflow to run")}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_event("cancel", _params, %{assigns: %{run_id: id}} = socket) do
     try do
       _ = Runtime.cancel(id, "dashboard")
@@ -130,7 +125,6 @@ defmodule SymphonyElixirWeb.IRRunsLive do
     {:noreply, assign(socket, detail: reload_detail(id))}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_event("retry_failed", _params, %{assigns: %{run_id: id}} = socket) do
     try do
       _ = Runtime.clear_failed(id, "dashboard")
@@ -141,7 +135,6 @@ defmodule SymphonyElixirWeb.IRRunsLive do
     {:noreply, assign(socket, detail: reload_detail(id))}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_event("rerun", _params, %{assigns: %{run_id: id}} = socket) do
     try do
       _ = Runtime.rerun(id, "dashboard")
@@ -159,7 +152,6 @@ defmodule SymphonyElixirWeb.IRRunsLive do
     """
   end
 
-  # astlog-ignore: public-def-needs-spec
   def render(assigns) do
     ~H"""
     {SymphonyElixirWeb.Layouts.app(%{inner_content: render_index(assigns), active_tab: :ir})}

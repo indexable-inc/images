@@ -1,3 +1,7 @@
 defmodule Widget do
+  # No @type attribute. An identifier merely *named* `type` must not satisfy the
+  # rule (the pre-negation rule wrongly stayed silent here).
   defstruct [:id, :name]
+  @spec type(term()) :: term()
+  def type(x), do: x
 end

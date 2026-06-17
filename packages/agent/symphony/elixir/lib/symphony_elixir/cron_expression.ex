@@ -64,7 +64,6 @@ defmodule SymphonyElixir.CronExpression do
     end
   end
 
-  # astlog-ignore: public-def-needs-spec
   def parse(_), do: {:error, :invalid_cron_expression}
 
   defp do_parse(expanded, source) do

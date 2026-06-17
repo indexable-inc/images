@@ -879,12 +879,12 @@ let
                 check_ruleset() {
                   rules="$1"
                   ext="$2"
-                  for rule in $(sed -n 's/^(rule (\([a-z0-9-]*\).*/\1/p' "$rules" | sort -u); do
-                    if ! grep -q "^(lint $rule " "$rules"; then
-                      echo "rule $rule has no (lint ...) declaration, so the scan gate skips it" >&2
-                      fail=1
-                    fi
-                  done
+                  # Rules without a (lint ...) are legitimate helper relations
+                  # (joins/negation need intermediate relations), so they are not
+                  # required to back a lint. The meaningful checks remain: every
+                  # lint has a good/bad fixture pair that fires/stays-clean, and
+                  # every fixture dir backs some lint. `astlog` itself rejects a
+                  # lint that names an undefined relation at parse time.
                   for rule in $(sed -n 's/^(lint \([a-z0-9-]*\).*/\1/p' "$rules" | sort -u); do
                     dir="$tests/$rule"
                     if [ ! -f "$dir/bad.fixture" ] || [ ! -f "$dir/good.fixture" ]; then

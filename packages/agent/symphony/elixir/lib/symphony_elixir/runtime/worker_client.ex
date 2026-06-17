@@ -86,7 +86,6 @@ defmodule SymphonyElixir.Runtime.WorkerClient do
     {:ok, socket}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_message(@topic, "teardown", payload, socket) do
     %{"wire_id" => wire_id, "run_id" => run_id} = payload
     config = socket.assigns.config
@@ -101,7 +100,6 @@ defmodule SymphonyElixir.Runtime.WorkerClient do
     {:ok, assign(socket, :handles, handles)}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_message(_topic, _event, _payload, socket), do: {:ok, socket}
 
   @impl Slipstream
@@ -116,13 +114,11 @@ defmodule SymphonyElixir.Runtime.WorkerClient do
     {:noreply, assign(socket, :handles, Map.put(socket.assigns.handles, run_id, handle))}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_info({:provision_done, wire_id, _run_id, {:error, reason}}, socket) do
     push(socket, @topic, "provision_result", %{wire_id: wire_id, ok: false, error: inspect(reason)})
     {:noreply, socket}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def handle_info({:teardown_done, wire_id}, socket) do
     push(socket, @topic, "teardown_result", %{wire_id: wire_id, ok: true})
     {:noreply, socket}

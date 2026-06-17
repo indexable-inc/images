@@ -114,7 +114,6 @@ defmodule SymphonyElixir.Engine.Envelope do
     end
   end
 
-  # astlog-ignore: public-def-needs-spec
   def from_map(_other), do: {:error, :envelope_not_map}
 
   @doc """

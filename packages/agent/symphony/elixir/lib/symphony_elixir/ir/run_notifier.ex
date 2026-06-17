@@ -69,7 +69,6 @@ defmodule SymphonyElixir.IR.RunNotifier do
   @spec notify?(RunGraph.t(), Config.t()) :: boolean()
   def notify?(%RunGraph{status: status}, _config) when status not in [:succeeded, :failed], do: false
 
-  # astlog-ignore: public-def-needs-spec
   def notify?(%RunGraph{trigger: trigger} = graph, %Config{} = config) do
     if trigger_kind(trigger) == :cron, do: cron_notify?(graph, config), else: true
   end

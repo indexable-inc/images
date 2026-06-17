@@ -116,7 +116,6 @@ defmodule SymphonyElixir.IR.Materializer do
   # A graph with no AST, or an `ast` that is not a reified workflow (a
   # hand-built graph in a test, or a pre-DSL run), has nothing to
   # re-expand. Return it unchanged.
-  # astlog-ignore: public-def-needs-spec
   def expand_dynamic(%RunGraph{} = graph), do: {:ok, graph, []}
 
   @placeholder_kinds [:gate, :map_fanout]

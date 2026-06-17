@@ -65,12 +65,10 @@ defmodule SymphonyElixir.Runtime.RoomEngineClient do
     end
   end
 
-  # astlog-ignore: public-def-needs-spec
   def run_node(%Node{kind: :agent} = node, _run_opts) do
     {:error, {:missing_envelope, node.id}, nil}
   end
 
-  # astlog-ignore: public-def-needs-spec
   def run_node(%Node{kind: kind} = node, _run_opts) do
     # Only :agent nodes go through the engine host. :exec/:subrun/:gate
     # nodes have their own executors; routing one here is a wiring bug, so

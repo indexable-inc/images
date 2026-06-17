@@ -132,6 +132,18 @@ pub enum Error {
         second_end: usize,
     },
 
+    #[snafu(display(
+        "rules:{line}: variable `{var}` is used only inside `(not ...)`; \
+         negation can only filter variables a positive atom already binds"
+    ))]
+    UnsafeNegation { var: String, line: usize },
+
+    #[snafu(display(
+        "rules: negation through recursion has no stratification (a relation \
+         depends on itself via `(not ...)`); first rule `{rule}` at rules:{line}"
+    ))]
+    UnstratifiableProgram { rule: String, line: usize },
+
     #[snafu(display("internal invariant broken: {what}"))]
     Internal { what: String },
 }

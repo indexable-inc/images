@@ -123,7 +123,7 @@ impl<'a> Evaluator<'a> {
                         regexes.insert(pattern.clone(), compiled);
                     }
                 }
-                BodyAtom::App(_) => {}
+                BodyAtom::App(_) | BodyAtom::Negation(_) => {}
             }
         }
         Ok(Self {
@@ -149,42 +149,49 @@ impl<'a> Evaluator<'a> {
                 .entry(rule.name.clone())
                 .or_insert_with(|| Relation::new(rule.head_vars.clone()));
         }
-        loop {
-            let mut staged: Vec<(&str, Row)> = Vec::new();
-            for rule in &self.program.rules {
-                let mut envs = Vec::new();
-                self.solve(&db, &rule.body, Env::new(), &mut envs)?;
-                for env in envs {
-                    let row = rule
-                        .head_vars
-                        .iter()
-                        .map(|var| {
-                            env.get(var).cloned().ok_or_else(|| {
-                                UnboundHeadVarSnafu {
-                                    line: rule.line,
-                                    var: var.clone(),
-                                }
-                                .build()
+        // Evaluate stratum by stratum: every relation a rule negates lives in an
+        // earlier stratum, so by the time a stratum runs its negated relations are
+        // final. Within a stratum, iterate the usual naive fixpoint to convergence.
+        for stratum in self.program.strata()? {
+            loop {
+                let mut staged: Vec<(&str, Row)> = Vec::new();
+                for &index in &stratum {
+                    let rule = &self.program.rules[index];
+                    let mut envs = Vec::new();
+                    self.solve(&db, &rule.body, Env::new(), &mut envs)?;
+                    for env in envs {
+                        let row = rule
+                            .head_vars
+                            .iter()
+                            .map(|var| {
+                                env.get(var).cloned().ok_or_else(|| {
+                                    UnboundHeadVarSnafu {
+                                        line: rule.line,
+                                        var: var.clone(),
+                                    }
+                                    .build()
+                                })
                             })
-                        })
-                        .collect::<Result<Row, _>>()?;
-                    staged.push((&rule.name, row));
+                            .collect::<Result<Row, _>>()?;
+                        staged.push((&rule.name, row));
+                    }
+                }
+                let mut grew = false;
+                for (name, row) in staged {
+                    let relation = db.relations.get_mut(name).ok_or_else(|| {
+                        InternalSnafu {
+                            what: format!("relation `{name}` missing from database"),
+                        }
+                        .build()
+                    })?;
+                    grew |= relation.insert(row);
+                }
+                if !grew {
+                    break;
                 }
             }
-            let mut grew = false;
-            for (name, row) in staged {
-                let relation = db.relations.get_mut(name).ok_or_else(|| {
-                    InternalSnafu {
-                        what: format!("relation `{name}` missing from database"),
-                    }
-                    .build()
-                })?;
-                grew |= relation.insert(row);
-            }
-            if !grew {
-                return Ok(db);
-            }
         }
+        Ok(db)
     }
 
     /// All variable bindings satisfying `atoms` against a finished database.
@@ -252,6 +259,27 @@ impl<'a> Evaluator<'a> {
                     if let Some(next) = next {
                         self.solve(db, rest, next, out)?;
                     }
+                }
+            }
+            BodyAtom::Negation(neg) => {
+                // Succeed iff no row of the (lower-stratum, final) relation unifies
+                // with the current bindings. Negation filters; it binds nothing.
+                let relation = db.relations.get(&neg.name).ok_or_else(|| {
+                    UnknownRelationSnafu {
+                        name: neg.name.clone(),
+                        line: neg.line,
+                    }
+                    .build()
+                })?;
+                let matched = relation.rows().iter().any(|row| {
+                    let mut env = Some(env.clone());
+                    for (term, value) in neg.args.iter().zip(row) {
+                        env = env.and_then(|e| unify_term(&e, term, value));
+                    }
+                    env.is_some()
+                });
+                if !matched {
+                    self.solve(db, rest, env, out)?;
                 }
             }
         }
@@ -340,23 +368,21 @@ impl<'a> Evaluator<'a> {
                 );
                 Ok(absent.then(|| env.clone()).into_iter().collect())
             }
-            "no-attached-sibling" => {
+            "attached-sibling" => {
                 let node = bound_node(app, env, 0)?;
                 let kind = bound_value(app, env, 1)?;
                 let text = bound_value(app, env, 2)?;
-                // Holds when none of the named siblings *attached above* `node`
-                // has a descendant with this kind and exact text. "Attached
-                // above" = the preceding named siblings up to (not including) the
-                // nearest preceding sibling of the same kind as `node` -- i.e. the
-                // annotation block (`@spec`/`@impl`/`@doc`/comments) that sits
-                // directly above a definition, stopping at the previous
-                // definition/clause of the same kind. This lets a rule require an
-                // adjacent annotation without general negation, while skipping
-                // intervening comments and doc attributes.
+                // Holds when some named sibling *attached above* `node` has a
+                // descendant with this kind and exact text. "Attached above" = the
+                // preceding named siblings up to (not including) the nearest
+                // preceding sibling of the same kind as `node` -- i.e. the
+                // annotation block (`@spec`/`@impl`/`@doc`/comments) directly above
+                // a definition, stopping at the previous definition/clause of the
+                // same kind. Absence is expressed by negating this with `(not ...)`.
                 let kt = self.corpus.value_text(&kind);
                 let tt = self.corpus.value_text(&text);
-                let absent = !self.attached_has_descendant(node, kt, tt);
-                Ok(absent.then(|| env.clone()).into_iter().collect())
+                let present = self.attached_has_descendant(node, kt, tt);
+                Ok(present.then(|| env.clone()).into_iter().collect())
             }
             other => InternalSnafu {
                 what: format!("builtin `{other}` has no evaluator"),

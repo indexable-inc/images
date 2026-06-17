@@ -1,55 +1,91 @@
 
 ;; Elixir type-discipline rules. They push code toward the shape Elixir 1.18's
-;; set-theoretic type checker can actually check: typed structs and spec'd
-;; public functions. Fixtures live in astlog-rules/tests/<rule-id>/ and run as
-;; `.ex` by the `astlog-rules` flake-check self-test.
-;;
-;; These are best-effort lint nudges, not a sound type analysis: astlog matches
-;; text and structure, not names/arities, so each rule has documented blind
-;; spots noted below. They catch the common cases; `# astlog-ignore: <rule>`
-;; is the escape hatch for the rest.
+;; set-theoretic type checker can actually check: typed structs and spec'd public
+;; functions. Both rules are name/structure-matched via stratified negation, so
+;; they are sound up to arity (see the note on public-def-needs-spec). Fixtures
+;; live in astlog-rules/tests/<rule-id>/ and run as `.ex` by the `astlog-rules`
+;; flake-check self-test.
 
-;; defstruct-needs-type: a module that defines a struct but no `@type` cannot be
-;; given a precise struct type by the checker (`state.field` access stays
-;; `dynamic`). Require a `@type` (conventionally `@type t :: %__MODULE__{...}`).
-;; Heuristic: "has a @type" is approximated by the presence of any identifier
-;; with text `type` in the module, so a function or variable literally named
-;; `type` also satisfies it (a false negative). Good enough for a nudge.
-;;
-;; The `defmodule`/`defstruct` calls are matched inline (rather than via helper
-;; relations) because the `astlog-rules` self-test requires every `(rule ...)`
-;; to back a `(lint ...)`; folding them in keeps this rule self-contained.
+;; --- shared building blocks ---
+
+(rule (defmodule m)
+  (match elixir "(call (identifier) @i) @m")
+  (text i "defmodule"))
+
+;; A public `def` and the node of its function name, across the three surface
+;; forms: `def f(args)`, `def f(args) when guard`, and bare `def f`.
+(rule (def-name d n)
+  (match elixir "(call (identifier) @kw (arguments (call (identifier) @n))) @d")
+  (text kw "def"))
+(rule (def-name d n)
+  (match elixir "(call (identifier) @kw (arguments (binary_operator left: (call (identifier) @n)))) @d")
+  (text kw "def"))
+(rule (def-name d n)
+  (match elixir "(call (identifier) @kw (arguments (identifier) @n)) @d")
+  (text kw "def"))
+
+;; A `@spec` and the node of the function name it documents.
+(rule (spec-name s n)
+  (match elixir "(unary_operator (call (identifier) @kw (arguments (binary_operator left: (call (identifier) @n))))) @s")
+  (text kw "spec"))
+
+;; --- defstruct-needs-type: a struct module must declare a @type ---
+;; Matches the actual `@type`/`@typep`/`@opaque` attribute (a `@` unary_operator
+;; over a call to `type`/...), not merely any identifier with text `type`.
+(rule (type-attr a)
+  (match elixir "(unary_operator (call (identifier) @ti)) @a")
+  (text-match ti "^(type|typep|opaque)$"))
+(rule (defstruct-call c)
+  (match elixir "(call (identifier) @i) @c")
+  (text i "defstruct"))
+(rule (module-has-type m)
+  (type-attr a)
+  (defmodule m)
+  (ancestor m a))
 (rule (defstruct-needs-type m)
-  (match elixir "(call (identifier) @mi) @m")
-  (text mi "defmodule")
-  (match elixir "(call (identifier) @si) @c")
-  (text si "defstruct")
+  (defmodule m)
+  (defstruct-call c)
   (ancestor m c)
-  (no-descendant m "identifier" "type"))
+  (not (module-has-type m)))
 (lint defstruct-needs-type error
   "module defines a struct but no @type; add a `@type t` for it so the 1.18 type checker can type its fields")
 
-;; public-def-needs-spec: a public `def` whose annotation block carries no
-;; `@spec` gives the checker no declared signature. Require one (or, for a
-;; behaviour callback, an `@impl` — the contract then comes from the behaviour
-;; and the checker already knows the callback's type).
+;; --- public-def-needs-spec: a public def needs a @spec (or @impl) ---
+;; A def is flagged unless its module has a @spec, or an @impl-annotated def, with
+;; the SAME function name. Name-matching makes one `@spec`/`@impl` cover every
+;; clause of a multi-clause function, and prevents a spec for a different function
+;; from exempting an unspec'd def. Behaviour callbacks are exempt via @impl.
 ;;
-;; `no-attached-sibling` searches the annotation block directly above the def
-;; (preceding siblings up to the previous def of the same kind), so a `@spec`
-;; still counts with a `@doc` or comment between it and the def. Each clause of a
-;; multi-clause function is judged on its own: put a `@spec`/`@impl` above every
-;; clause, or suppress a continuation clause with `# astlog-ignore:
-;; public-def-needs-spec`.
-;;
-;; Blind spot: the check only looks for an identifier with text `spec`/`impl` in
-;; the block, it does NOT match the spec's name/arity to the def. So a `@spec`
-;; (or `@impl`) for a *different* function sitting directly above an unspec'd def
-;; will wrongly exempt it. It catches the overwhelmingly common case; it is not a
-;; soundness guarantee.
-(rule (public-def-needs-spec c)
-  (match elixir "(call (identifier) @i) @c")
-  (text i "def")
-  (no-attached-sibling c "identifier" "spec")
-  (no-attached-sibling c "identifier" "impl"))
+;; Residual: matching is by name, not name+arity (astlog has no aggregation to
+;; count arguments), so `@spec foo/1` also exempts `def foo/2`. Rare, and the real
+;; type gate -- `mix compile --warnings-as-errors` -- is unaffected.
+
+;; module m contains a @spec for the function named t.
+(rule (spec-in-module m t)
+  (spec-name s n)
+  (text n t)
+  (defmodule m)
+  (ancestor m s))
+
+;; a def whose annotation block carries an `@impl` (a behaviour callback).
+(rule (impl-def d)
+  (def-name d n)
+  (attached-sibling d "identifier" "impl"))
+
+;; module m contains an @impl-annotated def named t (so every t clause is a callback).
+(rule (impl-in-module m t)
+  (impl-def d)
+  (def-name d n)
+  (text n t)
+  (defmodule m)
+  (ancestor m d))
+
+(rule (public-def-needs-spec d)
+  (def-name d n)
+  (text n t)
+  (defmodule m)
+  (ancestor m d)
+  (not (spec-in-module m t))
+  (not (impl-in-module m t)))
 (lint public-def-needs-spec error
-  "public def without a preceding @spec; add a `@spec` directly above it so the type checker has a signature")
+  "public def without a @spec; add a `@spec` for it so the type checker has a signature")

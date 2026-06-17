@@ -2,11 +2,18 @@ defmodule Service do
   @spec call(integer()) :: integer()
   def call(x), do: x
 
-  @spec documented(integer()) :: integer()
-  @doc "a doc attribute between the spec and the def"
-  def documented(x), do: x
+  # One @spec covers every clause of a multi-clause function (name-matched).
+  @spec multi(integer()) :: :ok
+  def multi(0), do: :ok
+  def multi(_), do: :ok
 
-  @spec commented(integer()) :: integer()
-  # an explanatory comment between the spec and the def
-  def commented(x), do: x
+  # A behaviour callback is exempt via @impl, across all its clauses.
+  @impl true
+  def handle_event("a", _params, socket), do: {:noreply, socket}
+  def handle_event("b", _params, socket), do: {:noreply, socket}
+
+  # A @doc between the @spec and the def does not hide the spec.
+  @doc "documented"
+  @spec documented(integer()) :: integer()
+  def documented(x), do: x
 end
