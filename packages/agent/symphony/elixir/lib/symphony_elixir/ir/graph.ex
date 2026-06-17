@@ -147,6 +147,7 @@ defmodule SymphonyElixir.IR.Graph do
     Map.get(inputs, "__on_failure__") == {:literal, true}
   end
 
+  # astlog-ignore: public-def-needs-spec
   def trigger_runs_on_failure?(_node), do: false
 
   @doc """
@@ -199,6 +200,7 @@ defmodule SymphonyElixir.IR.Graph do
   @spec finished_status(RunGraph.t()) :: RunGraph.status() | :running
   def finished_status(%RunGraph{nodes: nodes}) when map_size(nodes) == 0, do: :succeeded
 
+  # astlog-ignore: public-def-needs-spec
   def finished_status(%RunGraph{} = graph) do
     cond do
       not all_terminal?(graph) -> :running

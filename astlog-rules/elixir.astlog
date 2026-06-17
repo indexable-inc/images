@@ -1,0 +1,38 @@
+
+;; Elixir type-discipline rules. They push code toward the shape Elixir 1.18's
+;; set-theoretic type checker can actually check: typed structs and spec'd
+;; public functions. Fixtures live in astlog-rules/tests/<rule-id>/ and run as
+;; `.ex` by the `astlog-rules` flake-check self-test.
+
+;; defstruct-needs-type: a module that defines a struct but no `@type` cannot be
+;; given a precise struct type by the checker (`state.field` access stays
+;; `dynamic`). Require a `@type` (conventionally `@type t :: %__MODULE__{...}`).
+(rule (defstruct-call c)
+  (match elixir "(call (identifier) @i) @c")
+  (text i "defstruct"))
+(rule (defmodule-node m)
+  (match elixir "(call (identifier) @i) @m")
+  (text i "defmodule"))
+(rule (defstruct-needs-type m)
+  (defmodule-node m)
+  (defstruct-call c)
+  (ancestor m c)
+  (no-descendant m "identifier" "type"))
+(lint defstruct-needs-type error
+  "module defines a struct but no @type; add a `@type t` for it so the 1.18 type checker can type its fields")
+
+;; public-def-needs-spec: a public `def` with no `@spec` directly above it gives
+;; the checker no declared signature. Require an adjacent `@spec`.
+(rule (public-def-needs-spec c)
+  (match elixir "(call (identifier) @i) @c")
+  (text i "def")
+  ;; exempt behaviour callbacks: an `@impl` directly above means the contract
+  ;; comes from the behaviour, and the checker already knows the callback's type.
+  ;; The check is against the immediately-preceding sibling, so each clause of a
+  ;; multi-clause function is judged on its own: put a `@spec` (or `@impl`) above
+  ;; every clause, or suppress a continuation clause with `# astlog-ignore:
+  ;; public-def-needs-spec`. (Sound by design: it never hides an unspec'd def.)
+  (no-prev-sibling c "identifier" "spec")
+  (no-prev-sibling c "identifier" "impl"))
+(lint public-def-needs-spec error
+  "public def without a preceding @spec; add a `@spec` directly above it so the type checker has a signature")

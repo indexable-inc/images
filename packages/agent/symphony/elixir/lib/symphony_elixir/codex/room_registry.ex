@@ -14,6 +14,7 @@ defmodule SymphonyElixir.Codex.RoomRegistry do
   @spec register(Config.t(), map()) :: :ok
   def register(%Config{room: %{registry_url: nil}}, _backend), do: :ok
 
+  # astlog-ignore: public-def-needs-spec
   def register(%Config{} = config, backend) when is_map(backend) do
     post(config, "/api/backends", backend, "register")
   end
@@ -21,6 +22,7 @@ defmodule SymphonyElixir.Codex.RoomRegistry do
   @spec unregister(Config.t(), String.t()) :: :ok
   def unregister(%Config{room: %{registry_url: nil}}, _id), do: :ok
 
+  # astlog-ignore: public-def-needs-spec
   def unregister(%Config{} = config, id) when is_binary(id) do
     case Req.delete(url(config, "/api/backends/" <> URI.encode(id)),
            headers: headers(config),

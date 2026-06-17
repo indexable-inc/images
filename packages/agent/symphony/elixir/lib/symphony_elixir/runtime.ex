@@ -94,7 +94,9 @@ defmodule SymphonyElixir.Runtime do
 
   @doc "Read the current graph snapshot. Used by tests and the operator surface."
   @spec graph(pid() | String.t()) :: RunGraph.t()
+  @spec graph(pid()) :: RunGraph.t()
   def graph(pid) when is_pid(pid), do: GenServer.call(pid, :graph)
+  @spec graph(binary()) :: RunGraph.t()
   def graph(run_id) when is_binary(run_id), do: GenServer.call(via(run_id), :graph)
 
   @typedoc "Who requested an operator action, recorded in the audit log."
@@ -107,7 +109,9 @@ defmodule SymphonyElixir.Runtime do
   """
   @spec cancel(pid() | String.t(), actor()) :: :ok
   def cancel(target, actor \\ :operator)
+  @spec cancel(pid(), actor()) :: :ok
   def cancel(pid, actor) when is_pid(pid), do: GenServer.call(pid, {:cancel, actor})
+  @spec cancel(binary(), actor()) :: :ok
   def cancel(run_id, actor) when is_binary(run_id), do: GenServer.call(via(run_id), {:cancel, actor})
 
   @doc """
@@ -118,8 +122,10 @@ defmodule SymphonyElixir.Runtime do
   """
   @spec retry_node(pid() | String.t(), String.t(), actor()) :: :ok
   def retry_node(target, node_id, actor \\ :operator)
+  @spec retry_node(pid(), String.t(), actor()) :: :ok
   def retry_node(pid, node_id, actor) when is_pid(pid), do: GenServer.call(pid, {:retry_node, node_id, actor})
 
+  @spec retry_node(binary(), String.t(), actor()) :: :ok
   def retry_node(run_id, node_id, actor) when is_binary(run_id),
     do: GenServer.call(via(run_id), {:retry_node, node_id, actor})
 
@@ -130,7 +136,9 @@ defmodule SymphonyElixir.Runtime do
   """
   @spec rerun(pid() | String.t(), actor()) :: :ok
   def rerun(target, actor \\ :operator)
+  @spec rerun(pid(), actor()) :: :ok
   def rerun(pid, actor) when is_pid(pid), do: GenServer.call(pid, {:rerun, actor})
+  @spec rerun(binary(), actor()) :: :ok
   def rerun(run_id, actor) when is_binary(run_id), do: GenServer.call(via(run_id), {:rerun, actor})
 
   @doc """
@@ -142,7 +150,9 @@ defmodule SymphonyElixir.Runtime do
   """
   @spec clear_failed(pid() | String.t(), actor()) :: :ok
   def clear_failed(target, actor \\ :operator)
+  @spec clear_failed(pid(), actor()) :: :ok
   def clear_failed(pid, actor) when is_pid(pid), do: GenServer.call(pid, {:clear_failed, actor})
+  @spec clear_failed(binary(), actor()) :: :ok
   def clear_failed(run_id, actor) when is_binary(run_id), do: GenServer.call(via(run_id), {:clear_failed, actor})
 
   @impl true

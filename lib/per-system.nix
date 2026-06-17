@@ -93,8 +93,26 @@ let
           astlog scan astlog-rules/cargo.astlog ...$cargo_files
         }
       }
+      # The Elixir type-discipline rules (astlog-rules/elixir.astlog): a struct
+      # needs a `@type`, and a public `def` needs a preceding `@spec` (behaviour
+      # callbacks marked `@impl` are exempt) — the lint-level nudge toward the
+      # shape Elixir 1.18's set-theoretic checker can check. Run over every
+      # package's `lib/` Elixir, not a hand-maintained directory list: the only
+      # scoping is to `lib/` itself, because `mix.exs` build functions and
+      # `test/` ExUnit helpers are not the type-checked runtime surface and
+      # speccing them would be noise. `fd` already skips gitignored `_build`/`deps`.
+      def "main astlog-elixir" [] {
+        let files = (
+          fd --extension ex --extension exs
+          | lines
+          | where {|p| $p =~ '(^|/)lib/' }
+        )
+        if ($files | is-not-empty) {
+          astlog scan astlog-rules/elixir.astlog ...$files
+        }
+      }
       def main [] {
-        error make { msg: "specify a stage: nixfmt | statix | deadnix | astlog | astlog-rust" }
+        error make { msg: "specify a stage: nixfmt | statix | deadnix | astlog | astlog-rust | astlog-elixir" }
       }
     '';
   };
@@ -120,6 +138,10 @@ let
       "astlog-rust".command = [
         (lib.getExe lintStage)
         "astlog-rust"
+      ];
+      "astlog-elixir".command = [
+        (lib.getExe lintStage)
+        "astlog-elixir"
       ];
     };
   };
@@ -888,10 +910,11 @@ let
                 check_ruleset "$root/nix.astlog" nix
                 check_ruleset "$root/rust.astlog" rs
                 check_ruleset "$root/cargo.astlog" toml
+                check_ruleset "$root/elixir.astlog" ex
                 # Every fixture dir must back a lint in one of the rulesets.
                 for dir in "$tests"/*/; do
                   rule=$(basename "$dir")
-                  if ! grep -q "^(lint $rule " "$root/nix.astlog" "$root/rust.astlog" "$root/cargo.astlog"; then
+                  if ! grep -q "^(lint $rule " "$root/nix.astlog" "$root/rust.astlog" "$root/cargo.astlog" "$root/elixir.astlog"; then
                     echo "fixture dir astlog-rules/tests/$rule matches no lint" >&2
                     fail=1
                   fi
@@ -975,6 +998,12 @@ let
           # packages/agent/symphony/default.nix. The advisory lane (dialyzer,
           # sobelow, deps.audit) stays a local `mix quality` run.
           symphony-elixir = repoPackages.symphony.passthru.tests.elixir;
+          # The experimental hive package's type-check lane: `mix compile
+          # --warnings-as-errors` (which runs Elixir 1.18's set-theoretic type
+          # checker) plus format and test, as a sandboxed derivation. The
+          # "type check by default" half of the Elixir gate; the lint half is
+          # astlog-rules/elixir.astlog. See packages/andrewgazelka/hive/default.nix.
+          hive-elixir = repoPackages.hive.passthru.tests.elixir;
           # Deterministic alloc-count gate for indexbench: runs the counting-
           # allocator demo bench once through `indexbench assert` and fails if its
           # allocation count exceeds the declared budget. Reproducible, unlike

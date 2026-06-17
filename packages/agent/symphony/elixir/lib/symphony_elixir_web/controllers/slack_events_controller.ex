@@ -18,6 +18,7 @@ defmodule SymphonyElixirWeb.SlackEventsController do
     end
   end
 
+  @spec accept(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def accept(conn, %{"event" => %{"type" => "app_mention"} = event}) do
     with :ok <- verify_signature(conn) do
       json(conn, handle_app_mention(event))
@@ -28,6 +29,7 @@ defmodule SymphonyElixirWeb.SlackEventsController do
     end
   end
 
+  @spec accept(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def accept(conn, _params) do
     with :ok <- verify_signature(conn) do
       json(conn, %{ok: true, ignored: true})

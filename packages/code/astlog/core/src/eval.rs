@@ -340,11 +340,55 @@ impl<'a> Evaluator<'a> {
                 );
                 Ok(absent.then(|| env.clone()).into_iter().collect())
             }
+            "no-prev-sibling" => {
+                let node = bound_node(app, env, 0)?;
+                let kind = bound_value(app, env, 1)?;
+                let text = bound_value(app, env, 2)?;
+                // Holds when the immediately-preceding named sibling is absent
+                // or has no descendant with this kind and exact text. The
+                // sibling-scoped analogue of `no-descendant`: it lets a rule
+                // require an adjacent annotation (e.g. a `@spec` directly above
+                // a `def`) without general negation.
+                let absent = match self.prev_named_sibling(node) {
+                    None => true,
+                    Some(sibling) => !self.has_descendant(
+                        sibling,
+                        self.corpus.value_text(&kind),
+                        self.corpus.value_text(&text),
+                    ),
+                };
+                Ok(absent.then(|| env.clone()).into_iter().collect())
+            }
             other => InternalSnafu {
                 what: format!("builtin `{other}` has no evaluator"),
             }
             .fail(),
         }
+    }
+
+    /// The immediately-preceding named sibling of `node`: the named node with
+    /// the same parent that ends closest before `node` starts. Anonymous tokens
+    /// (`do`, `,`, ...) are skipped so callers see syntactic statements. `None`
+    /// when `node` is the first named child or has no parent.
+    fn prev_named_sibling(&self, node: NodeRef) -> Option<NodeRef> {
+        let file = &self.corpus.files[node.file];
+        let info = &file.nodes[node.node];
+        let parent = info.parent?;
+        let start = info.start;
+        file.nodes
+            .iter()
+            .enumerate()
+            .filter(|(index, info)| {
+                *index != node.node
+                    && info.named
+                    && info.parent == Some(parent)
+                    && info.end <= start
+            })
+            .max_by_key(|(_, info)| info.end)
+            .map(|(index, _)| NodeRef {
+                file: node.file,
+                node: index,
+            })
     }
 
     /// Whether `root` has a strict descendant with this kind and exact source

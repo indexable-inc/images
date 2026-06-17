@@ -28,6 +28,7 @@ defmodule SymphonyElixirWeb.Markdown do
   @spec to_html(String.t() | nil) :: Phoenix.HTML.safe()
   def to_html(nil), do: Phoenix.HTML.raw("")
 
+  @spec to_html(String.t() | nil) :: Phoenix.HTML.safe()
   def to_html(source) when is_binary(source) do
     case String.trim(source) do
       "" ->

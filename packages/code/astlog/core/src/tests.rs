@@ -279,6 +279,39 @@ fn dirty() { danger(); }
     Ok(())
 }
 
+#[test]
+fn no_prev_sibling_checks_immediately_preceding_named_sibling() -> TestResult {
+    // Two public defs: one directly under a `@spec`, one not. `no-prev-sibling`
+    // keeps only the def whose preceding named sibling carries no `spec`.
+    let source = "
+defmodule Demo do
+  @spec documented() :: :ok
+  def documented(), do: :ok
+  def undocumented(), do: :ok
+end
+";
+    let rules = r#"
+(rule (undocumented-def c)
+  (match elixir "(call (identifier) @i) @c")
+  (text i "def")
+  (no-prev-sibling c "identifier" "spec"))
+"#;
+    let dir = tempfile::tempdir()?;
+    write_sample(&dir, "sample.ex", source)?;
+    let analysis = analyze(rules, &[dir.path().to_path_buf()])?;
+    let rows = analysis.database.relations["undocumented-def"].rows();
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the def whose immediately-preceding sibling is not a @spec qualifies"
+    );
+    let Value::Node(node) = &rows[0][0] else {
+        return Err("undocumented-def column 0 should be a node".into());
+    };
+    assert!(analysis.corpus.node_text(*node).contains("undocumented"));
+    Ok(())
+}
+
 /// One rule flagging every `.unwrap()` receiver, lint-declared as an error
 /// with a `{e}` splice.
 const LINT_RULES: &str = r#"

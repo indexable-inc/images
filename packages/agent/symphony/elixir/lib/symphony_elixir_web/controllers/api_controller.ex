@@ -14,6 +14,7 @@ defmodule SymphonyElixirWeb.ApiController do
 
   alias SymphonyElixir.Runtime.Ingress
 
+  @spec enqueue_run(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def enqueue_run(conn, params) do
     input = Map.get(params, "input", %{})
 

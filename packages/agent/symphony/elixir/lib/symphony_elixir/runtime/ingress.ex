@@ -32,6 +32,7 @@ defmodule SymphonyElixir.Runtime.Ingress do
   @spec start_workflow(WorkflowCatalog.entry(), map() | nil, keyword()) :: {:ok, started()} | {:error, term()}
   def start_workflow(entry, trigger_context \\ nil, opts \\ [])
 
+  @spec start_workflow(WorkflowCatalog.entry(), map() | nil, keyword()) :: {:ok, started()} | {:error, term()}
   def start_workflow(%{ast: ast, hash: hash} = entry, trigger_context, opts) do
     run_id = Keyword.get_lazy(opts, :run_id, fn -> generate_run_id(entry) end)
     start_opts = Keyword.drop(opts, [:run_id])

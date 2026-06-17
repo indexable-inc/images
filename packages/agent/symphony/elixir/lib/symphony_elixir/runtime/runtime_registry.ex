@@ -119,6 +119,7 @@ defmodule SymphonyElixir.Runtime.RuntimeRegistry do
     {:reply, :ok, put_in(state.monitors[ref], worker.worker_id)}
   end
 
+  # astlog-ignore: public-def-needs-spec
   def handle_call({:unregister, worker_id}, _from, state) do
     :ets.delete(@table, worker_id)
     Logger.info("RuntimeRegistry: unregistered worker=#{worker_id}")

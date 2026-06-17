@@ -67,6 +67,7 @@ defmodule SymphonyElixirWeb.Components.IRGraph do
   attr(:placement, :map, default: nil)
   attr(:base_path, :string, default: "/ir")
 
+  @spec graph(map()) :: Phoenix.LiveView.Rendered.t()
   def graph(assigns) do
     assigns = assign(assigns, :layout, layout(assigns.nodes, assigns.trigger, assigns.placement))
 
@@ -131,10 +132,26 @@ defmodule SymphonyElixirWeb.Components.IRGraph do
         }
   def layout(nodes, trigger \\ nil, placement \\ nil)
 
+  @spec layout([map()], String.t() | nil, map() | nil) :: %{
+          viewbox: String.t(),
+          natural_width: integer(),
+          node_w: integer(),
+          node_h: integer(),
+          nodes: [map()],
+          edges: [map()]
+        }
   def layout([], nil, _placement) do
     %{viewbox: "0 0 200 80", natural_width: 200, node_w: @min_node_w, node_h: 80, nodes: [], edges: []}
   end
 
+  @spec layout([map()], String.t() | nil, map() | nil) :: %{
+          viewbox: String.t(),
+          natural_width: integer(),
+          node_w: integer(),
+          node_h: integer(),
+          nodes: [map()],
+          edges: [map()]
+        }
   def layout([], trigger, _placement) when is_binary(trigger) do
     sizing = [%{id: nil, label: trigger, detail_lines: []}]
     node_w = node_width(sizing)
@@ -162,6 +179,14 @@ defmodule SymphonyElixirWeb.Components.IRGraph do
     }
   end
 
+  @spec layout([map()], String.t() | nil, map() | nil) :: %{
+          viewbox: String.t(),
+          natural_width: integer(),
+          node_w: integer(),
+          node_h: integer(),
+          nodes: [map()],
+          edges: [map()]
+        }
   def layout(nodes, trigger, placement) when is_list(nodes) do
     # Build a node-id to deps map and compute layer assignments.
     deps_map = Map.new(nodes, fn n -> {n["id"], n["deps"] || []} end)

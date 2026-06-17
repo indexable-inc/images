@@ -31,6 +31,7 @@ defmodule SymphonyElixirWeb.WorkflowsLive do
     {:noreply, assign(socket, live_action: :show, workflow_name: name)}
   end
 
+  # astlog-ignore: public-def-needs-spec
   def handle_params(_params, _uri, socket) do
     {:noreply,
      assign(socket,
@@ -47,6 +48,7 @@ defmodule SymphonyElixirWeb.WorkflowsLive do
     """
   end
 
+  # astlog-ignore: public-def-needs-spec
   def render(assigns) do
     ~H"""
     {SymphonyElixirWeb.Layouts.app(%{inner_content: render_index(assigns), active_tab: :workflows})}

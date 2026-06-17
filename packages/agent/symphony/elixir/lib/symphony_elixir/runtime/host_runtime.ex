@@ -180,6 +180,7 @@ defmodule SymphonyElixir.Runtime.HostRuntime do
   @doc "The configured host user, or `{:error, :host_user_not_configured}`."
   @spec host_user(Config.t()) :: {:ok, String.t()} | {:error, term()}
   def host_user(%Config{host_user: user}) when is_binary(user) and user != "", do: {:ok, user}
+  @spec host_user(Config.t()) :: {:ok, String.t()} | {:error, term()}
   def host_user(%Config{}), do: {:error, :host_user_not_configured}
 
   @doc "Resolve the target user's home from `getent passwd` via the driver."

@@ -31,6 +31,7 @@ defmodule SymphonyElixirWeb.SkillsLive do
     {:noreply, assign(socket, live_action: :show, skill: skill, skill_name: name)}
   end
 
+  # astlog-ignore: public-def-needs-spec
   def handle_params(_params, _uri, socket) do
     {:noreply, assign(socket, live_action: :index)}
   end
@@ -42,6 +43,7 @@ defmodule SymphonyElixirWeb.SkillsLive do
     """
   end
 
+  # astlog-ignore: public-def-needs-spec
   def render(assigns) do
     ~H"""
     {SymphonyElixirWeb.Layouts.app(%{inner_content: render_index(assigns), active_tab: :skills})}

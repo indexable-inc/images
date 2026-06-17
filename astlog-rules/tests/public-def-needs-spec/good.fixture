@@ -1,0 +1,4 @@
+defmodule Service do
+  @spec call(integer()) :: integer()
+  def call(x), do: x
+end

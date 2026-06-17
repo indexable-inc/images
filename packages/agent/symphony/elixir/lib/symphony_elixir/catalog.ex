@@ -30,6 +30,8 @@ defmodule SymphonyElixir.Catalog do
 
   defstruct [:skills_dir, :poll_ms]
 
+  @type t :: %__MODULE__{skills_dir: Path.t() | nil, poll_ms: non_neg_integer() | nil}
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)

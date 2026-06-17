@@ -6,8 +6,11 @@ defmodule SymphonyElixirWeb.StaticAssetController do
 
   use Phoenix.Controller, formats: []
 
+  @spec phoenix(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def phoenix(conn, _params), do: send_dep_js(conn, :phoenix, "priv/static/phoenix.js")
+  @spec phoenix_html(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def phoenix_html(conn, _params), do: send_dep_js(conn, :phoenix_html, "priv/static/phoenix_html.js")
+  @spec phoenix_live_view(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def phoenix_live_view(conn, _params), do: send_dep_js(conn, :phoenix_live_view, "priv/static/phoenix_live_view.js")
 
   defp send_dep_js(conn, app, relative_path) do

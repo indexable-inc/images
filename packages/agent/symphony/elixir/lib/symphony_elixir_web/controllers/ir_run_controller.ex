@@ -30,10 +30,12 @@ defmodule SymphonyElixirWeb.IRRunController do
   # engines, efforts, permissions, locations, node kinds/states, effect
   # kinds, and trigger kinds. A consumer drives its selects from this so a
   # new enum value at its owner reaches the UI without a form edit.
+  @spec schema(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def schema(conn, _params) do
     json(conn, Schema.to_map())
   end
 
+  @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def index(conn, _params) do
     summaries = Store.load_all() |> Enum.sort_by(& &1.run_id) |> Enum.map(&View.summary/1)
     json(conn, %{runs: summaries})
@@ -44,6 +46,7 @@ defmodule SymphonyElixirWeb.IRRunController do
   # it, and start it under Runtime.Supervisor. Trigger context is optional;
   # an operator-started run carries `%{kind: :manual}` plus any input the
   # caller passed.
+  @spec create(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def create(conn, %{"workflow" => name}) when is_binary(name) do
     case Runtime.Ingress.start_by_name(name, trigger_context(conn.params), []) do
       {:ok, %{run_id: run_id}} ->
@@ -57,6 +60,7 @@ defmodule SymphonyElixirWeb.IRRunController do
     end
   end
 
+  @spec create(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def create(conn, _params) do
     conn |> put_status(:unprocessable_entity) |> json(%{error: "missing required field: workflow"})
   end
@@ -75,6 +79,7 @@ defmodule SymphonyElixirWeb.IRRunController do
     %{kind: :manual, input: input}
   end
 
+  @spec show(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def show(conn, %{"run_id" => run_id}) do
     case Store.load(run_id) do
       {:ok, graph} -> json(conn, View.detail(graph))
@@ -83,13 +88,17 @@ defmodule SymphonyElixirWeb.IRRunController do
     end
   end
 
+  @spec cancel(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def cancel(conn, %{"run_id" => run_id}), do: operate(conn, run_id, &Runtime.cancel(&1, actor(conn)))
 
+  @spec rerun(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def rerun(conn, %{"run_id" => run_id}), do: operate(conn, run_id, &Runtime.rerun(&1, actor(conn)))
 
+  @spec clear_failed(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def clear_failed(conn, %{"run_id" => run_id}),
     do: operate(conn, run_id, &Runtime.clear_failed(&1, actor(conn)))
 
+  @spec retry_node(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def retry_node(conn, %{"run_id" => run_id, "node_id" => node_id}),
     do: operate(conn, run_id, &Runtime.retry_node(&1, node_id, actor(conn)))
 

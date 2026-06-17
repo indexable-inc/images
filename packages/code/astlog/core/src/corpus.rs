@@ -36,6 +36,10 @@ pub struct NodeInfo {
     pub start: usize,
     pub end: usize,
     pub parent: Option<usize>,
+    /// Tree-sitter "named" node (a grammar rule, not an anonymous token like
+    /// `do` or `,`). Sibling-walking builtins skip anonymous nodes so they see
+    /// the syntactic statements, not the punctuation between them.
+    pub named: bool,
 }
 
 /// 1-based line/column of a byte offset.
@@ -193,6 +197,7 @@ fn build_node_table(tree: &tree_sitter::Tree) -> NodeTable {
             start: node.start_byte(),
             end: node.end_byte(),
             parent: parents.last().copied(),
+            named: node.is_named(),
         });
         if cursor.goto_first_child() {
             parents.push(index);

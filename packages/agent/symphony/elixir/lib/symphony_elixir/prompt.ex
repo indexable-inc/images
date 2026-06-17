@@ -59,9 +59,12 @@ defmodule SymphonyElixir.Prompt do
   @spec build(SymphonyElixir.IR.Node.prompt_ref(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def build(prompt_ref, opts \\ [])
 
+  # astlog-ignore: public-def-needs-spec
   def build({:inline, text}, _opts) when is_binary(text), do: {:ok, text}
+  # astlog-ignore: public-def-needs-spec
   def build({:inline, nil}, _opts), do: {:error, :unresolved_inline_prompt}
 
+  # astlog-ignore: public-def-needs-spec
   def build({:skill, name, bindings}, opts) when is_binary(name) and is_map(bindings) do
     with {:ok, resolver} <- fetch_resolver(opts),
          {:ok, body} <- resolver.(name),
@@ -70,7 +73,9 @@ defmodule SymphonyElixir.Prompt do
     end
   end
 
+  # astlog-ignore: public-def-needs-spec
   def build(nil, _opts), do: {:error, :missing_prompt_ref}
+  # astlog-ignore: public-def-needs-spec
   def build(other, _opts), do: {:error, {:invalid_prompt_ref, other}}
 
   @doc """

@@ -49,12 +49,19 @@ defmodule SymphonyElixir.IR.View do
   """
   @spec trigger_label(map() | nil) :: String.t()
   def trigger_label(%{kind: :manual}), do: "manual"
+  # astlog-ignore: public-def-needs-spec
   def trigger_label(%{kind: :cron, schedule: schedule}), do: "cron " <> to_string(schedule)
+  # astlog-ignore: public-def-needs-spec
   def trigger_label(%{kind: :linear, label: label}), do: "linear: " <> to_string(label)
+  # astlog-ignore: public-def-needs-spec
   def trigger_label(%{kind: :slack_huddle_completed, channel: c}), do: "huddle #" <> to_string(c)
+  # astlog-ignore: public-def-needs-spec
   def trigger_label(%{kind: :slack_app_mention, channel: c}), do: "mention #" <> to_string(c)
+  # astlog-ignore: public-def-needs-spec
   def trigger_label(%{kind: :github_pr_label, label: label}), do: "github: " <> to_string(label)
+  # astlog-ignore: public-def-needs-spec
   def trigger_label(%{kind: kind}), do: to_string(kind)
+  # astlog-ignore: public-def-needs-spec
   def trigger_label(_), do: "manual"
 
   @doc "Full run view: nodes with attempts and outputs, plus expansion and audit logs."

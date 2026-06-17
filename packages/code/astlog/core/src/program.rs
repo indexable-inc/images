@@ -35,6 +35,7 @@ pub const BUILTINS: &[(&str, usize)] = &[
     ("same-file", 2),
     ("text-match", 2),
     ("no-descendant", 3),
+    ("no-prev-sibling", 3),
 ];
 
 /// A list S-expression destructured into its head atom and remaining items.
