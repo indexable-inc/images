@@ -18,6 +18,7 @@ No token is baked into the repo.
     await slack.messages("@hari")     # recent messages in your DM with @hari
     await slack.thread("general", "1234567890.123456")  # a single thread
     await slack.send("general", "hello from ix")        # post a message
+    await slack.send("general", "in-thread reply", thread_ts="1234567890.123456")
     await slack.search("deploy staging")                # search across Slack
 
 Each call returns a polars DataFrame with a fixed schema so empty results stay
@@ -62,7 +63,7 @@ __all__ = [
     "thread",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # The env var a shared (multiplayer) room sets on the one MCP it replicates
 # across participants. Incognito is the default: an unset (or empty) value means
@@ -681,20 +682,50 @@ async def thread(
     )
 
 
-async def send(channel: str, text: str) -> dict[str, Any]:
+async def send(
+    channel: str,
+    text: str,
+    *,
+    thread_ts: str | None = None,
+    reply_broadcast: bool = False,
+) -> dict[str, Any]:
     """Post ``text`` to ``channel`` and return Slack's response metadata.
 
     ``channel`` is resolved like :func:`messages` (channel, ``@user``, or id).
-    Returns ``{"ok": True, "ts": "<timestamp>", "channel": "<id>"}`` on success.
-    Needs ``chat:write``. Raises :exc:`SlackError` on failure or in a shared
-    room.
+
+    Pass ``thread_ts`` -- the Slack timestamp of a parent message (the ``ts``
+    from :func:`messages` or :func:`thread`, e.g. ``"1234567890.123456"``) -- to
+    reply *inside* that thread instead of posting a new top-level message. Set
+    ``reply_broadcast=True`` to also surface a threaded reply to the whole
+    channel; it is only valid with ``thread_ts`` and raises otherwise.
+
+    Returns ``{"ok": True, "ts": "<timestamp>", "channel": "<id>",
+    "thread_ts": "<parent ts, or "">"}`` on success (``thread_ts`` is non-empty
+    for a threaded reply). Needs ``chat:write``. Raises :exc:`SlackError` on
+    failure or in a shared room.
     """
     _require_incognito()
+    if reply_broadcast and not thread_ts:
+        raise SlackError("reply_broadcast=True is only valid together with thread_ts")
     token = _token()
     channel_id = _resolve_channel(channel, token)
 
-    data = _api_call("chat.postMessage", token, {"channel": channel_id, "text": text})
-    return {"ok": True, "ts": data.get("ts", ""), "channel": data.get("channel", "")}
+    params: dict[str, Any] = {"channel": channel_id, "text": text}
+    if thread_ts:
+        params["thread_ts"] = thread_ts
+        if reply_broadcast:
+            params["reply_broadcast"] = "true"
+
+    data = _api_call("chat.postMessage", token, params)
+    # chat.postMessage echoes the stored message; a threaded reply carries its
+    # parent's `thread_ts`, so surface it (empty for a top-level post).
+    posted: dict[str, Any] = data.get("message") or {}
+    return {
+        "ok": True,
+        "ts": data.get("ts", ""),
+        "channel": data.get("channel", ""),
+        "thread_ts": posted.get("thread_ts", "") or "",
+    }
 
 
 async def search(

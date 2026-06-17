@@ -4640,6 +4640,38 @@ let
         cat stdout
         mkdir -p "$out"
       '';
+
+  # Network-free unit tests for the `slack` helper: module shape plus that
+  # `send` builds the right chat.postMessage params for top-level vs. in-thread
+  # replies (stubbing the one network primitive).
+  slackTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.polars
+    ps.pydantic
+    slackModule
+  ]);
+  slackTestSource = builtins.path {
+    name = "ix-mcp-slack-test";
+    path = ./tests/test_slack.py;
+  };
+  slackTests =
+    pkgs.runCommand "ix-mcp-slack-tests"
+      {
+        nativeBuildInputs = [ slackTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${slackTestSource} "$TMPDIR/test_slack.py"
+        ${lib.getExe slackTestPython} -m pytest "$TMPDIR/test_slack.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp slack tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
 in
 package.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
@@ -4657,6 +4689,7 @@ package.overrideAttrs (old: {
         googleAuthBundled
         ixGoogleBundled
         slackBundled
+        slackTests
         beeperBundled
         requirementsSmoke
         engineBundled
