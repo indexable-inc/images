@@ -378,6 +378,41 @@ fn unsafe_negation_is_rejected() {
 }
 
 #[test]
+fn negation_before_its_binding_is_rejected() {
+    // `t` is bound by `(text n t)` only AFTER the negation. The evaluator runs
+    // left-to-right, so `t` would be unbound when `(not ...)` runs and bound
+    // existentially per row instead of filtering -- safety must reject it.
+    let rules = r#"
+(rule (named n) (match rust "(identifier) @n"))
+(rule (other t) (match rust "(identifier) @x") (text x t))
+(rule (bad n) (named n) (not (other t)) (text n t))
+"#;
+    let Err(error) = analyze(rules, &[]) else {
+        panic!("negation before its binding atom must be rejected");
+    };
+    assert!(
+        error.to_string().contains("only inside"),
+        "expected unsafe-negation error, got: {error}"
+    );
+}
+
+#[test]
+fn rewrite_negation_safety_is_checked() {
+    // The same range-restriction applies to rewrite bodies, not just rules.
+    let rules = r#"
+(rule (thing x) (match rust "(identifier) @x"))
+(rewrite r (match rust "(identifier) @x") (not (thing y)) (replace x "z"))
+"#;
+    let Err(error) = analyze(rules, &[]) else {
+        panic!("unbound negation in a rewrite body must be rejected");
+    };
+    assert!(
+        error.to_string().contains("only inside"),
+        "expected unsafe-negation error, got: {error}"
+    );
+}
+
+#[test]
 fn negation_through_recursion_is_rejected() {
     let rules = r#"
 (rule (p x) (match rust "(identifier) @x"))

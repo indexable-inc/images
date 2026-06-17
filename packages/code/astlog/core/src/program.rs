@@ -212,10 +212,11 @@ impl Program {
                 .fail();
             }
             check_atoms(&rule.body, &arities)?;
-            check_negation_safety(rule)?;
+            check_negation_safety(&rule.body)?;
         }
         for rewrite in &self.rewrites {
             check_atoms(&rewrite.body, &arities)?;
+            check_negation_safety(&rewrite.body)?;
             check_template(rewrite)?;
         }
         for lint in &self.lints {
@@ -256,25 +257,27 @@ impl Program {
         let mut level: HashMap<&str, usize> = self.rules.iter().map(|r| (r.name.as_str(), 0)).collect();
         let passes = level.len() + 1;
         for pass in 0..=passes {
-            let mut changed = false;
+            let mut grew: Option<&str> = None;
             for &(a, b, negative) in &edges {
                 let need = level[b] + usize::from(negative);
                 if level[a] < need {
                     level.insert(a, need);
-                    changed = true;
+                    grew = Some(a);
                 }
             }
-            if !changed {
-                break;
-            }
-            if pass == passes {
-                let (rule, line) = self
-                    .rules
-                    .iter()
-                    .map(|r| (r.name.clone(), r.line))
-                    .next()
-                    .unwrap_or_default();
-                return UnstratifiableProgramSnafu { rule, line }.fail();
+            match grew {
+                None => break,
+                // A relation whose level still grows after a full pass per
+                // relation sits on a negation cycle: report it, not rule #1.
+                Some(name) if pass == passes => {
+                    let line = self.rules.iter().find(|r| r.name == name).map_or(0, |r| r.line);
+                    return UnstratifiableProgramSnafu {
+                        rule: name.to_owned(),
+                        line,
+                    }
+                    .fail();
+                }
+                Some(_) => {}
             }
         }
         let max_level = level.values().copied().max().unwrap_or(0);
@@ -395,12 +398,15 @@ fn check_atoms(atoms: &[BodyAtom], arities: &HashMap<&str, usize>) -> Result<(),
     Ok(())
 }
 
-/// Every variable a negated atom uses must be bound by a positive atom in the
-/// same rule (range restriction). Negation only filters existing bindings; a
-/// variable that appears only inside `(not ...)` has nothing to filter against.
-fn check_negation_safety(rule: &Rule) -> Result<(), Error> {
+/// Every variable a negated atom uses must be bound by a positive atom that
+/// appears BEFORE it in the body (range restriction). The evaluator runs atoms
+/// left-to-right, so a variable first bound after the negation is still unbound
+/// when the negation runs and would be existentially bound per row (a wildcard)
+/// rather than filtering -- this check rejects exactly that. Applied to rule and
+/// rewrite bodies alike.
+fn check_negation_safety(body: &[BodyAtom]) -> Result<(), Error> {
     let mut bound: HashSet<&str> = HashSet::new();
-    for atom in &rule.body {
+    for atom in body {
         match atom {
             BodyAtom::Match(m) => bound.extend(capture_names(&m.query)),
             BodyAtom::App(app) => {
@@ -410,22 +416,18 @@ fn check_negation_safety(rule: &Rule) -> Result<(), Error> {
                     }
                 }
             }
-            BodyAtom::Negation(_) => {}
-        }
-    }
-    for atom in &rule.body {
-        let BodyAtom::Negation(neg) = atom else {
-            continue;
-        };
-        for arg in &neg.args {
-            if let Term::Var(var) = arg
-                && !bound.contains(var.as_str())
-            {
-                return UnsafeNegationSnafu {
-                    var: var.clone(),
-                    line: neg.line,
+            BodyAtom::Negation(neg) => {
+                for arg in &neg.args {
+                    if let Term::Var(var) = arg
+                        && !bound.contains(var.as_str())
+                    {
+                        return UnsafeNegationSnafu {
+                            var: var.clone(),
+                            line: neg.line,
+                        }
+                        .fail();
+                    }
                 }
-                .fail();
             }
         }
     }
