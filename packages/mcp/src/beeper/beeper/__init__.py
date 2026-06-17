@@ -414,12 +414,17 @@ def login(token: str) -> dict[str, Any]:
     if not token:
         raise BeeperError("token must not be empty")
     _TOKEN_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # Write atomically: write to a temp file, chmod, then rename.
+    # Write atomically and never world-readable: create the temp file 0600 from
+    # the first open (O_EXCL avoids reusing an attacker-planted file), write, then
+    # rename over the final path. (Path.write_text would create it with the
+    # process umask first and only chmod afterwards, briefly exposing the token.)
     tmp = _TOKEN_FILE.with_suffix(".tmp")
     try:
-        tmp.write_text(token)
-        tmp.chmod(0o600)
-        tmp.rename(_TOKEN_FILE)
+        tmp.unlink(missing_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(token)
+        tmp.replace(_TOKEN_FILE)
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
@@ -444,10 +449,14 @@ async def status() -> dict[str, Any]:
     never raises: a missing/invalid token or an unreachable Desktop is reported
     as ``configured=False``, not an exception. Calls ``GET /v1/info``.
 
-    Does not check the shared-room guard (it reads only server metadata, never
-    personal chats), so it is safe to call in any session.
+    In a shared (multiplayer) room it reports ``configured=False`` WITHOUT
+    reading or sending the token: ``_request`` would send the bearer token to
+    ``BEEPER_DESKTOP_BASE_URL``, which another participant could point at a
+    listener they control, so the token must not leave an incognito session.
     """
     base = _base_url()
+    if os.environ.get(SHARED_ENV):
+        return {"configured": False, "base_url": base, "version": None}
     try:
         resp = await _request("GET", "/v1/info")
     except BeeperError:
@@ -604,6 +613,7 @@ async def search(
     sender: str | None = None,
     date_after: str | None = None,
     date_before: str | None = None,
+    exclude_low_priority: bool = False,
 ) -> pl.DataFrame:
     """Search messages across all chats and return matches as a polars DataFrame.
 
@@ -617,11 +627,14 @@ async def search(
 
     Narrow with ``account_id`` / ``chat_id`` (a single id), ``sender`` (``"me"``,
     ``"others"``, or a user id), and ``date_after`` / ``date_before`` (ISO 8601,
-    e.g. ``"2024-07-01T00:00:00Z"``). Raises :exc:`BeeperError` when no token is
+    e.g. ``"2024-07-01T00:00:00Z"``). ``exclude_low_priority`` defaults to
+    ``False`` so low-priority-inbox messages are included (the Beeper API itself
+    defaults this flag to true and would otherwise drop them silently); pass
+    ``True`` for a more refined search. Raises :exc:`BeeperError` when no token is
     configured, Beeper Desktop is unreachable, or in a shared room.
     """
     _require_incognito()
-    base_params: dict[str, Any] = {}
+    base_params: dict[str, Any] = {"excludeLowPriority": exclude_low_priority}
     if query:
         base_params["query"] = query
     if account_id:
