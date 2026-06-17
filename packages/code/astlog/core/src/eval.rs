@@ -340,23 +340,22 @@ impl<'a> Evaluator<'a> {
                 );
                 Ok(absent.then(|| env.clone()).into_iter().collect())
             }
-            "no-prev-sibling" => {
+            "no-attached-sibling" => {
                 let node = bound_node(app, env, 0)?;
                 let kind = bound_value(app, env, 1)?;
                 let text = bound_value(app, env, 2)?;
-                // Holds when the immediately-preceding named sibling is absent
-                // or has no descendant with this kind and exact text. The
-                // sibling-scoped analogue of `no-descendant`: it lets a rule
-                // require an adjacent annotation (e.g. a `@spec` directly above
-                // a `def`) without general negation.
-                let absent = match self.prev_named_sibling(node) {
-                    None => true,
-                    Some(sibling) => !self.has_descendant(
-                        sibling,
-                        self.corpus.value_text(&kind),
-                        self.corpus.value_text(&text),
-                    ),
-                };
+                // Holds when none of the named siblings *attached above* `node`
+                // has a descendant with this kind and exact text. "Attached
+                // above" = the preceding named siblings up to (not including) the
+                // nearest preceding sibling of the same kind as `node` -- i.e. the
+                // annotation block (`@spec`/`@impl`/`@doc`/comments) that sits
+                // directly above a definition, stopping at the previous
+                // definition/clause of the same kind. This lets a rule require an
+                // adjacent annotation without general negation, while skipping
+                // intervening comments and doc attributes.
+                let kt = self.corpus.value_text(&kind);
+                let tt = self.corpus.value_text(&text);
+                let absent = !self.attached_has_descendant(node, kt, tt);
                 Ok(absent.then(|| env.clone()).into_iter().collect())
             }
             other => InternalSnafu {
@@ -366,51 +365,66 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    /// The immediately-preceding named sibling of `node`: the named node with
-    /// the same parent that ends closest before `node` starts. Anonymous tokens
-    /// (`do`, `,`, ...) are skipped so callers see syntactic statements. `None`
-    /// when `node` is the first named child or has no parent.
-    fn prev_named_sibling(&self, node: NodeRef) -> Option<NodeRef> {
+    /// Whether any named sibling attached above `node` has a descendant with
+    /// this kind and exact text. Walks preceding siblings nearest-first and stops
+    /// at the first sibling of the same kind as `node` (the previous
+    /// definition/clause), so only the annotation block directly above `node`
+    /// (comments and `@...` attributes) is searched. Bounded to that block, not
+    /// the whole file.
+    fn attached_has_descendant(&self, node: NodeRef, kind: &str, text: &str) -> bool {
         let file = &self.corpus.files[node.file];
-        let info = &file.nodes[node.node];
-        let parent = info.parent?;
-        let start = info.start;
-        file.nodes
-            .iter()
-            .enumerate()
-            .filter(|(index, info)| {
-                *index != node.node
-                    && info.named
-                    && info.parent == Some(parent)
-                    && info.end <= start
-            })
-            .max_by_key(|(_, info)| info.end)
-            .map(|(index, _)| NodeRef {
-                file: node.file,
-                node: index,
-            })
+        let Some(parent) = file.nodes[node.node].parent else {
+            return false;
+        };
+        let node_kind = file.nodes[node.node].kind;
+        // Preorder node table: a node's preceding siblings have lower indices,
+        // and everything between `parent` and `node` is inside `parent`. Walk
+        // backward, considering only direct children of `parent`.
+        let mut index = node.node;
+        while index > parent {
+            index -= 1;
+            let info = &file.nodes[index];
+            if info.parent != Some(parent) {
+                continue; // a descendant of an earlier sibling, skip
+            }
+            if info.kind == node_kind {
+                break; // previous same-kind sibling: the annotation block ends here
+            }
+            if info.named
+                && self.has_descendant(
+                    NodeRef {
+                        file: node.file,
+                        node: index,
+                    },
+                    kind,
+                    text,
+                )
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Whether `root` has a strict descendant with this kind and exact source
-    /// text. Candidates are filtered by kind and text first (both cheap), so
-    /// the parent-chain walk only runs for the rare textual matches.
+    /// text. Bounded to `root`'s subtree: in the preorder node table the strict
+    /// descendants are the contiguous nodes after `root` whose start is within
+    /// `root`'s byte span.
     fn has_descendant(&self, root: NodeRef, kind: &str, text: &str) -> bool {
         let file = &self.corpus.files[root.file];
-        file.nodes.iter().enumerate().any(|(index, info)| {
-            index != root.node
-                && info.kind == kind
-                && &file.text[info.start..info.end] == text
-                && {
-                    let mut current = info.parent;
-                    loop {
-                        match current {
-                            Some(parent) if parent == root.node => break true,
-                            Some(parent) => current = file.nodes[parent].parent,
-                            None => break false,
-                        }
-                    }
-                }
-        })
+        let root_end = file.nodes[root.node].end;
+        let mut index = root.node + 1;
+        while index < file.nodes.len() {
+            let info = &file.nodes[index];
+            if info.start >= root_end {
+                break; // past root's subtree
+            }
+            if info.kind == kind && &file.text[info.start..info.end] == text {
+                return true;
+            }
+            index += 1;
+        }
+        false
     }
 }
 

@@ -280,13 +280,24 @@ fn dirty() { danger(); }
 }
 
 #[test]
-fn no_prev_sibling_checks_immediately_preceding_named_sibling() -> TestResult {
-    // Two public defs: one directly under a `@spec`, one not. `no-prev-sibling`
-    // keeps only the def whose preceding named sibling carries no `spec`.
+fn no_attached_sibling_scans_the_annotation_block() -> TestResult {
+    // `no-attached-sibling` searches the annotation block directly above each
+    // def (preceding siblings up to the previous def), so a `@spec` counts even
+    // with a `@doc` or comment between it and the def. Only the def with no
+    // `@spec` in its block qualifies.
     let source = "
 defmodule Demo do
   @spec documented() :: :ok
   def documented(), do: :ok
+
+  @spec with_doc() :: :ok
+  @doc \"a doc\"
+  def with_doc(), do: :ok
+
+  @spec with_comment() :: :ok
+  # an explanatory comment
+  def with_comment(), do: :ok
+
   def undocumented(), do: :ok
 end
 ";
@@ -294,7 +305,7 @@ end
 (rule (undocumented-def c)
   (match elixir "(call (identifier) @i) @c")
   (text i "def")
-  (no-prev-sibling c "identifier" "spec"))
+  (no-attached-sibling c "identifier" "spec"))
 "#;
     let dir = tempfile::tempdir()?;
     write_sample(&dir, "sample.ex", source)?;
@@ -303,7 +314,7 @@ end
     assert_eq!(
         rows.len(),
         1,
-        "only the def whose immediately-preceding sibling is not a @spec qualifies"
+        "only the def with no @spec in its annotation block qualifies"
     );
     let Value::Node(node) = &rows[0][0] else {
         return Err("undocumented-def column 0 should be a node".into());

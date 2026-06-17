@@ -1,4 +1,12 @@
 defmodule Service do
   @spec call(integer()) :: integer()
   def call(x), do: x
+
+  @spec documented(integer()) :: integer()
+  @doc "a doc attribute between the spec and the def"
+  def documented(x), do: x
+
+  @spec commented(integer()) :: integer()
+  # an explanatory comment between the spec and the def
+  def commented(x), do: x
 end
