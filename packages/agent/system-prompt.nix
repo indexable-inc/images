@@ -42,7 +42,7 @@ let
 
   worktree = "ALWAYS work in dedicated git worktree on own branch. Never edit primary checkout. About to change file there? Stop, make worktree first.";
 
-  bashCwd = "Bash cwd reset between calls: address worktree by absolute path or `git -C <worktree>`, and before any commit or branch operation verify `git rev-parse --show-toplevel` and current branch match your assigned worktree.";
+  shellCwd = "Kernel `sh()` keep no persistent cwd or shell state between calls: pass `cwd=<abs path>` each call (or `git -C <worktree>`), never assume prior `cd`. Prose with backtick or `$(...)`? Use argv-list form `sh([...])`, not one string. Before any commit or branch operation verify `git rev-parse --show-toplevel` and current branch match your assigned worktree.";
 
   backgroundSubagents = "Task split into genuinely independent pieces? Spawn background subagent per piece, each in own worktree, committing to `main`. Collect result as finish. Foreground only when no single useful step possible until it return.";
 
@@ -108,7 +108,7 @@ let
     oneImplementation
     fixAtSource
     worktree
-    bashCwd
+    shellCwd
     backgroundSubagents
     modelTiering
     harness
