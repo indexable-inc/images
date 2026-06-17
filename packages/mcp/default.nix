@@ -687,16 +687,33 @@ let
     };
   });
 
+  # `import ScriptingBridge` on Darwin: the pyobjc binding for Apple's Scripting
+  # Bridge, so a session can drive any scriptable macOS app (Things, Music,
+  # Finder, ...) as native Objective-C objects — `SBApplication` — with no
+  # AppleScript strings and no install step. nixpkgs omits this binding too, so
+  # derive it from Quartz the same way as `coreLocationModule` above (same
+  # monorepo src, only the source subdir and import check change).
+  scriptingBridgeModule = pkgs.python3.pkgs.pyobjc-framework-Quartz.overridePythonAttrs (old: {
+    pname = "pyobjc-framework-ScriptingBridge";
+    sourceRoot = "${old.src.name}/pyobjc-framework-ScriptingBridge";
+    pythonImportsCheck = [ "ScriptingBridge" ];
+    meta = old.meta // {
+      description = "PyObjC wrappers for the Scripting Bridge framework on macOS";
+    };
+  });
+
   # The `screen` helper is macOS-only, so its dependencies join the interpreter
   # only on Darwin. `pyobjc-framework-Quartz` is the maintained CoreGraphics
   # binding the helper wraps; Pillow (already transitive via matplotlib) carries
   # the PIL image type capture returns. `coreLocationModule` adds the Core
-  # Location binding so location reads work out of the box.
+  # Location binding so location reads work out of the box, and
+  # `scriptingBridgeModule` the Scripting Bridge binding for app automation.
   darwinExtraPackages =
     ps:
     lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
       ps.pyobjc-framework-Quartz
       coreLocationModule
+      scriptingBridgeModule
       screenModule
       vmkitModule
       imessageModule
@@ -4312,6 +4329,7 @@ let
 
   screenBundled = importTest "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
   coreLocationBundled = importTest "corelocation" "import CoreLocation; print('corelocation-ok', callable(CoreLocation.CLLocationManager.alloc))";
+  scriptingBridgeBundled = importTest "scriptingbridge" "import ScriptingBridge; print('scriptingbridge-ok', callable(ScriptingBridge.SBApplication.applicationWithBundleIdentifier_))";
   vmkitBundled = importTest "vmkit" "import vmkit; print('vmkit-ok', callable(vmkit.boot_linux), callable(vmkit.drive), callable(vmkit.screenshot))";
   imessageBundled = importTest "imessage" "import imessage; print('imessage-ok', all(callable(getattr(imessage, n)) for n in ('messages', 'chats', 'contacts', 'send')))";
   xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
@@ -4432,6 +4450,7 @@ package.overrideAttrs (old: {
       inherit
         screenBundled
         coreLocationBundled
+        scriptingBridgeBundled
         vmkitBundled
         vmkitResourceSmoke
         imessageBundled
