@@ -185,6 +185,24 @@ MODULES: tuple[Module, ...] = (
         ),
     ),
     Module(
+        "beeper",
+        "read chats and messages across every network (WhatsApp, Telegram, Signal, iMessage, "
+        "Discord, Slack, X, ...) into polars from the local Beeper Desktop API, search, and send "
+        "(`await beeper.accounts()` / `chats()` / `messages(chat_id)` / `search(query)` / "
+        "`send(chat_id, text)`); `beeper.login(token)` stores your access token (mode 0600), "
+        "`await status()` / `logout()` manage it. Incognito sessions only (personal chats never "
+        "reach a shared room)",
+        # Mirrors beeper._token()'s resolution order; the requirements smoke test
+        # pins these against the module's own constants so they cannot drift.
+        credential=Credential(
+            service="Beeper",
+            env=("BEEPER_ACCESS_TOKEN",),
+            token_path="~/.config/beeper/token",  # noqa: S106 -- path to token file, not a hardcoded secret
+            login="call `beeper.login(token)` in a cell",
+            url="https://developers.beeper.com/desktop-api/auth",
+        ),
+    ),
+    Module(
         "linear",
         "Linear issue tracker over GraphQL using LINEAR_API_KEY: "
         "`await linear.issue(id)` / `issue_update(id, **fields)` / "

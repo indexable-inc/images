@@ -499,6 +499,28 @@ let
         cp -r ${slackPythonSource}/slack/. "$site/"
       ''
   );
+  # Beeper: read chats and messages across every connected network, search, and
+  # send -- a polars-shaped wrapper over the local Beeper Desktop HTTP API
+  # (default http://localhost:23373). Pure Python over the bundled httpx + polars.
+  # Per-user credential: BEEPER_ACCESS_TOKEN env or ~/.config/beeper/token
+  # (mode 0600, written by beeper.login(token)). Incognito sessions only (personal
+  # chats never reach a shared room). Cross-platform.
+  beeperPythonSource = builtins.path {
+    name = "ix-mcp-beeper-python-source";
+    path = ./src/beeper;
+  };
+  beeperModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-beeper-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Per-user Beeper Desktop chats/messages/search/send bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/beeper"
+        mkdir -p "$site"
+        cp -r ${beeperPythonSource}/beeper/. "$site/"
+      ''
+  );
   # Git worktrees as the unit of isolated work: `import worktree`, then
   # `wt = await worktree.add("my-fix")` checks out a new branch in its own tree,
   # `await wt.build(".#mcp")` stages + nix-builds it, `worktree.list()` is a
@@ -910,6 +932,7 @@ let
       browserModule
       xModule
       slackModule
+      beeperModule
       tasksModule
       linearModule
       noxAutotriageModule
@@ -1022,6 +1045,7 @@ let
     "linear"
     "google_auth"
     "slack"
+    "beeper"
     "view"
     "worktree"
   ];
@@ -1390,6 +1414,51 @@ let
     assert state["configured"] is False, state
     print("slack-ok")
   '';
+  # The `beeper` helper imports and exposes its public surface. A real API call
+  # needs BEEPER_ACCESS_TOKEN + a running Beeper Desktop, so the sandbox-safe
+  # assertions are: the module imports, the public callables exist, an
+  # unconfigured session raises BeeperError naming the token, and IX_MCP_SHARED=1
+  # refuses access.
+  beeperBundled = importTest "beeper" ''
+    import os
+
+    import beeper
+
+    assert callable(beeper.login) and callable(beeper.logout)
+    import asyncio as _asyncio
+
+    assert _asyncio.iscoroutinefunction(beeper.status)
+    assert _asyncio.iscoroutinefunction(beeper.accounts)
+    assert _asyncio.iscoroutinefunction(beeper.chats)
+    assert _asyncio.iscoroutinefunction(beeper.messages)
+    assert _asyncio.iscoroutinefunction(beeper.search)
+    assert _asyncio.iscoroutinefunction(beeper.search_chats)
+    assert _asyncio.iscoroutinefunction(beeper.send)
+
+    # In a shared (multiplayer) room Beeper is refused before any network call,
+    # so personal chats never reach state other participants can see.
+    os.environ["IX_MCP_SHARED"] = "1"
+    try:
+        _asyncio.run(beeper.accounts())
+    except beeper.BeeperError as exc:
+        assert "shared" in str(exc).lower(), exc
+    else:
+        raise SystemExit("expected BeeperError in a shared room")
+
+    # Incognito is the default: with IX_MCP_SHARED unset the shared guard
+    # passes, so the next failure is a missing token -- proving the guard was
+    # the only thing that blocked it above.
+    os.environ.pop("IX_MCP_SHARED", None)
+    os.environ.pop("BEEPER_ACCESS_TOKEN", None)
+    try:
+        _asyncio.run(beeper.accounts())
+    except beeper.BeeperError as exc:
+        assert "token" in str(exc).lower(), exc
+    else:
+        raise SystemExit("expected BeeperError when no token is configured")
+
+    print("beeper-ok")
+  '';
 
   # The requirements surface: local-only probes of every credential declared in
   # the registry. In the credential-less sandbox every probe must miss and the
@@ -1401,12 +1470,15 @@ let
     import os
     from pathlib import Path
 
+    import beeper
     import slack
     from ix_notebook_mcp import registry, requirements
 
     creds = dict(registry.credentialed())
     assert creds["slack"].env == tuple(slack._TOKEN_ENV_VARS), creds["slack"].env
     assert Path(creds["slack"].token_path).expanduser() == slack._TOKEN_FILE, creds["slack"].token_path
+    assert creds["beeper"].env == tuple(beeper._TOKEN_ENV_VARS), creds["beeper"].env
+    assert Path(creds["beeper"].token_path).expanduser() == beeper._TOKEN_FILE, creds["beeper"].token_path
 
     by_name = {s.name: s for s in requirements.statuses()}
     assert set(by_name) == set(creds), sorted(by_name)
@@ -4397,6 +4469,7 @@ package.overrideAttrs (old: {
         googleAuthBundled
         ixGoogleBundled
         slackBundled
+        beeperBundled
         requirementsSmoke
         engineBundled
         serverTools
