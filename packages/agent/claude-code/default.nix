@@ -487,7 +487,8 @@ stdenv.mkDerivation (finalAttrs: {
     # server. See ./extract-system-prompt.nix and ./extract-system-prompt.py.
     extractSystemPrompt = import ./extract-system-prompt.nix {
       inherit ix pkgs;
-      claudeBinary = "${finalAttrs.finalPackage}/libexec/Claude Code";
+      stockBinary = "${finalAttrs.finalPackage}/libexec/Claude Code";
+      wrappedBinary = "${finalAttrs.finalPackage}/bin/${binName}";
     };
   }
   // lib.optionalAttrs (updateScript != null) {
