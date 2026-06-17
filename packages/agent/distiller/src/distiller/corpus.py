@@ -121,7 +121,6 @@ def item_row(
     body = item_body(item, project, session_labels=labels)
     content_hash = hash_body(body.encode())
     timestamp = int(item.last_updated or 0) or None
-    scope = item.scope
     meta: dict[str, object] = {
         "source": SOURCE,
         "external_id": external_id,
@@ -136,7 +135,7 @@ def item_row(
         # ``global`` rows are the cross-repo copies of shared lessons; ``repo``
         # rows are scoped to one repo. Lets a query target one tier or both.
         "tier": "global" if project == GLOBAL_PROJECT else "repo",
-        "scope": f"user:{user}" if scope == "user" else "shared",
+        "scope": f"user:{user}" if item.scope == "user" else "shared",
         "outcome": item.outcome,
         "session_ids": ",".join(item.sessions[:16]),
         "item_id": item.id,

@@ -405,4 +405,12 @@ def retire_stale(
 
     now = now if now is not None else time.time()
     cutoff = now - max_age_days * 86400
-    return [item for item in items if (item.evidence_to or item.last_updated or 0.0) >= cutoff]
+
+    def recency(item: Item) -> float:
+        # The freshest signal wins: an `update` op bumps last_updated even when it
+        # carried no in-window session to refresh evidence_to, and such an item
+        # must still count as re-evidenced (don't short-circuit on a stale
+        # evidence_to).
+        return max((t for t in (item.evidence_to, item.last_updated) if t), default=0.0)
+
+    return [item for item in items if recency(item) >= cutoff]

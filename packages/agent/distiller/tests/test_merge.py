@@ -120,8 +120,14 @@ def test_retire_stale_drops_old_unreevidenced_items() -> None:
         id="df-stale", title="S", body="b", outcome="success", scope="shared",
         sessions=[], last_updated=now - 200 * day, evidence_to=now - 200 * day,
     )
-    kept = distill.retire_stale([fresh, stale], now=now, max_age_days=90.0)
-    assert [i.id for i in kept] == ["df-fresh"]
+    # Refreshed this run by an update op that carried no in-window session: old
+    # evidence_to but fresh last_updated. Must survive (freshest signal wins).
+    refreshed = Item(
+        id="df-refreshed", title="R", body="b", outcome="success", scope="shared",
+        sessions=[], last_updated=now, evidence_to=now - 200 * day,
+    )
+    kept = distill.retire_stale([fresh, stale, refreshed], now=now, max_age_days=90.0)
+    assert [i.id for i in kept] == ["df-fresh", "df-refreshed"]
 
 
 def test_extract_json_tolerates_fences() -> None:

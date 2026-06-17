@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--project",
         action="append",
         default=None,
-        help="only distill projects whose path contains this substring (repeatable)",
+        help="only distill repos whose slug contains this substring, e.g. 'nox' (repeatable)",
     )
     parser.add_argument(
         "--min-sessions", type=int, default=1, help="skip projects with fewer new sessions"
@@ -106,7 +106,7 @@ def run(args: argparse.Namespace) -> int:
             all_outcomes_by_project[project] = st.session_outcomes
 
     for project, sessions in sorted(groups.items()):
-        slug = transcripts.project_slug(project)
+        slug = project  # scan() already keys groups by the canonical repo slug
         st = state.load(args.out, args.user, slug)
         st.project = project
         seen = st.distilled_sessions
