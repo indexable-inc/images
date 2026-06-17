@@ -21,8 +21,13 @@
   // it — the opposite of what we want.
   const SCHEME = '<meta name="color-scheme" content="light dark">';
   function themed(body: string): string {
-    if (/<meta[^>]+name=["']?color-scheme/i.test(body)) return body;
-    const head = body.match(/<head[^>]*>/i);
+    // `\sname\s*=\s*` matches `name` only as a standalone attribute (HTML allows
+    // whitespace around `=`); the lookahead pins the value to `color-scheme` at a
+    // token boundary so we don't miss a producer's spaced declaration and clobber it.
+    if (/<meta\b[^>]*\sname\s*=\s*["']?color-scheme(?=["'\s/>])/i.test(body)) return body;
+    // Anchor on the `<head>` tag boundary so a body fragment like `<header>` (which
+    // starts with `head`) isn't mistaken for the document head.
+    const head = body.match(/<head(?:\s[^>]*)?>/i);
     if (head) {
       const at = head.index! + head[0].length;
       return body.slice(0, at) + SCHEME + body.slice(at);
