@@ -1,6 +1,7 @@
 {
   lib,
   ix,
+  pkgs,
   stdenv,
   fetchurl,
   runtimeShell,
@@ -418,7 +419,7 @@ let
     else
       import ./update.nix { inherit writeNushellApplication nix gnupg; };
 in
-stdenv.mkDerivation {
+stdenv.mkDerivation (finalAttrs: {
   pname = "claude-code";
   inherit version;
 
@@ -480,7 +481,16 @@ stdenv.mkDerivation {
       ;
   };
 
-  passthru = lib.optionalAttrs (updateScript != null) {
+  passthru = {
+    # Prints the stock upstream system prompt (no house overrides) by capturing
+    # what the unwrapped libexec helper sends to a local ANTHROPIC_BASE_URL
+    # server. See ./extract-system-prompt.nix and ./extract-system-prompt.py.
+    extractSystemPrompt = import ./extract-system-prompt.nix {
+      inherit ix pkgs;
+      claudeBinary = "${finalAttrs.finalPackage}/libexec/Claude Code";
+    };
+  }
+  // lib.optionalAttrs (updateScript != null) {
     inherit updateScript;
   };
 
@@ -495,4 +505,4 @@ stdenv.mkDerivation {
     platforms = builtins.attrNames manifest.platforms;
     sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
   };
-}
+})
