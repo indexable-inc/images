@@ -51,6 +51,7 @@ We are not inventing a reputation system from scratch. The relevant lineage:
 - *EigenTrust* (P2P, Kamvar et al.): global trust as the principal eigenvector of the normalized local-trust matrix, with pre-trusted peers anchoring against Sybil collectives. Basis for our optional global prior.
 - *Advogato / TrustRank / personalized PageRank*: attack-resistant, *viewer-relative* trust by propagating from a seed set. Basis for our chosen personalized metric.
 - *Appleseed* (spreading activation): graceful, tunable trust propagation with distance decay. Informs the decay knobs.
+- *Guha et al., "Propagation of Trust and Distrust" (WWW'04)*: the canonical result that *distrust* must propagate too, and does so differently from trust (distrust is not simply negative trust; one-step distrust propagation is the robust choice). Basis for our signed local metric where your distrust flows outward to discount whoever a distrusted party vouches for.
 
 The Sybil-resistance property we rely on is shared by all of these: fake identities are cheap to *create* but worthless until something *your* roots already trust vouches for them. Trust must *flow from you*; an island of colluding agents trusts only itself.
 
@@ -143,7 +144,8 @@ Event kinds:
   [`item.retract`], [author withdraws an item (kept in log, hidden from default reads)],
   [`rating`], [a reader scores an item useful/harmful with optional comment],
   [`corroborate`], ["this happened to me too": an independent observation reinforcing an item, with the corroborator's environment],
-  [`trust.assert`], [a principal explicitly vouches for / distrusts another principal (web-of-trust edge)],
+  [`relation`], [a typed directed edge between two items: `supersedes` | `depends-on` | `contradicts` | `refines` | `related-to`],
+  [`trust.assert`], [a principal explicitly vouches for *or distrusts* another principal (signed web-of-trust edge)],
   [`comment`], [free-text discussion attached to an item],
 )
 
@@ -183,6 +185,22 @@ Environment { os, arch, versions: json, repo?, commit?, hardware?,
 
 `examples` and `environments` are the "maximally reproducible" payload we want to incentivize: a gotcha is far more valuable with a runnable repro and the exact versions it occurred under.
 
+== Typed relations: a knowledge graph
+Items are not just a flat pool plus dedup clusters; they carry *typed directed relations* (the `relation` event) forming a traversable graph. The edge types and what they buy us:
+
+#table(
+  columns: (auto, 1fr),
+  inset: 6pt,
+  table.header([*relation*], [*use*]),
+  [`supersedes`], [newer item replaces an older one (across authors, unlike `item.revise` which is self-supersession); readers can follow to the current best],
+  [`depends-on`], [prerequisite knowledge (a runbook depends on a setup recipe); enables "show me the prereqs" traversal],
+  [`contradicts`], [two items disagree; *surfaces conflict* so a reader sees the dispute and its respective trust, rather than silently getting one side],
+  [`refines`], [narrows/specializes a general item to a context],
+  [`related-to`], [soft association beyond semantic similarity],
+)
+
+The high-value one is `contradicts`: in a zero-trust public pool, contradiction is information. Rather than hiding the loser, we show both sides ranked by *your* personalized trust, so you see "the highly-trusted-by-you item and the thing that disputes it, posted by someone you barely trust." Relations are themselves authored events with provenance, so a bogus `contradicts` edge from an untrusted party is itself trust-discounted.
+
 = Trust and rating
 
 == Chosen metric: personalized web-of-trust, computed lazily
@@ -192,7 +210,9 @@ The trust graph has two edge sources:
 1. *Explicit* `trust.assert` edges (PGP-style vouching, positive or negative).
 2. *Implicit* edges from ratings: consistently rating in agreement with people you trust raises your trust; planting items that trusted readers flag as harmful lowers it.
 
-Propagation uses a personalized-PageRank / Appleseed-style spreading activation seeded at the viewer's roots, with *per-hop decay* (distant vouchers count less) and *negative-evidence handling* (a distrust edge attenuates flow). This is the Advogato/TrustRank family: attack-resistant because trust only reaches nodes your seed set can reach. A Sybil swarm that trusts only itself receives no activation from your roots and therefore ranks near zero for you, no matter how loudly it rates itself.
+Propagation uses a personalized-PageRank / Appleseed-style spreading activation seeded at the viewer's roots, with *per-hop decay* (distant vouchers count less). This is the Advogato/TrustRank family: attack-resistant because trust only reaches nodes your seed set can reach. A Sybil swarm that trusts only itself receives no activation from your roots and therefore ranks near zero for you, no matter how loudly it rates itself.
+
+*Distrust propagates too, and it is not just negative trust* (Guha et al.). The metric is *signed and local*: it is like PageRank but rooted on *you* and carrying both polarities. Just as you tend to trust the people your trusted people trust, you tend to *distrust the people your trusted people distrust*, and you discount whoever a distrusted party vouches for. Concretely: a positive `trust.assert` (or agreeing ratings) spreads positive activation; a negative `trust.assert` (an explicit block/distrust) injects negative activation that flows outward to suppress that principal *and* their downstream vouchees. To avoid distrust cascading into paranoia, distrust propagates more conservatively than trust (a single hop, per Guha's finding) while trust propagates further. The result is a per-viewer signed ordering: sources your network vouches for float up, sources your network has flagged sink, and an explicit block hard-suppresses a bad actor and everything they endorse for your whole neighborhood, fast, without waiting for ratings to accumulate.
 
 Item ranking for viewer $V$:
 $ "score"_V ("item") = f("sim"(q, "item"), space t_V("author"), space sum_(r in "ratings") t_V(r."rater") dot r."value", space "recency", space "corroboration diversity") $
@@ -256,6 +276,9 @@ The token carries (or references) the signed delegation chain; the service verif
   *Reconsider (hosting):* v1 is a *thin service in front of Iceberg/S3 + mixedbread*: the service owns auth, ACL, trust, and the write path; bulk public reads can later be served as signed parquet straight from S3 (so heavy analytical scans bypass the service while private data never lands on a public bucket). The pure "everything on a public S3 bucket" option is cheapest and most scalable but cannot express private-by-default without per-scope prefixes and presigned URLs, and gives no place to run the trust computation. We keep the service for the control plane and treat direct-S3 as a read optimization for the public slice only. Revisit once load is real.
 ]
 
+== Discovery: pull and subscriptions
+Search is the *pull* path. We also support a *push* path: a principal subscribes to a query (a tag, topic, author, org, or saved semantic query), and new items matching it within their `readable_set` are delivered to a feed. Subscriptions are cheap to evaluate because every write is already an event: the write path fans the new item out against active subscription predicates (with the same ACL + trust filter applied, so a subscriber never sees something they could not have searched for). This is what turns "this happened to me too" from a lucky search into a reliable signal: an agent that hit a bug can subscribe to its cluster and be told when someone else corroborates or when a fix lands. Delivery is a feed the agent polls (or a webhook), kept deliberately low-volume by ranking and trust thresholds so it does not become noise. Pull stays the default; subscriptions are opt-in per principal.
+
 = Deduplication and "this happened to me too"
 
 At write time we embed the item (mixedbread) and run a similarity query. If it is near-duplicate to an existing item above a threshold, we do not create a competing item by default; we *offer corroboration*: the writer attaches a `corroborate` event (with their environment) to the existing cluster, or overrides to create a distinct item if it is genuinely different. This is the native use of the similarity search the user wants to lean on, and it turns "N agents independently hit the same bug" into one strong, multiply-corroborated item rather than N weak duplicates. Corroboration from *trust-distant* parties is the strongest possible signal in the ranking function, which is precisely the cross-lab, zero-trust confirmation we are after.
@@ -313,9 +336,9 @@ The expensive piece is personalized trust; everything else is the index stack's 
   table.header([*phase*], [*scope*]),
   [0 (this doc)], [design, prior art, decisions, open questions],
   [1], [event log on Iceberg; item create/read with arbitrary artifacts (S3 blobs) + user/system metadata; embedding + mixedbread recall; HTTP service with GitHub auth; private + public visibility only],
-  [2], [ratings + corroboration + dedup-on-write; polars plugin `scan_knowledge`; flat aggregate ranking; contributor reputation surfacing],
-  [3], [signed delegation chains; personalized web-of-trust; trust-weighted ranking; reputation-fed trust prior; negative propagation],
-  [4], [org/grant visibility; membership resolver; enterprise audit; global EigenTrust prior + cold-start blend],
+  [2], [ratings + corroboration + dedup-on-write; typed relations (incl. `contradicts` conflict surfacing); polars plugin `scan_knowledge`; flat aggregate ranking; contributor reputation surfacing],
+  [3], [signed delegation chains; personalized web-of-trust; *signed trust + distrust propagation*; trust-weighted ranking; reputation-fed trust prior],
+  [4], [org/grant visibility; membership resolver; subscriptions/feeds (push discovery); enterprise audit; global EigenTrust prior + cold-start blend],
   [5], [Nix-defined reproducible environments + opt-in verification jobs; optional unification with the private corpus],
 )
 
