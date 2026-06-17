@@ -2489,6 +2489,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fff-suggest"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "libc",
+ "libloading 0.8.9",
+ "serde_json",
+]
+
+[[package]]
 name = "field-offset"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"

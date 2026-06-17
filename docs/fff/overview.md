@@ -41,3 +41,32 @@ other repo packages through the nixpkgs overlay: the `mcp` package takes
 `pkgs.fff` as an input and bundles the `fff-c` cdylib for its ctypes-backed
 `import fff` (`package.nix:3-10`). It builds on Linux and macOS
 (`meta.platforms = unix`, `default.nix:81`).
+
+## Claude Code `@` completion (`packages/agent/fff-suggest`)
+
+fff also backs Claude Code's `@`-mention file completion, replacing the CLI's
+built-in index. Claude Code exposes a statusLine-shaped custom completer via the
+`fileSuggestion` setting: it runs a command per keystroke (5s budget, cwd = the
+project dir), passes `{ query, … }` on stdin, and uses each non-empty stdout line
+as a suggestion **in the returned order** (no re-ranking) — so fff owns the
+ranking.
+
+That command is the per-keystroke client half of `packages/agent/fff-suggest`, a
+repo-owned rust workspace crate with one binary and two subcommands:
+
+- `fff-suggest query` — the tiny native client wired into `fileSuggestion`. It
+  reads the query, round-trips it to the daemon over a unix socket, prints the
+  ranked relative paths, and **fails open** (any error exits 0 with no output, so
+  Claude never hangs on its budget).
+- `fff-suggest serve <root>` — the resident per-project daemon. It `dlopen`s the
+  same `libfff_c` the kernel uses (`IX_FFF_LIB`, baked by the `fff-suggest`
+  wrapper), holds one frecency-ranked, file-watched index over `<root>`, and
+  answers over the socket until it sits idle (`IX_FFF_SUGGEST_IDLE_MS`, default
+  10 min). The client auto-starts it detached on the first `@` in a project;
+  every keystroke after that is a warm socket round-trip with **no Python on the
+  hot path** and no re-index.
+
+The socket lives at `<runtime-dir>/ix-fff-suggest/<hash(root)>.sock`. The wiring
+is gated on the `fff-suggest` sibling in `packages/agent/claude-code` (like the
+`search`/`mcp` siblings, only the flake package set provides it), and an
+install-check there guards the `fileSuggestion.command` shape against a CLI bump.
