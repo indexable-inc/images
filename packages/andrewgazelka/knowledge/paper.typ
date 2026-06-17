@@ -187,7 +187,8 @@ curl -s https://knowledge.ix.dev/v1/search -H "authorization: Bearer $KNOWLEDGE_
   --json '{"query":"cuda driver mismatch","filter":{"cuda":"12.4"},"limit":20}'
 curl -s https://knowledge.ix.dev/v1/items  -H "authorization: Bearer $KNOWLEDGE_TOKEN" \
   --json '{"title":"...","body":"...","kind":"gotcha","metadata":{"cuda":"12.4"},"environments":[...]}'
-curl -s https://knowledge.ix.dev/v1/items/$ID/corroborate --json '{"environment":{...}}'
+curl -s https://knowledge.ix.dev/v1/items/$ID/corroborate -H "authorization: Bearer $KNOWLEDGE_TOKEN" \
+  --json '{"environment":{...}}'
 ```
 The token carries the attenuated chain; the service verifies it to the GitHub root, resolves `readable_set`, computes trust, and returns ranked results. The polars plugin is a thin client over this same API.
 
@@ -244,9 +245,9 @@ GitHub-orgs vs native groups (membership resolver interface); the thin-service v
   columns: (auto, 1fr), inset: 6pt,
   table.header([*phase*], [*scope*]),
   [0 (this doc)], [design, verified SOTA review, decisions, open problems],
-  [1], [bi-temporal append-only log on Iceberg; item create/read with arbitrary artifacts (S3 blobs) + user/system metadata; mandatory signed provenance; embedding + mixedbread recall; HTTP service with GitHub OIDC auth; private + public visibility],
-  [2], [ratings + independent-root corroboration; tiered dedup (hash→MinHash→embedding); typed relations incl. `contradicts` review candidates; polars `scan_knowledge`; per-topic reputation surfacing; sleep-time curation jobs],
-  [3], [attenuated signed delegation chains (Biscuit/UCAN) + sender-constraint; personalized Sybil-tolerant WoT (MeritRank decays); one-hop distrust; trust-weighted ranking + sensitivity floor; EigenTrust seed-only prior; Proof+Stake high-impact gate],
+  [1], [bi-temporal append-only log on Iceberg; item create/read with arbitrary artifacts (S3 blobs) + user/system metadata; mandatory signed provenance; embedding + mixedbread recall *scoped to the caller's own private items only* (no cross-user or public surfacing yet, since the trust gate does not exist before phase 3); HTTP service with GitHub OIDC auth. Public *visibility* may be set on writes, but public items are not surfaced to other principals until phase 3.],
+  [2], [ratings + independent-root corroboration; tiered dedup (hash→MinHash→embedding); typed relations incl. `contradicts` review candidates; polars `scan_knowledge` (still own-scope); per-topic reputation surfacing; sleep-time curation jobs],
+  [3], [attenuated signed delegation chains (Biscuit/UCAN) + sender-constraint; personalized Sybil-tolerant WoT (MeritRank decays); one-hop distrust; trust-weighted ranking + sensitivity floor; EigenTrust seed-only prior; Proof+Stake high-impact gate. *This is the first phase that surfaces public / cross-user items, now strictly behind the provenance + trust gate.*],
   [4], [org/grant visibility + membership resolver; subscriptions/feeds; enterprise audit; feedback-driven traceback + lineage decay; distilled strategy-item layer],
   [5], [Nix-defined reproducible environments + opt-in verification; Sigstore/Rekor-style transparency; ontology canonicalization; optional unification with the private corpus],
 )
