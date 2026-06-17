@@ -1,7 +1,7 @@
 //! fff-backed `@` file completer for Claude Code, one compiled binary with two
 //! subcommands:
 //!
-//!   * `fff-suggest query` — the per-keystroke client wired into Claude Code's
+//!   * `fff-suggest query`: the per-keystroke client wired into Claude Code's
 //!     `fileSuggestion` setting. Claude spawns it fresh on every keystroke after
 //!     `@`, hands it `{ "query": "<text>" , … }` on stdin (cwd = the project
 //!     dir), and treats each non-empty stdout line as a suggestion, used in the
@@ -10,7 +10,7 @@
 //!     error exits 0 with no output (Claude then shows no suggestions rather
 //!     than hanging on its 5s budget).
 //!
-//!   * `fff-suggest serve <root>` — the resident daemon. It `dlopen`s the same
+//!   * `fff-suggest serve <root>`: the resident daemon. It `dlopen`s the same
 //!     `libfff_c` the notebook kernel uses (`IX_FFF_LIB`, baked by the
 //!     claude-code wrapper), holds one frecency-ranked, file-watched index over
 //!     `<root>`, and answers queries over the socket until it sits idle. The
@@ -67,7 +67,7 @@ fn main() -> ExitCode {
 /// `$XDG_RUNTIME_DIR`, which the OS already guarantees is a 0700 user-private
 /// tmpfs. When it is absent we fall back to the world-writable system temp dir,
 /// so the directory name is namespaced by uid and the directory itself is
-/// created/validated 0700 (see `ensure_private_dir`) — otherwise a deterministic
+/// created/validated 0700 (see `ensure_private_dir`); otherwise a deterministic
 /// socket path under a shared `/tmp` would let another local user pre-bind or
 /// connect to it to spoof completions or stall every `@`.
 fn runtime_dir() -> PathBuf {
@@ -91,7 +91,7 @@ fn socket_path(root: &Path) -> PathBuf {
 /// Create `dir` as a user-private 0700 directory, or accept it only if it
 /// already is one owned by us. Returns `false` (caller must fail open, leaving
 /// no socket server) when the path exists but is not a directory, is owned by
-/// another user, or grants any group/other access — the markers of a hijack
+/// another user, or grants any group/other access: the markers of a hijack
 /// attempt under a shared `/tmp`. `$XDG_RUNTIME_DIR` already satisfies this, so
 /// this only ever rejects a poisoned fallback directory.
 fn ensure_private_dir(dir: &Path) -> bool {
@@ -109,9 +109,11 @@ fn ensure_private_dir(dir: &Path) -> bool {
         return false;
     };
     // SAFETY: `getuid` just reads the process's real uid.
+    // No group/other permission bits set: the low 6 bits of the mode are zero,
+    // i.e. at least 6 trailing zero bits.
     meta.is_dir()
         && meta.uid() == unsafe { libc::getuid() }
-        && (meta.permissions().mode() & 0o077) == 0
+        && meta.permissions().mode().trailing_zeros() >= 6
 }
 
 // ── client ───────────────────────────────────────────────────────────────────
@@ -140,7 +142,7 @@ fn client() -> ExitCode {
     }
 
     // Cold path: start the daemon detached, then poll until it binds (or budget
-    // runs out). Failing here is silent — Claude just shows no suggestions.
+    // runs out). Failing here is silent: Claude just shows no suggestions.
     spawn_daemon(&root);
     let deadline = Instant::now() + Duration::from_millis(CLIENT_BUDGET_MS);
     while Instant::now() < deadline {
