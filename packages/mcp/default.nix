@@ -1457,6 +1457,19 @@ let
     else:
         raise SystemExit("expected BeeperError when no token is configured")
 
+    # Regression: a datetime column whose every value is empty/missing must not
+    # raise (polars format inference has no sample) -- _frame emits a typed null
+    # column instead. A mixed column parses the real value and nulls the empty.
+    allempty = beeper._frame([{"timestamp": ""}], {"timestamp": beeper._TS})
+    assert allempty["timestamp"].dtype == beeper._TS, allempty.schema
+    assert allempty["timestamp"].to_list() == [None], allempty
+    mixed = beeper._frame(
+        [{"timestamp": "2026-01-01T00:00:00Z"}, {"timestamp": ""}],
+        {"timestamp": beeper._TS},
+    )
+    assert mixed["timestamp"].dtype == beeper._TS, mixed.schema
+    assert mixed["timestamp"].null_count() == 1, mixed
+
     print("beeper-ok")
   '';
 

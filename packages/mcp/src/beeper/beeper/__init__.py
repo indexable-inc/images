@@ -159,18 +159,30 @@ def _frame(
     results. Datetime columns are parsed from ISO 8601 strings (``strict=False``
     so an unparseable value becomes null rather than raising); everything else is
     cast straight to its declared dtype.
+
+    When a datetime column has no parseable value (every row empty/missing) we
+    emit a typed null column instead of calling ``str.to_datetime``: with no
+    sample, polars' format inference raises ``ComputeError`` rather than nulling
+    out -- and ``strict=False`` only nulls *individual* failures, not that.
     """
     if not rows:
         return pl.DataFrame(schema=schema)
     df = pl.DataFrame(rows)
     exprs: list[pl.Expr] = []
     for name, dtype in schema.items():
-        col = pl.col(name) if name in df.columns else pl.lit(None)
+        present = name in df.columns
         if isinstance(dtype, pl.Datetime):
-            exprs.append(
-                col.cast(pl.Utf8).str.to_datetime(time_zone="UTC", strict=False).alias(name)
+            has_value = present and bool(
+                (df.get_column(name).cast(pl.Utf8).str.strip_chars().str.len_chars().fill_null(0) > 0).any()
             )
+            if has_value:
+                exprs.append(
+                    pl.col(name).cast(pl.Utf8).str.to_datetime(time_zone="UTC", strict=False).alias(name)
+                )
+            else:
+                exprs.append(pl.lit(None, dtype=dtype).alias(name))
         else:
+            col = pl.col(name) if present else pl.lit(None)
             exprs.append(col.cast(dtype).alias(name))
     return df.select(exprs)
 
