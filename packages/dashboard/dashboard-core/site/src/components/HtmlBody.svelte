@@ -9,32 +9,23 @@
   let { pane }: { pane: Pane } = $props();
 
   // Opt the frame document into both color schemes so it tracks the OS theme like
-  // the rest of the dashboard (which themes via `light-dark()`). Without this a
-  // sandboxed srcdoc frame defaults its canvas to light — WebKit/Safari renders a
-  // jarring white box behind otherwise-dark pane content (e.g. polars tables) on a
-  // dark page. The `<meta>` lands in the document head whether the producer ships
-  // a fragment (parser implies head/body) or a full document with its own <head>.
+  // the rest of the dashboard (style.css sets `color-scheme: light dark` on :root).
+  // The <iframe> element inherits that scheme; if the frame *document* resolves to a
+  // different one (an unstyled producer fragment defaults to `normal`/light), the
+  // CSS Color Adjustment spec makes the browser paint an *opaque* canvas behind the
+  // frame — the white box WebKit/Safari shows on a dark page. Declaring the same
+  // `light dark` on the document makes the schemes match, so the canvas stays
+  // transparent and the dashboard's dark surface shows through.
   //
-  // A producer that declares its own color-scheme owns the decision, so leave its
-  // document untouched: per the WHATWG "color scheme" algorithm the FIRST such
-  // meta in tree order wins, so injecting ours (ahead of theirs) would override
-  // it — the opposite of what we want.
-  const SCHEME = '<meta name="color-scheme" content="light dark">';
-  function themed(body: string): string {
-    // `\sname\s*=\s*` matches `name` only as a standalone attribute (HTML allows
-    // whitespace around `=`); the lookahead pins the value to `color-scheme` at a
-    // token boundary so we don't miss a producer's spaced declaration and clobber it.
-    if (/<meta\b[^>]*\sname\s*=\s*["']?color-scheme(?=["'\s/>])/i.test(body)) return body;
-    // Anchor on the `<head>` tag boundary so a body fragment like `<header>` (which
-    // starts with `head`) isn't mistaken for the document head.
-    const head = body.match(/<head(?:\s[^>]*)?>/i);
-    if (head) {
-      const at = head.index! + head[0].length;
-      return body.slice(0, at) + SCHEME + body.slice(at);
-    }
-    return SCHEME + body;
-  }
-  const html = $derived(themed(pane.body ?? ''));
+  // We PREPEND a fixed prefix rather than parse: pure string concatenation never
+  // inspects or mutates producer bytes, so there is no regex/DOM edge case to get
+  // wrong. The `<meta>` only sets the document's default supported schemes; a
+  // producer that sets its own `color-scheme` in author CSS still wins the used
+  // value, so this only themes otherwise-unstyled producers (e.g. a polars table).
+  // The leading `<!doctype html>` is the conformant srcdoc preamble; srcdoc
+  // documents render no-quirks regardless of doctype, so it changes no layout mode.
+  const PREFIX = '<!doctype html><meta name="color-scheme" content="light dark">';
+  const html = $derived(PREFIX + (pane.body ?? ''));
 </script>
 
 <iframe
