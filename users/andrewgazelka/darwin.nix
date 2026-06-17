@@ -48,6 +48,7 @@
       "signal@beta"
       "skim"
       "slack@beta"
+      "spotify"
       "stremio@beta"
       "superhuman"
       "superwhisper"
