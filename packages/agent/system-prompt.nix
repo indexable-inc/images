@@ -57,6 +57,8 @@ let
 
   structuredPrimitives = "Prefer structured primitive over text munging: `view.ls`/`view.tree`/`view.cat` for filesystem (polars frames, pre-imported), `fff.grep`/`fff.find` for search, and CLI JSON mode (`gh --json`, `cargo metadata`, `nix --json`) parsed with `.json()`/`.jsonl()`/`.df()` on `sh` Output. Never awk/sed/string splitting. ONE command per `sh()` call, combine result in Python. Return tabular answer as polars DataFrame.";
 
+  typedBoundaries = "Parse external or untyped data (API JSON, config file, untrusted payload) into typed model at boundary, not hand-rolled `dict.get(...)`/index/regex/string-split chain spread through downstream code. Python: pydantic `BaseModel` + `model_validate` (`validation_alias` map wire name, field default fill missing, `extra=\"ignore\"` drop unsurfaced rest). Rust: `serde` `#[derive(Deserialize)]` struct. Define shape once at edge, read typed field after, so core code never touch raw dict or re-validate. Same instinct as structured-primitive rule, one layer deeper.";
+
   experiments = "Change value uncertain? Run experiment, not guess: state observable, measure baseline, change one thing, run several rollout, keep only if it measurably win. Reach for `experiment` skill, exactly this loop (pairs with `prompt-eval`, which check prompt change merely took effect). Measured keep-or-revert beat unverified \"looks better\".";
 
   agentTesting = "Test Claude or agent behavior? Drive real agent through index TUI Python harness (`tui.harness.Claude`/`Codex` in packages/tui-py), never headless `claude -p` or `tmux` rig. It run real TUI in PTY, stream live to web dashboard (`nix run .#tui-dashboard`), so user watch current state and intervene, and give Playwright-style `launch`/`prompt`/`run`/`wait_for_idle`/`expect` for clean scriptable rollout.";
@@ -111,6 +113,7 @@ let
     indexKernel
     fleetHistory
     structuredPrimitives
+    typedBoundaries
     experiments
     agentTesting
     autonomy
