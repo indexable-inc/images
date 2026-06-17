@@ -41,14 +41,17 @@ DEFAULT_BINARY = "claude"
 
 
 async def _read_http_request(reader: asyncio.StreamReader) -> tuple[str, bytes]:
-    """Read one HTTP/1.1 request, returning (request_line, body)."""
-    head = b""
-    while b"\r\n\r\n" not in head:
-        chunk = await reader.read(65536)
-        if not chunk:
-            break
-        head += chunk
-    raw_head, _, rest = head.partition(b"\r\n\r\n")
+    """Read exactly one HTTP/1.1 request, returning (request_line, body).
+
+    Consumes precisely the headers and Content-Length body from the stream and
+    leaves anything after untouched, so a keep-alive connection that pipelines a
+    second request (e.g. count_tokens then messages on one socket) reads cleanly
+    on the next call. Returns ("", b"") at end of stream.
+    """
+    try:
+        raw_head = await reader.readuntil(b"\r\n\r\n")
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+        return "", b""
     lines = raw_head.decode("latin1").split("\r\n")
     request_line = lines[0] if lines else ""
     content_length = 0
@@ -56,12 +59,12 @@ async def _read_http_request(reader: asyncio.StreamReader) -> tuple[str, bytes]:
         if line.lower().startswith("content-length:"):
             with contextlib.suppress(ValueError):
                 content_length = int(line.split(":", 1)[1].strip())
-    body = rest
-    while len(body) < content_length:
-        chunk = await reader.read(65536)
-        if not chunk:
-            break
-        body += chunk
+    body = b""
+    if content_length:
+        try:
+            body = await reader.readexactly(content_length)
+        except asyncio.IncompleteReadError as err:
+            body = err.partial
     return request_line, body
 
 
@@ -80,55 +83,83 @@ async def capture(
     done = asyncio.Event()
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        request_line, body = await _read_http_request(reader)
-        is_messages = (
-            request_line.startswith("POST ")
-            and "/v1/messages" in request_line
-            and "count_tokens" not in request_line
-        )
-        if is_messages and body and not captured:
-            with contextlib.suppress(json.JSONDecodeError):
-                parsed: dict[str, Any] = json.loads(body)
-                captured.append(parsed)
-                done.set()
-        # Minimal valid Messages response so the CLI exits cleanly; by now we
-        # already hold the request we came for, so its fate does not matter.
-        payload = json.dumps(
-            {
-                "id": "msg_capture",
-                "type": "message",
-                "role": "assistant",
-                "model": model,
-                "content": [{"type": "text", "text": "ok"}],
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-            }
-        ).encode()
-        writer.write(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-            b"Content-Length: %d\r\n\r\n" % len(payload) + payload
-        )
-        with contextlib.suppress(Exception):
-            await writer.drain()
-            writer.close()
+        # Serve every request on the connection until EOF, so a keep-alive CLI
+        # that reuses one socket for count_tokens then messages is still caught.
+        try:
+            while True:
+                request_line, body = await _read_http_request(reader)
+                if not request_line:
+                    break
+                is_messages = (
+                    request_line.startswith("POST ")
+                    and "/v1/messages" in request_line
+                    and "count_tokens" not in request_line
+                )
+                if is_messages and body and not captured:
+                    with contextlib.suppress(json.JSONDecodeError):
+                        parsed: dict[str, Any] = json.loads(body)
+                        captured.append(parsed)
+                        done.set()
+                # Minimal valid Messages response so the CLI exits cleanly; by
+                # now we already hold the request we came for, so its fate does
+                # not matter.
+                payload = json.dumps(
+                    {
+                        "id": "msg_capture",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model,
+                        "content": [{"type": "text", "text": "ok"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    }
+                ).encode()
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                    b"Content-Length: %d\r\n\r\n" % len(payload) + payload
+                )
+                await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                writer.close()
 
-    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    # Raise the per-connection buffer limit well above a captured request body
+    # (prompt + ~20 tool schemas runs tens of KiB) so readuntil never overruns.
+    server = await asyncio.start_server(handle, "127.0.0.1", 0, limit=4 * 1024 * 1024)
     port = server.sockets[0].getsockname()[1]
     serving = asyncio.create_task(server.serve_forever())
 
     home = tempfile.mkdtemp(prefix="claude-extract-home-")
     cwd = tempfile.mkdtemp(prefix="claude-extract-cwd-")
-    env = {
-        **os.environ,
-        "HOME": home,
-        "XDG_CONFIG_HOME": f"{home}/.config",
-        "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}",
-        "ANTHROPIC_API_KEY": "sk-ant-extract-dummy",
-        "DISABLE_TELEMETRY": "1",
-        "DISABLE_ERROR_REPORTING": "1",
-        "DISABLE_AUTOUPDATER": "1",
-        "DISABLE_INSTALLATION_CHECKS": "1",
+    # Drop anything that would defeat the capture: a *_PROXY would route the
+    # loopback request away from our server, and a real auth token would let the
+    # CLI pick a non-API-key auth mode. We pin our own base URL + dummy key below.
+    stripped = {
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
     }
+    env = {k: v for k, v in os.environ.items() if k.upper() not in stripped}
+    env.update(
+        {
+            "HOME": home,
+            "XDG_CONFIG_HOME": f"{home}/.config",
+            "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{port}",
+            "ANTHROPIC_API_KEY": "sk-ant-extract-dummy",
+            "NO_PROXY": "127.0.0.1,localhost",
+            "no_proxy": "127.0.0.1,localhost",
+            "DISABLE_TELEMETRY": "1",
+            "DISABLE_ERROR_REPORTING": "1",
+            "DISABLE_AUTOUPDATER": "1",
+            "DISABLE_INSTALLATION_CHECKS": "1",
+        }
+    )
     proc = await asyncio.create_subprocess_exec(
         binary,
         "-p",
@@ -141,6 +172,10 @@ async def capture(
         stderr=asyncio.subprocess.STDOUT,
     )
     try:
+        # Return as soon as the request is captured (done) OR the child exits
+        # early without sending one (comm). `comm` exists only to detect that
+        # early exit so we don't wait the full timeout; the process is reaped in
+        # the `finally` below, so the cancelled task here leaks nothing.
         comm = asyncio.create_task(proc.communicate())
         _, pending = await asyncio.wait(
             {comm, asyncio.create_task(done.wait())},
