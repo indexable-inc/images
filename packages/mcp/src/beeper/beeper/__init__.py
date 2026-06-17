@@ -9,7 +9,7 @@ install step.
     import beeper
 
     beeper.login("<access token>")     # store your token (written mode 0600)
-    beeper.status()                    # {"configured": True, "base_url": ..., "version": ...}
+    await beeper.status()              # {"configured": True, "base_url": ..., "version": ...}
     beeper.logout()                    # remove the stored token file
 
     await beeper.accounts()            # connected networks/accounts, as a polars frame
