@@ -35,6 +35,7 @@ one is attached (``devices()`` lists them). Targeting is done through the CLI's
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -277,6 +278,57 @@ def _unlink(path: str) -> None:
     Path(path).unlink(missing_ok=True)
 
 
+async def _group_signal(pid: int, signal: str) -> None:
+    """Send `signal` to a sudo-spawned process group (negative pid).
+
+    Raises IphoneError if the `sudo kill` itself fails (e.g. sudoers permits
+    starting tunneld but not killing it), so cleanup never reports false success.
+    """
+    killer = await asyncio.create_subprocess_exec(
+        "sudo",
+        "-n",
+        "kill",
+        signal,
+        f"-{pid}",
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, err = await killer.communicate()
+    if killer.returncode != 0:
+        detail = (err or b"").decode(errors="replace").strip()
+        raise IphoneError(
+            f"`sudo kill {signal} -{pid}` failed (exit {killer.returncode}): "
+            f"{detail or 'no output'}"
+        )
+
+
+async def _sudo_kill(proc: asyncio.subprocess.Process | None) -> None:
+    """Terminate a sudo-spawned (root) tunneld process group; no-op if gone.
+
+    The daemon runs as root, so the spawning user cannot signal it directly
+    (`proc.terminate()` would EPERM); route the kill through sudo. The process
+    was started with its own session (`start_new_session=True`), so its pid is
+    the process-group id and a negative-pid kill reaps sudo and tunneld together.
+    Escalates to SIGKILL if the group ignores SIGTERM. Fails closed: raises
+    IphoneError if the signal could not be sent or the process is still alive
+    afterward, so a caller never clears its handle on a privileged process that
+    is in fact still running.
+    """
+    if proc is None or proc.returncode is not None:
+        return
+    await _group_signal(proc.pid, "-TERM")
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(proc.wait(), timeout=5)
+        return
+    await _group_signal(proc.pid, "-KILL")
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except TimeoutError:
+        raise IphoneError(
+            f"tunneld (pid {proc.pid}) still running after SIGKILL; left tracked for retry"
+        ) from None
+
+
 def _tunneld_url() -> str:
     return f"http://{_TUNNELD_HOST}:{_TUNNELD_PORT}/"
 
@@ -354,6 +406,7 @@ async def start_tunneld(*, sudo: bool = False) -> str:
         start_new_session=True,
     )
     err_log.close()
+    started = False
     try:
         for _ in range(40):
             await asyncio.sleep(0.5)
@@ -364,12 +417,23 @@ async def start_tunneld(*, sudo: bool = False) -> str:
                     f"{detail or 'no output (check passwordless sudo)'}"
                 )
             if await _tunneld_up():
+                started = True
                 return f"tunneld started (pid {_tunneld_proc.pid})"
         raise IphoneError("tunneld did not become ready within 20s")
     finally:
         # The daemon keeps its own open fd (POSIX), so removing the path now is
         # safe and avoids leaking a log file per start.
         await asyncio.to_thread(_unlink, err_log.name)
+        # On any non-success exit (early exit or readiness timeout) do not leave a
+        # privileged tunneld running behind a "startup failed" error. Suppress a
+        # cleanup failure so it cannot mask the original startup error, and only
+        # drop the handle if the daemon actually died (else keep it so a later
+        # stop_tunneld() can retry the kill).
+        if not started:
+            with contextlib.suppress(IphoneError):
+                await _sudo_kill(_tunneld_proc)
+            if _tunneld_proc is not None and _tunneld_proc.returncode is not None:
+                _tunneld_proc = None
 
 
 async def stop_tunneld() -> None:
@@ -378,12 +442,7 @@ async def stop_tunneld() -> None:
 
     if _tunneld_proc is None:
         return
-    if _tunneld_proc.returncode is None:
-        _tunneld_proc.terminate()
-        try:
-            await asyncio.wait_for(_tunneld_proc.wait(), timeout=10)
-        except TimeoutError:
-            _tunneld_proc.kill()
+    await _sudo_kill(_tunneld_proc)
     _tunneld_proc = None
 
 
