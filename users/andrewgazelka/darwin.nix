@@ -47,7 +47,7 @@
       "setapp"
       "signal"
       "skim"
-      "slack"
+      "slack@beta"
       "stremio"
       "superhuman"
       "superwhisper"
