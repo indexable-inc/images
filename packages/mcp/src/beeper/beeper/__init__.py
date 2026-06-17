@@ -403,7 +403,7 @@ async def chats(*, limit: int = 50, account_id: str | None = None) -> pl.DataFra
     _require_incognito()
     params: dict[str, Any] = {}
     if account_id:
-        params["accountID"] = [account_id]
+        params["accountIDs"] = [account_id]
     items = await _paginate("/v1/chats", limit=limit, params=params)
     rows: list[dict[str, Any]] = []
     for chat in items:
@@ -498,9 +498,9 @@ async def search(
     if query:
         params["query"] = query
     if account_id:
-        params["accountID"] = [account_id]
+        params["accountIDs"] = [account_id]
     if chat_id:
-        params["chatID"] = [chat_id]
+        params["chatIDs"] = [chat_id]
     if sender:
         params["sender"] = sender
     if date_after:
@@ -554,7 +554,7 @@ async def search_chats(
     if query:
         params["query"] = query
     if account_id:
-        params["accountID"] = [account_id]
+        params["accountIDs"] = [account_id]
     if inbox:
         params["inbox"] = inbox
     items = await _paginate("/v1/chats/search", limit=limit, params=params)
