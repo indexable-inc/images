@@ -125,6 +125,14 @@ MODULES: tuple[Module, ...] = (
         "(`imessage.messages()` / `chats()` / `send()`) (macOS only)",
     ),
     Module(
+        "iphone",
+        "drive a USB-connected iPhone/iPad via pymobiledevice3: list devices/apps into polars "
+        "(`iphone.devices()` / `apps()`), `screenshot()` a developer-mounted device to a PIL "
+        "image, `tap`/`swipe`/`launch`, and mount the Developer Disk Image. Developer commands "
+        "need a root `tunneld` daemon — start it explicitly with `iphone.start_tunneld(sudo=True)` "
+        "— plus a USB device with Developer Mode on",
+    ),
+    Module(
         "tasks",
         "generate and read the task-graph demo's SQLite DAG (`tasks.seed` / `load` / `frame`)",
     ),
