@@ -47,6 +47,7 @@ from typing import Any
 
 import httpx
 import polars as pl
+from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "BeeperError",
@@ -150,6 +151,97 @@ _SEARCH_CHATS_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "unread_count": pl.Int64,
     "last_activity": _TS,
 }
+
+
+# Pydantic models for the API response objects: validate-and-default the raw
+# JSON (``extra="ignore"`` drops fields we don't surface; aliases map the API's
+# camelCase to snake attributes) so the puller bodies read typed fields instead
+# of fragile ``dict.get(..., "") or ""`` chains. Timestamps stay ``str`` here so
+# `_frame` remains the single place datetimes are parsed.
+class _ApiModel(BaseModel):
+    # extra="ignore" drops API fields we don't surface. Fields use
+    # ``validation_alias`` (not ``alias``) so the API's camelCase keys are read on
+    # model_validate while the field keeps its snake name with a default -- which
+    # keeps each model a zero-arg-constructable type for ``default_factory``.
+    model_config = ConfigDict(extra="ignore")
+
+
+class _Bridge(_ApiModel):
+    type: str = ""
+    provider: str = ""
+
+
+class _User(_ApiModel):
+    id: str = ""
+    full_name: str = Field("", validation_alias="fullName")
+    username: str = ""
+    phone_number: str = Field("", validation_alias="phoneNumber")
+    is_self: bool = Field(default=False, validation_alias="isSelf")
+
+
+class _Account(_ApiModel):
+    account_id: str = Field("", validation_alias="accountID")
+    network: str = ""
+    status: str = ""
+    bridge: _Bridge = Field(default_factory=_Bridge)
+    user: _User | None = None
+
+
+class _Message(_ApiModel):
+    id: str = ""
+    chat_id: str = Field("", validation_alias="chatID")
+    account_id: str = Field("", validation_alias="accountID")
+    sender_id: str = Field("", validation_alias="senderID")
+    is_sender: bool = Field(default=False, validation_alias="isSender")
+    timestamp: str = ""
+    type: str = ""
+    text: str = ""
+    linked_message_id: str = Field("", validation_alias="linkedMessageID")
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class _Chat(_ApiModel):
+    id: str = ""
+    account_id: str = Field("", validation_alias="accountID")
+    network: str = ""
+    type: str = ""
+    title: str = ""
+    unread_count: int = Field(0, validation_alias="unreadCount")
+    is_muted: bool = Field(default=False, validation_alias="isMuted")
+    is_pinned: bool = Field(default=False, validation_alias="isPinned")
+    last_activity: str = Field("", validation_alias="lastActivity")
+    preview: _Message | None = None
+
+
+class _ListPage(_ApiModel):
+    """A cursor-paginated list envelope; items stay raw for the caller's model."""
+
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    has_more: bool = Field(default=False, validation_alias="hasMore")
+    oldest_cursor: str | None = Field(None, validation_alias="oldestCursor")
+
+
+class _SearchPage(_ApiModel):
+    """The message-search envelope: typed messages plus a chatID->chat map."""
+
+    chats: dict[str, _Chat] = Field(default_factory=dict)
+    items: list[_Message] = Field(default_factory=list)
+    has_more: bool = Field(default=False, validation_alias="hasMore")
+    oldest_cursor: str | None = Field(None, validation_alias="oldestCursor")
+
+
+class _AppInfo(_ApiModel):
+    version: str | None = None
+
+
+class _Info(_ApiModel):
+    app: _AppInfo = Field(default_factory=_AppInfo)
+    version: str | None = None  # older builds expose it at the top level
+
+
+class _SendResult(_ApiModel):
+    chat_id: str = Field("", validation_alias="chatID")
+    pending_message_id: str = Field("", validation_alias="pendingMessageID")
 
 
 def _frame(
@@ -360,14 +452,13 @@ async def status() -> dict[str, Any]:
         resp = await _request("GET", "/v1/info")
     except BeeperError:
         return {"configured": False, "base_url": base, "version": None}
-    info: dict[str, Any] = resp.json()
+    info = _Info.model_validate(resp.json())
     # /v1/info nests the app version under `app.version`; fall back to a
     # top-level `version` for older builds.
-    app: dict[str, Any] = info.get("app") or {}
     return {
         "configured": True,
         "base_url": base,
-        "version": app.get("version") or info.get("version"),
+        "version": info.app.version or info.version,
     }
 
 
@@ -385,25 +476,21 @@ async def accounts() -> pl.DataFrame:
     """
     _require_incognito()
     resp = await _request("GET", "/v1/accounts")
-    items: list[dict[str, Any]] = resp.json()
-    rows: list[dict[str, Any]] = []
-    for acct in items:
-        bridge: dict[str, Any] = acct.get("bridge") or {}
-        user: dict[str, Any] = acct.get("user") or {}
-        rows.append(
-            {
-                "account_id": acct.get("accountID", ""),
-                "network": acct.get("network", "") or "",
-                "type": bridge.get("type", "") or "",
-                "provider": bridge.get("provider", "") or "",
-                "status": acct.get("status", "") or "",
-                "user_id": user.get("id", "") or "",
-                "full_name": user.get("fullName", "") or "",
-                "username": user.get("username", "") or "",
-                "phone": user.get("phoneNumber", "") or "",
-                "is_self": bool(user.get("isSelf")),
-            }
-        )
+    rows: list[dict[str, Any]] = [
+        {
+            "account_id": a.account_id,
+            "network": a.network,
+            "type": a.bridge.type,
+            "provider": a.bridge.provider,
+            "status": a.status,
+            "user_id": a.user.id if a.user else "",
+            "full_name": a.user.full_name if a.user else "",
+            "username": a.user.username if a.user else "",
+            "phone": a.user.phone_number if a.user else "",
+            "is_self": a.user.is_self if a.user else False,
+        }
+        for a in (_Account.model_validate(d) for d in resp.json())
+    ]
     return _frame(rows, _ACCOUNTS_SCHEMA)
 
 
@@ -428,11 +515,10 @@ async def _paginate(
             page_params["cursor"] = cursor
             page_params["direction"] = "before"
         resp = await _request("GET", path, params=page_params)
-        data: dict[str, Any] = resp.json()
-        items: list[dict[str, Any]] = data.get("items") or []
-        out.extend(items)
-        cursor = data.get("oldestCursor")
-        if not data.get("hasMore") or not cursor or not items:
+        page = _ListPage.model_validate(resp.json())
+        out.extend(page.items)
+        cursor = page.oldest_cursor
+        if not page.has_more or not cursor or not page.items:
             break
     return out[:limit]
 
@@ -455,25 +541,23 @@ async def chats(*, limit: int = 50, account_id: str | None = None) -> pl.DataFra
     params: dict[str, Any] = {}
     if account_id:
         params["accountIDs"] = [account_id]
-    items = await _paginate("/v1/chats", limit=limit, params=params)
-    rows: list[dict[str, Any]] = []
-    for chat in items:
-        preview: dict[str, Any] = chat.get("preview") or {}
-        rows.append(
-            {
-                "id": chat.get("id", ""),
-                "account_id": chat.get("accountID", "") or "",
-                "network": chat.get("network", "") or "",
-                "type": chat.get("type", "") or "",
-                "title": chat.get("title", "") or "",
-                "unread_count": int(chat.get("unreadCount") or 0),
-                "is_muted": bool(chat.get("isMuted")),
-                "is_pinned": bool(chat.get("isPinned")),
-                "last_activity": chat.get("lastActivity", "") or "",
-                "preview_sender": preview.get("senderID", "") or "",
-                "preview_text": preview.get("text", "") or "",
-            }
-        )
+    raw = await _paginate("/v1/chats", limit=limit, params=params)
+    rows: list[dict[str, Any]] = [
+        {
+            "id": c.id,
+            "account_id": c.account_id,
+            "network": c.network,
+            "type": c.type,
+            "title": c.title,
+            "unread_count": c.unread_count,
+            "is_muted": c.is_muted,
+            "is_pinned": c.is_pinned,
+            "last_activity": c.last_activity,
+            "preview_sender": c.preview.sender_id if c.preview else "",
+            "preview_text": c.preview.text if c.preview else "",
+        }
+        for c in (_Chat.model_validate(d) for d in raw)
+    ]
     return _frame(rows, _CHATS_SCHEMA)
 
 
@@ -491,21 +575,21 @@ async def messages(chat_id: str, *, limit: int = 50) -> pl.DataFrame:
     unreachable, or in a shared room.
     """
     _require_incognito()
-    items = await _paginate(f"/v1/chats/{_quote_id(chat_id)}/messages", limit=limit)
+    raw = await _paginate(f"/v1/chats/{_quote_id(chat_id)}/messages", limit=limit)
     rows: list[dict[str, Any]] = [
         {
-            "id": msg.get("id", ""),
-            "chat_id": msg.get("chatID", "") or "",
-            "account_id": msg.get("accountID", "") or "",
-            "sender_id": msg.get("senderID", "") or "",
-            "is_sender": bool(msg.get("isSender")),
-            "timestamp": msg.get("timestamp", "") or "",
-            "type": msg.get("type", "") or "",
-            "text": msg.get("text", "") or "",
-            "reply_to": msg.get("linkedMessageID", "") or "",
-            "attachments": len(msg.get("attachments") or []),
+            "id": m.id,
+            "chat_id": m.chat_id,
+            "account_id": m.account_id,
+            "sender_id": m.sender_id,
+            "is_sender": m.is_sender,
+            "timestamp": m.timestamp,
+            "type": m.type,
+            "text": m.text,
+            "reply_to": m.linked_message_id,
+            "attachments": len(m.attachments),
         }
-        for msg in items
+        for m in (_Message.model_validate(d) for d in raw)
     ]
     # The API returns newest-first while paginating; present chronologically.
     return _frame(rows, _MESSAGES_SCHEMA).sort("timestamp")
@@ -554,8 +638,8 @@ async def search(
     # /v1/messages/search returns one cursor-paginated page per call (a single
     # page is capped well below large limits), so page oldest-ward until we have
     # `limit` matches, accumulating the chatID->chat map across pages for titles.
-    items: list[dict[str, Any]] = []
-    chat_map: dict[str, Any] = {}
+    items: list[_Message] = []
+    chat_map: dict[str, _Chat] = {}
     cursor: str | None = None
     while len(items) < limit:
         params = dict(base_params)
@@ -563,25 +647,25 @@ async def search(
             params["cursor"] = cursor
             params["direction"] = "before"
         resp = await _request("GET", "/v1/messages/search", params=params)
-        data: dict[str, Any] = resp.json()
-        chat_map.update(data.get("chats") or {})
-        page: list[dict[str, Any]] = data.get("items") or []
-        items.extend(page)
-        cursor = data.get("oldestCursor")
-        if not data.get("hasMore") or not cursor or not page:
+        page = _SearchPage.model_validate(resp.json())
+        chat_map.update(page.chats)
+        items.extend(page.items)
+        cursor = page.oldest_cursor
+        if not page.has_more or not cursor or not page.items:
             break
 
+    titles = {cid: c.title for cid, c in chat_map.items()}
     rows: list[dict[str, Any]] = [
         {
-            "chat_id": msg.get("chatID", "") or "",
-            "chat_title": (chat_map.get(msg.get("chatID", "") or "") or {}).get("title", "") or "",
-            "sender_id": msg.get("senderID", "") or "",
-            "is_sender": bool(msg.get("isSender")),
-            "timestamp": msg.get("timestamp", "") or "",
-            "type": msg.get("type", "") or "",
-            "text": msg.get("text", "") or "",
+            "chat_id": m.chat_id,
+            "chat_title": titles.get(m.chat_id, ""),
+            "sender_id": m.sender_id,
+            "is_sender": m.is_sender,
+            "timestamp": m.timestamp,
+            "type": m.type,
+            "text": m.text,
         }
-        for msg in items[:limit]
+        for m in items[:limit]
     ]
     return _frame(rows, _SEARCH_SCHEMA)
 
@@ -610,18 +694,18 @@ async def search_chats(
         params["accountIDs"] = [account_id]
     if inbox:
         params["inbox"] = inbox
-    items = await _paginate("/v1/chats/search", limit=limit, params=params)
+    raw = await _paginate("/v1/chats/search", limit=limit, params=params)
     rows: list[dict[str, Any]] = [
         {
-            "id": chat.get("id", ""),
-            "account_id": chat.get("accountID", "") or "",
-            "network": chat.get("network", "") or "",
-            "type": chat.get("type", "") or "",
-            "title": chat.get("title", "") or "",
-            "unread_count": int(chat.get("unreadCount") or 0),
-            "last_activity": chat.get("lastActivity", "") or "",
+            "id": c.id,
+            "account_id": c.account_id,
+            "network": c.network,
+            "type": c.type,
+            "title": c.title,
+            "unread_count": c.unread_count,
+            "last_activity": c.last_activity,
         }
-        for chat in items
+        for c in (_Chat.model_validate(d) for d in raw)
     ]
     return _frame(rows, _SEARCH_CHATS_SCHEMA)
 
@@ -645,8 +729,8 @@ async def send(chat_id: str, text: str, *, reply_to: str | None = None) -> dict[
     resp = await _request(
         "POST", f"/v1/chats/{_quote_id(chat_id)}/messages", json_body=body
     )
-    data: dict[str, Any] = resp.json()
+    result = _SendResult.model_validate(resp.json())
     return {
-        "chat_id": data.get("chatID", "") or chat_id,
-        "pending_message_id": data.get("pendingMessageID", "") or "",
+        "chat_id": result.chat_id or chat_id,
+        "pending_message_id": result.pending_message_id,
     }
