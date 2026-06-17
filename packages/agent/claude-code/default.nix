@@ -274,11 +274,17 @@ let
     {
       cleanupPeriodDays = 365;
       permissions = {
-        deny = [
-          "Bash(gh pr merge*--admin*)"
-          "Bash(gh pr merge*--force*)"
-        ]
-        ++ denyTools;
+        # Prepend any caller-supplied deny: `ix.deepMerge.rhs` treats a list as a
+        # leaf, so a computed `deny` would REPLACE `extraSettings.permissions.deny`
+        # outright and silently drop a consumer's own policy. Concatenate instead
+        # so package denies are additive to the caller's.
+        deny =
+          (extraSettings.permissions.deny or [ ])
+          ++ [
+            "Bash(gh pr merge*--admin*)"
+            "Bash(gh pr merge*--force*)"
+          ]
+          ++ denyTools;
       };
       hooks = {
         SessionStart = [

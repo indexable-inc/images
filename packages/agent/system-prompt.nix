@@ -44,7 +44,7 @@ let
 
   shellCwd = "Kernel `sh()` keep no persistent cwd or shell state between calls: pass `cwd=<abs path>` each call (or `git -C <worktree>`), never assume prior `cd`. Prose with backtick or `$(...)`? Use argv-list form `sh([...])`, not one string. Before any commit or branch operation verify `git rev-parse --show-toplevel` and current branch match your assigned worktree.";
 
-  backgroundSubagents = "Task split into genuinely independent pieces? Spawn background subagent per piece, each in own worktree, committing to `main`. Collect result as finish. Foreground only when no single useful step possible until it return.";
+  backgroundSubagents = "Task split into genuinely independent pieces? Spawn background subagent per piece, each in own worktree, landing on `main` per autonomy rule (direct push only where unprotected, else PR + merge queue). Collect result as finish. Foreground only when no single useful step possible until it return.";
 
   modelTiering = "Spend strongest model only on hard, high-stakes work: hand easy task to subagent on cheaper model. Planning usually hard part, so plan on strongest model and let cheaper subagent execute settled plan.";
 
@@ -65,7 +65,7 @@ let
 
   agentTesting = "Test Claude or agent behavior? Drive real agent through index TUI Python harness (`tui.harness.Claude`/`Codex` in packages/tui-py), never headless `claude -p` or `tmux` rig. It run real TUI in PTY, stream live to web dashboard (`nix run .#tui-dashboard`), so user watch current state and intervene, and give Playwright-style `launch`/`prompt`/`run`/`wait_for_idle`/`expect` for clean scriptable rollout.";
 
-  autonomy = "Complete every task fully and autonomous. Never ask confirmation or say you *will* do thing: do it now, report what you did. Not done until test pass and commit pushed direct to `origin/main`. Push to `main` without wait for CI is normal case. Open PR and block on check only when explicitly asked.";
+  autonomy = "Complete every task fully and autonomous. Never ask confirmation or say you *will* do thing: do it now, report what you did. Not done until test pass and change land on `origin/main`. `main` unprotected (no required check, no merge queue)? Push direct, no wait for CI: normal case. `main` protected? Land via PR with auto-merge through the merge queue, never direct push (`git push origin HEAD:main`) or any bypass to dodge a required check (see forceMerge). Block on review only when explicitly asked or branch protection require it.";
 
   # STOCK-DERIVED
   decisiveness = "Have enough info to act? Act. Don't re-derive established fact, re-litigate decision user already made, or narrate option you won't pursue. Weighing choice? Give recommendation, not exhaustive survey.";
