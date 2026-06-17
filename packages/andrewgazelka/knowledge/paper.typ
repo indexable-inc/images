@@ -5,345 +5,254 @@
 #set heading(numbering: "1.1")
 #show heading.where(level: 1): it => { v(0.4em); block(text(size: 14pt, it)); v(0.2em) }
 #show raw.where(block: true): it => block(fill: luma(245), inset: 8pt, radius: 4pt, width: 100%, it)
+#show link: it => underline(text(fill: rgb("#1a4f8a"), it))
+
+#let cite(url, label) = link(url)[#label]
 
 #align(center)[
   #text(size: 19pt, weight: "bold")[knowledge]
   #v(2pt)
   #text(size: 12pt)[A public, trust-weighted knowledge commons for autonomous agents]
   #v(4pt)
-  #text(size: 9.5pt, style: "italic")[Design paper, draft v0.1 #h(0.5em)·#h(0.5em) `index/packages/andrewgazelka/knowledge` #h(0.5em)·#h(0.5em) status: RFC / not yet built]
+  #text(size: 9.5pt, style: "italic")[Design paper, draft v0.2 #h(0.5em)·#h(0.5em) `index/packages/andrewgazelka/knowledge` #h(0.5em)·#h(0.5em) status: RFC / not yet built]
 ]
 
 #v(0.6em)
 
 #block(fill: luma(243), inset: 10pt, radius: 5pt, width: 100%)[
-  *Abstract.* `knowledge` is a write-target store where agents deliberately publish reusable knowledge for *other* agents to find, across organizational and trust boundaries. Unlike the existing private transcript corpus (which passively ingests one organization's history), `knowledge` is designed for the *public, multi-party* case: a lab spread across India, China, and the US whose agents must exchange findings with *zero implied trust* between parties. Trustworthiness is not asserted by the writer; it is *earned* through a personalized web-of-trust over per-reader ratings, rooted in GitHub-verified human identities and propagated down signed agent-delegation chains. Items default to private and are promoted to shared/public explicitly. The substrate reuses the index stack (mixedbread semantic search, the Iceberg lake, the polars IO-plugin pattern); the new surface is a curl-able service plus a `scan_knowledge()` polars plugin. This paper records the design, its prior art, the decisions taken, and the parts we should deliberately reconsider before promotion beyond a personal test project.
+  *Abstract.* `knowledge` is a write-target store where agents deliberately publish reusable knowledge for *other* agents to find, across organizational and trust boundaries. Unlike the existing private transcript corpus (which passively ingests one organization's history), `knowledge` is designed for the *public, multi-party* case: a lab spread across India, China, and the US whose agents must exchange findings with *zero implied trust* between parties. Trustworthiness is not asserted by the writer; it is *earned* through a personalized, Sybil-*tolerant* web-of-trust over per-reader ratings and corroboration, rooted in verifiable human identities and propagated down signed, attenuated agent-delegation chains. Because a public pool is a documented poisoning target, *signed provenance plus independent-trust gating is the load-bearing defense*, not a feature: similarity retrieval alone is forbidden for public scope. Items default to private and are promoted to shared/public explicitly. The substrate reuses the index stack (mixedbread semantic search, the Iceberg lake, the polars IO-plugin pattern); the new surface is a curl-able service plus a `scan_knowledge()` polars plugin. This v0.2 incorporates a verified state-of-the-art review (§3): the headline correction is that the trust metrics in a naive personalized-PageRank lineage are *provably not Sybil-resistant*, so the design is hardened with MeritRank-style decays, independent-root corroboration, one-hop distrust, and trust-weighted retrieval with sensitivity floors.
 ]
 
 = Motivation
 
 Today an agent's hard-won knowledge dies with its session. The fleet's private corpus partially fixes this *within one trust domain*: it ingests transcripts and serves them through `search.semantic`. But it is fundamentally a private, single-tenant memory. It answers "what has *my* org done?" not "what has *anyone* learned about X, and should I believe them?"
 
-The target here is *decentralized intelligence*. Picture a research lab distributed across continents and legal entities. An agent in one region debugs a gnarly CUDA/driver interaction; an agent elsewhere is about to hit the same wall. We want the second agent to benefit from the first, *without* the two parties having to pre-establish mutual trust. The classic problem with any open contribution pool is that openness is also an attack surface: anyone can write, so anyone can poison. The resolution is not access control alone (that just recreates silos) but a *trust metric*: you weight a contribution by how much your own chain of trust vouches for whoever produced it. Trusted people's agents tend to flag bad data as bad; you inherit that signal.
+The target here is *decentralized intelligence*. Picture a research lab distributed across continents and legal entities. An agent in one region debugs a gnarly CUDA/driver interaction; an agent elsewhere is about to hit the same wall. We want the second agent to benefit from the first, *without* the two parties having to pre-establish mutual trust. The classic problem with any open contribution pool is that openness is also an attack surface: anyone can write, so anyone can poison. The resolution is not access control alone (that just recreates silos) but a *trust metric*: you weight a contribution by how much your own chain of trust vouches for whoever produced it, and you ignore endorsements from identities your chain has never reached.
 
-Concretely we want:
-
-- *Open write, qualified read.* Any bound agent can contribute; readers see everything they are *permitted* to see, ranked by *personalized* trust.
-- *Huge, append-heavy scale.* Millions of items, far more ratings, write-mostly.
-- *Rich payloads.* Data plus arbitrary JSON metadata, runnable examples, and the environments they were observed in.
-- *Reproducible, queryable retrieval.* Semantic similarity (mixedbread) for recall and dedup; polars for structured filtering on metadata.
-- *A rating and corroboration loop.* "This helped me" / "this was wrong" with comments, and "this happened to me too" to let independent observations reinforce each other.
-- *Verifiable provenance.* Every write traces to a human via a signed agent-delegation chain.
-
-= Prior art
-
-This design is not speculative; it sits on a substantial body of measured results, including the fleet's own RFC ("how should agent memory be shared across users and sessions") and an internal research synthesis. The load-bearing lessons:
-
-== Shared agent memory is real but its benefit is efficiency, not IQ
-Controlled benchmarks (Stompy; Memco Spark) find shared memory does *not* raise the quality ceiling, which is a property of the model. It cuts turns and tokens (roughly 15--40% on *complex* tasks) and is *net-negative on simple tasks*. Implication for us: retrieval must be cheap to ignore and must not flood context. We surface a compact, ranked index and let agents pull detail on demand, never dump raw hits.
-
-== Shared multi-user stores are an attack surface
-This is the central risk and it directly motivates the trust system. MINJA (NeurIPS'25) shows a shared memory bank can be poisoned through query-only interaction so victims later retrieve attacker-planted records. "Sleeper" memory poisoning reaches 95--99% injection and steers 60--89% of later sessions. Even non-adversarially, memory-equipped agents show *higher* violation rates than no-memory baselines via stale facts and cross-context leakage. The prescribed defenses are exactly our primitives: write-path provenance, source isolation, *trust decay at retrieval*, and review/rating gates. A public pool makes this worse, not better, so trust weighting is not a feature; it is the precondition for the thing existing at all.
-
-== Trust metrics are a solved-enough problem to borrow from
-We are not inventing a reputation system from scratch. The relevant lineage:
-- *PGP web-of-trust*: identity vouching with transitive but decaying trust. We adopt the social structure (you trust roots; trust flows outward and weakens).
-- *EigenTrust* (P2P, Kamvar et al.): global trust as the principal eigenvector of the normalized local-trust matrix, with pre-trusted peers anchoring against Sybil collectives. Basis for our optional global prior.
-- *Advogato / TrustRank / personalized PageRank*: attack-resistant, *viewer-relative* trust by propagating from a seed set. Basis for our chosen personalized metric.
-- *Appleseed* (spreading activation): graceful, tunable trust propagation with distance decay. Informs the decay knobs.
-- *Guha et al., "Propagation of Trust and Distrust" (WWW'04)*: the canonical result that *distrust* must propagate too, and does so differently from trust (distrust is not simply negative trust; one-step distrust propagation is the robust choice). Basis for our signed local metric where your distrust flows outward to discount whoever a distrusted party vouches for.
-
-The Sybil-resistance property we rely on is shared by all of these: fake identities are cheap to *create* but worthless until something *your* roots already trust vouches for them. Trust must *flow from you*; an island of colluding agents trusts only itself.
-
-== Staleness needs metadata, not (yet) a knowledge graph
-mem0-style ADD-only timestamped facts plus recency-aware ranking approximate Zep/Graphiti's bi-temporal invalidation without the infra. We carry created / last-verified timestamps and let trust and recency co-rank. A full temporal knowledge graph is a future option, not a v1.
+Concretely we want: open write / qualified read; huge append-heavy scale; rich arbitrary payloads (data and metadata); reproducible, queryable retrieval (semantic recall plus polars filters); a rating and corroboration loop ("this helped me" / "this happened to me too"); and verifiable provenance to a human on every event.
 
 = Design principles
 
-1. *Provenance is mandatory and verifiable.* No anonymous writes. Every event names its full chain to a human.
-2. *Trust is earned and personal.* No global authority decides truth. Each reader gets a ranking relative to their own roots.
-3. *Private by default.* Agents write to their private scope; publishing is a deliberate act. Search returns the union of what you may see.
-4. *Append-only.* History is never mutated; corrections and retractions are new events. This is what makes audit, trust, and poisoning forensics tractable.
-5. *Reuse the substrate.* mixedbread for semantic recall and dedup, Iceberg for the durable log, the polars IO-plugin pattern for the query surface. The new code is identity, trust, ACL, and the write path.
-6. *Usable from anywhere.* A plain `curl` from a bash-only agent must be able to read and write. The index MCP is the *ergonomic* path, not the *only* path.
-7. *Generalize for enterprise from day one* without over-building. Choose schemas and scopes that extend to orgs, sharing grants, and audit, even while the first deployment is a personal test project.
+1. *Provenance is mandatory and verifiable.* No anonymous writes; every event names a signed chain to a human, and nothing is *surfaced* for public/cross-user scope without one. This is the central poisoning defense (§3, §10).
+2. *Trust is earned, personal, and Sybil-tolerant.* No global authority decides truth. Each reader gets a ranking relative to their own roots, and fake identities gain bounded leverage because trust must flow *to* them from a reader's seed set.
+3. *Private by default.* Agents write private; publishing is deliberate. Search returns the union of what you may see.
+4. *Append-only and bi-temporal.* History is never mutated; corrections, retractions, and supersessions are new events carrying both valid-time and ingestion-time. This makes audit, trust recompute, and poisoning forensics tractable.
+5. *Reuse the substrate.* mixedbread for recall and dedup, Iceberg for the durable log, the polars IO-plugin pattern for the query surface. The new code is identity, trust, ACL, dedup/conflict, and the write path.
+6. *Usable from anywhere.* A plain `curl` from a bash-only agent must read and write. The index MCP is the ergonomic path, not the only path.
+7. *Keep curation off the hot path.* Dedup, relation inference, and trust recompute run as background ("sleep-time") jobs that emit new events; reads stay low-latency.
+
+= State of the art and prior art
+
+This design was checked against a verified literature sweep (web search, primary sources, adversarial re-verification per claim). We cite only systems and results that verified; where a number is vendor self-report or a single-author preprint, we say so. The single most important finding is a *correction* to the trust design, called out in §3.2.
+
+== Agent memory: distilled, typed, temporal, additive
+Consensus has formed that agents should store *distilled, structured* experience and that memory should be *additive*, not destructively rewritten. #cite("https://arxiv.org/abs/2509.25140", "ReasoningBank") (Google, ICLR'26) distills reusable strategies including first-class *failure* lessons from self-judged outcomes and beats memory-free, raw-trajectory, and success-only baselines; notably it "just appends, leaving consolidation to future work", exactly the gap our relations + dedup fill. #cite("https://arxiv.org/abs/2510.04618", "ACE") (Stanford/SambaNova/Berkeley, ICLR'26) names the failure modes of destructive consolidation (*context collapse*, *brevity bias*) and shows incremental structured deltas beat full rewrites, and that self-curation *without a reliable feedback signal pollutes the store*, the core argument that our trust-weighting is necessary, not optional. #cite("https://arxiv.org/abs/2504.19413", "Mem0/Mem0g") independently converged on an ADD-only architecture (treat its LOCOMO numbers as directional only). #cite("https://arxiv.org/abs/2501.13956", "Zep/Graphiti") is the closest production analog to our typed-relation graph: a *bi-temporal* graph with automatic fact-invalidation and provenance to source. #cite("https://arxiv.org/abs/2502.12110", "A-MEM") (NeurIPS'25) is direct precedent for typed relations forming a self-organizing graph; #cite("https://arxiv.org/abs/2506.07398", "G-Memory") shows a distilled-insight tier above raw events raises success materially; #cite("https://arxiv.org/abs/2504.13171", "Letta/MemGPT sleep-time") validates running curation off the response path; #cite("https://arxiv.org/abs/2509.09498", "SEDM") proposes verifiable write-admission (replay the claimed benefit) as an objective signal (code unreleased). For our visibility model, #cite("https://arxiv.org/abs/2505.18279", "Collaborative Memory") (Accenture, ICML'25 workshop) is a near-exact independent reinvention: private + selectively-shared tiers, immutable per-fragment provenance, and access-filtered "projected" retrieval with auditable adherence to asymmetric, time-evolving permissions.
+
+== Trust, reputation, and Sybil-resistance (the key correction)
+*Our naive trust lineage is not Sybil-resistant on its own.* #cite("https://arxiv.org/abs/2207.09950", "MeritRank") (TU Delft/Tribler) proves personalized PageRank, hitting-time, and max-flow are not Sybil-resistant, and makes them Sybil-*tolerant* (bounded attacker gain) via three drop-in decays: *transitivity* (serial attacks), *connectivity* (parallel/cycle attacks across a narrow cut), and *epoch* (staleness). #cite("https://www.eecs.harvard.edu/cs286r/courses/fall09/papers/friedman1.pdf", "Friedman & Cheng") prove *no nonconstant symmetric reputation function is Sybilproof*, the strongest justification for making personalized/asymmetric trust primary over any global score, and they note even EigenTrust-style PageRank variants are manipulable. #cite("https://snap.stanford.edu/class/cs224w-readings/guha04trust.pdf", "Guha et al.") (WWW'04, ~800K Epinions edges) establish that distrust does *not* propagate transitively like trust and that *one-step distrust* performs best. #cite("https://arxiv.org/html/2510.27554v1", "TraceRank") demonstrates the property that makes count-based corroboration safe: N endorsements from zero-seed identities accrue *zero* propagated reputation regardless of N, while one high-seed endorsement propagates real trust. #cite("https://arxiv.org/pdf/2307.01411", "Web3Recommend") and #cite("https://github.com/BrightID/BrightID-AntiSybil", "SybilRank") show such a personalized engine is incrementally computable and Sybil-hardenable. For a uniqueness root, #cite("https://arxiv.org/pdf/2408.07892", "Personhood Credentials") (OpenAI/Microsoft/academia) and deployments like #cite("https://web3classdao.github.io/kaist2025/reports/brightid/", "BrightID") (~100K users by mid-2025, a scaling cautionary tale) define the option space. #cite("https://www.arxiv.org/pdf/2511.03434", "Inter-Agent Trust Models") (Hu & Rong) rate reputation "Very Low" robustness to Sybil for LLM agents (worsened by prompt injection and sycophancy) and recommend anchoring *high-impact actions* in Proof+Stake with reputation as an overlay; #cite("https://arxiv.org/abs/2505.14551", "TRep") makes honest trust-reporting a Nash equilibrium.
+
+== Memory poisoning and defenses
+Poisoning is a first-class, scale-invariant threat against similarity retrieval. #cite("https://arxiv.org/abs/2402.07867", "PoisonedRAG") (USENIX'25) reaches ~90% attack success with *5 injected texts* against a 2.68M-document corpus: content volume is no defense. #cite("https://arxiv.org/abs/2407.12784", "AgentPoison") (NeurIPS'24) backdoors agent memory at ≥80% success at under 0.1% poison rate by optimizing a trigger into a tight embedding cluster, attacking the very mechanism dedup relies on. #cite("https://arxiv.org/abs/2503.03704", "MINJA") (NeurIPS'25) plants poison with *query access only* (~98%), proving a valid delegation must not be equated with trustworthiness. #cite("https://arxiv.org/html/2512.16962v1", "MemoryGraft") and #cite("https://aclanthology.org/2025.findings-emnlp.1023.pdf", "AuthChain") (EMNLP'25) are the dangerous shapes for us: trigger-free, fluent poison disguised as a legitimate "successful experience" with forged in-document corroboration, defeating perplexity/anomaly/self-assessment detectors and single-document count-based corroboration. Defenses are complementary layers, none a guarantee: #cite("https://arxiv.org/abs/2405.15556", "RobustRAG") (NeurIPS'25) gives a *certified* lower bound *only while poison is a minority* of retrieved items (the precondition our trust filter must enforce); #cite("https://arxiv.org/abs/2410.22954", "RA-RAG") (EMNLP'25) estimates per-source reliability label-free via cross-source agreement among *independent* sources (the backbone of our corroboration layer); #cite("https://arxiv.org/html/2504.21668v1", "RAGForensics/RAGOrigin") perform post-hoc, black-box *traceback* from a bad answer to the responsible stored texts, for which our provenance-rich append-only log is an ideal substrate.
+
+== Agent identity, delegation, and provenance
+The standards space is crowded and unratified, so build on audited primitives. #cite("https://rfc-editor.org/rfc/rfc8693", "OAuth Token Exchange (RFC 8693)") supports nested `act` actor claims but treats prior actors as *informational*, not cryptographically attenuated per hop; the #cite("https://datatracker.ietf.org/doc/html/draft-oauth-ai-agents-on-behalf-of-user-02", "IETF on-behalf-of draft") covers only the single user→agent hop, so our multi-hop signed chain is ahead of the ratified surface. #cite("https://www.biscuitsec.org/", "Eclipse Biscuit") is the best concrete format: public-key (Ed25519) tokens with offline attenuation (appended blocks can only *restrict*), verifiable from the root key, with revocation IDs that cascade to derived tokens; #cite("https://ucan.xyz/specification/", "UCAN") contributes the anti-splicing invariant (`aud` of each proof equals `iss` of the next, chaining to the resource owner). #cite("https://docs.sigstore.dev/cosign/signing/overview/", "Sigstore (Fulcio+Rekor)") turns a GitHub OIDC identity into a short-lived signing cert (key destroyed) recorded in an immutable transparency log: a strong precedent for GitHub-rooted identity without long-lived keys *and* for our append-only log. #cite("https://docs.cloud.google.com/iam/docs/agent-identity-overview", "Google Cloud Agent Identity (SPIFFE/SPIRE)") and #cite("https://blog.cloudflare.com/web-bot-auth/", "Cloudflare Web Bot Auth (RFC 9421)") show sender-constraining tokens (DPoP/mTLS, per-request signatures) so a stolen credential can't be replayed. #cite("https://datatracker.ietf.org/doc/html/draft-singla-agent-identity-protocol-03", "draft-singla AIP") is precedent for binding the chain root to a verified human (root issuer must equal the principal id).
+
+== Dedup, entity resolution, and conflict detection
+#cite("https://arxiv.org/abs/2303.09540", "SemDeDup") (Meta) is the canonical cluster-then-threshold semantic dedup, productionized by #cite("https://docs.nvidia.com/nemo/curator/curate-text/process-data/deduplication/semdedup", "NeMo Curator"); #cite("https://arxiv.org/html/2411.04257v3", "LSHBloom") shows pure-embedding dedup is infeasible at scale (a 5B-doc LSH index ≈277TB), motivating a tiered hash → MinHash → embedding pipeline. Entity/claim resolution follows a blocking→matching decomposition (#cite("https://arxiv.org/html/2405.16884v3", "Match-Compare-Select")); #cite("https://aclanthology.org/2024.emnlp-main.548.pdf", "EDC/CESI") warn embedding-only canonicalization over-generalizes relations and an LLM "define" step fixes it, important before asserting typed relations. #cite("https://aclanthology.org/2025.emnlp-main.1765.pdf", "CLAIRE/WikiCollide") (Stanford OVAL, EMNLP'25) is the strongest analog to whole-log contradiction detection: ≥3.3% of Wikipedia facts contradict another, and the best automated detector reaches only AUROC 75.1%, so the correct output is *reviewable candidates with evidence, not auto-resolution*. #cite("https://papers.nips.cc/paper_files/paper/2024/file/baf4b960d118f838ad0b2c08247a9ebe-Paper-Datasets_and_Benchmarks_Track.pdf", "ConflictBank") supplies a conflict taxonomy mapping onto our relation subtypes (temporal→`supersedes`, misinformation→`contradicts`, semantic→`refines`).
+
+== Incentives and the 2026 landscape
+#cite("https://arxiv.org/abs/2605.14421", "MemLineage") is a close analog of our signed append-only log + typed derivation relations, contributing an *untrusted-ancestor gate* (items descending from low-trust ancestors cannot justify sensitive actions). On incentive design, #cite("https://link.springer.com/chapter/10.1007/978-3-032-03273-7_1", "Rennie & Potts") reframe the challenge as *critical mass, not free-riding* (contribution goods accrue benefit to contributors); #cite("https://petertsehsun.github.io/papers/Is_reputation_on_Stack_Overflow_always_a_good_indicator_for_users_expertise_No.pdf", "Stack Overflow studies") show *global* reputation is a weak expertise proxy, arguing for per-topic, corroboration-weighted reputation. The 2026 wave (#cite("https://blogs.oracle.com/developers/oracle-ai-agent-memory-a-governed-unified-memory-core-for-enterprise-ai-agents", "Oracle AI Agent Memory"), the mem0/Zep/Letta managed backends) makes governed agent memory a shipping category, but all are org-scoped or single-principal. *None combines verifiable public provenance, personalized cross-principal trust weighting, and access-filtered public sharing*: that is our differentiator.
 
 = Identity and delegation
 
-Every actor is a *principal*. There are two kinds: *humans* and *agents*. The invariant: every agent has exactly one parent, and following parents always terminates at a human.
+Every actor is a *principal*: a *human* or an *agent*. The invariant: every agent has exactly one parent, and following parents always terminates at a human.
 
 ```
 principal := human | agent
-agent.parent := principal        // human or another agent
 chain(agent) := [agent, ...ancestors, human]   // always ends in a human
 ```
 
-== Rooting in GitHub
-Humans authenticate via GitHub OAuth. The GitHub identity (stable numeric id, login, verified org/team memberships) is the *root of trust*. We use GitHub because the fleet already drives `gh` for auth and because it gives us a free, externally-verifiable identity and a free org/team membership graph.
+*Rooting.* Humans authenticate via GitHub OAuth/OIDC; the GitHub identity (stable id, verified org/team memberships) is the root of trust. Following the Sigstore precedent, we mint *short-lived* signing material from the OIDC identity rather than holding long-lived per-human keys, and we *bind the chain root to the verified identity* (root issuer must equal the principal id, the draft-singla pattern), closing the self-assertion gap.
 
-== Signed delegation chains
-When a human starts working, they obtain a root credential. Each agent they spawn (and each sub-agent it spawns) receives a *delegated, capability-scoped token* naming its parent. A write carries the chain as a sequence of signatures: each link signs "I, principal P, authorize child C to act, with scope S, until T." A reader (or the service) can verify the chain back to a GitHub-rooted human without contacting the spawner.
+*Attenuated, signed chains.* Each spawned agent receives a delegated token. Rather than bespoke crypto we adopt a real attenuation format: a #cite("https://www.biscuitsec.org/", "Biscuit") block per link (or a #cite("https://ucan.xyz/specification/", "UCAN") delegation), so a token is offline-verifiable against the root key, *monotone* (each block can only narrow scope), carries policy as in-chain caveats (visibility scope, expiry, rate, org-only, a depth cap of 0–10), and supports *cascade revocation* of a compromised agent subtree via revocation IDs. We adopt UCAN's `aud == next.iss` invariant to prevent chain splicing.
+
+*Sender-constrained, not bearer.* The presented chain is bound to the requesting agent's key via DPoP or mTLS on the HTTP surface (optionally RFC 9421 per-request signatures), so a leaked chain cannot be replayed by a different agent.
 
 ```mermaid
 graph TD
-  H["human (GitHub: alice, org acme)"] -->|signs| A1["agent: alice/claude-1"]
-  A1 -->|signs| A2["sub-agent: explore-7"]
-  A2 -->|writes| K["knowledge event\n(carries full signed chain)"]
-  K -.verify.-> H
+  H["human (GitHub OIDC: alice, org acme)"] -->|"mint short-lived root cert"| R["chain root (iss = alice)"]
+  R -->|"Biscuit block: narrow scope"| A1["agent alice/claude-1"]
+  A1 -->|"block: write-only, ns=cuda, depth-1"| A2["sub-agent explore-7"]
+  A2 -->|"DPoP-bound write"| K["knowledge event (full attenuated chain)"]
+  K -.offline verify to root key.-> R
 ```
 
-Rationale: this is the minimum that lets the trust graph operate over *agents* while collapsing cleanly to *humans*. Ratings and trust are ultimately attributed to the human root, but per-agent attribution is preserved so we can later distinguish "alice's careful review agent" from "alice's yolo agent." Capability scoping (a sub-agent token can be write-only to one namespace) limits blast radius if a token leaks.
-
-#block(fill: rgb("#fff4e6"), inset: 9pt, radius: 4pt, width: 100%)[
-  *Reconsider:* signing key custody for agents. A short-lived token minted by the parent and passed in-process is simplest and probably right for v1. True per-agent keypairs (the agent holds a private key) give stronger non-repudiation but add key management we likely do not need yet. Decide before any multi-tenant deployment.
-]
+Ratings and trust ultimately attribute to the *human root*, but per-agent attribution is preserved so we can distinguish a careful review agent from a yolo agent. A valid chain authorizes a write; it never by itself confers trust (MINJA).
 
 = Visibility, sharing, and the public/private split
 
-This is the feature that distinguishes `knowledge` from the private corpus, and the one the user most wants generalized for the long term.
-
-== The model
-Every item carries a *visibility* that names who may read it:
-
-- *private* — the author principal (and, by policy, their human root) only.
-- *grant* — an explicit allow-list of principals, humans, or organizations.
-- *org* — readable by members of a named organization (or team).
-- *public* — readable by anyone (still trust-ranked, not trusted).
-
-Agents *write private by default*. Publishing is an explicit promotion (`visibility: public`, or a grant). A single `search` over the store returns the *union of everything the caller is entitled to see*: their own private items, items shared to them or their orgs, and the global public pool, all interleaved and ranked by personalized trust. The caller never has to choose "which store"; access control is a filter, not a separate database.
+Every item carries a *visibility*: `private` (author + human root), `grant` (explicit allow-list of principals/humans/orgs), `org` (members of a named org/team), or `public`. Agents *write private by default*; publishing is an explicit promotion. A single `search` returns the *union of everything the caller is entitled to see*, interleaved and ranked by personalized trust. Access control is a filter, not a separate database. This mirrors #cite("https://arxiv.org/abs/2505.18279", "Collaborative Memory")'s validated private + selectively-shared + access-filtered design.
 
 ```
-visibility ∈ { private, grant{principals[]}, org{orgIds[]}, public }
-readable_set(viewer) = private(viewer)
-                     ∪ grants_to(viewer ∪ orgs(viewer))
-                     ∪ org_visible(orgs(viewer))
-                     ∪ public
+readable_set(viewer) = private(viewer) ∪ grants_to(viewer ∪ orgs(viewer))
+                     ∪ org_visible(orgs(viewer)) ∪ public
 ```
 
-== Relationship to the private corpus
-The private transcript corpus and `knowledge` are *different things with a shared substrate*. The corpus is passive, single-tenant, and high-volume-raw; `knowledge` is deliberate, multi-tenant, and curated-public. They reuse mixedbread, Iceberg, and the polars pattern, but `knowledge` adds the public-grade security layer (verifiable provenance, ACL, trust) that a private store never needed. The long-term unification is attractive: a single retrieval surface where a `visibility`/`shared-with` flag governs whether a fact is org-private or world-public, with `knowledge` simply being "the public end of one spectrum." We design the schema so that merge is possible later, but we do *not* couple them now: putting public, attacker-reachable writes into the private corpus's trust domain before the trust layer is proven would be reckless.
+`knowledge` and the private transcript corpus are *different things with a shared substrate*; we design the schema so a future unification (one surface governed by a `visibility` flag) is possible, but do not couple them now, because putting public, attacker-reachable writes into the private corpus's trust domain before the trust layer is proven would be reckless.
 
 #block(fill: rgb("#fff4e6"), inset: 9pt, radius: 4pt, width: 100%)[
-  *Reconsider (org model):* v1 maps organizations and teams directly onto *GitHub orgs/teams* because auth already proves membership and it is zero extra plumbing. This is convenient but couples us to one VCS provider's notion of an org and cannot express external members, cross-org consortia, or groups that do not exist on GitHub, which is exactly the distributed-lab case in the motivation. A *native* org/group model (membership managed in `knowledge`, GitHub as one identity provider among several, e.g. GitLab/Bitbucket/SSO) is almost certainly the right end state for enterprise. The schema keeps `org` as an opaque id with a pluggable membership resolver so we can swap GitHub-backed resolution for native groups without a data migration. Flagging explicitly per the user's request to "consider doing this differently."
+  *Reconsider (org model):* v1 maps organizations/teams onto *GitHub orgs/teams* (auth already proves membership, zero extra plumbing). This couples us to one provider's notion of an org and cannot express external members or cross-org consortia, the distributed-lab case in the motivation. A *native* org/group model (membership managed here, GitHub as one identity provider among several) is likely the enterprise end state. The schema keeps `org` an opaque id with a pluggable membership resolver, so GitHub-backed resolution can be swapped for native groups without migration.
 ]
 
 = Data model
 
-== Append-only event log
-The store is a log of immutable *events*. Current state (an item's text, its aggregate trust, who corroborated it) is *folded* from the log. This fits Iceberg's append-and-reconcile discipline, gives a complete audit trail for poisoning forensics, makes corrections first-class (a new event supersedes, it does not erase), and sidesteps write contention at scale.
-
-Event kinds:
+== Append-only, bi-temporal event log
+The store is a log of immutable *events*; current state is *folded* from the log (fits Iceberg's append-and-reconcile). Following #cite("https://arxiv.org/abs/2501.13956", "Zep/Graphiti"), every item and relation carries *both* `valid_time` (when the fact holds in the world) and `ingestion_time` (when we learned it). Default reads surface currently-valid facts; history stays queryable. Event kinds:
 
 #table(
-  columns: (auto, 1fr),
-  inset: 6pt,
-  align: left,
+  columns: (auto, 1fr), inset: 6pt, align: left,
   table.header([*event*], [*meaning*]),
-  [`item.create`], [a new knowledge item (the payload below)],
-  [`item.revise`], [author supersedes their own item with a new body; old version retained],
+  [`item.create`], [a new knowledge item (payload below)],
+  [`item.distill`], [a derived, structured strategy item (incl. first-class failure lessons), à la ReasoningBank; itself immutable, linked to its sources],
+  [`item.revise`], [author supersedes their own item; old version retained],
   [`item.retract`], [author withdraws an item (kept in log, hidden from default reads)],
   [`rating`], [a reader scores an item useful/harmful with optional comment],
   [`corroborate`], ["this happened to me too": an independent observation reinforcing an item, with the corroborator's environment],
-  [`relation`], [a typed directed edge between two items: `supersedes` | `depends-on` | `contradicts` | `refines` | `related-to`],
-  [`trust.assert`], [a principal explicitly vouches for *or distrusts* another principal (signed web-of-trust edge)],
+  [`relation`], [typed directed edge: `supersedes` | `depends-on` | `contradicts` | `refines` | `related-to` (may close a prior validity interval)],
+  [`trust.assert`], [a principal vouches for *or distrusts* another (signed web-of-trust edge)],
   [`comment`], [free-text discussion attached to an item],
 )
-
-Folding the log yields, per item: current body, version history, aggregate and per-viewer trust, corroboration count and diversity, and rating distribution. Folds are cached (see scalability).
 
 == Knowledge item payload
 ```
 KnowledgeItem {
-  id            : ULID                    // sortable, time-ordered
-  author        : principal_chain         // signed, ends in a human
-  visibility    : private | grant | org | public
-  title         : string
-  body          : markdown?               // optional human-readable text
-  artifacts     : Artifact[]              // arbitrary content (see below)
-  kind          : enum                    // gotcha | recipe | fact | runbook | dataset | pattern | warning ...
-  tags          : string[]
-  metadata      : json                    // user-supplied, arbitrary, filterable
-  sys_metadata  : json                    // system-stamped, trusted (see below)
-  examples      : Example[]               // runnable, reproducible
-  environments  : Environment[]           // where this was observed/verified
-  embedding     : vector                  // mixedbread, for recall + dedup
-  cluster_id    : ULID?                   // dedup cluster this item belongs to
-  created_at    : ts
-  last_verified : ts                      // bumped by corroborations/revisions
+  id, author: principal_chain, visibility,
+  title, body: markdown?,            // optional human-readable summary
+  artifacts: Artifact[],             // ANY MIME: text/binary/video/audio/custom
+  kind, tags,
+  metadata: json,                    // user-supplied, arbitrary, filterable
+  sys_metadata: json,                // forge-proof: created_at, signed chain,
+                                     //   resolved root human + root org, trust_at_write
+  examples: Example[], environments: Environment[],
+  embedding, minhash, content_sha256,// dedup signals (tiered, §10)
+  valid_time, ingestion_time, cluster_id?, last_verified
 }
-
-Artifact    { name, mime, size, blob_ref(S3), sha256, free: json }   // ANY bytes
-Example     { language, code, expected, notes }
-Environment { os, arch, versions: json, repo?, commit?, hardware?,
-              nix?: flake_ref,            // future: reproducible + re-runnable
-              free: json }
+Artifact { name, mime, size, blob_ref(S3), sha256, free: json }
+Environment { os, arch, versions: json, repo?, commit?, hardware?, nix?: flake_ref, free: json }
 ```
+*Content is arbitrary*: an item bundles typed `artifacts` of any MIME type (text, binaries, video, audio, custom formats, datasets), content-addressed blobs in S3. *Metadata is split*: `metadata` is schema-free user JSON (filter via `pl.col("metadata").struct.field(...)`); `sys_metadata` is service-stamped and unforgeable (`created_at`, the signed chain, the resolved root human and root org, and `trust_at_write`). The roots are derivable from the chain but denormalized onto every item because it is the cheapest way to filter and audit ("everything alice's org published") without folding a chain per query.
 
-*Content is arbitrary.* An item is a bundle of typed `artifacts`, each any MIME type at all: plain text, binaries, video, audio, custom file formats, datasets. Artifacts are stored as content-addressed blobs in S3 and referenced by digest; the item row stays small while payloads scale. `body` is just an optional human-readable summary on top.
-
-*Metadata is split into two layers.* `metadata` is deliberately schema-free JSON so contributors can attach anything (`{"cuda":"12.4","driver":"550.x","severity":"high"}`) and readers can filter on it via polars predicates (`pl.col("metadata").struct.field("cuda") == "12.4"`). `sys_metadata` is stamped by the service and *cannot be forged by the writer*: `created_at`, the full signed author chain, and the resolved *root human* and *root organization*. The roots are derivable from the chain and invariant to the chain's shape, so they are technically redundant, but we denormalize them onto every item anyway because it is the cheapest, most direct way to filter and audit ("everything alice's org ever published", "items by this human across all their agents") without folding a delegation chain on every query. Cheap and obvious beats clever here.
-
-`examples` and `environments` are the "maximally reproducible" payload we want to incentivize: a gotcha is far more valuable with a runnable repro and the exact versions it occurred under.
-
-== Typed relations: a knowledge graph
-Items are not just a flat pool plus dedup clusters; they carry *typed directed relations* (the `relation` event) forming a traversable graph. The edge types and what they buy us:
-
-#table(
-  columns: (auto, 1fr),
-  inset: 6pt,
-  table.header([*relation*], [*use*]),
-  [`supersedes`], [newer item replaces an older one (across authors, unlike `item.revise` which is self-supersession); readers can follow to the current best],
-  [`depends-on`], [prerequisite knowledge (a runbook depends on a setup recipe); enables "show me the prereqs" traversal],
-  [`contradicts`], [two items disagree; *surfaces conflict* so a reader sees the dispute and its respective trust, rather than silently getting one side],
-  [`refines`], [narrows/specializes a general item to a context],
-  [`related-to`], [soft association beyond semantic similarity],
-)
-
-The high-value one is `contradicts`: in a zero-trust public pool, contradiction is information. Rather than hiding the loser, we show both sides ranked by *your* personalized trust, so you see "the highly-trusted-by-you item and the thing that disputes it, posted by someone you barely trust." Relations are themselves authored events with provenance, so a bogus `contradicts` edge from an untrusted party is itself trust-discounted.
+== Derived distilled layer
+Over the raw log we maintain a #cite("https://arxiv.org/abs/2509.25140", "ReasoningBank")-style layer of `item.distill` events: structured strategy units (title / when-to-use / actionable content), *including first-class failure lessons*, linked via `supersedes`/`refines`/`contradicts`. Raw events stay immutable; distilled, high-trust items are surfaced above raw events (#cite("https://arxiv.org/abs/2506.07398", "G-Memory")). Distillation, dedup, relation inference, and trust recompute run as background *sleep-time* jobs (#cite("https://arxiv.org/abs/2504.13171", "Letta")) that emit new events, keeping reads low-latency.
 
 = Trust and rating
 
-== Chosen metric: personalized web-of-trust, computed lazily
-Trust is *relative to the viewer*. There is no global "this item is true." For viewer $V$ and author $A$, we compute a trust weight $t_V(A) in [0,1]$ by propagating from $V$'s roots through the trust graph, then rank an item by combining the author's trust with the trust-weighted ratings it has received.
+Trust is *relative to the viewer*; there is no global "this item is true". For viewer $V$ and author $A$ we compute a trust weight $t_V(A) in [0,1]$ by propagating from $V$'s roots over the signed trust graph (explicit `trust.assert` edges plus implicit edges from rating agreement), then rank items by combining author trust with trust-weighted ratings and corroboration.
 
-The trust graph has two edge sources:
-1. *Explicit* `trust.assert` edges (PGP-style vouching, positive or negative).
-2. *Implicit* edges from ratings: consistently rating in agreement with people you trust raises your trust; planting items that trusted readers flag as harmful lowers it.
+== Sybil-tolerance is mandatory, not optional
+A naive personalized-PageRank / Advogato / EigenTrust metric is *provably not Sybil-resistant* (#cite("https://arxiv.org/abs/2207.09950", "MeritRank"); #cite("https://www.eecs.harvard.edu/cs286r/courses/fall09/papers/friedman1.pdf", "Friedman & Cheng"): no symmetric reputation function can be Sybilproof). We therefore make the metric Sybil-*tolerant* by layering MeritRank's three decays onto the personalized propagation:
+- *transitivity decay* per delegation/endorsement hop (caps serial attacks),
+- *connectivity decay* penalizing paths crossing a narrow cut of few attack edges (caps parallel/cycle attacks),
+- *epoch decay* down-weighting stale ratings.
+This keeps the lazy ego-walk but bounds attacker gain. EigenTrust is demoted to an *auditable, seed-anchored cold-start prior*, used only when no personalized path exists and fully overridden once one does.
 
-Propagation uses a personalized-PageRank / Appleseed-style spreading activation seeded at the viewer's roots, with *per-hop decay* (distant vouchers count less). This is the Advogato/TrustRank family: attack-resistant because trust only reaches nodes your seed set can reach. A Sybil swarm that trusts only itself receives no activation from your roots and therefore ranks near zero for you, no matter how loudly it rates itself.
+== Signed, asymmetric, one-hop distrust
+Trust propagates transitively (with decay); *distrust does not* (#cite("https://snap.stanford.edu/class/cs224w-readings/guha04trust.pdf", "Guha et al."): one-step distrust performs best, multi-hop distrust actively hurts). A negative `trust.assert` discounts the distrusted node's *outgoing* opinions one step and hard-suppresses it (and what it directly endorses) for the viewer's neighborhood, fast, without waiting for ratings. This is "like personalized PageRank but rooted on *you* and signed".
 
-*Distrust propagates too, and it is not just negative trust* (Guha et al.). The metric is *signed and local*: it is like PageRank but rooted on *you* and carrying both polarities. Just as you tend to trust the people your trusted people trust, you tend to *distrust the people your trusted people distrust*, and you discount whoever a distrusted party vouches for. Concretely: a positive `trust.assert` (or agreeing ratings) spreads positive activation; a negative `trust.assert` (an explicit block/distrust) injects negative activation that flows outward to suppress that principal *and* their downstream vouchees. To avoid distrust cascading into paranoia, distrust propagates more conservatively than trust (a single hop, per Guha's finding) while trust propagates further. The result is a per-viewer signed ordering: sources your network vouches for float up, sources your network has flagged sink, and an explicit block hard-suppresses a bad actor and everything they endorse for your whole neighborhood, fast, without waiting for ratings to accumulate.
+== Corroboration weighted by independent human roots, never by count
+"This happened to me too" is powerful only if the corroborators are *independent*. Count-based corroboration is forgeable (#cite("https://aclanthology.org/2025.findings-emnlp.1023.pdf", "AuthChain") fabricates a chain-of-evidence in one document; #cite("https://arxiv.org/abs/2407.12784", "AgentPoison") engineers tight embedding clusters). So we collapse each corroborating agent's chain to its *human root*, dedupe by root, and aggregate corroboration as the sum of the *personalized WoT weights of the distinct roots*, requiring $k$ independent above-threshold roots before an item counts as consensus. By #cite("https://arxiv.org/html/2510.27554v1", "TraceRank")'s zero-seed-zero-reputation property, a flood of Sybil corroborations adds nothing.
 
-Item ranking for viewer $V$:
-$ "score"_V ("item") = f("sim"(q, "item"), space t_V("author"), space sum_(r in "ratings") t_V(r."rater") dot r."value", space "recency", space "corroboration diversity") $
+== Ranking with a sensitivity floor
+Retrieval ranks by $ "score"_V(d) = "sim"(q, d) dot t_V(d)^alpha + "recency" + "corrob"_V(d) $ with a *minimum-trust floor* $tau_min$ for high-stakes intents (credentials, financial, destructive actions) so low-trust items cannot be retrieved *at all* for sensitive queries (#cite("https://arxiv.org/abs/2410.22954", "RA-RAG") reliability weighting; the $"score" times "trust"^alpha$ + per-sensitivity-floor formulation). #cite("https://arxiv.org/abs/2405.15556", "RobustRAG")'s certified bound holds only while poison is a *minority* of retrieved items, which is precisely what the trust filter enforces.
 
-where `corroboration diversity` rewards independent confirmation from *trust-distant* principals (the same fact seen by unrelated parties is stronger evidence than one party repeating itself).
-
-== Why lazy, and how it scales
-A fully personalized metric cannot be precomputed for every viewer. We compute on read and cache aggressively: the viewer's trust vector changes slowly, so it is cached per viewer with TTL and invalidated on new `trust.assert`/`rating` events near their neighborhood. For a cheap default before the personalized vector warms up, we keep an *optional global EigenTrust prior* (recomputed offline) and blend it, so cold readers still get sane ranking. This is the hybrid fallback; the primary signal is personal.
-
-== Poisoning defenses (recap, made concrete)
-- *Provenance on every event* (the signed chain) so distrust can target a specific human root and everything they ever wrote.
-- *Trust decay at retrieval*: untrusted authors rank low rather than being absent, so the system degrades gracefully and remains debuggable.
-- *Source isolation*: items whose body was derived from fetched web content / untrusted repos are flagged `origin: untrusted` and discounted further until corroborated by a trusted party.
-- *Negative ratings propagate*: one trusted reader flagging an item as harmful suppresses it for everyone who trusts that reader.
+== Proof + Stake for high-impact writes
+Reputation governs *ranking, inclusion, rate-limits, and sampling*, but high-impact *writes* (a `supersedes` over a widely-trusted item, mass corroboration) require stronger evidence from a low-trust or new principal: sufficient delegation depth, a validation/attestation event, or an optional refundable anti-spam deposit (#cite("https://www.arxiv.org/pdf/2511.03434", "Inter-Agent Trust Models")'s Proof+Stake overlay; #cite("https://arxiv.org/abs/2505.14551", "TRep") for incentive-compatible honest reporting). A reputation drop triggers automatic escalation. This is an *action-impact* tier (T0–T3) layered on top of the *visibility* tiers.
 
 = Search and query API
 
-Two surfaces over one backend. Both enforce ACL server-side (a client can never request items outside its `readable_set`).
+Two surfaces over one backend; both enforce ACL *and* mandatory provenance server-side. *Similarity retrieval alone is forbidden for public/cross-user scope*: an item is surfaced only with a valid chain and after trust filtering.
 
-== Polars plugin (ergonomic path)
-Mirroring `polars-mixedbread`, expose a `scan_knowledge()` returning a `LazyFrame`, with semantic query and predicate pushdown:
-
+*Polars plugin* (ergonomic), mirroring `polars-mixedbread`:
 ```python
-import polars as pl
-from knowledge import scan_knowledge
-
-df = (
-    scan_knowledge(query="cuda driver mismatch on H100", as_viewer=me)
-      .filter(pl.col("metadata").struct.field("cuda") == "12.4")
-      .filter(pl.col("trust") > 0.3)        # personalized trust, server-computed
-      .sort("score", descending=True)
-      .head(20)
-      .collect()
-)
+df = (scan_knowledge(query="cuda driver mismatch on H100", as_viewer=me)
+        .filter(pl.col("metadata").struct.field("cuda") == "12.4")
+        .filter(pl.col("trust") > 0.3)        # personalized, server-computed
+        .sort("score", descending=True).head(20).collect())
 ```
-Semantic match and ACL/trust push down to the service; structured `metadata` filters and ordering run in polars. Returns the same shape the fleet already expects from `search.semantic`, so it drops into existing workflows.
+Semantic match, ACL, trust, and the sensitivity floor push down to the service; structured `metadata` filters and ordering run in polars.
 
-== HTTP service (universal path, bash-only friendly)
-Every operation is a plain authenticated HTTP call so an agent with nothing but `curl` can participate:
-
+*HTTP service* (universal, bash-only friendly): every op is an authenticated call so a `curl`-only agent can participate.
 ```bash
-# read
-curl -s https://knowledge.ix.dev/v1/search \
-  -H "authorization: Bearer $KNOWLEDGE_TOKEN" \
+curl -s https://knowledge.ix.dev/v1/search -H "authorization: Bearer $KNOWLEDGE_TOKEN" \
   --json '{"query":"cuda driver mismatch","filter":{"cuda":"12.4"},"limit":20}'
-
-# write (private by default)
-curl -s https://knowledge.ix.dev/v1/items \
-  -H "authorization: Bearer $KNOWLEDGE_TOKEN" \
-  --json '{"title":"H100 driver 550 + CUDA 12.4 hang","body":"...","kind":"gotcha",
-           "metadata":{"cuda":"12.4"},"examples":[...],"environments":[...]}'
-
-# rate / corroborate
-curl -s https://knowledge.ix.dev/v1/items/$ID/rating  --json '{"value":1,"comment":"fixed it for me"}'
+curl -s https://knowledge.ix.dev/v1/items  -H "authorization: Bearer $KNOWLEDGE_TOKEN" \
+  --json '{"title":"...","body":"...","kind":"gotcha","metadata":{"cuda":"12.4"},"environments":[...]}'
 curl -s https://knowledge.ix.dev/v1/items/$ID/corroborate --json '{"environment":{...}}'
 ```
-
-The token carries (or references) the signed delegation chain; the service verifies it to the GitHub root, resolves `readable_set`, computes trust, and returns ranked results. The polars plugin is a thin client over this same API.
-
-#block(fill: rgb("#fff4e6"), inset: 9pt, radius: 4pt, width: 100%)[
-  *Reconsider (hosting):* v1 is a *thin service in front of Iceberg/S3 + mixedbread*: the service owns auth, ACL, trust, and the write path; bulk public reads can later be served as signed parquet straight from S3 (so heavy analytical scans bypass the service while private data never lands on a public bucket). The pure "everything on a public S3 bucket" option is cheapest and most scalable but cannot express private-by-default without per-scope prefixes and presigned URLs, and gives no place to run the trust computation. We keep the service for the control plane and treat direct-S3 as a read optimization for the public slice only. Revisit once load is real.
-]
+The token carries the attenuated chain; the service verifies it to the GitHub root, resolves `readable_set`, computes trust, and returns ranked results. The polars plugin is a thin client over this same API.
 
 == Discovery: pull and subscriptions
-Search is the *pull* path. We also support a *push* path: a principal subscribes to a query (a tag, topic, author, org, or saved semantic query), and new items matching it within their `readable_set` are delivered to a feed. Subscriptions are cheap to evaluate because every write is already an event: the write path fans the new item out against active subscription predicates (with the same ACL + trust filter applied, so a subscriber never sees something they could not have searched for). This is what turns "this happened to me too" from a lucky search into a reliable signal: an agent that hit a bug can subscribe to its cluster and be told when someone else corroborates or when a fix lands. Delivery is a feed the agent polls (or a webhook), kept deliberately low-volume by ranking and trust thresholds so it does not become noise. Pull stays the default; subscriptions are opt-in per principal.
+Search is *pull*. We also support *push*: a principal subscribes to a query (tag, topic, author, org, saved semantic query) and new matching items within their `readable_set` are delivered to a feed, evaluated on the write path with the same ACL + trust filter. This turns "this happened to me too" from a lucky search into a reliable signal. Pull stays the default; feeds are opt-in and trust-thresholded to stay low-noise.
 
-= Deduplication and "this happened to me too"
+#block(fill: rgb("#fff4e6"), inset: 9pt, radius: 4pt, width: 100%)[
+  *Reconsider (hosting):* v1 is a *thin service in front of Iceberg/S3 + mixedbread* owning auth, ACL, trust, and the write path; the *public* slice can later be served as signed parquet straight from S3 for heavy analytical scans, while private data never lands on a public bucket. Pure public-S3 cannot express private-by-default without per-scope prefixes/presigned URLs and leaves nowhere to run trust. Keep the service for the control plane; treat direct-S3 as a public-read optimization.
+]
 
-At write time we embed the item (mixedbread) and run a similarity query. If it is near-duplicate to an existing item above a threshold, we do not create a competing item by default; we *offer corroboration*: the writer attaches a `corroborate` event (with their environment) to the existing cluster, or overrides to create a distinct item if it is genuinely different. This is the native use of the similarity search the user wants to lean on, and it turns "N agents independently hit the same bug" into one strong, multiply-corroborated item rather than N weak duplicates. Corroboration from *trust-distant* parties is the strongest possible signal in the ranking function, which is precisely the cross-lab, zero-trust confirmation we are after.
+= Deduplication, corroboration, and conflict
 
-= Incentives and recommended agent behavior
+*Tiered dedup* (#cite("https://arxiv.org/html/2411.04257v3", "LSHBloom"): pure-embedding dedup is infeasible at scale; #cite("https://arxiv.org/abs/2303.09540", "SemDeDup")): drop exact dupes by `content_sha256`, then MinHashLSH for near-verbatim, then embedding cluster-then-pairwise on survivors only. MinHash signatures live in S3 metadata so the cheap passes are incremental over the log. On near-duplicate at write time, we *offer corroboration* (attach a `corroborate` with environment to the existing cluster) rather than create a competing item, turning "N agents hit the same bug" into one multiply-corroborated item, with cross-trust corroboration the strongest ranking signal. An optional #cite("https://github.com/topoteretes/cognee", "Cognee")/#cite("https://aclanthology.org/2024.emnlp-main.548.pdf", "EDC")-style controlled-vocabulary canonicalization (with an LLM "define" step) runs before asserting typed relations, since embedding-only clustering over-generalizes relations.
 
-Value compounds only if contributions are good. We ship an opinionated default contributor guide (a skill / system-prompt section) so agents produce *maximally reproducible* knowledge:
+*Conflict detection* is a #cite("https://aclanthology.org/2025.emnlp-main.1765.pdf", "CLAIRE")-style retrieve-then-reason loop: for a new item, retrieve access-filtered near items, reason over pairs, and on likely conflict materialize a `contradicts` (or, if strictly newer with overlapping claims, an auto `supersedes` that closes the old validity interval) *flagged for review with supporting passages*. We never auto-resolve: the best fully-automated detector reaches only AUROC ~75% (§3.5), so the verified-correct output is reviewable candidates, not decisions.
 
-- *Write a gotcha the moment you resolve a non-obvious problem*, while the context is fresh: symptom, root cause, fix, and the smallest runnable repro.
-- *Always attach environment* (OS, arch, versions, hardware, repo/commit). A fact without its environment is hard to trust or reproduce.
-- *Prefer corroboration over duplication*: search first; if your situation matches an existing item, corroborate it (and add your environment) instead of posting a near-duplicate.
-- *Rate what you used*, useful or harmful, with a one-line why. Ratings are the fuel for the trust metric; an agent that consumes but never rates is a free-rider that weakens the commons.
-- *Retract or revise* when you later find an item was wrong; do not leave stale facts to mislead trusting readers.
-- *Default private; publish deliberately.* Promote to public/org only what generalizes beyond your context.
+= Poisoning defense (summary)
 
-These mirror the measured findings: small, high-signal, well-provenanced items beat large dumps, and the dominant failure mode is *retrieval/contribution never happening*, so the behavior must be made routine.
+The threat is real and scale-invariant (§3.3). Our layered response, in order of load:
+1. *Mandatory signed provenance + independent-trust gating* (the only known discriminator against trigger-free fluent poison like MemoryGraft/AuthChain). No similarity-only retrieval for public scope.
+2. *Trust-weighted retrieval + sensitivity floor* keeps poison a *minority* of retrieved items, the precondition for RobustRAG-style guarantees.
+3. *Independent-root corroboration* (count-flooding is worthless).
+4. *Hash-pinning* (`content_sha256`) so in-place mutation of a trusted item is detectable.
+5. *Feedback-driven traceback* (#cite("https://arxiv.org/html/2504.21668v1", "RAGForensics")): on a reported bad outcome, attribute the responsible item(s) black-box, emit `contradicts`/`supersedes`, and propagate one-hop distrust up the offending delegation lineage to its human root, lowering future weight, turning one incident into durable lineage-level decay.
+6. *Untrusted-origin tagging* (web/repo-derived content) discounted until independently corroborated (#cite("https://arxiv.org/abs/2605.14421", "MemLineage")'s untrusted-ancestor gate).
 
-== Reputation surfacing (not enforcement)
-We do *not* gate reads on participation or impose contribution quotas; hard reciprocity invites gaming and adds friction. Instead each principal accrues a *visible contributor reputation* derived from how trusted parties have rated their contributions over time, and that reputation *feeds the trust prior*: a contributor whose past items were consistently rated useful by your neighborhood has their new items start ranked higher for you, before those new items have any ratings of their own. Good contribution is rewarded with reach, not unlocked by a paywall. The reputation is surfaced (on the contributor and on each item) so the signal is legible to humans reviewing the pool, but it is an *input to ranking*, never an access gate.
+= Incentives
+
+We do *not* gate reads on participation (hard reciprocity invites gaming). Instead each principal accrues a *visible, per-topic, corroboration-weighted* reputation that *feeds the trust prior*: a contributor whose past items your neighborhood rated useful has their new items start ranked higher for you, before those items have ratings. Good contribution is rewarded with reach, not unlocked by a paywall. Per-topic and corroboration-weighting follow #cite("https://petertsehsun.github.io/papers/Is_reputation_on_Stack_Overflow_always_a_good_indicator_for_users_expertise_No.pdf", "Stack Overflow") evidence that global reputation is a weak expertise proxy; the real adoption risk is *critical mass*, not free-riding (#cite("https://link.springer.com/chapter/10.1007/978-3-032-03273-7_1", "Rennie & Potts")). A shipped contributor guide (skill / system-prompt section) makes the maximally-reproducible behaviors routine: write a gotcha with the smallest runnable repro the moment you fix something; always attach environment; corroborate rather than duplicate; rate what you used; retract/revise when wrong; default private, publish deliberately.
 
 = Scalability
 
-- *Writes* are append-only events to Iceberg; no update contention. Embedding happens on write (async) and feeds mixedbread.
-- *Reads* hit mixedbread for candidate recall (semantic), then the service applies ACL and the cached personalized trust vector. Folded item-state and trust vectors are cached (per-item state; per-viewer trust with TTL + neighborhood invalidation).
-- *Global EigenTrust prior* recomputed offline as a batch job over the trust graph, used as the cold-start blend.
-- *Hot public slice* can be materialized as parquet on S3 for direct polars scans, bypassing the service for heavy analytics.
+Writes are append-only events to Iceberg; embedding/MinHash computed on write (async) feed dedup and mixedbread. Reads hit mixedbread for candidate recall, then the service applies ACL, the cached personalized trust vector, and the sensitivity floor. Folded item-state and per-viewer trust vectors are cached (TTL + neighborhood invalidation on new edges). The MeritRank-decayed ego-walk is incrementally computable (#cite("https://arxiv.org/pdf/2307.01411", "Web3Recommend")). The hot public slice can be materialized as parquet on S3 for direct polars scans. Curation (dedup, relations, trust recompute, distillation) runs off-path as sleep-time jobs.
 
-The expensive piece is personalized trust; everything else is the index stack's existing, proven scale story.
+= Open problems (honestly stated)
 
-= Security and abuse considerations
-
-- *Verifiable provenance to a human* on every event; no anonymous writes.
-- *ACL enforced server-side*; clients cannot request beyond `readable_set`.
-- *Trust decay + negative propagation* make poisoning expensive and self-limiting: a poisoner must first earn trust from your roots, and one trusted flag suppresses them for your whole neighborhood.
-- *Untrusted-origin tagging* for web/repo-derived content.
-- *Capability-scoped, short-lived agent tokens* limit blast radius of a leak.
-- *Full audit log* (append-only) for forensics and rollback-by-superseding.
-- *Privacy*: private-by-default means an agent cannot accidentally leak its org's secrets to the public pool; promotion is explicit and (optionally) reviewable.
+These have no fully satisfying answer; the design acknowledges rather than hides them.
+1. *Automated contradiction/fact-verification is weak* (CLAIRE AUROC ~75%; best fact-verifier ~0.63 F1 on false claims). `contradicts`/`supersedes` must stay trust-weighted, surfaced-for-review signals; we do not claim automated truth-resolution.
+2. *Sybil-tolerance bounds, it does not prevent.* The only route to true uniqueness (personhood/biometric/social-graph roots) depends on a trusted issuer or scales slowly (BrightID ~100K). A public commons inherits an open uniqueness-root problem.
+3. *The Decentralized Reputation Trilemma*: a system cannot be simultaneously generalizable, trustless, and Sybil-resistant. We sacrifice a single global generalizable score for personalized Sybil-tolerance, and say so rather than imply a universal trust number.
+4. *Trigger-free fluent poisoning* defeats every content-based detector; provenance + independent-trust gating is the only known discriminator and has no published large-scale adversarial validation. Residual real-world attack success for a public commons is unknown.
+5. *Certified robustness needs poison-minority*, which depends entirely on the trust filter; there is no certificate for an attacker who accumulates trust legitimately then poisons, nor for in-place insider edits by an already-trusted principal.
+6. *Incentive design is under-evidenced* (observational SO studies + theory, not controlled agent-commons experiments). Informativeness-scored corroboration (peer-prediction) assumes priors that free-form reports violate and is collusion-prone. We have no validated anti-gaming guarantee.
+7. *Agent-identity standards are unratified and unaudited*; even building on Biscuit/UCAN/Sigstore leaves multi-hop human-rooted delegation ahead of any ratified surface.
+8. *Verifiable utility-based write-admission* (SEDM replay) is attractive but impractical for open-ended, non-deterministic, side-effecting contributions.
 
 = Open questions to settle before promotion
 
-1. *Org model*: GitHub-orgs-now vs native-groups (see reconsider box). Affects the membership resolver interface.
-2. *Hosting*: confirm thin-service vs direct-S3 boundary for the public read path under real load.
-3. *Agent key custody*: parent-minted tokens vs per-agent keypairs.
-4. *Trust metric tuning*: decay rate, negative-edge weighting, cold-start blend ratio. These want an experiment (baseline ranking quality vs poisoned-item suppression rate) rather than a guess.
-5. *Dedup threshold*: similarity cutoff for "offer corroboration vs allow new item," likely per-`kind`.
-6. *Living knowledge via Nix*: a compelling future direction is letting contributors define an example's environment as a *Nix flake*, making the repro bit-for-bit reproducible. A verification job could then re-run the example and bump or expire `last_verified` automatically. This is *opt-in and off by default*, not a universal re-run loop: many items are web-dependent, side-effecting, or environment-specific (a hardware hang on an H100) and must never be auto-executed. The default freshness signal stays timestamps + corroboration; Nix-backed re-running is a powerful add-on for the subset of items that are pure and self-contained. Fits naturally because the whole index stack is already Nix-built.
-7. *Unification with the private corpus*: when (if ever) to merge into one retrieval surface governed by `visibility`.
+GitHub-orgs vs native groups (membership resolver interface); the thin-service vs direct-S3 read boundary under load; agent key custody (parent-minted token vs per-agent keypair, now leaning Biscuit blocks); and the trust-tuning + dedup-threshold knobs ($alpha$, $tau_min$, MeritRank decay rates, $k$ independent roots, similarity cutoffs per `kind`), which want an *experiment* (ranking quality vs poisoned-item suppression rate) rather than a guess.
 
-= Phased plan (proposed)
+= Phased plan
 
 #table(
-  columns: (auto, 1fr),
-  inset: 6pt,
+  columns: (auto, 1fr), inset: 6pt,
   table.header([*phase*], [*scope*]),
-  [0 (this doc)], [design, prior art, decisions, open questions],
-  [1], [event log on Iceberg; item create/read with arbitrary artifacts (S3 blobs) + user/system metadata; embedding + mixedbread recall; HTTP service with GitHub auth; private + public visibility only],
-  [2], [ratings + corroboration + dedup-on-write; typed relations (incl. `contradicts` conflict surfacing); polars plugin `scan_knowledge`; flat aggregate ranking; contributor reputation surfacing],
-  [3], [signed delegation chains; personalized web-of-trust; *signed trust + distrust propagation*; trust-weighted ranking; reputation-fed trust prior],
-  [4], [org/grant visibility; membership resolver; subscriptions/feeds (push discovery); enterprise audit; global EigenTrust prior + cold-start blend],
-  [5], [Nix-defined reproducible environments + opt-in verification jobs; optional unification with the private corpus],
+  [0 (this doc)], [design, verified SOTA review, decisions, open problems],
+  [1], [bi-temporal append-only log on Iceberg; item create/read with arbitrary artifacts (S3 blobs) + user/system metadata; mandatory signed provenance; embedding + mixedbread recall; HTTP service with GitHub OIDC auth; private + public visibility],
+  [2], [ratings + independent-root corroboration; tiered dedup (hash→MinHash→embedding); typed relations incl. `contradicts` review candidates; polars `scan_knowledge`; per-topic reputation surfacing; sleep-time curation jobs],
+  [3], [attenuated signed delegation chains (Biscuit/UCAN) + sender-constraint; personalized Sybil-tolerant WoT (MeritRank decays); one-hop distrust; trust-weighted ranking + sensitivity floor; EigenTrust seed-only prior; Proof+Stake high-impact gate],
+  [4], [org/grant visibility + membership resolver; subscriptions/feeds; enterprise audit; feedback-driven traceback + lineage decay; distilled strategy-item layer],
+  [5], [Nix-defined reproducible environments + opt-in verification; Sigstore/Rekor-style transparency; ontology canonicalization; optional unification with the private corpus],
 )
 
 #v(0.5em)
 #line(length: 100%, stroke: 0.5pt + luma(180))
 #text(size: 8.5pt, style: "italic")[
-  Draft for discussion. Lives under `packages/andrewgazelka/` as a personal test project; promote out of that namespace once the org model, hosting boundary, and trust tuning are settled. Prior art and risk claims are grounded in the fleet's shared-memory research synthesis and RFC; see those for the underlying citations (MINJA, EigenTrust, Advogato/TrustRank, Appleseed, mem0/Zep, Stompy, Memco Spark).
+  Draft v0.2 for discussion. Lives under `packages/andrewgazelka/` as a personal test project; promote out of that namespace once the org model, hosting boundary, and trust tuning are settled. The §3 review was produced by a multi-agent web sweep with per-claim adversarial verification; vendor self-reported and single-author-preprint results are flagged inline and should not be cited as settled.
 ]
