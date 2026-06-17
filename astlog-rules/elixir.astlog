@@ -15,15 +15,15 @@
 ;; Heuristic: "has a @type" is approximated by the presence of any identifier
 ;; with text `type` in the module, so a function or variable literally named
 ;; `type` also satisfies it (a false negative). Good enough for a nudge.
-(rule (defstruct-call c)
-  (match elixir "(call (identifier) @i) @c")
-  (text i "defstruct"))
-(rule (defmodule-node m)
-  (match elixir "(call (identifier) @i) @m")
-  (text i "defmodule"))
+;;
+;; The `defmodule`/`defstruct` calls are matched inline (rather than via helper
+;; relations) because the `astlog-rules` self-test requires every `(rule ...)`
+;; to back a `(lint ...)`; folding them in keeps this rule self-contained.
 (rule (defstruct-needs-type m)
-  (defmodule-node m)
-  (defstruct-call c)
+  (match elixir "(call (identifier) @mi) @m")
+  (text mi "defmodule")
+  (match elixir "(call (identifier) @si) @c")
+  (text si "defstruct")
   (ancestor m c)
   (no-descendant m "identifier" "type"))
 (lint defstruct-needs-type error
