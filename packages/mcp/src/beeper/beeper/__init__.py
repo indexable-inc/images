@@ -96,6 +96,11 @@ _ACCOUNTS_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "is_self": pl.Boolean,
 }
 
+# Timestamp columns are parsed from the API's ISO 8601 strings into a real
+# tz-aware Datetime so callers can do native polars time math (filter by date,
+# group_by_dynamic, sort) instead of string compares.
+_TS = pl.Datetime(time_unit="us", time_zone="UTC")
+
 _CHATS_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "id": pl.Utf8,
     "account_id": pl.Utf8,
@@ -105,7 +110,7 @@ _CHATS_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "unread_count": pl.Int64,
     "is_muted": pl.Boolean,
     "is_pinned": pl.Boolean,
-    "last_activity": pl.Utf8,
+    "last_activity": _TS,
     "preview_sender": pl.Utf8,
     "preview_text": pl.Utf8,
 }
@@ -116,7 +121,7 @@ _MESSAGES_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "account_id": pl.Utf8,
     "sender_id": pl.Utf8,
     "is_sender": pl.Boolean,
-    "timestamp": pl.Utf8,
+    "timestamp": _TS,
     "type": pl.Utf8,
     "text": pl.Utf8,
     "reply_to": pl.Utf8,
@@ -128,7 +133,7 @@ _SEARCH_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "chat_title": pl.Utf8,
     "sender_id": pl.Utf8,
     "is_sender": pl.Boolean,
-    "timestamp": pl.Utf8,
+    "timestamp": _TS,
     "type": pl.Utf8,
     "text": pl.Utf8,
 }
@@ -140,8 +145,34 @@ _SEARCH_CHATS_SCHEMA: dict[str, pl.DataType | type[pl.DataType]] = {
     "type": pl.Utf8,
     "title": pl.Utf8,
     "unread_count": pl.Int64,
-    "last_activity": pl.Utf8,
+    "last_activity": _TS,
 }
+
+
+def _frame(
+    rows: list[dict[str, Any]],
+    schema: dict[str, pl.DataType | type[pl.DataType]],
+) -> pl.DataFrame:
+    """Build a typed, column-ordered frame from API rows.
+
+    Empty input returns the bare schema so downstream chains keep working on no
+    results. Datetime columns are parsed from ISO 8601 strings (``strict=False``
+    so an unparseable value becomes null rather than raising); everything else is
+    cast straight to its declared dtype.
+    """
+    if not rows:
+        return pl.DataFrame(schema=schema)
+    df = pl.DataFrame(rows)
+    exprs: list[pl.Expr] = []
+    for name, dtype in schema.items():
+        col = pl.col(name) if name in df.columns else pl.lit(None)
+        if isinstance(dtype, pl.Datetime):
+            exprs.append(
+                col.cast(pl.Utf8).str.to_datetime(time_zone="UTC", strict=False).alias(name)
+            )
+        else:
+            exprs.append(col.cast(dtype).alias(name))
+    return df.select(exprs)
 
 
 class BeeperError(RuntimeError):
@@ -351,9 +382,7 @@ async def accounts() -> pl.DataFrame:
                 "is_self": bool(user.get("isSelf")),
             }
         )
-    if not rows:
-        return pl.DataFrame(schema=_ACCOUNTS_SCHEMA)
-    return pl.DataFrame(rows, schema_overrides=_ACCOUNTS_SCHEMA).select(list(_ACCOUNTS_SCHEMA))
+    return _frame(rows, _ACCOUNTS_SCHEMA)
 
 
 async def _paginate(
@@ -391,7 +420,7 @@ async def chats(*, limit: int = 50, account_id: str | None = None) -> pl.DataFra
 
     Columns: ``id``, ``account_id``, ``network``, ``type`` (``"single"`` /
     ``"group"``), ``title``, ``unread_count``, ``is_muted``, ``is_pinned``,
-    ``last_activity`` (ISO timestamp), ``preview_sender``, ``preview_text`` (the
+    ``last_activity`` (tz-aware UTC datetime), ``preview_sender``, ``preview_text`` (the
     last message preview, when available).
 
     ``limit`` caps the rows returned (the API paginates automatically). Pass
@@ -423,9 +452,7 @@ async def chats(*, limit: int = 50, account_id: str | None = None) -> pl.DataFra
                 "preview_text": preview.get("text", "") or "",
             }
         )
-    if not rows:
-        return pl.DataFrame(schema=_CHATS_SCHEMA)
-    return pl.DataFrame(rows, schema_overrides=_CHATS_SCHEMA).select(list(_CHATS_SCHEMA))
+    return _frame(rows, _CHATS_SCHEMA)
 
 
 async def messages(chat_id: str, *, limit: int = 50) -> pl.DataFrame:
@@ -434,7 +461,7 @@ async def messages(chat_id: str, *, limit: int = 50) -> pl.DataFrame:
     ``chat_id`` is a Beeper chat ID (or a local chat ID from this Desktop
     installation); get one from :func:`chats` or :func:`search`. Columns: ``id``,
     ``chat_id``, ``account_id``, ``sender_id``, ``is_sender`` (True when you sent
-    it), ``timestamp`` (ISO), ``type`` (e.g. ``"TEXT"``), ``text``, ``reply_to``
+    it), ``timestamp`` (tz-aware UTC datetime), ``type`` (e.g. ``"TEXT"``), ``text``, ``reply_to``
     (the message ID this replies to, if any), ``attachments`` (count).
 
     ``limit`` caps the rows returned (the API paginates automatically). Raises
@@ -458,14 +485,8 @@ async def messages(chat_id: str, *, limit: int = 50) -> pl.DataFrame:
         }
         for msg in items
     ]
-    if not rows:
-        return pl.DataFrame(schema=_MESSAGES_SCHEMA)
     # The API returns newest-first while paginating; present chronologically.
-    return (
-        pl.DataFrame(rows, schema_overrides=_MESSAGES_SCHEMA)
-        .select(list(_MESSAGES_SCHEMA))
-        .sort("timestamp")
-    )
+    return _frame(rows, _MESSAGES_SCHEMA).sort("timestamp")
 
 
 async def search(
@@ -528,9 +549,7 @@ async def search(
         )
         if len(rows) >= limit:
             break
-    if not rows:
-        return pl.DataFrame(schema=_SEARCH_SCHEMA)
-    return pl.DataFrame(rows, schema_overrides=_SEARCH_SCHEMA).select(list(_SEARCH_SCHEMA))
+    return _frame(rows, _SEARCH_SCHEMA)
 
 
 async def search_chats(
@@ -570,11 +589,7 @@ async def search_chats(
         }
         for chat in items
     ]
-    if not rows:
-        return pl.DataFrame(schema=_SEARCH_CHATS_SCHEMA)
-    return pl.DataFrame(rows, schema_overrides=_SEARCH_CHATS_SCHEMA).select(
-        list(_SEARCH_CHATS_SCHEMA)
-    )
+    return _frame(rows, _SEARCH_CHATS_SCHEMA)
 
 
 async def send(chat_id: str, text: str, *, reply_to: str | None = None) -> dict[str, Any]:
