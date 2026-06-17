@@ -29,62 +29,88 @@
   (match elixir "(unary_operator (call (identifier) @kw (arguments (binary_operator left: (call (identifier) @n))))) @s")
   (text kw "spec"))
 
-;; --- defstruct-needs-type: a struct module must declare a @type ---
-;; Matches the actual `@type`/`@typep`/`@opaque` attribute (a `@` unary_operator
-;; over a call to `type`/...), not merely any identifier with text `type`.
+;; The actual `@type`/`@typep`/`@opaque` attribute (a `@` unary_operator over a
+;; call to `type`/...), not merely any identifier with text `type`.
 (rule (type-attr a)
   (match elixir "(unary_operator (call (identifier) @ti)) @a")
   (text-match ti "^(type|typep|opaque)$"))
 (rule (defstruct-call c)
   (match elixir "(call (identifier) @i) @c")
   (text i "defstruct"))
+
+;; --- nearest enclosing module ---
+;; A spec/impl/struct/type belongs to its NEAREST enclosing `defmodule`, not every
+;; ancestor module: otherwise a nested module's `@spec foo` would also count for
+;; the outer module and wrongly exempt an unspec'd `Outer.foo`. `nearest-mod x m`
+;; holds when `m` is a defmodule ancestor of `x` with no defmodule between them.
+(rule (mod-candidate x)
+  (def-name x n))
+(rule (mod-candidate x)
+  (spec-name x n))
+(rule (mod-candidate x)
+  (defstruct-call x))
+(rule (mod-candidate x)
+  (type-attr x))
+;; `m` is an ancestor module of `x` but a closer module `mid` sits in between.
+(rule (mod-shadowed x m)
+  (mod-candidate x)
+  (defmodule m)
+  (ancestor m x)
+  (defmodule mid)
+  (ancestor m mid)
+  (ancestor mid x))
+(rule (nearest-mod x m)
+  (mod-candidate x)
+  (defmodule m)
+  (ancestor m x)
+  (not (mod-shadowed x m)))
+
+;; --- defstruct-needs-type: a struct module must declare a @type ---
 (rule (module-has-type m)
   (type-attr a)
-  (defmodule m)
-  (ancestor m a))
-(rule (defstruct-needs-type m)
-  (defmodule m)
+  (nearest-mod a m))
+(rule (module-has-struct m)
   (defstruct-call c)
-  (ancestor m c)
+  (nearest-mod c m))
+(rule (defstruct-needs-type m)
+  (module-has-struct m)
   (not (module-has-type m)))
 (lint defstruct-needs-type error
   "module defines a struct but no @type; add a `@type t` for it so the 1.18 type checker can type its fields")
 
 ;; --- public-def-needs-spec: a public def needs a @spec (or @impl) ---
-;; A def is flagged unless its module has a @spec, or an @impl-annotated def, with
-;; the SAME function name. Name-matching makes one `@spec`/`@impl` cover every
-;; clause of a multi-clause function, and prevents a spec for a different function
-;; from exempting an unspec'd def. Behaviour callbacks are exempt via @impl.
+;; A def is flagged unless its nearest module has a @spec, or an @impl-annotated
+;; def, with the SAME function name. Name-matching makes one `@spec`/`@impl` cover
+;; every clause of a multi-clause function, and prevents a spec for a different
+;; function from exempting an unspec'd def. Behaviour callbacks are exempt via
+;; @impl.
 ;;
 ;; Residual: matching is by name, not name+arity (astlog has no aggregation to
 ;; count arguments), so `@spec foo/1` also exempts `def foo/2`. Rare, and the real
 ;; type gate -- `mix compile --warnings-as-errors` -- is unaffected.
 
-;; module m contains a @spec for the function named t.
+;; module m directly contains a @spec for the function named t.
 (rule (spec-in-module m t)
   (spec-name s n)
   (text n t)
-  (defmodule m)
-  (ancestor m s))
+  (nearest-mod s m))
 
 ;; a def whose annotation block carries an `@impl` (a behaviour callback).
 (rule (impl-def d)
   (def-name d n)
   (attached-sibling d "identifier" "impl"))
 
-;; module m contains an @impl-annotated def named t (so every t clause is a callback).
+;; module m directly contains an @impl-annotated def named t.
 (rule (impl-in-module m t)
   (impl-def d)
   (def-name d n)
   (text n t)
-  (defmodule m)
-  (ancestor m d))
+  (nearest-mod d m))
 
 (rule (public-def-needs-spec d)
   (def-name d n)
   (text n t)
-  (defmodule m)
-  (ancestor m d)
+  (nearest-mod d m)
   (not (spec-in-module m t))
   (not (impl-in-module m t)))
 (lint public-def-needs-spec error
