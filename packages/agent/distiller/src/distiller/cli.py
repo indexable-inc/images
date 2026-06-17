@@ -45,6 +45,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-new-items", type=int, default=8, help="cap of new items per project per run"
     )
     parser.add_argument(
+        "--max-delete", type=int, default=3, help="cap of items deleted per project per run"
+    )
+    parser.add_argument(
+        "--max-item-age-days",
+        type=float,
+        default=90.0,
+        help="retire items not re-evidenced within this many days (default 90)",
+    )
+    parser.add_argument(
         "--project",
         action="append",
         default=None,
@@ -128,8 +137,13 @@ def run(args: argparse.Namespace) -> int:
             s.session_id: SessionRecord(last_ts=s.last_ts) for s in fresh
         }
         st.items = distill.apply_operations(
-            st.items, result.operations, sessions_meta, max_new=args.max_new_items
+            st.items,
+            result.operations,
+            sessions_meta,
+            max_new=args.max_new_items,
+            max_delete=args.max_delete,
         )
+        st.items = distill.retire_stale(st.items, max_age_days=args.max_item_age_days)
         verdicts = distill.session_verdicts(result.session_outcomes, fresh)
         for s in fresh:
             verdict = verdicts[s.session_id]

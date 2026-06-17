@@ -51,10 +51,13 @@ repo/tool facts any agent would benefit from.
 - NEVER rewrite the whole playbook. Emit only operations:
   - {"op":"add","title":...,"body":...,"outcome":...,"scope":...,"sessions":[ids]}
   - {"op":"update","id":"<existing id>","title"?:...,"body"?:...,"outcome"?:...,"sessions":[ids]}
+  - {"op":"delete","id":"<existing id>","reason":"<why retired>"}
   Update an existing item when new evidence refines or contradicts it; add \
-only genuinely new lessons. Skip sessions that teach nothing (trivial chats, \
-aborted runs with no signal). Prefer FEW high-value items: at most {max_new} \
-new items this run.
+only genuinely new lessons. Delete an item ONLY when newer evidence directly \
+contradicts it or it is no longer true (a tool/flow changed); prefer update \
+over delete, and delete at most a couple per run. Skip sessions that teach \
+nothing (trivial chats, aborted runs with no signal). Prefer FEW high-value \
+items: at most {max_new} new items this run.
 - `sessions` lists the session ids the evidence came from.
 - Separately, judge EVERY session in the new evidence and emit exactly one \
 verdict per session id:
@@ -290,17 +293,21 @@ def apply_operations(
     now: float | None = None,
     id_factory: Callable[[], str] = new_item_id,
     max_new: int = 8,
+    max_delete: int = 3,
 ) -> list[Item]:
     """Merge model operations into the existing item list.
 
     Items absent from ``operations`` are kept untouched (the anti-collapse
-    invariant). Returns the merged list; mutates copies, not the input.
+    invariant). ``delete`` ops are capped at ``max_delete`` per run so a
+    misbehaving model cannot wipe the playbook. Returns the merged list;
+    mutates copies, not the input.
     """
 
     now = now if now is not None else time.time()
     merged: list[Item] = [item.model_copy() for item in items]
     by_id: dict[str, Item] = {item.id: item for item in merged}
     added = 0
+    deleted = 0
 
     def session_ids(op: dict[str, object]) -> list[str]:
         raw = op.get("sessions")
@@ -358,6 +365,14 @@ def apply_operations(
             new_sessions = [s for s in session_ids(op) if s not in target.sessions]
             target.sessions = target.sessions + new_sessions
             target.last_updated = now
+        elif kind == "delete":
+            if deleted >= max_delete:
+                continue
+            op_id = op.get("id")
+            if not isinstance(op_id, str) or by_id.pop(op_id, None) is None:
+                continue  # unknown id is a no-op
+            merged = [it for it in merged if it.id != op_id]
+            deleted += 1
 
     # Stamp date ranges from session metadata so provenance survives.
     for item in merged:
@@ -372,3 +387,22 @@ def apply_operations(
             prior_to = item.evidence_to
             item.evidence_to = max(stamps + ([prior_to] if prior_to else []))
     return merged
+
+
+def retire_stale(
+    items: list[Item],
+    now: float | None = None,
+    max_age_days: float = 90.0,
+) -> list[Item]:
+    """Drop items not evidenced within ``max_age_days`` (deterministic forgetting).
+
+    Recency is the newest evidence timestamp (``evidence_to``), falling back to
+    ``last_updated`` for items predating provenance stamps. An item that keeps
+    getting re-evidenced stays; one that has gone quiet past the window is
+    retired. The window is generous so this is a slow garbage-collector, not an
+    aggressive pruner; the model-driven ``delete`` op handles active contradiction.
+    """
+
+    now = now if now is not None else time.time()
+    cutoff = now - max_age_days * 86400
+    return [item for item in items if (item.evidence_to or item.last_updated or 0.0) >= cutoff]

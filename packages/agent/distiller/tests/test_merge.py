@@ -93,6 +93,37 @@ def test_unknown_update_and_garbage_ops_ignored() -> None:
     assert merged == []
 
 
+def test_delete_op_removes_item_with_cap() -> None:
+    existing = [
+        Item(id=f"df-{c}", title=f"T{c}", body="b", outcome="success", scope="shared", sessions=[])
+        for c in "abcd"
+    ]
+    ops = [
+        {"op": "delete", "id": "df-a"},
+        {"op": "delete", "id": "df-b"},
+        {"op": "delete", "id": "df-c"},
+        {"op": "delete", "id": "df-d"},  # beyond cap -> ignored
+        {"op": "delete", "id": "nope"},  # unknown id -> no-op
+    ]
+    merged = distill.apply_operations(existing, ops, {}, now=1.0, id_factory=ids(), max_delete=3)
+    assert {i.id for i in merged} == {"df-d"}  # exactly 3 deleted, cap held, unknown ignored
+
+
+def test_retire_stale_drops_old_unreevidenced_items() -> None:
+    now = 1_000_000_000.0
+    day = 86400.0
+    fresh = Item(
+        id="df-fresh", title="F", body="b", outcome="success", scope="shared",
+        sessions=[], last_updated=now - 10 * day, evidence_to=now - 10 * day,
+    )
+    stale = Item(
+        id="df-stale", title="S", body="b", outcome="success", scope="shared",
+        sessions=[], last_updated=now - 200 * day, evidence_to=now - 200 * day,
+    )
+    kept = distill.retire_stale([fresh, stale], now=now, max_age_days=90.0)
+    assert [i.id for i in kept] == ["df-fresh"]
+
+
 def test_extract_json_tolerates_fences() -> None:
     text = "Here you go:\n```json\n{\"operations\": []}\n```\nDone."
     assert distill._extract_json(text) == {"operations": []}
