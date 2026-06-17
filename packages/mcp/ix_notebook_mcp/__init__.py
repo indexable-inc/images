@@ -5,8 +5,9 @@ Every execution runs as an asyncio task on that kernel's event loop, so many run
 concurrently and none blocks the others. A call waits up to ``budget`` seconds;
 if the work is still going it keeps running in the background, registered in the
 in-kernel ``jobs`` dict that later ``python_exec`` calls inspect, await, or
-cancel. Each run is logged to a SQLite store that an auto-started dashboard
-renders, so a human can watch every running thing and its output live.
+cancel. Each run is logged to a SQLite store and published to the shared
+discovery dir, so a single standalone ``dashboard`` (``nix run .#dashboard``)
+renders every running thing and its output live for a human to watch.
 
 The pieces:
   - :mod:`ix_notebook_mcp.runtime` is the in-kernel runtime (``jobs``/``Job``/

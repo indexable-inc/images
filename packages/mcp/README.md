@@ -3,8 +3,9 @@
 A Python execution MCP server. Its one general tool, `python_exec`, runs code on
 **one shared, persistent IPython kernel**. The namespace persists across calls,
 many executions run **concurrently** on the kernel's event loop, and work that
-outlives a short foreground budget keeps running in the background. An
-auto-started dashboard shows every running execution and its live output.
+outlives a short foreground budget keeps running in the background. Run one
+standalone dashboard (`nix run .#dashboard`) to see every running execution and
+its live output across all servers.
 
 ## Quickstart
 
@@ -91,8 +92,11 @@ repr on the dashboard and its text to you.
 
 ## How it works
 
-`ix-mcp serve` starts one IPython kernel (over `jupyter-client`), an auto-started
-read-only dashboard, and the MCP transport, all on one event loop.
+`ix-mcp serve` starts one IPython kernel (over `jupyter-client`), a read-only
+data API, and the MCP transport, all on one event loop. It publishes its panes
+to the shared discovery dir but does not spawn its own dashboard hub; run one
+standalone `dashboard` (`nix run .#dashboard`) to view every server at once, or
+set `IX_MCP_AUTO_DASHBOARD=1` to restore the old per-server auto-spawn.
 
 - `kernel.py` owns the single kernel; `python_exec` sends `await __ix_exec(code,
   budget)` to it.

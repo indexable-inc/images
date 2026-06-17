@@ -7,11 +7,14 @@
   ix-mcp eval EXPR             evaluate one expression on a throwaway kernel
   ix-mcp exec SRC              run statements on a throwaway kernel
 
-`serve` starts ONE shared IPython kernel, an auto-started read-only dashboard
-over the execution store, and the MCP transport, all on one event loop.
-`notebook` is the engine without the MCP surface: the same kernel, store, and
-dashboard, driven only by what is already in the session file and the humans
-watching it.
+`serve` starts ONE shared IPython kernel, a read-only data API over the
+execution store, and the MCP transport, all on one event loop. It publishes its
+panes into the shared discovery dir but does NOT spawn a `dashboard` hub: that
+aggregator is a single machine-wide process you run yourself once
+(`nix run .#dashboard`), which renders every server behind one URL. Set
+`IX_MCP_AUTO_DASHBOARD` truthy to restore the old per-server auto-spawn.
+`notebook` is the engine without the MCP surface: the same kernel and store,
+driven only by what is already in the session file and the humans watching it.
 
 A session file (``--session work.ixnb`` or ``notebook work.ixnb``) makes the
 store persistent instead of per-run: every cell, its outputs, and a serialized
@@ -284,6 +287,28 @@ def _exec_trust_network() -> bool:
     )
 
 
+def _auto_dashboard() -> bool:
+    """Whether ``serve`` should spawn its own ``dashboard`` hub.
+
+    Off by default. The hub is a single, machine-wide, long-lived aggregator:
+    exactly one process binds the port, and every ``serve`` already publishes its
+    panes into the shared discovery dir (see ``pane_bridge``), so one hub renders
+    them all behind one stable URL. Spawning a hub per ``serve`` both duplicates
+    that singleton and leaks it -- a ``serve`` killed abnormally (SIGKILL/crash)
+    skips the cleanup ``finally``, so its hub reparents to init and survives
+    forever; a churning fleet of short-lived servers piles up thousands of
+    orphaned ``dashboard`` processes. Run the UI yourself once instead
+    (``nix run .#dashboard``). Set ``IX_MCP_AUTO_DASHBOARD`` truthy to restore the
+    old auto-spawn.
+    """
+    return os.environ.get("IX_MCP_AUTO_DASHBOARD", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     wd = getattr(args, "workdir", None)
     workdir = Path(wd).resolve() if wd else Path.cwd()
@@ -407,8 +432,9 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     os.environ["IX_MCP_STORE"] = str(store_path)
     # Surface the dashboard URL to the kernel so `DASHBOARD_URL` is one lookup
     # away (the agent should not have to spelunk the runtime dir to find it). The
-    # human-facing dashboard is the Loro hub, not the read-only data API.
-    os.environ["IX_MCP_DASHBOARD_URL"] = cfg.hub_url()
+    # human-facing dashboard is the Loro hub when we auto-spawn one; otherwise
+    # there is no per-server hub, so point at this server's own data API.
+    os.environ["IX_MCP_DASHBOARD_URL"] = cfg.hub_url() if _auto_dashboard() else cfg.dashboard_url()
     os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(dashboard_port))
 
     # On macOS the process env inherits the empty Apple launchd SSH agent
@@ -500,22 +526,30 @@ async def _run(cfg: Config) -> None:
         await locked.wait()
 
     runner = await dashboard.start(cfg)
-    # The human-facing dashboard is the Loro hub: spawn it, and publish this
-    # server's runs/resources/namespace as panes to the shared discovery dir it
-    # (and every other producer) feeds. Both are best-effort -- a missing hub
-    # binary or an unbindable producer socket just means no UI; the data API
-    # keeps serving embedders either way.
-    hub = _spawn_hub(cfg)
+    # Always publish this server's runs/resources/namespace as panes into the
+    # shared discovery dir; a single standalone `dashboard` (run separately,
+    # `nix run .#dashboard`) renders every producer behind one stable URL.
     bridge_task = asyncio.ensure_future(pane_bridge.run(cfg.store_path))
-    # Advertise the hub UI only if it actually started; otherwise point at the
+    # Only auto-spawn a per-server hub when explicitly opted in (see
+    # `_auto_dashboard`): the default leaks an orphaned `dashboard` per abnormal
+    # exit and duplicates the machine-wide singleton. Best-effort either way -- a
+    # missing hub binary or an unbindable producer socket just means no UI here.
+    hub = _spawn_hub(cfg) if _auto_dashboard() else None
+    # Advertise the hub UI only if we actually started one; otherwise point at the
     # live data API rather than a dead hub port.
     url = cfg.hub_url() if hub is not None else cfg.dashboard_url()
     (runtime_dir() / "dashboard-url").write_text(url)
     # Bake the live URL into the MCP instructions before serving, so the client
     # gets it in the `initialize` response -- no tool call to discover it.
     tools.set_dashboard_url(url)
-    label = "dashboard (all running things + output)" if hub is not None else "data API (UI unavailable)"
-    print(f"[ix-mcp] {label}: {url}", file=sys.stderr, flush=True)
+    if hub is not None:
+        print(f"[ix-mcp] dashboard (all running things + output): {url}", file=sys.stderr, flush=True)
+    else:
+        print(
+            f"[ix-mcp] data API: {url}  (aggregated UI: run `nix run .#dashboard`)",
+            file=sys.stderr,
+            flush=True,
+        )
     if cfg.session_path is not None:
         print(f"[ix-mcp] session file: {cfg.session_path}", file=sys.stderr, flush=True)
 
