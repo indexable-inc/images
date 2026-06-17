@@ -1,7 +1,7 @@
 { lib }:
-# House rules appended to Claude Code's stock system prompt (see the
-# `appendSystemPrompt` argument in ./claude-code/default.nix for how this string
-# is baked into the wrapper, surfaced as `systemPrompt` by ./common.nix).
+# The house system prompt Claude Code runs with, REPLACING the stock prompt
+# (see the `systemPrompt` argument in ./claude-code/default.nix for how this
+# string is baked into the wrapper, surfaced as `systemPrompt` by ./common.nix).
 # Each rule is a named binding so it is addressable from source; `order` then
 # fixes how the rules read top-to-bottom, and they are joined with blank lines so
 # a rule reads as a self-contained line instead of buried in indented-string prose.

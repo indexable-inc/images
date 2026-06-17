@@ -92,23 +92,23 @@
       (import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; })
       .houseServers,
 
-  # Text APPENDED to Claude Code's stock system prompt. The string is
-  # materialized to a store file and baked into the wrapper as
-  # `--append-system-prompt-file=<path>`: passing by path (not inline text)
-  # keeps arbitrary content free of shell quoting, and the store path makes the
-  # flag one self-contained argv token (see `wrapperFlags` for why every
-  # injected option-argument uses the `=` form).
-  # Append, never replace: the stock prompt (tool guidance, safety rules,
-  # coding conventions) stays intact and these house rules ride on top.
-  # Prepended before the user argv so an explicit
-  # `--append-system-prompt`/`--append-system-prompt-file` on the CLI still
-  # wins (single-value options are last-wins), and a caller who really wants a
-  # wholesale replacement can still pass `--system-prompt[-file]`. Defaults to
-  # the shared house prompt (`systemPrompt` in ../common.nix, authored in
-  # ../system-prompt.nix: the shokunin craft ethos plus the pre-v1
+  # Text used AS Claude Code's system prompt, REPLACING the stock prompt. The
+  # string is materialized to a store file and baked into the wrapper as
+  # `--system-prompt-file=<path>`: passing by path (not inline text) keeps
+  # arbitrary content free of shell quoting, and the store path makes the flag
+  # one self-contained argv token (see `wrapperFlags` for why every injected
+  # option-argument uses the `=` form).
+  # Set, not append: this wholly replaces the stock prompt (tool guidance,
+  # safety rules, coding conventions) rather than riding on top of it, so the
+  # baked text owns the entire system prompt. Prepended before the user argv so
+  # an explicit `--system-prompt`/`--system-prompt-file` on the CLI still wins
+  # (single-value options are last-wins), and a caller who wants the stock
+  # prompt plus additions can still pass `--append-system-prompt[-file]`.
+  # Defaults to the shared house prompt (`systemPrompt` in ../common.nix,
+  # authored in ../system-prompt.nix: the shokunin craft ethos plus the pre-v1
   # backward-compatibility engineering rule, plus a preference for working in git
   # worktrees); set to `null` to bake no flag and ship the stock prompt alone.
-  appendSystemPrompt ?
+  systemPrompt ?
     (import (ix.paths.packagesRoot + "/agent/common.nix") { inherit lib ix repoPackages; })
     .systemPrompt,
 
@@ -356,9 +356,9 @@ let
     "--thinking-display=summarized"
   ]
   ++ lib.optional dangerouslySkipPermissions "--dangerously-skip-permissions"
-  ++
-    lib.optional (appendSystemPrompt != null)
-      "--append-system-prompt-file=${builtins.toFile "claude-code-append-system-prompt.txt" appendSystemPrompt}"
+  ++ lib.optional (
+    systemPrompt != null
+  ) "--system-prompt-file=${builtins.toFile "claude-code-system-prompt.txt" systemPrompt}"
   ++ lib.optional (mcpServers != { }) "--mcp-config=${mcpConfigFile}";
 
   envEntries = attrs: lib.mapAttrsToList (key: value: { inherit key value; }) attrs;

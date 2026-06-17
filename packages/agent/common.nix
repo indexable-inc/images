@@ -13,9 +13,9 @@
   repoPackages ? { },
 }:
 {
-  # House rules a wrapper appends to its agent's stock system prompt. One
-  # paragraph per list element; see ./system-prompt.nix for the authored text
-  # and how claude-code bakes it (`appendSystemPrompt`).
+  # The house system prompt a wrapper bakes for its agent. One paragraph per
+  # list element; see ./system-prompt.nix for the authored text and how
+  # claude-code bakes it (`systemPrompt`, which REPLACES the stock prompt).
   systemPrompt = import ./system-prompt.nix { inherit lib; };
 
   # The house MCP servers (the `index` kernel plus `exa` web search), rendered

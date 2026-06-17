@@ -76,8 +76,9 @@ positional). Both rules are learned from real breakage; see the long comment at
   sandboxes). Gated on `dangerouslySkipPermissions` (below). Mind the upstream
   uid-0 guard: the CLI refuses this flag for an unsandboxed root user, so root
   consumers carry their own `IS_SANDBOX=1` or turn the flag off.
-- `--append-system-prompt-file=<store path>`: the house system prompt (below),
-  baked by path so content needs no shell quoting.
+- `--system-prompt-file=<store path>`: the house system prompt (below),
+  baked by path so content needs no shell quoting. It REPLACES the stock prompt
+  rather than appending to it.
 - `--mcp-config=<file>`: the baked MCP server set (below).
 
 ### Conditional `--settings` (injected only when the caller passes none)
@@ -114,10 +115,10 @@ Defaults to the house pair, additions only:
 - `exa`: Exa's hosted web-search server over streamable HTTP at
   `https://mcp.exa.ai/mcp` (keyless, rate-limited).
 
-### Appended system prompt (`system-prompt.nix`)
+### System prompt (`system-prompt.nix`)
 
-`appendSystemPrompt` appends the house rules to the stock system prompt, never
-replacing it (`default.nix:96-112`). The text is the shokunin craft ethos plus
+`systemPrompt` is baked as the session's system prompt, REPLACING the stock one
+rather than appending to it (`default.nix:95-113`). The text is the shokunin craft ethos plus
 fleet engineering rules: pre-v1 no-backward-compatibility, one-concept-one-
 implementation, always work in a git worktree, spawn background subagents for
 independent work, do work through the index Python kernel and `search` priors,
@@ -154,7 +155,7 @@ and on Linux the sandbox helpers `bubblewrap` and `socat`.
 
 `default.nix` exposes these args: `binName` (default `claude`),
 `dangerouslySkipPermissions`, `extraSettings`, `primaryCheckouts`, `mcpServers`,
-`appendSystemPrompt`. Example: `claude-code.override { dangerouslySkipPermissions = false; }`.
+`systemPrompt`. Example: `claude-code.override { dangerouslySkipPermissions = false; }`.
 
 ## Build and wiring
 
