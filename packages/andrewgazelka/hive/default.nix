@@ -89,8 +89,8 @@ in
     def --wrapped main [...args] {
       # mix compiles in place, so stage the read-only source into a writable
       # temp dir before running the demo.
-      let work = (mktemp -d)
-      cp -rL --no-preserve=mode ${src}/. $"($work)/"
+      let work = (^mktemp -d | str trim)
+      ^cp -rL --no-preserve=mode ${src}/. $"($work)/"
       cd $work
       with-env {
         MIX_ENV: "dev"
