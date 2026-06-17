@@ -132,6 +132,8 @@ async def capture(
                 )
                 await writer.drain()
         except (ConnectionError, asyncio.IncompleteReadError):
+            # The CLI hung up mid-exchange (it got its response, or we killed it
+            # after capture). Expected teardown, nothing to handle.
             pass
         finally:
             with contextlib.suppress(Exception):
