@@ -13,10 +13,15 @@
   // sandboxed srcdoc frame defaults its canvas to light — WebKit/Safari renders a
   // jarring white box behind otherwise-dark pane content (e.g. polars tables) on a
   // dark page. The `<meta>` lands in the document head whether the producer ships
-  // a fragment (parser implies head/body) or a full document with its own <head>;
-  // a producer that sets its own color-scheme still wins (its tag parses later).
+  // a fragment (parser implies head/body) or a full document with its own <head>.
+  //
+  // A producer that declares its own color-scheme owns the decision, so leave its
+  // document untouched: per the WHATWG "color scheme" algorithm the FIRST such
+  // meta in tree order wins, so injecting ours (ahead of theirs) would override
+  // it — the opposite of what we want.
   const SCHEME = '<meta name="color-scheme" content="light dark">';
   function themed(body: string): string {
+    if (/<meta[^>]+name=["']?color-scheme/i.test(body)) return body;
     const head = body.match(/<head[^>]*>/i);
     if (head) {
       const at = head.index! + head[0].length;
