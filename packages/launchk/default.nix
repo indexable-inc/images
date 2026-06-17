@@ -5,7 +5,7 @@
 }:
 # Reference package for the external-Rust-tool house style: a standalone
 # third-party binary built from a pinned flake source input with
-# `rustPlatform.buildRustPackage`. See `agent-context/sections/13-dependency-intake.md`.
+# `rustPlatform.buildRustPackage`. See `skills/dependency-intake/SKILL.md`.
 let
   src = ix.launchkSrc;
 in

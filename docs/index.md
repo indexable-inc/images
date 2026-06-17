@@ -13,7 +13,6 @@ From-source documentation for the packages in the `index` repo (a shared, open-s
 
 | package | summary |
 | --- | --- |
-| [agents-md](agents-md/overview.md) | `packages/agents-md` is the Rust CLI that renders, diffs, checks, and writes the always-on agent instruction files: `AGENTS.md` (Codex) and `CLAUDE.md` (Claude). |
 | [ast-merge](ast-merge/overview.md) | `packages/ast-merge` is an AST-aware git merge driver: instead of merging text lines it parses base/left/right with tree-sitter, matches nodes across the three revisions with a GumTree-st... |
 | [astlog](astlog/overview.md) | `packages/astlog` runs Datalog over tree-sitter syntax trees: a tree-sitter query match becomes a relation (one row per match, one column per `@capture`), Datalog rules join those relatio... |
 | [blast-radius](blast-radius/overview.md) | `packages/blast-radius` reports how many `.#checks.x86_64-linux` derivations a PR would rebuild and which changed inputs caused each rebuild. |

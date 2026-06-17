@@ -57,14 +57,10 @@ __pycache__/
 .claude/settings.local.json
 CLAUDE.local.md
 
-# Agent instruction files are rendered live by the SessionStart hook
-# (.claude/hooks/agent-instructions.sh) from agent-context/sections, not
-# committed. Preview with `nix build .#claude-md --print-out-paths | xargs cat`.
-/AGENTS.md
-/CLAUDE.md
-
-# Skills are built into a nix-store link farm (the `skills` flake package) and
-# symlinked here by the hook for Claude Code and Codex.
+# Skills are built into the `skills` flake package (one dir per skills/<name>)
+# and copied here by the SessionStart hook (.claude/hooks/agent-instructions.sh)
+# for Claude Code and Codex. Preview with
+# `nix build .#skills --print-out-paths | xargs ls`.
 /.claude/skills
 /.agents/
 

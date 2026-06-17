@@ -380,25 +380,9 @@ let
     meta.description = "Copy git-ignored files into an ix shell workspace";
   };
 
-  # Always-on instruction documents. Forcing either string evaluates the
-  # `agent-context` always-on cap assertion (see lib/agent-context/default.nix).
-  agentContextClaudeMd = pkgs.writeText "CLAUDE.md" ix.agentContext.alwaysDoc;
-  agentContextCodexMd = pkgs.writeText "AGENTS.md" ix.agentContext.alwaysDoc;
-
-  # One symlink-free directory holding every handwritten skill plus one
-  # generated skill per `disclosure: progressive` section, ready to copy into
-  # `.claude/skills`.
-  agentContextProgressiveSkills = ix.agentContext.mkProgressiveSkills { inherit pkgs; };
-  agentContextSkillCollisions = lib.intersectLists ix.skills.allSkills (
-    lib.attrNames agentContextProgressiveSkills
-  );
-  agentContextSkills =
-    assert lib.assertMsg (agentContextSkillCollisions == [ ])
-      "agent-context: progressive section names collide with handwritten skills: ${lib.concatStringsSep ", " agentContextSkillCollisions}";
-    ix.skills.mkSkillsDir {
-      inherit pkgs;
-      extraSkills = agentContextProgressiveSkills;
-    };
+  # One symlink-free directory holding every skill under `skills/`, ready to
+  # copy into `.claude/skills`.
+  skillsDir = ix.skills.mkSkillsDir { inherit pkgs; };
 
   # Declarative subagents rendered to a symlink-free `.claude/agents` directory.
   # index-action-runner offloads a long, image- or step-heavy loop into its own
@@ -406,7 +390,7 @@ let
   # FRESH inline `index` server from the shared `ix.mcp` registry, so each
   # spawned subagent gets its own kernel and browser rather than sharing the
   # parent's; the server is declared from the same source the wrappers render.
-  agentContextAgents = ix.agents.mkAgentsDir {
+  agentsDir = ix.agents.mkAgentsDir {
     inherit pkgs;
     agents = {
       index-action-runner = {
@@ -426,7 +410,7 @@ let
             };
           };
         };
-        body = builtins.readFile (paths.agentContext + "/agents/index-action-runner.md");
+        body = builtins.readFile (paths.agents + "/index-action-runner.md");
       };
     };
   };
@@ -814,16 +798,13 @@ let
           # pre-run at build time so the VM never needs the network; see
           # tests/minecraft-blocks-vm.nix.
           minecraft-blocks-vm = tests.minecraftBlocksVm;
-          # Instruction files are not committed; they are rendered live by the
-          # SessionStart hook. This gate forces the rendered always-on documents
-          # (which evaluates the always-on char cap assertion) and the combined
-          # skills directory (which evaluates the name-collision assertion and
-          # the no-symlink materialization check) to build.
-          agent-context = pkgs.runCommand "agent-context-check" { } ''
-            test -s ${agentContextClaudeMd}
-            test -s ${agentContextCodexMd}
-            test -d ${agentContextSkills}
-            test -d ${agentContextAgents}
+          # Skills and subagents are not committed; they are rendered live by the
+          # SessionStart hook. This gate forces the skills directory and the
+          # subagents directory (both of which evaluate the no-symlink
+          # materialization check) to build.
+          agent-skills = pkgs.runCommand "agent-skills-check" { } ''
+            test -d ${skillsDir}
+            test -d ${agentsDir}
             mkdir -p "$out"
           '';
           # Pins the last-applied 3-way merge behind homeModules.mutable-json:
@@ -1155,10 +1136,8 @@ in
       ix-shell-sync-ignored = ixShellSyncIgnored;
       mc-source = mcSource;
       update-sounds = updateSounds;
-      agents = agentContextAgents;
-      claude-md = agentContextClaudeMd;
-      codex-md = agentContextCodexMd;
-      skills = agentContextSkills;
+      agents = agentsDir;
+      skills = skillsDir;
     }
     // repoFlakePackages
     // examplePackages

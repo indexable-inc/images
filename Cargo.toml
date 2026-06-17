@@ -1,7 +1,6 @@
 [workspace]
 members = [
   "modules/services/resource-monitor/stats-writer",
-  "packages/agent/agents-md",
   "packages/blast-radius",
   "packages/build-version",
   "packages/agent/claude-hooks",

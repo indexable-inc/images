@@ -3,8 +3,8 @@
 `packages/launchk` builds [launchk](https://github.com/mach-kernel/launchk), a
 cursive (Rust TUI) tool for observing launchd agents and daemons, from source.
 It is the reference shape for the external-Rust-tool house style
-(`agent-context/sections/13-dependency-intake.md`, "Packaging external Rust
-CLI/TUI tools"), and is macOS-only because launchk talks to launchd over XPC.
+(`skills/dependency-intake/SKILL.md`, "Packaging external Rust CLI/TUI
+tools"), and is macOS-only because launchk talks to launchd over XPC.
 
 ## What this repo changes
 

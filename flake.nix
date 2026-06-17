@@ -28,18 +28,18 @@
     # file change anywhere re-hashes and re-copies the full tree per eval and
     # invalidates every dependent. Declaring each pure-data subtree as its own
     # `flake = false` path input scopes a consumer's source to just the subtree
-    # it reads, so an edit under `site/` no longer perturbs an `agent-context`
+    # it reads, so an edit under `site/` no longer perturbs a `skills`
     # package's drvPath. nix and nox both resolve these as lock nodes
     # `{ type = "path"; path = "./<dir>"; parent = []; }` against the parent
     # tree, with no separate fetch. Nix-code roots the flake itself imports
     # (`modules`, `packages`) stay ordinary relative paths: they are
     # import-time, not source identity. See ENG-2362.
-    agent-context = {
-      url = "path:./agent-context";
-      flake = false;
-    };
     skills = {
       url = "path:./skills";
+      flake = false;
+    };
+    agents = {
+      url = "path:./agents";
       flake = false;
     };
     images = {
@@ -163,8 +163,8 @@
       snix-src,
       clippy-fork,
       ghostty,
-      agent-context,
       skills,
+      agents,
       images,
       examples,
       tests,
@@ -205,8 +205,8 @@
       # new whole-repo dependency.
       paths = {
         root = ./.;
-        agentContext = agent-context.outPath;
         skills = skills.outPath;
+        agents = agents.outPath;
         images = images.outPath;
         modules = ./modules;
         examples = examples.outPath;
