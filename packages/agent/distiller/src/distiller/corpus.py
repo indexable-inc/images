@@ -126,6 +126,9 @@ def item_row(
         "host": host,
         "user": user,
         "project": project,
+        # ``project`` is now the canonical repo slug (see transcripts.repo_identity);
+        # expose it under ``repo`` too so cross-repo queries filter unambiguously.
+        "repo": project,
         "scope": f"user:{user}" if scope == "user" else "shared",
         "outcome": item.outcome,
         "session_ids": ",".join(item.sessions[:16]),
@@ -207,6 +210,7 @@ def session_row(session_id: str, rec: SessionRecord, project: str, host: str, us
         "host": host,
         "user": user,
         "project": project,
+        "repo": project,
         "session_id": session_id,
         "label": label,
         "reason": rec.reason or "",

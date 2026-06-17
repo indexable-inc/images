@@ -83,18 +83,44 @@ def test_meta_user_lines_and_sidechains_skipped(tmp_path: Path) -> None:
     assert session.goal == "real goal"
 
 
-def test_scan_groups_by_cwd_and_windows(tmp_path: Path) -> None:
+def test_scan_groups_by_repo_and_windows(tmp_path: Path) -> None:
+    # cwd "/home/u/repo" -> repo slug "repo" (not the full path).
     new = tmp_path / "-home-u-repo" / "new.jsonl"
     write_transcript(new, [rec("user", "hello", ts="2026-06-10T10:00:00Z")])
     old = tmp_path / "-home-u-repo" / "old.jsonl"
     write_transcript(old, [rec("user", "ancient", ts="2020-01-01T00:00:00Z")])
     now = transcripts._parse_ts("2026-06-11T00:00:00Z")
     groups = transcripts.scan(tmp_path, days=7, now=now)
-    assert list(groups) == ["/home/u/repo"]
-    assert [s.goal for s in groups["/home/u/repo"]] == ["hello"]
+    assert list(groups) == ["repo"]
+    assert [s.goal for s in groups["repo"]] == ["hello"]
 
 
-def test_project_key_falls_back_to_dir_name() -> None:
-    session = transcripts.Session(session_id="s", path="p")
-    assert transcripts.project_key(session, "-home-u-my-repo") == "/home/u/my/repo"
+def test_scan_collapses_clones_and_drops_scratch(tmp_path: Path) -> None:
+    # Two clones of one repo at different paths collapse to one silo...
+    a = tmp_path / "-home-u-Github-nox" / "a.jsonl"
+    write_transcript(a, [rec("user", "in github clone", cwd="/home/u/Github/nox")])
+    b = tmp_path / "-home-u-nox" / "b.jsonl"
+    write_transcript(b, [rec("user", "in home clone", cwd="/home/u/nox")])
+    # ...while a scratch cwd is dropped entirely.
+    scratch = tmp_path / "-tmp-ix-distiller-x" / "c.jsonl"
+    write_transcript(scratch, [rec("user", "scratch", cwd="/tmp/ix-distiller-x")])  # noqa: S108
+    now = transcripts._parse_ts("2026-06-11T00:00:00Z")
+    groups = transcripts.scan(tmp_path, days=3650, now=now)
+    assert list(groups) == ["nox"]
+    assert len(groups["nox"]) == 2
+
+
+def test_repo_identity_heuristics() -> None:
+    # clones collapse on basename
+    assert transcripts.repo_identity("/home/u/Github/nox", "x") == "nox"
+    assert transcripts.repo_identity("/home/u/nox", "x") == "nox"
+    # worktree resolves to the repo, not the worktree name
+    assert transcripts.repo_identity("/home/u/index/.claude/worktrees/feat-x", "x") == "index"
+    # non-repo cwds are rejected
+    assert transcripts.repo_identity("/tmp/ix-distiller-abc", "x") is None  # noqa: S108
+    assert transcripts.repo_identity("/home/u", "x") is None
+    assert transcripts.repo_identity("/home/u/Github", "x") is None
+    assert transcripts.repo_identity("/home/u/.claude", "x") is None
+    # dir-name fallback when cwd is absent
+    assert transcripts.repo_identity(None, "-home-u-my-repo") == "repo"
     assert transcripts.project_slug("/home/u/my repo!") == "home-u-my-repo"
