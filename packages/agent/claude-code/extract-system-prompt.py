@@ -109,11 +109,14 @@ async def capture(
                         parsed: dict[str, Any] = json.loads(body)
                         captured.append(parsed)
                         done.set()
-                # Minimal valid Messages response so the CLI exits cleanly; by
-                # now we already hold the request we came for, so its fate does
-                # not matter.
-                payload = json.dumps(
-                    {
+                # Reply with the shape each endpoint expects so the CLI doesn't
+                # error or retry before it gets to the messages request we want:
+                # count_tokens wants {input_tokens}, messages wants a message. By
+                # the time we hold our capture, the response's fate is moot.
+                if "count_tokens" in request_line:
+                    reply: dict[str, Any] = {"input_tokens": 1}
+                else:
+                    reply = {
                         "id": "msg_capture",
                         "type": "message",
                         "role": "assistant",
@@ -122,7 +125,7 @@ async def capture(
                         "stop_reason": "end_turn",
                         "usage": {"input_tokens": 1, "output_tokens": 1},
                     }
-                ).encode()
+                payload = json.dumps(reply).encode()
                 writer.write(
                     b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                     b"Content-Length: %d\r\n\r\n" % len(payload) + payload
@@ -142,19 +145,19 @@ async def capture(
 
     home = tempfile.mkdtemp(prefix="claude-extract-home-")
     cwd = tempfile.mkdtemp(prefix="claude-extract-cwd-")
-    # Drop anything that would defeat the capture: a *_PROXY would route the
-    # loopback request away from our server, and a real auth token would let the
-    # CLI pick a non-API-key auth mode. We pin our own base URL + dummy key below.
-    stripped = {
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "CLAUDE_CODE_OAUTH_TOKEN",
-    }
-    env = {k: v for k, v in os.environ.items() if k.upper() not in stripped}
+    # Build a hermetic child env so the capture reflects the binary, not the
+    # maintainer's shell. Drop every ANTHROPIC_*/CLAUDE_* var (model, token,
+    # context-window, thinking-budget knobs that would skew what is sent) and any
+    # *_PROXY (which would route the loopback request away from our server), then
+    # set back only what we control. The wrapped launcher gets its own settings
+    # from baked flags / IX_LAUNCH_SPEC, not from these, so this is safe for both.
+    def _hermetic(key: str) -> bool:
+        upper = key.upper()
+        if upper in {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}:
+            return False
+        return not (upper.startswith(("ANTHROPIC_", "CLAUDE_")))
+
+    env = {k: v for k, v in os.environ.items() if _hermetic(k)}
     env.update(
         {
             "HOME": home,
