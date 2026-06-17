@@ -5,7 +5,6 @@
   stdenv,
   makeBinaryWrapper,
   runCommand,
-  procps,
 }:
 # fff-suggest is a repo-owned rust workspace crate (the binary rides
 # `ix.rustWorkspace.units` like `claude-hooks`), wrapped so it carries the path
@@ -42,9 +41,11 @@ let
       '';
 
   # End-to-end: stand up the daemon over a temp tree and confirm the client
-  # returns the fff-ranked file for a query. Uses a tiny idle timeout and an
-  # explicit kill so the build never waits on a lingering daemon.
-  e2eTest = runCommand "fff-suggest-e2e" { nativeBuildInputs = [ procps ]; } ''
+  # returns the fff-ranked file for a query. A tiny idle timeout reaps the
+  # daemon, so the test needs no platform-specific killer (`procps`/`pkill` is
+  # Linux-only in nixpkgs and would make this check unbuildable on Darwin, where
+  # this stack is documented as supported).
+  e2eTest = runCommand "fff-suggest-e2e" { } ''
     set -eu
     export HOME="$TMPDIR/home"
     export XDG_RUNTIME_DIR="$TMPDIR/run"
@@ -66,8 +67,8 @@ let
       sleep 0.1
     done
 
-    # Stop the daemon we spawned (idle timeout is the backstop).
-    pkill -f 'fff-suggest serve' || true
+    # The daemon we cold-started reaps itself via IX_FFF_SUGGEST_IDLE_MS, so
+    # there is nothing to kill and the build never waits on a lingering process.
 
     case "$hits" in
       *alpha_module.rs*)
