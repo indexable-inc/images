@@ -22,6 +22,10 @@
       "chatgpt"
       "chatgpt-atlas"
       "claude"
+      # Cloudflare WARP: tunnels IPv4+IPv6 to Cloudflare, so an IPv6-only or
+      # broken-IPv4 network (e.g. hotel wifi with dead DHCPv4) can still reach
+      # IPv4-only hosts like github and Apple's APNs. Needs UDP egress to work.
+      "cloudflare-warp"
       "codex-app"
       "contexts"
       "cursor"
