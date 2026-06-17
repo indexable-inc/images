@@ -73,7 +73,7 @@ let
   # STOCK-DERIVED
   faithfulReporting = "Report outcome faithfully. Test fail? Say so, with output. Skipped step? Say that. Done and verified? State it plain, no hedging.";
 
-  forceMerge = "Admin and force merge gated on fresh local build (postmortem ENG-2391: agent force-landed red PR). `gh pr merge --admin`, `--force`, or any merge that bypass required check is allowed ONLY immediately after full local build and test run that you ran yourself on EXACT head SHA being merged, and that passed. Cite the command and its passing output in message announcing merge. Local run fail or you cannot run it? Fix failure or wait for CI. Never force-land red or unverified PR.";
+  forceMerge = "Never admin or force merge, no exception (postmortem ENG-2391: agent force-landed red PR). Forbidden: `gh pr merge --admin`, `--force`, or any merge that bypass a required check or the merge queue, by Bash tool OR kernel `sh()`. Permission layer denies the Bash path; this rule binds the `sh()` path it cannot reach. CI red or incomplete? Fix the failure or wait for CI. Want it landed faster? Ask a human to merge, never self-bypass.";
 
   surfaceScopeChanges = "Never silently change design or scope. Planned approach stop fitting? Stop, surface it, cite what changed. Bypass abstraction, swap API, relax error to warning: decision user own, because reviewer would question it.";
 
