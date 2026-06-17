@@ -232,7 +232,9 @@ def test_cli_end_to_end_writes_both_slices(tmp_path: Path, capsys: pytest.Captur
     base = tmp_path / "out" / "corpus" / "host=h" / "user=u"
     facts_dir = base / "source=distilled_facts"
     sessions_dir = base / "source=session_outcomes"
-    assert corpus.validate_slice(facts_dir) == 1
+    # The lesson is scope=shared, so it is emitted to both the repo tier and the
+    # cross-repo global tier -> two distilled_facts rows.
+    assert corpus.validate_slice(facts_dir) == 2
     assert corpus.validate_slice(sessions_dir, source=corpus.SESSIONS_SOURCE) == 2
 
     sessions_frame = pl.read_parquet(sessions_dir / "data.parquet")
@@ -246,9 +248,14 @@ def test_cli_end_to_end_writes_both_slices(tmp_path: Path, capsys: pytest.Captur
     assert metas["sess-bad"]["reason"] == "CI never recovered"
 
     facts_frame = pl.read_parquet(facts_dir / "data.parquet")
-    lesson_meta = json.loads(facts_frame["meta_json"][0])
-    assert lesson_meta["session_labels"] == "failure"
-    assert lesson_meta["failure_derived"] is True
+    metas = [json.loads(m) for m in facts_frame["meta_json"]]
+    by_tier = {m["tier"]: m for m in metas}
+    assert set(by_tier) == {"repo", "global"}  # shared lesson reaches both tiers
+    assert by_tier["repo"]["repo"] == "repo"
+    assert by_tier["global"]["project"] == corpus.GLOBAL_PROJECT
+    for m in metas:
+        assert m["session_labels"] == "failure"
+        assert m["failure_derived"] is True
 
     # Second run with nothing new: verdicts survive via state, slice intact.
     assert cli.run(args) == 0

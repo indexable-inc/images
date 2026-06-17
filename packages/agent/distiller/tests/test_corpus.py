@@ -49,6 +49,18 @@ def test_meta_json_carries_identity_and_filter_keys() -> None:
     assert row.external_id.startswith("distilled_facts:useru:home-u-repo:df-")
 
 
+def test_tier_meta_repo_vs_global() -> None:
+    item = make_item(scope="shared")
+    repo_row = corpus.item_row(item, "nox", "h", "u")
+    global_row = corpus.item_row(item, corpus.GLOBAL_PROJECT, "h", "u")
+    assert json.loads(repo_row.meta_json)["tier"] == "repo"
+    assert json.loads(repo_row.meta_json)["repo"] == "nox"
+    assert json.loads(global_row.meta_json)["tier"] == "global"
+    # distinct external_id so the repo and global copies coexist in one slice
+    assert repo_row.external_id != global_row.external_id
+    assert global_row.external_id == f"distilled_facts:u:{corpus.GLOBAL_PROJECT}:{item.id}"
+
+
 def test_corpus_hash_matches_rust_construction() -> None:
     # sha256 over sorted (id \0 hash \0) pairs, duplicates collapsed.
     pairs = [("b", "h2"), ("a", "h1"), ("b", "h2")]

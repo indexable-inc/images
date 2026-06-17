@@ -157,20 +157,28 @@ def run(args: argparse.Namespace) -> int:
             print(f"[{slug}] model found nothing worth keeping")
         keep_state(project, st)
 
-    item_rows = [
-        corpus.item_row(
-            item,
-            project,
-            args.host,
-            args.user,
-            session_labels={
-                sid: rec.label
-                for sid, rec in all_outcomes_by_project.get(project, {}).items()
-            },
-        )
-        for project, items in sorted(all_items_by_project.items())
-        for item in items
-    ]
+    # Per-repo rows plus a cross-repo tier: every ``scope=shared`` item is also
+    # emitted under the synthetic ``__global__`` project so it surfaces in any
+    # repo. The global copy has a distinct external_id (project differs), so both
+    # coexist; the digest/pull can target tier=repo, tier=global, or both.
+    item_rows: list[corpus.Row] = []
+    global_rows: list[corpus.Row] = []
+    for project, items in sorted(all_items_by_project.items()):
+        labels = {
+            sid: rec.label
+            for sid, rec in all_outcomes_by_project.get(project, {}).items()
+        }
+        for item in items:
+            item_rows.append(
+                corpus.item_row(item, project, args.host, args.user, session_labels=labels)
+            )
+            if item.scope == "shared":
+                global_rows.append(
+                    corpus.item_row(
+                        item, corpus.GLOBAL_PROJECT, args.host, args.user, session_labels=labels
+                    )
+                )
+    item_rows.extend(global_rows)
     session_rows = [
         corpus.session_row(sid, rec, project, args.host, args.user)
         for project, recs in sorted(all_outcomes_by_project.items())
