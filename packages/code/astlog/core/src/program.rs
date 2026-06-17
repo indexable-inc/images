@@ -418,14 +418,14 @@ fn check_negation_safety(rule: &Rule) -> Result<(), Error> {
             continue;
         };
         for arg in &neg.args {
-            if let Term::Var(var) = arg {
-                if !bound.contains(var.as_str()) {
-                    return UnsafeNegationSnafu {
-                        var: var.clone(),
-                        line: neg.line,
-                    }
-                    .fail();
+            if let Term::Var(var) = arg
+                && !bound.contains(var.as_str())
+            {
+                return UnsafeNegationSnafu {
+                    var: var.clone(),
+                    line: neg.line,
                 }
+                .fail();
             }
         }
     }
