@@ -278,6 +278,10 @@ def render_diff(stock: dict[str, Any], wrapped: dict[str, Any]) -> str:
     out.append(f"stock: {len(stock_tools)}  |  wrapped: {len(wrapped_tools)}")
     out.append(f"added by wrapper:   {', '.join(added) or '(none)'}")
     out.append(f"removed by wrapper: {', '.join(removed) or '(none)'}")
+    if any(t.startswith("mcp__") for t in added):
+        # MCP tools only appear if the baked servers actually connected; the exa
+        # server is HTTP to the internet, so an offline run under-reports them.
+        out.append("note: mcp__* tools depend on those servers connecting (exa needs network).")
     return "\n".join(out) + "\n"
 
 
@@ -335,7 +339,7 @@ def main() -> int:
     parser.add_argument(
         "--tools",
         action="store_true",
-        help="In text mode, also print tool names and descriptions.",
+        help="In text mode, also print tool names and descriptions (stock/wrapped modes).",
     )
     parsed = parser.parse_args()
 
