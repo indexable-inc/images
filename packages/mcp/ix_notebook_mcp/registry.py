@@ -196,7 +196,7 @@ MODULES: tuple[Module, ...] = (
         # pins these against the module's own constants so they cannot drift.
         credential=Credential(
             service="Beeper",
-            env=("BEEPER_ACCESS_TOKEN",),
+            env=("BEEPER_ACCESS_TOKEN", "BEEPER_API_TOKEN"),
             token_path="~/.config/beeper/token",  # noqa: S106 -- path to token file, not a hardcoded secret
             login="call `beeper.login(token)` in a cell",
             url="https://developers.beeper.com/desktop-api/auth",

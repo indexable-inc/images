@@ -21,8 +21,9 @@ install step.
 
 Each read call returns a polars DataFrame with a fixed schema so empty results
 stay typed. Credentials are per-user and never shared: the access token is read
-from the ``BEEPER_ACCESS_TOKEN`` environment variable, or from a user-only file
-at ``~/.config/beeper/token`` (written mode 0600 by :func:`login`). No token is
+from the ``BEEPER_ACCESS_TOKEN`` (or ``BEEPER_API_TOKEN``) environment variable,
+or from a user-only file at ``~/.config/beeper/token`` (written mode 0600 by
+:func:`login`). No token is
 baked into the repo. Mint one in Beeper Desktop under Settings -> Integrations
 ("Approved connections"). The API base URL can be overridden with
 ``BEEPER_DESKTOP_BASE_URL`` (e.g. a custom port or a tunneled remote desktop).
@@ -68,8 +69,10 @@ __version__ = "0.1.0"
 # access, keeping personal Beeper data out of synced room state.
 SHARED_ENV = "IX_MCP_SHARED"
 
-# Environment variables checked for an access token, in order.
-_TOKEN_ENV_VARS = ("BEEPER_ACCESS_TOKEN",)
+# Environment variables checked for an access token, in order. BEEPER_ACCESS_TOKEN
+# is the name the official Beeper CLI/SDK use; BEEPER_API_TOKEN is also accepted
+# as a common alias.
+_TOKEN_ENV_VARS = ("BEEPER_ACCESS_TOKEN", "BEEPER_API_TOKEN")
 
 # The per-user token file path (mode 0600).
 _TOKEN_FILE = pathlib.Path.home() / ".config" / "beeper" / "token"
@@ -222,8 +225,8 @@ def _base_url() -> str:
 def _token() -> str:
     """Return the access token, or raise BeeperError if none is configured.
 
-    Resolution order: ``BEEPER_ACCESS_TOKEN`` env, then ``~/.config/beeper/token``
-    (written by :func:`login`).
+    Resolution order: ``BEEPER_ACCESS_TOKEN`` env, ``BEEPER_API_TOKEN`` env, then
+    ``~/.config/beeper/token`` (written by :func:`login`).
     """
     for var in _TOKEN_ENV_VARS:
         val = os.environ.get(var, "").strip()
@@ -237,8 +240,8 @@ def _token() -> str:
         "No Beeper access token is configured for this session. "
         "Call `beeper.login(token)` with an access token minted in Beeper "
         "Desktop (Settings -> Integrations -> Approved connections), set the "
-        "BEEPER_ACCESS_TOKEN environment variable, or run `beeper.status()` to "
-        "check the current state."
+        "BEEPER_ACCESS_TOKEN (or BEEPER_API_TOKEN) environment variable, or run "
+        "`beeper.status()` to check the current state."
     )
 
 
@@ -260,7 +263,11 @@ async def _request(
     token = _token()
     url = f"{_base_url()}{path}"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        # trust_env=False: every request carries the user's bearer token to a
+        # local API, so never honor HTTP_PROXY/ALL_PROXY -- on a host with proxy
+        # env vars set, httpx would otherwise route the Authorization header to
+        # that proxy instead of keeping it on localhost.
+        async with httpx.AsyncClient(timeout=_TIMEOUT, trust_env=False) as client:
             resp = await client.request(
                 method,
                 url,
@@ -354,10 +361,13 @@ async def status() -> dict[str, Any]:
     except BeeperError:
         return {"configured": False, "base_url": base, "version": None}
     info: dict[str, Any] = resp.json()
+    # /v1/info nests the app version under `app.version`; fall back to a
+    # top-level `version` for older builds.
+    app: dict[str, Any] = info.get("app") or {}
     return {
         "configured": True,
         "base_url": base,
-        "version": info.get("version"),
+        "version": app.get("version") or info.get("version"),
     }
 
 
@@ -527,40 +537,52 @@ async def search(
     configured, Beeper Desktop is unreachable, or in a shared room.
     """
     _require_incognito()
-    params: dict[str, Any] = {"limit": limit}
+    base_params: dict[str, Any] = {}
     if query:
-        params["query"] = query
+        base_params["query"] = query
     if account_id:
-        params["accountIDs"] = [account_id]
+        base_params["accountIDs"] = [account_id]
     if chat_id:
-        params["chatIDs"] = [chat_id]
+        base_params["chatIDs"] = [chat_id]
     if sender:
-        params["sender"] = sender
+        base_params["sender"] = sender
     if date_after:
-        params["dateAfter"] = date_after
+        base_params["dateAfter"] = date_after
     if date_before:
-        params["dateBefore"] = date_before
+        base_params["dateBefore"] = date_before
 
-    resp = await _request("GET", "/v1/messages/search", params=params)
-    data: dict[str, Any] = resp.json()
-    chat_map: dict[str, Any] = data.get("chats") or {}
-    rows: list[dict[str, Any]] = []
-    for msg in data.get("items") or []:
-        cid = msg.get("chatID", "") or ""
-        chat_info: dict[str, Any] = chat_map.get(cid) or {}
-        rows.append(
-            {
-                "chat_id": cid,
-                "chat_title": chat_info.get("title", "") or "",
-                "sender_id": msg.get("senderID", "") or "",
-                "is_sender": bool(msg.get("isSender")),
-                "timestamp": msg.get("timestamp", "") or "",
-                "type": msg.get("type", "") or "",
-                "text": msg.get("text", "") or "",
-            }
-        )
-        if len(rows) >= limit:
+    # /v1/messages/search returns one cursor-paginated page per call (a single
+    # page is capped well below large limits), so page oldest-ward until we have
+    # `limit` matches, accumulating the chatID->chat map across pages for titles.
+    items: list[dict[str, Any]] = []
+    chat_map: dict[str, Any] = {}
+    cursor: str | None = None
+    while len(items) < limit:
+        params = dict(base_params)
+        if cursor:
+            params["cursor"] = cursor
+            params["direction"] = "before"
+        resp = await _request("GET", "/v1/messages/search", params=params)
+        data: dict[str, Any] = resp.json()
+        chat_map.update(data.get("chats") or {})
+        page: list[dict[str, Any]] = data.get("items") or []
+        items.extend(page)
+        cursor = data.get("oldestCursor")
+        if not data.get("hasMore") or not cursor or not page:
             break
+
+    rows: list[dict[str, Any]] = [
+        {
+            "chat_id": msg.get("chatID", "") or "",
+            "chat_title": (chat_map.get(msg.get("chatID", "") or "") or {}).get("title", "") or "",
+            "sender_id": msg.get("senderID", "") or "",
+            "is_sender": bool(msg.get("isSender")),
+            "timestamp": msg.get("timestamp", "") or "",
+            "type": msg.get("type", "") or "",
+            "text": msg.get("text", "") or "",
+        }
+        for msg in items[:limit]
+    ]
     return _frame(rows, _SEARCH_SCHEMA)
 
 
