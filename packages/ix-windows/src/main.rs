@@ -1,4 +1,4 @@
-//! `ix-windows`: open one borderless native webview window per live MCP
+//! `ix-windows`: open one floating, blurred overlay webview window per live MCP
 //! resource.
 //!
 //! A thin wrapper around [`ix_windows::WindowManager`]. It subscribes to the
@@ -14,11 +14,11 @@ use std::time::Duration;
 
 use clap::Parser;
 use dashboard_core::{ProducerEvent, discovery_dir, subscribe};
-use ix_windows::WindowManager;
+use ix_windows::{UserEvent, WindowManager};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 
-/// Render live MCP resources as borderless webview windows.
+/// Render live MCP resources as floating, blurred overlay webview windows.
 #[derive(Parser)]
 #[command(name = "ix-windows", version, about)]
 struct Cli {
@@ -39,13 +39,15 @@ fn main() {
     let dir = cli.dir.unwrap_or_else(discovery_dir);
     let rescan = Duration::from_millis(cli.rescan_ms);
 
-    // The user-event loop carries `ProducerEvent`s from the subscriber thread.
-    let event_loop = EventLoopBuilder::<ProducerEvent>::with_user_event().build();
+    // The loop carries `UserEvent`s: producer-stream events from the subscriber
+    // thread, plus resize reports posted by each window's measuring script.
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
     // Windows must be created and driven on the main thread, but the subscriber
     // is async. Run it on its own tokio runtime in a side thread and forward
-    // every event into the event loop via the proxy.
+    // every producer event into the event loop via the proxy.
+    let producer_proxy = proxy.clone();
     thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -54,24 +56,31 @@ fn main() {
         runtime.block_on(async move {
             let mut events = subscribe(dir, rescan, &tokio::runtime::Handle::current());
             while let Some(event) = events.recv().await {
-                if proxy.send_event(event).is_err() {
+                if producer_proxy.send_event(UserEvent::Producer(event)).is_err() {
                     break; // the event loop has exited; stop forwarding.
                 }
             }
         });
     });
 
-    let mut manager = WindowManager::new();
+    let mut manager = WindowManager::new(proxy);
     event_loop.run(move |event, target, control_flow| {
         // Idle until the next OS or producer event; this is a reactive viewer,
         // not an animation loop.
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(ProducerEvent::Snapshot(snapshot)) => {
+            Event::UserEvent(UserEvent::Producer(ProducerEvent::Snapshot(snapshot))) => {
                 manager.apply_snapshot(target, &snapshot);
             }
-            Event::UserEvent(ProducerEvent::Gone { producer }) => {
+            Event::UserEvent(UserEvent::Producer(ProducerEvent::Gone { producer })) => {
                 manager.producer_gone(&producer);
+            }
+            Event::UserEvent(UserEvent::Resize {
+                window,
+                width,
+                height,
+            }) => {
+                manager.resize(window, width, height);
             }
             Event::WindowEvent {
                 window_id,

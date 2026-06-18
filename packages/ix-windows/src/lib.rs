@@ -1,14 +1,23 @@
 //! The reusable engine behind `ix-windows`: map a stream of dashboard
-//! [`ProducerSnapshot`]s onto one borderless webview window per live MCP
-//! resource.
+//! [`ProducerSnapshot`]s onto one floating, blurred **overlay** webview window
+//! per live MCP resource.
 //!
 //! A [`WindowManager`] owns the open windows and reconciles them against each
 //! snapshot: a new resource opens a window, a changed one re-renders in place
 //! (no reload, so scroll and focus survive), a vanished one closes. It is
-//! deliberately decoupled from the event source and the user-event type so an
-//! embedder can drive it from its own `tao` event loop — the binary
-//! ([`crate`]'s `main`) is a thin wrapper that feeds it
-//! [`dashboard_core::subscribe`] events.
+//! deliberately decoupled from the event source for the window-creation target,
+//! but it emits [`UserEvent::Resize`] back into the loop (so it needs the loop's
+//! proxy), which fixes the loop's user-event type to [`UserEvent`].
+//!
+//! ## Overlay, not tiles
+//!
+//! Each window is a chrome-less, always-on-top card floating above the desktop:
+//! a transparent `wry` webview painted on top of a native `NSVisualEffectView`
+//! that blurs whatever is behind the window. There is no tiling and no layout
+//! manager. Instead the window auto-sizes to its content: a `ResizeObserver` in
+//! the page posts the rendered panel's pixel size over `wry`'s IPC channel, and
+//! [`WindowManager::resize`] grows or shrinks the OS window to match (clamped to
+//! the monitor), so a window is exactly as big as the HTML it holds.
 //!
 //! ## What counts as a resource
 //!
@@ -20,9 +29,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use dashboard_core::{Pane, ProducerSnapshot, View};
+use dashboard_core::{Pane, ProducerEvent, ProducerSnapshot, View};
 use tao::dpi::{LogicalPosition, LogicalSize};
-use tao::event_loop::EventLoopWindowTarget;
+use tao::event_loop::{EventLoopProxy, EventLoopWindowTarget};
 use tao::window::{Window, WindowId};
 use wry::{WebView, WebViewBuilder};
 
@@ -30,24 +39,48 @@ use wry::{WebView, WebViewBuilder};
 /// `pane_bridge.py` (`f"resource/{res['id']}"`).
 const RESOURCE_PREFIX: &str = "resource/";
 
+/// Logical size a freshly opened window starts at, before its content reports a
+/// natural size and [`WindowManager::resize`] snaps it to fit.
+const INITIAL_SIZE: (f64, f64) = (480.0, 300.0);
+
+/// Events the binary's `tao` event loop carries. The subscriber thread feeds
+/// [`UserEvent::Producer`]; the page's content-measuring script feeds
+/// [`UserEvent::Resize`] back through `wry`'s IPC handler and the loop proxy.
+#[derive(Debug, Clone)]
+pub enum UserEvent {
+    /// A producer-stream event (a new/updated snapshot or a gone producer).
+    Producer(ProducerEvent),
+    /// A window's content reported its natural pixel size; fit the OS window to
+    /// it. `window` identifies the source webview's window.
+    Resize {
+        window: WindowId,
+        width: f64,
+        height: f64,
+    },
+}
+
 /// A pane's global identity across producers: `(producer id, pane id)`. A pane id
 /// is unique only within its producer, so the producer scopes it.
 type PaneKey = (String, String);
 
-/// One open resource window: its `tao` window, its `wry` webview, and the last
-/// content rendered into it (so an unchanged snapshot is a no-op).
+/// One open resource window: its `tao` window, its `wry` webview, the last
+/// content rendered into it (so an unchanged snapshot is a no-op), and the last
+/// logical size applied (so a repeated resize report is a no-op).
 struct OpenWindow {
     // Held to keep the OS window alive; dropping `OpenWindow` closes the window.
     window: Window,
     webview: WebView,
     last_html: String,
     last_title: String,
+    last_size: (f64, f64),
 }
 
 impl OpenWindow {
     /// Re-render in place if the resource's html or title changed. The body swap
     /// targets `#ix-root` so the document, its scroll position, and focus survive
-    /// an update — a full reload would flicker and reset them.
+    /// an update — a full reload would flicker and reset them. The page's
+    /// `ResizeObserver` notices the resulting size change and posts a new size,
+    /// which drives [`WindowManager::resize`].
     fn refresh(&mut self, pane: &Pane, html: &str) {
         if self.last_html != html {
             // `serde_json::to_string` emits a valid JS string literal (quoted and
@@ -64,12 +97,14 @@ impl OpenWindow {
     }
 }
 
-/// Owns the resource windows and reconciles them against producer snapshots.
-#[derive(Default)]
+/// Owns the resource overlay windows and reconciles them against producer
+/// snapshots. Emits [`UserEvent::Resize`] through the loop proxy, so it is tied
+/// to a `tao` loop whose user-event type is [`UserEvent`].
 pub struct WindowManager {
+    proxy: EventLoopProxy<UserEvent>,
     windows: HashMap<PaneKey, OpenWindow>,
-    /// Reverse index so an OS close event (the user closing a window) maps back
-    /// to the pane it represented.
+    /// Reverse index so an OS event (a close, a resize report) maps back to the
+    /// pane it represents.
     by_window: HashMap<WindowId, PaneKey>,
     /// Resources the user explicitly closed while still live. Without this, the
     /// next snapshot (any resource content change republishes one) would find
@@ -77,25 +112,30 @@ pub struct WindowManager {
     /// resource actually vanishes or its producer disconnects, so a genuine
     /// re-registration opens a fresh window.
     dismissed: HashSet<PaneKey>,
-    /// How many windows have been opened, used to cascade each new one so they
-    /// do not stack exactly on top of each other on a plain desktop. A tiling
-    /// WM ignores the position hint and lays them out itself.
+    /// How many windows have been opened, used to cascade each new overlay so
+    /// they do not stack exactly on top of each other.
     opened: u32,
 }
 
 impl WindowManager {
-    /// An empty manager with no windows.
+    /// An empty manager that emits resize events through `proxy`.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
+        Self {
+            proxy,
+            windows: HashMap::new(),
+            by_window: HashMap::new(),
+            dismissed: HashSet::new(),
+            opened: 0,
+        }
     }
 
     /// Reconcile this producer's resource windows against its latest snapshot:
     /// open new resources, refresh changed ones, and close those that vanished.
     ///
     /// `target` is the running event loop, needed to create windows; it is
-    /// generic over the loop's user-event type so the engine stays independent of
-    /// the binary's event enum.
+    /// generic over the loop's user-event type so the window-creation path stays
+    /// independent of the binary's event enum.
     pub fn apply_snapshot<T: 'static>(
         &mut self,
         target: &EventLoopWindowTarget<T>,
@@ -163,14 +203,46 @@ impl WindowManager {
         true
     }
 
+    /// Fit the overlay window to the natural pixel size its content reported.
+    /// Clamped to the window's monitor work area so an oversized resource grows
+    /// scrollbars rather than spilling off-screen.
+    ///
+    /// The resize/reflow loop is broken primarily on the page side: `MEASURE_JS`
+    /// only posts when the measured panel size actually changes, and the panel's
+    /// intrinsic (`inline-block` / `max-width`) size does not depend on the
+    /// window width. The 1px guard here only suppresses sub-pixel jitter and a
+    /// repeated clamped-to-max report.
+    pub fn resize(&mut self, window: WindowId, width: f64, height: f64) {
+        let Some(key) = self.by_window.get(&window) else {
+            return;
+        };
+        let Some(open) = self.windows.get_mut(key) else {
+            return;
+        };
+        let (max_w, max_h) = open.window.current_monitor().map_or(
+            (1600.0, 1000.0),
+            |monitor| {
+                let size = monitor.size().to_logical::<f64>(monitor.scale_factor());
+                (size.width * 0.92, size.height * 0.92)
+            },
+        );
+        let w = width.clamp(120.0, max_w);
+        let h = height.clamp(80.0, max_h);
+        if (w - open.last_size.0).abs() < 1.0 && (h - open.last_size.1).abs() < 1.0 {
+            return;
+        }
+        open.last_size = (w, h);
+        open.window.set_inner_size(LogicalSize::new(w, h));
+    }
+
     /// Whether any resource windows are currently open.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.windows.is_empty()
     }
 
-    /// Create a chrome-less, square, transparent webview window for a resource
-    /// pane.
+    /// Create a chrome-less, transparent, always-on-top overlay window for a
+    /// resource pane, with a native blur behind its transparent webview.
     fn open<T: 'static>(
         &mut self,
         target: &EventLoopWindowTarget<T>,
@@ -178,25 +250,19 @@ impl WindowManager {
         pane: &Pane,
         html: &str,
     ) {
-        // Cascade each window so they do not perfectly overlap on a plain
-        // desktop; a tiling WM ignores the position and tiles them itself.
-        let step = f64::from(self.opened % 8) * 28.0;
+        // Cascade each overlay so several do not perfectly overlap.
+        let step = f64::from(self.opened % 8) * 32.0;
         self.opened = self.opened.wrapping_add(1);
-        // Borderless, exactly like ghostty's `window-decoration = none`: the macOS
-        // window server only rounds *titled* windows, so dropping decorations gives
-        // square corners for free, matching ghostty under a tiling WM.
-        //
-        // A borderless window has no fullscreen button, so aerospace's dialog
-        // heuristic floats it by default (the same reason terminals like kitty are
-        // special-cased, and the reason ghostty's bundle id is hardcoded to tile).
-        // ix-windows has no bundle id, so tiling relies on an `on-window-detected`
-        // rule matching the app name; see this crate's README / the aerospace config.
+        // Borderless + transparent + always-on-top: a floating overlay card. The
+        // macOS window server only rounds *titled* windows, so dropping
+        // decorations leaves the corners to the blur view's own rounded layer.
         let builder = tao::window::WindowBuilder::new()
             .with_title(&pane.title)
             .with_decorations(false)
             .with_transparent(true)
-            .with_inner_size(LogicalSize::new(720.0, 480.0))
-            .with_position(LogicalPosition::new(96.0 + step, 96.0 + step));
+            .with_always_on_top(true)
+            .with_inner_size(LogicalSize::new(INITIAL_SIZE.0, INITIAL_SIZE.1))
+            .with_position(LogicalPosition::new(64.0 + step, 64.0 + step));
         let window = match builder.build(target) {
             Ok(window) => window,
             Err(error) => {
@@ -205,8 +271,21 @@ impl WindowManager {
             }
         };
         let id = window.id();
+
+        // The page measures its content and posts `"<w>x<h>"`; forward that as a
+        // resize event tagged with this window so the loop can fit it.
+        let proxy = self.proxy.clone();
         let webview = match WebViewBuilder::new()
             .with_transparent(true)
+            .with_ipc_handler(move |request| {
+                if let Some((w, h)) = parse_size(request.body().as_str()) {
+                    let _ = proxy.send_event(UserEvent::Resize {
+                        window: id,
+                        width: w,
+                        height: h,
+                    });
+                }
+            })
             .with_html(shell(&pane.title, html))
             .build(&window)
         {
@@ -217,10 +296,13 @@ impl WindowManager {
             }
         };
 
-        // Let WebKit render at the display's native rate (120Hz on ProMotion)
-        // rather than its default ~60fps cap.
+        // macOS native tuning: a blur behind the transparent webview, and the
+        // 120Hz render-rate uncap. Both no-ops on an OS without the selectors.
         #[cfg(target_os = "macos")]
-        enable_high_refresh(&webview);
+        {
+            install_blur(&window);
+            enable_high_refresh(&webview);
+        }
 
         self.by_window.insert(id, key.clone());
         self.windows.insert(
@@ -230,6 +312,7 @@ impl WindowManager {
                 webview,
                 last_html: html.to_owned(),
                 last_title: pane.title.clone(),
+                last_size: INITIAL_SIZE,
             },
         );
     }
@@ -243,15 +326,33 @@ impl WindowManager {
     }
 }
 
-/// The chrome-less, ghostty-flavored document a resource renders inside: a dark
-/// monospace shell whose `#ix-root` holds the resource's own HTML, swapped in
-/// place on update.
+/// Parse a `"<width>x<height>"` IPC body (the page's measured panel size) into a
+/// pair of logical pixels. Returns `None` on anything malformed.
+///
+/// The body is attacker-controlled (any resource's verbatim HTML can call
+/// `window.ipc.postMessage`), so non-finite or non-positive values are rejected
+/// here rather than reaching [`WindowManager::resize`]: `f64::clamp` *panics* on
+/// `NaN`, which would abort the whole event loop and kill every overlay.
+fn parse_size(body: &str) -> Option<(f64, f64)> {
+    let (w, h) = body.trim().split_once('x')?;
+    let w: f64 = w.trim().parse().ok()?;
+    let h: f64 = h.trim().parse().ok()?;
+    if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    Some((w, h))
+}
+
+/// The chrome-less document a resource renders inside: a transparent shell whose
+/// `#ix-root` panel holds the resource's own HTML (swapped in place on update)
+/// and shrink-wraps it, plus a measuring script that posts the panel's pixel
+/// size over `wry`'s IPC channel so the OS window can fit it.
 fn shell(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <title>{title}</title><style>{STYLE}</style></head>\
-<body><div id=\"ix-root\">{body}</div></body></html>",
+<body><div id=\"ix-root\">{body}</div><script>{MEASURE_JS}</script></body></html>",
         title = escape_text(title),
     )
 }
@@ -265,22 +366,126 @@ fn escape_text(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Ghostty-flavored shell styling: a dark background, system monospace, and a
-/// themed scrollbar. Catppuccin-ish tones to match the dashboard. The root holds
-/// the resource content full-bleed (no padding) so a window is just the content.
+/// Overlay shell styling: the document is fully transparent so the native blur
+/// shows through; the content lives in `#ix-root`, an inline-block panel that
+/// shrink-wraps its content (so the window can be sized to fit) with a faint
+/// tint for legibility over the blur and rounded corners matching the blur layer.
 const STYLE: &str = "\
 :root { color-scheme: dark; }
-html, body { margin: 0; height: 100%; }
+html, body { margin: 0; padding: 0; background: transparent; }
 body {
-  background: #1e1e2e;
   color: #cdd6f4;
   font: 14px/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
 }
-#ix-root { padding: 0; }
+#ix-root {
+  display: inline-block;
+  box-sizing: border-box;
+  min-width: 120px;
+  max-width: 1200px;
+  padding: 16px 18px;
+  background: rgba(30, 30, 46, 0.30);
+  border-radius: 14px;
+}
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: #45475a; border-radius: 5px; }
+::-webkit-scrollbar-thumb { background: rgba(137, 140, 160, 0.5); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ";
+
+/// Measure the content panel and post its pixel size back to Rust whenever it
+/// changes. `offsetWidth`/`offsetHeight` include the panel padding, so the OS
+/// window ends up exactly as big as the rendered card. A `ResizeObserver` covers
+/// both content swaps (the in-place `#ix-root` update) and late reflows (images,
+/// fonts); reports are coalesced to one per frame and deduped, so a stable panel
+/// posts once.
+const MEASURE_JS: &str = "\
+(function () {
+  var root = document.getElementById('ix-root');
+  if (!root) return;
+  var lastW = -1, lastH = -1, pending = false;
+  function report() {
+    pending = false;
+    var w = Math.ceil(root.offsetWidth);
+    var h = Math.ceil(root.offsetHeight);
+    if (w === lastW && h === lastH) return;
+    lastW = w; lastH = h;
+    if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(w + 'x' + h);
+  }
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(report);
+  }
+  new ResizeObserver(schedule).observe(root);
+  window.addEventListener('load', schedule);
+  schedule();
+})();
+";
+
+/// Put a native `NSVisualEffectView` behind the (transparent) webview so the
+/// window blurs whatever is behind it, and give the overlay a rounded, shadowed,
+/// all-spaces-floating look.
+///
+/// Best-effort and main-thread-only: bails if the main-thread marker, the
+/// `NSWindow` pointer, or its content view are unavailable.
+#[cfg(target_os = "macos")]
+fn install_blur(window: &Window) {
+    use objc2::MainThreadMarker;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{
+        NSAutoresizingMaskOptions, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+        NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowCollectionBehavior,
+        NSWindowOrderingMode,
+    };
+    use tao::platform::macos::WindowExtMacOS;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    // SAFETY: on the main thread `tao` hands back a live, retained `NSWindow`
+    // pointer; `Retained::retain` balances the +1 when this scope ends.
+    let ns_window = unsafe { Retained::retain(window.ns_window().cast::<NSWindow>()) };
+    let Some(ns_window): Option<Retained<NSWindow>> = ns_window else {
+        return;
+    };
+
+    // SAFETY: ordinary Objective-C message sends on the main thread to freshly
+    // created / live AppKit objects of the expected classes.
+    unsafe {
+        let Some(content) = ns_window.contentView() else {
+            return;
+        };
+        let frame = content.bounds();
+        let effect = NSVisualEffectView::initWithFrame(mtm.alloc(), frame);
+        effect.setMaterial(NSVisualEffectMaterial::HUDWindow);
+        effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        effect.setState(NSVisualEffectState::Active);
+        // The window opens at `INITIAL_SIZE` and then auto-grows via
+        // `set_inner_size`. A flexible width+height mask keeps the blur filling
+        // the content view as it resizes: an `NSWindow` always resizes its
+        // content view to the content rect, and `contentView.autoresizesSubviews`
+        // defaults on, so this tracks every resize with no explicit handler -
+        // the same mechanism that keeps wry's own webview filling the window.
+        effect.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        effect.setWantsLayer(true);
+        if let Some(layer) = effect.layer() {
+            layer.setCornerRadius(14.0);
+            layer.setMasksToBounds(true);
+        }
+        // Place the blur beneath the webview (added as the content view's first
+        // subview), so the rendered HTML paints on top of it.
+        content.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, None);
+
+        ns_window.setHasShadow(true);
+        ns_window.invalidateShadow();
+        // A true overlay: float over other spaces and over fullscreen apps.
+        ns_window.setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary,
+        );
+    }
+}
 
 /// Let the webview render at the display's native refresh rate (120Hz on
 /// `ProMotion`) instead of `WebKit`'s default ~60fps cap, by disabling the
@@ -334,7 +539,7 @@ fn enable_high_refresh(webview: &WebView) {
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_text, shell};
+    use super::{escape_text, parse_size, shell};
 
     #[test]
     fn shell_wraps_body_in_ix_root_and_escapes_title() {
@@ -346,5 +551,23 @@ mod tests {
     #[test]
     fn escape_text_covers_markup_metachars() {
         assert_eq!(escape_text("<&>"), "&lt;&amp;&gt;");
+    }
+
+    #[test]
+    fn parse_size_reads_width_x_height() {
+        assert_eq!(parse_size("640x480"), Some((640.0, 480.0)));
+        assert_eq!(parse_size(" 12.5 x 7 "), Some((12.5, 7.0)));
+        assert_eq!(parse_size("nope"), None);
+        assert_eq!(parse_size("640x"), None);
+    }
+
+    #[test]
+    fn parse_size_rejects_non_finite_and_non_positive() {
+        // These reach the parser straight from attacker-controlled page script.
+        assert_eq!(parse_size("NaNx100"), None);
+        assert_eq!(parse_size("infx100"), None);
+        assert_eq!(parse_size("1e400x100"), None); // overflows to +inf
+        assert_eq!(parse_size("-5x100"), None);
+        assert_eq!(parse_size("0x0"), None);
     }
 }

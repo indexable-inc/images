@@ -50,7 +50,7 @@ From-source documentation for the packages in the `index` repo (a shared, open-s
 | [ix-dev-diagnose](ix-dev-diagnose/overview.md) | `packages/ix-dev-diagnose` probes `https://ix.dev/` (or any HTTPS URL) from the caller's network path and writes a single JSON diagnostic capturing every layer of the request: system DNS... |
 | [ix-fleet](ix-fleet/overview.md) | `packages/ix-fleet` renders and executes declarative **fleet plans**: a single JSON document describes a set of remote ix VMs (nodes) and their images, NixOS switch targets, east-west gro... |
 | [ix-sdk-python](ix-sdk-python/overview.md) | `packages/ix-sdk-python` is the Nix package that makes the precompiled Python SDK bindings available in-repo as `pkgs.ix-sdk-python` / `nix build .#ix-sdk-python`. |
-| [ix-windows](ix-windows/overview.md) | `packages/ix-windows` renders each live MCP resource as its own borderless, square, ghostty-styled native webview window. |
+| [ix-windows](ix-windows/overview.md) | `packages/ix-windows` renders each live MCP resource as its own floating, blurred overlay webview window that auto-sizes to its content. |
 | [kitty](kitty/overview.md) | `packages/kitty` is an encoder for the kitty terminal graphics protocol: it turns image bytes into the `APC _G ... |
 | [lake](lake/overview.md) | `packages/lake` (member `lake/iceberg`, crate `lake-iceberg`) is the Iceberg corpus lake: the durable, replayable log under the multi-source search corpus (issue #752), succeeding the ful... |
 | [launchk](launchk/overview.md) | `packages/launchk` builds launchk, a cursive (Rust TUI) tool for observing launchd agents and daemons, from source. |

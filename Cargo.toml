@@ -204,6 +204,7 @@ nix = "0.31"
 nix-web-monitor-parser = { path = "packages/nix/nix-web-monitor/parser" }
 numpy = "0.28"
 objc2 = "0.6"
+objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 objc2-web-kit = "0.3"
 object_store = { version = "0.13", features = ["aws"] }

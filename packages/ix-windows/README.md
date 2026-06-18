@@ -1,7 +1,7 @@
 # ix-windows
 
-Render each live MCP resource as its own borderless, square, ghostty-styled
-native webview window.
+Render each live MCP resource as its own floating, blurred **overlay** webview
+window that auto-sizes to its content.
 
 `ix-windows` is a standalone consumer of the dashboard producer stream. The MCP
 already publishes every resource onto the producer sockets as an `html` pane
@@ -14,27 +14,25 @@ nix run .#ix-windows            # watch the default discovery dir
 nix run .#ix-windows -- --dir /tmp/ixw
 ```
 
+## Overlay, not tiles
+
+Each window is a chrome-less, always-on-top card floating above the desktop. No
+tiling, no layout manager.
+
+- **Blur behind.** The `wry` webview is transparent and is painted on top of a
+  native `NSVisualEffectView` (behind-window blur), so the overlay frosts
+  whatever is behind it. The content lives in a faintly tinted, rounded `#ix-root`
+  panel for legibility; the blur layer is rounded and shadowed to match.
+- **Auto-size to content.** There is no fixed window size. A `ResizeObserver` in
+  the page measures the rendered panel and posts its pixel size over `wry`'s IPC
+  channel; the OS window is grown or shrunk to fit (clamped to the monitor work
+  area), so a window is exactly as big as the HTML it holds and expands as the
+  content grows.
+- **Floating across spaces.** The window is always-on-top and joins all spaces /
+  floats over fullscreen apps (`NSWindowCollectionBehavior`).
+
 ## macOS
 
-- **Square corners.** Windows are borderless (`with_decorations(false)`), exactly
-  like ghostty's `window-decoration = none`. The macOS window server only rounds
-  *titled* windows, so dropping decorations gives square corners for free.
 - **120Hz.** WebKit's private experimental flag
   `PreferPageRenderingUpdatesNear60FPSEnabled` is disabled so the webview renders
   at the display's full refresh rate (ProMotion).
-
-### Tiling under aerospace
-
-A borderless window has no fullscreen button, so aerospace's dialog heuristic
-floats it by default. This is the same reason terminals like `kitty` and
-`alacritty` are special-cased in aerospace, and the reason `ghostty`'s bundle id
-is hardcoded to tile. `ix-windows` is a bare binary with no bundle id, so tiling
-relies on an `on-window-detected` rule matching the app name:
-
-```toml
-[[on-window-detected]]
-if.app-name-regex-substring = 'ix-windows'
-run = 'layout tiling'
-```
-
-yabai users want the equivalent `yabai -m rule --add app='^ix-windows$' manage=on`.

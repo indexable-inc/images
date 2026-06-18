@@ -24,11 +24,12 @@ tao.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "net", "io-util", "time"] }
 wry.workspace = true
 
-# Native macOS window tuning via objc2: WebKit's private 120Hz experimental-
-# feature API and the `canBecomeKey`/`canBecomeMain` overrides that let a
-# borderless window tile under aerospace. Versions tracked to wry's own objc2
+# Native macOS overlay styling via objc2: the `NSVisualEffectView` blur behind
+# the transparent webview (objc2-app-kit) and WebKit's private 120Hz
+# experimental-feature API (objc2-web-kit). Versions tracked to wry's own objc2
 # graph.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }
 objc2-foundation = { workspace = true }
 objc2-web-kit = { workspace = true }
