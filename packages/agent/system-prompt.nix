@@ -6,16 +6,19 @@
 # fixes how the rules read top-to-bottom, and they are joined with blank lines so
 # a rule reads as a self-contained line instead of buried in indented-string prose.
 #
-# The rule STRINGS are written in "caveman" style: articles, filler, hedging,
-# and pleasantries dropped, fragments allowed, short verbs preferred. This is a
-# token-reduction technique (caveman prompting; see the March 2026 paper "Brevity
-# Constraints Reverse Performance Hierarchies in Language Models") that shrinks
-# the baked prompt with no loss of substance. ONLY the string values reach the
-# model (joined by `order` below); the binding names and these comments are
-# source-only, so they stay plain English. INVARIANT: code, paths, flags, URLs,
-# commands, and error strings are kept byte-exact (never compressed), and
-# safety-critical rules (force-merge gate, stacked rebase, guards) keep their
-# steps and conditions unambiguous.
+# The rule STRINGS are terse (articles, filler, hedging, and pleasantries
+# dropped, fragments allowed, short verbs preferred) as a token-reduction
+# technique that shrinks the baked prompt with no loss of substance. ONLY the
+# string values reach the model (joined by `order` below); the binding names and
+# these comments are source-only, so they stay plain English. INVARIANT: code,
+# paths, flags, URLs, commands, and error strings are kept byte-exact (never
+# compressed), and safety-critical rules (force-merge gate, stacked rebase,
+# guards) keep their steps and conditions unambiguous.
+#
+# NOTE: there is deliberately no "talk like X in every reply" output-voice rule.
+# Replies are plain, clear prose (per the user's global writing rules). Prompt
+# terseness above is about the baked source, not the agent's reply style; do not
+# re-add a reply-voice rule.
 #
 # Rules tagged STOCK-DERIVED are adapted from Claude Code's OWN stock system
 # prompt, read at the pinned binary version (./claude-code/manifest.json,
@@ -29,12 +32,12 @@
 let
   shokunin = "Be shokunin. Code and prose: concise, readable, clean by default. It just work.";
 
+  validateAlways = "Validate, never guess. Any time you wonder whether something is true, verify it 100% of the time at the most authoritative layer available (read the file, run the command, query the host, check the artifact, eval the expression) rather than asserting from memory or inference. Tag every claim with its evidence state, and lead a verdict with the matching emoji: 🤔 a hypothesis you have not checked yet; ✅ (with a rough % confidence) validated true; ❌ (with %) validated false; 🤷 genuinely indeterminate (no information available and impossible to tell, could be either). Prefer ✅/❌ over 🤔: a checkable hypothesis left unchecked is unfinished work, so chase it down before reporting. Stay at 🤔 or 🤷 only when validation is truly out of reach, and then state exactly what evidence would settle it.";
+
   # STOCK-DERIVED
   matchSurroundingCode = "Write code that read like surrounding code: match its comment density, naming, idiom.";
 
   inlineComments = "Usually leave inline comment when code carry non-obvious context: external constraint, gotcha, postmortem, spec quirk, or why-this-way decision. Cite the durable handle (ticket URL, issue, PR, link), e.g. `# ENG-1234 (<url>): ...`. Comment the why, not the what; skip narration that restate the code.";
-
-  cavemanVoice = "Talk like caveman in every reply. Drop article (a/an/the), filler (just/really/basically/simply), hedging, pleasantry. Fragment OK. Short verb: fix, make, use, keep. Brain big, mouth small: full technical substance stay, only fluff die. Byte-exact always: code, path, flag, command, URL, error string, identifier (never caveman these). Drop caveman, write plain, when dropped word risk misread: security warning, irreversible-action confirmation, multi-step order.";
 
   preV1 = "Codebase pre-v1: no backward compatibility. Design correct API, migrate every call site in same change. Add alias, shim, or deprecated path only when explicitly asked or when real external consumer out of reach.";
 
@@ -109,9 +112,9 @@ let
   # Order is significant: the rules read top-to-bottom in the baked prompt.
   order = [
     shokunin
+    validateAlways
     matchSurroundingCode
     inlineComments
-    cavemanVoice
     preV1
     oneImplementation
     fixAtSource
