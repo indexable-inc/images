@@ -18,7 +18,7 @@ Subcommands (`cli.py:49-81`):
 | --- | --- |
 | `serve` | run the MCP server (default command, `cli.py:84`). `--http [ADDR]` serves streamable HTTP instead of stdio; `--session FILE` makes the store a persistent notebook; `--workdir DIR` sets the kernel cwd. |
 | `notebook [FILE]` | the engine alone (kernel + dashboard + optional session file, no MCP transport); `transport="none"` (`cli.py:294`). The same engine the MCP server is one client of. |
-| `dashboard` | print and open the running server's dashboard URL, read from `runtime_dir()/dashboard-url` (`cli.py:546`). |
+| `dashboard` | open the one shared dashboard UI, starting it if needed (`_dashboard`). Reuses a running hub recorded in `runtime_dir()/hub.json` (`config.live_hub`, port-probed and pid-checked) or spawns one detached on a stable port (8080, `IX_DASH_HUB_PORT`); `--no-open` prints the URL without opening a browser. |
 | `requirements` | report each external credential as present (and from where) or missing (and the remedy); exits non-zero if any is missing (`cli.py:89`). See [requirements](#credentials-requirements). |
 | `eval EXPR` / `exec SRC` | run one expression/statements on a throwaway kernel via `jupyter_client.start_new_kernel` (`cli.py:557`); not the shared kernel. |
 

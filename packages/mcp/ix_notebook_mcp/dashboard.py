@@ -8,19 +8,44 @@ embedders poll (the room server reads ``/api/snapshot``; a peer's
 
 The human-facing UI is no longer served here: the MCP publishes its runs,
 resources, and live namespace as Loro panes to the shared ``dashboard`` hub
-(see :mod:`ix_notebook_mcp.pane_bridge`), which the CLI spawns and advertises.
-``/`` redirects there so an old bookmark still lands on the live board.
+(see :mod:`ix_notebook_mcp.pane_bridge`), which a human starts once with
+``ix-mcp dashboard``. ``/`` redirects to that hub when one is running, and
+otherwise serves a short page naming the command -- never a dead redirect.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import sqlite3
 
 from aiohttp import web
 
 from . import feed, store
-from .config import Config
+from .config import Config, live_hub, port_open
+
+
+def landing_html() -> str:
+    """The page ``/`` serves when no shared dashboard hub is running. It is a data
+    API, not the UI, so it points the human at the one command that opens the UI
+    rather than (as before) redirecting to a hub port that may be dead."""
+    return (
+        "<!doctype html><meta charset=utf-8>"
+        "<title>ix-mcp data API</title>"
+        "<style>body{font:15px/1.6 ui-monospace,monospace;max-width:40rem;"
+        "margin:4rem auto;padding:0 1rem;color:#ddd;background:#111}"
+        "code{background:#222;padding:.1rem .35rem;border-radius:4px}"
+        "a{color:#6cf}</style>"
+        "<h1>ix-mcp data API</h1>"
+        "<p>This is the read-only <b>data API</b> for one session, not the "
+        "dashboard UI. The UI is a single shared board across every session.</p>"
+        "<p>Open it with:</p>"
+        "<p><code>ix-mcp dashboard</code></p>"
+        "<p>Machine endpoints: "
+        "<a href=/api/jobs>/api/jobs</a> · "
+        "<a href=/api/resources>/api/resources</a> · "
+        "<a href=/api/snapshot>/api/snapshot</a></p>"
+    )
 
 # Binds for which "trust the network" must NOT relax the exec token: a loopback
 # bind is local-only, so tailnet trust is meaningless and could only mask a
@@ -37,8 +62,27 @@ def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
     app = web.Application()
 
     async def index(_request: web.Request) -> web.Response:
-        # The UI is the Loro hub now; send a stray visitor of the old URL there.
-        raise web.HTTPFound(config.hub_url())
+        # The UI is the shared Loro hub. Redirect there only when one is actually
+        # running (a human ran `ix-mcp dashboard`); otherwise serve a page naming
+        # that command. Never redirect to `config.hub_url()` -- that per-session
+        # `hub_port` is a free port reserved at startup but never bound here, so a
+        # bookmark to `/` used to 302 straight into a refused connection.
+        # `live_hub` does a blocking TCP probe, so run it off the shared event
+        # loop (the kernel, MCP transport, and this API all run on it -- a
+        # synchronous socket call here would freeze every concurrent job).
+        hub = await asyncio.to_thread(live_hub)
+        if hub and hub.get("url"):
+            raise web.HTTPFound(hub["url"])
+        # IX_MCP_AUTO_DASHBOARD spawns a per-server hub at `config.hub_port` but
+        # writes no shared state, so fall back to redirecting there when it is up.
+        # Gate strictly on `auto_dashboard`: in the default mode `hub_port` is a
+        # reserved-but-unbound ephemeral port, and an unrelated process could later
+        # reuse it -- probing it then would 302 to that wrong service.
+        if config.auto_dashboard and config.hub_port:
+            probe = "127.0.0.1" if config.host in ("0.0.0.0", "::", "") else config.host  # noqa: S104 -- wildcard mapped to a probeable loopback
+            if await asyncio.to_thread(port_open, config.hub_port, probe):
+                raise web.HTTPFound(config.hub_url())
+        return web.Response(text=landing_html(), content_type="text/html")
 
     async def jobs(_request: web.Request) -> web.Response:
         return web.json_response(store.recent(conn, limit=feed.JOBS_LIMIT))

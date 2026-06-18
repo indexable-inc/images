@@ -8,7 +8,9 @@ keeps the wiring simple. The object is frozen so nothing mutates after launch.
 
 from __future__ import annotations
 
+import json
 import os
+import socket
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +32,11 @@ class Config:
     # The Loro dashboard hub (the `dashboard` aggregator the CLI spawns) the human
     # opens: it renders this server's panes -- and every other producer's -- live.
     hub_port: int = 0
+    # True only when IX_MCP_AUTO_DASHBOARD made this server spawn its own per-server
+    # hub at `hub_port`. The data API's `/` only redirects to `hub_port` in that
+    # mode; in the default mode `hub_port` is a reserved-but-unbound port, so
+    # probing it could 302 to whatever unrelated process later reused it.
+    auto_dashboard: bool = False
 
     # Host advertised in the dashboard URL (distinct from the bind: a wildcard
     # bind is not a usable URL host, so the CLI resolves a reachable name).
@@ -132,3 +139,56 @@ def runtime_dir() -> Path:
     if info.st_mode & 0o077:
         path.chmod(0o700)
     return path
+
+
+def hub_state_path() -> Path:
+    """Where the ``ix-mcp dashboard`` launcher records the one shared hub it
+    started (``{pid, host, port, url}``), so a second launch reuses it instead of
+    spawning another. Machine-wide, distinct from any single ``serve``'s random
+    ``hub_port``: there is exactly one shared hub, not one per session."""
+    return runtime_dir() / "hub.json"
+
+
+def port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.25) -> bool:
+    """Whether something is accepting TCP connections on ``host:port`` right now.
+    Distinct from ``cli._bindable`` (which asks whether the port is *free*): this
+    asks whether a server is *live* there, so a stale hub-state file pointing at a
+    dead port is detected and ignored."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def live_hub() -> dict | None:
+    """The shared dashboard hub's advertised state if one is actually running,
+    else ``None``. Reads :func:`hub_state_path` and confirms the port is live, so
+    a leftover file from a crashed hub is treated as no hub. Cheap when no file
+    exists (the common case): no socket probe happens unless a record is present.
+
+    Probes the recorded bind ``host`` (not a hardcoded loopback) so a hub bound to
+    this machine's tailnet IP is correctly seen as live; a wildcard bind is probed
+    via loopback."""
+    try:
+        data = json.loads(hub_state_path().read_text())
+    except (OSError, ValueError):
+        return None
+    # The recorded process must still be alive: a TCP listener on the port alone
+    # is not enough, since after the hub dies an unrelated service could bind the
+    # same (often default 8080) port and we would redirect users to it. A dead pid
+    # means the file is stale, regardless of who now holds the port.
+    pid = data.get("pid")
+    if isinstance(pid, int) and pid > 0:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return None
+        except PermissionError:
+            pass  # exists but owned by another user -- still alive
+    port = data.get("port")
+    host = data.get("host") or "127.0.0.1"
+    probe = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host  # noqa: S104 -- mapping a wildcard record to a probeable loopback, not a bind
+    if not isinstance(port, int) or not port_open(port, probe):
+        return None
+    return data

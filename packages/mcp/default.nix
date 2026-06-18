@@ -1946,6 +1946,219 @@ let
         mkdir -p "$out"
       '';
 
+  # Exercises the shared-dashboard launcher logic: live_hub() ignores a missing
+  # or stale (dead-port) hub-state file and accepts a live one, and the data
+  # API's `/` landing page names `ix-mcp dashboard` instead of redirecting to a
+  # dead hub port. This is the "no million dashboards" reuse contract plus the
+  # dead-redirect fix, both pure Python (real loopback sockets, no `dashboard`
+  # binary), so the sandbox runs it.
+  dashboardLauncherTest = pkgs.writeText "ix-mcp-dashboard-launcher-test.py" ''
+    import asyncio
+    import json
+    import os
+    import socket
+    import tempfile
+    import threading
+    import time
+    from pathlib import Path
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from ix_notebook_mcp import config, store
+    from ix_notebook_mcp.dashboard import build_app, landing_html
+
+    state = config.hub_state_path()
+
+    # No state file -> no hub (and no socket probe even happens).
+    state.unlink(missing_ok=True)
+    assert config.live_hub() is None, "missing state must read as no hub"
+
+    # Stale state: a record whose port has nothing listening is ignored.
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    dead = probe.getsockname()[1]
+    probe.close()
+    state.write_text(json.dumps({"pid": 1, "host": "0.0.0.0", "port": dead, "url": f"http://x:{dead}/"}))
+    assert config.port_open(dead) is False, "closed port must not read as open"
+    assert config.live_hub() is None, "stale state (dead port) must read as no hub"
+
+    # Live state: a record whose port is accepting connections is reused.
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    # Backlog must exceed the probes below: each port_open leaves a completed but
+    # un-accepted connection, so listen(1) would make the second probe time out.
+    srv.listen(16)
+    live = srv.getsockname()[1]
+    url = f"http://join.example:{live}/"
+    state.write_text(json.dumps({"pid": 1, "host": "0.0.0.0", "port": live, "url": url}))
+    assert config.port_open(live) is True, "listening port must read as open"
+    got = config.live_hub()
+    assert got is not None and got["port"] == live and got["url"] == url, got
+
+    # Dead pid: even with a live listener on the recorded port (port reuse by an
+    # unrelated service), a dead recorded pid means the file is stale -> no hub.
+    gone = os.fork()
+    if gone == 0:
+        os._exit(0)
+    os.waitpid(gone, 0)  # reap so the pid is truly dead
+    state.write_text(json.dumps({"pid": gone, "host": "127.0.0.1", "port": live, "url": url}))
+    assert config.live_hub() is None, "stale state (dead pid) must read as no hub"
+    srv.close()
+    state.unlink(missing_ok=True)
+
+    # _bind_ip hands the Rust hub a concrete, non-wildcard IP literal: IPs pass
+    # through, names resolve, and a wildcard is refused (mapped to loopback) so the
+    # board never binds every NIC.
+    from ix_notebook_mcp import cli
+    assert cli._bind_ip("127.0.0.1") == "127.0.0.1"
+    assert cli._bind_ip("localhost") == "127.0.0.1"
+    assert cli._bind_ip("0.0.0.0") == "127.0.0.1"  # noqa: S104 -- asserting the wildcard refusal
+    assert cli._bind_ip("::") == "127.0.0.1"
+    assert cli._bind_ip("::1") == "::1"  # a non-wildcard IPv6 literal passes through
+
+    # _host_arg brackets IPv6 for the binary's host:port and the URL; IPv4/names
+    # are returned raw (Python's own socket calls take the unbracketed host).
+    assert cli._host_arg("127.0.0.1") == "127.0.0.1"
+    assert cli._host_arg("::1") == "[::1]"
+
+    # The data API landing page points at the command, never a bare redirect.
+    html = landing_html()
+    assert "ix-mcp dashboard" in html, html
+    assert "/api/jobs" in html, html
+
+    # A non-numeric IX_DASH_HUB_PORT must not crash the launcher: fall back to 8080.
+    os.environ["IX_DASH_HUB_PORT"] = "not-a-port"
+    assert cli._stable_hub_port() == 8080
+    os.environ["IX_DASH_HUB_PORT"] = "9191"
+    assert cli._stable_hub_port() == 9191
+    os.environ.pop("IX_DASH_HUB_PORT")
+
+    # Drive the real aiohttp `/` handler: 302 to a live hub, else the landing
+    # page -- never the old dead redirect. Pins the off-loop probe too.
+    async def check_index() -> None:
+        conn = store.connect(os.path.join(tempfile.mkdtemp(), "s.db"))
+        client = TestClient(TestServer(build_app(config.Config(workdir=Path(tempfile.mkdtemp())), conn)))
+        await client.start_server()
+        try:
+            hub = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            hub.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            hub.bind(("127.0.0.1", 0))
+            hub.listen(16)
+            hub_port = hub.getsockname()[1]
+            hub_url = f"http://127.0.0.1:{hub_port}/"
+            state.write_text(json.dumps({"pid": 1, "host": "127.0.0.1", "port": hub_port, "url": hub_url}))
+            resp = await client.get("/", allow_redirects=False)
+            assert resp.status == 302 and resp.headers.get("Location") == hub_url, (
+                resp.status,
+                resp.headers.get("Location"),
+            )
+            hub.close()
+
+            state.unlink(missing_ok=True)
+            resp = await client.get("/", allow_redirects=False)
+            assert resp.status == 200, resp.status
+            assert "ix-mcp dashboard" in await resp.text()
+        finally:
+            await client.close()
+
+    asyncio.run(check_index())
+
+    # The auto-dashboard hub_port branch is gated on `auto_dashboard`: with it
+    # ON, a live hub_port redirects; with it OFF (the default), a live listener on
+    # hub_port must NOT redirect -- that port is reserved-but-unbound and could be
+    # any unrelated process. Pins the wrong-redirect fix.
+    async def check_auto_gate() -> None:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(16)
+        hp = listener.getsockname()[1]
+        try:
+            auto = config.Config(
+                workdir=Path(tempfile.mkdtemp()), host="127.0.0.1", advertised_host="127.0.0.1",
+                hub_port=hp, auto_dashboard=True,
+            )
+            ca = TestClient(TestServer(build_app(auto, store.connect(os.path.join(tempfile.mkdtemp(), "a.db")))))
+            await ca.start_server()
+            try:
+                r = await ca.get("/", allow_redirects=False)
+                assert r.status == 302 and r.headers.get("Location") == auto.hub_url(), (r.status, r.headers.get("Location"))
+            finally:
+                await ca.close()
+
+            noauto = config.Config(
+                workdir=Path(tempfile.mkdtemp()), host="127.0.0.1", advertised_host="127.0.0.1",
+                hub_port=hp, auto_dashboard=False,
+            )
+            cn = TestClient(TestServer(build_app(noauto, store.connect(os.path.join(tempfile.mkdtemp(), "n.db")))))
+            await cn.start_server()
+            try:
+                r = await cn.get("/", allow_redirects=False)
+                assert r.status == 200 and "ix-mcp dashboard" in await r.text(), r.status
+            finally:
+                await cn.close()
+        finally:
+            listener.close()
+
+    asyncio.run(check_auto_gate())
+
+    # Concurrent launches must spawn exactly one hub (the flock in _dashboard
+    # serializes check-or-spawn): the loser blocks, then reuses the winner's
+    # hub.json instead of starting a second hub.
+    state.unlink(missing_ok=True)
+    hub = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    hub.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    hub.bind(("127.0.0.1", 0))
+    hub.listen(16)
+    hub_port = hub.getsockname()[1]
+    spawns = []
+
+    def fake_spawn() -> dict:
+        spawns.append(1)
+        time.sleep(0.3)  # hold the lock so the racer is forced to wait on it
+        st = {"pid": os.getpid(), "host": "127.0.0.1", "port": hub_port, "url": f"http://127.0.0.1:{hub_port}/"}
+        config.hub_state_path().write_text(json.dumps(st))
+        return st
+
+    real_spawn = cli._spawn_shared_hub
+    cli._spawn_shared_hub = fake_spawn
+    try:
+        threads = [threading.Thread(target=cli._dashboard, kwargs={"open_browser": False}) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        cli._spawn_shared_hub = real_spawn
+        hub.close()
+    assert len(spawns) == 1, f"expected exactly one spawn under the lock, got {len(spawns)}"
+    state.unlink(missing_ok=True)
+
+    print("dashboard-launcher-ok")
+  '';
+  dashboardLauncherSmoke =
+    pkgs.runCommand "ix-mcp-dashboard-launcher-smoke"
+      {
+        nativeBuildInputs = [ mcpPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        ${mcpPython}/bin/python3 ${dashboardLauncherTest} >stdout 2>stderr || {
+          echo "ix-mcp dashboard-launcher smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        grep -qx 'dashboard-launcher-ok' stdout || {
+          echo "ix-mcp dashboard-launcher smoke did not confirm helper behaviour:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        mkdir -p "$out"
+      '';
+
   # Exercises the in-kernel runtime (ix_notebook_mcp/runtime.py) in-process: two
   # jobs run concurrently on one event loop, neither blocks the other, each keeps
   # its own captured stdout, and the trailing expression is captured as the
@@ -4831,6 +5044,7 @@ package.overrideAttrs (old: {
         bindingsSmoke
         bindDefaultSmoke
         sshAuthSockSmoke
+        dashboardLauncherSmoke
         viewSmoke
         nixSmoke
         fleetSmoke
