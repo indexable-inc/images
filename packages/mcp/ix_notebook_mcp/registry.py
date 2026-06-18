@@ -288,6 +288,23 @@ MODULES: tuple[Module, ...] = (
             url="https://www.notion.so/my-integrations",
         ),
     ),
+    Module(
+        "mercury",
+        "every Mercury bank resource as polars over the public REST API: "
+        "`await mercury.accounts()` / `transactions(limit=...)` / `cards()` / `recipients()` / "
+        "`statements()` / `treasury()` / `credit()` / `categories()` / `invoices()` / `events()` / "
+        "`users()`, plus `transaction(id)` and `attach_receipt(tx_id, file)`; "
+        "`mercury.login(token)` stores your API token (mode 0600), `await status()` / `logout()` manage it",
+        # Mirrors mercury._token()'s resolution order; the requirements smoke test
+        # pins these against the module's own constants so they cannot drift.
+        credential=Credential(
+            service="Mercury",
+            env=("MERCURY_API_TOKEN", "MERCURY_TOKEN"),
+            token_path="~/.config/mercury/token",  # noqa: S106 -- path to token file, not a hardcoded secret
+            login="call `mercury.login(token)` in a cell",
+            url="https://docs.mercury.com/reference/getting-started-with-the-api",
+        ),
+    ),
 )
 
 # Always-present namespace builtins (installed by runtime.install; no import).
