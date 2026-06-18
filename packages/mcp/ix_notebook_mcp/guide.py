@@ -30,10 +30,12 @@ def modules_index() -> str:
         f"`{lib.name}`" + (f" ({lib.note})" if lib.note else "") for lib in registry.LIBRARIES
     )
     return (
-        f"Bundled tooling, no install step: {preimported} are pre-bound in the namespace (use them "
-        "with no import; an explicit `import` returns the same object), the others you `import` "
-        "once and reuse. Each module's exact signatures come from `api('<name>')` / "
-        f"`help(<name>.<fn>)`, never from here. Modules: {mods}. Also import-ready: {libs}."
+        f"Bundled tooling, no install step: every module is pre-bound in the namespace, so use "
+        f"any of them with no import (e.g. `await maps.nearby(...)` works directly). {preimported} "
+        "load eagerly; the rest are bound lazily and import themselves on first use, so an unused "
+        "one costs nothing. An explicit `import` still returns the same object. Each module's exact "
+        f"signatures come from `api('<name>')` / `help(<name>.<fn>)`, never from here. Modules: "
+        f"{mods}. Also import-ready (these you DO `import`): {libs}."
     )
 
 

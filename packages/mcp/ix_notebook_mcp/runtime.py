@@ -2800,6 +2800,40 @@ def _install_signal_handlers() -> None:
         signal.signal(signal.SIGUSR2, _break)
 
 
+class _LazyModule:
+    """A stand-in bound into the kernel namespace so a bundled module is usable
+    with no ``import`` -- but without paying its import cost until it is actually
+    touched. The first attribute access imports the real module, swaps it into the
+    namespace in place of this proxy (so later lookups skip this path and
+    ``type(maps)`` reads as a module once used), and delegates. An untouched module
+    therefore costs nothing at startup -- which matters for the framework-heavy
+    macOS modules (``maps`` alone pulls in MapKit + CoreLocation, ~120ms) -- and a
+    platform-absent one (a macOS-only module on Linux) raises an ordinary
+    ``ImportError`` only when first used, exactly as an explicit ``import`` would.
+    An explicit ``import maps`` still returns the real module and rebinds the name,
+    so both styles agree.
+    """
+
+    __slots__ = ("_ix_name", "_ix_ns")
+
+    def __init__(self, name: str, ns: dict) -> None:
+        self._ix_name = name
+        self._ix_ns = ns
+
+    def _ix_load(self) -> Any:
+        mod = __import__(self._ix_name)
+        self._ix_ns[self._ix_name] = mod  # real module replaces the proxy
+        return mod
+
+    def __getattr__(self, attr: str) -> Any:
+        # __getattr__ only fires for names not on the class/slots, so the two
+        # private slots and _ix_load resolve normally and never recurse here.
+        return getattr(self._ix_load(), attr)
+
+    def __repr__(self) -> str:
+        return f"<bundled module {self._ix_name!r} (lazy: imports on first use)>"
+
+
 def install(user_ns: dict | None = None) -> None:
     """Wire the runtime into the kernel: tee stdout/err, open the store, start the
     flusher, install the rescue/trace signal handlers, and expose the registry +
@@ -2874,6 +2908,13 @@ def install(user_ns: dict | None = None) -> None:
     for _mod_name in registry.preimport_names():
         with contextlib.suppress(Exception):  # best-effort per-module import; continue on missing modules
             target[_mod_name] = __import__(_mod_name)
+    # Every other bundled module is bound behind a lazy proxy, so `maps.nearby(...)`
+    # works with no `import maps` just like fff/view -- but the proxy defers the
+    # actual import to first use, so framework-heavy modules (maps, screen, vmkit,
+    # iphone, ...) and platform-absent ones cost nothing at startup. See _LazyModule.
+    for _mod_name in registry.module_names():
+        if _mod_name not in target:  # never shadow an eagerly pre-imported module
+            target[_mod_name] = _LazyModule(_mod_name, target)
     # The kernel is async-first and polars-first: nearly every session reaches
     # for asyncio (ensure_future / sleep), json (every CLI's --json output), and
     # pl within its first cells, and a NameError on `asyncio` in an async kernel
