@@ -793,7 +793,8 @@ async def tap(x: float, y: float, *, space: str = "points") -> None:
     Prefer ``tap_element(label=...)`` when the control has an accessibility
     label, or ``space="fraction"`` when eyeballing a screenshot. Never feed pixel
     coordinates read off a screenshot as default (points): a screenshot is
-    ``scale``× larger than the point grid (see ``screen()``), so they land short.
+    ``scale``× larger than the point grid (see ``screen()``), so they overshoot
+    and land off-screen.
     """
     await _require_wda()
     px, py = await _resolve_points(x, y, space)
@@ -1121,10 +1122,14 @@ async def _terminate(proc: asyncio.subprocess.Process | None) -> None:
 
 async def wda_stop() -> None:
     """Stop the WDA runner and port-forward started by this module."""
-    global _wda_xcuitest_proc, _wda_forward_proc, _wda_session, _wda_device
+    global _wda_xcuitest_proc, _wda_forward_proc, _wda_session, _wda_device, _wda_scale
 
     _wda_session = None
     _wda_device = None
+    # Drop the cached scale too: a later wda_start(udid=None) against an
+    # externally-reachable WDA takes the "already running" early return and never
+    # re-reads it, so a stale scale would mis-convert taps on a different device.
+    _wda_scale = None
     await _terminate(_wda_forward_proc)
     await _terminate(_wda_xcuitest_proc)
     _wda_forward_proc = None

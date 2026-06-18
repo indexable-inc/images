@@ -126,6 +126,18 @@ def test_to_points_unknown_space_raises() -> None:
         iphone._to_points(1, 2, "inches", 3.0, (402, 874))
 
 
+def test_wda_stop_clears_cached_scale(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The display scale is cached per device; wda_stop must drop it so a later
+    # wda_start against a different-scale device cannot reuse a stale value.
+    monkeypatch.setattr(iphone, "_wda_scale", 3.0)
+    monkeypatch.setattr(iphone, "_wda_session", "sid")
+    monkeypatch.setattr(iphone, "_wda_device", "udid")
+    asyncio.run(iphone.wda_stop())
+    assert iphone._wda_scale is None
+    assert iphone._wda_session is None
+    assert iphone._wda_device is None
+
+
 def test_ui_actions_require_wda(monkeypatch: pytest.MonkeyPatch) -> None:
     # When WDA is down, UI actions must raise a one-line precondition error
     # (naming wda_start) rather than failing deep in a urllib stack.
