@@ -136,10 +136,11 @@ Public surface:
   (`#ix-frame`) whose `srcdoc` is the resource body wrapped by `inner_document`.
   The producer HTML therefore runs in an opaque origin with no access to the
   trusted document, `window.ipc`, cookies, or storage -- the same trust model as
-  the web dashboard's html pane. Because that origin is opaque and the document
-  has no page URL, the body must be self-contained: external CDN scripts/styles
-  and same-origin `fetch` are blocked, so anything needing a library is
-  pre-rendered (e.g. mermaid -> SVG) and embedded.
+  the web dashboard's html pane. The opaque origin removes same-origin `fetch`,
+  cookies, and storage (it is not a network block: absolute HTTPS subresources may
+  still load subject to CORS, though an ES-module `import` from a CDN was observed
+  to fail). For a reproducible offline pane the body should be self-contained, so
+  anything needing a library is pre-rendered (e.g. mermaid -> SVG) and embedded.
 - **Auto-size to content.** `INNER_JS` (inside the iframe) runs a `ResizeObserver`
   on `#ix-content` and `postMessage`s the measured size out; `OUTER_JS` (the
   trusted document) validates that message, sizes the iframe, then posts the

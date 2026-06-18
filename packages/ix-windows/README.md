@@ -35,16 +35,18 @@ tiling, no layout manager.
   window is not user-resizable -- its size is owned by the content (auto-fit), so a
   manual resize would just fight the next content report.
 
-## Self-contained HTML only
+## Prefer self-contained HTML
 
 A resource's HTML is rendered inside a sandboxed, opaque-origin `<iframe>`
 (`sandbox="allow-scripts"`, no `allow-same-origin`) loaded with no page origin, so
-it must be **self-contained**: inline all CSS and JS and data. External CDN
-scripts/styles, same-origin `fetch`, cookies, and storage are blocked by the
-sandbox. Pre-render anything that needs a library and embed the result -- e.g.
-render a mermaid diagram to SVG server-side (`kroki.io`, the `mermaid` CLI, ...)
-and put the static `<svg>` in the HTML, rather than loading `mermaid.js` from a
-CDN (which silently fails).
+same-origin `fetch`, cookies, and storage are unavailable. Absolute HTTPS
+scripts/styles may still load (subject to the browser and the remote server /
+CORS), but they are a live network dependency, not an isolated pane -- and an
+ES-module `import` from a CDN was observed to fail under the opaque origin. For a
+reproducible, offline overlay, **inline** your CSS/JS/data and pre-render anything
+that needs a library: e.g. render a mermaid diagram to SVG server-side
+(`kroki.io`, the `mermaid` CLI, ...) and embed the static `<svg>`, rather than
+loading `mermaid.js` from a CDN.
 
 ## macOS
 
