@@ -30,6 +30,21 @@ tiling, no layout manager.
   content grows.
 - **Floating across spaces.** The window is always-on-top and joins all spaces /
   floats over fullscreen apps (`NSWindowCollectionBehavior`).
+- **Move, don't resize.** The card is borderless, so there is no title bar: drag
+  it by its **chrome** (the padding/background around the content) to move it. The
+  window is not user-resizable -- its size is owned by the content (auto-fit), so a
+  manual resize would just fight the next content report.
+
+## Self-contained HTML only
+
+A resource's HTML is rendered inside a sandboxed, opaque-origin `<iframe>`
+(`sandbox="allow-scripts"`, no `allow-same-origin`) loaded with no page origin, so
+it must be **self-contained**: inline all CSS and JS and data. External CDN
+scripts/styles, same-origin `fetch`, cookies, and storage are blocked by the
+sandbox. Pre-render anything that needs a library and embed the result -- e.g.
+render a mermaid diagram to SVG server-side (`kroki.io`, the `mermaid` CLI, ...)
+and put the static `<svg>` in the HTML, rather than loading `mermaid.js` from a
+CDN (which silently fails).
 
 ## macOS
 

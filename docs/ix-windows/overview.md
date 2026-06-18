@@ -54,8 +54,9 @@ subscriber is async, and the page's measuring script also feeds events back. The
 binary:
 
 1. Builds a `tao` `EventLoop` parameterized on [`UserEvent`] as its user-event
-   type, and a proxy. [`UserEvent`] wraps either a `ProducerEvent`
-   (`UserEvent::Producer`) or a content-size report (`UserEvent::Resize`).
+   type, and a proxy. [`UserEvent`] is one of a `ProducerEvent`
+   (`UserEvent::Producer`), a content-size report (`UserEvent::Resize`), or a
+   move request (`UserEvent::Drag`, posted when the user presses the card chrome).
 2. Spawns a side thread running a multi-thread tokio runtime that calls
    [`subscribe`](../dashboard-core/overview.md#consumer-side-subscribe-srcsubscribers)
    and forwards each event as `UserEvent::Producer` into the loop via a clone of
@@ -63,8 +64,8 @@ binary:
 3. Runs the event loop with `ControlFlow::Wait` (reactive viewer, not an
    animation loop) and dispatches to a [`WindowManager`]:
    `Producer(Snapshot)` -> `apply_snapshot`, `Producer(Gone)` -> `producer_gone`,
-   `Resize { window, .. }` -> `resize`, `WindowEvent::CloseRequested` ->
-   `window_closed`.
+   `Resize { window, .. }` -> `resize`, `Drag { window }` -> `begin_drag`,
+   `WindowEvent::CloseRequested` -> `window_closed`.
 
 ## The engine: `WindowManager` (`src/lib.rs`)
 
@@ -91,19 +92,25 @@ Public surface:
   resize/reflow loop.
 - [`producer_gone(producer)`]: drop every window of a disconnected producer and
   clear its dismissals.
+- [`begin_drag(window)`]: begin an interactive move of the window whose chrome the
+  user pressed (`OUTER_JS` posts `"drag"` on mousedown over the card), by calling
+  `drag_window`. A borderless, non-resizable window has no native title bar, so
+  this is how the overlay is moved.
 - [`window_closed(window_id)`]: the user closed a window; remove it and record
   the dismissal. Returns whether it was one of ours.
 - [`is_empty`]: whether any resource windows are open.
 
 ### Reconcile invariants
 
-- **In-place refresh.** `OpenWindow::refresh` swaps only the `#ix-root` inner
-  HTML via `evaluate_script` when the html changed, and resets the title when it
-  changed, so the document, scroll position, and focus survive an update (a full
-  reload would flicker and reset them). The new HTML is injected as a
-  `serde_json::to_string` JS string literal, so arbitrary resource HTML is
-  escaped safely. The page's `ResizeObserver` notices the resulting size change
-  and drives a `resize`.
+- **In-place refresh.** `OpenWindow::refresh` swaps the sandboxed iframe's
+  `srcdoc` (`#ix-frame`) via `evaluate_script` when the html changed, and resets
+  the title when it changed, so the trusted outer document, the window, and focus
+  survive an update (scroll position inside the iframe resets, the trade for never
+  running producer script in the trusted document). The new inner document is
+  injected as a `serde_json::to_string` JS string literal, so arbitrary resource
+  HTML is escaped safely; the iframe sandbox (not that escaping) is what contains
+  any script in the body. The iframe's own `ResizeObserver` notices the resulting
+  size change and reports it, driving a `resize`.
 - **Dismissal tracking.** `dismissed` records resources the user closed while
   still live. Without it, the next snapshot (any content change republishes one)
   would find the window gone and re-open it, fighting the user. It is cleared
@@ -123,17 +130,29 @@ Public surface:
   (`HUDWindow` material, `BehindWindow` blending) as the content view's first
   subview, beneath the transparent webview, with a rounded, shadowed layer. The
   rendered HTML paints on top of it.
-- **Transparent shell.** `shell(title, body)` wraps the resource HTML in a fully
-  transparent document whose `#ix-root` panel shrink-wraps its content with a
-  faint tint and rounded corners (the `STYLE` constant); the `<title>` is
-  escaped, the body injected verbatim (the same trust model as the web
-  dashboard's sandboxed html pane).
-- **Auto-size to content.** The shell embeds `MEASURE_JS`: a `ResizeObserver` on
-  `#ix-root` posts the panel's `offsetWidth`x`offsetHeight` over `wry`'s IPC
-  channel (coalesced to one report per frame, deduped). The IPC handler forwards
-  it as `UserEvent::Resize`, and `WindowManager::resize` fits the OS window. The
-  panel is `inline-block` / `max-width` so its intrinsic size does not depend on
-  the window width, which keeps the measurement stable (no resize loop).
+- **Sandboxed shell.** `shell(title, body)` builds a fully transparent trusted
+  outer document whose `#ix-root` panel (the `STYLE` constant) shrink-wraps a
+  single child: a `sandbox="allow-scripts"` (no `allow-same-origin`) `<iframe>`
+  (`#ix-frame`) whose `srcdoc` is the resource body wrapped by `inner_document`.
+  The producer HTML therefore runs in an opaque origin with no access to the
+  trusted document, `window.ipc`, cookies, or storage -- the same trust model as
+  the web dashboard's html pane. Because that origin is opaque and the document
+  has no page URL, the body must be self-contained: external CDN scripts/styles
+  and same-origin `fetch` are blocked, so anything needing a library is
+  pre-rendered (e.g. mermaid -> SVG) and embedded.
+- **Auto-size to content.** `INNER_JS` (inside the iframe) runs a `ResizeObserver`
+  on `#ix-content` and `postMessage`s the measured size out; `OUTER_JS` (the
+  trusted document) validates that message, sizes the iframe, then posts the
+  card's `offsetWidth`x`offsetHeight` over `wry`'s IPC channel (coalesced per
+  frame, deduped). The IPC handler forwards it as `UserEvent::Resize`, and
+  `WindowManager::resize` fits the OS window. `#ix-content` is `width: max-content`
+  so its intrinsic size does not depend on the window width, which keeps the
+  measurement stable (no resize loop).
+- **Move by chrome.** `OUTER_JS` also listens for a primary-button `mousedown` on
+  `#ix-root`; a press that reaches the trusted document landed on the card chrome
+  (the iframe captures its own events), so it posts `"drag"`, which the IPC
+  handler turns into `UserEvent::Drag` -> `begin_drag` -> `drag_window`. Producer
+  content inside the iframe stays interactive.
 - **120Hz.** `enable_high_refresh` disables WebKit's private
   `PreferPageRenderingUpdatesNear60FPSEnabled` experimental feature via the
   private `_setEnabled:forExperimentalFeature:` selector (gated by
