@@ -84,14 +84,17 @@ resolve. Verify with `await iphone.devices()` (the row's `ConnectionType` reads
 
 What is solid vs fragile wirelessly:
 
-- **Solid**: inventory (`devices`/`info`/`apps`), and all WDA UI control
-  (`source`, `tap`, `type_text`, the WDA screenshot) — these ride lockdown and
-  the WDA HTTP forward.
-- **Fragile**: the DVT developer services (`launch`, the DVT `screenshot`,
-  `simulate_location`, DDI mount) need the RemoteXPC tunnel, and `tunneld` over
-  Wi-Fi is less reliable than over USB on iOS 17+. If a DVT call hangs or fails
-  wirelessly, re-tether for that step. WDA-based automation (the common case) is
-  unaffected.
+- **Solid**: inventory (`devices`/`info`/`apps`), plus WDA UI control (`source`,
+  `tap`, `type_text`, the WDA screenshot) **once WDA is already running** and the
+  usbmux forward is established. These ride lockdown and the WDA HTTP forward.
+- **Fragile**: any call that starts or uses DVT developer services needs the
+  RemoteXPC tunnel, and `tunneld` over Wi-Fi is less reliable than over USB on
+  iOS 17+. That includes `wda_start` itself: it launches the XCUITest runner via
+  `developer dvt xcuitest` before opening the forward, so the WDA *startup* rides
+  the fragile path even though the taps that follow do not. Also `launch`, the
+  DVT `screenshot`, `simulate_location`, and the DDI mount. If one of these hangs
+  or fails wirelessly, re-tether for that step (notably the one-time
+  `wda_build_install` and each `wda_start`), then run the taps over Wi-Fi.
 
 **iPhone Mirroring is not a substitute**: it is a consumer feature with no API
 or CLI, room-range only (Bluetooth + same Apple ID, phone locked). Automating it
