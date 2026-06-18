@@ -1,0 +1,132 @@
+diff --git a/src/drv.cc b/src/drv.cc
+index 32e9467..ee66d34 100644
+--- a/src/drv.cc
++++ b/src/drv.cc
+@@ -1,3 +1,6 @@
++#include <nix/store/path-info.hh>
++#include <nix/store/realisation.hh>
++#include <nix/store/store-open.hh>
+ #include <nix/store/path-with-outputs.hh>
+ #include <nix/store/store-api.hh>
+ #include <nix/store/local-fs-store.hh>
+@@ -105,6 +108,104 @@ auto queryInputDrvs(const nix::Derivation &drv)
+     return drvs;
+ }
+ 
++// Resolve a content-addressed derivation's output paths and tell whether they
++// are already obtainable, mirroring what `nix build` itself does in
++// nix::Store::queryMissing (libstore/misc.cc).
++//
++// A floating CA derivation has no statically known output path: queryOutputs
++// returns std::nullopt for each output until the build is realised, so the
++// surrounding queryCacheStatus skips the (null) outputs and only feeds the
++// input drvs to queryMissing. That walk never consults the top-level CA
++// output's realisation, so an output that is already cached at a substituter
++// is still reported as `local`/`notBuilt` and re-dispatched every eval (the
++// CA half of the cache-blindness in nix#12128 / nix-eval-jobs#403).
++//
++// Here, for every output with no known path, we ask each substituter for the
++// realisation of DrvOutput{outputHash, outputName} (the resolved-derivation
++// key, exactly as queryMissing does via staticOutputHashes +
++// getDefaultSubstituters). When a realisation is found we fill in the resolved
++// output path so the emitted JSON carries a real `outputs.<name>` instead of
++// null, and record whether the resolved path still needs substituting.
++//
++// Returns:
++//   - std::nullopt : not a CA case to special-case (every output already had a
++//                    known path), or at least one output has no realisation
++//                    anywhere (so the caller must fall through to queryMissing,
++//                    which will classify it as a build).
++//   - Cached       : every output resolved and at least one still needs a
++//                    substitute (i.e. it is in a cache but not local).
++//   - Local        : every output resolved and all are already valid locally.
++auto resolveCaOutputs(
++    nix::Store &store,
++    std::map<std::string, std::optional<nix::StorePath>> &outputs,
++    std::vector<nix::StorePath> &neededSubstitutes, const nix::Derivation &drv)
++    -> std::optional<Drv::CacheStatus> {
++    if (!nix::experimentalFeatureSettings.isEnabled(nix::Xp::CaDerivations)) {
++        return std::nullopt;
++    }
++
++    bool anyUnresolved = false;
++    for (auto const &[outputName, outputPath] : outputs) {
++        if (!outputPath) {
++            anyUnresolved = true;
++            break;
++        }
++    }
++    if (!anyUnresolved) {
++        return std::nullopt;
++    }
++
++    // staticOutputHashes keys each output by the hash of its resolved-input
++    // derivation, which is the DrvOutput a CA realisation is registered under
++    // in the store/substituter (libstore/misc.cc does the same to answer the
++    // floating-CA case in queryMissing).
++    auto outputHashes = nix::staticOutputHashes(store, drv);
++    auto substituters = nix::getDefaultSubstituters();
++
++    bool anyNeedsSubstitute = false;
++    for (auto &[outputName, outputPath] : outputs) {
++        if (outputPath) {
++            continue;
++        }
++        auto hashIt = outputHashes.find(outputName);
++        if (hashIt == outputHashes.end()) {
++            return std::nullopt;
++        }
++        nix::DrvOutput const id{hashIt->second, outputName};
++
++        std::shared_ptr<const nix::UnkeyedRealisation> realisation =
++            store.queryRealisation(id);
++        if (!realisation) {
++            for (auto &sub : substituters) {
++                realisation = sub->queryRealisation(id);
++                if (realisation) {
++                    break;
++                }
++            }
++        }
++        if (!realisation) {
++            // No realisation anywhere: this output must be built. Let the
++            // caller's queryMissing populate the per-input neededBuilds.
++            return std::nullopt;
++        }
++
++        outputPath = realisation->outPath;
++        if (!store.isValidPath(realisation->outPath)) {
++            neededSubstitutes.push_back(realisation->outPath);
++            anyNeedsSubstitute = true;
++        }
++    }
++
++    std::ranges::sort(
++        neededSubstitutes,
++        [](const nix::StorePath &lhs, const nix::StorePath &rhs) -> bool {
++            return lhs.name() != rhs.name() ? lhs.name() < rhs.name()
++                                            : lhs.to_string() < rhs.to_string();
++        });
++    return anyNeedsSubstitute ? Drv::CacheStatus::Cached
++                              : Drv::CacheStatus::Local;
++}
++
+ auto queryCacheStatus(
+     nix::Store &store,
+     std::map<std::string, std::optional<nix::StorePath>> &outputs,
+@@ -113,6 +214,15 @@ auto queryCacheStatus(
+     std::vector<nix::StorePath> &unknownPaths, const nix::Derivation &drv)
+     -> Drv::CacheStatus {
+ 
++    // Floating CA outputs have no static path; resolve them against the
++    // substituters first so a cached output is not misreported as notBuilt.
++    // Falls through to queryMissing when an output cannot be resolved (it must
++    // be built) so the per-input neededBuilds breakdown still populates.
++    if (auto caStatus =
++            resolveCaOutputs(store, outputs, neededSubstitutes, drv)) {
++        return *caStatus;
++    }
++
+     std::vector<nix::StorePathWithOutputs> paths;
+     // Add output paths
+     for (auto const &[key, val] : outputs) {

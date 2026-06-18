@@ -199,7 +199,11 @@ let
   # (above nix-eval-jobs' 4 GiB default per worker, below the old 8 GiB), not a
   # workaround: the per-crate check split (see the `checks` block below) keeps
   # each worker's eval bounded by the largest single crate. Pinned by commit to
-  # nix-fast-build 1.5.0.
+  # nix-fast-build 1.5.0, but pointed at the repo-built patched nix-eval-jobs via
+  # --nix-eval-jobs (the eval-step binary, not nix-fast-build itself, is what
+  # decides cacheStatus): without the patch, --skip-cached treats every floating
+  # CA rust unit as uncached and rebuilds ~1434 of them on every warm run. See
+  # the $eval_jobs comment below.
   #
   # Step 2 (nix-eval-jobs) is the schema/eval gate over the package outputs,
   # broader than the `checks` set step 1 built. nix-eval-jobs is the same
@@ -217,14 +221,23 @@ let
   # reports a per-attribute eval failure as a JSON `error` line and still exits 0,
   # so the gate is the error-line check; a startup or lock failure exits nonzero
   # and aborts the run (Nushell propagates external failures like bash
-  # `set -o pipefail`). Pinned by commit to nix-eval-jobs v2.34.1, matching the
-  # host Nix 2.34.x.
+  # `set -o pipefail`). Uses the repo-built patched nix-eval-jobs
+  # (packages/nix/nix-eval-jobs, nixpkgs' v2.34.1 + the CA cacheStatus patch),
+  # matching the host Nix 2.34.x; invoked directly by store path rather than
+  # `nix run`.
   check = ix.writeNushellApplication pkgs {
     name = "check";
     meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux";
     text = ''
       const fast_build = "github:Mic92/nix-fast-build/7f185e0ec37b65b4730f892e0de9a831b0610f3a"
-      const eval_jobs = "github:nix-community/nix-eval-jobs/65ebf5b7cd453a27af09cf02b1fc57b3568cc4b7"
+      # Patched nix-eval-jobs (packages/nix/nix-eval-jobs): the stock binary
+      # reports `local`/`notBuilt` for floating content-addressed outputs even
+      # when they are in cache.ix.dev, so --skip-cached rebuilt every CA rust
+      # unit (~1434) on every run. The patch resolves the CA output realisation
+      # against the substituters so a warm unit reports `cached` and is skipped.
+      # See nix#12128 / nix-eval-jobs#403. Built for x86_64-linux (the CI gate
+      # system); `check` itself is x86_64-linux-only.
+      const eval_jobs = "${lib.getExe repoPackages.nix-eval-jobs}"
 
       def main [] {
         # ca-derivations: the rust workspace units default to
@@ -255,6 +268,10 @@ let
           try {
             ^nix run $fast_build -- ...[
               "--flake" ".#ciChecks.x86_64-linux"
+              # Drive nix-fast-build's evaluator with the patched nix-eval-jobs
+              # (CA cacheStatus fix) so --skip-cached actually skips warm CA
+              # units rather than rebuilding the lot.
+              "--nix-eval-jobs" $eval_jobs
               "--eval-max-memory-size" "6144"
               "--eval-workers" "16"
               "--skip-cached"
@@ -325,7 +342,7 @@ let
         let tmp = (mktemp --directory --tmpdir "ix-check.XXXXXX")
         let report = ($tmp | path join "flake-schema-eval.jsonl")
         do --capture-errors {
-          ^nix run $eval_jobs -- ...[
+          ^$eval_jobs ...[
             "--flake" ".#packages.x86_64-linux"
             "--workers" "16"
             "--gc-roots-dir" ($tmp | path join "flake-schema-eval-gc")
