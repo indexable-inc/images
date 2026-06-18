@@ -219,13 +219,23 @@ impl WindowManager {
         let Some(open) = self.windows.get_mut(key) else {
             return;
         };
-        let (max_w, max_h) = open.window.current_monitor().map_or(
-            (1600.0, 1000.0),
-            |monitor| {
-                let size = monitor.size().to_logical::<f64>(monitor.scale_factor());
-                (size.width * 0.92, size.height * 0.92)
+        // Monitor geometry (origin + extent) in logical pixels, so the overlay
+        // can be both sized to fit and kept fully on-screen.
+        let monitor = open.window.current_monitor();
+        let (origin, extent) = monitor.as_ref().map_or(
+            (LogicalPosition::new(0.0, 0.0), LogicalSize::new(1600.0, 1000.0)),
+            |m| {
+                let s = m.scale_factor();
+                (
+                    m.position().to_logical::<f64>(s),
+                    m.size().to_logical::<f64>(s),
+                )
             },
         );
+        // Leave breathing room so the overlay never butts the screen edge, and so
+        // a fit always exists for the off-screen nudge below.
+        let max_w = (extent.width * 0.92).max(120.0);
+        let max_h = (extent.height * 0.92).max(80.0);
         let w = width.clamp(120.0, max_w);
         let h = height.clamp(80.0, max_h);
         if (w - open.last_size.0).abs() < 1.0 && (h - open.last_size.1).abs() < 1.0 {
@@ -233,6 +243,24 @@ impl WindowManager {
         }
         open.last_size = (w, h);
         open.window.set_inner_size(LogicalSize::new(w, h));
+
+        // The cascade offset (or a user-dragged position) plus the new size can
+        // spill off the right/bottom edge; nudge the window back so it stays fully
+        // visible. `w`/`h` are capped below the monitor extent, so `min <= max`
+        // holds and a fit always exists.
+        if let (Some(scale), Ok(pos)) = (
+            monitor.as_ref().map(|m| m.scale_factor()),
+            open.window.outer_position(),
+        ) {
+            let pos = pos.to_logical::<f64>(scale);
+            // `.max(origin)` keeps `min <= max` even if a degenerate monitor is
+            // narrower than the minimum window size (else `clamp` would panic).
+            let nx = pos.x.clamp(origin.x, (origin.x + extent.width - w).max(origin.x));
+            let ny = pos.y.clamp(origin.y, (origin.y + extent.height - h).max(origin.y));
+            if (nx - pos.x).abs() >= 1.0 || (ny - pos.y).abs() >= 1.0 {
+                open.window.set_outer_position(LogicalPosition::new(nx, ny));
+            }
+        }
     }
 
     /// Whether any resource windows are currently open.
@@ -267,6 +295,12 @@ impl WindowManager {
             Ok(window) => window,
             Err(error) => {
                 eprintln!("ix-windows: window for {}: {error}", pane.id);
+                // Record the key so a failing build is not retried on every
+                // snapshot (which would churn OS windows for a live resource on a
+                // host where window/webview creation persistently fails). Reuses
+                // the dismissal lifecycle: cleared when the resource vanishes or
+                // its producer disconnects, so a later environment can retry.
+                self.dismissed.insert(key);
                 return;
             }
         };
@@ -292,6 +326,9 @@ impl WindowManager {
             Ok(webview) => webview,
             Err(error) => {
                 eprintln!("ix-windows: webview for {}: {error}", pane.id);
+                // As above: don't re-attempt a persistently failing build every
+                // snapshot. The `window` local drops here, closing the OS window.
+                self.dismissed.insert(key);
                 return;
             }
         };
@@ -367,9 +404,16 @@ fn escape_text(text: &str) -> String {
 }
 
 /// Overlay shell styling: the document is fully transparent so the native blur
-/// shows through; the content lives in `#ix-root`, an inline-block panel that
-/// shrink-wraps its content (so the window can be sized to fit) with a faint
-/// tint for legibility over the blur and rounded corners matching the blur layer.
+/// shows through; the content lives in `#ix-root`, a panel sized to its content's
+/// intrinsic width (`width: max-content`) with a faint tint for legibility over
+/// the blur and rounded corners matching the blur layer.
+///
+/// `width: max-content` (not plain `inline-block` shrink-to-fit) is load-bearing:
+/// shrink-to-fit is capped at the containing block's width, i.e. the *current*
+/// (initially tiny) window, so content wider than the window would wrap and the
+/// window could never grow past its initial size. `max-content` measures the
+/// content's true intrinsic width independent of the viewport; `max-width` caps
+/// runaway width (the OS window resize is clamped to the monitor on top of that).
 const STYLE: &str = "\
 :root { color-scheme: dark; }
 html, body { margin: 0; padding: 0; background: transparent; }
@@ -379,6 +423,7 @@ body {
 }
 #ix-root {
   display: inline-block;
+  width: max-content;
   box-sizing: border-box;
   min-width: 120px;
   max-width: 1200px;
