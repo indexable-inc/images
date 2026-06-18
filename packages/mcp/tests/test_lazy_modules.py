@@ -119,6 +119,30 @@ def test_install_binds_proxies_outside_baseline_and_seeds_them() -> None:
     assert isinstance(sess.get("maps"), runtime._LazyModule)
 
 
+def test_new_session_gets_a_fresh_proxy_not_shared_user_state() -> None:
+    # A no-session cell (or a restored checkpoint) may rebind a lazy-module name in
+    # the shared namespace (e.g. `x = 5`, x being the Twitter module's name). A fresh
+    # session must NOT inherit that user value -- it gets its own lazy proxy.
+    saved = (
+        runtime._user_ns,
+        runtime._baseline_names,
+        runtime._lazy_module_names,
+        dict(runtime._session_namespaces),
+    )
+    try:
+        runtime._user_ns = {"Result": object(), "x": 5}  # shared dict holds user x=5
+        runtime._baseline_names = frozenset({"Result"})
+        runtime._lazy_module_names = frozenset({"x"})
+        runtime._session_namespaces.clear()
+        sess = runtime._session_ns("leak-test")
+        assert isinstance(sess["x"], runtime._LazyModule)  # the proxy, not 5
+        assert sess["x"] is not runtime._user_ns["x"]
+    finally:
+        runtime._user_ns, runtime._baseline_names, runtime._lazy_module_names, prev = saved
+        runtime._session_namespaces.clear()
+        runtime._session_namespaces.update(prev)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

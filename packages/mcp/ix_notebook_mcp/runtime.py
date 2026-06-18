@@ -2467,13 +2467,18 @@ def _session_ns(session: str | None) -> dict:
     ns = _session_namespaces.get(session)
     if ns is None:
         shared = _shared_ns()
-        # install() ran: seed exactly the helper surface plus the lazy module
-        # proxies (so `maps.nearby(...)` works with no import in this session too).
-        # A bare runtime where install() did not run (one-shot eval paths) falls
-        # back to forking the whole shared namespace, so the session still sees
-        # Result and friends.
-        names = (_baseline_names | _lazy_module_names) or frozenset(shared)
+        # install() ran: seed exactly the helper surface. A bare runtime where it
+        # did not (one-shot eval paths) falls back to forking the whole shared
+        # namespace, so the session still sees Result and friends.
+        names = _baseline_names or frozenset(shared)
         ns = {name: shared[name] for name in names if name in shared}
+        # Give the session its OWN fresh lazy proxies, so `maps.nearby(...)` works
+        # with no import here too -- but never copy `shared[name]` for a lazy name:
+        # a no-session cell (or a restored checkpoint) may have rebound that name to
+        # user state (e.g. `x = 5`), and copying it would leak one context's value
+        # into every fresh session. A fresh proxy is stateless and correct.
+        for name in _lazy_module_names:
+            ns[name] = _LazyModule(name)
         _session_namespaces[session] = ns
     return ns
 
