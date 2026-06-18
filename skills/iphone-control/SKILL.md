@@ -1,13 +1,13 @@
 ---
 name: iphone-control
-description: "Drive a USB-connected iPhone/iPad from the kernel iphone helper: screenshots, app launch, GPS, and real taps/typing via WebDriverAgent. Use when controlling a physical iOS device, automating an app, requesting a ride, or filling a form on a real iPhone. Covers the one-time human gates and the WDA gotchas."
+description: "Drive a physical iPhone/iPad (over USB cable or Wi-Fi) from the kernel iphone helper: screenshots, app launch, GPS, and real taps/typing via WebDriverAgent. Use when controlling a physical iOS device, automating an app, requesting a ride, or filling a form on a real iPhone, including cable-free over the network. Covers the one-time human gates, going wireless, and the WDA gotchas."
 ---
 
 ## iPhone control
 
-The kernel `iphone` helper (pymobiledevice3 9.27.0) drives a USB-connected
-device. Start every task with `await iphone.doctor()` — it names exactly which
-prerequisite is missing instead of a multi-step debug.
+The kernel `iphone` helper (pymobiledevice3 9.27.0) drives a physical device
+over USB **or** Wi-Fi. Start every task with `await iphone.doctor()` — it names
+exactly which prerequisite is missing instead of a multi-step debug.
 
 ### What works without WebDriverAgent
 
@@ -57,6 +57,46 @@ After both, `await iphone.wda_build_install()` builds+signs+installs WDA once
   uses W3C actions over a forwarded `:8100`.
 - **Coordinates are points**, not screenshot pixels (≈ pixels / device scale).
   `source()` rects are already in points; tap their centers.
+
+### Wireless (no cable)
+
+The helper is transport-agnostic: every call goes through `pymobiledevice3
+usbmux ...` and the `tunneld` daemon, both of which macOS serves over USB **and**
+Wi-Fi. `devices()` lists a network-connected device the same as a USB one (it
+even dedupes a device that shows up on both, see the `_one_device` comment). The
+WDA forward's local end is always `127.0.0.1:8100`; usbmux routes it to the
+device whether that hop is USB or Wi-Fi. So no code path is cable-specific.
+
+What you must do **once over the cable** to bootstrap (wireless cannot pair from
+nothing):
+
+1. Plug in and **Trust** the device (the pairing record persists on the Mac).
+2. Enable **Connect via network**: Xcode > Window > Devices & Simulators >
+   select the device > check "Connect via network". This is what makes macOS
+   `usbmuxd` advertise the device over the LAN.
+3. The usual one-time gates below (Developer Mode, Apple ID in Xcode,
+   `wda_build_install()`).
+
+Then unplug. On the same LAN the device stays reachable; for off-LAN, put the
+Mac and the iPhone on the same Tailscale network so the usbmux/tunnel hops
+resolve. Verify with `await iphone.devices()` (the row's `ConnectionType` reads
+`Network`) and proceed exactly as over USB.
+
+What is solid vs fragile wirelessly:
+
+- **Solid**: inventory (`devices`/`info`/`apps`), and all WDA UI control
+  (`source`, `tap`, `type_text`, the WDA screenshot) — these ride lockdown and
+  the WDA HTTP forward.
+- **Fragile**: the DVT developer services (`launch`, the DVT `screenshot`,
+  `simulate_location`, DDI mount) need the RemoteXPC tunnel, and `tunneld` over
+  Wi-Fi is less reliable than over USB on iOS 17+. If a DVT call hangs or fails
+  wirelessly, re-tether for that step. WDA-based automation (the common case) is
+  unaffected.
+
+**iPhone Mirroring is not a substitute**: it is a consumer feature with no API
+or CLI, room-range only (Bluetooth + same Apple ID, phone locked). Automating it
+would mean screen-scraping the Mac mirror window and posting synthetic events,
+which is far more brittle than the WDA path above. Use Wi-Fi WDA, not Mirroring.
 
 ### Safety
 
