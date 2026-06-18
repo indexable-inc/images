@@ -821,14 +821,17 @@ def register_resource(
     close. Move one by dragging its card chrome (the padding around the content);
     it is not resizable (size follows the content).
 
-    Write SELF-CONTAINED HTML. The body is rendered inside a sandboxed,
+    Prefer SELF-CONTAINED HTML. The body is rendered inside a sandboxed,
     opaque-origin ``<iframe>`` (``sandbox="allow-scripts"``, no
-    ``allow-same-origin``) with no page origin, in both the dashboard and the
-    overlay. So inline all CSS, JS, and data: external CDN scripts/styles,
-    same-origin ``fetch``, cookies, and storage are blocked. Pre-render anything
-    needing a library and embed the result -- e.g. render a mermaid diagram to SVG
-    server-side (``kroki.io``, the ``mermaid`` CLI, ...) and put the static
-    ``<svg>`` in the HTML; loading ``mermaid.js`` from a CDN silently fails.
+    ``allow-same-origin``) in both the dashboard and the overlay, so same-origin
+    ``fetch``, cookies, and storage are unavailable. Absolute HTTPS scripts/styles
+    may still load (subject to the browser and the remote server / CORS), but they
+    are a live network dependency, not an isolated pane -- and an ES-module
+    ``import`` from a CDN was observed to fail under the opaque origin. For
+    reproducible, offline panes, pre-render anything needing a library and embed
+    the static output -- e.g. render a mermaid diagram to SVG server-side
+    (``kroki.io``, the ``mermaid`` CLI, ...) and put the static ``<svg>`` in the
+    HTML.
 
     Returns the :class:`Resource` handle (call ``.close()`` to remove it).
     """
