@@ -974,6 +974,37 @@ main.dragging-v .splitter-v::after {
   letter-spacing: 0.05em;
 }
 
+/* Marks a root-cause derivation: its whole input closure is cache hits, so its
+ * own inputs changed and it is *why* this build happened. Every other build is a
+ * forced cascade beneath one of these. Filled accent so the triggers stand out
+ * from the cascade in a wall of rebuilding rows. */
+.drv-cause {
+  margin-left: 0.5ch;
+  padding: 0 0.3ch;
+  border-radius: 3px;
+  font-size: 0.85em;
+  background: var(--accent);
+  color: var(--bg);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat.cause {
+  color: var(--accent);
+}
+
+/* The "what changed" reason on a root-cause row (e.g. "input rustc changed").
+ * Muted accent text so it reads as an annotation, not a badge. */
+.drv-reason {
+  margin-left: 0.5ch;
+  font-size: 0.85em;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 32ch;
+}
+
 .where {
   font-size: inherit !important;
   color: var(--muted);

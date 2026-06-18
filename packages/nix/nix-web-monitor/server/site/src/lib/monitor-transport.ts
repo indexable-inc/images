@@ -41,6 +41,8 @@ type Working = {
   daemon: MonitorSnapshot['daemon'];
   expected: Record<string, number>;
   dependencies: DerivationEdge[];
+  rootCauses: string[];
+  rebuildReasons: Record<string, string>;
   exitCode: number | null;
   finished: boolean;
 };
@@ -64,6 +66,8 @@ function createWorking(): Working {
     },
     expected: {},
     dependencies: [],
+    rootCauses: [],
+    rebuildReasons: {},
     exitCode: null,
     finished: false
   };
@@ -108,6 +112,12 @@ export function applyDelta(working: Working, delta: Delta): Working {
     case 'dependenciesSet':
       working.dependencies = delta.edges;
       return working;
+    case 'rootCausesSet':
+      working.rootCauses = delta.derivations;
+      return working;
+    case 'rebuildReasonSet':
+      working.rebuildReasons = { ...working.rebuildReasons, [delta.derivation]: delta.reason };
+      return working;
     case 'finished':
       working.exitCode = delta.exitCode;
       working.finished = true;
@@ -127,6 +137,8 @@ function fromSnapshot(snapshot: MonitorSnapshot): Working {
     daemon: snapshot.daemon,
     expected: { ...snapshot.expected },
     dependencies: snapshot.dependencies,
+    rootCauses: snapshot.rootCauses,
+    rebuildReasons: { ...snapshot.rebuildReasons },
     exitCode: snapshot.exitCode,
     finished: snapshot.finished
   };
@@ -164,6 +176,8 @@ export function projectSnapshot(working: Working): MonitorSnapshot {
     daemon: working.daemon,
     expected: { ...working.expected },
     dependencies: working.dependencies,
+    rootCauses: working.rootCauses,
+    rebuildReasons: { ...working.rebuildReasons },
     exitCode: working.exitCode,
     finished: working.finished
   };

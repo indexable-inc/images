@@ -9,6 +9,7 @@ use tokio::sync::{RwLock, Semaphore, broadcast, mpsc};
 use tokio::task::JoinSet;
 
 use crate::broadcast_deltas;
+use crate::reasons::resolve_reason;
 
 /// Suffix Nix uses for derivation files. A derivation's closure also contains
 /// source paths; only the `.drv` entries are nodes in the build DAG.
@@ -87,8 +88,27 @@ async fn resolve_one(
         }
     };
 
-    monitor.write().await.record_closure(derivation, closure);
-    broadcast_deltas(monitor, deltas).await
+    monitor.write().await.record_closure(derivation.clone(), closure);
+    broadcast_deltas(monitor, deltas).await?;
+
+    // If this derivation is a root cause (all its inputs are cache hits, so it is
+    // the actual trigger), explain *what* changed by diffing it against its
+    // previous build. Cascades need no reason: they sit under a root in the tree.
+    //
+    // Detach it: reason resolution runs extra `nix` queries and is purely
+    // best-effort, so it must not hold this dependency-query permit, nor delay
+    // the resolver's completion -- `run_nix_command` waits on the resolver before
+    // emitting `finished`, so awaiting reasons here could hang the UI / a
+    // `--exit-when-done` run behind a slow store query. The spawned task writes
+    // the reason and broadcasts it whenever it lands (or is dropped at exit).
+    if monitor.read().await.is_root_cause(&derivation) {
+        let monitor = Arc::clone(monitor);
+        let deltas = deltas.clone();
+        tokio::spawn(async move {
+            let _ = resolve_reason(derivation, &monitor, &deltas).await;
+        });
+    }
+    Ok(())
 }
 
 /// Transitive input derivations of `derivation`, via the decade-stable

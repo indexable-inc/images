@@ -26,6 +26,13 @@
     /// Derivations on the path from the root to here. Guards against re-entering
     /// a node already above us, which a malformed cyclic edge set could induce.
     ancestors: ReadonlySet<string>;
+    /// Root-cause derivations (their whole input closure is cache hits, so they
+    /// are what actually changed). Such rows get a `cause` badge; everything else
+    /// is a forced cascade beneath one.
+    rootCauses: ReadonlySet<string>;
+    /// "What changed" per derivation (derivation path -> reason), shown on
+    /// root-cause rows: the answer to why Nix rebuilt this.
+    rebuildReasons: Record<string, string>;
   };
 
   const {
@@ -40,8 +47,15 @@
     guideLines,
     isLast,
     isRoot,
-    ancestors
+    ancestors,
+    rootCauses,
+    rebuildReasons
   }: Props = $props();
+
+  const isRootCause = $derived(rootCauses.has(drv));
+  /// "What changed" for this row, shown only on root causes (cascades are
+  /// explained by sitting under a root in the tree).
+  const reason = $derived(isRootCause ? (rebuildReasons[drv] ?? '') : '');
 
   const isCommandRoot = $derived(drv === ROOT_SENTINEL);
   const node = $derived(tree.nodeByDrv.get(drv));
@@ -88,6 +102,11 @@
     <span class="root-stats">
       {#if summary.failed > 0}<span class="stat failed">{summary.failed} failed</span>{/if}
       {#if summary.running > 0}<span class="stat running">{summary.running} running</span>{/if}
+      {#if rootCauses.size > 0}<span
+          class="stat cause"
+          title="root causes: builds whose own inputs changed; every other build is a forced cascade beneath one"
+          >{rootCauses.size} cause{rootCauses.size === 1 ? '' : 's'}</span
+        >{/if}
       <span class="stat done" title="succeeded / total">
         {summary.succeeded}<span class="stat-sep">/</span>{summary.total}
       </span>
@@ -142,6 +161,8 @@
           class="drv-version">{parts.version}</span
         >{/if}{#if parts.hash.length > 0}<span class="drv-hash">{shortHash(parts)}</span
         >{/if}{#if node.contentAddressed}<span class="drv-ca" title="content-addressed: Nix resolved this derivation before building it">ca</span
+        >{/if}{#if isRootCause}<span class="drv-cause" title="root cause: this derivation's own inputs changed (its whole input closure is cache hits), so it is why this build happened">cause</span
+        >{/if}{#if reason.length > 0}<span class="drv-reason" title="why this rebuilt: {reason}">{reason}</span
         >{/if}
     </span>
     {#if node.status !== 'planned'}
@@ -178,6 +199,8 @@
       isLast={index === children.length - 1}
       isRoot={false}
       ancestors={childAncestors}
+      {rootCauses}
+      {rebuildReasons}
     />
   {/each}
 {/if}

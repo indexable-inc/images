@@ -267,6 +267,14 @@ pub enum Delta {
     ErrorAppend { message: String },
     /// The dependency DAG was recomputed after learning new edges.
     DependenciesSet { edges: Vec<DerivationEdge> },
+    /// The set of root-cause derivations was recomputed. A root cause is a built
+    /// derivation whose entire input closure is cache hits, so it is what
+    /// actually changed; every other build is a forced cascade beneath one.
+    RootCausesSet { derivations: Vec<String> },
+    /// A human "what changed" explanation for one (root-cause) derivation, learned
+    /// out-of-band by the server diffing its `.drv` against the previous build
+    /// (e.g. "input rustc changed", "source changed", "no prior build").
+    RebuildReasonSet { derivation: String, reason: String },
     /// The wrapped Nix process exited; `exit_code` is its status if any.
     Finished { exit_code: Option<i32> },
 }
@@ -302,6 +310,14 @@ pub struct MonitorState {
     /// an identical `DependenciesSet`.
     #[serde(skip)]
     last_dependencies: Option<Vec<DerivationEdge>>,
+    /// Last root-cause set broadcast, to drop redundant `RootCausesSet` frames
+    /// the same way `last_dependencies` drops redundant `DependenciesSet` ones.
+    #[serde(skip)]
+    last_root_causes: Option<Vec<String>>,
+    /// Per-derivation "what changed" explanations, learned out-of-band by the
+    /// server diffing each root cause's `.drv` against its previous build. Keyed
+    /// by derivation path; only root causes are populated.
+    rebuild_reasons: BTreeMap<String, String>,
     /// Which section of a build-plan announcement the message stream is inside.
     /// Nix prints the plan as a header line followed by indented store paths;
     /// this tracks that the indented lines belong to the build list rather than
@@ -353,9 +369,37 @@ impl MonitorState {
             daemon: self.daemon.clone(),
             expected: self.expected.clone(),
             dependencies: dependency_edges(&self.closure_deps, &observed),
+            root_causes: root_cause_derivations(&self.closure_deps, &observed),
+            rebuild_reasons: self.rebuild_reasons.clone(),
             exit_code: self.exit_code,
             finished: self.finished,
         }
+    }
+
+    /// Whether `derivation` is a root cause right now: it is a built derivation
+    /// whose input closure has been queried and contains no other built
+    /// derivation (all its inputs are cache hits). The server calls this to
+    /// decide whether to compute a "what changed" reason for it.
+    #[must_use]
+    pub fn is_root_cause(&self, derivation: &str) -> bool {
+        if !self.builds.contains_key(derivation) {
+            return false;
+        }
+        self.closure_deps.get(derivation).is_some_and(|closure| {
+            !closure
+                .iter()
+                .any(|input| self.builds.contains_key(input.as_str()))
+        })
+    }
+
+    /// Record a server-computed "what changed" explanation for one derivation and
+    /// broadcast it, skipping a no-op repeat.
+    pub fn set_rebuild_reason(&mut self, derivation: String, reason: String) {
+        if self.rebuild_reasons.get(&derivation) == Some(&reason) {
+            return;
+        }
+        self.rebuild_reasons.insert(derivation.clone(), reason.clone());
+        self.emit(Delta::RebuildReasonSet { derivation, reason });
     }
 
     /// Take the deltas accumulated since the last drain. The transport calls
@@ -426,8 +470,13 @@ impl MonitorState {
     pub fn record_closure(&mut self, derivation: String, closure_drvs: BTreeSet<String>) {
         self.closure_deps.insert(derivation, closure_drvs);
         let observed: BTreeSet<&str> = self.builds.keys().map(String::as_str).collect();
+        // Compute both before emitting: `observed` borrows `self.builds`, so its
+        // borrow must end before the `emit_*` calls take `&mut self`.
         let edges = dependency_edges(&self.closure_deps, &observed);
+        let causes = root_cause_derivations(&self.closure_deps, &observed);
+        drop(observed);
         self.emit_dependencies(edges);
+        self.emit_root_causes(causes);
     }
 
     /// Broadcast a recomputed edge set only when it differs from the last one.
@@ -440,6 +489,17 @@ impl MonitorState {
         }
         self.last_dependencies = Some(edges.clone());
         self.emit(Delta::DependenciesSet { edges });
+    }
+
+    /// Broadcast a recomputed root-cause set only when it differs from the last,
+    /// mirroring [`emit_dependencies`](Self::emit_dependencies): closure queries
+    /// arrive faster than the classification actually changes.
+    fn emit_root_causes(&mut self, derivations: Vec<String>) {
+        if self.last_root_causes.as_ref() == Some(&derivations) {
+            return;
+        }
+        self.last_root_causes = Some(derivations.clone());
+        self.emit(Delta::RootCausesSet { derivations });
     }
 
     pub fn apply_line(&mut self, line: &str) -> ParsedLine {
@@ -902,6 +962,33 @@ fn dependency_edges(
     edges
 }
 
+/// The built derivations that are *root causes* of this build: those whose entire
+/// transitive input `.drv` closure is cache hits (none of their inputs are
+/// themselves being built). These are what actually changed; every other built
+/// derivation is a forced cascade, since Nix rehashes everything downstream of a
+/// changed input.
+///
+/// A derivation whose closure has not been queried yet cannot be classified, so
+/// it is omitted rather than guessed (the next closure that arrives recomputes
+/// this). Sorted for a stable wire order.
+fn root_cause_derivations(
+    closure_deps: &BTreeMap<String, BTreeSet<String>>,
+    built: &BTreeSet<&str>,
+) -> Vec<String> {
+    let mut causes: Vec<String> = built
+        .iter()
+        .filter(|derivation| {
+            // Only classify once the closure is known; a root has no built input.
+            closure_deps.get(**derivation).is_some_and(|closure| {
+                !closure.iter().any(|input| built.contains(input.as_str()))
+            })
+        })
+        .map(|derivation| (*derivation).to_owned())
+        .collect();
+    causes.sort();
+    causes
+}
+
 /// Whether `text` is the header that precedes Nix's "will be built" derivation
 /// list. Nix uses the plural "these N derivations will be built:" and the
 /// singular "this derivation will be built:"; matching the shared suffix covers
@@ -972,6 +1059,18 @@ pub struct MonitorSnapshot {
     /// `from` directly requires `to`. Derived from `direct_deps` at snapshot
     /// time, restricted to built derivations and transitively reduced.
     pub dependencies: Vec<DerivationEdge>,
+    /// Built derivations whose entire transitive input closure is cache hits, so
+    /// they are the actual *cause* of this build: their own source/inputs changed.
+    /// Every other build is a forced cascade beneath one of these (Nix rehashes
+    /// everything downstream of a changed input). A build whose closure has not
+    /// been queried yet is omitted until it can be classified. Derived at
+    /// snapshot time from the closures and the built set, like `dependencies`.
+    pub root_causes: Vec<String>,
+    /// Per-derivation "what changed" explanations for root causes (e.g. "input
+    /// rustc changed", "source changed", "no prior build to compare"), learned by
+    /// the server diffing each root's `.drv` against its previous build. Keyed by
+    /// derivation path; absent for derivations not yet (or never) explained.
+    pub rebuild_reasons: BTreeMap<String, String>,
     pub exit_code: Option<i32>,
     pub finished: bool,
 }
@@ -1704,6 +1803,25 @@ mod tests {
             dependency_edges(&closure, &rendered),
             vec![edge("a", "b"), edge("b", "c")]
         );
+    }
+
+    #[test]
+    fn root_causes_are_builds_with_no_built_input() {
+        // a -> b -> c, all being built; only c (no built input) is the root
+        // cause. a and b are forced cascades. d has no closure recorded yet, so
+        // it is omitted (not yet classifiable) rather than wrongly called a root.
+        let closure = closures(&[("a", &["b", "c"]), ("b", &["c"]), ("c", &[])]);
+        let built = BTreeSet::from(["a", "b", "c", "d"]);
+        assert_eq!(root_cause_derivations(&closure, &built), vec!["c".to_owned()]);
+    }
+
+    #[test]
+    fn root_causes_ignore_cached_inputs() {
+        // a's only input `x` is not being built (a cache hit), so a is a root
+        // cause even though its closure is non-empty.
+        let closure = closures(&[("a", &["x"])]);
+        let built = BTreeSet::from(["a"]);
+        assert_eq!(root_cause_derivations(&closure, &built), vec!["a".to_owned()]);
     }
 
     #[test]

@@ -27,6 +27,7 @@ use tower_http::services::ServeDir;
 
 mod daemon;
 mod dependencies;
+mod reasons;
 use daemon::run_daemon_probe;
 use dependencies::resolve_dependencies;
 
@@ -108,6 +109,10 @@ async fn main() -> Result<()> {
         .get_matches();
     let args = Args::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     validate_site_dir(&args.site_dir)?;
+
+    // Record startup before any build runs: the "what changed" reason baseline
+    // uses it to exclude outputs registered during this run (see `reasons`).
+    reasons::record_start_time();
 
     let index_html =
         Bytes::from(std::fs::read(args.site_dir.join("index.html")).context("reading index.html")?);

@@ -16,6 +16,13 @@
   type Props = {
     builds: BuildNode[];
     dependencies: DerivationEdge[];
+    /// Root-cause derivations: builds whose whole input closure is cache hits, so
+    /// their own inputs changed. Marked with a `cause` badge; every other build
+    /// is a forced cascade beneath one.
+    rootCauses: string[];
+    /// "What changed" per root-cause derivation (path -> reason), shown on those
+    /// rows: the answer to why Nix rebuilt them.
+    rebuildReasons: Record<string, string>;
     /// The Nix invocation, shown as the tree's single root label.
     command: string;
     expected: Record<string, number>;
@@ -33,6 +40,8 @@
   const {
     builds,
     dependencies,
+    rootCauses,
+    rebuildReasons,
     command,
     expected,
     finished,
@@ -42,6 +51,9 @@
   }: Props = $props();
 
   const now = useNow();
+
+  /// Root-cause derivations as a set for O(1) per-row lookup.
+  const rootCauseSet = $derived(new Set(rootCauses));
 
   /// Running first, then failed, stopped, and finally succeeded; ties broken by
   /// derivation path. Shared by the flat list and the dependency tree so both
@@ -254,6 +266,8 @@
           isLast={index === tree.roots.length - 1}
           isRoot={true}
           ancestors={new Set()}
+          rootCauses={rootCauseSet}
+          {rebuildReasons}
         />
       {:else}
         <div class="empty wide">{emptyLabel}</div>
@@ -287,6 +301,11 @@
                 >{shortHash(parts)}</span
               >{/if}{#if build.contentAddressed}<span class="drv-ca"
                 title="content-addressed: Nix resolved this derivation before building it">ca</span
+              >{/if}{#if rootCauseSet.has(build.derivation)}<span class="drv-cause"
+                title="root cause: this derivation's own inputs changed (its whole input closure is cache hits), so it is why this build happened">cause</span
+              >{/if}{#if rootCauseSet.has(build.derivation) && (rebuildReasons[build.derivation] ?? '').length > 0}<span
+                class="drv-reason" title="why this rebuilt: {rebuildReasons[build.derivation]}"
+                >{rebuildReasons[build.derivation]}</span
               >{/if}
           </div>
           <div class="where" class:remote={isRemote(build.host)} title={whereLabel(build.host)}>

@@ -124,6 +124,15 @@ export const snapshotSchema = v.object({
   daemon: daemonInfoSchema,
   expected: v.record(v.string(), v.number()),
   dependencies: v.array(derivationEdgeSchema),
+  /// Built derivations that are root *causes*: their whole input closure is
+  /// cache hits, so their own source/inputs changed. Every other build is a
+  /// forced cascade beneath one of these. Used to mark which builds are the
+  /// actual triggers vs. dragged-along rebuilds.
+  rootCauses: v.array(v.string()),
+  /// "What changed" per root-cause derivation: derivation path -> human reason
+  /// (e.g. "input rustc changed", "source changed", "no prior build to compare").
+  /// Computed by the server diffing each root's `.drv` against its previous build.
+  rebuildReasons: v.record(v.string(), v.string()),
   exitCode: v.nullable(v.number()),
   finished: v.boolean()
 });
@@ -143,6 +152,8 @@ export const deltaSchema = v.variant('type', [
   v.object({ type: v.literal('expectedSet'), name: v.string(), value: v.number() }),
   v.object({ type: v.literal('errorAppend'), message: v.string() }),
   v.object({ type: v.literal('dependenciesSet'), edges: v.array(derivationEdgeSchema) }),
+  v.object({ type: v.literal('rootCausesSet'), derivations: v.array(v.string()) }),
+  v.object({ type: v.literal('rebuildReasonSet'), derivation: v.string(), reason: v.string() }),
   v.object({ type: v.literal('finished'), exitCode: v.nullable(v.number()) })
 ]);
 
@@ -192,6 +203,8 @@ export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
   },
   expected: {},
   dependencies: [],
+  rootCauses: [],
+  rebuildReasons: {},
   exitCode: null,
   finished: false
 });
