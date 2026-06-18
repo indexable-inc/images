@@ -191,8 +191,9 @@ def set_dashboard_url(url: str) -> None:
     it straight out of the ``initialize`` response -- the agent has the URL from
     the first message, with no tool call to look it up. The CLI calls this once
     the dashboard has bound its port, before the transport serves ``initialize``.
-    The URL is stashed so a tool call can surface it; the dashboard is opened
-    manually (`nix run .#mcp -- dashboard`), never auto-popped on a tool call.
+    The URL is stashed so a tool call can surface it, never auto-popped in a
+    browser. The human-facing UI is the standalone aggregator (`nix run
+    .#dashboard`), which renders every server at once.
     """
     global _dashboard_url
     _dashboard_url = url
