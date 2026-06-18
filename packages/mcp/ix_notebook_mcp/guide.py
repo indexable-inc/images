@@ -179,6 +179,13 @@ VERIFY = (
     "'the tab switches on screen'."
 )
 
+AUTOMERGE = (
+    "By default, merge a pull request you open yourself rather than handing it back: once its "
+    "required checks are green, resolve your own review threads and merge it (through the merge "
+    "queue when the repo sets one). Leave a PR open only when the change genuinely needs human "
+    "sign-off or the user asked you to."
+)
+
 HTML = (
     "htpy (build HTML in Python with `div(class_='x')[...]`; it auto-escapes every text node and "
     "attribute, so use it instead of f-string HTML, which is where escaping gets forgotten; an "
