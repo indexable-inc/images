@@ -29,7 +29,9 @@ What needs what (iOS 17+):
   full Xcode + an Apple ID in Xcode) and started (``wda_start(sudo=True)``);
   ``source()`` returns the live accessibility tree (with rects) as a polars
   frame, which is ground truth for where to tap even when a GPU/Metal view
-  screenshots black.
+  screenshots black. Taps take POINTS; screenshots come back in PIXELS (``scale``×
+  bigger). Prefer ``tap_element(label=...)`` or ``tap(px, py, space="pixels")`` /
+  ``space="fraction"`` over hand-converting (see ``screen()``).
 
 Run ``iphone.doctor()`` to see exactly which prerequisite is missing.
 
@@ -76,6 +78,7 @@ __all__ = [
     "kill",
     "launch",
     "press",
+    "screen",
     "screenshot",
     "simulate_location",
     "source",
@@ -92,6 +95,7 @@ __all__ = [
     "wda_start",
     "wda_status",
     "wda_stop",
+    "window_size",
 ]
 
 _TUNNELD_HOST = "127.0.0.1"
@@ -242,6 +246,11 @@ async def screenshot(udid: str | None = None) -> Image.Image:
     running, captures via WDA instead: while an XCUITest session holds the
     display, the DVT screenshot returns a black frame, so WDA is the reliable
     source during automation.
+
+    The image is in PIXELS, which is ``scale``× the point grid taps use. When WDA
+    is up the returned image's ``.info`` carries ``scale``, ``point_size`` and
+    ``pixel_size`` so coordinates can be reconciled; to tap a spot you see here,
+    pass ``tap(px, py, space="pixels")`` rather than the raw numbers.
     """
     import base64
     import io
@@ -254,7 +263,12 @@ async def screenshot(udid: str | None = None) -> Image.Image:
         value = await _wda("GET", "/screenshot")
         png = base64.b64decode(str(value))
         with Image.open(io.BytesIO(png)) as img:
-            return img.copy()
+            shot = img.copy()
+        scale = await _screen_scale()
+        shot.info["scale"] = scale
+        shot.info["pixel_size"] = shot.size
+        shot.info["point_size"] = (round(shot.width / scale), round(shot.height / scale))
+        return shot
 
     target = await _resolve(udid)
     with tempfile.TemporaryDirectory() as tmp:
@@ -542,6 +556,9 @@ _WDA_LOCAL_PORT = 8100  # local end of the usbmux forward to WDA's device port
 _wda_xcuitest_proc: asyncio.subprocess.Process | None = None
 _wda_forward_proc: asyncio.subprocess.Process | None = None
 _wda_session: str | None = None
+# Display scale (pixels per point) of the bound device. Fixed per device, so
+# cache it after the first lookup; cleared whenever a fresh runner is bound.
+_wda_scale: float | None = None
 # The device the running WDA runner/forward target, so wda_start does not silently
 # report "already running" for a different udid than the caller asked for.
 _wda_device: str | None = None
@@ -676,8 +693,110 @@ async def source() -> pl.DataFrame:
     return pl.DataFrame(rows, schema=schema)
 
 
-async def tap(x: int, y: int) -> None:
-    """Tap at screen coordinates (points) on the active WDA device, via W3C actions."""
+async def _require_wda() -> None:
+    """Raise a one-line, actionable error when WDA is not reachable.
+
+    UI actions otherwise fail deep inside a urllib stack on the first HTTP call,
+    which reads as a crash rather than a missing precondition.
+    """
+    if not await _wda_up():
+        raise IphoneError(
+            "WebDriverAgent is not reachable; run iphone.wda_start(sudo=True) "
+            "first (one-time install via iphone.wda_build_install())."
+        )
+
+
+# Coordinate spaces a caller may supply. Taps/swipes/element rects are in POINTS
+# (what WDA wants); screenshots come back in PIXELS (points × display scale); a
+# FRACTION is a 0..1 share of the screen, invariant to how an image was rendered.
+_COORD_SPACES = ("points", "pixels", "fraction")
+
+
+def _to_points(
+    x: float,
+    y: float,
+    space: str,
+    scale: float,
+    size: tuple[int, int],
+) -> tuple[int, int]:
+    """Convert an (x, y) in ``space`` to integer device points.
+
+    Pure (no I/O) so it is unit-testable: ``scale`` is pixels-per-point and
+    ``size`` is the screen's (width, height) in points.
+    """
+    if space == "points":
+        return round(x), round(y)
+    if space == "pixels":
+        return round(x / scale), round(y / scale)
+    if space == "fraction":
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+            raise IphoneError(f"fraction coordinates must be in 0..1, got ({x}, {y})")
+        return round(x * size[0]), round(y * size[1])
+    raise IphoneError(f"unknown coordinate space {space!r}; use one of {_COORD_SPACES}")
+
+
+async def _screen_scale() -> float:
+    """Display scale (pixels per point) of the bound device, cached."""
+    global _wda_scale
+    if _wda_scale is None:
+        info = await _wda_in_session("GET", "/wda/screen")
+        scale = info.get("scale") if isinstance(info, dict) else None
+        if not isinstance(scale, (int, float)) or scale <= 0:
+            raise IphoneError(f"WDA reported no usable display scale: {info!r}")
+        _wda_scale = float(scale)
+    return _wda_scale
+
+
+async def window_size() -> tuple[int, int]:
+    """Screen size in points (width, height) for the active orientation."""
+    value = await _wda_in_session("GET", "/window/size")
+    if not isinstance(value, dict) or "width" not in value or "height" not in value:
+        raise IphoneError(f"WDA window size returned no dimensions: {value!r}")
+    return int(value["width"]), int(value["height"])
+
+
+async def screen() -> dict[str, object]:
+    """Screen geometry: points (w, h), pixels (w, h), and the pixels/point scale.
+
+    Use this to reconcile a screenshot (pixels) with taps (points): a control at
+    pixel (px, py) in a screenshot is at point (px/scale, py/scale). Prefer
+    ``tap_element`` or ``tap(..., space="fraction")`` so you never do the math by
+    hand.
+    """
+    pts = await window_size()
+    scale = await _screen_scale()
+    return {
+        "points": pts,
+        "pixels": (round(pts[0] * scale), round(pts[1] * scale)),
+        "scale": scale,
+    }
+
+
+async def _resolve_points(x: float, y: float, space: str) -> tuple[int, int]:
+    """Turn caller coordinates in ``space`` into device points (fetching geometry
+    only when the space actually needs it)."""
+    if space == "points":
+        return _to_points(x, y, space, 1.0, (0, 0))
+    scale = await _screen_scale() if space == "pixels" else 1.0
+    size = await window_size() if space == "fraction" else (0, 0)
+    return _to_points(x, y, space, scale, size)
+
+
+async def tap(x: float, y: float, *, space: str = "points") -> None:
+    """Tap the screen via WDA's W3C actions.
+
+    ``space`` selects the coordinate system of ``x``/``y``:
+    ``"points"`` (default, what WDA and ``source()`` rects use), ``"pixels"``
+    (as read off a ``screenshot()``), or ``"fraction"`` (0..1 share of the
+    screen, robust to image rescaling).
+
+    Prefer ``tap_element(label=...)`` when the control has an accessibility
+    label, or ``space="fraction"`` when eyeballing a screenshot. Never feed pixel
+    coordinates read off a screenshot as default (points): a screenshot is
+    ``scale``× larger than the point grid (see ``screen()``), so they land short.
+    """
+    await _require_wda()
+    px, py = await _resolve_points(x, y, space)
     await _wda_in_session(
         "POST",
         "/actions",
@@ -688,7 +807,7 @@ async def tap(x: int, y: int) -> None:
                     "id": "finger1",
                     "parameters": {"pointerType": "touch"},
                     "actions": [
-                        {"type": "pointerMove", "duration": 0, "x": x, "y": y},
+                        {"type": "pointerMove", "duration": 0, "x": px, "y": py},
                         {"type": "pointerDown", "button": 0},
                         {"type": "pause", "duration": 90},
                         {"type": "pointerUp", "button": 0},
@@ -700,7 +819,13 @@ async def tap(x: int, y: int) -> None:
 
 
 async def tap_element(*, name: str | None = None, label: str | None = None) -> None:
-    """Find an element by accessibility name or label and tap its center."""
+    """Find an element by accessibility name or label and tap its center.
+
+    The most reliable way to tap: rects come straight from the accessibility tree
+    in points, so there is no coordinate-space guesswork. Prefer this over raw
+    ``tap`` whenever the target has a name/label.
+    """
+    await _require_wda()
     frame = await source()
     import polars as pl
 
@@ -720,14 +845,22 @@ async def tap_element(*, name: str | None = None, label: str | None = None) -> N
 
 
 async def swipe(
-    start_x: int,
-    start_y: int,
-    end_x: int,
-    end_y: int,
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
     *,
     duration: float = 0.3,
+    space: str = "points",
 ) -> None:
-    """Swipe between two screen coordinates (points) via the W3C Actions API."""
+    """Swipe between two screen coordinates via the W3C Actions API.
+
+    ``space`` is the coordinate system of both endpoints — ``"points"`` (default),
+    ``"pixels"`` (screenshot coordinates), or ``"fraction"`` (0..1) — see ``tap``.
+    """
+    await _require_wda()
+    sx, sy = await _resolve_points(start_x, start_y, space)
+    ex, ey = await _resolve_points(end_x, end_y, space)
     await _wda_in_session(
         "POST",
         "/actions",
@@ -738,9 +871,9 @@ async def swipe(
                     "id": "finger1",
                     "parameters": {"pointerType": "touch"},
                     "actions": [
-                        {"type": "pointerMove", "duration": 0, "x": start_x, "y": start_y},
+                        {"type": "pointerMove", "duration": 0, "x": sx, "y": sy},
                         {"type": "pointerDown", "button": 0},
-                        {"type": "pointerMove", "duration": int(duration * 1000), "x": end_x, "y": end_y},
+                        {"type": "pointerMove", "duration": int(duration * 1000), "x": ex, "y": ey},
                         {"type": "pointerUp", "button": 0},
                     ],
                 }
@@ -751,16 +884,19 @@ async def swipe(
 
 async def type_text(text: str) -> None:
     """Type into the focused field (tap a field first) via WDA."""
+    await _require_wda()
     await _wda_in_session("POST", "/wda/keys", {"value": list(text)})
 
 
 async def press(button: str) -> None:
     """Press a hardware button via WDA (home / volumeUp / volumeDown)."""
+    await _require_wda()
     await _wda_in_session("POST", "/wda/pressButton", {"name": button})
 
 
 async def home() -> None:
     """Go to the home screen via WDA (the home-button gesture)."""
+    await _require_wda()
     await _wda_in_session("POST", "/wda/pressButton", {"name": "home"})
 
 
@@ -912,7 +1048,7 @@ async def wda_start(*, sudo: bool = False, udid: str | None = None) -> str:
     the developer tunnel, ``sudo=True`` (same root-daemon opt-in as
     ``start_tunneld``). Returns once WDA answers, with a session ready for taps.
     """
-    global _wda_xcuitest_proc, _wda_forward_proc, _wda_session, _wda_device
+    global _wda_xcuitest_proc, _wda_forward_proc, _wda_session, _wda_device, _wda_scale
 
     target = await _resolve(udid)
     if await _wda_up():
@@ -935,7 +1071,9 @@ async def wda_start(*, sudo: bool = False, udid: str | None = None) -> str:
         )
     if _wda_xcuitest_proc is None or _wda_xcuitest_proc.returncode is not None:
         # A fresh runner means any cached session id is dead; force a new one.
+        # The scale belongs to the device being (re)bound, so re-read it too.
         _wda_session = None
+        _wda_scale = None
         _wda_device = target
         _wda_xcuitest_proc = await asyncio.create_subprocess_exec(
             *_pmd3_argv(),
