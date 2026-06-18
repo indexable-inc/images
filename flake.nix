@@ -112,8 +112,18 @@
     # instead of the upstream crate2nix `Cargo.nix`. The Cargo workspace lives in
     # the repo's `snix/` subdirectory. Pinned in flake.lock; `nix flake update
     # snix-src` to bump.
+    #
+    # `shallow=1` is load-bearing, not cosmetic: only the source tree at the
+    # pinned rev is ever used (`ix.snixSrc` -> `packages/nix/snix`), never git
+    # history or `revCount`. Without it the lock records `revCount`, which forces
+    # Nix to clone snix's entire ~22k-commit history (~500 MB) to materialize the
+    # input. nix-direnv's `use flake` then runs `nix flake archive` on every cold
+    # load (it gc-roots every input), so that full clone ran on each fresh
+    # `direnv` load and hung the shell for minutes. git.snix.dev serves an
+    # arbitrary SHA at depth 1, so the shallow fetch grabs just the pinned commit
+    # (~2 s) even after `canon` has moved ahead of the pin.
     snix-src = {
-      url = "git+https://git.snix.dev/snix/snix?ref=canon";
+      url = "git+https://git.snix.dev/snix/snix?ref=canon&shallow=1";
       flake = false;
     };
 

@@ -416,12 +416,13 @@
         "narHash": "sha256-NKP/1lgKRne7+nW8MaTQbPtfVPa4mqZuvIBcai4neDM=",
         "ref": "canon",
         "rev": "3251a55da2c9ebdf7392e281d959eb70ed5b6054",
-        "revCount": 22462,
+        "shallow": true,
         "type": "git",
         "url": "https://git.snix.dev/snix/snix"
       },
       "original": {
         "ref": "canon",
+        "shallow": true,
         "type": "git",
         "url": "https://git.snix.dev/snix/snix"
       }
