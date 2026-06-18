@@ -286,14 +286,17 @@ impl WindowManager {
         // Cascade each overlay so several do not perfectly overlap.
         let step = f64::from(self.opened % 8) * 32.0;
         self.opened = self.opened.wrapping_add(1);
-        // Borderless + transparent + always-on-top: a floating overlay card. The
-        // macOS window server only rounds *titled* windows, so dropping
-        // decorations leaves the corners to the blur view's own rounded layer.
+        // Borderless + transparent + always-on-top: a floating overlay card. Not
+        // user-resizable -- the window size is owned by the content (auto-fit via
+        // `resize`), so a manual drag would just fight the next content report.
+        // `install_blur` rounds the corners (the macOS server only rounds *titled*
+        // windows, so a borderless window is square until its layer is rounded).
         let builder = tao::window::WindowBuilder::new()
             .with_title(&pane.title)
             .with_decorations(false)
             .with_transparent(true)
             .with_always_on_top(true)
+            .with_resizable(false)
             .with_inner_size(LogicalSize::new(INITIAL_SIZE.0, INITIAL_SIZE.1))
             .with_position(LogicalPosition::new(64.0 + step, 64.0 + step));
         let window = match builder.build(target) {
@@ -602,6 +605,15 @@ fn install_blur(window: &Window) {
         // Place the blur beneath the webview (added as the content view's first
         // subview), so the rendered HTML paints on top of it.
         content.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, None);
+
+        // Round the *content view* itself (not just the blur), so the webview on
+        // top is clipped to the same radius -- otherwise its square layer paints
+        // over the blur's rounded corners and the overlay looks square.
+        content.setWantsLayer(true);
+        if let Some(layer) = content.layer() {
+            layer.setCornerRadius(14.0);
+            layer.setMasksToBounds(true);
+        }
 
         ns_window.setHasShadow(true);
         ns_window.invalidateShadow();
