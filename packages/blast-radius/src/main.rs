@@ -20,7 +20,7 @@ use clap::Parser;
 use color_eyre::eyre::{Result, bail};
 
 use causes::{Caps, root_causes};
-use report::{Report, categories};
+use report::Report;
 
 /// Phase labels are kebab-case and stable: they appear in CI logs and in
 /// `report.json.phaseTimings`, so renaming them breaks downstream readers.
@@ -269,7 +269,6 @@ fn main() -> Result<()> {
         base: short(&revs.base),
         head: short(&revs.head),
         total,
-        categories: categories(&changed, &added),
         causes: causes.into_iter().map(Into::into).collect(),
         changed,
         added,

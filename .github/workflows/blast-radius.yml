@@ -155,8 +155,6 @@ jobs:
               (.added   | type == "array") and
               (.removed | type == "array") and
               ((.changed + .added + .removed) | all(name_ok)) and
-              (.categories | type == "array") and
-              (.categories | all((.name | name_ok) and (.count | type == "number"))) and
               (.causes | type == "array") and
               (.causes | all((.name | name_ok) and (.checks | type == "array") and (.checks | all(name_ok)))) and
               # `timings` is optional (omitted when empty by the Rust crate via
@@ -206,13 +204,7 @@ jobs:
             (if ((.added | length) > 0) or ((.removed | length) > 0)
              then "", "\(.added | length) added, \(.removed | length) removed"
              else empty end),
-            # v1: proportions of what rebuilt, by check family.
-            (if (.categories | length) > 0
-             then "", "```mermaid", "pie showData title Rebuilt checks by category",
-                  (.categories[] | "  \"\(.name | safename)\" : \(.count)"),
-                  "```"
-             else empty end),
-            # v2: which changed inputs fan out to which checks (top causes). A
+            # Which changed inputs fan out to which checks (top causes). A
             # single-check cause is the same node twice (the cause drv is that
             # check own per-unit derivation), so render it as one node labeled
             # with the check name and skip the arrow; multi-check causes still

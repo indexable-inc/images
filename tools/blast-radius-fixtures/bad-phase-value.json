@@ -1,4 +1,4 @@
 {"base":"aaaaaaa","head":"bbbbbbb","total":1,
  "changed":[],"added":[],"removed":[],
- "categories":[],"causes":[],
+ "causes":[],
  "phaseTimings":{"eval-base":"23s"}}

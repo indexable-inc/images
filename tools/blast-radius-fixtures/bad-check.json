@@ -1,2 +1,2 @@
 {"base":"aaaaaaa","head":"bbbbbbb","total":1,"changed":[],"added":[],"removed":[],
- "categories":[],"causes":[{"name":"x","checks":["ok","`rm -rf`"]}]}
+ "causes":[{"name":"x","checks":["ok","`rm -rf`"]}],"phaseTimings":{"total":1.0}}

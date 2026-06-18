@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 
-use crate::causes::{Cause, category};
+use crate::causes::Cause;
 
 /// Maximum number of changed-check bullets to render in the `<details>` list.
 /// A PR touching a shared input rebuilds thousands of checks (on ix, 3817 of
@@ -21,12 +21,6 @@ use crate::causes::{Cause, category};
 /// caps identically; the `<summary>` carries the true total and the full list
 /// lives in the run artifact and logs.
 pub const CHANGED_LIST_CAP: usize = 200;
-
-#[derive(Debug, Serialize)]
-pub struct Category {
-    pub name: String,
-    pub count: usize,
-}
 
 #[derive(Debug, Serialize)]
 pub struct CauseJson {
@@ -52,7 +46,6 @@ pub struct Report {
     pub changed: Vec<String>,
     pub added: Vec<String>,
     pub removed: Vec<String>,
-    pub categories: Vec<Category>,
     pub causes: Vec<CauseJson>,
     /// Per-attribute wall-clock seconds from the prior successful Check run on
     /// the base branch (see [`crate::timings`]). Empty when no prior run was
@@ -83,28 +76,6 @@ pub fn format_seconds(seconds: f64) -> String {
     } else {
         format!("{:.0}h", (seconds / 3600.0).round())
     }
-}
-
-/// Count `changed + added` checks by category, most-rebuilt family first.
-pub fn categories(changed: &[String], added: &[String]) -> Vec<Category> {
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for name in changed.iter().chain(added) {
-        *counts.entry(category(name)).or_insert(0) += 1;
-    }
-    let mut categories: Vec<Category> = counts
-        .into_iter()
-        .map(|(name, count)| Category {
-            name: name.to_owned(),
-            count,
-        })
-        .collect();
-    categories.sort_by(|left, right| {
-        right
-            .count
-            .cmp(&left.count)
-            .then_with(|| left.name.cmp(&right.name))
-    });
-    categories
 }
 
 impl Report {
@@ -140,14 +111,6 @@ impl Report {
                 self.added.len(),
                 self.removed.len()
             );
-        }
-
-        if !self.categories.is_empty() {
-            out.push_str("\n```mermaid\npie showData title Rebuilt checks by category\n");
-            for category in &self.categories {
-                let _ = writeln!(out, "  \"{}\" : {}", category.name, category.count);
-            }
-            out.push_str("```\n");
         }
 
         if !self.causes.is_empty() {
@@ -228,24 +191,6 @@ mod tests {
             ],
             added: vec!["mcp-evalSmoke".into()],
             removed: vec![],
-            categories: vec![
-                Category {
-                    name: "rust".into(),
-                    count: 2,
-                },
-                Category {
-                    name: "mcp".into(),
-                    count: 2,
-                },
-                Category {
-                    name: "image".into(),
-                    count: 1,
-                },
-                Category {
-                    name: "lint".into(),
-                    count: 1,
-                },
-            ],
             causes: vec![
                 CauseJson {
                     name: "ix-rust-workspace".into(),

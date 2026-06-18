@@ -6,14 +6,6 @@
 1 added, 0 removed
 
 ```mermaid
-pie showData title Rebuilt checks by category
-  "rust" : 2
-  "mcp" : 2
-  "image" : 1
-  "lint" : 1
-```
-
-```mermaid
 flowchart LR
   c0["ix-rust-workspace"]
   c1["image-base (<1s)"]

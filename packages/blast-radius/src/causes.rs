@@ -140,15 +140,6 @@ pub fn root_causes(
     causes
 }
 
-/// A check's category for the v1 breakdown: the segment before the first dash
-/// (`image-foo` -> `image`, `rust-test-bar` -> `rust`, `lint` -> `lint`).
-pub fn category(name: &str) -> &str {
-    match name.split('-').next() {
-        Some(head) if !head.is_empty() => head,
-        _ => name,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,12 +308,5 @@ mod tests {
         assert_eq!(causes.len(), 1);
         assert_eq!(causes[0].name, "wide");
         assert_eq!(causes[0].checks, vec!["rust-1", "rust-2"]);
-    }
-
-    #[test]
-    fn category_splits_on_first_dash() {
-        assert_eq!(category("image-foo"), "image");
-        assert_eq!(category("rust-test-bar"), "rust");
-        assert_eq!(category("lint"), "lint");
     }
 }

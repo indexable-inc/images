@@ -23,7 +23,7 @@ yq '.jobs.comment.steps[] | select(.name == "Render comment").run' "$workflow" >
 validate() { ( cd "$tmp" && cp "$1" report.json && bash validate.sh ); }
 
 # Schema validation: the good report passes; hostile and old (missing
-# categories/causes/phaseTimings) reports are rejected fail-closed. The two
+# causes/phaseTimings) reports are rejected fail-closed. The two
 # `bad-phase-*` fixtures pin the kebab-case key constraint and the number-
 # typed value constraint that keep an attacker from smuggling shapes into
 # the artifact.
@@ -36,7 +36,7 @@ for bad in bad-name bad-check missing bad-phase-key bad-phase-value; do
   fi
 done
 
-# Render: the good report produces the golden comment (pie + flowchart + list).
+# Render: the good report produces the golden comment (flowchart + list).
 # `phaseTimings` is observability-only and never renders, so the golden
 # comment from a report carrying phaseTimings has no trace of those keys;
 # any drift here means the renderer leaked them.
