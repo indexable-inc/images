@@ -58,10 +58,16 @@ pub enum UserEvent {
         width: f64,
         height: f64,
     },
-    /// The user pressed on the card chrome; begin an interactive move of the
-    /// window. A borderless, non-resizable window has no native title bar to
-    /// drag, so `OUTER_JS` starts the drag and the loop calls `drag_window`.
+    /// The user pressed on the card chrome (or Cmd-pressed anywhere); begin an
+    /// interactive move of the window. A borderless, non-resizable window has no
+    /// native title bar to drag, so `OUTER_JS` starts the drag and the loop calls
+    /// `drag_window`.
     Drag { window: WindowId },
+    /// The user clicked the floating close button; dismiss this window. A
+    /// borderless window has no native close control, so the card paints its own
+    /// `×` and posts `"close"`, which the loop routes to
+    /// [`WindowManager::window_closed`].
+    Close { window: WindowId },
 }
 
 /// A pane's global identity across producers: `(producer id, pane id)`. A pane id
@@ -200,9 +206,11 @@ impl WindowManager {
         self.dismissed.retain(|(p, _)| p != producer);
     }
 
-    /// Forget a window the user closed (an OS `CloseRequested`) and remember the
-    /// dismissal so a later snapshot for the still-live resource does not re-open
-    /// it. Returns whether the window was one of ours.
+    /// Forget a window the user closed (an OS `CloseRequested`, or the card's own
+    /// floating `×` via [`UserEvent::Close`]) and remember the dismissal so a
+    /// later snapshot for the still-live resource does not re-open it. Removing it
+    /// from `windows` drops the `OpenWindow`, which closes the OS window. Returns
+    /// whether the window was one of ours.
     pub fn window_closed(&mut self, window: WindowId) -> bool {
         let Some(key) = self.by_window.remove(&window) else {
             return false;
@@ -334,6 +342,16 @@ impl WindowManager {
         };
         let id = window.id();
 
+        // A per-window secret the trusted outer document embeds in its close
+        // message. Producer HTML runs in a sandboxed, opaque-origin iframe that
+        // cannot read the outer document, so it can never learn this token --
+        // making `close` unforgeable from producer script even on engines where
+        // the injected `window.ipc` reaches subframes (e.g. WebView2). `drag`
+        // stays intentionally relayable from the iframe (that is how Cmd-drag over
+        // content works), but dismissing a window must be trusted-only.
+        let token = close_token();
+        let close_msg = format!("close:{token}");
+
         // The page measures its content and posts `"<w>x<h>"`; forward that as a
         // resize event tagged with this window so the loop can fit it.
         let proxy = self.proxy.clone();
@@ -343,6 +361,8 @@ impl WindowManager {
                 let body = request.body().as_str();
                 if body == "drag" {
                     let _ = proxy.send_event(UserEvent::Drag { window: id });
+                } else if body == close_msg {
+                    let _ = proxy.send_event(UserEvent::Close { window: id });
                 } else if let Some((w, h)) = parse_size(body) {
                     let _ = proxy.send_event(UserEvent::Resize {
                         window: id,
@@ -351,7 +371,7 @@ impl WindowManager {
                     });
                 }
             })
-            .with_html(shell(&pane.title, html))
+            .with_html(shell(&pane.title, html, &token))
             .build(&window)
         {
             Ok(webview) => webview,
@@ -422,16 +442,33 @@ fn parse_size(body: &str) -> Option<(f64, f64)> {
 ///
 /// The initial body rides in the iframe's `srcdoc` attribute (attribute-escaped);
 /// updates swap the `.srcdoc` property (see [`OpenWindow::refresh`]).
-fn shell(title: &str, body: &str) -> String {
+///
+/// `token` is this window's close secret: it is defined as a global only in this
+/// trusted document (unreachable from the sandboxed iframe) and appended to the
+/// `close` IPC message, so producer script cannot forge a dismissal. It is hex
+/// (`close_token`), so it needs no escaping inside the JS string literal.
+fn shell(title: &str, body: &str, token: &str) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <title>{title}</title><style>{STYLE}</style></head>\
-<body><div id=\"ix-root\"><iframe id=\"ix-frame\" sandbox=\"allow-scripts\" \
-srcdoc=\"{srcdoc}\"></iframe></div><script>{OUTER_JS}</script></body></html>",
+<body><div id=\"ix-root\"><div id=\"ix-close\" title=\"Close\">\u{00d7}</div>\
+<iframe id=\"ix-frame\" sandbox=\"allow-scripts\" \
+srcdoc=\"{srcdoc}\"></iframe></div>\
+<script>window.IX_CLOSE_TOKEN=\"{token}\";{OUTER_JS}</script></body></html>",
         title = escape_text(title),
         srcdoc = escape_attr(&inner_document(body)),
     )
+}
+
+/// An unguessable per-window token for the trusted `close` message: 128 bits of
+/// OS randomness (`uuid` v4), rendered as 32 hex chars. Producer script is
+/// untrusted and, on engines where the injected `window.ipc` reaches subframes,
+/// could otherwise brute-force a predictable token; random bits remove that. It
+/// lives only in the outer document, which the sandboxed opaque-origin iframe
+/// cannot read, so the producer never sees it.
+fn close_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 /// The sandboxed inner document for the iframe: the producer `body` verbatim in an
@@ -465,18 +502,23 @@ fn escape_attr(text: &str) -> String {
 }
 
 /// Outer (trusted) document styling: fully transparent so the native blur shows
-/// through; `#ix-root` is the tinted, rounded, padded card that wraps the iframe.
-/// The iframe is transparent and chrome-less; the outer script sizes it to the
-/// content size the inner document reports, so `#ix-root` shrink-wraps it.
+/// through; `#ix-root` is the tinted, rounded card that wraps the iframe edge to
+/// edge (no padding) plus the floating `#ix-close` control. The iframe is
+/// transparent and chrome-less; the outer script sizes it to the content size the
+/// inner document reports, so `#ix-root` shrink-wraps it.
 const STYLE: &str = "\
 :root { color-scheme: dark; }
 html, body { margin: 0; padding: 0; background: transparent; }
 #ix-root {
+  position: relative;
   display: inline-block;
   box-sizing: border-box;
-  padding: 16px 18px;
-  background: rgba(30, 30, 46, 0.30);
+  background: rgba(30, 30, 46, 0.20);
   border-radius: 14px;
+  /* No padding: producer content runs flush to the card edge. `overflow:hidden`
+     clips the square-cornered iframe to the card's rounded corners (the native
+     layer rounds the window, but the iframe's own corners would still poke out). */
+  overflow: hidden;
 }
 #ix-frame {
   display: block;
@@ -485,6 +527,40 @@ html, body { margin: 0; padding: 0; background: transparent; }
   width: 120px;
   height: 80px;
 }
+/* Borderless windows have no native close control, so the card paints its own.
+   It floats over the top-right corner at a faint base opacity, brightening on
+   hover. A faint *always-on* base (not reveal-on-card-hover) is deliberate: the
+   content fills the card via a sandboxed iframe, and hovering inside that opaque-
+   origin iframe does not set `:hover` on the parent card, so a pure
+   `#ix-root:hover` reveal would only ever show while the cursor sat on the button
+   itself -- undiscoverable.
+   `position: fixed` (not absolute) pins it to the webview viewport's top-right:
+   when a resource is wider/taller than the monitor clamp the window shows scroll-
+   bars over the oversized `#ix-root`, and an absolutely-positioned control would
+   sit at the off-screen content edge. `#ix-root` sets no transform/filter, so the
+   fixed control also escapes its `overflow:hidden` clip. */
+#ix-close {
+  position: fixed;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 13px/1 ui-monospace, 'SF Mono', Menlo, monospace;
+  color: #cdd6f4;
+  background: rgba(40, 40, 60, 0.55);
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.12s ease, background 0.12s ease;
+  -webkit-user-select: none;
+  user-select: none;
+}
+#ix-root:hover #ix-close { opacity: 0.75; }
+#ix-close:hover { background: rgba(220, 80, 90, 0.9); opacity: 1; }
 ";
 
 /// Inner (sandboxed) document styling: transparent so the outer card tint shows;
@@ -509,8 +585,8 @@ body {
   min-width: 120px;
   max-width: 1200px;
 }
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: rgba(137, 140, 160, 0.5); border-radius: 5px; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-thumb { background: rgba(137, 140, 160, 0.5); border-radius: 2px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ";
 
@@ -523,30 +599,49 @@ const OUTER_JS: &str = "\
 (function () {
   var frame = document.getElementById('ix-frame');
   var root = document.getElementById('ix-root');
+  var close = document.getElementById('ix-close');
   if (!frame || !root) return;
-  // Drag the borderless window by its chrome: a mousedown that reaches this
-  // (outer, trusted) document landed on the card padding/background, not inside
-  // the iframe (which captures its own events), so producer content stays
-  // interactive while the surrounding card is a move handle.
+  function ipc(msg) { if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(msg); }
+  // Drag the borderless window by any bare card chrome: a mousedown that reaches
+  // this (outer, trusted) document landed outside the iframe (which captures its
+  // own events). With zero padding the card shrink-wraps the content, so this
+  // fires rarely; the iframe relays Cmd-drag and empty-background drags below.
   root.addEventListener('mousedown', function (event) {
-    if (event.button !== 0) return;
-    if (window.ipc && window.ipc.postMessage) window.ipc.postMessage('drag');
+    if (event.button !== 0 || event.target === close) return;
+    ipc('drag');
   });
+  if (close) {
+    // Dismiss this window. The close message carries this window's secret token
+    // (defined only in this trusted document, unreadable by the sandboxed iframe),
+    // so producer script cannot forge a dismissal even if `window.ipc` reaches it.
+    // No mousedown guard is needed: the root drag handler above already ignores
+    // presses whose target is the close button.
+    close.addEventListener('click', function (event) {
+      event.stopPropagation();
+      ipc('close:' + (window.IX_CLOSE_TOKEN || ''));
+    });
+  }
   window.addEventListener('message', function (event) {
     if (event.source !== frame.contentWindow) return;
     var data = event.data;
+    // The iframe relays a Cmd-press (or a press on its empty background) so the
+    // window stays movable even though content fills the card edge to edge.
+    if (data && data.t === 'ixdrag') { ipc('drag'); return; }
     if (!data || data.t !== 'ixsize') return;
     var w = Number(data.w), h = Number(data.h);
-    // Reject garbage (non-finite, negative) but allow zero: empty or zero-height
-    // content is a valid report, and the outer card padding + the Rust-side min
-    // clamp still give the window a sane size.
+    // Reject only garbage and negatives. Zero is a valid report (an empty resource,
+    // or one that cleared its body): with zero padding we must still resize, or the
+    // window would strand at its previous/initial size showing a blank, click-
+    // blocking, always-on-top card. Floor the applied iframe size to 1px so the
+    // measured card stays positive; Rust's `parse_size`/min-clamp then shrinks the
+    // window to the minimum card (120x80) instead of dropping the report.
     if (!isFinite(w) || !isFinite(h) || w < 0 || h < 0) return;
-    frame.style.width = w + 'px';
-    frame.style.height = h + 'px';
+    frame.style.width = Math.max(w, 1) + 'px';
+    frame.style.height = Math.max(h, 1) + 'px';
     requestAnimationFrame(function () {
       var rw = Math.ceil(root.offsetWidth);
       var rh = Math.ceil(root.offsetHeight);
-      if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(rw + 'x' + rh);
+      ipc(rw + 'x' + rh);
     });
   });
 })();
@@ -554,12 +649,36 @@ const OUTER_JS: &str = "\
 
 /// Runs inside the sandboxed iframe. Measures the producer content panel and posts
 /// its pixel size to the parent whenever it changes (coalesced to one report per
-/// frame, deduped). It can only `postMessage` -- the sandbox denies it any access
-/// to the parent document, `window.ipc`, cookies, storage, or local files.
+/// frame, deduped), and relays a window-move gesture (Cmd+press anywhere, or a
+/// press on the bare background) so the borderless window stays movable with no
+/// card padding. It can only `postMessage` -- the sandbox denies it any access to
+/// the parent document, `window.ipc`, cookies, storage, or local files.
 const INNER_JS: &str = "\
 (function () {
   var root = document.getElementById('ix-content');
   if (!root) return;
+  // Keep the borderless window movable even though content fills it edge to edge:
+  // a Cmd+press anywhere (works over content, without stealing clicks or text
+  // selection) or a plain press on the bare background (no element under it)
+  // relays a move gesture to the parent. The sandbox permits postMessage out but
+  // grants no other access to the parent document.
+  // Capture phase (the `true` below) so the gesture is seen even when producer
+  // content (terminals, canvas widgets, draggable controls) calls
+  // `stopPropagation()` on bubbling mousedowns -- otherwise such a card, having no
+  // bare background, would be immovable.
+  document.addEventListener('mousedown', function (event) {
+    if (event.button !== 0) return;
+    var bare = event.target === document.body || event.target === root;
+    if (!event.metaKey && !bare) return;
+    // Only suppress the default for a bare-background press, where it would start
+    // a text selection. For a Cmd-press we deliberately do NOT preventDefault, so
+    // an ordinary Cmd-click on producer content (e.g. open-in-... on a link) keeps
+    // working: the relayed drag only actually moves the window if the pointer then
+    // moves (a no-move Cmd-click round-trips to `drag_window` after mouseup, a
+    // no-op), so click and window-move don't collide.
+    if (bare && !event.metaKey) event.preventDefault();
+    parent.postMessage({ t: 'ixdrag' }, '*');
+  }, true);
   var lastW = -1, lastH = -1, pending = false;
   function report() {
     pending = false;
@@ -708,11 +827,11 @@ fn enable_high_refresh(webview: &WebView) {
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_attr, escape_text, inner_document, parse_size, shell};
+    use super::{close_token, escape_attr, escape_text, inner_document, parse_size, shell};
 
     #[test]
     fn shell_sandboxes_body_in_an_iframe_and_escapes_title() {
-        let out = shell("a <b> & c", "<p>hi</p>");
+        let out = shell("a <b> & c", "<p>hi</p>", "deadbeef");
         // Producer body lives in a sandboxed iframe, never in the trusted document.
         assert!(out.contains("<iframe id=\"ix-frame\" sandbox=\"allow-scripts\""));
         assert!(!out.contains("<div id=\"ix-root\"><p>hi</p>"));
@@ -726,9 +845,31 @@ mod tests {
     fn shell_does_not_run_producer_script_in_the_trusted_document() {
         // A `<script>` in the body must end up inside the srcdoc attribute value
         // (escaped), not as a live top-level <script> in the outer document.
-        let out = shell("t", "<script>steal()</script>");
+        let out = shell("t", "<script>steal()</script>", "deadbeef");
         assert!(!out.contains("<script>steal()</script>"));
         assert!(out.contains("&lt;script&gt;steal()&lt;/script&gt;"));
+    }
+
+    #[test]
+    fn shell_embeds_close_token_in_the_trusted_document_only() {
+        // The token defines the secret the close button appends; it lives in the
+        // outer document (a top-level <script>), never inside the sandboxed iframe's
+        // srcdoc, so the producer cannot read it to forge a dismissal.
+        let out = shell("t", "<p>hi</p>", "deadbeef");
+        assert!(out.contains("window.IX_CLOSE_TOKEN=\"deadbeef\""));
+        // The srcdoc (everything the iframe sees) must not contain the token.
+        let srcdoc = out.split("srcdoc=\"").nth(1).unwrap();
+        let srcdoc = srcdoc.split("\"></iframe>").next().unwrap();
+        assert!(!srcdoc.contains("deadbeef"));
+    }
+
+    #[test]
+    fn close_token_is_128_bit_hex_and_unique() {
+        let t = close_token();
+        assert_eq!(t.len(), 32, "uuid v4 simple form is 32 hex chars");
+        assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
+        // Two tokens must differ (random, not a shared constant).
+        assert_ne!(close_token(), close_token());
     }
 
     #[test]

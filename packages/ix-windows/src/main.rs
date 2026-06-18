@@ -85,6 +85,9 @@ fn main() {
             Event::UserEvent(UserEvent::Drag { window }) => {
                 manager.begin_drag(window);
             }
+            Event::UserEvent(UserEvent::Close { window }) => {
+                manager.window_closed(window);
+            }
             Event::WindowEvent {
                 window_id,
                 event: WindowEvent::CloseRequested,

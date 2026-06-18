@@ -22,6 +22,9 @@ dashboard-core.workspace = true
 serde_json.workspace = true
 tao.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "net", "io-util", "time"] }
+# `v4` for the per-window close token: a 128-bit OS-random value, unguessable by
+# sandboxed producer script (see `close_token`).
+uuid = { workspace = true, features = ["v4"] }
 wry.workspace = true
 
 # Native macOS overlay styling via objc2: the `NSVisualEffectView` blur behind

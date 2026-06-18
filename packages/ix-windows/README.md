@@ -30,10 +30,15 @@ tiling, no layout manager.
   content grows.
 - **Floating across spaces.** The window is always-on-top and joins all spaces /
   floats over fullscreen apps (`NSWindowCollectionBehavior`).
-- **Move, don't resize.** The card is borderless, so there is no title bar: drag
-  it by its **chrome** (the padding/background around the content) to move it. The
-  window is not user-resizable -- its size is owned by the content (auto-fit), so a
-  manual resize would just fight the next content report.
+- **Move with Cmd+drag.** The card is borderless and runs content flush to its
+  edge (no padding), so there is no chrome to grab. Hold **Cmd** and drag anywhere
+  -- even over content -- to move it (an ordinary Cmd+click on content still works);
+  a drag on any bare background area moves it too. The window is not user-resizable
+  -- its size is owned by the content (auto-fit), so a manual resize would just
+  fight the next content report.
+- **Close.** Each card paints its own floating close button (top-right corner,
+  faint until hovered). Closing a window keeps it shut even while its resource is
+  still live; it reopens only if the resource is re-registered.
 
 ## Self-contained HTML only
 

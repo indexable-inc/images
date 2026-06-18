@@ -4118,6 +4118,7 @@ dependencies = [
  "serde_json",
  "tao",
  "tokio",
+ "uuid",
  "wry",
 ]
 
