@@ -251,6 +251,31 @@ def repo_identity(cwd: str | None, transcript_dir: str) -> str | None:
     return slug if slug != "unknown" else None
 
 
+def legacy_state_slugs(sessions: list[Session]) -> list[str]:
+    """Old per-cwd state filenames the given sessions wrote before repo-keying.
+
+    Before this change the state file was keyed on the raw cwd slug
+    (``/home/u/repo`` -> ``home-u-repo.json``); now it is keyed on the repo
+    identity (``repo.json``). On the first run after the switch the new path is
+    absent, so ``state.load`` would silently start fresh and the rewritten
+    corpus would drop every previously learned item. Returning the legacy
+    slug(s) for a repo's sessions lets ``load`` migrate the old file forward
+    (newest cwd first, so the most recent silo wins on collision).
+    """
+    seen: set[str] = set()
+    slugs: list[str] = []
+    for session in sorted(sessions, key=lambda s: s.last_ts or 0, reverse=True):
+        cwd = session.cwd
+        if not cwd:
+            continue
+        slug = project_slug(cwd)
+        if slug == "unknown" or slug in seen:
+            continue
+        seen.add(slug)
+        slugs.append(slug)
+    return slugs
+
+
 def scan(root: Path, days: float, now: float | None = None) -> dict[str, list[Session]]:
     """Parse every transcript under ``root`` newer than the window.
 

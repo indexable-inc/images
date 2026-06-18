@@ -20,10 +20,22 @@ def state_path(out_dir: Path, user: str, slug: str) -> Path:
     return out_dir / "state" / user / f"{slug}.json"
 
 
-def load(out_dir: Path, user: str, slug: str) -> State:
+def load(out_dir: Path, user: str, slug: str, legacy_slugs: list[str] | None = None) -> State:
     path = state_path(out_dir, user, slug)
     if not path.is_file():
-        return State()
+        # First run after repo-keying: the canonical path does not exist yet, so
+        # adopt the newest legacy per-cwd file (``home-u-repo.json``) if one is
+        # present. The run then re-saves under the canonical slug, migrating the
+        # learned items forward instead of starting from an empty corpus.
+        for legacy in legacy_slugs or ():
+            if legacy == slug:
+                continue
+            legacy_path = state_path(out_dir, user, legacy)
+            if legacy_path.is_file():
+                path = legacy_path
+                break
+        else:
+            return State()
     try:
         data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):

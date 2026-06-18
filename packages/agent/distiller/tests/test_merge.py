@@ -190,3 +190,71 @@ def test_load_schema_invalid_json_returns_empty(tmp_path: Path) -> None:
     loaded = state_mod.load(tmp_path, "u", "repo")
     assert loaded.items == []
     assert loaded.project is None
+
+
+def test_legacy_state_slugs_dedupes_newest_first() -> None:
+    """The legacy per-cwd slugs are the old state filenames, newest cwd first."""
+    from distiller.transcripts import Session, legacy_state_slugs
+
+    sessions = [
+        Session(session_id="a", path="a.jsonl", cwd="/home/u/repo", last_ts=100.0),
+        Session(session_id="b", path="b.jsonl", cwd="/home/u/Github/repo", last_ts=200.0),
+        Session(session_id="c", path="c.jsonl", cwd="/home/u/repo", last_ts=50.0),
+        Session(session_id="d", path="d.jsonl", cwd=None, last_ts=300.0),
+    ]
+    # Newest distinct cwd first; the duplicate /home/u/repo collapses; None drops.
+    assert legacy_state_slugs(sessions) == ["home-u-Github-repo", "home-u-repo"]
+
+
+def test_load_migrates_legacy_cwd_state(tmp_path: Path) -> None:
+    """First run after repo-keying adopts the old per-cwd state file so that
+    previously learned items are not silently dropped from the rewritten corpus.
+    """
+    from distiller import state as state_mod
+
+    legacy = {
+        "project": "/home/u/repo",
+        "items": [{"id": "df-old", "title": "Kept lesson", "body": "Do the thing."}],
+        "distilled_sessions": {"s1": "3:100"},
+        "session_outcomes": {},
+    }
+    # Old key was the raw cwd slug; new canonical key is the repo basename.
+    legacy_path = tmp_path / "state" / "u" / "home-u-repo.json"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(json.dumps(legacy))
+    assert not (tmp_path / "state" / "u" / "repo.json").is_file()
+
+    loaded = state_mod.load(tmp_path, "u", "repo", legacy_slugs=["home-u-repo"])
+    assert [item.id for item in loaded.items] == ["df-old"]
+    assert loaded.distilled_sessions == {"s1": "3:100"}
+
+
+def test_load_prefers_canonical_over_legacy(tmp_path: Path) -> None:
+    """Once the canonical file exists, the legacy file is ignored (no re-merge)."""
+    from distiller import state as state_mod
+
+    base = tmp_path / "state" / "u"
+    base.mkdir(parents=True)
+    (base / "repo.json").write_text(
+        json.dumps(
+            {
+                "project": "repo",
+                "items": [{"id": "df-new", "title": "Current", "body": "x"}],
+                "distilled_sessions": {},
+                "session_outcomes": {},
+            }
+        )
+    )
+    (base / "home-u-repo.json").write_text(
+        json.dumps(
+            {
+                "project": "/home/u/repo",
+                "items": [{"id": "df-old", "title": "Stale", "body": "y"}],
+                "distilled_sessions": {},
+                "session_outcomes": {},
+            }
+        )
+    )
+
+    loaded = state_mod.load(tmp_path, "u", "repo", legacy_slugs=["home-u-repo"])
+    assert [item.id for item in loaded.items] == ["df-new"]

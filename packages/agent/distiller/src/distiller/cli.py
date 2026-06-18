@@ -107,7 +107,11 @@ def run(args: argparse.Namespace) -> int:
 
     for project, sessions in sorted(groups.items()):
         slug = project  # scan() already keys groups by the canonical repo slug
-        st = state.load(args.out, args.user, slug)
+        # Migrate any pre-repo-keying state (keyed on the raw cwd slug) on the
+        # first run after the switch, so previously learned items survive.
+        st = state.load(
+            args.out, args.user, slug, legacy_slugs=transcripts.legacy_state_slugs(sessions)
+        )
         st.project = project
         seen = st.distilled_sessions
         fresh = [
