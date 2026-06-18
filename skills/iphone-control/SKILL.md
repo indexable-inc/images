@@ -77,10 +77,12 @@ nothing):
 3. The usual one-time gates below (Developer Mode, Apple ID in Xcode,
    `wda_build_install()`).
 
-Then unplug. On the same LAN the device stays reachable; for off-LAN, put the
-Mac and the iPhone on the same Tailscale network so the usbmux/tunnel hops
-resolve. Verify with `await iphone.devices()` (the row's `ConnectionType` reads
-`Network`) and proceed exactly as over USB.
+Then unplug. On the same LAN the device stays reachable. Verify with
+`await iphone.devices()` (the row's `ConnectionType` reads `Network`) and proceed
+exactly as over USB. Off-LAN does **not** work as-is: macOS `usbmuxd` discovers
+network devices via Bonjour/mDNS on the local segment, which an L3 overlay like
+Tailscale does not satisfy, and the helper only targets a UDID that
+`usbmux list` already shows. Keep the Mac and device on the same LAN.
 
 What is solid vs fragile wirelessly:
 
