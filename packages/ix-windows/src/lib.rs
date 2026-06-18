@@ -642,8 +642,16 @@ const OUTER_JS: &str = "\
     frame.style.width = Math.max(w, 1) + 'px';
     frame.style.height = Math.max(h, 1) + 'px';
     requestAnimationFrame(function () {
-      var rw = Math.ceil(root.offsetWidth);
-      var rh = Math.ceil(root.offsetHeight);
+      // Measure with getBoundingClientRect (sub-pixel) and round UP, not
+      // offsetWidth/Height (which round to the nearest integer, usually down): a
+      // rounded-down report makes the OS window a fraction smaller than the card,
+      // so the content overflows by < 1px and a scrollbar appears (and that
+      // scrollbar then nudges the other axis into overflowing too). Ceiling the
+      // true fractional size guarantees the window is >= the content, so neither
+      // axis scrolls.
+      var rect = root.getBoundingClientRect();
+      var rw = Math.ceil(rect.width);
+      var rh = Math.ceil(rect.height);
       ipc(rw + 'x' + rh);
     });
   });
@@ -685,8 +693,13 @@ const INNER_JS: &str = "\
   var lastW = -1, lastH = -1, pending = false;
   function report() {
     pending = false;
-    var w = Math.ceil(root.offsetWidth);
-    var h = Math.ceil(root.offsetHeight);
+    // getBoundingClientRect + ceil (not offsetWidth/Height, which round to the
+    // nearest integer and can land a pixel under the true fractional content
+    // width): rounding up guarantees the iframe the outer doc sizes to this is
+    // >= the content, so the producer pane never shows a sub-pixel scrollbar.
+    var rect = root.getBoundingClientRect();
+    var w = Math.ceil(rect.width);
+    var h = Math.ceil(rect.height);
     if (w === lastW && h === lastH) return;
     lastW = w; lastH = h;
     parent.postMessage({ t: 'ixsize', w: w, h: h }, '*');
