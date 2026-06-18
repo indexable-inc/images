@@ -18,6 +18,16 @@ export default defineConfig({
       $lib: fileURLToPath(new URL('./src/lib', import.meta.url))
     }
   },
+  // Pre-bundle @xyflow/svelte so Vitest's browser dep optimizer does not
+  // discover it mid-run, re-optimize, and reload the page. That reload is the
+  // "[vitest] Vite unexpectedly reloaded a test" flake: updates.test.ts (and
+  // others) transitively import the diagram components that use @xyflow/svelte,
+  // so the first test that touches one triggers a re-optimize+reload and the
+  // suite is reported as "0 passed", failing CI. Listing it here forces it into
+  // the initial optimize pass. See the Vite warning's own remediation.
+  optimizeDeps: {
+    include: ['@xyflow/svelte']
+  },
   plugins: [
     svelte({
       extensions: ['.svelte', '.svx'],
