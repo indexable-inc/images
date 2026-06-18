@@ -317,8 +317,8 @@ impl WindowManager {
         // It stays movable: `OUTER_JS` starts a window drag on mousedown over the
         // card chrome (`UserEvent::Drag` -> `drag_window`), since a borderless,
         // non-resizable window has no native title bar to grab.
-        // `install_blur` rounds the corners (the macOS server only rounds *titled*
-        // windows, so a borderless window is square until its layer is rounded).
+        // The overlay is a square card: a borderless window has square corners by
+        // default and `install_blur` adds no layer rounding.
         let builder = tao::window::WindowBuilder::new()
             .with_title(&pane.title)
             .with_decorations(false)
@@ -514,10 +514,8 @@ html, body { margin: 0; padding: 0; background: transparent; }
   display: inline-block;
   box-sizing: border-box;
   background: rgba(30, 30, 46, 0.20);
-  border-radius: 14px;
-  /* No padding: producer content runs flush to the card edge. `overflow:hidden`
-     clips the square-cornered iframe to the card's rounded corners (the native
-     layer rounds the window, but the iframe's own corners would still poke out). */
+  /* Square card (no border-radius). `overflow:hidden` still clips producer
+     content to the card bounds. */
   overflow: hidden;
 }
 #ix-frame {
@@ -747,23 +745,11 @@ fn install_blur(window: &Window) {
         effect.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
-        effect.setWantsLayer(true);
-        if let Some(layer) = effect.layer() {
-            layer.setCornerRadius(14.0);
-            layer.setMasksToBounds(true);
-        }
         // Place the blur beneath the webview (added as the content view's first
-        // subview), so the rendered HTML paints on top of it.
+        // subview), so the rendered HTML paints on top of it. A borderless window
+        // is square by default, and we keep it square: no layer cornerRadius on
+        // the blur or the content view.
         content.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, None);
-
-        // Round the *content view* itself (not just the blur), so the webview on
-        // top is clipped to the same radius -- otherwise its square layer paints
-        // over the blur's rounded corners and the overlay looks square.
-        content.setWantsLayer(true);
-        if let Some(layer) = content.layer() {
-            layer.setCornerRadius(14.0);
-            layer.setMasksToBounds(true);
-        }
 
         ns_window.setHasShadow(true);
         ns_window.invalidateShadow();
