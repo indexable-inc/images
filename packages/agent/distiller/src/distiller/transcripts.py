@@ -261,14 +261,17 @@ def legacy_state_slugs(sessions: list[Session]) -> list[str]:
     corpus would drop every previously learned item. Returning the legacy
     slug(s) for a repo's sessions lets ``load`` migrate the old file forward
     (newest cwd first, so the most recent silo wins on collision).
+
+    The old key used ``_resolve_path`` -- the recorded ``cwd`` when present, else
+    the decoded transcript-dir name -- so a session that never recorded a ``cwd``
+    still wrote a legacy file under that decoded path. Use the same fallback here
+    so those transcripts migrate too instead of starting from empty state.
     """
     seen: set[str] = set()
     slugs: list[str] = []
     for session in sorted(sessions, key=lambda s: s.last_ts or 0, reverse=True):
-        cwd = session.cwd
-        if not cwd:
-            continue
-        slug = project_slug(cwd)
+        raw = _resolve_path(session.cwd, Path(session.path).parent.name)
+        slug = project_slug(raw)
         if slug == "unknown" or slug in seen:
             continue
         seen.add(slug)

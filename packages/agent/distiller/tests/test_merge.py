@@ -200,10 +200,25 @@ def test_legacy_state_slugs_dedupes_newest_first() -> None:
         Session(session_id="a", path="a.jsonl", cwd="/home/u/repo", last_ts=100.0),
         Session(session_id="b", path="b.jsonl", cwd="/home/u/Github/repo", last_ts=200.0),
         Session(session_id="c", path="c.jsonl", cwd="/home/u/repo", last_ts=50.0),
-        Session(session_id="d", path="d.jsonl", cwd=None, last_ts=300.0),
     ]
-    # Newest distinct cwd first; the duplicate /home/u/repo collapses; None drops.
+    # Newest distinct cwd first; the duplicate /home/u/repo collapses.
     assert legacy_state_slugs(sessions) == ["home-u-Github-repo", "home-u-repo"]
+
+
+def test_legacy_state_slugs_falls_back_to_transcript_dir() -> None:
+    """A cwd-less session keyed off the decoded transcript dir, like old scan()."""
+    from distiller.transcripts import Session, legacy_state_slugs
+
+    # No recorded cwd: old _resolve_path used the decoded `-home-u-repo` dir name.
+    sessions = [
+        Session(
+            session_id="a",
+            path="/x/.claude/projects/-home-u-repo/a.jsonl",
+            cwd=None,
+            last_ts=10.0,
+        ),
+    ]
+    assert legacy_state_slugs(sessions) == ["home-u-repo"]
 
 
 def test_load_migrates_legacy_cwd_state(tmp_path: Path) -> None:
