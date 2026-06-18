@@ -72,7 +72,10 @@ def main(argv: list[str] | None = None) -> int:
         "session", nargs="?", metavar="FILE", help="Session file to create or reopen"
     )
     notebook.add_argument("--workdir", help="Directory the kernel runs in (default: cwd)")
-    sub.add_parser("dashboard", help="Open the running server's dashboard URL")
+    sub.add_parser(
+        "dashboard",
+        help="Print/open this server's data-API URL (run `nix run .#dashboard` for the human UI)",
+    )
     sub.add_parser(
         "requirements",
         help="Report each external credential the bundled tooling needs: present "
