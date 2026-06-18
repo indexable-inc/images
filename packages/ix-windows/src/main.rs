@@ -82,6 +82,9 @@ fn main() {
             }) => {
                 manager.resize(window, width, height);
             }
+            Event::UserEvent(UserEvent::Drag { window }) => {
+                manager.begin_drag(window);
+            }
             Event::WindowEvent {
                 window_id,
                 event: WindowEvent::CloseRequested,
