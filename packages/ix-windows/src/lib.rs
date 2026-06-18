@@ -3,8 +3,9 @@
 //! per live MCP resource.
 //!
 //! A [`WindowManager`] owns the open windows and reconciles them against each
-//! snapshot: a new resource opens a window, a changed one re-renders in place
-//! (no reload, so scroll and focus survive), a vanished one closes. It is
+//! snapshot: a new resource opens a window, a changed one re-renders (the
+//! producer HTML lives in a sandboxed iframe whose `srcdoc` is swapped, so its
+//! inner scroll resets), a vanished one closes. It is
 //! deliberately decoupled from the event source for the window-creation target,
 //! but it emits [`UserEvent::Resize`] back into the loop (so it needs the loop's
 //! proxy), which fixes the loop's user-event type to [`UserEvent`].
@@ -76,17 +77,21 @@ struct OpenWindow {
 }
 
 impl OpenWindow {
-    /// Re-render in place if the resource's html or title changed. The body swap
-    /// targets `#ix-root` so the document, its scroll position, and focus survive
-    /// an update — a full reload would flicker and reset them. The page's
-    /// `ResizeObserver` notices the resulting size change and posts a new size,
-    /// which drives [`WindowManager::resize`].
+    /// Re-render in place if the resource's html or title changed. The producer
+    /// body lives inside a sandboxed `<iframe>`, so an update swaps the iframe's
+    /// `srcdoc` (which reloads the iframe; scroll position inside it resets, the
+    /// trade for never running producer script in the trusted document). The
+    /// iframe's own measuring script reports the new size, which drives
+    /// [`WindowManager::resize`].
     fn refresh(&mut self, pane: &Pane, html: &str) {
         if self.last_html != html {
-            // `serde_json::to_string` emits a valid JS string literal (quoted and
-            // escaped), so arbitrary resource HTML is injected safely.
-            let literal = serde_json::to_string(html).unwrap_or_else(|_| "\"\"".to_owned());
-            let js = format!("document.getElementById('ix-root').innerHTML = {literal};");
+            // Set `.srcdoc` to the sandboxed inner document. `serde_json::to_string`
+            // emits a valid JS string literal, so the assignment is well-formed for
+            // arbitrary producer HTML; the iframe sandbox (not this escaping) is
+            // what contains any script in that HTML.
+            let inner = serde_json::to_string(&inner_document(html))
+                .unwrap_or_else(|_| "\"\"".to_owned());
+            let js = format!("document.getElementById('ix-frame').srcdoc = {inner};");
             let _ = self.webview.evaluate_script(&js);
             html.clone_into(&mut self.last_html);
         }
@@ -207,10 +212,10 @@ impl WindowManager {
     /// Clamped to the window's monitor work area so an oversized resource grows
     /// scrollbars rather than spilling off-screen.
     ///
-    /// The resize/reflow loop is broken primarily on the page side: `MEASURE_JS`
-    /// only posts when the measured panel size actually changes, and the panel's
-    /// intrinsic (`inline-block` / `max-width`) size does not depend on the
-    /// window width. The 1px guard here only suppresses sub-pixel jitter and a
+    /// The resize/reflow loop is broken primarily on the page side: the iframe's
+    /// `INNER_JS` only posts when its measured `#ix-content` size actually changes,
+    /// and that panel's intrinsic (`width: max-content`) size does not depend on
+    /// the window width. The 1px guard here only suppresses sub-pixel jitter and a
     /// repeated clamped-to-max report.
     pub fn resize(&mut self, window: WindowId, width: f64, height: f64) {
         let Some(key) = self.by_window.get(&window) else {
@@ -380,71 +385,146 @@ fn parse_size(body: &str) -> Option<(f64, f64)> {
     Some((w, h))
 }
 
-/// The chrome-less document a resource renders inside: a transparent shell whose
-/// `#ix-root` panel holds the resource's own HTML (swapped in place on update)
-/// and shrink-wraps it, plus a measuring script that posts the panel's pixel
-/// size over `wry`'s IPC channel so the OS window can fit it.
+/// The trusted outer document a resource renders inside: a transparent `#ix-root`
+/// panel (the tinted, rounded card on the blur) holding a **sandboxed** `<iframe>`
+/// that contains the producer HTML. Producer markup and any script it carries run
+/// only inside that opaque-origin sandbox (`sandbox="allow-scripts"`, no
+/// `allow-same-origin`), exactly like the web dashboard's html pane
+/// (`HtmlBody.svelte`): no access to this document, `window.ipc`, cookies,
+/// storage, or local files. The outer script ([`OUTER_JS`]) only listens for the
+/// iframe's own size message and forwards it to `wry`'s IPC channel.
+///
+/// The initial body rides in the iframe's `srcdoc` attribute (attribute-escaped);
+/// updates swap the `.srcdoc` property (see [`OpenWindow::refresh`]).
 fn shell(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <title>{title}</title><style>{STYLE}</style></head>\
-<body><div id=\"ix-root\">{body}</div><script>{MEASURE_JS}</script></body></html>",
+<body><div id=\"ix-root\"><iframe id=\"ix-frame\" sandbox=\"allow-scripts\" \
+srcdoc=\"{srcdoc}\"></iframe></div><script>{OUTER_JS}</script></body></html>",
         title = escape_text(title),
+        srcdoc = escape_attr(&inner_document(body)),
     )
 }
 
-/// Minimal escaping for text placed in an HTML text/attribute context (the
-/// `<title>`). The body is producer-rendered HTML and is injected verbatim, the
-/// same trust model as the web dashboard's sandboxed html pane.
+/// The sandboxed inner document for the iframe: the producer `body` verbatim in an
+/// intrinsically-sized `#ix-content` panel, plus the measuring script
+/// ([`INNER_JS`]) that posts its size out to the outer document. Loaded with an
+/// opaque origin (the iframe sandbox), so the verbatim body is contained.
+fn inner_document(body: &str) -> String {
+    format!(
+        "<!doctype html><meta charset=\"utf-8\"><style>{INNER_STYLE}</style>\
+<div id=\"ix-content\">{body}</div><script>{INNER_JS}</script>"
+    )
+}
+
+/// Minimal escaping for text in an HTML text context (the `<title>`).
 fn escape_text(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
 
-/// Overlay shell styling: the document is fully transparent so the native blur
-/// shows through; the content lives in `#ix-root`, a panel sized to its content's
-/// intrinsic width (`width: max-content`) with a faint tint for legibility over
-/// the blur and rounded corners matching the blur layer.
+/// Escape a string for a double-quoted HTML attribute value (the iframe
+/// `srcdoc`). `&` and `"` can break out of a double-quoted value; `<`/`>` are also
+/// escaped so producer markup never appears as live tags in the *outer* document
+/// source. The browser decodes these references back before parsing `srcdoc` as
+/// the iframe's document, so the inner document is reconstructed intact.
+fn escape_attr(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Outer (trusted) document styling: fully transparent so the native blur shows
+/// through; `#ix-root` is the tinted, rounded, padded card that wraps the iframe.
+/// The iframe is transparent and chrome-less; the outer script sizes it to the
+/// content size the inner document reports, so `#ix-root` shrink-wraps it.
+const STYLE: &str = "\
+:root { color-scheme: dark; }
+html, body { margin: 0; padding: 0; background: transparent; }
+#ix-root {
+  display: inline-block;
+  box-sizing: border-box;
+  padding: 16px 18px;
+  background: rgba(30, 30, 46, 0.30);
+  border-radius: 14px;
+}
+#ix-frame {
+  display: block;
+  border: 0;
+  background: transparent;
+  width: 120px;
+  height: 80px;
+}
+";
+
+/// Inner (sandboxed) document styling: transparent so the outer card tint shows;
+/// `#ix-content` shrink-wraps the producer body at its intrinsic width.
 ///
 /// `width: max-content` (not plain `inline-block` shrink-to-fit) is load-bearing:
-/// shrink-to-fit is capped at the containing block's width, i.e. the *current*
-/// (initially tiny) window, so content wider than the window would wrap and the
-/// window could never grow past its initial size. `max-content` measures the
-/// content's true intrinsic width independent of the viewport; `max-width` caps
-/// runaway width (the OS window resize is clamped to the monitor on top of that).
-const STYLE: &str = "\
+/// shrink-to-fit is capped at the containing block width, so content wider than
+/// the iframe's current size would wrap and never grow it. `max-content` measures
+/// the true intrinsic width; `max-width` caps runaway width (the OS window resize
+/// is clamped to the monitor on top of that).
+const INNER_STYLE: &str = "\
 :root { color-scheme: dark; }
 html, body { margin: 0; padding: 0; background: transparent; }
 body {
   color: #cdd6f4;
   font: 14px/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
 }
-#ix-root {
+#ix-content {
   display: inline-block;
   width: max-content;
   box-sizing: border-box;
   min-width: 120px;
   max-width: 1200px;
-  padding: 16px 18px;
-  background: rgba(30, 30, 46, 0.30);
-  border-radius: 14px;
 }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: rgba(137, 140, 160, 0.5); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ";
 
-/// Measure the content panel and post its pixel size back to Rust whenever it
-/// changes. `offsetWidth`/`offsetHeight` include the panel padding, so the OS
-/// window ends up exactly as big as the rendered card. A `ResizeObserver` covers
-/// both content swaps (the in-place `#ix-root` update) and late reflows (images,
-/// fonts); reports are coalesced to one per frame and deduped, so a stable panel
-/// posts once.
-const MEASURE_JS: &str = "\
+/// Runs in the trusted outer document. Listens for the iframe's size message,
+/// sizes the iframe to it, then reports the card's pixel size to Rust over `wry`'s
+/// IPC channel so the OS window can fit it. Only messages from our iframe with the
+/// expected shape and finite positive numbers are honoured; everything else
+/// (including any `postMessage` from producer script) is ignored.
+const OUTER_JS: &str = "\
 (function () {
+  var frame = document.getElementById('ix-frame');
   var root = document.getElementById('ix-root');
+  if (!frame || !root) return;
+  window.addEventListener('message', function (event) {
+    if (event.source !== frame.contentWindow) return;
+    var data = event.data;
+    if (!data || data.t !== 'ixsize') return;
+    var w = Number(data.w), h = Number(data.h);
+    // Reject garbage (non-finite, negative) but allow zero: empty or zero-height
+    // content is a valid report, and the outer card padding + the Rust-side min
+    // clamp still give the window a sane size.
+    if (!isFinite(w) || !isFinite(h) || w < 0 || h < 0) return;
+    frame.style.width = w + 'px';
+    frame.style.height = h + 'px';
+    requestAnimationFrame(function () {
+      var rw = Math.ceil(root.offsetWidth);
+      var rh = Math.ceil(root.offsetHeight);
+      if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(rw + 'x' + rh);
+    });
+  });
+})();
+";
+
+/// Runs inside the sandboxed iframe. Measures the producer content panel and posts
+/// its pixel size to the parent whenever it changes (coalesced to one report per
+/// frame, deduped). It can only `postMessage` -- the sandbox denies it any access
+/// to the parent document, `window.ipc`, cookies, storage, or local files.
+const INNER_JS: &str = "\
+(function () {
+  var root = document.getElementById('ix-content');
   if (!root) return;
   var lastW = -1, lastH = -1, pending = false;
   function report() {
@@ -453,7 +533,7 @@ const MEASURE_JS: &str = "\
     var h = Math.ceil(root.offsetHeight);
     if (w === lastW && h === lastH) return;
     lastW = w; lastH = h;
-    if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(w + 'x' + h);
+    parent.postMessage({ t: 'ixsize', w: w, h: h }, '*');
   }
   function schedule() {
     if (pending) return;
@@ -493,9 +573,10 @@ fn install_blur(window: &Window) {
         return;
     };
 
-    // SAFETY: ordinary Objective-C message sends on the main thread to freshly
-    // created / live AppKit objects of the expected classes.
-    unsafe {
+    // These AppKit calls are safe in objc2 (the bindings encode their
+    // thread/ownership requirements in the types), so no `unsafe` is needed; only
+    // the raw `Retained::retain` above is.
+    {
         let Some(content) = ns_window.contentView() else {
             return;
         };
@@ -584,13 +665,38 @@ fn enable_high_refresh(webview: &WebView) {
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_text, parse_size, shell};
+    use super::{escape_attr, escape_text, inner_document, parse_size, shell};
 
     #[test]
-    fn shell_wraps_body_in_ix_root_and_escapes_title() {
+    fn shell_sandboxes_body_in_an_iframe_and_escapes_title() {
         let out = shell("a <b> & c", "<p>hi</p>");
-        assert!(out.contains("<div id=\"ix-root\"><p>hi</p></div>"));
+        // Producer body lives in a sandboxed iframe, never in the trusted document.
+        assert!(out.contains("<iframe id=\"ix-frame\" sandbox=\"allow-scripts\""));
+        assert!(!out.contains("<div id=\"ix-root\"><p>hi</p>"));
+        // The body rides the srcdoc attribute, attribute-escaped.
+        assert!(out.contains("srcdoc=\""));
+        assert!(out.contains("&lt;p&gt;hi&lt;/p&gt;") || out.contains("<p>hi</p>"));
         assert!(out.contains("<title>a &lt;b&gt; &amp; c</title>"));
+    }
+
+    #[test]
+    fn shell_does_not_run_producer_script_in_the_trusted_document() {
+        // A `<script>` in the body must end up inside the srcdoc attribute value
+        // (escaped), not as a live top-level <script> in the outer document.
+        let out = shell("t", "<script>steal()</script>");
+        assert!(!out.contains("<script>steal()</script>"));
+        assert!(out.contains("&lt;script&gt;steal()&lt;/script&gt;"));
+    }
+
+    #[test]
+    fn inner_document_holds_the_body_verbatim() {
+        let inner = inner_document("<p>hi</p>");
+        assert!(inner.contains("<div id=\"ix-content\"><p>hi</p></div>"));
+    }
+
+    #[test]
+    fn escape_attr_covers_quote_and_amp() {
+        assert_eq!(escape_attr(r#"a&b"c"#), "a&amp;b&quot;c");
     }
 
     #[test]
