@@ -125,6 +125,14 @@ MODULES: tuple[Module, ...] = (
         "(`imessage.messages()` / `chats()` / `send()`) (macOS only)",
     ),
     Module(
+        "maps",
+        "native macOS places & geocoding, each an async call returning a polars frame: "
+        "`await maps.nearby(query, lat, lng)` searches places near a point (MapKit), and "
+        "`await maps.geocode(address)` / `await maps.reverse_geocode(lat, lng)` convert "
+        "address <-> coordinates (CoreLocation). No API key or cost — Apple's on-device "
+        "stack (macOS only)",
+    ),
+    Module(
         "iphone",
         "drive a USB-connected iPhone/iPad via pymobiledevice3: list devices/apps into polars "
         "(`iphone.devices()` / `apps()`), `screenshot()` a developer-mounted device to a PIL "
