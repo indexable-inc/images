@@ -196,7 +196,6 @@
     flex-direction: column;
     background: var(--panel);
     border: 1px solid var(--edge);
-    border-radius: 9px;
     overflow: hidden;
     transition: border-color 0.12s ease;
   }
