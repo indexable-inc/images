@@ -188,6 +188,13 @@ HTML = (
     "light-only colors), so it follows the viewer's OS theme — the dashboard is dark by default."
 )
 
+OUTPUT_HTML = (
+    "By default, when you give the human an output, write it to an HTML file and then open it: build "
+    "the page with htpy, write it to a file (`Path('out.html').write_text(str(el))`), and open it for "
+    "the viewer with `await sh(['open', 'out.html'])` so it lands in their browser. Reach past a plain "
+    "text answer to this rendered page for anything worth seeing."
+)
+
 POLARS = (
     "Prefer polars for any tabular data: return a DataFrame (or `Result.of(df)`) and the human "
     "gets the styled HTML table for free while you get the frame as compact, untruncated CSV — so "

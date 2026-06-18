@@ -64,6 +64,7 @@ _KERNEL_GUIDE = guide.compose(
     guide.modules_index(),
     guide.credentials_note(),
     guide.HTML,
+    guide.OUTPUT_HTML,
     guide.VERIFY,
     guide.RESULT_SPLIT,
     guide.RESULT_VARIANTS,
