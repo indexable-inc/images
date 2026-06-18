@@ -175,6 +175,47 @@ let
       {
         inherit indexPackages portableServicesModule ix;
       };
+
+  # OBS Studio "Source Record" plugin (exeldro): records individual sources to
+  # their own files (ISO recordings) simultaneously with the main capture. OBS
+  # itself is the `obs` Homebrew cask (darwinModules.andrewgazelka). nixpkgs'
+  # obs-studio / wrapOBS plugin path is Linux-only and wraps a nix-built OBS, so
+  # on macOS we instead extract the upstream signed .plugin bundle from the
+  # release .pkg (an xar wrapping a gzip'd cpio Payload) and drop it into the OBS
+  # user plugin dir via home.file below. Darwin-only; bump version + hash on
+  # upgrade (latest tag at github.com/exeldro/obs-source-record/releases).
+  obsSourceRecord = pkgs.stdenvNoCC.mkDerivation (finalAttrs: {
+    pname = "obs-source-record";
+    version = "0.4.8";
+    src = pkgs.fetchurl {
+      url = "https://github.com/exeldro/obs-source-record/releases/download/${finalAttrs.version}/source-record-${finalAttrs.version}-macos-universal.pkg";
+      hash = "sha256-YURjKZWFhI9KgoOxXVDF2bmr0jZCLeqKl+k0/b9w/hk=";
+    };
+    nativeBuildInputs = [
+      pkgs.xar
+      pkgs.libarchive
+    ];
+    # The .pkg is a flat installer; bsdtar auto-detects the gzip'd cpio Payload,
+    # which lays the bundle under ./Library/Application Support/obs-studio/plugins.
+    unpackPhase = ''
+      runHook preUnpack
+      xar -xf "$src"
+      bsdtar -xf source-record.pkg/Payload
+      runHook postUnpack
+    '';
+    installPhase = ''
+      runHook preInstall
+      mkdir -p "$out"
+      cp -R "Library/Application Support/obs-studio/plugins/source-record.plugin" "$out/"
+      runHook postInstall
+    '';
+    meta = {
+      description = "OBS Studio plugin to record individual sources to separate files";
+      homepage = "https://github.com/exeldro/obs-source-record";
+      license = lib.licenses.gpl2Only;
+      platforms = lib.platforms.darwin;
+    };
+  });
 in
 {
   imports = [
@@ -382,6 +423,15 @@ in
 
     # Expose the shared speaker on PATH so the user can announce by hand too.
     home.packages = [ sayDetached ];
+
+    # Drop the Source Record OBS plugin into the OBS user plugin dir (OBS scans
+    # it on launch). Symlinking the whole signed .plugin bundle (not its
+    # contents, so home.file's default non-recursive link) keeps its code
+    # signature intact. Darwin-only: the plugin and the `obs` cask are both macOS.
+    home.file = lib.mkIf isDarwin {
+      "Library/Application Support/obs-studio/plugins/source-record.plugin".source =
+        "${obsSourceRecord}/source-record.plugin";
+    };
 
     services.portable = lib.mkMerge [
       (lib.mkIf cfg.downtime.enable {

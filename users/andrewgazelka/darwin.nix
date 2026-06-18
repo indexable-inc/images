@@ -37,6 +37,9 @@
       "lm-studio"
       "mullvad-vpn@beta"
       "notion"
+      # OBS Studio. The Source Record plugin (ISO per-source recording) is wired
+      # in home.nix (`obsSourceRecord`): nixpkgs' OBS plugin path is Linux-only,
+      # so on macOS it drops the upstream .plugin into the OBS user plugin dir.
       "obs@beta"
       "obsidian"
       "orbstack"
