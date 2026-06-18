@@ -110,11 +110,9 @@ set `IX_MCP_AUTO_DASHBOARD=1` to restore the old per-server auto-spawn.
   program-counter highlight while a job runs, and the failing line highlighted in
   red with the exception headline when it errors.
 - `store.py` is the append-only execution log (one SQLite file in WAL mode).
-- `dashboard.py` serves a one-page live view of that log. The first tool call
-  of a session pops that page in the local browser (via Python's
-  platform-independent `webbrowser`, a no-op on headless machines), so the
-  human is watching the moment work begins; an embedder with no human at
-  this machine's display disables it with `IX_MCP_NO_BROWSER=1`.
+- `dashboard.py` serves a one-page live view of that log. Open it manually with
+  `nix run .#mcp -- dashboard`; the server never auto-pops a browser on a tool
+  call.
 - `outputs.py` renders kernel messages for the agent (text, images).
 - `tools.py` is the MCP surface: the general `python_exec`, plus `read` (pull a
   file or kernel value into the model's context while the dashboard stays quiet)
