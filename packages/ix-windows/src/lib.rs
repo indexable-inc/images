@@ -514,6 +514,11 @@ html, body { margin: 0; padding: 0; background: transparent; }
   display: inline-block;
   box-sizing: border-box;
   background: rgba(30, 30, 46, 0.20);
+  /* Match the Rust-side window min clamp (120x80 in `resize`) so an empty or
+     zero-height resource shows a small *visible* tinted card rather than a
+     mostly-transparent, click-intercepting always-on-top window. */
+  min-width: 120px;
+  min-height: 80px;
   /* Square card (no border-radius). `overflow:hidden` still clips producer
      content to the card bounds. */
   overflow: hidden;
