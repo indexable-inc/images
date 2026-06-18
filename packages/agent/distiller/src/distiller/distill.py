@@ -406,11 +406,14 @@ def retire_stale(
     now = now if now is not None else time.time()
     cutoff = now - max_age_days * 86400
 
-    def recency(item: Item) -> float:
+    def recency(item: Item) -> float | None:
         # The freshest signal wins: an `update` op bumps last_updated even when it
         # carried no in-window session to refresh evidence_to, and such an item
         # must still count as re-evidenced (don't short-circuit on a stale
-        # evidence_to).
-        return max((t for t in (item.evidence_to, item.last_updated) if t), default=0.0)
+        # evidence_to). ``None`` means no provenance stamp at all -- a legacy item
+        # (pre-provenance shape, also what the migration path loads) whose age is
+        # unknown; never retire it on a missing signal, only on a known-stale one,
+        # so migrating an old corpus does not wipe its items on the first run.
+        return max((t for t in (item.evidence_to, item.last_updated) if t), default=None)
 
-    return [item for item in items if recency(item) >= cutoff]
+    return [item for item in items if (r := recency(item)) is None or r >= cutoff]

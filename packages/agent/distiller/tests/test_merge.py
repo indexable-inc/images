@@ -130,6 +130,22 @@ def test_retire_stale_drops_old_unreevidenced_items() -> None:
     assert [i.id for i in kept] == ["df-fresh", "df-refreshed"]
 
 
+def test_retire_stale_keeps_items_without_provenance_stamps() -> None:
+    """A legacy/migrated item with no evidence_to or last_updated has unknown age
+    and must be kept, not retired on the first run (migration must not wipe it).
+    """
+    now = 1_000_000_000.0
+    # The pre-provenance shape: last_updated defaults to 0.0 and evidence_to is
+    # absent, so recency() has no usable signal.
+    no_stamp = Item(
+        id="df-legacy", title="L", body="b", outcome="mixed", scope="shared",
+        sessions=[], evidence_to=None,
+    )
+    assert no_stamp.last_updated == 0.0
+    kept = distill.retire_stale([no_stamp], now=now, max_age_days=90.0)
+    assert [i.id for i in kept] == ["df-legacy"]
+
+
 def test_extract_json_tolerates_fences() -> None:
     text = "Here you go:\n```json\n{\"operations\": []}\n```\nDone."
     assert distill._extract_json(text) == {"operations": []}
