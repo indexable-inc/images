@@ -16,8 +16,17 @@
 # that ships a real Nix package belongs in home.packages / environment, not here.
 {
   homebrew = {
+    # WARNING: the consuming host runs `brew bundle --force-cleanup --zap` on
+    # activation (see hosts/hydra/default.nix), which UNINSTALLS any cask not in
+    # this list AND any cask whose declared name doesn't match what's installed.
+    # A pre-release suffix is a DIFFERENT cask: `ghostty@tip` != `ghostty`,
+    # `slack@beta` != `slack`. Declare the suffixed channel but have the stable
+    # app installed (or vice-versa) and the next `darwin-rebuild switch` zaps the
+    # running app out from under you. (#1303 flipped these to @beta/@tip/@nightly
+    # and so zapped stable ghostty.) Keep entries stable (no `@channel`) unless
+    # you also install that exact channel locally so declared == installed.
     casks = [
-      "1password-cli@beta"
+      "1password-cli"
       "beeper"
       "chatgpt"
       "chatgpt-atlas"
@@ -25,30 +34,30 @@
       # Cloudflare WARP: tunnels IPv4+IPv6 to Cloudflare, so an IPv6-only or
       # broken-IPv4 network (e.g. hotel wifi with dead DHCPv4) can still reach
       # IPv4-only hosts like github and Apple's APNs. Needs UDP egress to work.
-      "cloudflare-warp@beta"
+      "cloudflare-warp"
       "codex-app"
       "contexts"
       "cursor"
-      "emacs-app@nightly"
-      "ghostty@tip"
+      "emacs-app"
+      "ghostty"
       "google-chrome"
       "helium-browser"
       "linear"
       "lm-studio"
-      "mullvad-vpn@beta"
+      "mullvad-vpn"
       "notion"
-      "obs@beta"
+      "obs"
       "obsidian"
       "postico"
       "prismlauncher"
       "raycast"
       "screen-studio"
       "setapp"
-      "signal@beta"
+      "signal"
       "skim"
-      "slack@beta"
+      "slack"
       "spotify"
-      "stremio@beta"
+      "stremio"
       "superhuman"
       "superwhisper"
       "tailscale-app"
@@ -61,7 +70,7 @@
       # refuses no-auth servers, so a third-party client is required to reach
       # `vnc://<host>.tail368802.ts.net:5900`. See ix nix/modules/desktop/remote-desktop.nix.
       "vnc-viewer"
-      "zed@preview"
+      "zed"
       "zoom"
     ];
 
