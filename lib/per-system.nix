@@ -1076,16 +1076,30 @@ let
           );
           site-test = siteTests.all;
         };
-        # One check per image OCI archive, built by nix-fast-build in step 1 of
-        # `.#check`. Without this, `.#packages` carries the image derivations
-        # but `.#checks` does not, so blast-radius under-reports any change
-        # that rebuilds every image because the drvPath shift never reaches a
-        # check. The `eval` aggregate at tests/default.nix:3890 only closes
-        # over per-image `extraScript` text, not `config.system.build.toplevel`,
-        # so it stays stable across semantic edits to shared image libs.
-        imageChecks = lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v) (
-          discoveredImages // nonNixExampleImages
-        );
+        # One check per image, built by nix-fast-build in step 1 of `.#check`.
+        # Without this, `.#packages` carries the image derivations but `.#checks`
+        # does not, so blast-radius under-reports any change that rebuilds every
+        # image because the drvPath shift never reaches a check. The `eval`
+        # aggregate at tests/default.nix:3890 only closes over per-image
+        # `extraScript` text, not `config.system.build.toplevel`, so it stays
+        # stable across semantic edits to shared image libs.
+        #
+        # For Nix images the check builds the system *closure*
+        # (`passthru.toplevel`), not the OCI tar the package output is. Packing
+        # the closure into a layered, compressed OCI archive
+        # (`streamLayeredImage`) is ~60-100s of deterministic tar+compress per
+        # image, and the gate consumes none of those bytes: it only needs "this
+        # image's closure builds", and the archive is rebuilt at release where a
+        # registry push actually uploads the layers. Gating on the closure keeps
+        # that signal (and gives blast-radius the toplevel drvPath directly)
+        # while dropping the tar pass, which dominated CI wall-clock because the
+        # closure includes frequently-changing packages (e.g. the base-profile
+        # mcp), so any edit re-packed all ~15 archives. Non-Nix example images
+        # (`mkNonNixImage`: a pulled Debian/Ubuntu base) have no Nix toplevel, so
+        # their check stays the assembled archive.
+        imageChecks =
+          lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v.toplevel) discoveredImages
+          // lib.mapAttrs' (n: v: lib.nameValuePair "image-${n}" v) nonNixExampleImages;
         # Rust crate prefixes can be overridden in `package.nix` and image
         # names are user-chosen, so a stray collision with an explicit check
         # would otherwise be silently swallowed by the `//` merge. Two pairwise

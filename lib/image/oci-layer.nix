@@ -113,6 +113,13 @@
             pkgs.gnutar
             pkgs.oci-image-builder
           ];
+          # Expose the NixOS system closure the OCI archive is packed from, so
+          # CI can gate on "the image's closure builds" (cheap: a relink over
+          # already-built store paths) without paying the streamLayeredImage
+          # tar+compress pass. The full archive is still this derivation's
+          # output, built only where the bytes are consumed (a registry push at
+          # release). See `imageChecks` in lib/per-system.nix.
+          passthru.toplevel = toplevel;
         }
         ''
           oci-image-builder ${lib.escapeShellArgs (efficiencyArgs ++ [ "${stream.passthru.conf}" ])} "$out"
