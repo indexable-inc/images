@@ -85,6 +85,37 @@ CREATE TABLE IF NOT EXISTS session (
     client      TEXT NOT NULL DEFAULT '',
     updated_at  REAL NOT NULL
 );
+
+-- Input channels: the address registry behind interactive resources. The kernel
+-- opens a channel when the agent creates an `Input`/`ask` (the rendered HTML's
+-- `ixSubmit` posts to this id), and closes it when the input is done. The
+-- dashboard's `/api/input` write path is the only OTHER process that touches this
+-- table, and only to READ it: a POST is accepted only for an `open` channel, so a
+-- submission for a finished or never-created channel never enters the queue. The
+-- id is NOT a secret (it rides in the HTML the read endpoints serve); it is just
+-- an address. `/api/input` authorizes by the network boundary (see dashboard.py).
+CREATE TABLE IF NOT EXISTS channels (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'open',
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL
+);
+
+-- Inputs: the user's submissions, an append-only queue from the browser to the
+-- kernel. The dashboard's `/api/input` appends one row per submission; the
+-- kernel runtime drains them on its flush tick, delivers each to the awaiting
+-- `Channel`, and DELETEs it (the row is a transient message, not history), so the
+-- table stays empty between submissions. `seq` orders delivery; `channel` joins
+-- to `channels`. This is the one place the two processes have a writer each on
+-- the same table family (server inserts, kernel deletes); WAL keeps them honest.
+CREATE TABLE IF NOT EXISTS inputs (
+    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel     TEXT NOT NULL,
+    payload     TEXT NOT NULL,
+    created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS inputs_channel ON inputs (channel, seq);
 """
 
 
@@ -395,6 +426,74 @@ def close_resource(conn: sqlite3.Connection, *, id: str, updated_at: float) -> N
 
 
 # --------------------------------------------------------------------------- #
+# Channels + inputs: the browser -> kernel write path behind interactive
+# resources. The kernel owns the `channels` lifecycle (open on create, closed on
+# done); the dashboard's `/api/input` reads `channels` to authorize a submission
+# and appends to `inputs`; the kernel drains `inputs` on its flush tick. See the
+# schema comments for the trust model (the channel id is a bearer capability).
+# --------------------------------------------------------------------------- #
+
+
+def open_channel(conn: sqlite3.Connection, *, id: str, title: str) -> None:
+    """Open (or re-open) an input channel so `/api/input` accepts submissions for
+    it. Idempotent: re-opening a known id refreshes its title and `open` status."""
+    now = _now()
+    conn.execute(
+        "INSERT INTO channels (id, title, status, created_at, updated_at) "
+        "VALUES (?, ?, 'open', ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET title = excluded.title, status = 'open', "
+        "updated_at = excluded.updated_at",
+        (id, title, now, now),
+    )
+
+
+def close_channel(conn: sqlite3.Connection, *, id: str) -> None:
+    """Close a channel so `/api/input` rejects further submissions, and drop any
+    of its still-undelivered inputs (no awaiter remains to read them)."""
+    conn.execute(
+        "UPDATE channels SET status = 'closed', updated_at = ? WHERE id = ?", (_now(), id)
+    )
+    conn.execute("DELETE FROM inputs WHERE channel = ?", (id,))
+
+
+def channel_open(conn: sqlite3.Connection, id: str) -> bool:
+    """Whether ``id`` names a channel currently accepting input. The dashboard's
+    `/api/input` gate: an unknown or closed id is refused (so a submission for a
+    finished or never-created channel never enters the queue)."""
+    row = conn.execute("SELECT status FROM channels WHERE id = ?", (id,)).fetchone()
+    return row is not None and row[0] == "open"
+
+
+def add_input(conn: sqlite3.Connection, *, channel: str, payload: str) -> None:
+    """Append one user submission (a JSON ``payload`` string) for ``channel``. The
+    dashboard is the sole inserter; the kernel drains and deletes."""
+    conn.execute(
+        "INSERT INTO inputs (channel, payload, created_at) VALUES (?, ?, ?)",
+        (channel, payload, _now()),
+    )
+
+
+def pending_inputs(conn: sqlite3.Connection) -> list[dict]:
+    """Every queued submission, oldest first, as ``{seq, channel, payload}`` dicts.
+    The kernel reads these on its flush tick, delivers each to the matching live
+    channel, and calls :func:`delete_inputs` with the seqs it handled."""
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT seq, channel, payload FROM inputs ORDER BY seq ASC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_inputs(conn: sqlite3.Connection, seqs: list[int]) -> None:
+    """Remove the input rows the kernel just delivered (by ``seq``), so each
+    submission is delivered exactly once and the queue stays empty between them."""
+    if not seqs:
+        return
+    placeholders = ",".join("?" for _ in seqs)
+    conn.execute(f"DELETE FROM inputs WHERE seq IN ({placeholders})", seqs)  # noqa: S608 -- placeholders are bound params, seqs are the values
+
+
+# --------------------------------------------------------------------------- #
 # Sessions: the pieces that make one store file a reopenable notebook.
 #
 # A session file carries three things: the execution log (the cells and their
@@ -460,6 +559,14 @@ def mark_interrupted(conn: sqlite3.Connection, *, ended_at: float) -> int:
         "UPDATE resources SET status = 'closed', updated_at = ? WHERE status != 'closed'",
         (ended_at,),
     )
+    # An open input channel awaits a submission in a coroutine that died with the
+    # kernel; close it so a stale capability cannot accept input nobody reads, and
+    # drop any queued-but-undelivered submissions for the same reason.
+    conn.execute(
+        "UPDATE channels SET status = 'closed', updated_at = ? WHERE status != 'closed'",
+        (ended_at,),
+    )
+    conn.execute("DELETE FROM inputs")
     return cur.rowcount
 
 

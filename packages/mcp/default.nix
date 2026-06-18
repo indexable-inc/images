@@ -4871,6 +4871,79 @@ let
         mkdir -p "$out"
       '';
 
+  # Interactive input: the browser -> kernel write path behind interactive
+  # resources (packages/mcp/tests/test_inputs.py). Covers the store queue, the
+  # dashboard `/api/input` gate + CORS (over a real aiohttp TestServer), and the
+  # kernel-side drain into an awaiting `Input` / `ask`. Needs the full mcp
+  # interpreter (ix_notebook_mcp + aiohttp) plus pytest, which bare mcpPython omits.
+  inputsTestPython = mcpPythonInterp.withPackages (
+    ps:
+    mcpPythonPackages ps
+    ++ [
+      ps.pytest
+    ]
+  );
+  inputsTestSource = builtins.path {
+    name = "ix-mcp-inputs-test";
+    path = ./tests/test_inputs.py;
+  };
+  inputsTests =
+    pkgs.runCommand "ix-mcp-inputs-tests"
+      {
+        nativeBuildInputs = [ inputsTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${inputsTestSource} "$TMPDIR/test_inputs.py"
+        ${lib.getExe inputsTestPython} -m pytest "$TMPDIR/test_inputs.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp inputs tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
+
+  # End-to-end browser proof of the interactive-input path: a real headless
+  # Chromium mounts an `Input`'s HTML in a sandboxed, opaque-origin srcdoc iframe
+  # (as HtmlBody.svelte does), clicks the button, and the cross-origin `ixSubmit`
+  # fetch must reach the real aiohttp `/api/input` and drain into the awaiting
+  # channel (packages/mcp/tests/test_input_browser.py). Same interpreter + bundled
+  # browser as the vdom smoke, plus pytest.
+  inputBrowserTestPython = mcpPythonInterp.withPackages (
+    ps:
+    mcpPythonPackages ps
+    ++ [
+      ps.pytest
+    ]
+  );
+  inputBrowserTestSource = builtins.path {
+    name = "ix-mcp-input-browser-test";
+    path = ./tests/test_input_browser.py;
+  };
+  inputBrowserSmoke =
+    pkgs.runCommand "ix-mcp-input-browser-smoke"
+      {
+        nativeBuildInputs = [ inputBrowserTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        export PLAYWRIGHT_BROWSERS_PATH=${lib.escapeShellArg playwrightBrowsers}
+        export FONTCONFIG_FILE=${fontsConf}
+        cp ${inputBrowserTestSource} "$TMPDIR/test_input_browser.py"
+        ${lib.getExe inputBrowserTestPython} -m pytest "$TMPDIR/test_input_browser.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp input browser smoke failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
+
   screenBundled = importTest "screen" "import screen; print('screen-ok', all(callable(getattr(screen, n)) for n in ('capture', 'click', 'write', 'press', 'key_down', 'key_up', 'apps', 'frontmost', 'launch', 'activate', 'terminate', 'accessibility_trusted')))";
   coreLocationBundled = importTest "corelocation" "import CoreLocation; print('corelocation-ok', callable(CoreLocation.CLLocationManager.alloc))";
   scriptingBridgeBundled = importTest "scriptingbridge" "import ScriptingBridge; print('scriptingbridge-ok', callable(ScriptingBridge.SBApplication.applicationWithBundleIdentifier_))";
@@ -5038,6 +5111,8 @@ package.overrideAttrs (old: {
         sessionIdentitySmoke
         feedSmoke
         apiSmoke
+        inputsTests
+        inputBrowserSmoke
         wedgeSmoke
         richSmoke
         yieldSmoke

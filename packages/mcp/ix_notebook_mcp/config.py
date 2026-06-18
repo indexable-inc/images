@@ -77,6 +77,9 @@ class Config:
     # (a tailnet/LAN bind, not 127.0.0.1). A set `exec_token` still wins (it is
     # then additionally required). With neither, the endpoint stays disabled.
     # Sourced from IX_MCP_EXEC_TRUST_NETWORK by the CLI; the fleet service sets it.
+    # It ALSO gates `/api/input` (the interactive-resource write path): on a
+    # non-loopback bind, input is accepted only when this is set (loopback always
+    # accepts it). See `dashboard.input_submit`.
     exec_trust_network: bool = False
 
     # Seconds past a cell's own ``budget`` that the server waits for the kernel to

@@ -40,6 +40,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import signal
 import sys
 import time
@@ -821,6 +822,12 @@ def register_resource(
     close. Move one by dragging its card chrome (the padding around the content);
     it is not resizable (size follows the content).
 
+    Interactive (a form the human fills in): pair the resource with an
+    :class:`Input`, drop its ``.script`` into the HTML, and ``await`` the reply --
+    or just use :func:`ask` for a ready-made form. A cross-origin ``fetch`` to the
+    data API DOES work from the sandbox (that is how input flows back); only
+    *same-origin* access to the embedding page is blocked.
+
     Prefer SELF-CONTAINED HTML. The body is rendered inside a sandboxed,
     opaque-origin ``<iframe>`` (``sandbox="allow-scripts"``, no
     ``allow-same-origin``) in both the dashboard and the overlay, so same-origin
@@ -860,6 +867,253 @@ def register_resource(
 
 jobs: dict[str, Job] = {}
 resources: dict[str, Resource] = {}
+
+
+# --------------------------------------------------------------------------- #
+# Interactive input: the browser -> kernel path that lets a rendered resource
+# (or cell) carry a form the human fills in, so the agent can pop a window up and
+# await the reply. An `Input`'s id is an ADDRESS, not a secret: it rides in the
+# rendered HTML, which the read endpoints and the dashboard hub serve to anyone on
+# the bind, so `/api/input` authorizes by the network boundary (loopback or a
+# trusted tailnet), the same posture as `/api/exec`. The injected `ixSubmit(payload)`
+# posts to that endpoint; the server appends to the store's `inputs` queue; the kernel's flush
+# tick (`_drain_inputs`) delivers each payload here and the agent's `await`
+# resolves. No same-origin access, cookies, or hub plumbing involved: an
+# opaque-origin sandboxed iframe can still make a cross-origin `fetch`.
+# --------------------------------------------------------------------------- #
+
+input_channels: dict[str, Input] = {}
+
+
+def _escape_attr(text: str) -> str:
+    """Escape a string for an HTML double-quoted attribute value. ``_escape_html``
+    covers text nodes (``&<>``); an attribute also needs the quote escaped so a
+    value containing ``"`` cannot break out of the attribute."""
+    return _escape_html(str(text)).replace('"', "&quot;")
+
+
+class Input:
+    """A live input channel: render arbitrary HTML with a form and await the reply.
+
+    Where a :class:`Resource` is output the kernel pushes to the human, an
+    ``Input`` is the channel the human pushes back on. Create one, drop its
+    :attr:`script` into any HTML you render (a resource, a cell), and have your
+    markup call the injected ``ixSubmit(payload)`` -- each call delivers
+    ``payload`` here. Read submissions with ``await channel`` (the next one) or
+    ``async for payload in channel`` (a stream):
+
+        inp = Input(title="name")
+        register_resource(
+            render=lambda: inp.script + "<button onclick='ixSubmit({clicked:1})'>go</button>",
+            id=inp.id, title="name",
+        )
+        payload = await inp            # -> {"clicked": 1}
+
+    For the common "ask a question, get an answer" case use :func:`ask`, which
+    builds the form, pops the window, and returns the response for you.
+
+    ``await`` blocks until the human responds, which will exceed your
+    ``python_exec`` budget and background the run; read the answer later with
+    ``await jobs['<id>']``.
+    """
+
+    def __init__(self, title: str = "input", id: str | None = None) -> None:
+        # The id addresses this channel in submissions; it is not an auth secret
+        # (it rides in the served HTML). Mint a long random token anyway so ids do
+        # not collide and are not enumerable, but `/api/input` gates on the network
+        # boundary, not on knowing this id.
+        self.id = id or secrets.token_urlsafe(18)
+        self.title = title
+        self.status = "open"
+        self.created = time.time()
+        self._queue: asyncio.Queue = asyncio.Queue()
+        input_channels[self.id] = self
+        # Open the channel in the store immediately so a submission that races the
+        # first render (the human clicks fast) is still authorized, not 404'd.
+        if _store is not None and _store_conn is not None:
+            with contextlib.suppress(Exception):  # best-effort: a missing store just means no submissions arrive
+                _store.open_channel(_store_conn, id=self.id, title=self.title)
+
+    @property
+    def endpoint(self) -> str:
+        """The absolute ``/api/input`` URL the injected script posts to. Absolute
+        because the sandboxed iframe's origin is ``about:srcdoc`` -- a relative URL
+        would resolve against that, not the data API."""
+        base = os.environ.get("IX_MCP_DATA_API_URL", "").rstrip("/")
+        return f"{base}/api/input"
+
+    @property
+    def script(self) -> str:
+        """A ``<script>`` to embed in the resource HTML. It defines
+        ``window.ixSubmit(payload)`` (POST ``payload`` to this channel) and the
+        lower-level ``window.ix.submit(channelId, payload)`` for HTML driving more
+        than one channel. Posts ``text/plain`` so the cross-origin request stays
+        a CORS *simple* request (no preflight); the server parses the JSON body
+        regardless of content type."""
+        # endpoint/id are a URL and a urlsafe token: both safe inside a JS string.
+        return (
+            "<script>(function(){"
+            f'var E={json.dumps(self.endpoint)},C={json.dumps(self.id)};'
+            "var x=(window.ix=window.ix||{});"
+            "x.submit=function(c,p){return fetch(E,{method:'POST',"
+            "headers:{'Content-Type':'text/plain;charset=UTF-8'},"
+            "body:JSON.stringify({channel:c,payload:p})}).then(function(r){return r.json();});};"
+            "window.ixSubmit=function(p){return x.submit(C,p);};"
+            "})();</script>"
+        )
+
+    def _deliver(self, payload: Any) -> None:
+        """Hand a drained submission to the awaiting coroutine (kernel-internal)."""
+        self._queue.put_nowait(payload)
+
+    async def recv(self, timeout: float | None = None) -> Any:
+        """The next submission's payload. Waits forever by default; pass
+        ``timeout`` (seconds) to raise ``TimeoutError`` instead."""
+        if timeout is None:
+            return await self._queue.get()
+        return await asyncio.wait_for(self._queue.get(), timeout)
+
+    def __await__(self) -> Any:
+        return self.recv().__await__()
+
+    def __aiter__(self) -> Input:
+        return self
+
+    async def __anext__(self) -> Any:
+        return await self._queue.get()
+
+    def closed(self) -> bool:
+        return self.status == "closed"
+
+    def close(self) -> Input:
+        """Close the channel: `/api/input` stops accepting submissions for it and
+        its queued-but-undelivered inputs are dropped. Idempotent."""
+        self.status = "closed"
+        input_channels.pop(self.id, None)
+        if _store is not None and _store_conn is not None:
+            with contextlib.suppress(Exception):  # best-effort: closing is advisory once the awaiter is gone
+                _store.close_channel(_store_conn, id=self.id)
+        return self
+
+    def __repr__(self) -> str:
+        return f"<Input {self.id} ({self.title}) [{self.status}]>"
+
+
+def _ask_form_html(
+    channel: Input,
+    prompt: str,
+    *,
+    fields: list[str] | None,
+    choices: list[str] | None,
+    multiline: bool,
+    submit_label: str,
+) -> str:
+    """The self-contained form HTML :func:`ask` renders: a prompt, the inputs, and
+    a wiring script that gathers the values and calls ``ixSubmit``. Themed for the
+    dashboard's light/dark surface; every agent-supplied string is escaped."""
+    if choices is not None:
+        body = "".join(
+            f'<button type="button" class="ix-choice" data-ix-value="{_escape_attr(c)}">'
+            f"{_escape_html(str(c))}</button>"
+            for c in choices
+        )
+        controls = f'<div class="ix-choices">{body}</div>'
+    elif fields is not None:
+        controls = "".join(
+            f'<label class="ix-field"><span>{_escape_html(str(f))}</span>'
+            f'<input name="{_escape_attr(f)}" autocomplete="off"></label>'
+            for f in fields
+        ) + f'<button type="submit" class="ix-submit">{_escape_html(submit_label)}</button>'
+    else:
+        control = (
+            '<textarea name="value" rows="3" autofocus></textarea>'
+            if multiline
+            else '<input name="value" autocomplete="off" autofocus>'
+        )
+        controls = f'{control}<button type="submit" class="ix-submit">{_escape_html(submit_label)}</button>'
+    style = (
+        "<style>"
+        ".ix-ask{font:14px/1.5 ui-sans-serif,system-ui,sans-serif;padding:14px 16px;"
+        "max-width:34rem}"
+        ".ix-prompt{font-weight:600;margin-bottom:10px}"
+        ".ix-field{display:flex;flex-direction:column;gap:3px;margin-bottom:8px}"
+        ".ix-field span{font-size:12px;opacity:.7}"
+        ".ix-ask input,.ix-ask textarea{font:inherit;padding:6px 8px;border:1px solid "
+        "color-mix(in srgb,currentColor 25%,transparent);border-radius:6px;background:transparent;"
+        "color:inherit;width:100%;box-sizing:border-box}"
+        ".ix-choices{display:flex;flex-wrap:wrap;gap:8px}"
+        ".ix-ask button{font:inherit;cursor:pointer;padding:6px 12px;border-radius:6px;"
+        "border:1px solid color-mix(in srgb,currentColor 30%,transparent);background:"
+        "color-mix(in srgb,currentColor 8%,transparent);color:inherit}"
+        ".ix-ask button:hover{background:color-mix(in srgb,currentColor 16%,transparent)}"
+        ".ix-submit{margin-top:10px}"
+        ".ix-done{margin-top:10px;font-weight:600;color:#3fb950}"
+        ".ix-ask[data-done] form{opacity:.5;pointer-events:none}"
+        "</style>"
+    )
+    wiring = (
+        "<script>(function(){"
+        "var root=document.currentScript.closest('.ix-ask');"
+        "var form=root.querySelector('form');"
+        "function finish(p){window.ixSubmit(p);root.setAttribute('data-done','');"
+        "root.querySelector('.ix-done').hidden=false;}"
+        "root.querySelectorAll('button[data-ix-value]').forEach(function(b){"
+        "b.addEventListener('click',function(){finish({value:b.getAttribute('data-ix-value')});});});"
+        "form.addEventListener('submit',function(e){e.preventDefault();"
+        "var fd=new FormData(form),o={};fd.forEach(function(v,k){o[k]=v;});"
+        "finish(o);});"
+        "})();</script>"
+    )
+    return (
+        f'{style}<div class="ix-ask"><div class="ix-prompt">{_escape_html(str(prompt))}</div>'
+        f'<form>{controls}</form><div class="ix-done" hidden>✓ sent</div></div>'
+        f"{channel.script}{wiring}"
+    )
+
+
+async def ask(
+    prompt: str,
+    *,
+    fields: list[str] | None = None,
+    choices: list[str] | None = None,
+    title: str | None = None,
+    multiline: bool = False,
+    submit_label: str = "Submit",
+) -> Any:
+    """Pop an input window asking the human, wait for their reply, return it.
+
+    Renders a form as a live :class:`Resource` (a dashboard pane, and a floating
+    window under ``ix-windows``), blocks until the human submits, closes the
+    window, and returns the response shaped to what you asked for:
+
+        await ask("What should I name the branch?")          # -> the typed string
+        await ask("Deploy where?", choices=["staging", "prod"])  # -> the chosen string
+        await ask("DB creds", fields=["user", "password"])   # -> {"user": ..., "password": ...}
+
+    ``choices`` and ``fields`` are mutually exclusive; pass neither for a single
+    free-text answer (``multiline=True`` for a textarea). Because it waits on a
+    human it will exceed your ``python_exec`` budget and background the run --
+    retrieve the answer in a later call with ``await jobs['<id>']``.
+
+    For HTML beyond a simple form, use :class:`Input` directly.
+    """
+    if choices is not None and fields is not None:
+        raise ValueError("pass choices or fields, not both")
+    channel = Input(title=title or prompt)
+    html = _ask_form_html(
+        channel, prompt, fields=fields, choices=choices, multiline=multiline, submit_label=submit_label
+    )
+    resource = register_resource(render=lambda: html, id=channel.id, title=title or prompt, kind="input")
+    try:
+        payload = await channel.recv()
+    finally:
+        channel.close()
+        resource.close()
+    # Shape the reply: a single free-text or single-choice answer reads as the
+    # bare value; a multi-field form reads as the dict the caller named.
+    if fields is None and isinstance(payload, dict) and set(payload) == {"value"}:
+        return payload["value"]
+    return payload
 
 
 @dataclasses.dataclass
@@ -2149,6 +2403,40 @@ async def _sweep_resources() -> None:
             )
 
 
+def _drain_inputs() -> None:
+    """Deliver every queued user submission to its live channel. The browser-side
+    `/api/input` appended them (a separate process); this is the kernel end of
+    that path. A submission for a channel that is gone (closed, or the kernel
+    restarted) has no awaiter, so it is dropped -- either way the row is consumed
+    so the queue stays empty between ticks.
+
+    Dequeue (DELETE) BEFORE delivering, so a delivered submission can never be
+    re-read and delivered twice (which would duplicate into a streaming channel's
+    queue). If the delete fails the rows survive and retry next tick, but nothing
+    was delivered yet, so there is still no duplicate. A crash between the delete
+    and the put loses at most the in-flight batch, which a human just re-submits."""
+    if _store is None or _store_conn is None:
+        return
+    try:
+        pending = _store.pending_inputs(_store_conn)
+    except Exception:
+        return  # best-effort: a read error this tick just retries next tick
+    if not pending:
+        return
+    try:
+        _store.delete_inputs(_store_conn, [row["seq"] for row in pending])
+    except Exception:
+        return  # leave the rows queued; nothing delivered yet, so no duplicate
+    for row in pending:
+        channel = input_channels.get(row["channel"])
+        if channel is not None and not channel.closed():
+            try:
+                payload = json.loads(row["payload"])
+            except (ValueError, TypeError):
+                payload = row["payload"]
+            channel._deliver(payload)
+
+
 async def _flusher() -> None:
     """Throttled background loop: persist every running job's output tail and
     re-render every live resource to the store so the dashboard shows both live.
@@ -2165,6 +2453,7 @@ async def _flusher() -> None:
                         _store_conn, job.id, job.output, job._displays or None, line=job.line
                     )
         await _sweep_resources()
+        _drain_inputs()
         cells._sync()
         session._sync()
         if _SESSION and _snapshot_dirty and not _snapshot_busy and not _restoring:
@@ -2942,6 +3231,9 @@ def install(user_ns: dict | None = None) -> None:
     target["resources"] = resources
     target["Resource"] = Resource
     target["register_resource"] = register_resource
+    target["Input"] = Input
+    target["ask"] = ask
+    target["input_channels"] = input_channels
     target["__ix_run"] = __ix_run
     target["__ix_exec"] = __ix_exec
     target["__ix_read"] = __ix_read

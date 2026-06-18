@@ -2,9 +2,12 @@
 
 Auto-started by the CLI. It serves the live execution log as JSON
 (``/api/jobs``, ``/api/jobs/{id}``, ``/api/resources``, ``/api/cells``,
-``/api/snapshot``) plus the tailnet-gated ``/api/exec`` write path, which
-embedders poll (the room server reads ``/api/snapshot``; a peer's
-``fleet.in_kernel`` drives ``/api/exec``).
+``/api/snapshot``) plus two write paths: the tailnet-gated ``/api/exec`` an
+embedder polls (the room server reads ``/api/snapshot``; a peer's
+``fleet.in_kernel`` drives ``/api/exec``), and ``/api/input``, which an
+interactive resource's ``ixSubmit`` posts the human's reply to (authorized by the
+network boundary like ``/api/exec``: loopback, or a trusted tailnet; see
+:class:`runtime.Input`).
 
 The human-facing UI is no longer served here: the MCP publishes its runs,
 resources, and live namespace as Loro panes to the shared ``dashboard`` hub
@@ -17,12 +20,31 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import sqlite3
 
 from aiohttp import web
 
 from . import feed, store
 from .config import Config, live_hub, port_open
+
+# Cap on one input submission's body. A submission is a small form payload (a
+# name, a choice, a few fields), never a file upload, so a generous-but-bounded
+# limit keeps a hostile tailnet peer from growing the store with one giant POST.
+_MAX_INPUT_BYTES = 256 * 1024
+
+# CORS for the input write path. An interactive resource renders inside a
+# sandboxed, opaque-origin iframe (``sandbox="allow-scripts"``, no
+# allow-same-origin), so its `fetch` carries ``Origin: null`` and the browser
+# blocks reading the response unless we allow it. We allow any origin: the
+# endpoint authorizes by the unguessable channel-id capability in the body, not
+# by origin, and the data API only binds the trust boundary (loopback/tailnet).
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "86400",
+}
 
 
 def landing_html() -> str:
@@ -163,6 +185,67 @@ def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
             }
         )
 
+    async def input_preflight(_request: web.Request) -> web.Response:
+        # The browser preflights any non-simple cross-origin POST. The injected
+        # `ixSubmit` sends `text/plain` to stay a simple request (no preflight),
+        # but answer OPTIONS too so a producer that posts `application/json`
+        # itself still works.
+        return web.Response(status=204, headers=_CORS_HEADERS)
+
+    async def input_submit(request: web.Request) -> web.Response:
+        # The browser -> kernel write path behind interactive resources: append a
+        # DATA payload (never code) to a channel the agent explicitly opened.
+        #
+        # Authorization is the NETWORK boundary, not a secret. The channel id is an
+        # address, not a capability: it is embedded in the resource HTML, which the
+        # read endpoints (`/api/resources`, `/api/snapshot`) and the dashboard hub
+        # serve to anyone who can reach the bind, so it cannot be treated as a
+        # secret. Instead, input is a write governed like `/api/exec`: allowed on a
+        # loopback bind (the local user is trusted, and input is low-risk), or on a
+        # non-loopback (tailnet) bind only when the operator trusts the tailnet
+        # (`IX_MCP_EXEC_TRUST_NETWORK`, which the fleet sets); otherwise refused.
+        # The channel-open check then prevents queueing input no awaiter reads.
+        if config.host not in _LOOPBACK_HOSTS and not config.exec_trust_network:
+            return web.json_response(
+                {
+                    "error": "input endpoint disabled on this non-loopback bind "
+                    "(set IX_MCP_EXEC_TRUST_NETWORK to accept input over the tailnet)"
+                },
+                status=403,
+                headers=_CORS_HEADERS,
+            )
+        raw = await request.read()
+        if len(raw) > _MAX_INPUT_BYTES:
+            return web.json_response(
+                {"error": f"payload exceeds {_MAX_INPUT_BYTES} bytes"},
+                status=413,
+                headers=_CORS_HEADERS,
+            )
+        try:
+            body = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return web.json_response(
+                {"error": "body must be JSON"}, status=400, headers=_CORS_HEADERS
+            )
+        channel = body.get("channel") if isinstance(body, dict) else None
+        if not isinstance(channel, str) or not channel:
+            return web.json_response(
+                {"error": "missing 'channel'"}, status=400, headers=_CORS_HEADERS
+            )
+        if "payload" not in body:
+            return web.json_response(
+                {"error": "missing 'payload'"}, status=400, headers=_CORS_HEADERS
+            )
+        if not store.channel_open(conn, channel):
+            # Unknown or already-closed channel: refuse rather than queue input no
+            # awaiter will ever read (and so an attacker cannot grow the table by
+            # posting to random ids).
+            return web.json_response(
+                {"error": "no such open channel"}, status=404, headers=_CORS_HEADERS
+            )
+        store.add_input(conn, channel=channel, payload=json.dumps(body["payload"]))
+        return web.json_response({"ok": True}, headers=_CORS_HEADERS)
+
     app.router.add_get("/", index)
     app.router.add_get("/api/jobs", jobs)
     app.router.add_get("/api/jobs/{id}", job)
@@ -170,6 +253,8 @@ def build_app(config: Config, conn: sqlite3.Connection) -> web.Application:
     app.router.add_get("/api/cells", cells)
     app.router.add_get("/api/snapshot", snapshot)
     app.router.add_post("/api/exec", exec_run)
+    app.router.add_post("/api/input", input_submit)
+    app.router.add_route("OPTIONS", "/api/input", input_preflight)
     return app
 
 

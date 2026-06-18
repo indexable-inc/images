@@ -243,6 +243,17 @@ BUILTINS: tuple[Builtin, ...] = (
     Builtin("resources", "the live, self-updating views (a terminal, a widget)"),
     Builtin("register_resource", "publish a live Resource to the dashboard"),
     Builtin(
+        "ask",
+        "pop a window asking the human and await the reply: `await ask(\"prompt\")` / "
+        "`ask(\"prompt\", choices=[...])` / `ask(\"prompt\", fields=[...])`. Blocks on the "
+        "human, so it exceeds your budget and backgrounds -- read it back with `await jobs['<id>']`",
+    ),
+    Builtin(
+        "Input",
+        "the general input primitive behind `ask`: drop its `.script` into any resource HTML, "
+        "have the markup call `ixSubmit(payload)`, then `await` the submission (or `async for`)",
+    ),
+    Builtin(
         "sh",
         "shell out on the loop; the Output IS a Result (ANSI as HTML for the human, "
         "`.text`/`.code`/`.ok` for you), and `.json()`/`.jsonl()`/`.df()` parse a JSON-mode "

@@ -90,6 +90,44 @@ large rendered view never costs you tokens. For an ordinary value the two
 audiences share one rendering: a bare trailing expression still shows its rich
 repr on the dashboard and its text to you.
 
+## Asking the human: interactive input
+
+A `Resource` pushes a view *to* the human; an `Input` is the channel the human
+pushes back *on*, so the agent can pop a window up and await a reply:
+
+```python
+name   = await ask("What should I name the branch?")          # the typed string
+target = await ask("Deploy where?", choices=["staging", "prod"])  # the chosen string
+creds  = await ask("DB creds", fields=["user", "password"])   # {"user": ..., "password": ...}
+```
+
+`ask` renders a form as a live resource (a dashboard pane, and a floating window
+under `ix-windows`), blocks until the human submits, closes the window, and
+returns the answer. Because it waits on a human it exceeds your `python_exec`
+budget and backgrounds: read the answer in a later call with `await jobs['<id>']`.
+
+For anything past a simple form, use the `Input` primitive directly: drop its
+`.script` into any HTML you render and have your markup call `ixSubmit(payload)`.
+
+```python
+inp = Input(title="canvas")
+register_resource(
+    render=lambda: inp.script + "<button onclick='ixSubmit({clicked:1})'>go</button>",
+    id=inp.id, title="canvas",
+)
+payload = await inp                      # -> {"clicked": 1}; or `async for` a stream
+```
+
+How it flows: the resource HTML mounts in a sandboxed, opaque-origin iframe
+(`sandbox="allow-scripts"`), and `ixSubmit` makes a cross-origin `fetch` to the
+data API's `POST /api/input` (the one write path besides `/api/exec`). That
+appends the submission to the store's `inputs` queue; the kernel drains it on its
+flush tick and the awaiting call resolves. The channel id is an address, not a
+secret (it rides in the HTML the read endpoints serve), so `/api/input` is
+authorized by the network boundary like `/api/exec`: allowed on a loopback bind,
+and on a tailnet bind only when the operator trusts the tailnet
+(`IX_MCP_EXEC_TRUST_NETWORK`, which the fleet sets).
+
 ## How it works
 
 `ix-mcp serve` starts one IPython kernel (over `jupyter-client`), a read-only

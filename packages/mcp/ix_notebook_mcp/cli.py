@@ -447,6 +447,11 @@ def _serve(args: argparse.Namespace, *, engine_only: bool = False) -> int:
     # human-facing dashboard is the Loro hub when we auto-spawn one; otherwise
     # there is no per-server hub, so point at this server's own data API.
     os.environ["IX_MCP_DASHBOARD_URL"] = cfg.hub_url() if _auto_dashboard() else cfg.dashboard_url()
+    # The data API base, ALWAYS this server's own read/write API (never the hub):
+    # the runtime bakes it into an interactive resource's `ixSubmit` so the
+    # browser posts user input to `/api/input` here. Distinct from
+    # IX_MCP_DASHBOARD_URL above, which may point at the human-facing hub.
+    os.environ["IX_MCP_DATA_API_URL"] = cfg.dashboard_url()
     os.environ["IPYTHONDIR"] = str(_prepare_ipython_startup(dashboard_port))
 
     # On macOS the process env inherits the empty Apple launchd SSH agent
