@@ -80,3 +80,50 @@ def test_no_device_message(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(iphone, "devices", _empty)
     with pytest.raises(iphone.IphoneError, match="no device connected"):
         asyncio.run(iphone._one_device())
+
+
+def test_tap_is_coordinate_based() -> None:
+    # tap moved from a (broken) WDA selector to W3C coordinate taps.
+    params = list(inspect.signature(iphone.tap).parameters)
+    assert params[:2] == ["x", "y"], params
+
+
+def test_wda_down_raises_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A connection error must surface as a clear IphoneError, and _wda_up must
+    # report False rather than raising. Monkeypatch urlopen so the test is
+    # hermetic (the macOS nix sandbox does not isolate loopback, so a real port
+    # probe could reach a host WDA forward).
+    import urllib.request
+
+    def _refuse(*_a: object, **_k: object) -> object:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _refuse)
+    assert asyncio.run(iphone._wda_up()) is False
+    with pytest.raises(iphone.IphoneError, match="WDA"):
+        asyncio.run(iphone._wda("GET", "/status"))
+
+
+def test_session_heals_on_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A stale session must be dropped and re-minted once on a session error.
+    calls: list[str] = []
+
+    async def fake_wda(method: str, path: str, body: object = None) -> object:
+        calls.append(path)
+        if path.startswith("/session/stale"):
+            raise iphone.IphoneError("invalid session id")
+        if path == "/session":
+            return {"sessionId": "fresh"}
+        return {}
+
+    monkeypatch.setattr(iphone, "_wda_session", "stale")
+    monkeypatch.setattr(iphone, "_wda", fake_wda)
+    asyncio.run(iphone._wda_in_session("POST", "/actions", {}))
+    assert any(c == "/session/fresh/actions" for c in calls), calls
+
+
+def test_doctor_never_raises() -> None:
+    # doctor() reports each check; it must not raise even with no device/WDA.
+    frame = asyncio.run(iphone.doctor())
+    assert "check" in frame.columns
+    assert "ok" in frame.columns
