@@ -36,9 +36,15 @@ tiling, no layout manager.
   a drag on any bare background area moves it too. The window is not user-resizable
   -- its size is owned by the content (auto-fit), so a manual resize would just
   fight the next content report.
-- **Close.** Each card paints its own floating close button (top-right corner,
-  faint until hovered). Closing a window keeps it shut even while its resource is
-  still live; it reopens only if the resource is re-registered.
+- **Close, and stay closed.** Each card paints its own floating close button
+  (top-right corner, faint until hovered). A closed resource is remembered
+  **persistently** (keyed by producing session + resource id), so it does not
+  reappear when the resource re-registers or when `ix-windows` restarts -- useful
+  when a session publishes a flood of resources you do not want to see. It only
+  reappears if a *different* session (or the same one after a restart) publishes
+  it. Dismissals are logged to `$XDG_STATE_HOME/ix-windows/dismissed` (else
+  `~/.local/state/ix-windows/dismissed`); delete that file to start showing
+  everything again.
 
 ## Prefer self-contained HTML
 

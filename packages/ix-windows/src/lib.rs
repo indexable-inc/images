@@ -29,6 +29,7 @@
 //! cells stay on the web canvas.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use dashboard_core::{Pane, ProducerEvent, ProducerSnapshot, View};
 use tao::dpi::{LogicalPosition, LogicalSize};
@@ -121,12 +122,20 @@ pub struct WindowManager {
     /// Reverse index so an OS event (a close, a resize report) maps back to the
     /// pane it represents.
     by_window: HashMap<WindowId, PaneKey>,
-    /// Resources the user explicitly closed while still live. Without this, the
-    /// next snapshot (any resource content change republishes one) would find
-    /// the window gone and re-open it, fighting the user. Cleared when the
-    /// resource actually vanishes or its producer disconnects, so a genuine
-    /// re-registration opens a fresh window.
-    dismissed: HashSet<PaneKey>,
+    /// Session-only suppression keyed by `(producer, pane)`: a window/webview that
+    /// failed to build (so we do not churn-retry it every snapshot). Cleared when
+    /// the resource vanishes or its producer disconnects, so a later environment
+    /// can retry. User dismissals live in `dismissed_keys` instead.
+    failed: HashSet<PaneKey>,
+    /// Resources the user explicitly closed, remembered **persistently** and keyed
+    /// by `(producer, pane id)`, mirrored to disk ([`dismissed_file`]). The
+    /// producer id is stable for the producing session's whole process lifetime, so
+    /// this survives re-registration and an `ix-windows` restart, yet does **not**
+    /// suppress a same-named pane from a *different* producer (e.g. two sessions
+    /// each publishing `resource/queue`). Resets only when the producing session
+    /// itself restarts (new producer id). Never auto-cleared; delete the file to
+    /// forget all.
+    dismissed_keys: HashSet<PaneKey>,
     /// How many windows have been opened, used to cascade each new overlay so
     /// they do not stack exactly on top of each other.
     opened: u32,
@@ -136,11 +145,13 @@ impl WindowManager {
     /// An empty manager that emits resize events through `proxy`.
     #[must_use]
     pub fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
+        let dismissed_keys = dismissed_file().map(|p| load_dismissed(&p)).unwrap_or_default();
         Self {
             proxy,
             windows: HashMap::new(),
             by_window: HashMap::new(),
-            dismissed: HashSet::new(),
+            failed: HashSet::new(),
+            dismissed_keys,
             opened: 0,
         }
     }
@@ -168,7 +179,7 @@ impl WindowManager {
             let key = (snapshot.producer.clone(), pane.id.clone());
             if let Some(open) = self.windows.get_mut(&key) {
                 open.refresh(pane, &view.html);
-            } else if !self.dismissed.contains(&key) {
+            } else if !self.failed.contains(&key) && !self.dismissed_keys.contains(&key) {
                 self.open(target, key, pane, &view.html);
             }
         }
@@ -186,9 +197,10 @@ impl WindowManager {
             self.close(&key);
         }
 
-        // Forget dismissals for this producer's resources that are gone, so a
-        // later re-registration of the same id opens a fresh window.
-        self.dismissed
+        // Forget build-failure suppressions for this producer's resources that are
+        // gone, so a later re-registration of the same id retries. (User
+        // dismissals in `dismissed_keys` are intentionally permanent.)
+        self.failed
             .retain(|(producer, id)| *producer != snapshot.producer || present.contains(id.as_str()));
     }
 
@@ -203,20 +215,27 @@ impl WindowManager {
         for key in gone {
             self.close(&key);
         }
-        self.dismissed.retain(|(p, _)| p != producer);
+        self.failed.retain(|(p, _)| p != producer);
     }
 
     /// Forget a window the user closed (an OS `CloseRequested`, or the card's own
-    /// floating `×` via [`UserEvent::Close`]) and remember the dismissal so a
-    /// later snapshot for the still-live resource does not re-open it. Removing it
-    /// from `windows` drops the `OpenWindow`, which closes the OS window. Returns
-    /// whether the window was one of ours.
+    /// floating `×` via [`UserEvent::Close`]) and remember the dismissal
+    /// **persistently** by resource id, so the resource stays closed across
+    /// re-registration, producer reconnect, and restart (see `dismissed_keys`).
+    /// Removing it from `windows` drops the `OpenWindow`, which closes the OS
+    /// window. Returns whether the window was one of ours.
     pub fn window_closed(&mut self, window: WindowId) -> bool {
         let Some(key) = self.by_window.remove(&window) else {
             return false;
         };
+        // Persist on first sighting of this key; the file is an append-only log, so
+        // a no-op insert must not append a duplicate line.
+        if self.dismissed_keys.insert(key.clone()) {
+            if let Some(path) = dismissed_file() {
+                append_dismissed(&path, &key);
+            }
+        }
         self.windows.remove(&key);
-        self.dismissed.insert(key);
         true
     }
 
@@ -333,10 +352,10 @@ impl WindowManager {
                 eprintln!("ix-windows: window for {}: {error}", pane.id);
                 // Record the key so a failing build is not retried on every
                 // snapshot (which would churn OS windows for a live resource on a
-                // host where window/webview creation persistently fails). Reuses
-                // the dismissal lifecycle: cleared when the resource vanishes or
-                // its producer disconnects, so a later environment can retry.
-                self.dismissed.insert(key);
+                // host where window/webview creation persistently fails). `failed`
+                // is cleared when the resource vanishes or its producer disconnects,
+                // so a later environment can retry.
+                self.failed.insert(key);
                 return;
             }
         };
@@ -379,7 +398,7 @@ impl WindowManager {
                 eprintln!("ix-windows: webview for {}: {error}", pane.id);
                 // As above: don't re-attempt a persistently failing build every
                 // snapshot. The `window` local drops here, closing the OS window.
-                self.dismissed.insert(key);
+                self.failed.insert(key);
                 return;
             }
         };
@@ -469,6 +488,71 @@ srcdoc=\"{srcdoc}\"></iframe></div>\
 /// cannot read, so the producer never sees it.
 fn close_token() -> String {
     uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Where user-dismissed resource ids are persisted across runs:
+/// `$XDG_STATE_HOME/ix-windows/dismissed`, else `$HOME/.local/state/ix-windows/
+/// dismissed`. `None` if neither env var is set (then dismissals are session-only).
+/// Delete this file to forget every dismissal and let all resources open again.
+fn dismissed_file() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
+    Some(base.join("ix-windows").join("dismissed"))
+}
+
+/// Read the persisted dismissed keys. Each line is a JSON `[producer, id]` pair
+/// (not a raw string): producer and id are agent-supplied and can contain anything
+/// -- newlines, quotes, surrounding whitespace -- and JSON round-trips them
+/// faithfully, where a raw-delimited format would split a multi-line value into
+/// bogus entries (dropping the real dismissal and possibly suppressing an
+/// unrelated key that matches a fragment). Blank lines are skipped and any line
+/// that fails to parse is ignored (corruption tolerance). Any error
+/// (missing/unreadable file) yields an empty set -- a lost log just reopens a few
+/// windows, never a crash.
+fn load_dismissed(path: &Path) -> HashSet<PaneKey> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return HashSet::new();
+    };
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str::<PaneKey>(line.trim()).ok())
+        .collect()
+}
+
+/// Append one dismissed key to the log as a JSON `[producer, id]` line (see
+/// [`load_dismissed`] for why JSON, not raw text). Creates the parent dir and file
+/// as needed. Best effort: a failure to persist only means the window may reopen on
+/// the next run, so errors are swallowed rather than disrupting the overlay.
+/// Callers must dedupe (only append a key not already in the in-memory set), since
+/// this is an append-only log.
+fn append_dismissed(path: &Path, key: &PaneKey) {
+    use std::io::Write as _;
+    let Ok(line) = serde_json::to_string(key) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // Owner-only: resource ids are agent-supplied and can embed private paths or
+    // names, so the dismissal log must not be world-readable. `mode` covers a fresh
+    // file; `set_permissions` tightens one created 0644 by an earlier build.
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    if let Ok(mut file) = options.open(path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+        }
+        let _ = writeln!(file, "{line}");
+    }
 }
 
 /// The sandboxed inner document for the iframe: the producer `body` verbatim in an
@@ -831,7 +915,45 @@ fn enable_high_refresh(webview: &WebView) {
 
 #[cfg(test)]
 mod tests {
-    use super::{close_token, escape_attr, escape_text, inner_document, parse_size, shell};
+    use super::{
+        append_dismissed, close_token, escape_attr, escape_text, inner_document, load_dismissed,
+        parse_size, shell,
+    };
+
+    #[test]
+    fn dismissed_log_round_trips_keys_and_ignores_blanks() {
+        // Unique temp path per run (close_token is a fresh uuid) so parallel tests
+        // never collide and we never touch a real state dir.
+        let dir = std::env::temp_dir().join(format!("ixw-dismiss-{}", close_token()));
+        let path = dir.join("dismissed");
+        assert!(load_dismissed(&path).is_empty(), "missing file -> empty set");
+
+        // Faithful round-trip, including keys with embedded newlines, quotes, and
+        // surrounding whitespace (a raw-line format would corrupt these), and the
+        // same id under two different producers staying distinct.
+        let keys: [(String, String); 4] = [
+            ("46256-abc".to_owned(), "resource/docs/a.md".to_owned()),
+            ("46256-abc".to_owned(), "resource/x\ny".to_owned()),
+            ("99999-zzz".to_owned(), "resource/docs/a.md".to_owned()),
+            ("p \"q".to_owned(), "resource/  spaced  ".to_owned()),
+        ];
+        for key in &keys {
+            append_dismissed(&path, key);
+        }
+        let set = load_dismissed(&path);
+        assert_eq!(set.len(), keys.len());
+        for key in &keys {
+            assert!(set.contains(key), "key not round-tripped: {key:?}");
+        }
+
+        // A stray blank line in the log must not become a phantom key.
+        std::fs::write(&path, "[\"a\",\"resource/x\"]\n\n  \n[\"a\",\"resource/y\"]\n").unwrap();
+        let set = load_dismissed(&path);
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&("a".to_owned(), "resource/x".to_owned())));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn shell_sandboxes_body_in_an_iframe_and_escapes_title() {
