@@ -190,7 +190,7 @@ HTML = (
 
 OUTPUT_HTML = (
     "By default, when you give the human an output, write it to an HTML file and then open it: build "
-    "the page with htpy, write it to a file (`Path('out.html').write_text(str(el))`), and open it for "
+    "the page with htpy, write it to a file (`from pathlib import Path; Path('out.html').write_text(str(el))`), and open it for "
     "the viewer with `await sh(['open', 'out.html'])` so it lands in their browser. Reach past a plain "
     "text answer to this rendered page for anything worth seeing."
 )
