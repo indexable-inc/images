@@ -198,12 +198,14 @@ let
   # --eval-workers 16 with --eval-max-memory-size 6144 is a headroom guard rail
   # (above nix-eval-jobs' 4 GiB default per worker, below the old 8 GiB), not a
   # workaround: the per-crate check split (see the `checks` block below) keeps
-  # each worker's eval bounded by the largest single crate. Pinned by commit to
-  # nix-fast-build 1.5.0, but pointed at the repo-built patched nix-eval-jobs via
-  # --nix-eval-jobs (the eval-step binary, not nix-fast-build itself, is what
-  # decides cacheStatus): without the patch, --skip-cached treats every floating
-  # CA rust unit as uncached and rebuilds ~1434 of them on every warm run. See
-  # the $eval_jobs comment below.
+  # each worker's eval bounded by the largest single crate. Both binaries are
+  # repo-built patches of nixpkgs' 1.5.0 / v2.34.1 (same commits the flake refs
+  # used to pin): the patched nix-eval-jobs (--nix-eval-jobs) resolves floating-CA
+  # outputs so they report a real cacheStatus instead of always-uncached, and the
+  # patched nix-fast-build makes --skip-cached skip a `local` (warm-store) output,
+  # not just a remotely-`cached` one. Without both, --skip-cached re-realizes every
+  # floating-CA rust unit and image closure (~1450) on every warm run. See the
+  # $fast_build and $eval_jobs comments below.
   #
   # Step 2 (nix-eval-jobs) is the schema/eval gate over the package outputs,
   # broader than the `checks` set step 1 built. nix-eval-jobs is the same
@@ -229,7 +231,15 @@ let
     name = "check";
     meta.description = "Run the full CI gate: build .#ciChecks.x86_64-linux and eval-validate .#packages.x86_64-linux";
     text = ''
-      const fast_build = "github:Mic92/nix-fast-build/7f185e0ec37b65b4730f892e0de9a831b0610f3a"
+      # Patched nix-fast-build (packages/nix/nix-fast-build): stock --skip-cached
+      # only skips a job whose nix-eval-jobs cacheStatus is `cached` (in a remote
+      # substituter); a `local` output (already in this warm runner's store but
+      # never pushed) falls through and is re-realized every run. On this CI the
+      # rust units and image closures are floating-CA and resolve to `local`, so
+      # the patch makes --skip-cached skip `local` too. nixpkgs' 1.5.0 tag is the
+      # same commit (7f185e0) the flake ref used to pin, so this is a like-for-like
+      # source swap plus the patch. Invoked directly by store path, not `nix run`.
+      const fast_build = "${lib.getExe repoPackages.nix-fast-build}"
       # Patched nix-eval-jobs (packages/nix/nix-eval-jobs): the stock binary
       # reports `local`/`notBuilt` for floating content-addressed outputs even
       # when they are in cache.ix.dev, so --skip-cached rebuilt every CA rust
@@ -266,7 +276,7 @@ let
         # outer `mut` from inside the catch closure).
         let build_failed = (
           try {
-            ^nix run $fast_build -- ...[
+            ^$fast_build ...[
               "--flake" ".#ciChecks.x86_64-linux"
               # Drive nix-fast-build's evaluator with the patched nix-eval-jobs
               # (CA cacheStatus fix) so --skip-cached actually skips warm CA

@@ -1,0 +1,25 @@
+--- a/nix_fast_build/__init__.py
++++ b/nix_fast_build/__init__.py
+@@ -1153,9 +1153,19 @@
+         # them for pushing if they are cached locally
+         elif cache_status == "cached":
+             continue
+-        elif cache_status == "local" and upload_queue is not None:
+-            outputs = {k: v for k, v in job.get("outputs", {}).items() if v is not None}
+-            upload_queue.put_nowait(Build(attr, job["drvPath"], outputs))
++        elif cache_status == "local":
++            # The output is already realized in the local store, so it never
++            # needs (re)building -- skip it like a remotely-cached job. Still
++            # queue it for upload first if a binary-cache target is configured.
++            # Without this, --skip-cached re-realizes every locally-present
++            # floating-CA derivation on a persistent warm runner (index CI:
++            # ~1450 rust units + image closures), because upstream only
++            # continues on "cached" and falls through to the build queue for
++            # "local". See packages/nix/nix-fast-build/default.nix.
++            if upload_queue is not None:
++                outputs = {k: v for k, v in job.get("outputs", {}).items() if v is not None}
++                upload_queue.put_nowait(Build(attr, job["drvPath"], outputs))
++            continue
+         system = job.get("system")
+         if system and system not in opts.systems:
+             continue
