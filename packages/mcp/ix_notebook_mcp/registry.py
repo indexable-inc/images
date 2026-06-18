@@ -125,6 +125,14 @@ MODULES: tuple[Module, ...] = (
         "(`imessage.messages()` / `chats()` / `send()`) (macOS only)",
     ),
     Module(
+        "iphone",
+        "drive a USB-connected iPhone/iPad via pymobiledevice3: list devices/apps into polars "
+        "(`iphone.devices()` / `apps()`), `screenshot()` a developer-mounted device to a PIL "
+        "image, `tap`/`swipe`/`launch`, and mount the Developer Disk Image. Developer commands "
+        "need a root `tunneld` daemon — start it explicitly with `iphone.start_tunneld(sudo=True)` "
+        "— plus a USB device with Developer Mode on",
+    ),
+    Module(
         "tasks",
         "generate and read the task-graph demo's SQLite DAG (`tasks.seed` / `load` / `frame`)",
     ),
@@ -182,6 +190,24 @@ MODULES: tuple[Module, ...] = (
             token_path="~/.config/slack/token",  # noqa: S106 -- path to token file, not a hardcoded secret
             login="call `slack.login(token)` in a cell",
             url="https://api.slack.com/authentication/token-types#user",
+        ),
+    ),
+    Module(
+        "beeper",
+        "read chats and messages across every network (WhatsApp, Telegram, Signal, iMessage, "
+        "Discord, Slack, X, ...) into polars from the local Beeper Desktop API, search, and send "
+        "(`await beeper.accounts()` / `chats()` / `messages(chat_id)` / `search(query)` / "
+        "`send(chat_id, text)`); `beeper.login(token)` stores your access token (mode 0600), "
+        "`await status()` / `logout()` manage it. Incognito sessions only (personal chats never "
+        "reach a shared room)",
+        # Mirrors beeper._token()'s resolution order; the requirements smoke test
+        # pins these against the module's own constants so they cannot drift.
+        credential=Credential(
+            service="Beeper",
+            env=("BEEPER_ACCESS_TOKEN", "BEEPER_API_TOKEN"),
+            token_path="~/.config/beeper/token",  # noqa: S106 -- path to token file, not a hardcoded secret
+            login="call `beeper.login(token)` in a cell",
+            url="https://developers.beeper.com/desktop-api/auth",
         ),
     ),
     Module(

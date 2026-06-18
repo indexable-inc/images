@@ -191,14 +191,16 @@ let
   #     .claude/settings.json) on purpose: project hooks only load for
   #     sessions started inside that project, which is exactly the bypass the
   #     guard closes (ENG-2692).
-  #   permissions.ask `gh pr merge --admin`/`--force` (ENG-2688, postmortem
-  #     ENG-2391): a check-bypassing merge must pause for confirmation so the
-  #     local-build gate in the appended system prompt gets applied, not
-  #     skimmed. Ask rules (unlike deny) are not enforced under the baked
-  #     `--dangerously-skip-permissions`, so under the default posture the
-  #     prompt rule is the practical gate and this rule covers consumers who
-  #     turn the flag off; deny would be wrong here because an admin merge
-  #     after a passing local build on the head SHA is explicitly allowed.
+  #   permissions.deny `gh pr merge --admin`/`--force` (ENG-2688, postmortem
+  #     ENG-2391: agent force-landed a red PR): admin/force merge is forbidden
+  #     outright, not gated. The old `ask` rule was theatre — it only intercepts
+  #     the Bash tool, but the kernel `sh()` path (and Bash itself, denied above)
+  #     reach `gh pr merge --admin` with no permission layer in front, so the
+  #     "pause for confirmation" gate was never real. Deny the Bash patterns
+  #     instead (enforced in every mode, including the baked
+  #     `--dangerously-skip-permissions`); the uncovered kernel `sh()` path is
+  #     bound by the `forceMerge` system-prompt rule's flat prohibition. Always
+  #     on, every configuration: a check-bypassing merge is never allowed.
   #   permissions.deny WebSearch/WebFetch (only while the exa MCP server is in
   #     the baked `mcpServers`): one web surface, not two. Exa's
   #     web_search_exa/web_fetch_exa cover both built-ins, so denying the
@@ -207,6 +209,30 @@ let
   #     the baked `--dangerously-skip-permissions`. Scoped to `mcpServers ?
   #     exa` so a consumer who overrides the server set away gets the
   #     built-ins back instead of no web access at all.
+  #   permissions.deny Bash (only while the index kernel MCP server `index` is in
+  #     the generated `mcpServers`): the kernel's `python_exec`/`sh()` IS the
+  #     shell, so the Bash tool is denied to force every shell call onto the
+  #     kernel (one async event loop, live on the dashboard, clean output instead
+  #     of the raw-pipe ANSI-mangling path). Gated on the CONFIGURED server, not
+  #     `repoPackages ? mcp`: a consumer can keep the `mcp` sibling yet override
+  #     `mcpServers = { }` (or drop `index`), and gating on availability would
+  #     then deny Bash while shipping no kernel server — a session with no shell
+  #     at all. Tying the deny to `mcpServers ? index` means Bash is removed only
+  #     when its replacement is actually present. Like the pair above, deny is the
+  #     ONE wall the dangerous-mode posture cannot punch through: it holds under
+  #     the baked `--dangerously-skip-permissions` (verified two ways — a headless
+  #     run with `--disallowedTools Bash` under the skip-flag is refused with "No
+  #     such tool available: Bash", and the WebSearch/WebFetch deny above is
+  #     already live under the same flag, which is why the model uses exa, not the
+  #     built-ins). It is not an `ask`, which the flag WOULD auto-approve.
+  #     TRADEOFFS: (1) removes the "Bash only when kernel wedged" fallback; a
+  #     wedged kernel is recovered with `kernel_trace` / fresh `python_exec` /
+  #     restart, never Bash. (2) the `Bash(gh pr merge*--admin*/--force*)` ask
+  #     rules below go unreachable when Bash is denied, so for a consumer who sets
+  #     `dangerouslySkipPermissions = false` the permission-level merge gate moves
+  #     entirely onto the baked `forceMerge` system-prompt rule (the operative
+  #     gate fleet-wide anyway, since the default skip-flag already makes `ask`
+  #     inert); the kernel `sh()` path carries no equivalent prompt.
   #   fileSuggestion (only when the `fff-suggest` sibling is in scope): routes
   #     `@`-mention file completion through fff's frecency-ranked fuzzy finder
   #     instead of the CLI's built-in index, via the statusLine-shaped custom
@@ -231,6 +257,16 @@ let
   };
   hookCmd = sub: "${claudeHooks}/bin/claude-hooks ${sub}";
 
+  # Tools denied via the flagSettings `permissions.deny` layer; see the
+  # `permissions.deny` bullets in the doc block above for why each, and why deny
+  # (unlike ask/allow) holds under the baked `--dangerously-skip-permissions`.
+  denyTools =
+    lib.optionals (mcpServers ? exa) [
+      "WebSearch"
+      "WebFetch"
+    ]
+    ++ lib.optional (mcpServers ? index) "Bash";
+
   # Caller's extraSettings first, then the computed defaults recursively merged
   # ON TOP, so the keys below always win a conflict while the caller's other
   # keys (hooks, statusLine, ...) pass through.
@@ -238,16 +274,17 @@ let
     {
       cleanupPeriodDays = 365;
       permissions = {
-        ask = [
-          "Bash(gh pr merge*--admin*)"
-          "Bash(gh pr merge*--force*)"
-        ];
-      }
-      // lib.optionalAttrs (mcpServers ? exa) {
-        deny = [
-          "WebSearch"
-          "WebFetch"
-        ];
+        # Prepend any caller-supplied deny: `ix.deepMerge.rhs` treats a list as a
+        # leaf, so a computed `deny` would REPLACE `extraSettings.permissions.deny`
+        # outright and silently drop a consumer's own policy. Concatenate instead
+        # so package denies are additive to the caller's.
+        deny =
+          (extraSettings.permissions.deny or [ ])
+          ++ [
+            "Bash(gh pr merge*--admin*)"
+            "Bash(gh pr merge*--force*)"
+          ]
+          ++ denyTools;
       };
       hooks = {
         SessionStart = [

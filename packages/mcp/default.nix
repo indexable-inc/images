@@ -499,6 +499,28 @@ let
         cp -r ${slackPythonSource}/slack/. "$site/"
       ''
   );
+  # Beeper: read chats and messages across every connected network, search, and
+  # send -- a polars-shaped wrapper over the local Beeper Desktop HTTP API
+  # (default http://localhost:23373). Pure Python over the bundled httpx + polars.
+  # Per-user credential: BEEPER_ACCESS_TOKEN env or ~/.config/beeper/token
+  # (mode 0600, written by beeper.login(token)). Incognito sessions only (personal
+  # chats never reach a shared room). Cross-platform.
+  beeperPythonSource = builtins.path {
+    name = "ix-mcp-beeper-python-source";
+    path = ./src/beeper;
+  };
+  beeperModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-beeper-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Per-user Beeper Desktop chats/messages/search/send bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/beeper"
+        mkdir -p "$site"
+        cp -r ${beeperPythonSource}/beeper/. "$site/"
+      ''
+  );
   # Git worktrees as the unit of isolated work: `import worktree`, then
   # `wt = await worktree.add("my-fix")` checks out a new branch in its own tree,
   # `await wt.build(".#mcp")` stages + nix-builds it, `worktree.list()` is a
@@ -778,6 +800,137 @@ let
     ];
   });
 
+  # pymobiledevice3 9.27.0, the modern pure-python iDevice client the `iphone`
+  # helper drives. nixpkgs pins 7.7.0, which predates iOS 17+ RemoteXPC tunnel
+  # support maturing and cannot drive a current iOS 26 device; 9.27.0 can. It is
+  # an override of the nixpkgs derivation (src bumped to the 9.27.0 sdist, plus
+  # the handful of deps 9.x added) rather than a uv project, because the closure
+  # has two sdist-only deps (hexdump, lzfse) that uv cannot build offline in the
+  # sandbox — nixpkgs already ships both prebuilt, so the override reuses them and
+  # every native dep nixpkgs has solved (qh3, cryptography, pillow, av, …). The
+  # delta over 7.7.0 is five deps (asn1, pyimg4, pyiosbackup, prompt-toolkit,
+  # defusedxml) plus av off Darwin, and a relaxed typer floor.
+  #
+  # asn1 is pinned to 2.8.0 across the whole mcp interpreter's package set. nixpkgs
+  # ships asn1 3.3.0, whose Encoder/Decoder API shift is what marks pyimg4 0.8.8
+  # `broken` there (its gate is `asn1 >= "3"`); 0.8.8 + asn1 2.x is the
+  # combination verified to mount the Developer Disk Image on-device. pyimg4 is
+  # pulled both directly and transitively (pymobiledevice3 -> ipsw-parser), so the
+  # downgrade must be set-wide, not per-package — a `packageOverrides` interpreter
+  # makes every consumer see the unbroken 2.8.0. Nothing else in the closure needs
+  # asn1 3.x.
+  mcpPythonInterp = pkgs.python3.override {
+    self = mcpPythonInterp;
+    packageOverrides = final: prev: {
+      asn1 = prev.asn1.overridePythonAttrs (_: {
+        version = "2.8.0";
+        src = pkgs.fetchPypi {
+          pname = "asn1";
+          version = "2.8.0";
+          hash = "sha256-rfd93CcHz0IMDq47me4w6ROvzwk2Rn1CZpggzmt9FQo=";
+        };
+      });
+      # pymobiledevice3 9.27.0 needs ipsw-parser >= 1.6.0; nixpkgs pins 1.5.0.
+      # Bump to 1.7.3 (the verified resolution). 1.7.x swaps its click dep for
+      # typer, so add it (and relax the floor, since the set's typer is 0.24.0).
+      ipsw-parser = prev.ipsw-parser.overridePythonAttrs (old: {
+        version = "1.7.3";
+        src = pkgs.fetchPypi {
+          pname = "ipsw_parser";
+          version = "1.7.3";
+          hash = "sha256-QSu7t3O0NLD5lL0EPNtX2QqxpK5y+oSJtxkAzYVtNuo=";
+        };
+        env = (old.env or { }) // {
+          SETUPTOOLS_SCM_PRETEND_VERSION = "1.7.3";
+        };
+        dependencies = (old.dependencies or [ ]) ++ [ final.typer ];
+        pythonRelaxDeps = (old.pythonRelaxDeps or [ ]) ++ [ "typer" ];
+      });
+    };
+  };
+
+  # pyiosbackup: read/decrypt iOS backups. Required by pymobiledevice3 9.27.0 and
+  # absent from nixpkgs (the packaged `iosbackup` is an unrelated project). Pure
+  # Python; all of its deps are already in the interpreter. Built from the
+  # asn1-pinned set so it shares one consistent closure.
+  pyiosbackupModule =
+    let
+      pname = "pyiosbackup";
+      version = "0.2.4";
+    in
+    mcpPythonInterp.pkgs.buildPythonPackage {
+      inherit pname version;
+      pyproject = true;
+      src = pkgs.fetchPypi {
+        inherit pname version;
+        hash = "sha256-ELTSoRyb7ck6VGfK063b4YvC3ENBVpIOciMibtTQvrc=";
+      };
+      build-system = [ mcpPythonInterp.pkgs.setuptools ];
+      dependencies = [
+        mcpPythonInterp.pkgs.bpylist2
+        mcpPythonInterp.pkgs.cryptography
+        mcpPythonInterp.pkgs.packaging
+        mcpPythonInterp.pkgs.construct
+        mcpPythonInterp.pkgs.click
+      ];
+      pythonImportsCheck = [ "pyiosbackup" ];
+      doCheck = false;
+    };
+
+  # The 9.27.0 override itself, built from the asn1-pinned set (so pyimg4 and
+  # ipsw-parser resolve to the unbroken 2.8.0). Keeps the nixpkgs 7.7.0 dependency
+  # set (native deps stay nixpkgs-built) and adds the new 9.x deps; typer is
+  # relaxed because nixpkgs pins 0.24.0 while 9.27.0 floors at 0.25 (the CLI runs
+  # on 0.24's surface, exercised by the import-smoke check). setuptools-scm reads
+  # the version from the sdist's PKG-INFO, pinned so the build never needs a .git.
+  # Upstream tests need a device, so checks are off.
+  pymobiledevice3_927 = mcpPythonInterp.pkgs.pymobiledevice3.overridePythonAttrs (old: {
+    version = "9.27.0";
+    src = pkgs.fetchPypi {
+      pname = "pymobiledevice3";
+      version = "9.27.0";
+      hash = "sha256-pYRzvX86tRUjYDuU7fBSD0VCTfE/sITJSId012+O7+8=";
+    };
+    env = (old.env or { }) // {
+      SETUPTOOLS_SCM_PRETEND_VERSION = "9.27.0";
+    };
+    dependencies =
+      (old.dependencies or [ ])
+      ++ [
+        mcpPythonInterp.pkgs.asn1
+        mcpPythonInterp.pkgs.pyimg4
+        pyiosbackupModule
+        mcpPythonInterp.pkgs.prompt-toolkit
+        mcpPythonInterp.pkgs.defusedxml
+      ]
+      ++ lib.optional (!pkgs.stdenv.hostPlatform.isDarwin) mcpPythonInterp.pkgs.av;
+    pythonRelaxDeps = [ "typer" ];
+    doCheck = false;
+  });
+
+  # The `iphone` helper source, bundled like `screen`/`vmkit`/`imessage` so every
+  # session can `import iphone`. Pure Python: it shells out to the bundled
+  # `pymobiledevice3` console script (resolved next to the interpreter at runtime)
+  # and returns device data as polars frames and screenshots as PIL images.
+  # Cross-platform (USB + a root `tunneld` are what it needs, not macOS), so it
+  # builds and import-checks on Linux CI too.
+  iphonePythonSource = builtins.path {
+    name = "ix-mcp-iphone-python-source";
+    path = ./src/iphone;
+  };
+  iphoneModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-iphone-python-module"
+      {
+        strictDeps = true;
+        meta.description = "USB iOS device control (pymobiledevice3) bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/iphone"
+        mkdir -p "$site"
+        cp -r ${iphonePythonSource}/iphone/. "$site/"
+      ''
+  );
+
   # The interpreter the wrapper pins. Sessions build their venv from this with
   # `--system-site-packages`, so `tui`, `search`, `fff`, `exa_py`, numpy, polars
   # (incl. Postgres via psycopg + SQLAlchemy), duckdb, httpx, htpy, and playwright
@@ -910,13 +1063,21 @@ let
       browserModule
       xModule
       slackModule
+      beeperModule
       tasksModule
       linearModule
       noxAutotriageModule
       mcpClientModule
+      # pymobiledevice3 9.27.0 (defined above) + the `iphone` wrapper that drives
+      # its CLI. The wrapper resolves the `pymobiledevice3` console script next to
+      # the interpreter, so both ride in the same env. Cross-platform: a USB
+      # iDevice + a root `tunneld` are what the developer commands need, not macOS,
+      # so CI builds the whole closure and import-checks it on Linux too.
+      pymobiledevice3_927
+      iphoneModule
     ]
     ++ darwinExtraPackages ps;
-  mcpPython = pkgs.python3.withPackages mcpPythonPackages;
+  mcpPython = mcpPythonInterp.withPackages mcpPythonPackages;
 
   # Browser bundle that matches the playwright-driver the python package is
   # patched to use. Exposed to the worker through PLAYWRIGHT_BROWSERS_PATH on the
@@ -1022,6 +1183,7 @@ let
     "linear"
     "google_auth"
     "slack"
+    "beeper"
     "view"
     "worktree"
   ];
@@ -1390,6 +1552,64 @@ let
     assert state["configured"] is False, state
     print("slack-ok")
   '';
+  # The `beeper` helper imports and exposes its public surface. A real API call
+  # needs BEEPER_ACCESS_TOKEN + a running Beeper Desktop, so the sandbox-safe
+  # assertions are: the module imports, the public callables exist, an
+  # unconfigured session raises BeeperError naming the token, and IX_MCP_SHARED=1
+  # refuses access.
+  beeperBundled = importTest "beeper" ''
+    import os
+
+    import beeper
+
+    assert callable(beeper.login) and callable(beeper.logout)
+    import asyncio as _asyncio
+
+    assert _asyncio.iscoroutinefunction(beeper.status)
+    assert _asyncio.iscoroutinefunction(beeper.accounts)
+    assert _asyncio.iscoroutinefunction(beeper.chats)
+    assert _asyncio.iscoroutinefunction(beeper.messages)
+    assert _asyncio.iscoroutinefunction(beeper.search)
+    assert _asyncio.iscoroutinefunction(beeper.search_chats)
+    assert _asyncio.iscoroutinefunction(beeper.send)
+
+    # In a shared (multiplayer) room Beeper is refused before any network call,
+    # so personal chats never reach state other participants can see.
+    os.environ["IX_MCP_SHARED"] = "1"
+    try:
+        _asyncio.run(beeper.accounts())
+    except beeper.BeeperError as exc:
+        assert "shared" in str(exc).lower(), exc
+    else:
+        raise SystemExit("expected BeeperError in a shared room")
+
+    # Incognito is the default: with IX_MCP_SHARED unset the shared guard
+    # passes, so the next failure is a missing token -- proving the guard was
+    # the only thing that blocked it above.
+    os.environ.pop("IX_MCP_SHARED", None)
+    os.environ.pop("BEEPER_ACCESS_TOKEN", None)
+    try:
+        _asyncio.run(beeper.accounts())
+    except beeper.BeeperError as exc:
+        assert "token" in str(exc).lower(), exc
+    else:
+        raise SystemExit("expected BeeperError when no token is configured")
+
+    # Regression: a datetime column whose every value is empty/missing must not
+    # raise (polars format inference has no sample) -- _frame emits a typed null
+    # column instead. A mixed column parses the real value and nulls the empty.
+    allempty = beeper._frame([{"timestamp": ""}], {"timestamp": beeper._TS})
+    assert allempty["timestamp"].dtype == beeper._TS, allempty.schema
+    assert allempty["timestamp"].to_list() == [None], allempty
+    mixed = beeper._frame(
+        [{"timestamp": "2026-01-01T00:00:00Z"}, {"timestamp": ""}],
+        {"timestamp": beeper._TS},
+    )
+    assert mixed["timestamp"].dtype == beeper._TS, mixed.schema
+    assert mixed["timestamp"].null_count() == 1, mixed
+
+    print("beeper-ok")
+  '';
 
   # The requirements surface: local-only probes of every credential declared in
   # the registry. In the credential-less sandbox every probe must miss and the
@@ -1401,12 +1621,15 @@ let
     import os
     from pathlib import Path
 
+    import beeper
     import slack
     from ix_notebook_mcp import registry, requirements
 
     creds = dict(registry.credentialed())
     assert creds["slack"].env == tuple(slack._TOKEN_ENV_VARS), creds["slack"].env
     assert Path(creds["slack"].token_path).expanduser() == slack._TOKEN_FILE, creds["slack"].token_path
+    assert creds["beeper"].env == tuple(beeper._TOKEN_ENV_VARS), creds["beeper"].env
+    assert Path(creds["beeper"].token_path).expanduser() == beeper._TOKEN_FILE, creds["beeper"].token_path
 
     by_name = {s.name: s for s in requirements.statuses()}
     assert set(by_name) == set(creds), sorted(by_name)
@@ -4273,7 +4496,9 @@ let
   # runs headless on set_content fixtures in the sandbox with no display or
   # network. The interpreter is mcpPython (the bundled browser module +
   # playwright) plus pytest and hypothesis, which the bare mcpPython omits.
-  vdomTestPython = pkgs.python3.withPackages (
+  # Reuses the full mcp module set (which includes the asn1-pinned pymobiledevice3
+  # override), so it must build from the same asn1-pinned interpreter.
+  vdomTestPython = mcpPythonInterp.withPackages (
     ps:
     mcpPythonPackages ps
     ++ [
@@ -4380,6 +4605,73 @@ let
         cat stdout
         mkdir -p "$out"
       '';
+
+  # The `iphone` helper imports in the real interpreter and exposes its surface.
+  # Cross-platform: pulls in the vendored pymobiledevice3 CLI, so it also proves
+  # that uv closure builds on Linux CI.
+  iphoneBundled = importTest "iphone" "import iphone; print('iphone-ok', all(callable(getattr(iphone, n)) for n in ('devices', 'apps', 'screenshot', 'launch', 'start_tunneld', 'tap', 'swipe')))";
+
+  # Device-free behaviour tests (exports, async signatures, explicit type hints,
+  # CLI-path resolution, the sudo guard, the no-device error).
+  iphoneTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.polars
+    iphoneModule
+  ]);
+  iphoneTestSource = builtins.path {
+    name = "ix-mcp-iphone-test";
+    path = ./tests/test_iphone.py;
+  };
+  iphoneTests =
+    pkgs.runCommand "ix-mcp-iphone-tests"
+      {
+        nativeBuildInputs = [ iphoneTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${iphoneTestSource} "$TMPDIR/test_iphone.py"
+        ${lib.getExe iphoneTestPython} -m pytest "$TMPDIR/test_iphone.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp iphone tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
+
+  # Network-free unit tests for the `slack` helper: module shape plus that
+  # `send` builds the right chat.postMessage params for top-level vs. in-thread
+  # replies (stubbing the one network primitive).
+  slackTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.polars
+    ps.pydantic
+    slackModule
+  ]);
+  slackTestSource = builtins.path {
+    name = "ix-mcp-slack-test";
+    path = ./tests/test_slack.py;
+  };
+  slackTests =
+    pkgs.runCommand "ix-mcp-slack-tests"
+      {
+        nativeBuildInputs = [ slackTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${slackTestSource} "$TMPDIR/test_slack.py"
+        ${lib.getExe slackTestPython} -m pytest "$TMPDIR/test_slack.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp slack tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
 in
 package.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
@@ -4397,6 +4689,8 @@ package.overrideAttrs (old: {
         googleAuthBundled
         ixGoogleBundled
         slackBundled
+        slackTests
+        beeperBundled
         requirementsSmoke
         engineBundled
         serverTools
@@ -4426,6 +4720,8 @@ package.overrideAttrs (old: {
         linearTriageTests
         noxAutotriageBundled
         noxAutotriageTests
+        iphoneBundled
+        iphoneTests
         ;
     }
     // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {

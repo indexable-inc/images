@@ -88,7 +88,6 @@ nix run .#skill-lint -- skills
 nix run .#skill-lint -- fix skills
 ```
 
-It lints the handwritten skills under `skills/` and the progressive skills
-generated from the [agent-context](../agents-md/overview.md) fragments. Inline
-tests in both `lint.rs` and `fix.rs` pin the rules and the conservative,
+It lints the skills under `skills/` (one directory per skill). Inline tests in
+both `lint.rs` and `fix.rs` pin the rules and the conservative,
 content-preserving fix behavior.

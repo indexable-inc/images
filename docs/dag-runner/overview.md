@@ -6,8 +6,8 @@ fixed "levels", determines parallelism), and renders inline progress. It powers
 `nix run .#health-checks` and is the planned replacement for `ix-fleet`'s
 sequential per-node loops (`README.md`). It is meant for short, hands-off
 batches, not a long-running supervisor; rationale (why not `process-compose`/
-`devenv-tasks`) is in the AGENTS.md "why dag-runner" section
-(`agent-context/sections/08b-why-dag-runner.md`).
+`devenv-tasks`) is in the `why-dag-runner` skill
+(`skills/why-dag-runner/SKILL.md`).
 
 It is a Tokio current-thread async binary (`src/main.rs:142`).
 

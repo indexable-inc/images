@@ -1,13 +1,13 @@
 {
   "nodes": {
-    "agent-context": {
+    "agents": {
       "flake": false,
       "locked": {
-        "path": "./agent-context",
+        "path": "./agents",
         "type": "path"
       },
       "original": {
-        "path": "./agent-context",
+        "path": "./agents",
         "type": "path"
       },
       "parent": []
@@ -345,7 +345,7 @@
     },
     "root": {
       "inputs": {
-        "agent-context": "agent-context",
+        "agents": "agents",
         "bench-filesystem": "bench-filesystem",
         "btop-src": "btop-src",
         "clippy-fork": "clippy-fork",

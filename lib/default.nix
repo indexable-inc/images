@@ -128,9 +128,8 @@ let
   secrets = import ./util/secrets.nix {
     inherit lib pkgs writeNushellApplication;
   };
-  agentContext = import ./agent-context { inherit lib paths; };
-  skills = import ./agent-context/skills.nix { inherit lib paths; };
-  agents = import ./agent-context/agents.nix { inherit lib; };
+  skills = import ./skills.nix { inherit lib paths; };
+  agents = import ./agents.nix { inherit lib; };
   # Shared JetBrains Islands palette (both variants), the single source of truth
   # for syntax color across the repo: the code-highlight crate embeds this JSON
   # for the search `-c` output, and the base profile generates its
@@ -408,7 +407,6 @@ let
     inherit
       rev
       revEpoch
-      agentContext
       agents
       artifacts
       attrs
