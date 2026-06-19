@@ -129,7 +129,7 @@ MODULES: tuple[Module, ...] = (
     Module(
         "ghostty",
         "drive the Ghostty terminal via its AppleScript dictionary: read every open "
-        "surface into polars (`await ghostty.surfaces()` -> id/tty/pid/cwd/title), and "
+        "surface into polars (`await ghostty.surfaces()` -> id/tty/pid/cwd/name), and "
         "close/focus/activate one by tty or id. `await ghostty.close_me()` shuts the "
         "window this very session runs in -- the end-of-task move once fully done "
         "(macOS only)",
