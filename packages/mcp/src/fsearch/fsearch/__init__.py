@@ -22,6 +22,8 @@ All three are ``async`` (they shell out), so ``await`` them.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json as _json
 import os
 import stat as _stat
@@ -63,11 +65,32 @@ class FsearchError(Exception):
 
 async def _run(argv: list[str], *, timeout: float, ok_codes: tuple[int, ...] = (0,)):
     """Run a search CLI off the event loop with color disabled (so its output is
-    clean, never SGR-corrupted) and surface a non-success exit as FsearchError."""
-    out = await _sh(argv, timeout=timeout, color=False)
+    clean, never SGR-corrupted). A non-success exit or a timeout surfaces as
+    FsearchError, so callers have one error type to catch (the timeout is the
+    safety net: a runaway search is killed at the deadline, never wedging the
+    kernel)."""
+    try:
+        out = await _sh(argv, timeout=timeout, color=False)
+    except TimeoutError as exc:
+        raise FsearchError(f"{argv[0]} timed out after {timeout}s") from exc
     if out.code not in ok_codes:
         raise FsearchError(f"{argv[0]} exited {out.code}: {out.text.strip()[:500]}")
     return out
+
+
+def _rg_str(field: dict[str, Any] | None) -> str:
+    """Decode a ripgrep --json text field: it is `{"text": ...}` for UTF-8 and
+    `{"bytes": "<base64>"}` for a non-UTF-8 path or match span. Reading only
+    `text` would silently blank a hit in a non-UTF-8-named file."""
+    if not field:
+        return ""
+    text = field.get("text")
+    if text is not None:
+        return text
+    raw = field.get("bytes")
+    if raw is not None:
+        return base64.b64decode(raw).decode("utf-8", "surrogateescape")
+    return ""
 
 
 def _lstat_rows(paths: list[str]) -> pl.DataFrame:
@@ -81,11 +104,13 @@ def _lstat_rows(paths: list[str]) -> pl.DataFrame:
     name an existing path — which drops the stderr noise without losing hits."""
     rows: list[dict[str, Any]] = []
     for raw in paths:
-        cand = raw.strip()
-        if not cand:
+        if not raw:
             continue
+        # Try the path verbatim first (preserves a legit leading/trailing space
+        # or newline in a filename), then a stderr-stripped candidate.
         st = None
-        for attempt in (cand, cand.rsplit("\n", 1)[-1].strip()):
+        cand = raw
+        for attempt in (raw, raw.strip(), raw.rsplit("\n", 1)[-1].strip()):
             try:
                 st = os.lstat(attempt)
                 cand = attempt
@@ -160,9 +185,9 @@ async def grep(
         if event.get("type") != "match":
             continue
         data = event["data"]
-        path = data["path"].get("text", "")
+        path = _rg_str(data.get("path"))
         line_number = data.get("line_number")
-        text = (data["lines"].get("text") or "").rstrip("\n")
+        text = _rg_str(data.get("lines")).rstrip("\n")
         abs_offset = data.get("absolute_offset")
         for sm in data.get("submatches", []):
             rows.append(
@@ -170,7 +195,7 @@ async def grep(
                     "path": path,
                     "line_number": line_number,
                     "col": sm.get("start"),
-                    "match": (sm.get("match") or {}).get("text", ""),
+                    "match": _rg_str(sm.get("match")),
                     "line": text,
                     "abs_offset": abs_offset,
                 }
@@ -213,10 +238,12 @@ async def find(
         argv.append("--no-ignore")
     if max_depth is not None:
         argv += ["--max-depth", str(max_depth)]
+    argv += ["--max-results", str(limit)]  # cap at the source (limit applies to real hits)
     argv += ["--", pattern, os.path.expanduser(str(root))]
     out = await _run(argv, timeout=timeout)
     paths = [p for p in out.text.split("\0") if p]
-    return _lstat_rows(paths[:limit])
+    # lstat off the event loop (up to `limit` stat syscalls), then cap rows.
+    return (await asyncio.to_thread(_lstat_rows, paths)).head(limit)
 
 
 async def spotlight(
@@ -244,4 +271,5 @@ async def spotlight(
     argv.append(query)
     out = await _run(argv, timeout=timeout)
     paths = [p for p in out.text.split("\0") if p]
-    return _lstat_rows(paths[:limit])
+    # mdfind has no result cap, so lstat all (off-loop) then cap real rows.
+    return (await asyncio.to_thread(_lstat_rows, paths)).head(limit)

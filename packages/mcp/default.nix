@@ -1348,6 +1348,7 @@ let
         assert isinstance(g, pl.DataFrame), type(g)
         assert list(g.columns) == ["path", "line_number", "col", "match", "line", "abs_offset"], g.columns
         files = set(g["path"].to_list())
+        assert all(files), "a match row had an empty path (rg bytes field not decoded?)"
         assert any("hello_world" in f for f in files), files
         assert any("main.rs" in f for f in files), files
         assert not any("ignored.txt" in f for f in files), f"gitignore not respected: {files}"

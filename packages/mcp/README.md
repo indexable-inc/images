@@ -71,7 +71,7 @@ one-shot snippets.
 
 Many jobs run at once and none blocks the others. The concurrency is cooperative:
 a job yields the loop at each `await`. For a blocking call (a heavy numpy/polars
-op, `fff`, a subprocess) wrap it in `await asyncio.to_thread(...)` so its
+op, a subprocess) wrap it in `await asyncio.to_thread(...)` so its
 GIL-releasing work runs off the loop and stays non-blocking.
 
 ## Two audiences: `Result(user_html, llm_result)`
@@ -162,8 +162,8 @@ set `IX_MCP_AUTO_DASHBOARD=1` to restore the old per-server auto-spawn.
 ## Pinned interpreter and bundled modules
 
 The kernel runs on the same pinned interpreter as the server, so code can
-`import` a set of bundled modules (the data libraries plus the in-house `fff` /
-`view` / `tui` / `search` / `fleet` helpers) with no install step. The canonical
+`import` a set of bundled modules (the data libraries plus the in-house
+`grep`/`find`/`spotlight` / `view` / `tui` / `search` / `fleet` helpers) with no install step. The canonical
 list lives in one place, the MCP server `instructions=` string in
 [`tools.py`](./ix_notebook_mcp/tools.py); the interpreter that
 backs it is assembled in [`default.nix`](./default.nix). Both are kept here
@@ -281,7 +281,7 @@ The default Tailscale-IP bind keeps the trust boundary at the tailnet.
 
 - You need multi-core parallelism for **pure-Python** CPU work: one kernel means
   one GIL, so pure-Python loops serialize. Offload such work to
-  `asyncio.to_thread` only helps for GIL-releasing libs (numpy/polars/fff); for
+  `asyncio.to_thread` only helps for GIL-releasing libs (numpy/polars); for
   pure-Python use a subprocess / `ProcessPoolExecutor`, or fan it across the
   cluster with `fleet.run`/`fleet.submit` (separate Ray worker processes, true
   multi-core and multi-node).
