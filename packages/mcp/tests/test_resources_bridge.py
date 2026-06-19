@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import shutil
 import stat
 import sys
 from collections.abc import Callable
@@ -90,7 +91,12 @@ def _write_stub_ix(tmp_path: Path, body: str) -> Path:
     or a message to stderr with a chosen exit code, standing in for the real CLI.
     """
     script = tmp_path / "ix"
-    script.write_text("#!/usr/bin/env bash\n" + body)
+    # Resolve bash's absolute path for the shebang: the nix build sandbox has no
+    # /usr/bin/env (and no /bin/sh), so a `#!/usr/bin/env bash` stub would fail
+    # to exec there ("ix not found"). bash is on PATH via the check's
+    # nativeBuildInputs, so shutil.which finds its store path.
+    bash = shutil.which("bash") or "/bin/bash"
+    script.write_text(f"#!{bash}\n" + body)
     script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return script
 
