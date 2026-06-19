@@ -12,9 +12,18 @@
 # strings are byte-exact, and safety-critical rules (the force-merge gate,
 # stacked rebase, guards) keep their steps and conditions unambiguous.
 #
-# NOTE: there is deliberately no "talk like X in every reply" output-voice rule.
-# Replies are plain, clear prose (per the user's global writing rules); do not
-# re-add a reply-voice rule.
+# NOTE on output-format rules: Claude Code's own `outputStyle` setting (the
+# `/output-style` / settings.json mechanism for changing how replies look) does
+# NOTHING on this build. Output styles are appended only while the CLI assembles
+# its STOCK system prompt; because the wrapper passes `--system-prompt-file` (a
+# full replacement, see ./claude-code's `systemPrompt` arg), the style has no
+# base to attach to and is silently dropped. Verified by capturing the actual
+# `system` blocks the binary sends: wrapped binary with `outputStyle` set is
+# byte-identical to wrapped without it, and adding a fake `--system-prompt-file`
+# to the stock binary likewise drops a set style. So any reply-format/output-voice
+# guidance MUST live here in the baked prompt (or ride `--append-system-prompt`);
+# a settings-based output style cannot deliver it. The `htmlDeliverable` rule
+# below is exactly such guidance, baked here for that reason.
 #
 # Rules tagged STOCK-DERIVED are adapted from Claude Code's OWN stock system
 # prompt, read at the pinned binary version (./claude-code/manifest.json,
@@ -117,6 +126,8 @@ let
 
   coordinateBranches = "Another developer is actively working in this codebase. Treat an unmerged branch as unfinished for a reason you may not see, and never work on someone else's feature or branch without coordinating.";
 
+  htmlDeliverable = "When the user asks a question or asks for an answer, analysis, summary, report, or other result meant for a human to read, deliver it as a single self-contained HTML file rather than in chat: write it with the Write tool (inline CSS, no external assets), open it (macOS `open <path>`), and keep your chat reply to a one-line pointer to that file. Do not also restate the answer in chat. Exceptions where text output stays inline, because something other than a human reading consumes it: (1) a subagent's or tool's return value, whose final text IS the data the caller parses, so return the content, never a file path; (2) any format-constrained or machine-readable output (JSON, a schema, a commit message, raw command output); (3) non-interactive or headless runs where no human is at a desktop to open a file. A single short clarifying question that blocks all work may stay in chat.";
+
   # Order is significant: the rules read top-to-bottom in the baked prompt.
   order = [
     shokunin
@@ -161,6 +172,7 @@ let
     discloseAi
     noEmDashes
     coordinateBranches
+    htmlDeliverable
   ];
 in
 lib.concatStringsSep "\n\n" order
