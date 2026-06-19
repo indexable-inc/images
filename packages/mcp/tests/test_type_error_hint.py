@@ -14,9 +14,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 
 def _get_hint_fn() -> object:
-    """Import _type_error_hint; skip if the module itself can't be imported."""
-    from ix_notebook_mcp.runtime import _type_error_hint
-    return _type_error_hint
+    """Return runtime._type_error_hint. Use the module-import style the test
+    methods use (`import ... as rt`) so the file has one consistent import."""
+    import ix_notebook_mcp.runtime as rt
+    return rt._type_error_hint
 
 
 # Module-level keyword-only function used as a test target for TypeError hints.
