@@ -240,12 +240,17 @@ async def my_surface() -> pl.DataFrame:
 
 
 def _selector(*, tty: str | None, id: str | None) -> str:  # noqa: A002 - mirrors the public close(id=) kwarg
-    """The AppleScript ``whose`` clause selecting one terminal by tty or id."""
+    """The AppleScript ``whose`` clause selecting one terminal by tty or id.
+
+    Fails closed unless *exactly* one selector is given: with both present,
+    silently preferring one could close/focus the wrong surface, and this is a
+    destructive control API.
+    """
+    if (tty is None) == (id is None):
+        raise GhosttyError("pass exactly one of tty= or id=")
     if tty is not None:
         return f'(first terminal whose tty is "{_escape_applescript(tty)}")'
-    if id is not None:
-        return f'(first terminal whose id is "{_escape_applescript(id)}")'
-    raise GhosttyError("pass exactly one of tty= or id=")
+    return f'(first terminal whose id is "{_escape_applescript(id)}")'
 
 
 async def _command(verb: str, *, tty: str | None, id: str | None) -> str:  # noqa: A002 - mirrors public kwarg

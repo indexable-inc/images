@@ -3778,6 +3778,14 @@ let
     assert ghostty._selector(tty="/dev/ttys001", id=None) == (
         '(first terminal whose tty is "/dev/ttys001")'
     )
+    # Fails closed unless exactly one selector is given (both set or both unset).
+    for bad in ({}, {"tty": "/dev/ttys001", "id": "X"}):
+        try:
+            ghostty._selector(tty=bad.get("tty"), id=bad.get("id"))
+        except ghostty.GhosttyError:
+            pass
+        else:
+            raise SystemExit(f"_selector accepted ambiguous args: {bad}")
 
     # _parse_ps + _walk_to_tty resolve the controlling tty from a synthetic table.
     tree = ghostty._parse_ps("100 1 ??\n200 100 ttys003\n300 200 ??\n")
