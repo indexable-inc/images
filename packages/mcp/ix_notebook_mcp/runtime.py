@@ -2277,8 +2277,8 @@ def doc(obj: Any) -> Result:
     """The signature and docstring of any object, RETURNED (not printed) as a
     Result -- so the documented "everything through Result" path also works for
     reading docs. ``help()`` only writes to stdout (not your channel) and returns
-    ``None``, so ``Result(help(x))`` shows nothing; use ``doc(fff.grep)`` instead.
-    Pair it with `api()`: `api('grep')` to find a name, `doc(fff.grep)` to read it."""
+    ``None``, so ``Result(help(x))`` shows nothing; use ``doc(grep)`` instead.
+    Pair it with `api()`: `api('grep')` to find a name, `doc(grep)` to read it."""
     name = getattr(obj, "__name__", None) or type(obj).__name__
     sig = ""
     if callable(obj):
@@ -2293,13 +2293,13 @@ def doc(obj: Any) -> Result:
 def api(filter: str | None = None) -> Any:
     """A live catalog of every helper the kernel gives you: the always-present
     namespace builtins (`Result`, `cells`, `jobs`, `sh`, ...) and the public
-    surface of each bundled module (`fff`, `view`, `nix`, `fleet`, ...), each with
+    surface of each bundled module (`view`, `nix`, `fleet`, ...), each with
     its signature and a one-line summary. Call `api()` to discover what exists
     instead of guessing names or grepping source; pass `filter` to match a
     substring against the name, summary, or module.
 
     Returns a polars DataFrame (filter/sort it further, e.g.
-    `api().filter(pl.col("where") == "fff")`), or plain text if polars is absent.
+    `api().filter(pl.col("where") == "view")`), or plain text if polars is absent.
     """
     rows = _api_rows()
     if filter:
@@ -2347,8 +2347,8 @@ def _type_error_hint(exc: TypeError) -> str:
         obj = ns.get(func_name)
         if obj is None:
             # Try module-qualified names (e.g. the error says "grep" but the
-            # callable lives as fff.grep in the namespace).
-            for mod_name in ("fff", "view", "nix", "fleet"):
+            # callable lives as view.grep in the namespace).
+            for mod_name in ("view", "nix", "fleet"):
                 mod = ns.get(mod_name)
                 if mod is not None:
                     candidate = getattr(mod, func_name, None)
@@ -3247,11 +3247,21 @@ def install(user_ns: dict | None = None) -> None:
         import sh as _sh_module
 
         target["sh"] = _sh_module
-    # Pre-bind the two most-reached-for bundled modules so `fff.grep(...)` and
-    # `view.ls(...)` work with no import, the way Result/cells/jobs/sh do (an
-    # explicit `import fff` returns the same object, so both styles agree). Both
-    # are already imported at startup (01-ix-polars installs view's renderer, which
-    # imports fff), so binding them here costs nothing; heavier modules (nix,
+    # Bind the filesystem-search helpers as top-level callables (`await grep(...)`
+    # / `find(...)` / `spotlight(...)`) the way `sh` is bound, so the most common
+    # search/listing actions need no import. They live in the bundled `fsearch`
+    # module (ripgrep/fd/Spotlight via `sh`, each returning a polars frame); an
+    # explicit `import fsearch` returns the same functions.
+    with contextlib.suppress(Exception):  # fsearch may be absent outside the bundled interpreter; skip it
+        import fsearch as _fsearch_module
+
+        target["grep"] = _fsearch_module.grep
+        target["find"] = _fsearch_module.find
+        target["spotlight"] = _fsearch_module.spotlight
+    # Pre-bind the most-reached-for bundled module so `view.ls(...)` works with no
+    # import, the way Result/cells/jobs/sh do (an explicit `import view` returns
+    # the same object). It is already imported at startup (01-ix-polars installs
+    # view's renderer), so binding it here costs nothing; heavier modules (nix,
     # fleet, search) stay import-on-demand to keep the namespace lean.
     for _mod_name in registry.preimport_names():
         with contextlib.suppress(Exception):  # best-effort per-module import; continue on missing modules

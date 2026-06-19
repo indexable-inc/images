@@ -60,12 +60,6 @@ class Builtin:
 # instructions. Pre-imported ones are usable with no ``import`` (like the builtins).
 MODULES: tuple[Module, ...] = (
     Module(
-        "fff",
-        "file tree listing (`tree`), typo-tolerant find, SIMD content grep; every result's "
-        "`.df` is a polars frame",
-        preimport=True,
-    ),
-    Module(
         "view",
         "ls / tree / grep / find / cat / head / json / diff / edit -- directories and searches "
         "as polars frames, files as syntax-highlighted views",
@@ -260,6 +254,22 @@ BUILTINS: tuple[Builtin, ...] = (
         "CLI straight to data / a polars frame: ask the tool for --json, never scrape TSV",
     ),
     Builtin("api", "the live catalog of every helper, as a polars frame (`api('grep')` to filter)"),
+    Builtin(
+        "grep",
+        "content search backed by ripgrep (process-isolated + timeout, so it can't wedge the "
+        "kernel): `await grep(pattern, root='.')` -> a polars frame, one row per match "
+        "(path/line_number/col/match/line); respects .gitignore by default",
+    ),
+    Builtin(
+        "find",
+        "file search backed by fd: `await find(ext='py', root='.')` -> a polars frame "
+        "(path/name/type/size/mtime); respects .gitignore by default; process-isolated + timeout",
+    ),
+    Builtin(
+        "spotlight",
+        "full-text + metadata search backed by macOS Spotlight (mdfind), macOS only: "
+        "`await spotlight(query, root='~')` -> a polars frame (path/name/type/size/mtime)",
+    ),
     Builtin("asyncio", "stdlib asyncio, pre-bound: `asyncio.ensure_future` / `sleep` with no import"),
     Builtin("json", "stdlib json, pre-bound: parse a CLI's --json output with no import"),
     Builtin("pl", "polars, pre-bound: build/transform DataFrames with no import"),

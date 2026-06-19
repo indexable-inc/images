@@ -212,45 +212,29 @@ let
       ''
   );
 
-  # The `fff` fast file-search package, baked into the interpreter so every
-  # session can `import fff` and run fuzzy file search / SIMD grep over a repo
-  # with no setup. Unlike `tui`/`search`, fff has no PyO3 binding: it ships a
-  # stable C ABI (the `fff-c` cdylib, emitted next to `fff-mcp` by
-  # `packages/fff`), and the pure-Python module loads it via ctypes. The cdylib
-  # is dropped next to the package source so the module loads it by a fixed
-  # path. Cross-platform: `pkgs.fff` builds on Linux and macOS. Store references
-  # in the cdylib are fine: this module never leaves the Nix environment.
-  fffPythonSource = builtins.path {
-    name = "ix-mcp-fff-python-source";
-    path = ./src/fff;
+  # The `fsearch` filesystem-search module: `grep`/`find`/`spotlight`, each
+  # backed by a battle-tested CLI (ripgrep / fd / macOS Spotlight) run as a
+  # SEPARATE process via the bundled `sh`, returning polars frames. Pure Python
+  # over the bundled sh/polars; cross-platform (spotlight is darwin-only and
+  # guards itself). Unlike its predecessor `fff` (a ctypes cdylib that walked the
+  # tree in-process and could pin the cores for an hour with no way to interrupt
+  # short of killing the kernel), a runaway here is process-isolated and bounded
+  # by `sh()`'s timeout + process-group kill. `ripgrep`/`fd` are put on the
+  # interpreter wrapper's PATH below so `sh("rg ...")` / `sh("fd ...")` resolve.
+  fsearchPythonSource = builtins.path {
+    name = "ix-mcp-fsearch-python-source";
+    path = ./src/fsearch;
   };
-  fffModule = pkgs.python3.pkgs.toPythonModule (
-    pkgs.runCommand "ix-mcp-fff-python-module"
+  fsearchModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-fsearch-python-module"
       {
         strictDeps = true;
-        meta.description = "fff fast file-search bound via ctypes, bundled into the ix-mcp interpreter";
+        meta.description = "rg/fd/Spotlight-backed grep/find/spotlight bundled into the ix-mcp interpreter";
       }
       ''
-        site="$out/${pkgs.python3.sitePackages}/fff"
+        site="$out/${pkgs.python3.sitePackages}/fsearch"
         mkdir -p "$site"
-        cp -r ${fffPythonSource}/fff/. "$site/"
-
-        cdylib=""
-        for candidate in \
-          ${pkgs.fff}/lib/libfff_c.so \
-          ${pkgs.fff}/lib/libfff_c.dylib
-        do
-          if [ -f "$candidate" ]; then
-            cdylib="$candidate"
-            break
-          fi
-        done
-        if [ -z "$cdylib" ]; then
-          echo "ix-fff module: no libfff_c cdylib under ${pkgs.fff}/lib" >&2
-          ls -la ${pkgs.fff}/lib >&2 || true
-          exit 1
-        fi
-        install -m555 "$cdylib" "$site/$(basename "$cdylib")"
+        cp -r ${fsearchPythonSource}/fsearch/. "$site/"
       ''
   );
 
@@ -353,7 +337,7 @@ let
   # Darwin, so the dependency is gated below.
   # Pretty, composable views of files and search results (view.ls/tree/grep/find
   # return polars DataFrames; view.cat/json/diff return highlighted Code). Pure
-  # Python over the bundled fff/polars/pygments; cross-platform, so every session
+  # Python over the bundled polars/pygments; cross-platform, so every session
   # can `import view`.
   viewPythonSource = builtins.path {
     name = "ix-mcp-view-python-source";
@@ -996,7 +980,7 @@ let
   );
 
   # The interpreter the wrapper pins. Sessions build their venv from this with
-  # `--system-site-packages`, so `tui`, `search`, `fff`, `exa_py`, numpy, polars
+  # `--system-site-packages`, so `tui`, `search`, `exa_py`, numpy, polars
   # (incl. Postgres via psycopg + SQLAlchemy), duckdb, httpx, htpy, and playwright
   # are importable by default while an in-session `pip install` still writes to
   # the per-session venv.
@@ -1115,7 +1099,7 @@ let
       astlogModule
       scipqlModule
       flecsQueryModule
-      fffModule
+      fsearchModule
       googleAuthModule
       ixGoogleModule
       ixNotebookMcpModule
@@ -1185,6 +1169,7 @@ let
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
+          --prefix PATH : ${lib.makeBinPath [ pkgs.ripgrep pkgs.fd ]} \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
         # The notebook engine alone (kernel + dashboard + session file, no MCP
         # transport): the same interpreter and env, entered at the `notebook`
@@ -1196,6 +1181,7 @@ let
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
+          --prefix PATH : ${lib.makeBinPath [ pkgs.ripgrep pkgs.fd ]} \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
       '';
 
@@ -1326,17 +1312,20 @@ let
     print("astlog-ok", astlog.__version__)
   '';
 
-  # End-to-end through the bundled `fff` ctypes module: index a temp tree, wait
-  # for the scan, then prove fuzzy file search and content grep both return the
-  # planted hits. Loads the fff-c cdylib from site-packages, so it also guards
-  # that the library actually shipped next to the module. Pure local FS, no
-  # network or watcher, so the build sandbox runs it.
-  fffTestPy = pkgs.writeText "ix-mcp-fff-test.py" ''
+  # End-to-end through the bundled `fsearch` module: plant a temp tree (with a
+  # .gitignore'd file), then prove `grep` (ripgrep) and `find` (fd) return the
+  # planted hits, respect .gitignore by default, and that `spotlight` raises its
+  # darwin guard off macOS. Runs real rg/fd (on the check's PATH); pure local FS,
+  # no network, so the build sandbox runs it.
+  fsearchTestPy = pkgs.writeText "ix-mcp-fsearch-test.py" ''
+    import asyncio
     import os
+    import sys
     import tempfile
-    import time
 
-    import fff
+    import polars as pl
+
+    import fsearch
 
     root = tempfile.mkdtemp()
     os.makedirs(os.path.join(root, "src"))
@@ -1344,150 +1333,76 @@ let
         fh.write("greetings\nfind me on this line\n")
     with open(os.path.join(root, "src", "main.rs"), "w") as fh:
         fh.write('fn main() {\n    println!("find me on this line");\n}\n')
+    # A .gitignore'd file must be skipped by default and surfaced with no_ignore.
+    with open(os.path.join(root, ".gitignore"), "w") as fh:
+        fh.write("ignored.txt\n")
+    with open(os.path.join(root, "ignored.txt"), "w") as fh:
+        fh.write("find me on this line\n")
 
-    finder = fff.FileFinder(root=root, watch=False, content_indexing=True, ai_mode=True)
-    try:
-        # The initial scan runs in the background; poll until the planted file
-        # is visible (a few short waits, robust to sandbox scheduling).
-        hit_path = None
-        for _ in range(20):
-            finder.wait_for_scan(2000)
-            result = finder.search(query="hello")
-            match = next((h for h in result.hits if "hello_world" in h.path), None)
-            if match is not None:
-                hit_path = match.path
-                break
-            time.sleep(0.25)
-        assert hit_path is not None, f"fuzzy search did not find hello_world.txt: {result.hits!r}"
 
-        grep_result = finder.grep(query="find me on this line", mode="plain", limit=10)
-        files = {m.path for m in grep_result.matches}
-        assert any("hello_world" in f for f in files), f"grep missed the txt file: {files!r}"
-        assert any("main.rs" in f for f in files), f"grep missed main.rs: {files!r}"
-        defs = finder.grep(query="fn main", mode="regex", classify_definitions=True)
-        assert defs.matches, "regex grep returned no matches"
+    async def main() -> None:
+        g = await fsearch.grep("find me on this line", root)
+        assert isinstance(g, pl.DataFrame), type(g)
+        assert list(g.columns) == ["path", "line_number", "col", "match", "line", "abs_offset"], g.columns
+        files = set(g["path"].to_list())
+        assert any("hello_world" in f for f in files), files
+        assert any("main.rs" in f for f in files), files
+        assert not any("ignored.txt" in f for f in files), f"gitignore not respected: {files}"
 
-        glob_result = finder.glob(pattern="**/*.rs")
-        assert any("main.rs" in h.path for h in glob_result.hits), (
-            f"glob missed main.rs: {glob_result.hits!r}"
-        )
-    finally:
-        finder.close()
+        # no_ignore surfaces the ignored file; fixed treats the alternation literally.
+        gi = await fsearch.grep("find me on this line", root, no_ignore=True)
+        assert any("ignored.txt" in f for f in gi["path"].to_list()), gi["path"].to_list()
+        plain = await fsearch.grep("greetings|fn main", root, fixed=True)
+        assert plain.height == 0, "fixed=True must treat the alternation literally"
 
-    # CodeMap groups grep matches (defs first) and renders foldable per-file.
-    cm = fff.CodeMap(query="find me on this line", matches=grep_result.matches)
-    assert cm.by_file and cm.matches and "find me on this line" in repr(cm), repr(cm)
-    cm_html = cm._repr_html_()
-    assert "<details" in cm_html and "find me" in cm_html, cm_html[:200]
-    # map() is the grep -> CodeMap convenience (type only; avoids a scan race).
-    assert isinstance(fff.map(query="fn main", path=root, mode="plain"), fff.CodeMap)
+        f = await fsearch.find(ext="rs", root=root)
+        assert isinstance(f, pl.DataFrame), type(f)
+        assert list(f.columns) == ["path", "name", "type", "size", "mtime"], f.columns
+        assert any(n == "main.rs" for n in f["name"].to_list()), f["name"].to_list()
+        assert set(f["type"].to_list()) == {"file"}, f["type"].to_list()
 
-    # The public search surface takes `path=` (consistent with `view`), not `root=`.
-    import inspect as _inspect
+        d = await fsearch.find(kind="dir", root=root)
+        assert any(n == "src" for n in d["name"].to_list()), d["name"].to_list()
 
-    for _fn in (fff.find, fff.grep, fff.afind, fff.agrep, fff.map, fff.amap):
-        _params = _inspect.signature(_fn).parameters
-        assert "path" in _params and "root" not in _params, (_fn.__name__, list(_params))
-    assert isinstance(fff.grep(query="find me on this line", path=root, mode="plain"), fff.GrepResult)
+        # spotlight is darwin-only: it must raise a clear error elsewhere.
+        if sys.platform != "darwin":
+            try:
+                await fsearch.spotlight("anything", root)
+            except fsearch.FsearchError as exc:
+                assert "macOS" in str(exc), exc
+            else:
+                raise AssertionError("spotlight should raise off macOS")
 
-    # A single file as `path` is grepped on its own, in an isolated one-file
-    # index: fff-c cannot content-index a lone file as a root, and its indexer
-    # skips dotfiles and ignored paths, so the helper copies the target into a
-    # throwaway visible-named tree and remaps matches back to its real name.
-    main_rs = os.path.join(root, "src", "main.rs")
-    one = fff.grep(query="find me on this line", path=main_rs, mode="plain")
-    assert {m.path for m in one.matches} == {"main.rs"}, f"file grep not scoped: {one.matches!r}"
-    assert fff.grep(query="no such content anywhere", path=main_rs, mode="plain").matches == [], "empty file grep should be empty"
-    assert any(h.path == "main.rs" for h in fff.find(query="main", path=main_rs).hits), "file find missed it"
-    assert fff.map(query="find me on this line", path=main_rs, mode="plain").by_file, "file map should group the hit"
+        print("fsearch-ok", fsearch.__version__)
 
-    # Regression guard for indexable-inc/index#890: a dotfile, and a file
-    # directly under $HOME, are both greppable even though fff's indexer skips
-    # hidden files in place and refuses to index $HOME whole.
-    dotfile = os.path.join(root, ".env")
-    with open(dotfile, "w") as fh:
-        fh.write("SECRET=find me on this line\n")
-    assert fff.grep(query="find me on this line", path=dotfile, mode="plain").matches, "dotfile grep found nothing"
 
-    home_file = os.path.join(os.environ["HOME"], ".zshrc")
-    with open(home_file, "w") as fh:
-        fh.write("export FIND_ME=1\n")
-    home_hit = fff.grep(query="FIND_ME", path=home_file, mode="plain")
-    assert {m.path for m in home_hit.matches} == {".zshrc"}, f"home dotfile grep: {home_hit.matches!r}"
-    assert any(h.path == ".zshrc" for h in fff.find(query="zshrc", path=home_file).hits), "home dotfile find missed it"
-
-    # A bare home / fs-root *directory* is refused with actionable guidance —
-    # never silently, and never with a message that nudges toward shelling out.
-    try:
-        fff.grep(query="anything", path=os.environ["HOME"], mode="plain")
-        raise AssertionError("expected a refusal for the bare home directory")
-    except fff.FffError as exc:
-        assert "subdirectory" in str(exc), f"unhelpful home-dir error: {exc}"
-
-    # Ergonomic by design: `query` is positional, `path` defaults to the cwd, and
-    # `mode` defaults to a fast literal search, so `grep("pattern")` just works
-    # (the shell-grep ergonomics added with mode="plain"). Mode beyond the default
-    # is still explicit -- there is no "smart" auto-detect (rejected below).
-    assert fff.grep("greetings", path=root).matches, "positional query + default mode should search"
-    assert fff.grep("greetings", path=root, mode="plain").matches, "explicit plain mode should search"
-
-    # mode="regex" runs the query as a regex and mode="plain" as a fast literal,
-    # so an alternation matches under regex but not under plain. There is no
-    # "smart" auto-detect mode -- the caller is always explicit.
-    assert fff.grep(query="greetings|fn main", path=root, mode="regex").matches, "regex missed the alternation"
-    assert fff.grep(query="greetings|fn main", path=root, mode="plain").matches == [], (
-        "plain must treat the alternation literally"
-    )
-    try:
-        fff.grep(query="x", path=root, mode="smart")
-        raise AssertionError("smart mode was removed")
-    except ValueError:
-        pass
-
-    # The flat results opt into the kernel table protocol (_ix_to_frame_), so a
-    # bare return renders as a polars table for both the human and the model;
-    # CodeMap exposes the nested per-file frame instead.
-    import polars as _pl
-
-    assert isinstance(fff.grep(query="find me on this line", path=root, mode="plain")._ix_to_frame_(), _pl.DataFrame)
-    assert isinstance(fff.find(query="main", path=root)._ix_to_frame_(), _pl.DataFrame)
-    cmdf = fff.map(query="find me on this line", path=root, mode="plain").df
-    assert cmdf.schema["matches"] == _pl.List(
-        _pl.Struct({"line": _pl.Int64, "col": _pl.Int64, "def": _pl.Boolean, "content": _pl.Utf8})
-    ), cmdf.schema
-
-    # One grep, one OR many patterns: a list is matched as a literal OR in a
-    # single pass (no Python loop of greps). A list requires mode="plain".
-    multi = fff.grep(query=["greetings", "fn main"], path=root, mode="plain")
-    multi_files = {m.path for m in multi.matches}
-    assert any("hello_world" in f for f in multi_files) and any("main.rs" in f for f in multi_files), (
-        multi_files
-    )
-    try:
-        fff.grep(query=["a", "b"], path=root, mode="regex")
-        raise AssertionError("a list query must reject a non-plain mode")
-    except ValueError:
-        pass
-    assert isinstance(fff.map(query=["greetings", "fn main"], path=root, mode="plain"), fff.CodeMap)
-
-    print("fff-ok", fff.__version__)
+    asyncio.run(main())
   '';
-  fffBundled =
-    pkgs.runCommand "ix-mcp-fff"
+  # fsearch's grep/find run real ripgrep/fd, so the check needs them on PATH
+  # (the same two added to the interpreter wrapper). A dedicated interpreter with
+  # all bundled modules + the planted tree proves the helpers end to end in the
+  # Linux sandbox; spotlight only asserts its darwin guard there.
+  fsearchTestPython = mcpPythonInterp.withPackages mcpPythonPackages;
+  fsearchBundled =
+    pkgs.runCommand "ix-mcp-fsearch"
       {
-        nativeBuildInputs = [ mcpPython ];
+        nativeBuildInputs = [
+          fsearchTestPython
+          pkgs.ripgrep
+          pkgs.fd
+        ];
         strictDeps = true;
       }
       ''
         export HOME=$TMPDIR/home
         mkdir -p "$HOME"
-        ${lib.getExe mcpPython} ${fffTestPy} >stdout 2>stderr || {
-          echo "ix-mcp fff test failed:" >&2
+        ${lib.getExe fsearchTestPython} ${fsearchTestPy} >stdout 2>stderr || {
+          echo "ix-mcp fsearch test failed:" >&2
           cat stdout stderr >&2
           exit 1
         }
-        grep -q '^fff-ok' stdout || {
-          echo "ix-mcp fff test did not print its ok marker:" >&2
+        grep -q '^fsearch-ok' stdout || {
+          echo "ix-mcp fsearch test did not print its ok marker:" >&2
           cat stdout stderr >&2
           exit 1
         }
@@ -2309,9 +2224,11 @@ let
     filt = ns["api"]("cells")
     assert 1 <= filt.height <= cat.height, (filt.height, cat.height)
 
-    # fff and view are pre-bound in the namespace (no import needed), the way
-    # Result/cells/jobs/sh are, so fff.grep(...) / view.tree(...) just work.
-    assert callable(getattr(ns.get("fff"), "grep", None)), ns.get("fff")
+    # grep/find/spotlight (the fsearch search helpers) and view are pre-bound in
+    # the namespace (no import needed), the way Result/cells/jobs/sh are, so
+    # `await grep(...)` / `view.tree(...)` just work.
+    assert callable(ns.get("grep")) and callable(ns.get("find")), (ns.get("grep"), ns.get("find"))
+    assert callable(ns.get("spotlight")), ns.get("spotlight")
     assert callable(getattr(ns.get("view"), "tree", None)), ns.get("view")
 
     # Result.llm_images downscale a large raster to <= _IMAGE_MAX_DIM on its
@@ -3003,8 +2920,8 @@ let
 
     # The table protocol: a non-DataFrame value exposing _ix_to_frame_() renders
     # as its polars frame -- a styled table for the human, compact CSV for the
-    # model -- instead of its one-line summary repr. This is what makes an fff
-    # GrepResult/SearchResult show the model the real rows, not just a count.
+    # model -- instead of its one-line summary repr, so a rich result type shows
+    # the model the real rows, not just a count.
     class _Framed:
         def _ix_to_frame_(self):
             return pl.DataFrame({"path": ["a.py"], "line": [3]})
@@ -3798,7 +3715,7 @@ let
   # The view module: tabular helpers return plain polars DataFrames (so they stay
   # composable), the file helpers return a Code view whose repr is the raw text,
   # and df_html renders the styled table the kernel installs globally. Pure local
-  # FS over the bundled fff/polars/pygments, so the sandbox runs it.
+  # FS over the bundled view/polars/pygments, so the sandbox runs it.
   viewTestPy = pkgs.writeText "ix-mcp-view-test.py" ''
     import polars as pl
 
@@ -3814,21 +3731,8 @@ let
     assert not lsdf["ignored"].any(), lsdf
     # A DataFrame stays a DataFrame through polars ops (composable).
     assert isinstance(lsdf.filter(pl.col("kind") == "dir"), pl.DataFrame)
-
-    # Content/file search lives in fff now (one canonical grep/find): the rich
-    # GrepResult/SearchResult expose .df (the styled-table frame) and opt into
-    # the kernel table protocol via _ix_to_frame_, so a bare return renders as a
-    # table for both the human and the model.
-    import fff
-
-    gr = fff.grep(query="viewTestPy", path=base, mode="plain")
-    g = gr.df
-    assert isinstance(g, pl.DataFrame) and {"path", "line", "content"} <= set(g.columns), g.columns
-    assert g.height > 0, "expected a grep hit for the marker"
-    assert gr._ix_to_frame_() is not None, "GrepResult must expose the table protocol"
-
-    f = fff.find(query="default.nix", path=base).df
-    assert isinstance(f, pl.DataFrame) and "path" in f.columns
+    # Content/file search is no longer in `view`: it lives in the top-level
+    # `grep`/`find` builtins (rg/fd-backed), exercised by the fsearch check.
 
     tr = view.tree(base, depth=1)
     assert isinstance(tr, pl.DataFrame) and "depth" in tr.columns
@@ -5093,7 +4997,7 @@ package.overrideAttrs (old: {
         htpyBundled
         searchBundled
         astlogBundled
-        fffBundled
+        fsearchBundled
         dataLibsBundled
         gmailLibsBundled
         exaBundled

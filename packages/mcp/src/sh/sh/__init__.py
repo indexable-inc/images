@@ -145,10 +145,10 @@ _STRUCTURED_OWNER = {
     "cat": "view.cat() renders the file; the `read` tool reads it without flooding the dashboard",
     "head": "view.cat() / the `read` tool with start/end replace head",
     "tail": "view.cat() / the `read` tool with start/end replace tail",
-    "grep": "fff.grep() searches a cached content index and returns matches as a polars frame",
-    "rg": "fff.grep() searches a cached content index and returns matches as a polars frame",
-    "find": "fff.find() is typo-tolerant file find returning a polars frame",
-    "fd": "fff.find() is typo-tolerant file find returning a polars frame",
+    "grep": "await grep(pattern, root) (ripgrep-backed) returns matches as a polars frame",
+    "rg": "await grep(pattern, root) (ripgrep-backed) returns matches as a polars frame",
+    "find": "await find(ext=..., root=...) (fd-backed) returns matching files as a polars frame",
+    "fd": "await find(ext=..., root=...) (fd-backed) returns matching files as a polars frame",
 }
 
 
@@ -462,10 +462,10 @@ async def sh(
     polars frame ready to filter and render. Run ONE command per call and combine
     the parsed results in Python, instead of chaining ``cmd1; echo ===; cmd2``
     and splitting text. For local listing / reading / searching, the bundled
-    ``view`` and ``fff`` modules are the owners (`view.ls`, `view.cat`,
-    `fff.grep`, `fff.find`); reaching for ``ls``/``cat``/``grep``/``find``
-    through the shell returns an Output carrying a hint to the structured
-    alternative.
+    helpers are the owners (`view.ls`, `view.cat`, and the top-level
+    `await grep(...)` / `await find(...)`); reaching for
+    ``ls``/``cat``/``grep``/``find`` through the shell returns an Output carrying
+    a hint to the structured alternative.
 
     Never pass prose through shell quoting: backticks in a string command are
     run as command substitution by the shell even when the string was produced

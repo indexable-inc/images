@@ -3,7 +3,7 @@
 Bundled like ``tui``/``search`` so every session can ``import view`` with no
 setup. The point: stop hand-rolling ``Result(user_html=...)`` for the reads and
 listings an agent does constantly, and never shell out to ``ls``/``grep``/``cat``
-(use ``fff``/``polars``/``pathlib`` instead, for structured, composable output).
+(use ``view``/``grep``/``polars``/``pathlib`` instead, for structured, composable output).
 
 Two flavors of view:
 
@@ -11,8 +11,8 @@ Two flavors of view:
   ``polars.DataFrame``. They compose with the full polars API (``.filter()``,
   ``.sort()``, ``.join()`` ...) and render as the dashboard's styled HTML table,
   because the kernel installs a global ``polars.DataFrame._repr_html_`` built
-  from :func:`df_html`. For content/file search use ``fff.grep`` / ``fff.find``
-  (their results render as the same styled table and expose ``.df``).
+  from :func:`df_html`. For content/file search use the top-level
+  ``await grep(...)`` / ``await find(...)`` (they return the same styled frame).
 * The file helpers (:func:`cat`/:func:`read`, :func:`head`, :func:`tail`,
   :func:`json`, :func:`diff`) return a :class:`Code`: a syntax-highlighted HTML
   render for the human plus the raw text as the agent's value.

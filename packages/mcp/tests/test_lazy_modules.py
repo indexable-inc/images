@@ -71,12 +71,14 @@ def test_underscore_and_introspection_probes_never_import() -> None:
 
 
 def test_registry_marks_only_the_cheap_modules_eager() -> None:
-    # The eager set stays the two cheap, always-loaded ones so startup is not taxed
-    # by heavy modules; everything else (incl. maps) is bound lazily.
+    # The eager set stays the cheap, always-loaded module (view) so startup is not
+    # taxed by heavy modules; everything else (incl. maps) is bound lazily. (The
+    # fsearch search helpers grep/find/spotlight are bound as top-level builtins,
+    # not preimport modules.)
     eager = set(registry.preimport_names())
     every = set(registry.module_names())
     assert eager <= every
-    assert eager == {"fff", "view"}, eager
+    assert eager == {"view"}, eager
     assert "maps" in every
     assert "maps" not in eager
 
@@ -112,8 +114,10 @@ def test_install_binds_proxies_outside_baseline_and_seeds_them() -> None:
     assert "maps" not in runtime._baseline_names
     assert "maps" in runtime._lazy_module_names
     assert "maps" not in sys.modules, "install() must not eager-import maps"
-    assert not isinstance(ns.get("fff"), runtime._LazyModule)  # fff stays eager
-    assert isinstance(ns.get("fff"), types.ModuleType)
+    assert not isinstance(ns.get("view"), runtime._LazyModule)  # view stays eager
+    assert isinstance(ns.get("view"), types.ModuleType)
+    # The fsearch search helpers are bound eagerly as top-level callables.
+    assert callable(ns.get("grep")) and callable(ns.get("find")) and callable(ns.get("spotlight"))
     # A fresh per-session namespace is seeded with the proxy too.
     sess = runtime._session_ns("sess-lazy-test")
     assert isinstance(sess.get("maps"), runtime._LazyModule)
