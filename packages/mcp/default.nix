@@ -1680,7 +1680,7 @@ let
   serverTools = importTest "server" (
     "import asyncio; from ix_notebook_mcp.tools import mcp; "
     + "names = sorted(t.name for t in asyncio.run(mcp.list_tools())); "
-    + "expected = {'python_exec','read','kernel_trace'}; "
+    + "expected = {'python_exec','read','kernel_trace','tui_act'}; "
     + "assert set(names) == expected, ('tool surface drifted: %r' % (names,)); "
     + "from ix_notebook_mcp import registry; instr = mcp._mcp_server.instructions; "
     + "assert 'root=' not in instr, 'a parameter/signature leaked into the instructions'; "
@@ -4997,6 +4997,44 @@ let
         cat stdout
         mkdir -p "$out"
       '';
+
+  # Network-free unit tests for the federated-resources bridge: every path of
+  # `resources_bridge` (list/read/act, peer-flag assembly, not-found -> -32002,
+  # graceful empty/clear-error when `ix` is absent) driven against a STUB `ix`
+  # script on PATH plus a nonexistent-binary path -- no real `ix` or peer needed.
+  # The bridge lives in the `ix_notebook_mcp` server package, so the test imports
+  # that module (bundled here) rather than a `src/*` helper; `bash` is on PATH for
+  # the stub script's shebang.
+  resourcesBridgeTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.pydantic
+    ixNotebookMcpModule
+  ]);
+  resourcesBridgeTestSource = builtins.path {
+    name = "ix-mcp-resources-bridge-test";
+    path = ./tests/test_resources_bridge.py;
+  };
+  resourcesBridgeTests =
+    pkgs.runCommand "ix-mcp-resources-bridge-tests"
+      {
+        nativeBuildInputs = [
+          resourcesBridgeTestPython
+          pkgs.bash
+        ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${resourcesBridgeTestSource} "$TMPDIR/test_resources_bridge.py"
+        ${lib.getExe resourcesBridgeTestPython} -m pytest "$TMPDIR/test_resources_bridge.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp resources-bridge tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
 in
 package.overrideAttrs (old: {
   passthru = (old.passthru or { }) // {
@@ -5015,6 +5053,7 @@ package.overrideAttrs (old: {
         ixGoogleBundled
         slackBundled
         slackTests
+        resourcesBridgeTests
         beeperBundled
         requirementsSmoke
         engineBundled

@@ -31,17 +31,24 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import uuid
 import weakref
 from typing import Annotated
 
+import mcp.types as types
 from mcp.server.fastmcp import Context, FastMCP
-from pydantic import Field
+from mcp.server.lowlevel.helper_types import ReadResourceContents
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData
+from pydantic import AnyUrl, Field
 
-from . import guide, outputs
+from . import guide, outputs, resources_bridge
 from .config import config
 from .kernel import current_kernel
+
+logger = logging.getLogger(__name__)
 
 # Order matters: clients truncate long instruction blocks from the tail, and a
 # 2026-06-10 session showed exactly that failure: the cut landed inside JOBS, so
@@ -346,6 +353,127 @@ async def read(
 @mcp.tool(structured_output=False, description=guide.TRACE)
 async def kernel_trace() -> str:
     return await current_kernel().dump_trace()
+
+
+# ---------------------------------------------------------------------------
+# Federated TUI resources: resources/list + resources/read + the tui_act tool.
+# ---------------------------------------------------------------------------
+#
+# The federated terminal resources another node advertises are bridged in through
+# the `ix` CLI (see resources_bridge). They surface here as real MCP resources so
+# a client can `@`-mention one, plus a `tui_act` tool so an agent can drive it.
+#
+# FastMCP's own resources/list only returns statically-registered resources (its
+# ResourceManager), with no hook for a list discovered at runtime -- so the
+# federated list is served by registering low-level handlers directly on the
+# wrapped server (`mcp._mcp_server`). These OVERRIDE the handlers FastMCP wired at
+# construction, so each delegates back to FastMCP's static path and then folds in
+# the federated entries, keeping any `@mcp.resource` registration working too.
+
+
+async def _list_resources_handler() -> list[types.Resource]:
+    """Serve `resources/list`: FastMCP's static resources plus federated ones.
+
+    Federated discovery degrades gracefully (an absent/unhealthy `ix` yields an
+    empty federated list), so this always returns at least the static set.
+    """
+    static = await mcp.list_resources()
+    federated: list[types.Resource] = []
+    # A broad catch is deliberate: discovery is best-effort, so any failure
+    # (CLI, network, parse) must degrade to the static set, never fail the request.
+    try:
+        federated = [
+            types.Resource(
+                uri=AnyUrl(entry.uri),
+                name=entry.name or entry.uri,
+                description=_federated_description(entry),
+                mimeType=entry.mime or "text/plain",
+            )
+            for entry in await resources_bridge.list_resources()
+        ]
+    except Exception:
+        logger.exception("federated resources/list failed; returning static only")
+    return [*static, *federated]
+
+
+def _federated_description(entry: resources_bridge.ResourceEntry) -> str:
+    """A one-line human label for a federated resource card."""
+    caps = ", ".join(entry.caps) if entry.caps else "—"
+    state = "alive" if entry.alive else "dead"
+    host = entry.host or _uri_host(entry.uri) or "?"
+    return f"federated TUI resource on {host} ({state}; caps: {caps})"
+
+
+def _uri_host(uri: str) -> str | None:
+    prefix = "ix://"
+    if not uri.startswith(prefix):
+        return None
+    return uri[len(prefix) :].partition("/")[0] or None
+
+
+async def _read_resource_handler(uri: AnyUrl) -> list[ReadResourceContents]:
+    """Serve `resources/read`: try FastMCP's static resources, then the federation.
+
+    A uri unknown to both raises an `McpError` carrying the resources spec's
+    `-32002` (resource-not-found) code so the client gets a precise error.
+    """
+    uri_str = str(uri)
+    # Static FastMCP resources first (a hand-registered `@mcp.resource`), so the
+    # federation only handles uris FastMCP does not own. The manager RAISES
+    # ValueError for an unknown uri (it does not return None), so treat that as
+    # "not static" and fall through to the federation rather than erroring.
+    try:
+        resource = await mcp._resource_manager.get_resource(uri_str, context=mcp.get_context())
+    except ValueError:
+        resource = None
+    if resource is not None:
+        content = await resource.read()
+        return [ReadResourceContents(content=content, mime_type=resource.mime_type)]
+    try:
+        text, mime = await resources_bridge.read_resource(uri_str)
+    except resources_bridge.ResourceNotFoundError as exc:
+        raise McpError(ErrorData(code=resources_bridge.RESOURCE_NOT_FOUND, message=str(exc))) from exc
+    except resources_bridge.ResourceBridgeError as exc:
+        raise McpError(ErrorData(code=types.INTERNAL_ERROR, message=str(exc))) from exc
+    return [ReadResourceContents(content=text, mime_type=mime)]
+
+
+# Register on the wrapped low-level server (overriding FastMCP's, which the
+# handlers above delegate back to for static resources).
+mcp._mcp_server.list_resources()(_list_resources_handler)
+mcp._mcp_server.read_resource()(_read_resource_handler)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Drive a federated TUI resource: send keystrokes to a peer's live terminal "
+        "resource (one you can `@`-mention from resources/list) and return the "
+        "peer's acknowledgement. `uri` is the resource's `ix://<host>/<name>` uri; "
+        "`send_keys` is the literal key sequence to deliver (e.g. 'ls\\n', "
+        "'C-c'). `peer` is an optional full endpoint URL (e.g. "
+        "'https://<addr>/rpc') targeting one peer directly; omit it to probe the "
+        "configured peers (IX_RESOURCE_PEERS) for the one advertising the uri. "
+        "Bridges to `ix resources act` and degrades clearly when `ix` is absent."
+    ),
+)
+async def tui_act(
+    uri: Annotated[str, Field(description="The ix://<host>/<name> uri of the federated resource to drive")],
+    send_keys: Annotated[str, Field(description="Literal keystrokes to send to the resource, e.g. 'ls\\n' or 'C-c'")],
+    peer: Annotated[
+        str | None,
+        Field(description="Optional full endpoint URL (e.g. 'https://<addr>/rpc') of one peer to target; omit to probe the configured peers for the uri's owner"),
+    ] = None,
+    ctx: Context | None = None,
+) -> Content:
+    await _identify_client_once(ctx)
+    try:
+        ack = await resources_bridge.act(uri, send_keys, peer=peer)
+    except resources_bridge.ResourceNotFoundError as exc:
+        raise McpError(ErrorData(code=resources_bridge.RESOURCE_NOT_FOUND, message=str(exc))) from exc
+    except resources_bridge.ResourceBridgeError as exc:
+        return [outputs.text(f"tui_act failed: {exc}")]
+    return [outputs.text(json.dumps(ack))]
 
 
 # Seed the server instructions now that every `@mcp.tool` above is registered, so
