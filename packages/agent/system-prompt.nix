@@ -58,6 +58,8 @@ let
 
   indexKernel = "Do your work through the index Python kernel (the `python_exec` MCP tool) and reuse its persistent namespace across turns. Search with the in-process `fff.grep`/`fff.find` (run `api()` to list them). Never shell out to `rg` or `fd` inside the kernel, where they run non-interactively and silently mislead (`rg` with no path argument searches empty stdin and returns nothing). The index kernel is your shell: the Bash tool is denied where the kernel is present (the house default). If the kernel wedges (the event loop is frozen and neither `kernel_trace` nor a fresh `python_exec` revives it), restart the kernel or report the blocker rather than falling back to Bash.";
 
+  kernelTiming = "The index kernel reports `elapsed_s`, each `python_exec` run's wall-clock seconds, in every reply. Treat a slow run as a problem to fix, not a number to ignore: a call that takes seconds when it should take milliseconds is almost always a synchronous wait (`subprocess.run`, `time.sleep`, `requests`, a long CPU-bound op) freezing the one shared event loop, which also stalls every other job queued behind it; make it non-blocking (wrap it in `await asyncio.to_thread(...)`, prefer an async API, or shell out via the bundled `sh()`) and the time drops. When the work is genuinely heavy, run it as a background job and poll `.done()` rather than holding the foreground channel. Investigate a surprising `elapsed_s` (profile it, look for a blocking call, narrow the work) instead of accepting it.";
+
   fleetHistory = "When fleet-history search is available, search it for prior work before a non-trivial task: in the kernel, `import search`, then `await search.semantic(\"<task phrasing>\", source=[\"claude_history\"], top_k=5)`. Route by question type: `shell` for what-is-the-command, `github` for why-is-it-this-way, and `claude_history` for how-did-someone-do-this. For broader prior research, spawn a cheap-model subagent so raw hits never flood your context. The corpus knows prior decisions, known pitfalls, and whether a thing was already built. The backend can be unavailable (for example a spend limit); if it errors, note that and proceed rather than blocking on it.";
 
   structuredPrimitives = "Prefer a structured primitive over text munging: `view.ls`/`view.tree`/`view.cat` for the filesystem (pre-imported polars frames), `fff.grep`/`fff.find` for search, and CLI JSON modes (`gh --json`, `cargo metadata`, `nix --json`) parsed with `.json()`/`.jsonl()`/`.df()` on the `sh` Output. Never use awk, sed, or string-splitting. Run one command per `sh()` call and combine the results in Python. Return a tabular answer as a polars DataFrame.";
@@ -132,6 +134,7 @@ let
     modelTiering
     harness
     indexKernel
+    kernelTiming
     fleetHistory
     structuredPrimitives
     probeByExitCode

@@ -2864,6 +2864,11 @@ def _job_summary(job: Job) -> dict:
         "result": None if job._result is None else _safe_repr(job._result),
         "result_chars": len(_result_text(job)),
         "error": job.error,
+        # Wall-clock seconds the run has taken (final once it ends, elapsed-so-far
+        # while it is still backgrounded). Surfaced in every reply so the caller
+        # notices a slow run and treats it as a problem to fix -- usually a sync
+        # call freezing the loop (make it async/background), not just an FYI.
+        "elapsed_s": round((job.ended or time.time()) - job.started, 2),
         # Where a still-running job is right now (cell line), so a budget-expired
         # reply can say not just "running" but "running, on line N".
         "line": _current_line(job) if job.running() else None,

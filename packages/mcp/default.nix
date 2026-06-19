@@ -2192,6 +2192,8 @@ let
         # full sizes the server uses to detect a truncated reply
         s = runtime._job_summary(a)
         assert s["output_chars"] == len(a.output) and s["result_chars"] == len("A done"), s
+        # elapsed_s rides every summary so the per-call reply reports the run's cost
+        assert isinstance(s["elapsed_s"], float) and s["elapsed_s"] >= 0.0, s
         # history() indexes the runs and returns a Result naming both jobs
         h = ns["history"]()
         assert isinstance(h, runtime.Result) and a.id in h.llm_result and b.id in h.llm_result
@@ -2864,6 +2866,9 @@ let
             assert summary is not None and summary["status"] == "wedged", summary
             assert elapsed < 15, ("watchdog did not fire promptly", elapsed)
             assert "asyncio.to_thread" in summary["error"], summary
+            # a wedged reply still carries elapsed_s (the slowest case the field
+            # exists to surface), reporting the seconds the call blocked
+            assert isinstance(summary["elapsed_s"], float) and summary["elapsed_s"] >= 0.5, summary
 
             _, after = await kernel.python_exec("Result.text('alive')", budget=10.0, name="after")
             assert after is not None and after["status"] == "done", after

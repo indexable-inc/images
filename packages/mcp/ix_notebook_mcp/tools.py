@@ -255,7 +255,17 @@ async def python_exec(
     if summary is None:
         return rendered
     header = outputs.text(
-        json.dumps({"job": summary.get("id"), "status": summary.get("status"), "running": summary.get("running")})
+        json.dumps(
+            {
+                "job": summary.get("id"),
+                "status": summary.get("status"),
+                "running": summary.get("running"),
+                # Wall-clock cost of this run, reported by default so the caller
+                # notices a slow run (the house system prompt's kernel-timing rule
+                # says to treat one as a problem to fix, not an FYI).
+                "elapsed_s": summary.get("elapsed_s"),
+            }
+        )
     )
     parts: Content = [header]
     # The kernel folds a cell's stdout into its result (Jupyter semantics; see

@@ -63,6 +63,10 @@ def _wedged_summary(budget: float, grace: float, deadline: float, *, interrupted
         "result": None,
         "result_chars": 0,
         "error": message,
+        # The wall-clock seconds this call blocked before the server gave up, so a
+        # wedged reply still carries elapsed_s (and reports the slowest case the
+        # field exists to surface) rather than a misleading null.
+        "elapsed_s": round(deadline, 2),
     }
 
 
