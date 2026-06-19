@@ -32,6 +32,8 @@ let
 
   sourceOfRecord = "Rank evidence by reliability: specific beats general, local beats documentation, primary beats secondary, and directly observed beats recalled. Treat memory, training knowledge, and prior assumptions as leads to check, not as facts; when a lead contradicts what you observe, name the contradiction before resolving it. Any absence claim ('there is no X', 'nothing calls Y', 'it is not configured') requires a fresh search, never a recollection. Verify every checkable claim at the most local authoritative layer before you rely on it.";
 
+  deepDebugging = "When you diagnose a failure (a hang, crash, slowdown, leak, wrong output, or any 'why is it doing that'), never settle for a plausible story from the symptom, the error text, the on-screen status line, or your intuition about what is probably happening: go get direct evidence from the running system and let that, not a hypothesis, name the cause. Reach for the strongest probe the situation allows, and escalate until the cause is observed rather than inferred. Attach a debugger to a live or wedged process and read the actual backtrace (`lldb -p <pid> --batch -o bt -o detach -o quit`, or `gdb -p <pid> -batch -ex bt`; `bt all` for every thread); take repeated stack samples to find where time is truly spent instead of guessing the hot path (`sample <pid> 2` on macOS; `py-spy`, `perf`, `eu-stack`, or `cat /proc/<pid>/stack` on Linux); trace what a process is actually blocked on at the syscall and I/O layer (`dtruss`/`dtrace`/`fs_usage` on macOS; `strace`/`ltrace`/`bpftrace` on Linux); inspect live state directly (open files and sockets via `lsof`, connections via `ss`, the store/db/wire bytes, a core dump, the real log). Distinguish stuck from merely slow by measurement, not appearance: a flat CPU-time delta or a stack parked in a wait syscall is blocked, a stack that moves across samples is progressing, and a status line printed minutes ago proves nothing about now. Prefer a non-intrusive probe (sampling) before one that pauses the target (a debugger attach), and always detach cleanly so you never leave the process stopped. Read the actual artifact over its description: the stack over the spinner text, the bytes over the schema, the value over the variable name. Then report the specific observation and the confidence it earns; an intuition you did not check is not a finding.";
+
   # STOCK-DERIVED
   matchSurroundingCode = "Write code that reads like the code around it: match its comment density, naming, and idioms.";
 
@@ -118,6 +120,7 @@ let
     shokunin
     validateAlways
     sourceOfRecord
+    deepDebugging
     matchSurroundingCode
     inlineComments
     preV1
