@@ -42,6 +42,25 @@ fn title_persists_and_updates_across_feeds() {
 }
 
 #[test]
+fn esc_terminates_an_unterminated_title() {
+    let mut t = OscTitleTracker::new().expect("create tracker");
+    // OSC 2 with no BEL/ST, directly followed by a CSI: ghostty dispatches the
+    // title on the ESC, so it must be captured (not dropped).
+    t.feed(b"\x1b]2;vim\x1b[2J");
+    assert_eq!(t.title(), Some("vim"));
+}
+
+#[test]
+fn invalid_utf8_title_is_ignored() {
+    let mut t = OscTitleTracker::new().expect("create tracker");
+    t.feed(b"\x1b]2;good\x07");
+    // A title with an invalid UTF-8 byte is skipped, not lossily replaced, so
+    // the previous title stands.
+    t.feed(b"\x1b]2;\xff\x07");
+    assert_eq!(t.title(), Some("good"));
+}
+
+#[test]
 fn can_aborts_an_in_progress_title() {
     let mut t = OscTitleTracker::new().expect("create tracker");
     t.feed(b"\x1b]2;keep\x07");

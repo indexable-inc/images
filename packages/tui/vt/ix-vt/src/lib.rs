@@ -701,18 +701,17 @@ const ST_FINAL: u8 = b'\\';
 const CAN: u8 = 0x18;
 const SUB: u8 = 0x1a;
 
-/// Where the framing scanner is within an `ESC ] … (BEL | ESC \)` OSC sequence.
+/// Where the framing scanner is within an `ESC ] … (BEL | ESC | CAN | SUB)` OSC
+/// sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameState {
     /// Outside any escape sequence.
     Ground,
-    /// Saw `ESC`; a following `]` opens an OSC.
+    /// Saw `ESC`; a following `]` opens an OSC (and a following `\` after an OSC
+    /// is the tail of a String Terminator, which lands back in `Ground`).
     Escape,
     /// Inside an OSC payload, forwarding bytes to the parser.
     Osc,
-    /// Inside an OSC payload and just saw `ESC`; a following `\` is the ST
-    /// terminator, anything else aborts the sequence.
-    OscEscape,
 }
 
 /// Tracks the most recent OSC window title in a raw terminal byte stream.
@@ -798,24 +797,18 @@ impl OscTitleTracker {
                     unsafe { sys::ghostty_osc_reset(self.parser) };
                     FrameState::Ground
                 }
-                ESC => FrameState::OscEscape,
+                // ESC always ends the OSC string: a following `\` makes it a
+                // clean ST, but any other escape sequence still terminates and
+                // dispatches the OSC (ghostty does the same). So finish here and
+                // re-enter Escape; a following `\` then harmlessly falls back to
+                // Ground, and a `[`, `]`, … starts its own sequence.
+                ESC => {
+                    self.finish(ST_FINAL);
+                    FrameState::Escape
+                }
                 _ => {
                     unsafe { sys::ghostty_osc_next(self.parser, byte) };
                     FrameState::Osc
-                }
-            },
-            FrameState::OscEscape => match byte {
-                ST_FINAL => {
-                    self.finish(ST_FINAL);
-                    FrameState::Ground
-                }
-                ESC => FrameState::OscEscape,
-                // The ESC began a different sequence, not an ST: abandon the
-                // partial OSC and reinterpret this byte from Ground (so a fresh
-                // ESC still opens the next sequence).
-                _ => {
-                    unsafe { sys::ghostty_osc_reset(self.parser) };
-                    self.step(FrameState::Ground, byte)
                 }
             },
         }
@@ -824,22 +817,28 @@ impl OscTitleTracker {
     /// Terminate the current OSC and, if it set the window title, capture it.
     fn finish(&mut self, terminator: u8) {
         let command = unsafe { sys::ghostty_osc_end(self.parser, terminator) };
-        if unsafe { sys::ghostty_osc_command_type(command) }
-            == sys::GhosttyOscCommandType::GHOSTTY_OSC_COMMAND_CHANGE_WINDOW_TITLE
+        // Ask only for the title string rather than reading the command *type*:
+        // `ghostty_osc_command_data` returns false for any command that is not a
+        // window-title change, which both classifies the command and avoids
+        // materializing the `GhosttyOscCommandType` enum from the FFI return
+        // (ghostty could in principle return a tag outside the checked-in enum,
+        // which would be UB to form as a Rust enum).
+        let mut text: *const c_char = ptr::null();
+        let ok = unsafe {
+            sys::ghostty_osc_command_data(
+                command,
+                sys::GhosttyOscCommandData::GHOSTTY_OSC_DATA_CHANGE_WINDOW_TITLE_STR,
+                (&raw mut text).cast::<c_void>(),
+            )
+        };
+        // The string is owned by the parser and only valid until the next
+        // `ghostty_osc_*` call (including the reset below), so copy it now. Skip
+        // a title that is not valid UTF-8 (ghostty's stream path ignores those
+        // too) rather than substituting replacement characters.
+        if ok && !text.is_null()
+            && let Ok(title) = unsafe { CStr::from_ptr(text) }.to_str()
         {
-            let mut text: *const c_char = ptr::null();
-            let ok = unsafe {
-                sys::ghostty_osc_command_data(
-                    command,
-                    sys::GhosttyOscCommandData::GHOSTTY_OSC_DATA_CHANGE_WINDOW_TITLE_STR,
-                    (&raw mut text).cast::<c_void>(),
-                )
-            };
-            // The string is owned by the parser and only valid until the next
-            // `ghostty_osc_*` call (including the reset below), so copy it now.
-            if ok && !text.is_null() {
-                self.title = Some(unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned());
-            }
+            self.title = Some(title.to_owned());
         }
         unsafe { sys::ghostty_osc_reset(self.parser) };
     }
