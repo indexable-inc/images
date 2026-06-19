@@ -545,6 +545,28 @@ let
         cp -r ${tasksPythonSource}/tasks/. "$site/"
       ''
   );
+  # Drive the Ghostty terminal over its AppleScript dictionary (Ghostty 1.3.2+):
+  # `import ghostty`, then `await ghostty.surfaces()` reads every open surface
+  # (id/tty/pid/cwd/title) into polars and `await ghostty.close_me()` closes the
+  # window this session runs in. Pure Python shelling `osascript` on the loop; no
+  # native binding, so a plain toPythonModule like `worktree`/`tasks`. macOS-only
+  # at import; bundled only in `darwinExtraPackages`.
+  ghosttyPythonSource = builtins.path {
+    name = "ix-mcp-ghostty-python-source";
+    path = ./src/ghostty;
+  };
+  ghosttyModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-ghostty-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Ghostty AppleScript control bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/ghostty"
+        mkdir -p "$site"
+        cp -r ${ghosttyPythonSource}/ghostty/. "$site/"
+      ''
+  );
   # Linear issue-tracker GraphQL client: `import linear`, then
   # `await linear.issue("ENG-123")` / `issue_update` / `issue_create` /
   # `project_create`. Pure Python over the already-bundled httpx; reads
@@ -770,6 +792,7 @@ let
       screenModule
       vmkitModule
       imessageModule
+      ghosttyModule
     ];
 
   # htpy: build HTML in plain Python (`div(class_="x")[ ... ]`), auto-escaping
@@ -4864,6 +4887,7 @@ let
   mapsBundled = importTest "maps" "import maps, MapKit; print('maps-ok', all(callable(getattr(maps, n)) for n in ('nearby', 'geocode', 'reverse_geocode')), callable(MapKit.MKLocalSearch.alloc))";
   vmkitBundled = importTest "vmkit" "import vmkit; print('vmkit-ok', callable(vmkit.boot_linux), callable(vmkit.drive), callable(vmkit.screenshot))";
   imessageBundled = importTest "imessage" "import imessage; print('imessage-ok', all(callable(getattr(imessage, n)) for n in ('messages', 'chats', 'contacts', 'send')))";
+  ghosttyBundled = importTest "ghostty" "import ghostty; print('ghostty-ok', all(callable(getattr(ghostty, n)) for n in ('surfaces', 'my_tty', 'my_surface', 'close', 'close_me', 'focus', 'activate', 'is_running')), ghostty.__version__)";
   xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
   linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
   noxAutotriageBundled = importTest "nox-autotriage" "import nox_autotriage; print('nox-autotriage-ok', callable(nox_autotriage.findings_from_conformance))";
@@ -5063,6 +5087,7 @@ package.overrideAttrs (old: {
         vmkitResourceSmoke
         imessageBundled
         imessageSmoke
+        ghosttyBundled
         ;
     };
   };

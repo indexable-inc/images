@@ -127,6 +127,14 @@ MODULES: tuple[Module, ...] = (
         "stack (macOS only)",
     ),
     Module(
+        "ghostty",
+        "drive the Ghostty terminal via its AppleScript dictionary: read every open "
+        "surface into polars (`await ghostty.surfaces()` -> id/tty/pid/cwd/title), and "
+        "close/focus/activate one by tty or id. `await ghostty.close_me()` shuts the "
+        "window this very session runs in -- the end-of-task move once fully done "
+        "(macOS only)",
+    ),
+    Module(
         "iphone",
         "drive a physical iPhone/iPad (USB or Wi-Fi) via pymobiledevice3: list devices/apps into "
         "polars (`iphone.devices()` / `apps()`), `screenshot()` a developer-mounted device to a PIL "
