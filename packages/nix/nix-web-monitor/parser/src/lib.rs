@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snafu::Snafu;
 
+pub mod activation;
 pub mod daemon;
+pub use activation::{Activation, ActivationStatus, ActivationStep};
 pub use daemon::{DaemonInfo, DaemonOps, OpClass};
 
 const NIX_JSON_PREFIX: &str = "@nix ";
@@ -246,8 +248,11 @@ pub struct OptimiseStats {
     rename_all_fields = "camelCase"
 )]
 pub enum Delta {
-    /// Full state, used only to seed a new subscriber. Never broadcast.
-    Reset { snapshot: MonitorSnapshot },
+    /// Full state, used only to seed a new subscriber. Never broadcast. Boxed
+    /// because the snapshot dwarfs every other variant; without it `Delta` (which
+    /// is moved per incremental delta on the hot path) would carry the seed's
+    /// footprint everywhere. Serializes identically to an unboxed snapshot.
+    Reset { snapshot: Box<MonitorSnapshot> },
     /// A build was created or changed (status, phase, host, failure).
     BuildUpsert { build: BuildNode },
     /// An activity was created or changed (status, phase, progress).
@@ -261,6 +266,13 @@ pub enum Delta {
     OptimiseSet { optimise: OptimiseStats },
     /// The live nix-daemon syscall view changed (new counts, path, or status).
     DaemonSet { daemon: DaemonInfo },
+    /// The activation phase (a `switch`'s `activate` run) changed: a step opened
+    /// or closed, a line landed, or the phase status moved. Carries the whole
+    /// subtree, like [`DaemonSet`](Delta::DaemonSet): the step list is small.
+    ActivationSet { activation: Activation },
+    /// The generation diff (`nvd diff <old> <new>`) became available at the end
+    /// of a switch. A whole-string replace; produced once.
+    DiffSet { diff: String },
     /// The expected count for one activity type was (re)declared.
     ExpectedSet { name: String, value: i64 },
     /// One operator/error message was appended to the errors list.
@@ -291,6 +303,12 @@ pub struct MonitorState {
     pub optimise: OptimiseStats,
     /// Live nix-daemon syscall view, fed out-of-band by the server's tracer.
     pub daemon: DaemonInfo,
+    /// Live activation view, fed out-of-band by the server's switch orchestrator.
+    /// Empty (`active: false`) on a plain `nix build`.
+    pub activation: Activation,
+    /// Generation diff (`nvd diff`) text, set once at the end of a switch. `None`
+    /// outside a switch or before the diff lands.
+    pub diff: Option<String>,
     pub expected: BTreeMap<String, i64>,
     pub exit_code: Option<i32>,
     pub finished: bool,
@@ -367,6 +385,8 @@ impl MonitorState {
             progress: self.progress,
             optimise: self.optimise,
             daemon: self.daemon.clone(),
+            activation: self.activation.clone(),
+            diff: self.diff.clone(),
             expected: self.expected.clone(),
             dependencies: dependency_edges(&self.closure_deps, &observed),
             root_causes: root_cause_derivations(&self.closure_deps, &observed),
@@ -461,6 +481,47 @@ impl MonitorState {
         });
     }
 
+    /// Begin the activation phase of a switch and broadcast it. `initial_step`
+    /// seeds a single open step for the unstructured (darwin) activate; pass
+    /// `None` for home-manager, whose `Activating` lines open their own steps.
+    pub fn begin_activation(&mut self, command: String, initial_step: Option<String>) {
+        self.activation
+            .begin(command, initial_step, current_unix_ms());
+        self.emit_activation();
+    }
+
+    /// Fold one activation output line into the step tree and broadcast it.
+    pub fn push_activation_line(&mut self, line: &str) {
+        self.activation.ingest_line(line, current_unix_ms());
+        self.emit_activation();
+    }
+
+    /// Set a human activation phase status (e.g. "skipped (build failed)") and
+    /// broadcast it, so the panel explains a phase that produced no steps.
+    pub fn set_activation_status(&mut self, status: String) {
+        self.activation.set_status(status);
+        self.emit_activation();
+    }
+
+    /// Settle the activation phase: close the open step (done or failed) and set
+    /// the terminal status, then broadcast.
+    pub fn finish_activation(&mut self, success: bool) {
+        self.activation.finish(success, current_unix_ms());
+        self.emit_activation();
+    }
+
+    fn emit_activation(&mut self) {
+        self.emit(Delta::ActivationSet {
+            activation: self.activation.clone(),
+        });
+    }
+
+    /// Record the generation diff text (`nvd diff` output) and broadcast it.
+    pub fn set_diff(&mut self, diff: String) {
+        self.diff = Some(diff.clone());
+        self.emit(Delta::DiffSet { diff });
+    }
+
     /// Record the transitive input `.drv` closure of one derivation, learned
     /// from `nix-store --query --requisites`. The caller filters source paths
     /// and the derivation itself out before calling. Stored unfiltered by build
@@ -536,22 +597,34 @@ impl MonitorState {
         self.exit_code = exit_code;
         self.finished = true;
         if exit_code == Some(0) {
-            let promoted: Vec<String> = self
-                .builds
-                .iter_mut()
-                .filter(|(_, build)| {
-                    matches!(build.status, BuildStatus::Stopped | BuildStatus::Planned)
-                })
-                .map(|(derivation, build)| {
-                    build.status = BuildStatus::Succeeded;
-                    derivation.clone()
-                })
-                .collect();
-            for derivation in promoted {
-                self.emit_build(&derivation);
-            }
+            self.promote_unfinished_builds();
         }
         self.emit(Delta::Finished { exit_code });
+    }
+
+    /// Promote `Stopped`/`Planned` build rows to `Succeeded` and broadcast them,
+    /// without settling the run. A switch calls this after its build phase
+    /// succeeds so the rows read as done while activation proceeds, rather than
+    /// lingering as `Stopped` (and sorted with unfinished work) if a later
+    /// activation phase fails. [`finish`](Self::finish) reuses the same promotion
+    /// on a clean exit.
+    pub fn mark_builds_succeeded(&mut self) {
+        self.promote_unfinished_builds();
+    }
+
+    fn promote_unfinished_builds(&mut self) {
+        let promoted: Vec<String> = self
+            .builds
+            .iter_mut()
+            .filter(|(_, build)| matches!(build.status, BuildStatus::Stopped | BuildStatus::Planned))
+            .map(|(derivation, build)| {
+                build.status = BuildStatus::Succeeded;
+                derivation.clone()
+            })
+            .collect();
+        for derivation in promoted {
+            self.emit_build(&derivation);
+        }
     }
 
     fn apply_event(&mut self, event: &NixEvent) {
@@ -1054,6 +1127,10 @@ pub struct MonitorSnapshot {
     pub optimise: OptimiseStats,
     /// Live nix-daemon syscall view, fed out-of-band by the server's tracer.
     pub daemon: DaemonInfo,
+    /// Live activation view, fed out-of-band by the server's switch orchestrator.
+    pub activation: Activation,
+    /// Generation diff text (`nvd diff`), set once at the end of a switch.
+    pub diff: Option<String>,
     pub expected: BTreeMap<String, i64>,
     /// Minimal dependency DAG over derivations Nix actually built: each edge's
     /// `from` directly requires `to`. Derived from `direct_deps` at snapshot

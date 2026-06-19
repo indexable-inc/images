@@ -50,7 +50,13 @@ let
         # `nix-web-monitor build .#x` uses the same Nix as a bare
         # `nix build .#x` would. Pinning a specific Nix here drags an
         # extra copy into every closure and silently shadows custom
-        # builds.
+        # builds. The same reasoning keeps `home-manager`, `darwin-rebuild`,
+        # and `sudo` (used by the `home`/`os` switch subcommands) on the
+        # operator's PATH rather than bundled.
+        #
+        # `nvd` is the one exception: the post-switch generation diff should work
+        # out of the box, so it is appended with `--suffix` (an operator's own
+        # `nvd` earlier on PATH still wins).
         # Stamp the build revision and commit time for `--version`. These ride
         # the wrapper env (not `env!`) and the `build-version` crate renders
         # them at runtime, so a new commit re-stamps this tiny wrapper without
@@ -58,6 +64,7 @@ let
         # ix tool reads; see `build-version` and `ix.rev` / `ix.revEpoch`.
         makeWrapper ${lib.getExe unwrapped} "$out/bin/nix-web-monitor" \
           --set NIX_WEB_MONITOR_SITE_DIR "$out/share/nix-web-monitor" \
+          --suffix PATH : ${lib.makeBinPath [ pkgs.nvd ]} \
           --set IX_BUILD_REV ${lib.escapeShellArg ix.rev} \
           --set IX_BUILD_EPOCH ${lib.escapeShellArg (toString ix.revEpoch)}
       '';

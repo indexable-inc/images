@@ -39,6 +39,8 @@ type Working = {
   progress: MonitorSnapshot['progress'];
   optimise: MonitorSnapshot['optimise'];
   daemon: MonitorSnapshot['daemon'];
+  activation: MonitorSnapshot['activation'];
+  diff: MonitorSnapshot['diff'];
   expected: Record<string, number>;
   dependencies: DerivationEdge[];
   rootCauses: string[];
@@ -64,6 +66,8 @@ function createWorking(): Working {
       opsPerSec: 0,
       currentPath: null
     },
+    activation: { active: false, command: '', steps: [], status: '' },
+    diff: null,
     expected: {},
     dependencies: [],
     rootCauses: [],
@@ -102,6 +106,12 @@ export function applyDelta(working: Working, delta: Delta): Working {
     case 'daemonSet':
       working.daemon = delta.daemon;
       return working;
+    case 'activationSet':
+      working.activation = delta.activation;
+      return working;
+    case 'diffSet':
+      working.diff = delta.diff;
+      return working;
     case 'expectedSet':
       working.expected = { ...working.expected, [delta.name]: delta.value };
       return working;
@@ -135,6 +145,8 @@ function fromSnapshot(snapshot: MonitorSnapshot): Working {
     progress: snapshot.progress,
     optimise: snapshot.optimise,
     daemon: snapshot.daemon,
+    activation: snapshot.activation,
+    diff: snapshot.diff,
     expected: { ...snapshot.expected },
     dependencies: snapshot.dependencies,
     rootCauses: snapshot.rootCauses,
@@ -174,6 +186,8 @@ export function projectSnapshot(working: Working): MonitorSnapshot {
     progress: working.progress,
     optimise: working.optimise,
     daemon: working.daemon,
+    activation: working.activation,
+    diff: working.diff,
     expected: { ...working.expected },
     dependencies: working.dependencies,
     rootCauses: working.rootCauses,

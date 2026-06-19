@@ -574,6 +574,102 @@ main.dragging-v .splitter-v::after {
   text-overflow: ellipsis;
 }
 
+/* ---------- activation + diff panels (switch only) ---------- */
+
+/* Both ride at the top of the side pane during a switch and cap their height so
+ * the daemon panel and activity graph below stay visible; they self-hide on a
+ * plain build (no activation, no diff). */
+.side-pane > .activation-panel,
+.side-pane > .diff-panel {
+  flex: 0 0 auto;
+  max-height: 40%;
+  border-bottom: 1px solid var(--line);
+}
+
+.activation-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.3rem 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.activation-status {
+  color: var(--muted);
+  white-space: normal;
+  line-height: 1.4;
+  padding: 0.1rem 0.2rem;
+}
+
+/* step dot | name | line-count badge | duration */
+.activation-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.15rem 0.2rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.activation-row:disabled {
+  cursor: default;
+}
+
+.activation-row:not(:disabled):hover {
+  background: var(--panel-soft);
+}
+
+.activation-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activation-lines-count {
+  color: var(--faint);
+  font-size: 0.85em;
+}
+
+.activation-duration {
+  color: var(--muted);
+}
+
+/* Activation steps finish "done"; reuse the succeeded colour for the dot. */
+.state[data-state='done'] {
+  background: var(--green);
+}
+
+.activation-lines {
+  margin: 0 0 0.2rem 1rem;
+  padding: 0.3rem 0.4rem;
+  background: var(--panel-soft);
+  border-radius: 3px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.3rem 0.4rem;
+}
+
+.diff-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
 /* ---------- activity graph ---------- */
 
 .graph,

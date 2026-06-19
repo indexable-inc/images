@@ -42,37 +42,86 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Parser)]
 #[command(about = "Run a Nix command with quiet terminal output and a live browser monitor.")]
-#[allow(clippy::struct_field_names)] // `nix_args` is the wire-level name passed to `nix`; renaming would hurt the CLI help text.
 struct Args {
     /// Interface used by the web monitor. Defaults to all interfaces so the UI
     /// is reachable over LAN/Tailscale without a flag. The live feed is a plain
     /// WebSocket, so off-host access needs no certificate.
-    #[arg(long, default_value = "0.0.0.0")]
+    //
+    // `global = true` so the flag is accepted after a named subcommand too
+    // (`nwm home switch --port 8080`), not just before it.
+    #[arg(long, default_value = "0.0.0.0", global = true)]
     host: String,
 
     /// TCP port for the UI, the JSON snapshot, and the WebSocket delta feed.
-    #[arg(long, default_value_t = 7532)]
+    #[arg(long, default_value_t = 7532, global = true)]
     port: u16,
 
-    /// Static UI directory. The Nix package wrapper fills this in.
+    /// Static UI directory. The Nix package wrapper fills this in. Always comes
+    /// from the env the wrapper sets, so it is never passed after a subcommand
+    /// and need not be `global` (which clap forbids on a required argument).
     #[arg(long, env = "NIX_WEB_MONITOR_SITE_DIR")]
     site_dir: PathBuf,
 
     /// Exit when the Nix command finishes instead of keeping the web UI alive.
-    #[arg(long)]
+    #[arg(long, global = true)]
     exit_when_done: bool,
 
     /// Terminal output policy. The browser always receives the parsed stream.
-    #[arg(long, value_enum, default_value_t = TerminalOutput::Summary)]
+    #[arg(long, value_enum, default_value_t = TerminalOutput::Summary, global = true)]
     terminal_output: TerminalOutput,
 
     /// Pass `-v` to Nix for richer internal-json activity events.
-    #[arg(long)]
+    #[arg(long, global = true)]
     nix_verbose: bool,
 
-    /// Arguments passed to `nix`. Example: `build .#hello --keep-going`.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
-    nix_args: Vec<String>,
+    #[command(subcommand)]
+    command: NwmCommand,
+}
+
+/// What `nwm` runs under the monitor. The named subcommands wrap the
+/// build-then-activate dance of a system switch; the external fallback keeps the
+/// original behaviour of passing any other arguments straight to `nix`, so
+/// `nwm build .#x` and `nwm run .#ix -- new` are unchanged.
+#[derive(clap::Subcommand)]
+enum NwmCommand {
+    /// Build (and by default activate) a home-manager configuration, mirroring
+    /// `home-manager switch` with the build and activation shown live.
+    Home(SwitchSpec),
+
+    /// Build (and by default activate) a nix-darwin system configuration,
+    /// mirroring `darwin-rebuild switch`. Activation runs under `sudo`.
+    Os(SwitchSpec),
+
+    /// Any other arguments are passed straight to `nix` (e.g. `build .#hello`,
+    /// `run .#ix -- new`, or `flake update index --flake .`).
+    #[command(external_subcommand)]
+    Nix(Vec<String>),
+}
+
+#[derive(clap::Args)]
+struct SwitchSpec {
+    #[command(subcommand)]
+    action: SwitchAction,
+}
+
+#[derive(clap::Subcommand)]
+enum SwitchAction {
+    /// Build the configuration and activate it.
+    Switch(SwitchArgs),
+    /// Build the configuration only, without activating.
+    Build(SwitchArgs),
+}
+
+#[derive(clap::Args)]
+struct SwitchArgs {
+    /// Flake to build, defaulting to the current directory. Accepts a directory
+    /// (`~/.config/nix`) or `dir#name` to override the configuration name (which
+    /// otherwise defaults to `<user>@<host>` for home and `<host>` for os).
+    flake: Option<String>,
+
+    /// Update flake inputs before building.
+    #[arg(short = 'u', long)]
+    update: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -117,8 +166,8 @@ async fn main() -> Result<()> {
     let index_html =
         Bytes::from(std::fs::read(args.site_dir.join("index.html")).context("reading index.html")?);
 
-    let command = format!("nix {}", args.nix_args.join(" "));
-    let monitor = Arc::new(RwLock::new(MonitorState::new(command)));
+    let job = build_job(args.command).await.context("planning job")?;
+    let monitor = Arc::new(RwLock::new(MonitorState::new(job.command_label.clone())));
     let (deltas, _) = broadcast::channel::<Bytes>(DELTA_CHANNEL_CAPACITY);
 
     let http_addr: SocketAddr = format!("{}:{}", args.host, args.port)
@@ -139,15 +188,15 @@ async fn main() -> Result<()> {
     // life of the UI. Best-effort, so its handle is just aborted at shutdown.
     let daemon_probe = tokio::spawn(run_daemon_probe(Arc::clone(&monitor), deltas.clone()));
 
-    let build = tokio::spawn(run_nix_command(
-        args.nix_args,
+    let build = tokio::spawn(run_job(
+        job,
         args.terminal_output,
         args.nix_verbose,
         monitor,
         deltas,
     ));
 
-    let exit_code = build.await.context("joining Nix command task")??;
+    let exit_code = build.await.context("joining job task")??;
 
     if !args.exit_when_done {
         eprintln!(
@@ -250,7 +299,7 @@ async fn serve_socket(
         let state = monitor.read().await;
         let receiver = deltas.subscribe();
         let seed = match encode(&Delta::Reset {
-            snapshot: state.snapshot(),
+            snapshot: Box::new(state.snapshot()),
         }) {
             Ok(seed) => seed,
             Err(error) => {
@@ -288,7 +337,7 @@ async fn serve_socket(
                         let state = monitor.read().await;
                         receiver = deltas.subscribe();
                         match encode(&Delta::Reset {
-                            snapshot: state.snapshot(),
+                            snapshot: Box::new(state.snapshot()),
                         }) {
                             Ok(resync) => resync,
                             Err(error) => {
@@ -327,13 +376,27 @@ fn encode(delta: &Delta) -> Result<Bytes> {
     Ok(Bytes::from(payload))
 }
 
-async fn run_nix_command(
+/// Result of one monitored `nix` invocation.
+struct NixBuildOutcome {
+    exit_code: Option<i32>,
+    /// Captured stdout, empty unless the call requested capture.
+    stdout: String,
+}
+
+/// Run one monitored `nix` invocation: spawn it with `--log-format internal-json`,
+/// parse its stderr into the build tree, and either forward or capture its
+/// stdout. Returns the exit code and the captured stdout (empty unless
+/// `capture_stdout`). Does **not** call [`MonitorState::finish`]: a switch runs
+/// several phases under one monitor, so the caller settles the run when the whole
+/// job is done.
+async fn run_nix_build(
     nix_args: Vec<String>,
     terminal_output: TerminalOutput,
     nix_verbose: bool,
-    monitor: Arc<RwLock<MonitorState>>,
-    deltas: broadcast::Sender<Bytes>,
-) -> Result<Option<i32>> {
+    capture_stdout: bool,
+    monitor: &Arc<RwLock<MonitorState>>,
+    deltas: &broadcast::Sender<Bytes>,
+) -> Result<NixBuildOutcome> {
     let mut command = Command::new("nix");
     if nix_verbose {
         command.arg("-v");
@@ -355,42 +418,56 @@ async fn run_nix_command(
     let (deps_tx, deps_rx) = mpsc::unbounded_channel();
     let resolver_task = tokio::spawn(resolve_dependencies(
         deps_rx,
-        Arc::clone(&monitor),
+        Arc::clone(monitor),
         deltas.clone(),
     ));
 
-    let stdout_task = tokio::spawn(forward_stdout(stdout, terminal_output));
+    let stdout_task = tokio::spawn(forward_stdout(stdout, terminal_output, capture_stdout));
     let stderr_task = tokio::spawn(parse_stderr(
         stderr,
-        Arc::clone(&monitor),
+        Arc::clone(monitor),
         deltas.clone(),
         terminal_output,
         deps_tx,
     ));
 
     let status = child.wait().await.context("waiting for nix")?;
-    stdout_task.await.context("joining stdout reader")??;
+    let captured = stdout_task.await.context("joining stdout reader")??;
     stderr_task.await.context("joining stderr reader")??;
     resolver_task
         .await
         .context("joining dependency resolver")??;
 
-    let exit_code = status.code();
-    monitor.write().await.finish(exit_code);
-    broadcast_deltas(&monitor, &deltas).await?;
-
-    Ok(exit_code)
+    Ok(NixBuildOutcome {
+        exit_code: status.code(),
+        stdout: captured,
+    })
 }
 
 /// Forward Nix's stdout byte-for-byte so commands like `nix eval --raw`
 /// preserve exact output (no spurious trailing newline, no UTF-8 round-trip).
 /// With `--log-format internal-json`, log activity lands on stderr; stdout is
 /// reserved for the command's actual output, which never needs parsing.
-async fn forward_stdout<R>(stream: R, terminal_output: TerminalOutput) -> Result<()>
+///
+/// When `capture` is set the stdout is collected and returned instead of
+/// forwarded: a switch builds with `--print-out-paths` and needs the resulting
+/// store path to activate, not to print.
+async fn forward_stdout<R>(
+    stream: R,
+    terminal_output: TerminalOutput,
+    capture: bool,
+) -> Result<String>
 where
     R: AsyncRead + Unpin,
 {
     let mut reader = stream;
+    if capture {
+        let mut buf = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buf)
+            .await
+            .context("capturing nix stdout")?;
+        return Ok(String::from_utf8_lossy(&buf).into_owned());
+    }
     match terminal_output {
         // Still drain so the child does not block on a full pipe.
         TerminalOutput::Quiet => {
@@ -404,7 +481,481 @@ where
                 .context("forwarding nix stdout")?;
         }
     }
+    Ok(String::new())
+}
+
+/// A planned unit of work and the label shown as the build-tree root.
+struct Job {
+    command_label: String,
+    kind: JobKind,
+}
+
+enum JobKind {
+    /// A single monitored `nix` invocation (passthrough or `flake update`).
+    Nix { args: Vec<String> },
+    /// A build-then-activate switch.
+    Switch(SwitchJob),
+}
+
+#[derive(Clone, Copy)]
+enum SwitchKind {
+    Home,
+    Os,
+}
+
+struct SwitchJob {
+    kind: SwitchKind,
+    /// Flake directory (or ref) the lock-update operates on.
+    flake_dir: String,
+    /// `<flake>#<attr>` passed to `nix build`.
+    build_target: String,
+    /// Activate after building (switch), or stop after the build.
+    do_switch: bool,
+    /// Update flake inputs before building.
+    update: bool,
+}
+
+/// Resolve a parsed subcommand into a [`Job`]: the build-tree root label plus the
+/// work to run. Async because switch attr resolution needs the short hostname.
+async fn build_job(command: NwmCommand) -> Result<Job> {
+    match command {
+        // `external_subcommand` collects the nix subcommand and its args verbatim.
+        NwmCommand::Nix(args) => Ok(Job {
+            command_label: format!("nix {}", args.join(" ")),
+            kind: JobKind::Nix { args },
+        }),
+        NwmCommand::Home(spec) => build_switch_job(SwitchKind::Home, spec).await,
+        NwmCommand::Os(spec) => build_switch_job(SwitchKind::Os, spec).await,
+    }
+}
+
+async fn build_switch_job(kind: SwitchKind, spec: SwitchSpec) -> Result<Job> {
+    let (args, do_switch) = match spec.action {
+        SwitchAction::Switch(args) => (args, true),
+        SwitchAction::Build(args) => (args, false),
+    };
+    // `dir#name` overrides the configuration name; a bare value is the flake dir.
+    let (flake_dir, name_override) = args.flake.map_or_else(
+        || (".".to_owned(), None),
+        |value| match value.split_once('#') {
+            Some((dir, name)) => (dir.to_owned(), Some(name.to_owned())),
+            None => (value, None),
+        },
+    );
+    let config_name = match name_override {
+        Some(name) => name,
+        None => match kind {
+            SwitchKind::Home => format!("{}@{}", current_user()?, short_hostname().await?),
+            // Mirror `darwin-rebuild`, which defaults the flake attribute to
+            // `scutil --get LocalHostName` (not `hostname -s`, which can differ).
+            SwitchKind::Os => local_host_name().await?,
+        },
+    };
+    // The attr part of the flakeref carries quotes around the config name (it
+    // contains `@` / `.`); Nix's flakeref parser accepts them in a single argv.
+    let attr = match kind {
+        SwitchKind::Home => format!(r#"homeConfigurations."{config_name}".activationPackage"#),
+        SwitchKind::Os => format!(r#"darwinConfigurations."{config_name}".system"#),
+    };
+    let build_target = format!("{flake_dir}#{attr}");
+    Ok(Job {
+        command_label: format!("nix build {build_target}"),
+        kind: JobKind::Switch(SwitchJob {
+            kind,
+            flake_dir,
+            build_target,
+            do_switch,
+            update: args.update,
+        }),
+    })
+}
+
+/// Run a planned job to completion and return its exit code.
+async fn run_job(
+    job: Job,
+    terminal_output: TerminalOutput,
+    nix_verbose: bool,
+    monitor: Arc<RwLock<MonitorState>>,
+    deltas: broadcast::Sender<Bytes>,
+) -> Result<Option<i32>> {
+    match job.kind {
+        JobKind::Nix { args } => {
+            let outcome =
+                run_nix_build(args, terminal_output, nix_verbose, false, &monitor, &deltas).await?;
+            settle(&monitor, &deltas, outcome.exit_code).await?;
+            Ok(outcome.exit_code)
+        }
+        JobKind::Switch(switch) => {
+            run_switch(switch, terminal_output, nix_verbose, &monitor, &deltas).await
+        }
+    }
+}
+
+/// Settle the monitor (`finish`) and flush the resulting deltas.
+async fn settle(
+    monitor: &Arc<RwLock<MonitorState>>,
+    deltas: &broadcast::Sender<Bytes>,
+    exit_code: Option<i32>,
+) -> Result<()> {
+    monitor.write().await.finish(exit_code);
+    broadcast_deltas(monitor, deltas).await
+}
+
+/// Orchestrate a switch: optional flake update, the monitored build, then (for
+/// `switch`) activation and an `nvd` generation diff. Each phase that bails sets
+/// a human activation status so the browser shows why a later phase did not run.
+async fn run_switch(
+    switch: SwitchJob,
+    terminal_output: TerminalOutput,
+    nix_verbose: bool,
+    monitor: &Arc<RwLock<MonitorState>>,
+    deltas: &broadcast::Sender<Bytes>,
+) -> Result<Option<i32>> {
+    // Phase 1: update flake inputs. A switch on a half-updated lock is wrong, so
+    // a failure aborts before building.
+    if switch.update {
+        eprintln!(
+            "nix-web-monitor: updating flake inputs in {}",
+            switch.flake_dir
+        );
+        // Run the update through the monitor so its fetches appear in the tree
+        // and any failure is parsed into the error panel, not lost to the
+        // terminal.
+        let update_args = vec![
+            "flake".to_owned(),
+            "update".to_owned(),
+            "--flake".to_owned(),
+            switch.flake_dir.clone(),
+        ];
+        let update_code = run_nix_build(update_args, terminal_output, nix_verbose, false, monitor, deltas)
+            .await?
+            .exit_code;
+        if update_code != Some(0) {
+            monitor
+                .write()
+                .await
+                .set_activation_status("skipped (flake update failed)".to_owned());
+            broadcast_deltas(monitor, deltas).await?;
+            settle(monitor, deltas, update_code).await?;
+            return Ok(update_code.or(Some(1)));
+        }
+    }
+
+    // Phase 2: build the toplevel, capturing its out path.
+    let build_args = vec![
+        "build".to_owned(),
+        switch.build_target.clone(),
+        "--no-link".to_owned(),
+        "--print-out-paths".to_owned(),
+    ];
+    let NixBuildOutcome {
+        exit_code: build_code,
+        stdout,
+    } = run_nix_build(build_args, terminal_output, nix_verbose, true, monitor, deltas).await?;
+    if build_code != Some(0) {
+        monitor
+            .write()
+            .await
+            .set_activation_status("skipped (build failed)".to_owned());
+        broadcast_deltas(monitor, deltas).await?;
+        settle(monitor, deltas, build_code).await?;
+        return Ok(build_code.or(Some(1)));
+    }
+    // The build succeeded, so it printed the activation/system store path. Both
+    // targets are single-output single-installable, so there is exactly one
+    // path; take the last non-empty line. A clean build that somehow printed no
+    // path is a distinct failure from a failed build, and must still exit
+    // non-zero rather than masquerade as success.
+    let Some(out_path) = stdout
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        monitor
+            .write()
+            .await
+            .set_activation_status("failed (build produced no output path)".to_owned());
+        broadcast_deltas(monitor, deltas).await?;
+        settle(monitor, deltas, Some(1)).await?;
+        return Ok(Some(1));
+    };
+
+    // The build succeeded: promote its rows to `succeeded` now, so they read as
+    // done while activation runs rather than lingering as `stopped` (and sorted
+    // with unfinished work) if a later activation phase fails.
+    monitor.write().await.mark_builds_succeeded();
+    broadcast_deltas(monitor, deltas).await?;
+
+    if !switch.do_switch {
+        // Build-only: the operator wants the store path, which the build phase
+        // captured instead of forwarding (and `--no-link` left no `result`).
+        println!("{out_path}");
+        settle(monitor, deltas, Some(0)).await?;
+        return Ok(Some(0));
+    }
+
+    // Phase 3: activate. Capture the current generation first, before the
+    // activate script flips the profile symlink, so the diff compares old to new.
+    let old_generation = read_old_generation(switch.kind).await;
+    let activation_code =
+        run_activation(&switch, &out_path, terminal_output, monitor, deltas).await?;
+    if activation_code != Some(0) {
+        settle(monitor, deltas, activation_code).await?;
+        return Ok(activation_code.or(Some(1)));
+    }
+
+    // Phase 4: best-effort generation diff.
+    if let Some(old) = old_generation {
+        run_diff(&old, &out_path, monitor, deltas).await;
+    }
+    settle(monitor, deltas, Some(0)).await?;
+    Ok(Some(0))
+}
+
+/// Run the activation script for a built configuration, streaming its output into
+/// the activation subtree. home runs `<out>/activate` directly; os activation
+/// needs root, so it pre-authenticates `sudo` interactively (a clean password
+/// prompt on the terminal) and then runs the canonical
+/// `sudo <out>/sw/bin/darwin-rebuild activate` with its output piped.
+async fn run_activation(
+    switch: &SwitchJob,
+    out_path: &str,
+    terminal_output: TerminalOutput,
+    monitor: &Arc<RwLock<MonitorState>>,
+    deltas: &broadcast::Sender<Bytes>,
+) -> Result<Option<i32>> {
+    let mut command;
+    let display;
+    let initial_step;
+    match switch.kind {
+        SwitchKind::Home => {
+            let activate = format!("{out_path}/activate");
+            command = Command::new(&activate);
+            display = activate;
+            // home-manager's own `Activating <step>` lines open the steps.
+            initial_step = None;
+        }
+        SwitchKind::Os => {
+            eprintln!(
+                "nix-web-monitor: system activation needs sudo -- enter your password in this terminal"
+            );
+            let pre_auth = Command::new("sudo")
+                .arg("-v")
+                .status()
+                .await
+                .context("pre-authenticating sudo")?;
+            if pre_auth.code() != Some(0) {
+                monitor
+                    .write()
+                    .await
+                    .set_activation_status("failed (sudo authentication)".to_owned());
+                broadcast_deltas(monitor, deltas).await?;
+                return Ok(pre_auth.code().or(Some(1)));
+            }
+            // Record the new generation in the system profile before activating.
+            // `darwin-rebuild activate` (unlike `switch`) does NOT advance the
+            // profile, so without this a switch activates without registering the
+            // generation and rollbacks/diffs/reboots still see the old one. This
+            // mirrors `darwin-rebuild switch` (`nix-env -p <profile> --set`).
+            let set_profile = Command::new("sudo")
+                .args([
+                    "nix-env",
+                    "-p",
+                    "/nix/var/nix/profiles/system",
+                    "--set",
+                    out_path,
+                ])
+                .status()
+                .await
+                .context("recording system generation")?;
+            if set_profile.code() != Some(0) {
+                monitor
+                    .write()
+                    .await
+                    .set_activation_status("failed (recording system generation)".to_owned());
+                broadcast_deltas(monitor, deltas).await?;
+                return Ok(set_profile.code().or(Some(1)));
+            }
+            let activate = format!("{out_path}/sw/bin/darwin-rebuild");
+            command = Command::new("sudo");
+            command.arg(&activate).arg("activate");
+            display = format!("sudo {activate} activate");
+            // nix-darwin's activate is unstructured: one step holds every line.
+            initial_step = Some("activate".to_owned());
+        }
+    }
+
+    monitor
+        .write()
+        .await
+        .begin_activation(display, initial_step);
+    broadcast_deltas(monitor, deltas).await?;
+
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().context("spawning activation")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("activation stdout was not captured")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("activation stderr was not captured")?;
+
+    let stdout_task = tokio::spawn(stream_activation(
+        stdout,
+        terminal_output,
+        Arc::clone(monitor),
+        deltas.clone(),
+    ));
+    let stderr_task = tokio::spawn(stream_activation(
+        stderr,
+        terminal_output,
+        Arc::clone(monitor),
+        deltas.clone(),
+    ));
+
+    let status = child.wait().await.context("waiting for activation")?;
+    stdout_task.await.context("joining activation stdout")??;
+    stderr_task.await.context("joining activation stderr")??;
+
+    let exit_code = status.code();
+    monitor.write().await.finish_activation(exit_code == Some(0));
+    broadcast_deltas(monitor, deltas).await?;
+    Ok(exit_code)
+}
+
+/// Read one activation stream line-by-line, folding each line into the activation
+/// subtree and (unless terminal output is `Quiet`) echoing it to the terminal so
+/// progress shows in both places. Lossy UTF-8 decode keeps the stream flowing
+/// past non-UTF-8 bytes, matching [`parse_stderr`].
+async fn stream_activation<R>(
+    stream: R,
+    terminal_output: TerminalOutput,
+    monitor: Arc<RwLock<MonitorState>>,
+    deltas: broadcast::Sender<Bytes>,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut reader = BufReader::new(stream);
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        buf.clear();
+        let read = reader
+            .read_until(b'\n', &mut buf)
+            .await
+            .context("reading activation output")?;
+        if read == 0 {
+            break;
+        }
+        if buf.last() == Some(&b'\n') {
+            buf.pop();
+        }
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+        let line = String::from_utf8_lossy(&buf);
+        monitor.write().await.push_activation_line(&line);
+        broadcast_deltas(&monitor, &deltas).await?;
+        // `Quiet` prints only wrapper status lines, so suppress the per-line
+        // activation echo; the browser still receives every line.
+        if !matches!(terminal_output, TerminalOutput::Quiet) {
+            eprintln!("{line}");
+        }
+    }
     Ok(())
+}
+
+/// Run `nvd diff <old> <new>` and publish its output to the diff panel.
+/// Best-effort: a missing `nvd` or a diff failure leaves the panel empty with a
+/// terminal note rather than failing the switch, which has already succeeded.
+async fn run_diff(
+    old_generation: &str,
+    new_generation: &str,
+    monitor: &Arc<RwLock<MonitorState>>,
+    deltas: &broadcast::Sender<Bytes>,
+) {
+    let output = Command::new("nvd")
+        .arg("diff")
+        .arg(old_generation)
+        .arg(new_generation)
+        .output()
+        .await;
+    match output {
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stdout).into_owned();
+            if !text.trim().is_empty() {
+                monitor.write().await.set_diff(text);
+                if let Err(error) = broadcast_deltas(monitor, deltas).await {
+                    eprintln!("nix-web-monitor: broadcasting diff failed: {error:#}");
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("nix-web-monitor: nvd not found; skipping generation diff");
+        }
+        Err(error) => {
+            eprintln!("nix-web-monitor: running nvd diff failed: {error:#}");
+        }
+    }
+}
+
+/// Resolve the current generation profile path so the post-switch diff has a
+/// baseline. Returns `None` (diff skipped) if no candidate resolves.
+async fn read_old_generation(kind: SwitchKind) -> Option<String> {
+    let candidates = match kind {
+        SwitchKind::Home => {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let user = std::env::var("USER").unwrap_or_default();
+            vec![
+                format!("{home}/.local/state/nix/profiles/home-manager"),
+                format!("/nix/var/nix/profiles/per-user/{user}/home-manager"),
+            ]
+        }
+        SwitchKind::Os => vec!["/nix/var/nix/profiles/system".to_owned()],
+    };
+    for candidate in candidates {
+        if let Ok(resolved) = tokio::fs::canonicalize(&candidate).await {
+            return Some(resolved.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+fn current_user() -> Result<String> {
+    std::env::var("USER").context("USER environment variable is not set")
+}
+
+/// The short (no-domain) hostname, used to default the configuration name.
+async fn short_hostname() -> Result<String> {
+    let output = Command::new("hostname")
+        .arg("-s")
+        .output()
+        .await
+        .context("running hostname -s")?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if name.is_empty() {
+        bail!("hostname -s returned an empty name");
+    }
+    Ok(name)
+}
+
+/// The macOS `LocalHostName`, which `darwin-rebuild` uses to default the flake
+/// attribute. Can differ from `hostname -s`, so the os switch must use the same
+/// source or it would build a different `darwinConfigurations.<name>`.
+async fn local_host_name() -> Result<String> {
+    let output = Command::new("scutil")
+        .args(["--get", "LocalHostName"])
+        .output()
+        .await
+        .context("running scutil --get LocalHostName")?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if name.is_empty() {
+        bail!("scutil --get LocalHostName returned an empty name");
+    }
+    Ok(name)
 }
 
 async fn parse_stderr<R>(
@@ -772,5 +1323,26 @@ mod tests {
 
         let decoded: Delta = rmp_serde::from_slice(&encoded).expect("payload decodes");
         assert_eq!(decoded, delta);
+    }
+
+    /// The activation and diff deltas ride the same wire as every other delta, so
+    /// a nested `Activation` subtree must round-trip through msgpack intact: this
+    /// is the contract the browser decodes per WebSocket frame during a switch.
+    #[test]
+    fn activation_and_diff_deltas_round_trip_through_msgpack() {
+        let mut activation = nix_web_monitor_parser::Activation::default();
+        activation.begin("/nix/store/x/activate".to_owned(), None, 1);
+        activation.ingest_line("Activating linkGeneration", 2);
+        let activation_delta = Delta::ActivationSet { activation };
+        let decoded: Delta = rmp_serde::from_slice(&encode(&activation_delta).expect("encodes"))
+            .expect("payload decodes");
+        assert_eq!(decoded, activation_delta);
+
+        let diff_delta = Delta::DiffSet {
+            diff: "<<< old\n>>> new".to_owned(),
+        };
+        let decoded: Delta =
+            rmp_serde::from_slice(&encode(&diff_delta).expect("encodes")).expect("payload decodes");
+        assert_eq!(decoded, diff_delta);
     }
 }

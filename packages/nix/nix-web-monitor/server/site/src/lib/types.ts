@@ -65,6 +65,27 @@ export const daemonInfoSchema = v.object({
   currentPath: v.nullable(v.string())
 });
 
+/// One activation step (a `home`/`os` switch's `activate` run): a named unit of
+/// work plus the output lines it printed. Mirrors the Rust `ActivationStep`.
+export const activationStepSchema = v.object({
+  name: v.string(),
+  status: v.picklist(['running', 'done', 'failed']),
+  lines: v.array(v.string()),
+  startedAtMs: v.number(),
+  stoppedAtMs: v.nullable(v.number())
+});
+
+/// Live activation view, populated only during a switch. `active` is false on a
+/// plain `nix build` (the panel hides); `status` mirrors `daemonInfo.status` as a
+/// human line ("running", "skipped (build failed)", "done", "failed"). Mirrors
+/// the Rust `Activation`.
+export const activationSchema = v.object({
+  active: v.boolean(),
+  command: v.string(),
+  steps: v.array(activationStepSchema),
+  status: v.string()
+});
+
 export const activityNodeSchema = v.object({
   id: v.number(),
   parent: v.nullable(v.number()),
@@ -122,6 +143,10 @@ export const snapshotSchema = v.object({
   progress: v.nullable(activityProgressSchema),
   optimise: optimiseStatsSchema,
   daemon: daemonInfoSchema,
+  /// Live activation view during a `home`/`os` switch; `active: false` otherwise.
+  activation: activationSchema,
+  /// Generation diff text (`nvd diff`), set once at the end of a switch.
+  diff: v.nullable(v.string()),
   expected: v.record(v.string(), v.number()),
   dependencies: v.array(derivationEdgeSchema),
   /// Built derivations that are root *causes*: their whole input closure is
@@ -149,6 +174,8 @@ export const deltaSchema = v.variant('type', [
   v.object({ type: v.literal('progressSet'), progress: activityProgressSchema }),
   v.object({ type: v.literal('optimiseSet'), optimise: optimiseStatsSchema }),
   v.object({ type: v.literal('daemonSet'), daemon: daemonInfoSchema }),
+  v.object({ type: v.literal('activationSet'), activation: activationSchema }),
+  v.object({ type: v.literal('diffSet'), diff: v.string() }),
   v.object({ type: v.literal('expectedSet'), name: v.string(), value: v.number() }),
   v.object({ type: v.literal('errorAppend'), message: v.string() }),
   v.object({ type: v.literal('dependenciesSet'), edges: v.array(derivationEdgeSchema) }),
@@ -164,6 +191,8 @@ export type ActivityProgress = v.InferOutput<typeof activityProgressSchema>;
 export type OptimiseStats = v.InferOutput<typeof optimiseStatsSchema>;
 export type DaemonOps = v.InferOutput<typeof daemonOpsSchema>;
 export type DaemonInfo = v.InferOutput<typeof daemonInfoSchema>;
+export type ActivationStep = v.InferOutput<typeof activationStepSchema>;
+export type Activation = v.InferOutput<typeof activationSchema>;
 export type ActivityNode = v.InferOutput<typeof activityNodeSchema>;
 export type BuildNode = v.InferOutput<typeof buildNodeSchema>;
 export type LogEntry = v.InferOutput<typeof logEntrySchema>;
@@ -201,6 +230,8 @@ export const EMPTY_SNAPSHOT: MonitorSnapshot = Object.freeze({
     opsPerSec: 0,
     currentPath: null
   },
+  activation: { active: false, command: '', steps: [], status: '' },
+  diff: null,
   expected: {},
   dependencies: [],
   rootCauses: [],

@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
+  import ActivationPanel from '$components/ActivationPanel.svelte';
   import ActivityGraph from '$components/ActivityGraph.svelte';
   import BuildTable from '$components/BuildTable.svelte';
   import DaemonPanel from '$components/DaemonPanel.svelte';
+  import DiffPanel from '$components/DiffPanel.svelte';
   import ErrorPanel from '$components/ErrorPanel.svelte';
   import LogPanel from '$components/LogPanel.svelte';
   import SummaryBar from '$components/SummaryBar.svelte';
@@ -219,6 +221,10 @@
         onkeydown={sidebarKeydown}
       />
       <aside class="side-pane">
+        {#if snapshot.activation.active}
+          <ActivationPanel activation={snapshot.activation} />
+        {/if}
+        <DiffPanel diff={snapshot.diff} />
         <DaemonPanel daemon={snapshot.daemon} />
         <ActivityGraph activities={snapshot.activities} builds={snapshot.builds} />
       </aside>
