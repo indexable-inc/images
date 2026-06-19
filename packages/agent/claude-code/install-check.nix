@@ -93,20 +93,6 @@
     printf 'session-digest hook check failed (cap): expected 6000 chars, got %s\n' "$cap" >&2
     exit 1
   fi
-  ${lib.optionalString (repoPackages ? fff-suggest) ''
-
-    # The fff `@`-completer wiring: the flagSettings layer must carry a
-    # fileSuggestion command pointing at the fff-suggest client. Guards against a
-    # silent drop if the gate or the key shape regresses on a CLI bump.
-    fs_cmd="$(${lib.getExe jq} -r '.fileSuggestion.command // ""' ${settingsDefaultsFile})"
-    case "$fs_cmd" in
-    *"/bin/fff-suggest query") : ;;
-    *)
-      printf 'fileSuggestion check failed: expected a */bin/fff-suggest query command, got:\n%s\n' "$fs_cmd" >&2
-      exit 1
-      ;;
-    esac
-  ''}
   ${lib.optionalString (repoPackages ? search) ''
 
     # Fail-open net for the prompt-priors hook: every skip path must exit 0

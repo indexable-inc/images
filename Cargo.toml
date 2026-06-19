@@ -5,7 +5,6 @@ members = [
   "packages/build-version",
   "packages/agent/claude-hooks",
   "packages/agent/claude-stories",
-  "packages/agent/fff-suggest",
   "packages/code/ast-merge/ast",
   "packages/code/ast-merge/cli",
   "packages/code/ast-merge/diff",

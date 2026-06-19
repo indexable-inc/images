@@ -233,12 +233,6 @@ let
   #     entirely onto the baked `forceMerge` system-prompt rule (the operative
   #     gate fleet-wide anyway, since the default skip-flag already makes `ask`
   #     inert); the kernel `sh()` path carries no equivalent prompt.
-  #   fileSuggestion (only when the `fff-suggest` sibling is in scope): routes
-  #     `@`-mention file completion through fff's frecency-ranked fuzzy finder
-  #     instead of the CLI's built-in index, via the statusLine-shaped custom
-  #     completer hook (per-keystroke command, query on stdin, stdout lines used
-  #     in order). Fails open. See its `lib.optionalAttrs` block below for the
-  #     full contract and the resident-daemon design.
 
   # The three hooks (session-digest, worktree-guard, prompt-priors) are
   # subcommands of one compiled binary, wrapped with their tool paths and the
@@ -327,23 +321,6 @@ let
             ];
           }
         ];
-      };
-    }
-    // lib.optionalAttrs (repoPackages ? fff-suggest) {
-      # `@`-mention file completion served by fff (frecency-ranked fuzzy finder)
-      # instead of Claude's built-in index. `fileSuggestion` is the CLI's
-      # statusLine-shaped custom-completer hook: Claude runs this command per
-      # keystroke (5s budget, cwd = project dir), passes `{ query, … }` on stdin,
-      # and uses each non-empty stdout line as a suggestion in the returned order
-      # (no re-ranking), so fff owns the ranking. The command is the tiny native
-      # client half of `fff-suggest`, which round-trips the query to a resident
-      # per-project daemon over a unix socket (no Python on the hot path) and
-      # fails open: any error exits 0 with no output. Gated on the `fff-suggest`
-      # sibling, which (like the `search`/`mcp` siblings) only the flake package
-      # set provides, so the overlay build of `pkgs.claude-code` simply omits it.
-      fileSuggestion = {
-        type = "command";
-        command = "${repoPackages.fff-suggest}/bin/fff-suggest query";
       };
     }
     // lib.optionalAttrs dangerouslySkipPermissions {
