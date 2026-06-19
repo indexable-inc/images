@@ -10,9 +10,9 @@ The target is either a self-contained HTML file (open it locally) or a page in a
 SvelteKit site such as the ix `playbook` (`src/routes/<slug>/+page.svx`). The
 medium changes; the rules below do not.
 
-This skill is about presentation. For a deep top-down, heavily-cited code
-explainer in the ix playbook, see that repo's `playbook-page` skill; the two
-compose (use this one's visual rules inside that one's zoom structure).
+This skill is about presentation. If the target repo has its own page-writing or
+playbook skill (for example a top-down, heavily-cited code explainer), use that
+for page architecture and apply these visual rules inside it; the two compose.
 
 ## The rules (non-negotiable)
 
@@ -53,11 +53,13 @@ compose (use this one's visual rules inside that one's zoom structure).
    refers to, hover a control to preview its effect (a close that shrinks the
    window). Trigger on hover, keep it still otherwise.
 
-9. **Proper, colored icons.** Use real brand marks, not monochrome glyphs where a
-   colored one exists. For language logos use the multicolor `logos` iconify set
-   (`~icons/logos/python` is the real two-tone snake, not the flat simple-icons
-   glyph). For a product with no logos entry, use its actual favicon or GitHub
-   org avatar. Put a topic icon inline with the title, not in a separate brand row.
+9. **Proper, colored icons.** Use the host app's existing icon system and real
+   brand marks, not monochrome glyphs where a colored one exists. In a project
+   that already uses Iconify, prefer the multicolor `logos` set (for example
+   `~icons/logos/python`, the real two-tone snake) over flat `simple-icons`
+   glyphs; in plain HTML, inline the SVG or use the favicon. For a product with
+   no logos entry, use its actual favicon or GitHub org avatar. Put a topic icon
+   inline with the title, not in a separate brand row.
 
 10. **House style.** No em dashes anywhere (use a colon, comma, or two sentences).
     No decorative emoji unless asked. Lead with the concrete fact.
@@ -96,4 +98,6 @@ Edges are relationships; do not stuff a sentence into a node label.
 - Walk the checklist: every section has a graphic; every graphic has a one-line
   setup; no big pasted source; any data is exact and aligned; no em dashes; icons
   are colored; nothing animates on its own.
-- Work in a worktree, keep the main checkout clean, and open a PR when done.
+- For a one-off local file, just open it; nothing more is needed. If the work
+  should land in a repo, use that repo's `workflow` skill for branch, worktree,
+  and PR handling rather than baking git flow into this skill.
