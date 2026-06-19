@@ -213,7 +213,13 @@ POLARS = (
     "works. Nested data renders recursively: a dict of dicts (or a frame with struct/list columns) "
     "shows each value as a nushell-style nested sub-table, so prefer one frame with struct/list "
     "columns over a `{label: blob}` dict that collapses each value to a clipped repr — or add each "
-    "item as its own `cells.add`."
+    "item as its own `cells.add`. To QUERY JSON or nested data, decode a JSON-string column with "
+    "`str.json_decode()` into a Struct, then reach into it: `pl.col('s').struct.field('x')` for one "
+    "field, `.struct.unnest()` to expand every field into its own column. There is no single "
+    "'does any field match' op — reduce across fields with `pl.any_horizontal(...)` / "
+    "`pl.all_horizontal(...)` over the unnested struct (e.g. "
+    "`pl.any_horizontal(pl.col('s').struct.unnest().is_null())` is 'any field is null'); add "
+    "`.fill_null(False)` inside the reducer when a missing field should count as no-match."
 )
 
 RESULT_SPLIT = (
