@@ -1031,3 +1031,313 @@
   (text-match attrs "^\\{\\s*\\}$"))
 (lint runcommand-missing-structured-attrs warning
   "runCommand with empty attrs {{}}; add {{ __structuredAttrs = true; }} for consistent derivation behavior")
+
+
+;; ---------------------------------------------------------------------------
+;; Nixcademy anti-pattern lints (ported from the Nixcademy "Nix Anti-Patterns"
+;; booklet, #TBD). Same shape as the rules above: one relation per lint named
+;; after its id, plus a (lint ...) declaration. Helper relations (no lint
+;; declaration) carry the joins/negation a single tree-sitter query cannot.
+;; ---------------------------------------------------------------------------
+
+;; no-at-pattern-shortcut: `{ foo, ... }@args` then reaching `args.bar` hides a
+;; required input behind the `...`. Match every attribute you use in the
+;; formals. Forwarding the whole captured set onward (no `.` access) is fine, so
+;; the rule fires only when the at-bound name is used as a select base.
+(rule (at-bound-fn n a)
+  (match nix "(function_expression (formals) (identifier) @a) @n"))
+(rule (at-bound-fn n a)
+  (match nix "(function_expression (identifier) @a (formals)) @n"))
+(rule (body-var-select s base)
+  (match nix "(select_expression expression: (variable_expression) @base) @s"))
+(rule (no-at-pattern-shortcut n)
+  (at-bound-fn n a)
+  (body-var-select s base)
+  (same-text a base)
+  (ancestor n s))
+(lint no-at-pattern-shortcut error
+  "`{{ foo, ... }}@args` then reaching `args.bar` hides a required input; match every attribute you use in the formals")
+
+;; nixpkgs-explicit-config: `import nixpkgs { }` inherits ambient config and
+;; overlays from the environment; pass `config = { }; overlays = [ ];` so the
+;; package set is self-contained.
+(rule (nixpkgs-explicit-config n)
+  (match nix "
+    (apply_expression
+      function: (apply_expression
+        function: (variable_expression) @imp
+        argument: (variable_expression) @np)
+      argument: (attrset_expression) @attrs) @n")
+  (text imp "import")
+  (text np "nixpkgs")
+  (no-descendant attrs "attrpath" "config"))
+(lint nixpkgs-explicit-config error
+  "`import nixpkgs {{ }}` inherits ambient config and overlays from the environment; pass `config = {{ }}; overlays = [ ];`")
+
+;; import-nixpkgs-once: an optional `pkgs ? import <nixpkgs> { }` default
+;; re-imports Nixpkgs as an accidental singleton with a possibly different
+;; release/config/overlays. Require `pkgs` and thread the one instance through.
+(rule (import-nixpkgs-once n)
+  (match nix "(formal) @n")
+  (text-match n "\\?\\s*import\\b.*nixpkgs"))
+(lint import-nixpkgs-once error
+  "optional `pkgs ? import <nixpkgs> {{ }}` default re-imports Nixpkgs as an accidental singleton; require `pkgs` and thread it through")
+
+;; set-docheck: `checkPhase` is off by default; set `doCheck = true;` so the
+;; build runs the package's tests. Warning severity: advice, not a behavior bug.
+(rule (set-docheck n)
+  (match nix "
+    (apply_expression
+      function: (select_expression) @f
+      argument: (attrset_expression) @attrs) @n")
+  (text-match f "(^|\\.)mkDerivation$")
+  (no-descendant attrs "attrpath" "doCheck"))
+(lint set-docheck warning
+  "`checkPhase` is off by default; set `doCheck = true;` so the build runs the package's tests")
+
+;; declare-env-explicitly: a list attr coerces to a single space-joined env var
+;; (`[ "-a" "-b c d" ]` -> `"-a -b c d"`); use the `env` slot with
+;; `lib.escapeShellArgs`. Heuristic: an UPPER_SNAKE attr name bound to a list.
+(rule (declare-env-explicitly n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (list_expression)) @n")
+  (text-match p "^[A-Z][A-Z0-9_]*$"))
+(lint declare-env-explicitly error
+  "a list attr coerces to a single space-joined env var; use the `env` slot with `lib.escapeShellArgs`")
+
+;; extend-makeflagsarray: assigning `makeFlagsArray` directly re-splits
+;; space-containing values; append to it in a `preBuild` shell snippet with
+;; proper bash quoting.
+(rule (extend-makeflagsarray n)
+  (match nix "(binding attrpath: (attrpath) @p) @n")
+  (text p "makeFlagsArray"))
+(lint extend-makeflagsarray error
+  "assigning `makeFlagsArray` directly mangles space-containing values; append to it in a `preBuild` shell snippet")
+
+;; no-pkgs-in-callpackage: taking `pkgs` in a `callPackage` argument set routes
+;; dependencies through `pkgs.foo`, which `override` cannot reach; list the
+;; exact dependencies as parameters so each is overridable.
+(rule (no-pkgs-in-callpackage n)
+  (match nix "(formal name: (identifier) @id) @n")
+  (text id "pkgs"))
+(lint no-pkgs-in-callpackage error
+  "taking `pkgs` in a `callPackage` argument set breaks `override`; list the exact dependencies you need")
+
+;; keep-python-composable: pulling deps out of `python3Packages` blocks
+;; per-dependency overrides; take the package names directly (each interpreter's
+;; `callPackage` adds them to scope).
+(rule (keep-python-composable n)
+  (match nix "(select_expression) @n")
+  (text-match n "^python3?[0-9]*Packages\\."))
+(lint keep-python-composable error
+  "pulling deps out of `python3Packages` blocks per-dependency overrides; take the package names directly")
+
+;; future-proof-overrideattrs: `overrideAttrs` with a plain attrset silently
+;; drops values the original later adds; use the `(old: { ... })` function form
+;; with `old.x or [ ]`.
+(rule (future-proof-overrideattrs n)
+  (match nix "
+    (apply_expression
+      function: (select_expression) @f
+      argument: (attrset_expression)) @n")
+  (text-match f "(^|\\.)overrideAttrs$"))
+(lint future-proof-overrideattrs error
+  "`overrideAttrs` with an attrset drops pre-existing values; use the `(old: {{ ... }})` function form with `old.x or [ ]`")
+
+;; keep-phase-hooks: a wholesale phase override without `runHook pre*`/`post*`
+;; strips downstream pre/post hooks. `phase-has-runhook` is the absence check
+;; negated by the lint.
+(rule (phase-has-runhook n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text-match v "runHook"))
+(rule (phase-binding-str n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text-match p "^(buildPhase|installPhase|checkPhase|configurePhase|unpackPhase|patchPhase|distPhase|installCheckPhase)$"))
+(rule (keep-phase-hooks n)
+  (phase-binding-str n)
+  (not (phase-has-runhook n)))
+(lint keep-phase-hooks error
+  "a phase override without `runHook pre*`/`runHook post*` strips downstream hooks; bracket the body with the hook calls")
+
+;; prefer-substituteinplace: `sed -i` / `awk` in a phase fails silently when the
+;; pattern stops matching; use `substituteInPlace ... --replace-fail`.
+(rule (prefer-substituteinplace n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: [(string_expression) (indented_string_expression)] @v) @n")
+  (text-match p "(^|\\.)(postPatch|prePatch|patchPhase|preBuild|postBuild|preInstall|postInstall|installPhase|buildPhase|preConfigure|postConfigure|configurePhase|preFixup|postFixup|fixupPhase)$")
+  (text-match v "(\\bsed\\b.*-i|\\bawk\\b)"))
+(lint prefer-substituteinplace error
+  "`sed -i` / `awk` in a phase fails silently when the match disappears; use `substituteInPlace ... --replace-fail`")
+
+;; overlay-prev-fn: an overlay's `prev:` (or `final: prev:`) function. Shared by
+;; the two overlay lints below to scope them to overlay context.
+(rule (overlay-prev-fn f)
+  (match nix "(function_expression (identifier) @id) @f")
+  (text id "prev"))
+
+;; overlay-preserve-nested: an overlay `a = { b = foo; };` replaces all of
+;; `prev.a`; merge with `prev.a or { } // { ... }`.
+(rule (overlay-preserve-nested n)
+  (overlay-prev-fn f)
+  (match nix "(binding expression: (attrset_expression)) @n")
+  (ancestor f n))
+(lint overlay-preserve-nested error
+  "overlay `a = {{ b; }}` drops the rest of `prev.a`; merge with `prev.a or {{ }} // {{ ... }}`")
+
+;; keep-overrides-composable: building a custom package in an overlay `let`
+;; hides it from later overlays; expose it as a real attr and inject via
+;; `final.<name>`.
+(rule (keep-overrides-composable n)
+  (overlay-prev-fn f)
+  (match nix "(let_expression) @n")
+  (text-match n "callPackage")
+  (ancestor f n))
+(lint keep-overrides-composable error
+  "hiding a custom package in an overlay `let` blocks later overlays; expose it as a real attr and inject via `final.<name>`")
+
+;; parametrize-with-options: wrapping a module in a top-level function arg
+;; (`pkg: { config, ... }: ...`) locks the choice in; declare an `mkOption` and
+;; read it from `config`.
+(rule (parametrize-with-options n)
+  (match nix "
+    (function_expression
+      (identifier) @outer
+      body: (function_expression (formals) @f)) @n")
+  (text-match f "(^|[^A-Za-z0-9_])config([^A-Za-z0-9_]|$)"))
+(lint parametrize-with-options error
+  "a top-level function arg on a module locks the choice in; declare an `mkOption` and read it from `config`")
+
+;; avoid-specialargs: `specialArgs` injection scales badly and can clash; prefer
+;; a Nixpkgs overlay and read `pkgs.<name>`.
+(rule (avoid-specialargs n)
+  (match nix "(binding attrpath: (attrpath) @p) @n")
+  (text p "specialArgs"))
+(lint avoid-specialargs error
+  "`specialArgs` injection scales badly and can clash; prefer a Nixpkgs overlay and read `pkgs.<name>`")
+
+;; separate-host-guest-pkgs: a test node defined as a bare attrset that
+;; references the orchestrating host's `pkgs` pulls guest packages from the
+;; wrong set; take `pkgs` from the node module function instead.
+(rule (nixostest-call n)
+  (match nix "(apply_expression function: (select_expression) @f) @n")
+  (text-match f "runNixOSTest$"))
+(rule (node-attrset-binding b)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (attrset_expression) @v) @b")
+  (text-match p "^nodes\\.")
+  (text-match v "\\bpkgs\\b"))
+(rule (separate-host-guest-pkgs n)
+  (nixostest-call n)
+  (node-attrset-binding b)
+  (ancestor n b))
+(lint separate-host-guest-pkgs error
+  "referencing the host's `pkgs` inside a test node breaks when host and guest platforms differ; take `pkgs` from the node module function")
+
+;; wait-for-unit-and-port: curling a service after only `wait_for_unit` races on
+;; fast hosts; wait for `network-online.target`, the unit, and the open port.
+;; `has-open-port` is the absence check negated by the lint.
+(rule (test-script-curl n)
+  (match nix "(indented_string_expression) @n")
+  (text-match n "wait_for_unit")
+  (text-match n "curl"))
+(rule (has-open-port n)
+  (match nix "(indented_string_expression) @n")
+  (text-match n "wait_for_open_port"))
+(rule (wait-for-unit-and-port n)
+  (test-script-curl n)
+  (not (has-open-port n)))
+(lint wait-for-unit-and-port error
+  "curling a service after only `wait_for_unit` races on fast hosts; wait for `network-online.target`, the unit, and the open port")
+
+;; minimize-with-scope: `with x;` over any target other than a bare
+;; `lib`/`pkgs`/`builtins` (those have their own dedicated lints) lifts every
+;; key into scope and obscures name origins. `with-allowed-env` is the
+;; already-covered set, negated so this rule only adds the delta.
+(rule (with-allowed-env e)
+  (match nix "(with_expression environment: (variable_expression) @e) @w")
+  (text-match e "^(lib|pkgs|builtins)$"))
+(rule (minimize-with-scope n)
+  (match nix "(with_expression environment: (_) @e) @n")
+  (not (with-allowed-env e)))
+(lint minimize-with-scope error
+  "`with x;` obscures name origins; bind with `let`/`inherit` or `builtins.attrValues {{ inherit (pkgs) ...; }}` (a tightly-scoped `with pkgs;` around one list is the one exception)")
+
+;; filter-src: `src = ./.;` copies the whole working tree into the store; filter
+;; with `lib.fileset.toSource` (or at least `lib.cleanSource`). Warning
+;; severity: a large pre-existing tree can adopt this incrementally.
+(rule (filter-src n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (path_expression) @v) @n")
+  (text p "src")
+  (text-match v "^\\.(/\\.?)?$"))
+(lint filter-src warning
+  "`src = ./.;` copies the whole tree into the store; filter with `lib.fileset.toSource` (or at least `lib.cleanSource`)")
+
+;; pname-with-version: a literal `name = "package"` set alongside a `version`
+;; restates what stdenv derives; use `pname` and let stdenv build
+;; `<pname>-<version>`. Joined on the shared `binding_set` so it fires only when
+;; both siblings are present, and the literal (non-interpolated) name keeps it
+;; distinct from no-derivation-name-version-interp.
+(rule (literal-name-binding n bs)
+  (match nix "
+    (binding_set
+      (binding
+        attrpath: (attrpath) @p
+        expression: (string_expression) @v) @n) @bs")
+  (text p "name")
+  (text-match v "^\"[^$]*\"$"))
+(rule (version-sibling bs)
+  (match nix "(binding_set (binding attrpath: (attrpath) @p)) @bs")
+  (text p "version"))
+(rule (pname-with-version n)
+  (literal-name-binding n bs)
+  (version-sibling bs))
+(lint pname-with-version error
+  "a literal `name` set alongside `version` restates what stdenv derives; use `pname` and let stdenv build `<pname>-<version>`")
+
+;; cross-compile-ready-deps: build-time tools (`pkg-config`, `cmake`, ...) in
+;; `buildInputs` instead of `nativeBuildInputs` break cross-compilation; split
+;; them and set `strictDeps = true`.
+(rule (cross-compile-ready-deps n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (list_expression) @v) @n")
+  (text p "buildInputs")
+  (text-match v "(^|[^A-Za-z0-9_-])(pkg-config|pkgconf|pkgconfig|cmake|meson|ninja|autoconf|automake|autoreconfHook|makeWrapper|installShellFiles)([^A-Za-z0-9_-]|$)"))
+(lint cross-compile-ready-deps error
+  "build-time tools (`pkg-config`, `cmake`, ...) belong in `nativeBuildInputs`, not `buildInputs`; split them and set `strictDeps = true`")
+
+;; prefer-phase-flags: a whole-phase override carrying custom targets/flags
+;; disables everything else the phase does and cannot be composed; route them to
+;; `makeFlags` / `buildFlags` / `configureFlags` / `installTargets`.
+(rule (prefer-phase-flags n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: [(string_expression) (indented_string_expression)] @v) @n")
+  (text-match p "^(buildPhase|installPhase)$")
+  (text-match v "\\bmake\\b.*[A-Za-z_][A-Za-z0-9_]*="))
+(rule (prefer-phase-flags n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: [(string_expression) (indented_string_expression)] @v) @n")
+  (text-match p "^configurePhase$")
+  (text-match v "\\./configure\\b"))
+(lint prefer-phase-flags error
+  "a whole-phase override carrying custom targets/flags should be `makeFlags` / `buildFlags` / `configureFlags` / `installTargets`")

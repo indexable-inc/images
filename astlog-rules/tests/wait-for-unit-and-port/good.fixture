@@ -1,0 +1,6 @@
+testScript = ''
+  server.wait_for_unit("network-online.target")
+  server.wait_for_unit("httpd.service")
+  server.wait_for_open_port(80)
+  client.succeed("curl http://server")
+'';

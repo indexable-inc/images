@@ -1,0 +1,1 @@
+nixpkgs.lib.nixosSystem { modules = [ { nixpkgs.overlays = [ self.overlays.default ]; } ./configuration.nix ]; }

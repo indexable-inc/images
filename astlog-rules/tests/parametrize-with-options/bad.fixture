@@ -1,0 +1,1 @@
+myPackage: { config, lib, ... }: { config.systemd.services.foo.serviceConfig.ExecStart = "${myPackage}/bin/cmd"; }

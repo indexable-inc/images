@@ -1,0 +1,1 @@
+{ lib }: { env.SOME_ENV_VAR = lib.escapeShellArgs [ "-a" "-b c d" ]; }

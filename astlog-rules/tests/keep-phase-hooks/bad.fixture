@@ -1,0 +1,4 @@
+{ buildPhase = ''
+  do something
+  make something else
+''; }
