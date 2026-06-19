@@ -39,7 +39,6 @@
       "notion"
       "obs@beta"
       "obsidian"
-      "orbstack"
       "postico"
       "prismlauncher"
       "raycast"
