@@ -1116,14 +1116,25 @@
 (lint extend-makeflagsarray error
   "assigning `makeFlagsArray` directly mangles space-containing values; append to it in a `preBuild` shell snippet")
 
-;; no-pkgs-in-callpackage: taking `pkgs` in a `callPackage` argument set routes
-;; dependencies through `pkgs.foo`, which `override` cannot reach; list the
-;; exact dependencies as parameters so each is overridable.
+;; no-pkgs-in-callpackage: taking `pkgs` in a `callPackage`-style package
+;; argument set routes dependencies through `pkgs.foo`, which `override` cannot
+;; reach; list the exact dependencies as parameters so each is overridable.
+;; Scoped to package functions -- a `pkgs` formal on a function whose body
+;; builds a derivation (mkDerivation / buildPythonPackage / buildGoModule / ...)
+;; -- so a NixOS module or flake output that legitimately takes `pkgs` is not
+;; flagged.
+(rule (mkderivation-call m)
+  (match nix "
+    (apply_expression
+      function: [(variable_expression) (select_expression)] @f) @m")
+  (text-match f "(^|\\.)(mkDerivation|mkDerivationNoCC|buildPythonPackage|buildPythonApplication|buildGoModule|buildGoApplication|buildRustPackage|buildPerlPackage|buildNpmPackage)$"))
 (rule (no-pkgs-in-callpackage n)
-  (match nix "(formal name: (identifier) @id) @n")
-  (text id "pkgs"))
+  (match nix "(function_expression (formals (formal name: (identifier) @id) @n)) @fn")
+  (text id "pkgs")
+  (mkderivation-call m)
+  (ancestor fn m))
 (lint no-pkgs-in-callpackage error
-  "taking `pkgs` in a `callPackage` argument set breaks `override`; list the exact dependencies you need")
+  "taking `pkgs` in a `callPackage` package argument set breaks `override`; list the exact dependencies you need")
 
 ;; keep-python-composable: pulling deps out of `python3Packages` blocks
 ;; per-dependency overrides; take the package names directly (each interpreter's
@@ -1146,15 +1157,76 @@
 (lint future-proof-overrideattrs error
   "`overrideAttrs` with an attrset drops pre-existing values; use the `(old: {{ ... }})` function form with `old.x or [ ]`")
 
-;; keep-phase-hooks: a wholesale phase override without `runHook pre*`/`post*`
-;; strips downstream pre/post hooks. `phase-has-runhook` is the absence check
-;; negated by the lint.
-(rule (phase-has-runhook n)
+;; keep-phase-hooks: a wholesale phase override must keep BOTH its
+;; `runHook pre<Phase>` and `runHook post<Phase>` calls, or downstream consumers
+;; lose the ability to prepend/append via pre/post overrides.
+;; `phase-correctly-hooked` holds only when the matching pre AND post hook for
+;; that exact phase are both present; the lint fires on any phase string missing
+;; either, or carrying a different phase's hooks.
+(rule (phase-correctly-hooked n)
   (match nix "
     (binding
       attrpath: (attrpath) @p
       expression: (indented_string_expression) @v) @n")
-  (text-match v "runHook"))
+  (text p "buildPhase")
+  (text-match v "runHook\\s+preBuild")
+  (text-match v "runHook\\s+postBuild"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "installPhase")
+  (text-match v "runHook\\s+preInstall")
+  (text-match v "runHook\\s+postInstall"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "checkPhase")
+  (text-match v "runHook\\s+preCheck")
+  (text-match v "runHook\\s+postCheck"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "configurePhase")
+  (text-match v "runHook\\s+preConfigure")
+  (text-match v "runHook\\s+postConfigure"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "unpackPhase")
+  (text-match v "runHook\\s+preUnpack")
+  (text-match v "runHook\\s+postUnpack"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "patchPhase")
+  (text-match v "runHook\\s+prePatch")
+  (text-match v "runHook\\s+postPatch"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "distPhase")
+  (text-match v "runHook\\s+preDist")
+  (text-match v "runHook\\s+postDist"))
+(rule (phase-correctly-hooked n)
+  (match nix "
+    (binding
+      attrpath: (attrpath) @p
+      expression: (indented_string_expression) @v) @n")
+  (text p "installCheckPhase")
+  (text-match v "runHook\\s+preInstallCheck")
+  (text-match v "runHook\\s+postInstallCheck"))
 (rule (phase-binding-str n)
   (match nix "
     (binding
@@ -1163,9 +1235,9 @@
   (text-match p "^(buildPhase|installPhase|checkPhase|configurePhase|unpackPhase|patchPhase|distPhase|installCheckPhase)$"))
 (rule (keep-phase-hooks n)
   (phase-binding-str n)
-  (not (phase-has-runhook n)))
+  (not (phase-correctly-hooked n)))
 (lint keep-phase-hooks error
-  "a phase override without `runHook pre*`/`runHook post*` strips downstream hooks; bracket the body with the hook calls")
+  "a phase override that drops its `runHook pre<Phase>` / `runHook post<Phase>` calls strips downstream hooks; keep both hooks for that phase")
 
 ;; prefer-substituteinplace: `sed -i` / `awk` in a phase fails silently when the
 ;; pattern stops matching; use `substituteInPlace ... --replace-fail`.
@@ -1185,12 +1257,21 @@
   (match nix "(function_expression (identifier) @id) @f")
   (text id "prev"))
 
-;; overlay-preserve-nested: an overlay `a = { b = foo; };` replaces all of
-;; `prev.a`; merge with `prev.a or { } // { ... }`.
+;; overlay-preserve-nested: an overlay `a = { b = foo; };` at the TOP LEVEL of
+;; the returned set replaces all of `prev.a`; merge with
+;; `prev.a or { } // { ... }`. Scoped to direct members of the overlay body
+;; (`parent`), so an attrset-valued binding nested deeper (a `meta`, an
+;; `overrideAttrs` lambda) is not flagged.
+(rule (overlay-body-bset bset)
+  (match nix "
+    (function_expression
+      (identifier) @id
+      body: (attrset_expression (binding_set) @bset)) @f")
+  (text id "prev"))
 (rule (overlay-preserve-nested n)
-  (overlay-prev-fn f)
+  (overlay-body-bset bset)
   (match nix "(binding expression: (attrset_expression)) @n")
-  (ancestor f n))
+  (parent bset n))
 (lint overlay-preserve-nested error
   "overlay `a = {{ b; }}` drops the rest of `prev.a`; merge with `prev.a or {{ }} // {{ ... }}`")
 

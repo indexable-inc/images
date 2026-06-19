@@ -1940,9 +1940,9 @@ Setting `makeFlagsArray` directly re-splits values containing spaces, so `[ "CFL
 
 **🔴 error**
 
-`callPackage` fills named parameters from `pkgs` and adds an `override` attribute for re-evaluating with modified arguments. Taking `pkgs` itself routes dependencies through `pkgs.foo`, which `override` cannot reach. List the exact dependencies as parameters so each is overridable.
+`callPackage` fills named parameters from `pkgs` and adds an `override` attribute for re-evaluating with modified arguments. Taking `pkgs` itself routes dependencies through `pkgs.foo`, which `override` cannot reach. List the exact dependencies as parameters so each is overridable. Scoped to package functions: a `pkgs` formal on a function whose body builds a derivation (`mkDerivation` / `buildPythonPackage` / `buildGoModule` / ...), so a NixOS module or flake output that legitimately takes `pkgs` is not flagged.
 
-*Matches:* `formal` · *predicates:* `text` · *1 pattern variant*
+*Matches:* `formal` · *predicates:* `text`, `text-match`, `ancestor` · *1 pattern variant*
 
 <table><tr><th>flagged</th><th>ok</th></tr><tr><td>
 
@@ -2006,7 +2006,7 @@ package.overrideAttrs (old: { patches = old.patches or [ ] ++ [ ./my-bugfix.patc
 
 **🔴 error**
 
-When you replace a phase wholesale, keep the `runHook preX` / `runHook postX` calls. Without them, downstream consumers can no longer prepend or append actions via `preX` / `postX` overrides. The rule negates an `runHook`-presence helper so it fires only on phase strings missing the calls.
+When you replace a phase wholesale, keep **both** the `runHook pre<Phase>` and `runHook post<Phase>` calls for that exact phase. Without them, downstream consumers can no longer prepend or append actions via `preX` / `postX` overrides. The rule negates a per-phase helper that holds only when both the matching pre and post hook are present, so it fires on any phase string missing either hook (or carrying a different phase's hooks), not just one with no hook at all.
 
 *Matches:* `binding` · *predicates:* `text-match`, `not` · *1 pattern variant*
 
@@ -2014,8 +2014,9 @@ When you replace a phase wholesale, keep the `runHook preX` / `runHook postX` ca
 
 ```nix
 { buildPhase = ''
-  do something
-  make something else
+  runHook preBuild
+  make something
+  do something else
 ''; }
 ```
 
@@ -2150,9 +2151,9 @@ Overlay functions that preserve and re-expose what they extend.
 
 **🔴 error**
 
-An overlay that writes `a = { b = foo; };` replaces the whole `pkgs.a`, dropping everything else that lived inside it. Reference the existing set through `prev` and merge with `//`, guarding with `or {}`. Scoped to overlay (`final: prev:`) context via an ancestor join.
+An overlay that writes `a = { b = foo; };` at the top level of the returned set replaces the whole `pkgs.a`, dropping everything else that lived inside it. Reference the existing set through `prev` and merge with `//`, guarding with `or {}`. Scoped to **direct members** of the overlay body (via `parent`), so an attrset-valued binding nested deeper (a `meta`, an `overrideAttrs` lambda) is not flagged.
 
-*Matches:* `binding` · *predicates:* `text`, `ancestor` · *1 pattern variant*
+*Matches:* `binding` · *predicates:* `text`, `parent` · *1 pattern variant*
 
 <table><tr><th>flagged</th><th>ok</th></tr><tr><td>
 
