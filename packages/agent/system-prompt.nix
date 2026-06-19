@@ -18,7 +18,7 @@
 #
 # Rules tagged STOCK-DERIVED are adapted from Claude Code's OWN stock system
 # prompt, read at the pinned binary version (./claude-code/manifest.json,
-# currently 2.1.170) by capturing what the binary actually sends to the API:
+# currently 2.1.183) by capturing what the binary actually sends to the API:
 # point the unwrapped `libexec/Claude Code` at a local `ANTHROPIC_BASE_URL`
 # server and read the `system` blocks. The wrapper REPLACES the stock prompt
 # instead of appending (see ./claude-code's `systemPrompt` arg), so these
