@@ -91,7 +91,10 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
-      path = [ pkgs.coreutils ];
+      path = [
+        cfg.package
+        pkgs.coreutils
+      ] ++ config.environment.systemPackages;
       environment.HOME = cfg.stateDir;
 
       # The CLI only accepts the launch token as an argument, so read it from the
