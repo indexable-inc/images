@@ -70,6 +70,36 @@
     } \
     --settings=/dev/null -p hi
 
+  # addDirs/pluginDirs render as single, prepended `=` tokens. `--add-dir` is
+  # variadic in the CLI, so a space-form token would swallow the next positional
+  # (proven against the real binary); this guards that the launcher keeps each as
+  # one argv entry, ahead of the subcommand. Synthesize a spec with the two flags
+  # appended to `flags` (mirrors what `map (d: "--add-dir=${"\${d}"}") addDirs`
+  # produces in the wrapper) and assert they land between the baked flags and the
+  # injected `--settings`.
+  ${lib.getExe jq} '.flags += ["--add-dir=/nix/store/sample-skills", "--plugin-dir=/nix/store/sample-plugin"]' \
+    "$PWD/test-spec.json" > "$PWD/dirs-spec.json"
+  dirs_got="$(IX_LAUNCH_SPEC="$PWD/dirs-spec.json" "$launcher" mcp list)"
+  dirs_want=${
+    lib.escapeShellArg (
+      lib.concatStringsSep "\n" (
+        wrapperFlags
+        ++ [
+          "--add-dir=/nix/store/sample-skills"
+          "--plugin-dir=/nix/store/sample-plugin"
+          "--settings=${settingsDefaultsFile}"
+          "mcp"
+          "list"
+        ]
+      )
+    )
+  }
+  if [ "$dirs_got" != "$dirs_want" ]; then
+    printf 'claude launcher argv check failed: add-dir/plugin-dir tokens\nexpected:\n%s\ngot:\n%s\n' \
+      "$dirs_want" "$dirs_got" >&2
+    exit 1
+  fi
+
   # Session-digest hook net: absent/empty digests stay silent (exit 0, no
   # output, so a host without the ix-context-digest timer loses nothing), a
   # present digest rides additionalContext verbatim, and an oversized digest

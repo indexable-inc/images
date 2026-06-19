@@ -42,6 +42,30 @@
   # runtime. `{ }` (default) ships only the computed defaults.
   extraSettings ? { },
 
+  # Directories baked into the wrapper as `--add-dir=<dir>` flags, one per entry.
+  # `--add-dir` grants tool file-access to a directory, AND (the reason this arg
+  # exists) Claude Code loads any `<dir>/.claude/skills/` and `<dir>/CLAUDE.md`
+  # found under it — the documented exception that makes `.claude/skills` under an
+  # added dir discoverable as BARE `/<skill-name>` commands, regardless of the
+  # session's cwd. This is the declarative, cwd-independent way to ship a fixed
+  # set of skills globally (parallel to how `mcpServers` bakes `--mcp-config`):
+  # point an entry at a store dir whose `.claude/skills/<name>/SKILL.md` tree is a
+  # materialized `skills.mkSkillsDir` output. The skills the CLI's own
+  # `.claude/skills` discovery (project + `~/.claude/skills`) finds still load
+  # alongside; this only adds. `[ ]` (default) bakes no flag. See the `=`-form
+  # note in `wrapperFlags`: `--add-dir` is variadic, so the space form would
+  # swallow the next argv token.
+  addDirs ? [ ],
+
+  # Directories baked into the wrapper as `--plugin-dir=<dir>` flags, one per
+  # entry: load a Claude Code plugin (a dir with `.claude-plugin/plugin.json`,
+  # bundling its own `skills/`, `agents/`, `hooks/`, `.mcp.json`, ...) for every
+  # session. Plugin skills/agents are NAMESPACED (`/<plugin>:<skill>`), unlike the
+  # bare names `addDirs` yields, so reach for this when you want a self-contained,
+  # provenance-tagged bundle rather than loose global skills. `[ ]` (default)
+  # bakes no flag.
+  pluginDirs ? [ ],
+
   # Shell glob patterns for the durable primary checkouts the PreToolUse
   # worktree guard protects (the claude-hooks `worktree-guard` subcommand): a file-edit tool call
   # whose target resolves into a PRIMARY checkout (git-dir == git-common-dir,
@@ -389,6 +413,13 @@ let
   #    explicit later `--thinking-display=omitted` on the CLI still wins
   #    (single-value options are last-wins).
   #  - `--dangerously-skip-permissions` (see its arg comment).
+  #  - `--add-dir=<dir>` (per `addDirs` entry): allow tool access to <dir> and
+  #    load any `<dir>/.claude/skills` + `<dir>/CLAUDE.md` under it. The `=` form
+  #    is MANDATORY here, not just preferred: `--add-dir <directories...>` is
+  #    variadic and would swallow the following argv token (the same class of bug
+  #    as `--mcp-config` above). See the `addDirs` arg comment.
+  #  - `--plugin-dir=<dir>` (per `pluginDirs` entry): load a plugin directory for
+  #    every session (namespaced skills/agents/hooks). See the `pluginDirs` arg.
   wrapperFlags = [
     "--debug"
     "--thinking-display=summarized"
@@ -397,7 +428,9 @@ let
   ++ lib.optional (
     systemPrompt != null
   ) "--system-prompt-file=${builtins.toFile "claude-code-system-prompt.txt" systemPrompt}"
-  ++ lib.optional (mcpServers != { }) "--mcp-config=${mcpConfigFile}";
+  ++ lib.optional (mcpServers != { }) "--mcp-config=${mcpConfigFile}"
+  ++ map (d: "--add-dir=${d}") addDirs
+  ++ map (d: "--plugin-dir=${d}") pluginDirs;
 
   envEntries = attrs: lib.mapAttrsToList (key: value: { inherit key value; }) attrs;
 
