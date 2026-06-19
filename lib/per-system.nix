@@ -411,6 +411,15 @@ let
   # copy into `.claude/skills`.
   skillsDir = ix.skills.mkSkillsDir { inherit pkgs; };
 
+  # The `index` Claude Code plugin: every index skill bundled for `--plugin-dir`,
+  # invoked as `/index:<skill>`. This is the pure-index default (no hooks, no
+  # personal skills); a consumer wanting extras calls `ix.claudePlugin.mkPlugin`
+  # with `extraSkills`/`hooks` directly.
+  claudePluginDir = ix.claudePlugin.mkPlugin {
+    inherit pkgs;
+    name = "index";
+  };
+
   # Declarative subagents rendered to a symlink-free `.claude/agents` directory.
   # index-action-runner offloads a long, image- or step-heavy loop into its own
   # context and returns only the conclusion (ENG-2792). Its frontmatter bakes a
@@ -440,6 +449,24 @@ let
         body = builtins.readFile (paths.agents + "/index-action-runner.md");
       };
     };
+    # Every other `agents/*.md` is a complete, hand-authored agent (frontmatter +
+    # body) and is copied verbatim. index-action-runner.md is body-only (its
+    # frontmatter is computed above), so it lacks the leading `---` and is
+    # excluded here, staying on the rendered path.
+    rawFiles =
+      let
+        entries = builtins.readDir paths.agents;
+        mdNames = lib.filter (n: lib.hasSuffix ".md" n && entries.${n} == "regular") (
+          builtins.attrNames entries
+        );
+        frontmattered = lib.filter (
+          n: lib.hasPrefix "---" (builtins.readFile (paths.agents + "/${n}"))
+        ) mdNames;
+      in
+      map (n: {
+        name = lib.removeSuffix ".md" n;
+        path = paths.agents + "/${n}";
+      }) frontmattered;
   };
 
   mcSource = ix.writeNushellApplication pkgs {
@@ -1179,6 +1206,7 @@ in
       update-sounds = updateSounds;
       agents = agentsDir;
       skills = skillsDir;
+      claude-plugin = claudePluginDir;
     }
     // repoFlakePackages
     // examplePackages
