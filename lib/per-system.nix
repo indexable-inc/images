@@ -426,48 +426,60 @@ let
   # FRESH inline `index` server from the shared `ix.mcp` registry, so each
   # spawned subagent gets its own kernel and browser rather than sharing the
   # parent's; the server is declared from the same source the wrappers render.
-  agentsDir = ix.agents.mkAgentsDir {
-    inherit pkgs;
-    agents = {
-      index-action-runner = {
-        frontmatter = {
-          name = "index-action-runner";
-          description =
-            "Offload a long, image-heavy or many-step loop (browser automation, "
-            + "scanning many images or PDFs, multi-step web flows) into an isolated "
-            + "context. Give it an outcome plus the exact fields to return; it drives "
-            + "the whole loop in its own index kernel and returns only the distilled "
-            + "result, keeping screenshots and DOM dumps out of the main thread.";
-          mcpServers = ix.mcp.toAgentMcpServers {
-            index = {
-              transport = "stdio";
-              command = lib.getExe repoPackages.mcp;
-              args = [ "serve" ];
+  agentsDir =
+    let
+      # Agents whose frontmatter is computed in nix rather than written in the
+      # file, so they are rendered (not copied verbatim) and their source `.md`
+      # is body-only. index-action-runner offloads a long, image- or step-heavy
+      # loop into its own context and returns only the conclusion (ENG-2792); its
+      # frontmatter bakes a FRESH inline `index` server from the shared `ix.mcp`
+      # registry, so each spawned subagent gets its own kernel and browser rather
+      # than sharing the parent's, declared from the source the wrappers render.
+      renderedAgents = {
+        index-action-runner = {
+          frontmatter = {
+            name = "index-action-runner";
+            description =
+              "Offload a long, image-heavy or many-step loop (browser automation, "
+              + "scanning many images or PDFs, multi-step web flows) into an isolated "
+              + "context. Give it an outcome plus the exact fields to return; it drives "
+              + "the whole loop in its own index kernel and returns only the distilled "
+              + "result, keeping screenshots and DOM dumps out of the main thread.";
+            mcpServers = ix.mcp.toAgentMcpServers {
+              index = {
+                transport = "stdio";
+                command = lib.getExe repoPackages.mcp;
+                args = [ "serve" ];
+              };
             };
           };
+          body = builtins.readFile (paths.agents + "/index-action-runner.md");
         };
-        body = builtins.readFile (paths.agents + "/index-action-runner.md");
       };
-    };
-    # Every other `agents/*.md` is a complete, hand-authored agent (frontmatter +
-    # body) and is copied verbatim. index-action-runner.md is body-only (its
-    # frontmatter is computed above), so it lacks the leading `---` and is
-    # excluded here, staying on the rendered path.
-    rawFiles =
-      let
-        entries = builtins.readDir paths.agents;
-        mdNames = lib.filter (n: lib.hasSuffix ".md" n && entries.${n} == "regular") (
-          builtins.attrNames entries
-        );
-        frontmattered = lib.filter (
-          n: lib.hasPrefix "---" (builtins.readFile (paths.agents + "/${n}"))
-        ) mdNames;
-      in
-      map (n: {
+      # A rendered agent's source `.md` is body-only and excluded here by name;
+      # every OTHER `agents/*.md` is a complete, hand-authored agent (frontmatter
+      # + body) copied verbatim. A non-rendered file without leading `---` is a
+      # mistake (a missing frontmatter block), so fail loudly with the offenders
+      # rather than silently dropping it from the agent set.
+      renderedFiles = map (n: "${n}.md") (builtins.attrNames renderedAgents);
+      entries = builtins.readDir paths.agents;
+      rawMdNames = lib.filter (
+        n: lib.hasSuffix ".md" n && entries.${n} == "regular" && !(lib.elem n renderedFiles)
+      ) (builtins.attrNames entries);
+      missingFrontmatter = lib.filter (
+        n: !(lib.hasPrefix "---" (builtins.readFile (paths.agents + "/${n}")))
+      ) rawMdNames;
+    in
+    assert lib.assertMsg (missingFrontmatter == [ ])
+      "agentsDir: agents/*.md without YAML frontmatter (add frontmatter, or render it in renderedAgents): ${lib.concatStringsSep ", " missingFrontmatter}";
+    ix.agents.mkAgentsDir {
+      inherit pkgs;
+      agents = renderedAgents;
+      rawFiles = map (n: {
         name = lib.removeSuffix ".md" n;
         path = paths.agents + "/${n}";
-      }) frontmattered;
-  };
+      }) rawMdNames;
+    };
 
   mcSource = ix.writeNushellApplication pkgs {
     name = "mc-source";

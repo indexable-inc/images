@@ -44,6 +44,21 @@ let
 
       ${agent.body}'';
 
+  # The `name:` from a hand-authored agent file's YAML frontmatter (the first
+  # `name:` line inside the leading `---` block), or null if absent. Used to
+  # check a raw file's declared name against its filename, the same invariant
+  # `renderAgent` enforces for rendered agents. The file is known to open with
+  # `---` (per-system.nix's discovery filters on that before this runs).
+  rawFrontmatterName =
+    path:
+    let
+      lines = lib.splitString "\n" (builtins.readFile path);
+      # Frontmatter is the leading block, so the first `name:` line is the
+      # declared agent name (a body line starting `name:` can't precede it).
+      nameLine = lib.findFirst (l: lib.hasPrefix "name:" l) null lines;
+    in
+    if nameLine == null then null else lib.removePrefix "name: " nameLine;
+
   mkAgentsDir =
     {
       pkgs,
@@ -55,10 +70,20 @@ let
         name = "${name}.md";
         path = pkgs.writeText "${name}.md" (renderAgent name agent);
       }) agents;
-      rawEntries = map (f: {
-        name = "${f.name}.md";
-        inherit (f) path;
-      }) rawFiles;
+      rawEntries = map (
+        f:
+        let
+          fmName = rawFrontmatterName f.path;
+        in
+        assert lib.assertMsg (fmName == f.name)
+          "agents.mkAgentsDir: raw agent file \"${f.name}.md\" declares frontmatter name=${
+            if fmName == null then "(missing)" else "\"${fmName}\""
+          } (must match its filename)";
+        {
+          name = "${f.name}.md";
+          inherit (f) path;
+        }
+      ) rawFiles;
       entries = renderedEntries ++ rawEntries;
       names = map (e: e.name) entries;
       collisions = lib.filter (n: lib.count (x: x == n) names > 1) (lib.unique names);
@@ -95,8 +120,10 @@ in
     - `rawFiles`: list of `{ name; path; }` for agents that already ship as a
       complete, hand-authored `.md` (frontmatter + body). The file at `path` is
       copied verbatim to `<name>.md`. Use this for static agents so adding one is
-      just dropping a `.md` file, with no nix entry. Names must not collide with
-      `agents` keys.
+      just dropping a `.md` file, with no nix entry. The file's frontmatter
+      `name:` must equal `name` (Claude registers the agent under the frontmatter
+      name, so a mismatch would silently install it under the wrong handle), and
+      names must not collide with `agents` keys.
 
     Returns a directory with one `<name>.md` per agent, built as real files with
     no symlinks (Claude Code drops symlinked agent entries,
