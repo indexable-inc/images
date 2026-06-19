@@ -42,6 +42,16 @@ fn title_persists_and_updates_across_feeds() {
 }
 
 #[test]
+fn can_aborts_an_in_progress_title() {
+    let mut t = OscTitleTracker::new().expect("create tracker");
+    t.feed(b"\x1b]2;keep\x07");
+    // A CAN (0x18) mid-payload aborts the control string, so this title is
+    // dropped, not captured, and the previous one stands.
+    t.feed(b"\x1b]2;abor\x18ted\x07");
+    assert_eq!(t.title(), Some("keep"));
+}
+
+#[test]
 fn icon_only_osc1_does_not_change_title() {
     let mut t = OscTitleTracker::new().expect("create tracker");
     t.feed(b"\x1b]2;real-title\x07");

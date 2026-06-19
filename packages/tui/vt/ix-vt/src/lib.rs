@@ -696,6 +696,10 @@ const BEL: u8 = 0x07;
 const OSC_INTRODUCER: u8 = b']';
 /// `\` (0x5c): the byte after `ESC` that forms a String Terminator (ST).
 const ST_FINAL: u8 = b'\\';
+/// `CAN` (0x18) and `SUB` (0x1a): per ECMA-48 either one aborts an in-progress
+/// control string, so they cancel a partial OSC rather than landing in its text.
+const CAN: u8 = 0x18;
+const SUB: u8 = 0x1a;
 
 /// Where the framing scanner is within an `ESC ] … (BEL | ESC \)` OSC sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -725,6 +729,10 @@ enum FrameState {
 /// next [`feed`](Self::feed). Like [`Terminal`], the underlying parser has
 /// thread affinity (the raw pointer keeps it `!Send`); keep the tracker on one
 /// thread and do not add an `unsafe impl Send`.
+///
+/// Framing covers the 7-bit OSC forms terminal programs actually emit (`ESC ]`
+/// opener, `BEL` or `ESC \` terminator, `CAN`/`SUB` abort); the 8-bit C1 forms
+/// (`0x9d` opener, `0x9c` ST) are not recognized.
 pub struct OscTitleTracker {
     parser: sys::GhosttyOscParser_ptr,
     frame: FrameState,
@@ -770,6 +778,9 @@ impl OscTitleTracker {
             FrameState::Ground => FrameState::Ground,
             FrameState::Escape => match byte {
                 OSC_INTRODUCER => {
+                    // Reset on open so a previous OSC abandoned without a
+                    // terminator (e.g. an `ESC [` arrived mid-payload) cannot
+                    // bleed into this one.
                     unsafe { sys::ghostty_osc_reset(self.parser) };
                     FrameState::Osc
                 }
@@ -780,6 +791,11 @@ impl OscTitleTracker {
             FrameState::Osc => match byte {
                 BEL => {
                     self.finish(BEL);
+                    FrameState::Ground
+                }
+                // CAN/SUB abort the control string: drop the partial OSC.
+                CAN | SUB => {
+                    unsafe { sys::ghostty_osc_reset(self.parser) };
                     FrameState::Ground
                 }
                 ESC => FrameState::OscEscape,
