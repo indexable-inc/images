@@ -71,34 +71,46 @@ async def _run(argv: list[str], *, timeout: float, ok_codes: tuple[int, ...] = (
 
 
 def _lstat_rows(paths: list[str]) -> pl.DataFrame:
-    """Turn a list of paths into the find/spotlight frame, one os.lstat per path
-    for type/size/mtime (a path that has since vanished gets null metadata)."""
+    """Turn a list of NUL-separated paths into the find/spotlight frame, one
+    os.lstat per path for type/size/mtime.
+
+    fd/mdfind write paths to stdout, but `sh` merges stderr (mdfind's locale
+    warnings, fd's permission-denied notes) into the same stream, so a stderr
+    line can glue onto the first path. For each segment we take the real path
+    (the text after any trailing stderr newline) and keep only segments that
+    name an existing path — which drops the stderr noise without losing hits."""
     rows: list[dict[str, Any]] = []
-    for p in paths:
-        try:
-            st = os.lstat(p)
-        except OSError:
-            kind, size, mtime = None, None, None
-        else:
-            mode = st.st_mode
-            kind = (
-                "symlink"
-                if _stat.S_ISLNK(mode)
-                else "dir"
-                if _stat.S_ISDIR(mode)
-                else "file"
-                if _stat.S_ISREG(mode)
-                else "other"
-            )
-            size = st.st_size
-            mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+    for raw in paths:
+        cand = raw.strip()
+        if not cand:
+            continue
+        st = None
+        for attempt in (cand, cand.rsplit("\n", 1)[-1].strip()):
+            try:
+                st = os.lstat(attempt)
+                cand = attempt
+                break
+            except OSError:
+                continue
+        if st is None:
+            continue  # not an existing path (a stderr line, or a vanished hit)
+        mode = st.st_mode
+        kind = (
+            "symlink"
+            if _stat.S_ISLNK(mode)
+            else "dir"
+            if _stat.S_ISDIR(mode)
+            else "file"
+            if _stat.S_ISREG(mode)
+            else "other"
+        )
         rows.append(
             {
-                "path": p,
-                "name": os.path.basename(p.rstrip("/")),
+                "path": cand,
+                "name": os.path.basename(cand.rstrip("/")),
                 "type": kind,
-                "size": size,
-                "mtime": mtime,
+                "size": st.st_size,
+                "mtime": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
             }
         )
     return pl.DataFrame(rows, schema=_FIND_SCHEMA)

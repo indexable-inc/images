@@ -1320,6 +1320,7 @@ let
   fsearchTestPy = pkgs.writeText "ix-mcp-fsearch-test.py" ''
     import asyncio
     import os
+    import subprocess
     import sys
     import tempfile
 
@@ -1334,10 +1335,12 @@ let
     with open(os.path.join(root, "src", "main.rs"), "w") as fh:
         fh.write('fn main() {\n    println!("find me on this line");\n}\n')
     # A .gitignore'd file must be skipped by default and surfaced with no_ignore.
+    # ripgrep only honors .gitignore inside a git repo, so init one.
     with open(os.path.join(root, ".gitignore"), "w") as fh:
         fh.write("ignored.txt\n")
     with open(os.path.join(root, "ignored.txt"), "w") as fh:
         fh.write("find me on this line\n")
+    subprocess.run(["git", "init", "-q", root], check=True)
 
 
     async def main() -> None:
@@ -1390,6 +1393,7 @@ let
           fsearchTestPython
           pkgs.ripgrep
           pkgs.fd
+          pkgs.git
         ];
         strictDeps = true;
       }
