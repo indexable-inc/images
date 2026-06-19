@@ -547,7 +547,7 @@ let
   );
   # Drive the Ghostty terminal over its AppleScript dictionary (Ghostty 1.3.2+):
   # `import ghostty`, then `await ghostty.surfaces()` reads every open surface
-  # (id/tty/pid/cwd/title) into polars and `await ghostty.close_me()` closes the
+  # (id/tty/pid/cwd/name) into polars and `await ghostty.close_me()` closes the
   # window this session runs in. Pure Python shelling `osascript` on the loop; no
   # native binding, so a plain toPythonModule like `worktree`/`tasks`. macOS-only
   # at import; bundled only in `darwinExtraPackages`.

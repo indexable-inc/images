@@ -142,8 +142,8 @@ def _walk_to_tty(tree: dict[int, tuple[int, str]], start: int) -> str | None:
 
     Pure counterpart of :func:`my_tty`. ``ps`` prints the tty as ``ttys000``;
     Ghostty's AppleScript ``tty`` reports ``/dev/ttys000``, so normalise to the
-    latter. The loop is bounded by a ``seen`` set so a cyclic/elf table cannot
-    spin.
+    latter. The loop is bounded by a ``seen`` set so a cyclic/self-referential
+    ps table (a pid that is its own ancestor) cannot spin.
     """
     pid: int | None = start
     seen: set[int] = set()
