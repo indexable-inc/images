@@ -1,0 +1,55 @@
+//! `OscTitleTracker` over ghostty's streaming OSC parser: it captures the
+//! window title from OSC 0/2, ignores the icon-only OSC 1, and tolerates a
+//! sequence split across feed boundaries.
+
+use ix_vt::OscTitleTracker;
+
+#[test]
+fn captures_bel_terminated_title() {
+    let mut t = OscTitleTracker::new().expect("create tracker");
+    assert_eq!(t.title(), None, "no title before any input");
+
+    // OSC 2 (set window title), BEL-terminated: ESC ] 2 ; hello BEL.
+    t.feed(b"\x1b]2;hello\x07");
+    assert_eq!(t.title(), Some("hello"));
+}
+
+#[test]
+fn captures_st_terminated_title_and_osc0() {
+    let mut t = OscTitleTracker::new().expect("create tracker");
+    // OSC 0 sets icon *and* window title; ST-terminated: ESC ] 0 ; world ESC \.
+    t.feed(b"\x1b]0;world\x1b\\");
+    assert_eq!(t.title(), Some("world"));
+}
+
+#[test]
+fn title_persists_and_updates_across_feeds() {
+    let mut t = OscTitleTracker::new().expect("create tracker");
+    // A title split across three feeds, including a mid-payload boundary and a
+    // split ST terminator (ESC in one chunk, '\\' in the next).
+    t.feed(b"\x1b]2;split-");
+    t.feed(b"title\x1b");
+    t.feed(b"\\");
+    assert_eq!(t.title(), Some("split-title"));
+
+    // Ordinary output between sequences leaves the title untouched.
+    t.feed(b"some normal output\r\n");
+    assert_eq!(t.title(), Some("split-title"));
+
+    // A later title replaces the earlier one.
+    t.feed(b"\x1b]2;second\x07");
+    assert_eq!(t.title(), Some("second"));
+}
+
+#[test]
+fn icon_only_osc1_does_not_change_title() {
+    let mut t = OscTitleTracker::new().expect("create tracker");
+    t.feed(b"\x1b]2;real-title\x07");
+    // OSC 1 sets the icon name, not the window title.
+    t.feed(b"\x1b]1;icon-name\x07");
+    assert_eq!(
+        t.title(),
+        Some("real-title"),
+        "icon-only OSC 1 must not overwrite the window title"
+    );
+}
