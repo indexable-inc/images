@@ -1,9 +1,17 @@
 name: Blast radius
 
 on:
-  pull_request:
-    branches:
-      - main
+  # Disabled on PRs: the per-PR full-catalog eval (~57s "Report blast radius"
+  # step) claims a shared `ix-ci` runner from the one dispatcher pool that
+  # serves the whole team, so every PR queued one more eval-only runner and
+  # slowed the queue. The report is informational (a sticky PR comment), never
+  # a merge gate, so dropping the auto-trigger costs no safety. Re-enable by
+  # uncommenting the `pull_request` block below. `workflow_dispatch` only keeps
+  # `on:` non-empty (the jobs are PR-context gated, so a manual run no-ops).
+  workflow_dispatch: {}
+  # pull_request:
+  #   branches:
+  #     - main
 
 permissions:
   contents: read
