@@ -44,20 +44,34 @@ let
 
       ${agent.body}'';
 
-  # The `name:` from a hand-authored agent file's YAML frontmatter (the first
-  # `name:` line inside the leading `---` block), or null if absent. Used to
-  # check a raw file's declared name against its filename, the same invariant
-  # `renderAgent` enforces for rendered agents. The file is known to open with
-  # `---` (per-system.nix's discovery filters on that before this runs).
+  # The `name:` value from a hand-authored agent file's YAML frontmatter, or
+  # null if absent. Used to check a raw file's declared name against its
+  # filename, the same invariant `renderAgent` enforces for rendered agents.
+  # The file is known to open with `---` (per-system.nix's discovery filters on
+  # that first). The scan is restricted to the frontmatter block (between the
+  # first two `---` fences) so a `name:` line in the markdown body can't be
+  # mistaken for the declared name; `\r` is stripped so CRLF files parse; and
+  # the value is taken via a regex tolerant of any whitespace after the colon
+  # (`name:foo`, `name:  foo`), not a fixed `"name: "` prefix.
   rawFrontmatterName =
     path:
     let
-      lines = lib.splitString "\n" (builtins.readFile path);
-      # Frontmatter is the leading block, so the first `name:` line is the
-      # declared agent name (a body line starting `name:` can't precede it).
-      nameLine = lib.findFirst (l: lib.hasPrefix "name:" l) null lines;
+      lines = map (lib.removeSuffix "\r") (lib.splitString "\n" (builtins.readFile path));
+      # Lines after the opening `---`, up to (not including) the closing `---`.
+      # foldl' rather than lib.takeWhile, which this nixpkgs pin lacks.
+      collect =
+        acc: l:
+        if acc.done || l == "---" then acc // { done = true; } else acc // { out = acc.out ++ [ l ]; };
+      fmLines =
+        (lib.foldl' collect {
+          out = [ ];
+          done = false;
+        } (lib.drop 1 lines)).out;
+      nameLine = lib.findFirst (lib.hasPrefix "name:") null fmLines;
+      m = if nameLine == null then null else builtins.match "name:[[:space:]]*(.*)" nameLine;
+      value = if m == null then null else builtins.head m;
     in
-    if nameLine == null then null else lib.removePrefix "name: " nameLine;
+    if value == "" then null else value;
 
   mkAgentsDir =
     {
