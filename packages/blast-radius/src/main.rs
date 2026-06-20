@@ -4,7 +4,8 @@
 //! The untrusted half of `.github/workflows/blast-radius.yml` runs this with
 //! `--json` to produce `report.json`; the trusted half validates that shape and
 //! renders the sticky PR comment from it. Run without `--json` locally to see
-//! the same report as Markdown.
+//! the same report as Markdown. Pass `--quiet` (`-q`) to silence the per-phase
+//! progress lines on stderr while still emitting the report.
 
 mod causes;
 mod git;
@@ -22,11 +23,41 @@ use color_eyre::eyre::{Result, bail};
 use causes::{Caps, root_causes};
 use report::Report;
 
-/// Phase labels are kebab-case and stable: they appear in CI logs and in
-/// `report.json.phaseTimings`, so renaming them breaks downstream readers.
-fn record_phase(phases: &mut BTreeMap<String, f64>, label: &'static str, secs: f64) {
-    eprintln!("blast-radius: {label}: {secs:.2}s");
-    phases.insert(label.to_owned(), secs);
+/// Per-phase timings plus the `--quiet` gate. Recording a phase (so it lands in
+/// `report.json.phaseTimings` and the rendered report) is kept separate from
+/// showing it: the live `blast-radius: <phase>: <secs>s` progress lines are pure
+/// render, and `--quiet` silences them while the timings still reach the report.
+struct Phases {
+    timings: BTreeMap<String, f64>,
+    quiet: bool,
+}
+
+impl Phases {
+    fn new(quiet: bool) -> Self {
+        Self {
+            timings: BTreeMap::new(),
+            quiet,
+        }
+    }
+
+    /// Record a phase's wall-clock seconds and, unless `--quiet`, print its live
+    /// progress line to stderr.
+    ///
+    /// Phase labels are kebab-case and stable: they appear in CI logs and in
+    /// `report.json.phaseTimings`, so renaming them breaks downstream readers.
+    fn record(&mut self, label: &'static str, secs: f64) {
+        self.timings.insert(label.to_owned(), secs);
+        if let Some(line) = self.progress_line(label, secs) {
+            eprintln!("{line}");
+        }
+    }
+
+    /// The live progress line for a phase, or `None` when `--quiet` suppresses
+    /// it. Split from [`Self::record`] so the quiet gate is unit-testable without
+    /// capturing stderr.
+    fn progress_line(&self, label: &str, secs: f64) -> Option<String> {
+        (!self.quiet).then(|| format!("blast-radius: {label}: {secs:.2}s"))
+    }
 }
 
 /// Graph budget for the rendered flowchart: only the highest fan-out causes, and
@@ -46,6 +77,12 @@ struct Cli {
     /// Emit the machine-readable report.json instead of Markdown.
     #[arg(long)]
     json: bool,
+    /// Suppress the per-phase progress lines on stderr (`blast-radius: <phase>:
+    /// <secs>s`). The timings still reach `report.json` and the rendered report,
+    /// and genuine warnings (eval failures, an unreadable timings file) are
+    /// always shown; only the live progress chatter is silenced.
+    #[arg(short, long)]
+    quiet: bool,
     /// nix-fast-build `check-results.json` from a prior successful Check run
     /// (typically the base branch). Used to annotate the rebuilt-checks list
     /// with per-attr wall-clock seconds. Missing attrs are omitted, not zeroed.
@@ -125,7 +162,7 @@ fn concurrent_evals(
     base: &str,
     head: &str,
     catalog: &str,
-    phases: &mut BTreeMap<String, f64>,
+    phases: &mut Phases,
 ) -> Result<Evals> {
     let (base, head) = std::thread::scope(|scope| {
         let head_h = scope.spawn(|| {
@@ -145,8 +182,8 @@ fn concurrent_evals(
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
         (base, head)
     });
-    record_phase(phases, "eval-base", base.1);
-    record_phase(phases, "eval-head", head.1);
+    phases.record("eval-base", base.1);
+    phases.record("eval-head", head.1);
     Ok(Evals {
         base: base.0?,
         head: head.0?,
@@ -160,7 +197,7 @@ fn compute_causes(
     base: &[nix::Check],
     head: &[nix::Check],
     changed: &[String],
-    phases: &mut BTreeMap<String, f64>,
+    phases: &mut Phases,
 ) -> Result<Vec<causes::Cause>> {
     if changed.is_empty() {
         return Ok(Vec::new());
@@ -177,10 +214,10 @@ fn compute_causes(
         .collect();
     let t = Instant::now();
     let head_graph = nix::derivation_graph(&head_paths)?;
-    record_phase(phases, "derivation-show-head", t.elapsed().as_secs_f64());
+    phases.record("derivation-show-head", t.elapsed().as_secs_f64());
     let t = Instant::now();
     let base_graph = nix::derivation_graph(&base_paths)?;
-    record_phase(phases, "derivation-show-base", t.elapsed().as_secs_f64());
+    phases.record("derivation-show-base", t.elapsed().as_secs_f64());
     let changed_basenames: BTreeMap<String, String> = changed
         .iter()
         .filter_map(|attr| {
@@ -189,7 +226,7 @@ fn compute_causes(
         .collect();
     let t = Instant::now();
     let causes = root_causes(&base_graph, &head_graph, &changed_basenames, CAPS);
-    record_phase(phases, "root-causes", t.elapsed().as_secs_f64());
+    phases.record("root-causes", t.elapsed().as_secs_f64());
     Ok(causes)
 }
 
@@ -197,7 +234,7 @@ fn main() -> Result<()> {
     color_eyre::install()?;
     let cli = Cli::parse();
     let wall = Instant::now();
-    let mut phases: BTreeMap<String, f64> = BTreeMap::new();
+    let mut phases = Phases::new(cli.quiet);
     let revs = git::resolve(cli.base.as_deref(), cli.head.as_deref())?;
 
     // Pick one catalog output for both revisions so their attr names line up
@@ -205,7 +242,7 @@ fn main() -> Result<()> {
     // `checks`. Resolved before the eval scope so base and head never mix keying.
     let t = Instant::now();
     let catalog = nix::catalog_attr(&revs.repo, &revs.base, &revs.head);
-    record_phase(&mut phases, "catalog-probe", t.elapsed().as_secs_f64());
+    phases.record("catalog-probe", t.elapsed().as_secs_f64());
 
     let Evals { base, head } =
         concurrent_evals(&revs.repo, &revs.base, &revs.head, catalog, &mut phases)?;
@@ -263,7 +300,7 @@ fn main() -> Result<()> {
         })
     });
 
-    record_phase(&mut phases, "total", wall.elapsed().as_secs_f64());
+    phases.record("total", wall.elapsed().as_secs_f64());
 
     let report = Report {
         base: short(&revs.base),
@@ -274,7 +311,7 @@ fn main() -> Result<()> {
         added,
         removed,
         timings,
-        phase_timings: phases,
+        phase_timings: phases.timings,
     };
 
     if cli.json {
@@ -283,4 +320,42 @@ fn main() -> Result<()> {
         print!("{}", report.to_markdown());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quiet_defaults_off_and_parses_both_spellings() {
+        assert!(!Cli::parse_from(["blast-radius"]).quiet);
+        assert!(Cli::parse_from(["blast-radius", "-q"]).quiet);
+        assert!(Cli::parse_from(["blast-radius", "--quiet"]).quiet);
+    }
+
+    #[test]
+    fn record_keeps_the_timing_regardless_of_quiet() {
+        for quiet in [false, true] {
+            let mut phases = Phases::new(quiet);
+            phases.record("eval-base", 1.5);
+            assert_eq!(phases.timings.get("eval-base"), Some(&1.5));
+        }
+    }
+
+    #[test]
+    fn quiet_suppresses_the_progress_line() {
+        assert!(
+            Phases::new(true)
+                .progress_line("eval-base", 1.5)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn verbose_emits_the_progress_line() {
+        assert_eq!(
+            Phases::new(false).progress_line("eval-base", 1.5).as_deref(),
+            Some("blast-radius: eval-base: 1.50s"),
+        );
+    }
 }
