@@ -3400,6 +3400,36 @@ let
       }
     ];
 
+    subagent-cache =
+      let
+        svc =
+          (evalConfig [
+            {
+              services.subagent-cache = {
+                enable = true;
+                bind = "100.64.0.1:3013";
+                databaseUrlFile = "/run/subagent-cache/database-url";
+                apiKeyFile = "/run/subagent-cache/anthropic-api-key";
+                ttlDays = 14;
+              };
+            }
+          ]).systemd.services.subagent-cache;
+      in
+      [
+        {
+          assertion =
+            svc.environment.SUBAGENT_CACHE_BIND == "100.64.0.1:3013"
+            && svc.environment.SUBAGENT_CACHE_TTL_DAYS == "14";
+          message = "subagent-cache module should pass bind and ttlDays through to the daemon env";
+        }
+        {
+          # Secrets are read from runtime files in the start script, never baked
+          # into the unit environment (which lands in the world-readable store).
+          assertion = !(svc.environment ? DATABASE_URL) && !(svc.environment ? ANTHROPIC_API_KEY);
+          message = "subagent-cache module must keep secrets out of the unit environment";
+        }
+      ];
+
     vitest = [
       {
         assertion = builtins.length vitestWorkspaceCases == 2;
