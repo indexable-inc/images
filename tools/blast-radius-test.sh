@@ -94,5 +94,29 @@ else
   note "render backstop: FAIL (marker lost; sticky-comment keying breaks)"; fail=1
 fi
 
+# Fallback path: when the `evaluate` job fails, the `comment` job composes a
+# "could not compute" note (same `<!-- blast-radius -->` marker) instead of
+# leaving the PR with no comment at all (#1415). Extract that step's verbatim
+# script and assert the marker survives (sticky keying) and the run link and
+# explanation are present. RUN_URL stands in for the workflow expression the
+# step reads from its env.
+yq '.jobs.comment.steps[] | select(.name == "Fallback comment (eval failed)").run' "$workflow" > "$tmp/fallback.sh"
+( cd "$tmp" && rm -f comment.md && RUN_URL="https://github.com/indexable-inc/index/actions/runs/123" bash fallback.sh )
+if head -c 64 "$tmp/comment.md" | grep -q '^<!-- blast-radius -->'; then
+  note "fallback: marker present ok"
+else
+  note "fallback: FAIL (marker missing; sticky-comment keying breaks)"; fail=1
+fi
+if grep -q 'Could not compute the blast radius' "$tmp/comment.md"; then
+  note "fallback: explanation present ok"
+else
+  note "fallback: FAIL (explanation missing)"; fail=1
+fi
+if grep -q 'actions/runs/123' "$tmp/comment.md"; then
+  note "fallback: run link present ok"
+else
+  note "fallback: FAIL (run link missing)"; fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi
 echo "blast-radius-test: all passed"
