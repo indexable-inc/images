@@ -193,7 +193,7 @@ def _parse_surfaces(raw: str) -> list[dict[str, object]]:
         cells = record.split(_FS)
         if len(cells) != len(_FIELDS):
             continue
-        row: dict[str, object] = dict(zip(_FIELDS, (c.strip() for c in cells)))
+        row: dict[str, object] = dict(zip(_FIELDS, (c.strip() for c in cells), strict=True))
         try:
             row["pid"] = int(str(row["pid"]))
         except ValueError:
@@ -239,7 +239,7 @@ async def my_surface() -> pl.DataFrame:
     return frame.filter(frame["tty"] == tty)
 
 
-def _selector(*, tty: str | None, id: str | None) -> str:  # noqa: A002 - mirrors the public close(id=) kwarg
+def _selector(*, tty: str | None, id: str | None) -> str:  # id mirrors the public close(id=) kwarg
     """The AppleScript ``whose`` clause selecting one terminal by tty or id.
 
     Fails closed unless *exactly* one selector is given: with both present,
@@ -253,7 +253,7 @@ def _selector(*, tty: str | None, id: str | None) -> str:  # noqa: A002 - mirror
     return f'(first terminal whose id is "{_escape_applescript(id)}")'
 
 
-async def _command(verb: str, *, tty: str | None, id: str | None) -> str:  # noqa: A002 - mirrors public kwarg
+async def _command(verb: str, *, tty: str | None, id: str | None) -> str:  # id mirrors public kwarg
     """Run a single-terminal command (``close`` / ``focus``)."""
     if not await is_running():
         raise GhosttyError("Ghostty is not running")
@@ -263,7 +263,7 @@ async def _command(verb: str, *, tty: str | None, id: str | None) -> str:  # noq
     return f"{verb}: {tty or id}"
 
 
-async def close(*, tty: str | None = None, id: str | None = None) -> str:  # noqa: A002 - by-id selector
+async def close(*, tty: str | None = None, id: str | None = None) -> str:  # id is the by-id selector
     """Close one terminal surface, selected by ``tty`` or by ``id``.
 
     Closing the last surface in a window closes the window. Pass exactly one of
@@ -272,12 +272,12 @@ async def close(*, tty: str | None = None, id: str | None = None) -> str:  # noq
     return await _command("close", tty=tty, id=id)
 
 
-async def focus(*, tty: str | None = None, id: str | None = None) -> str:  # noqa: A002 - by-id selector
+async def focus(*, tty: str | None = None, id: str | None = None) -> str:  # id is the by-id selector
     """Focus one terminal surface (and bring its window forward)."""
     return await _command("focus", tty=tty, id=id)
 
 
-async def activate(*, tty: str | None = None, id: str | None = None) -> str:  # noqa: A002 - by-id selector
+async def activate(*, tty: str | None = None, id: str | None = None) -> str:  # id is the by-id selector
     """Bring the window owning a terminal surface to the front."""
     if not await is_running():
         raise GhosttyError("Ghostty is not running")
