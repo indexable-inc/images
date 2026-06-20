@@ -44,6 +44,24 @@ done
 ( cd "$tmp" && cp "$fixtures/good.json" report.json && bash render.sh )
 if diff -u "$fixtures/good.expected.md" "$tmp/comment.md"; then note "render good: ok"; else note "render good: FAIL (output drift)"; fail=1; fi
 
+# Regression (#1421): a cause name is a nix derivation name, and fixed-output
+# patch/fetch drvs legally carry `?` and `=` (e.g. `<sha>.patch?full_index=1`,
+# `webkitgtk-2.52.4+abi=4.1`). The validator's name_ok used to omit those two
+# glyphs and fail-closed the WHOLE report, so the comment job exited 1 and posted
+# no comment at all -- the "sometimes empty" symptom. The report must now both
+# validate and render with the name intact (validate and safename stay lockstep).
+if validate "$fixtures/special-name.json" >/dev/null 2>&1; then
+  note "validate special-name: ok"
+else
+  note "validate special-name: FAIL (rejected a legal nix derivation name)"; fail=1
+fi
+( cd "$tmp" && cp "$fixtures/special-name.json" report.json && bash render.sh )
+if grep -qF 'e67caa006c75181b45b761cd50294cb3c8e18f1a.patch?full_index=1' "$tmp/comment.md"; then
+  note "render special-name: name preserved ok"
+else
+  note "render special-name: FAIL (legal name dropped from comment)"; fail=1
+fi
+
 # Overflow guard: a PR touching a shared input rebuilds thousands of checks, and
 # an uncapped changed-checks list overflows GitHub's 65536-char comment limit
 # (HTTP 422), so no comment posts. Synthesize a large report and assert the body
