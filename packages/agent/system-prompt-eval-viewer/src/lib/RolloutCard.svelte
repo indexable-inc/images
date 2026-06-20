@@ -6,23 +6,29 @@
   import Timeline from './Timeline.svelte';
 
   let { c, anchor }: { c: Case; anchor: string } = $props();
+  let open = $state(false);
   const st = $derived(statusOf(c));
   const dur = $derived(c.duration_ms ? `${Math.round(c.duration_ms / 1000)}s` : '-');
 </script>
 
-<details class="rollout" id={anchor}>
+<!-- Only mount the (potentially many-MB) verdicts + timeline once the card is
+     opened, so a report with dozens of rollouts paints instantly. bind:open also
+     tracks the toolbar's expand-all (which toggles the native details). -->
+<details class="rollout" id={anchor} bind:open>
   <summary>
     <Badge kind={st.kind} text={st.label} />
     <span class="title">{c.case_id}</span>
     <span class="roll">#{c.rollout}</span>
     <span class="meta">{dur} · {(c.output_tokens ?? 0).toLocaleString()} tok · ${(c.cost_usd ?? 0).toFixed(2)}</span>
   </summary>
-  <div class="inner">
-    {#if c.error}<p class="errline">{c.error}</p>{/if}
-    <VerdictTable {c} />
-    <div class="tlh">action timeline</div>
-    <Timeline steps={c.steps} transcript={c.transcript} />
-  </div>
+  {#if open}
+    <div class="inner">
+      {#if c.error}<p class="errline">{c.error}</p>{/if}
+      <VerdictTable {c} />
+      <div class="tlh">action timeline</div>
+      <Timeline steps={c.steps} transcript={c.transcript} />
+    </div>
+  {/if}
 </details>
 
 <style>

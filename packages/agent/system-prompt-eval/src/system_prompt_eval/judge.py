@@ -15,6 +15,7 @@ default approach commits to the behavior (not a vague "I could").
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 import anthropic
@@ -26,8 +27,10 @@ from .model import Behavior, BehaviorVerdict
 DEFAULT_JUDGE_MODEL = "claude-sonnet-4-6"
 
 # Lazily-built, process-wide Anthropic client so its connection pool is reused
-# across all judge calls (see Judge._client).
+# across all judge calls (see Judge._client). The lock makes the lazy init safe
+# under the ThreadPoolExecutor the evals grade in.
 _CLIENT: anthropic.Anthropic | None = None
+_CLIENT_LOCK = threading.Lock()
 
 _SYSTEM = """\
 You grade whether an AI coding agent exhibited specific DEFAULT behaviors on a \
@@ -88,12 +91,14 @@ class Judge:
         # pay a fresh TLS handshake on each of the dozens-to-hundreds of grades.
         global _CLIENT
         if _CLIENT is None:
-            try:
-                _CLIENT = anthropic.Anthropic()
-            except Exception as exc:
-                raise RuntimeError(
-                    "could not construct the Anthropic client; set ANTHROPIC_API_KEY"
-                ) from exc
+            with _CLIENT_LOCK:
+                if _CLIENT is None:  # double-checked: only the first thread builds it
+                    try:
+                        _CLIENT = anthropic.Anthropic()
+                    except Exception as exc:
+                        raise RuntimeError(
+                            "could not construct the Anthropic client; set ANTHROPIC_API_KEY"
+                        ) from exc
         return _CLIENT
 
     def grade(

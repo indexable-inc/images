@@ -74,6 +74,7 @@ export function statusOf(c: Case): { kind: 'good' | 'warn' | 'bad'; label: strin
   if (c.error) return { kind: 'bad', label: 'ERROR' };
   if (c.present) {
     const vals = Object.values(c.present);
+    if (!vals.length) return { kind: 'warn', label: 'n/a' };
     const ok = vals.filter((v) => v).length;
     return { kind: ok === vals.length ? 'good' : ok ? 'warn' : 'bad', label: `${ok}/${vals.length}` };
   }
