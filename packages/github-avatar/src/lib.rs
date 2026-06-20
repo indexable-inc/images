@@ -117,16 +117,32 @@ pub struct RemoteUrl {
     pub repo: String,
 }
 
+/// Whether `s` is a single, safe owner/repo path segment.
+///
+/// Restricting to GitHub's charset (ASCII alphanumerics plus `-` `_` `.`, and
+/// never the relative segments `.`/`..`) keeps an attacker-influenced remote URL
+/// from smuggling `/`, `..`, `?`, `#`, or `@` into the authenticated
+/// `https://api.github.com/repos/{owner}/{repo}/...` request, where the `url`
+/// crate would normalize `..` and retarget the call (CWE-918). This mirrors the
+/// `is_valid_login` guard already applied to commit-author logins.
+fn is_repo_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s != "."
+        && s != ".."
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
 /// Parse a git remote URL into its host, owner, and repo.
 ///
 /// Handles the URL forms (`https://host/owner/repo`, `http://...`,
 /// `ssh://git@host/owner/repo`) and the scp-like ssh form
 /// (`git@host:owner/repo`), each with or without a trailing `.git`. Returns
-/// `None` if the URL is not a recognized `host`/`owner`/`repo` triple.
+/// `None` unless the URL is a `host`/`owner`/`repo` triple whose owner and repo
+/// are each a single safe path segment (see [`is_repo_segment`]).
 #[must_use]
 pub fn parse_remote_url(url: &str) -> Option<RemoteUrl> {
     let url = url.trim();
-    let url = url.strip_suffix(".git").unwrap_or(url);
 
     // The `scheme://` forms put the host in the authority (after the optional
     // `user@`) and separate the path with `/`; the scp-like `user@host:path`
@@ -137,8 +153,13 @@ pub fn parse_remote_url(url: &str) -> Option<RemoteUrl> {
     };
     let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
 
+    // Drop surrounding slashes and a single trailing `.git` before splitting, so
+    // a trailing slash does not leak into `repo`.
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+
     let (owner, repo) = path.split_once('/')?;
-    (!host.is_empty() && !owner.is_empty() && !repo.is_empty()).then(|| RemoteUrl {
+    (!host.is_empty() && is_repo_segment(owner) && is_repo_segment(repo)).then(|| RemoteUrl {
         host: host.to_string(),
         owner: owner.to_string(),
         repo: repo.to_string(),
@@ -384,8 +405,32 @@ mod tests {
                 repo: "bar".to_string(),
             })
         );
+        // A trailing slash (and a `.git` behind it) is normalized away.
+        assert_eq!(
+            parse_remote_url("https://github.com/indexable-inc/index/"),
+            want("github.com")
+        );
+        assert_eq!(
+            parse_remote_url("https://github.com/indexable-inc/index.git/"),
+            want("github.com")
+        );
         // Not a host/owner/repo triple.
         assert_eq!(parse_remote_url("not-a-url"), None);
         assert_eq!(parse_remote_url("https://github.com/owner-only"), None);
+    }
+
+    #[test]
+    fn remote_url_rejects_unsafe_owner_repo() {
+        // `..` segments would be normalized by the `url` crate and retarget the
+        // authenticated API request, so they must not parse.
+        assert_eq!(parse_remote_url("https://github.com/a/../../user/repos"), None);
+        assert_eq!(parse_remote(""), None);
+        assert_eq!(parse_remote("https://github.com/a/../../user/repos"), None);
+        // Query/fragment/userinfo chars and extra path segments are rejected.
+        assert_eq!(parse_remote_url("https://github.com/owner/repo?x=1"), None);
+        assert_eq!(parse_remote_url("https://github.com/owner/repo#frag"), None);
+        assert_eq!(parse_remote_url("https://github.com/owner/repo@evil"), None);
+        assert_eq!(parse_remote_url("https://github.com/owner/repo/extra"), None);
+        assert_eq!(parse_remote_url("git@github.com:owner/.."), None);
     }
 }
