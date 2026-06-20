@@ -195,7 +195,10 @@ def run(ctx: EvalContext, *, cases_path: Path | None = None) -> EvalReport:
     scored = [r for r in results if r.error is None]
     did = sum(1 for r in scored if r.reverse_engineered)
     errored = sum(1 for r in results if r.error is not None)
-    headline = did / len(scored) if scored else 0.0
+    # Fail-closed: an errored rollout counts as a failure (see first_principles_eval
+    # and the behaviors eval's overall_rate). Dividing by every scheduled rollout
+    # keeps a crash-heavy run from reporting a misleadingly high headline.
+    headline = did / len(results) if results else 0.0
     n = len(results) or 1
     summary: dict[str, object] = {
         "reverse_engineered_rate": headline,

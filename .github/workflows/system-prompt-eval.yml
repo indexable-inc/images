@@ -29,12 +29,17 @@ concurrency:
 
 jobs:
   run-evals:
-    # Gate: dispatch, or a `/run-evals` comment on a pull request.
+    # Gate: dispatch, or a `/run-evals` comment on a pull request from a trusted
+    # actor. The comment path checks out the PR head and runs its code with
+    # ANTHROPIC_API_KEY in scope, so it MUST stay restricted to repo
+    # owners/members/collaborators — otherwise any commenter could exfiltrate the
+    # secret through PR-controlled eval code or dataset prompts.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request != null &&
-       startsWith(github.event.comment.body, '/run-evals'))
+       startsWith(github.event.comment.body, '/run-evals') &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ["${{ format('ix-ci-run-{0}-{1}-system-prompt-eval', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 90
     env:

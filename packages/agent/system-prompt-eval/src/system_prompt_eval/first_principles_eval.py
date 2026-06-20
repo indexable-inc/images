@@ -245,7 +245,11 @@ def run(ctx: EvalContext, *, cases_path: Path | None = None) -> EvalReport:
     scored = [r for r in results if r.error is None]
     validated = sum(1 for r in scored if r.validated)
     errored = sum(1 for r in results if r.error is not None)
-    headline = validated / len(scored) if scored else 0.0
+    # Fail-closed: an errored rollout counts as a failure, not as absent. Dividing
+    # by every scheduled rollout (not just the ones that produced a verdict) keeps
+    # this consistent with the behaviors eval's overall_rate, so a run where most
+    # rollouts crash cannot report a misleadingly high headline.
+    headline = validated / len(results) if results else 0.0
     n = len(results) or 1
     summary: dict[str, object] = {
         "accuracy": headline,
