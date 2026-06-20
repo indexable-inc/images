@@ -62,6 +62,7 @@ members = [
   "packages/nix/oci-image-builder",
   "packages/search/polars-mixedbread",
   "packages/progress-style",
+  "packages/text-utils",
   "packages/tui/reel",
   "packages/repo-walker",
   "packages/screencast/screencast",

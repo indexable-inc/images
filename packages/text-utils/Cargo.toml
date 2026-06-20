@@ -1,0 +1,9 @@
+[package]
+name = "text-utils"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Small string-case helpers (snake_case, ...)"
+
+[lints]
+workspace = true
