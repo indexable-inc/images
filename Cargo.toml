@@ -78,9 +78,6 @@ members = [
   "packages/search/sink/mixedbread",
   "packages/search/sink/parquet",
   "packages/search/indexer",
-  "packages/tui/tap",
-  "packages/tui/tap/protocol",
-  "packages/tui/tap/pty",
   "packages/terminal/terminal-theme",
   "packages/dashboard/dashboard",
   "packages/dashboard/dashboard-core",
@@ -250,8 +247,6 @@ strip-ansi-escapes = "0.2"
 tango-bench = "0.7"
 tantivy = "0.26"
 tao = "0.35"
-tap-protocol = { path = "packages/tui/tap/protocol" }
-tap-pty = { path = "packages/tui/tap/pty" }
 tar = "0.4"
 tempfile = "3"
 terminal-light = "1"
@@ -299,7 +294,6 @@ tree-sitter-yaml = "0.7"
 tui = { path = "packages/tui/tui" }
 url = { version = "2.5.8", default-features = false }
 uuid = "1"
-vt100 = "0.16"
 webpki-roots = "1"
 wry = "0.55"
 x509-parser = "0.18"
