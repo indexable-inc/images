@@ -28,6 +28,18 @@ validate() { ( cd "$tmp" && cp "$1" report.json && bash validate.sh ); }
 # typed value constraint that keep an attacker from smuggling shapes into
 # the artifact.
 if validate "$fixtures/good.json" >/dev/null 2>&1; then note "validate good: ok"; else note "validate good: FAIL"; fail=1; fi
+# Regression for #1421: fixed-output patch/fetch drv names legally carry `?`
+# and `=` (`<sha>.patch?full_index=1`, `webkitgtk-2.52.4+abi=4.1`). The old
+# narrow charset rejected them and fail-closed the whole report, so the PR
+# comment came up empty. The widened name_ok must accept this report.
+if validate "$fixtures/special-name.json" >/dev/null 2>&1; then note "validate special-name: ok"; else note "validate special-name: FAIL (charset rejects legal ?/= nix names)"; fail=1; fi
+# Render must also pass these names through safename (lockstep with name_ok).
+( cd "$tmp" && cp "$fixtures/special-name.json" report.json && bash render.sh )
+if grep -q 'webkitgtk-2.52.4+abi=4.1' "$tmp/comment.md" && grep -q 'source-1a2b3c.patch?full_index=1' "$tmp/comment.md"; then
+  note "render special-name: ok"
+else
+  note "render special-name: FAIL (safename dropped legal ?/= names)"; fail=1
+fi
 for bad in bad-name bad-check missing bad-phase-key bad-phase-value; do
   if validate "$fixtures/$bad.json" >/dev/null 2>&1; then
     note "validate $bad: FAIL (accepted hostile/old report)"; fail=1

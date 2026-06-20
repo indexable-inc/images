@@ -1,0 +1,7 @@
+{"base":"aaaaaaa","head":"bbbbbbb","total":42,
+ "changed":["source-1a2b3c.patch?full_index=1","webkitgtk-2.52.4+abi=4.1"],
+ "added":[],"removed":[],
+ "causes":[{"name":"nixpkgs-fetch=pinned","checks":["source-1a2b3c.patch?full_index=1"]},
+           {"name":"webkitgtk-2.52.4+abi=4.1","checks":["webkitgtk-2.52.4+abi=4.1"]}],
+ "timings":{},
+ "phaseTimings":{"catalog-probe":0.4,"eval-base":1.0,"eval-head":1.0,"derivation-show-base":0.1,"derivation-show-head":0.1,"root-causes":0.05,"total":2.65}}

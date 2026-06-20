@@ -1,17 +1,22 @@
 name: Blast radius
 
 on:
-  # Disabled on PRs: the per-PR full-catalog eval (~57s "Report blast radius"
-  # step) claims a shared `ix-ci` runner from the one dispatcher pool that
-  # serves the whole team, so every PR queued one more eval-only runner and
-  # slowed the queue. The report is informational (a sticky PR comment), never
-  # a merge gate, so dropping the auto-trigger costs no safety. Re-enable by
-  # uncommenting the `pull_request` block below. `workflow_dispatch` only keeps
-  # `on:` non-empty (the jobs are PR-context gated, so a manual run no-ops).
+  # Opt-in on PRs via the `blast-radius` label. The per-PR full-catalog eval
+  # (~57s "Report blast radius" step) claims a shared `ix-ci` runner from the
+  # one dispatcher pool that serves the whole team, so auto-running on every PR
+  # queued one more eval-only runner each and slowed the merge queue (#1384).
+  # Gating on a label keeps the report available where it is wanted while an
+  # unlabeled PR claims no runner. `labeled` fires when the label is added;
+  # `synchronize`/`reopened` re-run it on later pushes only while the label is
+  # still present (the job-level `contains(...labels...)` guard enforces that,
+  # since `labeled` fires for ANY label). `workflow_dispatch` keeps manual
+  # invocation available (the jobs are PR-context gated, so a bare manual run
+  # no-ops).
   workflow_dispatch: {}
-  # pull_request:
-  #   branches:
-  #     - main
+  pull_request:
+    types: [labeled, synchronize, reopened]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -41,10 +46,14 @@ jobs:
   # token-backed step. The report leaves this job only as an artifact (plain
   # data) for the comment job.
   evaluate:
-    # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml).
+    # Same-repository, non-Dependabot PRs carrying the `blast-radius` label only
+    # (mirroring ai-review-gate.yml's same-repo/non-bot guard). The label check
+    # is what makes the workflow opt-in: `labeled` fires for any label, so an
+    # unrelated label must not start the eval.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login != 'dependabot[bot]'
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'blast-radius')
     # Same self-hosted dispatcher as check.yml: the `ix-ci-run-*` label is
     # claimed by the org dispatcher, which mints an ephemeral runner with a warm
     # /nix/store. Evaluating .#ciChecks.x86_64-linux forces an x86_64-linux IFD
@@ -125,6 +134,12 @@ jobs:
   # PR cannot influence.
   comment:
     needs: evaluate
+    # Run even when `evaluate` failed, so a transient base/head eval bail posts
+    # a "could not compute" note instead of leaving the comment silently absent
+    # (#1415, #1429). Skip only when `evaluate` was itself skipped (unlabeled /
+    # wrong-repo PR — nothing to report) or the run was cancelled. The per-step
+    # gates below route the success path vs the fallback path.
+    if: ${{ !cancelled() && needs.evaluate.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,7 +149,10 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # Real-report path only: when `evaluate` failed there is no artifact, and
+      # the Compose fallback step below handles that case.
       - name: Download report
+        if: ${{ needs.evaluate.result == 'success' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: blast-radius-${{ github.run_id }}
@@ -146,14 +164,27 @@ jobs:
       # Fail closed: require the full schema before rendering. Every field is
       # type-checked, SHAs must be hex, and the `and` chain short-circuits so a
       # non-array `.changed` never reaches the `+`/`test` that would error.
+      # An explicit `if` drops the implicit `success()`, so re-assert it: a
+      # failed Download must short-circuit here rather than validate a missing
+      # file. Same for the Render step below.
       - name: Validate report schema
+        if: ${{ needs.evaluate.result == 'success' && success() }}
         run: |
           set -euo pipefail
           # Slurp (-s) so the artifact must be exactly one object: `jq -e`
           # otherwise exits on the last value, letting `{}` followed by a valid
           # report pass while the render then emits a null first section.
           jq -e -s '
-            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +():-]+$");
+            # Charset = the complete legal nix store-path-name set
+            # (0-9 a-z A-Z + - . _ ? =) plus the attr-path glyphs the renderer
+            # shows (/ space ( ) :). `?` and `=` are legal in fixed-output
+            # patch/fetch drv names (`<sha>.patch?full_index=1`,
+            # `webkitgtk-2.52.4+abi=4.1`); omitting them fail-closed the whole
+            # report and the comment came up empty (#1421). Still rejects every
+            # injection glyph (@ < > [ ] ` & | ; * # { ") so a hostile report
+            # cannot smuggle a mention or HTML through a check label. Keep this
+            # in lockstep with `safename` in the Render step.
+            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +()?=:-]+$");
             length == 1 and
             (.[0] |
               (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
@@ -185,10 +216,14 @@ jobs:
       # cannot inject mentions, HTML, or spoofed markers into a comment posted
       # with the write token. The trusted job owns the marker.
       - name: Render comment
+        if: ${{ needs.evaluate.result == 'success' && success() }}
         run: |
           set -euo pipefail
           jq -r '
-            def safename: select(test("^[A-Za-z0-9_./ +():-]+$"));
+            # Keep this charset in lockstep with `name_ok` in the Validate step
+            # (the complete legal nix name set plus attr-path glyphs; `?`/`=`
+            # included so fixed-output patch/fetch drv names render, #1421).
+            def safename: select(test("^[A-Za-z0-9_./ +()?=:-]+$"));
             # Mirror packages/blast-radius/src/report.rs::format_seconds: bucket
             # by magnitude, round to integer. Empty string for a missing entry
             # so a bare label renders when an attr was a substituter hit or new
@@ -261,12 +296,36 @@ jobs:
             printf '\n\n_Comment truncated to fit the GitHub comment size limit._\n' >> comment.md
           fi
 
+      # Fallback path: `evaluate` failed (no artifact) OR a prior step in this
+      # job failed (download/validate/render flaked). Write a fallback body
+      # under the SAME marker so the next good run overwrites it in place.
+      # This body is static (derived from no report data), so it is safe to
+      # post with the write token even when the report could not be validated.
+      - name: Compose fallback comment
+        if: ${{ !cancelled() && (needs.evaluate.result == 'failure' || failure()) }}
+        run: |
+          set -euo pipefail
+          {
+            echo "<!-- blast-radius -->"
+            echo "### Blast radius"
+            echo ""
+            echo "Could not compute the blast radius for this PR (the base/head"
+            echo "catalog eval or the comment pipeline did not complete). This is"
+            echo "usually a transient runner or base-branch issue, not a problem"
+            echo "with your change. Re-run the **Blast radius** workflow, or push"
+            echo "again, to refresh this comment."
+          } > comment.md
+
       # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker.
       # Paginate the comment list so the marker is found on busy PRs (no
       # duplicate comments), and restrict the match to comments this token can
       # actually PATCH: a user comment that happens to start with the marker
       # would otherwise be selected and every PATCH would 403 forever.
+      # `!cancelled()` + the comment.md existence guard posts whichever body was
+      # produced (real render or fallback); `success()` is wrong here because the
+      # fallback path runs after an earlier-step failure.
       - name: Post sticky comment
+        if: ${{ !cancelled() && hashFiles('comment.md') != '' }}
         run: |
           set -euo pipefail
           # `gh api --slurp` rejects `--jq`, so slurp the paginated pages (an
