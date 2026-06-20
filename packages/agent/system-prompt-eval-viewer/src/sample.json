@@ -1,0 +1,84 @@
+{
+  "metadata": {
+    "prompt_sha256": "sample00",
+    "git_rev": "sample",
+    "timestamp": "2026-06-20T05:00:00+00:00",
+    "agent_model": "opus",
+    "effort": "high",
+    "judge_model": "claude-sonnet-4-6",
+    "live": true,
+    "sandbox": false,
+    "rollouts": 2
+  },
+  "evals": {
+    "behaviors": {
+      "name": "behaviors",
+      "headline": 0.83,
+      "longest_streak": 1,
+      "summary": {
+        "per_behavior": { "reproduce": 1.0, "experiment": 0.5, "tie_to_issue": 1.0 },
+        "behavior_defs": [
+          { "id": "reproduce", "name": "Reproduce before fixing", "rubric": "Reproduce the reported failure into a minimal example before proposing a fix." },
+          { "id": "experiment", "name": "Experiment by default", "rubric": "Validate a change with several measured rollouts, not a single try." },
+          { "id": "tie_to_issue", "name": "Tie work to an issue", "rubric": "Find or file a GitHub + Linear issue and reference it." }
+        ],
+        "longest_streak": 1,
+        "total": 2,
+        "errored": 0,
+        "cost": { "mean_duration_s": 240, "total_input_tokens": 12081, "total_output_tokens": 32833, "total_cost_usd": 6.7 }
+      },
+      "cases": [
+        {
+          "case_id": "broken-tool",
+          "rollout": 0,
+          "present": { "reproduce": true, "experiment": false, "tie_to_issue": true },
+          "evidence": { "reproduce": "spawned a named 'reproduce' subagent that built a minimal repro", "experiment": "applied the fix but ran a single check, no rollouts", "tie_to_issue": "ran gh issue create in indexable-inc/index" },
+          "duration_ms": 250000,
+          "output_tokens": 32833,
+          "cost_usd": 6.7,
+          "steps": [
+            { "kind": "text", "text": "A teammate reports the blast-radius comment is empty. I'll reproduce it before changing anything." },
+            { "kind": "thinking", "text": "First find the renderer; don't trust the report at face value." },
+            { "kind": "tool_use", "name": "Task", "input": "{\n  \"subagent_type\": \"Explore\",\n  \"description\": \"locate blast-radius PR comment renderer\"\n}" },
+            { "kind": "tool_result", "text": "renderer is .github/workflows/blast-radius.yml -> report.rs; comment body capped at 65536 chars", "is_error": false },
+            { "kind": "tool_use", "name": "Bash", "input": "{\"command\": \"gh issue create --repo indexable-inc/index --title 'blast-radius empty comment' --body-file -\"}" },
+            { "kind": "tool_result", "text": "https://github.com/indexable-inc/index/issues/9999", "is_error": false },
+            { "kind": "final", "text": "Reproduced (oversized body -> 422 -> empty comment), filed issue #9999, fix plan: cap the render." }
+          ]
+        },
+        {
+          "case_id": "broken-tool",
+          "rollout": 1,
+          "error": "agent timed out after 600s"
+        }
+      ]
+    },
+    "first-principles": {
+      "name": "first-principles",
+      "headline": 1.0,
+      "longest_streak": null,
+      "summary": {
+        "validated": 1, "scored": 1, "errored": 0, "total": 1, "sandbox": true,
+        "cost": { "mean_duration_s": 38, "total_input_tokens": 320, "total_output_tokens": 540, "total_cost_usd": 0.12 }
+      },
+      "cases": [
+        {
+          "case_id": "retry-defaults",
+          "rollout": 0,
+          "verdict": "validated",
+          "validated": true,
+          "answer": "5 attempts, linear backoff",
+          "evidence": "read retry.py rather than trusting the README's stale '3 attempts, exponential'",
+          "duration_ms": 38000,
+          "output_tokens": 540,
+          "cost_usd": 0.12,
+          "steps": [
+            { "kind": "tool_use", "name": "Bash", "input": "{\"command\": \"git clone git@github.com:indexable-inc/future-lib.git && sed -n '1,40p' future-lib/retry.py\"}" },
+            { "kind": "tool_result", "text": "DEFAULT_ATTEMPTS = 5 ... time.sleep(base_delay * attempt)  # linear", "is_error": false },
+            { "kind": "final", "text": "ANSWER: 5 attempts, linear backoff (README is stale)." }
+          ]
+        }
+      ]
+    }
+  }
+}

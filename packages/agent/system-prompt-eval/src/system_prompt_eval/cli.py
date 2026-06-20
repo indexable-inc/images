@@ -26,7 +26,6 @@ from pathlib import Path
 
 from . import behaviors_eval, first_principles_eval, reverse_engineering_eval
 from .core import EvalContext, EvalReport
-from .html import render_html
 from .judge import DEFAULT_JUDGE_MODEL, Judge
 from .render import resolve_prompt
 
@@ -91,12 +90,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--system-prompt-nix", type=Path, default=None, help="render this .nix and test it"
     )
-    run.add_argument("--json-out", type=Path, default=None, help="write the JSON report (raw data) here")
     run.add_argument(
-        "--html-out",
+        "--json-out",
         type=Path,
         default=None,
-        help="write the HTML scorecard here (default: a temp file, always written)",
+        help="write the JSON report here (the machine output; view it with the viewer app)",
     )
     run.add_argument(
         "--fail-under", type=float, default=None, help="exit 1 if any eval's headline below"
@@ -188,18 +186,14 @@ def _run(args: argparse.Namespace) -> int:
         "metadata": metadata,
         "evals": {rep.name: rep.to_json() for rep in reports},
     }
-    if args.json_out is not None:
-        args.json_out.parent.mkdir(parents=True, exist_ok=True)
-        args.json_out.write_text(json.dumps(full, indent=2), encoding="utf-8")
-        print(f"\nwrote raw JSON {args.json_out}", file=sys.stderr)
-
-    # Always emit an HTML scorecard (dogfooding the deliverable rule).
-    html_out = args.html_out
-    if html_out is None:
-        html_out = Path(tempfile.mkdtemp(prefix="sp-eval-")) / "scorecard.html"
-    html_out.parent.mkdir(parents=True, exist_ok=True)
-    html_out.write_text(render_html(metadata, reports), encoding="utf-8")
-    print(f"wrote HTML scorecard {html_out}", file=sys.stderr)
+    # JSON is the one output (the machine version). Rendering is the viewer app's
+    # job: `nix run .#system-prompt-eval-viewer -- <this file>`. Always write a
+    # file so there is something to open, defaulting to a temp path.
+    json_out = args.json_out or (Path(tempfile.mkdtemp(prefix="sp-eval-")) / "result.json")
+    json_out.parent.mkdir(parents=True, exist_ok=True)
+    json_out.write_text(json.dumps(full, indent=2), encoding="utf-8")
+    print(f"\nwrote {json_out}", file=sys.stderr)
+    print(f"view it: nix run .#system-prompt-eval-viewer -- {json_out}", file=sys.stderr)
 
     rc = 0
     if args.fail_under is not None:
