@@ -28,11 +28,12 @@ import json as _json
 import os
 import stat as _stat
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import polars as pl
-from sh import sh as _sh  # the bundled async shell-out helper; `sh.sh` is the function
+from sh import Output, sh as _sh  # the bundled async shell-out helper; `sh.sh` is the function
 
 __all__ = ["FsearchError", "find", "grep", "spotlight"]
 
@@ -63,7 +64,14 @@ class FsearchError(Exception):
     """A search backend exited with an error (or, for spotlight, is unavailable)."""
 
 
-async def _run(argv: list[str], *, timeout: float, ok_codes: tuple[int, ...] = (0,)):
+def _expand(root: str | os.PathLike[str]) -> str:
+    """Expand a leading ``~`` to an absolute path. Sync on purpose: ``expanduser``
+    only reads ``$HOME`` / the passwd db (no event-loop I/O), and keeping it out
+    of the ``async`` callers is what lets them stay free of path methods (ASYNC240)."""
+    return str(Path(root).expanduser())
+
+
+async def _run(argv: list[str], *, timeout: float, ok_codes: tuple[int, ...] = (0,)) -> Output:
     """Run a search CLI off the event loop with color disabled (so its output is
     clean, never SGR-corrupted). A non-success exit or a timeout surfaces as
     FsearchError, so callers have one error type to catch (the timeout is the
@@ -132,10 +140,10 @@ def _lstat_rows(paths: list[str]) -> pl.DataFrame:
         rows.append(
             {
                 "path": cand,
-                "name": os.path.basename(cand.rstrip("/")),
+                "name": Path(cand.rstrip("/")).name,
                 "type": kind,
                 "size": st.st_size,
-                "mtime": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
+                "mtime": datetime.fromtimestamp(st.st_mtime, tz=UTC),
             }
         )
     return pl.DataFrame(rows, schema=_FIND_SCHEMA)
@@ -171,7 +179,7 @@ async def grep(
         argv.append("--no-ignore")
     if glob:
         argv += ["-g", glob]
-    argv += ["--", pattern, os.path.expanduser(str(root))]
+    argv += ["--", pattern, _expand(root)]
     out = await _run(argv, timeout=timeout, ok_codes=(0, 1))  # rg exits 1 on no matches
     rows: list[dict[str, Any]] = []
     for raw in out.text.splitlines():
@@ -239,7 +247,7 @@ async def find(
     if max_depth is not None:
         argv += ["--max-depth", str(max_depth)]
     argv += ["--max-results", str(limit)]  # cap at the source (limit applies to real hits)
-    argv += ["--", pattern, os.path.expanduser(str(root))]
+    argv += ["--", pattern, _expand(root)]
     out = await _run(argv, timeout=timeout)
     paths = [p for p in out.text.split("\0") if p]
     # lstat off the event loop (up to `limit` stat syscalls), then cap rows.
@@ -263,7 +271,7 @@ async def spotlight(
         raise FsearchError("spotlight needs macOS Spotlight (mdfind); use grep/find on Linux")
     argv = ["/usr/bin/mdfind", "-0"]
     if root:
-        argv += ["-onlyin", os.path.expanduser(str(root))]
+        argv += ["-onlyin", _expand(root)]
     if name_only:
         argv.append("-name")
     if literal:

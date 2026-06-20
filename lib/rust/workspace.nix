@@ -212,9 +212,6 @@ let
         ];
         packageTestInputs = {
           tui = [ workspacePkgs.vim ];
-          # tap's integration tests drive the `tap` binary on a PTY and run `bash`
-          # as the session child; the daemon resolves `bash` from PATH at runtime.
-          tap = [ workspacePkgs.bash ];
           # ix-vt's tests dlopen the libghostty-vt dylib at runtime; make its lib
           # dir available so the loader resolves `@rpath`/`-l ghostty-vt`.
           ix-vt = [ libghosttyVt ];

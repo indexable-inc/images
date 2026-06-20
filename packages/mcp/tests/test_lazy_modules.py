@@ -117,7 +117,9 @@ def test_install_binds_proxies_outside_baseline_and_seeds_them() -> None:
     assert not isinstance(ns.get("view"), runtime._LazyModule)  # view stays eager
     assert isinstance(ns.get("view"), types.ModuleType)
     # The fsearch search helpers are bound eagerly as top-level callables.
-    assert callable(ns.get("grep")) and callable(ns.get("find")) and callable(ns.get("spotlight"))
+    assert callable(ns.get("grep"))
+    assert callable(ns.get("find"))
+    assert callable(ns.get("spotlight"))
     # A fresh per-session namespace is seeded with the proxy too.
     sess = runtime._session_ns("sess-lazy-test")
     assert isinstance(sess.get("maps"), runtime._LazyModule)
