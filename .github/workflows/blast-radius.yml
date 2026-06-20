@@ -22,7 +22,15 @@ permissions:
 
 concurrency:
   group: blast-radius-${{ github.ref }}
-  cancel-in-progress: true
+  # Only cancel an in-flight run when the new event will itself run an eval: a
+  # push (`synchronize`)/`reopened`, a `workflow_dispatch`, or the `blast-radius`
+  # label being added. An unrelated `labeled` event skips `evaluate` (see the job
+  # `if:`), but concurrency cancellation is applied at the workflow level BEFORE
+  # any job `if:`, so an unconditional `cancel-in-progress` would let adding any
+  # label kill an opted-in PR's running eval and leave the sticky comment
+  # unrefreshed. Gating the cancel on the same condition keeps unrelated label
+  # events from interrupting a real run.
+  cancel-in-progress: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'blast-radius' }}
 
 env:
   # The self-hosted runner's Nix daemon owns substituters; the job only sets
