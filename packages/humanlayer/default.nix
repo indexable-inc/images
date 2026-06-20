@@ -1,8 +1,9 @@
 {
   lib,
-  stdenv,
+  stdenvNoCC,
   fetchurl,
-  autoPatchelfHook,
+  makeWrapper,
+  nodejs_22,
   nix,
   # Bound to a real builder only on the flake-package path (lib/packages.nix),
   # which is where `nix run .#humanlayer.updateScript` resolves; the overlay path
@@ -16,20 +17,25 @@ let
   # `nix run .#humanlayer.updateScript` (see the updateScript below). Mirrors the
   # packages/yc layout.
   manifest = lib.importJSON ./manifest.json;
-  inherit (manifest) version;
+  inherit (manifest) version cliHash;
 
   # The `@humanlayer/cli` npm launcher is a thin JS shim that execs a
   # platform-specific, bun-compiled standalone binary shipped in a sibling
-  # package (`@humanlayer/cli-<slug>`). We fetch that platform binary directly:
-  # it is the real `humanlayer` executable, so the JS launcher is not needed.
+  # package (`@humanlayer/cli-<slug>`). Install both packages side by side,
+  # matching npm's node_modules layout, because the standalone binary starts as
+  # raw Bun when invoked outside the launcher.
   baseUrl = "https://registry.npmjs.org/@humanlayer";
 
-  inherit (stdenv.hostPlatform) system;
+  inherit (stdenvNoCC.hostPlatform) system;
   target =
     manifest.platforms.${system}
       or (throw "humanlayer: no prebuilt binary for ${system}; supported: ${lib.concatStringsSep ", " (builtins.attrNames manifest.platforms)}");
 
-  src = fetchurl {
+  cliSrc = fetchurl {
+    url = "${baseUrl}/cli/-/cli-${version}.tgz";
+    hash = cliHash;
+  };
+  platformSrc = fetchurl {
     url = "${baseUrl}/cli-${target.slug}/-/cli-${target.slug}-${version}.tgz";
     inherit (target) hash;
   };
@@ -62,6 +68,7 @@ let
           # Without a version argument it tracks the upstream npm `latest` tag.
           def main [version?: string] {
             let v = ($version | default (http get $"($base)/cli/latest" | get version))
+            let cli_hash = (^nix store prefetch-file --json $"($base)/cli/-/cli-($v).tgz" | from json | get hash)
             let platforms = (
               $slugs
               | transpose system slug
@@ -72,27 +79,35 @@ let
                 }
             )
             let out = "packages/humanlayer/manifest.json"
-            { version: $v, platforms: $platforms } | to json --indent 2 | save --force $out
+            { version: $v, cliHash: $cli_hash, platforms: $platforms } | to json --indent 2 | save --force $out
             print $"updated ($out) to ($v)"
           }
         '';
       };
 in
-stdenv.mkDerivation {
+stdenvNoCC.mkDerivation {
   pname = "humanlayer";
-  inherit version src;
+  inherit version;
+  dontUnpack = true;
 
-  # The npm tarball unpacks to `package/` (bin/humanlayer + package.json).
-  sourceRoot = "package";
-
-  # The Linux binaries are dynamically linked against a generic libc; patch their
-  # interpreter and standard library NEEDEDs to the Nix store. Darwin binaries
-  # need no patching.
-  nativeBuildInputs = lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;
+  nativeBuildInputs = [ makeWrapper ];
 
   installPhase = ''
     runHook preInstall
-    install -Dm755 bin/humanlayer $out/bin/humanlayer
+
+    mkdir -p \
+      "$out/lib/node_modules/@humanlayer/cli" \
+      "$out/lib/node_modules/@humanlayer/cli-${target.slug}" \
+      "$out/bin"
+
+    tar -xzf ${cliSrc} -C "$out/lib/node_modules/@humanlayer/cli" --strip-components=1
+    tar -xzf ${platformSrc} -C "$out/lib/node_modules/@humanlayer/cli-${target.slug}" --strip-components=1
+
+    patchShebangs "$out/lib/node_modules/@humanlayer/cli/bin/humanlayer"
+    wrapProgram "$out/lib/node_modules/@humanlayer/cli/bin/humanlayer" \
+      --prefix PATH : "${lib.makeBinPath [ nodejs_22 ]}"
+    ln -s "$out/lib/node_modules/@humanlayer/cli/bin/humanlayer" "$out/bin/humanlayer"
+
     runHook postInstall
   '';
 
