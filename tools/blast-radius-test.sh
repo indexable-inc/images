@@ -43,6 +43,24 @@ done
 ( cd "$tmp" && cp "$fixtures/good.json" report.json && bash render.sh )
 if diff -u "$fixtures/good.expected.md" "$tmp/comment.md"; then note "render good: ok"; else note "render good: FAIL (output drift)"; fail=1; fi
 
+# Regression (#1421): a cause name is a nix derivation name, and fixed-output
+# patch/fetch drvs legally carry `?` and `=` (e.g. `<sha>.patch?full_index=1`,
+# `webkitgtk-2.52.4+abi=4.1`). The validator's name_ok used to omit those two
+# glyphs and fail-closed the WHOLE report, so the comment job exited 1 and posted
+# no comment at all -- the "sometimes empty" symptom. The report must now both
+# validate and render with the name intact (validate and safename stay lockstep).
+if validate "$fixtures/special-name.json" >/dev/null 2>&1; then
+  note "validate special-name: ok"
+else
+  note "validate special-name: FAIL (rejected a legal nix derivation name)"; fail=1
+fi
+( cd "$tmp" && cp "$fixtures/special-name.json" report.json && bash render.sh )
+if grep -qF 'e67caa006c75181b45b761cd50294cb3c8e18f1a.patch?full_index=1' "$tmp/comment.md"; then
+  note "render special-name: name preserved ok"
+else
+  note "render special-name: FAIL (legal name dropped from comment)"; fail=1
+fi
+
 # Overflow guard: a PR touching a shared input rebuilds thousands of checks, and
 # an uncapped changed-checks list overflows GitHub's 65536-char comment limit
 # (HTTP 422), so no comment posts. Synthesize a large report and assert the body
@@ -92,6 +110,30 @@ if head -c 64 "$tmp/comment.md" | grep -q '^<!-- blast-radius -->'; then
   note "render backstop: marker survived truncation ok"
 else
   note "render backstop: FAIL (marker lost; sticky-comment keying breaks)"; fail=1
+fi
+
+# Fallback path: when the `evaluate` job fails, the `comment` job composes a
+# "could not compute" note (same `<!-- blast-radius -->` marker) instead of
+# leaving the PR with no comment at all (#1415). Extract that step's verbatim
+# script and assert the marker survives (sticky keying) and the run link and
+# explanation are present. RUN_URL stands in for the workflow expression the
+# step reads from its env.
+yq '.jobs.comment.steps[] | select(.name == "Fallback comment (eval failed)").run' "$workflow" > "$tmp/fallback.sh"
+( cd "$tmp" && rm -f comment.md && RUN_URL="https://github.com/indexable-inc/index/actions/runs/123" bash fallback.sh )
+if head -c 64 "$tmp/comment.md" | grep -q '^<!-- blast-radius -->'; then
+  note "fallback: marker present ok"
+else
+  note "fallback: FAIL (marker missing; sticky-comment keying breaks)"; fail=1
+fi
+if grep -q 'Could not compute the blast radius' "$tmp/comment.md"; then
+  note "fallback: explanation present ok"
+else
+  note "fallback: FAIL (explanation missing)"; fail=1
+fi
+if grep -q 'actions/runs/123' "$tmp/comment.md"; then
+  note "fallback: run link present ok"
+else
+  note "fallback: FAIL (run link missing)"; fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi

@@ -1,17 +1,21 @@
 name: Blast radius
 
 on:
-  # Disabled on PRs: the per-PR full-catalog eval (~57s "Report blast radius"
-  # step) claims a shared `ix-ci` runner from the one dispatcher pool that
-  # serves the whole team, so every PR queued one more eval-only runner and
-  # slowed the queue. The report is informational (a sticky PR comment), never
-  # a merge gate, so dropping the auto-trigger costs no safety. Re-enable by
-  # uncommenting the `pull_request` block below. `workflow_dispatch` only keeps
-  # `on:` non-empty (the jobs are PR-context gated, so a manual run no-ops).
+  # Opt-in on PRs via a `blast-radius` label, not every PR. The per-PR
+  # full-catalog eval (~57s "Report blast radius" step) claims a shared `ix-ci`
+  # runner from the one dispatcher pool that serves the whole team, so running
+  # it on every PR slowed the queue -- why #1384 disabled the trigger entirely.
+  # Gating on the label (see the `evaluate` job `if:`) keeps that cost off
+  # unlabeled PRs while restoring the comment for PRs a maintainer opts in.
+  # `labeled` fires the first run when the label is added; `synchronize` /
+  # `reopened` refresh the sticky comment on later pushes (each re-checks the
+  # label, so removing it stops future runs). `workflow_dispatch` keeps `on:`
+  # non-empty for manual runs (PR-context gated, so a bare dispatch no-ops).
   workflow_dispatch: {}
-  # pull_request:
-  #   branches:
-  #     - main
+  pull_request:
+    types: [labeled, synchronize, reopened]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -41,8 +45,13 @@ jobs:
   # token-backed step. The report leaves this job only as an artifact (plain
   # data) for the comment job.
   evaluate:
-    # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml).
+    # Opt-in, same-repository, non-Dependabot PRs only. The `blast-radius` label
+    # is the opt-in gate (see the `on: pull_request` note); the same-repo +
+    # non-Dependabot checks mirror ai-review-gate.yml. On `workflow_dispatch`
+    # the `pull_request` context is empty, so this is false and the manual run
+    # no-ops -- matching the prior behavior.
     if: >-
+      contains(github.event.pull_request.labels.*.name, 'blast-radius') &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     # Same self-hosted dispatcher as check.yml: the `ix-ci-run-*` label is
@@ -125,6 +134,14 @@ jobs:
   # PR cannot influence.
   comment:
     needs: evaluate
+    # Run whenever `evaluate` actually ran -- success OR failure -- so a failed
+    # eval still leaves the PR an explicit note instead of silently nothing (the
+    # "comment comes up empty" report: #1415). The eval bail is frequently
+    # base-side (a transiently un-evaluable `master`) or a runner flake, i.e.
+    # unrelated to the PR. Skip only when `evaluate` was skipped (unlabeled PR /
+    # fork / Dependabot): those opted out, so no comment is correct.
+    # `!cancelled()` lets a cancel-in-progress run bow out without posting.
+    if: ${{ !cancelled() && needs.evaluate.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,7 +151,11 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # Download + validate + render run only when the eval succeeded; the
+      # fallback step below covers the failure path. The eval's `Upload report`
+      # is `if: success()`, so the artifact exists exactly on this path.
       - name: Download report
+        if: ${{ needs.evaluate.result == 'success' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: blast-radius-${{ github.run_id }}
@@ -147,13 +168,14 @@ jobs:
       # type-checked, SHAs must be hex, and the `and` chain short-circuits so a
       # non-array `.changed` never reaches the `+`/`test` that would error.
       - name: Validate report schema
+        if: ${{ needs.evaluate.result == 'success' }}
         run: |
           set -euo pipefail
           # Slurp (-s) so the artifact must be exactly one object: `jq -e`
           # otherwise exits on the last value, letting `{}` followed by a valid
           # report pass while the render then emits a null first section.
           jq -e -s '
-            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +():-]+$");
+            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +()?=:-]+$");
             length == 1 and
             (.[0] |
               (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
@@ -185,10 +207,11 @@ jobs:
       # cannot inject mentions, HTML, or spoofed markers into a comment posted
       # with the write token. The trusted job owns the marker.
       - name: Render comment
+        if: ${{ needs.evaluate.result == 'success' }}
         run: |
           set -euo pipefail
           jq -r '
-            def safename: select(test("^[A-Za-z0-9_./ +():-]+$"));
+            def safename: select(test("^[A-Za-z0-9_./ +()?=:-]+$"));
             # Mirror packages/blast-radius/src/report.rs::format_seconds: bucket
             # by magnitude, round to integer. Empty string for a missing entry
             # so a bare label renders when an attr was a substituter hit or new
@@ -260,6 +283,27 @@ jobs:
             mv comment.md.trunc comment.md
             printf '\n\n_Comment truncated to fit the GitHub comment size limit._\n' >> comment.md
           fi
+
+      # When evaluate did not succeed, compose an explicit "could not compute"
+      # note instead of leaving the PR with no comment. No PR-controlled data reaches
+      # this step (the report.json is not read), so it needs no schema gate. The
+      # same `<!-- blast-radius -->` marker means the next good run overwrites it
+      # in place. Authored here, on the trusted runner, so the marker stays
+      # under the write-token job's control.
+      - name: Fallback comment (eval failed)
+        if: ${{ needs.evaluate.result != 'success' }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo '<!-- blast-radius -->'
+            echo '### Blast radius'
+            echo ''
+            echo 'Could not compute the blast radius for this change: the evaluation step did not finish. This is often a transient base-branch eval or runner issue rather than a problem with this PR.'
+            echo ''
+            echo "See the [Blast radius run](${RUN_URL}) for details; pushing a new commit re-runs it."
+          } > comment.md
 
       # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker.
       # Paginate the comment list so the marker is found on busy PRs (no
