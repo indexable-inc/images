@@ -202,5 +202,82 @@
     exit 1
   fi
 
+  # PreToolUse guards (cargo-guard, bash-habits-guard, search-guard): a shared
+  # deny/allow asserter on the JSON permissionDecision channel.
+  pre_guard() {
+    local sub="$1" desc="$2" expect="$3" input="$4" got verdict
+    got="$(printf '%s' "$input" | ${claudeHooks}/bin/claude-hooks "$sub")"
+    case "$got" in
+    ''') verdict=allow ;;
+    *'"permissionDecision":"deny"'*) verdict=deny ;;
+    *) verdict="unparsed: $got" ;;
+    esac
+    if [ "$verdict" != "$expect" ]; then
+      printf '%s check failed (%s): expected %s, got %s\n' "$sub" "$desc" "$expect" "$verdict" >&2
+      exit 1
+    fi
+  }
+
+  pre_guard cargo-guard "bare cargo in monorepo denied" deny \
+    '{"tool_name":"Bash","cwd":"/x/indexable-inc/ix","tool_input":{"command":"cargo test"}}'
+  pre_guard cargo-guard "nix-wrapped cargo allowed" allow \
+    '{"tool_name":"Bash","cwd":"/x/indexable-inc/ix","tool_input":{"command":"nix run .#run -- cargo test"}}'
+  pre_guard cargo-guard "cargo outside monorepo allowed" allow \
+    '{"tool_name":"Bash","cwd":"/tmp/other","tool_input":{"command":"cargo test"}}'
+  pre_guard cargo-guard "non-Bash tool fails open" allow '{"tool_name":"Edit"}'
+  pre_guard cargo-guard "malformed payload fails open" allow 'not json'
+
+  pre_guard bash-habits-guard "stderr to /dev/null denied" deny \
+    '{"tool_name":"Bash","tool_input":{"command":"make 2>/dev/null"}}'
+  pre_guard bash-habits-guard "plain stdout /dev/null allowed" allow \
+    '{"tool_name":"Bash","tool_input":{"command":"make >/dev/null"}}'
+  pre_guard bash-habits-guard "recursive grep denied" deny \
+    '{"tool_name":"Bash","tool_input":{"command":"grep -r foo ."}}'
+  pre_guard bash-habits-guard "no-verify denied" deny \
+    '{"tool_name":"Bash","tool_input":{"command":"git commit --no-verify"}}'
+  pre_guard bash-habits-guard "quoted mention not a false positive" allow \
+    "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo '2>/dev/null'\"}}"
+
+  pre_guard search-guard "Search tool denied" deny '{"tool_name":"Search"}'
+  pre_guard search-guard "WebSearch not denied" allow '{"tool_name":"WebSearch"}'
+
+  # Review pair: log-edit records an edited path, the Stop gate then blocks once
+  # (JSON decision:block) and consumes the marker; a stop_hook_active re-entry
+  # allows silently (the loop guard).
+  rstate="$PWD/review-state"
+  printf '%s' '{"session_id":"s1","tool_input":{"file_path":"/a/b.rs"}}' \
+    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${claudeHooks}/bin/claude-hooks review-log-edit
+  gate="$(printf '%s' '{"session_id":"s1"}' \
+    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${claudeHooks}/bin/claude-hooks review-gate)"
+  case "$gate" in
+  *'"decision":"block"'*) : ;;
+  *) printf 'review-gate check failed: expected decision:block, got:\n%s\n' "$gate" >&2; exit 1 ;;
+  esac
+  again="$(printf '%s' '{"session_id":"s1"}' \
+    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${claudeHooks}/bin/claude-hooks review-gate)"
+  if [ -n "$again" ]; then
+    printf 'review-gate check failed: consumed marker should allow silently, got:\n%s\n' "$again" >&2
+    exit 1
+  fi
+  loop="$(printf '%s' '{"session_id":"s1","stop_hook_active":true}' \
+    | CLAUDE_REVIEW_STATE_DIR="$rstate" ${claudeHooks}/bin/claude-hooks review-gate)"
+  if [ -n "$loop" ]; then
+    printf 'review-gate check failed: stop_hook_active must allow silently, got:\n%s\n' "$loop" >&2
+    exit 1
+  fi
+
+  # friction-report self-gates on an ix-contributor git author; the sandbox has
+  # no git identity, so it must exit 0 silently (never block Stop, never file).
+  if [ -n "$(printf '%s' '{"session_id":"s1","transcript_path":"/dev/null"}' \
+    | HOME="$PWD/no-home" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+      ${claudeHooks}/bin/claude-hooks friction-report)" ]; then
+    printf 'friction-report check failed: non-contributor must exit silently\n' >&2
+    exit 1
+  fi
+
+  # session-banner is best-effort host introspection; assert only that it never
+  # crashes (fails open) on a minimal HOME.
+  HOME="$PWD/no-home" ${claudeHooks}/bin/claude-hooks session-banner </dev/null >/dev/null
+
   runHook postInstallCheck
 ''

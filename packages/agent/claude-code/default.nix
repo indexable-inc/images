@@ -257,10 +257,11 @@ let
   #     gate fleet-wide anyway, since the default skip-flag already makes `ask`
   #     inert); the kernel `sh()` path carries no equivalent prompt.
 
-  # The three hooks (session-digest, worktree-guard, prompt-priors) are
-  # subcommands of one compiled binary, wrapped with their tool paths and the
-  # baked primary-checkout default; each fails open and silent. See ./hooks.nix
-  # for the full design, kill switches, and per-hook rationale.
+  # Every hook is a subcommand of one compiled binary, wrapped with its tool
+  # paths and the baked primary-checkout default; each fails open and silent.
+  # ./hooks.nix builds the binary (and its wrapper env); ../hooks.nix is the
+  # neutral declaration list (which subcommand on which event/matcher) shared
+  # with the codex wrapper.
   claudeHooks = import ./hooks.nix {
     inherit
       lib
@@ -272,7 +273,18 @@ let
       repoPackages
       ;
   };
-  hookCmd = sub: "${claudeHooks}/bin/claude-hooks ${sub}";
+  # The settings.json `hooks` block, rendered for Claude from the shared
+  # declaration list (the same list renders the codex wrapper's hooks). Located
+  # via ix.paths (the no-parent-path house rule forbids a `../` literal), same
+  # as the common.nix import above.
+  sharedHooks = import (ix.paths.packagesRoot + "/agent/hooks.nix") {
+    inherit
+      lib
+      claudeHooks
+      primaryCheckouts
+      repoPackages
+      ;
+  };
 
   # Tools denied via the flagSettings `permissions.deny` layer; see the
   # `permissions.deny` bullets in the doc block above for why each, and why deny
@@ -303,48 +315,9 @@ let
           ]
           ++ denyTools;
       };
-      hooks = {
-        SessionStart = [
-          {
-            hooks = [
-              {
-                type = "command";
-                command = hookCmd "session-digest";
-                # A local file read; generous next to the CLI's 60s default.
-                timeout = 5;
-              }
-            ];
-          }
-        ];
-        PreToolUse = lib.optional (primaryCheckouts != [ ]) {
-          matcher = "Edit|MultiEdit|Write|NotebookEdit";
-          hooks = [
-            {
-              type = "command";
-              command = hookCmd "worktree-guard";
-              # The hook runs a handful of local `git rev-parse` calls; well
-              # past that something is wedged and failing open beats stalling
-              # every edit.
-              timeout = 10;
-            }
-          ];
-        };
-      }
-      // lib.optionalAttrs (repoPackages ? search) {
-        UserPromptSubmit = [
-          {
-            hooks = [
-              {
-                type = "command";
-                command = hookCmd "prompt-priors";
-                # Generous ceiling over the script's own 2s search budget; the
-                # CLI default is 60s, far past fail-open.
-                timeout = 5;
-              }
-            ];
-          }
-        ];
-      };
+      # The full hook set (context injectors, guards, review pair, friction) for
+      # Claude, rendered from the shared declaration list in ../hooks.nix.
+      hooks = sharedHooks.claude;
     }
     // lib.optionalAttrs dangerouslySkipPermissions {
       skipDangerousModePermissionPrompt = true;

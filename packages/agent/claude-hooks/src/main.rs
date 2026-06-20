@@ -1,13 +1,19 @@
-//! Claude Code hook commands, one compiled binary with three subcommands that
-//! replace the old hand-rolled `writeShellScript` hooks in
-//! `packages/agent/claude-code`. Every hook fails OPEN and SILENT: any missing input,
-//! parse error, or kill-switch returns with no stdout, because a noisy or broken
-//! hook is strictly worse than no hook.
+//! Claude Code / Codex hook commands, one compiled binary whose subcommands
+//! replace the old hand-rolled shell/Python hooks in `packages/agent/claude-code`
+//! and the personal `~/.config/nix` dotfiles. Every hook fails OPEN and SILENT:
+//! any missing input, parse error, or kill-switch returns with no stdout/stderr,
+//! because a noisy or broken hook is strictly worse than no hook.
 //!
-//! Tool paths and the baked primary-checkout default are passed by the
-//! claude-code wrapper via env (`IX_GIT`, `IX_SEARCH`,
-//! `IX_DEFAULT_PRIMARY_CHECKOUTS`); user-facing knobs keep their
-//! `CLAUDE_CODE_*` names.
+//! The neutral declaration list that maps each subcommand to its event/matcher
+//! for both agents lives in `packages/agent/hooks.nix`; the claude-code wrapper
+//! bakes the binary's tool paths and primary-checkout default via env
+//! (`IX_GIT`, `IX_SEARCH`, `IX_DEFAULT_PRIMARY_CHECKOUTS`), while user-facing
+//! knobs keep their `CLAUDE_CODE_*` names.
+
+mod friction;
+mod guards;
+mod review;
+mod session_banner;
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -68,6 +74,13 @@ fn main() -> ExitCode {
         Some("session-digest") => session_digest(),
         Some("worktree-guard") => worktree_guard(),
         Some("prompt-priors") => prompt_priors(),
+        Some("session-banner") => session_banner::session_banner(),
+        Some("review-log-edit") => review::review_log_edit(),
+        Some("review-gate") => review::review_gate(),
+        Some("cargo-guard") => guards::cargo_guard(),
+        Some("bash-habits-guard") => guards::bash_habits_guard(),
+        Some("search-guard") => guards::search_guard(),
+        Some("friction-report") => friction::friction_report(),
         other => {
             eprintln!("claude-hooks: unknown subcommand {other:?}");
             return ExitCode::from(2);
@@ -79,15 +92,15 @@ fn main() -> ExitCode {
 // --- shared helpers ---
 
 /// True when an env var is present and non-empty (the kill-switch convention).
-fn flag_set(name: &str) -> bool {
+pub(crate) fn flag_set(name: &str) -> bool {
     std::env::var_os(name).is_some_and(|v| !v.is_empty())
 }
 
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/var/empty"), PathBuf::from)
 }
 
-fn read_stdin() -> Option<String> {
+pub(crate) fn read_stdin() -> Option<String> {
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf).ok()?;
     Some(buf)
@@ -99,17 +112,17 @@ fn cap_chars(s: &str, max: usize) -> String {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ContextOutput {
-    hook_event_name: &'static str,
-    additional_context: String,
+pub(crate) struct ContextOutput {
+    pub(crate) hook_event_name: &'static str,
+    pub(crate) additional_context: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DenyOutput {
-    hook_event_name: &'static str,
-    permission_decision: &'static str,
-    permission_decision_reason: String,
+pub(crate) struct DenyOutput {
+    pub(crate) hook_event_name: &'static str,
+    pub(crate) permission_decision: &'static str,
+    pub(crate) permission_decision_reason: String,
 }
 
 #[derive(Serialize)]
@@ -118,7 +131,7 @@ struct Wrap<T> {
     hook_specific_output: T,
 }
 
-fn emit<T: Serialize>(inner: T) {
+pub(crate) fn emit<T: Serialize>(inner: T) {
     if let Ok(s) = serde_json::to_string(&Wrap {
         hook_specific_output: inner,
     }) {

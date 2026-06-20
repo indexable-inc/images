@@ -3,9 +3,19 @@
   ix,
   codex,
   makeBinaryWrapper,
+  runCommand,
+  git,
   symlinkJoin,
   formats,
   binName ? "codex",
+
+  # Shell globs the (claude-only) worktree-guard protects, threaded into the
+  # shared hook module so both wrappers feed it the same inputs. Unused in the
+  # codex render (worktree-guard is claude-only), kept only for parity.
+  primaryCheckouts ? [
+    "/home/*/index"
+    "/home/*/ix"
+  ],
 
   # Sibling repo packages from the flake package set (threaded by
   # lib/packages.nix), used to locate the `ix-mcp` entrypoint for the baked
@@ -79,6 +89,40 @@ let
     forced = entriesOf (ix.attrs.flattenToDotted forcedSettings);
     soft = entriesOf (ix.attrs.flattenToDotted settings) ++ ix.mcp.toCodexEntries mcpStdioServers;
   };
+
+  # Codex hooks come from the SAME declaration list as Claude's
+  # (../hooks.nix), rendered to codex's field-aligned hook schema. Codex does
+  # NOT discover hooks via a `-c` pointer; it reads `~/.codex/hooks.json` /
+  # inline `[hooks]` / plugin manifests, and a non-managed command hook is
+  # skipped until reviewed/trusted (its hash is recorded). So this wrapper does
+  # not bake the hooks into the launch spec — it EXPOSES the rendered file as
+  # `passthru.hooksJson`, which a consumer delivers to `~/.codex/hooks.json`
+  # (home-manager) and trusts once via `/hooks` (or installs as a managed
+  # `requirements.toml` layer). The hook commands are absolute store paths into
+  # the compiled `claude-hooks` binary, the same binary the claude-code wrapper
+  # builds (cached, one derivation).
+  claudeHooks = import (ix.paths.packagesRoot + "/agent/claude-code/hooks.nix") {
+    inherit
+      lib
+      runCommand
+      makeBinaryWrapper
+      ix
+      git
+      primaryCheckouts
+      repoPackages
+      ;
+  };
+  hooksJson = (formats.json { }).generate "codex-hooks.json" {
+    hooks =
+      (import (ix.paths.packagesRoot + "/agent/hooks.nix") {
+        inherit
+          lib
+          claudeHooks
+          primaryCheckouts
+          repoPackages
+          ;
+      }).codex;
+  };
 in
 # These baked defaults also reach the Codex GUI app's remote-SSH sessions, not
 # just terminal use. The desktop app does NOT ship its own binary to the remote
@@ -103,6 +147,9 @@ symlinkJoin {
       --inherit-argv0 \
       --set IX_LAUNCH_SPEC ${spec}
   '';
+  # The codex hooks.json rendered from the shared declaration list, for a
+  # consumer to deliver to `~/.codex/hooks.json` (see the `hooksJson` comment).
+  passthru = { inherit hooksJson; };
   meta = codex.meta // {
     description = "${codex.meta.description or "OpenAI Codex CLI"} (index wrapper with baked defaults)";
     mainProgram = binName;
