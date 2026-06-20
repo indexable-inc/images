@@ -303,6 +303,8 @@ jobs:
       # post with the write token even when the report could not be validated.
       - name: Compose fallback comment
         if: ${{ !cancelled() && (needs.evaluate.result == 'failure' || failure()) }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           {
@@ -314,6 +316,8 @@ jobs:
             echo "usually a transient runner or base-branch issue, not a problem"
             echo "with your change. Re-run the **Blast radius** workflow, or push"
             echo "again, to refresh this comment."
+            echo ""
+            echo "See the [Blast radius run](${RUN_URL}) for details."
           } > comment.md
 
       # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker.
