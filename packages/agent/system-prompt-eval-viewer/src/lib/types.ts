@@ -69,3 +69,18 @@ export function grade(h: number): 'good' | 'warn' | 'bad' {
 export function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
+
+export function statusOf(c: Case): { kind: 'good' | 'warn' | 'bad'; label: string } {
+  if (c.error) return { kind: 'bad', label: 'ERROR' };
+  if (c.present) {
+    const vals = Object.values(c.present);
+    const ok = vals.filter((v) => v).length;
+    return { kind: ok === vals.length ? 'good' : ok ? 'warn' : 'bad', label: `${ok}/${vals.length}` };
+  }
+  if (c.verdict)
+    return { kind: c.verdict === 'validated' ? 'good' : c.verdict === 'stale' ? 'bad' : 'warn', label: c.verdict };
+  if (c.reverse_engineered !== undefined)
+    return c.reverse_engineered ? { kind: 'good', label: 'RE' } : { kind: 'bad', label: 'guessed' };
+  return { kind: 'warn', label: '?' };
+}
+

@@ -1,34 +1,53 @@
+/* Notion-esque: white, warm near-black text, hairline borders, soft pastel tags,
+   generous whitespace, no gradients or neon. */
 :root {
-  --bg: #0b0d12;
-  --card: #14171f;
-  --panel: #0f1218;
-  --chip: #1b1f2a;
-  --line: #262b38;
-  --text: #e7e9ee;
-  --dim: #8b93a7;
-  --accent: #8b5cf6; /* violet */
-  --accent-2: #22d3ee; /* cyan */
-  --good: #34d399; /* emerald */
-  --warn: #fbbf24; /* amber */
-  --bad: #fb7185; /* rose */
-  --grad: linear-gradient(100deg, #8b5cf6, #22d3ee 60%, #34d399);
-  --mono: ui-monospace, "Berkeley Mono", "JetBrains Mono", "SF Mono", Menlo, monospace;
-  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --bg: #ffffff;
+  --card: #ffffff;
+  --panel: #f7f6f3;
+  --chip: #f1f0ee;
+  --line: rgba(55, 53, 47, 0.1);
+  --line-strong: rgba(55, 53, 47, 0.16);
+  --text: #37352f;
+  --dim: rgba(55, 53, 47, 0.55);
+  --accent: #2383e2;
+
+  --good: #448361;
+  --warn: #cb912f;
+  --bad: #c4554d;
+  --good-bg: #edf3ec;
+  --warn-bg: #fbf3db;
+  --bad-bg: #fbe4e4;
+  --good-fg: #2f5c45;
+  --warn-fg: #97600f;
+  --bad-fg: #9b362f;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+    "Apple Color Emoji", sans-serif;
+  --radius: 6px;
 }
 
-@media (prefers-color-scheme: light) {
+@media (prefers-color-scheme: dark) {
   :root {
-    --bg: #f7f8fb;
-    --card: #ffffff;
-    --panel: #f1f3f8;
-    --chip: #eef0f6;
-    --line: #e2e6ef;
-    --text: #1a1d27;
-    --dim: #5b6478;
-    --accent: #7c3aed;
-    --good: #059669;
-    --warn: #d97706;
-    --bad: #e11d48;
+    --bg: #191919;
+    --card: #1f1f1f;
+    --panel: #252525;
+    --chip: #2a2a2a;
+    --line: rgba(255, 255, 255, 0.094);
+    --line-strong: rgba(255, 255, 255, 0.16);
+    --text: rgba(255, 255, 255, 0.82);
+    --dim: rgba(255, 255, 255, 0.46);
+    --accent: #529cca;
+
+    --good: #4f9d77;
+    --warn: #d9a13a;
+    --bad: #d8635b;
+    --good-bg: rgba(79, 157, 119, 0.16);
+    --warn-bg: rgba(217, 161, 58, 0.16);
+    --bad-bg: rgba(216, 99, 91, 0.16);
+    --good-fg: #6fce9c;
+    --warn-fg: #e7c07a;
+    --bad-fg: #eb938c;
   }
 }
 
@@ -40,19 +59,16 @@ body {
   margin: 0;
   font-family: var(--sans);
   color: var(--text);
-  background:
-    radial-gradient(1200px 500px at 80% -10%, color-mix(in oklab, var(--accent) 14%, transparent), transparent),
-    radial-gradient(1000px 500px at 0% -10%, color-mix(in oklab, var(--accent-2) 10%, transparent), transparent),
-    var(--bg);
-  background-attachment: fixed;
+  background: var(--bg);
   -webkit-font-smoothing: antialiased;
   line-height: 1.5;
+  font-size: 15px;
 }
 
-a { color: var(--accent); }
+a { color: var(--accent); text-decoration: none; }
 
-::selection { background: color-mix(in oklab, var(--accent) 40%, transparent); }
+::selection { background: rgba(35, 131, 226, 0.18); }
 
-/* tidy scrollbars inside the code panes */
-*::-webkit-scrollbar { width: 9px; height: 9px; }
-*::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; }
+*::-webkit-scrollbar-track { background: transparent; }

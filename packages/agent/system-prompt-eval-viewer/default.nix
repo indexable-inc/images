@@ -1,4 +1,5 @@
 {
+  ix,
   lib,
   pkgs,
 }:
@@ -37,7 +38,7 @@ in
 # `nix run .#system-prompt-eval-viewer -- <result.json>` copies the built site to
 # a temp dir, drops the JSON in as data.json (which the app fetches on load),
 # serves it, and opens a browser. Without an argument it shows the bundled sample.
-pkgs.writeNushellApplication {
+ix.writeNushellApplication pkgs {
   name = "system-prompt-eval-viewer";
   runtimeInputs = [
     pkgs.python3
