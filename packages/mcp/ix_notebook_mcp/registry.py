@@ -232,6 +232,18 @@ MODULES: tuple[Module, ...] = (
             url="https://linear.app/settings/account/security",
         ),
     ),
+    Module(
+        "notion",
+        "Notion pages, databases, and blocks over the REST API using NOTION_API_KEY: "
+        "`await notion.search(query)` / `page(page_id)` / `blocks(block_id)` / "
+        "`db_query(database_id, filter=, sorts=)` / `page_create(parent, properties)` / "
+        "`blocks_append(block_id, children)` / `page_update(page_id, properties)`",
+        credential=Credential(
+            service="Notion",
+            env=("NOTION_API_KEY",),
+            url="https://www.notion.so/my-integrations",
+        ),
+    ),
 )
 
 # Always-present namespace builtins (installed by runtime.install; no import).
