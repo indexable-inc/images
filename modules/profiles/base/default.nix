@@ -418,14 +418,18 @@ in
             # the `claude` binary the dev images bake in. <leader>aa on a line.
             ./nvim/plugins/agent.lua
           ];
-          packages.ix.start = with pkgs.vimPlugins; [
-            nvim-treesitter.withAllGrammars
-            plenary-nvim
-            telescope-nvim
-            gitsigns-nvim
-            which-key-nvim
-            oil-nvim
-          ];
+          packages.ix.start = [
+            pkgs.vimPlugins.nvim-treesitter.withAllGrammars
+          ]
+          ++ builtins.attrValues {
+            inherit (pkgs.vimPlugins)
+              plenary-nvim
+              telescope-nvim
+              gitsigns-nvim
+              which-key-nvim
+              oil-nvim
+              ;
+          };
         };
         # ix-islands colorscheme, generated from the shared islands palette so
         # the editor and the search `-c` highlighter never drift. Both

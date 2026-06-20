@@ -25,7 +25,9 @@ let
       # `ix` closure it receives carries only `buildRustPackage`.
       # `buildIxRustTool` adds the richer surface for packages that need it.
       clippyPackage = pkgs.callPackage (packagePath "llm-clippy") {
-        ix.buildRustPackage = buildRustPackage;
+        ix = {
+          inherit buildRustPackage pkgs;
+        };
         inherit clippy-fork;
       };
       rustToolchain = languages.rust.toolchain pkgs {
@@ -46,10 +48,9 @@ let
       hostRustWorkspace = rustWorkspaceFor hostPkgs;
 
       checked = hostPkgs.callPackage path {
-        pkgs = hostPkgs;
-
         ix = {
           inherit buildRustPackage;
+          pkgs = hostPkgs;
           rustWorkspace = hostRustWorkspace;
         }
         // lib.optionalAttrs usesCargoUnit {

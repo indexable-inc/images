@@ -1,7 +1,6 @@
 {
   lib,
   ix,
-  pkgs,
   stdenv,
   fetchurl,
   runtimeShell,
@@ -556,7 +555,10 @@ stdenv.mkDerivation (finalAttrs: {
     # what the unwrapped libexec helper sends to a local ANTHROPIC_BASE_URL
     # server. See ./extract-system-prompt.nix and ./extract-system-prompt.py.
     extractSystemPrompt = import ./extract-system-prompt.nix {
-      inherit ix pkgs;
+      inherit ix;
+      # Read the package set from `ix` rather than a `pkgs` callPackage formal
+      # (which `override` can't reach); same value in both build paths.
+      inherit (ix) pkgs;
       stockBinary = "${finalAttrs.finalPackage}/libexec/Claude Code";
       wrappedBinary = "${finalAttrs.finalPackage}/bin/${binName}";
     };

@@ -14,8 +14,12 @@
 let
   nixos = import "${path}/nixos/lib/eval-config.nix" {
     system = "aarch64-linux";
-    specialArgs = { inherit bossbar-overlay; };
-    modules = [ ./nixos.nix ];
+    modules = [
+      ./nixos.nix
+      # Inject the overlaid `bossbar-overlay` through the package set rather than
+      # `specialArgs`, so the guest module reads it as `pkgs.bossbar-overlay`.
+      { nixpkgs.overlays = [ (_final: _prev: { inherit bossbar-overlay; }) ]; }
+    ];
   };
 in
 import "${path}/nixos/lib/make-disk-image.nix" {

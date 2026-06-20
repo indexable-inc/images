@@ -1,5 +1,11 @@
 {
   lib,
+  # This is the repo Rust builder factory (`import`ed by lib/rust/tooling.nix
+  # with an explicit `pkgs`, never `callPackage`d), not a package. It needs the
+  # whole package set to build a `makeRustPlatform` and the policy-check
+  # derivations, so there is no fixed dep list to enumerate and nothing for
+  # `override` to reach past.
+  # astlog-ignore: no-pkgs-in-callpackage
   pkgs,
   clippyPackage ? pkgs.clippy,
   rustToolchain,

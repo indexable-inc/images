@@ -62,4 +62,4 @@ than stock Clippy.
 policy dependency of every repo Rust package (`tooling.nix:81-88`), so a lint
 the fork adds fails the affected package's build, not just a separate gate.
 `llm-clippy` bootstraps before `cargoUnit`/`rustWorkspace` exist, so it receives
-only `buildRustPackage` from the `ix` closure (`tooling.nix:23-29`).
+only `buildRustPackage` and `pkgs` from the `ix` closure (`tooling.nix:27-30`).

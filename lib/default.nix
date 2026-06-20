@@ -77,7 +77,10 @@ let
     nixpkgs instance with the repo overlay applied, evaluated for
     `x86_64-linux`. Use this when the image build needs `pkgs` directly.
   */
-  pkgs = import nixpkgs { inherit system overlays; };
+  pkgs = import nixpkgs {
+    inherit system overlays;
+    config = { };
+  };
 
   # Auto-discovered NixOS module registry. The walk lives next to
   # `discoverImages` for symmetry; see its doc-comment for the discovery rules.

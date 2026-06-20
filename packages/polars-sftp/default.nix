@@ -1,6 +1,5 @@
 {
   ix,
-  pkgs,
   lib,
   stdenv,
   rustPlatform,
@@ -34,7 +33,9 @@ let
   # Strict type + annotation gate over the Python source (zuban --strict + ruff
   # ANN), mirroring buildUvApplication's pyChecker="zuban" path. The sources and
   # the `_polars_sftp.pyi` stub resolve `import polars`.
-  pyStrictTest = ix.buildPyStrictCheck pkgs {
+  # `ix.buildPyStrictCheck` is curried on the full package set; read it from `ix`
+  # rather than a `pkgs` callPackage formal (which `override` can't reach).
+  pyStrictTest = ix.buildPyStrictCheck ix.pkgs {
     pname = "polars-sftp";
     pythonSrc = ./python;
     pythonPackages = ps: [ ps.polars ];

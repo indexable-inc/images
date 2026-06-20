@@ -1,10 +1,13 @@
 {
   ix,
   lib,
-  pkgs ? ix.pkgs,
 }:
 
 let
+  # Read the package set from `ix` rather than a `pkgs` callPackage formal (which
+  # `override` can't reach). `ix.pkgs` is the caller's set, the same value
+  # callPackage would have auto-bound to a `pkgs` arg in the flake package set.
+  inherit (ix) pkgs;
   # The PTY-driving `tui` package, baked into the pinned interpreter so every
   # session can `import tui` with no setup. The PyO3 cdylib comes from the same
   # shared workspace graph the binary is selected from, dropped next to the
@@ -1213,7 +1216,12 @@ let
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
-          --prefix PATH : ${lib.makeBinPath [ pkgs.ripgrep pkgs.fd ]} \
+          --prefix PATH : ${
+            lib.makeBinPath [
+              pkgs.ripgrep
+              pkgs.fd
+            ]
+          } \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
         # The notebook engine alone (kernel + dashboard + session file, no MCP
         # transport): the same interpreter and env, entered at the `notebook`
@@ -1225,7 +1233,12 @@ let
           --set IX_GCAL_BIN ${lib.escapeShellArg "${gcalBin}/bin/gcal"} \
           --set IX_DASHBOARD_BIN ${lib.escapeShellArg (lib.getExe' dashboardHubBin "dashboard")} \
           --set SCIPQL_SOUFFLE ${lib.escapeShellArg (lib.getExe' pkgs.souffle "souffle")} \
-          --prefix PATH : ${lib.makeBinPath [ pkgs.ripgrep pkgs.fd ]} \
+          --prefix PATH : ${
+            lib.makeBinPath [
+              pkgs.ripgrep
+              pkgs.fd
+            ]
+          } \
           ${lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "--set IX_VMKIT_BIN ${lib.escapeShellArg "${vmkitBin}/bin/vmkit"}"}
       '';
 

@@ -60,6 +60,8 @@ let
   withIndexLib = { ix, ... }: { _module.args.indexLib = ix; };
   plainPkgs = import nixpkgs {
     inherit (pkgs.stdenv.hostPlatform) system;
+    config = { };
+    overlays = [ ];
   };
   # Evaluates the JVM profile against a PLAIN nixpkgs package set (no repo
   # overlay) to prove it resolves its JDK from stock nixpkgs. `ix` is supplied as
@@ -898,7 +900,7 @@ let
     # The Cargo library TARGET name, which is what the renderer uses for both
     # the unit key and the rlib filename (render.rs:1376, prepare_graph names).
     # The package is `prebuilt-lib`; its lib target is `prebuilt_lib`.
-    name = "prebuilt_lib";
+    pname = "prebuilt_lib";
     version = "0.1.0";
     inherit (cargoUnitPrebuiltVariantLib) hash;
     rlib = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib";
@@ -911,7 +913,7 @@ let
   # in a consumer graph only works when the leaf prebuilt rides along; that is
   # the path the chain arm proves end to end (ENG-2166).
   cargoUnitPrebuiltMidUnit = ix.cargoUnit.mkPrebuiltLibraryUnit {
-    name = "prebuilt_mid";
+    pname = "prebuilt_mid";
     version = "0.1.0";
     inherit (cargoUnitPrebuiltVariantMid) hash;
     rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
@@ -925,7 +927,7 @@ let
   cargoUnitPrebuiltToolchainMismatchEval = builtins.tryEval (
     builtins.seq
       (ix.cargoUnit.mkPrebuiltLibraryUnit {
-        name = "prebuilt_lib";
+        pname = "prebuilt_lib";
         version = "0.1.0";
         inherit (cargoUnitPrebuiltVariantLib) hash;
         rlib = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib";
@@ -940,7 +942,7 @@ let
   cargoUnitPrebuiltBadDepEval = builtins.tryEval (
     builtins.seq
       (ix.cargoUnit.mkPrebuiltLibraryUnit {
-        name = "prebuilt_mid";
+        pname = "prebuilt_mid";
         version = "0.1.0";
         inherit (cargoUnitPrebuiltVariantMid) hash;
         rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
@@ -1005,7 +1007,7 @@ let
   # workspace's artifacts (answer = 42): same unit key, different derivation.
   # Used by the explicit-override arm and the dep-conflict negative arm below.
   cargoUnitPrebuiltLibUnitFromPlain = ix.cargoUnit.mkPrebuiltLibraryUnit {
-    name = "prebuilt_lib";
+    pname = "prebuilt_lib";
     version = "0.1.0";
     inherit (cargoUnitPrebuiltPlainLib) hash;
     rlib = "${cargoUnitPrebuiltPlainLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltPlainLib.hash}.rlib";
@@ -1018,7 +1020,7 @@ let
   # discarded leaf's subtree, this key gets auto-injected and the C1 guard
   # fails eval, so the override arm passing proves the prune.
   cargoUnitPrebuiltPhantomDep = ix.cargoUnit.mkPrebuiltLibraryUnit {
-    name = "phantom_dep";
+    pname = "phantom_dep";
     version = "0.0.1";
     hash = "0000000000000000";
     # Never built or linked; any .rlib/.rmeta-suffixed store path satisfies the
@@ -1032,7 +1034,7 @@ let
   # derivation the override arm DISCARDS; its subtree must be pruned, not
   # walked.
   cargoUnitPrebuiltLibUnitWithPhantomDep = ix.cargoUnit.mkPrebuiltLibraryUnit {
-    name = "prebuilt_lib";
+    pname = "prebuilt_lib";
     version = "0.1.0";
     inherit (cargoUnitPrebuiltVariantLib) hash;
     rlib = "${cargoUnitPrebuiltVariantLib.unit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib";
@@ -1056,7 +1058,7 @@ let
       src = cargoUnitPrebuiltFixture;
       extraUnits = {
         ${cargoUnitPrebuiltVariantMid.key} = ix.cargoUnit.mkPrebuiltLibraryUnit {
-          name = "prebuilt_mid";
+          pname = "prebuilt_mid";
           version = "0.1.0";
           inherit (cargoUnitPrebuiltVariantMid) hash;
           rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
@@ -1080,7 +1082,7 @@ let
           src = cargoUnitPrebuiltFixture;
           extraUnits = {
             ${cargoUnitPrebuiltVariantMid.key} = ix.cargoUnit.mkPrebuiltLibraryUnit {
-              name = "prebuilt_mid";
+              pname = "prebuilt_mid";
               version = "0.1.0";
               inherit (cargoUnitPrebuiltVariantMid) hash;
               rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";

@@ -83,7 +83,7 @@ let
   # filename. The toolchain id is asserted equal to the workspace toolchain at
   # eval, so a wrong toolchain fails before link.
   prebuiltWireUnit = cargoUnit.mkPrebuiltLibraryUnit {
-    name = "ix_sdk_wire";
+    pname = "ix_sdk_wire";
     version = wireVersion;
     hash = wireHash;
     rlib = wireRlib;

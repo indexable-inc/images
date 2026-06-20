@@ -1,9 +1,11 @@
 {
   ix,
-  pkgs,
 }:
 
 let
+  # `ix.buildRustPackage` is curried on the full package set; read it from `ix`
+  # rather than taking a `pkgs` callPackage formal (which `override` can't reach).
+  inherit (ix) pkgs;
   inherit (pkgs) lib;
 in
 # nix-cargo-unit bootstraps the unit graph, so it cannot consume ix.cargoUnit

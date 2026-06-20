@@ -13,6 +13,11 @@
   ix,
 }:
 final: prev:
+# This `let` holds only the registry-iteration helpers (`overlayContext`,
+# `buildOverlayPackage`); it hides no custom package. Every package is exposed as
+# a real top-level overlay attr by the `genAttrs'` below (i.e. as
+# `final.<attrName>`), so later overlays compose.
+# astlog-ignore: keep-overrides-composable
 let
   # Read the target system from `prev`, not `final`: this overlay's attribute
   # *names* are computed by filtering the registry's `overlay` entries by
@@ -30,14 +35,23 @@ let
       final
       buildIxRustTool
       clippy-fork
-      ix
       ;
+    # Carry `pkgs` on the `ix` handle too (as `packageSetFor`'s `ixForPackages`
+    # does), so overlay-built packages can read `ix.pkgs` instead of taking a
+    # `pkgs` callPackage formal. Same value as the `pkgs` arg below (`final`).
+    ix = ix // {
+      pkgs = final;
+    };
     pkgs = final;
     inherit (entry) path;
     writePythonApplication = writePythonApplication final;
   };
   buildOverlayPackage =
     entry:
+    # This `let` only assembles the callPackage args for one registry entry and
+    # returns the built package, which `genAttrs'` exposes as a top-level
+    # `final.<attrName>`; it hides no package from later overlays.
+    # astlog-ignore: keep-overrides-composable
     let
       context = overlayContext entry;
       autoArgs = final // context;

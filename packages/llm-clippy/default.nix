@@ -2,7 +2,6 @@
   ix,
   lib,
   makeWrapper,
-  pkgs,
   clippy-fork ? null,
 }:
 
@@ -12,6 +11,9 @@
 # bound `src` turned the discovered `packages.<system>.llm-clippy` output into
 # an eval error that `nix flake check` surfaces.
 let
+  # `ix.buildRustPackage` is curried on the full package set; read `pkgs` from
+  # `ix` rather than taking a `pkgs` callPackage formal (unreachable by `override`).
+  inherit (ix) pkgs;
   source = if clippy-fork == null then throw "llm-clippy: clippy-fork is required" else clippy-fork;
   # Drive the toolchain from the fork's `rust-toolchain.toml` so a
   # `nix flake update clippy-fork` advances the rustc/rustc_private ABI in

@@ -94,7 +94,8 @@ in
       path = [
         cfg.package
         pkgs.coreutils
-      ] ++ config.environment.systemPackages;
+      ]
+      ++ config.environment.systemPackages;
       environment.HOME = cfg.stateDir;
 
       # The CLI only accepts the launch token as an argument, so read it from the

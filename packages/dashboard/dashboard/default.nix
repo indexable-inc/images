@@ -13,11 +13,11 @@ let
     meta.mainProgram = "dashboard";
   };
 in
-unit.overrideAttrs {
-  passthru = unit.passthru // {
-    tests = unit.passthru.tests // {
+unit.overrideAttrs (old: {
+  passthru = (old.passthru or { }) // {
+    tests = (old.passthru.tests or { }) // {
       # Expose the nix-built site for inspection / as a build check.
       site = ix.rustWorkspace.dashboardSite;
     };
   };
-}
+})

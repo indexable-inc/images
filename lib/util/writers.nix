@@ -214,8 +214,10 @@ let
       ''
       + text;
       checkPhase = ''
+        runHook preCheck
         ${lib.getExe' pkgs.bash "bash"} -n "$target"
         ${lib.getExe pkgs.shellcheck} --shell=bash --severity=warning "$target"
+        runHook postCheck
       '';
       meta = meta // {
         mainProgram = meta.mainProgram or name;

@@ -711,7 +711,7 @@ let
     point at the prebuilt (e.g. for `selectLibraryWithTests`).
 
     Arguments:
-    - `name`: the library unit's Cargo target name (the leading component of the
+    - `pname`: the library unit's Cargo target name (the leading component of the
       unit key), which for a default `lib` target is the underscored crate name
       (e.g. package `my-lib` has target `my_lib`). Any dashes are mapped to
       underscores for the on-disk artifact names, matching the renderer.
@@ -748,7 +748,10 @@ let
   */
   mkPrebuiltLibraryUnit =
     {
-      name,
+      # The Cargo library TARGET name (the renderer's unit-key/rlib component),
+      # not a stdenv derivation name; named `pname` so a `version` sibling does
+      # not read as a `name = "<pname>-<version>"` restatement.
+      pname,
       version,
       hash,
       rlib,
@@ -762,10 +765,10 @@ let
       # The renderer underscores the Cargo target name for on-disk artifacts
       # (`render.rs:1376`). Mirror that exactly so the rlib filename and the
       # `extern-path` contents match what a from-source unit would produce.
-      libName = replaceStrings [ "-" ] [ "_" ] name;
+      libName = replaceStrings [ "-" ] [ "_" ] pname;
     in
     assert lib.assertMsg (toolchainId == expectedToolchainId) ''
-      cargoUnit.mkPrebuiltLibraryUnit: toolchainId mismatch for `${name}`.
+      cargoUnit.mkPrebuiltLibraryUnit: toolchainId mismatch for `${pname}`.
         prebuilt was compiled with: ${toolchainId}
         this workspace's toolchain: ${expectedToolchainId}
       A prebuilt rlib/rmeta only links against the toolchain that produced it.
@@ -774,32 +777,32 @@ let
     # `.rlib`). Reject an artifact that is clearly not an rlib/rmeta so a
     # cdylib/staticlib/proc-macro mistake fails loud at eval, not at link.
     assert lib.assertMsg (lib.hasSuffix ".rlib" (toString rlib)) ''
-      cargoUnit.mkPrebuiltLibraryUnit: `rlib` for `${name}` must be a .rlib path; got ${toString rlib}.
+      cargoUnit.mkPrebuiltLibraryUnit: `rlib` for `${pname}` must be a .rlib path; got ${toString rlib}.
       Only plain rlib libraries are supported (not cdylib/staticlib/proc-macro).
     '';
     assert lib.assertMsg (lib.hasSuffix ".rmeta" (toString rmeta)) ''
-      cargoUnit.mkPrebuiltLibraryUnit: `rmeta` for `${name}` must be a .rmeta path; got ${toString rmeta}.
+      cargoUnit.mkPrebuiltLibraryUnit: `rmeta` for `${pname}` must be a .rmeta path; got ${toString rmeta}.
     '';
     # Auto-injection keys each dep by its `passthru.unitKey`, so an entry
     # without one could never be wired into a consuming graph. Reject it at
     # construction, naming the offender, instead of at injection time.
     assert lib.assertMsg (filter (dep: !(dep ? passthru.unitKey)) depUnits == [ ]) ''
-      cargoUnit.mkPrebuiltLibraryUnit: depUnits for `${name}` must be prebuilt unit
+      cargoUnit.mkPrebuiltLibraryUnit: depUnits for `${pname}` must be prebuilt unit
       derivations carrying `passthru.unitKey` (build them with mkPrebuiltLibraryUnit); got:
         ${lib.concatMapStringsSep "\n  " (dep: dep.name or "<non-derivation>") (
           filter (dep: !(dep ? passthru.unitKey)) depUnits
         )}
     '';
-    pkgs.runCommand "cargo-unit-prebuilt-${name}-${version}-${hash}"
+    pkgs.runCommand "cargo-unit-prebuilt-${pname}-${version}-${hash}"
       {
         # Surfaced for callers/tests that want to confirm the injected key
         # without reconstructing the format string. `depUnits` is what
         # `buildWorkspace` walks to auto-inject this unit's transitive deps.
         passthru = {
-          unitKey = "${name}-${version}-${hash}";
+          unitKey = "${pname}-${version}-${hash}";
           libraryName = libName;
           inherit
-            name
+            pname
             version
             hash
             toolchainId

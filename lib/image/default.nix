@@ -38,12 +38,14 @@ let
   */
   imagePkgs = import nixpkgs {
     inherit system overlays;
-    config.allowUnfreePredicate =
-      pkg:
-      builtins.elem (lib.getName pkg) [
-        "yourkit-java"
-        "claude-code"
-      ];
+    config = {
+      allowUnfreePredicate =
+        pkg:
+        builtins.elem (lib.getName pkg) [
+          "yourkit-java"
+          "claude-code"
+        ];
+    };
   };
 
   /**
@@ -150,6 +152,7 @@ let
   # toolchain.
   hostPkgs = import nixpkgs {
     inherit system overlays;
+    config = { };
   };
 
   inherit

@@ -29,7 +29,11 @@
       devShells = eachSystem (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            config = { };
+            overlays = [ ];
+          };
         in
         {
           default = pkgs.mkShell {
