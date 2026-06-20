@@ -896,7 +896,7 @@ mod tests {
             "missing claude.md context"
         );
         // dedupe is exact-match on the normalized form
-        let filed = vec![normalize_title("Weak grep tool")];
+        let filed = [normalize_title("Weak grep tool")];
         assert!(filed.contains(&normalize_title("weak   GREP   tool")));
         assert!(!filed.contains(&normalize_title("weak grep tooling")));
     }
