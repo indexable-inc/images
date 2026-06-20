@@ -125,6 +125,12 @@ jobs:
   # PR cannot influence.
   comment:
     needs: evaluate
+    # Run even when `evaluate` failed (a base/head eval error, often base-side
+    # and unrelated to this PR), so the PR never silently ends up with no blast-
+    # radius comment. `!cancelled()` covers success and failure but not a
+    # concurrency cancel; `result != 'skipped'` keeps it off forks/Dependabot
+    # PRs, where `evaluate` itself was skipped (and there is nothing to report).
+    if: ${{ !cancelled() && needs.evaluate.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,7 +140,12 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # Only present when `evaluate` succeeded (the upload step is `if: success()`).
+      # continue-on-error so a missing artifact after a failed eval drops through
+      # to the fallback step below instead of failing the job.
       - name: Download report
+        if: ${{ needs.evaluate.result == 'success' }}
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: blast-radius-${{ github.run_id }}
@@ -146,7 +157,13 @@ jobs:
       # Fail closed: require the full schema before rendering. Every field is
       # type-checked, SHAs must be hex, and the `and` chain short-circuits so a
       # non-array `.changed` never reaches the `+`/`test` that would error.
+      # Every gating step in this job spells out `&& success()`: a step with an
+      # explicit `if` drops the implicit `success()` GitHub adds to an
+      # unconditional step, so without it a failure in an earlier step would not
+      # stop this one. That short-circuit is what makes the validate -> render
+      # fail-closed chain below actually hold.
       - name: Validate report schema
+        if: ${{ needs.evaluate.result == 'success' && success() }}
         run: |
           set -euo pipefail
           # Slurp (-s) so the artifact must be exactly one object: `jq -e`
@@ -185,6 +202,7 @@ jobs:
       # cannot inject mentions, HTML, or spoofed markers into a comment posted
       # with the write token. The trusted job owns the marker.
       - name: Render comment
+        if: ${{ needs.evaluate.result == 'success' && success() }}
         run: |
           set -euo pipefail
           jq -r '
@@ -261,11 +279,37 @@ jobs:
             printf '\n\n_Comment truncated to fit the GitHub comment size limit._\n' >> comment.md
           fi
 
+      # `evaluate` failed (no report.json): post an explicit "could not compute"
+      # note rather than letting the comment job skip and leave the PR with no
+      # blast-radius comment at all. The eval bail is frequently base-side (a
+      # transiently un-evaluable `master`) or a runner flake, so the copy says
+      # as much. Keyed by the same marker, so the next successful run overwrites
+      # it in place. RUN_URL is passed via env (a GitHub `${{ }}` expression
+      # cannot be evaluated by the shell), which also lets the test drive this
+      # script with a stub URL.
+      - name: Compose fallback comment (eval failed)
+        if: ${{ needs.evaluate.result != 'success' && success() }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            printf '<!-- blast-radius -->\n'
+            printf '### Blast radius\n\n'
+            printf 'Could not compute the blast radius for this run: the check catalog failed to evaluate at the base or head commit. This is usually a transient base-branch or runner issue rather than a problem with this PR. See the [run logs](%s).\n' "$RUN_URL"
+          } > comment.md
+
       # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker.
       # Paginate the comment list so the marker is found on busy PRs (no
       # duplicate comments), and restrict the match to comments this token can
       # actually PATCH: a user comment that happens to start with the marker
       # would otherwise be selected and every PATCH would 403 forever.
+      #
+      # No explicit `if`, so the default `success()` gate applies: this runs
+      # after whichever of Render or Compose-fallback succeeded (each leaves a
+      # complete comment.md), and is SKIPPED if Validate or Render failed -- so a
+      # malformed report or a half-written comment.md is never posted. That keeps
+      # the fail-closed behavior an `if: !cancelled()` here would have broken.
       - name: Post sticky comment
         run: |
           set -euo pipefail
