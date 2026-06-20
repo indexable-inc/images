@@ -30,6 +30,28 @@ pub fn register_tokenizers(index: &tantivy::Index) {
         .register(CODE_STEMMED_TOKENIZER, code_stemmed);
 }
 
+/// Convert `input` to `snake_case`.
+///
+/// Splits on the same boundaries [`CodeTokenizer`] uses — `camelCase`,
+/// `snake_case`, `kebab-case`, whitespace, and any other non-alphanumeric run —
+/// then joins the lowercased words with `_`. Reusing the tokenizer keeps a
+/// single definition of where one "word" ends and the next begins, so this and
+/// search agree on acronym handling (`HTTPServer` → `http_server`).
+///
+/// Input with no alphanumeric characters (including `""`) yields `""`.
+pub fn to_snake_case(input: &str) -> String {
+    let mut stream = CodeTokenStream::new(input.to_owned());
+    let mut out = String::with_capacity(input.len());
+    while stream.advance() {
+        if !out.is_empty() {
+            out.push('_');
+        }
+        // `advance` already lowercased the token text in place.
+        out.push_str(&stream.token().text);
+    }
+    out
+}
+
 #[derive(Clone)]
 pub struct CodeTokenizer;
 
