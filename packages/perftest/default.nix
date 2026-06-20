@@ -8,7 +8,7 @@
   pciutils,
 }:
 
-stdenv.mkDerivation (finalAttrs: {
+stdenv.mkDerivation {
   pname = "perftest";
   version = "26.04.17";
 
@@ -53,4 +53,4 @@ stdenv.mkDerivation (finalAttrs: {
       "aarch64-linux"
     ];
   };
-})
+}
