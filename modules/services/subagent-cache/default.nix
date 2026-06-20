@@ -45,26 +45,22 @@ in
       '';
     };
 
-    databaseUrlFile = mkOption {
-      # A runtime path string, not `types.path`: the file is provided at boot by
-      # a secret mechanism outside the image, not a build input.
-      type = types.str;
-      example = "/run/subagent-cache/database-url";
+    environmentFiles = mkOption {
+      # Runtime path strings, not `types.path`: these are provided at boot by a
+      # secret mechanism outside the image, not build inputs.
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "/run/subagent-cache/db.env" ];
       description = ''
-        Path to a file holding the full Postgres connection URL, read when the
-        daemon starts and exported as `DATABASE_URL` (never placed on argv). The
-        password must not be baked into the store, so this is a runtime path.
-        The daemon bootstraps its own schema idempotently on startup.
-      '';
-    };
-
-    apiKeyFile = mkOption {
-      type = types.str;
-      example = "/run/subagent-cache/anthropic-api-key";
-      description = ''
-        Path to a file holding the Anthropic API key for the Stage-2 Haiku
-        judge, read when the daemon starts and exported as `ANTHROPIC_API_KEY`.
-        Provided at boot by a secret mechanism; never baked into the image.
+        systemd `EnvironmentFile` paths layered onto the daemon, for the two
+        secrets it reads from the environment: `DATABASE_URL` (the Postgres
+        connection string, password and all) and `ANTHROPIC_API_KEY` (the
+        Stage-2 Haiku judge key). Kept out of the unit's `environment` (which
+        lands in the world-readable store) and off argv. The consumer delivers
+        these through its own secret mechanism (e.g. the ix fleet composes
+        `DATABASE_URL` from the node's credential and injects `ANTHROPIC_API_KEY`
+        via its secret store). The daemon fails fast at startup if either is
+        missing, and bootstraps its own schema idempotently.
       '';
     };
 
@@ -111,7 +107,6 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
-      path = [ pkgs.coreutils ];
       environment = {
         SUBAGENT_CACHE_BIND = cfg.bind;
         SUBAGENT_CACHE_TTL_DAYS = toString cfg.ttlDays;
@@ -123,16 +118,12 @@ in
         # judge's HTTPS call to Anthropic needs an explicit CA bundle.
         SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
       };
-      # Read both secrets from their runtime files and export them (never argv),
-      # then exec the daemon. clap reads DATABASE_URL and the daemon reads
-      # ANTHROPIC_API_KEY once at startup (fail-fast on a misconfigured deploy).
-      script = ''
-        DATABASE_URL="$(cat ${lib.escapeShellArg cfg.databaseUrlFile})"
-        ANTHROPIC_API_KEY="$(cat ${lib.escapeShellArg cfg.apiKeyFile})"
-        export DATABASE_URL ANTHROPIC_API_KEY
-        exec ${lib.getExe cfg.package}
-      '';
       serviceConfig = {
+        # DATABASE_URL and ANTHROPIC_API_KEY arrive here, kept out of argv and the
+        # store. The daemon reads both from the environment and fails fast if
+        # either is absent.
+        EnvironmentFile = cfg.environmentFiles;
+        ExecStart = lib.getExe cfg.package;
         Restart = "on-failure";
         RestartSec = 5;
       };
