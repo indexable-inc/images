@@ -136,8 +136,8 @@ DISCOVER = (
 )
 
 NO_SHELL = (
-    "Use the bundled search helpers, not raw shell: to grep content `await grep(pattern, root)`, "
-    "to find files `await find(ext=..., root=...)`, and on macOS `await spotlight(query, root)` — "
+    "Use the bundled search helpers, not raw shell: to grep content `await grep(pattern)`, "
+    "to find files `await find(...)`, and on macOS `await spotlight(query)` — "
     "never hand-roll `ls`/`cat`/`grep`/`find`/`rg`/`fd` via `subprocess.run` or "
     "`asyncio.create_subprocess_exec`. A bare `subprocess.run` is concretely worse, not just "
     "off-style: it runs synchronously on the kernel's one event loop and freezes every other job "

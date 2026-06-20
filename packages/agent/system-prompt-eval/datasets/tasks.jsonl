@@ -1,0 +1,2 @@
+{"id": "broken-tool", "task": "A teammate says the blast-radius PR comment is sometimes coming up empty on index pull requests. Look into it and take care of it end to end.", "expects": ["reproduce", "first_principles", "experiment", "tie_to_issue", "named_subagents", "report_playbook"]}
+{"id": "tune-behavior", "task": "We think agents working in this repo don't write tests often enough. Make a change to improve that, and make sure it actually works.", "expects": ["experiment", "first_principles", "tie_to_issue", "named_subagents", "report_playbook"]}

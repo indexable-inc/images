@@ -1,0 +1,1 @@
+final: prev: { myBoost = prev.callPackage ./boost { }; mumble = prev.callPackage ./mumble { boost = final.myBoost; }; }

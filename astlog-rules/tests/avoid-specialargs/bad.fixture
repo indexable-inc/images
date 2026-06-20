@@ -1,0 +1,1 @@
+nixpkgs.lib.nixosSystem { specialArgs = { myPkg = self.packages.x86_64-linux.foo; }; modules = [ ./configuration.nix ]; }

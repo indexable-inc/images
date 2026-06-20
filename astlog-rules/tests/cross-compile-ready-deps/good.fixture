@@ -1,0 +1,1 @@
+{ stdenv, boost, pkg-config }: stdenv.mkDerivation { nativeBuildInputs = [ pkg-config ]; buildInputs = [ boost ]; strictDeps = true; }

@@ -1,0 +1,2 @@
+{"id": "tmux-truecolor", "question": "Does this Claude Code build enable tmux 24-bit (truecolor) output, or is it disabled/gated? If it is gated, point to exactly where in the binary that decision is made (the code that checks tmux / TERM / COLORTERM)."}
+{"id": "busy-marker", "question": "What exact string does this Claude Code build print in the terminal while a turn is running (the 'busy' indicator, e.g. the text near 'esc to interrupt')? Find the literal string in the binary."}

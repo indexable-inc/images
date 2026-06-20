@@ -1,0 +1,1 @@
+{ postPatch = "substituteInPlace main.c --replace-fail foo bar"; }

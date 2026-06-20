@@ -130,6 +130,7 @@ let
   };
   skills = import ./skills.nix { inherit lib paths; };
   agents = import ./agents.nix { inherit lib; };
+  claudePlugin = import ./claude-plugin.nix { inherit lib skills; };
   # Shared JetBrains Islands palette (both variants), the single source of truth
   # for syntax color across the repo: the code-highlight crate embeds this JSON
   # for the search `-c` output, and the base profile generates its
@@ -420,6 +421,7 @@ let
       buildUvApplication
       buildZigPackage
       cargoUnit
+      claudePlugin
       deepMerge
       goUnit
       languages

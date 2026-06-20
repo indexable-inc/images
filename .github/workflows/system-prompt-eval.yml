@@ -1,0 +1,111 @@
+name: system-prompt-eval
+
+# The full judged eval spawns many `claude -p` rollouts (real tokens, minutes
+# each), so it is NOT automatic. It runs only when a human asks for it:
+#   - comment `/run-evals` on a PR that touches the prompt or the eval, or
+#   - trigger it from the Actions tab (workflow_dispatch).
+# The cheap offline checks (scoring math, --help) already run on every PR via
+# the `check` workflow (`nix run .#check` covers this package's passthru.tests),
+# so this workflow is only the expensive behavioral pass.
+on:
+  workflow_dispatch:
+    inputs:
+      eval:
+        description: which eval (all | behaviors | first-principles | reverse-engineering)
+        default: all
+      rollouts:
+        description: rollouts per task/case
+        default: "5"
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: system-prompt-eval-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run-evals:
+    # Gate: dispatch, or a `/run-evals` comment on a pull request from a trusted
+    # actor. The comment path checks out the PR head and runs its code with
+    # ANTHROPIC_API_KEY in scope, so it MUST stay restricted to repo
+    # owners/members/collaborators — otherwise any commenter could exfiltrate the
+    # secret through PR-controlled eval code or dataset prompts.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       startsWith(github.event.comment.body, '/run-evals') &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-system-prompt-eval', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 90
+    env:
+      NIX_CONFIG: |-
+        experimental-features = nix-command flakes ca-derivations
+        accept-flake-config = true
+      # The agent (claude -p) and the LLM judge both read this. Without it the
+      # job cannot run; set it as a repo/org Actions secret.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - name: Resolve PR ref
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            ref=$(gh pr view "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --json headRefName -q .headRefName)
+            echo "ref=$ref" >> "$GITHUB_OUTPUT"
+            echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ steps.pr.outputs.ref }}
+
+      # `claude` must be on PATH for the rollouts; the package resolves it there.
+      # Dispatch inputs go through env, not `${{ }}` string interpolation, so a
+      # crafted value cannot break out of the shell (CWE-94).
+      - name: Run the eval
+        env:
+          EVAL: ${{ github.event.inputs.eval || 'all' }}
+          ROLLOUTS: ${{ github.event.inputs.rollouts || '5' }}
+        run: |
+          nix shell .#claude-code -c \
+            nix run .#system-prompt-eval -- run \
+              --eval "$EVAL" \
+              --rollouts "$ROLLOUTS" \
+              --json-out result.json \
+              --html-out scorecard.html
+
+      - name: Upload scorecard
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: system-prompt-eval-${{ github.run_id }}
+          path: |
+            result.json
+            scorecard.html
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Comment the score on the PR
+        if: always() && steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "## system-prompt-eval"
+            echo
+            echo '```json'
+            jq '.evals | map_values(.headline)' result.json 2>/dev/null || echo "(no result.json; the run failed, see the job log)"
+            echo '```'
+            echo
+            echo "Full scorecard (HTML) is in the run artifacts. _(posted by an AI agent via Claude Code)_"
+          } > comment.md
+          gh pr comment "${{ steps.pr.outputs.number }}" --repo "${{ github.repository }}" --body-file comment.md

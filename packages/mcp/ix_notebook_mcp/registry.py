@@ -232,6 +232,18 @@ MODULES: tuple[Module, ...] = (
             url="https://linear.app/settings/account/security",
         ),
     ),
+    Module(
+        "notion",
+        "Notion pages, databases, and blocks over the REST API using NOTION_API_KEY: "
+        "`await notion.search(query)` / `page(page_id)` / `blocks(block_id)` / "
+        "`db_query(database_id, filter=, sorts=)` / `page_create(parent, properties)` / "
+        "`blocks_append(block_id, children)` / `page_update(page_id, properties)`",
+        credential=Credential(
+            service="Notion",
+            env=("NOTION_API_KEY",),
+            url="https://www.notion.so/my-integrations",
+        ),
+    ),
 )
 
 # Always-present namespace builtins (installed by runtime.install; no import).
@@ -265,18 +277,18 @@ BUILTINS: tuple[Builtin, ...] = (
     Builtin(
         "grep",
         "content search backed by ripgrep (process-isolated + timeout, so it can't wedge the "
-        "kernel): `await grep(pattern, root='.')` -> a polars frame, one row per match "
-        "(path/line_number/col/match/line); respects .gitignore by default",
+        "kernel): `await grep(pattern)` -> a polars frame, one row per match "
+        "(path/line_number/col/match/line); searches the cwd, respects .gitignore by default",
     ),
     Builtin(
         "find",
-        "file search backed by fd: `await find(ext='py', root='.')` -> a polars frame "
-        "(path/name/type/size/mtime); respects .gitignore by default; process-isolated + timeout",
+        "file search backed by fd: `await find(ext='py')` -> a polars frame "
+        "(path/name/type/size/mtime); searches the cwd, respects .gitignore by default; process-isolated + timeout",
     ),
     Builtin(
         "spotlight",
         "full-text + metadata search backed by macOS Spotlight (mdfind), macOS only: "
-        "`await spotlight(query, root='~')` -> a polars frame (path/name/type/size/mtime)",
+        "`await spotlight(query)` -> a polars frame (path/name/type/size/mtime)",
     ),
     Builtin("asyncio", "stdlib asyncio, pre-bound: `asyncio.ensure_future` / `sleep` with no import"),
     Builtin("json", "stdlib json, pre-bound: parse a CLI's --json output with no import"),

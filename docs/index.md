@@ -87,7 +87,6 @@ From-source documentation for the packages in the `index` repo (a shared, open-s
 | [spark-gluten](spark-gluten/overview.md) | `packages/spark-gluten` packages the Apache Gluten Velox-backend bundle for Spark 3.5, patched so its native libraries load on NixOS. |
 | [spark-hive](spark-hive/overview.md) | `packages/spark-hive` packages Apache Spark 3.5, the official complete (hadoop3 + Hive) binary distribution, self-contained for NixOS and pinned to JDK 17. |
 | [symphony](symphony/overview.md) | Symphony is a boring DAG runtime for deterministic agent workflows. |
-| [tap](tap/overview.md) | `packages/tap` is a terminal session manager for tiling-WM users: start a command, detach, reattach later from any terminal, and share a session with others, with no in-terminal tiling la... |
 | [terminal-theme](terminal-theme/overview.md) | `packages/terminal-theme` owns one decision shared across the repo's terminal tools: is the terminal background light or dark. |
 | [tmux](tmux/overview.md) | `packages/tmux` repackages tmux with a modern default config baked in (truecolor, undercurl, mouse, vi copy mode, sane history and escape-time). |
 | [tonbo-artifacts](tonbo-artifacts/overview.md) | `packages/tonbo-artifacts` packages the Tonbo Artifacts CLI, a prebuilt binary served from Tonbo's release host. |

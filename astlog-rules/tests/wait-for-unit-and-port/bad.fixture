@@ -1,0 +1,4 @@
+testScript = ''
+  server.wait_for_unit("httpd.service")
+  client.succeed("curl http://server")
+'';

@@ -5,9 +5,9 @@ interactive terminal programs (gdb, vim, a shell, a REPL) from one process as if
 a human were typing, and read back a VT-rendered screen instead of a raw byte
 stream. It is a Rust library crate (`name = "tui"`,
 `packages/tui/tui/Cargo.toml:2`), a workspace member with no standalone flake output;
-it is consumed directly by [tui-node](../tui-node/overview.md),
-[tui-py](../tui-py/overview.md), and `tap`'s integration tests, and indirectly
-anywhere those bindings are used.
+it is consumed directly by [tui-node](../tui-node/overview.md) and
+[tui-py](../tui-py/overview.md), and indirectly anywhere those bindings are
+used.
 
 The crate-level mechanism (the actor mailbox, the dedicated VT engine thread,
 the cursor-key rewrite, the initial-paint wait) is in
