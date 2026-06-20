@@ -19,7 +19,13 @@ const MAX_DB_CONNECTIONS: usize = 8;
 #[snafu::report]
 #[tokio::main]
 async fn main() -> Result<()> {
+    // JSON logs to stderr: structured `target` + `fields` per event. A log
+    // shipper that ingests the systemd journal (e.g. the ix fleet's Vector ->
+    // ClickHouse pipeline, which parses a JSON MESSAGE into typed columns) gets
+    // the `target`, `agent_type`, and `outcome` fields the cache-observability
+    // dashboards key on, instead of an opaque text line.
     tracing_subscriber::fmt()
+        .json()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),

@@ -37,5 +37,8 @@ tokio-postgres = { workspace = true, features = [
   "with-uuid-1",
 ] }
 tracing.workspace = true
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-subscriber = { workspace = true, features = [
+  "env-filter",
+  "json",
+] }
 uuid = { workspace = true, features = ["v4", "serde"] }
