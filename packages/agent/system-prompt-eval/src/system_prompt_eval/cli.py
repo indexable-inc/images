@@ -24,7 +24,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import behaviors_eval, first_principles_eval
+from . import behaviors_eval, first_principles_eval, reverse_engineering_eval
 from .core import EvalContext, EvalReport
 from .html import render_html
 from .judge import DEFAULT_JUDGE_MODEL, Judge
@@ -35,6 +35,7 @@ from .render import resolve_prompt
 EVALS: dict[str, str] = {
     behaviors_eval.NAME: "do the target default behaviors emerge?",
     first_principles_eval.NAME: "validate a patched repo vs trust stale knowledge?",
+    reverse_engineering_eval.NAME: "reverse-engineer a pinned binary vs guess from memory?",
 }
 
 
@@ -67,6 +68,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sandbox",
         action="store_true",
         help="first-principles: wrap rollouts in the OS sandbox (sandbox-exec/bwrap)",
+    )
+    run.add_argument(
+        "--agent",
+        default="claude",
+        choices=("claude", "codex"),
+        help="agent under test for the matrix (codex backend not implemented yet)",
     )
     run.add_argument("--claude-bin", default="claude", help="`claude` binary (default: PATH)")
     run.add_argument("--model", default="opus", help="model for the agent under test")
@@ -125,14 +132,26 @@ def _run_one(name: str, ctx: EvalContext) -> EvalReport:
         return behaviors_eval.run(ctx)
     if name == first_principles_eval.NAME:
         return first_principles_eval.run(ctx)
+    if name == reverse_engineering_eval.NAME:
+        return reverse_engineering_eval.run(ctx)
     raise ValueError(f"unknown eval: {name}")
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.agent != "claude":
+        # The matrix seam exists, but only the claude backend is wired so far.
+        print(
+            f"agent '{args.agent}' is not implemented yet; only --agent claude works. "
+            "See the codex-backend tracking issue. Codex shares the same house "
+            "system prompt (packages/agent/common.nix), so this is the next backend.",
+            file=sys.stderr,
+        )
+        return 2
     prompt_file, prompt_sha = resolve_prompt(args.system_prompt_file, args.system_prompt_nix)
     ctx = EvalContext(
         prompt_file=prompt_file,
         judge=Judge(model=args.judge_model),
+        agent_kind=args.agent,
         claude_bin=args.claude_bin,
         model=args.model,
         effort=args.effort,

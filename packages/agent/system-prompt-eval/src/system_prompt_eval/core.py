@@ -27,6 +27,9 @@ class EvalContext:
 
     prompt_file: Path
     judge: Judge
+    # Which agent runs the rollout. "claude" is implemented; "codex" is the seam
+    # for the agent x model x effort matrix (deferred, see the codex-backend issue).
+    agent_kind: str = "claude"
     claude_bin: str = "claude"
     model: str | None = "opus"
     # Reasoning effort: never "fast"/low for an eval. high is the floor.
