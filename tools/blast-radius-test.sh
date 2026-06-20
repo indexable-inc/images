@@ -153,5 +153,24 @@ else
   note "gate [Post sticky comment]: FAIL (gate '$post_if' can post an unvalidated/partial body)"; fail=1
 fi
 
+# Opt-in label gate (#1384 re-enable). The `evaluate` job must (a) gate on the
+# `blast-radius` label so unlabeled PRs claim no self-hosted runner, and (b)
+# match the label PER EVENT so adding an UNRELATED label to an already opted-in
+# PR does not re-fire the costly eval. The workflow fires on every `labeled`
+# event, so the gate needs both the `contains(... 'blast-radius')` presence
+# check and a `github.event.label.name == 'blast-radius'` clause scoped to
+# `labeled` events. This is a workflow-level condition jq cannot exercise.
+eval_if="$(yq '.jobs.evaluate.if // ""' "$workflow")"
+if printf '%s' "$eval_if" | grep -q "contains(github.event.pull_request.labels.\*.name, 'blast-radius')"; then
+  note "gate [evaluate]: label opt-in present ok"
+else
+  note "gate [evaluate]: FAIL (missing blast-radius label gate; every PR would claim a runner)"; fail=1
+fi
+if printf '%s' "$eval_if" | grep -q "github.event.label.name == 'blast-radius'"; then
+  note "gate [evaluate]: per-label add gate present ok"
+else
+  note "gate [evaluate]: FAIL (a labeled event with any other label would re-run eval)"; fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi
 echo "blast-radius-test: all passed"
