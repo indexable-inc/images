@@ -153,7 +153,15 @@ jobs:
           # otherwise exits on the last value, letting `{}` followed by a valid
           # report pass while the render then emits a null first section.
           jq -e -s '
-            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +():-]+$");
+            # Charset is the legal nix store-path-name set (a-zA-Z0-9 + - . _ ? =)
+            # plus the extra glyphs attr-path normalization can introduce
+            # (/, space, (, ), :). A cause name is a derivation name, and fixed-
+            # output patch/fetch drvs carry `?` and `=` (e.g.
+            # `<sha>.patch?full_index=1`, `webkitgtk-2.52.4+abi=4.1`); omitting
+            # them fail-closed the whole report and posted no comment at all (the
+            # "sometimes empty" bug, #1421). Still rejects every markdown/mention/
+            # HTML glyph (@ < > [ ] ` & | ; * # {).
+            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +()?=:-]+$");
             length == 1 and
             (.[0] |
               (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
@@ -188,7 +196,9 @@ jobs:
         run: |
           set -euo pipefail
           jq -r '
-            def safename: select(test("^[A-Za-z0-9_./ +():-]+$"));
+            # Lockstep with the validator name_ok above: same charset, so a
+            # report that validated never has a label silently dropped here.
+            def safename: select(test("^[A-Za-z0-9_./ +()?=:-]+$"));
             # Mirror packages/blast-radius/src/report.rs::format_seconds: bucket
             # by magnitude, round to integer. Empty string for a missing entry
             # so a bare label renders when an attr was a substituter hit or new
