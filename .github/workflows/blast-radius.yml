@@ -1,17 +1,21 @@
 name: Blast radius
 
 on:
-  # Disabled on PRs: the per-PR full-catalog eval (~57s "Report blast radius"
-  # step) claims a shared `ix-ci` runner from the one dispatcher pool that
-  # serves the whole team, so every PR queued one more eval-only runner and
-  # slowed the queue. The report is informational (a sticky PR comment), never
-  # a merge gate, so dropping the auto-trigger costs no safety. Re-enable by
-  # uncommenting the `pull_request` block below. `workflow_dispatch` only keeps
-  # `on:` non-empty (the jobs are PR-context gated, so a manual run no-ops).
+  # Opt-in per PR, not on every push. Auto-running on every PR meant the per-PR
+  # full-catalog eval (~57s "Report blast radius" step) claimed a shared `ix-ci`
+  # runner from the one dispatcher pool that serves the whole team, queuing an
+  # eval-only runner each push and slowing the queue (#1384). But fully disabling
+  # it left the report unreachable, so the sticky comment "came up empty" on every
+  # PR. Middle ground: it runs only when a maintainer adds the `blast-radius`
+  # label. Once labeled, each later push (`synchronize`) and reopen refreshes the
+  # comment. The `evaluate` job `if:` below re-checks the label on every event, so
+  # pushing to an unlabeled PR (or adding a different label) claims no runner.
+  # `workflow_dispatch` is kept for manual reruns (no-ops without PR context).
   workflow_dispatch: {}
-  # pull_request:
-  #   branches:
-  #     - main
+  pull_request:
+    types: [labeled, synchronize, reopened]
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -41,10 +45,22 @@ jobs:
   # token-backed step. The report leaves this job only as an artifact (plain
   # data) for the comment job.
   evaluate:
-    # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml).
+    # Same-repository, non-Dependabot PRs only (mirroring ai-review-gate.yml),
+    # and only while the PR carries the `blast-radius` label (the opt-in gate;
+    # see `on:` above). `contains` re-checks the label on every event, so a push
+    # to a PR that no longer has the label claims no runner. The final clause
+    # keeps a `labeled` event from running the expensive eval unless the label
+    # being added is `blast-radius` itself: without it, adding any unrelated
+    # label to an already opted-in PR would re-claim the self-hosted runner and
+    # undercut the opt-in. `synchronize`/`reopened` (action != 'labeled') still
+    # refresh the comment via the `contains` check alone. The `comment` job has
+    # `needs: evaluate`, so it is skipped too whenever this gate is false.
     if: >-
+      github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login != 'dependabot[bot]'
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'blast-radius') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'blast-radius')
     # Same self-hosted dispatcher as check.yml: the `ix-ci-run-*` label is
     # claimed by the org dispatcher, which mints an ephemeral runner with a warm
     # /nix/store. Evaluating .#ciChecks.x86_64-linux forces an x86_64-linux IFD
@@ -125,6 +141,13 @@ jobs:
   # PR cannot influence.
   comment:
     needs: evaluate
+    # Run even when `evaluate` failed (a base/head eval error, often base-side
+    # and unrelated to this PR), so a labeled PR never silently ends up with no
+    # blast-radius comment. `!cancelled()` covers success and failure but not a
+    # concurrency cancel; `result != 'skipped'` keeps it off the unlabeled /
+    # fork / Dependabot case, where `evaluate` itself was skipped (nothing to
+    # report).
+    if: ${{ !cancelled() && needs.evaluate.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,7 +157,14 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # The report exists only when `evaluate` succeeded (its upload step is
+      # `if: success()`). `continue-on-error` so a transient `download-artifact`
+      # flake routes to the fallback comment below (issue #1429) instead of
+      # killing the job with no comment.
       - name: Download report
+        id: download
+        if: ${{ needs.evaluate.result == 'success' }}
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: blast-radius-${{ github.run_id }}
@@ -146,14 +176,31 @@ jobs:
       # Fail closed: require the full schema before rendering. Every field is
       # type-checked, SHAs must be hex, and the `and` chain short-circuits so a
       # non-array `.changed` never reaches the `+`/`test` that would error.
+      #
+      # `continue-on-error`: a rejected (malformed/hostile) report or a missing
+      # file (download flake) must NOT kill the job -- it routes to the fallback
+      # comment. Fail-closed is preserved structurally instead: Render is gated
+      # on `steps.validate.outcome == 'success'`, so a report that fails this
+      # step is never rendered or posted (issue #1429).
       - name: Validate report schema
+        id: validate
+        if: ${{ needs.evaluate.result == 'success' }}
+        continue-on-error: true
         run: |
           set -euo pipefail
           # Slurp (-s) so the artifact must be exactly one object: `jq -e`
           # otherwise exits on the last value, letting `{}` followed by a valid
           # report pass while the render then emits a null first section.
           jq -e -s '
-            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +():-]+$");
+            # Charset is the legal nix store-path-name set (A-Za-z0-9 + - . _ ? =)
+            # plus the extra glyphs attr-path normalization can introduce
+            # (/, space, parens, :). A cause name is a derivation name, and
+            # fixed-output patch/fetch drvs legally carry `?` and `=`
+            # (e.g. `<sha>.patch?full_index=1`, `webkitgtk-2.52.4+abi=4.1`);
+            # omitting them fail-closed the WHOLE report and posted no comment at
+            # all -- the "sometimes empty" bug (#1421). It still rejects every
+            # markdown/mention/HTML glyph (@ < > [ ] ` & | ; * # {).
+            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +()?=:-]+$");
             length == 1 and
             (.[0] |
               (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
@@ -184,11 +231,21 @@ jobs:
       # through a conservative charset (Nix attr names do) so a malicious PR
       # cannot inject mentions, HTML, or spoofed markers into a comment posted
       # with the write token. The trusted job owns the marker.
+      # Only when the report validated. Gating on `steps.validate.outcome` (not
+      # just `success()`) is what keeps the pipeline fail-closed now that Validate
+      # is `continue-on-error`: a rejected report leaves outcome != 'success', so
+      # this step is skipped and the fallback runs instead. `continue-on-error`
+      # so a render hiccup also routes to the fallback rather than killing the job.
       - name: Render comment
+        id: render
+        if: ${{ needs.evaluate.result == 'success' && steps.validate.outcome == 'success' }}
+        continue-on-error: true
         run: |
           set -euo pipefail
           jq -r '
-            def safename: select(test("^[A-Za-z0-9_./ +():-]+$"));
+            # Lockstep with the validator name_ok above: same charset, so a
+            # report that validated never has a label silently dropped here.
+            def safename: select(test("^[A-Za-z0-9_./ +()?=:-]+$"));
             # Mirror packages/blast-radius/src/report.rs::format_seconds: bucket
             # by magnitude, round to integer. Empty string for a missing entry
             # so a bare label renders when an attr was a substituter hit or new
@@ -247,7 +304,7 @@ jobs:
                      else empty end),
                     "", "</details>"
                else empty end)
-          ' report.json > comment.md
+          ' report.json > comment.md.tmp
           # Final hard guard against GitHub's 65536-char comment-body limit. The
           # changed-checks cap covers the common case, but the mermaid sections
           # are bounded only by the PR-controlled report, so a pathological shape
@@ -255,17 +312,50 @@ jobs:
           # post job keys on is at the TOP, so a tail truncation leaves it
           # intact) and append a notice.
           max_bytes=65000
-          if [ "$(wc -c < comment.md)" -gt "${max_bytes}" ]; then
-            head -c "${max_bytes}" comment.md > comment.md.trunc
-            mv comment.md.trunc comment.md
-            printf '\n\n_Comment truncated to fit the GitHub comment size limit._\n' >> comment.md
+          if [ "$(wc -c < comment.md.tmp)" -gt "${max_bytes}" ]; then
+            head -c "${max_bytes}" comment.md.tmp > comment.md.head
+            mv comment.md.head comment.md.tmp
+            printf '\n\n_Comment truncated to fit the GitHub comment size limit._\n' >> comment.md.tmp
           fi
+          # Publish atomically: only a fully-rendered body becomes comment.md, so
+          # the post step never picks up a half-written file if render is killed
+          # mid-way.
+          mv comment.md.tmp comment.md
+
+      # No usable report (eval bailed, the artifact download flaked, the report
+      # was rejected, or render failed): post an explicit "could not compute"
+      # note rather than leaving the PR with no blast-radius comment at all (the
+      # "comes up empty" bug, issues #1415 and #1429). The eval bail is
+      # frequently base-side (a transiently un-evaluable `main`) or a runner
+      # flake, so the copy says as much. Keyed by the same marker, so the next
+      # successful run overwrites it in place. RUN_URL is passed via env (a
+      # GitHub `${{ }}` expression cannot be evaluated by the shell), which also
+      # lets the test drive this script with a stub URL.
+      - name: Compose fallback comment (no usable report)
+        id: fallback
+        if: ${{ needs.evaluate.result != 'success' || steps.render.outcome != 'success' }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            printf '<!-- blast-radius -->\n'
+            printf '### Blast radius\n\n'
+            printf 'Could not compute the blast radius for this run: the check catalog failed to evaluate, or the report could not be downloaded or rendered. This is usually a transient base-branch or runner issue rather than a problem with this PR. See the [run logs](%s).\n' "$RUN_URL"
+          } > comment.md
 
       # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker.
       # Paginate the comment list so the marker is found on busy PRs (no
       # duplicate comments), and restrict the match to comments this token can
       # actually PATCH: a user comment that happens to start with the marker
       # would otherwise be selected and every PATCH would 403 forever.
+      #
+      # Exactly one producer leaves a complete comment.md: Render on a good
+      # report, else Compose fallback (which fires whenever Render did not
+      # succeed). Both Validate and Render are `continue-on-error`, so their
+      # failure does not trip `success()` here; the default `success()` gate
+      # still fail-closes against a genuinely broken job (e.g. the fallback
+      # `printf` itself erroring) so a half-written body is never posted.
       - name: Post sticky comment
         run: |
           set -euo pipefail
