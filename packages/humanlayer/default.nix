@@ -100,6 +100,7 @@ stdenvNoCC.mkDerivation {
   # makes it start as generic `bun`, so `humanlayer daemon ...` fails with
   # "Script not found". The npm JS launcher below executes the payload as
   # published, which is the form verified on NixOS.
+  dontStrip = true;
 
   installPhase = ''
     runHook preInstall
