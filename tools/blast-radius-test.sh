@@ -140,7 +140,15 @@ fi
 # These are workflow-level conditions jq cannot exercise, so assert them here.
 gate_if() { yq ".jobs.comment.steps[] | select(.name == \"$1\").if // \"\"" "$workflow"; }
 for step in "Validate report schema" "Render comment" "Compose fallback comment (eval failed)"; do
-  if gate_if "$step" | grep -q 'success()'; then
+  # Capture, then grep -- never `gate_if | grep -q` under `set -o pipefail`. yq
+  # emits one line per comment step (empty for the non-matching ones), so it is
+  # still writing when `grep -q` matches the gate line and closes the pipe; yq
+  # then dies with SIGPIPE (141) and pipefail turns the whole pipeline non-zero,
+  # failing this assertion ~65% of runs even though the gate is present. That
+  # flaky self-test is what kept the (real, present) fix looking broken in CI.
+  # The `post_if`/`eval_if` checks below already capture-first for this reason.
+  step_if="$(gate_if "$step")"
+  if printf '%s' "$step_if" | grep -q 'success()'; then
     note "gate [$step]: success() present ok"
   else
     note "gate [$step]: FAIL (missing success(); explicit if dropped the implicit gate)"; fail=1
