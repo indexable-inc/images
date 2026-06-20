@@ -29,11 +29,15 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-# Compact a tool input/result to keep the transcript inside the judge's budget
+# Compact a tool input/result to keep the JUDGE transcript inside its budget
 # while still showing the load-bearing tokens (a `gh issue create`, a Task
-# subagent description, a slack send).
+# subagent description, a slack send). The full, untruncated detail is kept
+# separately in `steps` for the HTML scorecard to render.
 _BLOCK_CAP = 600
 _TRANSCRIPT_CAP = 18000
+# Generous per-step cap for the rich HTML timeline: effectively full, but a guard
+# against a pathological multi-MB tool result blowing up the page.
+_STEP_CAP = 40000
 
 
 class AgentError(RuntimeError):
@@ -62,10 +66,16 @@ class RunMetrics:
 
 @dataclass(frozen=True, slots=True)
 class RunOutput:
-    """One rollout's compacted transcript plus its cost metrics."""
+    """One rollout's compact judge transcript, full step timeline, and metrics.
+
+    ``transcript`` is the compacted text the LLM judge reads. ``steps`` is the
+    full, ordered action timeline (assistant prose, thinking, every tool call with
+    its input, every tool result, the final answer) for the HTML scorecard.
+    """
 
     transcript: str
     metrics: RunMetrics
+    steps: list[dict[str, object]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,8 +140,9 @@ class Rollout:
 
 
 def parse_stream(stdout: str) -> RunOutput:
-    """Flatten stream-json into a transcript and pull the final result metrics."""
+    """Flatten stream-json into a judge transcript, a full step timeline, metrics."""
     parts: list[str] = []
+    steps: list[dict[str, object]] = []
     metrics = RunMetrics()
     for raw in stdout.splitlines():
         line = raw.strip()
@@ -143,14 +154,16 @@ def parse_stream(stdout: str) -> RunOutput:
             continue
         kind = event.get("type")
         if kind == "assistant":
-            parts.extend(_assistant_blocks(event))
+            _assistant(event, parts, steps)
         elif kind == "user":
-            parts.extend(_tool_results(event))
+            _tool_results(event, parts, steps)
         elif kind == "result":
-            parts.append("FINAL: " + str(event.get("result", "")).strip())
+            result = str(event.get("result", "")).strip()
+            parts.append("FINAL: " + result)
+            steps.append({"kind": "final", "text": result[:_STEP_CAP]})
             metrics = _metrics_from_result(event)
     text = "\n".join(p for p in parts if p)
-    return RunOutput(transcript=text[:_TRANSCRIPT_CAP], metrics=metrics)
+    return RunOutput(transcript=text[:_TRANSCRIPT_CAP], metrics=metrics, steps=steps)
 
 
 def _metrics_from_result(event: dict[str, object]) -> RunMetrics:
@@ -175,40 +188,57 @@ def _float(value: object) -> float:
 
 
 
-def _assistant_blocks(event: dict[str, object]) -> list[str]:
+def _assistant(
+    event: dict[str, object], parts: list[str], steps: list[dict[str, object]]
+) -> None:
     message = event.get("message")
     if not isinstance(message, dict):
-        return []
+        return
     content = message.get("content")
     if not isinstance(content, list):
-        return []
-    out: list[str] = []
+        return
     for block in content:
         if not isinstance(block, dict):
             continue
         btype = block.get("type")
         if btype == "text":
-            out.append("ASSISTANT: " + str(block.get("text", "")).strip())
+            text = str(block.get("text", "")).strip()
+            parts.append("ASSISTANT: " + text)
+            steps.append({"kind": "text", "text": text[:_STEP_CAP]})
+        elif btype == "thinking":
+            steps.append(
+                {"kind": "thinking", "text": str(block.get("thinking", "")).strip()[:_STEP_CAP]}
+            )
         elif btype == "tool_use":
             name = str(block.get("name", "?"))
-            payload = json.dumps(block.get("input", {}), default=str)[:_BLOCK_CAP]
-            out.append(f"TOOL_USE {name}: {payload}")
-    return out
+            raw_input = block.get("input", {})
+            payload = json.dumps(raw_input, default=str)
+            parts.append(f"TOOL_USE {name}: {payload[:_BLOCK_CAP]}")
+            steps.append(
+                {
+                    "kind": "tool_use",
+                    "name": name,
+                    "input": json.dumps(raw_input, indent=2, default=str)[:_STEP_CAP],
+                }
+            )
 
 
-def _tool_results(event: dict[str, object]) -> list[str]:
+def _tool_results(
+    event: dict[str, object], parts: list[str], steps: list[dict[str, object]]
+) -> None:
     message = event.get("message")
     if not isinstance(message, dict):
-        return []
+        return
     content = message.get("content")
     if not isinstance(content, list):
-        return []
-    out: list[str] = []
+        return
     for block in content:
         if not isinstance(block, dict) or block.get("type") != "tool_result":
             continue
-        out.append("TOOL_RESULT: " + _result_text(block.get("content"))[:_BLOCK_CAP])
-    return out
+        text = _result_text(block.get("content"))
+        is_error = bool(block.get("is_error"))
+        parts.append("TOOL_RESULT: " + text[:_BLOCK_CAP])
+        steps.append({"kind": "tool_result", "text": text[:_STEP_CAP], "is_error": is_error})
 
 
 def _result_text(content: object) -> str:

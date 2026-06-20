@@ -59,6 +59,8 @@ class RolloutResult:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+    # Full action timeline for the HTML scorecard.
+    steps: list[dict[str, object]] = field(default_factory=list)
 
     def all_expected_present(self, expected: tuple[str, ...]) -> bool:
         """True iff every expected behavior was judged present (and no error)."""

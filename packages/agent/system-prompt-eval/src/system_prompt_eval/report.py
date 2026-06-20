@@ -100,6 +100,9 @@ def summarize(
         "errored": errored,
         "tasks": len(tasks),
         "behaviors": len(behaviors),
+        "behavior_defs": [
+            {"id": b.id, "name": b.name, "rubric": b.rubric} for b in behaviors
+        ],
         "cost": cost_summary(results),
     }
 
@@ -118,6 +121,7 @@ def cases_json(results: Sequence[RolloutResult]) -> list[dict[str, object]]:
             "output_tokens": r.output_tokens,
             "cost_usd": r.cost_usd,
             "transcript": r.transcript,
+            "steps": r.steps,
         }
         for r in results
     ]

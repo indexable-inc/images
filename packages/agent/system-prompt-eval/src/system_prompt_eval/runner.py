@@ -54,6 +54,7 @@ def run_eval(
             input_tokens=out.metrics.input_tokens,
             output_tokens=out.metrics.output_tokens,
             cost_usd=out.metrics.cost_usd,
+            steps=out.steps,
         )
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:

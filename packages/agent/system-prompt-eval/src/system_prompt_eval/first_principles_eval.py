@@ -23,7 +23,7 @@ import stat
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import sandbox as sb
@@ -73,6 +73,7 @@ class FpResult:
     output_tokens: int = 0
     cost_usd: float = 0.0
     transcript: str = ""
+    steps: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -88,6 +89,7 @@ class FpResult:
             "output_tokens": self.output_tokens,
             "cost_usd": self.cost_usd,
             "transcript": self.transcript,
+            "steps": self.steps,
         }
 
 
@@ -242,6 +244,7 @@ def run(ctx: EvalContext, *, cases_path: Path | None = None) -> EvalReport:
             output_tokens=out.metrics.output_tokens,
             cost_usd=out.metrics.cost_usd,
             transcript=out.transcript,
+            steps=out.steps,
         )
 
     with ThreadPoolExecutor(max_workers=ctx.max_workers) as pool:
