@@ -108,11 +108,17 @@ class Judge:
         )
         raw = self._call(_SYSTEM, user)
         out = _JudgeOutput.model_validate(raw)
+        # Keep only verdicts for behaviors we actually asked about: a judge that
+        # echoes an extra/hallucinated id would otherwise leak into `present` and
+        # skew the per-rollout badge (the scoring math is id-guarded, the badge is
+        # not).
+        requested = {b.id for b in behaviors}
         by_id = {
             v.behavior_id: BehaviorVerdict(
                 behavior_id=v.behavior_id, present=v.present, evidence=v.evidence
             )
             for v in out.verdicts
+            if v.behavior_id in requested
         }
         # Any behavior the judge dropped is scored absent, not silently missing.
         for b in behaviors:
