@@ -175,8 +175,15 @@ jobs:
       # Fail closed: require the full schema before rendering. Every field is
       # type-checked, SHAs must be hex, and the `and` chain short-circuits so a
       # non-array `.changed` never reaches the `+`/`test` that would error.
+      #
+      # `&& success()` is load-bearing on every gated step in this job: an
+      # explicit `if` drops the implicit `success()` GitHub adds to an
+      # unconditional step, so without it a failure in an earlier step would
+      # not stop this one. That short-circuit is what makes the validate ->
+      # render fail-closed chain below actually hold, and the gate-wiring test
+      # in tools/blast-radius-test.sh asserts every gated step restates it.
       - name: Validate report schema
-        if: ${{ needs.evaluate.result == 'success' }}
+        if: ${{ needs.evaluate.result == 'success' && success() }}
         run: |
           set -euo pipefail
           # Slurp (-s) so the artifact must be exactly one object: `jq -e`
@@ -222,7 +229,10 @@ jobs:
       # cannot inject mentions, HTML, or spoofed markers into a comment posted
       # with the write token. The trusted job owns the marker.
       - name: Render comment
-        if: ${{ needs.evaluate.result == 'success' }}
+        # `&& success()` keeps this skipped if Validate failed (see the note on
+        # the Validate step): a report that did not pass the schema is never
+        # rendered, let alone posted.
+        if: ${{ needs.evaluate.result == 'success' && success() }}
         run: |
           set -euo pipefail
           jq -r '
@@ -310,7 +320,10 @@ jobs:
       # be evaluated by the shell), which also lets the test drive this script
       # with a stub URL.
       - name: Compose fallback comment (eval failed)
-        if: ${{ needs.evaluate.result != 'success' }}
+        # `&& success()` so a failure in an earlier comment-job step cannot
+        # reach the fallback either: the only producers are Render (good eval)
+        # and this step (failed eval), and both stay fail-closed.
+        if: ${{ needs.evaluate.result != 'success' && success() }}
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
