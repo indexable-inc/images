@@ -210,10 +210,15 @@ let
   #   hooks.SessionStart: the context-digest hook (claude-hooks `session-digest`);
   #     see `claudeHooks` below.
   #   hooks.PreToolUse: the worktree isolation guard for file-edit tools
-  #     (claude-hooks `worktree-guard`). Shipped from this layer (not a project
-  #     .claude/settings.json) on purpose: project hooks only load for
-  #     sessions started inside that project, which is exactly the bypass the
-  #     guard closes (ENG-2692).
+  #     (claude-hooks `worktree-guard`), plus the subagent-cache lookup on the
+  #     `Agent` tool (claude-hooks `subagent-cache-lookup`, ENG-4665). Shipped
+  #     from this layer (not a project .claude/settings.json) on purpose: project
+  #     hooks only load for sessions started inside that project, which is
+  #     exactly the bypass the guard closes (ENG-2692) and the reason the cache
+  #     must be non-optional fleet-wide.
+  #   hooks.SubagentStop: the subagent-cache populate (claude-hooks
+  #     `subagent-cache-populate`, ENG-4665). Both cache hooks fail open to a
+  #     cold run when SUBAGENT_CACHE_URL is unset or the daemon is unreachable.
   #   permissions.deny `gh pr merge --admin`/`--force` (ENG-2688, postmortem
   #     ENG-2391: agent force-landed a red PR): admin/force merge is forbidden
   #     outright, not gated. The old `ask` rule was theatre — it only intercepts
@@ -315,8 +320,9 @@ let
           ]
           ++ denyTools;
       };
-      # The full hook set (context injectors, guards, review pair, friction) for
-      # Claude, rendered from the shared declaration list in ../hooks.nix.
+      # The full hook set (context injectors, guards, review pair, friction,
+      # subagent-cache) for Claude, rendered from the shared declaration list in
+      # ../hooks.nix.
       hooks = sharedHooks.claude;
     }
     // lib.optionalAttrs dangerouslySkipPermissions {

@@ -3,7 +3,7 @@ name = "claude-hooks"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Claude Code/Codex hook commands (session-digest, worktree-guard, prompt-priors, review pair, bash/cargo/search guards, session-banner, friction-report) as one compiled binary"
+description = "Claude Code/Codex hook commands (session-digest, worktree-guard, prompt-priors, subagent-cache, review pair, bash/cargo/search guards, session-banner, friction-report) as one compiled binary"
 
 [lints]
 workspace = true
@@ -12,8 +12,9 @@ workspace = true
 # `clock` for chrono::Local (friction-report log timestamps).
 chrono = { workspace = true, features = ["alloc", "clock"] }
 glob.workspace = true
-# friction-report files to Linear over HTTPS; blocking client keeps the detached
-# --analyze worker a plain synchronous process (no async runtime in a hook).
+# friction-report files to Linear over HTTPS, and the subagent-cache hooks POST
+# to their daemon. A blocking client keeps these short-lived sync hooks a plain
+# synchronous process (no async runtime).
 reqwest = { workspace = true, features = ["blocking"] }
 # friction-report's single-flight flock, detached-session spawn (setsid), and
 # process-group SIGKILL on model timeout.
@@ -22,8 +23,11 @@ regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 # friction-report routes the model child's stdout to a real temp file (not a
-# pipe), the immortal-worker fix preserved from the Python.
+# pipe), and the subagent-cache tests use it too.
 tempfile.workspace = true
+# xxh64 (seed 0) for the subagent-cache freshness hash; matches mgrep and the
+# hashes other developers' hooks wrote into the shared cache.
+xxhash-rust = { workspace = true, features = ["xxh64"] }
 
 [[bin]]
 name = "claude-hooks"

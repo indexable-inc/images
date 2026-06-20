@@ -24,6 +24,8 @@ use chrono::{DateTime, SecondsFormat};
 use serde::Serialize;
 use serde_json::Value;
 
+mod subagent_cache;
+
 /// `SessionStart` digest cap (~1500 tokens), inside the 10,000-char
 /// `additionalContext` limit.
 const DIGEST_CAP: usize = 6000;
@@ -81,6 +83,8 @@ fn main() -> ExitCode {
         Some("bash-habits-guard") => guards::bash_habits_guard(),
         Some("search-guard") => guards::search_guard(),
         Some("friction-report") => friction::friction_report(),
+        Some("subagent-cache-lookup") => subagent_cache::lookup(),
+        Some("subagent-cache-populate") => subagent_cache::populate(),
         other => {
             eprintln!("claude-hooks: unknown subcommand {other:?}");
             return ExitCode::from(2);

@@ -279,5 +279,36 @@
   # crashes (fails open) on a minimal HOME.
   HOME="$PWD/no-home" ${claudeHooks}/bin/claude-hooks session-banner </dev/null >/dev/null
 
+  # Fail-open net for the subagent-cache hooks (ENG-4665): every skip and
+  # error path must exit 0 with NO output (a lookup that emits would block the
+  # Agent launch; a noisy populate would surface on every SubagentStop).
+  # SUBAGENT_CACHE_URL points at a closed port so the one path that does reach
+  # the network (a cacheable lookup) gets a refused connection and falls open.
+  sac() {
+    local desc="$1" sub="$2" input="$3" got
+    got="$(printf '%s' "$input" \
+      | SUBAGENT_CACHE_URL=http://127.0.0.1:1 ${claudeHooks}/bin/claude-hooks "$sub")"
+    if [ -n "$got" ]; then
+      printf 'subagent-cache %s check failed (%s): expected silent, got:\n%s\n' \
+        "$sub" "$desc" "$got" >&2
+      exit 1
+    fi
+  }
+  sac "malformed payload" subagent-cache-lookup 'not json'
+  sac "missing fields" subagent-cache-lookup '{"tool_input":{}}'
+  sac "non-cacheable agent skipped" subagent-cache-lookup \
+    '{"tool_input":{"subagent_type":"general-purpose","prompt":"how does X work"}}'
+  sac "cacheable lookup, daemon unreachable" subagent-cache-lookup \
+    '{"tool_input":{"subagent_type":"explore","prompt":"how does X work"}}'
+  sac "populate malformed payload" subagent-cache-populate 'not json'
+  sac "populate missing transcript" subagent-cache-populate \
+    '{"agent_type":"explore","last_assistant_message":"x","agent_transcript_path":"/no/such/transcript"}'
+  if [ -n "$(printf '%s' '{"tool_input":{"subagent_type":"explore","prompt":"how does X work"}}' \
+    | CLAUDE_CODE_DISABLE_SUBAGENT_CACHE=1 \
+      SUBAGENT_CACHE_URL=http://127.0.0.1:1 ${claudeHooks}/bin/claude-hooks subagent-cache-lookup)" ]; then
+    printf 'subagent-cache lookup check failed: kill switch must be silent\n' >&2
+    exit 1
+  fi
+
   runHook postInstallCheck
 ''

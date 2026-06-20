@@ -1,4 +1,4 @@
-# The three hooks are subcommands of one compiled binary (packages/claude-hooks)
+# The hooks are subcommands of one compiled binary (packages/agent/claude-hooks)
 # rather than hand-rolled shell scripts. Each fails OPEN and SILENT (any
 # missing input, parse error, or kill-switch exits with no stdout: a noisy or
 # broken hook is strictly worse than no hook). See that crate for the full
@@ -12,6 +12,12 @@
 #  - prompt-priors (UserPromptSubmit): triple-gated, score-gated ambient priors
 #    from the corpus store (ENG-2707), capped ~1200 tokens. Kill switch:
 #    CLAUDE_CODE_DISABLE_PROMPT_PRIORS=1.
+#  - subagent-cache-lookup (PreToolUse on Agent) / subagent-cache-populate
+#    (SubagentStop): serve a fresh prior read-only subagent investigation from
+#    the subagent-cache daemon (packages/agent/subagent-cache) instead of
+#    re-running it, and capture each finished one (ENG-4665). POST to
+#    SUBAGENT_CACHE_URL; inert when unset. Kill switch:
+#    CLAUDE_CODE_DISABLE_SUBAGENT_CACHE=1.
 # Tool paths and the baked primary-checkout default ride as env on a thin
 # makeBinaryWrapper so the hook is self-contained under any user PATH, while
 # user knobs keep their CLAUDE_CODE_* names. IX_SEARCH (and the prompt-priors

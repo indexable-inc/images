@@ -300,3 +300,4 @@ uuid = "1"
 webpki-roots = "1"
 wry = "0.55"
 x509-parser = "0.18"
+xxhash-rust = { version = "0.8", default-features = false }

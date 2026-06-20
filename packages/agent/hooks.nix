@@ -116,6 +116,26 @@ let
       event = "Stop";
       sub = "friction-report";
     }
+
+    # Subagent investigation cache (ENG-4665): serve a fresh prior read-only
+    # investigation instead of re-running it cold (PreToolUse on the Agent tool),
+    # and capture each finished one (SubagentStop). Claude-only: these are Claude
+    # Code's subagent-launch events. Always on; the hooks fail open to a cold run
+    # when SUBAGENT_CACHE_URL is unset or the daemon is unreachable, so they are
+    # inert off the tailnet. See packages/agent/subagent-cache.
+    {
+      event = "PreToolUse";
+      matcher = "Agent";
+      sub = "subagent-cache-lookup";
+      timeout = 15;
+      agents = [ "claude" ];
+    }
+    {
+      event = "SubagentStop";
+      sub = "subagent-cache-populate";
+      timeout = 30;
+      agents = [ "claude" ];
+    }
   ];
 
   defaults = {
