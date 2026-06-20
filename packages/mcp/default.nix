@@ -587,6 +587,26 @@ let
         cp -r ${linearPythonSource}/linear/. "$site/"
       ''
   );
+  # Notion REST client: `import notion`, then `await notion.search(query)` /
+  # `page(id)` / `blocks(id)` / `db_query(id)` / `page_create` / `blocks_append`
+  # / `page_update`. Pure Python over the already-bundled httpx + polars; reads
+  # NOTION_API_KEY from the environment at call time. Cross-platform.
+  notionPythonSource = builtins.path {
+    name = "ix-mcp-notion-python-source";
+    path = ./src/notion;
+  };
+  notionModule = pkgs.python3.pkgs.toPythonModule (
+    pkgs.runCommand "ix-mcp-notion-python-module"
+      {
+        strictDeps = true;
+        meta.description = "Notion REST client bundled into the ix-mcp interpreter";
+      }
+      ''
+        site="$out/${pkgs.python3.sitePackages}/notion"
+        mkdir -p "$site"
+        cp -r ${notionPythonSource}/notion/. "$site/"
+      ''
+  );
   # `nox_autotriage`: nox-aware adapter that converts a nox conformance report
   # into linear.triage Findings and files them to Linear.  Depends on
   # linearModule (for linear.triage).  Entry point: python -m nox_autotriage.
@@ -1137,6 +1157,7 @@ let
       beeperModule
       tasksModule
       linearModule
+      notionModule
       noxAutotriageModule
       mcpClientModule
       # pymobiledevice3 9.27.0 (defined above) + the `iphone` wrapper that drives
@@ -1254,6 +1275,7 @@ let
     "nix"
     "nox_autotriage"
     "linear"
+    "notion"
     "google_auth"
     "slack"
     "beeper"
@@ -1675,7 +1697,7 @@ let
           cat stdout stderr >&2
           exit 1
         fi
-        for needle in MXBAI_API_KEY EXA_API_KEY LINEAR_API_KEY 'mgrep login'; do
+        for needle in MXBAI_API_KEY EXA_API_KEY LINEAR_API_KEY NOTION_API_KEY 'mgrep login'; do
           if ! grep -qF "$needle" stdout; then
             echo "requirements report is missing $needle:" >&2
             cat stdout stderr >&2
@@ -4968,6 +4990,36 @@ let
   ghosttyBundled = importTest "ghostty" "import ghostty; print('ghostty-ok', all(callable(getattr(ghostty, n)) for n in ('surfaces', 'my_tty', 'my_surface', 'close', 'close_me', 'focus', 'activate', 'is_running')), ghostty.__version__)";
   xBundled = importTest "x" "import x; print('x-ok', callable(x.posts), x.__version__)";
   linearBundled = importTest "linear" "import linear; print('linear-ok', all(callable(getattr(linear, n)) for n in ('issue', 'issue_update', 'issue_create', 'issue_search', 'comment_create', 'project_create')), linear.__version__)";
+  notionBundled = importTest "notion" "import notion, asyncio; print('notion-ok', all(asyncio.iscoroutinefunction(getattr(notion, n)) for n in ('search', 'page', 'blocks', 'db_query', 'page_create', 'blocks_append', 'page_update')), notion.__version__)";
+  notionTestPython = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.httpx
+    ps.polars
+    ps.pydantic
+    notionModule
+  ]);
+  notionTestSource = builtins.path {
+    name = "ix-mcp-notion-test";
+    path = ./tests/test_notion.py;
+  };
+  notionTests =
+    pkgs.runCommand "ix-mcp-notion-tests"
+      {
+        nativeBuildInputs = [ notionTestPython ];
+        strictDeps = true;
+      }
+      ''
+        export HOME=$TMPDIR/home
+        mkdir -p "$HOME"
+        cp ${notionTestSource} "$TMPDIR/test_notion.py"
+        ${lib.getExe notionTestPython} -m pytest "$TMPDIR/test_notion.py" -q -p no:cacheprovider >stdout 2>stderr || {
+          echo "ix-mcp notion tests failed:" >&2
+          cat stdout stderr >&2
+          exit 1
+        }
+        cat stdout
+        mkdir -p "$out"
+      '';
   noxAutotriageBundled = importTest "nox-autotriage" "import nox_autotriage; print('nox-autotriage-ok', callable(nox_autotriage.findings_from_conformance))";
   linearTriageTestPython = pkgs.python3.withPackages (ps: [
     ps.pytest
@@ -5187,6 +5239,8 @@ package.overrideAttrs (old: {
         xBundled
         linearBundled
         linearTriageTests
+        notionBundled
+        notionTests
         noxAutotriageBundled
         noxAutotriageTests
         iphoneBundled
