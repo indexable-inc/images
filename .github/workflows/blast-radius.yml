@@ -22,16 +22,28 @@ permissions:
   contents: read
 
 concurrency:
-  group: blast-radius-${{ github.ref }}
-  # Only cancel an in-flight run when the new event will itself run an eval: a
-  # push (`synchronize`)/`reopened`, a `workflow_dispatch`, or the `blast-radius`
-  # label being added. An unrelated `labeled` event skips `evaluate` (see the job
-  # `if:`), but concurrency cancellation is applied at the workflow level BEFORE
-  # any job `if:`, so an unconditional `cancel-in-progress` would let adding any
-  # label kill an opted-in PR's running eval and leave the sticky comment
-  # unrefreshed. Gating the cancel on the same condition keeps unrelated label
-  # events from interrupting a real run.
-  cancel-in-progress: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'blast-radius' }}
+  # Real eval-running events (a push `synchronize`/`reopened`, a
+  # `workflow_dispatch`, or the `blast-radius` label being added) share one
+  # per-ref group so a newer push supersedes an older in-flight eval. An
+  # unrelated `labeled` event runs NO eval (every job `if:` is false), but GitHub
+  # applies concurrency BEFORE any job `if:` and cancels not only the in-progress
+  # run but ALSO any previously *pending* run in the group -- and that pending
+  # cancellation ignores `cancel-in-progress`. So a shared group lets an
+  # unrelated label evict a real eval that is still queued for a self-hosted
+  # runner, leaving the sticky comment stale or absent (the "sometimes empty"
+  # symptom). Route those no-op events to a unique throwaway group
+  # (`blast-radius-noop-<run_id>`) so they can never evict, cancel, or queue
+  # behind a real run.
+  group: >-
+    ${{
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'blast-radius')
+      && format('blast-radius-noop-{0}', github.run_id)
+      || format('blast-radius-{0}', github.ref)
+    }}
+  # Real events share the per-ref group, so a newer push cancels an older
+  # in-flight eval (don't stack evals). No-op events sit alone in their unique
+  # group, where this has no one to cancel.
+  cancel-in-progress: true
 
 env:
   # The self-hosted runner's Nix daemon owns substituters; the job only sets

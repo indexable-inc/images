@@ -153,5 +153,22 @@ else
   note "gate [Post sticky comment]: FAIL (gate '$post_if' can post an unvalidated/partial body)"; fail=1
 fi
 
+# Concurrency routing. GitHub applies the workflow-level concurrency group
+# BEFORE any job `if:`, and cancels any previously *pending* run in a group
+# regardless of `cancel-in-progress`. If a no-op `labeled` event (jobs all skip)
+# shared the real per-ref group, it could evict a real eval still queued for a
+# self-hosted runner -- leaving the sticky comment stale (the "sometimes empty"
+# symptom). The group expression must route no-op label events to a unique
+# throwaway group keyed by run_id, while real events share the per-ref group.
+# This is a workflow-level expression jq cannot exercise, so pin its shape here.
+conc_group="$(yq '.concurrency.group' "$workflow")"
+if printf '%s' "$conc_group" | grep -q 'github.run_id' \
+   && printf '%s' "$conc_group" | grep -q 'github.ref' \
+   && printf '%s' "$conc_group" | grep -q "github.event.label.name != 'blast-radius'"; then
+  note "concurrency: no-op events routed to a unique group ok"
+else
+  note "concurrency: FAIL (no-op label events can evict a pending real eval)"; fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then echo "blast-radius-test: FAILED"; exit 1; fi
 echo "blast-radius-test: all passed"
