@@ -154,6 +154,8 @@ def _run_case(ctx: EvalContext, case: ReCase, binary: Path) -> tuple[str, ReResu
             f"claude exited {proc.returncode}: {proc.stderr.strip()[:400] or '(no stderr)'}"
         )
     out = parse_stream(proc.stdout)
+    if not out.transcript.strip():
+        raise AgentError(f"empty transcript: {proc.stdout[:300]!r}")
     res = ReResult(
         case_id=case.id,
         rollout=0,

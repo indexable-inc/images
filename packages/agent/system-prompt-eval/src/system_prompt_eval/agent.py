@@ -129,11 +129,6 @@ class Rollout:
         return out
 
 
-def _transcript_from_stream(stdout: str) -> str:
-    """Flatten stream-json events into a readable transcript for the judge."""
-    return parse_stream(stdout).transcript
-
-
 def parse_stream(stdout: str) -> RunOutput:
     """Flatten stream-json into a transcript and pull the final result metrics."""
     parts: list[str] = []

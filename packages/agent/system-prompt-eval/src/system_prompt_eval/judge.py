@@ -25,6 +25,10 @@ from .model import Behavior, BehaviorVerdict
 # A capable mid-tier judge (mirrors search-eval's grader choice).
 DEFAULT_JUDGE_MODEL = "claude-sonnet-4-6"
 
+# Lazily-built, process-wide Anthropic client so its connection pool is reused
+# across all judge calls (see Judge._client).
+_CLIENT: anthropic.Anthropic | None = None
+
 _SYSTEM = """\
 You grade whether an AI coding agent exhibited specific DEFAULT behaviors on a \
 task, by reading a transcript of its run. You are strict and calibrated: score \
@@ -79,12 +83,18 @@ class Judge:
     model: str = DEFAULT_JUDGE_MODEL
 
     def _client(self) -> anthropic.Anthropic:
-        try:
-            return anthropic.Anthropic()
-        except Exception as exc:
-            raise RuntimeError(
-                "could not construct the Anthropic client; set ANTHROPIC_API_KEY"
-            ) from exc
+        # One client (and httpx connection pool) shared across every judge call;
+        # the SDK builds its pool in the constructor, so a per-call client would
+        # pay a fresh TLS handshake on each of the dozens-to-hundreds of grades.
+        global _CLIENT
+        if _CLIENT is None:
+            try:
+                _CLIENT = anthropic.Anthropic()
+            except Exception as exc:
+                raise RuntimeError(
+                    "could not construct the Anthropic client; set ANTHROPIC_API_KEY"
+                ) from exc
+        return _CLIENT
 
     def grade(
         self, task: str, transcript: str, behaviors: list[Behavior]

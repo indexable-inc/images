@@ -197,7 +197,12 @@ def _run_case(ctx: EvalContext, case: FpCase) -> RunOutput:
         raise AgentError(
             f"claude exited {proc.returncode}: {proc.stderr.strip()[:400] or '(no stderr)'}"
         )
-    return parse_stream(proc.stdout)
+    out = parse_stream(proc.stdout)
+    # A zero-exit run with empty stdout must surface as an error, not be judged on
+    # an empty answer (mirror agent.py:_invoke).
+    if not out.transcript.strip():
+        raise AgentError(f"empty transcript: {proc.stdout[:300]!r}")
+    return out
 
 
 def _final_answer(transcript: str) -> str:

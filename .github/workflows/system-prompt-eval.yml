@@ -69,12 +69,17 @@ jobs:
           ref: ${{ steps.pr.outputs.ref }}
 
       # `claude` must be on PATH for the rollouts; the package resolves it there.
+      # Dispatch inputs go through env, not `${{ }}` string interpolation, so a
+      # crafted value cannot break out of the shell (CWE-94).
       - name: Run the eval
+        env:
+          EVAL: ${{ github.event.inputs.eval || 'all' }}
+          ROLLOUTS: ${{ github.event.inputs.rollouts || '5' }}
         run: |
           nix shell .#claude-code -c \
             nix run .#system-prompt-eval -- run \
-              --eval "${{ github.event.inputs.eval || 'all' }}" \
-              --rollouts "${{ github.event.inputs.rollouts || '5' }}" \
+              --eval "$EVAL" \
+              --rollouts "$ROLLOUTS" \
               --json-out result.json \
               --html-out scorecard.html
 
